@@ -13,6 +13,12 @@ import http from 'node:http';
 import { ConfigError, loadConfig } from './config.js';
 import { SystemDb } from './db/system-db.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
+import { closeWritePool, configureWritePool, drainWritePool } from './db/write-pool.js';
+import {
+  checkpointAndCloseAllNetworkDbs,
+  startWalCheckpointScheduler,
+  type WalCheckpointScheduler,
+} from './db/wal-checkpoint.js';
 import { sweepCommentHtml } from './domain/markdown-sweep.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
@@ -39,13 +45,38 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
 
   // Пул reader-воркеров тяжёлых чтений (ADR bec191e6): процессный ресурс,
   // настраивается на старте. Тяжёлые выборки уходят в воркеры, чтобы
-  // синхронный better-sqlite3 не блокировал цикл событий; писатель остаётся
-  // единственным — в главном потоке. Воркеры поднимаются лениво.
+  // синхронный better-sqlite3 не блокировал цикл событий. Запись сети — в своём
+  // пуле воркеров (ниже, ADR ca3a9218): писатель у каждой сети единственный.
+  // Воркеры обоих пулов поднимаются лениво.
   configureReaderPool({
     size: config.readerPool.size,
     taskTimeoutMs: config.readerPool.taskTimeoutMs,
     logger,
   });
+
+  // Пул записи (ADR ca3a9218, тех.проект 0df7ccd6): тоже процессный ресурс и
+  // тоже поднимает воркеры лениво. Батч-запись мыслей уже идёт через него
+  // (задача c8920d04, фасад `domain/heavy-write.ts`), остальные пути записи
+  // переводятся поэтапно и пока исполняются в главном потоке.
+  // `ETN_WRITE_POOL_SIZE=0` выключает пул: задача записи исполняется синхронно.
+  const writePool = configureWritePool({
+    size: config.writePool.size,
+    taskTimeoutMs: config.writePool.taskTimeoutMs,
+    idleEvictionMs: config.writePool.idleEvictionMs,
+    logger,
+  });
+  if (writePool === null) {
+    logger.info('Write pool disabled (ETN_WRITE_POOL_SIZE=0): записи идут в главном потоке');
+  } else {
+    logger.info(
+      {
+        size: writePool.size,
+        taskTimeoutMs: writePool.taskTimeoutMs,
+        idleEvictionMs: writePool.idleEvictionMs,
+      },
+      'Write pool configured',
+    );
+  }
 
   if (!systemDb.hasFirstUser()) {
     systemDb.close();
@@ -105,14 +136,42 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     });
   }
 
+  // Фоновый чекпойнт WAL сетей (ошибка dac92886): авто-чекпойнт SQLite —
+  // PASSIVE и не продвигается, пока читатель держит снапшот, а `-wal` не
+  // усекается вовсе. Таймер `unref()`-нут и работает между запросами
+  // (better-sqlite3 синхронный), интервал — `ETN_WAL_CHECKPOINT_INTERVAL_MS`.
+  const walCheckpoint: WalCheckpointScheduler | null =
+    config.walCheckpoint.intervalMs > 0
+      ? startWalCheckpointScheduler({ intervalMs: config.walCheckpoint.intervalMs, logger })
+      : null;
+  if (walCheckpoint === null) {
+    logger.info('WAL background checkpoint disabled (ETN_WAL_CHECKPOINT_INTERVAL_MS=0)');
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Shutting down ETN server');
     fileLog.info('server', 'ETN server shutting down', { signal });
+    walCheckpoint?.stop();
     if (mcpListener !== null) {
       await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
     }
     await app.close();
+    // Записи — раньше всего остального: сначала дожидаемся слива очередей пула
+    // (подтверждённые задачи не теряем), затем закрываем воркеры — их
+    // writer-соединения не должны пережить остановку, иначе чекпойнт WAL
+    // ниже не сможет усечь журнал.
+    const drained = await drainWritePool();
+    if (!drained.drained) {
+      logger.warn({ ...drained }, 'write pool: очередь не слилась в отведённое время');
+    }
+    await closeWritePool();
+    // Читатели закрываются ДО чекпойнта: их снапшоты мешали бы усечь журнал.
     await closeReaderPool();
+    // Чекпойнт всех БД и закрытие соединений сетей (ошибка dac92886): иначе
+    // `-wal` остаётся «высокой водой», а `process.exit` не даёт SQLite
+    // выполнить собственный чекпойнт при закрытии последнего соединения.
+    checkpointAndCloseAllNetworkDbs({ logger });
+    systemDb.checkpointWal();
     systemDb.close();
     logger.info('ETN server stopped');
     fileLog.info('server', 'ETN server stopped');

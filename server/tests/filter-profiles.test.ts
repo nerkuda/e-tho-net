@@ -1,0 +1,433 @@
+/**
+ * Тесты реестра профилей контекста точек применения (задача 7a798b17,
+ * требования 0095daad/aed27eb8, ADR 0c02ab4f).
+ *
+ * Покрывают:
+ *   * инварианты реестра: все шесть профилей описаны; `withTime` согласован с
+ *     семейством токенов `time`; паритет `FILTER_AST_ENTITY_KINDS` с
+ *     объединением `FilterAstEntity` (сторож против рассинхрона словаря);
+ *   * валидацию видимости: операнд, невидимый в точке применения, отвергается
+ *     `VALIDATION_ERROR` (AST-профили мыслей; семантические профили — no-op);
+ *   * подключение к движку: `queryThoughts` с явным AST проверяет профиль,
+ *     без профиля — проверки нет;
+ *   * сохранение отбора типа: AST с невидимым операндом не сохраняется.
+ */
+
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { describe, it } from 'node:test';
+
+import DatabaseConstructor from 'better-sqlite3';
+
+import {
+  EtnError,
+  FILTER_AST_ENTITY_KINDS,
+  FILTER_AST_OPERATORS,
+  FILTER_PROFILES,
+  FILTER_PROFILE_IDS,
+  PROPERTY_OPERATOR_SETS,
+  PROPERTY_VALUE_TYPES,
+  filterProfileAstOperands,
+  filterProfileHasTime,
+  filterProfileOperandOperators,
+  getFilterProfile,
+  type FilterAst,
+  type FilterAstEntity,
+  type FilterAstNode,
+} from '@etn/shared';
+
+import type { NetworkDb } from '../src/db/network-db.js';
+import { createInMemoryNetworkDb } from '../src/db/network-db.js';
+import { assertFilterAstInProfile } from '../src/domain/filter-profile-validation.js';
+import {
+  OPS_BY_VALUE_TYPE,
+  queryThoughts,
+  type ThoughtQueryRequest,
+} from '../src/domain/query-service.js';
+import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { createThoughtTypeView } from '../src/domain/thought-type-views-service.js';
+
+function nativeAvailable(): boolean {
+  try {
+    const db = new DatabaseConstructor(':memory:');
+    db.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function astLeaf(entity: FilterAstEntity, operator: string, value?: unknown): FilterAst {
+  const leaf: Record<string, unknown> = { entity, operator };
+  if (value !== undefined) leaf['value'] = value;
+  return { version: 1, filter: leaf as unknown as FilterAstNode };
+}
+
+describe('реестр профилей контекста (задача 7a798b17)', () => {
+  it('описаны все шесть точек применения с непустыми операндами/операторами', () => {
+    assert.deepEqual(
+      [...FILTER_PROFILE_IDS].sort(),
+      ['attachments', 'chronicle', 'events', 'map', 'publications', 'thoughts'],
+    );
+    for (const id of FILTER_PROFILE_IDS) {
+      const profile = getFilterProfile(id);
+      assert.equal(profile.id, id);
+      assert.ok(profile.operands.length > 0, `${id}: операнды не пусты`);
+      assert.ok(profile.operators.length > 0, `${id}: операторы не пусты`);
+      assert.ok(profile.tokens.length > 0, `${id}: токены не пусты`);
+      // Инвариант гранулярности времени: `withTime` ⟺ семейство токенов `time`.
+      assert.equal(
+        profile.withTime,
+        profile.tokens.includes('time'),
+        `${id}: withTime согласован с tokens`,
+      );
+    }
+  });
+
+  it('профили со временем — только хроника и события', () => {
+    const withTime = FILTER_PROFILE_IDS.filter((id) => filterProfileHasTime(id));
+    assert.deepEqual([...withTime].sort(), ['chronicle', 'events']);
+  });
+
+  it('сторож паритета: FILTER_AST_ENTITY_KINDS совпадает со словарём FilterAstEntity', () => {
+    // Объект обязан перечислить КАЖДЫЙ вид операнда (иначе — ошибка компиляции):
+    // добавление вида в объединение без строки здесь не соберётся.
+    const allKinds: Record<FilterAstEntity['kind'], true> = {
+      id: true,
+      type: true,
+      property: true,
+      link_type: true,
+      parents: true,
+      children: true,
+      attachments: true,
+      chronology: true,
+      comment: true,
+      targets: true,
+      active: true,
+      trashed: true,
+      keywords: true,
+      author: true,
+      editor: true,
+      created_at: true,
+      updated_at: true,
+      properties: true,
+      record_time: true,
+      record_title: true,
+      record_body: true,
+      record_author: true,
+      record_editor: true,
+      occurred_at: true,
+      action: true,
+      entity_type: true,
+      entity_title: true,
+      entity_id: true,
+      user: true,
+      name: true,
+      kind: true,
+      mime_type: true,
+      owner: true,
+      size: true,
+    };
+    assert.deepEqual(
+      [...FILTER_AST_ENTITY_KINDS].sort(),
+      (Object.keys(allKinds) as string[]).sort(),
+    );
+  });
+
+  it('операторы профилей мыслей совпадают с полным словарём AST', () => {
+    for (const id of ['thoughts', 'map', 'publications'] as const) {
+      assert.deepEqual(getFilterProfile(id).operators, FILTER_AST_OPERATORS);
+    }
+  });
+
+  it('AST-операнды профиля: множества для мыслей, хроники, событий и вложений', () => {
+    for (const id of ['thoughts', 'map', 'publications', 'chronicle', 'events', 'attachments'] as const) {
+      assert.ok(filterProfileAstOperands(id) !== null, `${id}: операнды — виды AST`);
+    }
+    // Операнды AST-профилей ⊆ словаря видов AST.
+    const kinds = new Set<string>(FILTER_AST_ENTITY_KINDS);
+    for (const op of FILTER_PROFILES.thoughts.operands) assert.ok(kinds.has(op));
+    for (const op of FILTER_PROFILES.chronicle.operands) assert.ok(kinds.has(op));
+    for (const op of FILTER_PROFILES.events.operands) assert.ok(kinds.has(op));
+    for (const op of FILTER_PROFILES.attachments.operands) assert.ok(kinds.has(op));
+    // «Тождественность» (id) — новый операнд профиля мыслей (задача 4752b065).
+    assert.ok(FILTER_PROFILES.thoughts.operands.includes('id'));
+    // «Сущность» событий несёт подвыборочные операторы (задача 2b230e8e, требование 1765e659).
+    const entityIdOps = FILTER_PROFILES.events.operand_operators!['entity_id']!;
+    for (const op of ['eq', 'ne', 'in', 'not_in', 'all_of'] as const) {
+      assert.ok(entityIdOps.includes(op), `entity_id: ${op}`);
+    }
+    // «Владельцы» вложений — тоже подвыборочные операторы (задача 5a007bed).
+    const ownerOps = FILTER_PROFILES.attachments.operand_operators!['owner']!;
+    for (const op of ['in', 'not_in', 'all_of', 'in_hierarchy'] as const) {
+      assert.ok(ownerOps.includes(op), `owner: ${op}`);
+    }
+    // «Тип действия» и «Вид сущности» событий — множественные перечисления:
+    // ТОЛЬКО «в»/«не в» (ошибка 50d9bf4e п. C1).
+    assert.deepEqual(FILTER_PROFILES.events.operand_operators!['action'], ['in', 'not_in']);
+    assert.deepEqual(FILTER_PROFILES.events.operand_operators!['entity_type'], ['in', 'not_in']);
+    // Датовые операнды несут равно/не равно наравне с датами создания/изменения
+    // (ошибка 03db4cb0, паритет e219112e): равенство «голой даты» = сутки.
+    const dateSets: Array<[string, readonly string[]]> = [
+      ['chronicle/record_time', FILTER_PROFILES.chronicle.operand_operators!['record_time']!],
+      ['events/occurred_at', FILTER_PROFILES.events.operand_operators!['occurred_at']!],
+      ['thoughts/created_at', FILTER_PROFILES.thoughts.operand_operators!['created_at']!],
+      ['thoughts/updated_at', FILTER_PROFILES.thoughts.operand_operators!['updated_at']!],
+    ];
+    for (const [name, list] of dateSets) {
+      for (const op of ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'] as const) {
+        assert.ok(list.includes(op), `${name}: ${op}`);
+      }
+    }
+  });
+
+  it('профиль вложений: состав по требованию f67c85c1', () => {
+    const p = getFilterProfile('attachments');
+    // Операнды — видимые характеристики вложения: имя, вид (file/url), MIME,
+    // владельцы, размер. Дат в карточке нет — created_at/updated_at не входят.
+    assert.deepEqual([...p.operands].sort(), ['kind', 'mime_type', 'name', 'owner', 'size']);
+    assert.ok(!p.operands.includes('created_at') && !p.operands.includes('updated_at'));
+    const sets = p.operand_operators!;
+    assert.deepEqual(Object.keys(sets).sort(), [...p.operands].sort(), 'наборы заданы на каждый операнд');
+    // Имя: равно/содержит/в списке/Найти слова.
+    for (const op of ['eq', 'contains', 'in', 'matches'] as const) {
+      assert.ok(sets['name']!.includes(op), `name: ${op}`);
+    }
+    // Вид (file/url): равно/в списке.
+    assert.ok(sets['kind']!.includes('eq') && sets['kind']!.includes('in'));
+    // MIME: равно/содержит/в списке.
+    for (const op of ['eq', 'contains', 'in'] as const) assert.ok(sets['mime_type']!.includes(op));
+    // Владельцы: в списке/в иерархии/в выборке (all_of над под-выборкой)/количество.
+    for (const op of ['in', 'in_hierarchy', 'all_of'] as const) assert.ok(sets['owner']!.includes(op));
+    assert.ok(sets['owner']!.includes('gt') || sets['owner']!.includes('eq'), 'владельцы: количество');
+    // Размер: сравнения/между/заполнено.
+    for (const op of ['gt', 'between', 'is_empty'] as const) assert.ok(sets['size']!.includes(op));
+  });
+
+  it('составы по операнду: operators каждого профиля — ровно объединение наборов', () => {
+    // С 0.13.1 (задача 6ae062a9, требование c088f9e1) наборы по операнду несут
+    // ВСЕ профили, включая отбор мыслей: иначе редактор предлагал бы операторы,
+    // которые исполнитель отвергает.
+    for (const id of FILTER_PROFILE_IDS) {
+      const p = getFilterProfile(id);
+      const sets = p.operand_operators;
+      assert.ok(sets !== undefined, `${id}: наборы по операндам заданы`);
+      // Набор задан на КАЖДЫЙ операнд профиля.
+      assert.deepEqual(
+        Object.keys(sets!).sort(),
+        [...p.operands].sort(),
+        `${id}: состав задан на каждый операнд`,
+      );
+      const union: string[] = [];
+      for (const list of Object.values(sets!)) {
+        for (const op of list) if (!union.includes(op)) union.push(op);
+      }
+      assert.deepEqual([...p.operators].sort(), [...union].sort(), `${id}: operators = union`);
+    }
+  });
+
+  it('отбор мыслей: составы по операнду по требованию c088f9e1', () => {
+    const sets = FILTER_PROFILES.thoughts.operand_operators!;
+    // Предикаты-триады: только «равно»/«не равно», без сравнений и «между».
+    assert.deepEqual(sets['active'], ['eq', 'ne']);
+    assert.deepEqual(sets['trashed'], ['eq', 'ne']);
+    // «Найти слова» — только matches.
+    assert.deepEqual(sets['keywords'], ['matches']);
+    // «Мысль» (id): тождественность набором и «в иерархии»/«не в иерархии» —
+    // выбранные мысли и их потомки (задача a577875b).
+    for (const op of ['eq', 'ne', 'in', 'not_in', 'in_hierarchy', 'not_in_hierarchy'] as const) {
+      assert.ok(sets['id']!.includes(op), `id: ${op}`);
+    }
+    // Наборные под-выборочные операторы — только на релевантных операндах.
+    for (const kind of ['active', 'trashed', 'keywords', 'author', 'editor', 'created_at', 'properties'] as const) {
+      const list = sets[kind]!;
+      for (const op of ['any_of', 'all_of', 'none_of'] as const) {
+        assert.ok(!list.includes(op), `${kind}: нерелевантная под-выборка (${op})`);
+      }
+    }
+    for (const kind of ['parents', 'children'] as const) {
+      for (const op of ['all_of', 'any_of', 'none_of', 'in_hierarchy'] as const) {
+        assert.ok(sets[kind]!.includes(op), `${kind}: релевантная под-выборка (${op})`);
+      }
+    }
+    // «Тип» — одиночный: «все в выборке» неприменимо (исполнитель отвергает all_in).
+    assert.ok(sets['type']!.includes('any_of') && !sets['type']!.includes('all_of'));
+    // Тип связи: иерархия есть, под-выборка исполнителем отложена.
+    assert.ok(sets['link_type']!.includes('in_hierarchy'));
+    assert.ok(!sets['link_type']!.includes('all_of'));
+  });
+
+  it('отбор мыслей: состав свойства по природе (требование 9bdddad6)', () => {
+    const byType = FILTER_PROFILES.thoughts.operand_operators_by_value_type!;
+    // Скаляры: без под-выборочных наборов «все в выборке» у дат/чисел и булевых.
+    assert.ok(byType['date']!.includes('between') && !byType['date']!.includes('all_of'));
+    assert.ok(byType['number']!.includes('gt') && !byType['number']!.includes('all_of'));
+    assert.deepEqual(byType['bool'], ['eq', 'ne'], 'булево — триада без сравнений');
+    // Ссылочные: наборные операторы и «в иерархии» (требование aa7a2aea).
+    for (const op of ['in', 'not_in', 'any_of', 'all_of', 'none_of', 'in_hierarchy'] as const) {
+      assert.ok(byType['link']!.includes(op), `link: ${op}`);
+    }
+    // Текст/url — подстрока и сравнения.
+    assert.ok(byType['text']!.includes('contains') && byType['text']!.includes('ne'));
+    // Помощник отдаёт состав по природе, а без природы — объединённый набор операнда.
+    assert.deepEqual(
+      filterProfileOperandOperators('thoughts', 'property', 'bool'),
+      byType['bool'],
+      'природа известна — точный набор',
+    );
+    const union: string[] = [];
+    for (const list of Object.values(byType)) {
+      for (const op of list) if (!union.includes(op)) union.push(op);
+    }
+    assert.deepEqual(
+      [...filterProfileOperandOperators('thoughts', 'property')].sort(),
+      [...union].sort(),
+      'природа неизвестна — объединённый набор операнда',
+    );
+    assert.deepEqual(
+      filterProfileOperandOperators('thoughts', 'property'),
+      FILTER_PROFILES.thoughts.operand_operators!['property'],
+    );
+    // Операнд другого вида состав не путает.
+    assert.deepEqual(filterProfileOperandOperators('thoughts', 'active'), ['eq', 'ne']);
+  });
+
+  it('паритет: гейт плоской формы — подмножество AST-набора природы свойства', () => {
+    // Серверный гейт `OPS_BY_VALUE_TYPE` (плоская форма §6.10) обязан входить в
+    // декларацию профилей; обратное добавление допустимо только для документированных
+    // AST-операторов (`not_contains`, сравнения/«между» скаляров, «в иерархии»).
+    const astExtras = new Set<string>([
+      'not_contains',
+      'gt',
+      'gte',
+      'lt',
+      'lte',
+      'between',
+      'not_between',
+      'in_hierarchy',
+      'not_in_hierarchy',
+    ]);
+    for (const valueType of PROPERTY_VALUE_TYPES) {
+      const gateOps = OPS_BY_VALUE_TYPE[valueType];
+      const declared = PROPERTY_OPERATOR_SETS[valueType];
+      for (const op of gateOps) {
+        assert.ok(declared.includes(op), `${valueType}: гейт ${op} отсутствует в декларации`);
+      }
+      for (const op of declared) {
+        assert.ok(
+          (gateOps as readonly string[]).includes(op) || astExtras.has(op),
+          `${valueType}: лишний оператор ${op} не из AST-дополнений`,
+        );
+      }
+    }
+  });
+
+  it('валидация видимости: операнд вне профиля отвергается', () => {
+    // «Цели» доступны только хронике — в отборе мыслей операнд невидим.
+    const withTargets = astLeaf({ kind: 'targets' }, 'in', []);
+    assert.throws(
+      () => assertFilterAstInProfile(withTargets, 'thoughts'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+    // Тип связи виден и карте, и отбору мыслей (задача f7da04d6: канонический
+    // AST-лист link_filter допустим в теле отбора мыслей).
+    const withLinkType = astLeaf({ kind: 'link_type' }, 'in', [randomUUID()]);
+    assert.doesNotThrow(() => assertFilterAstInProfile(withLinkType, 'map'));
+    assert.doesNotThrow(() => assertFilterAstInProfile(withLinkType, 'thoughts'));
+    // Видимый операнд в своём профиле — без ошибки.
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'active' }, 'eq', true), 'thoughts'));
+    // «Цели» видны в профиле хроники (задача 4752b065) — проверка проходит.
+    assert.doesNotThrow(() => assertFilterAstInProfile(withTargets, 'chronicle'));
+    // Операнд записи виден хронике, но не мыслям.
+    assert.throws(
+      () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'thoughts'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+    // Оператор не из набора своего операнда хроники — тоже отказ.
+    assert.throws(
+      () => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'gt', 'x'), 'chronicle'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+    // «Текст записи» принимает строковые операторы (ошибка 609deba0 п.5);
+    // «Найти слова» остаётся для пути Б ключевых слов панели.
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'contains', 'x'), 'chronicle'));
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'chronicle'));
+    // «Цели записи»: список мыслей и «в иерархии» (ошибка 609deba0 п.1).
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'targets' }, 'in', [randomUUID()]), 'chronicle'));
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'targets' }, 'in_hierarchy', [randomUUID()]), 'chronicle'));
+    // Операнд события виден событиям, но не мыслям (задача 2b230e8e).
+    assert.doesNotThrow(() => assertFilterAstInProfile(astLeaf({ kind: 'occurred_at' }, 'gte', 0), 'events'));
+    assert.throws(
+      () => assertFilterAstInProfile(astLeaf({ kind: 'occurred_at' }, 'gte', 0), 'thoughts'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+  });
+
+  it('под-выборка проверяется тем же профилем', () => {
+    const nested: FilterAst = {
+      version: 1,
+      filter: {
+        entity: { kind: 'property', property_id: 'p' },
+        operator: 'in',
+        value: { query: { entity: { kind: 'targets' }, operator: 'in', value: [] }, operator: 'in' },
+      } as unknown as FilterAstNode,
+    };
+    assert.throws(
+      () => assertFilterAstInProfile(nested, 'thoughts'),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+  });
+
+  describe('подключение к движку и сохранению', { skip: !nativeAvailable() }, () => {
+    function run(ndb: NetworkDb, tree: FilterAst, profile?: 'thoughts'): void {
+      const req: ThoughtQueryRequest = { sort: 'alpha', order: 'asc', limit: 10, offset: 0, count: true, ast: tree };
+      queryThoughts(ndb, 'u', req, { emptyFilterMode: 'all', maxLimit: 100, ...(profile !== undefined ? { profile } : {}) });
+    }
+
+    it('queryThoughts проверяет профиль у явного AST; без профиля — не проверяет', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Живой тип связи: «Тип связи» исполним движком и виден профилю мыслей
+        // (задача f7da04d6 — операнд добавлен в профиль thoughts).
+        const ltId = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                                     version, created_at, updated_at, created_by)
+             VALUES (?, 'касается', lower('касается'), 'касается от', lower('касается от'), 1, '2024', '2024', 'u')`,
+          )
+          .run(ltId);
+        const tree = astLeaf({ kind: 'link_type' }, 'in', [ltId]);
+        assert.doesNotThrow(() => run(ndb, tree, 'thoughts'));
+        // Без профиля движок профиль не применяет (обратная совместимость).
+        assert.doesNotThrow(() => run(ndb, tree));
+        // Невидимый операнд (хроника) с профилем мыслей — отказ.
+        assert.throws(
+          () => run(ndb, astLeaf({ kind: 'record_body' }, 'matches', 'x'), 'thoughts'),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('сохранение отбора типа: AST с невидимым операндом не сохраняется', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'task' }, 'u');
+        assert.throws(
+          () =>
+            createThoughtTypeView(
+              ndb,
+              tt.id,
+              { name: 'Битый', definition: JSON.stringify(astLeaf({ kind: 'targets' }, 'in', [])) },
+              'u',
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+  });
+});

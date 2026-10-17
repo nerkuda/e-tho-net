@@ -82,9 +82,9 @@ describe('дневник: строка поиска с debounce (T7)', () => {
     assert.match(panel, /SEARCH_DEBOUNCE_MS/, 'debounce панели использует общую задержку');
     assert.match(panel, /window\.clearTimeout\(searchTimer\)/, 'повторный ввод сбрасывает таймер');
     assert.match(panel, /window\.setTimeout\([\s\S]*actions\.apply\(\)/, 'по паузе запускается применение');
-    assert.match(panel, /onInput: \(\) => scheduleSearchApply\(\)/, 'секция поиска подключена к debounce');
+    assert.match(panel, /scheduleSearchApply\(\)/, 'секция поиска подключена к debounce');
     // Критерий — тот же keywords, что и в определении отбора/сохранённого фильтра.
-    assert.match(panel, /title: 'Ключевые слова'/, 'секция панели подписана «Ключевые слова»');
+    assert.match(panel, /title: 'Поиск по записям'/, 'строка поиска подписана «Поиск по записям»');
     assert.match(panel, /keywords: needle/, 'подсказки ищут записи критерием keywords');
   });
 
@@ -111,13 +111,15 @@ describe('дневник: переход к записи (0.10.1, задача 4
     assert.match(src, /const startDay = localDay\(row\.valid_from\)/, 'дата начала записи');
     // Доработка приёмки (DoD 4): период пишется mode-конвертером как в
     // `pickPeriod` — поля панели показывают дату записи, а не «сегодня».
-    assert.match(src, /const mode = getFilterState\(\)\.dateMode/, 'режим полей периода — из отбора');
+    // Задача 608ecb79: режим «Пресеты/Даты» упразднён — переход к записи пишет
+    // дату начала записи строкой дерева единой кодировкой токенов календаря.
+    assert.match(src, /setChroniclePeriod\(values\.from, values\.to\)/, 'период пишется строкой дерева');
     assert.match(
       src,
-      /periodValuesForRange\(startDay, startDay, todayLocal\(\), mode\)/,
+      /periodValuesForRange\(startDay, startDay, todayLocal\(\), 'presets'\)/,
       'период — через mode-конвертер, а не сырые инстансы',
     );
-    assert.match(src, /applyPeriodToFilter\(getFilterState\(\), values\)/, 'дата начала подставляется в отбор');
+    assert.match(src, /setChroniclePeriod\(values\.from, values\.to\)/, 'дата начала подставляется в отбор');
     assert.match(src, /jumpToRecord: \(row\) => void jumpToRecord\(row\)/, 'строка поиска вызывает переход');
   });
 
@@ -136,9 +138,10 @@ describe('дневник: переход к записи (0.10.1, задача 4
     );
     // Оба пути перехода (запись прошла отбор / отбор сброшен) используют одно
     // значение `values`; на пути сброса режим сохраняется.
-    assert.match(src, /fresh\.dateMode = mode/, 'режим периода сохраняется при сбросе');
-    assert.match(src, /fresh\.dateFrom = values\.from/, 'сброс: дата начала записи');
-    assert.match(src, /fresh\.dateTo = values\.to/, 'сброс: дата начала записи');
+    // Задача 608ecb79: при сбросе отбора дата начала записи пишется строкой
+    // «Время записи» дерева (клик календаря и переход пишут одним путём).
+    assert.match(src, /clearFilter\(\)/, 'сброс: критерии очищаются');
+    assert.match(src, /setChroniclePeriod\(values\.from, values\.to\)/, 'сброс: дата начала записи');
   });
 
   it('лента прокручивается к записи, делает её текущей и подсвечивает', () => {
@@ -150,7 +153,7 @@ describe('дневник: переход к записи (0.10.1, задача 4
 
   it('запись вне отбора: отбор сбрасывается, дата начала остаётся', () => {
     assert.match(src, /if \(await loadUntilRecord\(row\.id\)\)/, 'сначала запись ищется в текущем отборе');
-    assert.match(src, /const fresh = defaultChronicleCriteriaState\(\)/, 'не прошла — отбор сбрасывается');
+    assert.match(src, /clearFilter\(\)/, 'не прошла — отбор сбрасывается');
     assert.match(src, /setSavedFilterId\(null\)/, 'сохранённый отбор снимается');
     assert.match(src, /await loadUntilRecord\(row\.id\)/, 'лента догружается до записи');
     assert.ok(

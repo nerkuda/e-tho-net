@@ -23,6 +23,7 @@ import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolv
 import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery } from '../../domain/query-service.js';
+import { parseFilterAst } from '../../domain/filter-ast.js';
 import { queryThoughtsAsync, searchAsync, subgraphAsync } from '../../domain/heavy-read.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
@@ -37,6 +38,7 @@ import { traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
 import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
+import { mcpTokenContext } from './token-context.js';
 import {
   fanOutFindDuplicates,
   fanOutQuery,
@@ -83,6 +85,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
         'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
+        'Принимает и `ast` — мыслевые настройки отбора (профиль `thoughts`: подкорень, типы мыслей, ' +
+        '«показывать неактуальные», «корзина»); валидируется профилем, `VALIDATION_ERROR` вне профиля; ' +
+        '`ast` XOR плоские мыслевые параметры. `focus_thought_id` — мысль-фокус карты: ' +
+        'контекст токенов `$thought*` в `ast` (совместим с `ast`). ' +
         '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
         'per group.',
       inputSchema: ThoughtsSearch.schema,
@@ -90,6 +96,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     },
     (args) =>
       runTool(async () => {
+        // AST-условие мыслевых настроек (профиль `thoughts`, задача d5e8ddc1):
+        // строгий разбор формы доменом; XOR с плоскими мыслевыми параметрами
+        // проверен схемой ThoughtsSearch.
+        const ast = args.ast === undefined ? undefined : parseFilterAst(args.ast);
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         if (args.network_ids !== undefined) {
           const access = buildCrossNetworkAccess(rt, args.network_ids);
@@ -118,6 +128,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           const result = fanOutSearch(access, {
             networkIds: access.accessibleIds,
             q: args.query,
+            ast,
             scope: args.scope,
             in: args.in_subtree_of === undefined ? undefined : 'subtree',
             from_thought_id: args.in_subtree_of,
@@ -125,10 +136,17 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             type: args.type,
             author_id: args.author_id,
             editor_id: args.editor_id,
+            // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+            // 2220340b): один id по всем сетям веера, домен ищет мысль в
+            // реестре КАЖДОЙ сети — паритет с REST `fanOutSearch`.
+            focus_thought_id: args.focus_thought_id,
             show_inactive: args.show_inactive,
             limit: args.limit ?? 50,
             offset: args.offset ?? 0,
             showInactiveDefault: false,
+            // Токены AST в веере разрешаются по реестру КАЖДОЙ сети (свой
+            // первый день недели) — фабрика берёт networkId (задача 56a143ff).
+            tokenContextFor: (nid) => mcpTokenContext(rt, nid),
           });
           // O10: count reads for the «head» network — the per-network reads
           // counter is per-network, so we count hits from each network in its
@@ -165,17 +183,28 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         } else if (args.type_id !== undefined && args.type_id !== null) {
           typeIdForDomain = [args.type_id];
         }
-        const result = await searchAsync(ndb, {
-          q: args.query,
-          scope: args.scope,
-          in: args.in_subtree_of === undefined ? undefined : 'subtree',
-          from_thought_id: args.in_subtree_of,
-          type_id: typeIdForDomain,
-          author_id: args.author_id,
-          editor_id: args.editor_id,
-          limit: args.limit,
-          offset: args.offset,
-        });
+        const result = await searchAsync(
+          ndb,
+          {
+            q: args.query,
+            ast,
+            scope: args.scope,
+            in: args.in_subtree_of === undefined ? undefined : 'subtree',
+            from_thought_id: args.in_subtree_of,
+            type_id: typeIdForDomain,
+            author_id: args.author_id,
+            editor_id: args.editor_id,
+            // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+            // 2220340b, паритет с REST `routes/search.ts`).
+            focus_thought_id: args.focus_thought_id,
+            limit: args.limit,
+            offset: args.offset,
+          },
+          false,
+          // Контекст календарных токенов AST (задача 56a143ff): часы сервера,
+          // `userId` ключа, «первый день недели» сети, профиль «мысли».
+          mcpTokenContext(rt, args.network_id as string),
+        );
         // O10: count the thoughts referenced by name/text/chrono hits. Link hits
         // (`by_links`) carry only `link_id`, so they don't move a thought counter.
         const thoughtIds = [
@@ -209,14 +238,22 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
         '`keywords` (мини-синтаксис по названию и синонимам), `properties[]` (операторы ' +
         'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
-        '`author_id`/`editor_id`, `link_filter`. Ответ несёт справочник `thought_types` и эхо ' +
-        '`resolved_types`/`resolved_properties` для входов по имени. Справочник фильтров, семантика ' +
-        'свойств-связей и наборов — `etn.guide { topic: "thoughts.query" }`.',
+        '`author_id`/`editor_id`, `link_filter` (совместим с `ast` — пред-сужение ' +
+        'поверх дерева). Принимает и `ast` — дерево условий ' +
+        '(грамматика — `etn.guide { topic: "thoughts.query" }`), несовместимое со старыми ' +
+        'критериями. Ответ несёт справочник `thought_types` и эхо ' +
+        '`resolved_types`/`resolved_properties` для входов по имени; неразрешимый токен — пустая ' +
+        'страница и `unresolved`, удалённая сущность условия — `VALIDATION_ERROR` ' +
+        '(`details.diagnostics`).',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
     (args) =>
       runTool(async () => {
+        // AST-тело (задача cb78315b): строгий разбор формы доменом — неизвестные
+        // поля любого уровня, версия формы и согласованность оператора листа с
+        // под-выборкой → `VALIDATION_ERROR` (не молчаливый игнор).
+        const ast = args.ast === undefined ? undefined : parseFilterAst(args.ast);
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         if (args.network_ids !== undefined) {
           const access = buildCrossNetworkAccess(rt, args.network_ids);
@@ -292,6 +329,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             query: mcpRequestToQuery(
               {
                 ...args,
+                // Разобранное AST-тело (сырое `...args.ast` перекрыто
+                // типизированным) — веер тоже принимает `ast`, паритет с REST.
+                ast,
                 type_id: args.type_id ?? resolvedTypeIds,
                 type: undefined,
                 properties: domainProperties,
@@ -300,6 +340,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             ),
             limit: args.limit ?? 50,
             offset: args.offset ?? 0,
+            // Токены AST разрешаются в контексте КАЖДОЙ сети (первый день
+            // недели у сети свой) — паритет с REST (`tokenContextFor`).
+            tokenContextFor: (nid) => mcpTokenContext(rt, nid),
           });
           // O10: count reads per network.
           for (const net of access.networks) {
@@ -315,6 +358,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             networks: result.networks,
             ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
             ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
+            // Неразрешимые токены AST по сетям (требование b7fdab20) — та же
+            // семантика, что у одиночного `unresolved`, плюс `network_id`.
+            ...(result.response.unresolved !== undefined && result.response.unresolved.length > 0
+              ? { unresolved: result.response.unresolved }
+              : {}),
           };
         }
         const ndb = openMemberNetwork(rt, args.network_id as string);
@@ -384,6 +432,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           mcpRequestToQuery(
             {
               ...args,
+              // Разобранное AST-тело (сырое `...args.ast` перекрыто типизированным).
+              ast,
               // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
               // XOR-схема соблюдена и обе формы не приходят одновременно).
               type_id:
@@ -394,7 +444,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             },
             { maxNodes: rt.limits.maxNodesPerSubgraph },
           ),
-          { maxLimit: 200, emptyFilterMode: 'all' },
+          {
+            maxLimit: 200,
+            emptyFilterMode: 'all',
+            // Обязательный пункт задачи cb78315b: контекст разрешения токенов AST.
+            tokenContext: mcpTokenContext(rt, args.network_id as string),
+            // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
+            profile: 'thoughts',
+          },
         );
         // O10: count every hit in the structured query.
         recordReads(ndb, result.items.map((h) => h.id), { now: new Date().toISOString() });
@@ -415,6 +472,11 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           thought_types: thoughtTypeCatalog(ndb, result.items.map((h) => h.type_id)),
           ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
           ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
+          // Неразрешимый токен AST — пустая страница с пояснением
+          // (требование b7fdab20): условие не теряется молча.
+          ...(result.unresolved !== undefined && result.unresolved.length > 0
+            ? { unresolved: result.unresolved.map((u) => ({ token: u.token, reason: u.reason })) }
+            : {}),
         };
       }),
   );

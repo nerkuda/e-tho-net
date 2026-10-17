@@ -18,6 +18,7 @@ export * from './transclusion-warning.js';
 export * from './thought-copy.js';
 export * from './search.js';
 export * from './query.js';
+export * from './filter-ast.js';
 export * from './structure.js';
 export * from './chronicle.js';
 export * from './pin.js';

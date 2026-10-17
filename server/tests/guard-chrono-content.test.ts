@@ -1,13 +1,18 @@
 /**
- * Сторож содержания хроно-записей (0.12.1, требование 26f0aa52, модель
- * немедленного создания 2026-10-09).
+ * Сторож содержания комментариев (0.12.1, требование 26f0aa52, модель
+ * немедленного создания 2026-10-09; пустое тело — ошибка 00f1d0e6).
  *
- * Правило: хронологическая запись валидна уже при наличии хотя бы одной
- * привязки — пустые `title` и `body_md` допустимы. Кнопка «Добавить» создаёт
- * такую запись сразу, наполнение — позже. Согласованность create/update:
- * существующую запись разрешено опустошить до того же состояния. Постоянный
- * комментарий по-прежнему требует непустой `body_md`, а хроно-запись без
- * целей — отказ.
+ * Правила:
+ *   * хронологическая запись валидна уже при наличии хотя бы одной привязки —
+ *     пустые `title` и `body_md` допустимы; кнопка «Добавить» создаёт такую
+ *     запись сразу, наполнение — позже; согласованность create/update:
+ *     существующую запись разрешено опустошить до того же состояния;
+ *   * пустое тело допустимо и у ПОСТОЯННОГО комментария — в мыслях, дневниковых
+ *     записях и описаниях типов (ошибка 00f1d0e6: очистка текста и сохранение
+ *     обязаны проходить без ошибки). Пустой комментарий не удаляется: строку
+ *     хранит пустое тело, повторное наполнение работает;
+ *   * хроно-запись БЕЗ целей (в т.ч. без ключа `targets`) — по-прежнему отказ;
+ *     только привязки делают запись не бесхозной (требование 53ce7e9b).
  *
  * Проверяется на трёх слоях: домен, REST-маршрут и MCP (`etn.thoughts.write`
  * chronicle[] и `etn.comments.update`).
@@ -112,19 +117,32 @@ describe(
       }
     });
 
-    it('домен: постоянный комментарий без текста отвергается', () => {
+    it('домен: постоянный комментарий без текста создаётся и опустошается', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const home = seedHome(ndb);
-        assert.throws(
-          () => createComment(ndb, 'thought', home, { kind: 'permanent' }, USER),
-          validationError('body_md'),
+
+        // Пустое тело постоянного комментария — не ошибка (00f1d0e6).
+        const empty = createComment(ndb, 'thought', home, { kind: 'permanent' }, USER);
+        assert.equal(empty.body_md, '', 'пустое тело сохранено как пустая строка');
+        assert.equal(empty.kind, 'permanent');
+
+        // Тело из пробелов сохраняется как есть (очистка не превращается в отказ).
+        const second = createComment(
+          ndb,
+          'thought',
+          home,
+          { kind: 'chronological', body_md: '   ' },
+          USER,
         );
-        assert.throws(
-          () => createComment(ndb, 'thought', home, { kind: 'permanent', body_md: '   ' }, USER),
-          validationError('body_md'),
-          'пробельный текст не считается содержанием',
-        );
+        assert.equal(second.body_md, '   ', 'пробельное тело не отвергается');
+
+        // Опустошение и повторное наполнение постоянного комментария.
+        const filled = updateComment(ndb, empty.id, { body_md: 'снова текст' }, undefined, USER);
+        assert.equal(filled.body_md, 'снова текст');
+        const cleared = updateComment(ndb, empty.id, { body_md: '' }, undefined, USER);
+        assert.equal(cleared.body_md, '', 'очистка постоянного комментария проходит');
+        assert.equal(cleared.version, filled.version + 1);
       } finally {
         ndb.close();
       }
@@ -158,7 +176,7 @@ describe(
       }
     });
 
-    it('REST: пустая хроно-запись с HOME — 201; опустошение PATCH — 200; постоянная без тела и хроно без целей — 422', async () => {
+    it('REST: пустая хроно-запись с HOME — 201; опустошение PATCH — 200; постоянная без тела — 201; хроно без целей — 422', async () => {
       const ctx = await buildRestContext();
       try {
         // Пустая хроно-запись при единственной привязке HOME — 201.
@@ -193,15 +211,27 @@ describe(
         assert.equal(emptiedData.title, null);
         assert.equal(emptiedData.body_md, '');
 
-        // Постоянный комментарий без текста — 422.
+        // Постоянный комментарий без тела — 201 с пустым телом (00f1d0e6).
         const perm = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/comments`,
           headers: authHeaders(ctx),
           payload: { kind: 'permanent' },
         });
-        assert.equal(perm.statusCode, 422);
-        assert.equal(perm.json().error.code, 'VALIDATION_ERROR');
+        assert.equal(perm.statusCode, 201, perm.body);
+        const permData = perm.json().data as { id: string; body_md: string; body_html: string };
+        assert.equal(permData.body_md, '');
+        assert.equal(permData.body_html, '');
+
+        // ...и опустошение его через PATCH — 200 (согласованность create/update).
+        const permCleared = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/comments/${permData.id}`,
+          headers: authHeaders(ctx),
+          payload: { body_md: '' },
+        });
+        assert.equal(permCleared.statusCode, 200, permCleared.body);
+        assert.equal((permCleared.json().data as { body_md: string }).body_md, '');
 
         // Хроно-запись без целей (пустой targets) — 422.
         const noTargets = await ctx.app.inject({

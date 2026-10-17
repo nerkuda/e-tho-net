@@ -22,6 +22,7 @@ import type MarkdownIt from 'markdown-it';
 import type Token from 'markdown-it/lib/token.mjs';
 
 import { DEFAULT_MAX_LENGTH, getRenderer } from './renderer.js';
+import type { TransclusionRenderOptions } from './transclusion-block.js';
 import {
   inlinePlainText,
   type WikiLinkRef,
@@ -95,6 +96,17 @@ export interface PublicationRenderOptions {
    * in `body_md` (задача 59774016).
    */
   sourceMap?: boolean;
+  /**
+   * Блочные обёртки развёрнутых трансклюзий (ТП2, задача `a2b68d72`): с
+   * переданными подписями каждый развёрнутый фрагмент оборачивается в
+   * `<div class="md-transclusion" data-transclusion-depth=…>`, а маркеры
+   * ошибок/пропуска — в контейнеры `md-transclusion--missing`/`--skipped`.
+   * Требует, чтобы в `source` уже лежали готовые маркеры `etn:transclusion`
+   * (выход `expandTransclusions`); `sourceOffsets`/`data-md-*` при этом считаются
+   * от переданного (развёрнутого) текста, а не от исходного `body_md`.
+   * Строго opt-in: без опции вывод фрагмента не меняется.
+   */
+  transclusion?: TransclusionRenderOptions;
 }
 
 /** Result of {@link renderPublicationFragment}. */
@@ -315,6 +327,9 @@ export function renderPublicationFragment(
     // coordinates, exactly as {@link renderMarkdown} does.
     sourceMap: opts.sourceMap === true,
     sourceMapSource: opts.sourceMap === true ? source : undefined,
+    // Блочные обёртки трансклюзий (opt-in): тот же top-level ключ, что читает
+    // {@link renderMarkdown}, — единый плагин `transclusion-block`.
+    transclusionLabels: opts.transclusion?.labels,
   };
   const html = md.render(source, env);
   return { html, headings: env.pub.headings };

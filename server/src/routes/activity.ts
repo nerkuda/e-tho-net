@@ -31,8 +31,8 @@ import type { ActivityRollupResult, ActivityTruncateResult } from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
 import {
-  ACTIVITY_LIMIT_MAX,
   listActivity,
+  parseActivityListQuery,
   rollupActivity,
   truncateActivity,
 } from '../domain/activity-service.js';
@@ -52,16 +52,19 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestActivityList, req);
+        const params = parseActivityListQuery({ ...input }, req.id);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const result = listActivity(ndb, {
-          networkId: input.network_id,
-          from_ms: input.from_ms ?? 0,
-          to_ms: input.to_ms ?? Number.MAX_SAFE_INTEGER,
-          user_id: input.user_id,
-          entity_type: input.entity_type,
-          entity_id: input.entity_id,
-          limit: Math.min(ACTIVITY_LIMIT_MAX, input.limit ?? 50),
-          offset: input.offset ?? 0,
+        // Контекст профиля «события» (требование 0095daad, ADR 0c02ab4f):
+        // первый день недели сети для `$weekStart`/`$weekEnd`; профиль несёт
+        // время (токены `$now`/`$hour*`). Настроек сети у домена нет — берём здесь.
+        const network = app.systemDb.getNetworkById(input.network_id);
+        const result = listActivity(ndb, params, {
+          userId: req.auth!.user.id,
+          nowMs: Date.now(),
+          ...(network !== null && network.first_day_of_week !== undefined
+            ? { firstDayOfWeek: network.first_day_of_week }
+            : {}),
+          requestId: req.id,
         });
         sendList(reply, result.data, result.total, result.offset, result.limit);
       },

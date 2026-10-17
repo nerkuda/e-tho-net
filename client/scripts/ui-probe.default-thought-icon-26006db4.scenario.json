@@ -1,0 +1,48 @@
+{
+  "name": "default-thought-icon-26006db4",
+  "description": "Дефолтная иконка мысли (облачко v1, задача 26006db4) с приглушённым серым контуром (задача 54c82d64): инлайн-SVG в облаке канваса и в редакторе, контур обоих элементов красится токеном --text-dim инлайн-стилем — светлая тема rgb(92, 102, 117), тёмная rgb(154, 163, 181); presentation-атрибута stroke у элементов нет, эмодзи-фолбэка 💭 в боксе нет. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.default-thought-icon-26006db4.scenario.json",
+  "timeout": 90000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null" },
+
+    { "name": "set-light", "eval": "document.documentElement.dataset.theme = 'light'" },
+    {
+      "name": "canvas-light",
+      "probe": "(() => { const box = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-icon'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, hasSvg: svg !== null, boxText: box?.textContent ?? null, strokeAttr: path?.getAttribute('stroke') ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "theme": "light", "hasSvg": true, "boxText": "", "strokeAttr": null, "pathStroke": "rgb(92, 102, 117)", "circleStroke": "rgb(92, 102, 117)" }
+    },
+
+    { "name": "set-dark", "eval": "document.documentElement.dataset.theme = 'dark'" },
+    {
+      "name": "canvas-dark",
+      "probe": "(() => { const box = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-icon'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "theme": "dark", "pathStroke": "rgb(154, 163, 181)", "circleStroke": "rgb(154, 163, 181)" }
+    },
+    { "name": "set-light-again", "eval": "document.documentElement.dataset.theme = 'light'" },
+
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "editor-open", "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'" },
+    {
+      "name": "editor-light",
+      "probe": "(() => { const box = document.querySelector('.editor-icon-box'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, boxText: box?.textContent ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "theme": "light", "boxText": "", "pathStroke": "rgb(92, 102, 117)", "circleStroke": "rgb(92, 102, 117)" }
+    },
+
+    { "name": "set-dark-editor", "eval": "document.documentElement.dataset.theme = 'dark'" },
+    { "name": "editor-dark-ready", "waitFor": "getComputedStyle(document.querySelector('.editor-icon-box svg.icon path')).stroke === 'rgb(154, 163, 181)'" },
+    {
+      "name": "editor-dark",
+      "probe": "(() => { const box = document.querySelector('.editor-icon-box'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "theme": "dark", "pathStroke": "rgb(154, 163, 181)", "circleStroke": "rgb(154, 163, 181)" }
+    },
+    { "name": "set-light-editor", "eval": "document.documentElement.dataset.theme = 'light'" }
+  ]
+}

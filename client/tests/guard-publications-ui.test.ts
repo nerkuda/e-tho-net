@@ -283,17 +283,18 @@ describe('guard: UI публикаций (a3cfc018)', () => {
       'самодельных подписей вида владельца («мысль»/«публикация») нет',
     );
 
+    // Рецепт заголовков — шестое место единого редактора (задача a0c071f8):
+    // «Родительские мысли» стали строкой «Родители» с оператором «в иерархии»,
+    // отдельного фасада-секции в модуле больше нет (ADR fc23f9c1).
     const recipe = fs.readFileSync(
       path.join(RENDERER_ROOT, 'screens', 'publications', 'recipe.ts'),
       'utf8',
     );
+    assert.match(recipe, /buildFilterEditor\(\{/, 'рецепт собирается единым редактором отбора');
+    assert.match(recipe, /profile: 'publications'/, 'профиль места — «публикации»');
     assert.ok(
-      recipe.includes('buildParentThoughtsSection'),
-      'рецепт использует общий фасад «Родительские мысли»',
-    );
-    assert.ok(
-      recipe.indexOf('buildParentThoughtsSection(ctx') < recipe.indexOf('buildKeywordsSection(ctx'),
-      '«Родительские мысли» — первое поле группы «ОТБОР РАЗДЕЛОВ»',
+      !recipe.includes('buildParentThoughtsSection'),
+      'отдельного фасада «Родительские мысли» в рецепте нет — это строка дерева',
     );
   });
 
@@ -332,34 +333,35 @@ describe('guard: UI публикаций (a3cfc018)', () => {
   });
 
   /**
-   * Дополнение к задаче b02ef1cf (замечание координатора): у роли
-   * «Родительские мысли» — ОДНА реализация (`buildParentThoughtsSection` в
-   * `lib/filter-form.ts`). Экраны, применявшие конструктор, обязаны брать
-   * фасад, а не держать собственную копию синхронизации облачков/поиска.
+   * Шестое место единого редактора — вкладка «Рецепты» редактора публикаций
+   * (задача a0c071f8, ТП 3e97b648, ADR fc23f9c1). Прежде рецепт собирался
+   * плоским легаси-конструктором секций (`lib/filter-form.ts`), и «Родительские
+   * мысли» были отдельным фасадом; теперь их строку («Родители» + оператор
+   * «в иерархии») строит ОБЩИЙ редактор. Модуль рецепта не держит ни спец-секций,
+   * ни второго конструктора/парсера отбора — только профиль и данные места.
    */
-  it('роль «Родительские мысли» — одна реализация на всех потребителей', () => {
-    const consumers = [
-      'screens/structures/filter-panel.ts',
-      'screens/chronicle/filter-panel.ts',
-      'screens/thought-type/filter-dialog.ts',
-      'screens/publications/recipe.ts',
-    ] as const;
-    for (const rel of consumers) {
-      const source = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
+  it('вкладка «Рецепты» собрана единым редактором, без спец-секций и своих копий (a0c071f8)', () => {
+    const recipe = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'publications', 'recipe.ts'),
+      'utf8',
+    );
+    assert.match(recipe, /buildFilterEditor\(\{/, 'рецепт — место единого редактора отбора');
+    assert.match(recipe, /profile: 'publications'/, 'профиль рецепта — «публикации»');
+    // Маркеры прежнего плоского конструктора и его секций (ADR fc23f9c1:
+    // отдельного контрола/парсера для бывшей спец-функции быть не должно).
+    for (const gone of [
+      'buildParentThoughtsSection',
+      'buildKeywordsSection',
+      'buildConditionsSection',
+      'buildExtrasSection',
+      'buildEntityChipSection',
+      'buildFilterForm',
+      'parentThoughtOptions',
+      'syncParentChips',
+    ]) {
       assert.ok(
-        // Якорь — именно ВЫЗОВ фасада с контекстом, а не импорт: `import {
-        // buildParentThoughtsSection }` без применения сторожа не проходит.
-        /buildParentThoughtsSection\s*\(/.test(source),
-        `${rel} обязан собирать «Родительские мысли» общим фасадом`,
-      );
-      // Маркеры прежних копий: своя карта облачков и её синхронизация.
-      assert.ok(
-        !source.includes('parentThoughtOptions'),
-        `${rel}: своей копии живого поиска «Родительских мыслей» быть не должно`,
-      );
-      assert.ok(
-        !source.includes('syncParentChips'),
-        `${rel}: своей копии синхронизации облачков «Родительских мыслей» быть не должно`,
+        !recipe.includes(gone),
+        `в рецепте не должно быть «${gone}» — соответствующая строка строится единым редактором`,
       );
     }
   });

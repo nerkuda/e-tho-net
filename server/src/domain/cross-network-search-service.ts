@@ -30,9 +30,9 @@ import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer } from './layer-service.js';
 import { findDuplicates, search } from './search-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
-import type { ThoughtQueryRequest } from './query-service.js';
+import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
-import type { DuplicateHit, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
+import type { CrossNetworkSearchResponse, CrossNetworkTokenIssue, DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
 
 /** Максимум сетей в одном веерном вызове. Запросы сверх лимита — ошибка
  *  (агенту нужен явный сигнал, а не молчаливая обрезка). */
@@ -129,17 +129,24 @@ function normalizeNetworkIds(ids: string[]): string[] {
 
 /** Слить N SearchResponse в один с проставленным `network_id` на каждом хите.
  *  Суммарный бюджет `cap` расходуется в порядке сетей и групп; при обрезке
- *  возвращается `truncated: true`. */
+ *  возвращается `truncated: true`. Неразрешимые токены AST агрегируются по
+ *  сетям (у каждой сети свой контекст — первый день недели).
+ *
+ *  Записи `unresolved` здесь НЕ схлопываются: одна и та же проблема из разных
+ *  сетей — разные диагностики (у сети свой контекст), их различает `network_id`.
+ *  Дедупликация нужна только внутри одной сети (legacy `scope=thoughts` — два
+ *  прогона одного AST, `routes/search.ts`, задача 1169ae37). */
 function mergeSearchResponses(
   responses: Array<{ networkId: string; response: SearchResponse }>,
   cap: number,
-): { response: SearchResponse; truncated: boolean } {
+): { response: CrossNetworkSearchResponse; truncated: boolean } {
   const budget = makeBudget(cap);
   const by_names: SearchResponse['by_names'] = [];
   const by_texts: SearchResponse['by_texts'] = [];
   const by_links: SearchResponse['by_links'] = [];
   const by_chrono: SearchResponse['by_chrono'] = [];
   const total = { names: 0, texts: 0, links: 0, chronology: 0 };
+  const unresolved: CrossNetworkTokenIssue[] = [];
   for (const { networkId, response } of responses) {
     for (const hit of acceptWithBudget(budget, response.by_names)) {
       by_names.push({ ...hit, network_id: networkId });
@@ -157,6 +164,11 @@ function mergeSearchResponses(
     total.texts += response.meta.total_in_group.texts;
     total.links += response.meta.total_in_group.links;
     total.chronology += response.meta.total_in_group.chronology;
+    if (response.unresolved !== undefined) {
+      for (const issue of response.unresolved) {
+        unresolved.push({ network_id: networkId, token: issue.token, reason: issue.reason });
+      }
+    }
   }
   return {
     response: {
@@ -165,6 +177,7 @@ function mergeSearchResponses(
       by_links,
       by_chrono,
       meta: { total_in_group: total },
+      ...(unresolved.length > 0 ? { unresolved } : {}),
     },
     truncated: budget.truncated,
   };
@@ -176,6 +189,12 @@ export interface CrossNetworkSearchArgs {
   networkIds: string[];
   /** Те же аргументы, что и для {@link search} одиночной сети. */
   q: string;
+  /**
+   * AST-условие мыслевых настроек отбора (профиль `thoughts`, задача
+   * d5e8ddc1, требование b91336e7): веерный режим обязан передавать `ast`,
+   * иначе настройки отбора терялись бы на каждой сети.
+   */
+  ast?: import('@etn/shared').FilterAst;
   scope?: SearchResponse['by_names'][number] extends never ? never
     : import('@etn/shared').SearchScope;
   in?: 'subtree';
@@ -187,10 +206,22 @@ export interface CrossNetworkSearchArgs {
   trashed?: boolean;
   author_id?: string;
   editor_id?: string;
+  /**
+   * Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+   * 4b1cc3d4): один id по всем сетям веера, домен разрешает его в каждой
+   * сети (мысль ищется в БД этой сети).
+   */
+  focus_thought_id?: string;
   limit: number;
   offset: number;
   /** Значение `show_inactive` по умолчанию (из пользовательских настроек). */
   showInactiveDefault: boolean;
+  /**
+   * Контекст разрешения токенов AST по сети (задача 56a143ff): первый день
+   * недели у каждой сети свой, поэтому фабрика берёт `networkId`. Отсутствие —
+   * исполнение без разрешения календарных токенов.
+   */
+  tokenContextFor?: (networkId: string) => AstTokenContext;
   /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
   maxHits?: number;
 }
@@ -199,7 +230,7 @@ export interface CrossNetworkSearchArgs {
 export function fanOutSearch(
   access: CrossNetworkAccess,
   args: CrossNetworkSearchArgs,
-): { response: SearchResponse; networks: NetworksCatalog } {
+): { response: CrossNetworkSearchResponse; networks: NetworksCatalog } {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
   const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
@@ -208,6 +239,7 @@ export function fanOutSearch(
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const response = search(ndb, {
       q: args.q,
+      ast: args.ast,
       scope: args.scope,
       in: args.in,
       from_thought_id: args.from_thought_id,
@@ -218,19 +250,20 @@ export function fanOutSearch(
       trashed: args.trashed,
       author_id: args.author_id,
       editor_id: args.editor_id,
+      focus_thought_id: args.focus_thought_id,
       // Берём per-сеть лимит = лимит * |networks|, чтобы после слияния
       // верхушка веера была представлена полностью. Объём удерживает общий
       // потолок `cap` (задача 29bc5673): per-сеть лимит НЕ занижаем до `cap`,
       // иначе обрезка становится неотличима от «ровно в потолок».
       limit: args.limit * Math.max(accessible.length, 1),
       offset: 0,
-    }, args.showInactiveDefault);
+    }, args.showInactiveDefault, args.tokenContextFor?.(net.id));
     responses.push({ networkId: net.id, response });
   }
   // Сначала сливаем (по сетям уже урезанные по per-сеть-лимиту выборки) с
   // общим бюджетом, затем применяем limit/offset к объединённой выдаче.
   const { response: merged, truncated } = mergeSearchResponses(responses, cap);
-  const paginated: SearchResponse = {
+  const paginated: CrossNetworkSearchResponse = {
     by_names: merged.by_names.slice(args.offset, args.offset + args.limit),
     by_texts: merged.by_texts.slice(args.offset, args.offset + args.limit),
     by_links: merged.by_links.slice(args.offset, args.offset + args.limit),
@@ -238,6 +271,8 @@ export function fanOutSearch(
     meta: merged.meta,
     truncated,
     reason: truncated ? 'cross_network_max_hits' : null,
+    // Диагностика неразрешимых токенов агрегирована по сетям — отдаём как есть.
+    ...(merged.unresolved !== undefined ? { unresolved: merged.unresolved } : {}),
   };
   return {
     response: paginated,
@@ -256,6 +291,13 @@ export interface CrossNetworkQueryArgs {
   offset: number;
   /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
   maxHits?: number;
+  /** Контекст разрешения токенов AST по сети (обязательный пункт задачи
+   *  c13762b1): первый день недели у каждой сети свой, поэтому фабрика берёт
+   *  networkId. Отсутствие — исполнение без разрешения календарных токенов. */
+  tokenContextFor?: (networkId: string) => AstTokenContext;
+  /** Профиль точки применения отбора (требование 0095daad, ADR 0c02ab4f).
+   *  По умолчанию `thoughts`; задаётся фасадом точки. */
+  profile?: FilterProfileId;
 }
 
 /** Запустить веером {@link queryThoughtsAsync} по всем сетям. */
@@ -271,6 +313,10 @@ export async function fanOutQuery(
   let total = 0;
   let truncated = false;
   let reason: 'max_nodes' | 'cross_network_max_hits' | null = null;
+  // Неразрешимые токены AST, агрегированные по сетям (требование b7fdab20):
+  // у каждой сети свой контекст разрешения (первый день недели, реестр) — в
+  // веерном ответе носитель «какая сеть» обязателен.
+  const unresolved: import('@etn/shared').CrossNetworkTokenIssue[] = [];
   for (const net of accessible) {
     const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
     const result = await queryThoughtsAsync(
@@ -287,7 +333,7 @@ export async function fanOutQuery(
         limit: args.limit * Math.max(accessible.length, 1),
         offset: 0,
       },
-      { maxLimit: 200, emptyFilterMode: 'all' },
+      { maxLimit: 200, emptyFilterMode: 'all', profile: args.profile ?? 'thoughts', ...(args.tokenContextFor !== undefined ? { tokenContext: args.tokenContextFor(net.id) } : {}) },
     );
     for (const item of acceptWithBudget(budget, result.items)) {
       hits.push({
@@ -300,6 +346,11 @@ export async function fanOutQuery(
       });
     }
     total += result.total ?? 0;
+    if (result.unresolved !== undefined) {
+      for (const issue of result.unresolved) {
+        unresolved.push({ network_id: net.id, token: issue.token, reason: issue.reason });
+      }
+    }
     if (result.truncated) {
       truncated = true;
       reason = result.reason;
@@ -332,6 +383,9 @@ export async function fanOutQuery(
       next_cursor: null,
       truncated,
       reason,
+      // Отдаём только при непустом наборе — как у одиночной выборки,
+      // чтобы «всё разрешилось» не шумело в ответе.
+      ...(unresolved.length > 0 ? { unresolved } : {}),
     },
     networks: accessible.map((n) => ({ id: n.id, display_name: n.display_name })),
   };

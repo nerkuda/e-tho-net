@@ -226,3 +226,29 @@ describe('диалог: вкладки общего механизма и ста
     closeDialog();
   });
 });
+
+/**
+ * Ошибка 50d9bf4e п. A8: диалог отбора типа мысли вдвое выше роли `l`.
+ * Числовая связь «вдвое» — контракт между двумя модулями CSS (`dialogs.css`
+ * задаёт высоту роли `l`, `screens/events.css` — модификатор диалога отбора),
+ * поэтому её держит тест: значение модификатора обязано быть РОВНО удвоенной
+ * высотой роли `l`. Экранный предел (`94vh`) в удвоении не участвует —
+ * удвоение проверяется по числу в `min(...)`.
+ */
+describe('диалог отбора типа мысли: высота вдвое больше роли l (ошибка 50d9bf4e п. A8)', () => {
+  function heightOf(css: string, selector: string): number | null {
+    const block = new RegExp(`${selector}\\s*\\{([^}]*)\\}`).exec(css);
+    if (block === null) return null;
+    const value = /--dialog-h:\s*(?:min\()?(\d+)px/.exec(block[1]!);
+    return value === null ? null : Number(value[1]);
+  }
+
+  it('CSS фиксирует модификатор view-editor-dialog и его высоту — 2× роль l', () => {
+    const css = readFileSync(CSS_PATH, 'utf8');
+    const roleL = heightOf(css, "\\.dialog-box\\[data-dialog-size='l'\\]");
+    const editor = heightOf(css, "\\.dialog-box\\[data-dialog-size='l'\\]\\.view-editor-dialog");
+    assert.equal(roleL, 680, 'роль l задаёт высоту 680px');
+    assert.ok(editor !== null, 'диалог отбора типа задаёт высоту модификатором view-editor-dialog');
+    assert.equal(editor, roleL! * 2, 'высота диалога отбора вдвое больше роли l');
+  });
+});

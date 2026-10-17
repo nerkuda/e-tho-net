@@ -72,6 +72,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { selectRecipeIds } from './publication-recipe.js';
+import type { AstTokenContext } from './query-service.js';
 import {
   isStructuralLinkProperty,
   linkPropertyDirection,
@@ -90,6 +91,12 @@ import {
   resolvePublicationRefs,
   setPublicationAcceptedIds,
 } from './publication-service.js';
+import {
+  createBodyExpander,
+  SERVER_TRANSCLUSION_LABELS,
+  withRawSourceOffsets,
+  type BodyExpander,
+} from './transclusion-service.js';
 
 // ---------------------------------------------------------------------------
 // Константы и лимиты
@@ -670,6 +677,7 @@ function buildDocument(
   userId: string,
   includeExcluded: boolean,
   warnings: string[],
+  tokenContext?: AstTokenContext,
 ): BuiltDocument {
   const excluded = loadExcluded(ndb, pub.id);
   // Рецепт не задан (`null`) — тот же пустой отбор, что и пустой рецепт: сборка
@@ -681,7 +689,7 @@ function buildDocument(
     warnings.push(PUBLICATION_EMPTY_RECIPE_WARNING);
     selectedIds = [];
   } else {
-    selectedIds = selectRecipeIds(ndb, userId, pub.title_recipe, warnings);
+    selectedIds = selectRecipeIds(ndb, userId, pub.title_recipe, warnings, tokenContext);
   }
   const structSelected = includeExcluded
     ? selectedIds
@@ -846,6 +854,14 @@ interface RenderContext {
   titles: Map<string, { title: string }>;
   textsBySection: Map<string, SectionText[]>;
   resolver: (ref: WikiLinkRef) => WikiLinkResolution | undefined;
+  /**
+   * Развёртка ссылок-трансклюзий (весь постоянный комментарий источника или его
+   * раздел) с маркерами ADR `85a7a01e`: предисловия, тексты и резюме публикации
+   * — обычные markdown-поля, поэтому трансклюзии в них раскрываются так же, как
+   * в комментарии мысли (ошибка `3b3035cf`, требование `2fb33964`). Развёртка
+   * идёт ДО рендера; `body_md` в DTO остаётся исходным.
+   */
+  expand: BodyExpander;
   /** Кеш «доп. материалов» по мысли (раздел рендерится один раз, но защищаемся). */
   extraCache: Map<string, PublicationAssemblyExtraGroup[]>;
   /** Накопитель экспортной модели; отсутствует при обычной сборке страницы. */
@@ -871,13 +887,18 @@ function renderSection(
   const heading = number !== null ? `${number}. ${title}` : title;
 
   const preambleSource = ctx.comments.get(node.thoughtId) ?? '';
+  // Трансклюзии в предисловии разворачиваются ДО рендера (ошибка 3b3035cf);
+  // пустое предисловие не разворачиваем. Блочная обёртка `md-transclusion`
+  // включается подписями контейнеров.
+  const preambleBody = preambleSource.trim() === '' ? '' : ctx.expand(preambleSource);
   const preambleResult =
-    preambleSource.trim() === ''
+    preambleBody.trim() === ''
       ? { html: '', headings: [] as PublicationHeading[] }
-      : renderPublicationFragment(preambleSource, {
+      : renderPublicationFragment(preambleBody, {
           baseLevel: headingNumber,
           headingAnchor: headingAnchorFor(node.thoughtId),
           resolveLink: ctx.resolver,
+          transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
         });
 
   const sectionTexts = node.repeatOf === null ? (ctx.textsBySection.get(node.thoughtId) ?? []) : [];
@@ -889,16 +910,30 @@ function renderSection(
   // нужны, и превью/файл не должны расходиться по содержимому (ADR 06874c5d).
   const sourceMap = ctx.exportSink === undefined;
   const textRenders = sectionTexts.map((t) => {
+    // Трансклюзии раскрываем ВСЕГДА — в превью (клиент рендерит серверный HTML
+    // как есть), в MCP-сборке и в экспорте: требование `2fb33964` «во всех
+    // markdown-полях» и польза агенту-потребителю. Для превью (`sourceMap`)
+    // офсеты `data-md-*` «сворачиваем» обратно в координаты `body_md`
+    // (`withRawSourceOffsets`): собственный текст владельца точен, внутри вставок
+    // разметки нет (клик там — фолбэк). `body_md` в DTO остаётся исходным.
     const body = ctx.comments.get(t.thoughtId) ?? '';
-    const result =
-      body.trim() === ''
-        ? { html: '', headings: [] as PublicationHeading[] }
-        : renderPublicationFragment(body, {
+    const expanded = body.trim() === '' ? '' : ctx.expand(body);
+    const rendered =
+      expanded.trim() === ''
+        ? null
+        : renderPublicationFragment(expanded, {
             baseLevel: headingNumber,
             headingAnchor: headingAnchorFor(t.thoughtId),
             resolveLink: ctx.resolver,
+            transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
             ...(sourceMap ? { sourceMap: true } : {}),
           });
+    const result =
+      rendered === null
+        ? { html: '', headings: [] as PublicationHeading[] }
+        : sourceMap
+          ? { ...rendered, html: withRawSourceOffsets(body, expanded, rendered.html) }
+          : rendered;
     return { text: t, body, result };
   });
 
@@ -1025,9 +1060,9 @@ function prepareDocument(
   userId: string,
   includeExcluded: boolean,
   warnings: string[],
-  exportSink?: ExportSink,
+  opts: { exportSink?: ExportSink; tokenContext?: AstTokenContext } = {},
 ): { doc: BuiltDocument; ctx: RenderContext } {
-  const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
+  const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings, opts.tokenContext);
 
   // Якоря всех блоков документа (разделы + тексты): ссылка на мысль внутри
   // публикации становится якорем даже с другой страницы ([[#888453b6]]).
@@ -1048,8 +1083,9 @@ function prepareDocument(
     titles: loadThoughtMeta(ndb, [...blockIds]),
     textsBySection: doc.textsBySection,
     resolver,
+    expand: createBodyExpander(ndb),
     extraCache: new Map(),
-    ...(exportSink === undefined ? {} : { exportSink }),
+    ...(opts.exportSink === undefined ? {} : { exportSink: opts.exportSink }),
   };
   return { doc, ctx };
 }
@@ -1063,12 +1099,19 @@ export function assemblePublication(
   ndb: NetworkDb,
   publicationId: string,
   userId: string,
-  query: { page?: number; include_excluded?: boolean } = {},
+  query: { page?: number; include_excluded?: boolean; tokenContext?: AstTokenContext } = {},
 ): PublicationAssembly {
   const pub = getPublicationOrThrow(ndb, publicationId);
   const includeExcluded = query.include_excluded === true;
   const warnings: string[] = [];
-  const { doc, ctx } = prepareDocument(ndb, pub, userId, includeExcluded, warnings);
+  const { doc, ctx } = prepareDocument(
+    ndb,
+    pub,
+    userId,
+    includeExcluded,
+    warnings,
+    query.tokenContext === undefined ? {} : { tokenContext: query.tokenContext },
+  );
 
   const perPage = PUBLICATION_ASSEMBLY_PAGE_SIZE;
   const totalRoots = doc.tree.length;
@@ -1078,10 +1121,16 @@ export function assemblePublication(
   const sections = renderSections(ndb, pageRoots, ctx);
 
   const summary = pub.summary_md ?? '';
+  // Резюме — тоже markdown-поле публикации: трансклюзии разворачиваются, как в
+  // предисловиях и текстах (требование 2fb33964, ошибка 3b3035cf).
+  const summaryBody = summary.trim() === '' ? '' : ctx.expand(summary);
   const summaryHtml =
-    summary.trim() === ''
+    summaryBody.trim() === ''
       ? ''
-      : renderPublicationFragment(summary, { resolveLink: ctx.resolver }).html;
+      : renderPublicationFragment(summaryBody, {
+          resolveLink: ctx.resolver,
+          transclusion: { labels: SERVER_TRANSCLUSION_LABELS },
+        }).html;
 
   return {
     publication: {
@@ -1114,17 +1163,23 @@ export function assemblePublication(
  *
  * @param resolveUserName отображаемое имя пользователя (для авторства-фолбэка
  *   «пусто → создатель»); домен не знает системной БД.
+ * @param tokenContext контекст токенов AST-рецепта (часы/первый день недели
+ *   сети) — иначе календарный токен в рецепте считался бы по произвольным часам.
  */
 export function buildPublicationExportDocument(
   ndb: NetworkDb,
   publicationId: string,
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): PublicationExportDocument {
   const pub = getPublicationOrThrow(ndb, publicationId);
   const warnings: string[] = [];
   const sink: ExportSink = { sections: new Map(), headings: [] };
-  const { doc, ctx } = prepareDocument(ndb, pub, userId, false, warnings, sink);
+  const { doc, ctx } = prepareDocument(ndb, pub, userId, false, warnings, {
+    exportSink: sink,
+    ...(tokenContext === undefined ? {} : { tokenContext }),
+  });
   renderSections(ndb, doc.tree, ctx); // заполняет sink по всему дереву
 
   const byNode = new Map<PublicationContentNode, PublicationExportSection>();
@@ -1179,6 +1234,8 @@ export function listPublicationCandidates(
     include_excluded?: boolean;
     /** Кеш членства с дебаунсом (ленивый фасад); без него — прямой расчёт. */
     cache?: PublicationMembershipCache;
+    /** Контекст токенов AST-рецепта (окно дебаунса кеша — 400 мс). */
+    tokenContext?: AstTokenContext;
   } = {},
 ): PublicationCandidatesResult {
   const pub = getPublicationOrThrow(ndb, publicationId);
@@ -1190,7 +1247,7 @@ export function listPublicationCandidates(
   const offset = Math.max(Math.trunc(query.offset ?? 0), 0);
   const compute = (): PublicationCandidatesResult => {
     const warnings: string[] = [];
-    const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings);
+    const doc = buildDocument(ndb, pub, userId, includeExcluded, warnings, query.tokenContext);
     const ids = doc.candidateIds;
     const pageIds = ids.slice(offset, offset + limit);
     const meta = loadThoughtMeta(ndb, pageIds);
@@ -1248,6 +1305,7 @@ export function acceptPublicationCandidate(
   publicationId: string,
   thoughtId: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
@@ -1275,7 +1333,9 @@ export function acceptPublicationCandidate(
     // обязана быть его частью — кандидаты считаются до сравнения.
     const warnings: string[] = [];
     const selectedIds =
-      pub.title_recipe === null ? [] : selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings);
+      pub.title_recipe === null
+        ? []
+        : selectRecipeIds(ndb, actorUserId, pub.title_recipe, warnings, tokenContext);
     const excluded = new Set(
       listPublicationExclusions(ndb, publicationId).map((e) => e.thought_id),
     );
@@ -1375,6 +1435,8 @@ export function listPublicationUsage(
     publication_limit?: number;
     /** Кеш членства с дебаунсом (ленивый фасад); без него — прямой расчёт. */
     cache?: PublicationMembershipCache;
+    /** Контекст токенов AST-рецепта (окно дебаунса кеша — 400 мс). */
+    tokenContext?: AstTokenContext;
   } = {},
 ): PublicationUsageResult {
   const limit = Math.min(
@@ -1395,7 +1457,7 @@ export function listPublicationUsage(
 
     for (const pub of publications.items) {
       const warnings: string[] = [];
-      const doc = buildDocument(ndb, pub, userId, false, warnings);
+      const doc = buildDocument(ndb, pub, userId, false, warnings, query.tokenContext);
 
       const path = findSectionPath(doc.tree, thoughtId);
       if (path !== null) {

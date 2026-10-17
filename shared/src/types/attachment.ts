@@ -7,6 +7,7 @@
  */
 
 import type { AttachmentKind, AttachmentOwnerType } from '../enums.js';
+import type { FilterAst } from './filter-ast.js';
 
 /** An attachment on a thought/link (02-data-model.md §3.9). */
 export interface Attachment {
@@ -219,13 +220,24 @@ export interface AttachmentOwnerRemoveResult {
 
 /**
  * Query of `GET /attachments` (03-server-api.md §11, workplan L25).
- * `q` is required; without it the server returns an empty result
- * (no unscoped listing).
+ * Two mutually exclusive forms (XOR):
+ *   * **key-word search** — `q` (mini-syntax; without it the server returns an
+ *     empty result, no unscoped listing);
+ *   * **AST body** (`ast`) — the «вложения» profile of the common filter AST
+ *     (задача 5a007bed): операнды `name`/`kind`/`mime_type`/`owner`/`size`.
+ * Supplying `ast` together with flat filters (`q`/`kind`/`exclude_owner_*`) is a
+ * `VALIDATION_ERROR`; `limit`/`offset` are pagination and allowed with either.
  */
 export interface AttachmentSearchQuery {
   /** Keywords; same mini-syntax as the thought search (§6.10): AND of
-   *  include-words, `-word` exclusion, `*` infix wildcard. */
-  q: string;
+   *  include-words, `-word` exclusion, `*` infix wildcard. Absent with `ast`. */
+  q?: string;
+  /**
+   * Тело отбора в общем AST (профиль `attachments`, задача 5a007bed): операнды
+   * `name` (заголовок), `kind` (file/url), `mime_type`, `owner` (владельцы),
+   * `size` (байты). XOR с плоскими фильтрами (`q`/`kind`/`exclude_owner_*`).
+   */
+  ast?: FilterAst;
   /** Filter to one attachment kind. */
   kind?: AttachmentKind;
   /** Exclude attachments of this owner (used by the editor's add dialog to

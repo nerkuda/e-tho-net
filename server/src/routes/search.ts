@@ -24,6 +24,7 @@ import { createReadStream } from 'node:fs';
 import {
   EtnError,
   PREF_KEY,
+  type CrossNetworkSearchResponse,
   type ExportEtnxOptions,
   type ExportFormat,
   type ExportJobStartResult,
@@ -31,18 +32,17 @@ import {
   type MentionsScanResponse,
   type SearchResponse,
   type SearchScope,
+  type TokenIssue,
 } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, type RouteDeps } from './helpers.js';
+import { openRouteNetworkDb, restTokenContext, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
 import { getExportJob, getExportJobContent, getExportJobFile, startExportJob } from '../domain/export-service.js';
+import { parseFilterAst } from '../domain/filter-ast.js';
 import { findMentionsInTexts } from '../domain/search-service.js';
 import { searchAsync } from '../domain/heavy-read.js';
-import {
-  fanOutSearch,
-  type CrossNetworkAccess,
-} from '../domain/cross-network-search-service.js';
+import { fanOutSearch, type CrossNetworkAccess } from '../domain/cross-network-search-service.js';
 
 /** Map a stored export MIME type to the recommended download filename extension. */
 function extensionFor(contentType: string): string {
@@ -59,8 +59,17 @@ const LEGACY_SCOPE_MAP: Record<string, SearchScope[]> = {
   chronology: ['chronology'],
 };
 
-/** Merge two search responses (used for the legacy `thoughts` scope). */
-function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchResponse {
+/**
+ * Merge two search responses (used for the legacy `thoughts` scope).
+ *
+ * Диагностика `unresolved` схлопывается по (`path`, `token`, `reason`): legacy
+ * `scope=thoughts` — это ДВА прогона одного и того же AST (`names` + `texts`),
+ * поэтому один и тот же неразрешимый токен приезжал из обоих ответов и
+ * дублировался в выдаче (живой прогон давал `length: 2`, задача 1169ae37).
+ * Порядок диагностик — по первому появлению.
+ */
+export function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchResponse {
+  const unresolved = dedupeUnresolved([...(a.unresolved ?? []), ...(b.unresolved ?? [])]);
   return {
     by_names: [...a.by_names, ...b.by_names],
     by_texts: [...a.by_texts, ...b.by_texts],
@@ -74,7 +83,25 @@ function mergeSearchResponses(a: SearchResponse, b: SearchResponse): SearchRespo
         chronology: a.meta.total_in_group.chronology + b.meta.total_in_group.chronology,
       },
     },
+    ...(unresolved.length > 0 ? { unresolved } : {}),
   };
+}
+
+/**
+ * Одна проблема с токеном — одна запись диагностики. Ключ — (`path`, `token`,
+ * `reason`); `message` в ключ не входит: у одной и той же проблемы он одинаков —
+ * пояснение домен строит по токену и причине.
+ */
+function dedupeUnresolved(issues: readonly TokenIssue[]): TokenIssue[] {
+  const seen = new Set<string>();
+  const out: TokenIssue[] = [];
+  for (const issue of issues) {
+    const key = `${issue.path}\u0000${issue.token}\u0000${issue.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(issue);
+  }
+  return out;
 }
 
 /** `/api/v1/*` search/export/job routes plugin factory. */
@@ -91,6 +118,11 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestSearchQuery, req);
         const networkId = input.network_id as string;
         const q = input.q as string;
+        // AST-условие мыслевых настроек (профиль `thoughts`, задача d5e8ddc1):
+        // строгий разбор формы доменом; XOR с плоскими мыслевыми параметрами
+        // уже проверен схемой RestSearchQuery.
+        const astRaw = input.ast as unknown;
+        const ast = astRaw === undefined ? undefined : parseFilterAst(astRaw, req.id);
 
         const scopeRaw = input.scope as string | undefined;
         // Legacy `thoughts` → two granular queries merged (names + texts).
@@ -100,6 +132,10 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const inParam = input.in as 'subtree' | undefined;
         const fromThoughtId = input.from_thought_id as string | undefined;
+        // Мысль-фокус карты — контекст разрешения токенов `$thought*` в `ast`
+        // (задача 4b1cc3d4): клиент присылает текущую мысль в фокусе, домен
+        // подставляет её в условие быстрой команды «По родителю в фокусе».
+        const focusThoughtId = input.focus_thought_id as string | undefined;
 
         const pref = app.systemDb.getNetworkPreference(
           req.auth!.user.id,
@@ -155,6 +191,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           const result = fanOutSearch(access, {
             networkIds: accessibleIds,
             q,
+            ast,
             scope: granularScopes[0],
             in: inParam,
             from_thought_id: fromThoughtId,
@@ -164,17 +201,26 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
             trashed: input.trashed as boolean | undefined,
             author_id: input.author_id as string | undefined,
             editor_id: input.editor_id as string | undefined,
+            focus_thought_id: focusThoughtId,
             limit,
             offset,
             showInactiveDefault,
+            // Токены AST в веерном режиме разрешаются по реестру КАЖДОЙ сети
+            // (свой первый день недели) — фабрика берёт networkId (задача
+            // 56a143ff, паритет с «Структурами»).
+            tokenContextFor: (nid) => restTokenContext(app, req.auth!.user.id, nid),
           });
-          sendSuccess(reply, { ...result.response, networks: result.networks } satisfies SearchResponse);
+          sendSuccess(
+            reply,
+            { ...result.response, networks: result.networks } satisfies CrossNetworkSearchResponse,
+          );
           return;
         }
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const requestBase = {
           q,
+          ast,
           in: inParam as 'subtree' | undefined,
           from_thought_id: fromThoughtId,
           type_id: (input.type_id ?? []) as string[],
@@ -187,6 +233,9 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           // применяется (domain-слой сам приводит к `null`).
           author_id: input.author_id as string | undefined,
           editor_id: input.editor_id as string | undefined,
+          // Контекст токенов контекста мысли `$thought*` в `ast` (задача
+          // 4b1cc3d4): мысль-фокус карты. Совместим с `ast` (в XOR не входит).
+          focus_thought_id: focusThoughtId,
           limit,
           offset,
         };
@@ -195,11 +244,19 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           ndb,
           { ...requestBase, scope: granularScopes[0] },
           showInactiveDefault,
+          // Контекст календарных токенов AST (задача 56a143ff): часы сервера,
+          // `userId` ключа, «первый день недели» сети, профиль «мысли».
+          restTokenContext(app, req.auth!.user.id, networkId),
         );
         for (let i = 1; i < granularScopes.length; i += 1) {
           response = mergeSearchResponses(
             response,
-            await searchAsync(ndb, { ...requestBase, scope: granularScopes[i] }, showInactiveDefault),
+            await searchAsync(
+              ndb,
+              { ...requestBase, scope: granularScopes[i] },
+              showInactiveDefault,
+              restTokenContext(app, req.auth!.user.id, networkId),
+            ),
           );
         }
         sendSuccess(reply, response);

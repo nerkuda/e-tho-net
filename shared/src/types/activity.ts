@@ -18,6 +18,8 @@
  * чтения в журнал не пишутся.
  */
 
+import type { FilterAst } from './filter-ast.js';
+
 /**
  * Действия, оставляющие запись в `activity_log` (требование b0c7a57c).
  * Состав растёт вместе с доменом — текстовое поле без CHECK, чтобы новые
@@ -86,6 +88,13 @@ export interface ActivityRow {
 export interface ActivityListParams {
   /** Идентификатор сети (уже задан URL'ом, но нужен доменному сервису). */
   networkId: string;
+  /**
+   * Тело отбора в общем AST (профиль `events`, задача 2b230e8e): операнды
+   * `occurred_at`/`action`/`entity_type`/`entity_id`/`user`. Задаётся ЛИБО телом
+   * AST, ЛИБО плоскими полями (`from_ms`/…) — не оба (XOR, `VALIDATION_ERROR`).
+   * Плоские поля компилируются в AST единым компилятором.
+   */
+  ast?: FilterAst;
   /** Включать события не раньше этого `occurred_at_ms`. */
   from_ms?: number;
   /** Включать события не позже этого `occurred_at_ms`. */

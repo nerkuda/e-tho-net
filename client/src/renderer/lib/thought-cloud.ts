@@ -36,6 +36,7 @@ import { store } from '../state.js';
 import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
 import { renderLibraryIcon, svgIcon } from './ui/icon.js';
+import { renderDefaultThoughtIcon } from './ui/thought-default-icon.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
 import { logUiEvent } from './ui-log.js';
@@ -105,8 +106,8 @@ export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
 /**
  * Resolves a thought's icon: its own icon wins, else the default icon resolved
  * along the type chain (L21; a thought without a type resolves the root type),
- * else none (the caller falls back to 💭). Returns the icon value together
- * with its kind (02-data-model.md §3.1.1).
+ * else none (the caller renders the built-in default cloud). Returns the icon
+ * value together with its kind (02-data-model.md §3.1.1).
  */
 export function resolveThoughtIcon(thought: {
   icon: string | null;
@@ -130,7 +131,8 @@ export function resolveThoughtIcon(thought: {
  * Renders a thought's resolved icon into an element: an `<img>` for an
  * `image`-kind icon, a Lucide glyph from the facade for an `icon`-kind icon
  * (requirement ead91183; the full catalog is fetched lazily), otherwise the
- * emoji glyph (own/type default, else 💭). When the icon is backed by an
+ * emoji glyph (own/type default), otherwise the built-in default cloud
+ * (задача 26006db4). When the icon is backed by an
  * attachment (L16), the `<img>` carries the thought and attachment ids so the
  * Ctrl-hover magnifier shows the attachment's full picture instead of the
  * icon-sized preview.
@@ -166,13 +168,20 @@ export function applyThoughtIcon(
   } else if (ic.kind === 'icon' && ic.icon !== null) {
     // Библиотечная иконка (icon_kind='icon') — имя в каталоге Lucide, значок
     // рисует фасад (отложенно: полный каталог грузится лениво). Неизвестное
-    // имя (устаревшие данные) — заглушка, как у отсутствующего глифа. Цвет
-    // символа передаётся фасаду (пусто — прежний `currentColor`).
+    // имя (устаревшие данные) — дефолтное облачко мысли, как у мысли без
+    // иконки. Цвет символа передаётся фасаду (пусто — прежний `currentColor`).
     const iconOptions: { size: number; color?: string } = { size: 24 };
     if (ic.color !== null) iconOptions.color = ic.color;
-    void renderLibraryIcon(iconBox, ic.icon, iconOptions, '💭');
+    void renderLibraryIcon(iconBox, ic.icon, iconOptions, () =>
+      renderDefaultThoughtIcon(iconBox),
+    );
+  } else if (ic.icon !== null) {
+    // Пользовательская эмодзи-иконка (своя или унаследованная от типа) —
+    // глифом, как раньше.
+    iconBox.textContent = ic.icon;
   } else {
-    iconBox.textContent = ic.icon ?? '💭';
+    // Иконки нет нигде — встроенное дефолтное облачко мысли (задача 26006db4).
+    renderDefaultThoughtIcon(iconBox);
   }
 }
 

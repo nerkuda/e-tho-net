@@ -40,6 +40,7 @@ import {
   type IconCatalog,
 } from '../lib/ui/icon.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
+import { renderDefaultThoughtIcon } from '../lib/ui/thought-default-icon.js';
 
 /** Оригинал файла-картинки, выбранного системным диалогом (несётся вызывающему). */
 export interface ResourceFileSource {
@@ -479,12 +480,18 @@ export function thoughtIconSourceTab(opts: {
         } else if (type.icon_kind === 'icon' && type.icon !== null) {
           // Библиотечная иконка типа (icon_kind='icon') — значок каталога
           // рисует фасад, отложенно (каталог грузится лениво). Цвет символа —
-          // как у типа (0.12.1, задача 4105bd6a).
+          // как у типа (0.12.1, задача 4105bd6a). Неизвестное имя — дефолтное
+          // облачко мысли (задача 26006db4), а не эмодзи-заглушка.
           const iconOptions: { size: number; color?: string } = { size: 20 };
           if (type.icon_color !== null) iconOptions.color = type.icon_color;
-          void renderLibraryIcon(cell, type.icon, iconOptions, '💭');
+          void renderLibraryIcon(cell, type.icon, iconOptions, () =>
+            renderDefaultThoughtIcon(cell),
+          );
+        } else if (type.icon !== null && type.icon !== '') {
+          // Пользовательская эмодзи-иконка типа — глифом, как раньше.
+          cell.textContent = type.icon;
         } else {
-          cell.textContent = type.icon ?? '💭';
+          renderDefaultThoughtIcon(cell);
         }
         grid.append(cell);
       }

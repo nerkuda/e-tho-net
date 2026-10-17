@@ -41,6 +41,7 @@ import {
   upsertPermanentViaWrite,
 } from './mcp-helpers.js';
 import type { WriteThoughtFixture } from './mcp-helpers.js';
+import { authHeaders, buildRestContext, closeRestContext } from './rest-helpers.js';
 
 // Test user for authorship columns (task 5ef8b5bb)
 const USER = 'test-user';
@@ -1352,6 +1353,64 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       }
     } finally {
       await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.networks.list/structure отдают first_day_of_week; значение = GET /networks/:id (8eaeba9a)', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      // Одна настройка в системной БД — источник для обоих фасадов.
+      const current = rest.sys.getNetworkById(rest.networkId)!;
+      rest.sys.updateNetwork(rest.networkId, {
+        displayName: current.display_name,
+        description: current.description,
+        when_to_use: current.when_to_use,
+        conventions: current.conventions,
+        examples: current.examples,
+        type_roles: current.type_roles,
+        first_day_of_week: 7,
+      });
+
+      // Эталон — REST GET /networks/:id.
+      const restGet = await rest.app.inject({
+        method: 'GET',
+        url: `/api/v1/networks/${rest.networkId}`,
+        headers: authHeaders(rest),
+      });
+      assert.equal(restGet.statusCode, 200, JSON.stringify(restGet.json()));
+      const expected = (restGet.json().data as { first_day_of_week: number }).first_day_of_week;
+      assert.equal(expected, 7);
+
+      // MCP networks.list.
+      const listed = await callOp(handle.client, 'networks.list', {});
+      assert.equal(listed.isError, undefined, toolText(listed));
+      const items = toolJson<Array<{ id: string; first_day_of_week?: number }>>(listed);
+      const mine = items.find((i) => i.id === rest.networkId);
+      assert.ok(mine !== undefined, 'сеть ключа присутствует в networks.list');
+      assert.equal(mine!.first_day_of_week, expected, 'networks.list = GET /networks/:id');
+
+      // MCP networks.structure (обе ветки: со структурой и без).
+      const structure = await handle.client.callTool({
+        name: 'etn.networks.structure',
+        arguments: { network_id: rest.networkId },
+      });
+      assert.equal(structure.isError, undefined, toolText(structure));
+      const structureData = toolJson<{ first_day_of_week?: number }>(structure);
+      assert.equal(structureData.first_day_of_week, expected, 'networks.structure = GET /networks/:id');
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
     }
   });
 

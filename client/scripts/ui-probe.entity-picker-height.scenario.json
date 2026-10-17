@@ -1,0 +1,140 @@
+{
+  "name": "entity-picker-height",
+  "description": "Высота модальных пикеров сущностей (ошибка ffa55338, версия 0.13.1). Симптом: оба режима пикера (`.list-dialog-body` + роль `s` + `fixedHeight`, lib/entity-picker.ts:840/1004) показывают мало строк списка — роль `s` даёт `--dialog-h: 320px`. Сценарий открывает ОБА режима: (1) пикер типов — контекстное меню мысли «Изменить тип» (kind thought-types, дерево `.st-f-picker-list`); (2) единый список сущностей — контекстное меню редактора комментария «Вставить ссылку на публикацию…» (kind publications, `.entity-pick-chips`). Пробы: высота бокса `.dialog-box` = min(max(450px, 50vh), calc(100vh − 60px)) на двух размерах окна (допуск ±2px), область списка тянется и прокручивается, пустой поиск не схлопывает область, роль `s` остаётся на боксе. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.entity-picker-height.scenario.json --out .tmp/ffa55338/out",
+  "timeout": 120000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed-thought-types",
+      "timeout": 30000,
+      "eval": "(() => { const ps = []; for (let i = 1; i <= 20; i++) { ps.push(window.etn.types.createThoughtType('{{networkId}}', { name: 'Стенд-тип ' + String(i).padStart(2, '0') })); } return Promise.all(ps).then((r) => r.length); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "map-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-thought-menu", "eval": "(() => { const el = document.querySelector('[data-id=\"{{thoughtId}}\"] .cloud') || document.querySelector('[data-id=\"{{thoughtId}}\"]'); if (!el) throw new Error('нет облачка засеянной мысли'); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5 })); return true; })()" },
+    { "name": "thought-menu-visible", "timeout": 8000, "waitFor": "document.querySelectorAll('.menu-item').length > 0" },
+    { "name": "pick-change-type", "eval": "(() => { const rows = Array.from(document.querySelectorAll('.menu-item')); const row = rows.find((e) => (e.textContent || '').includes('Изменить тип')); if (!row) throw new Error('нет пункта «Изменить тип»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()" },
+    { "name": "type-picker-open", "timeout": 10000, "waitFor": "document.querySelector('.dialog-box .st-f-picker-list') !== null" },
+    { "name": "type-picker-role", "probe": "document.querySelector('.dialog-box')?.dataset?.dialogSize ?? null", "expect": "s" },
+
+    { "name": "type-picker-dialog-not-hidden", "probe": "document.hidden === false", "expect": true },
+
+    { "name": "type-picker-resize-large", "eval": "(() => { window.resizeTo(1500, 1150); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "type-picker-large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    {
+      "name": "type-picker-geom-large",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); const list = document.querySelector('.st-f-picker-list'); const lh = list ? Math.round(list.getBoundingClientRect().height) : null; const row = document.querySelector('.dialog-box .ui-tree-row'); const rowH = row ? Math.round(row.getBoundingClientRect().height) : null; const rows = document.querySelectorAll('.dialog-box .ui-tree-row').length; return JSON.stringify({ vh: vh, h: h, expected: expected, listH: lh, rowH: rowH, rows: rows, visibleRows: (lh && rowH) ? Math.round(lh / rowH) : null }); })()"
+    },
+    {
+      "name": "type-picker-geom-large-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+    {
+      "name": "type-picker-list-scroll-metrics",
+      "probe": "(() => { const l = document.querySelector('.st-f-picker-list'); const tree = l ? l.querySelector('.ui-tree') : null; const sc = tree && tree.scrollHeight > tree.clientHeight ? tree : l; if (!sc) return 'no-list'; return JSON.stringify({ clientH: sc.clientHeight, scrollH: sc.scrollHeight, scrollable: sc.scrollHeight > sc.clientHeight + 4 }); })()"
+    },
+    {
+      "name": "type-picker-list-scrolls",
+      "probe": "(() => { const l = document.querySelector('.st-f-picker-list'); if (!l) return false; const tree = l.querySelector('.ui-tree'); const sc = tree && tree.scrollHeight > tree.clientHeight ? tree : l; sc.scrollTop = 0; const before = sc.scrollTop; sc.scrollTop = 60; return sc.scrollTop > before; })()",
+      "expect": true
+    },
+
+    { "name": "type-picker-resize-small", "eval": "(() => { window.resizeTo(1200, 520); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "type-picker-small-ready", "timeout": 10000, "waitFor": "window.innerHeight < 560 && window.innerHeight > 440" },
+    {
+      "name": "type-picker-geom-small",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); return JSON.stringify({ vh: vh, h: h, expected: expected, ceiling: vh - 60 }); })()"
+    },
+    {
+      "name": "type-picker-geom-small-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+
+    {
+      "name": "type-picker-area-before-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const list = document.querySelector('.st-f-picker-list'); if (!box || !list) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), list: Math.round(list.getBoundingClientRect().height) }); })()"
+    },
+    {
+      "name": "type-picker-search-no-match",
+      "eval": "(() => { const i = document.querySelector('.dialog-box .st-f-search'); if (!i) throw new Error('нет строки поиска пикера'); i.value = 'заведомо нет такого типа'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    { "name": "type-picker-empty-state", "timeout": 8000, "waitFor": "document.querySelector('.dialog-box .st-f-picker-list') !== null" },
+    {
+      "name": "type-picker-area-after-empty-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const list = document.querySelector('.st-f-picker-list'); if (!box || !list) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), list: Math.round(list.getBoundingClientRect().height) }); })()",
+      "expectFrom": "type-picker-area-before-search"
+    },
+
+    { "name": "type-picker-resize-restore", "eval": "(() => { window.resizeTo(1280, 800); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "type-picker-restore-ready", "timeout": 10000, "waitFor": "window.innerHeight > 600" },
+    { "name": "type-picker-close", "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-footer .ui-btn')).find((n) => (n.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()" },
+    { "name": "type-picker-closed", "timeout": 10000, "waitFor": "document.querySelector('.dialog-box') === null" },
+
+    { "name": "open-thought-editor", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "thought-opened", "timeout": 15000, "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'" },
+    { "name": "enter-edit", "click": "[data-action=\"edit\"]" },
+    { "name": "edit-mode", "timeout": 10000, "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null" },
+    { "name": "comment-menu-open", "eval": "(() => { const c = document.querySelector('.md-field--editing .cm-content'); if (!c) throw new Error('нет поля комментария в правке'); const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 10 })); return true; })()" },
+    { "name": "comment-menu-visible", "timeout": 8000, "waitFor": "document.querySelectorAll('.menu-item').length > 0" },
+    { "name": "pick-publication-link", "eval": "(() => { const rows = Array.from(document.querySelectorAll('.menu-item')); const row = rows.find((e) => (e.textContent || '').includes('Вставить ссылку на публикацию')); if (!row) throw new Error('нет пункта «Вставить ссылку на публикацию…»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()" },
+    { "name": "publication-picker-open", "timeout": 10000, "waitFor": "document.querySelector('.dialog-box .entity-pick-chips') !== null" },
+    { "name": "publication-picker-role", "probe": "document.querySelector('.dialog-box')?.dataset?.dialogSize ?? null", "expect": "s" },
+    { "name": "publication-picker-mode", "probe": "document.querySelector('.dialog-box .st-f-picker-list') === null && document.querySelector('.dialog-box .st-f-searchbar') !== null", "expect": true },
+
+    { "name": "publication-picker-dialog-not-hidden", "probe": "document.hidden === false", "expect": true },
+
+    { "name": "publication-picker-resize-large", "eval": "(() => { window.resizeTo(1500, 1150); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "publication-picker-large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    {
+      "name": "publication-picker-geom-large",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); const body = document.querySelector('.dialog-box .list-dialog-body'); return JSON.stringify({ vh: vh, h: h, expected: expected, bodyH: body ? Math.round(body.getBoundingClientRect().height) : null }); })()"
+    },
+    {
+      "name": "publication-picker-geom-large-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+
+    { "name": "publication-picker-resize-small", "eval": "(() => { window.resizeTo(1200, 520); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "publication-picker-small-ready", "timeout": 10000, "waitFor": "window.innerHeight < 560 && window.innerHeight > 440" },
+    {
+      "name": "publication-picker-geom-small",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return 'no-box'; const vh = window.innerHeight; const h = Math.round(box.getBoundingClientRect().height); const expected = Math.round(Math.min(Math.max(450, 0.5 * vh), vh - 60)); return JSON.stringify({ vh: vh, h: h, expected: expected, ceiling: vh - 60 }); })()"
+    },
+    {
+      "name": "publication-picker-geom-small-fits",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); if (!box || document.hidden) return false; const vh = window.innerHeight; const h = box.getBoundingClientRect().height; const expected = Math.min(Math.max(450, 0.5 * vh), vh - 60); return Math.abs(h - expected) <= 2; })()",
+      "expect": true
+    },
+
+    {
+      "name": "publication-picker-area-before-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const chips = document.querySelector('.entity-pick-chips'); if (!box || !chips) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), chips: Math.round(chips.getBoundingClientRect().height) }); })()"
+    },
+    {
+      "name": "publication-picker-search-no-match",
+      "eval": "(() => { const i = document.querySelector('.dialog-box .st-f-search'); if (!i) throw new Error('нет строки поиска пикера'); i.value = 'заведомо нет такой публикации'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    { "name": "publication-picker-search-state", "timeout": 8000, "waitFor": "document.querySelector('.dialog-box .entity-pick-chips') !== null" },
+    {
+      "name": "publication-picker-area-after-empty-search",
+      "probe": "(() => { const box = document.querySelector('.dialog-box'); const chips = document.querySelector('.entity-pick-chips'); if (!box || !chips) return 'no-dialog'; return JSON.stringify({ box: Math.round(box.getBoundingClientRect().height), chips: Math.round(chips.getBoundingClientRect().height) }); })()",
+      "expectFrom": "publication-picker-area-before-search"
+    },
+
+    { "name": "publication-picker-resize-restore", "eval": "(() => { window.resizeTo(1280, 800); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "publication-picker-restore-ready", "timeout": 10000, "waitFor": "window.innerHeight > 600" },
+    { "name": "publication-picker-close", "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-footer .ui-btn')).find((n) => (n.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()" },
+    { "name": "publication-picker-closed", "timeout": 10000, "waitFor": "document.querySelector('.dialog-box') === null" }
+  ]
+}

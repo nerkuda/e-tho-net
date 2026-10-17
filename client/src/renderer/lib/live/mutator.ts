@@ -26,7 +26,7 @@ import {
 } from './entities.js';
 import type { PublicationOrderItem } from '@etn/shared';
 
-import { thoughtUpdateKeys } from './event-router.js';
+import { commentActivityKeys, thoughtUpdateKeys } from './event-router.js';
 import { queryKeys } from './query-keys.js';
 import type { LocalMutationSignal } from './query-registry.js';
 import { invalidateQueries, setQueryData } from './query-registry.js';
@@ -148,6 +148,23 @@ export function signalPublicationOrderChanged(
 }
 
 /**
+ * Сигнал «активность владельца изменилась» (своя правка комментария или
+ * хроно-записи): домен двигает `updated_at` владельца-мысли (ошибка 228df7a4,
+ * требование e6d4165e), поэтому клиент гасит ровно те же ключи, что роутер на
+ * событиях `comment.*` ({@link commentActivityKeys}). Без этого правка
+ * комментария «не считалась изменением мысли»: список отбора по «Дате
+ * изменений» оставался прежним, пока пользователь не применит отбор вручную
+ * (ошибка 04344707). Локальный путь обязан совпадать с сетевым — тот же урок,
+ * что у `signalThoughtUpdated` (ошибка 4b3d1940).
+ */
+export function signalOwnerActivity(ownerId: string): void {
+  invalidateAfterMutation(commentActivityKeys(), {
+    local: 'owner-activity',
+    id: ownerId,
+  } satisfies LocalMutationSignal);
+}
+
+/**
  * Сигнал «сохранён ПОСТОЯННЫЙ комментарий мысли/связи» (своя правка из
  * редактора). `bodyMd` едет в сигнале, чтобы под stale рабочая область правила
  * блок точечно, без перечитывания сборки.
@@ -157,6 +174,7 @@ export function signalPermanentCommentSaved(
   bodyMd: string,
   kind = 'permanent',
 ): void {
+  signalOwnerActivity(ownerId);
   invalidateQueries(queryKeys.publicationAssemblyAll(), {
     local: 'comment-saved',
     id: ownerId,

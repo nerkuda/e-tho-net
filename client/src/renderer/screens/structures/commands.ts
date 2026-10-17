@@ -19,9 +19,7 @@
 
 import {
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
-  type SortOrder,
   type StructureFilter,
-  type StructureSort,
   type ThoughtBatchArgs,
   type ThoughtBatchOp,
 } from '@etn/shared';
@@ -39,9 +37,13 @@ import { store } from '../../state.js';
 
 /** The applied filter the commands run against (owned by structures.ts). */
 export interface FilterCommandsContext {
+  /**
+   * Применённый отбор целиком: порядок несёт он сам (плоская пара `sort`/`order`
+   * из чипов панели либо `ast.sort`). Второго источника порядка нет — иначе
+   * команда собирала бы id в порядке, которого пользователь не выбирал
+   * (ошибка 32fd6125).
+   */
   filter: StructureFilter;
-  sort: StructureSort;
-  order: SortOrder;
   /** Runs after a server command so the results tree refetches its page. */
   refresh(): void;
 }
@@ -91,10 +93,11 @@ async function collectAllIds(ctx: FilterCommandsContext): Promise<string[]> {
   const ids: string[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < COLLECT_MAX_PAGES; page++) {
+    // Порядок — один источник: его несёт сам отбор (плоская пара у пустого
+    // дерева, `ast.sort` у дерева); полей `sort`/`order` рядом с отбором нет
+    // (ошибка 32fd6125).
     const result = await etn.structures.queryIds(networkId, {
       ...ctx.filter,
-      sort: ctx.sort,
-      order: ctx.order,
       limit: STRUCTURES_QUERY_IDS_MAX_LIMIT,
       offset: 0,
       ...(cursor !== null ? { cursor } : {}),

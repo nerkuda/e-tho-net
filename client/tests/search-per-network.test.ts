@@ -27,6 +27,7 @@ import {
   defaultSearchCriteriaState,
   parseSearchCriteria,
   searchCriteriaToStored,
+  type SearchCriteriaState,
 } from '../src/renderer/lib/filter-builder.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
@@ -60,8 +61,7 @@ describe('модульное состояние строки поиска сбр
     assert.match(body, /lastResults = null;/, 'прошлые результаты не переживают смену сети');
     assert.match(body, /lastSelectedKey = null;/, 'выбранный хит сброшен');
     assert.match(body, /cursor = null;/, 'клавиатурный курсор сброшен');
-    assert.match(body, /subrootClouds\.clear\(\);/, 'облачка подкорней прошлой сети сняты');
-    assert.match(body, /subrootCloudsRequested\.clear\(\);/, 'реестр догрузки подкорней снят');
+    assert.match(body, /searchEditor = null;/, 'рукоятка редактора прошлой сети снята');
     assert.match(body, /window\.clearTimeout\(searchTimer\)/, 'таймер поиска снят');
     // Ключевое (замечание верификатора): отложенную запись сохранения сброс НЕ
     // отменяет — она досылает настройку в свою (старую) сеть.
@@ -105,8 +105,10 @@ describe('хранилище настроек уже адресуется сет
 describe('дефолт для сети без своей записи (ошибка 438092f6)', () => {
   it('пустой/мусорный вход даёт пустые настройки, а не чужие', () => {
     const empty = defaultSearchCriteriaState();
-    assert.equal(empty.subtree, false, 'ограничение потомками выключено');
-    assert.deepEqual(empty.subrootIds, [], 'мысли-подкорни пусты');
+    assert.equal(empty.onlyThoughts, false, 'области поиска не ограничены');
+    assert.equal(empty.onlyLinks, false);
+    assert.equal(empty.onlyChrono, false);
+    assert.deepEqual(empty.linkTypeIds, [], 'тип связи не применён');
     for (const raw of [null, undefined, 'мусор', 42, [], {}]) {
       assert.deepEqual(parseSearchCriteria(raw), empty, `«${String(raw)}» → дефолт`);
     }
@@ -115,30 +117,51 @@ describe('дефолт для сети без своей записи (ошиб�
 
 describe('ранее сохранённые записи не теряются (ошибка 438092f6)', () => {
   it('запись сети читается обратно без потерь', () => {
-    const saved = searchCriteriaToStored({
+    const withSubroot: SearchCriteriaState = {
       ...defaultSearchCriteriaState(),
-      subtree: true,
-      subrootIds: ['11111111-1111-4111-8111-111111111111'],
-    });
-    const parsed = parseSearchCriteria(saved);
-    assert.equal(parsed.subtree, true, 'флажок сохранён');
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+          { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: ['11111111-1111-4111-8111-111111111111'] },
+          },
+        ],
+      },
+    };
+    const parsed = parseSearchCriteria(searchCriteriaToStored(withSubroot));
     assert.deepEqual(
-      parsed.subrootIds,
-      ['11111111-1111-4111-8111-111111111111'],
-      'выбранная мысль-подкорень сохранена',
+      parsed.tree,
+      withSubroot.tree,
+      'дерево мыслевых настроек сохранено и прочитано без потерь',
     );
   });
 
-  it('легаси-формат до 0.8.2 (`subrootId`) читается как набор', () => {
+  it('легаси-формат до 0.8.2 (`subrootId`) мигрирует в строку подкорня', () => {
     const parsed = parseSearchCriteria({
       subtree: true,
       subrootId: '22222222-2222-4222-8222-222222222222',
     });
-    assert.equal(parsed.subtree, true, 'старый флажок учтён');
-    assert.deepEqual(
-      parsed.subrootIds,
-      ['22222222-2222-4222-8222-222222222222'],
-      'одиночный `subrootId` прошлых версий → набор из одной мысли',
-    );
+    assert.deepEqual(parsed.tree, {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+        {
+          kind: 'leaf',
+          entity: { kind: 'parents' },
+          operator: 'in_hierarchy',
+          mode: 'all_links',
+          value: { kind: 'list', items: ['22222222-2222-4222-8222-222222222222'] },
+        },
+      ],
+    });
   });
 });

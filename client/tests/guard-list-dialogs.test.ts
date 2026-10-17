@@ -668,6 +668,10 @@ const DIALOG_FILES = new Set([
   // 00160da1): фасад для мыслей, связей, публикаций и полок.
   'lib/delete-dialog.ts',
   'lib/entity-picker.ts',
+  // Модальный слой под-выборки редактора отбора (задача 3644342c, ADR 4396ca00):
+  // в общей оболочке `showDialog` живёт то же дерево условий (`buildFilterTree`)
+  // с кнопками «Готово»/«Отмена»; не список-диалог.
+  'lib/filter-subquery.ts',
   'lib/saved-filter-bar.ts',
   // Диалог выбора свойства-связи при дропе мысли на облачко (задача d144ef71):
   // общая оболочка `showDialog` + готовое комбо link-properties; не список.

@@ -30,7 +30,6 @@ import {
   type AttachmentInput,
   type AttachmentKind,
   type AttachmentOwnerType,
-  type AttachmentSearchQuery,
   type AttachmentUpdateInput,
 } from '@etn/shared';
 
@@ -53,6 +52,7 @@ import {
   getAttachmentRawByPath,
   listAttachments,
   listAttachmentUsage,
+  parseAttachmentSearchQuery,
   removeOwner,
   searchAttachments,
   updateAttachment,
@@ -225,23 +225,15 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const input = parseRest(RestAttachmentSearch, req);
-        const query: AttachmentSearchQuery = {
-          q: (input.q as string | undefined) ?? '',
-          ...(input.exclude_owner_type !== undefined
-            ? {
-                exclude_owner_type:
-                  input.exclude_owner_type as AttachmentSearchQuery['exclude_owner_type'],
-              }
-            : {}),
-          ...(input.exclude_owner_id !== undefined
-            ? { exclude_owner_id: input.exclude_owner_id as string }
-            : {}),
-          ...(input.kind !== undefined ? { kind: input.kind as AttachmentKind } : {}),
-          ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
-          ...(input.offset !== undefined ? { offset: input.offset as number } : {}),
-        };
+        // `ast` XOR плоские фильтры разбирает домен (задача 5a007bed); профиль
+        // «вложения» времени не несёт (withTime=false) — контексту нужен лишь
+        // пользователь для под-выборки мыслей-владельцев.
+        const query = parseAttachmentSearchQuery({ ...input }, req.id);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const { items, total } = searchAttachments(ndb, query);
+        const { items, total } = searchAttachments(ndb, query, {
+          userId: req.auth!.user.id,
+          requestId: req.id,
+        });
         const limit = query.limit ?? 50;
         const offset = query.offset ?? 0;
         sendList(reply, items, total, offset, limit);

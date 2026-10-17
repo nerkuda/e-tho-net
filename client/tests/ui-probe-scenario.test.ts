@@ -33,6 +33,8 @@ test('parseScenario: сценарий со всеми действиями ра�
         { click: '#feed' },
         { click: { selector: '.card', at: [4, 6] } },
         { click: [640, 400] },
+        { hover: '#card' },
+        { hover: { selector: '.row', at: [2, 3] } },
         { text: 'привет' },
         { waitFor: { expression: 'document.readyState === "complete"', frames: 2 } },
         { probe: { name: 'rows', expression: 'document.querySelectorAll(".row").length' } },
@@ -44,27 +46,29 @@ test('parseScenario: сценарий со всеми действиями ра�
 
   assert.equal(scenario.name, 'probe');
   assert.equal(scenario.timeout, DEFAULT_STEP_TIMEOUT);
-  assert.equal(scenario.steps.length, 9);
+  assert.equal(scenario.steps.length, 11);
   assert.deepEqual(
     scenario.steps.map((step) => step.kind),
-    ['key', 'click', 'click', 'click', 'text', 'waitFor', 'probe', 'shot', 'eval'],
+    ['key', 'click', 'click', 'click', 'hover', 'hover', 'text', 'waitFor', 'probe', 'shot', 'eval'],
   );
   assert.equal(scenario.steps[0]?.key?.code, 'ArrowDown');
-  assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null });
-  assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null });
-  assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400 });
-  assert.equal(scenario.steps[4]?.text, 'привет');
-  assert.deepEqual(scenario.steps[5]?.waitFor, {
+  assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null, count: 1 });
+  assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null, count: 1 });
+  assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400, count: 1 });
+  assert.deepEqual(scenario.steps[4]?.hover, { selector: '#card', at: null, x: null, y: null });
+  assert.deepEqual(scenario.steps[5]?.hover, { selector: '.row', at: [2, 3], x: null, y: null });
+  assert.equal(scenario.steps[6]?.text, 'привет');
+  assert.deepEqual(scenario.steps[7]?.waitFor, {
     expression: 'document.readyState === "complete"',
     frames: 2,
   });
-  assert.deepEqual(scenario.steps[6]?.probe, {
+  assert.deepEqual(scenario.steps[8]?.probe, {
     name: 'rows',
     expression: 'document.querySelectorAll(".row").length',
   });
-  assert.deepEqual(scenario.steps[7]?.shot, { file: '01.png', clip: { selector: '.feed' } });
-  assert.deepEqual(scenario.steps[8]?.eval, {
-    name: 'eval9',
+  assert.deepEqual(scenario.steps[9]?.shot, { file: '01.png', clip: { selector: '.feed' } });
+  assert.deepEqual(scenario.steps[10]?.eval, {
+    name: 'eval11',
     expression: 'document.querySelector("#x").focus()',
   });
 });
@@ -202,6 +206,39 @@ test('click: селектор и координаты взаимоисключа
   assert.throws(() => validateScenario(scenarioFrom([{ click: {} }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ click: [1, 2, 3] }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ click: { selector: '#x', bogus: 1 } }])), ScenarioError);
+});
+
+test('click.count: двойной клик; ноль/дробь/нечисло отвергаются; у hover поля нет', () => {
+  const scenario = validateScenario(scenarioFrom([{ click: { selector: '.cal-day', count: 2 } }]));
+  assert.equal(scenario.steps[0]?.click?.count, 2, 'count=2 — двойной клик');
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { selector: '#x', count: 0 } }])),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { selector: '#x', count: 1.5 } }])),
+    ScenarioError,
+  );
+  // У наведения `count` — неизвестное поле (наведение не кликает).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: { selector: '#x', count: 2 } }])),
+    ScenarioError,
+  );
+});
+
+test('hover: та же форма точки, что у click; ошибки называют поле «hover»', () => {
+  const scenario = validateScenario(scenarioFrom([{ hover: { selector: '.row', at: [1, 2] } }]));
+  assert.deepEqual(scenario.steps[0]?.hover, { selector: '.row', at: [1, 2], x: null, y: null });
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: { selector: '#x', x: 1 } }])),
+    ScenarioError,
+  );
+  assert.throws(() => validateScenario(scenarioFrom([{ hover: {} }])), ScenarioError);
+  // Ошибка обязана называть поле `hover`, а не `click` (общий нормализатор точки).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: [1, 2, 3] }])),
+    (err: unknown) => err instanceof ScenarioError && /\.hover/.test(err.message),
+  );
 });
 
 test('text и timeout: пустая строка и нечисловой лимит отвергаются', () => {
@@ -346,4 +383,56 @@ test('expect: допустим только у probe и api', () => {
   assert.equal(ok.steps[0]?.expect, 2);
   assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expect: 1 }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expect: 1 }])), ScenarioError);
+});
+
+test('expectFrom: ожидание — снимок ранее выполненного шага (делает сценарий самопроверяемым)', () => {
+  const scenario = validateScenario(
+    scenarioFrom([
+      {
+        name: 'headings-before',
+        api: { name: 'headings-before', path: '/networks/{{networkId}}/publications/{{pubId}}/assembly', expression: 'data.sections.map((s) => s.heading)' },
+      },
+      { key: 'Tab' },
+      {
+        name: 'headings-after',
+        api: { name: 'headings-after', path: '/networks/{{networkId}}/publications/{{pubId}}/assembly', expression: 'data.sections.map((s) => s.heading)' },
+        expectFrom: 'headings-before',
+      },
+      { probe: { name: 'rows', expression: '[1]' }, expectFrom: 'headings-before' },
+    ]),
+  );
+  assert.equal(scenario.steps[0]?.expectFrom, undefined, 'снимок «до» ожидания не требует');
+  assert.equal(scenario.steps[2]?.expectFrom, 'headings-before');
+  assert.equal(scenario.steps[2]?.expect, undefined, 'литерал и снимок не смешиваются');
+  assert.equal(scenario.steps[3]?.kind, 'probe');
+  assert.equal(scenario.steps[3]?.expectFrom, 'headings-before', 'снимок работает и у probe');
+  // «expectFrom» допустим только у probe/api (как и «expect»).
+  assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expectFrom: 'x' }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expectFrom: 'x' }])), ScenarioError);
+  // Ожидание задаётся либо литералом, либо снимком — не обоими.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x' }, expect: 1, expectFrom: 'x' }])),
+    ScenarioError,
+  );
+  // Пустое имя шага-снимка отвергается.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x' }, expectFrom: '' }])),
+    ScenarioError,
+  );
+  // Самоссылка — тавтология: раннер кладёт значение шага в `context.values` под
+  // его именем ДО проверки ожидания, поэтому шаг сверялся бы сам с собой и был
+  // бы всегда зелёным. Валидация обязана отвергать такую ссылку.
+  assert.throws(
+    () =>
+      validateScenario(
+        scenarioFrom([{ name: 'p', probe: { name: 'p', expression: '1' }, expectFrom: 'p' }]),
+      ),
+    ScenarioError,
+  );
+  // Автоимя шага — тоже самоссылка (ключ снимка в `context.values` — имя ШАГА,
+  // а не вложенное имя пробы).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ probe: { expression: '1' }, expectFrom: '1:probe' }])),
+    ScenarioError,
+  );
 });

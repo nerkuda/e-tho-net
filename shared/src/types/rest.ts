@@ -27,6 +27,8 @@ import type { NetworkProperty } from './thought-type.js';
 import type { ThoughtRef } from './thought.js';
 import type { FocusNeighbor } from './thought.js';
 import type { NetworksCatalog } from './network.js';
+import type { CrossNetworkTokenIssue } from './query.js';
+import type { FilterDiagnostic } from './filter-ast.js';
 import type { StructureQueryResponse } from './structure.js';
 
 /**
@@ -100,6 +102,12 @@ export interface RunThoughtTypeViewMeta {
   sort?: string;
   order?: string;
   unresolved?: ViewUnresolvedToken[];
+  /**
+   * Жёлтая диагностика (требование 325efc13): свойство условия отвязано от типа
+   * отбора — отбор исполнен по фактическим значениям вне типа. Пусто/отсутствует
+   * — предупреждений нет. Красная диагностика приходит ошибкой `VALIDATION_ERROR`.
+   */
+  warnings?: FilterDiagnostic[];
 }
 
 /** Результат прогона отбора: страница мыслей + мета (в success-конверте `meta`). */
@@ -223,6 +231,12 @@ export interface CrossNetworkDuplicateResponse {
  */
 export type CrossNetworkStructureQueryResponse = StructureQueryResponse & {
   networks: NetworksCatalog;
+  /**
+   * Неразрешимые токены AST, агрегированные по сетям (требование b7fdab20):
+   * `{ network_id, token, reason }`. Отсутствует/пусто — всё разрешилось.
+   * Паритет с MCP-веером (`etn.thoughts.query` с `network_ids`).
+   */
+  unresolved?: CrossNetworkTokenIssue[];
 };
 
 /** `POST /networks/{nid}/thoughts/export` — поставленная задача экспорта. */

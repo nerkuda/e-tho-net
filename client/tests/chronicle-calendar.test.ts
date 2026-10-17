@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { buildMonthWeeks } from '../src/renderer/lib/month-calendar.js';
+import { weekdayLabels } from '../src/renderer/lib/month-calendar.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 
@@ -46,6 +47,29 @@ describe('календарь месяца', () => {
     const week = weeks.find((w) => w.days.some((d) => d.day === '2026-09-26'))!;
     // 2026-09-26 — суббота, её ISO-неделя считается по четвергу 2026-09-24.
     assert.equal(week.week, 39);
+  });
+
+  it('первый день недели сети задаёт раскладку строк и подписи столбцов (1b77decd)', () => {
+    // fdw=1 (понедельник) — прежнее поведение.
+    assert.deepEqual(weekdayLabels(1), ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']);
+    // fdw=7 (воскресенье) — столбцы начинаются с «Вс».
+    assert.deepEqual(weekdayLabels(7), ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']);
+    // fdw=2 (вторник) — столбцы начинаются со «Вт».
+    assert.deepEqual(weekdayLabels(2), ['Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс', 'Пн']);
+
+    // Воскресная сетка сентября 2026: 09-01 — вторник, сетка начинается с вс 2026-08-30.
+    const sunday = buildMonthWeeks(2026, 9, 7);
+    assert.equal(sunday[0]!.days[0]!.day, '2026-08-30', 'строка начинается с воскресенья');
+    assert.equal(sunday[0]!.days[6]!.day, '2026-09-05', 'строка кончается субботой');
+    // Строка недели, содержащая 09-26 (сб): вс 09-20 … сб 09-26.
+    const weekOf = sunday.find((w) => w.days.some((d) => d.day === '2026-09-26'))!;
+    assert.equal(weekOf.days[0]!.day, '2026-09-20');
+    assert.equal(weekOf.days[6]!.day, '2026-09-26');
+    // Номер недели — ISO-номер «срединного» дня строки (ср 09-23) = 39.
+    assert.equal(weekOf.week, 39);
+
+    // Понедельничная сетка того же месяца не изменилась.
+    assert.equal(buildMonthWeeks(2026, 9, 1)[0]!.days[0]!.day, '2026-08-31');
   });
 });
 

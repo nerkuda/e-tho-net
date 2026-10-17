@@ -41,6 +41,7 @@
 
 - [userdocs/overview.md](userdocs/overview.md) — обзор и основы;
 - [userdocs/map.md](userdocs/map.md) — рабочий стол «Карта»;
+- [userdocs/filters.md](userdocs/filters.md) — отборы: единый редактор условий;
 - [userdocs/structures.md](userdocs/structures.md) — рабочий стол «Структуры»;
 - [userdocs/diary.md](userdocs/diary.md) — рабочий стол «Дневник»;
 - [userdocs/events.md](userdocs/events.md) — «События» и совместная работа;

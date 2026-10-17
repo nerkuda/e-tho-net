@@ -1,0 +1,289 @@
+{
+  "name": "filter-polish-609deba0-b",
+  "description": "Ошибка 609deba0, группа B (панель «Дневник»): B1 операторы «в иерархии»/«не в иерархии» и «Список»/«Выборка» у «Целей записи»; B2 неудаляемое условие периода записи; B3 «Сначала старые/новые» выше фразы-превью; B4 подписи «Период записи»/«Текст записи»; B5 набор операторов заголовка и текста записи; B6 ширина чипов и поля «Автор записи».",
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "map-ready",
+      "waitFor": "document.querySelector('[data-id]') !== null"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-chronicle",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "chronicle-editor",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.chron-filter .fe .ff-name__input') !== null"
+    },
+    {
+      "name": "widen-window",
+      "eval": "(() => { window.resizeTo(1900, 1000); return window.innerWidth; })()"
+    },
+    {
+      "name": "widen-ready",
+      "timeout": 8000,
+      "waitFor": "window.innerWidth >= 1400 && document.querySelector('.chron-filter') !== null"
+    },
+    {
+      "name": "panel-widen-drag",
+      "eval": "(async () => { const s = document.querySelector('.chron-splitter'); const pan = document.querySelector('.chron-filter-area'); if (!s || !pan) return 'no-splitter'; const orig = Element.prototype.setPointerCapture; Element.prototype.setPointerCapture = function () {}; const r = s.getBoundingClientRect(); const x = Math.round(r.left + r.width / 2); const y = Math.round(r.top + 60); const base = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, clientX: x, clientY: y }; s.dispatchEvent(new PointerEvent('pointerdown', base)); for (let k = 1; k <= 8; k += 1) s.dispatchEvent(new PointerEvent('pointermove', Object.assign({}, base, { clientX: x + 80 * k }))); s.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, base, { buttons: 0, clientX: x + 640 }))); Element.prototype.setPointerCapture = orig; await new Promise(r2 => setTimeout(r2, 250)); return Math.round(pan.getBoundingClientRect().width); })()"
+    },
+    {
+      "name": "b2-pick-day",
+      "eval": "(async () => { const d = document.querySelector('.chron-cal .cal-day:not(.is-out)'); if (!d) return 'no-day'; d.click(); await new Promise(r => setTimeout(r, 500)); return 'ok'; })()"
+    },
+    {
+      "name": "b2-period-row",
+      "timeout": 8000,
+      "waitFor": "[...document.querySelectorAll('.chron-filter .ft-row .ft-row__what')].some(e => (e.textContent || '').includes('Период записи'))"
+    },
+    {
+      "name": "b4-label-period",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); return r ? (r.querySelector('.ft-row__what').textContent || '').trim() : 'no-row'; })()",
+      "expect": "Период записи▾"
+    },
+    {
+      "name": "b2-no-remove",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); return r ? r.querySelector('.ft-row__remove') === null : false; })()",
+      "expect": true
+    },
+    {
+      "name": "b2-capture-period",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); window.__b2 = r ? ((r.querySelector('.ft-row__value') || {}).textContent || '') : null; return window.__b2; })()"
+    },
+    {
+      "name": "b2-clear",
+      "eval": "(async () => { const b = document.querySelector('.chron-filter .ff-clear'); if (!b) return 'no-clear'; b.click(); await new Promise(r => setTimeout(r, 400)); return 'ok'; })()"
+    },
+    {
+      "name": "b2-period-kept",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); if (!r) return false; const now = ((r.querySelector('.ft-row__value') || {}).textContent || ''); return window.__b2 !== null && window.__b2.length > 0 && now === window.__b2; })()",
+      "expect": true
+    },
+    {
+      "name": "b2-period-value",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); return r ? ((r.querySelector('.ft-row__value') || {}).textContent || '') : 'no-row'; })()"
+    },
+    {
+      "name": "b3-order-above-preview",
+      "probe": "(() => { const o = document.querySelector('.chron-filter .chron-order-row'); const p = document.querySelector('.chron-filter .ff-preview'); if (!o || !p) return false; return (o.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0; })()",
+      "expect": true
+    },
+    {
+      "name": "b3-order-outside-foot-top",
+      "probe": "(() => { const o = document.querySelector('.chron-filter .chron-order-row'); const p = document.querySelector('.chron-filter .ff-preview'); if (!o || !p) return false; const op = o.compareDocumentPosition(p); return (op & Node.DOCUMENT_POSITION_PRECEDING) === 0; })()",
+      "expect": true
+    },
+    {
+      "name": "b1-add-condition",
+      "eval": "(() => { const g = document.querySelector('.chron-filter .ft-group[data-path=\"\"]'); const b = g && g.querySelector('.ft-add-condition'); if (!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b1-row-ready",
+      "timeout": 8000,
+      "waitFor": "document.querySelectorAll('.chron-filter .ft-row').length >= 2"
+    },
+    {
+      "name": "b1-pick-targets",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__what').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const hit = [...last.querySelectorAll('.ft-choice__item')].find(e => (e.textContent || '').includes('Цели записи')); if (!hit) return 'no-item'; hit.click(); await new Promise(r => setTimeout(r, 180)); return 'ok'; })()"
+    },
+    {
+      "name": "b1-targets-label",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; return (row.querySelector('.ft-row__what').textContent || '').trim(); })()",
+      "expect": "Цели записи▾"
+    },
+    {
+      "name": "b1-pick-hierarchy",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__op').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const hit = last.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]'); if (!hit) return 'no-op'; hit.click(); await new Promise(r => setTimeout(r, 200)); return 'ok'; })()"
+    },
+    {
+      "name": "b1-hierarchy-menu-has-both",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__op').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const keys = [...last.querySelectorAll('.ft-choice__item')].map(e => e.dataset.key); const ok = keys.includes('in_hierarchy') && keys.includes('not_in_hierarchy'); const closest = last.querySelector('.ft-choice__item--cursor'); if (closest) closest.click(); else row.querySelector('.ft-row__op').click(); await new Promise(r => setTimeout(r, 120)); return JSON.stringify({ ok, keys }); })()"
+    },
+    {
+      "name": "b1-mode-switch-present",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const m = row.querySelector('.fq-mode'); if (!m) return 'no-mode'; const labels = [...m.querySelectorAll('button')].map(b => b.textContent.trim()); return JSON.stringify(labels); })()",
+      "expect": "[\"Список\",\"Выборка\"]"
+    },
+    {
+      "name": "b1-mode-list-active",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const m = row.querySelector('.fq-mode'); if (!m) return false; const first = m.querySelector('button'); return first !== null && (first.getAttribute('aria-pressed') === 'true' || first.classList.contains('ui-btn--active')); })()",
+      "expect": true
+    },
+    {
+      "name": "b1-open-subquery",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const b = [...row.querySelectorAll('.fq-mode button')].find(x => x.textContent.trim() === 'Выборка'); if (!b) return 'no-btn'; b.click(); await new Promise(r => setTimeout(r, 250)); return 'ok'; })()"
+    },
+    {
+      "name": "b1-modal-open",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.fq-modal') !== null"
+    },
+    {
+      "name": "b1-modal-order-kept",
+      "probe": "document.querySelector('.chron-filter .chron-order-row') !== null && document.querySelector('.fq-modal') !== null"
+    },
+    {
+      "name": "b1-cancel",
+      "eval": "(async () => { const btns = [...document.querySelectorAll('.dialog-backdrop button')]; const b = [...btns].reverse().find(x => x.textContent.trim() === 'Отмена'); if (!b) return 'no-cancel'; b.click(); await new Promise(r => setTimeout(r, 200)); return 'ok'; })()"
+    },
+    {
+      "name": "b1-modal-closed",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.fq-modal') === null"
+    },
+    {
+      "name": "b1-list-back",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const m = row.querySelector('.fq-mode'); if (!m) return false; const first = m.querySelector('button'); return first !== null && (first.getAttribute('aria-pressed') === 'true' || first.classList.contains('ui-btn--active')); })()",
+      "expect": true
+    },
+    {
+      "name": "b5-add-title-row",
+      "eval": "(() => { const g = document.querySelector('.chron-filter .ft-group[data-path=\"\"]'); const b = g && g.querySelector('.ft-add-condition'); if (!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b5-pick-title",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__what').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const hit = [...last.querySelectorAll('.ft-choice__item')].find(e => (e.textContent || '').includes('Заголовок записи')); if (!hit) return 'no-item'; hit.click(); await new Promise(r => setTimeout(r, 180)); return 'ok'; })()"
+    },
+    {
+      "name": "b5-title-label",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; return (rows[rows.length - 1].querySelector('.ft-row__what').textContent || '').trim(); })()",
+      "expect": "Заголовок записи▾"
+    },
+    {
+      "name": "b5-title-open-ops",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; rows[rows.length - 1].querySelector('.ft-row__op').click(); await new Promise(r => setTimeout(r, 150)); return 'ok'; })()"
+    },
+    {
+      "name": "b5-title-ops",
+      "probe": "(() => { const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const keys = [...last.querySelectorAll('.ft-choice__item')].map(e => e.dataset.key); return JSON.stringify({ noMatches: !keys.includes('matches'), eq: keys.includes('eq'), ne: keys.includes('ne'), contains: keys.includes('contains'), notContains: keys.includes('not_contains') }); })()",
+      "expect": "{\"noMatches\":true,\"eq\":true,\"ne\":true,\"contains\":true,\"notContains\":true}"
+    },
+    {
+      "name": "b5-title-close",
+      "eval": "(async () => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); await new Promise(r => setTimeout(r, 200)); return document.querySelectorAll('.ft-choice-popover').length; })()"
+    },
+    {
+      "name": "b5-title-menu-closed",
+      "timeout": 8000,
+      "waitFor": "document.querySelectorAll('.ft-choice-popover').length === 0"
+    },
+    {
+      "name": "b5-add-body-row",
+      "eval": "(() => { const g = document.querySelector('.chron-filter .ft-group[data-path=\"\"]'); const b = g && g.querySelector('.ft-add-condition'); if (!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b5-pick-body",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__what').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const hit = [...last.querySelectorAll('.ft-choice__item')].find(e => (e.textContent || '').includes('Текст записи')); if (!hit) return 'no-item'; hit.click(); await new Promise(r => setTimeout(r, 180)); return 'ok'; })()"
+    },
+    {
+      "name": "b4-label-body",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; return (rows[rows.length - 1].querySelector('.ft-row__what').textContent || '').trim(); })()",
+      "expect": "Текст записи▾"
+    },
+    {
+      "name": "b5-body-open-ops",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; rows[rows.length - 1].querySelector('.ft-row__op').click(); await new Promise(r => setTimeout(r, 150)); return 'ok'; })()"
+    },
+    {
+      "name": "b5-body-ops",
+      "probe": "(() => { const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const keys = [...last.querySelectorAll('.ft-choice__item')].map(e => e.dataset.key); return JSON.stringify({ noMatches: !keys.includes('matches'), eq: keys.includes('eq'), ne: keys.includes('ne'), contains: keys.includes('contains'), notContains: keys.includes('not_contains') }); })()",
+      "expect": "{\"noMatches\":true,\"eq\":true,\"ne\":true,\"contains\":true,\"notContains\":true}"
+    },
+    {
+      "name": "b5-body-close",
+      "eval": "(async () => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); await new Promise(r => setTimeout(r, 200)); return document.querySelectorAll('.ft-choice-popover').length; })()"
+    },
+    {
+      "name": "b5-body-menu-closed",
+      "timeout": 8000,
+      "waitFor": "document.querySelectorAll('.ft-choice-popover').length === 0"
+    },
+    {
+      "name": "b6-add-author-row",
+      "eval": "(() => { const g = document.querySelector('.chron-filter .ft-group[data-path=\"\"]'); const b = g && g.querySelector('.ft-add-condition'); if (!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b6-pick-author",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__what').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const hit = [...last.querySelectorAll('.ft-choice__item')].find(e => (e.textContent || '').includes('Автор записи')); if (!hit) return 'no-item'; hit.click(); await new Promise(r => setTimeout(r, 180)); return 'ok'; })()"
+    },
+    {
+      "name": "b6-pick-in",
+      "eval": "(async () => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; row.querySelector('.ft-row__op').click(); await new Promise(r => setTimeout(r, 120)); const menus = [...document.querySelectorAll('.ft-choice')]; const last = menus[menus.length - 1]; const hit = last.querySelector('.ft-choice__item[data-key=\"in\"]'); if (!hit) return 'no-op'; hit.click(); await new Promise(r => setTimeout(r, 200)); return 'ok'; })()"
+    },
+    {
+      "name": "b6-widths",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const box = row.querySelector('.fv-user'); const list = row.querySelector('.fv-user .ui-chip-list'); const add = row.querySelector('.fv-user .ui-chip-list-add'); const r = (e) => (e === null || e === undefined ? -1 : Math.round(e.getBoundingClientRect().width)); return JSON.stringify({ user: r(box), list: r(list), add: r(add) }); })()"
+    },
+    {
+      "name": "b6-widths-positive",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const list = row.querySelector('.fv-user .ui-chip-list'); const add = row.querySelector('.fv-user .ui-chip-list-add'); const w = (e) => (e === null || e === undefined ? -1 : e.getBoundingClientRect().width); return w(list) > 0 && w(add) > 0; })()",
+      "expect": true
+    },
+    {
+      "name": "switch-to-dark",
+      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+    },
+    {
+      "name": "dark-theme-on",
+      "probe": "document.documentElement.dataset.theme === 'dark'",
+      "expect": true
+    },
+    {
+      "name": "dark-b3-order-above-preview",
+      "probe": "(() => { const o = document.querySelector('.chron-filter .chron-order-row'); const p = document.querySelector('.chron-filter .ff-preview'); if (!o || !p) return false; return (o.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && getComputedStyle(o).display !== 'none' && o.getBoundingClientRect().height > 0; })()",
+      "expect": true
+    },
+    {
+      "name": "dark-b2-no-remove",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); return r ? r.querySelector('.ft-row__remove') === null : false; })()",
+      "expect": true
+    },
+    {
+      "name": "dark-b6-widths-positive",
+      "probe": "(() => { const rows = [...document.querySelectorAll('.chron-filter .ft-row')]; const row = rows[rows.length - 1]; const list = row.querySelector('.fv-user .ui-chip-list'); const add = row.querySelector('.fv-user .ui-chip-list-add'); const w = (e) => (e === null || e === undefined ? -1 : e.getBoundingClientRect().width); return w(list) > 0 && w(add) > 0; })()",
+      "expect": true
+    },
+    {
+      "name": "dark-row-layout",
+      "probe": "(() => { const r = [...document.querySelectorAll('.chron-filter .ft-row')].find(x => ((x.querySelector('.ft-row__what') || {}).textContent || '').includes('Период записи')); if (!r) return 'no-row'; const cs = getComputedStyle(r); return JSON.stringify({ bg: cs.backgroundColor, color: cs.color, align: cs.alignItems }); })()"
+    }
+  ]
+}

@@ -281,3 +281,36 @@ describe('lib/ui/popover: жизненный цикл панели', () => {
     assert.equal(mounted(handle.element as unknown as ShimElement), false);
   });
 });
+
+/**
+ * Ошибка 50d9bf4e, пункты C2/C3: якорь панели перерисовывается вместе со
+ * строкой-владельцем (правка значения пересобирает дерево отбора целиком).
+ * `setAnchor` даёт владельцу перепривязать ЖИВУЮ панель к новому узлу поля —
+ * панель не остаётся на координатах удалённого якоря.
+ */
+describe('lib/ui/popover: перепривязка к новому якорю (п. C2/C3)', () => {
+  /** Якорь с заданной геометрией в окне (шим без раскладки). */
+  function anchorAt(top: number): HTMLElement {
+    const el = new ShimElement('span');
+    el.rect = { left: 100, top, right: 180, bottom: top + 20, width: 80, height: 20 };
+    return el as unknown as HTMLElement;
+  }
+
+  /** Верхняя координата панели из inline-стиля, px. */
+  function panelTop(handle: { element: HTMLElement }): number {
+    return Number.parseFloat(handle.element.style.getPropertyValue('top'));
+  }
+
+  it('setAnchor переставляет панель под новым якорем', async () => {
+    resetBody();
+    const p = await popover();
+    const handle = p.openPopover({
+      anchor: { element: anchorAt(100) },
+      content: { title: 't', body: elem('div') },
+    });
+    assert.equal(panelTop(handle), 130, 'панель под первым якорем');
+    handle.setAnchor({ element: anchorAt(300) });
+    assert.equal(panelTop(handle), 330, 'панель переехала под новым якорем');
+    handle.close();
+  });
+});

@@ -1,0 +1,158 @@
+{
+  "name": "filter-polish-4258e694",
+  "description": "Полировка редактора отбора, часть 1 (ошибка 4258e694; пункты 2, 11, 12а, 12б): онбординг → «Структуры» → фраза-превью из сохранённого отбора без «все условия», с именами (не id) и оператором «И» → двухрядный футер (действия сверху, имя+сохранённые снизу), не уезжает при прокрутке дерева → сплиттер раздвигает панель до предела. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-4258e694.scenario.json --out .tmp/etn-4258e694/out",
+  "timeout": 120000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    {
+      "name": "seed-saved-filter-with-names",
+      "api": {
+        "name": "seed-saved-filter-with-names",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Отбор с именами",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "entity": { "kind": "type" },
+                  "operator": "eq",
+                  "value": "11111111-1111-1111-1111-111111111111",
+                  "labels": { "value": "Очень длинное имя типа мысли для проверки обрезки" }
+                },
+                { "entity": { "kind": "comment" }, "operator": "not_empty" }
+              ]
+            },
+            "sort": [{ "key": "title", "order": "asc" }]
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+
+    { "name": "widen-window", "eval": "(() => { window.resizeTo(1720, 1000); return window.innerWidth; })()" },
+    { "name": "widen-ready", "timeout": 8000, "waitFor": "window.innerWidth >= 1400 && document.querySelector('.structures')?.classList.contains('fp-side') === true" },
+
+    {
+      "name": "panel-metrics-initial",
+      "probe": "(() => { const cs = getComputedStyle(document.body); const canvas = document.querySelector('.structures'); const panel = document.querySelector('.st-filter'); return JSON.stringify({ innerW: window.innerWidth, editorPos: document.body.dataset.editorPos ?? null, editorW: cs.getPropertyValue('--editor-w').trim(), canvasW: canvas ? canvas.clientWidth : null, panelW: panel ? Math.round(panel.getBoundingClientRect().width) : null }); })()"
+    },
+
+    { "name": "focus-splitter", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); return document.activeElement === s; })()" },
+    { "name": "splitter-to-max", "key": "End" },
+    {
+      "name": "panel-metrics-at-max",
+      "probe": "(() => { const cs = getComputedStyle(document.body); const canvas = document.querySelector('.structures'); const panel = document.querySelector('.st-filter'); const results = document.querySelector('.st-results'); return JSON.stringify({ innerW: window.innerWidth, editorPos: document.body.dataset.editorPos ?? null, editorWPx: parseFloat(cs.getPropertyValue('--editor-w')) || 0, canvasW: canvas ? canvas.clientWidth : null, panelW: panel ? Math.round(panel.getBoundingClientRect().width) : null, resultsW: results ? Math.round(results.getBoundingClientRect().width) : null }); })()"
+    },
+    {
+      "name": "panel-reaches-half-canvas",
+      "probe": "(() => { const canvas = document.querySelector('.structures'); const panel = document.querySelector('.st-filter'); const w = panel ? panel.getBoundingClientRect().width : 0; const c = canvas ? canvas.clientWidth : 0; return JSON.stringify({ panelW: Math.round(w), canvasW: c, halfCanvas: Math.round(c / 2), ratio: c ? +(w / c).toFixed(3) : null }); })()"
+    },
+    {
+      "name": "panel-at-half-canvas",
+      "probe": "(() => { const canvas = document.querySelector('.structures'); const panel = document.querySelector('.st-filter'); if (!canvas || !panel) return false; const w = panel.getBoundingClientRect().width; const c = canvas.clientWidth; return Math.abs(w - c / 2) <= 1; })()",
+      "expect": true
+    },
+
+    { "name": "open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "focus-search", "click": ".sfd-search" },
+    { "name": "select-row", "key": "ArrowDown" },
+    { "name": "confirm-row", "key": "Enter" },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+
+    {
+      "name": "phrase-text",
+      "probe": "document.querySelector('.st-filter .ff-preview__text')?.textContent ?? null"
+    },
+    {
+      "name": "phrase-no-service-words",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''; return !t.includes('все условия') && !t.includes('любое условие'); })()",
+      "expect": true
+    },
+    {
+      "name": "phrase-uppercase-and",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''; return t.includes(' И ') && t.includes('Есть комментарий'); })()",
+      "expect": true
+    },
+    {
+      "name": "phrase-name-not-id",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''; return !t.includes('11111111-1111') && t.includes('Очень длинное имя типа мысли…'); })()",
+      "expect": true
+    },
+    {
+      "name": "phrase-tooltip-names",
+      "probe": "(() => { const box = document.querySelector('.st-filter .ff-preview'); const t = box ? box.title : ''; return t.includes('Очень длинное имя типа мысли') && !t.includes('11111111-1111'); })()",
+      "expect": true
+    },
+
+    {
+      "name": "footer-two-rows",
+      "probe": "(() => { const act = document.querySelector('.st-filter .ff-actions'); const nm = document.querySelector('.st-filter .ff-name'); return JSON.stringify({ actions: !!act, name: !!nm, applyTop: !!(act && act.querySelector('.ff-apply')), clearTop: !!(act && act.querySelector('.ff-clear')), commandsTop: !!(act && act.querySelector('.ff-extra--commands')), savedNotTop: !(act && act.querySelector('.ff-extra--saved')), nameInputBottom: !!(nm && nm.querySelector('.ff-name__input')), saveBottom: !!(nm && nm.querySelector('.ff-save')), savedBottom: !!(nm && nm.querySelector('.ff-extra--saved')) }); })()"
+    },
+
+    {
+      "name": "add-many-conditions",
+      "eval": "(() => { for (let i = 0; i < 40; i += 1) { const btn = document.querySelector('.st-filter .ft-add-condition'); if (!btn) break; btn.click(); } return document.querySelectorAll('.st-filter .ft-row').length; })()"
+    },
+    {
+      "name": "conditions-count",
+      "probe": "document.querySelectorAll('.st-filter .ft-row').length"
+    },
+    { "name": "shorten-window", "eval": "(() => { window.resizeTo(1720, 560); return window.innerHeight; })()" },
+    {
+      "name": "shorten-metrics",
+      "timeout": 8000,
+      "waitFor": "window.innerHeight !== 1000"
+    },
+    {
+      "name": "tree-metrics-detail",
+      "probe": "(() => { const panel = document.querySelector('.st-filter'); const ft = panel ? panel.querySelector('.ft') : null; const g = panel ? panel.querySelector('.ft-group') : null; const row = panel ? panel.querySelector('.ft-row') : null; const cs = (e) => e ? getComputedStyle(e) : null; return JSON.stringify({ innerH: window.innerHeight, ft: ft ? { sh: ft.scrollHeight, ch: ft.clientHeight, ofy: cs(ft).overflowY, h: Math.round(ft.getBoundingClientRect().height) } : null, group: g ? { sh: g.scrollHeight, ch: g.clientHeight, ov: cs(g).overflow, h: Math.round(g.getBoundingClientRect().height), collapsed: g.classList.contains('collapsed') } : null, footH: panel ? Math.round(panel.querySelector('.fe-foot').getBoundingClientRect().height) : null, rowH: row ? Math.round(row.getBoundingClientRect().height) : null, rows: panel ? panel.querySelectorAll('.ft-row').length : null }); })()"
+    },
+    {
+      "name": "footer-outside-tree-scroller",
+      "probe": "(() => { const ft = document.querySelector('.st-filter .ft'); return ft ? ft.querySelector('.ff-actions') === null && ft.querySelector('.fe-foot') === null : 'no-tree'; })()",
+      "expect": true
+    },
+    {
+      "name": "footer-tree-scroll-metrics",
+      "probe": "(() => { const panel = document.querySelector('.st-filter'); const ft = panel ? panel.querySelector('.ft') : null; const foot = panel ? panel.querySelector('.fe-foot') : null; const actions = panel ? panel.querySelector('.ff-actions') : null; if (!panel || !ft || !foot) return 'missing'; const pr = panel.getBoundingClientRect(); const fr = foot.getBoundingClientRect(); const ar = actions ? actions.getBoundingClientRect() : null; return JSON.stringify({ treeScrolls: ft.scrollHeight > ft.clientHeight + 1, treeScrollHeight: ft.scrollHeight, treeClientHeight: ft.clientHeight, footTop: Math.round(fr.top), footBottom: Math.round(fr.bottom), panelTop: Math.round(pr.top), panelBottom: Math.round(pr.bottom), footOverflow: Math.round(fr.bottom - pr.bottom), actionsVisible: ar ? ar.bottom <= pr.bottom + 1 && ar.top >= pr.top - 1 : null }); })()"
+    },
+    {
+      "name": "tree-scrolls-when-long",
+      "probe": "(() => { const ft = document.querySelector('.st-filter .ft'); return ft ? ft.scrollHeight > ft.clientHeight + 1 : false; })()",
+      "expect": true
+    },
+    {
+      "name": "scroll-tree-to-bottom",
+      "eval": "(() => { const ft = document.querySelector('.st-filter .ft'); if (ft) ft.scrollTop = ft.scrollHeight; return ft ? ft.scrollTop : null; })()"
+    },
+    {
+      "name": "footer-visible-after-tree-scroll",
+      "probe": "(() => { const panel = document.querySelector('.st-filter'); const foot = panel ? panel.querySelector('.fe-foot') : null; const actions = panel ? panel.querySelector('.ff-actions') : null; if (!panel || !foot || !actions) return 'missing'; const pr = panel.getBoundingClientRect(); const ar = actions.getBoundingClientRect(); return JSON.stringify({ actionsBottom: Math.round(ar.bottom), panelBottom: Math.round(pr.bottom), visible: ar.bottom <= pr.bottom + 1 && ar.top >= pr.top - 1 }); })()"
+    },
+    {
+      "name": "footer-visible-after-scroll-assert",
+      "probe": "(() => { const panel = document.querySelector('.st-filter'); const actions = panel ? panel.querySelector('.ff-actions') : null; if (!panel || !actions) return false; const pr = panel.getBoundingClientRect(); const ar = actions.getBoundingClientRect(); return ar.bottom <= pr.bottom + 1 && ar.top >= pr.top - 1; })()",
+      "expect": true
+    }
+  ]
+}

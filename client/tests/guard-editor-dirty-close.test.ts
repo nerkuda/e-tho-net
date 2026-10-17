@@ -117,7 +117,7 @@ const EDITOR_SPECS: readonly EditorSpec[] = [
   {
     file: 'screens/thought-type/filter-dialog.ts',
     name: 'редактор отбора (представления)',
-    start: 'const criteriaBase = criteria.buildWire();',
+    start: 'const criteriaBase = buildViewAst(state);',
     end: '// Save flow',
   },
 ];

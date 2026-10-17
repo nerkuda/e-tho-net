@@ -65,14 +65,14 @@ function wiringProblems(rawSource: string): string[] {
     );
   }
   // Спуск и раскрытие берут фильтр из одного места: панель → `buildFilter()`
-  // → `appliedQuery.filter.link_filter` → запрос раскрытия.
-  if (
-    !source.includes('const linkFilter = buildTraversalFilter();') ||
-    !source.includes('appliedQuery?.filter.link_filter')
-  ) {
-    problems.push(
-      'спуск и раскрытие обязаны брать link_filter из общего buildTraversalFilter()/appliedQuery',
-    );
+  // → `appliedQuery.filter.link_filter` → запрос раскрытия. После пересборки
+  // панели на единый редактор (задача 213bd2d2, ADR fc23f9c1, решение
+  // 2026-10-12) фасада обхода у панели НЕТ: ограничение по связям выражается
+  // строкой «в иерархии» дерева, а раскрытие по-прежнему берёт фильтр из общего
+  // `appliedQuery` — значит обходит по тем же живым связям, что и сам отбор
+  // (расхождения «отбор ↔ раскрытие» нет — ошибка db504c1a остаётся закрытой).
+  if (!source.includes('appliedQuery?.filter.link_filter')) {
+    problems.push('раскрытие обязано брать фильтр обхода из общего appliedQuery');
   }
   return problems;
 }
@@ -102,5 +102,26 @@ describe('структуры: раскрытие ветви подчиняетс
       wiringProblems(bypass).some((p) => p.includes('раз(а)')),
       'вызов в обход точки обязан ловиться',
     );
+  });
+
+  it('панель не строит фасадных parent_ids/link_filter (решение 2026-10-12)', () => {
+    const panel = fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        '..',
+        'src',
+        'renderer',
+        'screens',
+        'structures',
+        'filter-panel.ts',
+      ),
+      'utf8',
+    );
+    for (const gone of ['buildTraversalFilter', 'linkFilterTypeIds', 'linkFilterStructural', "'parent_ids'"]) {
+      assert.ok(
+        !panel.includes(gone),
+        `фасад обхода «${gone}» из панели убран: ограничение выражает строка «в иерархии»`,
+      );
+    }
   });
 });

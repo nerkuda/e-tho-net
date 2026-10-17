@@ -187,6 +187,31 @@ function attachmentOwnerKeys(ownerType: string, ownerId: string): string[] {
 }
 
 /**
+ * Ключи, гасимые АКТИВНОСТЬЮ комментария (создание/правка/удаление комментария
+ * или хроно-записи). Активность комментария двигает `updated_at` владельца-МЫСЛИ
+ * (домен, ошибка 228df7a4; приравнивание — требование e6d4165e: правка
+ * содержимого владельца = правка владельца), поэтому меняется состав датовых
+ * отборов «Структур» («Дата изменений») и условий «Есть комментарий» — страница
+ * отбора перечитывается. Без этого правка комментария «не считалась изменением
+ * мысли»: список «Структур» оставался прежним до ручного «Применить» (ошибка
+ * 04344707). ЕДИНЫЙ источник для роутера (чужое событие `comment.*`) и
+ * mutator-слоя (своя правка, `signalOwnerActivity`), как у
+ * {@link thoughtUpdateKeys}.
+ *
+ * Окрестность фокуса (`focus:<id>`) в набор НЕ входит сознательно: отклик фокуса
+ * комментариев не несёт, а его перечитывание трясло редактор (ошибка 206e33a1) —
+ * снятие ключа `focus` здесь вернуло бы тот дефект.
+ *
+ * Набор гасится и на комментарий к СВЯЗИ, и на многоцелевой комментарий: ключ
+ * страницы — один префикс, лишняя инвалидация стоит лишь отложенного перезапроса
+ * видимой страницы, а адреса всех владельцев-мыслей многоцелевого комментария в
+ * событии нет (там лишь первичный владелец).
+ */
+export function commentActivityKeys(): string[] {
+  return [queryKeys.structuresPageAll()];
+}
+
+/**
  * Ключи данных, гасимые правкой мысли. ЕДИНЫЙ источник для роутера (чужие
  * события) и mutator-слоя (своя правка редактора/холста/корзины,
  * `signalThoughtUpdated`): локальный путь обязан гасить ровно те же ключи, что
@@ -304,6 +329,7 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.indicators(evt.data.comment.owner_id),
         queryKeys.chronicleFeedAll(),
         queryKeys.publicationAssemblyAll(),
+        ...commentActivityKeys(),
       ],
     }),
   ],
@@ -315,6 +341,7 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.chronicleFeedAll(),
         // Блок документа образует только постоянный комментарий.
         ...(evt.data.kind === 'permanent' ? [queryKeys.publicationAssemblyAll()] : []),
+        ...commentActivityKeys(),
       ],
     }),
   ],
@@ -325,6 +352,7 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.indicators(evt.data.owner_id),
         queryKeys.chronicleFeedAll(),
         queryKeys.publicationAssemblyAll(),
+        ...commentActivityKeys(),
       ],
     }),
   ],

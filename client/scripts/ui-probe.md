@@ -55,13 +55,21 @@ node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key 
 `--var имя=значение` (стенд подставляет адрес, API-key и id засеянных
 сущностей).
 
+Ожидание у шагов `probe`/`api` задаётся одним из двух (взаимоисключающе):
+`expect` — литерал, либо `expectFrom` — **снимок** значения, прочитанного
+ранее выполненным шагом `probe`/`api` с указанным `name`. Снимок делает
+сценарий самопроверяемым: «после равно до» без зашитого списка (например,
+паритет заголовков разделов до и после правки рецепта — сценарий
+`ui-probe.publication-recipe.scenario.json`).
+
 | Действие | Вид | Назначение |
 | --- | --- | --- |
 | `key` | `{ "key": "ArrowDown", "modifiers": ["shift"] }` | клавиши/сочетания (CDP `Input.dispatchKeyEvent`) |
-| `click` | `"#sel"` \| `{ "selector": "#sel", "at": [4,4] }` \| `[640,400]` \| `{ "x":10, "y":20 }` | клик по элементу/координатам (CDP) |
+| `click` | `"#sel"` \| `{ "selector": "#sel", "at": [4,4] }` \| `[640,400]` \| `{ "x":10, "y":20 }` \| `{ "selector": "#sel", "count": 2 }` | клик по элементу/координатам (CDP); `count: 2` — двойной клик (`click.detail >= 2`) |
+| `hover` | та же форма точки, что у `click` | навести курсор БЕЗ клика (`mouseMoved`) — включает CSS `:hover` (проверка hover-видимости действий) |
 | `text` | `"строка"` | ввод текста (CDP `Input.insertText`) |
 | `waitFor` | `"expr"` \| `{ "expression": "…", "frames": 2 }` \| `2` | ожидание по условию; кадровые ожидания — только при активном окне |
-| `probe` | `"expr"` \| `{ "name": "rows", "expression": "…" }` | прочитать значение и записать в отчёт; `expect` — сверка «факт/ожидание» |
+| `probe` | `"expr"` \| `{ "name": "rows", "expression": "…" }` | прочитать значение и записать в отчёт; `expect`/`expectFrom` — сверка «факт/ожидание» |
 | `eval` | `"expr"` | побочное действие без записи значения |
 | `shot` | `"01.png"` \| `{ "file": "01.png", "clip": "#sel" }` | PNG (только доказательство ошибки) |
 | `assert` | см. ниже | растровый ассерт: кроп + проверки, результат текстом |
@@ -113,13 +121,37 @@ node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key 
 не только проверять эффект, но и ЗАСЕИВАТЬ данные перед прогоном (например,
 POST дневниковой записи). Пример — `ui-probe.diary-create-thought.scenario.json`.
 
+### Самопроверка «до ↔ после» (`expectFrom`)
+
+Ожидание можно не зашивать, а взять из снимка, снятого ранее тем же сценарием:
+шаг `probe`/`api` с `"name": "<шаг>"` сохраняет своё значение, а последующий шаг
+с `"expectFrom": "<шаг>"` сверяется с ним. Так проверяется паритет результата до
+и после правки:
+
+```json
+{ "name": "headings-before",
+  "api": { "name": "headings-before", "method": "GET",
+           "path": "/networks/{{networkId}}/publications/{{pubId}}/assembly",
+           "expression": "data.sections.map((s) => s.heading)" } },
+{ "name": "headings-after",
+  "api": { "name": "headings-after", "method": "GET",
+           "path": "/networks/{{networkId}}/publications/{{pubId}}/assembly",
+           "expression": "data.sections.map((s) => s.heading)" },
+  "expectFrom": "headings-before" }
+```
+
+`expectFrom` ссылается на `name` уже выполненного шага `probe`/`api`; ссылка на
+невыполненный/чужой шаг — ошибка шага. `expect` и `expectFrom` взаимоисключающи.
+Живой образец — `ui-probe.publication-recipe.scenario.json`.
+
 ## Отчёт
 
 `<out>/report.txt` — человекочитаемый «шаг → проба → факт/ожидание»;
 `<out>/report.json` — машинный. PNG — только при шаге `shot` или `assert` с
 `evidence: true`.
 
-Шаги `assert`/`api` без `expect` дают только факт; с `expect` — сверку.
+Шаги `probe`/`api` без `expect`/`expectFrom` дают только факт; с `expect` —
+сверку с литералом, с `expectFrom` — сверку со снимком ранее выполненного шага.
 
 ## Рецепт изолированного стенда (перенесён из карточки компонента `9eddf9c0`)
 

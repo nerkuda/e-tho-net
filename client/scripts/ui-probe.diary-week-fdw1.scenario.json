@@ -1,0 +1,51 @@
+{
+  "name": "diary-week-fdw1",
+  "description": "Согласованность недели календаря «Дневника» при first_day_of_week=1: подписи столбцов, заголовок строки недели, клик по строке недели, клик по дню и предопределённый набор «Мои записи за неделю». Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.diary-week-fdw1.scenario.json --out .tmp/etn-73fa3c3b/fdw1",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "set-fdw-1",
+      "api": { "name": "set-fdw-1", "method": "PATCH", "path": "/networks/{{networkId}}", "body": { "first_day_of_week": 1 }, "expression": "data.first_day_of_week" },
+      "expect": 1
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-diary", "click": "button.view-tab[title=\"Дневник\"]" },
+    { "name": "diary-panel", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null" },
+    {
+      "name": "seed-week",
+      "eval": "(async () => { const nid = '{{networkId}}'; const seed = '{{thoughtId}}'; const mk = async (title, day) => { const t = new Date(day + 'T12:00:00').toISOString(); return window.etn.comments.create(nid, 'thought', seed, { kind: 'chronological', title, body_md: 'запись ' + day, valid_from: t, valid_to: t }); }; for (const d of ['2026-10-12','2026-10-13','2026-10-14','2026-10-15','2026-10-16','2026-10-17','2026-10-18']) { await mk('Д ' + d, d); } return true; })()"
+    },
+    { "name": "goto-today", "click": ".cal-today" },
+    { "name": "feed-today", "timeout": 10000, "waitFor": "document.querySelectorAll('.diary-day').length === 1" },
+    { "name": "weekday-labels", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-wd')).map((e) => e.textContent)", "expect": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"] },
+    { "name": "week-row-title", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-week')).map((e) => e.getAttribute('title'))", "expect": ["Неделя 40: 2026-09-28 — 2026-10-04", "Неделя 41: 2026-10-05 — 2026-10-11", "Неделя 42: 2026-10-12 — 2026-10-18", "Неделя 43: 2026-10-19 — 2026-10-25", "Неделя 44: 2026-10-26 — 2026-11-01", "Неделя 45: 2026-11-02 — 2026-11-08"] },
+    {
+      "name": "click-week-row-1012",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes('2026-10-12')); if (!b) throw new Error('нет строки недели 2026-10-12'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()"
+    },
+    { "name": "feed-week", "timeout": 10000, "waitFor": "document.querySelectorAll('.diary-day').length === 7" },
+    { "name": "week-row-state", "probe": "({ days: document.querySelectorAll('.diary-day').length, dayKeys: Array.from(document.querySelectorAll('.diary-day')).map((e) => e.dataset.day), selected: document.querySelectorAll('.cal-day.is-selected').length, selectedDays: Array.from(document.querySelectorAll('.cal-day.is-selected')).map((e) => e.getAttribute('title')), from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null })", "expect": { "days": 7, "dayKeys": ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"], "selected": 7, "selectedDays": ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"], "from": "$weekStart", "to": "$weekEnd" } },
+
+    { "name": "click-day-1014", "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-day')).find((e) => e.getAttribute('title') === '2026-10-14'); if (!b) throw new Error('нет дня 2026-10-14'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
+    { "name": "feed-day", "timeout": 10000, "waitFor": "document.querySelectorAll('.diary-day').length === 1" },
+    { "name": "day-state", "probe": "({ days: document.querySelectorAll('.diary-day').length, selected: document.querySelectorAll('.cal-day.is-selected').length, from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, shift: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__shift')?.value ?? null })", "expect": { "days": 1, "selected": 1, "from": "$today", "shift": "−1" } },
+
+    { "name": "open-saved", "eval": "(() => { const b = document.querySelector('.chron-filter .ff-extra--saved'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
+    { "name": "saved-dialog", "waitFor": "document.querySelector('.sfd-search') !== null" },
+    { "name": "search-week", "click": ".sfd-search" },
+    { "name": "search-week-typed", "text": "за неделю" },
+    { "name": "pick-week", "key": "ArrowDown" },
+    { "name": "confirm-week", "key": "Enter" },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    { "name": "feed-preset-week", "timeout": 10000, "waitFor": "document.querySelectorAll('.diary-day').length === 7" },
+    { "name": "preset-week-state", "probe": "({ days: document.querySelectorAll('.diary-day').length, selected: document.querySelectorAll('.cal-day.is-selected').length, selectedDays: Array.from(document.querySelectorAll('.cal-day.is-selected')).map((e) => e.getAttribute('title')) })", "expect": { "days": 7, "selected": 7, "selectedDays": ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"] } }
+  ]
+}

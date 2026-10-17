@@ -1,0 +1,41 @@
+{
+  "name": "value-focus-diary-7d36f439",
+  "description": "Аналог ошибки 7d36f439 (правило аналогов) в поле «Поиск по записям» «Дневника» (lib/filter-form.ts:213 → ctx.touch → renderPanel → panel.replaceChildren): онбординг → «Дневник» → поле ключевых слов вводится ДВУМЯ шагами (одна вставка `text`, затем пер-символьные `key`). Пробы: `document.activeElement` — это поле, а его `value` содержит текст обоих шагов. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.value-focus-diary-7d36f439.scenario.json --out .tmp/value-focus-diary-7d36f439",
+  "timeout": 90000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-chronicle-view", "click": "button.view-tab[title=\"Дневник\"]" },
+    { "name": "search-field-ready", "waitFor": "document.querySelector('.chron-filter input.st-f-keywords') !== null" },
+
+    { "name": "focus-search-field", "click": ".chron-filter input.st-f-keywords" },
+    { "name": "insert-first-part", "text": "abc" },
+    {
+      "name": "field-keeps-focus-after-insert",
+      "probe": "document.activeElement === document.querySelector('.chron-filter input.st-f-keywords')",
+      "expect": true
+    },
+    { "name": "key-d", "key": "d" },
+    { "name": "key-e", "key": "e" },
+    { "name": "key-f", "key": "f" },
+    {
+      "name": "field-holds-both-parts",
+      "probe": "document.querySelector('.chron-filter input.st-f-keywords')?.value ?? null",
+      "expect": "abcdef"
+    },
+    {
+      "name": "field-still-focused",
+      "probe": "document.activeElement === document.querySelector('.chron-filter input.st-f-keywords')",
+      "expect": true
+    }
+  ]
+}

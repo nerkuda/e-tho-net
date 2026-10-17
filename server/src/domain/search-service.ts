@@ -57,6 +57,7 @@
 import {
   buildLikePattern,
   EtnError,
+  FILTER_AST_VERSION,
   foldCase,
   mentionPrefilterMarkers,
   mentionPrefilterPass,
@@ -70,6 +71,8 @@ import {
   TRAVERSAL_DEFAULTS,
   type DuplicateHit,
   type DuplicateMatchKind,
+  type FilterAst,
+  type FilterAstNode,
   type IconKind,
   type MentionHit,
   type MentionPrefilterMarkers,
@@ -99,6 +102,16 @@ import {
 } from './font-style.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { filterAstClause, type AstTokenContext } from './query-service.js';
+import {
+  resolveThoughtTokensInAst,
+  scanStringForTokens,
+  type TokenIssue,
+} from './thought-type-view-tokens.js';
+import { getThought } from './thought-service.js';
+import { buildThoughtResolveContext } from './thought-type-views-service.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
 // (docs/03-server-api.md §6.9 resolve is conceptually part of search/lookup).
@@ -477,12 +490,26 @@ export function collectSubtreeTypes(
 
 /** Resolved filters shared by all four search groups. */
 interface SearchFilters {
+  /**
+   * Актуальность/корзина КОРПУСНЫХ сущностей (связи и link-половина хроники):
+   * `show_inactive`/`trashed` остаются параметрами полнотекстового поиска и
+   * фильтруют хиты-связи и хроно-хиты (требование b91336e7, ADR 7581ac14).
+   * Мыслевые настройки (актуальность/корзина/тип/подкорень) сюда НЕ входят —
+   * они исполняются единым AST-движком ({@link thoughtClause}).
+   */
   showInactive: boolean;
   /** S13: when false (default) marked-for-deletion rows are hidden. */
   trashed: boolean;
-  typeIds: string[] | null;
+  /** Фильтр по типу связи (поддерево) — корпусный, фильтрует хиты-связи. */
   linkTypeIds: string[] | null;
-  subtreeIds: Set<string> | null;
+  /**
+   * Конъюнктивная WHERE-клауза МЫСЛЕВЫХ условий отбора (профиль `thoughts`),
+   * скомпилированная единым AST-движком ({@link filterAstClause}). Добавляется
+   * к WHERE мыслевых FTS-групп (`by_names`, `by_texts`, thought-половина
+   * `by_chrono`); корпусные группы её не получают. `null` — мыслевых
+   * настроек нет.
+   */
+  thoughtClause: Clause | null;
   limit: number;
   offset: number;
   /** Highlight terms derived from the query (for JS snippet highlighting). */
@@ -522,14 +549,6 @@ function clampPaging(
 function inListClause(column: string, ids: string[] | null): Clause | null {
   if (!ids || ids.length === 0) return null;
   const placeholders = ids.map(() => '?').join(',');
-  return { sql: `${column} IN (${placeholders})`, params: [...ids] };
-}
-
-/** Build a subtree-restriction clause, or `null` when the set is not limiting. */
-function subtreeClause(column: string, ids: Set<string> | null): Clause | null {
-  if (ids === null) return null;
-  if (ids.size === 0) return { sql: '0', params: [] }; // guaranteed-false
-  const placeholders = [...ids].map(() => '?').join(',');
   return { sql: `${column} IN (${placeholders})`, params: [...ids] };
 }
 
@@ -583,16 +602,16 @@ function searchNames(
   trigram: TrigramQuery,
   f: SearchFilters,
 ): { hits: SearchNameHit[]; total: number } {
-  if (f.subtreeIds !== null && f.subtreeIds.size === 0) return { hits: [], total: 0 };
   const useFts = trigram.match !== '';
   const join = useFts ? 'JOIN fts_thought_names fnames ON fnames.rowid = t.rowid' : '';
   const orderBy = useFts ? 'ORDER BY rank' : 'ORDER BY t.title_norm';
   const { where, params } = joinClauses([
     useFts ? { sql: 'fts_thought_names MATCH ?', params: [trigram.match] } : null,
-    { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
-    { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
-    inListClause('t.type_id', f.typeIds),
-    subtreeClause('t.id', f.subtreeIds),
+    // Мыслевые настройки (актуальность/корзина/тип/подкорень) — единой
+    // конъюнкцией из AST-движка (требование b91336e7, ADR 7581ac14).
+    // `ORDER BY rank` и сниппеты сохраняются: AST-клауза — обычный предикат
+    // поверх ранжированной FTS-выборки, множество id не материализуется.
+    f.thoughtClause,
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
     ...trigram.nameShortInclude.map((w) => buildShortWordNameClause(w, false)),
@@ -685,14 +704,12 @@ function searchTexts(
   match: string,
   f: SearchFilters,
 ): { hits: SearchTextHit[]; total: number } {
-  if (f.subtreeIds !== null && f.subtreeIds.size === 0) return { hits: [], total: 0 };
   const { where, params } = joinClauses([
     { sql: 'fts_thought_texts MATCH ?', params: [match] },
     { sql: "c.owner_type = 'thought'", params: [] },
-    { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
-    { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
-    inListClause('t.type_id', f.typeIds),
-    subtreeClause('f.thought_id', f.subtreeIds),
+    // Мыслевые настройки — единой AST-конъюнкцией (см. `searchNames`).
+    // Автор/редактор остаются корпусными параметрами (авторство МЫСЛИ).
+    f.thoughtClause,
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
   ]);
@@ -882,10 +899,10 @@ function buildChronoHalf(
   // fts_link_texts.link_id for links).
   let joins = '';
   if (side === 'thought') {
-    clauses.push({ sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
-    clauses.push({ sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] });
-    clauses.push(inListClause('t.type_id', f.typeIds));
-    clauses.push(subtreeClause('f.thought_id', f.subtreeIds));
+    // Мыслевые настройки thought-половины хроники — единой AST-конъюнкцией
+    // (требование b91336e7). Автор/редактор остаются корпусными: для раздела
+    // «хронология» это авторство КОММЕНТАРИЯ (`c.created_by`/`c.updated_by`).
+    clauses.push(f.thoughtClause);
     joins = 'JOIN thoughts_v t ON t.id = c.owner_id';
   } else {
     clauses.push({ sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
@@ -954,21 +971,246 @@ function searchChrono(
 }
 
 // ---------------------------------------------------------------------------
+// Мыслевые настройки отбора → общий AST (требование b91336e7, ADR 7581ac14)
+// ---------------------------------------------------------------------------
+
+/** Обернуть результат {@link filterAstClause} в локальную форму WHERE-клаузы. */
+function toSearchClause(clause: { sql: string; params: unknown[] }): Clause {
+  return { sql: clause.sql, params: clause.params };
+}
+
+/**
+ * Скомпилировать МЫСЛЕВЫЕ настройки плоского контракта поиска в общий AST
+ * (профиль `thoughts`) — обратная совместимость: те же настройки, что раньше
+ * исполнялись отдельным плоским путём, теперь идут через единый движок.
+ *
+ *   * «показывать неактуальные» (`show_inactive`, дефолт — настройка
+ *     пользователя): `true` → условия нет; иначе лист «Актуальность» = true.
+ *   * «корзина» (`trashed`): `true` → условия нет; иначе лист «Пометка на
+ *     удаление» = false (marked_for_deletion скрыты).
+ *   * типы мыслей (`type` — имя, резолвится; `type_id`) → лист «Тип в
+ *     иерархии» (L21: тип и его подтипы).
+ *   * подкорень (`in=subtree` + `from_thought_id`) → «ИЛИ(id в [корень],
+ *     parents in_hierarchy [корень] режим `all_links`)» — ровно корень и его
+ *     потомки по всем ЖИВЫМ не-корзинным связям (прецедент —
+ *     `applyLegacyHierarchyTraversal`, `client/src/renderer/lib/filter-builder.ts`).
+ *     Лист `parents` + `in_hierarchy` матчит ПОТОМКОВ корня (родитель входит в
+ *     поддерево), сами корни добавляет лист `id` в списке; `children` дал бы
+ *     предков и для подкорня не годится.
+ *
+ * `undefined` — мыслевых настроек в запросе нет (без фильтра).
+ */
+export function compileSearchThoughtAst(
+  ndb: NetworkDb,
+  request: SearchRequest,
+  showInactiveDefault: boolean,
+): FilterAst | undefined {
+  const children: FilterAstNode[] = [];
+
+  // «Показывать неактуальные»: true → условия нет; иначе — только активные.
+  const showInactive = request.show_inactive ?? showInactiveDefault;
+  if (!showInactive) {
+    children.push({ entity: { kind: 'active' }, operator: 'eq', value: true });
+  }
+  if (request.trashed !== true) {
+    children.push({ entity: { kind: 'trashed' }, operator: 'eq', value: false });
+  }
+
+  // Резолв имени типа в id (задача d5ab1630 «Типы адресуются именами»).
+  const resolvedTypeId =
+    request.type !== undefined ? resolveThoughtTypeIdByName(ndb, request.type) : undefined;
+  const typeIds = resolvedTypeId !== undefined ? [resolvedTypeId] : request.type_id;
+  if (typeIds !== undefined && typeIds.length > 0) {
+    children.push({ entity: { kind: 'type' }, operator: 'in_hierarchy', value: [...typeIds] });
+  }
+
+  if (
+    request.in === 'subtree' &&
+    typeof request.from_thought_id === 'string' &&
+    request.from_thought_id !== ''
+  ) {
+    const root = request.from_thought_id;
+    children.push({
+      op: 'or',
+      children: [
+        { entity: { kind: 'id' }, operator: 'in', value: [root] },
+        { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: [root] },
+      ],
+    });
+  }
+
+  if (children.length === 0) return undefined;
+  return {
+    version: FILTER_AST_VERSION,
+    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
+  };
+}
+
+/**
+ * Правило сосуществования: `ast` XOR плоские МЫСЛЕВЫЕ параметры
+ * (требование b91336e7, ADR 7581ac14). Одновременная передача — ошибка
+ * валидации: мыслевые настройки шли бы двумя противоречивыми путями.
+ * Корпусные параметры (`q`, `scope`, `link_type_id`, `author_id`,
+ * `editor_id`) с `ast` совместимы всегда и здесь не проверяются.
+ */
+export function assertSearchAstExclusive(request: SearchRequest): void {
+  if (request.ast === undefined) return;
+  const conflicting: string[] = [];
+  if (request.type_id !== undefined && request.type_id.length > 0) conflicting.push('type_id');
+  if (request.type !== undefined) conflicting.push('type');
+  if (request.show_inactive !== undefined) conflicting.push('show_inactive');
+  if (request.trashed !== undefined) conflicting.push('trashed');
+  if (request.in !== undefined) conflicting.push('in');
+  if (request.from_thought_id !== undefined) conflicting.push('from_thought_id');
+  if (conflicting.length === 0) return;
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `Поле ast несовместимо с плоскими мыслевыми параметрами (${conflicting.join(
+      ', ',
+    )}): передайте либо ast, либо плоские параметры.`,
+    { field: 'ast', conflicting },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Токены контекста мысли в AST точки поиска (задача 4b1cc3d4)
+// ---------------------------------------------------------------------------
+
+/** Пустой ответ поиска (все группы пусты); с диагностикой — при её наличии. */
+function emptySearchResponse(unresolved: TokenIssue[]): SearchResponse {
+  return {
+    by_names: [],
+    by_texts: [],
+    by_links: [],
+    by_chrono: [],
+    meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
+    ...(unresolved.length > 0 ? { unresolved } : {}),
+  };
+}
+
+/**
+ * Строки-токены КОНТЕКСТА МЫСЛИ (`$thought`, `$thought.<поле>`,
+ * `$thought.[<свойство>]`), найденные в AST. Глобальные токены (`$today`,
+ * `$user`, …) не считаются: их раскрывает движок по `tokenContext`
+ * (задача 56a143ff). Обход — по объектам-значениям `{ token: '…' }`.
+ */
+function collectThoughtTokenStrings(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) collectThoughtTokenStrings(item, out);
+    return out;
+  }
+  if (node === null || typeof node !== 'object') return out;
+  const record = node as Record<string, unknown>;
+  const token = record['token'];
+  if (typeof token === 'string' && Object.keys(record).length === 1) {
+    const { known } = scanStringForTokens(token);
+    if (known.some((tok) => tok.kind !== 'global')) out.push(token);
+    return out;
+  }
+  for (const value of Object.values(record)) collectThoughtTokenStrings(value, out);
+  return out;
+}
+
+/**
+ * Разрешить в AST токены контекста мысли (`$thought*`) мыслью-фокусом карты
+ * (`focus_thought_id`) — образец решения C3 (ошибка 23c7d3e9,
+ * `runViewForThought`): пред-резолв токенов контекста мысли сервисом, у
+ * которого есть мысль, ДО единого движка отбора.
+ *
+ * Без фокуса или при ненайденной мысли токен не разрешается: отдаём
+ * `unresolved` с пояснением (требование b7fdab20) — условие диагностируется, а
+ * не исполняется тихо пустым результатом.
+ *
+ * `null` — токенов контекста мысли в AST нет: резолв не нужен (лишний запрос к
+ * БД не делаем, AST без изменений).
+ */
+function resolveSearchThoughtTokens(
+  ndb: NetworkDb,
+  ast: FilterAst,
+  focusThoughtId: string | undefined,
+  tokenContext: AstTokenContext | undefined,
+): { ast: FilterAst; unresolved: TokenIssue[] } | null {
+  const tokens = collectThoughtTokenStrings(ast);
+  if (tokens.length === 0) return null;
+  if (focusThoughtId === undefined || focusThoughtId === '') {
+    return {
+      ast,
+      unresolved: tokens.map((token) => ({
+        path: '',
+        token,
+        reason: 'unknown_token' as const,
+        message: `Токен «${token}» требует мысли в фокусе карты: задайте мысль в фокусе и повторите поиск.`,
+      })),
+    };
+  }
+  const thought = getThought(ndb, focusThoughtId);
+  if (thought === null) {
+    return {
+      ast,
+      unresolved: tokens.map((token) => ({
+        path: '',
+        token,
+        reason: 'unknown_token' as const,
+        message: `Мысль в фокусе карты (${focusThoughtId}) не найдена — токен «${token}» не разрешён.`,
+      })),
+    };
+  }
+  const ctx = buildThoughtResolveContext(
+    ndb,
+    {
+      id: thought.id,
+      title: thought.title,
+      synonyms: thought.synonyms,
+      type_id: thought.type_id,
+      active: thought.active,
+      created_by: thought.created_by ?? '',
+      updated_by: thought.updated_by ?? '',
+      created_at: thought.created_at,
+      updated_at: thought.updated_at,
+    },
+    focusThoughtId,
+    tokenContext?.userId ?? '',
+    {
+      ...(tokenContext?.nowMs !== undefined
+        ? { now: (): Date => new Date(tokenContext.nowMs!) }
+        : {}),
+      ...(tokenContext?.firstDayOfWeek !== undefined
+        ? { firstDayOfWeek: tokenContext.firstDayOfWeek }
+        : {}),
+      ...(tokenContext?.withTime !== undefined ? { withTime: tokenContext.withTime } : {}),
+    },
+  );
+  // Глобальные токены (`$today`/`$user`/…) движок раскрывает сам по
+  // `tokenContext`; здесь подставляются ТОЛЬКО токены контекста мысли.
+  const resolved = resolveThoughtTokensInAst(ast, ctx);
+  return { ast: resolved.definition as FilterAst, unresolved: resolved.unresolved };
+}
+
+// ---------------------------------------------------------------------------
 // Public: search
 // ---------------------------------------------------------------------------
 
 /**
  * Run a full-text search (docs/03-server-api.md §12).
  *
+ * Диагностика AST (`unresolved` — задача 56a143ff, требование b7fdab20) объявлена
+ * в общем контракте: `SearchResponse.unresolved` (`TokenIssue[]`, задача
+ * 1169ae37), поэтому своего расширения ответ точки поиска не заводит.
+ *
  * @param ndb - open network database.
  * @param request - query parameters; `scope` selects which groups to populate.
  * @param showInactiveDefault - caller's `preferences.show_inactive` value, used
  *   when `request.show_inactive` is omitted.
+ * @param tokenContext - контекст разрешения календарных токенов `request.ast`
+ *   (задача 56a143ff): часы сервера, `userId` ключа, первый день недели сети,
+ *   профиль времени. Без него лист с токеном неразрешим (`AST_FALSE`,
+ *   `unresolved` с пояснением вместо бесшумного пустого).
  */
 export function search(
   ndb: NetworkDb,
   request: SearchRequest,
   showInactiveDefault = false,
+  tokenContext?: AstTokenContext,
 ): SearchResponse {
   if (typeof request.q !== 'string' || request.q.trim() === '') {
     throw new EtnError('VALIDATION_ERROR', 'q must be a non-empty string', { field: 'q' });
@@ -986,23 +1228,62 @@ export function search(
     tokenize(w.replace(/\*/g, ' ')),
   );
 
-  // Резолв имени типа в id (задача d5ab1630 «Типы и свойства адресуются
-  // именами во всех фильтрах MCP»). MCP-фасад тоже резолвит; здесь — для
-  // прямых вызовов из REST. Идемпотентно: если `type` не задан — никакой
-  // работы, и `type_id` используется как есть.
-  const resolvedTypeId: string | undefined =
-    request.type !== undefined ? resolveThoughtTypeIdByName(ndb, request.type) : undefined;
-  const typeIds = resolvedTypeId !== undefined ? [resolvedTypeId] : request.type_id;
+  // Мыслевые настройки отбора — ЕДИНЫМ путём: явное `ast` (профиль `thoughts`)
+  // либо компиляция плоских мыслевых параметров в тот же AST (требование
+  // b91336e7, ADR 7581ac14, задача d5e8ddc1). Отдельного плоского пути
+  // исполнения мыслевых настроек нет — второй движок не вводится.
+  const explicitAst = request.ast;
+  if (explicitAst !== undefined) {
+    assertSearchAstExclusive(request);
+    // Видимость операндов профиля `thoughts` (требование 0095daad): условие
+    // вне профиля — `VALIDATION_ERROR` до исполнения (сценарий 55f31eee).
+    assertFilterAstInProfile(explicitAst, 'thoughts');
+    // Красная диагностика: AST со ссылкой на удалённую сущность не исполняем.
+    const diag = diagnoseFilterAst(ndb, explicitAst);
+    if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+  }
+  let effectiveAst: FilterAst | undefined =
+    explicitAst ?? compileSearchThoughtAst(ndb, request, showInactiveDefault);
+  // Токены КОНТЕКСТА МЫСЛИ (`$thought*`) разрешаются мыслью-фокусом карты до
+  // единого движка (задача 4b1cc3d4): без фокуса/при ненайденной мысли —
+  // штатная диагностика `unresolved` вместо тихой пустоты (требование b7fdab20).
+  if (effectiveAst !== undefined) {
+    const thoughtResolved = resolveSearchThoughtTokens(
+      ndb,
+      effectiveAst,
+      request.focus_thought_id,
+      tokenContext,
+    );
+    if (thoughtResolved !== null) {
+      if (thoughtResolved.unresolved.length > 0) {
+        return emptySearchResponse(thoughtResolved.unresolved);
+      }
+      effectiveAst = thoughtResolved.ast;
+    }
+  }
+  // Неразрешимые токены AST (задача 56a143ff, требование b7fdab20): лист с
+  // токеном собирает диагностику в этот коллектор; пусто — всё разрешилось.
+  const unresolved: TokenIssue[] = [];
+  const thoughtClause: Clause | null =
+    effectiveAst === undefined
+      ? null
+      : toSearchClause(
+          filterAstClause(ndb, effectiveAst, undefined, {
+            ...(tokenContext !== undefined ? { ctx: tokenContext } : {}),
+            unresolved,
+          }),
+        );
 
   const filters: SearchFilters = {
+    // show_inactive/trashed остаются параметрами полнотекстового поиска —
+    // фильтруют ХИТЫ-связи и хроно-хиты по связям (мыслевые настройки идут в
+    // `thoughtClause` через AST).
     showInactive: request.show_inactive ?? showInactiveDefault,
     trashed: request.trashed === true,
-    // L21: a selected parent type matches its whole subtree (OR semantics).
-    typeIds: typeIds ? expandTypeIdsToSubtree(ndb, 'thought_types', typeIds) : null,
     linkTypeIds: request.link_type_id
       ? expandTypeIdsToSubtree(ndb, 'link_types', request.link_type_id)
       : null,
-    subtreeIds: request.in === 'subtree' ? collectSubtreeIds(ndb, request.from_thought_id) : null,
+    thoughtClause,
     limit: paging.limit,
     offset: paging.offset,
     terms: highlightTerms,
@@ -1029,7 +1310,9 @@ export function search(
   // word at all (empty query already rejected above, or a pure exclusion —
   // FTS5 has no unary NOT, "matches nothing" is the deliberate rule here).
   if (trigram.match === '' && trigram.nameShortInclude.length === 0) {
-    return empty;
+    // Диагностика токенов сохраняется и на раннем выходе: причина пустого
+    // ответа не должна теряться (задача 56a143ff).
+    return unresolved.length > 0 ? { ...empty, unresolved } : empty;
   }
 
   const wants = (group: SearchScope): boolean => scope === 'all' || scope === group;
@@ -1060,6 +1343,9 @@ export function search(
     by_links: links.hits,
     by_chrono: chrono.hits,
     meta,
+    // Неразрешимые токены AST — только при непустом наборе (паритет с
+    // `queryThoughts`: «всё разрешилось» не шумит в ответе).
+    ...(unresolved.length > 0 ? { unresolved } : {}),
   };
 }
 
@@ -1070,6 +1356,43 @@ export function search(
 /** Normalise a title/synonym the way the thought service does (NFC+trim+lower). */
 function norm(value: string): string {
   return value.normalize('NFC').trim().toLowerCase();
+}
+
+/** Whole-term matcher of one stored `*`-synonym plus its cheap prefilter markers. */
+interface AnchoredWildcardPattern {
+  regex: RegExp;
+  markers: MentionPrefilterMarkers;
+}
+
+/**
+ * Cache of anchored wildcard-synonym matchers, keyed by `synonym_norm`
+ * (ошибка 5e35eb7b).
+ *
+ * {@link findDuplicates} evaluates EVERY `*`-synonym of the network against
+ * EVERY input term; on a network with thousands of wildcard synonyms that was
+ * thousands of `new RegExp` compilations per call (the CPU-profile hot frame
+ * behind the 0.8–1.9 s standalone cost), even though the patterns are stable
+ * between edits. A pattern is compiled at most once per process per
+ * `synonym_norm`; the cache is capped and cleared wholesale when full — terms
+ * are cheap to recompile and a per-entry LRU would cost more than it saves.
+ * Shared `RegExp` objects are safe here: the anchored match uses `.test()`
+ * without the `g` flag, so there is no `lastIndex` state.
+ */
+const anchoredWildcardCache = new Map<string, AnchoredWildcardPattern>();
+const ANCHORED_WILDCARD_CACHE_MAX = 8192;
+
+/** Returns the anchored wildcard matcher for `synonymNorm`, compiling it at most once. */
+function anchoredWildcardFor(synonymNorm: string): AnchoredWildcardPattern {
+  let pat = anchoredWildcardCache.get(synonymNorm);
+  if (pat === undefined) {
+    if (anchoredWildcardCache.size >= ANCHORED_WILDCARD_CACHE_MAX) anchoredWildcardCache.clear();
+    pat = {
+      regex: new RegExp(`^(?:${synonymPatternSource(synonymNorm)})$`, 'iu'),
+      markers: mentionPrefilterMarkers(synonymNorm),
+    };
+    anchoredWildcardCache.set(synonymNorm, pat);
+  }
+  return pat;
 }
 
 /**
@@ -1302,16 +1625,20 @@ export function findDuplicates(
         // correct if that upstream normalisation ever changes and matches the
         // neighbouring `buildLikePattern(word.toLowerCase())` callers.
         const pattern = buildLikePattern(word.toLowerCase());
+        // The synonym half of the clause is an UNCORRELATED `IN (SELECT …)`.
+        // `thought_synonyms_v` is a layer-chain view: a correlated `EXISTS`
+        // makes SQLite re-evaluate the whole view once per outer thought
+        // (measured on 5 000 thoughts × 3 500 synonyms: 1 194 ms for one word),
+        // while the uncorrelated subquery is materialised once and probed by id
+        // (1.3 ms) — same result set, ~900× cheaper (ошибка 5e35eb7b).
         const clause =
-          "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
-          " WHERE ts.thought_id = thoughts.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
+          "(title_norm LIKE ? ESCAPE '\\' OR thoughts.id IN (SELECT ts.thought_id" +
+          " FROM thought_synonyms_v ts WHERE ts.synonym_norm LIKE ? ESCAPE '\\'))";
         conditions.push(negate ? `NOT ${clause}` : clause);
         params.push(pattern, pattern);
       };
       for (const word of keywords.include) push(word, false);
       for (const word of keywords.exclude) push(word, true);
-      // `thoughts_v thoughts` — alias keeps the correlated EXISTS reference
-      // (`thoughts.id`) valid against the view.
       // Bug a01893c7-ed1e-4c1b-a215-d4398135e049: filter trashed rows out of
       // partial-match candidates.
       let partialRows = ndb
@@ -1376,13 +1703,26 @@ export function findDuplicates(
     // the add-thought dialog would treat «Грабли» as an exact duplicate of
     // the whole phrase (08-ui-spec.md §4.4: «`*`-паттерн синонима совпал со
     // вводом»).
-    for (const r of wildSynRows) {
-      const anchored = new RegExp(`^(?:${synonymPatternToRegex(r.synonym_norm).source})$`, 'iu');
-      if (!anchored.test(n)) continue;
-      const hit = ensure(r);
-      if (hit.matched_on === 'partial') {
-        hit.matched_on = 'synonym';
-        hit.matched_synonym = r.synonym;
+    //
+    // Performance (ошибка 5e35eb7b): matchers come from a compile cache, and
+    // every pattern first passes a cheap conservative prefilter over the term —
+    // the same «string sieves before regex» trick as the §21 mentions scan
+    // ({@link mentionPrefilterPass}). A pattern whose literal chunks are absent
+    // from the term cannot match, so the regex is skipped for the vast majority
+    // of the network's wildcard synonyms. The term's folded form and word-token
+    // set are computed once per term, not per pattern.
+    if (wildSynRows.length > 0) {
+      const foldedTerm = foldCase(n);
+      const foldedWords = new Set(splitMentionWords(n).map(foldCase));
+      for (const r of wildSynRows) {
+        const pat = anchoredWildcardFor(r.synonym_norm);
+        if (!mentionPrefilterPass(pat.markers, foldedTerm, foldedWords)) continue;
+        if (!pat.regex.test(n)) continue;
+        const hit = ensure(r);
+        if (hit.matched_on === 'partial') {
+          hit.matched_on = 'synonym';
+          hit.matched_synonym = r.synonym;
+        }
       }
     }
   }
@@ -1412,6 +1752,76 @@ export function findDuplicates(
   return [...byId.values()].sort(
     (a, b) => priority[a.matched_on] - priority[b.matched_on] || a.title.localeCompare(b.title),
   );
+}
+
+/** Result of the cheap blocking gate ({@link findBlockingDuplicate}). */
+export interface BlockingDuplicateMatch {
+  id: string;
+  matched_on: 'title' | 'synonym';
+  /** The existing thought's literal synonym that matched (`matched_on: 'synonym'`). */
+  matched_synonym?: string;
+}
+
+/**
+ * Blocking duplicate of a proposed thought title — the cheap, direct counterpart
+ * of {@link findDuplicates} used by the write gate (задача bf9f46bd, ошибка
+ * 9f4c0793).
+ *
+ * A match blocks creation only when BOTH hold:
+ *   - it is an exact (normalised) match — the existing thought's `title_norm`
+ *     equals the proposed title, or one of its LITERAL (no `*`) synonyms does;
+ *   - the matched thought has the SAME type as the proposed one (`null` on both
+ *     sides counts as the same type — both untyped).
+ *
+ * Wildcard-mask matches, partial matches and exact matches at a different type
+ * do NOT block: they are reported as candidates instead (see
+ * {@link findDuplicates}). The wildcard mask is by construction a
+ * wordform/prefix match, never an exact name, so a literal requirement on the
+ * synonym side is explicit here (`NOT LIKE '%*%'`).
+ *
+ * Unlike {@link findDuplicates}, this gate NEVER builds wildcard regexes or runs
+ * LIKE scans: both lookups are exact-equality probes served by
+ * `idx_thoughts_title_norm` / `idx_synonyms_norm`, i.e. microseconds even on a
+ * network with thousands of thoughts. That is what removes the second heavy
+ * duplicate call from `upsertThoughtBundle`.
+ *
+ * Attribution trap (why this cannot be derived from `findDuplicates` hits): a
+ * `DuplicateHit`'s `matched_on`/`matched_synonym` describe the side of the
+ * EXISTING thought and do not say which proposed term matched. An exact match of
+ * a proposed SYNONYM against another thought's title would surface as
+ * `matched_on: 'title'` and wrongly block. Only the proposed TITLE is checked
+ * here, and synonyms are checked against the proposed title as well — exactly
+ * the semantics of the full gate.
+ */
+export function findBlockingDuplicate(
+  ndb: NetworkDb,
+  title: string,
+  typeId: string | null,
+): BlockingDuplicateMatch | undefined {
+  const n = norm(title);
+  if (n === '') return undefined;
+  // Strongest tier first: exact same-type title_norm (indexed point lookup).
+  const titleRow = ndb
+    .prepare(
+      'SELECT id FROM thoughts_v WHERE title_norm = ? AND marked_for_deletion = 0 AND type_id IS ? LIMIT 1',
+    )
+    .get(n, typeId) as { id: string } | undefined;
+  if (titleRow !== undefined) return { id: titleRow.id, matched_on: 'title' };
+  // Exact same-type LITERAL synonym (indexed point lookup). A stored `*`-mask
+  // synonym never blocks, matching the full gate's `includes('*')` rule.
+  const synRow = ndb
+    .prepare(
+      `SELECT t.id AS id, ts.synonym AS synonym
+       FROM thought_synonyms_v ts JOIN thoughts_v t ON t.id = ts.thought_id
+       WHERE ts.synonym_norm = ? AND ts.synonym NOT LIKE '%*%'
+         AND t.marked_for_deletion = 0 AND t.type_id IS ?
+       ORDER BY ts.synonym LIMIT 1`,
+    )
+    .get(n, typeId) as { id: string; synonym: string } | undefined;
+  if (synRow !== undefined) {
+    return { id: synRow.id, matched_on: 'synonym', matched_synonym: synRow.synonym };
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

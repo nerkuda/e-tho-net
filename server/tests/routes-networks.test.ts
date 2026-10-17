@@ -46,6 +46,10 @@ const TEST_CONFIG: ServerConfig = {
   logLevel: 'silent',
   mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
   readerPool: { size: 1, taskTimeoutMs: 30000 },
+  // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
+  walCheckpoint: { intervalMs: 0 },
+  // Пул записи в тестах выключен: пути записи переводит отдельная задача (c8920d04).
+  writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
 };
 
 interface SeededUser {
@@ -528,6 +532,41 @@ describe(
         const got = get.json().data as typeof dto;
         assert.equal(got.description, 'What the network is about.');
         assert.equal(got.conventions, 'Always chronicle changes.');
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
+    it('PATCH /networks/{id} sets first_day_of_week; invalid value → 422 (0.13.1, 0f1b9892)', async () => {
+      const { app, sys, db, admin } = await buildApp();
+      const networkId = seedNetwork(db, admin.userId);
+      try {
+        const ok = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { first_day_of_week: 7 },
+        });
+        assert.equal(ok.statusCode, 200);
+        assert.equal((ok.json().data as { first_day_of_week: number }).first_day_of_week, 7);
+
+        // GET отдаёт настройку.
+        const get = await app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+        });
+        assert.equal((get.json().data as { first_day_of_week: number }).first_day_of_week, 7);
+
+        // Вне диапазона 1..7 — VALIDATION_ERROR.
+        const bad = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { first_day_of_week: 9 },
+        });
+        assert.equal(bad.statusCode, 422);
       } finally {
         await app.close();
         sys.close();

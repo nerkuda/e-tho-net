@@ -40,6 +40,7 @@ import {
   type EtnErrorBody,
   type EtnErrorCode,
   type ExportJobStartResult,
+  type FilterAst,
   type FocusOrderResult,
   type LocksClearResult,
   type NetworkPropertyDeleteResult,
@@ -2136,6 +2137,10 @@ export class RestClient {
     request: import('@etn/shared').SearchRequest,
   ): Promise<import('@etn/shared').SearchResponse> {
     const q: QueryRecord = { q: request.q };
+    // Мыслевые настройки отбора — AST-телем в query-параметре `ast`
+    // (задача d5e8ddc1, требование b91336e7): сервер валидирует профилем
+    // `thoughts` и исполняет единым движком. Корпусные параметры — рядом.
+    if (request.ast !== undefined) q['ast'] = JSON.stringify(request.ast);
     if (request.in !== undefined) q['in'] = request.in;
     if (request.from_thought_id !== undefined) q['from_thought_id'] = request.from_thought_id;
     if (request.scope !== undefined) q['scope'] = request.scope;
@@ -2151,6 +2156,11 @@ export class RestClient {
     }
     if (request.editor_id !== undefined && request.editor_id !== '') {
       q['editor_id'] = request.editor_id;
+    }
+    // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+    // 4b1cc3d4): сервер разрешает условие «По родителю в фокусе» по этой мысли.
+    if (request.focus_thought_id !== undefined && request.focus_thought_id !== '') {
+      q['focus_thought_id'] = request.focus_thought_id;
     }
     if (request.limit !== undefined) q['limit'] = request.limit;
     if (request.offset !== undefined) q['offset'] = request.offset;
@@ -2501,6 +2511,9 @@ export class RestClient {
   ): Promise<import('@etn/shared').SearchResponse> {
     const q: QueryRecord = { q: request.q };
     if (networkIds.length > 0) q['network_ids'] = networkIds;
+    // Мыслевые настройки отбора — AST-телем (см. `searchThoughts`); веерный
+    // режим обязан передавать `ast`, иначе настройки терялись бы (задача d5e8ddc1).
+    if (request.ast !== undefined) q['ast'] = JSON.stringify(request.ast);
     if (request.in !== undefined) q['in'] = request.in;
     if (request.from_thought_id !== undefined) q['from_thought_id'] = request.from_thought_id;
     if (request.scope !== undefined) q['scope'] = request.scope;
@@ -2513,6 +2526,11 @@ export class RestClient {
     }
     if (request.editor_id !== undefined && request.editor_id !== '') {
       q['editor_id'] = request.editor_id;
+    }
+    // Мысль-фокус карты — контекст токенов `$thought*` в `ast` (задача
+    // 4b1cc3d4): сервер разрешает условие «По родителю в фокусе» по этой мысли.
+    if (request.focus_thought_id !== undefined && request.focus_thought_id !== '') {
+      q['focus_thought_id'] = request.focus_thought_id;
     }
     if (request.limit !== undefined) q['limit'] = request.limit;
     if (request.offset !== undefined) q['offset'] = request.offset;
@@ -2638,6 +2656,7 @@ export class RestClient {
           total?: number | null;
           directions?: import('@etn/shared').StructureDirectionFlags;
           next_cursor?: string | null;
+          unresolved?: Array<{ path: string; token: string; reason: string; message: string }>;
         }
       | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : items.length;
@@ -2649,6 +2668,11 @@ export class RestClient {
       next_cursor: this.legacyStructureQuery
         ? legacyNextCursor(startOffset, items.length, limit, typeof meta?.total === 'number' ? meta.total : null)
         : meta?.next_cursor ?? null,
+      // Неразрешимые токены AST (требование b7fdab20): редактор отбора
+      // подсвечивает их адреса — поле едет из того же конверта `meta`.
+      ...(Array.isArray(meta?.unresolved) && meta.unresolved.length > 0
+        ? { unresolved: meta.unresolved }
+        : {}),
     };
   }
 
@@ -2768,7 +2792,7 @@ export class RestClient {
   /** `POST /networks/{nid}/saved-filters` — create (idempotent). */
   public async createSavedFilter(
     networkId: string,
-    input: { name: string; definition: import('@etn/shared').SavedFilterDefinition },
+    input: { name: string; definition: import('@etn/shared').SavedFilterCriteria },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').SavedFilter> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
@@ -2783,7 +2807,7 @@ export class RestClient {
     filterId: string,
     input: {
       name?: string;
-      definition?: import('@etn/shared').SavedFilterDefinition;
+      definition?: import('@etn/shared').SavedFilterCriteria;
     },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').SavedFilter> {
@@ -2819,9 +2843,20 @@ export class RestClient {
     const { data: rows, meta: envelope } = await this.requestEnvelope<
       import('@etn/shared').ChronicleRow[]
     >('POST', `/networks/${encodeURIComponent(networkId)}/chronicle/query`, { body: request });
-    const meta = envelope as { total?: number } | undefined;
+    const meta = envelope as
+      | { total?: number; warnings?: import('@etn/shared').FilterDiagnostic[] }
+      | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : rows.length;
-    return { rows, total };
+    return {
+      rows,
+      total,
+      // Диагностика ядра отбора едет из того же конверта `meta` (требование
+      // 44d61c8a): редактор «Дневника» подсвечивает адресованные строки —
+      // единый путь со «Структурами».
+      ...(Array.isArray(meta?.warnings) && meta.warnings.length > 0
+        ? { warnings: meta.warnings }
+        : {}),
+    };
   }
 
   /** `GET /networks/{nid}/saved-filters?view=chronicle` — the user's chronicle filters. */
@@ -3124,10 +3159,16 @@ export class RestClient {
   // `client/src/renderer/screens/activity/`.
   // ---------------------------------------------------------------------------
 
-  /** `GET /networks/{nid}/activity` — лента с фильтрами и пагинацией. */
+  /**
+   * `GET /networks/{nid}/activity` — лента с фильтрами и пагинацией.
+   * `ast` — тело отбора профиля «события» (XOR с плоскими фильтрами,
+   * требование db5e1063): уходит JSON-строкой query-параметра, как ждёт
+   * серверный `parseRestAstQueryParam`.
+   */
   public async listActivity(
     networkId: string,
     filters?: {
+      ast?: FilterAst;
       from_ms?: number;
       to_ms?: number;
       user_id?: string;
@@ -3138,6 +3179,7 @@ export class RestClient {
     },
   ): Promise<ActivityListResult> {
     const query: QueryRecord = {};
+    if (filters?.ast !== undefined) query['ast'] = JSON.stringify(filters.ast);
     if (filters?.from_ms !== undefined) query['from_ms'] = filters.from_ms;
     if (filters?.to_ms !== undefined) query['to_ms'] = filters.to_ms;
     if (filters?.user_id !== undefined) query['user_id'] = filters.user_id;

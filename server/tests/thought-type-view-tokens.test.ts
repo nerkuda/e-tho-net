@@ -183,33 +183,43 @@ describe(
       );
     });
 
-    it('отвергает $thought.[НесуществующееСвойство] когда передана цепочка типа', () => {
+    it('отвергает $thought.[Имя] которого нет в РЕЕСТРЕ СЕТИ (unknown_property)', () => {
       const def = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[НетТакого]"}],"sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
-        ],
-      };
+      const properties = [
+        { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
+      ];
       assert.throws(
-        () => validateDefinitionForTokens(def, { thoughtType }),
+        () => validateDefinitionForTokens(def, { properties }),
         (err: unknown) => err instanceof EtnError &&
           (err.details as { reason?: string }).reason === 'unknown_property',
       );
+    });
+
+    it('принимает $thought.[Имя] свойства ВНЕ типа отбора — по реестру сети (п. A6)', () => {
+      // Свойство определено в сети, но не привязано к типу этого отбора:
+      // раньше отвергалось `unknown_property`, теперь принимается (резолв по
+      // реестру; отсутствие значения у мысли — пустое значение, не ошибка).
+      const def = parseOrThrow<Record<string, unknown>>(
+        '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Свойство другого типа]"}],"sort":"alpha","order":"asc"}',
+      );
+      const properties = [
+        { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
+        { key: 'Свойство другого типа', multiple: false, value_type: 'text' as const },
+      ];
+      validateDefinitionForTokens(def, { properties });
     });
 
     it('отвергает $thought.[множественное] в скалярной операции (требование 12fccde9)', () => {
       const def = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Теги]"}],"sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Теги', multiple: true, value_type: 'text' as const },
-        ],
-      };
+      const properties = [
+        { key: 'Теги', multiple: true, value_type: 'text' as const },
+      ];
       assert.throws(
-        () => validateDefinitionForTokens(def, { thoughtType }),
+        () => validateDefinitionForTokens(def, { properties }),
         (err: unknown) => err instanceof EtnError &&
           (err.details as { reason?: string }).reason === 'incompatible_operation',
       );
@@ -222,26 +232,22 @@ describe(
       const def2 = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"not_in","value":["$thought.[Теги]"]}],"sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Теги', multiple: true, value_type: 'text' as const },
-        ],
-      };
-      validateDefinitionForTokens(def1, { thoughtType });
-      validateDefinitionForTokens(def2, { thoughtType });
+      const properties = [
+        { key: 'Теги', multiple: true, value_type: 'text' as const },
+      ];
+      validateDefinitionForTokens(def1, { properties });
+      validateDefinitionForTokens(def2, { properties });
     });
 
     it('собирает все проблемы при collectAll=true', () => {
       const def = parseOrThrow<Record<string, unknown>>(
         '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[НетТакого]"}],"keywords":"$foo","sort":"alpha","order":"asc"}',
       );
-      const thoughtType = {
-        properties: [
-          { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
-        ],
-      };
+      const properties = [
+        { key: 'Версия', multiple: false, value_type: 'thought_ref' as const },
+      ];
       try {
-        validateDefinitionForTokens(def, { thoughtType, collectAll: true });
+        validateDefinitionForTokens(def, { properties, collectAll: true });
         assert.fail('expected VALIDATION_ERROR');
       } catch (err) {
         assert.ok(err instanceof EtnError);
@@ -365,6 +371,88 @@ describe(
       assert.equal(def.properties[0]!.value, 'version-uuid-1');
     });
 
+    it('арифметика $thought.[дата]+7d смещает значение свойства (ошибка 9beab3a5)', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"gte","value":"$thought.[Плановый срок]+7d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [
+            { key: 'Плановый срок', value_type: 'date', multiple: false, value: '2026-09-01' },
+          ],
+        }),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      // Дата без времени остаётся YYYY-MM-DD (как у `$today+7d`).
+      assert.equal(def.properties[0]!.value, '2026-09-08');
+    });
+
+    it('арифметика $thought.[дата-время]-1d смещает и время (ошибка 9beab3a5)', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"lte","value":"$thought.[Момент]-1d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [
+            {
+              key: 'Момент',
+              value_type: 'date',
+              multiple: false,
+              value: '2026-09-02T10:00:00.000Z',
+            },
+          ],
+        }),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '2026-09-01T10:00:00.000Z');
+    });
+
+    it('без арифметики значение свойства-даты не меняется', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Плановый срок]"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [
+            { key: 'Плановый срок', value_type: 'date', multiple: false, value: '2026-09-01' },
+          ],
+        }),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '2026-09-01');
+    });
+
+    it('арифметика у пустого значения свойства — пусто без неразрешимого токена (A6, 9beab3a5)', () => {
+      // Свойства нет у оцениваемой мысли: смещать нечего, условие сравнивается
+      // с пустотой — как и без арифметики (пункт A6 ошибки 50d9bf4e).
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[ПустоеСвойство]+7d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx(),
+      );
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '');
+    });
+
+    it('арифметика на не-датовом значении свойства — неразрешимый токен, как у не-дат', () => {
+      const result = resolveTokensInDefinition(
+        parseOrThrow(
+          '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[Заметка]+7d"}],"sort":"alpha","order":"asc"}',
+        ),
+        ctx({
+          properties: [{ key: 'Заметка', value_type: 'text', multiple: false, value: 'просто текст' }],
+        }),
+      );
+      assert.equal(result.unresolved.length, 1);
+      assert.equal(result.unresolved[0]!.token, '$thought.[Заметка]+7d');
+      assert.equal(result.unresolved[0]!.reason, 'empty_value');
+    });
+
     it('подставляет множественное свойство как массив (требование 12fccde9)', () => {
       const result = resolveTokensInDefinition(
         parseOrThrow(
@@ -388,16 +476,20 @@ describe(
       assert.deepEqual(def.properties[0]!.value, ['tag-a', 'tag-b']);
     });
 
-    it('неразрешимое свойство → unresolved (требование b7fdab20)', () => {
+    it('свойства нет у мысли → ПУСТОЕ значение, а не неразрешимый токен (п. A6)', () => {
+      // Свойство резолвится по реестру сети: если у оцениваемой мысли значения
+      // нет (или свойство не подключено к типу) — по семантике отбора это пустое
+      // значение, отбор исполняется, а не возвращает пустой результат с
+      // пояснением (ошибка 50d9bf4e, пункт A6).
       const result = resolveTokensInDefinition(
         parseOrThrow(
           '{"properties":[{"property_id":"x","op":"eq","value":"$thought.[ПустоеСвойство]"}],"sort":"alpha","order":"asc"}',
         ),
         ctx(),
       );
-      assert.equal(result.unresolved.length, 1);
-      assert.equal(result.unresolved[0]!.reason, 'unknown_property');
-      assert.match(result.unresolved[0]!.message, /ПустоеСвойство/);
+      assert.equal(result.unresolved.length, 0);
+      const def = result.definition as { properties: Array<{ value: string }> };
+      assert.equal(def.properties[0]!.value, '');
     });
 
     it('нерезолвимое поле active-false остаётся строкой, не молча пустой', () => {
@@ -624,10 +716,10 @@ describe(
       }
     });
 
-    // Тихий smoke: setPropertyValue используется ниже как пример, что
-    // пустое значение для скалярного свойства остаётся null в БД и не
-    // попадает в resolve-контекст (требование b7fdab20).
-    it('run-time: пустое значение свойства даёт unresolved (без этапа 5)', () => {
+    // Smoke: пустое значение для скалярного свойства не попадает в
+    // resolve-контекст — по семантике отбора это ПУСТОЕ значение (A6), а не
+    // неразрешимый токен.
+    it('run-time: пустое значение свойства → пустое значение, без unresolved (п. A6)', () => {
       const { ndb, typeId } = setup();
       try {
         // Создаём мысль и отбор, у мысли НЕ заполняем «Версия».
@@ -652,7 +744,7 @@ describe(
           USER,
         );
 
-        // Резолвер от лица мысли без значения — должен собрать unresolved.
+        // Резолвер от лица мысли без значения — пустое значение, отбор исполним.
         // (runViewForThought здесь не вызываем, чтобы не дублировать слой
         // engine'а; достаточно проверить сборку контекста и резолвер.)
         const ctx = buildResolveContext(
@@ -677,8 +769,9 @@ describe(
           ),
           ctx,
         );
-        assert.equal(result.unresolved.length, 1);
-        assert.equal(result.unresolved[0]!.reason, 'unknown_property');
+        assert.equal(result.unresolved.length, 0);
+        const def = result.definition as { properties: Array<{ value: string }> };
+        assert.equal(def.properties[0]!.value, '');
       } finally {
         ndb.close();
       }
@@ -725,6 +818,44 @@ describe(
           'элемент tag-a из значения "tag-a, tag-b" матчится поэлементно',
         );
         assert.ok(!res.items.some((i) => i.id === miss.id));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('run-time: первый день недели сети доезжает в плоскую форму (задача 7a798b17)', async () => {
+      const { ndb, typeId } = setup();
+      try {
+        const context = createThought(ndb, { title: 'Контекст', type_id: typeId }, USER);
+        const sunday = createThought(ndb, { title: 'Вс', type_id: typeId }, USER);
+        const wednesday = createThought(ndb, { title: 'Ср', type_id: typeId }, USER);
+        const setCreated = (id: string, iso: string): void => {
+          ndb.prepare('UPDATE thoughts SET created_at = ? WHERE id = ?').run(iso, id);
+        };
+        setCreated(sunday.id, '2024-06-09T12:00:00.000Z'); // воскресенье
+        setCreated(wednesday.id, '2024-06-12T12:00:00.000Z');
+
+        const view = createThoughtTypeView(
+          ndb,
+          typeId,
+          {
+            name: 'С начала недели',
+            definition: JSON.stringify({ created_after: '$weekStart', sort: 'alpha', order: 'asc' }),
+          },
+          USER,
+        );
+
+        const nowMs = new Date('2024-06-15T10:00:00.000Z').getTime(); // суббота
+        // Без firstDayOfWeek неделя считается с понедельника — воскресенье не входит.
+        const monday = await runViewForThought(ndb, view, context.id, USER, undefined, {
+          tokenContext: { nowMs },
+        });
+        assert.deepEqual(monday.items.map((i) => i.title), ['Ср']);
+        // firstDayOfWeek = 7 (воскресенье) — неделя начинается 09.06, входит и «Вс».
+        const sundayStart = await runViewForThought(ndb, view, context.id, USER, undefined, {
+          tokenContext: { nowMs, firstDayOfWeek: 7 },
+        });
+        assert.deepEqual([...sundayStart.items.map((i) => i.title)].sort(), ['Вс', 'Ср']);
       } finally {
         ndb.close();
       }
@@ -836,5 +967,168 @@ describe('токены границ года и арифметика ±Ny (0.10.
         token,
       );
     }
+  });
+});
+
+// ============================================================================
+// 5. Календарные границы, первый день недели, арифметика ±N, контекст времени
+//    (0.13.1, задача 0f1b9892; требования 84b52caa и 1b77decd)
+// ============================================================================
+
+describe('токены календарных границ (0.13.1, задача 0f1b9892)', () => {
+  const wed = (): Date => new Date('2026-09-09T10:30:00.000Z'); // среда
+
+  it('канон camelCase и легаси-синонимы дают одинаковый результат', () => {
+    const pairs: Array<[string, string]> = [
+      ['$weekStart', '$week.start'],
+      ['$weekEnd', '$week.end'],
+      ['$monthStart', '$month.start'],
+      ['$monthEnd', '$month.end'],
+      ['$yearStart', '$year.start'],
+      ['$yearEnd', '$year.end'],
+    ];
+    for (const [canon, legacy] of pairs) {
+      assert.deepEqual(
+        resolveGlobalDateTokens(canon, { now: wed }),
+        resolveGlobalDateTokens(legacy, { now: wed }),
+        `${canon} ↔ ${legacy}`,
+      );
+      assert.equal(
+        resolveGlobalDateTokens(canon, { now: wed }).unresolved.length,
+        0,
+        `${canon} должен быть известным токеном`,
+      );
+    }
+  });
+
+  it('$weekStart/$weekEnd — неделя с понедельника по умолчанию', () => {
+    assert.equal(resolveGlobalDateTokens('$weekStart', { now: wed }).value, '2026-09-07');
+    assert.equal(resolveGlobalDateTokens('$weekEnd', { now: wed }).value, '2026-09-13');
+  });
+
+  it('первый день недели сети учитывается ($weekStart=вс, ISO 7)', () => {
+    // Среда 09.09.2026 при первом дне «воскресенье»: неделя 06.09–12.09.
+    assert.equal(
+      resolveGlobalDateTokens('$weekStart', { now: wed, firstDayOfWeek: 7 }).value,
+      '2026-09-06',
+    );
+    assert.equal(
+      resolveGlobalDateTokens('$weekEnd', { now: wed, firstDayOfWeek: 7 }).value,
+      '2026-09-12',
+    );
+    // Суббота при первом дне «суббота» (6) — начало недели та же суббота.
+    const sat = (): Date => new Date('2026-09-12T10:00:00.000Z');
+    assert.equal(
+      resolveGlobalDateTokens('$weekStart', { now: sat, firstDayOfWeek: 6 }).value,
+      '2026-09-12',
+    );
+  });
+
+  it('$monthStart/$monthEnd и $yearStart/$yearEnd', () => {
+    assert.equal(resolveGlobalDateTokens('$monthStart', { now: wed }).value, '2026-09-01');
+    assert.equal(resolveGlobalDateTokens('$monthEnd', { now: wed }).value, '2026-09-30');
+    assert.equal(resolveGlobalDateTokens('$yearStart', { now: wed }).value, '2026-01-01');
+    assert.equal(resolveGlobalDateTokens('$yearEnd', { now: wed }).value, '2026-12-31');
+  });
+
+  it('клэмпинг месяца: 31.01 + 1mo → последний день февраля', () => {
+    const jan31 = (): Date => new Date('2026-01-31T10:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$today+1mo', { now: jan31 }).value, '2026-02-28');
+    const leap = (): Date => new Date('2024-01-31T10:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$today+1mo', { now: leap }).value, '2024-02-29');
+  });
+
+  it('клэмпинг года: 29.02 високосного + 1y → 28.02', () => {
+    const feb29 = (): Date => new Date('2024-02-29T10:00:00.000Z');
+    assert.equal(resolveGlobalDateTokens('$today+1y', { now: feb29 }).value, '2025-02-28');
+    // 29.02 − 1y → 28.02 предыдущего (не високосного) года.
+    assert.equal(resolveGlobalDateTokens('$today-1y', { now: feb29 }).value, '2023-02-28');
+  });
+
+  it('неделя = ровно 7 суток (±Nw)', () => {
+    assert.equal(resolveGlobalDateTokens('$today+1w', { now: wed }).value, '2026-09-16');
+    assert.equal(resolveGlobalDateTokens('$today-2w', { now: wed }).value, '2026-08-26');
+  });
+
+  it('арифметика границ: $weekStart-1w, $monthEnd+1mo, $yearStart-1y', () => {
+    assert.equal(resolveGlobalDateTokens('$weekStart-1w', { now: wed }).value, '2026-08-31');
+    // $monthEnd — последний день сентября; +1mo → последний день октября.
+    assert.equal(resolveGlobalDateTokens('$monthEnd+1mo', { now: wed }).value, '2026-10-31');
+    assert.equal(resolveGlobalDateTokens('$yearStart-1y', { now: wed }).value, '2025-01-01');
+  });
+});
+
+describe('токены времени: контекст/профиль (ADR 0c02ab4f)', () => {
+  const now = (): Date => new Date('2026-09-09T13:37:45.123Z');
+
+  it('$now/$hourStart/$hourEnd раскрываются только при withTime', () => {
+    assert.equal(resolveGlobalDateTokens('$now', { now, withTime: true }).value, now().toISOString());
+    assert.equal(
+      resolveGlobalDateTokens('$hourStart', { now, withTime: true }).value,
+      '2026-09-09T13:00:00.000Z',
+    );
+    assert.equal(
+      resolveGlobalDateTokens('$hourEnd', { now, withTime: true }).value,
+      '2026-09-09T13:59:59.999Z',
+    );
+  });
+
+  it('в профиле без времени ($now/$hourStart) — неразрешимы', () => {
+    for (const token of ['$now', '$hourStart', '$hourEnd', '$now+1h', '$today+30mi']) {
+      const res = resolveGlobalDateTokens(token, { now, withTime: false });
+      assert.equal(res.unresolved.length, 1, token);
+      assert.equal(res.unresolved[0]!.reason, 'time_context_required', token);
+      assert.equal(res.value, token, 'значение не подменяется');
+    }
+  });
+
+  it('h/mi допустимы со временем и сдвигают момент', () => {
+    assert.equal(
+      resolveGlobalDateTokens('$now-2h', { now, withTime: true }).value,
+      '2026-09-09T11:37:45.123Z',
+    );
+    assert.equal(
+      resolveGlobalDateTokens('$hourStart+30mi', { now, withTime: true }).value,
+      '2026-09-09T13:30:00.000Z',
+    );
+  });
+
+  it('валидатор отвергает токен времени в профиле без времени', () => {
+    const def = parseOrThrow<Record<string, unknown>>(
+      '{"created_after":"$hourStart","sort":"alpha","order":"asc"}',
+    );
+    assert.throws(
+      () => validateDefinitionForTokens(def, { withTime: false }),
+      (err: unknown) => err instanceof EtnError &&
+        (err.details as { reason?: string }).reason === 'time_context_required',
+    );
+    // Со временем — проходит.
+    validateDefinitionForTokens(def, { withTime: true });
+  });
+
+  it('без флага withTime сохраняется историческое поведение ($now разрешён)', () => {
+    const res = resolveGlobalDateTokens('$now', { now });
+    assert.equal(res.unresolved.length, 0);
+    assert.equal(res.value, now().toISOString());
+  });
+
+  it('резолвер отбора: ctx.withTime=false делает $now неразрешимым', () => {
+    const ctxNoTime = buildResolveContext(
+      {
+        id: 't', title: 'T', synonyms: [], type_id: null, active: true,
+        created_by: 'u', updated_by: 'u',
+        created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      },
+      [],
+      'u',
+      now,
+      { withTime: false },
+    );
+    const res = resolveTokensInDefinition(
+      parseOrThrow('{"updated_after":"$now","sort":"alpha","order":"asc"}'),
+      ctxNoTime,
+    );
+    assert.equal(res.unresolved.length, 1);
+    assert.equal(res.unresolved[0]!.reason, 'time_context_required');
   });
 });

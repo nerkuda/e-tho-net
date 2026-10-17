@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import {
   buildLikePattern,
   EtnError,
+  isPublicationTitleRecipeAst,
   type HoldingLayerRef,
   type Publication,
   type PublicationActiveFilter,
@@ -31,8 +32,8 @@ import {
   type PublicationListQuery,
   type PublicationOrderItem,
   type PublicationSort,
+  type PublicationTitleRecipe,
   type PublicationUpdateInput,
-  type SavedFilterDefinition,
   type Shelf,
   type ShelfDeletionCheckResult,
   type ShelfInput,
@@ -48,6 +49,9 @@ import {
 } from '../db/publication-id.js';
 import { listPublicationHoldingLayers } from './holding-layers.js';
 import { hasOwnership } from './attachment-service.js';
+import { parseFilterAst } from './filter-ast.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { assertFilterDefinitionInProfile } from './filter-profile-validation.js';
 import { purgeOwnerAttachments } from './owner-cleanup.js';
 import { invalidatePublicationMembershipCache } from './publication-membership-cache.js';
 import { selectRecipeIds } from './publication-recipe.js';
@@ -57,6 +61,7 @@ import {
   recipeOverlap,
   summaryHasMarkdownHeadings,
 } from './publication-validation.js';
+import type { AstTokenContext } from './query-service.js';
 import { normalizeTitle } from './thought-service.js';
 
 /** Cap длины названия — по образцу мыслей (защита от мусора). */
@@ -128,14 +133,31 @@ function parseStringArray(text: string | null): string[] {
 }
 
 /** Разобрать JSON-объект рецепта; битое значение → `null`. */
-function parseRecipe(text: string | null): SavedFilterDefinition | null {
+function parseRecipe(text: string | null): PublicationTitleRecipe | null {
   if (text === null || text === '') return null;
   try {
     const value = JSON.parse(text) as unknown;
-    return value !== null && typeof value === 'object' ? (value as SavedFilterDefinition) : null;
+    return value !== null && typeof value === 'object'
+      ? (value as PublicationTitleRecipe)
+      : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Проверить рецепт заголовков на записи (задача ef37b01e, требование 0095daad).
+ * AST-форма проверяется целиком: строгая форма тела, видимость операндов/
+ * операторов в профиле точки применения «публикации» и красная диагностика
+ * (ссылки на удалённые сущности). Плоский формат НЕ проверяется здесь — его
+ * историческая семантика (неразбираемый рецепт → пустая сборка с
+ * предупреждением) сохраняется без изменений.
+ */
+function assertTitleRecipeWritable(ndb: NetworkDb, recipe: PublicationTitleRecipe): void {
+  if (!isPublicationTitleRecipeAst(recipe)) return;
+  assertFilterDefinitionInProfile(recipe as unknown as Record<string, unknown>, 'publications');
+  const diag = diagnoseFilterAst(ndb, parseFilterAst(recipe));
+  if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
 }
 
 /** Источник обложки, вычисляемый из пары полей. */
@@ -235,6 +257,7 @@ function selectCurrentSelection(
   ndb: NetworkDb,
   id: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): string[] {
   const row = ndb
     .prepare('SELECT title_recipe FROM publications_v WHERE id = ? LIMIT 1')
@@ -242,7 +265,7 @@ function selectCurrentSelection(
   const recipe = parseRecipe(row?.title_recipe ?? null);
   if (recipe === null) return [];
   const warnings: string[] = [];
-  return selectRecipeIds(ndb, actorUserId, recipe, warnings);
+  return selectRecipeIds(ndb, actorUserId, recipe, warnings, tokenContext);
 }
 
 /** Порядок: узел публикации либо узел, когда-то существовавший (история). */
@@ -492,6 +515,7 @@ function resolvePublicationFields(
 
   let titleRecipe = current?.title_recipe ?? null;
   if (input.title_recipe !== undefined) {
+    if (input.title_recipe !== null) assertTitleRecipeWritable(ndb, input.title_recipe);
     titleRecipe =
       input.title_recipe === null ? null : JSON.stringify(input.title_recipe);
   }
@@ -533,11 +557,13 @@ function resolvePublicationFields(
 // CRUD публикаций
 // ---------------------------------------------------------------------------
 
-/** Создать публикацию (POST /publications). */
+/** Создать публикацию (POST /publications). `tokenContext` — контекст токенов
+ * AST-рецепта (срез принятого состояния считается его исполнением). */
 export function createPublication(
   ndb: NetworkDb,
   input: PublicationCreateInput,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): Publication {
   return ndb.transaction(() => {
     const id = randomUUID();
@@ -547,7 +573,7 @@ export function createPublication(
     const recipe = parseRecipe(fields.title_recipe);
     const warnings: string[] = [];
     const acceptedIds =
-      recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings);
+      recipe === null ? [] : selectRecipeIds(ndb, actorUserId, recipe, warnings, tokenContext);
     const nowMs = Date.now();
     const now = new Date(nowMs).toISOString();
     ndb
@@ -949,10 +975,11 @@ export function setPublicationOrder(
   publicationId: string,
   items: PublicationOrderItem[],
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationOrderItem[] {
   return ndb.transaction(() => {
     getPublicationOrThrow(ndb, publicationId);
-    const selectedIds = selectCurrentSelection(ndb, publicationId, actorUserId);
+    const selectedIds = selectCurrentSelection(ndb, publicationId, actorUserId, tokenContext);
     const members = new Set<string>([
       ...selectedIds,
       ...(getPublicationAcceptedIds(ndb, publicationId) ?? []),
@@ -1032,9 +1059,10 @@ function publicationMemberThoughtIds(
   publicationId: string,
   pub: Publication,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): Set<string> {
   const ids = new Set<string>([
-    ...selectCurrentSelection(ndb, publicationId, actorUserId),
+    ...selectCurrentSelection(ndb, publicationId, actorUserId, tokenContext),
     ...(getPublicationAcceptedIds(ndb, publicationId) ?? []),
   ]);
   const contentProps = [...pub.text_sources, ...pub.extra_properties];
@@ -1105,9 +1133,10 @@ function assertThoughtInPublication(
   pub: Publication,
   thoughtId: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): void {
   assertThoughtVisible(ndb, thoughtId);
-  const members = publicationMemberThoughtIds(ndb, publicationId, pub, actorUserId);
+  const members = publicationMemberThoughtIds(ndb, publicationId, pub, actorUserId, tokenContext);
   if (!members.has(thoughtId)) {
     throw new EtnError('VALIDATION_ERROR', `Мысль ${thoughtId} не входит в публикацию.`, {
       entity: 'thought',
@@ -1123,12 +1152,13 @@ export function addPublicationExclusion(
   publicationId: string,
   thoughtId: string,
   actorUserId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
     // Мысль обязана существовать и входить в публикацию (ошибка 3882bd46):
     // посторонний id отвергается, а не молча попадает в список исключений.
-    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, actorUserId);
+    assertThoughtInPublication(ndb, publicationId, pub, thoughtId, actorUserId, tokenContext);
     const id = publicationExclusionId(publicationId, thoughtId);
     const materialized = materializeShadow(ndb, 'publication_exclusions', id);
     if (materialized) {
@@ -1173,6 +1203,7 @@ export function removePublicationExclusion(
   ndb: NetworkDb,
   publicationId: string,
   thoughtId: string,
+  tokenContext?: AstTokenContext,
 ): PublicationExclusion[] {
   return ndb.transaction(() => {
     const pub = getPublicationOrThrow(ndb, publicationId);
@@ -1183,7 +1214,7 @@ export function removePublicationExclusion(
       .prepare('SELECT 1 FROM publication_exclusions WHERE id = ? LIMIT 1') // layers:physical-read
       .get(id);
     if (physical === undefined) {
-      assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '');
+      assertThoughtInPublication(ndb, publicationId, pub, thoughtId, '', tokenContext);
     }
     const visible = ndb
       .prepare('SELECT 1 FROM publication_exclusions_v WHERE id = ? LIMIT 1')

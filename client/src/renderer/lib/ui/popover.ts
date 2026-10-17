@@ -182,6 +182,14 @@ export interface PopoverHandle {
   readonly element: HTMLElement;
   /** Лежит ли узел внутри панели (для решений «свой/чужой узел»). */
   contains(node: Node | null): boolean;
+  /**
+   * Переставить панель на ДРУГОЙ якорь и сразу пересчитать позицию. Нужно
+   * потребителям, чей якорь перерисовывается вместе с разметкой (правка
+   * значения перерисовывает дерево отбора целиком, а панель-чеклист остаётся
+   * в `document.body`): вместо закрытия панели владелец даёт её новому узлу
+   * поля и панель следует за ним (ошибка 50d9bf4e, пункты C2/C3).
+   */
+  setAnchor(anchor: PopoverAnchor): void;
   /** Пересчитывает позицию (после смены содержимого/размера окна). */
   reposition(): void;
   /** Закрывает панель; повторный вызов — no-op. */
@@ -341,7 +349,9 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
   body.append(content.body);
   element.append(el('div', POPOVER_HEAD_CLASS, content.title), body);
 
-  const anchor = options.anchor;
+  // Якорь — изменяемый: панель может перепривязаться к новому узлу поля
+  // (`setAnchor`), если разметку строки-владельца перерисовали.
+  let anchor = options.anchor;
   const position = (): void => {
     const rect = element.getBoundingClientRect();
     const panel = { width: rect.width, height: rect.height };
@@ -398,6 +408,10 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
   return {
     element,
     contains: (node) => element.contains(node),
+    setAnchor: (next) => {
+      anchor = next;
+      position();
+    },
     reposition: position,
     close: () => record.close(),
   };

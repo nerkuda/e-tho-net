@@ -12,9 +12,9 @@
  * **Только чтение.** Воркер не применяет миграции, не чистит `object_locks` и
  * вообще не пишет в `main`: соединение открывается `readonly: true`, а состав
  * операций ограничен выборками (движок отбора, поиск, обход подграфа).
- * Единственный писатель сети — главный поток (ADR 162d8e7a); второй писатель
- * запрещён ADR bec191e6. Сторож `guard-reader-pool.test.ts` не даёт появиться
- * здесь записывающему SQL.
+ * Единственный писатель сети — writer-воркер её write-пула (ADR ca3a9218,
+ * `db/write-pool.ts`); запись из reader-воркера запрещена. Сторож
+ * `guard-reader-pool.test.ts` не даёт появиться здесь записывающему SQL.
  *
  * Инвалидация состояния между задачами (запрет ADR «изменяемое состояние без
  * явной инвалидации»): контекст слоя переустанавливается на соединении каждой
@@ -123,6 +123,8 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         depths: result.depths === null ? null : [...result.depths].map(([id, depth]) => ({ id, depth })),
         truncated: result.truncated,
         reason: result.reason,
+        ...(result.unresolved !== undefined ? { unresolved: result.unresolved } : {}),
+        ...(result.stats !== undefined ? { stats: result.stats } : {}),
       };
       return { ok: true, result: flat };
     }
@@ -133,13 +135,20 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         total: result.total,
         has_more: result.has_more,
         next_cursor: result.next_cursor,
+        ...(result.unresolved !== undefined ? { unresolved: result.unresolved } : {}),
+        ...(result.stats !== undefined ? { stats: result.stats } : {}),
       };
       return { ok: true, result: flat };
     }
     case 'search.query':
       return {
         ok: true,
-        result: search(ndb, task.payload.request, task.payload.showInactiveDefault),
+        result: search(
+          ndb,
+          task.payload.request,
+          task.payload.showInactiveDefault,
+          task.payload.tokenContext,
+        ),
       };
     case 'graph.subgraph':
       return {

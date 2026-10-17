@@ -10,6 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
@@ -18,9 +19,10 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createThought, focus } from '../src/domain/thought-service.js';
 import { createLink } from '../src/domain/link-service.js';
-import { search } from '../src/domain/search-service.js';
+import { findBlockingDuplicate, findDuplicates, search } from '../src/domain/search-service.js';
 import { traverse } from '../src/domain/graph-traversal.js';
 import { createComment } from '../src/domain/comment-service.js';
+import { writeThoughts } from '../src/domain/thought-write-service.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -39,7 +41,17 @@ const CEIL = {
   focus: 2_000,
   search: 2_000,
   traverse: 1_000,
+  // Duplicate-gate smoke (ошибки 646347ab / 9f4c0793 / 5e35eb7b): the old
+  // behaviour measured ~1.4 s per findDuplicates and ~36 s per 12-item batch on
+  // this wildcard profile; the ceilings catch its return, not micro-regressions.
+  findDuplicates: 1_500,
+  blockingGate: 200,
+  writeBatch: 10_000,
 } as const;
+
+/** Wildcard-heavy profile of the duplicate-gate smoke (large-network shape). */
+const DUP_THOUGHTS = 8_000;
+const DUP_WILDCARDS = 4_000;
 
 describe(
   'Performance smoke (I3)',
@@ -99,6 +111,62 @@ describe(
       const traverseMs = Date.now() - t0;
       assert.ok(walk.ids.length > 100);
       assert.ok(traverseMs < CEIL.traverse, `traverse took ${traverseMs}ms`);
+
+      ndb.close();
+    });
+
+    it('wildcard-heavy network: duplicate gate and write batch stay cheap', () => {
+      const ndb: NetworkDb = createInMemoryNetworkDb();
+      const insThought = ndb.prepare(
+        `INSERT INTO thoughts (id, title, title_norm, active, is_protected, is_root,
+                               version, created_at, created_by, updated_at, updated_by)
+         VALUES (?, ?, ?, 1, 0, 0, 1, '2024-01-01T00:00:00Z', 'u', '2024-01-01T00:00:00Z', 'u')`,
+      );
+      const insSynonym = ndb.prepare(
+        'INSERT OR IGNORE INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)',
+      );
+      ndb.transaction(() => {
+        const ids: string[] = [];
+        for (let i = 0; i < DUP_THOUGHTS; i++) {
+          const id = randomUUID();
+          const title = `Мысль номер ${i}`;
+          insThought.run(id, title, title.toLowerCase());
+          ids.push(id);
+        }
+        for (let i = 0; i < DUP_WILDCARDS; i++) {
+          const synonym = `терм${i}*`;
+          insSynonym.run(ids[i % ids.length] as string, synonym, synonym.toLowerCase());
+        }
+      });
+
+      // The full heavy duplicate scan (used once per new batch item for
+      // `duplicate_candidates`): the correlated-EXISTS partial scan and the
+      // per-pattern regex compilation must not come back.
+      let t0 = Date.now();
+      findDuplicates(ndb, 'какой-то заголовок');
+      const dupMs = Date.now() - t0;
+      assert.ok(dupMs < CEIL.findDuplicates, `findDuplicates took ${dupMs}ms`);
+
+      // The blocking gate is two indexed point lookups, independent of the
+      // wildcard volume.
+      t0 = Date.now();
+      assert.equal(findBlockingDuplicate(ndb, 'несуществующее название', null), undefined);
+      const gateMs = Date.now() - t0;
+      assert.ok(gateMs < CEIL.blockingGate, `blocking gate took ${gateMs}ms`);
+
+      // A 12-item `etn.thoughts.write` batch: one heavy scan per item and a
+      // cheap gate, no second heavy scan.
+      const input = {
+        thoughts: Array.from({ length: 12 }, (_, k) => ({
+          ref: `r${k}`,
+          thought: { title: `Батчевая мысль ${k}` },
+        })),
+      } as unknown as Parameters<typeof writeThoughts>[1];
+      t0 = Date.now();
+      const batch = writeThoughts(ndb, input, 'perf-user');
+      const batchMs = Date.now() - t0;
+      assert.equal(batch.items.length, 12);
+      assert.ok(batchMs < CEIL.writeBatch, `12-item write batch took ${batchMs}ms`);
 
       ndb.close();
     });

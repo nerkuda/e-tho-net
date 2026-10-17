@@ -42,6 +42,8 @@ import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
   type EffectiveThoughtTypeView,
+  type FilterDiagnostic,
+  type FilterProfileId,
   type SortOrder,
   type StructureSort,
   type ThoughtTypeView,
@@ -53,10 +55,20 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
-import { structureRequestToQuery, type ThoughtQueryRequest, type ThoughtQueryResult } from './query-service.js';
+import { parseFilterAst } from './filter-ast.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { assertFilterDefinitionInProfile } from './filter-profile-validation.js';
+import {
+  structureRequestToQuery,
+  type AstTokenContext,
+  type QueryStats,
+  type ThoughtQueryRequest,
+  type ThoughtQueryResult,
+} from './query-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
 import {
   buildResolveContext,
+  resolveThoughtTokensInAst,
   resolveTokensInDefinition as resolveTokensDefinition,
   validateDefinitionForTokens,
   type PropertyMeta,
@@ -79,7 +91,15 @@ import {
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
 import { getThought } from './thought-service.js';
-import { listEffectiveTypeProperties, oppositeLinkPropertyDisplayName } from './property-service.js';
+import {
+  getNetworkPropertyByName,
+  getLinkPropertyValues,
+  linkPropertySideFromConfig,
+  listEffectiveTypeProperties,
+  listNetworkProperties,
+  listThoughtLinkProperties,
+  oppositeLinkPropertyDisplayName,
+} from './property-service.js';
 
 /**
  * Доменное представление отбора (`ThoughtTypeView`). Различается с репозиторным
@@ -116,30 +136,33 @@ function viewNameKey(name: string): string {
 }
 
 /**
- * Метаданные свойств типа отбора для валидатора токенов (`thought-type-view-tokens`):
- * имена, `multiple`, `value_type`. Цепочка типов здесь не нужна —
- * `listEffectiveTypeProperties` уже сворачивает её (предок перекрывает
- * потомка, см. 02-data-model.md §3.4.1), и до валидатора доходят ровно те
- * ключи, что реально доступны мысли этого типа.
+ * Метаданные свойств РЕЕСТРА СЕТИ для валидатора токенов
+ * (`thought-type-view-tokens`): имена, `multiple`, `value_type`.
  *
- * Свойство-связь привязывается к типу ОДНОЙ стороной, но адресуется обеими
- * (задача df992826): к метаданным добавляется имя противоположной стороны,
- * чтобы токен `$thought.[<обратное имя>]` не отвергался как `unknown_property`.
- * Единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`.
+ * **Свойство резолвится по реестру сети независимо от привязки к типу отбора**
+ * (ошибка 50d9bf4e, пункт A6): токен `$thought.[Имя]` принимается, если такое
+ * свойство определено в сети, — даже если оно не подключено к типу этого отбора
+ * (при исполнении отсутствие значения у мысли даёт пустое значение по семантике
+ * отбора). Поэтому валидатору отдаётся ПОЛНЫЙ список свойств сети, а не
+ * свойства цепочки типа.
+ *
+ * Свойство-связь адресуется обеими сторонами: к метаданным добавляется имя
+ * противоположной стороны, чтобы токен `$thought.[<обратное имя>]` был принят
+ * (единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`).
  */
-function getTypePropertyMeta(ndb: NetworkDb, thoughtTypeId: string): PropertyMeta[] {
+function getNetworkPropertyMeta(ndb: NetworkDb): PropertyMeta[] {
   const out: PropertyMeta[] = [];
-  for (const p of listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId)) {
-    const meta: PropertyMeta = {
-      key: p.key,
+  for (const p of listNetworkProperties(ndb)) {
+    out.push({
+      key: p.name,
       multiple: p.config?.multiple === true,
       value_type: p.value_type,
-    };
-    out.push(meta);
+    });
     if (p.value_type !== 'link') continue;
-    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, p.side ?? null);
-    if (opposite === null || opposite === p.key) continue;
-    out.push({ key: opposite, multiple: meta.multiple, value_type: p.value_type });
+    const side = linkPropertySideFromConfig(p.value_type, p.config ?? null);
+    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, side);
+    if (opposite === null || opposite === p.name) continue;
+    out.push({ key: opposite, multiple: p.config?.multiple === true, value_type: p.value_type });
   }
   return out;
 }
@@ -237,6 +260,26 @@ function validateDefinition(definition: unknown, requestId?: string): string {
   return definition;
 }
 
+/**
+ * Красная диагностика на сохранении (требование 44d61c8a): AST-форма
+ * определения, ссылающаяся на удалённую сущность (свойство реестра, тип/тип
+ * связи, значение-мысль), не сохраняется — `VALIDATION_ERROR` со
+ * структурированными `details.diagnostics`. Определения старой плоской формы
+ * (`definition v1`, без поля `version`) пропускаются: их миграция в AST —
+ * отдельная задача 4be62d42.
+ */
+function assertAstDefinitionEntitiesResolvable(
+  ndb: NetworkDb,
+  parsedDefinition: Record<string, unknown>,
+  thoughtTypeId: string,
+  requestId?: string,
+): void {
+  if (parsedDefinition['version'] === undefined) return;
+  const ast = parseFilterAst(parsedDefinition, requestId);
+  const diag = diagnoseFilterAst(ndb, ast, { thoughtTypeId, requestId });
+  if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
+}
+
 /** Валидация `position`: целое число ≥ 0, опционально. */
 function validatePosition(position: unknown, requestId?: string): number | undefined {
   if (position === undefined) return undefined;
@@ -332,17 +375,23 @@ export function createThoughtTypeView(
   const definition = validateDefinition(input.definition, requestId);
   const position = validatePosition(input.position, requestId);
   // Полная валидация токенов (задача 20b2fca0): запускается после синтаксиса
-  // JSON и проверки типа мысли — нужно знать `thought_type_id`, чтобы сверить
-  // имена свойств в `$thought.[…]` с цепочкой типов и распознать `multiple`.
+  // JSON. Свойства сверяются с РЕЕСТРОМ СЕТИ (A6), а не с цепочкой типа:
+  // `$thought.[Имя]` принимается для любого свойства сети, а `multiple`
+  // распознаётся по его конфигурации.
   // Повторный JSON.parse дёшев — definition это пара KB; альтернатива
   // (возвращать из `validateDefinition` ещё и parsed-объект) рвёт границу
   // ответственности функции (валидация → парсинг).
   const parsedDefinition = JSON.parse(definition) as Record<string, unknown>;
   validateDefinitionForTokens(
     parsedDefinition,
-    { thoughtType: { properties: getTypePropertyMeta(ndb, thoughtTypeId) } },
+    { properties: getNetworkPropertyMeta(ndb) },
     requestId,
   );
+  // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
+  assertAstDefinitionEntitiesResolvable(ndb, parsedDefinition, thoughtTypeId, requestId);
+  // Профиль точки применения: операнд, невидимый в отборе мыслей, не сохраняется
+  // (требование 0095daad, ADR 0c02ab4f).
+  assertFilterDefinitionInProfile(parsedDefinition, 'thoughts', requestId);
 
   // Проверка типа — корневой тип нельзя «заселять отборами с холста».
   const root = getRootThoughtType(ndb);
@@ -453,15 +502,24 @@ export function updateThoughtTypeView(
     }
 
     if (validated.definition !== undefined) {
-      // Полная валидация токенов (задача 20b2fca0): нужен `thought_type_id`,
-      // поэтому выполняется внутри транзакции после `getViewOrThrow`. До
-      // UPDATE — иначе можно было бы сохранить невалидное определение.
+      // Полная валидация токенов (задача 20b2fca0): свойства сверяются с
+      // реестром СЕТИ (A6). До UPDATE — иначе можно было бы сохранить
+      // невалидное определение.
       const parsedDefinition = JSON.parse(validated.definition) as Record<string, unknown>;
       validateDefinitionForTokens(
         parsedDefinition,
-        { thoughtType: { properties: getTypePropertyMeta(ndb, current.thought_type_id) } },
+        { properties: getNetworkPropertyMeta(ndb) },
         requestId,
       );
+      // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
+      assertAstDefinitionEntitiesResolvable(
+        ndb,
+        parsedDefinition,
+        current.thought_type_id,
+        requestId,
+      );
+      // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
+      assertFilterDefinitionInProfile(parsedDefinition, 'thoughts', requestId);
     }
 
     if (validated.name !== undefined) {
@@ -652,6 +710,22 @@ export interface RunViewResult {
   sort: StructureSort;
   /** Эффективное направление сортировки (см. {@link RunViewResult.sort}). */
   order: SortOrder;
+  /**
+   * Жёлтая диагностика (требование 325efc13): свойство условия отвязано от типа
+   * отбора — отбор исполнен по фактическим значениям вне типа. Пусто — жёлтых
+   * предупреждений нет. Красная диагностика не доходит сюда: она бросает ошибку.
+   */
+  warnings?: FilterDiagnostic[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
+  /**
+   * Есть ли ещё страницы за текущей (задача 0e7e89f5). Доносится из движка
+   * (`queryThoughts`) — прежде терялось: MCP `etn.views.run { ast }` молча не
+   * отдавал хвост, а сохранённый путь его не возвращал вовсе.
+   */
+  has_more: boolean;
+  /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
+  next_cursor: string | null;
 }
 
 /**
@@ -670,57 +744,151 @@ export interface RunViewQueryOptions {
   limit?: number;
   /** Смещение пагинации (дефолт 0). */
   offset?: number;
+  /** Контекст разрешения токенов AST (обязательный пункт задачи c13762b1):
+   *  часы, пользователь, первый день недели сети, профиль времени. Прокидывается
+   *  в движок отбора (`queryThoughts`) — без него календарные токены AST не
+   *  разрешатся. */
+  tokenContext?: AstTokenContext;
+  /** Собирать статистику исполнения (требование 0f34a5ff) — только при
+   *  включённом серверном журналировании. */
+  collectStats?: boolean;
+  /** Профиль точки применения (требование 0095daad, ADR 0c02ab4f). Отбор типа —
+   *  точка «мысли»; по умолчанию `thoughts`. Определяет видимость операндов и
+   *  гранулярность времени. */
+  profile?: FilterProfileId;
+  /**
+   * Потолок лимита страницы. Не задан — `STRUCTURES_QUERY_MAX_LIMIT`
+   * (REST `POST /thoughts/query`). MCP-ветки `etn.views.run` (сохранённый отбор
+   * и ad-hoc AST) и ad-hoc REST-маршрут используют 200 (задача 0e7e89f5) —
+   * прежде потолки расходились (100 vs 200).
+   */
+  maxLimit?: number;
+  /**
+   * `ast.sort` и поля `sort`/`order` взаимоисключающие (конвенция cb78315b
+   * «оставьте один источник», задача 0e7e89f5). По умолчанию `false`:
+   * сохранённый отбор допускает переопределение — тело перекрывает сохранённую
+   * сортировку (контракт 95273103). Ad-hoc путь передаёт `true`.
+   */
+  exclusiveSort?: boolean;
 }
 
 /**
  * Превратить «сырые» значения свойств мысли из `getPropertyValues` в
  * плоскую форму, которую ест резолвер токенов: ключ + тип + флаг
- * `multiple` (из `properties.config` через `effective`-цепочку) + скаляр
- * или массив строк (для `multiple`). Внешние значения (`outside_type`)
- * резолвер игнорирует — они не в цепочке типа, и валидация при сохранении
- * отвергла бы `$thought.[…]` на такое имя.
+ * `multiple` + скаляр или массив строк (для `multiple`).
+ *
+ * **Свойство резолвится по реестру сети независимо от привязки к типу**
+ * (ошибка 50d9bf4e, пункт A6): значение свойства вне цепочки типа отбора
+ * (`outside_type`) тоже подставляется — метаданные (`multiple`/`value_type`)
+ * для него берутся из реестра. Свойство, которого у мысли нет, в карту не
+ * попадает — резолвер отдаёт для него пустое значение (семантика отбора), а не
+ * «неразрешимый токен».
  */
 function collectThoughtPropertyValues(
   ndb: NetworkDb,
   thoughtId: string,
   typeId: string | null,
 ): ThoughtPropertyValue[] {
-  const raw = getPropertyValues(ndb, 'thought', thoughtId).filter((v) => !v.outside_type);
-  if (raw.length === 0) return [];
-  const meta = typeId === null
-    ? new Map<string, { multiple: boolean; value_type: typeof raw[number]['value_type'] }>()
-    : new Map(
-      listEffectiveTypeProperties(ndb, 'thought_type', typeId).map((p) => [
-        p.key,
-        { multiple: p.config?.multiple === true, value_type: p.value_type },
-      ] as const),
-    );
   const out: ThoughtPropertyValue[] = [];
-  for (const v of raw) {
-    // `null` (и экзотика вроде пустого массива для одиночного свойства) —
-    // резолверу нечего подставлять: токен становится неразрешимым, отбор
-    // вернёт пустой результат с пояснением «у мысли не заполнено свойство
-    // …». Это требование b7fdab20.
-    if (v.value === null) continue;
-    if (Array.isArray(v.value) && v.value.length === 0) continue;
-    // `cross_network_ref` (задача 7849008a) — снапшот `CrossNetworkRefValue[]`,
-    // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
-    if (v.value_type === 'cross_network_ref') continue;
-    const m = meta.get(v.property_name);
-    const multiple = m?.multiple === true;
-    const valueType = m?.value_type ?? v.value_type;
-    // Множественное `text` хранится comma-joined строкой (02-data-model
-    // §3.4–3.5); токен `$thought.[…]` обязан подставляться СПИСКОМ элементов
-    // (требование 12fccde9) — иначе он уходит одной склеенной строкой и
-    // условие-список по ней не матчит (ошибка 7489e4d9, тот же класс).
-    let value = v.value as string | number | boolean | string[];
-    if (multiple && valueType === 'text' && typeof value === 'string') {
-      value = splitMultipleText(value);
-      if (value.length === 0) continue; // пустой список — неразрешимый токен (12fccde9)
+  const raw = getPropertyValues(ndb, 'thought', thoughtId);
+  if (raw.length > 0) {
+    const meta = typeId === null
+      ? new Map<string, { multiple: boolean; value_type: typeof raw[number]['value_type'] }>()
+      : new Map(
+        listEffectiveTypeProperties(ndb, 'thought_type', typeId).map((p) => [
+          p.key,
+          { multiple: p.config?.multiple === true, value_type: p.value_type },
+        ] as const),
+      );
+    for (const v of raw) {
+      // `null` (и экзотика вроде пустого массива для одиночного свойства) —
+      // резолверу нечего подставлять: подставляется пустое значение (A6).
+      if (v.value === null) continue;
+      if (Array.isArray(v.value) && v.value.length === 0) continue;
+      // `cross_network_ref` (задача 7849008a) — снапшот `CrossNetworkRefValue[]`,
+      // токены `$thought.<key>` не применимы к кросс-сетевому адресу.
+      if (v.value_type === 'cross_network_ref') continue;
+      // Метаданные: цепочка типа, при отсутствии (свойство вне типа) — реестр сети.
+      const fromType = meta.get(v.property_name);
+      const fromRegistry = fromType === undefined ? getNetworkPropertyByName(ndb, v.property_name) : null;
+      const multiple = fromType?.multiple ?? fromRegistry?.config?.multiple === true;
+      const valueType = fromType?.value_type ?? fromRegistry?.value_type ?? v.value_type;
+      // Множественное `text` хранится comma-joined строкой (02-data-model
+      // §3.4–3.5); токен `$thought.[…]` обязан подставляться СПИСКОМ элементов
+      // (требование 12fccde9) — иначе он уходит одной склеенной строкой и
+      // условие-список по ней не матчит (ошибка 7489e4d9, тот же класс).
+      let value = v.value as string | number | boolean | string[];
+      if (multiple && valueType === 'text' && typeof value === 'string') {
+        value = splitMultipleText(value);
+        if (value.length === 0) continue; // пустой список — пустое значение (12fccde9)
+      }
+      out.push({ key: v.property_name, value_type: valueType, multiple, value });
     }
-    out.push({ key: v.property_name, value_type: valueType, multiple, value });
+  }
+  // Свойства-СВЯЗИ: их значений в `property_values` нет вовсе (проекция «ребро →
+  // свойство», ADR «проекция ребра»), поэтому `$thought.[<Имя>]` для свойства-
+  // связи обязано читать цель рёбер (требование 3697eb65: `$thought.[…]` —
+  // значение свойства СЕТИ, обе стороны свойства адресуемы).
+  out.push(...collectThoughtLinkPropertyValues(ndb, thoughtId));
+  return out;
+}
+
+/**
+ * Значения свойств-СВЯЗЕЙ мысли для резолвера токенов `$thought.[<Имя>]`:
+ * имя и направление — из {@link listThoughtLinkProperties} (прямая и обратная
+ * сторона свойства, зеркала, внетиповые рёбра), цели — из рёбер
+ * ({@link getLinkPropertyValues}). Одно живое ребро — СКАЛЯР (id цели, чтобы
+ * работал `eq`), несколько — СПИСОК (наборы/`in`); пустой набор в карту не
+ * попадает — это ПУСТОЕ значение по семантике A6 (условие сравнивается с
+ * пустотой, а не даёт неразрешимый токен).
+ */
+function collectThoughtLinkPropertyValues(
+  ndb: NetworkDb,
+  thoughtId: string,
+): ThoughtPropertyValue[] {
+  const out: ThoughtPropertyValue[] = [];
+  const seen = new Set<string>();
+  for (const lp of listThoughtLinkProperties(ndb, thoughtId)) {
+    const key = lp.property_name.trim();
+    if (key === '' || seen.has(key)) continue;
+    seen.add(key);
+    const targets = getLinkPropertyValues(ndb, 'thought', thoughtId, lp.link_type_id, lp.direction)
+      .map((item) => item.target_id);
+    if (targets.length === 0) continue;
+    out.push({
+      key,
+      value_type: 'link',
+      multiple: targets.length > 1,
+      value: targets.length === 1 ? targets[0]! : targets,
+    });
   }
   return out;
+}
+
+/**
+ * Собрать {@link ResolveContext} для конкретной мысли — общая точка разрешения
+ * токенов контекста мысли (`$thought`/`$thought.*`/`$thought.[…]`): поля мысли +
+ * значения свойств + пользователь + часы/настройки сети. Используется отбором
+ * типа мысли (`runViewForThought`) и точкой поиска карты (задача 4b1cc3d4):
+ * семантика `$thought` одна, второй сборки контекста нет.
+ */
+export function buildThoughtResolveContext(
+  ndb: NetworkDb,
+  thought: ResolveContext['thought'],
+  thoughtId: string,
+  userId: string,
+  extra: { now?: () => Date; firstDayOfWeek?: number; withTime?: boolean } = {},
+): ResolveContext {
+  return buildResolveContext(
+    thought,
+    collectThoughtPropertyValues(ndb, thoughtId, thought.type_id),
+    userId,
+    extra.now,
+    {
+      ...(extra.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+      ...(extra.withTime !== undefined ? { withTime: extra.withTime } : {}),
+    },
+  );
 }
 
 /**
@@ -737,24 +905,17 @@ function splitMultipleText(raw: string): string[] {
 }
 
 /**
- * Исполнить отбор относительно конкретной мысли (задача 20b2fca0).
- *
- * Шаги:
- *   1. Прочитать мысль (404 для несуществующей — `getThought` возвращает
- *      `null`, бросаем `NOT_FOUND`).
- *   2. Распарсить `definition` отбора как `StructureFilter` — этот же
- *      парсер использует REST/MCP при прямых запросах структур, так что
- *      токены и здесь проходят через `validateDefinitionForTokens` уже
- *      на этапе сохранения (защита двойная).
- *   3. Собрать контекст резолвера: поля мысли + значения свойств +
- *      id пользователя + часы (`now()` по умолчанию).
- *   4. Подставить токены. Если хоть один не разрешён — пустой результат
- *      с пояснениями (требование b7fdab20), `queryThoughts` не вызывается.
- *   5. Иначе — `queryThoughts` от имени `userId` с подставленным фильтром.
- *
- * Этап 5 упакует результат в REST-ответ `POST /thoughts/{id}/views/{view}/run`;
- * здесь только чистый pipeline без HTTP-обвязки.
+ * Коды плоской сортировки `StructureSort` → фиксированные ключи `ast.sort`.
+ * Нужны, когда тело запроса переопределяет сортировку AST-определения
+ * (контракт 95273103): `viewed`/`manual` ключа AST не имеют — там отбор
+ * уходит на плоскую сортировку движка.
  */
+const STRUCTURE_SORT_TO_AST_KEY: Partial<Record<StructureSort, string>> = {
+  alpha: 'title',
+  created: 'created_at',
+  updated: 'updated_at',
+};
+
 export async function runViewForThought(
   ndb: NetworkDb,
   view: ThoughtTypeView,
@@ -763,6 +924,59 @@ export async function runViewForThought(
   requestId?: string,
   options?: RunViewQueryOptions,
 ): Promise<RunViewResult> {
+  // Тонкая обёртка над единой доменной точкой (задача 0e7e89f5): от сохранённого
+  // отбора зависят лишь `view.definition` и `view.thought_type_id`.
+  return executeViewDefinitionForThought(ndb, {
+    definition: JSON.parse(view.definition) as Record<string, unknown>,
+    thoughtTypeId: view.thought_type_id,
+    thoughtId,
+    userId,
+    ...(requestId !== undefined ? { requestId } : {}),
+    ...(options !== undefined ? { options } : {}),
+  });
+}
+
+/**
+ * Исполнить ПРОИЗВОЛЬНОЕ определение отбора относительно конкретной мысли —
+ * единая доменная точка (задача 0e7e89f5). От сохранённого отбора отличается
+ * только источником определения: {@link runViewForThought} передаёт
+ * `view.definition` и `view.thought_type_id`, ad-hoc AST-прогон (`etn.views.run
+ * { ast }` и REST `POST /thoughts/{id}/views/run`) — само тело и тип контекстной
+ * мысли. Всё прочее — резолв токенов контекста мысли, диагностика, единый
+ * исполнитель, исключение контекстной мысли, `total` (всегда COUNT),
+ * `has_more`/`next_cursor` — ОДНО для обеих форм; второй сборки контекста мысли
+ * нет (общая точка {@link buildThoughtResolveContext}).
+ *
+ * Шаги:
+ *   1. Прочитать мысль (404 для несуществующей — `getThought` возвращает
+ *      `null`, бросаем `NOT_FOUND`).
+ *   2. Распарсить определение: wire-AST (`version`) либо старая плоская форма
+ *      `definition v1` (распознаётся по отсутствию `version`).
+ *   3. Собрать контекст резолвера: поля мысли + значения свойств +
+ *      id пользователя + часы (`now()` по умолчанию).
+ *   4. Подставить токены. Если хоть один не разрешён — пустой результат
+ *      с пояснениями (требование b7fdab20), `queryThoughts` не вызывается.
+ *   5. Иначе — `queryThoughts` от имени `userId` с подставленным фильтром.
+ *
+ * @param input.thoughtTypeId Тип мысли — якорь жёлтой диагностики «свойство
+ *   отвязано от типа» (`diagnoseFilterAst`). У сохранённого отбора —
+ *   `view.thought_type_id`, у ad-hoc — тип контекстной мысли (`thought.type_id`;
+ *   у мысли без типа диагностик нет).
+ */
+export async function executeViewDefinitionForThought(
+  ndb: NetworkDb,
+  input: {
+    definition: Record<string, unknown>;
+    thoughtTypeId?: string | null;
+    thoughtId: string;
+    userId: string;
+    requestId?: string;
+    options?: RunViewQueryOptions;
+  },
+): Promise<RunViewResult> {
+  const { thoughtId, userId, requestId } = input;
+  const options = input.options;
+  const parsed = input.definition;
   const thought = getThought(ndb, thoughtId);
   if (thought === null) {
     throw new EtnError(
@@ -772,7 +986,6 @@ export async function runViewForThought(
       requestId,
     );
   }
-  const parsed = JSON.parse(view.definition) as Record<string, unknown>;
   // Повторная защита: даже если по дороге кто-то подменил definition в БД,
   // здесь отбор не выполнится с невалидными токенами — выбросим 422.
   validateDefinitionForTokens(parsed, undefined, requestId);
@@ -791,8 +1004,25 @@ export async function runViewForThought(
   const limit = options?.limit ?? 100;
   const offset = options?.offset ?? 0;
 
-  const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
-  const ctx: ResolveContext = buildResolveContext(
+  // Определение отбора хранится либо в форме AST (0.13.1, сущность 489c394f —
+  // распознаётся по полю `version`), либо в старой плоской `definition v1`.
+  const isAstDefinition = parsed['version'] !== undefined;
+
+  let resolvedDefinition: Record<string, unknown>;
+  // Контекст резолва токенов (мысль-контекст + свойства + пользователь + часы +
+  // настройки сети) — ОБЩИЙ для обеих форм определения: плоский резолвер
+  // раскрывает им строки, AST-форма — токены контекста мысли (ошибка 23c7d3e9
+  // п. C3). Часы/первый день недели/гранулярность времени берутся из
+  // `tokenContext` (обязательный пункт задачи 7a798b17, замечание верификатора
+  // задачи 0f1b9892; требование 0095daad) — иначе календарные токены
+  // (`$today`/`$weekStart`) раскрывались бы по реальным часам и от
+  // понедельника, а `$now` — по историческому умолчанию.
+  const extra = options?.tokenContext;
+  const now = extra?.nowMs !== undefined ? (): Date => new Date(extra.nowMs!) : undefined;
+  // Сборка контекста — общая точка ({@link buildThoughtResolveContext}), одна и
+  // та же с точкой поиска карты (задача 4b1cc3d4).
+  const resolveContext: ResolveContext = buildThoughtResolveContext(
+    ndb,
     {
       id: thought.id,
       title: thought.title,
@@ -807,39 +1037,132 @@ export async function runViewForThought(
       created_at: thought.created_at,
       updated_at: thought.updated_at,
     },
-    properties,
+    thoughtId,
     userId,
+    {
+      ...(now !== undefined ? { now } : {}),
+      ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+      ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
+    },
   );
-  const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
 
-  if (resolved.unresolved.length > 0) {
-    return {
-      items: [],
-      total: 0,
-      directions: {},
-      unresolved: resolved.unresolved,
-      sort,
-      order,
-    };
+  if (isAstDefinition) {
+    // AST-форма. ГЛОБАЛЬНЫЕ токены (`$today`/`$user`/`$weekStart` и арифметика
+    // по ним) раскрывает САМ движок по `tokenContext` (единый исполнитель,
+    // задача 0f1b9892) — плоский резолвер к AST неприменим: он подставляет
+    // значение ВНУТРЬ строки `{token:"$user"}` и превращает валидный токен в
+    // мусорный. Токены КОНТЕКСТА МЫСЛИ (`$thought`/`$thought.*`/
+    // `$thought.[…]`) движку не по силам — контекста мысли в сетевом запросе
+    // нет, — поэтому их раскрывает сервис, у которого мысль есть. Иначе условие
+    // «Мысль в иерархии $thought» давало необъяснимый пустой результат (ошибка
+    // 23c7d3e9 п. C3).
+    const resolvedAst = resolveThoughtTokensInAst(parsed, resolveContext);
+    if (resolvedAst.unresolved.length > 0) {
+      return {
+        items: [],
+        total: 0,
+        directions: {},
+        unresolved: resolvedAst.unresolved,
+        sort,
+        order,
+        has_more: false,
+        next_cursor: null,
+      };
+    }
+    resolvedDefinition = resolvedAst.definition as Record<string, unknown>;
+  } else {
+    const resolved = resolveTokensInDefinitionProxy(parsed, resolveContext);
+
+    if (resolved.unresolved.length > 0) {
+      return {
+        items: [],
+        total: 0,
+        directions: {},
+        unresolved: resolved.unresolved,
+        sort,
+        order,
+        has_more: false,
+        next_cursor: null,
+      };
+    }
+    resolvedDefinition = resolved.definition as Record<string, unknown>;
   }
 
-  // Парсер ожидает именно `Record<string, unknown>` (это `body` в REST).
-  // Резолвер оставляет на выходе объект, потому что на входе был объект
-  // (валидация отвергла бы не-объект), — cast для согласования типов.
-  const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
-  const query: ThoughtQueryRequest = structureRequestToQuery({
-    ...filter,
-    sort,
-    order,
-    limit,
-    offset,
-    // Отбор типа отвечает полным числом совпадений — COUNT запрашивается
-    // явно (требование 5adebf61: по умолчанию подсчёта нет).
-    count: true,
-  });
+  // Старая плоская форма компилируется в AST тем же движком отбора (единый
+  // вход, требование 91983c20); одноразовая миграция БД v1 → AST — отдельная
+  // задача 4be62d42.
+  let warnings: FilterDiagnostic[] = [];
+  const query: ThoughtQueryRequest = isAstDefinition
+    ? (() => {
+        // Форму дерева валидирует доменный parseFilterAst (строгая проверка).
+        const ast = parseFilterAst(resolvedDefinition, requestId);
+        // Ad-hoc путь (задача 0e7e89f5): `ast.sort` и `sort`/`order` — два
+        // источника одного порядка, одновременно недопустимы (конвенция
+        // cb78315b «оставьте один источник»). Сохранённый отбор эту пару
+        // допускает — тело перекрывает сохранённую сортировку (95273103).
+        if (
+          options?.exclusiveSort === true &&
+          ast.sort !== undefined &&
+          ast.sort.length > 0 &&
+          (options.sort !== undefined || options.order !== undefined)
+        ) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'Сортировка задана дважды: в теле ast (sort) и в полях sort/order — оставьте один источник.',
+            { field: 'sort' },
+            requestId,
+          );
+        }
+        // Диагностика AST отбора типа (требования 44d61c8a/325efc13): красное
+        // (удалённая сущность) — запрет применения; жёлтое (свойство отвязано
+        // от типа) — исполняем и отдаём предупреждение в ответе. Якорь жёлтой
+        // диагностики — тип мысли (у сохранённого отбора — тип отбора, у
+        // ad-hoc — тип контекстной мысли).
+        const diag = diagnoseFilterAst(ndb, ast, {
+          thoughtTypeId: input.thoughtTypeId ?? undefined,
+          requestId,
+        });
+        if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
+        warnings = diag.warnings;
+        // Контракт 95273103: явные `sort`/`order` ТЕЛА переопределяют
+        // сохранённую в определении сортировку. Для AST-определения это значит
+        // переопределить и `ast.sort` (иначе движок предпочёл бы определение):
+        //   * задан `sort` → одна карта «код → ключ AST» с телом-направлением
+        //     (некодируемые коды вроде `viewed` — плоская сортировка движка);
+        //   * задан только `order` → направление КАЖДОГО сохранённого ключа
+        //     берётся из тела.
+        const bodySort = options?.sort;
+        const bodyOrder = options?.order;
+        let astForQuery = ast;
+        if (bodySort !== undefined || bodyOrder !== undefined) {
+          const mapped = bodySort === undefined ? undefined : STRUCTURE_SORT_TO_AST_KEY[bodySort];
+          if (bodySort !== undefined && mapped !== undefined) {
+            astForQuery = { version: ast.version, filter: ast.filter, sort: [{ key: mapped, order }] };
+          } else if (bodySort === undefined && ast.sort !== undefined) {
+            astForQuery = { version: ast.version, filter: ast.filter, sort: ast.sort.map((k) => ({ ...k, order })) };
+          } else {
+            // `viewed`/`manual` или определение без `sort`: отдаём плоской
+            // сортировке движка (`req.sort`/`req.order` уже несут тело).
+            astForQuery = { version: ast.version, filter: ast.filter };
+          }
+        }
+        return { ast: astForQuery, sort, order, limit, offset, count: true } satisfies ThoughtQueryRequest;
+      })()
+    : structureRequestToQuery({
+        ...parseStructureFilter(resolvedDefinition, requestId),
+        sort,
+        order,
+        limit,
+        offset,
+        count: true,
+      });
   const result = await queryThoughtsAsync(ndb, userId, query, {
     emptyFilterMode: 'home_orphans',
     includeDirections: true,
+    profile: options?.profile ?? 'thoughts',
+    ...(options?.maxLimit !== undefined ? { maxLimit: options.maxLimit } : {}),
+    ...(options?.tokenContext !== undefined ? { tokenContext: options.tokenContext } : {}),
+    ...(options?.collectStats === true ? { collectStats: true } : {}),
   });
   // Исключаем саму контекстную мысль из результата: «отбор относительно
   // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.
@@ -851,9 +1174,18 @@ export async function runViewForThought(
     items,
     total,
     directions: result.directions,
-    unresolved: [],
+    // Неразрешимые токены AST (задача 0f1b9892, требование b7fdab20) —
+    // приходят из исполнения; пустой массив — всё разрешилось. Прежде здесь
+    // жёстко стоял `[]`, и неразрешимый токен молча давал пустую выдачу.
+    unresolved: result.unresolved ?? [],
     sort,
     order,
+    // Хвост страницы несёт движок (задача 0e7e89f5): `total` — всегда COUNT
+    // (`count: true` выше), `has_more`/`next_cursor` — есть ли ещё страницы.
+    has_more: result.has_more,
+    next_cursor: result.next_cursor,
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...(result.stats !== undefined ? { stats: result.stats } : {}),
   };
 }
 

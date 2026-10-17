@@ -31,6 +31,9 @@ const ENTITY_PICKER = read('lib/entity-picker.ts');
 const PERIOD_EDITOR = read('lib/period-editor.ts');
 const BUILDER = read('lib/filter-builder.ts');
 const DIARY = read('screens/chronicle/diary.ts');
+// Резолвер глобальных токенов перенесён в библиотеку дат (общий с виджетом
+// значения условия, ошибка 1b6c49fe); «Дневник» реэкспортирует его.
+const DATES = read('lib/dates.ts');
 const RECORD_BODY = read('screens/chronicle/record-body.ts');
 const CSS = read('styles/screens/chronicle.css');
 
@@ -43,18 +46,16 @@ describe('приёмка №2, п.1: единые поля выбора (обе 
 
   it('обе панели задают приглашение «+ ещё один тип/мысль»', () => {
     // Приглашение поля МЫСЛЕЙ задаёт общий фасад роли «Родительские мысли»
-    // (`lib/filter-form.ts`), на который переведены обе панели: своей копии
-    // строки приглашения у панелей больше нет (единая реализация, задача
-    // b02ef1cf). Приглашение ТИПА панели задают по-прежнему сами.
+    // (`lib/filter-form.ts`), на который переведена панель «Дневника». Панель
+    // «Структур» пересобрана на единый редактор (задача 213bd2d2, ADR fc23f9c1):
+    // спец-секций у неё больше нет, поля мыслей и типов — строки дерева, а их
+    // чип-поля строит общий виджет значения (`lib/filter-value.ts`).
     const FORM = read('lib/filter-form.ts');
     assert.ok(FORM.includes("'+ ещё одну мысль'"), 'приглашение мысли — в общем фасаде');
-    for (const [name, src] of [
-      ['Структуры', STRUCTURES_PANEL],
-      ['Дневник', CHRONICLE_PANEL],
-    ] as const) {
-      assert.ok(src.includes("'+ ещё один тип'"), `${name}: приглашение типа`);
-      assert.ok(src.includes('buildParentThoughtsSection'), `${name}: поле мыслей — общий фасад`);
-    }
+    // Панель «Дневника» (задача 608ecb79) тоже перешла на единый редактор: её
+    // спец-секций нет, строку поиска собирает общий каркас слова.
+    assert.match(CHRONICLE_PANEL, /buildKeywordsSection/, 'Дневник: строка поиска — общий каркас');
+    assert.match(ENTITY_PICKER, /addPlaceholder/, 'приглашения полей — общий фасад');
   });
 
   it('кнопок «выбрать…»/«список типов…» в панелях нет', () => {
@@ -130,17 +131,19 @@ describe('приёмка №2, п.6: период «Пресеты»/«Даты�
       'клиентский шаблон токенов знает год',
     );
     assert.ok(
-      DIARY.includes('year\\.start') && DIARY.includes('year\\.end'),
+      DATES.includes('year\\.start') && DATES.includes('year\\.end'),
       'раскрытие годовых токенов',
     );
-    assert.match(DIARY, /months = n \* 12/, '±Ny = 12 месяцев');
+    assert.match(DATES, /months = n \* 12/, '±Ny = 12 месяцев');
+    assert.match(DIARY, /resolveDateToken/, '«Дневник» реэкспортирует общий резолвер токенов');
   });
 
-  it('режим периода едет в сохранённый отбор', () => {
-    assert.match(BUILDER, /dateMode/);
-    assert.match(BUILDER, /out\.date_mode = state\.dateMode/);
-    assert.match(CHRONICLE_PANEL, /panelMode: filter\.dateMode/);
-    assert.match(CHRONICLE_PANEL, /date_mode|dateMode/, 'режим восстанавливается парсером');
+  it('период едет в сохранённый отбор строкой «Время записи» дерева', () => {
+    // Задача 608ecb79: режим «Пресеты/Даты» упразднён — панель хранит период
+    // строкой дерева (токены календаря), сохранённый отбор пишется AST.
+    assert.match(CHRONICLE_PANEL, /chroniclePeriod\(/, 'период читается из дерева');
+    assert.match(CHRONICLE_PANEL, /buildFilterAst\(filter, \{ profile: FILTER_PROFILE \}\)/, 'сохранение — AST');
+    assert.match(BUILDER, /dateMode/, 'плоская v1-форма периода читается прежним конвертером');
   });
 
   it('календарь пишет значения по режиму (правило «Пресетов»)', () => {

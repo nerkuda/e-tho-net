@@ -71,6 +71,17 @@ export interface DatePeriodDialogOptions {
   initial?: Partial<DatePeriodValue>;
   /** Заголовок диалога (по умолчанию «Дата/период»). */
   title?: string;
+  /**
+   * Активация дня ДВОЙНЫМ кликом: получает текущее значение — потребитель
+   * (например, модальный диалог) может подтвердить выбор и закрыться. Одиночный
+   * клик только выбирает день (ошибка 609deba0 п.4).
+   */
+  onDayActivate?: (value: DatePeriodValue) => void;
+  /**
+   * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
+   * раскладка сетки и подписи столбцов. Не задан — понедельник.
+   */
+  firstDayOfWeek?: number;
 }
 
 /** Рукоятка собранного диалога (для тестов и встраивания). */
@@ -288,6 +299,7 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     today,
     weekNumbers: false,
     enableRangeDrag: allowPeriod,
+    firstDayOfWeek: opts.firstDayOfWeek,
     onPickDay: (day) => {
       if (mode === 'date') {
         from = day;
@@ -314,6 +326,12 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
       from = today;
       to = today;
       syncCalendar();
+    },
+    // Двойной клик по дню — активация: день уже выбран `onPickDay`, отдаём
+    // текущее значение потребителю (модальный диалог по нему подтверждает и
+    // закрывается; ошибка 609deba0 п.4).
+    onPickDayActivate: () => {
+      opts.onDayActivate?.(currentValue());
     },
   });
 
@@ -526,20 +544,23 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
 
   repaint();
 
+  /** Текущее значение диалога с учётом «живого» ввода полей нижней строки. */
+  function currentValue(): DatePeriodValue {
+    commitLiveInputs();
+    return {
+      mode,
+      from,
+      to: mode === 'date' ? from : to,
+      hasTime,
+      fromTime,
+      toTime,
+    };
+  }
+
   return {
     root,
     getMode: () => mode,
-    getValue: () => {
-      commitLiveInputs();
-      return {
-        mode,
-        from,
-        to: mode === 'date' ? from : to,
-        hasTime,
-        fromTime,
-        toTime,
-      };
-    },
+    getValue: currentValue,
   };
 }
 
@@ -552,13 +573,25 @@ export function openDatePeriodDialog(
 ): Promise<DatePeriodValue | null> {
   return new Promise((resolve) => {
     let settled = false;
+    /**
+     * Закрывающая функция каркаса — нужна пути «двойной клик по дню»: он
+     * подтверждает выбор БЕЗ нажатия «ОК», поэтому сам диалог не закрывается
+     * (кнопки закрывает `showDialog`, обработчик дня — нет).
+     */
+    let closeSelf: (() => void) | null = null;
     const finish = (value: DatePeriodValue | null): void => {
       if (settled) return;
       settled = true;
+      closeSelf?.();
       resolve(value);
     };
-    const dialog = buildDatePeriodDialog(opts);
-    showDialog({
+    const dialog = buildDatePeriodDialog({
+      ...opts,
+      // Двойной клик по дню подтверждает выбор и закрывает диалог — как «ОК»
+      // (ошибка 609deba0 п.4).
+      onDayActivate: (value) => finish(value),
+    });
+    closeSelf = showDialog({
       title: opts.title ?? 'Дата/период',
       // Роль `s` — нижняя граница ширины (хватает сетке Пн–Вс на 7 колонок);
       // `fitContent` снимает потолок высоты и прокрутку тела, чтобы календарь

@@ -123,7 +123,7 @@ describe('globalCopy (Ctrl+C) ignores the selection panel — bug 627a0822', () 
     setCursor('clicked');
     setClipboard(null);
     try {
-      await appInternals.globalCopy();
+      await appInternals.globalCopy(appInternals.currentThoughtCopyTarget());
 
       const snap = getClipboard();
       assert.ok(snap !== null, 'a snapshot must be created');
@@ -158,7 +158,7 @@ describe('globalCopy (Ctrl+C) ignores the selection panel — bug 627a0822', () 
     setCursor(null);
     setClipboard(null);
     try {
-      await appInternals.globalCopy();
+      await appInternals.globalCopy(appInternals.currentThoughtCopyTarget());
 
       const snap = getClipboard();
       assert.ok(snap !== null, 'a snapshot must be created');
@@ -188,12 +188,73 @@ describe('globalCopy (Ctrl+C) ignores the selection panel — bug 627a0822', () 
     setCursor(null);
     setClipboard(null);
     try {
-      await appInternals.globalCopy();
+      await appInternals.globalCopy(appInternals.currentThoughtCopyTarget());
 
       assert.equal(getClipboard(), null, 'nothing must land in the clipboard');
       assert.deepEqual(fetched, [], 'no thought may be fetched');
     } finally {
       store.update({ selection: [], focus: null } as any);
+    }
+  });
+});
+
+describe('currentThoughtCopyTarget — screen selection wins on «Структуры» (bug 00275531)', () => {
+  it('copies the thought selected on the structures screen, not the map cursor', async () => {
+    shimDom();
+    const { fetched } = stubEtn();
+    const { appInternals } = await import('../src/renderer/app.js');
+    const { setCursor } = await import('../src/renderer/canvas/kbd-nav.js');
+    const { setScreenThoughtSource } = await import('../src/renderer/lib/screen-thought-source.js');
+    const { structuresThoughtSource } = await import(
+      '../src/renderer/screens/structures/structures.js'
+    );
+    const { getClipboard, setClipboard } = await import('../src/renderer/canvas/clipboard.js');
+    const { store } = await import('../src/renderer/state.js');
+
+    // The map still has a cursor/focus, but on the structures view the screen
+    // selection (the cloud the user picked there) must win.
+    store.update({
+      networkId: 'n1',
+      activeView: 'structures',
+      selection: [],
+      structuresActiveThoughtId: 'st1',
+      focus: { focused: thought('foc') },
+    } as any);
+    setCursor('cur');
+    // mountStructures registers exactly this provider on the screen.
+    assert.equal(structuresThoughtSource(), 'st1');
+    setScreenThoughtSource('structures', structuresThoughtSource);
+    setClipboard(null);
+    try {
+      assert.equal(appInternals.currentThoughtCopyTarget(), 'st1');
+      await appInternals.globalCopy(appInternals.currentThoughtCopyTarget());
+
+      const snap = getClipboard();
+      assert.ok(snap !== null, 'a snapshot must be created');
+      assert.equal((snap.thoughts[0] as any).source_id, 'st1');
+      assert.ok(
+        fetched.every((id) => id === 'st1'),
+        `only the screen-selected thought may be fetched, got: ${JSON.stringify(fetched)}`,
+      );
+    } finally {
+      setScreenThoughtSource('structures', null);
+      setCursor(null);
+      setClipboard(null);
+      store.update({ selection: [], focus: null, activeView: 'map', structuresActiveThoughtId: null } as any);
+    }
+  });
+
+  it('on screens without thoughts the resolver yields no target', async () => {
+    shimDom();
+    stubEtn();
+    const { appInternals } = await import('../src/renderer/app.js');
+    const { store } = await import('../src/renderer/state.js');
+
+    store.update({ networkId: 'n1', activeView: 'chronicle' } as any);
+    try {
+      assert.equal(appInternals.currentThoughtCopyTarget(), null);
+    } finally {
+      store.update({ activeView: 'map' } as any);
     }
   });
 });

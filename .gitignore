@@ -8,6 +8,12 @@ out/
 release/
 *.tsbuildinfo
 
+# Исходные ресурсы упаковки electron-builder (client/build) — версионируются
+# (ошибка 5d0f698b: правило `build/` молча съедало новые ассеты упаковки).
+# Генерируемый notices-файл остаётся игнорируемым.
+!client/build/
+client/build/THIRD-PARTY-NOTICES.txt
+
 # Logs
 *.log
 npm-debug.log*

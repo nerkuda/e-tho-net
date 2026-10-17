@@ -23,11 +23,16 @@ import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
   CHRONICLE_THOUGHT_IDS_MAX,
+  CHRONICLE_LEGACY_KEYWORD_SCOPES,
   EtnError,
+  FILTER_AST_VERSION,
+  HIERARCHY_SUBTREE_MAX_NODES,
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
+  STRUCTURE_KEYWORD_SCOPES,
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
+  commentScopeEnabled,
   parseFilterKeywords,
   type ChronicleFilter,
   type ChronicleFilterDefinition,
@@ -37,6 +42,12 @@ import {
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
+  type FilterAst,
+  type FilterAstLeaf,
+  type FilterAstListItem,
+  type FilterAstNode,
+  type FilterAstValue,
+  type FilterDiagnostic,
   type SortOrder,
   type StructureAuthorOp,
   type StructureKeywordScope,
@@ -45,10 +56,14 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { buildThoughtIdSelect, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
+import { buildThoughtIdSelect, compileThoughtQueryToAst, diaryKeywordClause, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { collectHierarchySubtree } from './graph-traversal.js';
 import { normaliseInstant } from './dates.js';
 import { isFilterEmpty, parseStructureFilter } from './structure-service.js';
+import { parseFilterAst } from './filter-ast.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
 import { resolveGlobalDateTokens, scanStringForTokens } from './thought-type-view-tokens.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
@@ -110,19 +125,24 @@ function parseDateField(
  * Раскрыть токены периода (`$today`/`$now`, арифметика) в момент применения
  * отбора и привести результат к полному UTC-инстансу (требование 91f8d8dd).
  * Значение без токенов уже нормализовано на разборе — возвращается как есть.
+ * `extra` несёт контекст профиля хроники (требование 0095daad, ADR 0c02ab4f):
+ * первый день недели сети (иначе `$weekStart` считается от понедельника) и
+ * гранулярность времени (`withTime: true` — хроника несёт время).
  */
 function resolvePeriodField(
   value: string | null | undefined,
   field: 'date_from' | 'date_to',
   now?: () => Date,
+  extra?: { firstDayOfWeek?: number; withTime?: boolean },
 ): string | undefined {
   if (value === undefined || value === null) return undefined;
   const { known, unknown } = scanStringForTokens(value);
   if (known.length === 0 && unknown.length === 0) return value;
-  const { value: resolved, unresolved } = resolveGlobalDateTokens(
-    value,
-    now === undefined ? {} : { now },
-  );
+  const { value: resolved, unresolved } = resolveGlobalDateTokens(value, {
+    ...(now === undefined ? {} : { now }),
+    ...(extra?.firstDayOfWeek !== undefined ? { firstDayOfWeek: extra.firstDayOfWeek } : {}),
+    ...(extra?.withTime !== undefined ? { withTime: extra.withTime } : {}),
+  });
   if (unresolved.length > 0) {
     throw new EtnError('VALIDATION_ERROR', `${field}: ${unresolved[0]!.message}`, {
       field,
@@ -141,6 +161,23 @@ export function parseChronicleFilter(
 ): ChronicleFilter {
   const filter: ChronicleFilter = {};
 
+  // AST-тело профиля «хроника» (задача 4752b065): XOR с плоскими критериями —
+  // либо AST, либо плоские поля. Пагинация/`order`/`date_mode` (режим полей
+  // панели, на выборку не влияет) допустимы с обеими формами.
+  const astRaw = body['ast'];
+  if (astRaw !== undefined && astRaw !== null) {
+    const flatPresent = CHRONICLE_FLAT_FIELDS.filter((f) => body[f] !== undefined);
+    if (flatPresent.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'AST-тело (`ast`) несовместимо с плоскими критериями отбора.',
+        { field: 'ast', conflicts: flatPresent },
+        requestId,
+      );
+    }
+    filter.ast = parseChronicleAst(astRaw, requestId);
+  }
+
   const keywords = body['keywords'];
   if (keywords !== undefined) {
     if (typeof keywords !== 'string') {
@@ -152,17 +189,22 @@ export function parseChronicleFilter(
   }
 
   // Область поиска ключевых слов (0.10.1, элемент 2f14de06/91f8d8dd): чекбоксы
-  // «наименование/синонимы/комментарий». Пустой набор/отсутствие — поиск по
-  // всем областям (поведение до 0.10.1).
+  // «наименование/синонимы/комментарий» + «дневники» (0.13.1, ошибка 2bc251de).
+  // Пустой набор/отсутствие — ИСТОРИЧЕСКОЕ множество областей (title, synonyms,
+  // comment), поведение до 0.10.1; новые области включаются только явно.
+  // Словарь — ОДИН: shared-константа (требование 9e9d14dc — словарь закрытый),
+  // локальная копия списка разъехалась бы с ней по составу областей.
   const keywordScope = body['keyword_scope'];
   if (keywordScope !== undefined) {
     if (
       !Array.isArray(keywordScope) ||
-      keywordScope.some((v) => v !== 'title' && v !== 'synonyms' && v !== 'comment')
+      keywordScope.some(
+        (v) => typeof v !== 'string' || !(STRUCTURE_KEYWORD_SCOPES as readonly string[]).includes(v),
+      )
     ) {
       throw new EtnError('VALIDATION_ERROR', 'Недопустимый keyword_scope.', {
         field: 'keyword_scope',
-        allowed: ['title', 'synonyms', 'comment'],
+        allowed: STRUCTURE_KEYWORD_SCOPES,
       }, requestId);
     }
     if (keywordScope.length > 0) {
@@ -241,7 +283,7 @@ export function parseChronicleFilter(
   // Критерии целей записи (0.10.1, требование 306f74cc) — тот же набор, что у
   // панели «Структур»: разбираем общим доменным парсером, чтобы модель
   // критериев не дублировалась. Запись проходит, если хотя бы одна её
-  // привязанная мысль удовлетворяет (см. `buildRowsWhere`).
+  // привязанная мысль удовлетворяет (см. операнд «Цели» в {@link compileChronicleToAst}).
   const targets = body['targets'];
   if (targets !== undefined) {
     if (typeof targets !== 'object' || targets === null || Array.isArray(targets)) {
@@ -391,6 +433,24 @@ export function parseChronicleFilterDefinition(
   return { ...filter, order: orderRaw as SortOrder };
 }
 
+/** Поля плоской формы хроники — несовместимы с AST-телом (XOR). */
+const CHRONICLE_FLAT_FIELDS = [
+  'keywords',
+  'keyword_scope',
+  'thought_ids',
+  'include_subtree',
+  'type_ids',
+  'link_type_ids',
+  'link_scope',
+  'targets',
+  'date_from',
+  'date_to',
+  'created_by',
+  'updated_by',
+  'created_by_op',
+  'updated_by_op',
+] as const;
+
 /** Parse the body of `POST /chronicle/query` into a typed request. */
 export function parseChronicleQueryBody(
   body: Record<string, unknown>,
@@ -402,14 +462,18 @@ export function parseChronicleQueryBody(
     typeof orderRaw === 'string' && (SORT_ORDERS as readonly string[]).includes(orderRaw)
       ? (orderRaw as SortOrder)
       : 'asc';
+  const limit = parseChronicleLimit(body, requestId);
+  const offset = parseChronicleOffset(body, requestId);
+  return { ...filter, order, limit, offset };
+}
+
+/** Parse `limit` of a chronicle query (default {@link CHRONICLE_PAGE_SIZE}). */
+function parseChronicleLimit(body: Record<string, unknown>, requestId: string): number {
   const limitRaw = body['limit'];
   const limit =
     typeof limitRaw === 'number' && Number.isInteger(limitRaw)
       ? limitRaw
       : CHRONICLE_PAGE_SIZE;
-  const offsetRaw = body['offset'];
-  const offset =
-    typeof offsetRaw === 'number' && Number.isInteger(offsetRaw) ? offsetRaw : 0;
   if (limit < 1 || limit > CHRONICLE_QUERY_MAX_LIMIT) {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -418,12 +482,20 @@ export function parseChronicleQueryBody(
       requestId,
     );
   }
+  return limit;
+}
+
+/** Parse `offset` of a chronicle query (default 0). */
+function parseChronicleOffset(body: Record<string, unknown>, requestId: string): number {
+  const offsetRaw = body['offset'];
+  const offset =
+    typeof offsetRaw === 'number' && Number.isInteger(offsetRaw) ? offsetRaw : 0;
   if (offset < 0) {
     throw new EtnError('VALIDATION_ERROR', 'offset должен быть целым числом ≥ 0.', {
       field: 'offset',
     }, requestId);
   }
-  return { ...filter, order, limit, offset };
+  return offset;
 }
 
 /**
@@ -479,26 +551,38 @@ function collectRootAndSubtreeIds(
  * Хронологические комментарии мысли здесь НЕ ищутся (0.10.1, T7): совпадение в
  * теле записи должно отбирать саму запись, а не её цель. Иначе для записи дня
  * (единственная цель — HOME) слово в теле выбирало бы корень и возвращало все
- * его записи. Поиск по телам/заголовкам записей делает {@link RECORD_KEYWORD_COND}
- * в фазе 2.
+ * его записи. Поиск по телам/заголовкам записей делает {@link recordMatchesClause}
+ * через операнды `record_body`/`record_title`.
  *
  * Область (`keyword_scope`) сужает набор сравнений (0.10.1): `comment` —
- * постоянный комментарий мысли и комментарии её связей. Отсутствие области —
- * все сравнения (поведение до 0.10.1).
+ * постоянный комментарий мысли и комментарии её связей; `diary` — дневниковые
+ * записи самой мысли (тело/заголовок её хроно-записи, 0.13.1, ошибка 2bc251de).
+ * Отсутствие области — ИСТОРИЧЕСКОЕ множество областей
+ * ({@link CHRONICLE_LEGACY_KEYWORD_SCOPES} — title/synonyms/comment, поведение
+ * до 0.10.1): новые области включаются только явным набором, иначе старый отбор
+ * молча расширил бы выборку.
  */
 function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
   sql: string;
   argCount: number;
 } {
+  const legacyAll = scope === undefined || scope.length === 0;
   const enabled = (name: StructureKeywordScope): boolean =>
-    scope === undefined || scope.length === 0 || scope.includes(name);
+    legacyAll
+      ? (CHRONICLE_LEGACY_KEYWORD_SCOPES as readonly string[]).includes(name)
+      : scope.includes(name);
   const parts: string[] = [];
-  if (enabled('title')) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+  let argCount = 0;
+  if (enabled('title')) {
+    parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+    argCount += 1;
+  }
   if (enabled('synonyms')) {
     parts.push(`EXISTS (
   SELECT 1 FROM thought_synonyms_v ts
   WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
 )`);
+    argCount += 1;
   }
   if (enabled('comment')) {
     parts.push(`EXISTS (
@@ -512,18 +596,22 @@ function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
   JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
   WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
 )`);
+    argCount += 2;
   }
-  if (parts.length === 0) parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
-  return { sql: `(${parts.join(' OR ')})`, argCount: parts.length };
+  if (enabled('diary')) {
+    // Дневниковые записи мысли (ошибка 2bc251de, требование 0882f8d5): предикат —
+    // ОБЩИЙ с листом AST «Найти слова» (`diaryKeywordClause`), иначе области
+    // разъехались бы между плоским телом и AST-путём.
+    const diary = diaryKeywordClause('t');
+    parts.push(diary.sql);
+    argCount += diary.paramCount;
+  }
+  if (parts.length === 0) {
+    parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
+    argCount += 1;
+  }
+  return { sql: `(${parts.join(' OR ')})`, argCount };
 }
-
-/**
- * Keywords condition for one word against the RECORD itself (0.10.1, T7):
- * тело и заголовок хроно-комментария. Это и есть «поиск фильтрует ленту» —
- * запись проходит по собственному тексту независимо от того, попала ли в
- * отбор её мысль-цель (иначе записи дня на HOME не сужались бы).
- */
-const RECORD_KEYWORD_COND = `(unicode_lower(c.body_md) LIKE ? ESCAPE '\\' OR unicode_lower(IFNULL(c.title, '')) LIKE ? ESCAPE '\\')`;
 
 /**
  * Phase 1 SQL — filter the (possibly subtree-expanded) thought set by type and
@@ -592,203 +680,11 @@ function validToLowerCond(dateFrom: string): [string, string[]] {
 }
 
 /**
- * Attachment condition for a set of selected thought ids: the comment is
- * attached to one of them, or to a link whose endpoint (per `link_scope`) is.
+ * Одна точка правды для гейта пути Б (текст/заголовок записи) — предикат живёт
+ * в `@etn/shared` (chronicle-keywords.ts) вместе с конструктором группы панели
+ * «Дневника»; ре-экспорт сохранён ради прежней поверхности домена.
  */
-function attachmentCond(
-  ndb: NetworkDb,
-  ids: string[],
-  request: ChronicleQueryRequest,
-  args: unknown[],
-): string {
-  const parts: string[] = [
-    `EXISTS (SELECT 1 FROM comment_targets_v ct
-             WHERE ct.comment_id = c.id AND ct.owner_type = 'thought'
-               AND ct.owner_id IN (${placeholders(ids.length)}))`,
-  ];
-  args.push(...ids);
-
-  const scope = request.link_scope ?? 'both';
-  const endpointConds: string[] = [];
-  if (scope === 'sources' || scope === 'both') {
-    endpointConds.push(`l.source_id IN (${placeholders(ids.length)})`);
-    args.push(...ids);
-  }
-  if (scope === 'targets' || scope === 'both') {
-    endpointConds.push(`l.target_id IN (${placeholders(ids.length)})`);
-    args.push(...ids);
-  }
-  let linkCond = `EXISTS (SELECT 1 FROM comment_targets_v ctl
-    JOIN links_v l ON l.id = ctl.owner_id AND ctl.owner_type = 'link'
-    WHERE ctl.comment_id = c.id AND (${endpointConds.join(' OR ')})`;
-  if ((request.link_type_ids ?? []).length > 0) {
-    // L21: subtree expansion, same as the thought-type filter above.
-    const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', request.link_type_ids!);
-    if (expandedLinks.length > 0) {
-      linkCond += ` AND l.type_id IN (${placeholders(expandedLinks.length)})`;
-      args.push(...expandedLinks);
-    }
-  }
-  linkCond += ')';
-  parts.push(linkCond);
-  return `(${parts.join(' OR ')})`;
-}
-
-/**
- * «У записи есть хоть одна привязка» — дешёвая замена перебора всех id, когда
- * структурный отбор мыслей не сужен (нет `thought_ids`/`type_ids`): тот же
- * результат, но без огромного `IN (…)` в списке параметров.
- */
-function anyAttachmentCond(): string {
-  return `EXISTS (SELECT 1 FROM comment_targets_v cta WHERE cta.comment_id = c.id)`;
-}
-
-/**
- * Текстовое условие по телу и заголовку САМОЙ записи (0.10.1, T7): каждое
- * включающее слово обязано встретиться, ни одно исключающее — нет.
- * `null` — слов нет.
- */
-function recordTextCond(
-  includeWords: string[],
-  excludeWords: string[],
-  args: unknown[],
-): string | null {
-  const parts: string[] = [];
-  for (const word of includeWords) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    parts.push(RECORD_KEYWORD_COND);
-    args.push(pattern, pattern);
-  }
-  for (const word of excludeWords) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    parts.push(`NOT ${RECORD_KEYWORD_COND}`);
-    args.push(pattern, pattern);
-  }
-  return parts.length > 0 ? parts.join(' AND ') : null;
-}
-
-/**
- * Включена ли область `comment` в `keyword_scope`. Отсутствие области (или
- * пустой массив) — прежнее поведение «все области»; иначе область должна быть
- * названа явно. Одна точка правды для пути Б (текст/заголовок записи).
- */
-export function commentScopeEnabled(scope: StructureKeywordScope[] | undefined): boolean {
-  return scope === undefined || scope.length === 0 || scope.includes('comment');
-}
-
-/**
- * Phase 2 WHERE shared by the count and the page queries.
- *
- * `scopeIds` — мысли структурного отбора (без ключевых слов); `keywordIds` —
- * мысли, прошедшие мыслевой путь ключевых слов (пусто, если ни одна не
- * прошла). Записи отбираются как объединение: (путь А, только при включающих
- * словах) привязанные к `keywordIds`, ИЛИ (путь Б) привязанные к области
- * отбора И совпавшие по собственному тексту (включающие есть / исключающих
- * нет).
- *
- * Путь Б — это область `comment` (0.10.1, задача 46057359): «Комментарии»
- * относятся к постоянным комментариям мыслей И к дневниковым записям, а
- * «наименование»/«синонимы» — только к мыслям. Поэтому совпадение по
- * телу/заголовку САМОЙ записи ищется, только когда `keyword_scope` содержит
- * `comment`; выключенный флаг «Комментарии» оставляет записи лишь мыслевому
- * пути (наименование/синонимы целей).
- */
-function buildRowsWhere(
-  ndb: NetworkDb,
-  userId: string,
-  scopeIds: string[],
-  keywordIds: string[],
-  scopeRestricted: boolean,
-  includeWords: string[],
-  excludeWords: string[],
-  request: ChronicleQueryRequest,
-): { cond: string; args: unknown[] } {
-  const conds: string[] = ["c.kind = 'chronological'"];
-  const args: unknown[] = [];
-
-  // Порядок вызовов = порядок `?` в итоговом SQL. Мыслевой путь (А) — только
-  // при включающих словах: чисто исключающие слова работают по тексту записи
-  // (путь Б), иначе прежнее «вычитание мыслей» возвращало бы записи их соседей.
-  const parts: string[] = [];
-  if (includeWords.length > 0 && keywordIds.length > 0) {
-    parts.push(attachmentCond(ndb, keywordIds, request, args));
-  }
-  // Путь Б — только при включённой области `comment`.
-  if (
-    commentScopeEnabled(request.keyword_scope) &&
-    (includeWords.length > 0 || excludeWords.length > 0)
-  ) {
-    const text = recordTextCond(includeWords, excludeWords, args);
-    if (text !== null) {
-      const attach = scopeRestricted
-        ? attachmentCond(ndb, scopeIds, request, args)
-        : anyAttachmentCond();
-      parts.push(`(${text} AND ${attach})`);
-    }
-  }
-  if (parts.length > 0) {
-    // Скобки обязательны: без них `kind='chronological' AND A OR B` разбирается
-    // как `(kind AND A) OR B`, и путь Б (текст записи) вернул бы в ленту
-    // постоянные комментарии (дефект приёмки 0.10.1).
-    conds.push(`(${parts.join(' OR ')})`);
-  } else if (includeWords.length > 0) {
-    // Включающие слова заданы, но ни один путь не дал условий: при выключенной
-    // области `comment` совпадение по тексту записи не ищется, а мыслевого
-    // совпадения нет — записей нет (иначе запрос отдал бы ВСЕ записи области).
-    conds.push('0');
-  } else if (scopeIds.length > 0) {
-    conds.push(
-      scopeRestricted ? attachmentCond(ndb, scopeIds, request, args) : anyAttachmentCond(),
-    );
-  } else {
-    conds.push('0');
-  }
-
-  // Критерии целей (0.10.1, требование 306f74cc): запись проходит, если ХОТЯ
-  // БЫ ОДНА её привязанная мысль (`comment_targets`, включая вторичные)
-  // удовлетворяет критериям набора «Структур». Критерии строит единый движок
-  // выборки мыслей (`buildThoughtIdSelect`) — модель не дублируется; здесь
-  // подзапрос встраивается в `IN`, поэтому обход индексный по
-  // `comment_targets.comment_id`, без N+1 по записям.
-  if (request.targets !== undefined) {
-    const targetSelect = buildThoughtIdSelect(
-      ndb,
-      userId,
-      structureRequestToQuery({
-        ...request.targets,
-        sort: 'alpha',
-        order: 'asc',
-        limit: 1,
-        offset: 0,
-      }),
-    );
-    conds.push(
-      `EXISTS (SELECT 1 FROM comment_targets_v cttg
-         WHERE cttg.comment_id = c.id AND cttg.owner_type = 'thought'
-           AND cttg.owner_id IN (${targetSelect.sql}))`,
-    );
-    args.push(...targetSelect.params);
-  }
-
-  if (request.date_from !== undefined && request.date_from !== null) {
-    const [cond, more] = validToLowerCond(request.date_from);
-    conds.push(cond);
-    args.push(...more);
-  }
-  if (request.date_to !== undefined && request.date_to !== null) {
-    const [cond, more] = validFromUpperCond(request.date_to);
-    conds.push(cond);
-    args.push(...more);
-  }
-
-  // Фильтры авторства (задача 59119797, эволюция операторов): колонки
-  // `comments.created_by` / `comments.updated_by`. Парсер отбрасывает
-  // пустые значения, здесь же формируется WHERE по оператору.
-  appendChronicleAuthorCondition(conds, args, 'c.created_by', request.created_by, request.created_by_op);
-  appendChronicleAuthorCondition(conds, args, 'c.updated_by', request.updated_by, request.updated_by_op);
-
-  return { cond: conds.join(' AND '), args };
-}
+export { commentScopeEnabled };
 
 /** Resolve one comment row with all its targets into a {@link ChronicleRow}. */
 function buildRows(
@@ -881,12 +777,614 @@ interface Row {
  * `opts.userId` — контекст исполнения критериев целей (движок выборки мыслей);
  * `opts.now` — часы для раскрытия токенов периода (тесты).
  */
+// ---------------------------------------------------------------------------
+// AST хроники: исполнитель записи и компилятор плоской формы (задача 4752b065;
+// требования 62475a6e «операнды профиля», 0c83819c «REST/MCP компилируется в
+// общий AST»; ADR 06a15c16 двухфазность, ADR 3301223f keyword_scope).
+//
+// Единый AST-путь: операнды записи (record_*) дают условия по alias `c`,
+// «Цели» (targets) — под-выборка мыслей, исполняемая общим движком
+// (`buildThoughtIdSelect`); двухфазность = EXISTS по целям (in «хотя бы одна»,
+// all_of «все цели»). Плоское тело компилируется этим же модулем; второй
+// SQL-путь не вводится.
+// ---------------------------------------------------------------------------
+
+/** Условие над alias `c` (запись) + параметры. */
+interface ChronicleClause {
+  sql: string;
+  args: unknown[];
+}
+
+/** Контекст раскрытия токенов и настроек профиля хроники. */
+interface ChronicleAstOpts {
+  userId: string;
+  now?: () => Date;
+  firstDayOfWeek?: number;
+  withTime?: boolean;
+  requestId?: string;
+}
+
+const RECORD_TITLE_COND = `unicode_lower(IFNULL(c.title, '')) LIKE ? ESCAPE '\\'`;
+const RECORD_BODY_COND = `unicode_lower(c.body_md) LIKE ? ESCAPE '\\'`;
+
+const astUnsupported = (message: string, requestId?: string): never => {
+  throw new EtnError('VALIDATION_ERROR', message, { field: 'ast' }, requestId);
+};
+
+/** Разбор `version`-AST хроники (строгая форма). */
+function parseChronicleAst(raw: unknown, requestId?: string): FilterAst {
+  return parseFilterAst(raw, requestId);
+}
+
+/** Строковое значение токена/скаляра AST. */
+function astTokenOrString(raw: unknown, field: string, requestId?: string): string {
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'token' in raw) {
+    const t = (raw as { token?: unknown }).token;
+    if (typeof t === 'string') return t;
+  }
+  throw new EtnError('VALIDATION_ERROR', `${field}: ожидается дата или токен.`, { field }, requestId);
+}
+
+/** Раскрыть дату/токен границы периода записи в полный UTC-инстанс. */
+function resolveRecordBound(raw: unknown, bound: 'lower' | 'upper', opts: ChronicleAstOpts): string {
+  const field = bound === 'lower' ? 'date_from' : 'date_to';
+  const rawStr = astTokenOrString(raw, field, opts.requestId).trim();
+  const { known, unknown } = scanStringForTokens(rawStr);
+  if (unknown.length > 0) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: неизвестный токен «${unknown[0]!.raw}».`, { field, token: unknown[0]!.raw }, opts.requestId);
+  }
+  const bad = known.find((t) => t.kind !== 'global');
+  if (bad !== undefined) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: токен «${bad.raw}» требует контекста мысли и в периоде недопустим.`, { field, token: bad.raw }, opts.requestId);
+  }
+  if (known.length === 0) {
+    const normalised = normaliseInstant(rawStr, field, bound === 'lower' ? 'start' : 'end');
+    if (normalised != null) return normalised;
+  }
+  const resolved = resolvePeriodField(rawStr, field, opts.now, {
+    ...(opts.firstDayOfWeek !== undefined ? { firstDayOfWeek: opts.firstDayOfWeek } : {}),
+    ...(opts.withTime !== undefined ? { withTime: opts.withTime } : {}),
+  });
+  if (resolved === undefined) {
+    throw new EtnError('VALIDATION_ERROR', `${field}: не удалось раскрыть значение периода.`, { field }, opts.requestId);
+  }
+  return resolved;
+}
+
+/** «Время записи» — пересечение интервала записи [valid_from, valid_to] с условием. */
+function recordTimeLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): ChronicleClause {
+  const lower = (value: unknown, strict: boolean): ChronicleClause => {
+    const [, args] = validToLowerCond(resolveRecordBound(value, 'lower', opts));
+    return { sql: `(c.valid_to IS NULL OR c.valid_to ${strict ? '>' : '>='} ?)`, args };
+  };
+  const upper = (value: unknown, strict: boolean): ChronicleClause => {
+    const [, args] = validFromUpperCond(resolveRecordBound(value, 'upper', opts));
+    return { sql: `c.valid_from ${strict ? '<' : '<='} ?`, args };
+  };
+  const between = (value: unknown): ChronicleClause => {
+    if (!Array.isArray(value) || value.length !== 2) {
+      astUnsupported('«Время записи»: оператор «между» требует две границы.', opts.requestId);
+    }
+    const bounds = value as FilterAstListItem[];
+    const a = lower(bounds[0], false);
+    const b = upper(bounds[1], false);
+    return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
+  };
+  /**
+   * Равенство «времени записи»: пересечение интервала записи с СУТКАМИ «голой
+   * даты» (нижняя граница — начало суток, верхняя — конец) либо с точкой полного
+   * инстанса. Та же семантика интервала, что у «между» с совпавшими границами
+   * (ошибка 03db4cb0, паритет с датами создания/изменения e219112e).
+   */
+  const equal = (value: unknown): ChronicleClause => {
+    const a = lower(value, false);
+    const b = upper(value, false);
+    return { sql: `(${a.sql} AND ${b.sql})`, args: [...a.args, ...b.args] };
+  };
+  switch (leaf.operator) {
+    case 'gte':
+      return lower(leaf.value, false);
+    case 'gt':
+      return lower(leaf.value, true);
+    case 'lte':
+      return upper(leaf.value, false);
+    case 'lt':
+      return upper(leaf.value, true);
+    case 'eq':
+      return equal(leaf.value);
+    case 'ne': {
+      const inner = equal(leaf.value);
+      return { sql: `NOT ${inner.sql}`, args: inner.args };
+    }
+    case 'between':
+      return between(leaf.value);
+    case 'not_between': {
+      const inner = between(leaf.value);
+      return { sql: `NOT ${inner.sql}`, args: inner.args };
+    }
+    default:
+      return astUnsupported(`Оператор «${leaf.operator}» недопустим для «Времени записи».`, opts.requestId);
+  }
+}
+
+/** «Найти слова» мини-синтаксисом по одному столбцу записи (include — AND, exclude — NOT). */
+function recordMatchesClause(columnCond: string, value: FilterAstValue | undefined): ChronicleClause {
+  const { include, exclude } = parseFilterKeywords(typeof value === 'string' ? value : '');
+  const parts: string[] = [];
+  const args: unknown[] = [];
+  for (const word of include) {
+    parts.push(columnCond);
+    args.push(buildLikePattern(word.toLowerCase()));
+  }
+  for (const word of exclude) {
+    parts.push(`NOT ${columnCond}`);
+    args.push(buildLikePattern(word.toLowerCase()));
+  }
+  if (parts.length === 0) return { sql: '1=1', args: [] };
+  return { sql: `(${parts.join(' AND ')})`, args };
+}
+
+/** Условие по столбцу-строке записи (равно/содержит/Найти слова). */
+function recordTextLeafClause(
+  leaf: FilterAstLeaf,
+  column: 'c.title' | 'c.body_md',
+  matchesCond: string,
+  opts: ChronicleAstOpts,
+): ChronicleClause {
+  const op = leaf.operator;
+  if (op === 'matches') return recordMatchesClause(matchesCond, leaf.value);
+  const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
+  if (raw === undefined) {
+    return astUnsupported(`Оператор «${op}» требует строковое значение.`, opts.requestId);
+  }
+  switch (op) {
+    case 'eq':
+      return { sql: `${column} = ?`, args: [raw] };
+    case 'ne':
+      return { sql: `(${column} IS NULL OR ${column} <> ?)`, args: [raw] };
+    case 'contains':
+      return { sql: `unicode_lower(IFNULL(${column}, '')) LIKE ? ESCAPE '\\'`, args: [buildLikePattern(raw.toLowerCase())] };
+    case 'not_contains': {
+      const inner = { sql: `unicode_lower(IFNULL(${column}, '')) LIKE ? ESCAPE '\\'`, args: [buildLikePattern(raw.toLowerCase())] };
+      return { sql: `NOT (${inner.sql})`, args: inner.args };
+    }
+    default:
+      return astUnsupported(`Оператор «${op}» недопустим для строкового операнда записи.`, opts.requestId);
+  }
+}
+
+/**
+ * Подпись колонки авторства записи для диагностики («Автор записи» /
+ * «Редактор записи») — одна точка на все сообщения этой пары колонок.
+ */
+function recordAuthorColumnLabel(column: 'c.created_by' | 'c.updated_by'): string {
+  return column === 'c.created_by' ? 'Автор записи' : 'Редактор записи';
+}
+
+/**
+ * Значение авторства записи из значения листа: литеральные строки — как есть,
+ * значения-ТОКЕНЫ (`$user` у «Автора записи» предопределённого набора «Мои
+ * записи за неделю») раскрываются ГЛОБАЛЬНЫМИ токенами — по образцу границ
+ * {@link recordTimeLeafClause}. Нераскрытый/недопустимый токен — ЯВНАЯ ошибка,
+ * а не молчаливое `1=1`: прежнее поведение теряло условие и показывало ВСЕ
+ * записи (арбитраж оркестратора 2026-10-14).
+ *
+ * Токен `$user` без пользователя запроса — тоже ЯВНАЯ ошибка (ошибка 1936c70e):
+ * `resolveGlobalDateTokens` подставляет для него ПУСТУЮ строку, и путь исполнения
+ * без `opts.userId` (например, прямой вызов домена / parity-прогон сохранённых
+ * тел) сообщал невнятное «не задано значение условия», хотя авторство задано
+ * ТОКЕНОМ. Диагностика называет настоящую причину и одинакова у всех входов:
+ * фасады (REST/MCP) передают `userId` — токен раскрывается; вход без него —
+ * явная ошибка, а не пустой автор.
+ */
+function resolveRecordAuthorValue(
+  raw: FilterAstValue | undefined,
+  column: 'c.created_by' | 'c.updated_by',
+  opts: ChronicleAstOpts,
+): string | string[] | undefined {
+  if (raw === undefined) return undefined;
+  const resolveItem = (item: unknown): string => {
+    // Строковая форма токена (плоское определение `definition v1`) раскрывается,
+    // только если строка ЦЕЛИКОМ — один известный токен; иная строка остаётся
+    // литералом-id. Паритет с объектной формой `{ token }` и с листом
+    // «Автор»/«Редактор» профиля мыслей (ошибка cc3d: строковый токен авторства
+    // не раскрывался и молча терял условие до явной диагностики).
+    let text: string;
+    if (typeof item === 'string') {
+      const scanned = scanStringForTokens(item);
+      const pureToken =
+        scanned.unknown.length === 0 && scanned.known.length === 1 && item === scanned.known[0]!.raw;
+      if (!pureToken) return item;
+      text = item;
+    } else if (typeof item === 'object' && item !== null && !Array.isArray(item) && 'token' in item) {
+      const t = (item as { token?: unknown }).token;
+      if (typeof t !== 'string') return '';
+      text = t;
+    } else {
+      return '';
+    }
+    const { known, unknown } = scanStringForTokens(text);
+    if (unknown.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${column}: неизвестный токен «${unknown[0]!.raw}».`,
+        { field: 'value', token: unknown[0]!.raw },
+        opts.requestId,
+      );
+    }
+    const bad = known.find((t) => t.kind !== 'global');
+    if (bad !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${column}: токен «${bad.raw}» требует контекста мысли и в условии авторства недопустим.`,
+        { field: 'value', token: bad.raw },
+        opts.requestId,
+      );
+    }
+    // `$user` без пользователя запроса: пустая подстановка — это НЕ «условие
+    // без значения», а неразрешённый токен; называем причину (ошибка 1936c70e).
+    if (
+      opts.userId === '' &&
+      known.some((t) => t.raw === '$user' || t.raw.startsWith('$user.'))
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${recordAuthorColumnLabel(column)}: токен «$user» не разрешён — не задан пользователь запроса.`,
+        { field: 'value', token: '$user' },
+        opts.requestId,
+      );
+    }
+    const resolved = resolveGlobalDateTokens(text, {
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
+      userId: opts.userId,
+    });
+    if (resolved.unresolved.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${column}: не удалось раскрыть токен «${text}».`,
+        { field: 'value', token: text },
+        opts.requestId,
+      );
+    }
+    return resolved.value;
+  };
+  return Array.isArray(raw) ? raw.map(resolveItem) : resolveItem(raw);
+}
+
+/**
+ * Условие авторства записи (`created_by`/`updated_by`). Значение раскрывается
+ * токенами ({@link resolveRecordAuthorValue}); пустое/нераскрытое значение в
+ * операторе, требующем значения, — ошибка, а не `1=1`.
+ */
+function recordAuthorLeafClause(
+  leaf: FilterAstLeaf,
+  column: 'c.created_by' | 'c.updated_by',
+  opts: ChronicleAstOpts,
+): ChronicleClause {
+  const conds: string[] = [];
+  const args: unknown[] = [];
+  // Wire-модель называет пустоту `is_empty`/`not_empty`, домен-условие — `empty`/
+  // `not_empty` (легаси `StructureAuthorOp`): отображаем явно.
+  const op: StructureAuthorOp =
+    leaf.operator === 'is_empty' ? 'empty' : (leaf.operator as StructureAuthorOp);
+  if (op === 'empty' || op === 'not_empty') {
+    appendChronicleAuthorCondition(conds, args, column, undefined, op);
+    return { sql: conds.join(' AND '), args };
+  }
+  const value = resolveRecordAuthorValue(leaf.value, column, opts);
+  if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
+    return astUnsupported(`«${recordAuthorColumnLabel(column)}»: не задано значение условия.`, opts.requestId);
+  }
+  appendChronicleAuthorCondition(conds, args, column, value, op);
+  if (conds.length === 0) return { sql: '1=1', args: [] };
+  return { sql: conds.join(' AND '), args };
+}
+
+/**
+ * Условие «Цели»: привязка записи к мысли-цели ИЛИ к связи, конец которой ∈
+ * подвыборки (семантика плоского `attachmentCond`, `link_scope = 'both'`;
+ * решение оркестратора 2026-10-12). Семантику задаёт оператор ЛИСТА профиля
+ * (`in`/`not_in`/`all_of`/`is_empty`/`not_empty`); значение — под-выборка мыслей
+ * либо её отсутствие для быстрых форм.
+ *
+ * Под-выборка исполняется с контекстом ФАЗЫ 1 ХРОНИКИ
+ * (`keywordCommentIncludesLinkComments`): область `comment` листа «Найти слова»
+ * ищет и комментарии инцидентных связей мысли (требование ce111b0d; ошибка
+ * fc97548d — паритет с плоским `keyword_scope`, который эти комментарии видел).
+ * Иначе панельное AST-тело и прежнее плоское тело давали разные наборы целей.
+ */
+function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleAstOpts): ChronicleClause {
+  const op = leaf.operator;
+  if (op === 'is_empty') return { sql: `NOT EXISTS (${ATTACH_ANY_SQL})`, args: [] };
+  if (op === 'not_empty') return { sql: `EXISTS (${ATTACH_ANY_SQL})`, args: [] };
+  const value = leaf.value;
+  const isSubquery =
+    typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value;
+  // Значение — под-выборка мыслей ЛИБО список id («Список», ошибка 609deba0 п.1),
+  // зеркало операнда «Мысль».
+  const ids = (): string[] => {
+    if (isSubquery) {
+      const { query } = value as { query: FilterAstNode };
+      const sel = buildThoughtIdSelect(
+        ndb,
+        opts.userId,
+        {
+          sort: 'alpha', order: 'asc', limit: 1, offset: 0,
+          ast: { version: FILTER_AST_VERSION, filter: query },
+        },
+        opts.requestId,
+        { keywordCommentIncludesLinkComments: true },
+      );
+      return (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
+    }
+    if (Array.isArray(value)) return (value as FilterAstListItem[]).filter((v): v is string => typeof v === 'string');
+    return [];
+  };
+  const idsArgs = (set: string[]): unknown[] => (set.length === 0 ? [] : [...set, ...set, ...set]);
+
+  // «В иерархии»/«не в иерархии»: выбранные цели и их СТРУКТУРНЫЕ потомки
+  // (зеркало «Мысли» в иерархии, задача a577875b; «Цели» — ошибка 609deba0 п.1).
+  if (op === 'in_hierarchy' || op === 'not_in_hierarchy') {
+    const roots = ids();
+    let subtree: string[] = [];
+    if (roots.length > 0) {
+      const res = collectHierarchySubtree(ndb, roots, 'structural', {
+        maxDepth: TRAVERSAL_DEFAULTS.MAX_DEPTH,
+        maxNodes: HIERARCHY_SUBTREE_MAX_NODES,
+        timeoutMs: TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS,
+      });
+      // Бюджет обхода не усекаем молча (ADR 58b501d8): превышение — явная ошибка.
+      if (res.truncated) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Обход «Целей в иерархии» прерван: превышен ресурсный бюджет; сузьте набор целей.',
+          { field: 'targets', reason: 'hierarchy_budget' },
+          opts.requestId,
+        );
+      }
+      subtree = res.ids;
+    }
+    const matchArgs = idsArgs(subtree);
+    if (op === 'in_hierarchy') return { sql: `EXISTS (${attachToIdsSql(subtree)})`, args: matchArgs };
+    // Запись без целей характеристикой не обладает — «не в иерархии» не
+    // удовлетворяет (строгость как у `not_in`).
+    return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(subtree)}))`, args: matchArgs };
+  }
+
+  if (!isSubquery && !Array.isArray(value)) {
+    return astUnsupported('«Цели»: оператор требует значения — списка мыслей либо под-выборки.', opts.requestId);
+  }
+  const set = ids();
+  const attachArgs = idsArgs(set);
+  switch (op) {
+    case 'in':
+      return { sql: `EXISTS (${attachToIdsSql(set)})`, args: attachArgs };
+    case 'not_in':
+      // Запись БЕЗ целей характеристикой не обладает и условию не удовлетворяет
+      // (сценарий 31b6425b): сперва требуем хотя бы одну цель.
+      return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(set)}))`, args: attachArgs };
+    case 'all_of': {
+      // «Все цели удовлетворяют» — цель есть и нет привязки вне подвыборки
+      // (пустой набор целей не удовлетворяет, сценарий 31b6425b).
+      return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(set, true)}))`, args: attachArgs };
+    }
+    default:
+      return astUnsupported(`Оператор «${op}» недопустим для «Целей».`, opts.requestId);
+  }
+}
+
+const ATTACH_ANY_SQL = `SELECT 1 FROM comment_targets_v cta WHERE cta.comment_id = c.id`;
+
+/**
+ * SQL привязки записи к цели: мысль ∈ подвыборки ИЛИ связь, чей конец ∈
+ * подвыборки (семантика плоского `attachmentCond`, `link_scope = 'both'`).
+ * Плейсхолдеры: сначала мысль, затем source, затем target (по три блока ids).
+ */
+function attachToIdsSql(ids: string[], negate = false): string {
+  const inList = ids.length === 0 ? 'NULL' : placeholders(ids.length);
+  const inner = `(
+    (ct.owner_type = 'thought' AND ct.owner_id IN (${inList}))
+    OR (ct.owner_type = 'link' AND (l.source_id IN (${inList}) OR l.target_id IN (${inList})))
+  )`;
+  const where = `ct.comment_id = c.id AND ${negate ? `NOT ${inner}` : inner}`;
+  return `SELECT 1 FROM comment_targets_v ct
+    LEFT JOIN links_v l ON ct.owner_type = 'link' AND l.id = ct.owner_id
+    WHERE ${where}`;
+}
+
+/** Условие узла AST хроники по alias `c`. */
+function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: ChronicleAstOpts): ChronicleClause {
+  if ('op' in node) {
+    if (node.op === 'not') {
+      const child = chronicleAstNodeClause(ndb, node.children[0]!, opts);
+      return { sql: `NOT (${child.sql})`, args: child.args };
+    }
+    const parts = node.children.map((c) => chronicleAstNodeClause(ndb, c, opts));
+    if (node.op === 'and') {
+      return parts.length === 0
+        ? { sql: '1=1', args: [] }
+        : { sql: `(${parts.map((p) => p.sql).join(' AND ')})`, args: parts.flatMap((p) => p.args) };
+    }
+    return parts.length === 0
+      ? { sql: '0', args: [] }
+      : { sql: `(${parts.map((p) => p.sql).join(' OR ')})`, args: parts.flatMap((p) => p.args) };
+  }
+  switch (node.entity.kind) {
+    case 'record_time':
+      return recordTimeLeafClause(node, opts);
+    case 'record_title':
+      return recordTextLeafClause(node, 'c.title', RECORD_TITLE_COND, opts);
+    case 'record_body':
+      // «Текст записи» — те же операторы, что у заголовка (ошибка 609deba0 п.5):
+      // равно/не равно/содержит/не содержит + «Найти слова» (путь Б ключевых слов).
+      return recordTextLeafClause(node, 'c.body_md', RECORD_BODY_COND, opts);
+    case 'record_author':
+      return recordAuthorLeafClause(node, 'c.created_by', opts);
+    case 'record_editor':
+      return recordAuthorLeafClause(node, 'c.updated_by', opts);
+    case 'targets':
+      return targetsLeafClause(ndb, node, opts);
+    default:
+      return astUnsupported(`Операнд «${node.entity.kind}» не виден в профиле хроники.`, opts.requestId);
+  }
+}
+
+/** Цели-подвыборка «id in [список]» (для компиляции scope/пути А). */
+function targetsIdSubqueryNode(ids: string[], operator: 'in' | 'not_in' = 'in'): FilterAstNode {
+  return {
+    entity: { kind: 'targets' },
+    operator,
+    value: { query: { entity: { kind: 'id' }, operator: 'in', value: [...ids] }, operator: operator === 'in' ? 'in' : 'not_in' },
+  };
+}
+
+function targetsNotEmptyNode(): FilterAstNode {
+  return { entity: { kind: 'targets' }, operator: 'not_empty' };
+}
+
+/** Группа текста записи (путь Б): include — OR(тело, заголовок), exclude — NOT(OR). */
+function recordTextGroupNode(includeWords: string[], excludeWords: string[]): FilterAstNode | null {
+  const children: FilterAstNode[] = [];
+  for (const word of includeWords) {
+    children.push({
+      op: 'or',
+      children: [
+        { entity: { kind: 'record_body' }, operator: 'matches', value: word },
+        { entity: { kind: 'record_title' }, operator: 'matches', value: word },
+      ],
+    });
+  }
+  for (const word of excludeWords) {
+    children.push({
+      op: 'not',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'record_body' }, operator: 'matches', value: word },
+            { entity: { kind: 'record_title' }, operator: 'matches', value: word },
+          ],
+        },
+      ],
+    });
+  }
+  if (children.length === 0) return null;
+  return children.length === 1 ? children[0]! : { op: 'and', children };
+}
+
+const AST_FALSE: FilterAstNode = { op: 'or', children: [] };
+
+/**
+ * Скомпилировать плоское тело хроники в общий AST (требование 0c83819c).
+ * Семантика воспроизводит прежний SQL-путь хроники один-в-один; неподдержанные
+ * плоские особенности (`link_scope != both`, `link_type_ids`) — явная ошибка, а
+ * не молчаливая подмена.
+ */
+export function compileChronicleToAst(
+  ndb: NetworkDb,
+  request: ChronicleQueryRequest,
+  opts: ChronicleAstOpts,
+): FilterAst {
+  const linkScope = request.link_scope ?? 'both';
+  if (linkScope !== 'both') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `AST 0.13.1 выражает только link_scope = 'both'; значение «${linkScope}» не поддержано — отказ вместо подмены.`,
+      { field: 'link_scope' },
+      opts.requestId,
+    );
+  }
+  if ((request.link_type_ids ?? []).length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'AST 0.13.1 не выражает фильтр типов связей (link_type_ids) — отказ вместо подмены.',
+      { field: 'link_type_ids' },
+      opts.requestId,
+    );
+  }
+
+  const { include: includeWords, exclude: excludeWords } = parseFilterKeywords(request.keywords ?? '');
+  const baseIds = collectRootAndSubtreeIds(ndb, request);
+  const typeIds = request.type_ids ?? [];
+  const scopeIds = selectThoughts(ndb, baseIds, typeIds, [], []);
+  let keywordIds: string[] = scopeIds;
+  if (includeWords.length > 0 || excludeWords.length > 0) {
+    keywordIds = selectThoughts(ndb, baseIds, typeIds, includeWords, [], request.keyword_scope);
+    if (excludeWords.length > 0) {
+      const excluded = new Set(selectThoughts(ndb, baseIds, typeIds, excludeWords, [], request.keyword_scope));
+      keywordIds = keywordIds.filter((id) => !excluded.has(id));
+    }
+  }
+  const scopeRestricted = baseIds !== null || typeIds.length > 0;
+
+  const parts: FilterAstNode[] = [];
+  if (includeWords.length > 0 && keywordIds.length > 0) parts.push(targetsIdSubqueryNode(keywordIds));
+  if (commentScopeEnabled(request.keyword_scope) && (includeWords.length > 0 || excludeWords.length > 0)) {
+    const text = recordTextGroupNode(includeWords, excludeWords);
+    if (text !== null) {
+      const attach = scopeRestricted ? targetsIdSubqueryNode(scopeIds) : targetsNotEmptyNode();
+      parts.push({ op: 'and', children: [text, attach] });
+    }
+  }
+  let overall: FilterAstNode;
+  if (parts.length > 0) overall = parts.length === 1 ? parts[0]! : { op: 'or', children: parts };
+  else if (includeWords.length > 0) overall = AST_FALSE;
+  else if (scopeIds.length > 0) overall = scopeRestricted ? targetsIdSubqueryNode(scopeIds) : targetsNotEmptyNode();
+  else overall = AST_FALSE;
+
+  const andParts: FilterAstNode[] = [overall];
+  if (request.targets !== undefined) {
+    const compiled = compileThoughtQueryToAst(
+      ndb,
+      structureRequestToQuery({ ...request.targets, sort: 'alpha', order: 'asc', limit: 1, offset: 0 }),
+      opts.requestId,
+    );
+    if (compiled !== undefined) {
+      andParts.push({
+        entity: { kind: 'targets' },
+        operator: 'in',
+        value: { query: compiled.filter, operator: 'in' },
+      });
+    }
+  }
+  if (request.date_from !== undefined && request.date_from !== null) {
+    andParts.push({ entity: { kind: 'record_time' }, operator: 'gte', value: request.date_from });
+  }
+  if (request.date_to !== undefined && request.date_to !== null) {
+    andParts.push({ entity: { kind: 'record_time' }, operator: 'lte', value: request.date_to });
+  }
+  // Авторство: плоский парсер отбрасывает пустые значения (empty/not_empty без
+  // значения не доходят до запроса), поэтому в AST попадает только реальное
+  // значение с оператором профиля (eq/ne/in/not_in) — набор `record_author`/
+  // `record_editor` пустых операторов не несёт (профиль 62475a6e).
+  const authorNode = (kind: 'record_author' | 'record_editor', value: string | string[] | undefined, op: StructureAuthorOp | undefined): FilterAstNode | null => {
+    if (value === undefined) return null;
+    return { entity: { kind }, operator: (op ?? 'eq') as FilterAstLeaf['operator'], value };
+  };
+  const created = authorNode('record_author', request.created_by, request.created_by_op);
+  if (created !== null) andParts.push(created);
+  const updated = authorNode('record_editor', request.updated_by, request.updated_by_op);
+  if (updated !== null) andParts.push(updated);
+
+  const filter: FilterAstNode =
+    andParts.length === 1 ? andParts[0]! : { op: 'and', children: andParts };
+  return { version: FILTER_AST_VERSION, filter };
+}
+
 export function queryChronicle(
   ndb: NetworkDb,
   request: ChronicleQueryRequest,
   opts: {
     userId?: string;
     now?: () => Date;
+    /**
+     * Контекст профиля хроники (требование 0095daad, ADR 0c02ab4f): первый день
+     * недели сети для `$weekStart`/`$weekEnd` и `withTime` (хроника — профиль со
+     * временем). Прокидывается фасадом (REST/MCP) из настроек сети.
+     */
+    firstDayOfWeek?: number;
+    withTime?: boolean;
     /**
      * Транспорт-агностичный transform `body_md` → `body_html` (MCP-фасад
      * передаёт пересборку из развёрнутого текста — ошибка a6da3d37; REST не
@@ -902,50 +1400,36 @@ export function queryChronicle(
   } = {},
 ): ChronicleQueryResponse {
   const userId = opts.userId ?? '';
-  // Токены периода раскрываются в момент применения отбора (требование
-  // 91f8d8dd), затем значения сравниваются как полные UTC-инстансы.
-  const dateFrom = resolvePeriodField(request.date_from, 'date_from', opts.now);
-  const dateTo = resolvePeriodField(request.date_to, 'date_to', opts.now);
-  const resolved: ChronicleQueryRequest = { ...request };
-  if (dateFrom !== undefined) resolved.date_from = dateFrom;
-  if (dateTo !== undefined) resolved.date_to = dateTo;
-
-  const { include: includeWords, exclude: excludeWords } = parseFilterKeywords(
-    resolved.keywords ?? '',
-  );
-  const baseIds = collectRootAndSubtreeIds(ndb, resolved);
-  const typeIds = resolved.type_ids ?? [];
-  // Область структурного отбора (мысли без ключевых слов) — в неё обязан
-  // попасть путь Б: «запись совпала по своему тексту».
-  const scopeIds = selectThoughts(ndb, baseIds, typeIds, [], []);
-  if (scopeIds.length === 0) {
-    return { rows: [], total: 0 };
-  }
-  // Путь А: мысли, прошедшие мыслевой поиск (название, синонимы, постоянный
-  // комментарий, комментарии связей), минус исключающие слова.
-  let keywordIds = scopeIds;
-  if (includeWords.length > 0 || excludeWords.length > 0) {
-    keywordIds = selectThoughts(ndb, baseIds, typeIds, includeWords, [], resolved.keyword_scope);
-    if (excludeWords.length > 0) {
-      const excluded = new Set(
-        selectThoughts(ndb, baseIds, typeIds, excludeWords, [], resolved.keyword_scope),
-      );
-      keywordIds = keywordIds.filter((id) => !excluded.has(id));
-    }
-  }
-  const scopeRestricted = baseIds !== null || typeIds.length > 0;
-
-  const { cond, args } = buildRowsWhere(
-    ndb,
+  const astOpts: ChronicleAstOpts = {
     userId,
-    scopeIds,
-    keywordIds,
-    scopeRestricted,
-    includeWords,
-    excludeWords,
-    resolved,
-  );
-  const dir = resolved.order === 'desc' ? 'DESC' : 'ASC';
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.firstDayOfWeek !== undefined ? { firstDayOfWeek: opts.firstDayOfWeek } : {}),
+    ...(opts.withTime !== undefined ? { withTime: opts.withTime } : {}),
+  };
+  // Единый AST-путь (требование 0c83819c): явное ast-тело — как передано
+  // (с проверкой профиля и красной диагностикой); плоское — компилируется тем
+  // же модулем. Второго исполнения критериев нет.
+  let ast: FilterAst;
+  // Жёлтая диагностика ядра явного AST (требование 325efc13): у хроники
+  // контекста типа нет, поэтому записей обычно не бывает, но контракт несёт
+  // `warnings` — единый путь со «Структурами» (требование 0fd1dc5d).
+  let warnings: FilterDiagnostic[] = [];
+  if (request.ast !== undefined) {
+    assertFilterAstInProfile(request.ast, 'chronicle');
+    const diag = diagnoseFilterAst(ndb, request.ast);
+    if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+    warnings = diag.warnings;
+    ast = request.ast;
+  } else {
+    ast = compileChronicleToAst(ndb, request, astOpts);
+  }
+  const record = chronicleAstNodeClause(ndb, ast.filter, astOpts);
+  const cond = `c.kind = 'chronological' AND (${record.sql})`;
+  const args = record.args;
+  // Подсветка сниппета — по включающим словам плоской формы. AST-тело своих
+  // слов не декларирует в запросе (они внутри листьев), поэтому подсветки нет.
+  const includeWords = parseFilterKeywords(request.keywords ?? '').include;
+  const dir = request.order === 'desc' ? 'DESC' : 'ASC';
   const totalRow = ndb
     .prepare(`SELECT COUNT(*) AS c FROM comments_v c WHERE ${cond}`)
     .get(...args) as { c: number };
@@ -964,7 +1448,7 @@ export function queryChronicle(
                 c.id ${dir}
        LIMIT ? OFFSET ?`,
     )
-    .all(...args, resolved.limit, resolved.offset) as Row[];
+    .all(...args, request.limit, request.offset) as Row[];
 
   // Resolve targets: collect all thought ids and link ids of the page.
   const thoughtIds = new Set<string>();
@@ -1038,5 +1522,9 @@ export function queryChronicle(
         opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
     };
   });
-  return { rows: buildRows(ndb, withSnippets, refs, linkTargets), total };
+  return {
+    rows: buildRows(ndb, withSnippets, refs, linkTargets),
+    total,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }

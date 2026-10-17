@@ -11,9 +11,17 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 
 ## Как пользоваться
 
-1. **Только через barrel `lib/ui/index.ts`.** Экраны и модули рендерера
-   импортируют фасады из `./lib/ui/index.js`, а не из файлов напрямую
-   (сторож `guard-ui-facades.test.ts`, ADR `03eb2c61`).
+1. **Barrel — точка доступа для внешних потребителей.** Экраны (`screens/**`,
+   `editor/**`, `search/**`, `canvas/**`) и прочие внешние потребители берут
+   фасады из `./lib/ui/index.js` — это единая точка входа каталога. Модули
+   ВНУТРИ `lib/` могут импортировать фасад файлом (`./ui/button.js`,
+   `./ui/popover.js`): barrel тянет `register.ts` — регистрацию вендора
+   (Web Awesome/Vaadin и их CSS), которая в обычном прогоне тестов на
+   DOM-шиме не грузится; файловый импорт делает модуль тестируемым
+   (прецеденты: `lib/dialog.ts`, `lib/filter-form.ts`, `lib/filter-tree.ts`).
+   Сторож `guard-ui-facades.test.ts` проверяет единую точку доступа
+   (реэкспорт каждого модуля из barrel), вендор только внутри `lib/ui/**` и
+   каркас диалога, но путь импорта фасада из `lib/` не ограничивает.
 2. **Голые вендорские элементы запрещены.** `wa-*`, `vaadin-*` и импорт
    `@awesome.me/webawesome` / `@vaadin/*` допускаются только внутри
    `lib/ui/**` (сторож `guard-ui-facades`).
@@ -61,6 +69,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | --- | --- | --- | --- |
 | `button.ts` / `button.css` | `uiButton`, `iconButton`, `BUTTON_CLASS`, `BUTTON_ACTIVE_CLASS`, `setButtonActive` | Единственный API кнопок: роли (`primary`/`neutral`/`danger`/`ghost`), плотности, состояния | задача `56f1dcb2`, требование `edc5faea` |
 | `icon.ts` | `svgIcon`, `renderIcon`, `renderIconNode`, `ICON_NAMES`, `isIconName`, `loadIconCatalog`, `searchIconCatalog`, `iconAliases`, `renderLibraryIcon`, `ICON_CLASS` | **Единственный доступ к иконочной библиотеке Lucide**: рендер значка обвязки с размером/цветом/толщиной, каталог имён библиотеки (лениво), поиск по нему (в том числе по псевдонимам Lucide — возвращает канонические имена, ошибка `08b90470`) и отложенная отрисовка значка каталога по имени (вид `icon_kind='icon'`). Прямой импорт `lucide` вне фасада запрещён; эмодзи/картинки контента — не сюда | задача `6d8db38b`, ADR `bd224643`, требование `e52d249e` |
+| `thought-default-icon.ts` | `renderDefaultThoughtIcon`, `THOUGHT_DEFAULT_ICON_VIEW_BOX`, `THOUGHT_DEFAULT_ICON_STROKE` | **Дефолтная иконка мысли** — встроенное облачко (форма v1): собственный inline-SVG значка, которым фолбэкается отсутствующая иконка мысли вместо эмодзи 💭. Контур — приглушённый серый токен `--text-dim`, наложенный инлайн-стилем элементов (`var()` в атрибутах SVG не работает); серый в обеих темах, отдельного файла тёмной темы нет. Размер наследует контекст (класс `icon`, как у значков Lucide) | задача `26006db4`, задача `54c82d64` |
 | `tabs.ts` / `tabs.css` | `uiTabs` | Полоса вкладок диалогов и экранов (`.ui-tab*`) поверх `wa-tab-group` | задача `a57e7998`, требование `88a9225a` |
 | `collapsible.ts` | `collapsibleSection` | Сворачиваемые секции (группы редактора, панели) | задача `a57e7998` |
 | `messages.ts` / `messages.css` | `errorLine`, `fieldError`, `operationError`, `setStatusText`, `footerErrorLine`, классы `ERROR_LINE_CLASS`/`FIELD_ERROR_CLASS`/`FOOTER_ERROR_CLASS` | Единый вид сообщений и строк ошибок | задача `e20761c2`, требование `397c5a56` |

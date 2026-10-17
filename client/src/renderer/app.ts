@@ -40,6 +40,7 @@ import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
+import { resolveThoughtCopyTarget, screenThoughtSource } from './lib/screen-thought-source.js';
 import {
   defaultEventAreaW,
   parseCanvasLayout,
@@ -743,25 +744,23 @@ function globalKeyBindings(): KeyBindingDef[] {
     // A visible DOM text selection (e.g. inside the comment view mode,
     // b6690109) outranks the thought copy: no preventDefault, the native copy
     // puts the selected text on the system clipboard.
-    if (
-      store.state.screen === 'workspace' &&
-      store.state.networkId !== null &&
-      !hasTextSelection(document.getSelection())
-    ) {
-      void globalCopy();
-      return true;
-    }
-    return false;
+    if (hasTextSelection(document.getSelection())) return false;
+    if (store.state.screen !== 'workspace' || store.state.networkId === null) return false;
+    // Экраны без мыслей (Дневник, События, Публикации) не перехватывают Ctrl+C:
+    // копирование мысли там не поддерживается — работает нативное копирование
+    // текста (ошибка 00275531).
+    if (!supportsThoughtCopy()) return false;
+    void globalCopy(currentThoughtCopyTarget());
+    return true;
   });
 
   bind('app.pasteThought', ['Ctrl+V', 'Meta+V'], (event) => {
     if (isEditableTarget(event.target)) return false;
     if (event.shiftKey || event.altKey) return false;
-    if (store.state.screen === 'workspace' && store.state.networkId !== null) {
-      void globalPaste();
-      return true;
-    }
-    return false;
+    if (store.state.screen !== 'workspace' || store.state.networkId === null) return false;
+    if (!supportsThoughtCopy()) return false;
+    void globalPaste(currentThoughtPasteTarget());
+    return true;
   });
 
   // Глобальный поиск клиента перенесён на Ctrl+Shift+F (0.12.1, задача
@@ -780,8 +779,10 @@ function globalKeyBindings(): KeyBindingDef[] {
   });
 
   // Canvas zoom (L9): '+'/'=' (both main-row layouts), numpad 'Add';
-  // '-'/'Subtract'; '0' resets. Workspace screen only.
-  const workspaceOnly = (): boolean => store.state.screen === 'workspace';
+  // '-'/'Subtract'; '0' resets. Только при РЕАЛЬНО ВИДИМОМ холсте (ошибка
+  // 63967c21): вид «Карта» без перекрытий. Раскладка (позиция редактора,
+  // доли зон холста) холст не скрывает — скрывают его смена вида и
+  // непрозрачные панели поверх (см. `canvasVisible`).
   bind(
     'canvas.zoomIn',
     ['Ctrl+=', 'Ctrl++', 'Ctrl+Shift+=', 'Ctrl+Add', 'Meta+=', 'Meta++', 'Meta+Add'],
@@ -789,7 +790,7 @@ function globalKeyBindings(): KeyBindingDef[] {
       applyCanvasZoom('in');
       return true;
     },
-    workspaceOnly,
+    canvasVisible,
   );
   bind(
     'canvas.zoomOut',
@@ -798,7 +799,7 @@ function globalKeyBindings(): KeyBindingDef[] {
       applyCanvasZoom('out');
       return true;
     },
-    workspaceOnly,
+    canvasVisible,
   );
   bind(
     'canvas.zoomReset',
@@ -807,10 +808,58 @@ function globalKeyBindings(): KeyBindingDef[] {
       applyCanvasZoom('reset');
       return true;
     },
-    workspaceOnly,
+    canvasVisible,
   );
 
   return bindings;
+}
+
+/** Виды, где вообще поддерживается копирование/вставка МЫСЛИ (ошибка
+ *  00275531): карта и структуры. На Дневнике, Событиях и Публикациях мысль не
+ *  копируется — Ctrl+C/V отдаются нативному копированию текста. */
+function supportsThoughtCopy(): boolean {
+  const view = store.state.activeView;
+  return view === 'map' || view === 'structures';
+}
+
+/** Холст карты реально виден пользователю (ошибка 63967c21): рабочий стол, вид
+ *  «Карта» и ни одного непрозрачного перекрытия поверх холста. Перекрытия —
+ *  ровно те, что накрывают холст в `screens/workspace.ts`: сеть без доступа
+ *  (`.workspace-placeholder`, `inaccessibleTabIds`) и панель выбора сети
+ *  (`.workspace-picker`, `pickerOpen`); оба — `position: absolute; inset: 0`
+ *  с непрозрачным фоном, то есть холст под ними не виден. Раскладка холст не
+ *  скрывает: позиция редактора его только сужает, доли зон (`canvas_layout`) —
+ *  внутренние границы. Команды масштаба не должны срабатывать «невидимо» —
+ *  тот же класс, что ошибка 00275531 (команда по состоянию чужого вида). */
+function canvasVisible(): boolean {
+  const st = store.state;
+  if (st.screen !== 'workspace' || st.activeView !== 'map') return false;
+  if (st.pickerOpen) return false;
+  const tabId = st.activeTabId;
+  return !(tabId !== null && st.inaccessibleTabIds.has(tabId));
+}
+
+/** Цель Ctrl+C: на карте — курсор/фокус холста, в структурах — выделенная на
+ *  экране мысль (источник вида {@link screenThoughtSource}), иначе `null`. */
+function currentThoughtCopyTarget(): string | null {
+  const view = store.state.activeView;
+  return resolveThoughtCopyTarget({
+    view,
+    screenId: screenThoughtSource(view)?.() ?? null,
+    cursorId: getCanvasCursor(),
+    focusId: store.state.focus?.focused.id ?? null,
+  });
+}
+
+/** Цель Ctrl+V: на карте — прежнее правило (одноэлементное выделение → курсор →
+ *  фокус), в структурах — выделенная на экране мысль, иначе `null`. */
+function currentThoughtPasteTarget(): string | null {
+  const view = store.state.activeView;
+  if (view !== 'map') return screenThoughtSource(view)?.() ?? null;
+  const selection = store.state.selection;
+  if (selection.length === 1 && selection[0] !== undefined) return selection[0];
+  if (selection.length === 0) return getCanvasCursor() ?? store.state.focus?.focused.id ?? null;
+  return store.state.focus?.focused.id ?? null;
 }
 
 /** Ctrl+C: copy the thought under the dashed cursor frame on the canvas, or —
@@ -830,15 +879,12 @@ function globalKeyBindings(): KeyBindingDef[] {
  *  returns a visible notice — silent failures (no focus, fetch error) were
  *  reported as "Ctrl+C does nothing at all" and the user had no way to tell
  *  whether the handler even fired. */
-async function globalCopy(): Promise<void> {
+async function globalCopy(targetId: string | null): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const cursorId = getCanvasCursor();
-  const focusId = store.state.focus?.focused.id ?? null;
-  const targetId = cursorId ?? focusId;
   if (targetId === null) {
     notice(
-      'Не выбрана мысль для копирования. Кликните на мысль на карте, чтобы сфокусировать её.',
+      'Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.',
       'error',
     );
     return;
@@ -860,16 +906,7 @@ async function globalCopy(): Promise<void> {
  *  cursor is the click-synchronous "where does the new content go" signal,
  *  while the editor focus may still point at a previously focused thought.
  *  With multiple thoughts selected we fall back to the canvas focus. */
-async function globalPaste(): Promise<void> {
-  const selection = store.state.selection;
-  let targetId: string | null = null;
-  if (selection.length === 1 && selection[0] !== undefined) {
-    targetId = selection[0];
-  } else if (selection.length === 0) {
-    targetId = getCanvasCursor() ?? store.state.focus?.focused.id ?? null;
-  } else {
-    targetId = store.state.focus?.focused.id ?? null;
-  }
+async function globalPaste(targetId: string | null): Promise<void> {
   if (targetId === null) {
     notice(
       'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
@@ -908,7 +945,16 @@ async function globalPaste(): Promise<void> {
   }
 }
 
-/** Test seam: the global Ctrl+C handler. Guards the regression of bug
- *  627a0822 — Ctrl+C must copy the cursor/focus thought even while the
- *  selection panel holds thoughts, never the panel's contents. */
-export const appInternals = { globalCopy };
+/** Test seam: the global Ctrl+C handler and its target resolver. Guards the
+ *  regression of bug 627a0822 — Ctrl+C must copy the cursor/focus thought even
+ *  while the selection panel holds thoughts, never the panel's contents — and
+ *  of bug 00275531 — on the structures screen it copies the screen selection.
+ *  `globalKeyBindings` + `canvasVisible` guard bug 63967c21 — the canvas zoom
+ *  commands must not fire while the canvas is hidden (another view or an
+ *  opaque overlay). */
+export const appInternals = {
+  globalCopy,
+  currentThoughtCopyTarget,
+  canvasVisible,
+  globalKeyBindings,
+};

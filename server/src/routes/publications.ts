@@ -48,12 +48,19 @@ import {
   type PublicationCreateInput,
   type PublicationOrderItem,
   type PublicationSort,
+  type PublicationTitleRecipe,
   type PublicationUpdateInput,
-  type SavedFilterDefinition,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, openRouteNetworkDbBase, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  openRouteNetworkDbBase,
+  restTokenContext,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import {
   addPublicationExclusion,
   addShelfItem,
@@ -142,6 +149,17 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
     const { requireNetworkMember } = app.accessControl;
 
+    /**
+     * Контекст токенов AST-рецепта публикации: профиль «публикации» — календарные
+     * токены без времени, первый день недели сети, часы исполнения и вызывающий
+     * пользователь (требование 0095daad). Единая точка для всех обработчиков:
+     * рецепт исполняется при каждой сборке, а «превью и файл не расходятся» —
+     * значит сборка, кандидаты, использование, печать и экспорт обязаны видеть
+     * ОДИН и тот же контекст.
+     */
+    const recipeTokenContext = (req: FastifyRequest, networkId: string) =>
+      restTokenContext(app, req.auth!.user.id, networkId, 'publications');
+
     // -------------------------------------------------------------------------
     // Публикации: CRUD (карточка 5af247e4)
     // -------------------------------------------------------------------------
@@ -180,7 +198,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           authorship: input.authorship ?? null,
           cover_attachment_id: input.cover_attachment_id ?? null,
           cover_url: input.cover_url ?? null,
-          title_recipe: (input.title_recipe ?? null) as SavedFilterDefinition | null,
+          title_recipe: (input.title_recipe ?? null) as PublicationTitleRecipe | null,
           ...(input.text_sources !== undefined ? { text_sources: input.text_sources } : {}),
           ...(input.extra_properties !== undefined
             ? { extra_properties: input.extra_properties }
@@ -190,7 +208,12 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
         };
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const publication = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const created = createPublication(ndb, create, req.auth!.user.id);
+          const created = createPublication(
+            ndb,
+            create,
+            req.auth!.user.id,
+            recipeTokenContext(req, input.network_id),
+          );
           return {
             result: created,
             // Отдельного `publication.created` каталог 67b8748e не объявляет:
@@ -268,7 +291,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           changes.cover_attachment_id = input.cover_attachment_id;
         if (input.cover_url !== undefined) changes.cover_url = input.cover_url;
         if (input.title_recipe !== undefined)
-          changes.title_recipe = input.title_recipe as SavedFilterDefinition | null;
+          changes.title_recipe = input.title_recipe as PublicationTitleRecipe | null;
         if (input.text_sources !== undefined) changes.text_sources = input.text_sources;
         if (input.extra_properties !== undefined)
           changes.extra_properties = input.extra_properties;
@@ -393,7 +416,13 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }));
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const ordered = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const order = setPublicationOrder(ndb, input.publication_id, items, req.auth!.user.id);
+          const order = setPublicationOrder(
+            ndb,
+            input.publication_id,
+            items,
+            req.auth!.user.id,
+            recipeTokenContext(req, input.network_id),
+          );
           const snapshot = publicationRef(ndb, input.publication_id);
           return {
             result: order,
@@ -425,6 +454,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
             input.publication_id,
             input.thought_id,
             req.auth!.user.id,
+            recipeTokenContext(req, input.network_id),
           );
           const snapshot = publicationRef(ndb, input.publication_id);
           return {
@@ -455,7 +485,12 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestPublicationExclusionRemove, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const exclusions = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const list = removePublicationExclusion(ndb, input.publication_id, input.thought_id);
+          const list = removePublicationExclusion(
+            ndb,
+            input.publication_id,
+            input.thought_id,
+            recipeTokenContext(req, input.network_id),
+          );
           const snapshot = publicationRef(ndb, input.publication_id);
           return {
             result: list,
@@ -528,6 +563,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           ...(input.include_excluded !== undefined
             ? { include_excluded: input.include_excluded }
             : {}),
+          tokenContext: recipeTokenContext(req, input.network_id),
         });
         sendSuccess(reply, assembly);
       },
@@ -558,6 +594,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           },
           req.auth!.user.id,
           resolveUserName,
+          recipeTokenContext(req, input.network_id),
         );
         sendSuccess(reply, { job_id: job.job_id } satisfies ExportJobStartResult, undefined, 202);
       },
@@ -578,6 +615,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           },
           req.auth!.user.id,
           resolveUserName,
+          recipeTokenContext(req, input.network_id),
         );
         sendSuccess(reply, { job_id: job.job_id } satisfies ExportJobStartResult, undefined, 202);
       },
@@ -602,6 +640,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
           input.publication_id,
           req.auth!.user.id,
           resolveUserName,
+          recipeTokenContext(req, input.network_id),
         );
         reply
           .header('content-type', 'text/html; charset=utf-8')
@@ -627,6 +666,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
               ? { include_excluded: input.include_excluded }
               : {}),
             cache: publicationMembershipCache,
+            tokenContext: recipeTokenContext(req, input.network_id),
           },
         );
         sendSuccess(reply, candidates);
@@ -650,6 +690,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
             input.publication_id,
             input.thought_id,
             req.auth!.user.id,
+            recipeTokenContext(req, input.network_id),
           );
           const snapshot = publicationRef(ndb, input.publication_id);
           return {
@@ -682,6 +723,7 @@ export function createPublicationsRoutes(deps: RouteDeps): FastifyPluginAsync {
             ? { publication_limit: input.publication_limit }
             : {}),
           cache: publicationMembershipCache,
+          tokenContext: recipeTokenContext(req, input.network_id),
         });
         sendSuccess(reply, usage);
       },

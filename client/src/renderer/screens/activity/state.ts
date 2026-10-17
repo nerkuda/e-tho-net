@@ -1,31 +1,43 @@
 /**
  * Pure state helpers of the «События» view (задача f27809d0 «Вид workspace
- * «События» в клиенте», элемент UI 8cd9ad55, 08-ui-spec.md §18).
+ * «События» в клиенте», элемент UI 8cd9ad55, 08-ui-spec.md §18; пересобрана на
+ * единый редактор — задача 16899243, требование db5e1063, ADR fc23f9c1).
  *
- * Модель критериев, её парсер и план запроса живут в едином конструкторе
- * `lib/filter-builder.ts` (задача 3742dd59): здесь — только L4-обёртка этой
- * вкладки (offset/ширина панели), словарь типов сущностей и КЛИЕНТСКАЯ
- * валидация словарей, которых у модели нет (список типов сущностей нужен
- * интерфейсу «Событий»). Свой `ActivityFilterState` убран — состояние
- * выражается общей моделью.
+ * Модель критериев — общая (`FilterCriteriaState`, профиль «события»), дерево
+ * условий заполняет единый конструктор: AST-снимок читает
+ * `parseActivityCriteriaTree` (ветка `parseFilterDefinitionTree`), прежний
+ * плоский снимок `activity_state` компилируется в дерево
+ * (`compileActivityCriteriaToAst`). Своей модели/парсера у экрана нет.
+ *
+ * Здесь — только L4-обёртка вкладки (offset/ширина панели), словарь видов
+ * сущностей экрана и клиентская валидация словарей ВОССТАНОВЛЕННОГО прежнего
+ * пресета (серверный словарь обязан совпадать с интерфейсом, иначе событие
+ * молча выпадет из ленты).
  */
 
-import type { ActivityEntityType } from '@etn/shared';
+import type { ActivityEntityType, FilterAstLeaf } from '@etn/shared';
 
 import {
   ACTIVITY_ACTION_FILTERS,
-  defaultActivityCriteriaState,
-  parseActivityCriteria,
+  OPERAND_KIND_LABELS,
+  astOperatorLabel,
+  parseActivityCriteriaTreeDetailed,
   type ActivityActionFilter,
-  type ActivityCriteriaState,
+  type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
+
+/** Подпись отброшенного миграцией условия: «Автор события — не заполнено». */
+function describeDroppedActivityCondition(leaf: FilterAstLeaf): string {
+  const operand = OPERAND_KIND_LABELS[leaf.entity.kind] ?? leaf.entity.kind;
+  return `${operand} — ${astOperatorLabel(leaf.operator)}`;
+}
 
 /** Action values shown in the UI filter — the server log carries the same
  *  vocabulary (`created`/`updated`/`deleted`/`trashed`/`restored`). */
 export type ActionFilter = ActivityActionFilter;
 
 /** Whitelist of `entity_type` values the user can filter by. Mirrors
- *  `ActivityEntityType` plus the empty option (no entity-type filter applied). */
+ *  `ActivityEntityType` (серверный словарь) for the editor's enum. */
 export const ENTITY_TYPE_OPTIONS: ReadonlyArray<{
   value: ActivityEntityType;
   label: string;
@@ -40,15 +52,27 @@ export const ENTITY_TYPE_OPTIONS: ReadonlyArray<{
   { value: 'layer', label: 'слой' },
 ];
 
-/** Критерии отбора «Событий» — общая модель конструктора. */
-export type ActivityFilterState = ActivityCriteriaState;
+/** Критерии отбора «Событий» — общая модель конструктора (профиль «события»). */
+export type ActivityFilterState = FilterCriteriaState;
 
-/** Empty filter — show every row of the log. */
-export const DEFAULT_FILTER: ActivityFilterState = defaultActivityCriteriaState();
+/** Свежий пустой отбор — «вся лента» (дерево — пустая группа И). */
+export function createDefaultActivityFilter(): ActivityFilterState {
+  return parseActivityCriteriaTreeDetailed({}).state;
+}
+
+/** Empty filter — show every row of the log. Только для сравнения в тестах;
+ *  экран берёт {@link createDefaultActivityFilter} (свежий объект с деревом). */
+export const DEFAULT_FILTER: ActivityFilterState = createDefaultActivityFilter();
 
 /** Parsed persisted L4 `activity_state`. */
 export interface PersistedActivityState {
   filter: ActivityFilterState;
+  /**
+   * Условия прежнего плоского пресета, отброшенные профилем «события» при
+   * миграции (потеря, которую лента показывает жёлтой диагностикой футера):
+   * например «Автор события — не заполнено».
+   */
+  dropped: readonly string[];
   offset: number;
   /** Ширина панели отборов (px), заданная сплиттером. */
   panelWidth: number | null;
@@ -58,10 +82,32 @@ const ENTITY_TYPE_VALUES: ReadonlySet<string> = new Set(ENTITY_TYPE_OPTIONS.map(
 const ACTION_VALUES: ReadonlySet<string> = new Set(ACTIVITY_ACTION_FILTERS);
 
 /**
+ * Клиентская валидация словарей ПРЕЖНЕГО плоского пресета: неизвестные типы
+ * сущностей и коды действий отбрасываются (AST-снимок уже нормализован).
+ */
+function cleanLegacyDictionaries(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const record = raw as Record<string, unknown>;
+  if (!Array.isArray(record['entityTypes']) && !Array.isArray(record['actions'])) return raw;
+  const cleaned: Record<string, unknown> = { ...record };
+  if (Array.isArray(record['entityTypes'])) {
+    cleaned['entityTypes'] = (record['entityTypes'] as unknown[]).filter(
+      (v): v is string => typeof v === 'string' && ENTITY_TYPE_VALUES.has(v),
+    );
+  }
+  if (Array.isArray(record['actions'])) {
+    cleaned['actions'] = (record['actions'] as unknown[]).filter(
+      (v): v is string => typeof v === 'string' && ACTION_VALUES.has(v),
+    );
+  }
+  return cleaned;
+}
+
+/**
  * Best-effort parser for the L4 JSON blob (unknown input → defaults).
- * Читает и старый формат (`fromMs`/`toMs`/`userOp`/`userId`/`userIds`), и
- * новый — общую модель; неизвестные типы сущностей и коды действий
- * отбрасываются по словарям этого экрана.
+ * Читает и прежний плоский формат (`fromMs`/`toMs`/`userOp`/`userId`/`userIds`/
+ * `entityTypes`/`actions`), и новый — AST-снимок: и то и другое сводится единым
+ * конструктором к дереву условий профиля «события».
  */
 export function parseActivityState(raw: string): PersistedActivityState {
   let parsed: Partial<{
@@ -72,15 +118,12 @@ export function parseActivityState(raw: string): PersistedActivityState {
   try {
     parsed = JSON.parse(raw) as typeof parsed;
   } catch {
-    return { filter: { ...DEFAULT_FILTER }, offset: 0, panelWidth: null };
+    return { filter: createDefaultActivityFilter(), dropped: [], offset: 0, panelWidth: null };
   }
-  const filter = parseActivityCriteria(parsed.filter ?? {});
-  // Клиентская валидация словарей: у модели их нет, а серверный словарь
-  // должен совпадать с интерфейсом (иначе событие молча выпадет из ленты).
-  filter.entityTypes = filter.entityTypes.filter((v) => ENTITY_TYPE_VALUES.has(v));
-  filter.actions = filter.actions.filter((v) => ACTION_VALUES.has(v));
+  const detailed = parseActivityCriteriaTreeDetailed(cleanLegacyDictionaries(parsed.filter ?? {}));
   return {
-    filter,
+    filter: detailed.state,
+    dropped: detailed.dropped.map(describeDroppedActivityCondition),
     offset:
       typeof parsed.offset === 'number' && Number.isFinite(parsed.offset) && parsed.offset >= 0
         ? Math.floor(parsed.offset)

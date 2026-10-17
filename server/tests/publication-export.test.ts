@@ -197,6 +197,49 @@ async function getJob(
   return res.json().data;
 }
 
+/**
+ * Публикация «Вставка» для проверок сбора ассетов из трансклюзий (ошибка
+ * `6ab79f3d`): раздел публикации несёт СВОЮ картинку (адрес по пути) и
+ * трансклюзию `![[#<id>]]` на мысль ВНЕ публикации, в чьём тексте — та же
+ * картинка, но адресованная по id вложения. Хеш содержимого один → ассет
+ * должен быть один, а обе ссылки — переписаны.
+ */
+function seedTransclusionImagePublication(ctx: RestTestContext): string {
+  const docType = createThoughtType(ctx.ndb, { name: 'Doc' }, ctx.adminId);
+  const plainType = createThoughtType(ctx.ndb, { name: 'Plain' }, ctx.adminId);
+  const section = seedThought(ctx.ndb, 'Раздел A', docType.id, ctx.adminId);
+  const source = seedThought(ctx.ndb, 'Источник вставки', plainType.id, ctx.adminId);
+
+  const attachmentsDir = path.join(ctx.dataDir, 'networks', ctx.networkId, 'attachments');
+  fs.mkdirSync(attachmentsDir, { recursive: true });
+  const imgPath = path.join(attachmentsDir, 'pic.png');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 5, 5, 5]);
+  fs.writeFileSync(imgPath, bytes);
+  const att = createAttachmentFile(
+    ctx.ndb,
+    'thought',
+    source,
+    { title: 'pic', mime_type: 'image/png', data_base64: bytes.toString('base64') },
+    ctx.adminId,
+  );
+  assert.equal(att.kind, 'file');
+
+  seedComment(ctx.ndb, source, `Вставка.\n\n![src](etnimg://attachment/${att.id})`, ctx.adminId);
+  seedComment(
+    ctx.ndb,
+    section,
+    `Начало.\n\n![own](${etnimgUrl(imgPath)})\n\n![[#${source}]]`,
+    ctx.adminId,
+  );
+
+  const pub = createPublication(
+    ctx.ndb,
+    { title: 'Вставка', title_recipe: { type_ids: [docType.id], sort: 'alpha', order: 'asc' } },
+    ctx.adminId,
+  );
+  return pub.id;
+}
+
 describe('publication-export: одиночный экспорт', { skip }, () => {
   const cleanups: Array<() => Promise<void>> = [];
   afterEach(async () => {
@@ -450,6 +493,56 @@ describe('publication-export: одиночный экспорт', { skip }, () =
     assert.ok(printHtml.includes('src="data:image/png;base64,'), printHtml);
     assert.ok(!printHtml.includes(`etnimg://attachment/${att.id}`), printHtml);
     assert.ok(printHtml.includes(`etnimg://attachment/${missingId}`), printHtml);
+  });
+
+  it('zip: картинка из источника трансклюзии собирается в assets и переписывается (6ab79f3d)', async () => {
+    const ctx = await buildRestContext();
+    cleanups.push(() => closeRestContext(ctx));
+
+    const publicationId = seedTransclusionImagePublication(ctx);
+    const jobId = await startExport(ctx, publicationId, 'md');
+    const job = await getJob(ctx, jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.report?.publications[0]?.status, 'ok');
+
+    const zip = await downloadJob(ctx, jobId);
+    const names = (await listZipEntries(zip)).map((e) => e.fileName);
+    const assets = names.filter((n) => n.startsWith('assets/') && n.endsWith('.png'));
+    assert.equal(
+      assets.length,
+      1,
+      `ожидался один ассет (дедупликация по хешу): ${names.join(', ')}`,
+    );
+
+    const md = (await readZipEntry(zip, 'vstavka.md')).toString('utf8');
+    assert.ok(!md.includes('![['), `осталась ссылка трансклюзии: ${md}`);
+    assert.ok(!md.includes('etnimg://'), `осталась исходная схема адреса: ${md}`);
+    assert.ok(md.includes('Вставка.'), `нет развёрнутого текста вставки: ${md}`);
+    assert.equal(
+      md.split(`](${assets[0]!})`).length - 1,
+      2,
+      `своя картинка и картинка вставки должны ссылаться на ассет: ${md}`,
+    );
+  });
+
+  it('print: картинка из источника трансклюзии вклеивается как data-URI (6ab79f3d)', async () => {
+    const ctx = await buildRestContext();
+    cleanups.push(() => closeRestContext(ctx));
+
+    const publicationId = seedTransclusionImagePublication(ctx);
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/publications/${publicationId}/print`,
+      headers: authHeaders(ctx),
+    });
+    assert.equal(res.statusCode, 200);
+    const html = res.body;
+    assert.ok(!html.includes('etnimg://'), `осталась исходная схема адреса: ${html}`);
+    assert.equal(
+      html.split('src="data:image/png;base64,').length - 1,
+      2,
+      `своя картинка и картинка вставки должны быть вклеены: ${html}`,
+    );
   });
 
   it('разделы глубже H6: обезглавливание в абзац, а не кламп (md и html)', async () => {

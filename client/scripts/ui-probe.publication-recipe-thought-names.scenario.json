@@ -1,0 +1,106 @@
+{
+  "name": "publication-recipe-thought-names-d17a8bfd",
+  "description": "Фраза-представление отбора на вкладке «Рецепт» публикации показывает НАЗВАНИЯ мыслей, а не UUID (ошибка d17a8bfd, требование 9d5e3c4e). Самодостаточный: публикация с ЛЕГАСИ-рецептом по мыслям (плоский parent_ids → группа «Мысль в [id] ИЛИ Родители в иерархии [id]», БЕЗ снапшотов labels) создаётся API-шагом прямо в прогоне, поэтому засев не требуется. Проверка: фраза `.pub-card-recipe .ff-preview__text` содержит название засеянной стендом мысли (--seed-title, по умолчанию «Проба стенда») и НЕ содержит фрагмента её UUID. Прогон: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.publication-recipe-thought-names.scenario.json --out .tmp/<папка>",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-recipe-publication",
+      "api": {
+        "name": "seed-recipe-publication",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/publications",
+        "body": {
+          "title": "РЕЦЕПТ-ИМЕНА",
+          "title_recipe": {
+            "parent_ids": ["{{thoughtId}}"],
+            "sort": "alpha",
+            "order": "asc"
+          }
+        }
+      }
+    },
+    {
+      "name": "open-publications-view",
+      "click": "[title=\"Публикации\"]"
+    },
+    {
+      "name": "library-visible",
+      "waitFor": "(() => { const el = [...document.querySelectorAll('.pub-entry, .pub-card')].find((e) => e.textContent.includes('РЕЦЕПТ-ИМЕНА')); return el !== undefined; })()"
+    },
+    {
+      "name": "open-recipe-card",
+      "eval": "(() => { const el = [...document.querySelectorAll('.pub-entry, .pub-card')].find((e) => e.textContent.includes('РЕЦЕПТ-ИМЕНА')); if (!el) return false; el.click(); return true; })()"
+    },
+    {
+      "name": "card-opened",
+      "waitFor": "document.querySelector('#pub-card-title')?.value === 'РЕЦЕПТ-ИМЕНА'"
+    },
+    {
+      "name": "open-recipe-tab",
+      "eval": "(() => { const tb = [...document.querySelectorAll('.ui-tab')].find((e) => e.textContent.trim() === 'Рецепт'); if (!tb) return false; tb.click(); return true; })()"
+    },
+    {
+      "name": "editor-mounted",
+      "waitFor": "document.querySelector('.pub-card-recipe .fe') !== null"
+    },
+    {
+      "name": "phrase-text-before-wait",
+      "probe": "document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''"
+    },
+    {
+      "name": "wait-thought-name",
+      "waitFor": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''; return t.includes('{{seedTitle}}'); })()",
+      "timeout": 8000
+    },
+    {
+      "name": "phrase-text",
+      "probe": "document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''"
+    },
+    {
+      "name": "phrase-thought-name",
+      "probe": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''; return t.includes('{{seedTitle}}') && (t.match(/{{seedTitle}}/g) ?? []).length >= 2; })()",
+      "expect": true
+    },
+    {
+      "name": "phrase-no-thought-id",
+      "probe": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''; const id = '{{thoughtId}}'; return !t.includes(id) && !t.includes(id.slice(0, 8)); })()",
+      "expect": true
+    }
+  ]
+}

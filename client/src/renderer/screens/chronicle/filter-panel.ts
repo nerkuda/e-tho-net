@@ -1,115 +1,114 @@
 /**
- * Панель отбора вида «Дневник» (L20, 0.10.1, элемент интерфейса 9b424548).
+ * Панель отбора вида «Дневник» (L20, элемент интерфейса 9b424548) — на едином
+ * редакторе отбора.
  *
- * Состав панели — набор «Структур» (требование 306f74cc): календарь месяца
- * (первый элемент, его строит хозяин экрана и передаёт header'ом), период
- * «с»–«по» с пресетами токенов, ключевые слова с областью поиска, типы мыслей,
- * типы связей, родительские мысли, свойства, дополнительно (актуальность +
- * корзина), направление сортировки, футер «Применить/Очистить» + сохранённые
- * отборы.
+ * Задача 608ecb79 «Пересборка панели „Дневника“ на дерево» (требование 0582f863
+ * «Панель „Дневника“ пересобрана на единый редактор (профиль со временем)»,
+ * ADR fc23f9c1 «судьба спец-секций», ADR a9336708). Образец — панель «Структур»
+ * (задача 213bd2d2, коммит 34e29ab6).
  *
- * Критерии ЗАПИСИ (ключевые слова/область, период, авторство) живут на верхнем
- * уровне модели; критерии ЦЕЛЕЙ — во вложенной `targets` (тот же конструктор
- * `lib/filter-builder.ts`, что у «Структур»; второй конструктор не рисуется).
- * Двухпутевой поиск T7 (тела/заголовки записей + мыслевый путь) сохраняется в
- * критерии «ключевые слова».
+ * Условия держит дерево `FilterTreeNode` единой модели `FilterCriteriaState`,
+ * вид строит общая фабрика `lib/filter-editor.ts` с профилем `chronicle`
+ * («Дневниковые записи» — профиль СО ВРЕМЕНЕМ: доступны `$now`/`$hour*` и
+ * единицы `h`/`mi`). Бывшие спец-поля — строки-условия:
  *
- * Каркас формы — общий `lib/filter-form.ts`; контрол периода — общий
- * `lib/period-editor.ts` (панельный вариант: поля «с»/«по», переключатель
- * «Пресеты»/«Даты»; в «Пресетах» каждая граница — комбобокс базовых пресетов
- * и сдвиг ±N/единица, приёмка №3); сохранённые отборы —
- * `lib/saved-filter-bar.ts`.
+ *   • «Период» → строка «Период записи» с оператором «между» (в значении —
+ *     даты или календарные токены; календарь месяца читает период из дерева
+ *     через {@link chroniclePeriod});
+ *   • «Цели» → строка «Цели записи» — список мыслей либо под-выборка мыслей
+ *     (профиль `thoughts`), семантика «хотя бы одна цель удовлетворяет» (`in`);
+ *   • «Ключевые слова» (двухпутевой поиск T7) → группа ИЛИ: текст записи
+ *     («Текст записи»/«Заголовок записи» c «Найти слова») ИЛИ мыслевый путь
+ *     («Цели записи» → «Найти слова» с областями поиска). Решение
+ *     оркестратора 2026-10-12;
+ *   • автор/редактор записи — строки «Автор записи»/«Редактор записи».
+ *
+ * Живая строка поиска («Найденные записи» + переход к записи, debounce и
+ * история ввода) остаётся ОТДЕЛЬНЫМ элементом панели над деревом (решение
+ * оркестратора 2026-10-12): она пишет ту же группу ключевых слов в дерево и
+ * потому по-прежнему фильтрует ленту.
  */
 
 import {
+  buildChronicleKeywordGroup,
+  FILTER_AST_VERSION,
   type ChronicleFilterDefinition,
   type ChronicleRow,
+  type FilterAstNode,
   type NetworkProperty,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
-import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
+import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { div, fmtDate } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
 import {
-  filterEntityOptions,
-  linkTypeEntityOptions,
-  pickEntitiesModal,
-  thoughtTypeEntityOptions,
-} from '../../lib/entity-picker.js';
-import {
-  buildConditionsSection,
-  buildEntityChipSection,
-  buildFilterBlock,
-  buildFilterFooterButtons,
-  buildFilterForm,
   buildKeywordsSection,
-  buildParentThoughtsSection,
-  buildSortSection,
-  buildTrashedRow,
-  buildTriRow,
-  extrasActive,
   type FilterFormContext,
-  type FilterSection,
-  type ParentThoughtsSection,
 } from '../../lib/filter-form.js';
 import {
-  buildChronicleWire,
-  parseChronicleCriteria,
-  defaultChronicleCriteriaState,
+  buildFilterAst,
+  compileFlatCriteriaToAst,
+  defaultFilterCriteriaState,
+  defaultFilterTreeGroup,
+  filterAstToTree,
+  parseFilterAstState,
+  parseFilterDefinition,
   withReverseLinkPropertySides,
-  type ChronicleCriteriaState,
+  type FilterCriteriaState,
+  type FilterTreeGroup,
+  type FilterTreeLeaf,
+  type FilterTreeNode,
+  type FilterTreeValue,
 } from '../../lib/filter-builder.js';
-import { buildPeriodEditor, type PeriodValue } from '../../lib/period-editor.js';
-import { openDatePeriodDialog } from '../../lib/date-period-dialog.js';
-import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import {
-  buildSavedFilterBar,
-  type SavedFilterBarHandle,
-  type SavedFilterEntry,
-  type SavedFilterStore,
-} from '../../lib/saved-filter-bar.js';
+  filterIssuesFromError,
+  filterIssuesFromPayload,
+  type FilterIssue,
+} from '../../lib/filter-diagnostics.js';
+import { canonicalFilterTree } from '../../lib/filter-canonical.js';
+import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
+import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
+import { notice } from '../../lib/notice.js';
+import {
+  predefinedFilterIds,
+  predefinedFiltersToCreate,
+  type PredefinedFilter,
+} from '../../lib/predefined-filters.js';
+import { duplicateFilterName } from '../../lib/pure.js';
+import { openSavedFilterDialog } from '../../lib/saved-filter-bar.js';
+import { segmentedControl } from '../../lib/ui/segmented.js';
+import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import { store } from '../../state.js';
 import {
   SEARCH_DEBOUNCE_MS,
-  periodTokensForRange,
-  resolveDateToken,
   resolvePeriodForQuery,
+  todayLocal,
 } from './diary.js';
 import { isFeedRecordEditorTarget } from './feed-nav.js';
 
-export type { ChronicleCriteriaState as ChronicleFilterState } from '../../lib/filter-builder.js';
+/** Профиль контекста места: «Дневниковые записи» (со временем). */
+export const FILTER_PROFILE = 'chronicle' as const;
+
+/** Модель отбора панели — та же единая модель конструктора (дерево + порядок). */
+export type ChronicleFilterState = FilterCriteriaState;
+/** Короткое имя модели внутри модуля. */
+type FilterState = ChronicleFilterState;
+
+export type { ChronicleCriteriaState as ChronicleFilterStateLegacy } from '../../lib/filter-builder.js';
 
 /** Ключ истории ввода строки поиска «Дневника» (общий механизм recent-values). */
 const KEYWORDS_HISTORY_KEY = 'diary.keywords';
 
-/** Модель отбора — общая модель конструктора. */
-type FilterState = ChronicleCriteriaState;
-
-let filter: FilterState = defaultChronicleCriteriaState();
-/** Ref of the selected saved filter (null — not saved yet / custom). */
-let savedFilterId: string | null = null;
-/** Секция «Родительские мысли» критериев целей (для внешнего добавления корня). */
-let targetsParentsRef: ParentThoughtsSection | null = null;
-/** Строка сохранённых отборов (общий модуль `lib/saved-filter-bar.ts`). */
-let savedBar: SavedFilterBarHandle | null = null;
-/** Имя отбора в поле строки — переживает перерисовку панели. */
-let filterName = '';
-
-let panel: HTMLElement | null = null;
-/** Узлы-заголовки панели (календарь) — переносятся при каждой перерисовке. */
-let headerNodes: readonly HTMLElement[] = [];
-/** Сворачивание группы «Период» (по умолчанию свёрнута, пока период пуст). */
-let periodCollapsed = true;
-/** Сворачивание группы «Свойства». */
-let propertiesCollapsed = true;
-/** Сворачивание группы «Дополнительно». */
-let extrasCollapsed = true;
-/** Реестр свойств сети (для условий целей), один REST-вызов на открытие. */
-const propertyDefs = new Map<string, NetworkProperty>();
+/** Дополнения сборки панели. */
+interface PanelOptions {
+  /** Узлы над секциями (календарь месяца — первый элемент панели). */
+  header?: readonly HTMLElement[];
+}
 
 /** Actions the panel delegates to the host module. */
 interface PanelActions {
@@ -119,24 +118,698 @@ interface PanelActions {
   jumpToRecord?: (row: ChronicleRow) => void;
 }
 
-/** Дополнения сборки панели. */
-interface PanelOptions {
-  /** Узлы над секциями (календарь месяца — первый элемент панели). */
-  header?: readonly HTMLElement[];
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
+
+let filter: FilterState = defaultState();
+let panel: HTMLElement | null = null;
+let actions: PanelActions = { apply: () => undefined };
+let editor: FilterEditorHandle | null = null;
+/** Ref of the selected saved filter (null — not saved yet / custom). */
+let savedFilterId: string | null = null;
+/** Имя отбора в поле футера — переживает перерисовку панели. */
+let filterName = '';
+let savedFilterName: string | null = null;
+/** Снимок определения на момент сохранения (маркер ● футера). */
+let savedDefinition: unknown = null;
+/** Записи диагностики от сервера (ошибка выборки). */
+let serverIssues: readonly FilterIssue[] = [];
+/** Узлы-заголовки панели (календарь) — переносятся при каждой перерисовке. */
+let headerNodes: readonly HTMLElement[] = [];
+/** Реестр свойств сети (условия под-выборки целей), один REST-вызов на открытие. */
+const propertyDefs = new Map<string, NetworkProperty>();
+/** Список сохранённых отборов панели (кэш диалога выбора). */
+let savedRows: SavedFilterRow[] = [];
+/** Слой (G6) подписан на инвалидации списка отборов — один раз. */
+let savedFiltersWired = false;
+/** Признак: панель уже смонтирована (перерисовка допустима). */
+let mounted = false;
+
+interface SavedFilterRow {
+  id: string;
+  name: string;
+  definition: unknown;
+  /** Условия строки совпали с предопределённым набором (метка в списке). */
+  predefined?: boolean;
 }
 
-let actions: PanelActions = { apply: () => undefined };
+function defaultState(): FilterState {
+  return { ...defaultFilterCriteriaState(), tree: defaultFilterTreeGroup('and'), sortKeys: [] };
+}
+
+// Операнды профиля `chronicle` (реестр `shared/src/filter-profiles.ts`).
+const OP_TIME = 'record_time';
+const OP_TARGETS = 'targets';
+const OP_TITLE = 'record_title';
+const OP_BODY = 'record_body';
+const OP_AUTHOR = 'record_author';
+const OP_EDITOR = 'record_editor';
+
+// ---------------------------------------------------------------------------
+// Дерево: сборка листьев и обход
+// ---------------------------------------------------------------------------
+
+function leaf(
+  kind: string,
+  operator: FilterTreeLeaf['operator'],
+  value: FilterTreeValue,
+): FilterTreeLeaf {
+  return { kind: 'leaf', entity: { kind } as FilterTreeLeaf['entity'], operator, value };
+}
+
+/** Все листья дерева (в порядке обхода). */
+function allLeaves(node: FilterTreeNode | null | undefined, out: FilterTreeLeaf[] = []): FilterTreeLeaf[] {
+  if (node === null || node === undefined) return out;
+  if (node.kind === 'leaf') {
+    out.push(node);
+    return out;
+  }
+  for (const child of node.children) allLeaves(child, out);
+  return out;
+}
+
+/** Текстовое представление элемента значения-списка (литерал или токен). */
+function itemText(item: string | { token: string } | number | boolean): string {
+  if (typeof item === 'object') return item.token;
+  return String(item);
+}
+
+/** Корень дерева с гарантированной группой `И`. */
+function rootGroup(state: FilterState = filter): FilterTreeGroup {
+  const tree = state.tree ?? null;
+  if (tree !== null && tree.kind === 'group') return tree;
+  const fresh: FilterTreeGroup = { kind: 'group', op: 'and', children: tree === null ? [] : [tree] };
+  state.tree = fresh;
+  return fresh;
+}
+
+// ---------------------------------------------------------------------------
+// Период: чтение/запись из строки «Период записи» (календарь и хост)
+// ---------------------------------------------------------------------------
+
+/**
+ * Границы периода, как их видит панель: из строки «Период записи» дерева.
+ * «Между» даёт обе границы; одиночные `gte`/`lte` — по одной. Токены отдаются
+ * как есть (раскрытие — в {@link chronicleQueryDefinition}).
+ */
+export function chroniclePeriod(state: FilterState = filter): { from: string; to: string } {
+  const leaves = allLeaves(state.tree ?? null);
+  const between = leaves.find(
+    (l) =>
+      l.entity.kind === OP_TIME &&
+      (l.operator === 'between' || l.operator === 'not_between') &&
+      l.value.kind === 'list',
+  );
+  if (between !== undefined && between.value.kind === 'list') {
+    const items = between.value.items;
+    return {
+      from: items[0] === undefined ? '' : itemText(items[0]),
+      to: items[1] === undefined ? '' : itemText(items[1]),
+    };
+  }
+  const lower = leaves.find(
+    (l) => l.entity.kind === OP_TIME && (l.operator === 'gte' || l.operator === 'gt'),
+  );
+  const upper = leaves.find(
+    (l) => l.entity.kind === OP_TIME && (l.operator === 'lte' || l.operator === 'lt'),
+  );
+  return {
+    from: lower === undefined ? '' : valueText(lower.value),
+    to: upper === undefined ? '' : valueText(upper.value),
+  };
+}
+
+/** Текст скалярного/токенного значения листа (`''` — значение пустое). */
+function valueText(value: FilterTreeValue): string {
+  if (value.kind === 'scalar') return String(value.value);
+  if (value.kind === 'token') return value.token;
+  if (value.kind === 'list' && value.items[0] !== undefined) return itemText(value.items[0]);
+  return '';
+}
+
+/**
+ * Записать период в строку «Период записи» (календарь, диалог даты, сброс).
+ * Существующие строки времени заменяются; пустые границы — условие снимается.
+ */
+export function setChroniclePeriod(from: string, to: string): void {
+  filter = applyChroniclePeriod(filter, from, to);
+  renderPanel();
+}
+
+/** Чистая правка модели: заменить условие времени на указанный период. */
+export function applyChroniclePeriod(
+  state: FilterState,
+  from: string,
+  to: string,
+): FilterState {
+  const root = rootGroup(state);
+  const kept = root.children.filter(
+    (child) => child.kind !== 'leaf' || child.entity.kind !== OP_TIME,
+  );
+  const next = [...kept];
+  const f = from.trim();
+  const t = to.trim();
+  if (f !== '' && t !== '') next.push(leaf(OP_TIME, 'between', { kind: 'list', items: [f, t] }));
+  else if (f !== '') next.push(leaf(OP_TIME, 'gte', { kind: 'scalar', value: f }));
+  else if (t !== '') next.push(leaf(OP_TIME, 'lte', { kind: 'scalar', value: t }));
+  return { ...state, tree: { kind: 'group', op: root.op, children: next } };
+}
+
+// ---------------------------------------------------------------------------
+// Ключевые слова: двухпутевая группа (решение оркестратора 2026-10-12)
+// ---------------------------------------------------------------------------
+
+/** Область мыслевого пути (checkbox-и строки поиска). */
+interface KeywordSlice {
+  keywords: string;
+  keywordInTitle: boolean;
+  keywordInSynonyms: boolean;
+  keywordInComment: boolean;
+}
+
+/** Срез состояния для общего поля ключевых слов (живая строка поиска). */
+let keywordSlice: KeywordSlice = { keywords: '', keywordInTitle: true, keywordInSynonyms: true, keywordInComment: true };
+
+/**
+ * Группа ключевых слов дерева (маркер структуры: ИЛИ пути А и пути Б). Обход
+ * РЕКУРСИВНЫЙ: путь Б — это пословные группы `ИЛИ(тело, заголовок)`, вложенные
+ * в `И` вместе с `цели не пусты`.
+ */
+function isKeywordGroup(node: FilterTreeNode): boolean {
+  if (node.kind !== 'group' || node.op !== 'or') return false;
+  return allLeaves(node).some(isKeywordGroupLeaf);
+}
+
+/** Лист-признак группы ключевых слов (слово пути Б либо путь А / «цели не пусты»). */
+function isKeywordGroupLeaf(leaf: FilterTreeLeaf): boolean {
+  if (leaf.entity.kind === OP_BODY || leaf.entity.kind === OP_TITLE) return true;
+  if (leaf.entity.kind !== OP_TARGETS) return false;
+  if (leaf.operator === 'not_empty') return true;
+  return (
+    leaf.value.kind === 'subquery' &&
+    allLeaves(leaf.value.node).some((inner) => inner.entity.kind === 'keywords')
+  );
+}
+
+/** Области поиска мыслевого пути → плоский список (пусто — все три). */
+function scopeIds(slice: KeywordSlice): Array<'title' | 'synonyms' | 'comment'> {
+  const out: Array<'title' | 'synonyms' | 'comment'> = [];
+  if (slice.keywordInTitle) out.push('title');
+  if (slice.keywordInSynonyms) out.push('synonyms');
+  if (slice.keywordInComment) out.push('comment');
+  return out;
+}
+
+/**
+ * Группа ключевых слов «оба пути ИЛИ». Критерий собирает ОБЩИЙ конструктор
+ * `@etn/shared` (`buildChronicleKeywordGroup`) — ровно тот же, что проверяет
+ * серверный тест паритета. Путь Б гейтится областью `comment` (пустой набор —
+ * все области) и на каждое слово строит `ИЛИ(тело, заголовок)`; путь А —
+ * под-выборка целей с «Найти слова» в отмеченных областях.
+ */
+function keywordGroup(text: string, scope: readonly string[]): FilterTreeGroup {
+  const group = filterAstToTree(
+    buildChronicleKeywordGroup(text, scope as readonly StructureKeywordScope[]),
+  );
+  return group !== null && group.kind === 'group'
+    ? group
+    : { kind: 'group', op: 'or', children: [] };
+}
+
+/** Записать срез ключевых слов в дерево (управляемая группа в корне). */
+function syncKeywordsToTree(): void {
+  const root = rootGroup();
+  const kept = root.children.filter((child) => !isKeywordGroup(child));
+  const text = keywordSlice.keywords.trim();
+  const next = text === '' ? kept : [...kept, keywordGroup(text, scopeIds(keywordSlice))];
+  filter = { ...filter, tree: { kind: 'group', op: root.op, children: next } };
+}
+
+/** Прочитать срез ключевых слов из дерева (открытие панели, смена отбора). */
+function syncKeywordsFromTree(): void {
+  const root = filter.tree;
+  const group =
+    root !== undefined && root !== null && root.kind === 'group'
+      ? root.children.find(isKeywordGroup)
+      : undefined;
+  if (group === undefined) return;
+  const parsed = readKeywordSlice(group);
+  if (parsed === null) return;
+  // Пустой набор областей — «все области» (поведение до 0.10.1): галочки все.
+  const scope =
+    parsed.scope.length > 0 ? parsed.scope : (['title', 'synonyms', 'comment'] as const);
+  keywordSlice = {
+    keywords: parsed.keywords,
+    keywordInTitle: scope.includes('title'),
+    keywordInSynonyms: scope.includes('synonyms'),
+    keywordInComment: scope.includes('comment'),
+  };
+}
+
+/**
+ * Текст и области ключевых слов из группы дерева. Источник — лист «Найти слова»
+ * пути А (несёт и текст мини-синтаксиса, и области); без пути А (одни
+ * исключающие слова) слова восстанавливаются из пути Б. `null` — слов нет.
+ */
+function readKeywordSlice(
+  group: FilterTreeNode,
+): { keywords: string; scope: string[] } | null {
+  let keywords: string | null = null;
+  let scope: StructureKeywordScope[] | null = null;
+  const include: string[] = [];
+  const exclude: string[] = [];
+  const walk = (node: FilterTreeNode, negated: boolean): void => {
+    if (node.kind === 'group') {
+      const nextNegated = node.op === 'not' ? !negated : negated;
+      for (const child of node.children) walk(child, nextNegated);
+      return;
+    }
+    if (node.operator !== 'matches') return;
+    const text = valueText(node.value);
+    if (text === '') return;
+    if (node.entity.kind === 'keywords') {
+      keywords = text;
+      if (Array.isArray(node.entity.scope)) scope = [...node.entity.scope];
+      return;
+    }
+    if (node.entity.kind === OP_BODY || node.entity.kind === OP_TITLE) {
+      if (negated) exclude.push(text);
+      else include.push(text);
+    }
+  };
+  walk(group, false);
+  if (keywords === null && include.length === 0 && exclude.length === 0) return null;
+  return {
+    keywords: keywords ?? [...include, ...exclude.map((word) => `-${word}`)].join(' '),
+    scope: scope ?? [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Чтение определения отбора (L4-снимок и сохранённые отборы v1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Прочитать определение отбора «Дневника» в модель панели. Формы:
+ *   • AST (`{ version, filter }`) — единый читатель `parseFilterAstState`;
+ *   • плоское `definition v1` (`ChronicleFilterDefinition`) — компилируется в
+ *     строки дерева по структуре серверного компилятора: период → «Время
+ *     записи», `targets` → список/под-выборка «Цели записи» (единый конвертер
+ *     мыслей `compileFlatCriteriaToAst`), `created_by`/`updated_by` →
+ *     «Автор/Редактор записи», `keywords` → двухпутевая группа.
+ */
+export function readFilterDefinition(def: unknown): FilterState {
+  const next = defaultState();
+  if (def === null || typeof def !== 'object' || Array.isArray(def)) return next;
+  const rec = def as Record<string, unknown>;
+  // Форма СОБСТВЕННОЙ записи панели — `{ ast, order }` (см. {@link chronicleDefinition}):
+  // AST-тело вложено в поле `ast`, а не лежит на верхнем уровне. Читаем ОБЕ
+  // формы одним ридером AST; иначе сохранённый/восстановленный из L4 отбор
+  // «Дневника» открывался пустым — условие терялось на чтении (дефект, найден
+  // при задаче a6609741: метод диагностики панели не получал строк).
+  const nestedAst = rec['ast'];
+  const astBody =
+    typeof rec['version'] === 'number'
+      ? rec
+      : typeof nestedAst === 'object' && nestedAst !== null && !Array.isArray(nestedAst)
+        ? (nestedAst as Record<string, unknown>)
+        : null;
+  if (astBody !== null && typeof astBody['version'] === 'number') {
+    const parsed = parseFilterAstState(astBody, {});
+    const order = rec['order'] === 'desc' ? 'desc' : 'asc';
+    return { ...next, ...parsed, tree: parsed.tree ?? defaultFilterTreeGroup('and'), order };
+  }
+  const children: FilterTreeNode[] = [];
+  const from = str(rec['date_from']);
+  const to = str(rec['date_to']);
+  if (from !== '' && to !== '') children.push(leaf(OP_TIME, 'between', { kind: 'list', items: [from, to] }));
+  else if (from !== '') children.push(leaf(OP_TIME, 'gte', { kind: 'scalar', value: from }));
+  else if (to !== '') children.push(leaf(OP_TIME, 'lte', { kind: 'scalar', value: to }));
+
+  const author = authorLeaf(OP_AUTHOR, rec, 'created_by');
+  if (author !== null) children.push(author);
+  const edit = authorLeaf(OP_EDITOR, rec, 'updated_by');
+  if (edit !== null) children.push(edit);
+
+  const targets = rec['targets'];
+  if (targets !== undefined && targets !== null) {
+    const ast = compileFlatCriteriaToAst(
+      parseFilterDefinition(targets),
+      registryWithSides(),
+      { activeMode: 'structures' },
+    );
+    if (ast !== undefined) {
+      children.push(
+        leaf(OP_TARGETS, 'in', {
+          kind: 'subquery',
+          operator: 'in',
+          node: astNodeToTree(ast.filter),
+        }),
+      );
+    }
+  }
+
+  const keywords = str(rec['keywords']);
+  if (keywords !== '') {
+    const scope = Array.isArray(rec['keyword_scope'])
+      ? (rec['keyword_scope'] as string[]).filter((s) => typeof s === 'string')
+      : ['title', 'synonyms', 'comment'];
+    children.push(keywordGroup(keywords, scope));
+  }
+
+  const order = rec['order'];
+  return {
+    ...next,
+    tree: { kind: 'group', op: 'and', children },
+    order: order === 'desc' ? 'desc' : 'asc',
+  };
+}
+
+/** Лист авторства записи из плоских полей `created_by`/`updated_by`. */
+function authorLeaf(
+  kind: string,
+  rec: Record<string, unknown>,
+  field: 'created_by' | 'updated_by',
+): FilterTreeLeaf | null {
+  const op = rec[`${field}_op`];
+  if (op === 'empty' || op === 'not_empty') {
+    return leaf(kind, op === 'empty' ? 'is_empty' : 'not_empty', { kind: 'none' });
+  }
+  const value = rec[field];
+  if (typeof value === 'string' && value !== '') return leaf(kind, 'eq', { kind: 'scalar', value });
+  if (Array.isArray(value)) {
+    const ids = value.filter((v): v is string => typeof v === 'string');
+    if (ids.length > 0) {
+      return leaf(kind, op === 'not_in' ? 'not_in' : 'in', { kind: 'list', items: ids });
+    }
+  }
+  return null;
+}
+
+/** Узел AST → узел дерева (для под-выборки целей). */
+function astNodeToTree(node: FilterAstNode): FilterTreeNode {
+  if ('children' in node) {
+    return {
+      kind: 'group',
+      op: node.op,
+      children: node.children.map(astNodeToTree),
+    };
+  }
+  const parsed = parseFilterAstState({ version: 1, filter: node }, {});
+  return parsed.tree ?? defaultFilterTreeGroup('and');
+}
+
+function str(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+// ---------------------------------------------------------------------------
+// Публичный API панели (хост экрана)
+// ---------------------------------------------------------------------------
+
+/** Returns the current filter state. */
+export function getFilterState(): FilterState {
+  return filter;
+}
+
+/** Replaces the filter state and repaints the panel (L4 restore / saved filter). */
+export function setFilterState(next: FilterState): void {
+  filter = { ...defaultState(), ...next, tree: next.tree ?? defaultFilterTreeGroup('and') };
+  syncKeywordsFromTree();
+  renderPanel();
+}
+
+/** Marks which saved filter is selected (null = custom, not saved). */
+export function setSavedFilterId(id: string | null): void {
+  savedFilterId = id;
+}
+
+/** The id of the currently selected saved filter. */
+export function getSavedFilterId(): string | null {
+  return savedFilterId;
+}
+
+/** Серверная диагностика последнего отбора — строки редактора. */
+export function setFilterServerIssues(issues: readonly FilterIssue[]): void {
+  serverIssues = issues;
+  editor?.refresh();
+}
+
+/** Записи диагностики из ошибки запроса (красное ядро). */
+export function filterIssuesFromQueryError(err: unknown): readonly FilterIssue[] {
+  return filterIssuesFromError(err);
+}
+
+/**
+ * Записи диагностики из УСПЕШНОЙ выборки: `warnings` конверта `meta`
+ * (требование 325efc13). Единый путь со «Структурами» — редактор подсвечивает
+ * адресованные строки, жёлтое применение не запрещает.
+ */
+export function filterIssuesFromQueryResult(payload: {
+  warnings?: unknown;
+}): readonly FilterIssue[] {
+  return filterIssuesFromPayload(payload as Parameters<typeof filterIssuesFromPayload>[0]);
+}
+
+/** Adds a parent thought to the goals criteria (external drop / picker). */
+export function addThoughtToFilter(id: string): void {
+  const root = rootGroup();
+  const goals = root.children.find(
+    (child): child is FilterTreeLeaf =>
+      child.kind === 'leaf' && child.entity.kind === OP_TARGETS && child.value.kind === 'subquery',
+  );
+  if (goals !== undefined && goals.value.kind === 'subquery') {
+    const node = goals.value.node;
+    if (node.kind === 'group') {
+      if (node.children.some((c) => c.kind === 'leaf' && c.entity.kind === 'parents' && c.value.kind === 'list' && c.value.items.includes(id))) {
+        return;
+      }
+      node.children = [
+        ...node.children,
+        { kind: 'leaf', entity: { kind: 'parents' } as FilterTreeLeaf['entity'], operator: 'in_hierarchy', mode: 'all_links', value: { kind: 'list', items: [id] } },
+      ];
+    }
+  } else {
+    root.children = [
+      ...root.children,
+      leaf(OP_TARGETS, 'in', {
+        kind: 'subquery',
+        operator: 'in',
+        node: {
+          kind: 'group',
+          op: 'and',
+          children: [
+            { kind: 'leaf', entity: { kind: 'parents' } as FilterTreeLeaf['entity'], operator: 'in_hierarchy', mode: 'all_links', value: { kind: 'list', items: [id] } },
+          ],
+        },
+      }),
+    ];
+  }
+  filter = { ...filter, tree: root };
+  renderPanel();
+}
+
+/** Reloads the saved-filter list (real-time `saved-filter.*`). */
+export async function reloadSavedFilters(): Promise<void> {
+  await reloadSavedRows();
+}
+
+/** Очищает критерии панели (порядок сохраняется). */
+export function clearFilter(): void {
+  const order = filter.order;
+  // Период записи — НЕУДАЛЯЕМОЕ условие панели (ошибка 609deba0 п.2): «Очистить»
+  // снимает остальные критерии, но границы периода, которыми управляет
+  // календарь, сохраняет.
+  const { from, to } = chroniclePeriod();
+  filter = applyChroniclePeriod({ ...defaultState(), order }, from, to);
+  keywordSlice = { keywords: '', keywordInTitle: true, keywordInSynonyms: true, keywordInComment: true };
+  savedFilterId = null;
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
+  serverIssues = [];
+  renderPanel();
+}
+
+/**
+ * Wire-определение текущего отбора (с реестром — условия под-выборки целей без
+ * него потерялись бы). Единственная точка конвертации для персиста/сохранения:
+ * AST-форма; прежние плоские определения читает тот же конвертер.
+ */
+export function chronicleDefinition(): ChronicleFilterDefinition {
+  return {
+    ast: buildFilterAst(filter, { profile: FILTER_PROFILE }),
+    order: filter.order,
+  } as ChronicleFilterDefinition;
+}
+
+/**
+ * Определение отбора с ЗАМЕНЁННЫМ периодом — для запросов, которым нужны свои
+ * границы времени (счётчики календаря по месяцу): границы подменяются В ДЕРЕВЕ,
+ * а не плоскими полями (тело-дерево и плоские критерии вместе сервер отвергает).
+ */
+export function chronicleDefinitionForPeriod(
+  from: string,
+  to: string,
+): ChronicleFilterDefinition {
+  const ast = buildFilterAst(applyChroniclePeriod(filter, from, to), { profile: FILTER_PROFILE });
+  return { ast, order: filter.order } as ChronicleFilterDefinition;
+}
+
+/**
+ * Определение отбора для ЗАПРОСА ленты: как {@link chronicleDefinition}, но
+ * границы периода-токены раскрыты в ЛОКАЛЬНЫЕ календарные даты наблюдателя
+ * (`resolvePeriodForQuery`, требование 469d8d69) — результат выборки согласован
+ * с локальным днём принадлежности записи и с подсветкой календаря. Полные
+ * инстансы (переход к записи) проходят как есть.
+ */
+export function chronicleQueryDefinition(): ChronicleFilterDefinition {
+  const { from, to } = chroniclePeriod();
+  const fdw = store.state.network?.first_day_of_week;
+  const firstDayOfWeek = typeof fdw === 'number' && fdw >= 1 && fdw <= 7 ? fdw : 1;
+  const resolved = resolvePeriodForQuery(from, to, todayLocal(), firstDayOfWeek);
+  return chronicleDefinitionForPeriod(resolved.from, resolved.to);
+}
+
+/** REST-хранилище отборов вида «Дневник» (`/saved-filters?view=chronicle`). */
+async function reloadSavedRows(): Promise<void> {
+  try {
+    savedRows = (await etn.chronicleFilters.list(requireNetworkId())).map((f) => ({
+      id: f.id,
+      name: f.name,
+      definition: f.definition,
+    }));
+  } catch {
+    savedRows = [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Предопределённые наборы (задача 347b307e, решения арбитража 2026-10-14)
+// ---------------------------------------------------------------------------
+
+/** Условия набора одним корнем-группой `И` в форме записи панели (`{ ast, order }`). */
+function presetChronicle(children: FilterAstNode[]): ChronicleFilterDefinition {
+  return {
+    ast: { version: FILTER_AST_VERSION, filter: { op: 'and', children } },
+    order: 'asc',
+  } as ChronicleFilterDefinition;
+}
+
+/**
+ * Предопределённые наборы отбора панели «Дневника» — формулировки заказчика
+ * ДОСЛОВНО. Решения арбитража 2026-10-14: «Дата создания записи» в терминах
+ * пользователя — «Период записи» (`record_time`); новый операнд `created_at` НЕ
+ * заводится. «Автор записи = текущий пользователь» — значение-токен `$user`
+ * (резолв — `chronicle-service`, иначе условие молча терялось).
+ */
+export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
+  {
+    name: 'Мои записи за неделю',
+    definition: presetChronicle([
+      {
+        entity: { kind: 'record_time' },
+        operator: 'between',
+        value: [{ token: '$weekStart' }, { token: '$weekEnd' }],
+      },
+      { entity: { kind: 'record_author' }, operator: 'eq', value: { token: '$user' } },
+    ]),
+  },
+  {
+    name: 'Записи за 30 дней',
+    definition: presetChronicle([
+      {
+        entity: { kind: 'record_time' },
+        operator: 'between',
+        value: [{ token: '$today-30d' }, { token: '$today' }],
+      },
+    ]),
+  },
+];
+
+/**
+ * Каноничная форма условий определения отбора «Дневника» — сопоставление
+ * предопределённых наборов «по условиям» (арбитраж 2026-10-14). Определение
+ * приводит к дереву РИДЕР ПАНЕЛИ ({@link readFilterDefinition}), поэтому
+ * легаси-плоский отбор сравнивается наравне с AST.
+ */
+export function canonicalDefinition(def: unknown): string {
+  return canonicalFilterTree(readFilterDefinition(def).tree);
+}
+
+/**
+ * Досоздать отсутствующие предопределённые наборы (при открытии списка отборов).
+ * Сопоставление — по каноничным условиям, конфликт имени даёт свободное имя
+ * (`duplicateFilterName`). Ошибка REST набор не теряет — досоздастся при
+ * следующем открытии.
+ */
+async function seedPredefinedFilters(): Promise<void> {
+  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
+  if (toCreate.length === 0) {
+    markPredefinedRows();
+    return;
+  }
+  for (const item of toCreate) {
+    try {
+      await etn.chronicleFilters.create(requireNetworkId(), {
+        name: item.name,
+        definition: item.definition as ChronicleFilterDefinition,
+      });
+    } catch {
+      // набор досоздастся при следующем открытии списка
+    }
+  }
+  await reloadSavedRows();
+  markPredefinedRows();
+}
+
+/** Пометить строки, условия которых совпали с предопределённым набором. */
+function markPredefinedRows(): void {
+  const ids = predefinedFilterIds(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
+  for (const row of savedRows) row.predefined = ids.has(row.id);
+}
+
+// ---------------------------------------------------------------------------
+// Реестр свойств
+// ---------------------------------------------------------------------------
+
+function registryWithSides(): Map<string, NetworkProperty> {
+  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
+}
+
+async function loadPropertyDefs(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    const rows = await etn.propertyRegistry.list(networkId);
+    propertyDefs.clear();
+    for (const row of rows) propertyDefs.set(row.id, row);
+  } catch {
+    // Сеть недоступна — панель работает с пустым реестром.
+  }
+}
+
+/** Реестр нужен конвертеру определения — хост зовёт перед разбором снимка. */
+export async function preloadFilterRegistry(): Promise<void> {
+  await loadPropertyDefs();
+}
+
+// ---------------------------------------------------------------------------
+// Живая строка поиска (T7) — элемент панели, пишет ключевые слова в дерево
+// ---------------------------------------------------------------------------
 
 /** Найденные записи строки поиска по id (для перехода при выборе строки). */
 const recordHits = new Map<string, ChronicleRow>();
-/** Таймер debounce строки поиска (0.10.1, T7). */
 let searchTimer: number | null = null;
-
 /**
- * Применяет отбор через паузу после ввода (debounce строки поиска, T7): не
- * каждое нажатие запускает запрос, но панель не требует явного «Применить»
- * для текстового критерия.
+ * Обновление заголовка строки поиска (маркер `*` у непустого отбора): строка
+ * собирается один раз, а правки её поля (аналог ошибки 7d36f439) больше не
+ * пересобирают панель — маркер обновляем точечно.
  */
+let searchSectionRefresh: (() => void) | null = null;
+
+/** Пауза после ввода: не каждое нажатие запускает запрос (0.10.1, T7). */
 function scheduleSearchApply(): void {
   if (searchTimer !== null) window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => {
@@ -145,12 +818,8 @@ function scheduleSearchApply(): void {
   }, SEARCH_DEBOUNCE_MS);
 }
 
-/**
- * Источник «найденные записи» строки поиска (T7): живой поиск по телам и
- * заголовкам записей через критерий `keywords` «Дневника». Период и прочие
- * критерии здесь не применяются — иначе не найти запись вне текущего периода,
- * а её и открывает переход. Выбор строки — не подстановка текста, а переход.
- */
+/** Живой поиск записей по телам и заголовкам (период не применяется — иначе
+ *  не найти запись вне текущего периода, а её и открывает переход). */
 async function searchRecordOptions(query: string): Promise<SuggestEntry[]> {
   const needle = query.trim();
   if (needle === '') return [];
@@ -176,334 +845,75 @@ async function searchRecordOptions(query: string): Promise<SuggestEntry[]> {
   }
 }
 
-/** Источник подсказок строки поиска — найденные записи. */
 function recordSearchSource(): SuggestSource {
   return { when: 'typed', header: 'Найденные записи', load: (query) => searchRecordOptions(query) };
 }
 
-/** Returns the current filter state. */
-export function getFilterState(): FilterState {
-  return { ...filter, targets: { ...filter.targets } };
-}
-
-/** Replaces the filter state and repaints the panel (L4 restore / saved filter). */
-export function setFilterState(next: FilterState): void {
-  filter = { ...next, targets: { ...next.targets } };
-  periodCollapsed = next.dateFrom === '' && next.dateTo === '';
-  renderPanel();
-}
-
-/** Marks which saved filter is selected (null = custom, not saved). */
-export function setSavedFilterId(id: string | null): void {
-  savedFilterId = id;
-}
-
-/** The id of the currently selected saved filter. */
-export function getSavedFilterId(): string | null {
-  return savedFilterId;
-}
-
-/** Adds a parent thought to the goals criteria (external drop / picker). */
-export function addThoughtToFilter(id: string): void {
-  if (!filter.targets.parentIds.includes(id)) {
-    filter.targets = { ...filter.targets, parentIds: [...filter.targets.parentIds, id] };
-    // Перерисовка пересобирает секцию «Родительские мысли»; общий фасад сам
-    // резолвит облачко добавленного корня и обновит чип (замечание
-    // координатора: без своей копии синхронизации облачков).
-    targetsParentsRef?.resolveClouds();
-    renderPanel();
-  }
-}
-
-/** Reloads the saved-filter list and repaints it (real-time `saved-filter.*`). */
-export async function reloadSavedFilters(): Promise<void> {
-  await savedBar?.reload();
-}
-
-/** REST-хранилище отборов вида «Дневник» (`/saved-filters?view=chronicle`). */
-function savedFilterStore(): SavedFilterStore {
+/** Контекст общего поля ключевых слов: пишет срез и держит debounce. */
+function keywordsContext(): FilterFormContext {
   return {
-    list: async () =>
-      (await etn.chronicleFilters.list(requireNetworkId())).map((f) => ({
-        id: f.id,
-        name: f.name,
-        definition: f.definition,
-      })),
-    create: async (name, definition) =>
-      toEntry(
-        await etn.chronicleFilters.create(requireNetworkId(), {
-          name,
-          definition: definition as ChronicleFilterDefinition,
-        }),
-      ),
-    update: async (id, patch) =>
-      toEntry(
-        await etn.chronicleFilters.update(requireNetworkId(), id, {
-          ...(patch.name !== undefined ? { name: patch.name } : {}),
-          ...(patch.definition !== undefined
-            ? { definition: patch.definition as ChronicleFilterDefinition }
-            : {}),
-        }),
-      ),
-    remove: (id) => etn.chronicleFilters.remove(requireNetworkId(), id),
+    networkId: requireNetworkId(),
+    getState: () => keywordSlice as unknown as FilterCriteriaState,
+    registry: registryWithSides(),
+    touch: () => {
+      syncKeywordsToTree();
+      // Аналог ошибки 7d36f439: набор текста в поле «Поиск по записям» не должен
+      // пересобирать панель целиком — иначе поле теряет фокус и каретку на каждом
+      // символе. Обновляем только редактор (его дерево отражает группу слов);
+      // само поле живёт в строке поиска ВНЕ редактора, поэтому фокус сохраняется.
+      editor?.refresh();
+      // Маркер «отбор непуст» заголовка строки поиска — точечно (панель не
+      // пересобирается, см. пояснение выше).
+      searchSectionRefresh?.();
+      scheduleSearchApply();
+    },
   };
 }
 
-/** Запись хранилища → запись строки сохранённых отборов. */
-function toEntry(filter2: {
-  id: string;
-  name: string;
-  definition: ChronicleFilterDefinition;
-}): SavedFilterEntry {
-  return { id: filter2.id, name: filter2.name, definition: filter2.definition };
-}
-
-/** Applies a saved filter: fills the controls and delegates the query. */
-function applySavedFilterEntry(entry: SavedFilterEntry): void {
-  filter = parseChronicleCriteria(entry.definition as ChronicleFilterDefinition);
-  savedFilterId = entry.id;
-  filterName = entry.name;
-  periodCollapsed = filter.dateFrom === '' && filter.dateTo === '';
-  renderPanel();
-  actions.apply();
-}
-
-/** Clears every filter field (keeps the panel, does not apply). */
-export function clearFilter(): void {
-  // Снимаем отложенное применение поиска: очистка не должна тут же перезапускать отбор.
-  if (searchTimer !== null) {
-    window.clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-  filter = defaultChronicleCriteriaState();
-  savedFilterId = null;
-  filterName = '';
-  periodCollapsed = true;
-  propertiesCollapsed = true;
-  extrasCollapsed = true;
-  renderPanel();
-}
-
-/**
- * Реестр свойств для конструктора условий целей: к загруженному реестру
- * добавлены обратные стороны свойств-связей — тот же хелпер, что у панели
- * «Структур» и диалога отбора типа (стандарт S4).
- */
-function registryWithSides(): Map<string, NetworkProperty> {
-  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
-}
-
-/** Один REST-запрос реестра свойств сети на открытие панели. */
-async function loadPropertyDefs(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  try {
-    const rows = await etn.propertyRegistry.list(networkId);
-    propertyDefs.clear();
-    for (const row of rows) propertyDefs.set(row.id, row);
-  } catch {
-    // Сеть недоступна — панель работает с пустым реестром.
-  }
-}
-
-/**
- * Wire-определение текущего отбора (с реестром — условия целей без него
- * потерялись бы). Единственная точка конвертации для запроса и персиста.
- */
-export function chronicleDefinition(): ChronicleFilterDefinition {
-  return buildChronicleWire(filter, registryWithSides());
-}
-
-/**
- * Определение отбора для ЗАПРОСА ленты (0.10.1, приёмка №4, задача fd9eef49):
- * как {@link chronicleDefinition}, но границы периода-токены раскрыты в
- * ЛОКАЛЬНЫЕ календарные даты наблюдателя (`resolvePeriodForQuery`). Панель и
- * сохранённый отбор хранят токены, а на сервер уходит «голая дата» — сутки UTC
- * (требование 469d8d69), поэтому результат выборки согласован с локальным днём
- * принадлежности записи и с подсветкой календаря. Полные инстансы (переход к
- * записи) проходят как есть.
- */
-export function chronicleQueryDefinition(): ChronicleFilterDefinition {
-  const def = chronicleDefinition();
-  const { from, to } = resolvePeriodForQuery(filter.dateFrom, filter.dateTo);
-  delete def.date_from;
-  delete def.date_to;
-  if (from !== '') def.date_from = from;
-  if (to !== '') def.date_to = to;
-  return def;
-}
-
-/**
- * Секция «Период»: панельный вариант общего контрола `lib/period-editor.ts`
- * (элемент 2f14de06, требование 91f8d8dd, приёмка №3): переключатель
- * «Пресеты»/«Даты», границы «с»/«по» без часов и минут. В «Пресетах» каждая
- * граница — комбобокс базовых пресетов и сдвиг ±N/единица; поле показывает
- * человекочитаемую композицию, на сервер уходит канонический токен. Контрол
- * лишь сообщает значение — применение делает кнопка «Применить». Режим едет в
- * сохранённый отбор (`date_mode`); токены раскрываются для подсветки календаря
- * общим клиентским вычислителем.
- */
-function periodSection(ctx: FilterFormContext): FilterSection {
-  const section = buildFilterBlock('Период', {
-    collapsible: true,
-    getCollapsed: () => periodCollapsed,
-    setCollapsed: (v) => (periodCollapsed = v),
-    isNonEmpty: () => filter.dateFrom !== '' || filter.dateTo !== '',
-  });
-  const editor = buildPeriodEditor({
-    variant: 'panel',
-    panelMode: filter.dateMode,
-    resolveToken: (token) => resolveDateToken(token),
-    tokensForRange: (from, to) => periodTokensForRange(from, to),
-    value: { from: filter.dateFrom, to: filter.dateTo, mode: filter.dateMode },
-    label: 'Период дневника',
-    // Режим «Даты» (приёмка №5): клик по полю открывает диалог даты/периода
-    // (период разрешён, время — нет); «Пресеты» не затрагиваются.
-    openDatesDialog: (current) =>
-      openDatePeriodDialog({
-        allowPeriod: true,
-        allowTime: false,
-        initial: {
-          mode: 'period',
-          from: current.from || resolveDateToken('$today'),
-          to: current.to || resolveDateToken('$today'),
-          hasTime: false,
-        },
-      }).then((result) => (result === null ? null : { from: result.from, to: result.to })),
-    onChange: (value: PeriodValue) => {
-      filter.dateFrom = value.from ?? '';
-      filter.dateTo = value.to ?? '';
-      if (value.mode !== undefined) filter.dateMode = value.mode;
-      ctx.touch();
+/** Живая строка поиска над деревом: поле слов + три области мыслевого пути. */
+function buildSearchRow(): HTMLElement {
+  const section = buildKeywordsSection(keywordsContext(), {
+    title: 'Поиск по записям',
+    placeholder: 'счет* -вод*',
+    showScope: true,
+    tooltip:
+      'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. ' +
+      'Условие ищет запись двумя путями (ИЛИ): по телу и заголовку самой записи и по ' +
+      'мыслям-целям в выбранных областях. Подсказка «Найденные записи» открывает ' +
+      'запись переходом (период из записи, прокрутка и подсветка).',
+    suggestSource: {
+      when: 'always',
+      load: () =>
+        loadRecentValues(requireNetworkId(), KEYWORDS_HISTORY_KEY).map((value) => ({
+          value,
+          label: value,
+        })),
+    },
+    extraSources: [recordSearchSource()],
+    onPickEntry: (entry) => {
+      if (entry.recordId === undefined) return false;
+      const row = recordHits.get(entry.recordId);
+      if (row !== undefined) actions.jumpToRecord?.(row);
+      return true;
+    },
+    onBlur: (value) => {
+      const trimmed = value.trim();
+      if (trimmed === '') return;
+      try {
+        recordRecentValue(requireNetworkId(), KEYWORDS_HISTORY_KEY, trimmed);
+      } catch {
+        // нет сети — история не критична
+      }
     },
   });
-  section.body.append(editor.root);
-  return section;
+  section.refresh();
+  searchSectionRefresh = () => section.refresh();
+  return section.box;
 }
 
-/** Секция «Типы мыслей» критериев целей (набор «Структур»). */
-function targetsTypesSection(ctx: FilterFormContext): FilterSection {
-  return buildEntityChipSection(ctx, {
-    title: 'Типы мыслей',
-    getValues: () => ctx.getState().typeIds,
-    setValues: (values) => {
-      ctx.getState().typeIds = values;
-    },
-    loadOptions: (query) =>
-      filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
-    optionsHeader: 'Типы мыслей',
-    placeholder: 'Название типа…',
-    addPlaceholder: '+ ещё один тип',
-    picker: {
-      label: 'Открыть список типов',
-      open: () =>
-        pickEntitiesModal({
-          networkId: requireNetworkId(),
-          kind: 'thought-types',
-          title: 'Типы мыслей целей',
-          currentIds: ctx.getState().typeIds,
-        }),
-    },
-  });
-}
-
-/** Секция «Типы связей» критериев целей. */
-function targetsLinkTypesSection(ctx: FilterFormContext): FilterSection {
-  return buildEntityChipSection(ctx, {
-    title: 'Типы связей',
-    getValues: () => ctx.getState().linkTypeIds,
-    setValues: (values) => {
-      ctx.getState().linkTypeIds = values;
-    },
-    loadOptions: (query) =>
-      filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
-    optionsHeader: 'Типы связей',
-    placeholder: 'Название типа…',
-    addPlaceholder: '+ ещё один тип',
-    picker: {
-      label: 'Открыть список типов',
-      open: () =>
-        pickEntitiesModal({
-          networkId: requireNetworkId(),
-          kind: 'link-types',
-          title: 'Типы связей целей',
-          currentIds: ctx.getState().linkTypeIds,
-        }),
-    },
-  });
-}
-
-/**
- * Секция «Родительские мысли» критериев целей: отбор записей, у которых есть
- * цель, подчинённая любой из указанных мыслей. ОБЩИЙ фасад роли
- * (`buildParentThoughtsSection`) — тот же чип-лист корней, живой поиск и
- * ленивая догрузка облачков, что в «Структурах», диалоге типа и публикациях.
- * Ссылка на секцию нужна внешнему переносу мысли на панель
- * ({@link addThoughtToFilter}).
- */
-function targetsParentsSection(ctx: FilterFormContext): ParentThoughtsSection {
-  const section = buildParentThoughtsSection(ctx, {
-    tooltip: 'Отобрать записи, цель которых подчинена указанным мыслям',
-    picker: {
-      label: 'Выбрать из списка',
-      open: async () => {
-        const result = await pickThoughtsDialog({
-          networkId: requireNetworkId(),
-          allowCreate: false,
-          allowLinkType: false,
-          selectedIds: ctx.getState().parentIds,
-          title: 'Родительские мысли',
-        });
-        return result === null ? null : pickedThoughtIds(result);
-      },
-    },
-  });
-  targetsParentsRef = section;
-  return section;
-}
-
-/**
- * Секция «Дополнительно» критериев целей: только актуальность и корзина
- * (элемент 9b424548). Флажки гаснут, когда соответствующее содержимое
- * настройками скрыто — как у панели «Структур».
- */
-function targetsExtrasSection(ctx: FilterFormContext): FilterSection {
-  const section = buildFilterBlock('Дополнительно', {
-    collapsible: true,
-    getCollapsed: () => extrasCollapsed,
-    setCollapsed: (v) => (extrasCollapsed = v),
-    isNonEmpty: () => extrasActive(ctx.getState()),
-  });
-  section.body.append(
-    buildTriRow(
-      ctx,
-      'Только актуальные',
-      () => ctx.getState().active,
-      (v) => (ctx.getState().active = v),
-      {
-        yes: 'актуальные',
-        no: 'не актуальные',
-        ...(store.state.showInactive
-          ? {}
-          : {
-              disabled: true,
-              tooltip:
-                'Доступно при включённой настройке «Показывать неактуальные мысли и связи» (Настройки мыслесети → Видимость)',
-            }),
-      },
-    ),
-    buildTrashedRow(ctx, 'Включая помеченные на удаление', {
-      ...(store.state.showTrash
-        ? {}
-        : {
-            disabled: true,
-            tooltip:
-              'Доступно при включённой настройке «Показывать содержимое корзины» (Настройки мыслесети → Видимость)',
-          }),
-    }),
-  );
-  return section;
-}
+// ---------------------------------------------------------------------------
+// Сборка панели
+// ---------------------------------------------------------------------------
 
 /** Builds and mounts the filter panel into `host`; returns the root element. */
 export function mountChronicleFilterPanel(
@@ -513,142 +923,272 @@ export function mountChronicleFilterPanel(
 ): HTMLElement {
   actions = panelActions;
   headerNodes = opts.header ?? [];
+  mounted = true;
   host.replaceChildren();
-  panel = div('chron-filter');
-  host.append(panel);
+  panel = host;
   renderPanel();
   wireSavedFiltersToLayer();
   void reloadSavedFilters();
-  // Реестр свойств нужен условиям целей — рисуем панель ещё раз, когда он есть.
+  // Реестр свойств нужен конвертеру и под-выборке целей — перерисовка, когда он есть.
   void loadPropertyDefs().then(() => renderPanel());
   return panel;
 }
 
-/** Слой (G6): `saved-filter.*` роутер гасит ключ `saved-filters` — панель
- *  перечитывает список сохранённых отборов сама, без прямого realtime-хука. */
-let savedFiltersWired = false;
+/** Слой (G6): `saved-filter.*` гасит ключ — панель перечитывает список сама. */
 function wireSavedFiltersToLayer(): void {
   if (savedFiltersWired) return;
   savedFiltersWired = true;
   onQueryInvalidated((prefix) => {
-    if (!matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) return;
-    void reloadSavedFilters();
+    if (matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) void reloadSavedRows();
   });
 }
 
-/** Перерисовывает панель из текущего состояния (общий каркас). */
+/** Элемент направления сортировки ленты (ключ один — направление одно). */
+function orderControl(): HTMLElement {
+  const seg = segmentedControl({
+    items: [
+      { id: 'asc', label: 'Сначала старые' },
+      { id: 'desc', label: 'Сначала новые' },
+    ],
+    activeId: filter.order,
+    ariaLabel: 'Направление сортировки',
+    onChange: (id) => {
+      filter = { ...filter, order: id === 'desc' ? 'desc' : 'asc' };
+    },
+  });
+  seg.root.dataset['role'] = 'chronicle-order';
+  return seg.root;
+}
+
+/** Собирает и перерисовывает панель из текущего состояния. */
 function renderPanel(): void {
-  if (panel === null) return;
+  if (!mounted || panel === null) return;
   panel.replaceChildren();
+  panel.classList.add('chron-filter');
 
-  const sections: FilterSection[] = [];
-  const touch = (): void => {
-    for (const section of sections) section.refresh();
-  };
-  const ctx: FilterFormContext = {
+  for (const node of headerNodes) panel.append(node);
+  panel.append(buildSearchRow());
+
+  const orderWrap = div('chron-order-row');
+  orderWrap.append(orderControl());
+
+  editor = buildFilterEditor({
+    profile: FILTER_PROFILE,
     networkId: requireNetworkId(),
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    data: {
+      registry: registryWithSides(),
+      linkTypes: store.state.linkTypes,
+      thoughtTypes: store.state.thoughtTypes,
+      contextual: [OP_TIME, OP_TARGETS, OP_BODY, OP_TITLE, OP_AUTHOR, OP_EDITOR],
+    },
     getState: () => filter,
-    registry: registryWithSides(),
-    touch,
-  };
-  // Критерии целей — вложенная модель `filter.targets` (0.10.1, 306f74cc).
-  const targetsCtx: FilterFormContext = {
-    ...ctx,
-    getState: () => filter.targets,
-  };
-
-  sections.push(
-    periodSection(ctx),
-    buildKeywordsSection(ctx, {
-      title: 'Ключевые слова',
-      placeholder: 'Поиск по записям: счет* -вод*',
-      showScope: true,
-      tooltip:
-        'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. ' +
-        'Ищется в телах и заголовках записей, а также в выбранных областях их мыслей. ' +
-        'Подсказка «Найденные записи» открывает запись переходом ' +
-        '(период из записи, прокрутка и подсветка).',
-      onInput: () => scheduleSearchApply(),
-      extraSources: [recordSearchSource()],
-      onPickEntry: (entry) => {
-        if (entry.recordId === undefined) return false;
-        const row = recordHits.get(entry.recordId);
-        if (row !== undefined) actions.jumpToRecord?.(row);
-        return true;
-      },
-      suggestSource: {
-        when: 'always',
-        load: () =>
-          loadRecentValues(requireNetworkId(), KEYWORDS_HISTORY_KEY).map((value) => ({
-            value,
-            label: value,
-          })),
-      },
-      onBlur: (value) => {
-        const trimmed = value.trim();
-        if (trimmed === '') return;
-        try {
-          recordRecentValue(requireNetworkId(), KEYWORDS_HISTORY_KEY, trimmed);
-        } catch {
-          // нет сети — история не критична
-        }
-      },
-    }),
-    targetsTypesSection(targetsCtx),
-    targetsLinkTypesSection(targetsCtx),
-    targetsParentsSection(targetsCtx),
-    buildConditionsSection(targetsCtx, {
-      get: () => propertiesCollapsed,
-      set: (v) => (propertiesCollapsed = v),
-    }),
-    targetsExtrasSection(targetsCtx),
-    buildSortSection(ctx, { showSort: false }),
-  );
-
-  // Футер: применить/очистить + строка сохранённых отборов (общий модуль).
-  const btnRow = buildFilterFooterButtons({
-    onApply: () => actions.apply(),
-    onClear: () => clearFilter(),
-    clearLabel: 'Очистить отбор',
-  });
-  savedBar = buildSavedFilterBar({
-    store: savedFilterStore(),
-    getName: () => filterName,
-    setName: (name) => {
-      filterName = name;
+    setSortKeys: () => {
+      /* многоуровневой сортировки у ленты нет — порядок задаёт направление */
     },
-    buildDefinition: () => chronicleDefinition(),
-    applyEntry: (entry) => applySavedFilterEntry(entry),
+    touch: () => {
+      serverIssues = [];
+      editor?.refresh();
+    },
+    // Набор текста в поле значения (ошибка 7d36f439): снятие серверной
+    // диагностики — БЕЗ пересборки редактора (поле не теряет фокус и каретку).
+    touchValue: () => {
+      serverIssues = [];
+    },
+    sort: false,
+    // Переключатель направления — НАД фразой-превью (ошибка 609deba0 п.3):
+    // отдаём его фабрике слотом непрокручиваемого низа редактора.
+    aboveFooter: orderWrap,
+    // «Период записи» — неудаляемое условие (ошибка 609deba0 п.2): границами
+    // управляет календарь, крестик строки не рисуется; «Очистить» его сохраняет.
+    isLeafLocked: (leaf) => leaf.entity.kind === OP_TIME,
+    host: {
+      apply: () => actions.apply(),
+      save: (request) => void saveFilter(request),
+      reset: () => clearFilter(),
+      getName: () => filterName,
+      setName: (name) => {
+        filterName = name;
+      },
+      savedName: () => savedFilterName,
+      baseline: () => savedDefinition,
+      current: () => chronicleDefinition(),
+      issues: () => serverIssues,
+    },
+    buttons: { extra: footerExtraButtons() },
+  });
+  panel.append(editor.root);
+}
+
+/** Кнопки места: выбор сохранённого отбора. */
+function footerExtraButtons(): FilterFooterButtonSpec[] {
+  return [
+    {
+      // Нижний ряд футера — манипуляции с сохранёнными отборами (двухрядная
+      // компоновка, ошибка 4258e694 п.2): кнопка рядом с полем имени, как в
+      // «Структурах».
+      id: 'saved',
+      label: 'Отборы…',
+      title: 'Выбрать сохранённый отбор',
+      place: 'name',
+      onClick: () => void openSavedPicker(),
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Сохранённые отборы (личные, `?view=chronicle`)
+// ---------------------------------------------------------------------------
+
+async function saveFilter(request: { name: string; asCopy: boolean }): Promise<void> {
+  const name = request.name.trim();
+  if (name === '') {
+    notice('Введите имя отбора');
+    return;
+  }
+  const definition = chronicleDefinition();
+  try {
+    await reloadSavedRows();
+    const existing = savedRows.find((row) => row.name.toLowerCase() === name.toLowerCase());
+    const target = request.asCopy ? undefined : existing;
+    if (target !== undefined) {
+      await etn.chronicleFilters.update(requireNetworkId(), target.id, {
+        name,
+        definition: definition as ChronicleFilterDefinition,
+      });
+      savedFilterId = target.id;
+    } else {
+      const created = await etn.chronicleFilters.create(requireNetworkId(), {
+        name,
+        definition: definition as ChronicleFilterDefinition,
+      });
+      savedFilterId = created.id;
+    }
+  } catch (err) {
+    errorDialog('Сохранить отбор', err);
+    return;
+  }
+  filterName = name;
+  savedFilterName = name;
+  savedDefinition = definition;
+  editor?.refresh();
+  notice(`Отбор «${name}» сохранён`);
+}
+
+async function openSavedPicker(): Promise<void> {
+  await reloadSavedRows();
+  await seedPredefinedFilters();
+  // Перечитывание списка в ходе диалога: предопределённые наборы ВНУТРИ сессии
+  // не досоздаются (посев — только при открытии); метка пересчитывается.
+  const reload = async (): Promise<void> => {
+    await reloadSavedRows();
+    markPredefinedRows();
+  };
+  openSavedFilterDialog({
+    entries: () => savedRows,
     selectedId: () => savedFilterId,
-    setSelectedId: (id) => {
-      savedFilterId = id;
+    onPick: (entry) => applySavedFilter(entry),
+    onRename: async (entry) => {
+      const name = (await promptDialog('Переименовать отбор', 'Имя', entry.name) ?? '').trim();
+      if (name === '' || name === entry.name) return null;
+      try {
+        await etn.chronicleFilters.update(requireNetworkId(), entry.id, { name });
+      } catch (err) {
+        errorDialog('Переименовать отбор', err);
+        return null;
+      }
+      await reload();
+      if (savedFilterId === entry.id) {
+        filterName = name;
+        savedFilterName = name;
+        editor?.refresh();
+      }
+      return name;
     },
-  });
-
-  buildFilterForm({
-    sections,
-    header: [...headerNodes],
-    footer: [btnRow, savedBar.root],
-    mount: panel,
+    onCopy: async (entry) => {
+      const copyName = duplicateFilterName(
+        entry.name,
+        savedRows.map((row) => row.name),
+      );
+      try {
+        const created = await etn.chronicleFilters.create(requireNetworkId(), {
+          name: copyName,
+          definition: entry.definition as ChronicleFilterDefinition,
+        });
+        await reload();
+        return created.id;
+      } catch (err) {
+        errorDialog('Скопировать отбор', err);
+        return null;
+      }
+    },
+    onDelete: async (entry) => {
+      const confirmed = await confirmDialog(
+        'Удалить отбор',
+        `Удалить сохранённый отбор «${entry.name}»?`,
+        true,
+      );
+      if (!confirmed) return;
+      try {
+        await etn.chronicleFilters.remove(requireNetworkId(), entry.id);
+      } catch (err) {
+        errorDialog('Удалить отбор', err);
+        return;
+      }
+      if (savedFilterId === entry.id) {
+        savedFilterId = null;
+        savedFilterName = null;
+      }
+      await reload();
+    },
+    onRefresh: reload,
   });
 }
 
-/** Счётчик установок шортката «Дневника»: уникальный id контекста. */
+/** Применить сохранённый отбор (в т.ч. прежний плоский v1) и выполнить запрос. */
+function applySavedFilter(entry: SavedFilterRow): void {
+  // Период записи — НЕУДАЛЯЕМАЯ строка панели (ошибка 609deba0 п.2). Определение
+  // могло не нести лист `record_time` (легаси/импорт) — тогда строку периода
+  // восстанавливаем из текущих границ, иначе она молча пропала бы вместе с
+  // календарём (ошибка 68023851 п.3).
+  const { from, to } = chroniclePeriod();
+  filter = ensureChroniclePeriod(readFilterDefinition(entry.definition), from, to);
+  syncKeywordsFromTree();
+  savedFilterId = entry.id;
+  filterName = entry.name;
+  savedFilterName = entry.name;
+  savedDefinition = entry.definition;
+  serverIssues = [];
+  renderPanel();
+  actions.apply();
+}
+
+/**
+ * Гарантировать НЕУДАЛЯЕМУЮ строку «Период записи» (инвариант B2 панели,
+ * ошибка 609deba0 п.2): если прочитанное определение периода не несёт,
+ * подставляем текущие границы — иначе строка-замок периода исчезла бы молча
+ * (ошибка 68023851 п.3). Есть период в определении — оставляем его как есть.
+ */
+export function ensureChroniclePeriod(state: FilterState, from: string, to: string): FilterState {
+  const read = chroniclePeriod(state);
+  if (read.from !== '' || read.to !== '') return state;
+  return applyChroniclePeriod(state, from, to);
+}
+
+// ---------------------------------------------------------------------------
+// Шорткат применения отбора (Ctrl+Enter)
+// ---------------------------------------------------------------------------
+
 let chronicleApplySeq = 0;
 
 /**
  * Global Ctrl+Enter shortcut for the diary view (hosted by the feed).
- *
- * `onApply` — точка применения отбора; вынесена параметром с дефолтом на
- * `actions.apply()` только ради наблюдаемости в тестах (боевой вызов —
- * `wireChronicleApplyShortcut(hostEl)` без второго аргумента).
+ * `onApply` вынесена параметром с дефолтом только ради наблюдаемости в тестах.
  */
 export function wireChronicleApplyShortcut(
   container: HTMLElement,
   onApply: () => void = () => actions.apply(),
 ): void {
-  // Клавиатура вида — через общеклиентский диспетчер (ADR b420b08c, задача
-  // fd3d84f4): пока фокус внутри контейнера, его контекст на вершине стека.
   const contextId = `chronicle-apply-${(chronicleApplySeq += 1)}`;
   defineKeyContext({
     id: contextId,
@@ -657,13 +1197,7 @@ export function wireChronicleApplyShortcut(
         command: 'chronicle.apply',
         chord: 'Ctrl+Enter',
         run: (event) => {
-          // Клавишу уже поглотил внутренний редактор записи (CM6 keymap Mod-Enter
-          // → коммит правки, M10) — не применяем отбор второй раз (ошибка
-          // f5809943). Проверка нужна и при прямом `dispatchKeyEvent` в тестах.
           if (event.defaultPrevented) return false;
-          // Источник — редактор ЗАПИСИ ленты (комментарий/заголовок): молчим.
-          // Панель отбора сюда не попадает — Ctrl+Enter в её полях применяет
-          // отбор (спека «Горячие клавиши», 50bb672a).
           if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return false;
           onApply();
           return true;

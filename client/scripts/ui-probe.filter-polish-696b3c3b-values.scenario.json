@@ -1,0 +1,171 @@
+{
+  "name": "filter-polish-696b3c3b-values",
+  "description": "Полировка редактора отбора, часть 3 (ошибка 696b3c3b; пункты 1, 5, 6, 9, 11 — вторая половина). Онбординг → сид свойств → «Структуры» → DOM-пробы. П.1 — порядок футера фраза → линия-разделитель → имя → кнопки. П.5 — «Тип мысли» + «не имеет свойство» даёт чип-поле выбора свойства. П.6 — выпадашка «Есть свойства»: иконки, тип значения рядом с именем, ширина списка. П.9 — фраза предиката без значения без «=». П.11 — датовый виджет: одна рамка, пропорции 63/20/15/остаток, сокращённые подписи, «Точная дата» → поле даты с календарём. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-696b3c3b-values.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-text-property",
+      "api": {
+        "name": "createTextProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": { "name": "Заметка стенда", "value_type": "text", "description": "Свободный текст заметки" },
+        "expression": "data.name"
+      }
+    },
+    {
+      "name": "seed-number-property",
+      "api": {
+        "name": "createNumberProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": { "name": "Вес стенда", "value_type": "number" },
+        "expression": "data.name"
+      }
+    },
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "createLinkProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "Связь стенда",
+          "value_type": "link",
+          "name_forward": "связь стенда",
+          "name_reverse": "связь стенда от"
+        },
+        "expression": "data.name"
+      }
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe') !== null" },
+
+    { "name": "widen-window", "eval": "(() => { window.resizeTo(1900, 1000); return window.innerWidth; })()" },
+    { "name": "widen-ready", "timeout": 8000, "waitFor": "window.innerWidth >= 1400 && document.querySelector('.st-filter') !== null" },
+    { "name": "panel-to-max", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); return true; })()" },
+    { "name": "panel-max-ready", "timeout": 8000, "waitFor": "(document.querySelector('.st-filter')?.getBoundingClientRect().width ?? 0) >= 300" },
+
+    { "name": "add-nested-group", "eval": "(() => { const g0 = document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const btn = g0 ? g0.querySelector('.ft-add-group') : null; if (btn) { btn.click(); return 'clicked'; } return 'no-button'; })()" },
+    { "name": "row-exists", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row') !== null" },
+
+    { "name": "phrase-visible", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .fe-foot .ff .ff-preview') !== null" },
+
+    {
+      "name": "footer-order",
+      "probe": "(() => { const ff = document.querySelector('.st-filter .fe-foot .ff'); if (!ff) return 'no-footer'; const kids = [...ff.children].map((c) => c.className); const at = (t) => kids.findIndex((c) => c.includes(t)); return JSON.stringify({ kids, preview: at('ff-preview'), divider: at('ff-divider'), name: at('ff-name'), actions: at('ff-actions'), dividerBorder: (() => { const d = ff.querySelector('.ff-divider'); return d ? getComputedStyle(d).borderTopWidth + ' ' + getComputedStyle(d).borderTopStyle : null; })() }); })()"
+    },
+    {
+      "name": "footer-order-assert",
+      "probe": "(() => { const ff = document.querySelector('.st-filter .fe-foot .ff'); const kids = [...ff.children].map((c) => c.className); const at = (t) => kids.findIndex((c) => c.includes(t)); const p = at('ff-preview'); const d = at('ff-divider'); const a = at('ff-actions'); const n = at('ff-name'); const div = ff.querySelector('.ff-divider'); const border = div ? getComputedStyle(div).borderTopWidth : '0px'; return p >= 0 && d === p + 1 && a > d && (n < 0 || (n > d && n < a)) && parseFloat(border) > 0; })()",
+      "expect": true
+    },
+
+    { "name": "open-what", "eval": "(() => { const row = document.querySelector('.st-filter .ft-row'); row.querySelector('.ft-row__what').click(); return true; })()" },
+    { "name": "what-open", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') !== null" },
+    { "name": "pick-type", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"type\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "type-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what').textContent.includes('Тип')" },
+
+    { "name": "open-op-type", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__op').click(); return true; })()" },
+    { "name": "op-menu-type", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"not_has\"]') !== null" },
+    { "name": "pick-not-has", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"not_has\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "not-has-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__value .fv[data-editor=\"properties\"]') !== null" },
+    {
+      "name": "type-not-has-value",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const v = row.querySelector('.ft-row__value'); return JSON.stringify({ editor: v.querySelector('.fv')?.dataset.editor ?? null, chipField: !!v.querySelector('.entity-chip-field'), op: row.querySelector('.ft-row__op').textContent.trim() }); })()"
+    },
+    {
+      "name": "type-not-has-value-assert",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); const v = row.querySelector('.ft-row__value'); return v.querySelector('.fv')?.dataset.editor === 'properties' && !!v.querySelector('.entity-chip-field') && row.querySelector('.ft-row__op').textContent.includes('не имеет'); })()",
+      "expect": true
+    },
+
+    { "name": "open-op-type-has", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__op').click(); return true; })()" },
+    { "name": "op-menu-type-has", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"has\"]') !== null" },
+    { "name": "pick-has", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"has\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "has-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__value .entity-chip-field') !== null" },
+
+    { "name": "open-what-2", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__what').click(); return true; })()" },
+    { "name": "what-open-2", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"properties\"]') !== null" },
+    { "name": "pick-properties", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"properties\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "after-properties", "probe": "(() => { const rows = [...document.querySelectorAll('.st-filter .ft-row')]; return JSON.stringify(rows.map((r) => ({ what: r.querySelector('.ft-row__what')?.textContent ?? null, valueEditor: r.querySelector('.fv')?.dataset.editor ?? null, op: r.querySelector('.ft-row__op')?.textContent ?? null }))); })()" },
+    { "name": "props-ready", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-properties .entity-chip-input') !== null" },
+
+    { "name": "focus-chip-input", "eval": "(() => { const i = document.querySelector('.st-filter .ft-row .fv-properties .entity-chip-input'); i.focus(); return true; })()" },
+    { "name": "props-dropdown-open", "timeout": 8000, "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null" },
+    {
+      "name": "props-dropdown-metrics",
+      "probe": "(() => { const list = document.querySelector('.type-combo-list'); const rows = [...document.querySelectorAll('.type-combo-list .type-combo-item')]; const byName = (n) => rows.find((r) => r.textContent.includes(n)); const one = (n) => { const r = byName(n); return r ? { note: r.querySelector('.type-combo-note')?.textContent ?? null, icon: !!r.querySelector('.type-combo-icon svg'), title: r.getAttribute('title') } : null; }; return JSON.stringify({ width: list ? Math.round(list.getBoundingClientRect().width) : null, count: rows.length, icons: rows.filter((r) => r.querySelector('.type-combo-icon svg')).length, notes: rows.map((r) => r.querySelector('.type-combo-note')?.textContent).filter(Boolean), text: one('Заметка стенда'), number: one('Вес стенда'), link: one('Связь стенда') }); })()"
+    },
+    {
+      "name": "props-dropdown-assert",
+      "probe": "(() => { const list = document.querySelector('.type-combo-list'); const rows = [...document.querySelectorAll('.type-combo-list .type-combo-item')]; const byName = (n) => rows.find((r) => r.textContent.toLowerCase().includes(n.toLowerCase())); const note = (n) => byName(n)?.querySelector('.type-combo-note')?.textContent ?? null; const icon = (n) => !!byName(n)?.querySelector('.type-combo-icon svg'); const width = list ? list.getBoundingClientRect().width : 0; const textTitle = byName('Заметка стенда')?.getAttribute('title') ?? ''; return width >= 400 && rows.length >= 3 && rows.every((r) => r.querySelector('.type-combo-icon svg')) && note('Заметка стенда') === 'строка' && note('Вес стенда') === 'число' && note('Связь стенда') === 'связь' && icon('Связь стенда') && textTitle.includes('Свободный текст заметки'); })()",
+      "expect": true
+    },
+    { "name": "close-dropdown", "key": "Escape" },
+
+    { "name": "pick-type-for-phrase", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__what').click(); return true; })()" },
+    { "name": "what-open-3", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') !== null" },
+    { "name": "pick-type-3", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"type\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "type-picked-for-phrase", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what').textContent.includes('Тип') && document.querySelector('.st-filter .ft-row .ft-row__op') !== null" },
+    { "name": "open-op-phrase", "eval": "(() => { const op = document.querySelector('.st-filter .ft-row .ft-row__op'); if (!op) return 'no-op'; op.click(); return true; })()" },
+    { "name": "op-menu-phrase", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"eq\"]') !== null" },
+    { "name": "pick-eq-phrase", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"eq\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "type-eq-empty", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__op').textContent.includes('=') && document.querySelector('.st-filter .ft-row .ft-row__value .fv[data-editor=\"entity\"]') !== null" },
+    { "name": "phrase-after-eq", "probe": "(() => { const p = document.querySelector('.st-filter .fe-foot .ff .ff-preview__text'); return p ? p.textContent : 'no-preview'; })()" },
+    {
+      "name": "phrase-no-eq-without-value-assert",
+      "probe": "(() => { const p = document.querySelector('.st-filter .fe-foot .ff .ff-preview__text'); const t = p ? p.textContent : ''; return t.trim() === 'Тип мысли' && !/=/.test(t); })()",
+      "expect": true
+    },
+
+    { "name": "pick-created-at", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__what').click(); return true; })()" },
+    { "name": "what-open-4", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"created_at\"]') !== null" },
+    { "name": "pick-created-at-2", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"created_at\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "created-at-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what').textContent.includes('Дата создания')" },
+    { "name": "open-op-date", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__op').click(); return true; })()" },
+    { "name": "op-menu-date", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"gte\"]') !== null" },
+    { "name": "pick-gte", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"gte\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "date-widget", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-date__frame') !== null" },
+
+    {
+      "name": "date-widget-metrics",
+      "probe": "(() => { const frame = document.querySelector('.st-filter .ft-row .fv-date__frame'); const w = (sel) => { const e = frame.querySelector(sel); return e ? Math.round(e.getBoundingClientRect().width) : null; }; const total = Math.round(frame.getBoundingClientRect().width); const a = w('.fv-date__anchor'); const s = w('.fv-date__shift'); const u = w('.fv-date__unit'); const r = w('.fv-date__reset'); const borders = ['.fv-date__anchor', '.fv-date__shift', '.fv-date__unit'].map((sel) => getComputedStyle(frame.querySelector(sel)).borderStyle + '/' + getComputedStyle(frame.querySelector(sel)).borderTopWidth); const anchor = frame.querySelector('.fv-date__anchor'); const opts = [...anchor.querySelectorAll('option')].map((o) => o.value); const group = anchor.querySelector('optgroup'); const unitOpts = [...frame.querySelector('.fv-date__unit').querySelectorAll('option')].map((o) => o.textContent); return JSON.stringify({ total, a, s, u, r, ratioA: a / total, ratioS: s / total, ratioU: u / total, borders, firstOption: opts[0], group: group ? group.label : null, unitOpts }); })()"
+    },
+    {
+      "name": "date-widget-assert",
+      "probe": "(() => { const frame = document.querySelector('.st-filter .ft-row .fv-date__frame'); const ew = (sel) => { const e = frame.querySelector(sel); return e ? e.getBoundingClientRect().width : 0; }; const total = frame.getBoundingClientRect().width; const a = ew('.fv-date__anchor'); const s = ew('.fv-date__shift'); const u = ew('.fv-date__unit'); const r = ew('.fv-date__reset'); const near = (x, t, tol) => Math.abs(x - t) <= tol; const noInnerBorder = ['.fv-date__anchor', '.fv-date__shift', '.fv-date__unit'].every((sel) => getComputedStyle(frame.querySelector(sel)).borderStyle === 'none' || getComputedStyle(frame.querySelector(sel)).borderTopWidth === '0px'); const anchor = frame.querySelector('.fv-date__anchor'); const first = anchor.querySelector('option').value; const group = anchor.querySelector('optgroup')?.label; const units = [...frame.querySelector('.fv-date__unit').querySelectorAll('option')].map((o) => o.textContent); const unitsOk = ['дн', 'нед', 'мес', 'год'].every((x) => units.includes(x)); return total > 0 && near(a / total, 0.63, 0.12) && near(s / total, 0.2, 0.1) && near(u / total, 0.15, 0.1) && r > 10 && noInnerBorder && first === 'exact' && group === 'ОТНОСИТЕЛЬНЫЕ ДАТЫ' && unitsOk; })()",
+      "expect": true
+    },
+
+    {
+      "name": "switch-to-exact",
+      "eval": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); sel.value = 'exact'; sel.dispatchEvent(new Event('change', { bubbles: true })); return true; })()"
+    },
+    { "name": "exact-rendered", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-date__frame--exact .date-field') !== null" },
+    {
+      "name": "exact-metrics",
+      "probe": "(() => { const frame = document.querySelector('.st-filter .ft-row .fv-date__frame'); const field = frame.querySelector('.date-field'); return JSON.stringify({ exact: frame.classList.contains('fv-date__frame--exact'), dateField: !!field, calendar: !!field?.querySelector('.date-field-pick'), ownClear: !!field?.querySelector('.date-field-clear'), shift: !!frame.querySelector('.fv-date__shift'), unit: !!frame.querySelector('.fv-date__unit'), input: frame.querySelector('.date-field-input')?.value ?? null }); })()"
+    },
+    {
+      "name": "exact-assert",
+      "probe": "(() => { const frame = document.querySelector('.st-filter .ft-row .fv-date__frame'); const field = frame.querySelector('.date-field'); return frame.classList.contains('fv-date__frame--exact') && !!field && !!field.querySelector('.date-field-pick') && !field.querySelector('.date-field-clear') && !frame.querySelector('.fv-date__shift') && !frame.querySelector('.fv-date__unit') && /^\\d{4}-\\d{2}-\\d{2}$/.test(frame.querySelector('.date-field-input')?.value ?? ''); })()",
+      "expect": true
+    },
+
+    { "name": "phrase-final", "probe": "(() => { const p = document.querySelector('.st-filter .fe-foot .ff .ff-preview__text'); return p ? p.textContent : 'no-preview'; })()" }
+  ]
+}

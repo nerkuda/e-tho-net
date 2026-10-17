@@ -1,22 +1,20 @@
 /**
- * Tests for the structures filter panel after ошибка 6158d2ea
- * («Непонятные термины в панели отбора структур»).
+ * Тесты панели отбора «Структур» после пересборки на единый редактор
+ * (задача 213bd2d2, требование 54cba705, ADR fc23f9c1 «судьба спец-секций»).
  *
- * Proof of the requested behaviour:
- *   * group titles and the panel order are exactly
- *     Ключевые слова, Типы мыслей, Типы связей, Родительские мысли,
- *     Выбирать потомков по связям;
- *   * the group is titled «Выбирать потомков по связям» and its flag reads
- *     «учитывать связи без типа» — the old terms are gone;
- *   * the group is disabled (dimmed, not editable) and dropped from the wire
- *     filter while «Родительские мысли» is empty — an empty group must not
- *     make the filter non-empty (the view would stop showing HOME+orphans);
- *   * with parents filled the group is editable and its `link_filter` is sent.
+ * Доказательства требуемого поведения:
+ *   * спец-секций в экране нет — панель смонтирована КОРНЕМ редактора (`.fe`),
+ *     групп «Ключевые слова» / «Выбирать потомков по связям» в разметке нет;
+ *   * пустое дерево даёт ПЛОСКИЙ пустой отбор без `ast` — контракт «нет
+ *     критериев → HOME + сироты» (§15.3) держится на отсутствии `ast`;
+ *   * прежний плоский отбор («Родительские мысли» + «Выбирать потомков по
+ *     связям») читается тем же конвертером и переводится в строку
+ *     «Родители в иерархии» с режимом «по всем связям» (решение 2026-10-12);
+ *   * политика видимости плоского контракта (только актуальные, без помеченных)
+ *     впекается в AST как обычные листья и снимается явным условием дерева или
+ *     настройкой «Показывать неактуальные».
  *
- * The panel is mounted for real under a minimal DOM shim (the same technique
- * as `structures-dates-filter.test.ts` and `renderer-editor-mount.test.ts`);
- * the wire assertions go through the exported `buildTraversalFilter()` /
- * `buildExtraFilter()` — the very seam `structures.ts::buildFilter` uses.
+ * Панель монтируется на минимальном DOM-шиме (как `structures-dates-filter`).
  */
 
 import assert from 'node:assert/strict';
@@ -24,13 +22,6 @@ import { before, describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-/** Concatenated text of a subtree (the shim keeps text per node). */
-function textOf(node: ShimElement): string {
-  let out = node.textContent;
-  for (const child of node.children) out += ` ${textOf(child)}`;
-  return out.trim();
-}
 
 /** Installs the minimal DOM/window shims the panel and its imports need. */
 function installShim(): void {
@@ -57,8 +48,8 @@ function installShim(): void {
     etn: {
       admin: { listUsers: async () => [] },
       propertyRegistry: { list: async () => [] },
-      savedFilters: { list: async () => [] },
-      structures: { query: async () => ({ items: [], total: 0 }) },
+      savedFilters: { list: async () => [], create: async () => ({}), update: async () => ({}), remove: async () => undefined },
+      structures: { query: async () => ({ items: [], total: 0 }), queryIds: async () => ({ ids: [], total: 0 }) },
       thoughts: {
         resolve: async () => [],
         findDuplicates: async () => [],
@@ -68,26 +59,37 @@ function installShim(): void {
 }
 
 let panel: typeof import('../src/renderer/screens/structures/filter-panel.js');
+let stateMod: typeof import('../src/renderer/state.js');
 let host: ShimElement;
 
-/** Top-level groups of the mounted panel, in DOM order. */
-function groupBoxes(): ShimElement[] {
-  const scroll = host.querySelector('.st-f-scroll');
-  assert.notEqual(scroll, null, 'панель обязана быть смонтирована');
-  return scroll!.children.filter((c) => c.className.split(/\s+/).includes('st-f-block'));
+const PARENT_ID = '11111111-1111-4111-8111-111111111111';
+const LINK_TYPE_ID = '00000000-0000-4000-8000-0000000000ff';
+
+/**
+ * Листья дерева модели (`kind: 'leaf'`) или узла AST (нет `children`) в порядке
+ * обхода — обе формы различаются наличием `children`.
+ */
+function leaves(node: any, out: any[] = []): any[] {
+  if (node === null || node === undefined) return out;
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) leaves(child, out);
+    return out;
+  }
+  out.push(node);
+  return out;
 }
 
-/** The «Выбирать потомков по связям» group of the mounted panel. */
-function traversalBox(): ShimElement {
-  const box = groupBoxes().find((b) => textOf(b.children[0]!).includes('Выбирать потомков по связям'));
-  assert.notEqual(box, undefined, 'группа «Выбирать потомков по связям» обязана быть в панели');
-  return box!;
+/** Concatenated text of a subtree (the shim keeps text per node). */
+function textOf(node: ShimElement): string {
+  let out = node.textContent;
+  for (const child of node.children) out += ` ${textOf(child)}`;
+  return out.trim();
 }
 
 before(async () => {
   installShim();
-  const { store } = await import('../src/renderer/state.js');
-  store.state.networkId = '00000000-0000-4000-8000-0000000000aa';
+  stateMod = await import('../src/renderer/state.js');
+  stateMod.store.state.networkId = '00000000-0000-4000-8000-0000000000aa';
   panel = await import('../src/renderer/screens/structures/filter-panel.js');
   host = new ShimElement('div');
   panel.mountFilterPanel(host as unknown as HTMLElement, {
@@ -97,86 +99,193 @@ before(async () => {
   });
 });
 
-describe('structures filter panel — термины и доступность обхода (ошибка 6158d2ea)', () => {
-  it('порядок групп: Ключевые слова, Типы мыслей, Типы связей, Родительские мысли, Выбирать потомков по связям', () => {
-    const titles = groupBoxes().map((box) => textOf(box.children[0]!).replace(/\s*\*\s*$/, ''));
-    assert.deepEqual(titles.slice(0, 5), [
+describe('панель «Структур» — единый редактор отбора (задача 213bd2d2)', () => {
+  it('спец-секций в экране нет: панель — корень редактора, а не список групп', () => {
+    assert.notEqual(host.querySelector('.fe'), null, 'панель смонтирована редактором');
+    assert.notEqual(host.querySelector('.fe-foot'), null, 'низ редактора на месте');
+    assert.equal(host.querySelector('.st-f-block'), null, 'спец-секций панели не осталось');
+    const text = textOf(host);
+    for (const gone of [
       'Ключевые слова',
-      'Типы мыслей',
-      'Типы связей',
-      'Родительские мысли',
       'Выбирать потомков по связям',
-    ]);
+      'Обход по связям',
+      'Родительские мысли',
+    ]) {
+      assert.ok(!text.includes(gone), `секция «${gone}» убрана из экрана`);
+    }
   });
 
-  it('новые подписи группы и флага; старые термины убраны', () => {
-    const text = textOf(traversalBox());
-    assert.ok(text.includes('Выбирать потомков по связям'), 'новая подпись группы');
-    assert.ok(text.includes('учитывать связи без типа'), 'новая подпись флага');
-    const all = textOf(host);
-    assert.ok(!all.includes('Обход по связям'), 'старый термин «Обход по связям» не должен остаться');
-    assert.ok(!all.includes('структурные связи'), 'старый термин «структурные связи» не должен остаться');
-  });
-
-  it('пустые «Родительские мысли» → группа погашена и в запрос не попадает', () => {
+  it('пустое дерево → плоский пустой отбор без AST (HOME + сироты, §15.3)', () => {
     panel.setFilterState({
       ...panel.getFilterState(),
-      parentIds: [],
-      linkFilterTypeIds: ['00000000-0000-4000-8000-0000000000ff'],
+      tree: { kind: 'group', op: 'and', children: [] },
+      sortKeys: [],
+    });
+    const filter = panel.buildQueryFilter();
+    assert.equal(filter.ast, undefined, 'пустое дерево уходит без ast');
+    // Ключа в паре нет: сортировку панели несёт секция чипов, а пустые чипы не
+    // воскрешают легаси-поле `state.sort` (ошибка 32fd6125) — порядок по
+    // умолчанию сервера (для плоского отбора это `created`).
+    assert.equal(filter.sort, undefined);
+    assert.equal(filter.order, undefined);
+  });
+
+  it('прежний плоский отбор читается конвертером и переводится в «в иерархии по всем связям»', () => {
+    // 1) Снимок L4 прежней панели (плоская модель, camelCase).
+    const snapshot = JSON.stringify({
+      keywords: 'кот',
+      parentIds: [PARENT_ID],
+      linkFilterTypeIds: [LINK_TYPE_ID],
       linkFilterStructural: true,
+      sort: 'alpha',
+      order: 'desc',
     });
-    const box = traversalBox();
-    // Погашена: заголовок не маркируется, тело недоступно к вводу.
-    assert.equal(box.classList.contains('st-f-block-disabled'), true);
-    assert.equal(box.children[0]!.classList.contains('st-f-title-active'), false);
-    const checkbox = box.querySelectorAll('input').find((i) => i.type === 'checkbox');
-    assert.equal(checkbox?.disabled, true, 'флаг обхода недоступен');
-    assert.equal(box.querySelector('.entity-chip-input')?.disabled, true, 'поле типов связей недоступно');
-    // В запрос не попадает: пустая группа не делает отбор непустым.
-    assert.equal(panel.buildTraversalFilter(), undefined);
+    const fromSnapshot = leaves(panel.parseFilterState(snapshot).tree);
+    const snapshotRoots = fromSnapshot.find((leaf) => leaf.entity.kind === 'parents');
+    assert.notEqual(snapshotRoots, undefined, 'строка «Родители» собрана из parent_ids');
+    assert.equal(snapshotRoots.operator, 'in_hierarchy');
+    assert.equal(snapshotRoots.mode, 'all_links', 'аналог «в иерархии по всем типам связей»');
+    assert.deepEqual(snapshotRoots.value, { kind: 'list', items: [PARENT_ID] });
+    assert.ok(
+      fromSnapshot.some((leaf) => leaf.entity.kind === 'keywords'),
+      'ключевые слова стали строкой «Найти слова»',
+    );
+
+    // 2) Сохранённый отбор прежней формы (плоское определение v1, snake_case).
+    const saved = panel.readFilterDefinition({
+      parent_ids: [PARENT_ID],
+      link_filter: { type_ids: [LINK_TYPE_ID], include_structural: true },
+      type_ids: ['22222222-2222-4222-8222-222222222222'],
+    });
+    const savedRows = leaves(saved.tree);
+    const savedRoots = savedRows.find((leaf) => leaf.entity.kind === 'parents');
+    assert.notEqual(savedRoots, undefined, 'сохранённый parent_ids тоже стал строкой');
+    assert.equal(savedRoots.mode, 'all_links');
+    assert.ok(savedRows.some((leaf) => leaf.entity.kind === 'type'));
+
+    // Плоского фасада в отборе больше нет: запрос уходит деревом.
+    panel.setFilterState({ ...panel.getFilterState(), ...saved, savedFilterId: null, panelWidth: null });
+    const filter = panel.buildQueryFilter();
+    assert.notEqual(filter.ast, undefined, 'непустое дерево уходит AST');
+    assert.equal((filter as Record<string, unknown>)['parent_ids'], undefined);
+    assert.equal((filter as Record<string, unknown>)['link_filter'], undefined);
   });
 
-  it('заполненные «Родительские мысли» → группа доступна и попадает в запрос', () => {
-    const parentId = '11111111-1111-4111-8111-111111111111';
-    panel.setFilterState({
-      ...panel.getFilterState(),
-      parentIds: [parentId],
-      linkFilterTypeIds: ['00000000-0000-4000-8000-0000000000ff'],
-      linkFilterStructural: true,
-    });
-    const box = traversalBox();
-    assert.equal(box.classList.contains('st-f-block-disabled'), false);
-    assert.equal(box.children[0]!.classList.contains('st-f-title-active'), true, 'заполненная группа маркируется');
-    const checkbox = box.querySelectorAll('input').find((i) => i.type === 'checkbox');
-    assert.equal(checkbox?.disabled, false);
-    assert.equal(box.querySelector('.entity-chip-input')?.disabled, false);
-    assert.deepEqual(panel.buildTraversalFilter(), {
-      type_ids: ['00000000-0000-4000-8000-0000000000ff'],
-      include_structural: true,
-    });
-    assert.deepEqual(panel.buildExtraFilter().parent_ids, [parentId]);
+  it('плоский parent_ids → группа ИЛИ(id в [корни], Родители в иерархии [корни]) без потери листа корней', async () => {
+    // Довесок к находкам проверки части 4 (ошибка 68023851): конверсия плоского
+    // `parent_ids` — ГРУППА из ДВУХ листьев: фасадный обход включал сами корни,
+    // поэтому их добавляет лист `id в [корни]` рядом с `parents in_hierarchy`.
+    // Своё покрытие: потеря листа `id в [корни]` (или всего `parents`-листа) в
+    // `compileFlatCriteriaToAst` (filter-builder.ts:2370) краснеет ЗДЕСЬ, а не
+    // только в тестах чужого места.
+    const builder = await import('../src/renderer/lib/filter-builder.js');
+    const state = { ...builder.defaultFilterCriteriaState(), parentIds: [PARENT_ID] };
+    const ast = builder.compileFlatCriteriaToAst(state, new Map(), { activeMode: 'structures' });
+    assert.notEqual(ast, undefined, 'непустой плоский отбор даёт AST');
+    const root = ast!.filter as any;
+    assert.ok(Array.isArray(root.children), 'корень — группа И');
+    const group = root.children.find((child: any) => child.op === 'or');
+    assert.notEqual(group, undefined, 'родительские мысли — ГРУППА ИЛИ (а не один лист)');
+
+    const idLeaf = group.children.find((child: any) => child.entity?.kind === 'id');
+    assert.notEqual(idLeaf, undefined, 'лист «id в [корни]» в группе есть (фасад включал корни)');
+    assert.equal(idLeaf.operator, 'in');
+    assert.deepEqual(idLeaf.value, [PARENT_ID], 'корни — в листе «id в [корни]»');
+
+    const parentsLeaf = group.children.find((child: any) => child.entity?.kind === 'parents');
+    assert.notEqual(parentsLeaf, undefined, 'лист «Родители в иерархии» в группе есть');
+    assert.equal(parentsLeaf.operator, 'in_hierarchy');
+    assert.deepEqual(parentsLeaf.value, [PARENT_ID], 'корни — и в листе «Родители в иерархии»');
+    // Режим обхода ставит НЕ этот конвертер, а доводка дерева
+    // (`applyLegacyTraversalMode` → `all_links`); проверено отдельной пробой выше.
   });
 
-  it('обход без ограничений по-прежнему не добавляет link_filter (регрессия)', () => {
-    panel.setFilterState({
-      ...panel.getFilterState(),
-      parentIds: ['11111111-1111-4111-8111-111111111111'],
-      linkFilterTypeIds: [],
-      linkFilterStructural: false,
-    });
-    assert.equal(panel.buildTraversalFilter(), undefined);
+  it('политика видимости: только актуальные и без помеченных, снимается настройкой и условием', () => {
+    const fresh = panel.getFilterState();
+    const withKeyword = {
+      ...fresh,
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'keywords' },
+            operator: 'matches',
+            value: { kind: 'scalar', value: 'кот' },
+          },
+        ],
+      },
+      sortKeys: [],
+    };
+    panel.setFilterState(withKeyword as any);
+    const filter = panel.buildQueryFilter();
+    const astLeaves = leaves({ kind: 'group', op: 'and', children: [filter.ast!.filter] });
+    const kinds = astLeaves.map((leaf) => leaf.entity.kind);
+    assert.ok(kinds.includes('active'), 'дефолт «только актуальные» впечён листом');
+    assert.ok(kinds.includes('trashed'), 'дефолт «без помеченных» впечён листом');
+    const active = astLeaves.find((leaf) => leaf.entity.kind === 'active');
+    assert.equal(active.value, true);
+    const trashed = astLeaves.find((leaf) => leaf.entity.kind === 'trashed');
+    assert.equal(trashed.value, false);
+
+    // Явное условие дерева сильнее дефолта: строка «Только актуальные: нет».
+    stateMod.store.state.showInactive = true;
+    const explicit = {
+      ...withKeyword,
+      tree: {
+        kind: 'group',
+        op: 'and' as const,
+        children: [
+          ...(withKeyword.tree as any).children,
+          { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+        ],
+      },
+    };
+    panel.setFilterState(explicit as any);
+    const kinds2 = leaves({ kind: 'group', op: 'and', children: [panel.buildQueryFilter().ast!.filter] }).map(
+      (leaf) => leaf.entity.kind,
+    );
+    assert.ok(kinds2.includes('active'));
+    // Настройка снимает дефолт «только актуальные», но не подменяет условие.
+    assert.equal(kinds2.filter((kind) => kind === 'active').length, 1, 'одно условие по active, без дубля');
+    stateMod.store.state.showInactive = false;
   });
 
-  it('снятие «Родительских мыслей» снова гасит группу (динамический пересчёт)', () => {
-    panel.setFilterState({
+  it('пустая настройка видимости: без show_inactive дефолт по active остаётся', () => {
+    const only = {
       ...panel.getFilterState(),
-      parentIds: ['11111111-1111-4111-8111-111111111111'],
-      linkFilterTypeIds: ['00000000-0000-4000-8000-0000000000ff'],
-      linkFilterStructural: true,
-    });
-    assert.equal(traversalBox().classList.contains('st-f-block-disabled'), false);
-    panel.setFilterState({ ...panel.getFilterState(), parentIds: [] });
-    assert.equal(traversalBox().classList.contains('st-f-block-disabled'), true);
-    assert.equal(panel.buildTraversalFilter(), undefined);
+      tree: {
+        kind: 'group',
+        op: 'and' as const,
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'keywords' },
+            operator: 'matches',
+            value: { kind: 'scalar', value: 'кот' },
+          },
+        ],
+      },
+      sortKeys: [],
+    };
+    panel.setFilterState(only as any);
+    const kinds = leaves({ kind: 'group', op: 'and', children: [panel.buildQueryFilter().ast!.filter] }).map(
+      (leaf) => leaf.entity.kind,
+    );
+    assert.ok(kinds.includes('active'), 'актуальность по умолчанию в отборе');
+  });
+
+  it('treeHasConditions: пустая группа и null — отбор без условий', () => {
+    assert.equal(panel.treeHasConditions(null), false);
+    assert.equal(panel.treeHasConditions({ kind: 'group', op: 'and', children: [] }), false);
+    assert.equal(
+      panel.treeHasConditions({
+        kind: 'group',
+        op: 'and',
+        children: [{ kind: 'group', op: 'or', children: [{ kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } }] }],
+      } as any),
+      true,
+    );
   });
 });

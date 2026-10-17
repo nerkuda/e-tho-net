@@ -20,28 +20,34 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { NetworkProperty } from '@etn/shared';
+import { FILTER_AST_VERSION } from '@etn/shared';
 
 import {
   ACTIVITY_ACTION_FILTERS,
   AUTHOR_OP_LABELS,
   FILTER_ORDERS,
   FILTER_SORTS,
-  activityRowPasses,
   authorFilterActive,
-  buildActivityQueryPlan,
   buildChronicleWire,
+  buildSearchAst,
   buildSearchCriteriaWire,
   buildWireFilter,
+  compileActivityCriteriaToAst,
+  compileActivityCriteriaToAstDetailed,
+  compileFlatCriteriaToAst,
   defaultActivityCriteriaState,
   defaultChronicleCriteriaState,
   defaultFilterCriteriaState,
   defaultSearchCriteriaState,
+  filterTreeIdsByKind,
   parseActivityCriteria,
   parseChronicleCriteria,
   parseFilterDefinition,
+  parseFilterDefinitionTree,
   parseSearchCriteria,
   searchCriteriaToStored,
-  searchSubtreeRoots,
+  type FilterCriteriaState,
+  type SearchCriteriaState,
 } from '../src/renderer/lib/filter-builder.js';
 
 const EMPTY_REGISTRY = new Map<string, NetworkProperty>();
@@ -132,51 +138,228 @@ describe('единая модель состояния переживает со
     assert.deepEqual(state.actions, ['created']);
   });
 
-  it('строка поиска карты: набор настроек переживает сохранение', () => {
-    const state = {
+  it('строка поиска карты: настройки переживают сохранение (мыслевые — AST, корпусные — плоские)', () => {
+    const state: SearchCriteriaState = {
       ...defaultSearchCriteriaState(),
-      subtree: true,
-      subrootIds: ['root-1', 'root-2'],
       onlyLinks: true,
-      typeIds: ['t1', 't2'],
       linkTypeIds: ['l1'],
-      trashed: true,
       authorId: 'u1',
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+          { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+          {
+            kind: 'leaf',
+            entity: { kind: 'type' },
+            operator: 'in_hierarchy',
+            value: { kind: 'list', items: ['t1', 't2'] },
+          },
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: ['root-1', 'root-2'] },
+          },
+        ],
+      },
     };
     const back = parseSearchCriteria(searchCriteriaToStored(state));
     assert.deepEqual(back, state, 'записанное читается тем же парсером');
   });
 
-  it('строка поиска карты: одиночный `subrootId` прошлых версий читается набором', () => {
-    const back = parseSearchCriteria({ subtree: true, subrootId: 'root-1' });
-    assert.equal(back.subtree, true);
-    assert.deepEqual(back.subrootIds, ['root-1'], 'старый ключ — набор из одной мысли');
+  it('строка поиска карты: прежний плоский снимок мигрирует в дерево редактора', () => {
+    const back = parseSearchCriteria({
+      subtree: true,
+      subrootId: 'root-1',
+      typeIds: ['t1'],
+      showInactive: false,
+      trashed: false,
+      onlyLinks: true,
+    });
+    // Одиночный `subrootId` — корень из одной мысли; строка подкорня хранит
+    // только «Родители в иерархии» (корень добавит buildSearchAst).
+    assert.deepEqual(back.tree, {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+        { kind: 'leaf', entity: { kind: 'type' }, operator: 'in_hierarchy', value: { kind: 'list', items: ['t1'] } },
+        {
+          kind: 'leaf',
+          entity: { kind: 'parents' },
+          operator: 'in_hierarchy',
+          mode: 'all_links',
+          value: { kind: 'list', items: ['root-1'] },
+        },
+      ],
+    });
+    assert.equal(back.onlyLinks, true, 'корпусные ключи читаются как прежде');
+  });
+
+  it('строка поиска карты: `subtree` с ПУСТЫМ набором корней сохраняет строку подкорня (фолбэк на фокус)', () => {
+    const back = parseSearchCriteria({ subtree: true, subrootIds: [] });
+    // Строка подкорня ОБЯЗАНА остаться: ограничение включено, мысль не выбрана —
+    // значение `none`, фокус подставит buildSearchAst/expandSearchSubtreeRoots.
+    assert.deepEqual(back.tree, {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+        {
+          kind: 'leaf',
+          entity: { kind: 'parents' },
+          operator: 'in_hierarchy',
+          mode: 'all_links',
+          value: { kind: 'none' },
+        },
+      ],
+    });
+    // И при сборке AST корнем становится ТЕКУЩИЙ ФОКУС (прежнее поведение
+    // `searchSubtreeRoots` → `[focusId]` → `in=subtree`+`from_thought_id=focusId`).
+    const ast = buildSearchAst(back, 'focus-1');
+    assert.deepEqual(ast?.filter, {
+      op: 'and',
+      children: [
+        { entity: { kind: 'active' }, operator: 'eq', value: true },
+        { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['focus-1'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['focus-1'] },
+          ],
+        },
+      ],
+    });
   });
 });
 
 // ---------------------------------------------------------------------------
-// 1b. Мысли-подкорни запроса поиска (задача a3247f84)
+// 1b. AST мыслевых настроек строки поиска (задача 8f3b2cf2)
 // ---------------------------------------------------------------------------
 
-describe('мысли-подкорни запроса поиска', () => {
-  it('выключенный флажок — поиск без подкорня', () => {
-    const state = { ...defaultSearchCriteriaState(), subrootIds: ['a', 'b'] };
-    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), [null]);
+describe('AST мыслевых настроек строки поиска', () => {
+  it('пустое дерево — AST нет (сервер применяет дефолты видимости сам)', () => {
+    const state = { ...defaultSearchCriteriaState(), tree: null };
+    assert.equal(buildSearchAst(state, 'focus-1'), undefined);
   });
 
-  it('пустой набор при включённом флажке — запасной вариант «текущий фокус»', () => {
-    const state = { ...defaultSearchCriteriaState(), subtree: true };
-    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), ['focus-1']);
-    assert.deepEqual(searchSubtreeRoots(state, null), [null]);
+  it('дефолт — только актуальные и без корзины (паритет прежних плоских флагов)', () => {
+    const ast = buildSearchAst(defaultSearchCriteriaState(), null);
+    assert.deepEqual(ast?.filter, {
+      op: 'and',
+      children: [
+        { entity: { kind: 'active' }, operator: 'eq', value: true },
+        { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+      ],
+    });
   });
 
-  it('выбранные мысли — по запросу на каждую (объединение поддеревьев)', () => {
-    const state = {
+  it('подкорень расширяется до «ИЛИ(id в [корни], parents in_hierarchy [корни] all_links)»', () => {
+    const state: FilterCriteriaState = {
       ...defaultSearchCriteriaState(),
-      subtree: true,
-      subrootIds: ['a', 'b'],
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: ['a', 'b'] },
+          },
+        ],
+      },
     };
-    assert.deepEqual(searchSubtreeRoots(state, 'focus-1'), ['a', 'b']);
+    const ast = buildSearchAst(state, null);
+    assert.deepEqual(ast?.filter, {
+      op: 'and',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['a', 'b'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['a', 'b'] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('пустая строка подкорня берёт текущий фокус (прежнее поведение)', () => {
+    const state: FilterCriteriaState = {
+      ...defaultSearchCriteriaState(),
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'none' },
+          },
+        ],
+      },
+    };
+    const withFocus = buildSearchAst(state, 'focus-1');
+    assert.deepEqual(withFocus?.filter, {
+      op: 'and',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['focus-1'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['focus-1'] },
+          ],
+        },
+      ],
+    });
+    const withoutFocus = buildSearchAst(state, null);
+    // Пустой подкорень и без фокуса — ограничение не задано: строку не создаём,
+    // мыслевых условий не осталось → AST нет (поиск без ограничения, bug 46047836).
+    assert.equal(withoutFocus, undefined);
+  });
+
+  it('единственная строка — пустой подкорень без фокуса: AST нет (bug 46047836)', () => {
+    const state: FilterCriteriaState = {
+      ...defaultSearchCriteriaState(),
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'parents' },
+            operator: 'in_hierarchy',
+            mode: 'all_links',
+            value: { kind: 'list', items: [] },
+          },
+        ],
+      },
+    };
+    assert.equal(buildSearchAst(state, null), undefined);
+    // С фокусом — прежнее поведение: корень = фокус, строка остаётся.
+    const withFocus = buildSearchAst(state, 'focus-1');
+    assert.deepEqual(withFocus?.filter, {
+      op: 'and',
+      children: [
+        {
+          op: 'or',
+          children: [
+            { entity: { kind: 'id' }, operator: 'in', value: ['focus-1'] },
+            { entity: { kind: 'parents' }, operator: 'in_hierarchy', mode: 'all_links', value: ['focus-1'] },
+          ],
+        },
+      ],
+    });
   });
 });
 
@@ -197,12 +380,20 @@ describe('единый конвертер отбора', () => {
     );
   });
 
-  it('план запроса «Событий» детерминирован и полон', () => {
-    const state = { ...defaultActivityCriteriaState(), entityTypes: ['thought' as const], actions: ['created' as const] };
-    const plan = buildActivityQueryPlan(state, ['thought', 'link']);
-    assert.deepEqual(plan.entityTypes, ['thought']);
-    assert.equal(plan.actions?.has('created'), true);
-    assert.equal(plan.clientFilter.actions, true, 'действие фильтруется клиентом — сервер его не умеет');
+  it('компилятор «Событий» переводит плоский пресет в AST детерминированно', () => {
+    const state = {
+      ...defaultActivityCriteriaState(),
+      entityTypes: ['thought' as const],
+      actions: ['created' as const],
+      createdAfter: '2024-06-01',
+    };
+    const ast1 = compileActivityCriteriaToAst(state);
+    const ast2 = compileActivityCriteriaToAst(
+      parseActivityCriteria({ entityTypes: ['thought'], actions: ['created'], fromMs: '2024-06-01' }),
+    );
+    assert.deepEqual(ast2, ast1, 'плоский пресет и его повторное чтение дают то же дерево');
+    assert.notEqual(ast1, undefined);
+    assert.equal(compileActivityCriteriaToAst(defaultActivityCriteriaState()), undefined, 'пустой отбор — без AST');
   });
 });
 
@@ -224,50 +415,56 @@ describe('выравненные возможности отбора', () => {
     assert.equal(authorFilterActive('not_empty', '', []), true);
   });
 
-  it('«События» умеют empty/not_empty и ne/not_in (клиентская дофильтровка)', () => {
+  it('«События»: автор — только eq/ne/in/not_in; empty/not_empty отбрасываются профилем', () => {
     assert.deepEqual(
       [...ACTIVITY_ACTION_FILTERS],
       ['created', 'updated', 'deleted', 'trashed', 'restored'],
     );
-    const emptyPlan = buildActivityQueryPlan({ ...defaultActivityCriteriaState(), authorOp: 'empty' }, ['thought']);
-    assert.equal(emptyPlan.clientFilter.userEmpty, true);
-    assert.equal(
-      activityRowPasses({ ...defaultActivityCriteriaState(), authorOp: 'empty' }, emptyPlan, {
-        user_id: 'u1',
-        action: 'created',
-        entity_title: 'x',
-      }),
-      false,
-      'empty отбрасывает строки с автором',
-    );
-    const notInPlan = buildActivityQueryPlan(
-      { ...defaultActivityCriteriaState(), authorOp: 'not_in', authorIds: ['u1'] },
-      ['thought'],
-    );
-    assert.equal(notInPlan.clientFilter.userNotIn, true);
-    assert.equal(
-      activityRowPasses(
-        { ...defaultActivityCriteriaState(), authorOp: 'not_in', authorIds: ['u1'] },
-        notInPlan,
-        { user_id: 'u1', action: 'created', entity_title: 'x' },
-      ),
-      false,
-      'not_in отбрасывает исключённого автора',
-    );
+    // Требование 1765e659: автор события — «равно», «в списке», под-выборка.
+    // Прежние пресеты с `empty`/`not_empty` профиль «события» не выражает —
+    // условие отбрасывается общим правилом миграции, а НЕ порождает лист
+    // `user is_empty` (который сервер отверг бы с VALIDATION_ERROR).
+    const empty = compileActivityCriteriaToAstDetailed({
+      ...defaultActivityCriteriaState(),
+      authorOp: 'empty',
+    });
+    assert.equal(empty.ast, undefined, 'единственное условие отброшено — критериев не осталось');
+    assert.deepEqual(empty.dropped, [{ entity: { kind: 'user' }, operator: 'is_empty' }]);
+    assert.equal(compileActivityCriteriaToAst({ ...defaultActivityCriteriaState(), authorOp: 'empty' }), undefined);
+    // `not_in` и `ne` — выразимы, остаются.
+    const notInAst = compileActivityCriteriaToAst({
+      ...defaultActivityCriteriaState(),
+      authorOp: 'not_in',
+      authorIds: ['u1', 'u2'],
+    });
+    assert.deepEqual(notInAst?.filter, {
+      entity: { kind: 'user' },
+      operator: 'not_in',
+      value: ['u1', 'u2'],
+    });
+    const neAst = compileActivityCriteriaToAst({
+      ...defaultActivityCriteriaState(),
+      authorOp: 'ne',
+      authorId: 'u3',
+    });
+    assert.deepEqual(neAst?.filter, { entity: { kind: 'user' }, operator: 'ne', value: 'u3' });
   });
 
-  it('строка поиска хранит типы массивом (а не одним id)', () => {
+  it('строка поиска: корпусной wire несёт только тип связи и автор/редактор', () => {
     const wire = buildSearchCriteriaWire({
       ...defaultSearchCriteriaState(),
       typeIds: ['t1', 't2'],
       linkTypeIds: ['l1', 'l2'],
+      authorId: 'u1',
+      editorId: 'u2',
     });
-    assert.deepEqual(wire.type_id, ['t1', 't2']);
-    assert.deepEqual(wire.link_type_id, ['l1', 'l2']);
+    // Мыслевые настройки (типы мыслей, подкорень, видимость) в AST, а НЕ в
+    // плоских параметрах (требование b91336e7: `ast` XOR плоские мыслевые).
+    assert.deepEqual(wire, { link_type_id: ['l1', 'l2'], author_id: 'u1', editor_id: 'u2' });
   });
 
   // Задача 77923b49: настройка «Показывать содержимое корзины» гасит критерий
-  // «Корзина» в панели «Структур» — ровно так же, как «Показывать
+  // «Помечено на удаление» в панели «Структур» — ровно так же, как «Показывать
   // неактуальное» гасит «Актуальность» (иначе явный флаг отбора возвращал бы
   // на экран то, что настройка прячет).
   it('«Структуры»: выключенная настройка корзины выбрасывает критерий trashed', () => {
@@ -294,5 +491,106 @@ describe('выравненные возможности отбора', () => {
       buildWireFilter(state, EMPTY_REGISTRY, { activeMode: 'view' }).trashed,
       true,
     );
+  });
+});
+
+describe('плоские датовые границы: токен уходит в AST канонической формой (99e7889d)', () => {
+  /** Листья дерева AST глубоко (в порядке обхода). */
+  function astLeaves(node: unknown): Array<{ entity: { kind: string }; operator: string; value?: unknown }> {
+    const out: Array<{ entity: { kind: string }; operator: string; value?: unknown }> = [];
+    const walk = (current: unknown): void => {
+      const row = current as { op?: string; children?: unknown[]; entity?: unknown };
+      if (row.entity !== undefined) {
+        out.push(current as (typeof out)[number]);
+        return;
+      }
+      for (const child of row.children ?? []) walk(child);
+    };
+    walk(node);
+    return out;
+  }
+
+  it('«Дата изменений между $weekStart и $today»: границы — формой `{ token }`', () => {
+    // Плоская форма хранит токен СТРОКОЙ (`updatedAfter: '$weekStart'`) — поле
+    // периода принимает опоры. Без канонизации сырая строка уезжала исполнителю
+    // литералом и сравнивалась с колонкой как текст («отбор исполнялся, но с
+    // неверными датами»), а незаполненная вторая граница приходила пустой
+    // строкой — «Граница даты должна быть непустой строкой ISO-8601».
+    const state: FilterCriteriaState = {
+      ...defaultFilterCriteriaState(),
+      updatedAfter: '$weekStart',
+      updatedBefore: '$today',
+      createdAfter: '2026-01-01',
+    };
+    const ast = compileFlatCriteriaToAst(state, EMPTY_REGISTRY, { activeMode: 'view' });
+    assert.notEqual(ast, undefined, 'условия есть — AST собран');
+    const leaves = astLeaves(ast!.filter);
+    const updated = leaves.filter((leaf) => leaf.entity.kind === 'updated_at');
+    assert.deepEqual(
+      updated.map((leaf) => [leaf.operator, leaf.value]),
+      [
+        ['gte', { token: '$weekStart' }],
+        ['lte', { token: '$today' }],
+      ],
+      'обе границы «Дата изменений» — в форме AST-токена, а не сырой строкой',
+    );
+    assert.deepEqual(
+      leaves.find((leaf) => leaf.entity.kind === 'created_at')?.value,
+      '2026-01-01',
+      'конкретная дата остаётся литералом — токеном становится только «$…»',
+    );
+  });
+});
+
+describe('идентификаторы листьев дерева отбора по виду операнда (a0c071f8)', () => {
+  const TYPE_ID = '11111111-1111-4111-8111-111111111111';
+  const PARENT_ID = '22222222-2222-4222-8222-222222222222';
+
+  it('плоское определение: `type_ids`/`parent_ids` находятся листьями дерева', () => {
+    // Прежний рецепт публикации читался плоскими полями; в новой форме те же
+    // адреса лежат листьями дерева (компилятор переводит `type_ids` в «Тип в
+    // иерархии», `parent_ids` — в ИЛИ(id, родители в иерархии)) — читатель
+    // предзаполнения берёт их оттуда, а не из плоских полей определения.
+    const tree = parseFilterDefinitionTree({
+      keywords: 'слово',
+      type_ids: [TYPE_ID],
+      parent_ids: [PARENT_ID],
+      sort: 'created',
+      order: 'asc',
+    }).tree;
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'type'), [TYPE_ID]);
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'parents'), [PARENT_ID]);
+  });
+
+  it('AST-тело: значения берутся из листьев, пустые виды дают пусто', () => {
+    const tree = parseFilterDefinitionTree({
+      version: FILTER_AST_VERSION,
+      filter: {
+        op: 'and',
+        children: [
+          { entity: { kind: 'type' }, operator: 'in_hierarchy', value: [TYPE_ID] },
+          { entity: { kind: 'keywords', scope: ['title'] }, operator: 'matches', value: 'с' },
+        ],
+      },
+    }).tree;
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'type'), [TYPE_ID]);
+    assert.deepEqual(filterTreeIdsByKind(tree ?? null, 'parents'), []);
+  });
+
+  it('значения-токены идентификатором не считаются', () => {
+    const tree = {
+      kind: 'group' as const,
+      op: 'and' as const,
+      children: [
+        {
+          kind: 'leaf' as const,
+          entity: { kind: 'parents' as const },
+          operator: 'in' as const,
+          value: { kind: 'list' as const, items: [PARENT_ID, { token: '$today' }] },
+        },
+      ],
+    };
+    assert.deepEqual(filterTreeIdsByKind(tree, 'parents'), [PARENT_ID]);
+    assert.deepEqual(filterTreeIdsByKind(null, 'parents'), []);
   });
 });

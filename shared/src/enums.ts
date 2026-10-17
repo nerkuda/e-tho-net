@@ -184,11 +184,17 @@ export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
 
 /**
  * Where the structures `keywords` mini-syntax searches (03-server-api.md
- * §6.10): thought title, synonyms and/or the permanent comment. An absent or
- * empty `keyword_scope` defaults to `['title', 'synonyms']` — the original
- * behaviour before the comment scope existed.
+ * §6.10): thought title, synonyms, the permanent comment and/or the thought's
+ * diary records (chronological comments). An absent or empty `keyword_scope`
+ * defaults to `['title', 'synonyms']` — the original behaviour before the
+ * comment scope existed.
+ *
+ * `diary` (0.13.1, ошибка 2bc251de, требование 0882f8d5 «Найти слова») —
+ * дневниковые записи мысли: мысль соответствует, если её хронологическая запись
+ * содержит слова (тело или заголовок записи). Области объединяются по ИЛИ;
+ * ни одной отмеченной области в листе AST — условие отключено.
  */
-export const STRUCTURE_KEYWORD_SCOPES = ['title', 'synonyms', 'comment'] as const;
+export const STRUCTURE_KEYWORD_SCOPES = ['title', 'synonyms', 'comment', 'diary'] as const;
 export type StructureKeywordScope = (typeof STRUCTURE_KEYWORD_SCOPES)[number];
 
 /** Who receives a real-time event (04-realtime.md §3, 11-settings-and-state.md §4). */

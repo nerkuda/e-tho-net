@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildToc,
+  expandTransclusions,
   formatSectionNumber,
   publicationAnchor,
   renderMarkdown,
@@ -332,5 +333,38 @@ test('публикация: HTML-комментарии скрыты, новые
   assert.ok(html.includes('<mark>акцент</mark>'), html);
   assert.ok(html.includes('<u>подчёркнутое</u>'), html);
   assert.ok(html.includes('type="checkbox" disabled checked>'), html);
+});
+
+// ---------------------------------------------------------------------------
+// Трансклюзии: opt-in блочная обёртка (ошибка 3b3035cf, задача a2b68d72)
+// ---------------------------------------------------------------------------
+
+test('публикация: без опции маркеры трансклюзии скрыты — вывод не меняется', () => {
+  const source = [
+    `<!-- etn:transclusion begin source=${UUID} depth=1 -->`,
+    'Тело источника.',
+    `<!-- etn:transclusion end source=${UUID} depth=1 -->`,
+  ].join('\n');
+  const { html } = renderPublicationFragment(source, { baseLevel: 1 });
+  assert.ok(!html.includes('md-transclusion'), html);
+  assert.ok(!html.includes('etn:transclusion'), html);
+  assert.ok(html.includes('Тело источника.'), html);
+});
+
+test('публикация: опция transclusion оборачивает развёрнутое в md-transclusion', () => {
+  const expanded = expandTransclusions(
+    `До\n\n![[#${UUID}]]\n\nПосле`,
+    () => ({ found: true, body_md: 'Тело источника.' }),
+  );
+  const { html } = renderPublicationFragment(expanded, {
+    baseLevel: 1,
+    transclusion: {
+      labels: { noSource: 'нет источника', noSection: 'нет раздела', skipped: 'не раскрыта' },
+    },
+  });
+  assert.ok(html.includes('class="md-transclusion"'), html);
+  assert.ok(html.includes('data-transclusion-depth="1"'), html);
+  assert.ok(html.includes('Тело источника.'), html);
+  assert.ok(!html.includes('etn:transclusion'), html);
 });
 

@@ -6,8 +6,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { chipList } from '../src/renderer/lib/ui/chip-list.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -104,6 +105,119 @@ describe('lib/ui/chip-list', () => {
       options(addSelect(root)).map((o) => o.value),
       ['', 'x'],
       'добавленный кандидат ушёл из списка добавления',
+    );
+  });
+
+  it('режим checklist: кнопка-список вместо <select>, крестик очистки поля (п. C2/C3)', () => {
+    installShim();
+    let values = ['a'];
+    const handle = chipList({
+      getValues: () => values,
+      labelOf: (v) => v,
+      onRemove: (v) => {
+        values = values.filter((x) => x !== v);
+      },
+      getOptions: () => [
+        { value: 'a', label: 'A' },
+        { value: 'b', label: 'B' },
+      ],
+      onAdd: (v) => {
+        values = [...values, v];
+      },
+      addMode: 'checklist',
+      addLabel: 'Выбрать значения…',
+      selectAllLabel: 'Выбрать все',
+      clearTitle: 'Очистить поле',
+    });
+    const root = handle.root as unknown as ShimElement;
+    assert.equal(root.findAll((n) => n.tagName === 'SELECT').length, 0, 'в режиме-чеклисте нет <select>');
+    assert.ok(root.querySelector('.ui-chip-list-add--checklist') !== null, 'кнопка-список');
+    const clear = root.querySelector('.ui-chip-list-clear')!;
+    assert.equal(clear.title, 'Очистить поле');
+    clear.emit('click');
+    assert.equal(chips(root).length, 0, 'крестик очищает всё поле');
+    assert.deepEqual(values, []);
+  });
+});
+
+/**
+ * Ошибка 50d9bf4e, пункты C2/C3: правка значения перерисовывает строку-владельца
+ * ЦЕЛИКОМ, а панель-чеклист остаётся в `document.body`. Открытая панель обязана
+ * перепривязаться к НОВОМУ узлу поля (по `anchorKey`), а не остаться на
+ * координатах удалённого — иначе всплывающий список отрывается от поля.
+ */
+describe('lib/ui/chip-list: перепривязка панели-чеклиста после перерисовки (п. C2/C3)', () => {
+  beforeEach(() => keymap.keymapInternals.reset());
+
+  /** Окно с документом-телом, умеющим искать по селектору (как браузер). */
+  function installDocumentShim(): ShimElement {
+    const body = new ShimElement('body');
+    const doc: any = {
+      createElement: (tag: string) => new ShimElement(tag),
+      createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+      body,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      querySelector: (selector: string) => body.querySelector(selector),
+    };
+    (globalThis as any).document = doc;
+    (globalThis as any).window = {
+      innerWidth: 1000,
+      innerHeight: 800,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+    return body;
+  }
+
+  /** Чеклист-поле с адресом слота; корень монтируется в тело (как строка дерева). */
+  function mountChecklist(body: ShimElement, values: string[]): { root: ShimElement; button: ShimElement } {
+    const handle = chipList({
+      getValues: () => values,
+      labelOf: (v) => v,
+      onRemove: () => undefined,
+      getOptions: () => [
+        { value: 'created', label: 'Создано' },
+        { value: 'updated', label: 'Изменено' },
+        { value: 'deleted', label: 'Удалено' },
+      ],
+      onAdd: (v) => values.push(v),
+      addMode: 'checklist',
+      checklistColumns: 2,
+      addLabel: 'Выбрать значения…',
+      selectAllLabel: 'Выбрать все',
+      anchorKey: '5-0',
+    });
+    const root = handle.root as unknown as ShimElement;
+    body.append(root);
+    return { root, button: root.querySelector('.ui-chip-list-add--checklist')! };
+  }
+
+  it('адрес поля выставляется атрибутом и панель переезжает к новому узлу', () => {
+    const body = installDocumentShim();
+    const first = mountChecklist(body, []);
+    assert.equal(first.button.dataset['uiChipListAnchor'], '5-0', 'адрес поля — на кнопке');
+
+    first.button.emit('click');
+    const panel = body.querySelector('.ui-popover.ui-chip-checklist-popover');
+    assert.ok(panel !== null, 'панель-чеклист открыта');
+    assert.equal(panel!.style.getPropertyValue('top'), '30px', 'панель под старым полем');
+
+    // Перерисовка строки-владельца: старый корень снят, построен новый чип-лист
+    // с ТЕМ ЖЕ адресом слота, но поле переехало (поле ниже на 280px).
+    first.root.remove();
+    const second = mountChecklist(body, []);
+    second.button.rect = { left: 100, top: 300, right: 180, bottom: 320, width: 80, height: 20 };
+
+    // Переключение флажка в открытой панели — та самая серия переключений.
+    const input = panel!.findAll((el) => el.type === 'checkbox')[0]!;
+    input.checked = true;
+    input.emit('change');
+
+    assert.equal(
+      panel!.style.getPropertyValue('top'),
+      '330px',
+      'панель переехала к новому узлу поля, а не осталась на координатах удалённого',
     );
   });
 });

@@ -328,11 +328,27 @@ export interface MigrationHelpersContext {
  *     0.5.5).
  *
  * Single setup point shared by the main-thread connection
- * ({@link openNetworkDb} / {@link createInMemoryNetworkDb}) and every
- * read-only reader-worker connection (`db/reader-worker.ts`). Before the fix
- * the worker applied only the pragma profile and failed with
+ * ({@link openNetworkDb} / {@link createInMemoryNetworkDb}) and every worker
+ * connection (`db/reader-worker.ts`, `db/write-worker.ts`). Before the fix
+ * the reader worker applied only the pragma profile and failed with
  * `no such function: unicode_lower` on any comment-scope keyword search that
  * went through the reader pool.
+ *
+ * Состав — функции РАНТАЙМА, а не миграций:
+ *
+ *   * `type_name_key` и `unicode_lower` нужны запросам (сворачивание регистра
+ *     кириллицы, разрешение типа по имени);
+ *   * `gen_uuid` нужен и ЗАПИСИ, и миграции 025: схема объявляет
+ *     `DEFAULT (gen_uuid())` для id строк (`thought_synonyms`,
+ *     `comment_targets`, `attachment_owners`), поэтому вставка без явного id
+ *     требует функцию на соединении. Раньше её регистрировал только
+ *     `registerMigrationHelpers`, и write-воркер падал на первом же батче с
+ *     `unknown function: gen_uuid()` (задача 57068081, ADR ca3a9218).
+ *     Регистрируется БЕЗ флага `deterministic` осознанно: SQLite сворачивает
+ *     детерминированную функцию без аргументов в константу на запрос, и
+ *     `INSERT … SELECT gen_uuid()` миграции 025 выдал бы всем строкам один и тот
+ *     же UUID, сломав `UNIQUE (id, layer_id)`; `DEFAULT (expr)` детерминизма не
+ *     требует — терять нечего.
  */
 export function registerQueryFunctions(db: Database.Database): void {
   db.function('type_name_key', (value: unknown) =>
@@ -341,21 +357,18 @@ export function registerQueryFunctions(db: Database.Database): void {
   db.function('unicode_lower', (value: unknown) =>
     typeof value === 'string' ? value.toLowerCase() : value,
   );
+  db.function('gen_uuid', () => randomUUID());
 }
 
 /**
  * Register SQL helpers used by network migrations.
  *
- * Migration-only helpers (not needed by plain reads):
+ * Migration-only helpers (всё, чего не хватает рантайму — `gen_uuid` из общего
+ * набора {@link registerQueryFunctions} нужен и записи, см. её описание):
  *
- *   * `gen_uuid` supplies row ids for `thought_synonyms`/`comment_targets`
- *     rows created without an explicit id (migration 025). Deliberately
- *     registered WITHOUT the `deterministic` flag: SQLite folds a
- *     deterministic no-argument function into a constant per statement, so
- *     `INSERT … SELECT gen_uuid()` in 025 would give every row the same UUID
- *     and trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)` does not require
- *     determinism (only generated columns and index expressions do), so
- *     nothing is lost by leaving the flag off.
+ *   * `gen_uuid` — регистрируется {@link registerQueryFunctions} и нужен и
+ *     миграции 025 (`INSERT … SELECT gen_uuid()`), и рантайм-записи: схема
+ *     объявляет `DEFAULT (gen_uuid())` для id строк.
  *   * `etn_first_user_id` exposes the id of the server's root administrator
  *     (`is_first_user = 1`) for migrations that need to backfill authorship —
  *     see task 38ba3498 / migration 033. Returns the empty string when the
@@ -392,7 +405,6 @@ export function registerMigrationHelpers(
 ): void {
   const firstUserId = ctx.firstUserId ?? '';
   registerQueryFunctions(db);
-  db.function('gen_uuid', () => randomUUID());
   db.function('etn_first_user_id', () => firstUserId);
   // Best-effort SHA-256 файла вложения для `attachments.content_hash` (миграция
   // 050, задача 369241e4). Нечитаемый/отсутствующий файл (клиентский локальный
@@ -577,6 +589,17 @@ export function closeNetworkDb(networkId: string, layerId?: string): boolean {
     closed = true;
   }
   return closed;
+}
+
+/**
+ * Все открытые соединения сетей (по одному на пару «сеть + слой»), в порядке
+ * регистрации. Нужны обслуживающим проходам, которые работают по ФАЙЛАМ
+ * (`data.db`): чекпойнт WAL (`db/wal-checkpoint.ts`, ошибка dac92886) и любые
+ * будущие операции «по всем открытым сетям». Соединения НЕ копируются и НЕ
+ * закрываются здесь — вызывающий сам решает, что с ними делать.
+ */
+export function listOpenNetworkDbs(): NetworkDb[] {
+  return [...registry.values()];
 }
 
 /**

@@ -47,6 +47,7 @@ import type {
   EtnErrorCode,
   ExportJob,
   ExportRequest,
+  FilterAst,
   FocusDir,
   FocusEdge,
   FocusNeighbor,
@@ -81,7 +82,7 @@ import type {
   PropertyDefinitionUpdateInput,
   PropertyValue,
   SavedFilter,
-  SavedFilterDefinition,
+  SavedFilterCriteria,
   PinnedThoughtEntry,
   Publication,
   PublicationActiveFilter,
@@ -594,12 +595,12 @@ export interface EtnApi {
     list(networkId: string): Promise<SavedFilter[]>;
     create(
       networkId: string,
-      input: { name: string; definition: SavedFilterDefinition },
+      input: { name: string; definition: SavedFilterCriteria },
     ): Promise<SavedFilter>;
     update(
       networkId: string,
       filterId: string,
-      input: { name?: string; definition?: SavedFilterDefinition },
+      input: { name?: string; definition?: SavedFilterCriteria },
     ): Promise<SavedFilter>;
     remove(networkId: string, filterId: string): Promise<void>;
   };
@@ -671,10 +672,13 @@ export interface EtnApi {
     /**
      * `GET /networks/{nid}/activity` — лента журнала с фильтрами
      * `from_ms`/`to_ms`/`user_id`/`entity_type`/`entity_id` и пагинацией.
+     * `ast` — тело отбора профиля «события» (XOR с плоскими фильтрами,
+     * требование db5e1063): передаётся JSON-строкой query-параметра.
      */
     list(
       networkId: string,
       filters?: {
+        ast?: FilterAst;
         from_ms?: number;
         to_ms?: number;
         user_id?: string;

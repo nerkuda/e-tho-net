@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createComment, createCommentWithTargets } from '../src/domain/comment-service.js';
+import { resolveGlobalDateTokens } from '../src/domain/thought-type-view-tokens.js';
 import {
   buildMcpContext,
   closeMcpContext,
@@ -111,6 +112,46 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
       MCP,
       /body\.keyword_scope\s*=\s*args\.keyword_scope/,
       'MCP-инструмент обязан прокинуть keyword_scope — иначе путь Б не гейтится',
+    );
+  });
+
+  it('словарь областей keyword_scope — один (shared-константа), без локальной копии', () => {
+    // Требование 9e9d14dc: словарь областей закрытый. Локальный литерал в домене
+    // отставал бы от shared-словаря: новая область (`diary`, ошибка 2bc251de)
+    // молча отвергалась бы на входе хроники.
+    assert.match(
+      DOMAIN,
+      /STRUCTURE_KEYWORD_SCOPES/,
+      'хроника обязана валидировать области по shared-словарю',
+    );
+    assert.ok(
+      !/'synonyms'\s*&&/.test(DOMAIN),
+      'области не перечисляются литералами в домене',
+    );
+    assert.ok(
+      !/allowed:\s*\[\s*'title'/.test(DOMAIN),
+      'список допустимых областей не дублируется литералом',
+    );
+  });
+
+  it('фаза 1 отбора хроники ставит контекст «comment + комментарии связей» (ошибка fc97548d)', () => {
+    // Паритет с плоским `keyword_scope`: плоский компилятор эти комментарии
+    // видит (требование ce111b0d), поэтому исполнитель целей обязан передать
+    // контекст в движок мыслей — иначе AST-тело панели молча теряло бы мысли.
+    assert.match(
+      DOMAIN,
+      /keywordCommentIncludesLinkComments:\s*true/,
+      'targetsLeafClause обязан ставить keywordCommentIncludesLinkComments',
+    );
+    assert.match(
+      DOMAIN,
+      /buildThoughtIdSelect\(/,
+      'подвыборка целей исполняется общим движком мыслей',
+    );
+    assert.match(
+      DOMAIN,
+      /comment_targets_v/,
+      'плоский компилятор ищет комментарии связей через comment_targets_v',
     );
   });
 
@@ -250,6 +291,70 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     }
   });
 
+  it('REST и MCP: область diary отбирает мысль по её дневниковой записи (ошибка 2bc251de)', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Alpha');
+      const rec = createComment(
+        ndb,
+        'thought',
+        target,
+        { kind: 'chronological', body_md: 'дневникслово в записи', valid_from: '2024-01-01' },
+        USER,
+      );
+
+      const run = async (filter: Record<string, unknown>): Promise<string[]> => {
+        const restRes = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload: filter,
+        });
+        assert.equal(restRes.statusCode, 200, JSON.stringify(restRes.json()));
+        const restRows = restRes.json().data as Array<{ id: string }>;
+        const mcpRes = await handle.client.callTool({
+          name: 'etn.chronicle.query',
+          arguments: { network_id: rest.networkId, ...filter },
+        });
+        const mcpRows = toolJson<{ rows: Array<{ id: string }> }>(mcpRes).rows;
+        assert.deepEqual(
+          mcpRows.map((r) => r.id),
+          restRows.map((r) => r.id),
+          'состав обязан совпасть у REST и MCP',
+        );
+        return restRows.map((r) => r.id);
+      };
+
+      // `comment` выключен → путь «текст записи» отключён, запись находится
+      // ТОЛЬКО областью `diary` (мысль отобрана по своей хроно-записи).
+      assert.deepEqual(
+        await run({ keywords: 'дневникслово', keyword_scope: ['title', 'synonyms', 'diary'] }),
+        [rec.id],
+        'область diary отбирает мысль по её дневниковой записи',
+      );
+      assert.deepEqual(
+        await run({ keywords: 'дневникслово', keyword_scope: ['title', 'synonyms'] }),
+        [],
+        'без diary и comment запись не находится',
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
   it('REST и MCP дают одинаковый порядок и состав для одного отбора', async () => {
     const rest = await buildRestContext();
     const mcp = await buildMcpContext({
@@ -354,6 +459,102 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         networkId: rest.networkId,
         systemDb: rest.sys,
       });
+      await closeRestContext(rest);
+    }
+  });
+
+  it('REST: ast-тело хроники — 200; XOR с плоскими критериями и link_scope!=both → 422 (задача 4752b065)', async () => {
+    const rest = await buildRestContext();
+    try {
+      const inject = (payload: Record<string, unknown>) =>
+        rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload,
+        });
+
+      const ast = {
+        version: 1,
+        filter: { entity: { kind: 'targets' }, operator: 'not_empty' },
+      };
+      // Валидное AST-тело профиля «хроника» принимается.
+      const ok = await inject({ ast });
+      assert.equal(ok.statusCode, 200, JSON.stringify(ok.json()));
+
+      // XOR: `ast` несовместимо с плоскими критериями (keywords/date/targets/...).
+      const conflict = await inject({ ast, keywords: 'x' });
+      assert.equal(conflict.statusCode, 422, 'ast + плоские критерии → 422 (XOR)');
+
+      // Плоское `link_scope != both` не выражается в AST — явный отказ, не подмена.
+      const scope = await inject({ ast, link_scope: 'sources' });
+      assert.equal(scope.statusCode, 422, 'ast + link_scope=sources → 422');
+
+      // Плоский `link_scope != both` без ast тоже отвергается компилятором.
+      const flatScope = await inject({ link_scope: 'sources' });
+      assert.equal(flatScope.statusCode, 422, 'плоский link_scope=sources → 422 (компилятор)');
+    } finally {
+      await closeRestContext(rest);
+    }
+  });
+
+  it('REST: первый день недели сети доходит в POST /chronicle/query (задача 7a798b17)', async () => {
+    const rest = await buildRestContext();
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const thought = seedThought(ndb, 'Хроника недели');
+      // Границы недели для текущего момента при разных настройках сети.
+      const now = new Date();
+      const sundayStart = resolveGlobalDateTokens('$weekStart', {
+        now: () => now,
+        firstDayOfWeek: 7,
+      }).value as string;
+      const mondayStart = resolveGlobalDateTokens('$weekStart', {
+        now: () => now,
+        firstDayOfWeek: 1,
+      }).value as string;
+      assert.notEqual(sundayStart, mondayStart, 'воскресная и понедельничная недели различаются');
+      // Запись на границе недели с началом в воскресенье.
+      createComment(
+        ndb,
+        'thought',
+        thought,
+        { kind: 'chronological', body_md: 'Вс', valid_from: `${sundayStart}T12:00:00.000Z` },
+        USER,
+      );
+
+      const payload = { date_from: '$weekStart', date_to: '$weekStart' };
+      const record = rest.sys.getNetworkById(rest.networkId);
+      assert.ok(record !== null, 'сеть должна читаться из системной БД');
+      const setFirstDay = (firstDayOfWeek: number): void => {
+        rest.sys.updateNetwork(rest.networkId, {
+          displayName: record!.display_name,
+          description: record!.description,
+          when_to_use: record!.when_to_use,
+          conventions: record!.conventions,
+          examples: record!.examples,
+          type_roles: record!.type_roles,
+          first_day_of_week: firstDayOfWeek,
+        });
+      };
+      const total = async (): Promise<number> => {
+        const res = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload,
+        });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.json()));
+        return (res.json().meta as { total: number }).total;
+      };
+
+      // Неделя с воскресенья → запись воскресенья входит.
+      setFirstDay(7);
+      assert.equal(await total(), 1, 'firstDayOfWeek=7 обязан учесть воскресную границу');
+      // Неделя с понедельника → та же запись вне периода.
+      setFirstDay(1);
+      assert.equal(await total(), 0, 'firstDayOfWeek=1 обязан считать неделю с понедельника');
+    } finally {
       await closeRestContext(rest);
     }
   });

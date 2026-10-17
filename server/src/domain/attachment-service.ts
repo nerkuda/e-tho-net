@@ -34,7 +34,10 @@ import {
   ATTACHMENT_OWNER_TYPES,
   buildLikePattern,
   EtnError,
+  FILTER_AST_VERSION,
+  HIERARCHY_SUBTREE_MAX_NODES,
   parseFilterKeywords,
+  TRAVERSAL_DEFAULTS,
   type Attachment,
   type AttachmentContent,
   type AttachmentContentUpdateInput,
@@ -53,12 +56,22 @@ import {
   type AttachmentUpdateInput,
   type AttachmentUsage,
   type AttachmentUsageRef,
+  type FilterAst,
+  type FilterAstLeaf,
+  type FilterAstListItem,
+  type FilterAstNode,
+  type FilterAstValue,
 } from '@etn/shared';
 
 import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { isBaseContext, materializeShadow, materializeShadowFromAnyLayer, materializeTombstone } from '../db/layer-write.js';
+import { collectHierarchySubtree } from './graph-traversal.js';
+import { parseFilterAst } from './filter-ast.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { buildThoughtIdSelect } from './query-service.js';
 
 /** Raw `attachments` row shape. */
 interface AttachmentRow {
@@ -1274,6 +1287,495 @@ export function copyAttachment(
   return addOwners(ndb, sourceId, input.target_owner_type, input.target_owner_ids, actorUserId);
 }
 
+// ---------------------------------------------------------------------------
+// Отбор вложений на общий AST (задача 5a007bed; требования f67c85c1 «операнды
+// профиля вложений», 0095daad «профили точек применения»; ADR 0c02ab4f).
+//
+// У вложений до этой задачи НЕТ плоской ФИЛЬТРУЕМОЙ формы: `GET /attachments` —
+// поиск по ключевым словам (`q` обязателен; каждое слово ищется в объединении
+// title/description/url/file_path). Такой поиск не сводится к операндам профиля
+// (объединение четырёх колонок против операнда «Имя» = `title`), поэтому
+// компилятора «плоская форма → AST» НЕТ: AST — НОВАЯ точка отбора того же
+// эндпоинта, а прежний `q`-поиск остаётся отдельным путём (его результаты
+// неизменны). Плоские фильтры и `ast` несовместимы (XOR).
+// ---------------------------------------------------------------------------
+
+/**
+ * Контекст исполнения отбора вложений. Профиль «вложения» НЕ несёт времени
+ * (`withTime = false`, требование 0095daad): операндов-дат в нём нет, поэтому
+ * часов и первого дня недели здесь не требуется — только контекст под-выборки
+ * мыслей-владельцев (`$user`) и идентификатор запроса для диагностики.
+ */
+export interface AttachmentSearchOptions {
+  /** Пользователь-контекст под-выборки мыслей-владельцев (видимость `$user`). */
+  userId?: string;
+  /** Идентификатор запроса для диагностики. */
+  requestId?: string;
+}
+
+/** Плоские фильтры вложений — несовместимы с AST-телом (XOR). */
+const ATTACHMENT_FLAT_FIELDS = ['q', 'kind', 'exclude_owner_type', 'exclude_owner_id'] as const;
+
+/** Условие над alias `a` (`attachments_v`) + параметры. */
+interface AttachmentClause {
+  sql: string;
+  args: unknown[];
+}
+
+const attachmentAstUnsupported = (message: string, requestId?: string): never => {
+  throw new EtnError('VALIDATION_ERROR', message, { field: 'ast' }, requestId);
+};
+
+/** Список строк значения листа (`eq/ne` — одна, `in/not_in` — массив). */
+function attachmentStringList(
+  value: unknown,
+  operator: string,
+  field: string,
+  requestId?: string,
+): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value) && value.every((v) => typeof v === 'string')) return value as string[];
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `Операнд «${field}»: оператор «${operator}» требует строку или список строк.`,
+    { field },
+    requestId,
+  );
+}
+
+/** Условие «в списке / не в списке» по выражению-колонке. */
+function attachmentInClause(
+  column: string,
+  ids: readonly string[],
+  positive: boolean,
+): AttachmentClause {
+  if (ids.length === 0) return { sql: positive ? '0' : '1=1', args: [] };
+  return {
+    sql: `${column} ${positive ? 'IN' : 'NOT IN'} (${ids.map(() => '?').join(',')})`,
+    args: [...ids],
+  };
+}
+
+/** Идентификаторы мыслей из под-выборки (значение операнда «владельцы»). */
+function attachmentSubqueryIds(
+  ndb: NetworkDb,
+  query: FilterAstNode,
+  opts: AttachmentSearchOptions,
+): string[] {
+  const sel = buildThoughtIdSelect(ndb, opts.userId ?? '', {
+    sort: 'alpha',
+    order: 'asc',
+    limit: 1,
+    offset: 0,
+    ast: { version: FILTER_AST_VERSION, filter: query },
+  });
+  return (ndb.prepare(sel.sql).all(...sel.params) as Array<{ id: string }>).map((r) => r.id);
+}
+
+const ATTACHMENT_TITLE_COND = `unicode_lower(IFNULL(a.title, '')) LIKE ? ESCAPE '\\'`;
+const ATTACHMENT_MIME_COND = `unicode_lower(IFNULL(a.mime_type, '')) LIKE ? ESCAPE '\\'`;
+const ATTACHMENT_OWNER_ANY_SQL = `SELECT 1 FROM attachment_owners_v o WHERE o.attachment_id = a.id`;
+const ATTACHMENT_OWNER_COUNT_SQL = `(SELECT COUNT(*) FROM attachment_owners_v o WHERE o.attachment_id = a.id)`;
+
+/** «Найти слова» мини-синтаксисом по столбцу (include — AND, exclude — NOT). */
+function attachmentMatchesClause(
+  columnCond: string,
+  value: FilterAstValue | undefined,
+): AttachmentClause {
+  const { include, exclude } = parseFilterKeywords(typeof value === 'string' ? value : '');
+  const parts: string[] = [];
+  const args: unknown[] = [];
+  for (const word of include) {
+    parts.push(columnCond);
+    args.push(buildLikePattern(word.toLowerCase()));
+  }
+  for (const word of exclude) {
+    parts.push(`NOT ${columnCond}`);
+    args.push(buildLikePattern(word.toLowerCase()));
+  }
+  if (parts.length === 0) return { sql: '1=1', args: [] };
+  return { sql: `(${parts.join(' AND ')})`, args };
+}
+
+/** «Имя/заголовок» (`title`): равно/содержит/в списке/«Найти слова». */
+function attachmentNameLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions): AttachmentClause {
+  const op = leaf.operator;
+  if (op === 'matches') return attachmentMatchesClause(ATTACHMENT_TITLE_COND, leaf.value);
+  if (op === 'in' || op === 'not_in') {
+    const list = attachmentStringList(leaf.value, op, 'name', opts.requestId);
+    return attachmentInClause('a.title', list, op === 'in');
+  }
+  const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
+  if (raw === undefined) {
+    return attachmentAstUnsupported(
+      `Операнд «Имя/заголовок»: оператор «${op}» требует строку.`,
+      opts.requestId,
+    );
+  }
+  switch (op) {
+    case 'eq':
+      return { sql: 'a.title = ?', args: [raw] };
+    case 'ne':
+      return { sql: '(a.title IS NULL OR a.title <> ?)', args: [raw] };
+    case 'contains':
+      return { sql: ATTACHMENT_TITLE_COND, args: [buildLikePattern(raw.toLowerCase())] };
+    case 'not_contains':
+      return {
+        sql: `NOT (${ATTACHMENT_TITLE_COND})`,
+        args: [buildLikePattern(raw.toLowerCase())],
+      };
+    default:
+      return attachmentAstUnsupported(
+        `Оператор «${op}» недопустим для «Имени/заголовка».`,
+        opts.requestId,
+      );
+  }
+}
+
+/** «Тип» (`kind` = file/url): равно/в списке. */
+function attachmentKindLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions): AttachmentClause {
+  const op = leaf.operator;
+  if (op === 'in' || op === 'not_in') {
+    const list = attachmentStringList(leaf.value, op, 'kind', opts.requestId);
+    return attachmentInClause('a.kind', list, op === 'in');
+  }
+  const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
+  if (raw === undefined) {
+    return attachmentAstUnsupported(`Операнд «Тип»: оператор «${op}» требует строку.`, opts.requestId);
+  }
+  if (op === 'eq') return { sql: 'a.kind = ?', args: [raw] };
+  if (op === 'ne') return { sql: 'a.kind <> ?', args: [raw] }; // kind NOT NULL
+  return attachmentAstUnsupported(`Оператор «${op}» недопустим для «Типа».`, opts.requestId);
+}
+
+/** «MIME-подтип» (`mime_type`): равно/содержит/в списке. */
+function attachmentMimeLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions): AttachmentClause {
+  const op = leaf.operator;
+  if (op === 'in' || op === 'not_in') {
+    const list = attachmentStringList(leaf.value, op, 'mime_type', opts.requestId);
+    return attachmentInClause('a.mime_type', list, op === 'in');
+  }
+  const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
+  if (raw === undefined) {
+    return attachmentAstUnsupported(
+      `Операнд «MIME-подтип»: оператор «${op}» требует строку.`,
+      opts.requestId,
+    );
+  }
+  switch (op) {
+    case 'eq':
+      return { sql: 'a.mime_type = ?', args: [raw] };
+    case 'ne':
+      return { sql: '(a.mime_type IS NULL OR a.mime_type <> ?)', args: [raw] };
+    case 'contains':
+      return { sql: ATTACHMENT_MIME_COND, args: [buildLikePattern(raw.toLowerCase())] };
+    case 'not_contains':
+      return { sql: `NOT (${ATTACHMENT_MIME_COND})`, args: [buildLikePattern(raw.toLowerCase())] };
+    default:
+      return attachmentAstUnsupported(
+        `Оператор «${op}» недопустим для «MIME-подтипа».`,
+        opts.requestId,
+      );
+  }
+}
+
+/** «Размер» (`file_size`, байты): сравнения/«между»/заполнено. */
+function attachmentSizeLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions): AttachmentClause {
+  const op = leaf.operator;
+  if (op === 'is_empty') return { sql: 'a.file_size IS NULL', args: [] };
+  if (op === 'not_empty') return { sql: 'a.file_size IS NOT NULL', args: [] };
+  const num = (raw: unknown): number => {
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Операнд «Размер»: ожидается число (байты).',
+      { field: 'size' },
+      opts.requestId,
+    );
+  };
+  const between = (value: unknown): AttachmentClause => {
+    if (!Array.isArray(value) || value.length !== 2) {
+      attachmentAstUnsupported('«Размер»: оператор «между» требует две границы.', opts.requestId);
+    }
+    const bounds = value as FilterAstListItem[];
+    return { sql: '(a.file_size >= ? AND a.file_size <= ?)', args: [num(bounds[0]), num(bounds[1])] };
+  };
+  switch (op) {
+    case 'eq':
+      return { sql: 'a.file_size = ?', args: [num(leaf.value)] };
+    case 'ne':
+      return { sql: '(a.file_size IS NULL OR a.file_size <> ?)', args: [num(leaf.value)] };
+    case 'gt':
+      return { sql: 'a.file_size > ?', args: [num(leaf.value)] };
+    case 'gte':
+      return { sql: 'a.file_size >= ?', args: [num(leaf.value)] };
+    case 'lt':
+      return { sql: 'a.file_size < ?', args: [num(leaf.value)] };
+    case 'lte':
+      return { sql: 'a.file_size <= ?', args: [num(leaf.value)] };
+    case 'between':
+      return between(leaf.value);
+    case 'not_between': {
+      const inner = between(leaf.value);
+      return { sql: `NOT ${inner.sql}`, args: inner.args };
+    }
+    default:
+      return attachmentAstUnsupported(`Оператор «${op}» недопустим для «Размера».`, opts.requestId);
+  }
+}
+
+/** Владельцы заданного ТИПА (`owner_type`): «в списке»/«не в списке». */
+function attachmentOwnerTypeClause(
+  types: readonly string[],
+  positive: boolean,
+): AttachmentClause {
+  const inList = types.length === 0 ? 'NULL' : types.map(() => '?').join(',');
+  return {
+    sql: `${positive ? 'EXISTS' : 'NOT EXISTS'} (SELECT 1 FROM attachment_owners_v o
+      WHERE o.attachment_id = a.id AND o.owner_type IN (${inList}))`,
+    args: [...types],
+  };
+}
+
+/** Мысли-владельцы (owner_type = 'thought') из списка id: есть/нет. */
+function attachmentThoughtOwnerClause(
+  ids: readonly string[],
+  positive: boolean,
+): AttachmentClause {
+  const inList = ids.length === 0 ? 'NULL' : ids.map(() => '?').join(',');
+  return {
+    sql: `${positive ? 'EXISTS' : 'NOT EXISTS'} (SELECT 1 FROM attachment_owners_v o
+      WHERE o.attachment_id = a.id AND o.owner_type = 'thought' AND o.owner_id IN (${inList}))`,
+    args: [...ids],
+  };
+}
+
+/** Мысли-владельцы, лежащие ВНЕ списка id (для «все владельцы ∈ подвыборке»). */
+function attachmentThoughtOwnerOutsideClause(ids: readonly string[]): AttachmentClause {
+  const inList = ids.length === 0 ? 'NULL' : ids.map(() => '?').join(',');
+  return {
+    sql: `EXISTS (SELECT 1 FROM attachment_owners_v o
+      WHERE o.attachment_id = a.id AND o.owner_type = 'thought' AND o.owner_id NOT IN (${inList}))`,
+    args: [...ids],
+  };
+}
+
+/** Поддерево «в иерархии» от корней-мыслей (`structural`/`all_links`). */
+function attachmentOwnerSubtree(
+  ndb: NetworkDb,
+  roots: readonly string[],
+  leaf: FilterAstLeaf,
+  opts: AttachmentSearchOptions,
+): string[] {
+  if (roots.length === 0) return [];
+  const mode = leaf.mode === 'all_links' ? 'all_links' : 'structural';
+  const res = collectHierarchySubtree(ndb, roots, mode, {
+    maxDepth: TRAVERSAL_DEFAULTS.MAX_DEPTH,
+    maxNodes: HIERARCHY_SUBTREE_MAX_NODES,
+    timeoutMs: TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS,
+  });
+  if (res.truncated) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Обход «Владельцев в иерархии» прерван: превышен ресурсный бюджет; сузьте набор корней или глубину отбора.',
+      { field: 'owner', reason: 'hierarchy_budget' },
+      opts.requestId,
+    );
+  }
+  return res.ids;
+}
+
+/**
+ * «Владельцы» (`attachment_owners`). Один операнд несёт три аспекта (требование
+ * f67c85c1): наличие (`is_empty`/`not_empty`), тип владельца (`in`/`not_in` со
+ * СПИСКОМ типов), мысли-владельцы (`in`/`not_in`/`all_of` со значением-
+ * подвыборкой мыслей, `in_hierarchy`/`not_in_hierarchy` — по мыслям в поддереве)
+ * и количество (`eq`/`ne`/`gt`/`gte`/`lt`/`lte` с числом).
+ */
+function attachmentOwnerLeaf(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  opts: AttachmentSearchOptions,
+): AttachmentClause {
+  const op = leaf.operator;
+  if (op === 'is_empty') return { sql: `NOT EXISTS (${ATTACHMENT_OWNER_ANY_SQL})`, args: [] };
+  if (op === 'not_empty') return { sql: `EXISTS (${ATTACHMENT_OWNER_ANY_SQL})`, args: [] };
+  const value = leaf.value;
+  const isSubquery =
+    typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value;
+  // Количество живых владений (значение — число).
+  if (op === 'eq' || op === 'ne' || op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return attachmentAstUnsupported(
+        '«Владельцы»: оператор сравнения требует число (количество владельцев).',
+        opts.requestId,
+      );
+    }
+    const cmp =
+      op === 'eq' ? '=' : op === 'ne' ? '<>' : op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : '<=';
+    return { sql: `${ATTACHMENT_OWNER_COUNT_SQL} ${cmp} ?`, args: [value] };
+  }
+  if (op === 'in_hierarchy' || op === 'not_in_hierarchy') {
+    const roots = attachmentStringList(value, op, 'owner', opts.requestId);
+    const subtree = attachmentOwnerSubtree(ndb, roots, leaf, opts);
+    const match = attachmentThoughtOwnerClause(subtree, true);
+    if (op === 'in_hierarchy') return match;
+    // Симметрично `not_in`: вложение без владельцев характеристикой не обладает
+    // и «не в иерархии» не удовлетворяет.
+    return {
+      sql: `(EXISTS (${ATTACHMENT_OWNER_ANY_SQL}) AND NOT (${match.sql}))`,
+      args: match.args,
+    };
+  }
+  if (op === 'in' || op === 'not_in') {
+    if (isSubquery) {
+      const ids = attachmentSubqueryIds(ndb, (value as { query: FilterAstNode }).query, opts);
+      const thoughtIn = attachmentThoughtOwnerClause(ids, true);
+      if (op === 'in') return thoughtIn;
+      // Вложение без владельцев характеристикой не обладает и «не в выборке» не
+      // удовлетворяет (строгость как у «Целей» хроники): сперва хотя бы один.
+      return {
+        sql: `(EXISTS (${ATTACHMENT_OWNER_ANY_SQL}) AND NOT (${thoughtIn.sql}))`,
+        args: thoughtIn.args,
+      };
+    }
+    // Плоское значение — СПИСОК ТИПОВ владельца (thought|link|publication).
+    const types = attachmentStringList(value, op, 'owner', opts.requestId);
+    return attachmentOwnerTypeClause(types, op === 'in');
+  }
+  if (op === 'all_of') {
+    if (!isSubquery) {
+      return attachmentAstUnsupported(
+        '«Владельцы»: оператор all_of требует под-выборку мыслей-владельцев.',
+        opts.requestId,
+      );
+    }
+    const ids = attachmentSubqueryIds(ndb, (value as { query: FilterAstNode }).query, opts);
+    // «Все мысли-владельцы ∈ подвыборке»: владелец есть, и ни одна мысль-владелец
+    // не лежит ВНЕ подвыборки. Не-мыслевые владельцы (связь/публикация) вне
+    // предмета подвыборки мыслей и не учитываются. Пустая подвыборка — «нет
+    // совпадений» (ни один владелец не может быть «во всех» пустого набора).
+    if (ids.length === 0) return { sql: '0', args: [] };
+    const outside = attachmentThoughtOwnerOutsideClause(ids);
+    return {
+      sql: `(EXISTS (${ATTACHMENT_OWNER_ANY_SQL}) AND NOT (${outside.sql}))`,
+      args: outside.args,
+    };
+  }
+  return attachmentAstUnsupported(`Оператор «${op}» недопустим для «Владельцев».`, opts.requestId);
+}
+
+/** Условие узла AST вложений над alias `a`. */
+function attachmentAstNodeClause(
+  ndb: NetworkDb,
+  node: FilterAstNode,
+  opts: AttachmentSearchOptions,
+): AttachmentClause {
+  if ('op' in node) {
+    if (node.op === 'not') {
+      const child = attachmentAstNodeClause(ndb, node.children[0]!, opts);
+      return { sql: `NOT (${child.sql})`, args: child.args };
+    }
+    const parts = node.children.map((c) => attachmentAstNodeClause(ndb, c, opts));
+    if (node.op === 'and') {
+      return parts.length === 0
+        ? { sql: '1=1', args: [] }
+        : { sql: `(${parts.map((p) => p.sql).join(' AND ')})`, args: parts.flatMap((p) => p.args) };
+    }
+    return parts.length === 0
+      ? { sql: '0', args: [] }
+      : { sql: `(${parts.map((p) => p.sql).join(' OR ')})`, args: parts.flatMap((p) => p.args) };
+  }
+  switch (node.entity.kind) {
+    case 'name':
+      return attachmentNameLeaf(node, opts);
+    case 'kind':
+      return attachmentKindLeaf(node, opts);
+    case 'mime_type':
+      return attachmentMimeLeaf(node, opts);
+    case 'owner':
+      return attachmentOwnerLeaf(ndb, node, opts);
+    case 'size':
+      return attachmentSizeLeaf(node, opts);
+    default:
+      return attachmentAstUnsupported(
+        `Операнд «${node.entity.kind}» не виден в профиле «вложения».`,
+        opts.requestId,
+      );
+  }
+}
+
+/**
+ * Разобрать запрос поиска вложений (`GET /attachments` / `etn.attachments.search`)
+ * в {@link AttachmentSearchQuery}. `ast` XOR плоские фильтры (требование
+ * f67c85c1, задача 5a007bed); строгая форма AST — доменный `parseFilterAst`,
+ * видимость операндов — по профилю «вложения» (проверяется в
+ * {@link searchAttachmentsByAst}).
+ */
+export function parseAttachmentSearchQuery(
+  raw: Record<string, unknown>,
+  requestId: string,
+): AttachmentSearchQuery {
+  const out: AttachmentSearchQuery = {};
+  const astRaw = raw['ast'];
+  if (astRaw !== undefined && astRaw !== null) {
+    const conflicts = ATTACHMENT_FLAT_FIELDS.filter(
+      (f) => raw[f] !== undefined && raw[f] !== '',
+    );
+    if (conflicts.length > 0) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'AST-тело (`ast`) несовместимо с плоскими фильтрами вложений.',
+        { field: 'ast', conflicts },
+        requestId,
+      );
+    }
+    out.ast = parseFilterAst(astRaw, requestId);
+  } else {
+    if (raw['q'] !== undefined) out.q = raw['q'] as string;
+    if (raw['kind'] !== undefined) out.kind = raw['kind'] as AttachmentKind;
+    if (raw['exclude_owner_type'] !== undefined) {
+      out.exclude_owner_type = raw['exclude_owner_type'] as AttachmentOwnerType;
+    }
+    if (raw['exclude_owner_id'] !== undefined) {
+      out.exclude_owner_id = raw['exclude_owner_id'] as string;
+    }
+  }
+  if (raw['limit'] !== undefined) out.limit = raw['limit'] as number;
+  if (raw['offset'] !== undefined) out.offset = raw['offset'] as number;
+  return out;
+}
+
+/**
+ * Отбор вложений по AST профиля «вложения» (задача 5a007bed). Видимость
+ * операндов/операторов проверяется профилем, неисполнимые условия (удалённая
+ * сущность) — красной диагностикой до исполнения. Порядок — `created_at DESC`
+ * (как у прежнего поиска).
+ */
+export function searchAttachmentsByAst(
+  ndb: NetworkDb,
+  ast: FilterAst,
+  query: Pick<AttachmentSearchQuery, 'limit' | 'offset'> = {},
+  opts: AttachmentSearchOptions = {},
+): { items: Attachment[]; total: number } {
+  assertFilterAstInProfile(ast, 'attachments', opts.requestId);
+  const diag = diagnoseFilterAst(ndb, ast);
+  if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+  const limit = typeof query.limit === 'number' ? Math.max(0, Math.min(200, Math.trunc(query.limit))) : 50;
+  const offset = typeof query.offset === 'number' ? Math.max(0, Math.trunc(query.offset)) : 0;
+  const clause = attachmentAstNodeClause(ndb, ast.filter, opts);
+  const totalRow = ndb
+    .prepare(`SELECT COUNT(*) AS n FROM attachments_v a WHERE ${clause.sql}`)
+    .get(...clause.args) as { n: number };
+  const rows = ndb
+    .prepare(
+      `SELECT a.* FROM attachments_v a WHERE ${clause.sql}
+       ORDER BY a.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...clause.args, limit, offset) as AttachmentRow[];
+  return { items: hydrateAttachmentSearchRows(ndb, rows), total: totalRow.n };
+}
+
 /**
  * Search attachments across the whole network by keywords (03-server-api.md §11,
  * workplan L25). `q` is required and uses the same mini-syntax as the thought
@@ -1287,11 +1789,17 @@ export function copyAttachment(
  *
  * No FTS index exists on `attachments`; the search runs as parameterised LIKE.
  * Result order is `created_at DESC` (most recent first).
+ *
+ * При заданном `query.ast` идёт НОВЫЙ путь — единый AST-исполнитель профиля
+ * «вложения» ({@link searchAttachmentsByAst}, задача 5a007bed); плоские фильтры
+ * тогда запрещены (XOR, проверяет {@link parseAttachmentSearchQuery}).
  */
 export function searchAttachments(
   ndb: NetworkDb,
   query: AttachmentSearchQuery,
+  opts: AttachmentSearchOptions = {},
 ): { items: Attachment[]; total: number } {
+  if (query.ast !== undefined) return searchAttachmentsByAst(ndb, query.ast, query, opts);
   const keywords = parseFilterKeywords(query.q ?? '');
   if (keywords.include.length === 0) {
     return { items: [], total: 0 };
@@ -1336,17 +1844,22 @@ export function searchAttachments(
        ORDER BY created_at DESC LIMIT ? OFFSET ?`,
     )
     .all(...params, limit, offset) as AttachmentRow[];
-  // Владелец в DTO — первичное владение (переходный период, см. блок «Ownership»).
-  const items = withOwnershipAggregates(
-    ndb,
-    rows.map((row) => rowToAttachment(row, primaryOwnership(ndb, row.id))),
-  );
+  const items = hydrateAttachmentSearchRows(ndb, rows);
   // При отборе `exclude_owner_*` все возвращённые вложения по построению НЕ
   // принадлежат указанному объекту — отмечаем это явно (сущность 109be255).
   if (query.exclude_owner_type !== undefined && query.exclude_owner_id !== undefined) {
     for (const a of items) a.owned_by_current = false;
   }
   return { items, total: totalRow.n };
+}
+
+/** Строки поиска → DTO вложений (первичное владение + агрегаты владельцев). */
+function hydrateAttachmentSearchRows(ndb: NetworkDb, rows: AttachmentRow[]): Attachment[] {
+  // Владелец в DTO — первичное владение (переходный период, блок «Ownership»).
+  return withOwnershipAggregates(
+    ndb,
+    rows.map((row) => rowToAttachment(row, primaryOwnership(ndb, row.id))),
+  );
 }
 
 /**

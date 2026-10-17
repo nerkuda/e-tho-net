@@ -23,10 +23,14 @@ import {
   isPeriodToken,
   isoWeekNumber,
   localDay,
+  localDayEnd,
+  localDayStart,
   periodTokensForRange,
   periodValuesForRange,
   resolveDateToken,
+  resolvePeriodBoundForQuery,
   resolvePeriodDay,
+  resolvePeriodForQuery,
   rowDays,
   visibleChips,
   weekPeriod,
@@ -257,48 +261,131 @@ describe('diary: раскрытие токенов дат периода (0.10.1
   });
 });
 
+/**
+ * Канон имени головы токена — camelCase (`$weekStart`/`$monthStart`…), и его
+ * пишет контрол периода, хранят предопределённые наборы и отборы. Клиентский
+ * резолвер знал только легаси точечные формы, поэтому подсветка календаря для
+ * канонических токенов не считалась (ошибки 0114e9c3, 73fa3c3b). Неделя при
+ * этом обязана считаться от первого дня недели СЕТИ (требование 1b77decd).
+ */
+describe('diary: канонические camelCase-токены и первый день недели (0114e9c3, 73fa3c3b)', () => {
+  const today = '2026-09-26'; // суббота; неделя пн 09-21 … вс 09-27
+
+  it('resolveDateToken раскрывает канонические головы (паритет с сервером)', () => {
+    assert.equal(resolveDateToken('$weekStart', today), '2026-09-21');
+    assert.equal(resolveDateToken('$weekEnd', today), '2026-09-27');
+    assert.equal(resolveDateToken('$weekStart-1w', today), '2026-09-14');
+    assert.equal(resolveDateToken('$weekEnd+1w', today), '2026-10-04');
+    assert.equal(resolveDateToken('$monthStart', today), '2026-09-01');
+    assert.equal(resolveDateToken('$monthEnd', today), '2026-09-30');
+    assert.equal(resolveDateToken('$monthStart-1mo', today), '2026-08-01');
+    assert.equal(resolveDateToken('$yearStart', today), '2026-01-01');
+    assert.equal(resolveDateToken('$yearEnd', today), '2026-12-31');
+  });
+
+  it('isPeriodToken и resolvePeriodDay знают канонические токены', () => {
+    for (const token of ['$weekStart', '$weekEnd', '$monthStart', '$monthEnd', '$yearStart', '$yearEnd']) {
+      assert.equal(isPeriodToken(token), true, `${token} распознан токеном`);
+      assert.notEqual(resolvePeriodDay(token, today), '', `${token} раскрыт для подсветки`);
+    }
+    // Токены предопределённого набора «Мои записи за неделю» + автор.
+    assert.equal(resolvePeriodDay('$weekStart', today), '2026-09-21');
+    assert.equal(resolvePeriodDay('$weekEnd', today), '2026-09-27');
+    assert.equal(resolvePeriodDay('$today-30d', today), '2026-08-27');
+    assert.equal(localDay('$weekStart'), '', 'токен — не «голая дата»');
+  });
+
+  it('неделя считается от первого дня недели сети, а не жёстко от понедельника', () => {
+    // Первый день недели — воскресенье (ISO 7): неделя вс 09-20 … сб 09-26.
+    assert.equal(resolveDateToken('$weekStart', today, 7), '2026-09-20');
+    assert.equal(resolveDateToken('$weekEnd', today, 7), '2026-09-26');
+    assert.equal(resolvePeriodDay('$weekStart', today, 7), '2026-09-20');
+    // Понедельник (ISO 1) — прежнее поведение.
+    assert.equal(resolveDateToken('$weekStart', today, 1), '2026-09-21');
+  });
+
+  it('границы-токены для запроса раскрываются в ЛОКАЛЬНЫЕ сутки наблюдателя', () => {
+    assert.equal(
+      resolvePeriodBoundForQuery('$weekStart', 'start', today),
+      localDayStart('2026-09-21'),
+    );
+    assert.equal(resolvePeriodBoundForQuery('$weekEnd', 'end', today), localDayEnd('2026-09-27'));
+    assert.deepEqual(resolvePeriodForQuery('$weekStart', '$weekEnd', today), {
+      from: localDayStart('2026-09-21'),
+      to: localDayEnd('2026-09-27'),
+    });
+    // Первый день недели сети учитывается и в границах запроса.
+    assert.equal(
+      resolvePeriodBoundForQuery('$weekStart', 'start', today, 7),
+      localDayStart('2026-09-20'),
+    );
+  });
+
+  it('weekPeriod и обратное преобразование в токены идут от первого дня недели сети', () => {
+    // fdw=1 (понедельник): пн 09-21 … вс 09-27.
+    assert.deepEqual(weekPeriod(today, 1), { from: '2026-09-21', to: '2026-09-27' });
+    // fdw=7 (воскресенье): вс 09-20 … сб 09-26.
+    assert.deepEqual(weekPeriod(today, 7), { from: '2026-09-20', to: '2026-09-26' });
+    // Распознавание недели при fdw=7 пишет канон и границы недели сети.
+    assert.deepEqual(periodTokensForRange('2026-09-20', '2026-09-26', today, 7), {
+      from: '$weekStart',
+      to: '$weekEnd',
+    });
+    // Понедельничный диапазон при fdw=7 неделей сети не является — день-арифметика.
+    assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today, 7), {
+      from: '$today-5d',
+      to: '$today+1d',
+    });
+    // При fdw=1 прежнее распознавание сохраняется.
+    assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today, 1), {
+      from: '$weekStart',
+      to: '$weekEnd',
+    });
+  });
+});
+
 describe('diary: синхронизация календаря и полей периода (91f8d8dd)', () => {
   const today = '2026-09-26'; // суббота
 
-  it('день=сегодня, неделя и месяц распознаются в токены', () => {
+  it('день=сегодня, неделя и месяц распознаются в токены (канон camelCase)', () => {
     assert.deepEqual(periodTokensForRange('2026-09-26', '2026-09-26', today), {
       from: '$today',
       to: '$today',
     });
     assert.deepEqual(periodTokensForRange('2026-09-21', '2026-09-27', today), {
-      from: '$week.start',
-      to: '$week.end',
+      from: '$weekStart',
+      to: '$weekEnd',
     });
     assert.deepEqual(periodTokensForRange('2026-09-14', '2026-09-20', today), {
-      from: '$week.start-1w',
-      to: '$week.end-1w',
+      from: '$weekStart-1w',
+      to: '$weekEnd-1w',
     });
     assert.deepEqual(periodTokensForRange('2026-09-28', '2026-10-04', today), {
-      from: '$week.start+1w',
-      to: '$week.end+1w',
+      from: '$weekStart+1w',
+      to: '$weekEnd+1w',
     });
     assert.deepEqual(periodTokensForRange('2026-09-01', '2026-09-30', today), {
-      from: '$month.start',
-      to: '$month.end',
+      from: '$monthStart',
+      to: '$monthEnd',
     });
     assert.deepEqual(periodTokensForRange('2026-08-01', '2026-08-31', today), {
-      from: '$month.start-1mo',
-      to: '$month.end-1mo',
+      from: '$monthStart-1mo',
+      to: '$monthEnd-1mo',
     });
   });
 
   it('год (этот/прошлый/будущий) распознаётся в токены', () => {
     assert.deepEqual(periodTokensForRange('2026-01-01', '2026-12-31', today), {
-      from: '$year.start',
-      to: '$year.end',
+      from: '$yearStart',
+      to: '$yearEnd',
     });
     assert.deepEqual(periodTokensForRange('2025-01-01', '2025-12-31', today), {
-      from: '$year.start-1y',
-      to: '$year.end-1y',
+      from: '$yearStart-1y',
+      to: '$yearEnd-1y',
     });
     assert.deepEqual(periodTokensForRange('2027-01-01', '2027-12-31', today), {
-      from: '$year.start+1y',
-      to: '$year.end+1y',
+      from: '$yearStart+1y',
+      to: '$yearEnd+1y',
     });
   });
 

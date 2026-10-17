@@ -68,9 +68,11 @@ import {
   TYPE_OWNER_TYPES,
   type EtnErrorCode,
   type LinkTypeFilterInput,
+  type McpThoughtWriteParams,
   type SearchRequest,
   type StructureDirectionFlags,
   type SubgraphEdge,
+  type ThoughtCreateInput,
   type ThoughtRef,
 } from '@etn/shared';
 import { ACTIVITY_LIMIT_MAX } from './domain/activity-service.js';
@@ -88,6 +90,8 @@ import {
 import { validateLayerColors } from './domain/layer-service.js';
 import type { TraversalBounds } from './domain/graph-traversal.js';
 import type {
+  AstTokenContext,
+  QueryStats,
   ThoughtQueryOptions,
   ThoughtQueryRequest,
 } from './domain/query-service.js';
@@ -863,6 +867,36 @@ export const LayersResetOverride = defineContract(
 // Область: мысли — чтение (tools/thoughts-read.ts; REST-аналоги ниже по файлу)
 // ===========================================================================
 
+/**
+ * AST-тело отбора (0.13.1, задача cb78315b; сущность «Модель отбора (AST) и её
+ * wire-формат» 489c394f). Wire-формат `{ version, filter, sort? }` исполняется
+ * единым движком (требование 76e30d9a). Строгую проверку формы (неизвестные
+ * поля на любом уровне, версия, согласованность оператора листа и под-выборки)
+ * делает доменный `parseFilterAst` — здесь схема лишь фиксирует «объект» и
+ * рекламирует форму в `tools/list`, чтобы не дублировать разбор и держать одну
+ * каноническую диагностику `VALIDATION_ERROR` для REST и MCP.
+ */
+const FilterAstBody = z
+  .record(z.string(), z.unknown())
+  .describe('AST-тело отбора; грамматика — etn.guide { topic: "thoughts.query" }.');
+
+/**
+ * Плоские МЫСЛЕВЫЕ параметры точки поиска, несовместимые с `ast`
+ * (требование b91336e7, ADR 7581ac14, задача d5e8ddc1): мыслевые настройки
+ * идут ЛИБО деревом `ast`, ЛИБО плоскими полями. Корпусные (`q`, `scope`,
+ * `link_type_id`, `author_id`, `editor_id`) с `ast` совместимы всегда и сюда
+ * не входят.
+ */
+const SEARCH_AST_EXCLUSIVE_PARAMS = [
+  'type_id',
+  'type',
+  'show_inactive',
+  'trashed',
+  'in_subtree_of',
+  'in',
+  'from_thought_id',
+] as const;
+
 const SearchFields = z
   .object({
     // Сеть обязательна, но в форме XOR: либо одна (`network_id`), либо веер
@@ -875,6 +909,13 @@ const SearchFields = z
     network_ids: z.array(NetworkId).optional().describe(
       'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
     ),
+    /**
+     * AST-условие мыслевых настроек отбора (профиль `thoughts`): подкорень,
+     * типы мыслей, «показывать неактуальные», «корзина» (требование b91336e7,
+     * ADR 7581ac14, задача d5e8ddc1). Валидируется профилем `thoughts` и
+     * исполняется единым движком отбора; корпусные параметры совместимы всегда.
+     */
+    ast: FilterAstBody.optional(),
     query: z.string().min(1),
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
@@ -882,6 +923,12 @@ const SearchFields = z
     type: z.string().min(1).optional(),
     author_id: z.string().optional(),
     editor_id: z.string().optional(),
+    // Мысль-фокус карты — контекст разрешения токенов `$thought*` в `ast`
+    // (задача 2220340b, паритет с REST `RestSearchQuery.focus_thought_id`).
+    // КОРПОРАТИВНЫЙ к мыслевым настройкам: НЕ входит в XOR-список
+    // `SEARCH_AST_EXCLUSIVE_PARAMS` — совместим с `ast` и с плоскими
+    // параметрами, как в REST.
+    focus_thought_id: ThoughtId.optional(),
     show_inactive: z.boolean().optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
@@ -890,6 +937,23 @@ const SearchFields = z
   // уровня → VALIDATION_ERROR. До `.refine()` — порядок обязателен в zod 4.
   .strict()
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача d5e8ddc1, требование b91336e7: `ast` XOR плоские МЫСЛЕВЫЕ параметры.
+  // Корпусные (`query`, `scope`, `author_id`, `editor_id`) с `ast` допустимы.
+  // `type_id === null` трактуется как «не указан» (nullable-форма MCP).
+  .refine(
+    (v) =>
+      v.ast === undefined ||
+      ((v.type_id === undefined || v.type_id === null) &&
+        v.type === undefined &&
+        v.show_inactive === undefined &&
+        v.in_subtree_of === undefined),
+    {
+      message:
+        `Поле ast несовместимо с плоскими мыслевыми параметрами (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+          ', ',
+        )}): передайте либо ast, либо плоские параметры.`,
+    },
+  )
   // Задача eb1a3f43, требование c98d5d19: веерный режим — `network_ids`
   // рядом с `network_id`, но XOR: либо одна сеть, либо список. Парсер
   // repeatable создаёт `network_ids: []` при отсутствии параметра в query —
@@ -966,6 +1030,35 @@ const QueryPropertyFields = z
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
     message: 'Укажите property_id или property в условии свойства.',
   });
+/**
+ * Старые критерии выборки, с которыми `ast` несовместим (требование 91983c20,
+ * задача cb78315b): отбор выражается ЛИБО деревом `ast`, ЛИБО плоскими полями,
+ * но не обоими сразу — одновременная передача молча теряла бы часть намерения.
+ * `sort`/`order`/`limit`/`offset`/`count`/`cursor` сюда НЕ входят: это страница
+ * (пагинация и сортировка), а не критерии.
+ *
+ * `link_filter` тоже НЕ входит (задача c5381a2d): это ФАСАДНОЕ пред-сужение,
+ * применяемое ПОВЕРХ критериев AST (требование 3482a399) — движок связку
+ * «`ast` + `link_filter`» поддерживает, и REST `POST /thoughts/query` её
+ * допускает. Паритет MCP↔REST.
+ */
+const LEGACY_QUERY_CRITERIA = [
+  'in_subtree_of',
+  'max_depth',
+  'type_id',
+  'type',
+  'active',
+  'trashed',
+  'keywords',
+  'properties',
+  'created_after',
+  'created_before',
+  'updated_after',
+  'updated_before',
+  'author_id',
+  'editor_id',
+] as const;
+
 const QueryFields = z
   .object({
     // XOR сети — как в `SearchFields`: обязательность несёт описание полей
@@ -976,6 +1069,7 @@ const QueryFields = z
     network_ids: z.array(NetworkId).optional().describe(
       'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
     ),
+    ast: FilterAstBody.optional(),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
@@ -1003,6 +1097,18 @@ const QueryFields = z
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
   .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  // Задача cb78315b (требование 91983c20): `ast` XOR старые критерии —
+  // смешение молча теряло бы часть намерения. Страница (sort/order/limit/
+  // offset/count/cursor) и фасадный `link_filter` (пред-сужение поверх AST,
+  // задача c5381a2d) допустимы и с `ast`.
+  .refine(
+    (v) => v.ast === undefined || LEGACY_QUERY_CRITERIA.every((k) => v[k] === undefined),
+    {
+      message:
+        `Тело ast несовместимо со старыми критериями (${LEGACY_QUERY_CRITERIA.join(', ')}): ` +
+        'передайте либо ast, либо плоские критерии.',
+    },
+  )
   // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
   // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
   // query — пустой массив трактуется как «не указан».
@@ -1368,7 +1474,12 @@ export const AttachmentsSearch = defineContract(
   'etn.attachments.search',
   z.object({
     network_id: NetworkId,
-    q: z.string().min(1),
+    // `ast` XOR плоские фильтры (задача 5a007bed, требование f67c85c1): тело
+    // отбора профиля «вложения» (name/kind/mime_type/owner/size). При `ast`
+    // плоские `q`/`kind`/`exclude_owner_*` запрещены — разбирает доменный
+    // `parseAttachmentSearchQuery`; поэтому `q` здесь необязателен.
+    ast: FilterAstBody.optional(),
+    q: z.string().min(1).optional(),
     kind: z.enum(ATTACHMENT_KINDS).optional(),
     exclude_owner_type: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
     exclude_owner_id: z.string().min(1).optional(),
@@ -1465,6 +1576,7 @@ export const NetworksWrite = defineContract(
       conventions: z.string().nullable().optional(),
       examples: z.string().nullable().optional(),
       type_roles: z.record(z.string(), z.string().nullable()).optional(),
+      first_day_of_week: z.number().int().min(1).max(7).optional(),
     })
     .strict(),
   {},
@@ -1696,14 +1808,23 @@ export const TypesList = defineContract(
 
 export const ViewsRun = defineContract(
   'etn.views.run',
-  z.object({
-    network_id: NetworkId,
-    thought_id: ThoughtId,
-    view_name: z.string().min(1),
-    limit: z.number().int().min(1).optional(),
-    offset: z.number().int().min(0).optional(),
-    order: z.enum(['asc', 'desc']).optional(),
-  }),
+  z
+    .object({
+      network_id: NetworkId,
+      thought_id: ThoughtId,
+      // Задача cb78315b (требование a50c7872): инструмент принимает ЛИБО
+      // сохранённый отбор по имени/id, ЛИБО готовое AST-тело — ровно одно.
+      view_name: z.string().min(1).optional(),
+      ast: FilterAstBody.optional(),
+      limit: z.number().int().min(1).optional(),
+      offset: z.number().int().min(0).optional(),
+      order: z.enum(['asc', 'desc']).optional(),
+    })
+    // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
+    .strict()
+    .refine((v) => (v.view_name === undefined) !== (v.ast === undefined), {
+      message: 'Укажите ровно одно: view_name (сохранённый отбор) или ast (тело-отбор).',
+    }),
   {},
 );
 
@@ -1711,6 +1832,10 @@ export const ActivityList = defineContract(
   'etn.activity.list',
   z.object({
     network_id: NetworkId,
+    // AST-тело профиля «события» (задача 2b230e8e, требование 3c91f418):
+    // операнды occurred_at/action/entity_type/entity_id/user; XOR с плоскими
+    // фильтрами — разбирает доменный `parseActivityListQuery`.
+    ast: FilterAstBody.optional(),
     from_ms: z.number().int().nonnegative().optional(),
     to_ms: z.number().int().nonnegative().optional(),
     user_id: z.string().min(1).optional(),
@@ -1874,6 +1999,10 @@ export const ChronicleQuery = defineContract(
     // Компактная форма — свободный объект: tools/list держит бюджет размера
     // (сторож mcp-telemetry), а состав полей валидируется в домене.
     targets: z.record(z.string(), z.unknown()).optional(),
+    // AST-тело отбора профиля «хроника» (задача 4752b065, требование 0c83819c):
+    // операнды записи (`record_*`) и «Цели» (`targets`). XOR с плоскими
+    // критериями — разбирает доменный `parseChronicleQueryBody`.
+    ast: FilterAstBody.optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
@@ -1999,6 +2128,9 @@ export const RestActivityList = defineContract(
   'rest:activity.list',
   z.object({
     network_id: NetworkId,
+    // AST-тело профиля «события» в query-параметре (JSON-объект, задача
+    // 2b230e8e): XOR с плоскими фильтрами.
+    ast: z.record(z.string(), z.unknown()).optional(),
     from_ms: z.number().int().min(0).optional(),
     to_ms: z.number().int().min(0).optional(),
     user_id: z.string().min(1).optional(),
@@ -2009,6 +2141,7 @@ export const RestActivityList = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    ast: { from: { kind: 'query' }, parse: parseRestAstQueryParam },
     from_ms: { from: { kind: 'query', coerce: 'int', min: 0 } },
     to_ms: { from: { kind: 'query', coerce: 'int', min: 0 } },
     user_id: { from: { kind: 'query' }, parse: singleQueryValue },
@@ -2502,6 +2635,9 @@ export const RestAttachmentSearch = defineContract(
   z.object({ network_id: NetworkId }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
+    // AST-тело профиля «вложения» в query-параметре (JSON-объект, задача
+    // 5a007bed): XOR с плоскими фильтрами (`q`/`kind`/`exclude_owner_*`).
+    ast: { from: { kind: 'query' }, parse: parseRestAstQueryParam },
     q: { from: { kind: 'query' }, t: z.string().optional() },
     exclude_owner_type: {
       from: { kind: 'query' },
@@ -2925,6 +3061,9 @@ export const RestSearchQuery = defineContract(
       // дополняет ею веер.
       // Задача eb1a3f43: веерный режим — `network_ids` опционален.
       network_ids: z.array(NetworkId).optional(),
+      // AST-условие мыслевых настроек (профиль `thoughts`) в query-параметре
+      // (JSON-объект, задача d5e8ddc1): XOR с плоскими мыслевыми параметрами.
+      ast: z.record(z.string(), z.unknown()).optional(),
       q: z.string().min(1),
       scope: z.string().optional(),
       in: z.string().optional(),
@@ -2935,15 +3074,43 @@ export const RestSearchQuery = defineContract(
       trashed: z.boolean().optional(),
       author_id: z.string().optional(),
       editor_id: z.string().optional(),
+      // Мысль-фокус карты — контекст разрешения токенов `$thought*` в `ast`
+      // (задача 4b1cc3d4). Корпусный по сосуществованию с `ast`: в XOR
+      // плоских МЫСЛЕВЫХ параметров не входит (см. refine ниже).
+      focus_thought_id: z.string().min(1).optional(),
       limit: z.number().int().min(1).optional(),
       offset: z.number().int().min(0).optional(),
-    }),
+    })
+    // Задача d5e8ddc1, требование b91336e7: `ast` XOR плоские МЫСЛЕВЫЕ
+    // параметры. В REST `type_id` — repeatable: при отсутствии параметра
+    // парсер кладёт `[]`, поэтому проверяем длину, а не наличие ключа.
+    // Корпусные (`q`, `scope`, `link_type_id`, `author_id`, `editor_id`) с
+    // `ast` совместимы всегда.
+    .refine(
+      (v) =>
+        v.ast === undefined ||
+        ((v.type_id?.length ?? 0) === 0 &&
+          v.show_inactive === undefined &&
+          v.trashed === undefined &&
+          v.in === undefined &&
+          v.from_thought_id === undefined),
+      {
+        message:
+          `Поле ast несовместимо с плоскими мыслевыми параметрами (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+            ', ',
+          )}): передайте либо ast, либо плоские параметры.`,
+      },
+    ),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     // `repeatable: true` парсера: при отсутствии параметра в строке запроса
     // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
     // проверяет роут (`input.network_ids.length > 0`).
     network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
+    // AST-тело в query-параметре — та же форма, что у одноимённого поля тела
+    // `etn.thoughts.query` (задача d5e8ddc1); строгую форму проверяет доменный
+    // `parseFilterAst` позднее (в роуте), здесь — только JSON-декодирование.
+    ast: { from: { kind: 'query' }, parse: parseRestAstQueryParam },
     q: {
       from: { kind: 'query' },
       parse: (raw: unknown) => {
@@ -2977,6 +3144,9 @@ export const RestSearchQuery = defineContract(
     trashed: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     author_id: { from: { kind: 'query' }, t: z.string().optional() },
     editor_id: { from: { kind: 'query' }, t: z.string().optional() },
+    // Мысль-фокус карты: query-параметр `focus_thought_id` (задача 4b1cc3d4),
+    // совместим с `ast` — контекст токенов `$thought*`, а не критерий отбора.
+    focus_thought_id: { from: { kind: 'query' }, t: z.string().optional() },
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
   },
@@ -3224,10 +3394,12 @@ export const RestThoughtCreateBody = defineContract(
         }
         const c = raw as Record<string, unknown>;
         const bodyMd = c['body_md'];
-        if (typeof bodyMd !== 'string' || bodyMd.trim() === '') {
+        // Пустое тело допустимо (ошибка 00f1d0e6: пустой комментарий — не
+        // ошибка); поле обязано быть строкой — иначе непонятна природа значения.
+        if (typeof bodyMd !== 'string') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'comment.body_md обязателен и не может быть пустым.',
+            'comment.body_md обязателен и должен быть строкой.',
             { field: 'comment.body_md' },
             requestId,
           );
@@ -3732,16 +3904,51 @@ export const RestViewUpdateBody = defineContract(
   },
 );
 
-/** Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки. */
+/**
+ * Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки.
+ * `.strict()` (задача 0e7e89f5): прежде схема не была строгой и ошибочно
+ * присланное `ast` молча срезалось zod-ом — вызов «успешно» исполнял
+ * сохранённый отбор вместо ad-hoc тела. Ad-hoc — отдельный маршрут.
+ */
 export const RestViewRunBody = defineContract(
   'rest:views.run-body',
-  z.object({
-    sort: z.enum(STRUCTURE_SORTS).optional(),
-    order: z.enum(SORT_ORDERS).optional(),
-    limit: z.number().int().min(1).max(STRUCTURES_QUERY_MAX_LIMIT).optional(),
-    offset: z.number().int().min(0).optional(),
-  }),
+  z
+    .object({
+      sort: z.enum(STRUCTURE_SORTS).optional(),
+      order: z.enum(SORT_ORDERS).optional(),
+      limit: z.number().int().min(1).max(STRUCTURES_QUERY_MAX_LIMIT).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict(),
   {
+    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
+    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    limit: { from: { kind: 'body' } },
+    offset: { from: { kind: 'body' } },
+  },
+);
+
+/**
+ * Тело POST /thoughts/{id}/views/run — ad-hoc AST-прогон относительно мысли
+ * (задача 0e7e89f5). Паритет с MCP `etn.views.run { ast }`: `ast` обязателен,
+ * `sort`/`order`/`limit`/`offset` — корпусные переопределения страницы.
+ * `ast.sort` и `sort`/`order` одновременно — `VALIDATION_ERROR` (конвенция
+ * cb78315b «оставьте один источник»). Потолок `limit` — 200 (паритет с
+ * MCP-ветками `etn.views.run`). Строгая схема: неизвестные поля отвергаются.
+ */
+export const RestViewRunAstBody = defineContract(
+  'rest:views.run-ast-body',
+  z
+    .object({
+      ast: FilterAstBody,
+      sort: z.enum(STRUCTURE_SORTS).optional(),
+      order: z.enum(SORT_ORDERS).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict(),
+  {
+    ast: { from: { kind: 'body' }, msg: 'ast обязателен — ad-hoc тело отбора.' },
     sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
     order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
     limit: { from: { kind: 'body' } },
@@ -3771,6 +3978,28 @@ function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInp
     );
   }
   return parseLinkTypeFilterValue(decoded, requestId);
+}
+
+/**
+ * Разбор query-параметра `ast` (JSON-объект тела отбора) в GET-путях —
+ * `GET /activity` (задача 2b230e8e) и `GET /attachments` (задача 5a007bed).
+ * Значение — та же форма, что у MCP-поля `ast` (`version` + `filter`). Строгую
+ * форму проверяет доменный `parseFilterAst` позднее; здесь только
+ * JSON-декодирование строки запроса.
+ */
+function parseRestAstQueryParam(raw: unknown, requestId: string): unknown {
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof first !== 'string' || first === '') return undefined;
+  try {
+    return JSON.parse(first);
+  } catch {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'ast должен быть JSON-объектом тела отбора (version + filter).',
+      { field: 'ast' },
+      requestId,
+    );
+  }
 }
 
 /** GET /networks/:id/thoughts/:id/hierarchy — dir/show_inactive/show_trash/offset/link_filter. */
@@ -3903,6 +4132,12 @@ export const RestStructureQueryBody = defineContract(
       created_before: z.unknown().optional(),
       updated_after: z.unknown().optional(),
       updated_before: z.unknown().optional(),
+      // Требование 91983c20 (тех.проект «Ядро AST и операторы»): тело-отбор AST
+      // (сущность 489c394f) — дерево условий вместо плоских критериев. Форму
+      // разбирает доменный parseFilterAst (роут); при `ast` плоские критерии
+      // запрещены (валидируется в роуте). Неизвестные поля по-прежнему
+      // отклоняются (`.strict()`).
+      ast: z.unknown().optional(),
       sort: z.enum(STRUCTURE_SORTS).optional(),
       order: z.enum(SORT_ORDERS).optional(),
       ids_only: z.boolean().optional(),
@@ -4061,6 +4296,11 @@ export interface ReaderThoughtsQueryPayload {
 export interface ReaderSearchPayload {
   request: SearchRequest;
   showInactiveDefault: boolean;
+  /**
+   * Контекст разрешения календарных токенов `request.ast` (задача 56a143ff):
+   * плоский сериализуемый объект, переживает structured clone до воркера.
+   */
+  tokenContext?: AstTokenContext;
 }
 
 /** Payload `graph.subgraph` — радиус-ограниченный подграф вокруг семян. */
@@ -4091,6 +4331,14 @@ export interface ReaderDepthsEntry {
   depth: number;
 }
 
+/** Сериализованный неразрешимый токен AST (доменный `TokenIssue`). */
+export interface ReaderTokenIssue {
+  path: string;
+  token: string;
+  reason: string;
+  message: string;
+}
+
 /** Сериализованный результат `thoughts.query` (плоский `ThoughtQueryResult`). */
 export interface ReaderThoughtsQueryResult {
   items: ThoughtRef[];
@@ -4102,6 +4350,10 @@ export interface ReaderThoughtsQueryResult {
   depths: ReaderDepthsEntry[] | null;
   truncated: boolean;
   reason: 'max_nodes' | null;
+  /** Неразрешимые токены AST (требование b7fdab20); непусто — результат пуст. */
+  unresolved?: ReaderTokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /** Результат `thoughts.queryIds`. */
@@ -4110,6 +4362,10 @@ export interface ReaderThoughtsQueryIdsResult {
   total: number | null;
   has_more: boolean;
   next_cursor: string | null;
+  /** Неразрешимые токены AST (требование b7fdab20); непусто — `ids` пуст. */
+  unresolved?: ReaderTokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /** Успешный ответ воркера. `result` конкретизируется по `op` на стороне пула. */
@@ -4126,6 +4382,115 @@ export interface ReaderTaskFail {
 
 /** Ответ reader-воркера. */
 export type ReaderTaskResponse = ReaderTaskOk | ReaderTaskFail;
+
+// ---------------------------------------------------------------------------
+// Контракт write-пула (ADR ca3a9218, тех.проект 0df7ccd6, задача 57068081)
+// ---------------------------------------------------------------------------
+
+/**
+ * Контекст задачи write-пула: всё, что нужно воркеру, чтобы открыть СВОЁ
+ * writer-соединение и исполнить запись без знаний о сессии.
+ *
+ * Отличия от {@link ReaderTaskContext} принципиальные и по существу:
+ *
+ *   * соединение воркера — ПИШУЩЕЕ (не `readonly`), открывается тем же профилем
+ *     прагм и тем же набором SQL-функций, что и главное соединение, но БЕЗ
+ *     миграций и без чистки `object_locks` (`openNetworkDb` в воркере запрещён —
+ *     сторож `guard-write-pool.test.ts`);
+ *   * `schemaVersion` — маркер инвалидации: сменилась (миграция главного
+ *     потока) — соединение воркера переоткрывается, следующая задача едет по
+ *     новой схеме (сценарий 75627b29);
+ *   * `layerId` переустанавливается на соединении каждой задачей (`useLayer`):
+ *     видимость `*_v` в записи — слоя задачи, а не прошлой (сценарий 83bf13f1).
+ */
+export interface WriteTaskContext {
+  /** Абсолютный путь к `data.db` сети (воркер открывает своё writer-соединение). */
+  dbPath: string;
+  /** Логический id сети — ключ sticky-привязки в диспетчере пула. */
+  networkId: string;
+  /** Контекст слоя: `*_v` резолвятся по цепочке предков этого слоя. */
+  layerId: string;
+  /** `PRAGMA schema_version` — инвалидация соединений воркера при смене схемы. */
+  schemaVersion: number;
+  /**
+   * Плоские факты кросс-сетевого доступа (`CrossNetworkAccessContext` содержит
+   * `Logger` и `Set` — через границу потока не проходят). Пока не используется:
+   * кросс-сетевой резолв в воркере — этап переноса соответствующих операций
+   * (ADR ca3a9218, «Кросс-сетевой резолв»). Фасад опознаёт такие батчи по форме
+   * адреса в значениях свойств (`thoughtsBatchNeedsMainThread`) и оставляет их в
+   * главном потоке через `poolable: false` (см. `runWriteTask`); воркер такую
+   * задачу отвергает — защита от тихой поломки.
+   */
+  crossNetworkAccess?: WriteCrossNetworkFacts;
+}
+
+/** Сериализуемая часть контекста кросс-сетевого доступа. */
+export interface WriteCrossNetworkFacts {
+  dataDir: string;
+  userId: string;
+  clientId: string;
+  currentNetworkId: string;
+  accessibleNetworkIds: string[];
+}
+
+/**
+ * Имена операций, исполняемых write-воркером. Этап 1 переноса — батч-запись
+ * мыслей (`write.thoughts`); REST-путь создания мысли GUI-клиента — единичная
+ * запись `write.thought` (задача c744e05c, та же архитектура пула).
+ */
+export type WriteOp = 'write.thoughts' | 'write.thought';
+
+/** Payload `write.thoughts` — тот же вход, что у `writeThoughts` в домене. */
+export interface WriteThoughtsPayload {
+  /** Батч `etn.thoughts.write` (мысли + комментарии + свойства + связи). */
+  input: McpThoughtWriteParams;
+  /** Актор записи: авторство строк и журнала. */
+  actorUserId: string;
+}
+
+/**
+ * Payload `write.thought` — единичное создание мысли REST-путём `POST /thoughts`
+ * (задача c744e05c): тот же вход, что у `createThought` в домене, плюс актор.
+ * Тело сериализуемо (плоские строки/числа/булевы и вложенные `create_link`/
+ * `comment`) — через границу потока структурное клонирование проходит без потерь.
+ */
+export interface WriteThoughtPayload {
+  /** Вход создания мысли (`ThoughtCreateInput`), уже разобранный REST-контрактом. */
+  input: ThoughtCreateInput;
+  /** Актор записи: авторство строк и журнала. */
+  actorUserId: string;
+}
+
+/**
+ * Одна задача write-пула: контекст + op + payload. Замыкания через границу
+ * потока не передаются (ADR ca3a9218), поэтому op назван строкой, а данные —
+ * плоский structured-clone DTO. Размеченное объединение по `op`: воркер
+ * выбирает композицию по имени операции и типизирует payload сужением.
+ */
+export type WriteTask = { context: WriteTaskContext } & (
+  | { op: 'write.thoughts'; payload: WriteThoughtsPayload }
+  | { op: 'write.thought'; payload: WriteThoughtPayload }
+);
+
+/**
+ * Успешный ответ write-воркера: `result` конкретизируется по `op`. Для
+ * `write.thoughts` это исход задачи (`ThoughtsWriteOutcome` из
+ * `domain/write-ops.ts`): `{ result, events }` — события собраны внутри
+ * транзакции и публикуются главным потоком после коммита (ADR ca3a9218).
+ */
+export interface WriteTaskOk {
+  ok: true;
+  result: unknown;
+}
+
+/** Ответ воркера с ошибкой: доменная ошибка сериализуется в плоский вид. */
+export interface WriteTaskFail {
+  ok: false;
+  error: { code: EtnErrorCode; message: string; details?: unknown };
+}
+
+/** Ответ write-воркера. */
+export type WriteTaskResponse = WriteTaskOk | WriteTaskFail;
 
 // ---------------------------------------------------------------------------
 // Публикации (0.11.1, задача 8178e007; карточка CRUD 5af247e4)

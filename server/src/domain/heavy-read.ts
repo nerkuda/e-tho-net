@@ -24,7 +24,7 @@
  * соединение воркера, если схема успела измениться.
  */
 
-import { type SearchRequest, type SearchResponse } from '@etn/shared';
+import { type SearchRequest } from '@etn/shared';
 
 import type {
   ReaderSubgraphResult,
@@ -38,6 +38,7 @@ import { getReaderPool, type ReaderPool } from '../db/reader-pool.js';
 import {
   queryThoughts,
   queryThoughtIds,
+  type AstTokenContext,
   type ThoughtIdsQueryResult,
   type ThoughtQueryOptions,
   type ThoughtQueryRequest,
@@ -45,7 +46,8 @@ import {
 } from './query-service.js';
 import { search } from './search-service.js';
 import { subgraph, type TraversalBounds } from './graph-traversal.js';
-import type { SubgraphEdge } from '@etn/shared';
+import type { TokenIssue } from './thought-type-view-tokens.js';
+import type { SearchResponse, SubgraphEdge } from '@etn/shared';
 
 /**
  * Контекст воркера из соединения главного потока, либо `null`, если операцию
@@ -73,6 +75,8 @@ function toThoughtQueryResult(flat: ReaderThoughtsQueryResult): ThoughtQueryResu
     depths: flat.depths === null ? null : new Map(flat.depths.map((e) => [e.id, e.depth])),
     truncated: flat.truncated,
     reason: flat.reason,
+    ...(flat.unresolved !== undefined ? { unresolved: flat.unresolved as TokenIssue[] } : {}),
+    ...(flat.stats !== undefined ? { stats: flat.stats } : {}),
   };
 }
 
@@ -117,7 +121,15 @@ export async function queryThoughtIdsAsync(
     op: 'thoughts.queryIds',
     payload: { userId, request, options },
   };
-  return (await pool.run(task)) as ReaderThoughtsQueryIdsResult;
+  const flat = (await pool.run(task)) as ReaderThoughtsQueryIdsResult;
+  return {
+    ids: flat.ids,
+    total: flat.total,
+    has_more: flat.has_more,
+    next_cursor: flat.next_cursor,
+    ...(flat.unresolved !== undefined ? { unresolved: flat.unresolved as TokenIssue[] } : {}),
+    ...(flat.stats !== undefined ? { stats: flat.stats } : {}),
+  };
 }
 
 /** Полнотекстовый поиск (см. {@link search}) через пул. */
@@ -125,16 +137,20 @@ export async function searchAsync(
   ndb: NetworkDb,
   request: SearchRequest,
   showInactiveDefault = false,
+  tokenContext?: AstTokenContext,
 ): Promise<SearchResponse> {
   const pool = getReaderPool();
   const context = contextFor(ndb, pool);
   if (pool === null || context === null) {
-    return search(ndb, request, showInactiveDefault);
+    return search(ndb, request, showInactiveDefault, tokenContext);
   }
   const task: ReaderTask = {
     context,
     op: 'search.query',
-    payload: { request, showInactiveDefault },
+    // `AstTokenContext` сериализуем (плоские числа/строки) — переживает
+    // structured clone до reader-воркера, поэтому разрешение календарных
+    // токенов одинаково в обоих режимах (задача 56a143ff).
+    payload: { request, showInactiveDefault, ...(tokenContext !== undefined ? { tokenContext } : {}) },
   };
   return (await pool.run(task)) as SearchResponse;
 }

@@ -1,0 +1,374 @@
+{
+  "name": "filter-polish-609deba0-a",
+  "description": "Полировка, часть 4 (ошибка 609deba0), группа A + C1. Онбординг → карта (C1: диалог отбора из «+» зоны фокуса — создание и правка) → «Структуры мыслей» (A1 нет «Выборки» у типа, A2 отмена возвращает «Список», A3 неявное значение триады, A4 двойной клик по дате в календаре). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-609deba0-a.scenario.json --out .tmp/etn-609deba0-a/out",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "map-ready",
+      "waitFor": "document.querySelector('[data-id]') !== null"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "createLinkProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "Связь стенда",
+          "value_type": "link",
+          "name_forward": "связь стенда",
+          "name_reverse": "связь стенда от"
+        },
+        "expression": "data.name"
+      }
+    },
+    {
+      "name": "c1-seed-typed-home",
+      "eval": "(async () => { const nid='{{networkId}}'; const type=await window.etn.types.createThoughtType(nid, { name: 'Тип стенда C1' }); const cur=await window.etn.thoughts.get(nid, '{{homeId}}'); await window.etn.thoughts.update(nid, '{{homeId}}', { type_id: type.id }, cur.version); window.__c1 = { typeId: type.id, viewId: null }; return 'ok'; })()"
+    },
+    {
+      "name": "c1-focus-home",
+      "eval": "(async () => { const el=document.querySelector('[data-id=\"{{homeId}}\"] .cloud') || document.querySelector('.canvas-focus-row .cloud'); if(!el) return 'no-cloud'; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); await new Promise(r=>setTimeout(r,400)); return 'ok'; })()"
+    },
+    {
+      "name": "c1-add-enabled",
+      "timeout": 15000,
+      "waitFor": "(() => { const b=document.querySelector('.canvas-filter-strip-add'); return b !== null && b.disabled === false; })()"
+    },
+    {
+      "name": "c1-click-add",
+      "click": ".canvas-filter-strip-add"
+    },
+    {
+      "name": "c1-create-dialog",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.view-editor-body') !== null"
+    },
+    {
+      "name": "c1-create-editor",
+      "probe": "(() => { const b=document.querySelector('.view-editor-body'); return b !== null && b.querySelector('.ft-group') !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "c1-create-no-crash",
+      "probe": "(() => [...document.querySelectorAll('body *')].some(e => (e.textContent||'').includes('criteriaBase')))()",
+      "expect": false
+    },
+    {
+      "name": "c1-close-dialog",
+      "key": "Escape"
+    },
+    {
+      "name": "c1-close-dialog-dismiss",
+      "eval": "(() => { const backs=[...document.querySelectorAll('.dialog-backdrop')]; const top=backs[backs.length-1]; if(!top) return 'no-dialog'; const labels=['Не сохранять','Отмена','ОК','Да'];\n  for (const l of labels) { const b=[...top.querySelectorAll('button')].find(x=>x.textContent.trim()===l); if(b){ b.click(); return l; } }\n  return 'no-btn'; })()"
+    },
+    {
+      "name": "c1-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.view-editor-body') === null"
+    },
+    {
+      "name": "c1-seed-view",
+      "eval": "(async () => { const nid='{{networkId}}'; const def=JSON.stringify({ version: 1, filter: { entity: { kind: 'id' }, operator: 'eq', value: '{{thoughtId}}' } }); const v=await window.etn.thoughtTypeViews.create(nid, window.__c1.typeId, { name: 'Отбор стенда C1', definition: def }); window.__c1.viewId=v.id; return v.id ? 'ok' : 'no'; })()"
+    },
+    {
+      "name": "c1-view-button",
+      "timeout": 20000,
+      "waitFor": "(() => { const b=document.querySelector('.canvas-filter-strip-btn[data-view-id=\"'+window.__c1.viewId+'\"]'); return b !== null && b.disabled === false; })()"
+    },
+    {
+      "name": "c1-open-view-menu",
+      "eval": "(() => { const b=document.querySelector('.canvas-filter-strip-btn[data-view-id=\"'+window.__c1.viewId+'\"]'); const r=b.getBoundingClientRect(); b.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.left+5,clientY:r.top+5})); return 'ok'; })()"
+    },
+    {
+      "name": "c1-menu-visible",
+      "timeout": 8000,
+      "waitFor": "(() => [...document.querySelectorAll('.menu-item')].some(e=>(e.textContent||'').includes('Изменить отбор')))()"
+    },
+    {
+      "name": "c1-click-edit",
+      "eval": "(() => { const it=[...document.querySelectorAll('.menu-item')].find(e=>(e.textContent||'').includes('Изменить отбор')); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "c1-edit-dialog",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.view-editor-body') !== null"
+    },
+    {
+      "name": "c1-edit-editor",
+      "probe": "(() => { const b=document.querySelector('.view-editor-body'); return b !== null && b.querySelector('.ft-group') !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "c1-edit-rows",
+      "probe": "document.querySelectorAll('.view-editor-body .ft-row').length"
+    },
+    {
+      "name": "c1-close-edit",
+      "key": "Escape"
+    },
+    {
+      "name": "c1-close-edit-dismiss",
+      "eval": "(() => { const backs=[...document.querySelectorAll('.dialog-backdrop')]; const top=backs[backs.length-1]; if(!top) return 'no-dialog'; const labels=['Не сохранять','Отмена','ОК','Да'];\n  for (const l of labels) { const b=[...top.querySelectorAll('button')].find(x=>x.textContent.trim()===l); if(b){ b.click(); return l; } }\n  return 'no-btn'; })()"
+    },
+    {
+      "name": "c1-edit-closed",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.view-editor-body') === null"
+    },
+    {
+      "name": "open-structures",
+      "click": "button.view-tab[title=\"Структуры мыслей\"]"
+    },
+    {
+      "name": "structures-editor",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.st-filter .fe .ft-group') !== null"
+    },
+    {
+      "name": "widen-window",
+      "eval": "(() => { window.resizeTo(1900, 1000); return window.innerWidth; })()"
+    },
+    {
+      "name": "widen-ready",
+      "timeout": 8000,
+      "waitFor": "window.innerWidth >= 1400 && document.querySelector('.st-filter') !== null"
+    },
+    {
+      "name": "panel-widen-drag",
+      "eval": "(async () => { const s = document.querySelector('.st-splitter'); const pan = document.querySelector('.st-filter'); if (!s || !pan) return 'no-splitter'; const orig = Element.prototype.setPointerCapture; Element.prototype.setPointerCapture = function () {}; const r = s.getBoundingClientRect(); const x = Math.round(r.left + 200); const y = Math.round(r.top + r.height / 2); const base = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, clientX: x, clientY: y }; s.dispatchEvent(new PointerEvent('pointerdown', base)); for (let k = 1; k <= 6; k += 1) s.dispatchEvent(new PointerEvent('pointermove', Object.assign({}, base, { clientY: y + 60 * k }))); s.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, base, { buttons: 0, clientY: y + 360 }))); Element.prototype.setPointerCapture = orig; await new Promise(r2 => setTimeout(r2, 250)); return Math.round(pan.getBoundingClientRect().height); })()"
+    },
+    {
+      "name": "panel-max-ready",
+      "timeout": 8000,
+      "waitFor": "(document.querySelector('.st-filter')?.getBoundingClientRect().height ?? 0) >= 400"
+    },
+    {
+      "name": "a1-add-condition",
+      "eval": "(() => { const g=document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const b=g && g.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a1-row",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"0\"]') !== null"
+    },
+    {
+      "name": "a1-pick-type",
+      "eval": "(async () => { document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-row__what').click(); await new Promise(r=>setTimeout(r,60)); const it=document.querySelector('.ft-choice__item[data-key=\"type\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a1-pick-hierarchy",
+      "eval": "(async () => { const row=document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); row.querySelector('.ft-row__op').click(); await new Promise(r=>setTimeout(r,60)); const it=document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]'); if(!it) return 'no-op'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a1-no-subquery-switch",
+      "probe": "document.querySelector('.st-filter .ft-row[data-path=\"0\"] .fq-mode') === null",
+      "expect": true
+    },
+    {
+      "name": "a1-op-is-hierarchy",
+      "probe": "(document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-row__op')?.textContent||'').includes('иерархи')",
+      "expect": true
+    },
+    {
+      "name": "a1-list-cards",
+      "probe": "(() => { const e=document.querySelector('.st-filter .ft-row[data-path=\"0\"] .fv-entity'); return e !== null && e.dataset.entityKind === 'thought-types'; })()",
+      "expect": true
+    },
+    {
+      "name": "a3-pick-id",
+      "eval": "(async () => { document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-row__what').click(); await new Promise(r=>setTimeout(r,60)); const it=document.querySelector('.ft-choice__item[data-key=\"id\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a3-issue-shown",
+      "timeout": 8000,
+      "waitFor": "(() => { const r=document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); return r.dataset.severity === 'error' && (r.querySelector('.ft-issue__text')?.textContent||'').includes('не задано значение условия'); })()"
+    },
+    {
+      "name": "a3-issue-present",
+      "probe": "(document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-issue__text')?.textContent||'').includes('не задано значение условия')",
+      "expect": true
+    },
+    {
+      "name": "a3-pick-active",
+      "eval": "(async () => { document.querySelector('.st-filter .ft-row[data-path=\"0\"] .ft-row__what').click(); await new Promise(r=>setTimeout(r,60)); const it=document.querySelector('.ft-choice__item[data-key=\"active\"]'); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a3-issue-gone",
+      "probe": "(() => { const r=document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); return r.dataset.severity === undefined && r.querySelector('.fv-triad') !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "a3-triad-value",
+      "probe": "(() => { const r=document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); const yes=[...r.querySelectorAll('.fv-triad button')].find(b=>b.textContent.trim()==='да'); return yes?.getAttribute('aria-pressed') === 'true'; })()",
+      "expect": true
+    },
+    {
+      "name": "a2-add-condition",
+      "eval": "(() => { const g=document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const b=g && g.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a2-row",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"1\"]') !== null"
+    },
+    {
+      "name": "a2-pick-link",
+      "eval": "(async () => { document.querySelector('.st-filter .ft-row[data-path=\"1\"] .ft-row__what').click(); await new Promise(r=>setTimeout(r,60)); const it=[...document.querySelectorAll('.ft-choice__item')].find(e=>(e.textContent||'').includes('Связь стенда')); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a2-pick-in",
+      "eval": "(async () => { const row=document.querySelector('.st-filter .ft-row[data-path=\"1\"]'); row.querySelector('.ft-row__op').click(); await new Promise(r=>setTimeout(r,60)); const it=document.querySelector('.ft-choice__item[data-key=\"in\"]'); if(!it) return 'no-op'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a2-mode-present",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"1\"] .fq-mode') !== null"
+    },
+    {
+      "name": "a2-mode-list-active",
+      "probe": "(() => { const row=document.querySelector('.st-filter .ft-row[data-path=\"1\"]'); const b=[...row.querySelectorAll('.fq-mode button')].find(x=>x.textContent.trim()==='Список'); return b?.getAttribute('aria-pressed') === 'true'; })()",
+      "expect": true
+    },
+    {
+      "name": "a2-open-subquery",
+      "eval": "(() => { const row=document.querySelector('.st-filter .ft-row[data-path=\"1\"]'); const b=[...row.querySelectorAll('.fq-mode button')].find(x=>x.textContent.trim()==='Выборка'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a2-modal-open",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.fq-modal') !== null"
+    },
+    {
+      "name": "a2-cancel",
+      "eval": "(async () => { const btns=[...document.querySelectorAll('.dialog-backdrop button')]; const b=[...btns].reverse().find(x=>x.textContent.trim()==='Отмена'); if(!b) return 'no-cancel'; b.click(); await new Promise(r=>setTimeout(r,50)); return 'ok'; })()"
+    },
+    {
+      "name": "a2-modal-closed",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.fq-modal') === null"
+    },
+    {
+      "name": "a2-list-back",
+      "probe": "(() => { const row=document.querySelector('.st-filter .ft-row[data-path=\"1\"]'); const b=[...row.querySelectorAll('.fq-mode button')].find(x=>x.textContent.trim()==='Список'); return b?.getAttribute('aria-pressed') === 'true' && row.querySelector('.fv') !== null && row.querySelector('.fq-chip') === null; })()",
+      "expect": true
+    },
+    {
+      "name": "a4-add-condition",
+      "eval": "(() => { const g=document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const b=g && g.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a4-row",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"2\"]') !== null"
+    },
+    {
+      "name": "a4-pick-date",
+      "eval": "(async () => { document.querySelector('.st-filter .ft-row[data-path=\"2\"] .ft-row__what').click(); await new Promise(r=>setTimeout(r,100)); const menus=[...document.querySelectorAll('.ft-choice')]; const last=menus[menus.length-1]; const hit=last.querySelector('.ft-choice__item[data-key=\"created_at\"]'); if(!hit) return 'no-item'; hit.click(); await new Promise(r=>setTimeout(r,150)); return (document.querySelector('.st-filter .ft-row[data-path=\"2\"] .ft-row__what')||{}).textContent||'none'; })()"
+    },
+    {
+      "name": "a4-date-cell",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"2\"] .fv-date__anchor') !== null"
+    },
+    {
+      "name": "a4-to-exact",
+      "eval": "(() => { const s=document.querySelector('.st-filter .ft-row[data-path=\"2\"] .fv-date__anchor'); s.value='exact'; s.dispatchEvent(new Event('change',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "a4-pick-ready",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.st-filter .ft-row[data-path=\"2\"] .date-field-pick') !== null"
+    },
+    {
+      "name": "a4-open-calendar",
+      "eval": "(async () => { const b=document.querySelector('.st-filter .ft-row[data-path=\"2\"] .date-field-pick'); if(!b) return 'no-btn'; b.click(); await new Promise(r=>setTimeout(r,250)); return document.querySelector('.dpd')!==null ? 'dpd' : 'none'; })()"
+    },
+    {
+      "name": "a4-dialog",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.dpd .cal-day') !== null"
+    },
+    {
+      "name": "a4-dblclick",
+      "click": {
+        "selector": ".dpd .cal-day:not(.is-out)",
+        "count": 2
+      }
+    },
+    {
+      "name": "a4-dialog-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dpd') === null"
+    },
+    {
+      "name": "a4-value-set",
+      "probe": "(() => { const i=document.querySelector('.st-filter .ft-row[data-path=\"2\"] .date-field-input'); return i !== null && i.value.length === 10 && i.value[4] === '-' && i.value[7] === '-'; })()",
+      "expect": true
+    },
+    {
+      "name": "a4-value",
+      "probe": "(document.querySelector('.st-filter .ft-row[data-path=\"2\"] .date-field-input')?.value ?? 'none')"
+    },
+    {
+      "name": "switch-to-dark",
+      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+    },
+    {
+      "name": "dark-theme-on",
+      "probe": "document.documentElement.dataset.theme === 'dark'",
+      "expect": true
+    },
+    {
+      "name": "dark-a1-no-subquery-switch",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"0\"]'); return row !== null && row.querySelector('.fq-mode') === null; })()",
+      "expect": true
+    },
+    {
+      "name": "dark-a2-mode-list-active",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row[data-path=\"1\"]'); const m = row && row.querySelector('.fq-mode'); if (!m) return false; const b = m.querySelector('button'); return b !== null && (b.getAttribute('aria-pressed') === 'true' || b.classList.contains('ui-btn--active')); })()",
+      "expect": true
+    },
+    {
+      "name": "dark-a4-date-value",
+      "probe": "(document.querySelector('.st-filter .ft-row[data-path=\"2\"] .date-field-input')?.value ?? 'none')"
+    }
+  ]
+}

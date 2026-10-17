@@ -1,6 +1,6 @@
 /**
  * Зона «Настройки поиска» выпадающей панели строки поиска карты (задача
- * a3247f84, 0.8.2).
+ * a3247f84, 0.8.2; перекомпоновка — задача 4b1cc3d4).
  *
  * Контракт (элемент интерфейса «Строка поиска вида «Карта мыслей»»):
  *  - панель делится на две зоны — «результаты поиска» и «настройки поиска»;
@@ -10,10 +10,14 @@
  *    и перезапуск клиента (локальное L4 `ui_state`, как `search_state`);
  *  - ширина окна > 1000 px — настройки справа от результатов (30% ширины
  *    панели), ≤ 1000 px — сверху; положение переключается на ресайзе;
- *  - компоновка настроек — три строки (подкорни; места поиска; ограничения),
- *    при нехватке ширины элементы ложатся друг под друга;
- *  - поле мыслей-подкорней — общий чип-лист пикера (как «Родительские мысли»
- *    панели «Структур»), активно только при установленном флажке.
+ *  - компоновка настроек (задача 4b1cc3d4): первой строкой — блок «места
+ *    поиска» (области FTS), затем единый редактор мыслевых условий (профиль
+ *    `thoughts`); поля «Ограничения»/«Автор»/«Редактор» убраны СОВСЕМ
+ *    (решение заказчика 2026-10-15);
+ *  - внизу зоны — постоянно видимый (не прокручиваемый) подвал команд
+ *    «Очистить» и «Добавить отбор…»; прокручивается только тело зоны;
+ *  - мыслевые настройки (подкорень, типы, «неактуальные», «корзина») — строки
+ *    редактора; корпусные (области поиска) — плоская строка зоны.
  *
  * Клиентские тесты идут без jsdom (конвенция соседних тестов), поэтому чистая
  * логика проверяется напрямую, а привязка слоёв — по якорям исходника и
@@ -183,7 +187,7 @@ describe('положение зоны настроек по ширине окн�
   });
 });
 
-describe('прокрутка зон независима (ошибка aa5d0aff)', () => {
+describe('прокрутка зон независима (ошибка aa5d0aff; низ зоны — задача 4b1cc3d4)', () => {
   it('панель сама не прокручивается — прокрутка живёт у зон', () => {
     const css = readText(STYLES_CSS);
     assert.match(
@@ -197,67 +201,113 @@ describe('прокрутка зон независима (ошибка aa5d0aff)
     );
   });
 
-  it('у каждой зоны — своя вертикальная прокрутка', () => {
+  it('результаты прокручиваются своей полосой, зона настроек — телом (не сама)', () => {
     const css = readText(STYLES_CSS);
     assert.match(css, /\.search-results \{[^}]*overflow-y: auto;/, 'результаты прокручиваются своей полосой');
-    assert.match(css, /\.search-settings \{[^}]*overflow-y: auto;/, 'настройки прокручиваются своей полосой');
+    // Зона настроек — flex-колонка без своей прокрутки: полоса у ТЕЛА, поэтому
+    // подвал команд не уезжает вместе с условиями (задача 4b1cc3d4).
     assert.match(
       css,
-      /\.search-panel\.search-settings-side \.search-settings \{[^}]*overflow-y: auto;/,
-      'в боковом положении настройки прокручиваются сами',
+      /\.search-settings \{[^}]*overflow: hidden;/,
+      'сама зона настроек не прокручивается',
+    );
+    assert.ok(
+      !/\.search-settings \{[^}]*overflow-y: auto;/.test(css),
+      'у зоны настроек нет своей вертикальной прокрутки',
+    );
+    assert.match(
+      css,
+      /\.search-settings-body \{[^}]*overflow-y: auto;/,
+      'тело зоны настроек прокручивается своей полосой',
     );
   });
 
-  it('сверху высота настроек ограничена, остаток высоты уходит результатам', () => {
+  it('подвал команд не прокручивается (flex: 0 0 auto)', () => {
+    const css = readText(STYLES_CSS);
+    assert.match(
+      css,
+      /\.search-settings-actions \{[^}]*flex: 0 0 auto;/,
+      'подвал команд забирает высоту по содержимому и не уезжает при прокрутке',
+    );
+  });
+
+  it('сверху высота настроек ограничена, прокручивается их тело', () => {
     const css = readText(STYLES_CSS);
     assert.match(
       css,
       /\.search-panel\.search-settings-top \.search-settings \{[^}]*max-height: min\(240px, 25vh\);/,
       'настройки сверху не выше разумного предела — не съедают результаты',
     );
-    assert.match(
-      css,
-      /\.search-panel\.search-settings-top \.search-settings \{[^}]*overflow-y: auto;/,
-      'сверх предела настройки прокручиваются своей полосой',
+    assert.ok(
+      !/\.search-panel\.search-settings-top \.search-settings \{[^}]*overflow-y: auto;/.test(css),
+      'сверху сама зона не прокручивается — прокрутка у её тела',
     );
   });
 });
 
-describe('компоновка зоны настроек — три строки (задача a3247f84)', () => {
-  it('строки: подкорни, места поиска, ограничения', () => {
+describe('компоновка зоны настроек: места поиска, редактор, подвал команд (задача 4b1cc3d4)', () => {
+  it('мыслевые настройки — строки единого редактора (профиль thoughts)', () => {
     const search = readText(SEARCH_TS);
-    assert.match(search, /label: 'ограничить потомками мыслей:'/);
-    assert.match(search, /span\('Места поиска:', 'search-settings-label'\)/);
-    assert.match(search, /span\('Ограничения:', 'search-settings-label'\)/);
-    assert.equal(
-      (search.match(/div\('search-settings-row'\)/g) ?? []).length,
-      3,
-      'ровно три строки настроек',
+    assert.match(search, /buildFilterEditor\(\{/, 'зона монтирует единый редактор');
+    assert.match(search, /profile: 'thoughts'/, 'профиль строки поиска — мысли');
+    assert.match(
+      search,
+      /contextual: \['parents', 'children', 'type', 'active', 'trashed'\]/,
+      'подкорень/типы/видимость — операнды редактора',
+    );
+    assert.match(
+      search,
+      /title: t\('filterEditor\.titleSearch'\)/,
+      'заголовок редактора — свой, из словаря («Отбор мыслей для поиска:»)',
     );
   });
 
-  it('флажки мест поиска: мысли, связи, хроники, неактуальные, корзина', () => {
+  it('строка «Места поиска» — первая; корпусных полей «Ограничения» нет', () => {
+    const search = readText(SEARCH_TS);
+    assert.match(search, /span\('Места поиска:', 'search-settings-label'\)/);
+    assert.ok(!search.includes("span('Ограничения:'"), 'строки «Ограничения» больше нет');
+    assert.equal(
+      (search.match(/div\('search-settings-row'\)/g) ?? []).length,
+      1,
+      'ровно одна плоская строка — места поиска',
+    );
+    // Порядок зоны: тело собирается как «места поиска → редактор».
+    assert.match(
+      search,
+      /body\.append\(placesRow, searchEditor\.root\)/,
+      'места поиска идут ПЕРЕД редактором (первой строкой)',
+    );
+    assert.match(
+      search,
+      /zone\.append\(body, actions\)/,
+      'зона = прокручиваемое тело + подвал команд',
+    );
+  });
+
+  it('флажки мест поиска: мысли, связи, хроники (области FTS)', () => {
     const search = readText(SEARCH_TS);
     for (const [label, key] of [
       ["'мысли'", "'onlyThoughts'"],
       ["'связи'", "'onlyLinks'"],
       ["'хроники'", "'onlyChrono'"],
-      ["'неактуальные'", "'showInactive'"],
-      ["'корзина'", "'trashed'"],
     ] as const) {
       assert.ok(
         search.includes(`mkCheck(${label}, ${key})`),
         `флажок ${label} привязан к ${key}`,
       );
     }
+    assert.ok(!search.includes("mkCheck('неактуальные'"), 'неактуальные — строка редактора');
+    assert.ok(!search.includes("mkCheck('корзина'"), 'корзина — строка редактора');
   });
 
-  it('ограничения: типы мыслей, типы связей, Автор, редактор', () => {
+  it('корпусные поля сняты совсем (тип связи, Автор, Редактор)', () => {
     const search = readText(SEARCH_TS);
-    assert.match(search, /optionsHeader: 'Типы мыслей'/);
-    assert.match(search, /optionsHeader: 'Типы связей'/);
-    assert.match(search, /buildUserSelectWidget\(\{\s*label: 'Автор'/);
-    assert.match(search, /buildUserSelectWidget\(\{\s*label: 'Редактор'/);
+    assert.ok(!search.includes("optionsHeader: 'Типы связей'"), 'поля типов связей нет');
+    assert.ok(!search.includes("buildUserSelectWidget({"), 'селектов пользователей нет');
+    assert.ok(
+      !search.includes("optionsHeader: 'Типы мыслей'"),
+      'типы мыслей — строка редактора, а не поле зоны',
+    );
   });
 
   it('при нехватке ширины элементы строки ложатся друг под друга', () => {
@@ -270,68 +320,72 @@ describe('компоновка зоны настроек — три строки
     assert.match(
       css,
       /\.search-settings \{\s*display: flex;\s*flex-direction: column;\s*gap: 10px;/,
-      'отступы между строками задаёт контейнер настроек',
+      'отступы между блоками задаёт контейнер настроек',
     );
   });
 });
 
-describe('поле «ограничить потомками мыслей» (задача a3247f84)', () => {
-  it('поле — общий чип-лист пикера, как «Родительские мысли»', () => {
+describe('единый редактор, подвал команд и запрос поиска (задачи 8f3b2cf2, 4b1cc3d4)', () => {
+  it('редактор — общая фабрика, без сортировки и футера; правки применяются', () => {
     const search = readText(SEARCH_TS);
     assert.match(
       search,
-      /getValues: \(\) => options\.subrootIds,[\s\S]*?onChange: \(values\) => \{\s*options = \{ \.\.\.options, subrootIds: values \};/,
-      'значения поля пишутся в набор мыслей-подкорней',
+      /buildFilterEditor\(\{[\s\S]*?sort: false,[\s\S]*?footer: false,/,
+      'у строки поиска нет секции сортировки и футера',
     );
     assert.match(
       search,
-      /pickThoughtsDialog\(\{[\s\S]*?selectedIds: options\.subrootIds,[\s\S]*?return result === null \? null : pickedThoughtIds\(result\);/,
-      'кнопка пикера открывает общий модальный выбор мыслей',
-    );
-    assert.ok(
-      !search.includes('buildEntityCombo'),
-      'своё одиночное комбо для подкорня не используется',
+      /touch: \(\) => \{\s*persistState\(\);\s*refreshSearchIfVisible\(\);\s*searchEditor\?\.refresh\(\);/,
+      'правка мыслевых настроек сохраняется и перезапрашивает результаты',
     );
   });
 
-  it('тултип и активация только при включённом флажке', () => {
+  it('подвал команд: «Очистить» через handle.clear и меню «Добавить отбор…»', () => {
     const search = readText(SEARCH_TS);
     assert.match(
       search,
-      /setTooltip\(\s*subrootField\.root,\s*'Поиск будет осуществляться только среди потомков указанных мыслей',?\s*\)/,
-      'тултип поля — дословно из решения пользователя',
+      /onClick: \(\) => searchEditor\?\.clear\(\)/,
+      '«Очистить» — штатная очистка единого редактора',
     );
+    assert.match(search, /openQuickCommandsMenu\(event\)/, 'подменю команд открывается из подвала');
     assert.match(
       search,
-      /const subrootField = buildEntityChipField\(\{/,
-      'ссылка на собранное поле доступна для включения/выключения',
+      /menuAction\(t\('search\.cmdParentInFocus'\), \(\) => runQuickCommand\('parentInFocus'\)\)/,
+      'команда «По родителю в фокусе» — в подменю',
     );
-    assert.match(
-      search,
-      /subrootField\.setDisabled\(!options\.subtree\)/,
-      'при отрисовке поле выключено, если флажок снят',
-    );
-    assert.match(
-      search,
-      /options = \{ \.\.\.options, subtree: subtreeCheck\.checked \};\s*subrootField\.setDisabled\(!subtreeCheck\.checked\);/,
-      'смена флажка включает/выключает поле',
-    );
+    assert.match(search, /addSearchQuickCondition\(options\.tree \?\? null, SEARCH_QUICK_CONDITIONS\[command\]\(\)\)/,
+      'условие команды кладётся в основную группу идемпотентно');
   });
 
-  it('строки настроек применяются к результатам (сохранение + перезапрос)', () => {
+  it('запрос шлёт ast + мысль-фокус, без плоских мыслевых и без корпусных полей', () => {
     const search = readText(SEARCH_TS);
-    const applies = search.match(/persistState\(\);\s*refreshSearchIfVisible\(\);/g) ?? [];
-    // Подкорни (поле + флажок), типы мыслей, типы связей, Автор, редактор и
-    // общий обработчик пяти флажков мест поиска.
-    assert.ok(
-      applies.length >= 7,
-      `каждое изменение настройки сохраняется и перезапрашивает результаты (найдено ${applies.length})`,
-    );
-    // Пять флажков мест поиска строит общий обработчик — проверяем его якорь.
     assert.match(
       search,
-      /const mkCheck = \([\s\S]*?options = \{ \.\.\.options, \[key\]: checked \};[\s\S]*?persistState\(\);/,
-      'общий обработчик флажков мест поиска пишет отбор и применяет его',
+      /const focusId = store\.state\.focus\?\.focused\.id \?\? null;/,
+      'мысль-фокус читается из состояния карты',
+    );
+    assert.match(search, /buildSearchAst\(options, focusId\)/, 'мыслевые настройки компилируются в AST');
+    assert.match(
+      search,
+      /\.\.\.\(focusId !== null \? \{ focus_thought_id: focusId \} : \{\}\)/,
+      'мысль-фокус едет отдельным параметром запроса (резолв $thought)',
+    );
+    assert.match(search, /buildSearchCriteriaWire\(options\)/, 'корпусные параметры едут отдельно');
+    assert.ok(!/from_thought_id:/.test(search), 'плоский подкорень больше не шлётся');
+    assert.ok(!/in: options\.subtree/.test(search), 'плоский `in=subtree` больше не шлётся');
+  });
+
+  it('диагностика неразрешённых токенов рисуется над группами результатов', () => {
+    const search = readText(SEARCH_TS);
+    assert.match(
+      search,
+      /renderUnresolvedDiagnostics\(resultsBox, response\.unresolved\)/,
+      'диагностика `unresolved` показывается пользователю, а не молчит',
+    );
+    assert.match(
+      search,
+      /search-diagnostic-warning/,
+      'предупреждение о неразрешённых токенах — своим блоком',
     );
   });
 });

@@ -443,11 +443,14 @@ describe('приёмка №5, п.4: применения диалога', () =>
     assert.match(src, /resolveDatePeriodInstants\(/);
   });
 
-  it('панель отбора, режим «Даты»: клик по полю открывает диалог (без времени)', () => {
+  it('панель отбора: период — строка дерева, своего диалога дат у панели нет', () => {
+    // Задача 608ecb79: период выражает строка «Время записи» единого редактора,
+    // её значение рисует общий редактор значения (профиль без времени у мгновенных
+    // дат), а собственного поля-диалога у панели больше нет.
     const src = read('screens/chronicle/filter-panel.ts');
-    assert.match(src, /openDatesDialog:/);
-    assert.match(src, /allowTime: false/);
-    assert.match(src, /openDatePeriodDialog\(\{/);
+    assert.match(src, /buildFilterEditor\(\{/);
+    assert.ok(!src.includes('openDatesDialog'), 'своего диалога дат у панели нет');
+    assert.ok(!src.includes('openDatePeriodDialog'), 'панель не открывает диалог периода сама');
   });
 
   it('панельный контрол: кнопка-календарь отдаёт текущий период и применяет результат', async () => {

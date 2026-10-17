@@ -987,6 +987,11 @@ function buildMultiTextChipsEditor(opts: {
   // первой правки показывается целиком (карточка ошибки 4a96d07a). Значение
   // в `store` тоже не пишем: история без выпадашки-истории бессмысленна.
   const options = kind === 'text' ? (definition.config?.options ?? []).filter((o) => o !== '') : [];
+  /**
+   * После добавления чипа вернуть фокус в поле ввода: `render()` пересоздаёт
+   * поле, и без этого второй чип не набрать сразу (замечание п.6г).
+   */
+  let refocusInput = false;
 
   const commit = (next: string[]): void => {
     items = next;
@@ -1057,7 +1062,10 @@ function buildMultiTextChipsEditor(opts: {
         onPick: (entry) => {
           const value = entry.value;
           input.value = '';
-          if (!items.includes(value)) commit([...items, value]);
+          if (!items.includes(value)) {
+            refocusInput = true;
+            commit([...items, value]);
+          }
         },
       });
       // Угловая каретка — полный список вариантов (handle.open игнорирует when).
@@ -1081,9 +1089,19 @@ function buildMultiTextChipsEditor(opts: {
       if (value === '') return;
       event.preventDefault();
       input.value = '';
-      if (!items.includes(value)) commit([...items, value]);
+      if (!items.includes(value)) {
+        refocusInput = true;
+        commit([...items, value]);
+      }
     });
     root.append(input);
+    // Вернуть фокус в поле ввода после добавления чипа (замечание п.6г). Фокус
+    // здесь ставится сразу; если перерисовка хоста пересоберёт редактор, поле
+    // вернётся к вводу силами каркаса дерева (lib/filter-tree.ts).
+    if (refocusInput) {
+      refocusInput = false;
+      input.focus();
+    }
   };
 
   render();

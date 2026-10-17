@@ -1,0 +1,199 @@
+{
+  "name": "publication-recipe-a0c071f8",
+  "description": "Вкладка «Рецепты» редактора публикаций на едином редакторе отбора (задача a0c071f8, сценарий b0a50833, ТП 3e97b648): легаси-плоский рецепт открывается ДЕРЕВОМ (не секциями), фраза-превью футера, обе темы; правка автосохраняет AST-тело, а пересборка даёт ТЕ ЖЕ заголовки разделов («заголовок идентичен прежнему»). Паритет заголовков проверяется САМОПРОВЕРКОЙ: шаг headings-before снимает заголовки по легаси-рецепту ДО правки, шаг headings-after сверяет с этим снимком (expectFrom) — зашитого списка нет, регресс порядка/потери заголовка ловится. Битый рецепт (publication-recipe-editor) показывает диагностику и НЕ перезаписывается, а служебный дефолт «Помечено на удаление = нет», которого определение не задавало, строкой не показывается (дефолт места, а не условие — от него зависит контракт §15.3 «нет критериев → HOME + сироты»). 38 шагов. ТРЕБУЕТ предварительного засева: мысли «Проба альфа/бета/гамма» и публикации «РЕЦЕПТ-ПРОБА» (легаси title_recipe {keywords:\"проба\",keyword_scope:[\"title\"],sort:\"alpha\",order:\"asc\"}) и «РЕЦЕПТ-БИТЫЙ» (title_recipe с условием по несуществующему свойству) — id первой передаётся --var pubId. Прогон: node client/scripts/ui-probe.mjs --port <cdp> --api <url> --api-key <key> --var serverUrl=<url> --var apiKey=<key> --var networkId=<id> --var thoughtId=<id> --var pubId=<id> --scenario client/scripts/ui-probe.publication-recipe.scenario.json",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "open-publications-view",
+      "click": "[title=\"Публикации\"]"
+    },
+    {
+      "name": "library-visible",
+      "waitFor": "document.querySelectorAll('.pub-entry, .pub-card').length > 0"
+    },
+    {
+      "name": "library-titles",
+      "probe": "[...document.querySelectorAll('.pub-entry, .pub-card')].map((e) => e.textContent).join(' | ')"
+    },
+    {
+      "name": "open-recipe-card",
+      "eval": "(() => { const el = [...document.querySelectorAll('.pub-entry, .pub-card')].find((e) => e.textContent.includes('РЕЦЕПТ-ПРОБА')); if (!el) return false; el.click(); return true; })()"
+    },
+    {
+      "name": "card-opened",
+      "waitFor": "document.querySelector('#pub-card-title')?.value === 'РЕЦЕПТ-ПРОБА'"
+    },
+    {
+      "name": "open-recipe-tab",
+      "eval": "(() => { const tb = [...document.querySelectorAll('.ui-tab')].find((e) => e.textContent.trim() === 'Рецепт'); if (!tb) return false; tb.click(); return true; })()"
+    },
+    {
+      "name": "editor-mounted",
+      "waitFor": "document.querySelector('.pub-card-recipe .fe') !== null"
+    },
+    {
+      "name": "recipe-rows",
+      "probe": "[...document.querySelectorAll('.pub-card-recipe .ft-row__what')].map((e) => e.textContent.replace('▾', '').trim())",
+      "expect": [
+        "Помечено на удаление",
+        "Найти слова"
+      ]
+    },
+    {
+      "name": "schema-is-tree-not-section",
+      "probe": "document.querySelectorAll('.pub-card-recipe .st-f-block').length",
+      "expect": 0
+    },
+    {
+      "name": "headings-before-rewrite",
+      "api": {
+        "name": "headings-before-rewrite",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/publications/{{pubId}}/assembly",
+        "expression": "data.sections.map((s) => s.heading)"
+      }
+    },
+    {
+      "name": "phrase-preview",
+      "probe": "document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? ''"
+    },
+    {
+      "name": "phrase-keywords-operand",
+      "probe": "(document.querySelector('.pub-card-recipe .ff-preview__text')?.textContent ?? '').includes('Найти слова')",
+      "expect": true
+    },
+    {
+      "name": "theme-tokens-differ",
+      "probe": "(() => { const el = document.querySelector('.pub-card-recipe .ft-group'); if (!el) return false; const root = document.documentElement; const light = getComputedStyle(el).backgroundColor; root.dataset.theme = 'dark'; const dark = getComputedStyle(el).backgroundColor; root.dataset.theme = 'light'; return light !== dark; })()"
+    },
+    {
+      "name": "theme-light-bg",
+      "probe": "(() => { const el = document.querySelector('.pub-card-recipe .ft-group'); return el ? getComputedStyle(el).backgroundColor : null; })()"
+    },
+    {
+      "name": "focus-keywords",
+      "click": "[data-input=\"keywords\"]"
+    },
+    {
+      "name": "select-all",
+      "key": "a",
+      "modifiers": [
+        "ctrl"
+      ]
+    },
+    {
+      "name": "retype-with-space",
+      "text": "проба "
+    },
+    {
+      "name": "blur-saves",
+      "key": "Tab"
+    },
+    {
+      "name": "wait-autosave",
+      "waitFor": "new Promise((r) => setTimeout(() => r(true), 1500))"
+    },
+    {
+      "name": "saved-as-ast",
+      "api": {
+        "name": "saved-as-ast",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/publications",
+        "expression": "(Array.isArray(data) ? data : data.items).find((p) => p.title === 'РЕЦЕПТ-ПРОБА').title_recipe.version"
+      },
+      "expect": 1
+    },
+    {
+      "name": "rebuild-after-rewrite",
+      "api": {
+        "name": "rebuild-after-rewrite",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/publications/{{pubId}}/rebuild",
+        "body": {
+          "publication_id": "{{pubId}}"
+        }
+      }
+    },
+    {
+      "name": "headings-after-rewrite",
+      "api": {
+        "name": "headings-after-rewrite",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/publications/{{pubId}}/assembly",
+        "expression": "data.sections.map((s) => s.heading)"
+      },
+      "expectFrom": "headings-before-rewrite"
+    },
+    {
+      "name": "open-broken-card",
+      "eval": "(() => { const el = [...document.querySelectorAll('.pub-entry, .pub-card')].find((e) => e.textContent.includes('РЕЦЕПТ-БИТЫЙ')); if (!el) return false; el.click(); return true; })()"
+    },
+    {
+      "name": "broken-card-opened",
+      "waitFor": "document.querySelector('#pub-card-title')?.value === 'РЕЦЕПТ-БИТЫЙ'"
+    },
+    {
+      "name": "broken-diagnostic-visible",
+      "waitFor": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview'); return t !== null && (t.getAttribute('title') ?? '').includes('отброшено'); })()"
+    },
+    {
+      "name": "broken-diagnostic-text",
+      "probe": "(() => { const t = document.querySelector('.pub-card-recipe .ff-preview'); return t ? (t.getAttribute('title') ?? '') : null; })()"
+    },
+    {
+      "name": "broken-rows-service-default-hidden",
+      "probe": "[...document.querySelectorAll('.pub-card-recipe .ft-row__what')].map((e) => e.textContent.replace('▾', '').trim())",
+      "expect": []
+    },
+    {
+      "name": "broken-recipe-not-rewritten",
+      "waitFor": "new Promise((r) => setTimeout(() => r(true), 800))"
+    },
+    {
+      "name": "broken-recipe-unchanged",
+      "api": {
+        "name": "broken-recipe-unchanged",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/publications",
+        "expression": "(Array.isArray(data) ? data : data.items).find((p) => p.title === 'РЕЦЕПТ-БИТЫЙ').title_recipe.version === undefined"
+      },
+      "expect": true
+    }
+  ]
+}

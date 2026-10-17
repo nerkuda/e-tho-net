@@ -194,10 +194,38 @@
   font-size: 12px;
 }
 
-/* Thought-type view editor dialog (задача e37f3f04, 0.7.3). */
+/* Thought-type view editor dialog (задача e37f3f04, 0.7.3; пересобран на
+   единое дерево условий). Тело диалога — flex-колонка под ФИКСИРОВАННУЮ высоту
+   диалога: имя, описание, переключатель и непрокручиваемый низ редактора
+   (секция сортировки + строка полного представления отбора) остаются видимыми,
+   прокручивается ТОЛЬКО дерево условий (`.fe > .ft`, ошибка 50d9bf4e п. A8). */
 .view-editor-body {
-  max-height: min(70vh, 760px);
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Тело диалога отбора типа не прокручивается само — прокрутка живёт внутри
+   редактора (`.fe > .ft`); поля и футер закреплены (п. A8). */
+.dialog-body:has(> .view-editor-body) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Высота диалога отбора типа — ВДВОЕ больше роли `l` (ошибка 50d9bf4e п. A8):
+   роль `l` — 680px (`styles/dialogs.css`), удвоение — 1360px; предел экрана
+   (94vh) оставлен, чтобы диалог помещался на маленьком мониторе, и он же
+   перебивает удвоение на низких экранах. Селектор с `[data-dialog-size]`
+   перебивает правило роли по специфичности независимо от порядка в бандле
+   (грабли 36889dd6). Связь «вдвое» с числом роли `l` закреплена тестом
+   `dialog-size-tabs.test.ts` («высота диалога отбора типа — вдвое больше роли l»). */
+.dialog-box[data-dialog-size='l'].view-editor-dialog {
+  --dialog-h: min(1360px, 94vh);
 }
 .view-editor-body .ui-field-label {
   white-space: nowrap;

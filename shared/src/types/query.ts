@@ -155,6 +155,39 @@ export interface ThoughtQueryRequest {
   cursor?: string;
 }
 
+/**
+ * Неразрешимый токен AST-условия одиночной сети: где нашли (`path`), что нашли
+ * (`token`), почему не разрешилось (`reason`) и пояснение (`message`). Единая
+ * форма диагностики точки поиска и структурной выборки (требование b7fdab20:
+ * непусто — условие не раскрылось, результат пуст; адрес `path` подсвечивает
+ * строку редактора).
+ *
+ * Веерный ответ несёт сокращённый вид с сетью — {@link CrossNetworkTokenIssue}
+ * (у каждой сети свой контекст токенов, пояснение не агрегируется). Замкнутое
+ * множество кодов `reason` живёт в домене (`thought-type-view-tokens`), в
+ * контракт едет строкой — как у веерного вида.
+ */
+export interface TokenIssue {
+  /** JSON-путь до значения условия в `definition` (адрес строки редактора). */
+  path: string;
+  token: string;
+  reason: string;
+  /** Человекочитаемое пояснение (его показывает редактор отбора). */
+  message: string;
+}
+
+/**
+ * Неразрешимый токен веерной (кросс-сетевой) выборки: тот же смысл, что у
+ * одиночного `unresolved` ({@link TokenIssue}), но с указанием сети — у каждой
+ * сети свой контекст (первый день недели, реестр).
+ */
+export interface CrossNetworkTokenIssue {
+  /** Сеть, в контексте которой токен не разрешился. */
+  network_id: string;
+  token: string;
+  reason: string;
+}
+
 /** Одна мысль в результате выборки. */
 export interface ThoughtQueryHit {
   id: string;
@@ -193,4 +226,10 @@ export interface ThoughtQueryResponse {
    * Присутствует только в веерном режиме; для одиночной сети — `undefined`.
    */
   networks?: NetworksCatalog;
+  /**
+   * Неразрешимые токены веерной выборки, агрегированные по сетям (требование
+   * b7fdab20): пусто/отсутствует — всё разрешилось. Та же семантика, что у
+   * `unresolved` одиночной выборки, но с `network_id`.
+   */
+  unresolved?: CrossNetworkTokenIssue[];
 }

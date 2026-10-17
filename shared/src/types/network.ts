@@ -53,6 +53,14 @@ export interface Network extends NetworkSelfDescription {
    * (the deletion guard checks both roles).
    */
   type_roles: TypeRoles;
+  /**
+   * Первый день недели сети (ISO: 1 = понедельник … 7 = воскресенье) —
+   * настройка сети, общая для календарных виджетов и календарных токенов
+   * отбора (`$weekStart`/`$weekEnd`), требование 1b77decd / версия 0.13.1.
+   * При создании сети берётся из настроек ОС сервера
+   * ({@link defaultFirstDayOfWeek}), для ранее созданных сетей — понедельник.
+   */
+  first_day_of_week: number;
   created_at: string;
   updated_at: string;
 }
@@ -90,6 +98,30 @@ export interface UpdateNetworkInput {
   conventions?: string | null;
   examples?: string | null;
   type_roles?: TypeRoles;
+  /**
+   * Первый день недели сети (ISO 1=пн … 7=вс). `undefined` — сохранить
+   * текущий; вне диапазона 1..7 — `VALIDATION_ERROR`. См. {@link Network}.
+   */
+  first_day_of_week?: number;
+}
+
+/**
+ * Первый день недели по настройкам ОС/локали сервера (ISO 1=пн … 7=вс).
+ * Используется как значение по умолчанию при создании сети (требование
+ * «Первый день недели — настройка сети» 1b77decd). Локаль берётся из
+ * `Intl`; если движок не отдаёт `weekInfo` (нет данных о локали), возвращается
+ * понедельник (1) — конвенция ISO 8601 и историческое поведение ETN.
+ */
+export function defaultFirstDayOfWeek(locale?: string): number {
+  try {
+    const resolved = locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
+    const info = (new Intl.Locale(resolved) as { weekInfo?: { firstDay?: number } }).weekInfo;
+    const first = info?.firstDay;
+    if (typeof first === 'number' && first >= 1 && first <= 7) return first;
+  } catch {
+    // Игнорируем: недоступная локаль не должна ломать создание сети.
+  }
+  return 1;
 }
 
 /** Membership row (02-data-model.md §2.4). */
@@ -134,6 +166,12 @@ export interface NetworkListItem {
    * Derived: `Boolean(type_roles.table_of_contents)`.
    */
   has_structure: boolean;
+  /**
+   * Первый день недели сети (ISO 1=пн … 7=вс) — настройка, управляющая
+   * семантикой `$weekStart`/`$weekEnd` в отборах (задача 8eaeba9a, 0.13.1).
+   * То же значение, что у `GET /networks/:id` (`networkDto`), — единый источник.
+   */
+  first_day_of_week: number;
 }
 
 /** Input for `POST /networks/{id}/members` (03-server-api.md §5.3). */

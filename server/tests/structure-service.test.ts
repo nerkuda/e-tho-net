@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import { EtnError, STRUCTURES_QUERY_IDS_MAX_LIMIT, typeNameKey } from '@etn/shared';
-import type { StructureQueryRequest } from '@etn/shared';
+import type { SavedFilterDefinition, StructureQueryRequest } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -187,15 +187,17 @@ function seedComment(
   thoughtId: string,
   kind: 'permanent' | 'chronological',
   bodyMd = 'x',
+  /** Заголовок записи — вторая половина текста дневниковой записи (область `diary`). */
+  titleMd: string | null = null,
 ): void {
   ndb
     .prepare(
-      `INSERT INTO comments (id, owner_type, owner_id, kind, body_md, body_html, valid_from,
+      `INSERT INTO comments (id, owner_type, owner_id, kind, title, body_md, body_html, valid_from,
                              version, created_at, updated_at, created_by, updated_by)
-       VALUES (?, 'thought', ?, ?, ?, '<p>x</p>', '2024-01-01T00:00:00Z', 1,
+       VALUES (?, 'thought', ?, ?, ?, ?, '<p>x</p>', '2024-01-01T00:00:00Z', 1,
                '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u', 'u')`,
     )
-    .run(randomUUID(), thoughtId, kind, bodyMd);
+    .run(randomUUID(), thoughtId, kind, titleMd, bodyMd);
 }
 
 /** Insert a URL attachment row for a thought owner. */
@@ -514,6 +516,111 @@ describe(
             query({ keywords: 'счета', keyword_scope: ['comment'] }),
           );
           assert.deepEqual(result.items, []);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it("searches the thought's diary records (body and title) when \"diary\" is in keyword_scope", () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const byBody = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, byBody, 'chronological', 'дневникслово в теле записи');
+          const byTitle = seedThought(ndb, { title: 'Показания' });
+          seedComment(ndb, byTitle, 'chronological', 'без слова', 'Дневникслово в заголовке');
+          // Это слово есть и в постоянном комментарии — область diary его НЕ ищет.
+          const byPermanent = seedThought(ndb, { title: 'Счётчик' });
+          seedComment(ndb, byPermanent, 'permanent', 'дневникслово в постоянном комментарии');
+          seedThought(ndb, { title: 'Не подходит' });
+
+          const result = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'дневникслово', keyword_scope: ['diary'] }),
+          );
+          assert.deepEqual(
+            result.items.map((t) => t.id).sort(),
+            [byBody, byTitle].sort(),
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('diary OR-combines with title/synonyms/comment and respects -exclusions', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const byDiary = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, byDiary, 'chronological', 'счетчик в записи');
+          const byComment = seedThought(ndb, { title: 'Показания' });
+          seedComment(ndb, byComment, 'permanent', 'счетчик в комментарии');
+          const noisy = seedThought(ndb, { title: 'Тепло' });
+          seedComment(ndb, noisy, 'chronological', 'счетчик шумнаязапись');
+
+          assert.deepEqual(
+            queryThoughts(
+              ndb,
+              USER,
+              query({ keywords: 'счетчик', keyword_scope: ['diary', 'comment'] }),
+            ).items.map((t) => t.id).sort(),
+            [byDiary, byComment, noisy].sort(),
+            'области объединяются по ИЛИ: запись ИЛИ постоянный комментарий',
+          );
+          // Исключающее слово проверяется по тем же источникам: шумная запись
+          // вычитает мысль, хотя её наименование слову не противоречит.
+          assert.deepEqual(
+            queryThoughts(
+              ndb,
+              USER,
+              query({ keywords: 'счетчик -шумнаязапись', keyword_scope: ['diary', 'comment'] }),
+            ).items.map((t) => t.id).sort(),
+            [byDiary, byComment].sort(),
+            'исключающее слово ищется и по дневниковым записям',
+          );
+          assert.deepEqual(
+            queryThoughts(
+              ndb,
+              USER,
+              query({ keywords: 'счетчик -шумнаязапись', keyword_scope: ['comment'] }),
+            ).items.map((t) => t.id).sort(),
+            [byComment].sort(),
+            'без diary запись не участвует ни в включении, ни в исключении',
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('diary is never implied: empty/absent keyword_scope stays title+synonyms', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const byDiary = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, byDiary, 'chronological', 'дневникслово в записи');
+
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ keywords: 'дневникслово', keyword_scope: [] })).items,
+            [],
+            'пустой набор — дефолт title+synonyms, дневник не подразумевается',
+          );
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ keywords: 'дневникслово' })).items,
+            [],
+            'отсутствие keyword_scope — тоже дефолт',
+          );
+          // Область diary не ищет названия/синонимы — только записи.
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ keywords: 'або', keyword_scope: ['diary'] })).items,
+            [],
+            'область diary не подменяет область имён',
+          );
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ keywords: 'або', keyword_scope: ['title'] })).items.map((t) => t.id),
+            [byDiary],
+            'область title работает как прежде',
+          );
         } finally {
           ndb.close();
         }
@@ -1681,7 +1788,10 @@ describe(
           const redefined = updateSavedFilter(ndb, USER, created.id, {
             definition: parseSavedFilterDefinition({ keywords: 'вода', sort: 'alpha', order: 'asc' }),
           });
-          assert.equal(redefined.definition.keywords, 'вода');
+          assert.equal(
+            (redefined.definition as SavedFilterDefinition).keywords,
+            'вода',
+          );
 
           deleteSavedFilter(ndb, USER, created.id);
           assert.deepEqual(listSavedFilters(ndb, USER), []);

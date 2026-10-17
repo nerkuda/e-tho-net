@@ -35,7 +35,6 @@
 import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
-  STRUCTURE_KEYWORD_SCOPES,
   UI_STATE_KEY,
   type ChronicleRow,
   type ChronicleTarget,
@@ -43,6 +42,7 @@ import {
   type Comment,
   type CommentTarget,
   type Link,
+  type StructureKeywordScope,
   type ThoughtRef,
 } from '@etn/shared';
 
@@ -103,7 +103,6 @@ import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
-import { parseChronicleCriteria, defaultChronicleCriteriaState } from '../../lib/filter-builder.js';
 import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
   invalidateQueries,
@@ -113,7 +112,6 @@ import {
 } from '../../lib/live/query-registry.js';
 import { buildMonthCalendar, type MonthCalendarHandle } from '../../lib/month-calendar.js';
 import {
-  applyPeriodToFilter,
   attachmentOwnerForRow,
   clampPseudoDate,
   collectRowsToDepth,
@@ -139,10 +137,19 @@ import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.
 import {
   addThoughtToFilter,
   chronicleDefinition,
+  chronicleDefinitionForPeriod,
+  chroniclePeriod,
   chronicleQueryDefinition,
+  clearFilter,
+  filterIssuesFromQueryError,
+  filterIssuesFromQueryResult,
   getFilterState,
   getSavedFilterId,
   mountChronicleFilterPanel,
+  preloadFilterRegistry,
+  readFilterDefinition,
+  setChroniclePeriod,
+  setFilterServerIssues,
   setFilterState,
   setSavedFilterId,
   wireChronicleApplyShortcut,
@@ -458,7 +465,10 @@ export async function ensureChronicleInitialised(): Promise<void> {
     }
     if (raw !== null && raw !== '') {
       const parsed = parseChronicleState(raw);
-      setFilterState(parseChronicleCriteria(parsed.filter));
+      // Реестр свойств нужен конвертеру определения (условия под-выборки целей
+      // и свойств) — прежний плоский снимок иначе терял бы часть условий.
+      await preloadFilterRegistry();
+      setFilterState(readFilterDefinition(parsed.filter));
       setSavedFilterId(parsed.savedFilterId);
       if (parsed.month !== null) month = parsed.month;
     }
@@ -533,8 +543,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     today: todayLocal(),
     month: month ?? undefined,
     counts: (day) => dayCount(day),
+    firstDayOfWeek: networkFirstDayOfWeek(),
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
-    onPickWeek: (monday) => void pickPeriod(weekPeriod(monday)),
+    onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
     onToday: () => goToday(),
     onMonthChange: (year, monthNo) => {
       month = { year, month: monthNo };
@@ -686,19 +697,31 @@ async function reload(preserveDepth = false): Promise<void> {
   renderStatus('loading');
   try {
     const def = chronicleQueryDefinition();
+    // Диагностика ядра едет в каждой странице конверта `meta`; редактору нужна
+    // диагностика ПЕРВОЙ страницы — адреса строк (требование 44d61c8a).
+    let pageWarnings: unknown = undefined;
     const result = await collectRowsToDepth(
       preserveDepth ? rows.length : CHRONICLE_PAGE_SIZE,
       CHRONICLE_PAGE_SIZE,
-      (offset, limit) => etn.chronicle.query(networkId, { ...def, limit, offset }),
+      (offset, limit) =>
+        etn.chronicle.query(networkId, { ...def, limit, offset }).then((page) => {
+          if (offset === 0) pageWarnings = (page as { warnings?: unknown }).warnings;
+          return page;
+        }),
     );
     if (seq !== querySeq) return;
     rows = result.rows;
     total = result.total;
     pendingReconcile = false;
+    // Успешный запрос: строки редактора получают актуальную диагностику ядра
+    // (жёлтое — не блокирует; красное пришло бы ошибкой выше).
+    setFilterServerIssues(filterIssuesFromQueryResult({ warnings: pageWarnings }));
     renderFeed();
     publishChronicleSnapshot();
   } catch (err) {
     if (seq !== querySeq) return;
+    // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
+    setFilterServerIssues(filterIssuesFromQueryError(err));
     renderStatus('error', err);
   }
 }
@@ -884,10 +907,25 @@ function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
 // Feed rendering
 // ---------------------------------------------------------------------------
 
-/** Локальный день записи HOME — границы применённого периода ленты. */
+/**
+ * Первый день недели открытой сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
+ * общая настройка календарных виджетов и календарных токенов. Нет сети или
+ * настройки — понедельник (поведение по умолчанию).
+ */
+function networkFirstDayOfWeek(): number {
+  const value = store.state.network?.first_day_of_week;
+  return typeof value === 'number' && value >= 1 && value <= 7 ? value : 1;
+}
+
+/** Локальный день записи HOME — границы применённого периода ленты.
+ *  Период — строка «Период записи» дерева (панель отбора, задача 608ecb79). */
 function currentFromTo(): { from: string; to: string } {
-  const filter = getFilterState();
-  return { from: resolvePeriodDay(filter.dateFrom), to: resolvePeriodDay(filter.dateTo) };
+  const period = chroniclePeriod();
+  const fdw = networkFirstDayOfWeek();
+  return {
+    from: resolvePeriodDay(period.from, todayLocal(), fdw),
+    to: resolvePeriodDay(period.to, todayLocal(), fdw),
+  };
 }
 
 /** Число записей, попавших в день (счётчик календаря). */
@@ -1045,11 +1083,11 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
  */
 async function addRecord(presetThoughtIds: string[] = []): Promise<void> {
   if (host === null) return;
-  const filter = getFilterState();
+  const period = chroniclePeriod();
   const targetDay = clampPseudoDate(
     todayLocal(),
-    resolvePeriodDay(filter.dateFrom),
-    resolvePeriodDay(filter.dateTo),
+    resolvePeriodDay(period.from, todayLocal(), networkFirstDayOfWeek()),
+    resolvePeriodDay(period.to, todayLocal(), networkFirstDayOfWeek()),
   );
   const networkId = requireNetworkId();
   try {
@@ -1584,6 +1622,7 @@ async function editRecordDates(row: ChronicleRow): Promise<void> {
   const result = await openDatePeriodDialog({
     allowPeriod: true,
     allowTime: true,
+    firstDayOfWeek: networkFirstDayOfWeek(),
     // Время показано, только когда запись его уже учитывает; иначе — скрыто.
     initial: datePeriodValueFromInstants(
       previous.from,
@@ -1909,9 +1948,17 @@ async function attachToRecord(rowId: string, thoughtIds: string[]): Promise<void
  * `periodValuesForRange`).
  */
 async function pickPeriod(period: { from: string; to: string }): Promise<void> {
-  const mode = getFilterState().dateMode;
-  const next = periodValuesForRange(period.from, period.to, todayLocal(), mode);
-  setFilterState(applyPeriodToFilter(getFilterState(), next));
+  // Клик календаря пишет период строкой «Период записи» (задача 608ecb79):
+  // «Пресеты» — токены календаря, которые панель показывает и раскрывает в
+  // локальные сутки при запросе (`chronicleQueryDefinition`).
+  const next = periodValuesForRange(
+    period.from,
+    period.to,
+    todayLocal(),
+    'presets',
+    networkFirstDayOfWeek(),
+  );
+  setChroniclePeriod(next.from, next.to);
   persistState();
   await applyFilter();
 }
@@ -1927,8 +1974,12 @@ function goToday(): void {
 /** Согласовать выделение календаря с полями периода (поля — источник дат). */
 function syncCalendar(): void {
   if (calendar === null) return;
-  const filter = getFilterState();
-  calendar.setSelection(resolvePeriodDay(filter.dateFrom), resolvePeriodDay(filter.dateTo));
+  const period = chroniclePeriod();
+  const fdw = networkFirstDayOfWeek();
+  calendar.setSelection(
+    resolvePeriodDay(period.from, todayLocal(), fdw),
+    resolvePeriodDay(period.to, todayLocal(), fdw),
+  );
   month = calendar.getMonth();
 }
 
@@ -1960,18 +2011,18 @@ async function refreshCalendarCounts(): Promise<void> {
   const { year, month: monthNo } = calendar.getMonth();
   const first = `${year}-${pad2(monthNo)}-01`;
   const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
-  const def = chronicleDefinition();
   const tally = new Map<string, number>();
   try {
+    // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
+    // сервере = сутки UTC (469d8d69) и запись у локальной полуночи первого/1-го
+    // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
+    // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
+    // плоские границы вместе сервер отвергает.
+    const def = chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last));
     let offset = 0;
     for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
       const res = await etn.chronicle.query(networkId, {
         ...def,
-        // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
-        // сервере = сутки UTC (469d8d69) и запись у локальной полуночи первого/1-го
-        // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
-        date_from: localDayStart(first),
-        date_to: localDayEnd(last),
         limit: CHRONICLE_QUERY_MAX_LIMIT,
         offset,
       });
@@ -1986,8 +2037,12 @@ async function refreshCalendarCounts(): Promise<void> {
   }
   dayCounts.clear();
   for (const [day, count] of tally) dayCounts.set(day, count);
-  const filter = getFilterState();
-  calendar.setSelection(resolvePeriodDay(filter.dateFrom), resolvePeriodDay(filter.dateTo));
+  const period = chroniclePeriod();
+  const fdw = networkFirstDayOfWeek();
+  calendar.setSelection(
+    resolvePeriodDay(period.from, todayLocal(), fdw),
+    resolvePeriodDay(period.to, todayLocal(), fdw),
+  );
 }
 
 /** Двузначная запись числа. */
@@ -1998,6 +2053,21 @@ function pad2(n: number): string {
 // ---------------------------------------------------------------------------
 // Поиск дневниковых записей и переход к записи (0.10.1, задача 46057359)
 // ---------------------------------------------------------------------------
+
+/**
+ * Области поиска строки поиска записей — прежние три, ЯВНЫМ списком.
+ *
+ * Новые области словаря (`diary`, 0.13.1) сюда НЕ подставляются автоматически:
+ * строка ищет записи по их собственному тексту/заголовку и по мысли-владельцу,
+ * а область `diary` потянула бы лишние строки — записи мыслей, совпавших по
+ * своим записям (ошибка 2bc251de, решение оркестратора: прежнее поведение
+ * строки сохраняется). Поэтому словарь областей здесь не разворачивается.
+ */
+const RECORD_SEARCH_KEYWORD_SCOPES: readonly StructureKeywordScope[] = [
+  'title',
+  'synonyms',
+  'comment',
+];
 
 /**
  * Живой поиск записей строкой (задача 46057359): только хроно-записи, критерий
@@ -2011,10 +2081,10 @@ async function searchRecords(query: string): Promise<ChronicleRow[]> {
   if (networkId === null) return [];
   const result = await etn.chronicle.query(networkId, {
     keywords: query,
-    // Область поиска — все три явно: строка ищет записи и по их собственному
+    // Области поиска — все три явно: строка ищет записи и по их собственному
     // тексту/заголовку (область `comment`), независимо от флагов панели отбора
     // (0.10.1, задача 46057359). Без `comment` сервер не ищет по тексту записи.
-    keyword_scope: [...STRUCTURE_KEYWORD_SCOPES],
+    keyword_scope: [...RECORD_SEARCH_KEYWORD_SCOPES],
     order: 'desc',
     limit: RECORD_SEARCH_MAX_RESULTS,
     offset: 0,
@@ -2084,11 +2154,10 @@ async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
   // «Пресеты» → токен `$today±Nd`, «Даты» → точная дата; раскрытие в ЛОКАЛЬНЫЕ
   // сутки наблюдателя делает запрос (`chronicleQueryDefinition` →
   // `resolvePeriodForQuery`), поэтому запись у полуночи не выпадает (ADR 994d076a).
-  const mode = getFilterState().dateMode;
-  const values = periodValuesForRange(startDay, startDay, todayLocal(), mode);
+  const values = periodValuesForRange(startDay, startDay, todayLocal(), 'presets');
   jumpHighlightId = null;
   // 1) Дата начала записи, прочие критерии отбора сохраняются.
-  setFilterState(applyPeriodToFilter(getFilterState(), values));
+  setChroniclePeriod(values.from, values.to);
   persistState();
   await getHome().catch(() => undefined);
   await reload();
@@ -2100,11 +2169,8 @@ async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
     return;
   }
   // 2) Запись не проходит отбор — сброс отбора, дата начала записи остаётся.
-  const fresh = defaultChronicleCriteriaState();
-  fresh.dateMode = mode;
-  fresh.dateFrom = values.from;
-  fresh.dateTo = values.to;
-  setFilterState(fresh);
+  clearFilter();
+  setChroniclePeriod(values.from, values.to);
   setSavedFilterId(null);
   persistState();
   await reload();

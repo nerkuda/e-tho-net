@@ -14,9 +14,10 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import { listActivity } from '../../domain/activity-service.js';
+import { listActivity, parseActivityListQuery } from '../../domain/activity-service.js';
 import { ActivityList } from '../../contracts.js';
 import { openMemberNetwork, runTool } from '../context.js';
+import { mcpTokenContext } from './token-context.js';
 
 export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
@@ -28,22 +29,22 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
         'creation, update, delete, trash/restore of a thought, link, type, property, comment, attachment ' +
         'or layer; `entity_title` is a snapshot at the moment of the event. Captures (`edit.*`) are not ' +
         'recorded. Filters combine with AND; sorted by `occurred_at_ms DESC`; paginated (`limit` default ' +
-        '50, max 200, + `offset`). Детали фильтров и пагинации — `etn.guide { topic: "activity.list" }`.',
+        '50, max 200, + `offset`). `ast` — тело отбора профиля «события» (XOR с плоскими фильтрами). ' +
+        'Детали фильтров, AST и пагинации — `etn.guide { topic: "activity.list" }`.',
       inputSchema: ActivityList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const result = listActivity(ndb, {
-          networkId: args.network_id,
-          from_ms: args.from_ms,
-          to_ms: args.to_ms,
-          user_id: args.user_id,
-          entity_type: args.entity_type,
-          entity_id: args.entity_id,
-          limit: args.limit,
-          offset: args.offset,
+        const params = parseActivityListQuery({ ...args }, '');
+        // Контекст профиля «события»: первый день недели сети, часы и
+        // пользователь для под-выборки «Сущность» (требование 0095daad).
+        const tokenCtx = mcpTokenContext(rt, args.network_id as string, 'events');
+        const result = listActivity(ndb, params, {
+          userId: rt.deps.auth.userId,
+          nowMs: tokenCtx.nowMs,
+          ...(tokenCtx.firstDayOfWeek !== undefined ? { firstDayOfWeek: tokenCtx.firstDayOfWeek } : {}),
         });
         return {
           data: result.data,

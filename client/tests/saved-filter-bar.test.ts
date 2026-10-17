@@ -128,7 +128,11 @@ describe('диалог выбора сохранённого отбора (за�
       /body\.append\(search, toolbar, listHost\)/,
       'порядок правила 1–2: поиск, строка управления, список',
     );
-    assert.match(bar, /onMount: \(\) => search\.focus\(\)/, 'фокус — в поле поиска');
+    assert.match(
+      bar,
+      /onMount: \(_close, box\) => \{[\s\S]*?search\.focus\(\);\s*\}/,
+      'фокус — в поле поиска',
+    );
   });
 
   it('список — единая таблица фасада: текущая строка, клавиатура, выбор', () => {
@@ -226,15 +230,19 @@ describe('диалог выбора сохранённого отбора (за�
 });
 
 describe('однообразие: «Хроника» работает с отборами как «Структуры» (задача 2ebe4206)', () => {
-  it('обе панели строят строку общим модулем, каждая со своим видом хранилища', () => {
+  it('обе панели работают с отборами общими модулями, каждая со своим видом хранилища', () => {
     const structures = readText(STRUCTURES_PANEL);
     const chronicle = readText(CHRONICLE_PANEL);
-    assert.match(structures, /buildSavedFilterBar\(\{/, '«Структуры» используют общую строку');
-    assert.match(chronicle, /buildSavedFilterBar\(\{/, '«Хроника» использует ту же строку');
+    // Обе панели (задачи 213bd2d2 и 608ecb79) перешли на единый редактор: имя и
+    // запись отбора — в общем футере (`lib/filter-editor.ts` → `filter-footer.ts`),
+    // выбор — общий диалог-список того же модуля сохранённых отборов. Своего
+    // списка у панелей по-прежнему нет (см. следующий тест).
+    assert.match(structures, /openSavedFilterDialog\(\{/, '«Структуры» используют общий диалог отборов');
+    assert.match(chronicle, /openSavedFilterDialog\(\{/, '«Хроника» использует тот же диалог');
     assert.match(structures, /etn\.savedFilters\./, 'хранилище «Структур» — view=structures');
     assert.match(chronicle, /etn\.chronicleFilters\./, 'хранилище «Хроники» — view=chronicle');
-    assert.match(structures, /savedBar\.root/, 'строка кладётся в футер панели «Структур»');
-    assert.match(chronicle, /savedBar\.root/, 'строка кладётся в футер панели «Хроники»');
+    assert.match(structures, /buildFilterEditor\(\{/, 'редактор «Структур» — общая фабрика с футером');
+    assert.match(chronicle, /buildFilterEditor\(\{/, 'редактор «Хроники» — общая фабрика с футером');
   });
 
   it('своего списка сохранённых отборов у экранов больше нет', () => {

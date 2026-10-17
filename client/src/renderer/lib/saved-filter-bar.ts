@@ -38,6 +38,7 @@ import { svgIcon } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton, uiButton } from './ui/button.js';
+import { badge } from './ui/badge.js';
 import { createTable } from './ui/table.js';
 import { duplicateFilterName, filterSavedByName } from './pure.js';
 
@@ -46,6 +47,8 @@ export interface SavedFilterEntry {
   id: string;
   name: string;
   definition: unknown;
+  /** Предопределённый набор (условия совпали с набором-предустановкой) — метка. */
+  predefined?: boolean;
 }
 
 /** Хранилище сохранённых отборов одного вида (REST-обёртка экрана). */
@@ -373,6 +376,17 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
         render: (entry) => {
           const node = span(entry.name);
           if (entry.id === opts.selectedId()) node.style.fontWeight = '600';
+          if (entry.predefined === true) {
+            // Минимальная пометка предопределённого набора — общий бейдж
+            // дизайн-системы (`lib/ui/badge.ts`), без новых паттернов.
+            node.append(
+              ' ',
+              badge(t('savedFilters.predefined'), {
+                kind: 'quiet',
+                title: t('savedFilters.predefinedHint'),
+              }),
+            );
+          }
           return node;
         },
       },
@@ -489,8 +503,9 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     title: t('savedFilters.title'),
     body,
     size: 's',
-    // Высота диалога стабильна: задана ролью, не содержимым списка/поиска
-    // (правило 9 требования 11ddd910, ошибка f68bb43c).
+    // Высота диалога стабильна и ФИКСИРОВАНА: её задаёт модификатор
+    // `dialog-saved-filter` на боксе (см. `onMount`), а не содержимое
+    // списка/поиска (правило 9 требования 11ddd910, ошибка f68bb43c).
     fixedHeight: true,
     // Правило 3: футер — кнопки решения. «Выбрать» применяет текущую строку,
     // «Отмена» закрывает без выбора.
@@ -509,7 +524,16 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
       },
       { label: t('actions.cancel') },
     ],
-    onMount: () => search.focus(),
+    // Роль `s` (320px) мала для диалога-списка — видно ≈4 строки (ошибка
+    // d8eac984). Модификатор `dialog-saved-filter` на боксе берёт именованную
+    // высоту (50 % окна, не менее 450px) через `--dialog-h-saved-filter`
+    // (styles/dialogs.css, styles/tokens.css) — оговорка «Высота вне ролей»
+    // требования 13464c39. Высота остаётся ФИКСИРОВАННОЙ (`fixedHeight`), роль
+    // `s` не меняется: её делят модальные пикеры сущностей.
+    onMount: (_close, box) => {
+      box.classList.add('dialog-saved-filter');
+      search.focus();
+    },
   });
   render();
 }

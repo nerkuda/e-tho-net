@@ -1,0 +1,502 @@
+/*
+ * Вид дерева условий отбора (0.13.1, элемент интерфейса fc65b647; ADR 4154811f
+ * «два библиотечных модуля» — роли, которых в дизайн-системе нет).
+ *
+ * Модуль несёт ТОЛЬКО новые роли дерева: рамку группы с заголовком, связатор-
+ * индикатор между строками, тон вложенности и слот значения. Кнопки, поля,
+ * сегменты и поповеры берутся из `lib/ui` — своих классов под них не заводим
+ * (стандарт «Клиентский UI — только из дизайн-системы»).
+ *
+ * Тона — токены `--ft-tone-1..4` (`styles/tokens.css`, обе темы): цикл из
+ * четырёх тонов, соседние уровни не совпадают (требование 5ef1bce1).
+ */
+
+.ft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ft-title {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  font-weight: var(--font-weight-medium);
+}
+
+/* --- Группа: рамка с заголовком-полосой -------------------------------- */
+
+.ft-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ft-tone-1 {
+  background: var(--ft-tone-1);
+}
+.ft-tone-2 {
+  background: var(--ft-tone-2);
+}
+.ft-tone-3 {
+  background: var(--ft-tone-3);
+}
+.ft-tone-4 {
+  background: var(--ft-tone-4);
+}
+
+/*
+ * Заголовок-полоса группы. Компактнее и выразительнее (требование заказчика
+ * 2026-10-14, ошибка 696b3c3b п.4): вертикальный padding уменьшен; фон = фон
+ * группы (тон `.ft-tone-N` наследуется, своей заливки нет) — раньше заголовок
+ * красился `--surface-2` и визуально не отличался от строк условий; шрифт всех
+ * элементов ВНУТРИ заголовка (коннектор-список, НЕ-чип) толще текста условий
+ * (600 против 400).
+ */
+.ft-group__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: calc(var(--space-1) / 2) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ft-group__head .ft-group__connector,
+.ft-group__head .ft-group__connector-label,
+.ft-group__head .ft-group__caret,
+.ft-group__head .ft-group__not {
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Коннектор группы — выпадающий список (требование заказчика 2026-10-13):
+   безрамная кнопка-текст с кареткой, а не сегмент-тогглер. Специфичность
+   повышена (`.ft .ft-group__connector`) — тот же узел несёт `.ui-btn`. */
+.ft .ft-group__connector {
+  border: none;
+  background: none;
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  white-space: nowrap;
+}
+
+.ft .ft-group__connector:hover:not(:disabled) {
+  background: none;
+  color: var(--accent);
+}
+
+.ft-group__caret {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  line-height: var(--font-size-s);
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+
+.ft-group__connector-label {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  white-space: nowrap;
+}
+
+.ft-group__not {
+  margin-left: auto;
+}
+
+/* Контрастный маркер НЕ: включённое отрицание читается в обеих темах
+   (требование 5ef1bce1) — акцентная рамка и плотный текст. */
+.ft-group__not[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  background: var(--accent);
+  font-weight: var(--font-weight-semibold);
+}
+
+.ft-group__body {
+  display: flex;
+  flex-direction: column;
+  /* Расстояние МЕЖДУ условиями чуть больше, чем между операндами одного
+     условия (требование заказчика 2026-10-13): внутри строки — `--space-2`. */
+  gap: var(--space-3);
+  padding: var(--space-2);
+  min-width: 0;
+}
+
+.ft-group__empty {
+  color: var(--text-faint);
+  font-size: var(--font-size-s);
+}
+
+.ft-group[data-collapsed='1'] .ft-group__head {
+  border-bottom: none;
+}
+
+/* --- Связатор-индикатор: левый столбец ПЕРЕД строкой ------------------- */
+/*
+ * Индикаторы И/ИЛИ стоят отдельным левым столбцом перед КАЖДЫМ условием
+ * (требование заказчика 2026-10-13), а не между строками; связатор не кликается
+ * — коннекцию меняет селектор группы.
+ */
+.ft-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ft-connector {
+  flex: 0 0 auto;
+  width: 2.5em;
+  padding-top: var(--space-1);
+  text-align: right;
+  color: var(--text-faint);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  /* Индикатор не кликается: коннекция меняется селектором группы. */
+  pointer-events: none;
+  user-select: none;
+}
+
+.ft-item > .ft-group,
+.ft-item > .ft-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* --- Строка-условие ---------------------------------------------------- */
+
+/*
+ * Строка-условие — три части (операнд, оператор, значение) выровнены ПО ВЕРХНЕМУ
+ * краю (требование заказчика 2026-10-14, ошибка f4e99090, п.6): при переносе
+ * каждая часть стоит со своей строки и держит верх своего блока — центрирование
+ * смешивало их по вертикали. Крестик удаления — абсолютный (верхний правый угол
+ * строки, см. `.ft-row__remove`), поэтому строка позиционирована, а справа
+ * зарезервировано место под крестик.
+ */
+.ft-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  /* Строка диагностики ложится второй полосой под условием (элемент 4e634c9a). */
+  flex-wrap: wrap;
+  padding: var(--space-1);
+  padding-right: calc(var(--space-1) + var(--control-w-s) + var(--space-2));
+  /* Рамка строки НЕ рисуется (требование заказчика 2026-10-13): рамки только у
+     групп и поля ввода значения. */
+  background: var(--surface);
+}
+
+/*
+ * Ячейки операнда/оператора — БЕЗ рамки (требование заказчика 2026-10-13).
+ * Селектор с повышенной специфичностью (`.ft .ft-picker`) обязателен: тот же
+ * элемент несёт класс `.ui-btn` (база `lib/ui/button.css` задаёт рамку
+ * `--border-strong` и фон `--surface`, а CSS из TS-импорта попадает в бандл
+ * ПОСЛЕ styles.css) — специфичность гарантирует безрамность независимо от
+ * порядка подключения CSS.
+ */
+.ft .ft-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--font-size-s);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ft .ft-picker:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.ft-picker__icon {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.ft-picker__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-picker__caret {
+  color: var(--text-faint);
+}
+
+/*
+ * Значение — самодостаточный БЛОК-колонка (требование заказчика 2026-10-14,
+ * ошибка f4e99090, п.6): облачка значений, затем поле живого поиска и
+ * переключатели режима стоят друг под другом ВНУТРИ блока. При нехватке ширины
+ * блок переносится ЦЕЛИКОМ под операнд/оператор (одним flex-элементом),
+ * сохраняя выравнивание по верхнему краю.
+ */
+.ft-row__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+/*
+ * Значение-пользователь («Автор/Редактор записи»): чип-поле мультивыбора обязано
+ * получать ширину колонки значения (ошибка 609deba0 п.6). Колонка `.ft-row__value`
+ * — flex-столбец с `align-items: flex-start`, поэтому её элементы сжимаются до
+ * content, а внутри чип-листа (`lib/ui/chip-list.css`) ширины процентные: при
+ * shrink-to-fit они вырождались в 0 и выбранные чипы с полем ввода были невидимы
+ * (высота строки при этом раздувалась). Растягивать нужно ИМЕННО ячейку значения
+ * — flex-элемент колонки (`.fv`), и только у пользовательского вида: прочие виды
+ * значений (переключатели, чипы мыслей, дата) сохраняют собственные пропорции.
+ * Внутри растянутой ячейки обёртка заполняет ширину целиком.
+ */
+.ft-row__value .fv:has(> .fv-user) {
+  align-self: stretch;
+  min-width: 0;
+}
+
+.ft-row__value .fv-user {
+  width: 100%;
+}
+
+/*
+ * Компактные переключатели в строках условий (требование заказчика 2026-10-14,
+ * ошибка f4e99090, п.2): у сегментных переключателей ячейки значения
+ * («по структуре»/«по всем связям», триады «да/нет») padding уменьшен ВДВОЕ,
+ * шрифт — 0.84em. Правило одно на все переключатели строки (единый вид, без
+ * точечных правок): сегменты — кнопки-ghost словаря `lib/ui`, их плотность
+ * понижаем здесь, специфичностью перекрывая `--m`/`--ghost` из `lib/ui`.
+ */
+.ft-row .ui-segmented .ui-btn--ghost {
+  padding: calc(var(--control-pad-y) / 2) calc(var(--space-5) / 2);
+  font-size: 0.84em;
+}
+
+/* Области «Найти слова» — чекбоксы В ОДНУ СТРОКУ (требование заказчика
+   2026-10-13). */
+.fv-scopes {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+/* Поля ввода множественных значений не растут беспредельно: видимая высота не
+   больше ~10 строк (эталон — таблица свойств редактора мысли). */
+.ft-row__value .st-f-chipfield {
+  max-height: calc(var(--field-h) * 10);
+  overflow-y: auto;
+}
+
+.ft-value {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+  font-size: var(--font-size-s);
+}
+
+.ft-value__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-row__remove,
+.ft-group__remove {
+  margin-left: auto;
+}
+
+/* Крестик удаления УСЛОВИЯ закреплён в ВЕРХНЕМ ПРАВОМ УГЛУ строки
+   (требование заказчика 2026-10-14, ошибка f4e99090, п.6): абсолютное
+   позиционирование не даёт крестику «прыгать» по высоте при любом переносе
+   частей строки — он всегда относится ко всей строке и стоит на её верху.
+   Видим ТОЛЬКО при наведении на строку ИЛИ фокусе ввода в строке (требование
+   заказчика 2026-10-14, ошибка 696b3c3b п.3): место зарезервировано (крестик
+   absolute, строка держит правый отступ), поэтому `opacity`/`pointer-events`,
+   а не `display`; `visibility: hidden` убрал бы крестик из порядка обхода
+   клавиатуры, а `:focus-within` тогда не сработал бы. */
+.ft-row__remove {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  margin-left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.ft-row:hover .ft-row__remove,
+.ft-row:focus-within .ft-row__remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* --- Кнопки группы и выпадающие списки --------------------------------- */
+
+/* Кнопки «+ условие»/«+ группу» видны ТОЛЬКО при наведении на СВОЮ группу
+   (требование заказчика 2026-10-14, ошибка 696b3c3b п.2): при наведении на
+   вложенную группу — только у неё, у родительской/дочерней не видны. Механизм —
+   ВИДИМОСТЬ (opacity/pointer-events), а не удаление из DOM: кнопки всегда в
+   разметке, размеры группы при наведении не «прыгают». `:has(.ft-group:hover)`
+   отсекает РОДИТЕЛЬСКИЕ наведённые группы (hover всплывает к предкам), оставляя
+   лишь глубочайшую наведённую — её кнопки и показываются. */
+.ft-group__actions {
+  display: flex;
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.ft-group:hover:not(:has(.ft-group:hover)) > .ft-group__body > .ft-group__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Клавиатурный путь к тем же кнопкам (стандарт 1b5f6200 «функция не живёт
+   только на hover»): Tab на «+ условие»/«+ группу» внутри группы раскрывает их
+   — `:focus-within` глубочайшей сфокусированной группы (так же, как hover у
+   наведённой). Без этого правила кнопки были бы доступны только мышью. */
+.ft-group:focus-within:not(:has(.ft-group:focus-within)) > .ft-group__body > .ft-group__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ft-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Поле живого поиска закреплено СВЕРХУ выпадающего списка и не прокручивается
+   вместе с ним (требование заказчика 2026-10-13). */
+.ft-choice__search-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding-bottom: var(--space-1);
+}
+
+.ft-choice__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: auto;
+}
+
+.ft-choice__group {
+  color: var(--text-faint);
+  font-size: var(--font-size-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ft-choice__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Выделенная клавиатурой строка списка (навигация ↑/↓, выбор Enter). */
+.ft-choice__item--cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Список операторов — сетка «утверждение | отрицание» (требование 502f1922). */
+.ft-choice--grid .ft-choice__rows {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+}
+
+.ft-choice--grid .ft-choice__item {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.ft-choice--grid .ft-choice__item[data-side='no'] {
+  color: var(--text-dim);
+}
+
+.ft-choice__empty {
+  color: var(--text-faint);
+  font-size: var(--font-size-s);
+}
+
+/* --- Диагностика строк (элемент интерфейса 4e634c9a) -------------------- */
+/*
+ * Красное (сущность условия удалена) — строка подсвечена и применение отбора
+ * запрещено; жёлтое (свойство отвязано от типа) — исполняется по фактическим
+ * значениям. Строка диагностики несёт точную причину; перехода-кнопки нет —
+ * переход/автоправка срабатывает по клику на сам текст причины (п.10).
+ */
+
+.ft-node--error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ft-node--warning {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.ft-issue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-basis: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+}
+
+.ft-issue[data-severity='error'] .ft-issue__text {
+  color: var(--danger);
+}
+
+.ft-issue[data-severity='warning'] .ft-issue__text {
+  color: var(--warn-strong);
+}
+
+.ft-issue__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Текст причины с доступной автоправкой/переходом — кликается (п.10). */
+.ft-issue__text--action {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+

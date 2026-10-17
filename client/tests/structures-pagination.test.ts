@@ -115,4 +115,23 @@ describe('структуры: проводка курсора в запроса�
       'offset в collectAllIds не должен расти с числом собранных id',
     );
   });
+
+  it('порядок — один источник: отбор, а не легаси-поля модели (ошибка 32fd6125)', () => {
+    assert.ok(
+      !/orderFields/.test(structures) && !/orderFields/.test(commands),
+      'второго источника порядка `sort`/`order` рядом с отбором нет',
+    );
+    assert.ok(
+      !/sort:\s*state\.sort/.test(structures),
+      'легаси-поле `state.sort` не подменяет чипы панели в запросе выборки',
+    );
+    assert.ok(
+      !/ctx\.sort|ctx\.order/.test(commands),
+      'команды берут порядок из применённого отбора, а не из полей контекста',
+    );
+    assert.ok(
+      !/sort:\s*appliedQuery\.sort/.test(structures),
+      'применённый отбор несёт порядок сам',
+    );
+  });
 });

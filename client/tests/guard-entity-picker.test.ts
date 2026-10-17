@@ -91,6 +91,32 @@ const LEGACY_LINK_PROPERTY_RULE: GuardRule = {
 /** Расширения сканирования с CSS: классы-самоделки могут жить в стилях. */
 const GUARD_EXTENSIONS_WITH_CSS = [...DEFAULT_GUARD_EXTENSIONS, '.css'];
 
+/**
+ * Файлы ЯЧЕЙКИ ЗНАЧЕНИЯ редактора отбора (`lib/filter-value.ts`,
+ * `lib/filter-subquery.ts`): чипы-облачка значений собирает только общий
+ * чип-лист/комбо пикера (`buildEntityChipField`/`buildEntityCombo`), поэтому
+ * собственный вызов `createThoughtCloud` в них запрещён. Сторож требования
+ * заказчика «единый компонент выбора мыслей» (ошибка f4e99090 п.5): собранный
+ * вручную чип неизбежно разойдётся с эталоном (значок, имя, предпросмотр).
+ */
+const EDITOR_VALUE_FILES = new Set([
+  'lib/filter-value.ts',
+  'lib/filter-subquery.ts',
+  'lib/filter-tree.ts',
+]);
+
+/** Облачко-чип ячейки значения строится общим пикером, не вручную. */
+const CHIP_VIA_FIELD_RULE: GuardRule = {
+  name: 'no-own-cloud-in-filter-value',
+  description:
+    'В ячейке значения редактора отбора (lib/filter-value.ts, lib/filter-subquery.ts) ' +
+    'облачко-чип собирает только общий чип-лист/комбо пикера (lib/entity-picker.ts): ' +
+    'свой createThoughtCloud здесь запрещён — иначе чип разойдётся с эталоном ' +
+    '«иконка + имя + ✕ + предпросмотр» (ошибка f4e99090 п.5, стандарты S2/S3).',
+  pattern: /\bcreateThoughtCloud\s*\(/,
+  allow: (rel) => !EDITOR_VALUE_FILES.has(rel),
+};
+
 describe('guard: выбор сущности делается только общим пикером', () => {
   it('<select> не собирается из типов мыслей или типов связей', () => {
     assertGuardClean(RENDERER_ROOT, [
@@ -138,6 +164,33 @@ describe('guard: выбор сущности делается только об�
 
   it('рамка поля одиночного выбора сущности собирается только общим пикером', () => {
     assertGuardClean(RENDERER_ROOT, [FIELD_BUILD_RULE]);
+  });
+
+  it('облачко-чип ячейки значения редактора отбора собирает только общий пикер', () => {
+    assertGuardClean(RENDERER_ROOT, [CHIP_VIA_FIELD_RULE]);
+  });
+
+  it('правило про облачко в ячейке отбора краснеет на умышленно добавленной сборке', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-picker-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'lib', 'filter-value.ts'),
+        [
+          "import { createThoughtCloud } from './thought-cloud.js';",
+          "const chip = createThoughtCloud({ id: 'x', title: 'x' }, { profile: 'chip' });",
+          'void chip;',
+        ].join('\n'),
+        'utf8',
+      );
+      const violations = collectViolations(dir, [CHIP_VIA_FIELD_RULE]);
+      assert.ok(
+        violations.some((v) => v.rule === 'no-own-cloud-in-filter-value'),
+        'свой createThoughtCloud в ячейке значения обязан попадать в нарушение',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('поле выбора свойства-связи — только общий пикер, прежних классов нет', () => {

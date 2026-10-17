@@ -14,6 +14,11 @@
  * справа в той же строке «<» (месяц назад), «○» (сегодня), «>» (месяц вперёд).
  * Дни соседних месяцев приглушены.
  *
+ * **Первый день недели.** Строки сетки, подписи столбцов, номер недели и клик по
+ * строке недели строятся от `firstDayOfWeek` — настройки сети (ISO 1 = пн … 7 = вс,
+ * требование 1b77decd: «ВСЕ календарные виджеты» учитывают её, а не каждая по
+ * своему). Не задан — понедельник (поведение прежних версий).
+ *
  * **Одиночный клик и перетаскивание.** Клик по дню сообщает хозяину день
  * (`onPickDay`). Перетаскивание (mousedown → движение → mouseup) сообщает
  * упорядоченный диапазон (`onRangeChange`). Сетка при старте перетаскивания НЕ
@@ -45,6 +50,17 @@ export { buildMonthWeeks } from './dates.js';
 export type { CalendarCell, CalendarWeek } from './dates.js';
 
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+/**
+ * Подписи столбцов дней недели, начиная с первого дня недели сети
+ * (ISO 1 = пн … 7 = вс, требование 1b77decd). При `firstDayOfWeek = 1` —
+ * прежний порядок Пн…Вс.
+ */
+export function weekdayLabels(firstDayOfWeek = 1): string[] {
+  const iso = firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : 1;
+  const offset = iso - 1;
+  return [...WEEKDAYS.slice(offset), ...WEEKDAYS.slice(0, offset)];
+}
 /** Полные названия месяцев для списка выбора (январь–декабрь). */
 const MONTHS = [
   'Январь',
@@ -99,8 +115,18 @@ export interface MonthCalendarOptions {
   counts?: (day: string) => number;
   /** Клик по дню. */
   onPickDay?: (day: string) => void;
-  /** Клик по строке недели (аргумент — понедельник недели). */
-  onPickWeek?: (monday: string) => void;
+  /**
+   * ДВОЙНОЙ клик по дню (активация). Отделён от {@link MonthCalendarOptions.onPickDay}:
+   * одиночный клик только выбирает день, активация подтверждает выбор в
+   * диалоге (закрывает его) — та же конвенция, что у списков/таблиц
+   * (`lib/ui/tree.ts`/`table-grid.ts`, ошибка d1a009fa). Двойной клик
+   * распознаётся по счётчику нажатий (`MouseEvent.detail >= 2`), а НЕ нативным
+   * `dblclick`: после первого клика сетка пересобирается (`render()`), узел дня
+   * заменяется, и браузер `dblclick` не присылает (ошибка 609deba0 п.4).
+   */
+  onPickDayActivate?: (day: string) => void;
+  /** Клик по строке недели (аргумент — ПЕРВЫЙ день недели сети). */
+  onPickWeek?: (firstDayOfWeek: string) => void;
   /** Перетаскивание диапазона: `from`/`to` — упорядоченные локальные даты. */
   onRangeChange?: (from: string, to: string) => void;
   /** Кнопка «○» (сегодня): перейти к текущей дате. */
@@ -113,6 +139,12 @@ export interface MonthCalendarOptions {
   weekNumbers?: boolean;
   /** Разрешить выбор диапазона перетаскиванием (диалог — да). */
   enableRangeDrag?: boolean;
+  /**
+   * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd): от него
+   * строятся строки сетки, подписи столбцов, номер недели и клик по строке
+   * недели. Не задан — понедельник (поведение прежних версий).
+   */
+  firstDayOfWeek?: number;
 }
 
 /** Рукоятка календаря. */
@@ -164,6 +196,10 @@ let yearInputContextSeq = 0;
 export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHandle {
   const weekNumbers = opts.weekNumbers !== false;
   const dragEnabled = opts.enableRangeDrag === true;
+  const firstDayOfWeek =
+    typeof opts.firstDayOfWeek === 'number' && opts.firstDayOfWeek >= 1 && opts.firstDayOfWeek <= 7
+      ? opts.firstDayOfWeek
+      : 1;
 
   const root = div('cal');
   if (!weekNumbers) root.classList.add('cal--no-weeks');
@@ -468,13 +504,17 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       size: 's',
       title: cell.day,
       class: classes.join(' '),
-      onClick: () => {
+      onClick: (event) => {
         if (dragMoved) {
           // Завершение перетаскивания: click уже обработан в mouseup.
           dragMoved = false;
           return;
         }
         opts.onPickDay?.(cell.day);
+        // Двойной клик — активация дня (подтверждение выбора), распознанная по
+        // счётчику нажатий: узел заменяется после первого клика и нативный
+        // `dblclick` не доходит (ошибка 609deba0 п.4).
+        if ((event as MouseEvent).detail >= 2) opts.onPickDayActivate?.(cell.day);
       },
     });
     // Индикатор записей — столбик 1–3 точек СЛЕВА от номера дня, по центру
@@ -527,10 +567,10 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     dayCells = [];
     const headRow = div('cal-row cal-row-head');
     if (weekNumbers) headRow.append(span('', 'cal-week-num'));
-    for (const name of WEEKDAYS) headRow.append(span(name, 'cal-wd'));
+    for (const name of weekdayLabels(firstDayOfWeek)) headRow.append(span(name, 'cal-wd'));
     grid.append(headRow);
 
-    for (const week of buildMonthWeeks(year, month)) {
+    for (const week of buildMonthWeeks(year, month, firstDayOfWeek)) {
       const row = div('cal-row');
       if (weekNumbers) {
         row.append(

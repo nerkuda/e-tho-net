@@ -1,0 +1,106 @@
+{
+  "name": "filter-date-operators-e219112e",
+  "description": "Ошибка e219112e: (1) у дат создания/изменения нет «равно/не равно» — серверный словарь и движок; (2) свойство-дата в сравнении строится общим виджетом даты. Сценарий: онбординг → сид свойства-даты → сохранённый отбор «Структуры» с условием по свойству-дате (оператор «больше или равно») → проба вида ячейки (fv-date) → контроль сервера: AST created_at eq $today находит мысль, updated_at ne $today — нет. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-date-operators-e219112e.scenario.json --out .tmp/etn-e219112e/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-date-property",
+      "api": {
+        "name": "createDateProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": { "name": "Срок стенда", "value_type": "date" },
+        "expression": "data.name"
+      },
+      "expect": "Срок стенда"
+    },
+
+    {
+      "name": "seed-saved-date-property",
+      "api": {
+        "name": "seed-saved-date-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Срок стенда",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                { "entity": { "kind": "property", "property": "Срок стенда" }, "operator": "gte", "value": { "token": "$today" } }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "structures-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-filter-typed", "text": "Срок" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+
+    { "name": "date-widget", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fv-date .fv-date__anchor') !== null" },
+    { "name": "date-widget-state", "probe": "({ editor: document.querySelector('.st-filter .ft-row__value [data-editor]')?.dataset['editor'] ?? null, hasDateCell: document.querySelector('.st-filter .fv-date') !== null, anchor: document.querySelector('.st-filter .fv-date .fv-date__anchor')?.value ?? null })", "expect": { "editor": "date", "hasDateCell": true, "anchor": "$today" } },
+
+    {
+      "name": "server-created-at-eq",
+      "api": {
+        "name": "serverCreatedAtEq",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/query",
+        "body": {
+          "ast": {
+            "version": 1,
+            "filter": { "entity": { "kind": "created_at" }, "operator": "eq", "value": { "token": "$today" } }
+          },
+          "limit": 50,
+          "offset": 0,
+          "count": false
+        },
+        "expression": "(data.items ?? data).some((i) => i.id === '{{thoughtId}}')"
+      },
+      "expect": true
+    },
+    {
+      "name": "server-updated-at-ne",
+      "api": {
+        "name": "serverUpdatedAtNe",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/query",
+        "body": {
+          "ast": {
+            "version": 1,
+            "filter": { "entity": { "kind": "updated_at" }, "operator": "ne", "value": { "token": "$today" } }
+          },
+          "limit": 50,
+          "offset": 0,
+          "count": false
+        },
+        "expression": "(data.items ?? data).some((i) => i.id === '{{thoughtId}}')"
+      },
+      "expect": false
+    }
+  ]
+}

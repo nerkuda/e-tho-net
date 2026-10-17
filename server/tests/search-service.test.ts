@@ -19,7 +19,14 @@ import {
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { FONT_BOLD_BIT } from '../src/domain/font-style.js';
-import { findDuplicates, findMentions, findMentionsInTexts, makeSnippet, search } from '../src/domain/search-service.js';
+import {
+  findBlockingDuplicate,
+  findDuplicates,
+  findMentions,
+  findMentionsInTexts,
+  makeSnippet,
+  search,
+} from '../src/domain/search-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -1590,5 +1597,136 @@ describe('findMentionsInTexts — паритет оптимизированно�
     } finally {
       ndb.close();
     }
+  });
+});
+
+/**
+ * Reference implementation of the OLD blocking gate: derive the blocking match
+ * from the full `findDuplicates` hit list (the code that ran a second heavy
+ * duplicate check per bundle item). Kept in the test as the semantic oracle for
+ * the cheap indexed {@link findBlockingDuplicate} (ошибка 9f4c0793).
+ */
+function referenceBlockingDuplicate(
+  ndb: NetworkDb,
+  title: string,
+  typeId: string | null,
+): { id: string; matched_on: 'title' | 'synonym'; matched_synonym?: string } | undefined {
+  for (const hit of findDuplicates(ndb, title)) {
+    if (hit.type_id !== typeId) continue;
+    if (hit.matched_on === 'title') return { id: hit.id, matched_on: 'title' };
+    if (hit.matched_on === 'synonym' && hit.matched_synonym?.includes('*') !== true) {
+      return { id: hit.id, matched_on: 'synonym', matched_synonym: hit.matched_synonym };
+    }
+  }
+  return undefined;
+}
+
+describe('findBlockingDuplicate — дешёвый гейт на индексированных lookup-ах (9f4c0793)', () => {
+  function seedType(ndb: NetworkDb, id: string, name: string): void {
+    ndb
+      .prepare(
+        `INSERT INTO thought_types (id, name, name_key, version, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, 1, '2024', '2024', 'u')`,
+      )
+      .run(id, name, typeNameKey(name));
+  }
+
+  it('совпадает с полной проверкой на всём фикстуре (паритет семантики)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedType(ndb, 'type-a', 'A');
+      seedType(ndb, 'type-b', 'B');
+
+      seedThought(ndb, 'Слои', { type_id: 'type-a' });
+      seedSynonym(ndb, seedThought(ndb, 'Слои изменений', { type_id: 'type-a' }), 'слои');
+      seedSynonym(ndb, seedThought(ndb, 'Игорь Петров', { type_id: 'type-a' }), 'Игорян*');
+      seedSynonym(ndb, seedThought(ndb, 'Метка', { type_id: 'type-a' }), '*');
+      seedSynonym(ndb, seedThought(ndb, 'Слой без типа'), 'слои');
+      seedSynonym(ndb, seedThought(ndb, 'Термин', { type_id: 'type-a' }), 'подсистема');
+      seedSynonym(ndb, seedThought(ndb, 'Скрытая', { type_id: 'type-a', active: 0 }), 'слои');
+      const trashed = seedThought(ndb, 'Удалённая', { type_id: 'type-a' });
+      seedSynonym(ndb, trashed, 'слои');
+      ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+
+      const probes: Array<[string, string | null]> = [
+        ['Слои', 'type-a'], // точный title того же типа → блок
+        ['слои', 'type-a'], // точный литеральный синоним → блок
+        ['слои', null], // синоним без типа → не блок
+        ['слои', 'type-b'], // чужой тип → не блок
+        ['Подсистема', 'type-a'], // только литеральный синоним того же типа → блок
+        ['Скрытая', 'type-a'], // неактуальная мысль блокирует (её отбор не глушат)
+        ['Удалённая', 'type-a'], // помеченная на удаление → не блок
+        ['Игорянский', 'type-a'], // wildcard-синоним → не блок
+        ['Метка', 'type-a'], // точный title мысли, несущей `*`-синоним → блок по title
+        ['Слой', 'type-a'], // частичное → не блок
+        ['Слои изменений', 'type-a'], // точный title другой мысли того же типа → блок
+        ['Несуществующее', 'type-a'], // ничего → не блок
+        ['   ', 'type-a'], // пустое → не блок
+      ];
+      for (const [title, typeId] of probes) {
+        assert.deepEqual(
+          findBlockingDuplicate(ndb, title, typeId),
+          referenceBlockingDuplicate(ndb, title, typeId),
+          `паритет для title=${JSON.stringify(title)} type=${String(typeId)}`,
+        );
+      }
+      // Фикстур действительно блокирует в обе стороны — иначе паритет тривиален.
+      assert.ok(findBlockingDuplicate(ndb, 'Слои', 'type-a'), 'exact title must block');
+      assert.equal(findBlockingDuplicate(ndb, 'Игорянский', 'type-a'), undefined);
+      assert.equal(
+        findBlockingDuplicate(ndb, 'Удалённая', 'type-a'),
+        undefined,
+        'trashed must not block',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('предложенный синоним, совпавший с чужим title, не блокирует (ловушка атрибуции)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      seedThought(ndb, 'Слои');
+      // Гейт смотрит только предложенный TITLE; чужой title под синонимом не
+      // должен блокировать, хотя полный findDuplicates вернёт такую мысль с
+      // matched_on 'title'.
+      assert.equal(findBlockingDuplicate(ndb, 'Слои изменений', null), undefined);
+      assert.ok(
+        findDuplicates(ndb, 'Слои изменений', ['Слои']).some((h) => h.matched_on === 'title'),
+        'полный find_duplicates всё же показывает совпадение с чужим title',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('префильтр wildcard-синонимов не теряет совпадений (проверка кэша/отсева)', () => {
+    const cases: Array<[synonym: string, term: string, matches: boolean]> = [
+      ['Игорян*', 'Игорянский', true],
+      ['Игорян*', 'СИгорянский', false], // матч — на всё название целиком
+      ['Петров* Игор*', 'Петрова Игоря', true],
+      ['Петров* Игор*', 'Игоря Петрова', false], // порядок слов важен
+      ['И*гор*', 'Ивангорец', true],
+      ['ſoft*', 'softserve', true], // длинная s сворачивается как в regex 'iu'
+      ['C++*', 'C++17', true],
+      ['*', 'звёздочка', true], // без маркеров — префильтр пропускает всегда
+    ];
+    let matched = 0;
+    for (const [synonym, term, expected] of cases) {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedSynonym(ndb, seedThought(ndb, 'Носитель'), synonym);
+        const found = findDuplicates(ndb, term).some((h) => h.matched_on === 'synonym');
+        assert.equal(
+          found,
+          expected,
+          `синоним ${JSON.stringify(synonym)} против ${JSON.stringify(term)}`,
+        );
+        if (found) matched += 1;
+      } finally {
+        ndb.close();
+      }
+    }
+    assert.ok(matched >= 5, 'часть кейсов реально матчит — паритет нетривиален');
   });
 });

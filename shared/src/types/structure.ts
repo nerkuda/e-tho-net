@@ -15,6 +15,7 @@ import type {
 } from '../enums.js';
 import type { FocusEdge, ThoughtRef } from './thought.js';
 import type { LinkTypeFilterInput } from './link.js';
+import type { FilterAst } from './filter-ast.js';
 
 /** A single scalar of a property condition (shape depends on the value type). */
 export type StructurePropertyValue = string | number | boolean;
@@ -59,9 +60,11 @@ export interface StructureFilter {
   /** Keywords mini-syntax: whitespace-separated words, `*` wildcard, `-` exclusion. */
   keywords?: string;
   /**
-   * Where `keywords` searches (bug fix 0.5.5): any subset of `title` (thought
-   * title) / `synonyms` / `comment` (permanent comment). Absent or an empty
-   * array defaults to `['title', 'synonyms']` — the original behaviour.
+   * Where `keywords` searches (bug fix 0.5.5; 0.13.1, ошибка 2bc251de): any
+   * subset of `title` (thought title) / `synonyms` / `comment` (permanent
+   * comment) / `diary` (the thought's chronological records — body or title).
+   * Absent or an empty array defaults to `['title', 'synonyms']` — the original
+   * behaviour.
    */
   keyword_scope?: StructureKeywordScope[];
   /**
@@ -144,12 +147,32 @@ export interface StructureFilter {
   created_before?: string;
   updated_after?: string;
   updated_before?: string;
+  /**
+   * Критерии отбора ДЕРЕВОМ (требование 91983c20, сущность 489c394f): единый
+   * редактор отбора передаёт условия деревом AST, а не плоскими полями.
+   * Плоские критерии и `ast` взаимно исключают друг друга — сервер отвергает
+   * их одновременную передачу (`VALIDATION_ERROR`, `routes/structures.ts`
+   * `parseQueryBody`); фасадные `parent_ids`/`link_filter` в этот конфликт не
+   * входят и применяются поверх AST.
+   *
+   * Контракт пустого отбора «HOME + сироты» (§15.3) определяется наличием
+   * `ast`: он смотрит ТОЛЬКО на присутствие поля, поэтому пустое дерево
+   * передаётся ОТСУТСТВИЕМ `ast` (тогда работает плоский пустой отбор), а не
+   * пустой группой.
+   */
+  ast?: FilterAst;
 }
 
 /** Filter + paging of `POST /thoughts/query` (the list envelope of §6.10). */
 export interface StructureQueryRequest extends StructureFilter {
-  sort: StructureSort;
-  order: SortOrder;
+  /**
+   * Плоская одноуровневая сортировка. НЕ передаётся вместе с `ast`, несущим
+   * `ast.sort`: это два источника одного порядка, и сервер отвергает их
+   * одновременную передачу (`VALIDATION_ERROR`, `parseQueryBody`). Отсутствие
+   * обоих — серверный дефолт `created`/`asc`.
+   */
+  sort?: StructureSort;
+  order?: SortOrder;
   limit: number;
   offset: number;
   /**
@@ -196,6 +219,12 @@ export interface StructureQueryResponse {
   directions: StructureDirectionFlags;
   /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
   next_cursor?: string | null;
+  /**
+   * Неразрешимые токены AST (требование b7fdab20): непусто — критерии не
+   * раскрылись, пояснения с адресами строк редактора (паритет с ids-only
+   * выборкой). Отсутствует/пусто — всё разрешилось.
+   */
+  unresolved?: Array<{ path: string; token: string; reason: string; message: string }>;
 }
 
 /** Result of `POST /thoughts/query` with `ids_only: true` (§6.10, L22). */
@@ -207,6 +236,12 @@ export interface StructureIdsQueryResponse {
   has_more?: boolean;
   /** Keyset-курсор следующей страницы (`null` — страниц больше нет). */
   next_cursor?: string | null;
+  /**
+   * Неразрешимые токены AST (требование b7fdab20, уточнение 30db3cea): непусто —
+   * `ids` пуст, пояснения здесь (паритет с основным путём `POST /thoughts/query`).
+   * Отсутствует/пусто — всё разрешилось.
+   */
+  unresolved?: Array<{ path: string; token: string; reason: string; message: string }>;
 }
 
 /**
@@ -239,13 +274,22 @@ export interface SavedFilterDefinition extends StructureFilter {
   order: SortOrder;
 }
 
+/**
+ * Определение сохранённого отбора «Структур»: легаси-плоская форма
+ * {@link SavedFilterDefinition} (`definition v1`) либо форма AST ({@link FilterAst},
+ * `{ version, filter, sort? }`) — как у отборов типа мысли и у рецепта заголовка
+ * публикации. Панель «Структур» пишет и читает форму AST (единый редактор дерева),
+ * поэтому обе формы допустимы; различает их наличие поля `version`.
+ */
+export type SavedFilterCriteria = SavedFilterDefinition | FilterAst;
+
 /** A named saved filter of the structures view (L3, per-user). */
 export interface SavedFilter {
   id: string;
   /** Which view the filter belongs to; legacy rows default to 'structures'. */
   view: SavedFilterView;
   name: string;
-  definition: SavedFilterDefinition;
+  definition: SavedFilterCriteria;
   /** ISO-8601 UTC. */
   created_at: string;
   /** ISO-8601 UTC. */

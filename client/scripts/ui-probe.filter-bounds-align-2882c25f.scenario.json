@@ -1,0 +1,73 @@
+{
+  "name": "filter-bounds-align-2882c25f",
+  "description": "Ошибка 2882c25f: оператор «между» у дат не выравнивает границы. Сценарий: онбординг → сохранённый отбор «Дата изменения между 2026-01-10 и 2026-01-20» в панели «Структуры» → ввод «С» позже «По» подтягивает конец к началу, ввод «По» раньше «С» — начало к концу (замер по DOM и по фразе футера). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-bounds-align-2882c25f.scenario.json --out .tmp/etn-2882c25f/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-saved-filter",
+      "api": {
+        "name": "seed-saved-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Границы дат",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "entity": { "kind": "updated_at" },
+                  "operator": "between",
+                  "value": ["2026-01-10", "2026-01-20"]
+                }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "structures-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-filter-typed", "text": "Границы" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+
+    { "name": "bounds-cell", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input') !== null && document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input') !== null" },
+    { "name": "bounds-before-from", "probe": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input')?.value ?? null", "expect": "2026-01-10" },
+    { "name": "bounds-before-to", "probe": "document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input')?.value ?? null", "expect": "2026-01-20" },
+
+    { "name": "type-from-later", "eval": "(() => { const i = document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input'); i.value = '2026-03-01'; i.dispatchEvent(new Event('change', { bubbles: true })); return 'typed'; })()" },
+    { "name": "bounds-after-to-aligned", "timeout": 10000, "waitFor": "document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input')?.value === '2026-03-01'" },
+    { "name": "bounds-after-from", "probe": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input')?.value ?? null", "expect": "2026-03-01" },
+    { "name": "bounds-after-to", "probe": "document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input')?.value ?? null", "expect": "2026-03-01" },
+    { "name": "bounds-after-phrase", "probe": "document.querySelector('.st-filter .ff-preview__text')?.textContent ?? null", "expect": "Дата изменения между 2026-03-01 и 2026-03-01" },
+    { "name": "bounds-after-phrase-old-value-gone", "probe": "(document.querySelector('.st-filter .ff-preview__text')?.textContent ?? '').includes('2026-01-20')", "expect": false },
+
+    { "name": "type-to-earlier", "eval": "(() => { const i = document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input'); i.value = '2025-12-31'; i.dispatchEvent(new Event('change', { bubbles: true })); return 'typed'; })()" },
+    { "name": "bounds-reverse-from-aligned", "timeout": 10000, "waitFor": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input')?.value === '2025-12-31'" },
+    { "name": "bounds-reverse-from", "probe": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input')?.value ?? null", "expect": "2025-12-31" },
+    { "name": "bounds-reverse-to", "probe": "document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input')?.value ?? null", "expect": "2025-12-31" },
+    { "name": "bounds-reverse-phrase", "probe": "document.querySelector('.st-filter .ff-preview__text')?.textContent ?? null", "expect": "Дата изменения между 2025-12-31 и 2025-12-31" }
+  ]
+}

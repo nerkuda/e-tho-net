@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BASE_LAYER_ID, type PublicationExportFormat } from '@etn/shared';
+import { BASE_LAYER_ID, filterProfileHasTime, type PublicationExportFormat } from '@etn/shared';
 
 import { ConfigError, loadConfig, type ServerConfig } from './config.js';
 import { logger } from './logger.js';
@@ -33,6 +33,7 @@ import { generateApiKey } from './auth/api-key.js';
 import { createApiKeyAuthProvider } from './mcp/auth.js';
 import { runStdioMcp } from './mcp/stdio.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
+import { closeWritePool, configureWritePool, drainWritePool } from './db/write-pool.js';
 import { listLayers } from './domain/layer-service.js';
 import { getPublication } from './domain/publication-service.js';
 import { buildPublicationExportDocument } from './domain/publication-assembly-service.js';
@@ -458,10 +459,28 @@ async function runPublicationsRebuild(
     // --- Build files with the export domain --------------------------------
     const { slugById, titleById } = resolvePublicationSlugs(ndb, found);
     const entries: PublicationFile[] = [];
+    // Контекст токенов AST-рецепта (профиль «публикации»): часы пересборки,
+    // пользователь и первый день недели сети из системной БД. Пересборка CLI
+    // обязана видеть тот же отбор, что сборка/экспорт на сервере.
+    const net = sys.getNetworkById(networkId);
+    const tokenContext = {
+      nowMs: Date.now(),
+      userId: auth.userId,
+      ...(net !== null && net.first_day_of_week !== undefined
+        ? { firstDayOfWeek: net.first_day_of_week }
+        : {}),
+      withTime: filterProfileHasTime('publications'),
+    };
     for (const id of found) {
       const slug = slugById.get(id)!;
       try {
-        const document = buildPublicationExportDocument(ndb, id, auth.userId, resolveUserName);
+        const document = buildPublicationExportDocument(
+          ndb,
+          id,
+          auth.userId,
+          resolveUserName,
+          tokenContext,
+        );
         const artifact = buildPublicationArtifact(ndb, document, args.format, true, '', slug);
         entries.push(...artifact.entries);
         for (const w of artifact.entry.warnings) warnings.push(w);
@@ -650,6 +669,14 @@ export async function main(opts: MainOptions = {}): Promise<number> {
         size: config.readerPool.size,
         taskTimeoutMs: config.readerPool.taskTimeoutMs,
       });
+      // Батч-запись идёт через пул записи (задача c8920d04, ADR ca3a9218): та же
+      // причина — синхронный better-sqlite3 заморозил бы stdio-процесс целиком.
+      // `ETN_WRITE_POOL_SIZE=0` выключает пул и возвращает запись в главный поток.
+      configureWritePool({
+        size: config.writePool.size,
+        taskTimeoutMs: config.writePool.taskTimeoutMs,
+        idleEvictionMs: config.writePool.idleEvictionMs,
+      });
       // Logger is built inside runStdioMcp (stderr-bound) to keep stdout clean.
       await runStdioMcp({ dataDir: config.dataDir, apiKey });
       return 0;
@@ -657,6 +684,13 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       console.error(err instanceof Error ? err.message : String(err));
       return 1;
     } finally {
+      // Порядок как при остановке HTTP-сервера: сначала дождаться слива очереди
+      // записи и закрыть воркеры, потом читателей.
+      const drained = await drainWritePool();
+      if (!drained.drained) {
+        console.error('write pool: очередь не слилась в отведённое время');
+      }
+      await closeWritePool();
       await closeReaderPool();
     }
   }

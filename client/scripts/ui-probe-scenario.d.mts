@@ -7,6 +7,7 @@
 export type StepKind =
   | 'key'
   | 'click'
+  | 'hover'
   | 'text'
   | 'waitFor'
   | 'probe'
@@ -67,6 +68,8 @@ export interface NormalizedClick {
   at: [number, number] | null;
   x: number | null;
   y: number | null;
+  /** Число последовательных нажатий (2 — двойной клик; по умолчанию 1). */
+  count: number;
 }
 
 export interface NormalizedWaitFor {
@@ -90,8 +93,16 @@ export interface ScenarioStep {
   name: string;
   timeout: number;
   expect?: unknown;
+  /**
+   * Ожидание-снимок: имя ранее выполненного шага `probe`/`api`, чьё значение
+   * становится ожиданием этого шага (самопроверка «до ↔ после»). Взаимоисключающе
+   * с `expect`.
+   */
+  expectFrom?: string;
   key?: NormalizedKey;
   click?: NormalizedClick;
+  /** Наведение курсора без клика (`mouseMoved`): включает CSS `:hover`. */
+  hover?: NormalizedClick;
   text?: string;
   waitFor?: NormalizedWaitFor;
   probe?: NormalizedExpression;

@@ -10,24 +10,40 @@
  */
 
 import type { ChronicleLinkScope, SavedFilterView, SortOrder, StructureKeywordScope } from '../enums.js';
+import type { FilterAst, FilterDiagnostic } from './filter-ast.js';
 import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */
 export interface ChronicleFilter {
-  /** Keywords mini-syntax (`*`/`-`, AND). Отбирает записи двумя путями:
+  /**
+   * Тело отбора в общем AST (профиль `chronicle`, задача 4752b065): операнды
+   * записи (`record_time`/`record_title`/`record_body`/`record_author`/
+   * `record_editor`) и «Цели» (`targets` — под-выборка мыслей). Задаётся ЛИБО
+   * телом AST, ЛИБО плоскими полями — не оба (XOR, `VALIDATION_ERROR`). Пустое
+   * поле — плоская форма компилируется в AST единым компилятором.
+   */
+  ast?: FilterAst;
+  /**
+   * Keywords mini-syntax (`*`/`-`, AND). Отбирает записи двумя путями:
    *  (А) по мыслям — слова ищутся в названии, синонимах, постоянном комментарии
    *  мысли и комментариях её связей, затем возвращаются записи этих мыслей;
    *  (Б) по тексту самой записи — её тело и заголовок (0.10.1, T7; так сужается
-   *  лента записей дня, привязанных только к HOME). Исключающие слова вычитают
-   *  запись по её собственному тексту. */
+   *  лента записей дня, привязанных только к HOME). Путь Б включается, только
+   *  когда в {@link keyword_scope} есть область `comment` (пустой набор — все
+   *  области); исключающие слова вычитают запись по её собственному тексту.
+   */
   keywords?: string;
   /**
    * Где ищутся `keywords` в МЫСЛЕВОМ пути (путь А): любое подмножество
-   * `title`/`synonyms`/`comment` (постоянный комментарий мысли и комментарии её
-   * связей). Отсутствие или пустой массив — поиск по всем трём областям
-   * (поведение до 0.10.1). Тело/заголовок САМОЙ записи (путь Б, T7) от области
-   * не зависит.
+   * `title`/`synonyms`/`comment`/`diary` (0.13.1, ошибка 2bc251de) — название,
+   * синонимы, постоянный комментарий мысли и комментарии её связей, её
+   * дневниковые записи. Отсутствие или пустой массив — ИСТОРИЧЕСКОЕ множество
+   * областей (`title`/`synonyms`/`comment`, поведение до 0.10.1): новые области
+   * включаются только явным набором. Область `comment` гейтит и путь Б:
+   * тело/заголовок САМОЙ записи (T7) ищутся, только когда область `comment`
+   * включена (пустой набор — историческое множество); набор без `comment` путь Б
+   * отключает (задача 46057359, требование 9e9d14dc).
    */
   keyword_scope?: StructureKeywordScope[];
   /** Root thoughts of the «мысли» field; empty = all thoughts of the network. */
@@ -147,6 +163,14 @@ export interface ChronicleRow {
 export interface ChronicleQueryResponse {
   rows: ChronicleRow[];
   total: number;
+  /**
+   * Диагностика ядра выборки (`meta.warnings`, как у прочих запросов отбора):
+   * `FilterDiagnostic` адресует строку редактора (`path`), редактор «Дневника»
+   * подсвечивает её и запрещает применение при красном (требования
+   * 44d61c8a/325efc13). Жёлтое ядро хроника не строит (нет контекста типа —
+   * ревизия требования 0fd1dc5d), поле — единый контракт с «Структурами».
+   */
+  warnings?: FilterDiagnostic[];
 }
 
 /** Persisted criteria of a chronicle saved filter (03-server-api.md §18). */

@@ -40,12 +40,26 @@
 
 import {
   EtnError,
+  FILTER_AST_VERSION,
+  HIERARCHY_SUBTREE_MAX_NODES,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
   isLinkTypeFilterActive,
   parseFilterKeywords,
+  type FilterAst,
+  type FilterAstEntity,
+  type FilterAstHierarchyMode,
+  type FilterAstLeaf,
+  type FilterAstListItem,
+  type FilterAstNode,
+  type FilterAstOperator,
+  type FilterAstScalar,
+  type FilterAstSortKey,
+  type FilterAstSubqueryValue,
+  type FilterAstValue,
+  type FilterProfileId,
   type LinkPropertyDirection,
   type LinkTypeFilterInput,
   type PropertyConfig,
@@ -64,17 +78,23 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
+import { normaliseInstant } from './dates.js';
+import { collectHierarchySubtree } from './graph-traversal.js';
 import { getLinkDirections } from './link-service.js';
 import {
   getNetworkProperty,
   isStructuralLinkProperty,
   linkPropertyDirection,
   linkPropertyLinkTypeId,
+  listEffectiveTypeProperties,
   resolveConditionPropertyRef,
 } from './property-service.js';
 import { nameTrigramMatch } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
+import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
+import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from './thought-type-view-tokens.js';
 
 // ---------------------------------------------------------------------------
 // Канонические типы запроса/ответа
@@ -166,6 +186,13 @@ export interface ThoughtQueryRequest {
   link_filter?: LinkTypeFilterInput;
   /** Ограничение поддерева (REST `parent_ids` / MCP `in_subtree_of`). */
   subtree?: ThoughtQuerySubtree;
+  /**
+   * Дерево условий AST (задача 9c156b8c). Задано — критерии берутся только из
+   * него (единый исполнитель {@link filterAstClause}), плоские поля-критерии
+   * игнорируются, неявные дефолты `active`/`trashed` не применяются: отбор
+   * выражен деревом целиком. Сортировка/пагинация/курсор действуют как обычно.
+   */
+  ast?: FilterAst;
   /** Сортировка — единый набор REST; MCP-имена маппятся адаптером. */
   sort: StructureSort;
   order: SortOrder;
@@ -204,6 +231,46 @@ export interface ThoughtQueryOptions {
    * раскрываемости обещает уровень, которого соседи не отдают.
    */
   showTrash?: boolean;
+  /**
+   * Контекст разрешения токенов AST-листьев (0.13.1, задача 0f1b9892):
+   * настройка сети «первый день недели», профиль со временем, часы для тестов.
+   * Не задан — токены раскрываются с дефолтами (понедельник, датовый профиль,
+   * реальные часы). `$thought.*` в сетевом запросе контекста мысли не имеет и
+   * даёт неразрешимость.
+   */
+  tokenContext?: AstTokenContext;
+  /**
+   * Собирать статистику исполнения (требование 0f34a5ff «Статистика
+   * исполнения отборов при серверном логировании»). Флаг включается фасадом
+   * ТОЛЬКО когда серверное журналирование включено: при выключенном
+   * логировании счётчики не собираются — накладных расходов нет.
+   */
+  collectStats?: boolean;
+  /**
+   * Профиль контекста точки применения отбора (требование 0095daad, ADR
+   * 0c02ab4f; задача 7a798b17). Задан — явное AST-тело проверяется на видимость
+   * операндов/операторов в этом профиле (невидимый операнд →
+   * `VALIDATION_ERROR`). Не задан — проверки по профилю нет (обратная
+   * совместимость внутренних вызовов движка).
+   */
+  profile?: FilterProfileId;
+}
+
+/**
+ * Статистика одного исполнения отбора (требование 0f34a5ff). Наружу (в
+ * API-ответ) не выводится — пользователь фасада пишет её в серверный журнал.
+ */
+export interface QueryStats {
+  /** Время исполнения запроса, мс. */
+  duration_ms: number;
+  /** Число условий-листьев, попавших в план обхода. */
+  conditions: number;
+  /** Число обойдённых узлов (иерархия/под-выборки). */
+  nodes_walked: number;
+  /** Число обращений к обходу иерархии («в иерархии»). */
+  hierarchy_calls: number;
+  /** Сработавшие ресурсные предохранители (имена), без ошибки. */
+  limits_hit: string[];
 }
 
 /** Результат канонической выборки. */
@@ -227,6 +294,13 @@ export interface ThoughtQueryResult {
   truncated: boolean;
   /** Причина обрезки (`max_nodes`) или null. */
   reason: 'max_nodes' | null;
+  /**
+   * Неразрешимые токены AST (требование b7fdab20). Непусто — отбор не выполнен:
+   * `items` пуст, пояснения — здесь. Отсутствует/пусто — всё разрешилось.
+   */
+  unresolved?: TokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 /** Результат id-only выборки ({@link queryThoughtIds}). */
@@ -238,6 +312,10 @@ export interface ThoughtIdsQueryResult {
   has_more: boolean;
   /** Keyset-курсор следующей страницы; `null` — страниц больше нет. */
   next_cursor: string | null;
+  /** Неразрешимые токены AST (непусто — `ids` пуст, см. {@link ThoughtQueryResult.unresolved}). */
+  unresolved?: TokenIssue[];
+  /** Статистика исполнения (только при `collectStats`, требование 0f34a5ff). */
+  stats?: QueryStats;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,8 +375,11 @@ export function structureRequestToQuery(req: StructureQueryRequest): ThoughtQuer
             link_filter: req.link_filter,
           }
         : undefined,
-    sort: req.sort,
-    order: req.order,
+    // `sort`/`order` необязательны у запроса-фасада: тело-дерево (`ast`) несёт
+    // порядок в `ast.sort`, и плоская пара тогда не передаётся (задача
+    // 213bd2d2). Дефолты — те же, что у роута (`parseQueryBody`).
+    sort: req.sort ?? 'created',
+    order: req.order ?? 'asc',
     limit: req.limit,
     offset: req.offset,
     count: req.count,
@@ -355,15 +436,17 @@ const MCP_SORT_TO_CANONICAL: Record<ThoughtQuerySort, StructureSort> = {
  * (= `alpha`) `asc`.
  */
 export function mcpRequestToQuery(
-  req: McpThoughtQueryRequest,
+  req: McpThoughtQueryRequest & { readonly ast?: FilterAst },
   bounds: { maxNodes: number },
 ): ThoughtQueryRequest {
   const maxDepth = Math.min(
     Math.max(req.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, 1),
     TRAVERSAL_DEFAULTS.MAX_DEPTH,
   );
+  assertAstSortNotConflicting(req);
   return {
     type_ids: req.type_id,
+    ast: req.ast,
     properties: (req.properties ?? []).map((c) => {
       if (typeof c.property_id !== 'string' || c.property_id === '') {
         throw new EtnError(
@@ -410,6 +493,28 @@ export function mcpRequestToQuery(
   };
 }
 
+/**
+ * Проверка сортировки MCP-запроса с AST-телом (задача cb78315b, расширено
+ * задачей 3a157e66). Wire-формат AST несёт многоуровневый `sort: [{ key, order }]`
+ * — он принимается целиком и исполняется единым движком (требование 3e47f52a);
+ * ограничение «ровно один ключ» снято. Внешние `sort`/`order` инструмента и
+ * `ast.sort` — два источника одного порядка: одновременная передача —
+ * `VALIDATION_ERROR` (конвенция cb78315b «оставьте один источник»).
+ */
+function assertAstSortNotConflicting(
+  req: McpThoughtQueryRequest & { readonly ast?: FilterAst },
+): void {
+  const keys = req.ast?.sort;
+  if (keys === undefined || keys.length === 0) return;
+  if (req.sort !== undefined || req.order !== undefined) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Сортировка задана дважды: в теле ast (sort) и в полях sort/order инструмента — оставьте один источник.',
+      { field: 'sort' },
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SQL-движок
 // ---------------------------------------------------------------------------
@@ -436,8 +541,12 @@ type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
  * значения и запрещены для `bool` — там тот же смысл несут `eq true`/
  * `eq false`. Свойство-связь (`link`) хранит значение в рёбрах (links_v),
  * а не в property_values (ADR «проекция ребра»).
+ *
+ * Экспортируется для сторожа паритета с декларацией профилей
+ * (`PROPERTY_OPERATOR_SETS` в `@etn/shared`, требование 9bdddad6): гейт плоской
+ * формы — подмножество AST-набора (тест `filter-profiles.test.ts`).
  */
-const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryPropertyOperator[]> = {
+export const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryPropertyOperator[]> = {
   // `text` с `config.multiple` — множественное скалярное свойство (02-data-model
   // §3.4–3.5); наборные операторы для него предусмотрены требованием 92b9c55b,
   // матчинг поэлементный (ошибка 7489e4d9).
@@ -500,6 +609,19 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   publication: 'value_text',
 };
 
+/**
+ * Виды значений, для которых текстовое сравнение регистронезависимо
+ * (ADR 9779dd21 «равно — строгое, текст регистронезависимо»; требование
+ * f14e48ab для «содержит»). SQLite `COLLATE NOCASE` кириллицу не покрывает —
+ * регистр сворачивается функцией `unicode_lower` с обеих сторон.
+ */
+const CASE_FOLDED_VALUE_TYPES: ReadonlySet<PropertyValueType> = new Set<PropertyValueType>(['text', 'url']);
+
+/** Нужно ли сворачивать регистр текстового сравнения для этого вида значения. */
+function foldsCase(def: { value_type: PropertyValueType }): boolean {
+  return CASE_FOLDED_VALUE_TYPES.has(def.value_type);
+}
+
 /** Default keyword scope: title + synonyms only (the original behaviour). */
 const DEFAULT_KEYWORD_SCOPE: readonly StructureKeywordScope[] = ['title', 'synonyms'];
 
@@ -507,28 +629,88 @@ function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<St
   return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
 }
 
+/** Клауза совпадения «Найти слова»: SQL-предикат и число LIKE-параметров в нём. */
+interface KeywordMatchClause {
+  sql: string;
+  paramCount: number;
+}
+
 /**
- * One keyword match clause built for the effective scope: title and/or
- * synonyms and/or the permanent comment (OR between the selected sources).
- * The LIKE pattern is built by {@link buildLikePattern} (escaping `%`/`_`/`\`,
- * `*` → `%`), so the match is infix and case-insensitive.
+ * Условие области «в дневниках» (`diary`, ошибка 2bc251de, требование 0882f8d5)
+ * для мысли-кандидата: её хронологическая запись содержит слово. Текст записи —
+ * тело И заголовок — ровно так, как путь «текст самой записи» компилирует
+ * хроника (`record_body`/`record_title`, задача 608ecb79).
+ *
+ * Одна точка правды: этот же предикат использует плоский компилятор хроники
+ * (`chronicle-service.thoughtKeywordCond`), иначе AST-лист и `keyword_scope`
+ * разъехались бы (тот же класс дефекта, что fc97548d).
+ *
+ * @param alias алиас `thoughts_v` в объемлющем SQL (у обоих вызывающих — `t`).
  */
-function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; paramCount: number } {
-  const parts: string[] = [];
-  if (scope.has('title')) parts.push("t.title_norm LIKE ? ESCAPE '\\'");
+export function diaryKeywordClause(alias = 't'): KeywordMatchClause {
+  return {
+    sql:
+      `EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = ${alias}.id` +
+      " AND c.kind = 'chronological'" +
+      " AND (unicode_lower(c.body_md) LIKE ? ESCAPE '\\'" +
+      " OR unicode_lower(IFNULL(c.title, '')) LIKE ? ESCAPE '\\'))",
+    paramCount: 2,
+  };
+}
+
+/**
+ * Одна клауза совпадения по словам для эффективного набора областей: `title`,
+ * `synonyms`, `comment` (постоянный комментарий мысли) и/или `diary`
+ * (хронологические записи мысли) — OR между выбранными источниками. LIKE-образец
+ * строит {@link buildLikePattern} (экранирование `%`/`_`/`\`, `*` → `%`),
+ * поэтому совпадение инфиксное и регистронезависимое.
+ *
+ * `opts.commentIncludesLinkComments` (требование ce111b0d, ошибка fc97548d) —
+ * контекст ФАЗЫ 1 ОТБОРА ХРОНИКИ: область `comment` ищет и комментарии
+ * инцидентных связей мысли с обеих сторон. Опцию ставит только исполнитель
+ * хроники (`chronicle-service.targetsLeafClause`); семантика отбора мыслей
+ * (требование b363cad1 — только постоянный комментарий самой мысли) не меняется.
+ */
+function buildKeywordClause(
+  scope: Set<StructureKeywordScope>,
+  opts?: { commentIncludesLinkComments?: boolean },
+): KeywordMatchClause {
+  const parts: KeywordMatchClause[] = [];
+  if (scope.has('title')) parts.push({ sql: "t.title_norm LIKE ? ESCAPE '\\'", paramCount: 1 });
   if (scope.has('synonyms')) {
-    parts.push(
-      'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+    parts.push({
+      sql:
+        'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
         " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\')",
-    );
+      paramCount: 1,
+    });
   }
   if (scope.has('comment')) {
-    parts.push(
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
+    parts.push({
+      sql:
+        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
         " AND c.kind = 'permanent' AND unicode_lower(c.body_md) LIKE ? ESCAPE '\\')",
-    );
+      paramCount: 1,
+    });
+    if (opts?.commentIncludesLinkComments === true) {
+      // Комментарии инцидентных связей с обеих сторон — как в плоском
+      // `thoughtKeywordCond` (тип комментария не сужается: и постоянные, и
+      // записи дневника связи), требование ce111b0d.
+      parts.push({
+        sql:
+          'EXISTS (SELECT 1 FROM comments_v c2' +
+          " JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'" +
+          ' JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)' +
+          " WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\')",
+        paramCount: 1,
+      });
+    }
   }
-  return { sql: `(${parts.join(' OR ')})`, paramCount: parts.length };
+  if (scope.has('diary')) parts.push(diaryKeywordClause('t'));
+  return {
+    sql: `(${parts.map((p) => p.sql).join(' OR ')})`,
+    paramCount: parts.reduce((sum, p) => sum + p.paramCount, 0),
+  };
 }
 
 /**
@@ -549,13 +731,13 @@ function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; p
  * версий в выборку не попадают.
  *
  * @returns `null`, когда сужатель неприменим (нет include-слов с индексным
- *   представлением или в области есть комментарий).
+ *   представлением или в области есть комментарий либо дневниковые записи).
  */
 function buildKeywordFtsJoin(
   include: string[],
   scope: Set<StructureKeywordScope>,
 ): Clause | null {
-  if (include.length === 0 || scope.has('comment')) return null;
+  if (include.length === 0 || scope.has('comment') || scope.has('diary')) return null;
   const match = nameTrigramMatch(include);
   if (match === null) return null;
   return {
@@ -634,28 +816,156 @@ export function directionsOf(
  * Одна ключевая часть детерминированного порядка: SQL-выражение и направление.
  * Порядок строится из них + уникального `id` (ADR 5f6cb775: сортировка обязана
  * иметь уникальный добор ключа, иначе keyset теряет и дублирует строки).
+ *
+ * `tag` — идентичность ключа для подписи курсора ({@link sortSignature}). Для
+ * ключей-свойств `expr` ссылается на псевдоним (`psv<индекс>`), который НЕ
+ * различает свойства одного вида на одном индексе («Срок» и «Дедлайн» дали бы
+ * одинаковый `psv0.value_date`) — поэтому в подпись входит `property_id`.
  */
 interface SortKey {
   expr: string;
   dir: 'ASC' | 'DESC';
+  /** Тег идентичности ключа (у ключей-свойств — `property:<id>`). */
+  tag?: string;
+}
+
+/**
+ * Ключи AST-сортировки (`FilterAstSortKey[]`) в ключи SQL-движка.
+ *
+ * Многоуровневая (порядок ключей = порядок объявления), направление на каждый
+ * ключ (требование 3e47f52a). Фиксированные ключи — `title`/`created_at`/
+ * `updated_at`; прочие — свойства реестра (по id, каноническому имени либо
+ * ИМЕНИ СТОРОНЫ свойства-связи). По булевым ложь раньше истины при возрастании
+ * (SQLite хранит `bool` как 0/1). Пустые значения свойства — в конце списка при
+ * любом направлении (ведущий ключ `(expr IS NULL)`), чтобы заполненные строки
+ * шли первыми. Уникальный добор `t.id` добавляется в {@link orderClause} —
+ * стабильная пагинация.
+ *
+ * Свойства-связи поддержаны (требование 8334b54a, ADR 23fab347: исполнитель
+ * принимает всё, что позволил сохранить конструктор; ошибка 335b23cb). Значение
+ * свойства-связи — мысль (цель ребра своего типа связи), поэтому ключ сортирует
+ * по НАЗВАНИЮ связанной мысли: коррелированный агрегат `MIN(название)` по живым
+ * рёбрам нужной стороны. Агрегат берётся один раз на мысль (подзапрос в JOIN с
+ * `GROUP BY`), а не размножает строки страницы, как джойн значений; при
+ * нескольких связях ключ детерминирован (минимальное название), пустая сторона —
+ * в конце, как у скалярных свойств. Сторона адресуется тем же резолвером, что и
+ * условия ({@link resolveConditionPropertyRef}): обратное имя свойства-связи
+ * сортирует по связывающим мыслям, а не по целям.
+ */
+function astSortClause(
+  ndb: NetworkDb,
+  sortKeys: readonly FilterAstSortKey[],
+  requestId?: string,
+): { keys: SortKey[]; joinSql: string; joinParams: unknown[] } {
+  const keys: SortKey[] = [];
+  const joins: string[] = [];
+  const joinParams: unknown[] = [];
+  sortKeys.forEach((key, i) => {
+    const dir: 'ASC' | 'DESC' = key.order === 'desc' ? 'DESC' : 'ASC';
+    switch (key.key) {
+      case 'title':
+      case 'alpha':
+        keys.push({ expr: 't.title COLLATE NOCASE', dir });
+        return;
+      case 'created_at':
+      case 'created':
+        keys.push({ expr: 't.created_at', dir });
+        return;
+      case 'updated_at':
+      case 'updated':
+        keys.push({ expr: 't.updated_at', dir });
+        return;
+      default:
+        break;
+    }
+    // Ключ-свойство: адресация registry `property_id`, каноническим именем
+    // свойства либо именем стороны свойства-связи — тем же резолвером, что у
+    // условий (`resolveConditionPropertyRef`), иначе конструктор и исполнитель
+    // разошлись бы в толковании одного ключа.
+    const ref = resolveConditionPropertyRef(ndb, key.key, requestId);
+    const def = ref === null ? null : lookupPropertyRow(ndb, ref.propertyId);
+    if (ref === null || def === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Ключ сортировки «${key.key}» не найден: это не фиксированный ключ (title/created_at/updated_at) и не свойство сети.`,
+        { field: 'ast.sort', key: key.key },
+        requestId,
+      );
+    }
+    if (def.value_type === 'link') {
+      const edges = linkPropertyEdges(def, ref.direction);
+      if (edges === null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Сортировка по свойству-связи «${key.key}» не поддержана: у свойства нет типа связи.`,
+          { field: 'ast.sort', key: key.key },
+          requestId,
+        );
+      }
+      // Один агрегат на мысль: страница не размножается по числу связей, а
+      // keyset сравнивает то же выражение `lsv<i>.val` (подзапросы — свои
+      // области видимости, поэтому внутренние алиасы `l`/`t2` у каждого ключа
+      // свои и не конфликтуют).
+      const alias = `lsv${i}`;
+      joins.push(
+        `LEFT JOIN (
+           SELECT l.${edges.ownerCol} AS owner_id, MIN(t2.title COLLATE NOCASE) AS val
+             FROM links_v l
+             JOIN thoughts_v t2 ON t2.id = l.${edges.targetCol}
+            WHERE ${edges.typeSql} AND l.active = 1 AND l.marked_for_deletion = 0
+            GROUP BY l.${edges.ownerCol}
+         ) ${alias} ON ${alias}.owner_id = t.id`,
+      );
+      joinParams.push(...edges.typeParams);
+      const expr = `${alias}.val`;
+      // Тег отличает прямую сторону от обратной и от скалярного свойства с тем
+      // же id: курсор, снятый по чужому порядку, не должен продолжать страницу.
+      const tag = `link:${def.id}|${edges.direction}`;
+      keys.push({ expr: `(${expr} IS NULL)`, dir: 'ASC', tag });
+      keys.push({ expr, dir, tag });
+      return;
+    }
+    const alias = `psv${i}`;
+    joins.push(
+      `LEFT JOIN property_values_v ${alias} ON ${alias}.owner_type = 'thought'` +
+        ` AND ${alias}.owner_id = t.id AND ${alias}.property_id = ?`,
+    );
+    joinParams.push(def.id);
+    const expr = `${alias}.${VALUE_COLUMN[def.value_type]}`;
+    const tag = `property:${def.id}`;
+    keys.push({ expr: `(${expr} IS NULL)`, dir: 'ASC', tag });
+    keys.push({ expr, dir, tag });
+  });
+  return { keys, joinSql: joins.join(' '), joinParams };
 }
 
 /**
  * Ключи сортировки запроса плюс `thought_views`-джойн для `viewed`.
  *
- * `homeFirst` (пустой REST-фильтр) добавляет ведущий ключ «HOME — первой»;
- * `viewed` — два ключа: флаг NULL-метки (NULL последними при `asc`, как в
- * §6.10) и сама метка. Значения ключей совпадают с прежним `ORDER BY`, но
- * теперь дополняются `t.id` в {@link orderClause} — порядок детерминирован.
+ * `homeFirst` (пустой REST-фильтр) добавляет ведущий ключ «HOME — первой».
+ * Непустой `req.ast.sort` (требование 3e47f52a) задаёт многоуровневый порядок
+ * целиком и перекрывает `req.sort`/`req.order` (конфликт двух источников
+ * отвергается фасадами до вызова движка). `viewed` — два ключа: флаг
+ * NULL-метки (NULL последними при `asc`, как в §6.10) и сама метка. Значения
+ * ключей совпадают с прежним `ORDER BY`, но теперь дополняются `t.id` в
+ * {@link orderClause} — порядок детерминирован.
  */
 function sortKeysFor(
+  ndb: NetworkDb,
   userId: string,
   req: ThoughtQueryRequest,
   homeFirst: boolean,
 ): { keys: SortKey[]; joinSql: string; joinParams: unknown[] } {
-  const dir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   const keys: SortKey[] = [];
   if (homeFirst) keys.push({ expr: '(t.is_root = 1)', dir: 'DESC' });
+
+  const astSort = req.ast?.sort;
+  if (astSort !== undefined && astSort.length > 0) {
+    const ast = astSortClause(ndb, astSort);
+    return { keys: [...keys, ...ast.keys], joinSql: ast.joinSql, joinParams: ast.joinParams };
+  }
+
+  const dir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   switch (req.sort) {
     case 'alpha':
       keys.push({ expr: 't.title COLLATE NOCASE', dir });
@@ -713,24 +1023,6 @@ function appendAuthorCondition(
   // `eq` (default) — exact match.
   where.push(`${column} = ?`);
   params.push(value);
-}
-
-/** Appends inclusive date-bound WHERE clauses (`>=`/`<=`) for one column. */
-function appendDateBound(
-  where: string[],
-  params: unknown[],
-  column: string,
-  after: string | undefined,
-  before: string | undefined,
-): void {
-  if (typeof after === 'string' && after.trim() !== '') {
-    where.push(`${column} >= ?`);
-    params.push(after.trim());
-  }
-  if (typeof before === 'string' && before.trim() !== '') {
-    where.push(`${column} <= ?`);
-    params.push(before.trim());
-  }
 }
 
 /** Convert a condition scalar to the SQL parameter of its value column. */
@@ -831,13 +1123,15 @@ function textListClause(
   requestId?: string,
 ): Clause {
   const values = coerceValueList(value, operator, requestId);
+  // `text`-сравнение регистронезависимо (ADR 9779dd21): регистр сворачивается
+  // `unicode_lower` с обеих сторон — `COLLATE NOCASE` кириллицу не покрывает.
   const elementSql = `EXISTS (
     SELECT 1 FROM property_values_v pv
     WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
       AND pv.${column} IS NOT NULL AND ${
         multiple
-          ? `instr(', ' || pv.${column} || ', ', ', ' || ? || ', ') > 0`
-          : `pv.${column} = ?`
+          ? `instr(', ' || unicode_lower(pv.${column}) || ', ', ', ' || unicode_lower(?) || ', ') > 0`
+          : `unicode_lower(pv.${column}) = unicode_lower(?)`
       })`;
   const one = (v: string): Clause => ({ sql: elementSql, params: [propertyId, v] });
   if (operator === 'all_of') {
@@ -884,33 +1178,40 @@ function urlListClause(
   requestId?: string,
 ): Clause {
   const values = coerceValueList(value, operator, requestId);
-  const placeholders = values.map(() => '?').join(',');
+  // `url` — текстовое значение: сравнение регистронезависимо (unicode_lower).
+  const placeholders = values.map(() => 'unicode_lower(?)').join(',');
   const matchSql = multiple
     ? `SELECT 1 FROM property_values_v pv, ${multipleValueElementsSql(column)} je
        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-         AND pv.${column} IS NOT NULL AND je.value IN (${placeholders})`
+         AND pv.${column} IS NOT NULL AND unicode_lower(je.value) IN (${placeholders})`
     : `SELECT 1 FROM property_values_v pv
        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-         AND pv.${column} IN (${placeholders})`;
+         AND unicode_lower(pv.${column}) IN (${placeholders})`;
   const match: Clause = { sql: `EXISTS (${matchSql})`, params: [propertyId, ...values] };
   return operator === 'in' ? match : { sql: `NOT (${match.sql})`, params: match.params };
 }
 
-/** Клауза `any_of`/`all_of`/`none_of` по множественному свойству. */
+/**
+ * Клауза `any_of`/`all_of`/`none_of` по множественному свойству. `fold` —
+ * регистронезависимое сравнение элементов (текстовые виды значений, ADR 9779dd21).
+ */
 function multipleValueSetClause(
   propertyId: string,
   column: string,
   operator: 'any_of' | 'all_of' | 'none_of',
   value: ThoughtQueryPropertyCondition['value'],
   requestId?: string,
+  fold = false,
 ): Clause {
   const values = coerceValueList(value, operator, requestId);
   const elementsSql = multipleValueElementsSql(column);
+  const elemExpr = fold ? 'unicode_lower(je.value)' : 'je.value';
+  const valExpr = fold ? 'unicode_lower(?)' : '?';
   const existsOne = (v: string): Clause => ({
     sql: `EXISTS (
       SELECT 1 FROM property_values_v pv, ${elementsSql} je
       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-        AND pv.${column} IS NOT NULL AND je.value = ?)`,
+        AND pv.${column} IS NOT NULL AND ${elemExpr} = ${valExpr})`,
     params: [propertyId, v],
   });
   if (operator === 'all_of') {
@@ -923,15 +1224,1609 @@ function multipleValueSetClause(
     }
     return { sql: parts.join(' AND '), params };
   }
-  const placeholders = values.map(() => '?').join(',');
+  const placeholders = values.map(() => valExpr).join(',');
   const any: Clause = {
     sql: `EXISTS (
       SELECT 1 FROM property_values_v pv, ${elementsSql} je
       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-        AND pv.${column} IS NOT NULL AND je.value IN (${placeholders}))`,
+        AND pv.${column} IS NOT NULL AND ${elemExpr} IN (${placeholders}))`,
     params: [propertyId, ...values],
   };
   return operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
+}
+
+// ---------------------------------------------------------------------------
+// Единый исполнитель AST отбора (задача 9c156b8c)
+// ---------------------------------------------------------------------------
+
+/**
+ * Единый исполнитель дерева AST (тех.проект «Ядро AST и операторы», требование
+ * «Один исполнитель AST для REST, MCP и UI» 76e30d9a). Второго движка нет:
+ * группы сворачиваются булево (И/ИЛИ/НЕ), а каждый лист транслируется в SQL
+ * тем же набором помощников, что и плоские критерии `definition v1`
+ * ({@link propertyClauses}, раскрытие типов, авторские/датовые/предикатные
+ * клаузы). Поэтому одинаковый отбор даёт одинаковый результат во всех контурах.
+ *
+ * Семантика групп:
+ *   * `and` — конъюнкция детей; пустая группа нейтральна (`1=1`);
+ *   * `or` — дизъюнкция детей; пустая группа нейтральна (`0` — вклада не даёт);
+ *   * `not` — отрицание ровно одного ребёнка (гарантировано валидатором формы).
+ */
+
+/** Константа-клауза «истина» (нейтральный элемент `and` и отключённых условий). */
+const AST_TRUE: Clause = { sql: '1=1', params: [] };
+/** Константа-клауза «ложь» (нейтральный элемент `or`). */
+const AST_FALSE: Clause = { sql: '0', params: [] };
+
+/** Операторы сравнения значения/количества с одной границей. */
+const AST_COMPARE_OPS = new Set<FilterAstOperator>(['gt', 'gte', 'lt', 'lte']);
+/** Операторы «между»/«не между» — две границы, включительно. */
+const AST_RANGE_OPS = new Set<FilterAstOperator>(['between', 'not_between']);
+
+/**
+ * Операторы-листья, совместимые со значением-под-выборкой: наборные/ссылочные и
+ * иерархические («под-выборка — набор корней»). Несовместимые (предикаты
+ * количества, «Найти слова», булевы) отвергаются {@link astSubqueryLeafClause} —
+ * значение-под-выборка доступно только на релевантных левых операндах
+ * (требование c088f9e1).
+ */
+const AST_SUBQUERY_LEAF_OPS = new Set<FilterAstOperator>([
+  'in',
+  'not_in',
+  'any_of',
+  'all_of',
+  'none_of',
+  'eq',
+  'ne',
+  // «В иерархии»/«не в иерархии»: под-выборка даёт НАБОР КОРНЕЙ, обход их
+  // поддерева и проверка вхождения — как для списка корней (ошибка f4e99090
+  // п.4). Квантификатор `value.operator` согласован разбором AST
+  // (`SUBQUERY_LEAF_OPERATOR`: `in` ↔ `in_hierarchy`, `not_in` ↔
+  // `not_in_hierarchy`).
+  'in_hierarchy',
+  'not_in_hierarchy',
+]);
+
+/**
+ * Ресурсные предохранители исполнения под-выборок (требование 64c90b05, ADR
+ * 58b501d8). Глубина вложенности моделью НЕ ограничена — это не семантический
+ * лимит, а защита ресурса: при исчерпании — явная ошибка исполнения
+ * (`VALIDATION_ERROR` с `reason`), а не молчаливое усечение. Ширина согласована
+ * с бюджетом обхода иерархии T4 ({@link HIERARCHY_SUBTREE_MAX_NODES}).
+ */
+export const AST_SUBQUERY_MAX_NODES = HIERARCHY_SUBTREE_MAX_NODES;
+/** Предохранитель глубины вложенности под-выборок (стек/SQL-выражение). */
+export const AST_SUBQUERY_MAX_DEPTH = 100;
+
+/** Ошибка «оператор/значение распознаны, но исполнение — отдельная задача ТП». */
+function astUnsupported(what: string, field: string, requestId?: string): never {
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `${what} пока не поддержано доменным исполнителем отбора.`,
+    { field, unsupported: true },
+    requestId,
+  );
+}
+
+/** Операнды, поддерживающие значение-под-выборку (релевантные, требование c088f9e1). */
+const AST_SUBQUERY_SUPPORTED = new Set<FilterAstEntity['kind']>([
+  'property',
+  'parents',
+  'children',
+  'type',
+  // «Мысль» (`id`, задача a577875b): под-выборка — источник КОРНЕЙ
+  // иерархического обхода; наборный оператор тоже исполним (вхождение мысли в
+  // выборку), но UI предлагает под-выборку на «Мысли» только у иерархических
+  // операторов (ошибка f4e99090 п.4).
+  'id',
+]);
+
+/** Релевантные операнды, ждущие под-проекта сущностей (честный unsupported). */
+const AST_SUBQUERY_DEFERRED = new Set<FilterAstEntity['kind']>([
+  'attachments',
+  'chronology',
+  'targets',
+  'link_type',
+]);
+
+// ---------------------------------------------------------------------------
+// Значения-под-выборки: «в (выборке)»/«не в (выборке)»/«все в (выборке)»
+// (задача 8914ac36; требования 485ff29e/c088f9e1/64c90b05, ADR b0cf5433/58b501d8)
+// ---------------------------------------------------------------------------
+
+/** Значение-под-выборка (`{ query, operator }`) в позиции значения листа. */
+function isSubqueryValue(value: FilterAstValue | undefined): value is FilterAstSubqueryValue {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && 'query' in value;
+}
+
+/** Операторы под-выборки как значения: квантификация над набором значений операнда. */
+type SubqueryQuantifier = FilterAstSubqueryValue['operator'];
+
+/**
+ * Материализовать результат под-выборки: под-дерево AST компилируется тем же
+ * {@link filterAstNodeClause} (та же валидация/исполнение, рекурсивно) и
+ * исполняется над `thoughts_v` с предохранителями ресурса. Токены внутри
+ * под-выборки резолвит тот же `tokenContext` (собираются в общий `unresolved`).
+ *
+ * `mode`:
+ *   * `ids` — id выбранных мыслей (свойства-ссылки, «Родители»/«Потомки»);
+ *   * `types` — типы выбранных мыслей (операнд «Тип»: «под-выборка по типам»).
+ *
+ * Предохранители (требование 64c90b05): глубина вложенности и ширина набора
+ * (на одну под-выборку и суммарно за запрос). Исчерпание — явная ошибка, не
+ * молчаливое усечение (ADR 58b501d8).
+ */
+function astSubqueryIdSet(
+  ndb: NetworkDb,
+  subquery: FilterAstSubqueryValue,
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+  mode: 'ids' | 'types' = 'ids',
+): string[] {
+  const depth = astOpts?.subqueryDepth ?? 0;
+  if (depth >= AST_SUBQUERY_MAX_DEPTH) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Глубина вложенности под-выборок превысила предохранитель ресурса (${AST_SUBQUERY_MAX_DEPTH}); упростите отбор.`,
+      { field: `${path}.query`, reason: 'subquery_depth', limit: AST_SUBQUERY_MAX_DEPTH },
+      requestId,
+    );
+  }
+  const childOpts: AstExecOptions = { ...astOpts, subqueryDepth: depth + 1 };
+  const clause = filterAstNodeClause(ndb, subquery.query, `${path}.query`, requestId, childOpts);
+  const select =
+    mode === 'types'
+      ? `SELECT DISTINCT t.type_id AS v FROM thoughts_v t WHERE (${clause.sql}) AND t.type_id IS NOT NULL`
+      : `SELECT t.id AS v FROM thoughts_v t WHERE ${clause.sql}`;
+  const rows = ndb
+    .prepare(`${select} LIMIT ?`)
+    .all(...clause.params, AST_SUBQUERY_MAX_NODES + 1) as Array<{ v: string }>;
+  if (astOpts?.stats !== undefined) astOpts.stats.nodes_walked += rows.length;
+  if (rows.length > AST_SUBQUERY_MAX_NODES) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Под-выборка вернула больше ${AST_SUBQUERY_MAX_NODES} элементов — превышен ресурсный бюджет; сузьте под-выборку.`,
+      { field: `${path}.query`, reason: 'subquery_budget', limit: AST_SUBQUERY_MAX_NODES },
+      requestId,
+    );
+  }
+  const budget = astOpts?.subqueryBudget;
+  if (budget !== undefined) {
+    budget.ids += rows.length;
+    if (budget.ids > AST_SUBQUERY_MAX_NODES) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Суммарный размер под-выборок отбора превысил ресурсный бюджет (${AST_SUBQUERY_MAX_NODES}); упростите отбор.`,
+        { field: `${path}.query`, reason: 'subquery_budget', limit: AST_SUBQUERY_MAX_NODES },
+        requestId,
+      );
+    }
+  }
+  return rows.map((r) => r.v);
+}
+
+/** Клауза `NOT EXISTS (SELECT 1 <fromAndWhere…>)`. */
+function notExistsClause(fromAndWhere: string, params: unknown[]): Clause {
+  return { sql: `NOT EXISTS (SELECT 1 ${fromAndWhere})`, params };
+}
+
+/**
+ * Квантификация набора значений множественного операнда относительно набора
+ * под-выборки: `in` — хотя бы одно значение входит; `not_in` — ни одно; `all_in`
+ * — каждое (вакуумно истинно при отсутствии значений). `base` — фрагмент
+ * `FROM … WHERE owner = t.id …`, `otherCol` — колонка значения (цели рёбер).
+ */
+function subqueryEdgeQuantClause(
+  base: string,
+  typeParams: unknown[],
+  otherCol: string,
+  ids: readonly string[],
+  quant: SubqueryQuantifier,
+): Clause {
+  const membership = astIdInClause(`l.${otherCol}`, ids);
+  const match: Clause = {
+    sql: `EXISTS (SELECT 1 ${base} AND ${membership.sql})`,
+    params: [...typeParams, ...membership.params],
+  };
+  if (quant === 'in') return match;
+  if (quant === 'not_in') return astNegate(match);
+  // all_in: ни одного значения вне набора. Пустой набор — ни одного ребра.
+  if (ids.length === 0) return notExistsClause(base, [...typeParams]);
+  const notIn: Clause = {
+    sql: `l.${otherCol} NOT IN (${ids.map(() => '?').join(',')})`,
+    params: [...ids],
+  };
+  return notExistsClause(`${base} AND ${notIn.sql}`, [...typeParams, ...notIn.params]);
+}
+
+/** Клауза под-выборки по свойству-ссылке (обе стороны, включая обратное имя). */
+function subqueryLinkPropertyClause(
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+  ids: readonly string[],
+  quant: SubqueryQuantifier,
+): Clause {
+  const edges = linkPropertyEdges(def, directionRef);
+  if (edges === null) return quant === 'in' ? AST_FALSE : AST_TRUE;
+  const base = `FROM links_v l
+      WHERE l.${edges.ownerCol} = t.id AND ${edges.typeSql}
+        AND l.active = 1 AND l.marked_for_deletion = 0`;
+  return subqueryEdgeQuantClause(base, edges.typeParams, edges.targetCol, ids, quant);
+}
+
+/** Клауза под-выборки по структурным «Родители»/«Потомки» (живые нетипизированные рёбра). */
+function subqueryStructuralClause(
+  kind: 'parents' | 'children',
+  ids: readonly string[],
+  quant: SubqueryQuantifier,
+): Clause {
+  const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
+  const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
+  const base = `FROM links_v l
+      WHERE l.${ownCol} = t.id AND l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL`;
+  return subqueryEdgeQuantClause(base, [], otherCol, ids, quant);
+}
+
+/** Клауза под-выборки по одиночному операнду «Тип» (тип мысли против id-набора). */
+function subqueryTypeClause(ids: readonly string[], quant: SubqueryQuantifier): Clause {
+  if (ids.length === 0) return quant === 'in' ? AST_FALSE : AST_TRUE;
+  const placeholders = ids.map(() => '?').join(',');
+  if (quant === 'in') return { sql: `t.type_id IN (${placeholders})`, params: [...ids] };
+  // not_in: тип не задан либо не входит в набор (NULL не «входит»).
+  return {
+    sql: `(t.type_id IS NULL OR t.type_id NOT IN (${placeholders}))`,
+    params: [...ids],
+  };
+}
+
+/**
+ * Лист со значением-под-выборкой. Сначала проверяется релевантность левого
+ * операнда (требование c088f9e1): нерелевантные — явная ошибка; релевантные, но
+ * ждущие под-проекта сущностей (вложения/дневник/цели/тип связи) — честный
+ * `unsupported`. Затем квантификация `value.operator` (`in`/`not_in`/`all_in`);
+ * `all_in` применим только к множественным операндам («Тип» — одиночный).
+ */
+function astSubqueryLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  const entity = leaf.entity;
+  // 1. Релевантность левого операнда (требование c088f9e1).
+  if (AST_SUBQUERY_DEFERRED.has(entity.kind)) {
+    astUnsupported(`Исполнение под-выборки на операнде «${entity.kind}»`, `${path}.value`, requestId);
+  }
+  if (!AST_SUBQUERY_SUPPORTED.has(entity.kind)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Значение-под-выборка недоступно на операнде «${entity.kind}».`,
+      { field: `${path}.value`, operand: entity.kind, relevant: false },
+      requestId,
+    );
+  }
+  // 2. Совместимость оператора-листа (наборные/ссылочные, не предикаты).
+  if (!AST_SUBQUERY_LEAF_OPS.has(leaf.operator)) {
+    astUnsupported(`Оператор «${leaf.operator}» со значением-под-выборкой`, `${path}.operator`, requestId);
+  }
+  const subquery = leaf.value as FilterAstSubqueryValue;
+  const quant = subquery.operator;
+  // «В иерархии»/«не в иерархии» со значением-под-выборкой: под-выборка даёт
+  // НАБОР КОРНЕЙ, а исполнение обходит их поддерево общим механизмом и
+  // проверяет вхождение значения операнда (ошибка f4e99090 п.4, требование
+  // 485ff29e — иерархический случай). Режим обхода — только структурный
+  // (карточка a577875b: «выбери эти мысли и их потомков»).
+  const hierarchy = leaf.operator === 'in_hierarchy' || leaf.operator === 'not_in_hierarchy';
+
+  switch (entity.kind) {
+    case 'property': {
+      const propertyRef = entity.property_id ?? entity.property;
+      const ref = propertyRef === undefined ? null : resolveConditionPropertyRef(ndb, propertyRef, requestId);
+      if (ref === null) return NO_MATCH_CLAUSE;
+      const def = lookupPropertyRow(ndb, ref.propertyId);
+      if (def === null) return NO_MATCH_CLAUSE;
+      if (def.value_type !== 'link') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Значение-под-выборка доступно только на ссылочных операндах; свойство типа ${def.value_type} — не ссылка.`,
+          { field: `${path}.value`, operand: 'property', value_type: def.value_type },
+          requestId,
+        );
+      }
+      let ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      // «В иерархии»: значения свойства проверяются против поддерева корней из
+      // под-выборки — тем же обходом, что у списка корней.
+      if (hierarchy) {
+        ids = astHierarchySubtree(ndb, 'structural', ids, astOpts, `${path}.value`, requestId);
+      }
+      const directionRef = entity.direction ?? ref.direction;
+      return subqueryLinkPropertyClause(def, directionRef, ids, quant);
+    }
+    case 'parents':
+    case 'children': {
+      const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      if (hierarchy) {
+        // Корни поддерева — результат под-выборки; обход и проверка вхождения —
+        // общим листом «в иерархии» (ровно как для списка корней).
+        return hierarchyStructuralLeafClause(
+          ndb,
+          entity.kind,
+          { ...leaf, value: ids },
+          astOpts,
+          `${path}.value`,
+          requestId,
+        );
+      }
+      return subqueryStructuralClause(entity.kind, ids, quant);
+    }
+    case 'id': {
+      // «Мысль» со значением-под-выборкой: наборный оператор — вхождение мысли
+      // в выборку; иерархический — в поддерево мыслей выборки (R ∪ subtree(R)).
+      const ids = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId);
+      if (hierarchy) {
+        const subtree = astHierarchySubtree(ndb, 'structural', ids, astOpts, `${path}.value`, requestId);
+        const match = astIdInClause('t.id', subtree);
+        return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+      }
+      if (quant === 'all_in') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Оператор «все в (выборке)» применим только к множественным операндам; «Мысль» — одиночный.',
+          { field: `${path}.value.operator`, operand: 'id' },
+          requestId,
+        );
+      }
+      const match = astIdInClause('t.id', ids);
+      return quant === 'in' ? match : astNegate(match);
+    }
+    case 'type': {
+      if (quant === 'all_in') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Оператор «все в (выборке)» применим только к множественным операндам; «Тип» — одиночный.',
+          { field: `${path}.value.operator`, operand: 'type' },
+          requestId,
+        );
+      }
+      // «Тип» — одиночный операнд: под-выборка по типам (типы выбранных мыслей).
+      const typeIds = astSubqueryIdSet(ndb, subquery, astOpts, path, requestId, 'types');
+      if (hierarchy) {
+        // «В иерархии» по типу — тип и его подтипы из набора типов выборки.
+        return hierarchyTypeLeafClause(ndb, { ...leaf, value: typeIds }, `${path}.value`, requestId);
+      }
+      return subqueryTypeClause(typeIds, quant);
+    }
+    default:
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Неизвестный операнд значения-под-выборки.',
+        { field: `${path}.entity` },
+        requestId,
+      );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Операторы «в иерархии»/«не в иерархии» (задача e62aa4db)
+// ---------------------------------------------------------------------------
+
+/** Режим обхода листа «в иерархии»: явный `mode` либо структурный по умолчанию. */
+function astHierarchyMode(leaf: FilterAstLeaf): FilterAstHierarchyMode {
+  return leaf.mode ?? 'structural';
+}
+
+/**
+ * Поддерево «в иерархии» от корней `roots` в заданном режиме, с кэшем в
+ * пределах одного исполнения запроса (ADR 588be3f3, п. 4). Превышение
+ * ресурсного бюджета — явная ошибка исполнения: молча усекать отбор запрещено
+ * (ADR 58b501d8 «неограниченная глубина вложенности»).
+ */
+function astHierarchySubtree(
+  ndb: NetworkDb,
+  mode: FilterAstHierarchyMode,
+  roots: string[],
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+): string[] {
+  const cache = astOpts?.hierarchyCache;
+  const key = `${mode}|${roots.join('\u0000')}`;
+  const cached = cache?.get(key);
+  if (cached !== undefined) return cached;
+  if (astOpts?.stats !== undefined) astOpts.stats.hierarchy_calls += 1;
+  const res = collectHierarchySubtree(ndb, roots, mode, {
+    maxDepth: TRAVERSAL_DEFAULTS.MAX_DEPTH,
+    maxNodes: HIERARCHY_SUBTREE_MAX_NODES,
+    timeoutMs: TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS,
+  });
+  if (astOpts?.stats !== undefined) astOpts.stats.nodes_walked += res.ids.length;
+  if (res.truncated) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Обход «в иерархии» прерван: превышен ресурсный бюджет ' +
+        (res.reason === 'timeout' ? '(время)' : '(число узлов)') +
+        '; сузьте набор корней или глубину отбора.',
+      {
+        field: path,
+        reason: 'hierarchy_budget',
+        limit: res.reason === 'timeout' ? TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS : HIERARCHY_SUBTREE_MAX_NODES,
+      },
+      requestId,
+    );
+  }
+  if (cache !== undefined) cache.set(key, res.ids);
+  return res.ids;
+}
+
+/** Клауза вхождения в список id (`IN`); пустой список — «нет совпадений». */
+function astIdInClause(columnExpr: string, ids: readonly string[]): Clause {
+  if (ids.length === 0) return AST_FALSE;
+  return { sql: `${columnExpr} IN (${ids.map(() => '?').join(',')})`, params: [...ids] };
+}
+
+/**
+ * Лист «в иерархии» по структурным «Родители»/«Потомки»: значение операнда
+ * (родитель/потомок мысли) входит в поддерево указанных корней (требование
+ * aa7a2aea). Режим обхода — `leaf.mode`: `structural` — только живые
+ * нетипизированные рёбра, `all_links` — любая живая связь считается
+ * родительской (ADR df23db45).
+ */
+function hierarchyStructuralLeafClause(
+  ndb: NetworkDb,
+  kind: 'parents' | 'children',
+  leaf: FilterAstLeaf,
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+): Clause {
+  const roots = astStringList(leaf.value, leaf.operator, path, requestId);
+  if (roots.length === 0) return leaf.operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+  const mode = astHierarchyMode(leaf);
+  const subtree = astHierarchySubtree(ndb, mode, roots, astOpts, path, requestId);
+  const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
+  const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
+  const edge =
+    mode === 'structural'
+      ? 'l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL'
+      : 'l.active = 1 AND l.marked_for_deletion = 0';
+  const membership = astIdInClause(`l.${otherCol}`, subtree);
+  const match: Clause = {
+    sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.${ownCol} = t.id AND ${edge} AND ${membership.sql})`,
+    params: membership.params,
+  };
+  return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+}
+
+/**
+ * Лист «в иерархии» по операнду «Тип»: тип мысли входит в поддерево указанных
+ * типов-корней (сам тип и его подтипы, ADR 9a356460); режим связей неприменим.
+ */
+function hierarchyTypeLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const roots = astStringList(leaf.value, leaf.operator, path, requestId);
+  const expanded = roots.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', roots);
+  const match = astIdInClause('t.type_id', expanded);
+  return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
+}
+
+/**
+ * Контекст разрешения токенов AST-листа (требование 1b77decd / ADR 0c02ab4f).
+ * `nowMs` — часы в миллисекундах (сериализуемо: тот же объект уходит в
+ * читающий пул, функция-часы через границу воркера не проходит). `userId` —
+ * владелец ключа для `$user`. `firstDayOfWeek` — настройка сети «первый день
+ * недели» (ISO 1=пн … 7=вс) для `$weekStart`/`$weekEnd`. `withTime` — профиль
+ * со временем (разрешает `$now`/`$hourStart`/`$hourEnd` и `h`/`mi`).
+ */
+export interface AstTokenContext {
+  nowMs?: number;
+  userId?: string;
+  firstDayOfWeek?: number;
+  withTime?: boolean;
+}
+
+/** Собрать опции резолвера из {@link AstTokenContext}. */
+function astResolveOptions(ctx: AstTokenContext | undefined): {
+  now?: () => Date;
+  userId?: string;
+  firstDayOfWeek?: number;
+  withTime?: boolean;
+} {
+  const out: { now?: () => Date; userId?: string; firstDayOfWeek?: number; withTime?: boolean } = {};
+  if (ctx?.nowMs !== undefined) out.now = () => new Date(ctx.nowMs!);
+  if (ctx?.userId !== undefined) out.userId = ctx.userId;
+  if (ctx?.firstDayOfWeek !== undefined) out.firstDayOfWeek = ctx.firstDayOfWeek;
+  if (ctx?.withTime !== undefined) out.withTime = ctx.withTime;
+  return out;
+}
+
+/**
+ * Разрешить одно значение-токен (`{ token: "$today+7d" }`) в скаляр. Возврат
+ * `{ ok: false }` — токен неразрешим (`unresolved` уже собран в `sink`).
+ */
+function astResolveToken(
+  token: string,
+  ctx: AstTokenContext | undefined,
+  sink: TokenIssue[] | undefined,
+  path: string,
+): { ok: boolean; value?: FilterAstScalar } {
+  const res = resolveGlobalDateTokens(token, astResolveOptions(ctx));
+  if (res.unresolved.length > 0) {
+    if (sink !== undefined) {
+      for (const issue of res.unresolved) sink.push({ ...issue, path });
+    }
+    return { ok: false };
+  }
+  return { ok: true, value: res.value };
+}
+
+/**
+ * Датовые ОПЕРАНДЫ профиля мыслей: их границы принимают токен и в форме
+ * `{ token }`, и СТРОКОЙ (`"$weekStart"`) — вторая форма приходит из плоского
+ * тела `updated_after`/`created_after` и из сохранённых плоских определений
+ * (`definition v1` хранит токен строкой). Паритет с профилем хроники, где
+ * граница периода принимает обе формы (`astTokenOrString` + `resolvePeriodField`
+ * в `chronicle-service.ts`). У датового операнда строка целиком — значение
+ * границы, поэтому через резолвер идёт ЛЮБАЯ строка (в т.ч. смешанный текст с
+ * токеном).
+ */
+const AST_STRING_TOKEN_KINDS: ReadonlySet<string> = new Set(['created_at', 'updated_at']);
+
+/**
+ * Режим раскрытия СТРОКОВОГО значения листа как токена:
+ *
+ *   * `none` — строка есть литерал значения (текст, id, слова — операнды, не
+ *     перечисленные ниже);
+ *   * `pure` — строка раскрывается, только если ЦЕЛИКОМ равна одному известному
+ *     токену: значение-свойство хранит и обычный текст (в т.ч. начинающийся с
+ *     `$`), поэтому `$word`-мусор остаётся литералом, а не неразрешимым токеном;
+ *   * `all` — любая строка проходит через резолвер (датовые границы; см.
+ *     {@link AST_STRING_TOKEN_KINDS}).
+ */
+type AstStringTokenMode = 'none' | 'pure' | 'all';
+
+/**
+ * Операнды, строковое значение которых может быть токеном в форме РЕЖИМА `pure`
+ * (строка-целиком-известный-токен): полиморфное «Свойство», авторские операнды
+ * «Автор»/«Редактор», полнотекстовый «Найти слова» и операнды-ИДЕНТИФИКАТОРЫ
+ * («Мысль» `id`, структурные «Родители»/«Потомки», «Тип», «Тип связи»). Их
+ * строковое значение в плоской форме `definition v1` и в плоском теле точки
+ * хранит токен СТРОКОЙ (`"$thought"`, `"$user"`, `"$today"`), и такая строка
+ * обязана раскрыться (ошибки d52e4d79 — свойство-связь, cc3d — автор/редактор,
+ * d166cfe9 — «Найти слова», 5a855ef8 — операнды-идентификаторы), но обычный
+ * текст/ид с ведущим `$`, не совпавший целиком с известным токеном, остаётся
+ * ЛИТЕРАЛОМ (для «Найти слова» это ещё и сохраняет мини-синтаксис §6.10: строка с
+ * примесью текста или пробелами токеном не является). Значения операндов-
+ * идентификаторов — UUID (id мысли/типа/типа связи), с `$` начинаться не могут,
+ * поэтому расширение режима `pure` на них безопасно и не задевает легитимные
+ * литералы: строка-токен раскрывается как объектная форма (`unresolved` у
+ * неизвестного токена), а `$…`-мусор остаётся литералом. Режим `pure`
+ * восстанавливает паритет клиентского зеркала
+ * (`compileFlatCriteriaToAst`/`flatKeywordLeaf` оборачивают одиночный `$…`-токен
+ * в `{ token }`) и плоского резолвера типовых отборов
+ * (`resolveTokensInDefinition`) с серверным AST-движком.
+ */
+const AST_PURE_STRING_TOKEN_KINDS: ReadonlySet<string> = new Set([
+  'property',
+  'author',
+  'editor',
+  'keywords',
+  'id',
+  'parents',
+  'children',
+  'type',
+  'link_type',
+]);
+
+/**
+ * Режим строковых токенов для листа. Операнды-СВОЙСТВО, авторские операнды,
+ * полнотекстовый «Найти слова» и операнды-ИДЕНТИФИКАТОРЫ (`id`/`parents`/
+ * `children`/`type`/`link_type`) — `pure`: плоская форма `definition v1`, плоское
+ * тело точки и клиент хранят значение-токен СТРОКОЙ (`"$thought"`, `["$user"]`,
+ * `"$today"`), и такая строка обязана раскрыться (ошибки d52e4d79, cc3d,
+ * d166cfe9, 5a855ef8), но текст/ид с ведущим `$`, не совпавший ЦЕЛИКОМ с
+ * известным токеном, токеном не является. Прочие операнды (булевы предикаты,
+ * коллекции-вложения, «количество», «Имеет свойство») строку-токен не раскрывают:
+ * у них она и есть литерал значения (токена, дающего id свойства, не существует).
+ */
+function astStringTokenMode(leaf: FilterAstLeaf): AstStringTokenMode {
+  if (AST_STRING_TOKEN_KINDS.has(leaf.entity.kind)) return 'all';
+  if (AST_PURE_STRING_TOKEN_KINDS.has(leaf.entity.kind)) return 'pure';
+  return 'none';
+}
+
+/**
+ * `true`, если строка ЦЕЛИКОМ является одним ИЗВЕСТНЫМ токеном (без примеси
+ * текста и без неизвестных `$…`-фрагментов). Только такие строки операнда-
+ * свойства трактуются как токен в режиме `pure`.
+ */
+function isPureKnownTokenString(value: string): boolean {
+  const { known, unknown } = scanStringForTokens(value);
+  return unknown.length === 0 && known.length === 1 && value === known[0]!.raw;
+}
+
+/**
+ * Разрешить токены в значении листа. Скаляр/список литералов — как есть;
+ * одиночный токен и токены-элементы СПИСКА (границы «между») — раскрываются.
+ * Возврат `{ ok: false }` — хоть один токен неразрешим (`unresolved` собран в
+ * `sink`), лист даёт `false`. Требование 84b52caa (каждая граница — токен).
+ *
+ * `mode` (см. {@link AstStringTokenMode}) решает, раскрывается ли СТРОКОВОЕ
+ * значение: у датовых операндов (`all`) — любая строка, у операнда-свойства
+ * (`pure`) — строка-целиком-токен, иначе строка-без-токенов возвращается как
+ * есть. Без этого плоский `updated_after: "$weekStart"` сравнивался ЛИТЕРАЛЬНО
+ * (ошибка 99e7889d), а строковый токен в значении свойства-связи не раскрывался
+ * и падал валидацией типа (ошибка d52e4d79).
+ */
+function astResolveLeafValue(
+  value: FilterAstValue | undefined,
+  ctx: AstTokenContext | undefined,
+  sink: TokenIssue[] | undefined,
+  path: string,
+  mode: AstStringTokenMode = 'none',
+): { ok: boolean; value?: FilterAstValue } {
+  const stringIsToken = (s: string): boolean =>
+    mode === 'all' || (mode === 'pure' && isPureKnownTokenString(s));
+  if (Array.isArray(value)) {
+    const out: FilterAstListItem[] = [];
+    for (let i = 0; i < value.length; i += 1) {
+      const el = value[i]!;
+      if (typeof el === 'object' && el !== null && 'token' in el) {
+        const r = astResolveToken(el.token, ctx, sink, `${path}.value[${i}]`);
+        if (!r.ok) return { ok: false };
+        out.push(r.value!);
+      } else if (typeof el === 'string' && stringIsToken(el)) {
+        const r = astResolveToken(el, ctx, sink, `${path}.value[${i}]`);
+        if (!r.ok) return { ok: false };
+        out.push(r.value!);
+      } else {
+        out.push(el);
+      }
+    }
+    return { ok: true, value: out };
+  }
+  if (typeof value === 'object' && value !== null && 'token' in value) {
+    const r = astResolveToken(value.token, ctx, sink, `${path}.value`);
+    if (!r.ok) return { ok: false };
+    return { ok: true, value: r.value };
+  }
+  if (typeof value === 'string' && stringIsToken(value)) {
+    const r = astResolveToken(value, ctx, sink, `${path}.value`);
+    if (!r.ok) return { ok: false };
+    return { ok: true, value: r.value };
+  }
+  return { ok: true, value };
+}
+
+// ---------------------------------------------------------------------------
+// Операторы AST: предикаты количества, сравнения, «имеет свойство» (aee021c8)
+// ---------------------------------------------------------------------------
+
+/** Отрицание клаузы (общий помощник «не»-операторов и предикатов). */
+function astNegate(clause: Clause): Clause {
+  return { sql: `NOT (${clause.sql})`, params: clause.params };
+}
+
+/**
+ * Числовая граница предиката «количество» — число либо числовая строка
+ * (поля-счётчики приходят числами; строковая форма допускается как щадящая).
+ */
+function astCountNumber(value: FilterAstValue | undefined, path: string, requestId?: string): number {
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(n)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Оператор «количество» требует числового значения.',
+      { field: path },
+      requestId,
+    );
+  }
+  return n;
+}
+
+/** Две числовые границы «между» (включительно). */
+function astCountRange(value: FilterAstValue | undefined, path: string, requestId?: string): [number, number] {
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Оператор «между» требует ровно две границы.',
+      { field: path },
+      requestId,
+    );
+  }
+  return [astCountNumber(value[0], path, requestId), astCountNumber(value[1], path, requestId)];
+}
+
+/**
+ * Предикат «количество»: сравнение числа значений операнда (скалярный
+ * подзапрос `countSql`, параметры — `countParams`) с числовой границей
+ * {@link FilterAstLeaf.value}. Числовые операторы ядра (равно/не равно,
+ * больше/меньше/…, «между»); `is_empty`/`not_empty` выражают «количество = 0» /
+ * «количество > 0». Ноль допустим.
+ */
+function countLeafClause(
+  countSql: string,
+  countParams: unknown[],
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const expr = `(${countSql})`;
+  const op = leaf.operator;
+  if (op === 'between' || op === 'not_between') {
+    const [lo, hi] = astCountRange(leaf.value, `${path}.value`, requestId);
+    const low: Clause = { sql: `${expr} >= ?`, params: [...countParams, lo] };
+    const high: Clause = { sql: `${expr} <= ?`, params: [...countParams, hi] };
+    const between: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return op === 'between' ? between : astNegate(between);
+  }
+  if (op === 'is_empty' || op === 'not_empty') {
+    return op === 'is_empty'
+      ? { sql: `${expr} = 0`, params: [...countParams] }
+      : { sql: `${expr} > 0`, params: [...countParams] };
+  }
+  const cmp =
+    op === 'eq' ? '=' :
+    op === 'ne' ? '<>' :
+    op === 'gt' ? '>' :
+    op === 'gte' ? '>=' :
+    op === 'lt' ? '<' :
+    op === 'lte' ? '<=' :
+    null;
+  if (cmp === null) astUnsupported(`Оператор «${op}» для количества`, path, requestId);
+  const n = astCountNumber(leaf.value, `${path}.value`, requestId);
+  return { sql: `${expr} ${cmp} ?`, params: [...countParams, n] };
+}
+
+/**
+ * Скалярный подзапрос `COUNT(*)` по коллекции мысли. Структурные
+ * «Родители»/«Потомки» считают только живые нетипизированные рёбра — ровно как
+ * {@link structuralLeafClause} (типизированные рёбра — режим «все типы связей»,
+ * отдельная задача e62aa4db).
+ */
+function collectionCountSql(kind: 'parents' | 'children' | 'attachments' | 'chronology'): string {
+  switch (kind) {
+    case 'parents':
+      return `SELECT COUNT(*) FROM links_v l WHERE l.target_id = t.id AND l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL`;
+    case 'children':
+      return `SELECT COUNT(*) FROM links_v l WHERE l.source_id = t.id AND l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL`;
+    case 'attachments':
+      return `SELECT COUNT(*) FROM attachments_v a WHERE a.owner_type = 'thought' AND a.owner_id = t.id`;
+    case 'chronology':
+      return `SELECT COUNT(*) FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological'`;
+  }
+}
+
+/**
+ * Лист коллекции: bool-предикаты наличия (`да/нет/не важно`,
+ * `заполнено/не заполнено`) либо предикат количества, когда оператор числовой
+ * или значение — число (требование bd0348b3, «количество»).
+ */
+function collectionLeafClause(
+  kind: 'parents' | 'children' | 'attachments' | 'chronology',
+  existsSql: string,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const op = leaf.operator;
+  const isCount =
+    AST_RANGE_OPS.has(op) ||
+    AST_COMPARE_OPS.has(op) ||
+    (typeof leaf.value === 'number' && (op === 'eq' || op === 'ne'));
+  if (isCount) return countLeafClause(collectionCountSql(kind), [], leaf, path, requestId);
+  return boolPresenceClause(existsSql, leaf, path, requestId);
+}
+
+/**
+ * Сравнение скалярного значения свойства (числа, даты, строки — лексикографически)
+ * и «между» (обе границы включительны): EXISTS по колонке значения. Требование
+ * 25324388.
+ */
+function scalarCompareClause(
+  def: RegistryPropertyRow,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const column = VALUE_COLUMN[def.value_type];
+  // Текст — регистронезависимо, включая строковые «больше/меньше» (ADR 9779dd21).
+  const fold = foldsCase(def);
+  const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+  const rhs = fold ? 'unicode_lower(?)' : '?';
+  const one = (op: 'gte' | 'lte' | 'gt' | 'lt' | 'eq', value: FilterAstScalar): Clause => {
+    const cmp = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : op === 'lte' ? '<=' : '=';
+    // Датовое свойство: включительная верхняя граница-«голая дата» — конец
+    // суток UTC (требование 469d8d69); числа и строки не трогаются.
+    const bound: FilterAstScalar =
+      op === 'lte' && def.value_type === 'date' && typeof value === 'string'
+        ? expandInclusiveDateUpper(value.trim())
+        : value;
+    return {
+      sql: `EXISTS (
+        SELECT 1 FROM property_values_v pv
+        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+          AND ${lhs} ${cmp} ${rhs})`,
+      params: [def.id, sqlScalar(def, bound, requestId)],
+    };
+  };
+  const op = leaf.operator;
+  if (op === 'between' || op === 'not_between') {
+    if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Оператор «между» требует ровно две границы.',
+        { field: `${path}.value` },
+        requestId,
+      );
+    }
+    const low = one('gte', leaf.value[0] as FilterAstScalar);
+    const high = one('lte', leaf.value[1] as FilterAstScalar);
+    const between: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return op === 'between' ? between : astNegate(between);
+  }
+  return one(op as 'gt' | 'gte' | 'lt' | 'lte', leaf.value as FilterAstScalar);
+}
+
+/**
+ * Предикат «количество» по свойству-связи — число живых рёбер заданной стороны
+ * (обе стороны свойства, требование bd0348b3). Направление — переопределение
+ * операнда, затем имя стороны, затем `config` (единая точка —
+ * {@link linkPropertyDirection}).
+ */
+function linkPropertyCountClause(
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  let config: PropertyConfig | null = null;
+  if (def.config !== null) {
+    try {
+      config = JSON.parse(def.config) as PropertyConfig;
+    } catch {
+      config = null;
+    }
+  }
+  const structural = isStructuralLinkProperty(config);
+  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
+  if (!structural && linkTypeId === null) return AST_FALSE;
+  const direction = directionRef ?? linkPropertyDirection(config);
+  const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
+  const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+  const typeParams = linkTypeId === null ? [] : [linkTypeId];
+  const countSql = `SELECT COUNT(*) FROM links_v l WHERE l.${ownerCol} = t.id AND ${typeSql}
+    AND l.active = 1 AND l.marked_for_deletion = 0`;
+  return countLeafClause(countSql, [...typeParams], leaf, path, requestId);
+}
+
+/**
+ * Предикат «количество» по множественному скалярному свойству: число элементов
+ * значения (JSON-массив `["a","b"]` — `json_array_length`; comma-joined
+ * `"a, b"` — по разделителю `", "`). Требование bd0348b3.
+ */
+function multiplePropertyCountClause(
+  def: RegistryPropertyRow,
+  column: string,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  // COALESCE → 0: отсутствие значения = пустой набор (требование bd0348b3),
+  // иначе скалярный подзапрос без строк давал NULL, и «количество = 0» /
+  // «не заполнено» не срабатывали для мысли без значения.
+  const countSql = `SELECT COALESCE((
+      SELECT CASE
+        WHEN pv.${column} IS NULL OR pv.${column} = '' THEN 0
+        WHEN pv.${column} LIKE '[%' THEN json_array_length(pv.${column})
+        ELSE (length(pv.${column}) - length(replace(pv.${column}, ', ', ''))) / 2 + 1
+      END
+      FROM property_values_v pv
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+    ), 0)`;
+  return countLeafClause(countSql, [def.id], leaf, path, requestId);
+}
+
+/**
+ * Множество типов мыслей, в эффективном наборе свойств которых (по цепочке типа
+ * с наследованием, включая зеркала) есть хотя бы одно из `propertyIds`.
+ * Требование bd0348b3 («имеет свойство» для операнда «Тип»).
+ */
+function typeIdsWithEffectiveProperty(ndb: NetworkDb, propertyIds: readonly string[]): string[] {
+  const wanted = new Set(propertyIds);
+  const out: string[] = [];
+  for (const node of listTypeNodes(ndb, 'thought_types')) {
+    const effective = listEffectiveTypeProperties(ndb, 'thought_type', node.id);
+    if (effective.some((d) => wanted.has(d.property_id))) out.push(node.id);
+  }
+  return out;
+}
+
+/** Минимальная строка реестра свойства (id + природа) для листа AST. */
+function lookupPropertyRow(ndb: NetworkDb, propertyId: string): RegistryPropertyRow | null {
+  const raw = ndb
+    .prepare('SELECT id, value_type, config FROM properties_v WHERE id = ?')
+    .get(propertyId) as { id: string; value_type: string; config: string | null } | undefined;
+  if (raw === undefined) return null;
+  return { id: raw.id, value_type: raw.value_type as PropertyValueType, config: raw.config };
+}
+
+/**
+ * Опции исполнения AST, задаваемые ВСТРАИВАЮЩИМ вызовом (не критерий выборки).
+ * Живут отдельно от {@link AstExecOptions}, чтобы передаваться в
+ * {@link buildThoughtIdSelect} от чужого исполнителя (хроника).
+ */
+export interface AstExecContextOptions {
+  /**
+   * Область `comment` листа «Найти слова» ищет и комментарии инцидентных связей
+   * мысли с обеих сторон — семантика ФАЗЫ 1 отбора хроники (требование
+   * ce111b0d «Двухфазный отбор хроники…»; ошибка fc97548d — паритет AST-листа с
+   * плоским `keyword_scope`). Ставит исполнитель хроники; отбор мыслей
+   * (`POST /thoughts/query`, требование b363cad1) опцию не ставит.
+   */
+  keywordCommentIncludesLinkComments?: boolean;
+}
+
+/** Опции исполнения AST-листьев: контекст токенов и коллектор неразрешимых. */
+interface AstExecOptions extends AstExecContextOptions {
+  ctx?: AstTokenContext;
+  unresolved?: TokenIssue[];
+  /**
+   * Кэш поддерева «в иерархии» в пределах одного исполнения запроса
+   * (ключ — режим + список корней). Поддерево не зависит от мысли-кандидата и
+   * считается один раз на условие (ADR 588be3f3, п. 4).
+   */
+  hierarchyCache?: Map<string, string[]>;
+  /** Текущая глубина вложенности под-выборок (ресурсный предохранитель, 64c90b05). */
+  subqueryDepth?: number;
+  /** Общий на запрос счётчик материализованных id под-выборок (бюджет ширины). */
+  subqueryBudget?: { ids: number };
+  /**
+   * Мутируемые счётчики статистики исполнения (требование 0f34a5ff). Присутствует
+   * ТОЛЬКО когда фасад запросил `collectStats` — тогда счётчики доступны во всех
+   * ветках обхода; иначе `undefined`, и инкременты пропускаются (нет накладных
+   * расходов при выключенном логировании).
+   */
+  stats?: {
+    conditions: number;
+    nodes_walked: number;
+    hierarchy_calls: number;
+    limits_hit: Set<string>;
+  };
+}
+
+/** Свернуть дерево AST в один SQL-предикат над `thoughts_v t`. */
+export function filterAstClause(
+  ndb: NetworkDb,
+  ast: FilterAst,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  return filterAstNodeClause(ndb, ast.filter, 'filter', requestId, astOpts);
+}
+
+function filterAstNodeClause(
+  ndb: NetworkDb,
+  node: FilterAstNode,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  if ('op' in node) {
+    if (node.op === 'not') {
+      const child = filterAstNodeClause(ndb, node.children[0]!, `${path}.children[0]`, requestId, astOpts);
+      return { sql: `NOT (${child.sql})`, params: child.params };
+    }
+    if (node.children.length === 0) return node.op === 'and' ? AST_TRUE : AST_FALSE;
+    const parts = node.children.map((child, i) =>
+      filterAstNodeClause(ndb, child, `${path}.children[${i}]`, requestId, astOpts),
+    );
+    const sql = parts.map((p) => `(${p.sql})`).join(node.op === 'and' ? ' AND ' : ' OR ');
+    return { sql: `(${sql})`, params: parts.flatMap((p) => p.params) };
+  }
+  return filterAstLeafClause(ndb, node, path, requestId, astOpts);
+}
+
+function filterAstLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  // Условие попало в план обхода — считаем его (только при сборе статистики).
+  if (astOpts?.stats !== undefined) astOpts.stats.conditions += 1;
+  // Токен-значение раскрывается сервером; неразрешимый — лист даёт false и
+  // уходит в коллектор (требование b7fdab20 «пустой результат с пояснением»).
+  // У датовых операндов раскрывается и строковая форма токена (ошибка 99e7889d),
+  // у операнда-свойства — строка-целиком-токен (ошибка d52e4d79).
+  const resolved = astResolveLeafValue(
+    leaf.value,
+    astOpts?.ctx,
+    astOpts?.unresolved,
+    path,
+    astStringTokenMode(leaf),
+  );
+  if (!resolved.ok) return AST_FALSE;
+  if (resolved.value !== leaf.value) leaf = { ...leaf, value: resolved.value };
+  // «Между» с обеими совпавшими границами (одиночный скаляр, в т.ч. раскрытый
+  // токен) — эквивалент равенства (сценарий cbc22d19, шаг 3, границы включительны).
+  if (
+    (leaf.operator === 'between' || leaf.operator === 'not_between') &&
+    (typeof leaf.value === 'string' || typeof leaf.value === 'number')
+  ) {
+    leaf = { ...leaf, value: [leaf.value, leaf.value] };
+  }
+  // `eq`/`ne` с ОДНОЭЛЕМЕНТНЫМ списком — эквивалент скаляра: клиент и плоская
+  // форма хранят значение-ссылку списком и на одиночном операторе (напр.
+  // `["$thought"]`), а движок читает такой лист как одиночное значение, а не
+  // отвергает валидацией типа (ошибка d52e4d79).
+  if (
+    (leaf.operator === 'eq' || leaf.operator === 'ne') &&
+    Array.isArray(leaf.value) &&
+    leaf.value.length === 1
+  ) {
+    leaf = { ...leaf, value: leaf.value[0] };
+  }
+  if (isSubqueryValue(leaf.value)) {
+    return astSubqueryLeafClause(ndb, leaf, path, requestId, astOpts);
+  }
+  const { entity, operator } = leaf;
+  const opPath = `${path}.operator`;
+
+  switch (entity.kind) {
+    case 'id': {
+      // «В иерархии» по «Мысли»: выбранные мысли (R) и ВСЕ их потомки по
+      // структурным связям — R ∪ subtree(R) (задача a577875b). Механизм обхода
+      // от корней — общий ({@link astHierarchySubtree}); режим связей неприменим
+      // (карточка задачи: только структурные потомки), `leaf.mode` игнорируется.
+      if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+        const roots = astStringList(leaf.value, operator, `${path}.value`, requestId);
+        if (roots.length === 0) return operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+        const subtree = astHierarchySubtree(ndb, 'structural', roots, astOpts, `${path}.value`, requestId);
+        const match = astIdInClause('t.id', subtree);
+        return operator === 'in_hierarchy' ? match : astNegate(match);
+      }
+      // Тождественность мысли: явный список id (операторы eq/ne/in/not_in).
+      const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
+      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+        astUnsupported(`Оператор «${operator}» для операнда «Тождественность»`, opPath, requestId);
+      }
+      const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      if (list.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const match: Clause = {
+        sql: `t.id IN (${list.map(() => '?').join(',')})`,
+        params: [...list],
+      };
+      return operator === 'in' || operator === 'eq' ? match : astNegate(match);
+    }
+
+    case 'property':
+      return propertyLeafClause(ndb, leaf, `${path}.entity`, requestId, astOpts);
+
+    case 'type': {
+      // «В иерархии» по типу: тип и его подтипы (ADR 9a356460).
+      if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+        return hierarchyTypeLeafClause(ndb, leaf, `${path}.value`, requestId);
+      }
+      // «Имеет свойство»/«не имеет» для операнда «Тип» (требование bd0348b3):
+      // эффективный набор свойств самого типа с наследованием.
+      if (operator === 'has' || operator === 'not_has') {
+        const propIds = astStringList(leaf.value, operator, `${path}.value`, requestId);
+        if (propIds.length === 0) return operator === 'has' ? AST_FALSE : AST_TRUE;
+        const typeIds = typeIdsWithEffectiveProperty(ndb, propIds);
+        if (typeIds.length === 0) return operator === 'has' ? AST_FALSE : AST_TRUE;
+        const match: Clause = {
+          sql: `t.type_id IN (${typeIds.map(() => '?').join(',')})`,
+          params: typeIds,
+        };
+        return operator === 'has' ? match : astNegate(match);
+      }
+      const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
+      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+        astUnsupported(`Оператор «${operator}» для операнда «Тип»`, opPath, requestId);
+      }
+      const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', list);
+      if (expanded.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const match: Clause = {
+        sql: `t.type_id IN (${expanded.map(() => '?').join(',')})`,
+        params: [...expanded],
+      };
+      return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+    }
+
+    case 'link_type': {
+      // Единый операнд «Тип связи» (задача f7da04d6, требование 8c131cff) в
+      // контексте МЫСЛИ: «у мысли есть инцидентная связь указанного типа».
+      // `in`/`in_hierarchy` (и `eq`) раскрывают тип вместе с потомками
+      // `link_types` (L21) — общий AST-лист фильтра типов связей; `is_empty`/
+      // `not_empty` — «нет/есть ТИПИЗИРОВАННЫХ инцидентных связей» (семантика
+      // подтверждена оркестратором для контекста мысли, задача f7da04d6).
+      const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
+      if (operator === 'is_empty' || operator === 'not_empty') {
+        const typed: Clause = {
+          sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
+            AND l.type_id IS NOT NULL
+            AND (l.source_id = t.id OR l.target_id = t.id))`,
+          params: [],
+        };
+        return operator === 'not_empty' ? typed : { sql: `NOT (${typed.sql})`, params: [] };
+      }
+      if (
+        operator !== 'in' &&
+        operator !== 'not_in' &&
+        operator !== 'eq' &&
+        operator !== 'ne' &&
+        operator !== 'in_hierarchy' &&
+        operator !== 'not_in_hierarchy'
+      ) {
+        astUnsupported(`Оператор «${operator}» для операнда «Тип связи»`, opPath, requestId);
+      }
+      const list =
+        operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'link_types', list);
+      const positive = operator === 'in' || operator === 'eq' || operator === 'in_hierarchy';
+      if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
+      const match: Clause = {
+        sql: `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
+          AND l.type_id IN (${expanded.map(() => '?').join(',')})
+          AND (l.source_id = t.id OR l.target_id = t.id))`,
+        params: [...expanded],
+      };
+      return positive ? match : { sql: `NOT (${match.sql})`, params: match.params };
+    }
+
+    case 'parents':
+    case 'children':
+      // «В иерархии» по структурным «Родители»/«Потомки» — обход от корней,
+      // режим structural/all_links (задача e62aa4db).
+      if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+        return hierarchyStructuralLeafClause(ndb, entity.kind, leaf, astOpts, `${path}.value`, requestId);
+      }
+      return structuralLeafClause(entity.kind, leaf, `${path}.value`, requestId);
+
+    case 'attachments':
+      return collectionLeafClause(
+        'attachments',
+        'EXISTS (SELECT 1 FROM attachments_v a WHERE a.owner_type = \'thought\' AND a.owner_id = t.id)',
+        leaf,
+        path,
+        requestId,
+      );
+
+    case 'chronology':
+      return collectionLeafClause(
+        'chronology',
+        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')",
+        leaf,
+        path,
+        requestId,
+      );
+
+    case 'comment':
+      return boolPresenceClause(
+        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')",
+        leaf,
+        path,
+        requestId,
+      );
+
+    case 'active':
+      return boolColumnClause('t.active', leaf, path, requestId);
+
+    case 'trashed':
+      return boolColumnClause('t.marked_for_deletion', leaf, path, requestId);
+
+    case 'keywords':
+      return keywordsLeafClause(entity, leaf, path, requestId, astOpts);
+
+    case 'author':
+      return authorLeafClause('t.created_by', leaf, path, requestId);
+
+    case 'editor':
+      return authorLeafClause('t.updated_by', leaf, path, requestId);
+
+    case 'created_at':
+      return dateLeafClause('t.created_at', leaf, path, requestId);
+
+    case 'updated_at':
+      return dateLeafClause('t.updated_at', leaf, path, requestId);
+
+    case 'properties':
+      return hasPropertiesLeafClause(ndb, leaf, path, requestId);
+
+    case 'targets':
+      astUnsupported('Операнд «Цели» (отбор хроники)', `${path}.entity`, requestId);
+  }
+  // Недостижимо: все виды операндов обработаны выше.
+  throw new EtnError('VALIDATION_ERROR', 'Неизвестный операнд условия отбора.', { field: `${path}.entity` }, requestId);
+}
+
+/** Значение-лист как непустой список строк (ид/имена) для наборных операторов. */
+function astStringList(
+  value: FilterAstValue | undefined,
+  operator: string,
+  path: string,
+  requestId?: string,
+): string[] {
+  const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  if (raw.some((v) => typeof v !== 'string')) {
+    throw new EtnError('VALIDATION_ERROR', `Значение оператора «${operator}» должно быть строкой или списком строк.`, {
+      field: path,
+    }, requestId);
+  }
+  return [...new Set(raw as string[])];
+}
+
+/**
+ * Лист по свойству. Семантика — по природе левого операнда (требования
+ * 1e19504b/7f0e3f8c/f14e48ab/25324388/bd0348b3):
+ *
+ *   * сравнения (`gt/gte/lt/lte`, `between/not_between`) — по значению скаляра
+ *     (число/дата/строка лексикографически) либо, для свойства-связи и
+ *     множественного свойства, — по количеству значений («количество»);
+ *   * `eq`/`ne` числом на коллекции/связи — тоже количество;
+ *   * `is_empty`/`not_empty` множественного свойства — «количество = 0 / > 0»
+ *     (пустой набор — не заполнено);
+ *   * остальные (`eq/ne/contains/not_contains/in/not_in/any_of/all_of/none_of`)
+ *     транслируются в {@link propertyClauses} — единый словарь движка.
+ *
+ * Неадресуемое/удалённое свойство даёт клаузу «нет совпадений»
+ * ({@link NO_MATCH_CLAUSE}), а не расширение отбора (ошибки 090d0242/4f17cb73).
+ */
+function propertyLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  entityPath: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  const { entity, operator } = leaf;
+  if (entity.kind !== 'property') throw new Error('propertyLeafClause вызван не для свойства');
+  const propertyRef = entity.property_id ?? entity.property;
+  if (propertyRef === undefined) {
+    throw new EtnError('VALIDATION_ERROR', 'Операнд «свойство» не адресует свойство.', { field: entityPath }, requestId);
+  }
+  const ref = resolveConditionPropertyRef(ndb, propertyRef, requestId);
+  if (ref === null) return NO_MATCH_CLAUSE;
+  const def = lookupPropertyRow(ndb, ref.propertyId);
+  if (def === null) return NO_MATCH_CLAUSE;
+  const directionRef = entity.direction ?? ref.direction;
+  // Делегат передаёт ИСХОДНУЮ ссылку (id или имя): разрешение имени и сторону
+  // свойства-связи по обратному имени выполняет {@link propertyClauses} — как в
+  // T1, без потери направления (задача df992826).
+  const delegate = (): Clause =>
+    propertyClauses(
+      ndb,
+      [{ property_id: propertyRef, operator: operator as ThoughtQueryPropertyOperator, value: leaf.value as ThoughtQueryPropertyCondition['value'] }],
+      requestId,
+    )[0] ?? AST_FALSE;
+
+  // «В иерархии» по свойству-ссылке: хотя бы одно значение (цель рёбер)
+  // входит в поддерево корней (требование aa7a2aea, задача e62aa4db).
+  if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
+    if (def.value_type !== 'link') {
+      astUnsupported(`Оператор «${operator}» для свойства типа ${def.value_type}`, entityPath, requestId);
+    }
+    return hierarchyLinkPropertyClause(ndb, def, directionRef, leaf, astOpts, entityPath, requestId);
+  }
+
+  const numericValue = typeof leaf.value === 'number';
+  const countShaped = AST_RANGE_OPS.has(operator) || AST_COMPARE_OPS.has(operator) || (numericValue && (operator === 'eq' || operator === 'ne'));
+
+  // Свойство-связь: числовые операторы — количество живых рёбер стороны;
+  // остальные — напрямую через {@link linkPropertyClause}, чтобы учесть явный
+  // `entity.direction` (делегат `propertyClauses` сторону-переопределение не
+  // принимает — задача aee021c8, итерация 2).
+  if (def.value_type === 'link') {
+    if (countShaped) return linkPropertyCountClause(def, directionRef, leaf, entityPath, requestId);
+    return linkPropertyClause(
+      def,
+      { property_id: def.id, operator: operator as ThoughtQueryPropertyOperator, value: leaf.value as ThoughtQueryPropertyCondition['value'] },
+      requestId,
+      directionRef,
+    );
+  }
+
+  // Множественное скалярное свойство: количество значений (+ пустой набор).
+  if (isMultipleProperty(def, def.value_type)) {
+    if (countShaped || operator === 'is_empty' || operator === 'not_empty') {
+      return multiplePropertyCountClause(def, VALUE_COLUMN[def.value_type], leaf, entityPath, requestId);
+    }
+    return delegate();
+  }
+
+  // Скалярные сравнения и «между» (числа, даты, строки лексикографически).
+  if (AST_RANGE_OPS.has(operator) || AST_COMPARE_OPS.has(operator)) {
+    if (
+      def.value_type === 'text' ||
+      def.value_type === 'url' ||
+      def.value_type === 'date' ||
+      def.value_type === 'number'
+    ) {
+      return scalarCompareClause(def, leaf, entityPath, requestId);
+    }
+    astUnsupported(`Оператор «${operator}» для свойства типа ${def.value_type}`, entityPath, requestId);
+  }
+
+  if (operator === 'not_contains') {
+    const inner = propertyClauses(ndb, [{ property_id: def.id, operator: 'contains', value: leaf.value as string }], requestId)[0] ?? AST_FALSE;
+    return astNegate(inner);
+  }
+  return delegate();
+}
+
+/**
+ * Лист по структурным «Родители»/«Потомки»: наличие/отсутствие, «в списке» и
+ * «количество» (числовые операторы — требование bd0348b3), наборные
+ * `any_of`/`all_of`/`none_of` (требование 92b9c55b; профиль
+ * `THOUGHT_OPERATOR_SETS.parents/children`).
+ */
+function structuralLeafClause(
+  kind: 'parents' | 'children',
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  const ownCol = kind === 'parents' ? 'target_id' : 'source_id';
+  const otherCol = kind === 'parents' ? 'source_id' : 'target_id';
+  const { operator } = leaf;
+  // «Количество» структурных связей — скалярный COUNT(*) по тем же живым
+  // нетипизированным рёбрам.
+  if (
+    AST_RANGE_OPS.has(operator) ||
+    AST_COMPARE_OPS.has(operator) ||
+    (typeof leaf.value === 'number' && (operator === 'eq' || operator === 'ne'))
+  ) {
+    return countLeafClause(collectionCountSql(kind), [], leaf, path, requestId);
+  }
+  // Структурное ребро — живое НЕТИПИЗИРОВАННОЕ ребро (эталон: property-service
+  // `structuralEdgeCounts`; ADR/требование «структурные связи»). Типизированные
+  // рёбра относятся к режиму «по всем типам связей» (задача e62aa4db) и здесь
+  // НЕ учитываются — иначе смешивались бы два режима (сущность 489c394f).
+  const edge = `l.${ownCol} = t.id AND l.active = 1 AND l.marked_for_deletion = 0 AND l.type_id IS NULL`;
+  const presence: Clause = {
+    sql: `EXISTS (SELECT 1 FROM links_v l WHERE ${edge})`,
+    params: [],
+  };
+  if (operator === 'is_empty') return { sql: `NOT (${presence.sql})`, params: presence.params };
+  if (operator === 'not_empty') return presence;
+  if (
+    operator === 'in' ||
+    operator === 'not_in' ||
+    operator === 'eq' ||
+    operator === 'ne' ||
+    operator === 'any_of' ||
+    operator === 'all_of' ||
+    operator === 'none_of'
+  ) {
+    const ids = astStringList(leaf.value, operator, path, requestId);
+    const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
+    // `all_of` у СПИСКА значений — «набор содержит ВСЕ перечисленные»
+    // (требование 92b9c55b, ярлык редактора «содержит все из»): у мысли есть
+    // КАЖДЫЙ из перечисленных родителей/потомков — точечный join по ребру на
+    // значение, ровно как у свойства-связи и множественного свойства. Это НЕ
+    // квантификатор `all_in` под-выборки («каждое значение операнда входит в
+    // выборку», требование 485ff29e) — направления квантификации разные, и
+    // путать их нельзя. Пустой список — вакуумно истинно (как «все в» без
+    // значений, сценарий c76f688b).
+    if (operator === 'all_of') {
+      const parts: string[] = [];
+      const params: unknown[] = [];
+      for (const id of list) {
+        parts.push(`EXISTS (SELECT 1 FROM links_v l WHERE ${edge} AND l.${otherCol} = ?)`);
+        params.push(id);
+      }
+      return parts.length === 0 ? AST_TRUE : { sql: parts.join(' AND '), params };
+    }
+    if (list.length === 0) {
+      return operator === 'in' || operator === 'eq' || operator === 'any_of' ? AST_FALSE : AST_TRUE;
+    }
+    const match: Clause = {
+      sql: `EXISTS (SELECT 1 FROM links_v l WHERE ${edge}
+        AND l.${otherCol} IN (${list.map(() => '?').join(',')}))`,
+      params: [...list],
+    };
+    // `any_of` — «хотя бы один родитель/потомок в наборе» (паритет с `in`),
+    // `none_of` — «ни одного» (паритет с `not_in`).
+    return operator === 'in' || operator === 'eq' || operator === 'any_of'
+      ? match
+      : { sql: `NOT (${match.sql})`, params: match.params };
+  }
+  astUnsupported(`Оператор «${operator}» для структурного операнда`, path, requestId);
+}
+
+/** Булев предикат по колонке-флагу (`active`/`marked_for_deletion`). */
+function boolColumnClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  if (leaf.operator !== 'eq' && leaf.operator !== 'ne') {
+    astUnsupported(`Оператор «${leaf.operator}» для булева предиката`, path, requestId);
+  }
+  if (typeof leaf.value !== 'boolean') {
+    throw new EtnError('VALIDATION_ERROR', 'Булев предикат требует значения boolean.', { field: path }, requestId);
+  }
+  const want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
+  return { sql: `${column} = ${want ? 1 : 0}`, params: [] };
+}
+
+/** Наличие/отсутствие коллекции (вложения, дневниковые записи, комментарий). */
+function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  let want: boolean;
+  if (leaf.operator === 'not_empty') want = true;
+  else if (leaf.operator === 'is_empty') want = false;
+  else if ((leaf.operator === 'eq' || leaf.operator === 'ne') && typeof leaf.value === 'boolean') {
+    want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
+  } else {
+    astUnsupported(`Оператор «${leaf.operator}» для предиката наличия`, path, requestId);
+  }
+  return want ? { sql: existsSql, params: [] } : { sql: `NOT (${existsSql})`, params: [] };
+}
+
+/**
+ * «Найти слова»: LIKE-фильтр по выбранным областям (мини-синтаксис §6.10).
+ *
+ * `astOpts.keywordCommentIncludesLinkComments` — контекст фазы 1 отбора хроники:
+ * область `comment` ищет и комментарии инцидентных связей (см.
+ * {@link buildKeywordClause}); ставит только исполнитель хроники.
+ */
+function keywordsLeafClause(
+  entity: { kind: 'keywords'; scope?: StructureKeywordScope[] },
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  if (leaf.operator !== 'matches') {
+    astUnsupported(`Оператор «${leaf.operator}» для операнда «Найти слова»`, path, requestId);
+  }
+  // Ни одной отмеченной области (в т.ч. `scope` не задан) — условие отключено;
+  // режима «искать везде» нет (требование 0882f8d5). Дефолт title+synonyms —
+  // поведение плоского движка (`keyword_scope`), к операнду AST не применяется.
+  const scope = new Set<StructureKeywordScope>(entity.scope ?? []);
+  if (scope.size === 0) return AST_TRUE;
+  const text = typeof leaf.value === 'string' ? leaf.value : '';
+  const { include, exclude } = parseFilterKeywords(text);
+  if (include.length === 0 && exclude.length === 0) return AST_TRUE;
+  const clause = buildKeywordClause(scope, {
+    ...(astOpts?.keywordCommentIncludesLinkComments === true
+      ? { commentIncludesLinkComments: true }
+      : {}),
+  });
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  for (const word of include) {
+    parts.push(clause.sql);
+    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+  }
+  for (const word of exclude) {
+    parts.push(`NOT ${clause.sql}`);
+    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+  }
+  return { sql: `(${parts.join(' AND ')})`, params };
+}
+
+/** Лист авторства/редактора — та же семантика, что у авторских фильтров. */
+function authorLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  const map: Record<string, StructureAuthorOp> = {
+    eq: 'eq',
+    ne: 'ne',
+    in: 'in',
+    not_in: 'not_in',
+    is_empty: 'empty',
+    not_empty: 'not_empty',
+  };
+  const op = map[leaf.operator];
+  if (op === undefined) astUnsupported(`Оператор «${leaf.operator}» для авторского операнда`, path, requestId);
+  const value: string | string[] | undefined =
+    leaf.value === undefined ? undefined : Array.isArray(leaf.value) ? (leaf.value as string[]) : (leaf.value as string);
+  const where: string[] = [];
+  const params: unknown[] = [];
+  appendAuthorCondition(where, params, column, value, op);
+  return { sql: where.length > 0 ? `(${where.join(' AND ')})` : AST_TRUE.sql, params };
+}
+
+/** «Голая дата» `YYYY-MM-DD` (без времени). */
+const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Верхняя ВКЛЮЧИТЕЛЬНАЯ датовая граница-«голая дата» разворачивается до конца
+ * суток UTC (требование 469d8d69 «голая дата во входных параметрах API = сутки
+ * UTC»). Без разворота граничный день отсекался бы ЦЕЛИКОМ: значения-даты
+ * мыслей хранятся с временем, а сравнение лексикографическое — ошибка круга
+ * проверки задачи 347b307e (`created_at between [$today, $today]` давал 0).
+ *
+ * Нижние границы (лексикографически = начало суток — уже корректны), строгие
+ * `lt` и полные инстансы (со временем) не трогаются: разворот применяет только
+ * вызывающий — для ВКЛЮЧИТЕЛЬНОГО верхнего предела (`lte`/верх «между»).
+ */
+function expandInclusiveDateUpper(value: string): string {
+  if (!BARE_DATE_RE.test(value)) return value;
+  return normaliseInstant(value, 'date', 'end') ?? value;
+}
+
+/** Лист по дате создания/изменения: равно/не равно, сравнения и «между» (границы включительны). */
+function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  const one = (op: string, value: unknown): Clause => {
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new EtnError('VALIDATION_ERROR', 'Граница даты должна быть непустой строкой ISO-8601.', { field: path }, requestId);
+    }
+    const raw = value.trim();
+    // Включительная верхняя граница-«голая дата» — конец суток UTC (469d8d69).
+    const bound = op === 'lte' ? expandInclusiveDateUpper(raw) : raw;
+    const sql = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : '<=';
+    return { sql: `${column} ${sql} ?`, params: [bound] };
+  };
+  if (leaf.operator === 'gt' || leaf.operator === 'gte' || leaf.operator === 'lt' || leaf.operator === 'lte') {
+    return one(leaf.operator, leaf.value);
+  }
+  if (leaf.operator === 'eq' || leaf.operator === 'ne') {
+    // Равенство даты = попадание в её СУТКИ: нижняя граница — само значение,
+    // верхняя — конец суток для «голой даты» / сам инстанс для полного значения
+    // (ошибка e219112e, п.1 — «равно/не равно» у дат создания/изменения).
+    const low = one('gte', leaf.value);
+    const high = one('lte', leaf.value);
+    const eq: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return leaf.operator === 'eq' ? eq : astNegate(eq);
+  }
+  if (leaf.operator === 'between' || leaf.operator === 'not_between') {
+    if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {
+      throw new EtnError('VALIDATION_ERROR', 'Оператор «между» требует ровно две границы.', { field: path }, requestId);
+    }
+    const low = one('gte', leaf.value[0]);
+    const high = one('lte', leaf.value[1]);
+    const between: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
+    return leaf.operator === 'between' ? between : { sql: `NOT (${between.sql})`, params: between.params };
+  }
+  astUnsupported(`Оператор «${leaf.operator}» для даты`, path, requestId);
+}
+
+/**
+ * «Имеет свойство»/«не имеет свойство» для мысли: фактический набор = свойства,
+ * эффективные по цепочке типов мысли (с наследованием), ПЛЮС индивидуально
+ * заданные значения (требование bd0348b3). «Имеет» истинно, если хотя бы одно
+ * из списка в наборе.
+ */
+function hasPropertiesLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+  // «Заполнено/не заполнено» без списка свойств — «мысль имеет хотя бы одно
+  // значение свойства»/«ни одного». Это точный AST-эквивалент плоского
+  // трёхсостоянного `has_properties` (компилятор, требования 91983c20/76e30d9a);
+  // `has`/`not_has` с набором id отвечает на другой вопрос («имеет конкретные
+  // свойства», с учётом наследования по типу) и потому для него не годится.
+  if (leaf.operator === 'is_empty' || leaf.operator === 'not_empty') {
+    const exists =
+      "EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
+    return leaf.operator === 'not_empty' ? { sql: exists, params: [] } : { sql: `NOT (${exists})`, params: [] };
+  }
+  if (leaf.operator !== 'has' && leaf.operator !== 'not_has') {
+    astUnsupported(`Оператор «${leaf.operator}» для операнда «свойства»`, path, requestId);
+  }
+  const ids = astStringList(leaf.value, leaf.operator, path, requestId);
+  if (ids.length === 0) return leaf.operator === 'has' ? AST_FALSE : AST_TRUE;
+  const individual: Clause = {
+    sql: `EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id
+      AND pv.property_id IN (${ids.map(() => '?').join(',')}))`,
+    params: [...ids],
+  };
+  const byType = typeIdsWithEffectiveProperty(ndb, ids);
+  const match: Clause =
+    byType.length === 0
+      ? individual
+      : {
+          sql: `(${individual.sql} OR t.type_id IN (${byType.map(() => '?').join(',')}))`,
+          params: [...individual.params, ...byType],
+        };
+  return leaf.operator === 'has' ? match : astNegate(match);
 }
 
 /** Минимальная строка реестра свойств для батч-чтения условий. */
@@ -946,6 +2841,76 @@ interface RegistryPropertyRow {
 interface Clause {
   sql: string;
   params: unknown[];
+}
+
+/** Рёбра свойства-связи: колонки сторон + фильтр типа связи (или структурности). */
+interface LinkPropertyEdges {
+  ownerCol: 'source_id' | 'target_id';
+  targetCol: 'source_id' | 'target_id';
+  typeSql: string;
+  typeParams: unknown[];
+  /** Разрешённое направление стороны (`out` — источник, `in` — цель). */
+  direction: LinkPropertyDirection;
+}
+
+/**
+ * Разобрать `config` свойства-связи в параметры рёбер. `null` — некорректный
+ * config (не структурное и без `link_type_id`): условие не матчит ничего.
+ */
+function linkPropertyEdges(
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+): LinkPropertyEdges | null {
+  let config: PropertyConfig | null = null;
+  if (def.config !== null) {
+    try {
+      config = JSON.parse(def.config) as PropertyConfig;
+    } catch {
+      config = null;
+    }
+  }
+  const structural = isStructuralLinkProperty(config);
+  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
+  if (!structural && linkTypeId === null) return null;
+  const direction = directionRef ?? linkPropertyDirection(config);
+  return {
+    ownerCol: direction === 'out' ? 'source_id' : 'target_id',
+    targetCol: direction === 'out' ? 'target_id' : 'source_id',
+    typeSql: linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?',
+    typeParams: linkTypeId === null ? [] : [linkTypeId],
+    direction,
+  };
+}
+
+/**
+ * Лист «в иерархии» по свойству-ссылке: истина, если хотя бы одно значение
+ * (цель рёбер стороны свойства) входит в поддерево корней (требование aa7a2aea,
+ * задача e62aa4db). Режим обхода поддерева — `leaf.mode` (по умолчанию
+ * структурный).
+ */
+function hierarchyLinkPropertyClause(
+  ndb: NetworkDb,
+  def: RegistryPropertyRow,
+  directionRef: LinkPropertyDirection | null,
+  leaf: FilterAstLeaf,
+  astOpts: AstExecOptions | undefined,
+  path: string,
+  requestId?: string,
+): Clause {
+  const roots = astStringList(leaf.value, leaf.operator, path, requestId);
+  if (roots.length === 0) return leaf.operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+  const edges = linkPropertyEdges(def, directionRef);
+  if (edges === null) return leaf.operator === 'in_hierarchy' ? AST_FALSE : AST_TRUE;
+  const subtree = astHierarchySubtree(ndb, astHierarchyMode(leaf), roots, astOpts, path, requestId);
+  const membership = astIdInClause(`l.${edges.targetCol}`, subtree);
+  const match: Clause = {
+    sql: `EXISTS (
+      SELECT 1 FROM links_v l
+      WHERE l.${edges.ownerCol} = t.id AND ${edges.typeSql}
+        AND l.active = 1 AND l.marked_for_deletion = 0 AND ${membership.sql})`,
+    params: [...edges.typeParams, ...membership.params],
+  };
+  return leaf.operator === 'in_hierarchy' ? match : astNegate(match);
 }
 
 /**
@@ -973,25 +2938,12 @@ function linkPropertyClause(
   requestId?: string,
   directionRef: LinkPropertyDirection | null = null,
 ): Clause {
-  let config: PropertyConfig | null = null;
-  if (def.config !== null) {
-    try {
-      config = JSON.parse(def.config) as PropertyConfig;
-    } catch {
-      config = null;
-    }
-  }
-  const structural = isStructuralLinkProperty(config);
-  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
-  if (!structural && linkTypeId === null) {
+  const edges = linkPropertyEdges(def, directionRef);
+  if (edges === null) {
     // Некорректный config (валидируется при правке онтологии) — не матчит ничего.
     return { sql: '0', params: [] };
   }
-  const direction = directionRef ?? linkPropertyDirection(config);
-  const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
-  const targetCol = direction === 'out' ? 'target_id' : 'source_id';
-  const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
-  const typeParams = linkTypeId === null ? [] : [linkTypeId];
+  const { ownerCol, targetCol, typeSql, typeParams } = edges;
   const existsSql = (extraSql: string, extraParams: unknown[]): Clause => ({
     sql: `EXISTS (
       SELECT 1 FROM links_v l
@@ -1177,17 +3129,22 @@ function propertyClauses(
 
     // Операторы наборов (задача 20effcbd) — `url` и legacy `thought_ref`.
     if (cond.operator === 'any_of' || cond.operator === 'all_of' || cond.operator === 'none_of') {
-      out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId));
+      out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId, foldsCase(def)));
       continue;
     }
 
     if (cond.operator === 'contains') {
+      // «Содержит» — подстрочно и регистронезависимо (требование f14e48ab):
+      // регистр сворачивается unicode_lower с обеих сторон.
+      const fold = foldsCase(def);
       const pattern = buildLikePattern(String(cond.value));
+      const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+      const rhs = fold ? 'unicode_lower(?)' : '?';
       out.push({
         sql: `EXISTS (
           SELECT 1 FROM property_values_v pv
           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-            AND pv.${column} LIKE ? ESCAPE '\\')`,
+            AND ${lhs} LIKE ${rhs} ESCAPE '\\')`,
         params: [def.id, pattern],
       });
       continue;
@@ -1246,9 +3203,14 @@ function propertyClauses(
         );
       }
       const values = cond.value.map((v) => sqlScalar(def, v, requestId));
+      // «В списке» — равенство по правилам типа: текст регистронезависимо
+      // (требование 7f0e3f8c, ADR 9779dd21).
+      const fold = foldsCase(def);
+      const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+      const rhs = fold ? 'unicode_lower(?)' : '?';
       const listSql = `SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND pv.${column} IN (${values.map(() => '?').join(',')})`;
+           AND ${lhs} IN (${values.map(() => rhs).join(',')})`;
       out.push(cond.operator === 'in' ? { sql: `EXISTS (${listSql})`, params: [def.id, ...values] } : { sql: `NOT EXISTS (${listSql})`, params: [def.id, ...values] });
       continue;
     }
@@ -1274,11 +3236,16 @@ function propertyClauses(
       cond.operator === 'gt' ? '>' :
       cond.operator === 'gte' ? '>=' :
       cond.operator === 'lt' ? '<' : '<=';
+    // «Равно/сравнения» по правилам типа: текст регистронезависимо, включая
+    // строковые «больше/меньше» (ADR 9779dd21, требование 25324388).
+    const fold = foldsCase(def);
+    const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
+    const rhs = fold ? 'unicode_lower(?)' : '?';
     out.push({
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-          AND pv.${column} ${opSql} ?)`,
+          AND ${lhs} ${opSql} ${rhs})`,
       params: [def.id, value],
     });
   }
@@ -1295,6 +3262,7 @@ function propertyClauses(
  */
 function isFilterEmpty(req: ThoughtQueryRequest): boolean {
   return (
+    req.ast === undefined &&
     (req.keywords ?? '').trim() === '' &&
     !isLinkTypeFilterActive(req.link_filter) &&
     (req.type_ids ?? []).length === 0 &&
@@ -1316,7 +3284,7 @@ function isFilterEmpty(req: ThoughtQueryRequest): boolean {
 }
 
 /** True when a date bound carries a non-empty value worth applying. */
-function dateBoundIsSet(value: string | undefined): boolean {
+function dateBoundIsSet(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
 
@@ -1357,14 +3325,28 @@ const CURSOR_VERSION = 1;
 /** Разобранный keyset-курсор: ключ сортировки последней строки страницы. */
 interface QueryCursor {
   v: number;
-  s: StructureSort;
-  o: SortOrder;
+  /**
+   * Подпись фактического порядка (см. {@link sortSignature}): и ключи `ast.sort`,
+   * и режим «пустой фильтр», и направление добора `id`. Заменяет прежние
+   * `sort`/`order` — при `ast.sort` они дефолтные и не отличали бы один
+   * многоуровневый порядок от другого.
+   */
+  sig: string;
   /** `1` — режим «пустой фильтр» (HOME первой); иначе `0`. */
   h: 0 | 1;
   /** Значения ключей сортировки последней строки (в порядке {@link SortKey}). */
   k: Array<string | number | null>;
   /** id последней строки (уникальный добор ключа, ADR 5f6cb775). */
   id: string;
+}
+
+/**
+ * Подпись фактического порядка страницы: список `(expr, dir)` ключей плюс
+ * направление завершающего `t.id`. По ней курсор сверяется с текущим запросом —
+ * продолжение читается только по тому же порядку (в т.ч. при `ast.sort`).
+ */
+function sortSignature(keys: SortKey[], idDir: 'ASC' | 'DESC'): string {
+  return JSON.stringify({ idDir, keys: keys.map((k) => [k.tag ?? k.expr, k.expr, k.dir]) });
 }
 
 /** Кодировать курсор в непрозрачную строку (base64url JSON). */
@@ -1374,12 +3356,13 @@ function encodeCursor(cursor: QueryCursor): string {
 
 /**
  * Разобрать и провалидировать курсор. Курсор обязан соответствовать
- * `sort`/`order`/режиму пустого фильтра текущего запроса — иначе продолжение
- * страницы читалось бы по чужому порядку (потеря/дубли строк).
+ * фактическому порядку текущего запроса (`sig` — ключи `ast.sort` либо плоские
+ * `sort`/`order`) и режиму пустого фильтра — иначе продолжение страницы
+ * читалось бы по чужому порядку (потеря/дубли строк).
  */
 function decodeCursor(
   raw: string,
-  req: ThoughtQueryRequest,
+  sig: string,
   homeFirst: boolean,
   requestId?: string,
 ): QueryCursor {
@@ -1400,7 +3383,7 @@ function decodeCursor(
   if (typeof parsed !== 'object' || parsed === null) return invalid();
   const c = parsed as Partial<QueryCursor>;
   if (c.v !== CURSOR_VERSION) return invalid({ reason: 'version' });
-  if (c.s !== req.sort || c.o !== req.order) return invalid({ reason: 'sort' });
+  if (c.sig !== sig) return invalid({ reason: 'sort' });
   if (c.h !== (homeFirst ? 1 : 0)) return invalid({ reason: 'mode' });
   if (!Array.isArray(c.k) || typeof c.id !== 'string' || c.id === '') return invalid({ reason: 'shape' });
   if (c.k.some((v) => v !== null && typeof v !== 'string' && typeof v !== 'number')) {
@@ -1483,6 +3466,190 @@ function cursorKeyColumns(keys: SortKey[]): string {
   return keys.map((k, i) => `, ${k.expr} AS __k${i}`).join('');
 }
 
+// ---------------------------------------------------------------------------
+// Компилятор плоской формы отбора в AST (требования 91983c20 «Старые тела
+// REST/MCP компилируются в AST» и 76e30d9a «Один исполнитель AST…», ADR
+// 34f6f9d6; сущность спецификации 489c394f).
+//
+// Единый вход: критерии плоского тела (`ThoughtQueryRequest`) превращаются в
+// дерево AST и исполняются единственным AST-путём — второго пути исполнения
+// критериев нет. Компилятор живёт в движке, поэтому компиляция прозрачна для
+// обоих фасадов (REST `POST /thoughts/query` и MCP `etn.thoughts.query`).
+//
+// Листья переиспользуют тот же исполнитель, что и явное AST-тело, поэтому
+// паритет результата с прежней плоской формой достигается по построению
+// (требование 91983c20). НЕ компилируются (остаются фасадными пред-сужениями,
+// применяются поверх критериев): `subtree` из `parent_ids`/`in_subtree_of`
+// (требование 3482a399 — корни входят в результат) и `link_filter` (вынесен из
+// AST по сущности 489c394f). Сортировка/пагинация живут вне дерева (3e47f52a).
+// ---------------------------------------------------------------------------
+
+/** Оператор авторского фильтра → код оператора AST-листа («Пусто» — is_empty). */
+const AUTHOR_OP_TO_AST: Record<StructureAuthorOp, FilterAstOperator> = {
+  eq: 'eq',
+  ne: 'ne',
+  in: 'in',
+  not_in: 'not_in',
+  empty: 'is_empty',
+  not_empty: 'not_empty',
+};
+
+/** Условие-лист AST с необязательным значением. */
+function astLeaf(entity: FilterAstEntity, operator: FilterAstOperator, value?: FilterAstValue): FilterAstLeaf {
+  return value === undefined ? { entity, operator } : { entity, operator, value };
+}
+
+/**
+ * Лист авторского операнда (автор/редактор) с той же семантикой, что у плоского
+ * {@link appendAuthorCondition}: `empty`/`not_empty` дают условие даже без
+ * значения; отсутствующий оператор трактуется как `eq`.
+ */
+function compileAuthorLeaf(
+  kind: 'author' | 'editor',
+  value: string | string[] | undefined,
+  op: StructureAuthorOp | undefined,
+): FilterAstLeaf | null {
+  if (op === 'empty') return astLeaf({ kind }, 'is_empty');
+  if (op === 'not_empty') return astLeaf({ kind }, 'not_empty');
+  if (value === undefined) return null;
+  return astLeaf({ kind }, AUTHOR_OP_TO_AST[op ?? 'eq'], value);
+}
+
+/**
+ * Скомпилировать критерии плоской формы в AST. `undefined` — плоское тело не
+ * несёт ни одного критерия (тогда движок отдаёт режим пустого фильтра как
+ * раньше). Все листья объединяются по AND — плоская семантика «критерии по AND».
+ */
+export function compileThoughtQueryToAst(
+  ndb: NetworkDb,
+  req: ThoughtQueryRequest,
+  requestId?: string,
+): FilterAst | undefined {
+  const children: FilterAstNode[] = [];
+
+  // Актуальность: явное значение переопределяет настройку; дефолт — только
+  // активные; `'any'` — без условия (плоская семантика).
+  if (req.active === 'true' || req.active === undefined) children.push(astLeaf({ kind: 'active' }, 'eq', true));
+  else if (req.active === 'false') children.push(astLeaf({ kind: 'active' }, 'eq', false));
+
+  // Пометка на удаление: дефолт — только непомеченные; `'any'` — без условия.
+  if (req.trashed === 'true') children.push(astLeaf({ kind: 'trashed' }, 'eq', true));
+  else if (req.trashed === 'false' || req.trashed === undefined) children.push(astLeaf({ kind: 'trashed' }, 'eq', false));
+
+  const author = compileAuthorLeaf('author', req.created_by, req.created_by_op);
+  if (author !== null) children.push(author);
+  const editor = compileAuthorLeaf('editor', req.updated_by, req.updated_by_op);
+  if (editor !== null) children.push(editor);
+
+  // Даты: границы включительны (плоский `appendDateBound` — `>=`/`<=`).
+  if (dateBoundIsSet(req.created_after)) children.push(astLeaf({ kind: 'created_at' }, 'gte', req.created_after.trim()));
+  if (dateBoundIsSet(req.created_before)) children.push(astLeaf({ kind: 'created_at' }, 'lte', req.created_before.trim()));
+  if (dateBoundIsSet(req.updated_after)) children.push(astLeaf({ kind: 'updated_at' }, 'gte', req.updated_after.trim()));
+  if (dateBoundIsSet(req.updated_before)) children.push(astLeaf({ kind: 'updated_at' }, 'lte', req.updated_before.trim()));
+
+  // Трёхсостоянные признаки наличия: true — только с наличием, false — только
+  // без, поле не задано — критерий не участвует.
+  if (req.has_properties !== undefined) children.push(astLeaf({ kind: 'properties' }, req.has_properties ? 'not_empty' : 'is_empty'));
+  if (req.has_comment !== undefined) children.push(astLeaf({ kind: 'comment' }, req.has_comment ? 'not_empty' : 'is_empty'));
+  if (req.has_attachments !== undefined) children.push(astLeaf({ kind: 'attachments' }, req.has_attachments ? 'not_empty' : 'is_empty'));
+  if (req.has_chronology !== undefined) children.push(astLeaf({ kind: 'chronology' }, req.has_chronology ? 'not_empty' : 'is_empty'));
+
+  // «Найти слова»: области берутся ровно как у плоского движка (отсутствие/
+  // пустой набор → дефолт title+synonyms), мини-синтаксис разбирает лист.
+  const keywords = req.keywords ?? '';
+  if (keywords.trim() !== '') {
+    children.push(astLeaf({ kind: 'keywords', scope: [...resolveKeywordScope(req.keyword_scope)] }, 'matches', keywords));
+  }
+
+  // Тип мысли: плоский `type_ids` компилируется в лист «Тип в иерархии»
+  // (`entity.type` + `in_hierarchy`, режим structural по умолчанию) — требование
+  // f7f93c32, ADR 9a356460. Раскрытие подтипов/потомков делает исполнитель на
+  // момент запроса (`hierarchyTypeLeafClause` → `expandTypeIdsToSubtree`), а НЕ
+  // компилятор: замороженный список подтипов дал бы неверный результат, если
+  // после сохранения отбора в онтологии появится новый подтип (операнд «Тип»
+  // в иерархии реализован задачей e62aa4db).
+  if ((req.type_ids ?? []).length > 0) {
+    children.push(astLeaf({ kind: 'type' }, 'in_hierarchy', [...(req.type_ids as string[])]));
+  }
+  // Тип связи: раскрытие по поддереву (L21) делается той же функцией, что у
+  // плоской ветки; пустое раскрытие — условие не накладывается (прежнее
+  // поведение плоского движка: `expanded.length === 0` → клауза не добавлялась).
+  if ((req.link_type_ids ?? []).length > 0) {
+    const expanded = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids as string[]);
+    if (expanded.length > 0) children.push(astLeaf({ kind: 'link_type' }, 'in', expanded));
+  }
+
+  // Условия значений свойств: тот же словарь операторов, что у плоской формы.
+  // Прежде — валидация теми же правилами плоского движка ({@link propertyClauses}):
+  // AST-лист свойства шире плоского (числовые операторы на связи/коллекции —
+  // «количество»), поэтому недопустимое для плоской формы значение (напр.
+  // числовое `eq` по свойству-связи) должно быть отвергнуто ровно как раньше,
+  // а не молча получить иную семантику. Результат проверки не нужен: исполняет
+  // всё равно AST-лист, но для допустимых значений он даёт тот же ответ.
+  if ((req.properties ?? []).length > 0) {
+    propertyClauses(ndb, req.properties as ThoughtQueryPropertyCondition[], requestId);
+  }
+  for (const cond of req.properties ?? []) {
+    children.push(
+      astLeaf({ kind: 'property', property_id: cond.property_id }, cond.operator as FilterAstOperator, cond.value),
+    );
+  }
+
+  if (children.length === 0) return undefined;
+  return {
+    version: FILTER_AST_VERSION,
+    filter: children.length === 1 ? (children[0] as FilterAstNode) : { op: 'and', children },
+  };
+}
+
+/**
+ * Листья «Найти слова» в строго конъюнктивном контексте (корень и все предки —
+ * только `and`; ни `or`, ни `not`). Только для них безопасно FTS-сужение
+ * (`fts_thought_names MATCH`, требование 314cbb8d): под `or`/`not` сужатель
+ * отсекал бы строки, удовлетворяющие другим ветвям.
+ */
+function conjunctiveKeywordLeaves(node: FilterAstNode, out: FilterAstLeaf[]): FilterAstLeaf[] {
+  if ('op' in node) {
+    if (node.op === 'and') for (const child of node.children) conjunctiveKeywordLeaves(child, out);
+    return out;
+  }
+  if (node.entity.kind === 'keywords') out.push(node);
+  return out;
+}
+
+/**
+ * FTS-сужатели для конъюнктивных листьев «Найти слова» (перенесены в AST-путь,
+ * чтобы сторож производительности полнотекста 314cbb8d оставался зелёным).
+ * Алиасы уникальны (`__kw`, `__kw1`, …) — джойнов может быть несколько.
+ */
+function astKeywordFtsJoins(ast: FilterAst): Clause[] {
+  const joins: Clause[] = [];
+  let idx = 0;
+  for (const leaf of conjunctiveKeywordLeaves(ast.filter, [])) {
+    if (leaf.entity.kind !== 'keywords') continue;
+    const scope = new Set<StructureKeywordScope>(leaf.entity.scope ?? []);
+    // Пустая область — условие «Найти слова» отключено (лист вернёт AST_TRUE),
+    // FTS-сужатель не ставим, иначе он отсекал бы строки вопреки листу.
+    if (scope.size === 0) continue;
+    // Значение-ТОКЕН сужателю не подчиняется: объектная форма (`{ token }`) не
+    // строка и сюда не доходит, а строковая (`"$today"`) — строка-целиком-
+    // известный-токен. Сужатель строит trigram-MATCH по СЫРОМУ значению, поэтому
+    // на нераскрытом «$today» он отсечёт строки ещё до клаузы (клауза ищет
+    // раскрытую дату) — ошибка d166cfe9. Паритет форм: обходим сужатель для
+    // значения-токена (FTS — лишь пред-сужение, клауза «Найти слова» хранит
+    // семантику мини-языка §6.10 и остаётся источником истины).
+    const value = leaf.value;
+    if (typeof value === 'string' && isPureKnownTokenString(value)) continue;
+    const { include } = parseFilterKeywords(typeof value === 'string' ? value : '');
+    const join = buildKeywordFtsJoin(include, scope);
+    if (join === null) continue;
+    const alias = idx === 0 ? '__kw' : `__kw${idx}`;
+    joins.push({ sql: idx === 0 ? join.sql : join.sql.replace(/__kw\b/g, alias), params: join.params });
+    idx += 1;
+  }
+  return joins;
+}
+
 function buildFilterQuerySql(
   ndb: NetworkDb,
   userId: string,
@@ -1490,16 +3657,19 @@ function buildFilterQuerySql(
   walk: WalkResult | null,
   emptyFilterMode: 'home_orphans' | 'all',
   requestId?: string,
+  astOpts?: AstExecOptions,
 ): FilterQuerySql {
   const homeFirst = emptyFilterMode === 'home_orphans' && isFilterEmpty(req);
-  const { keys, joinSql, joinParams } = sortKeysFor(userId, req, homeFirst);
+  const { keys, joinSql, joinParams } = sortKeysFor(ndb, userId, req, homeFirst);
   const idDir: 'ASC' | 'DESC' = req.order === 'desc' ? 'DESC' : 'ASC';
   const cursor =
     typeof req.cursor === 'string' && req.cursor.trim() !== ''
-      ? decodeCursor(req.cursor.trim(), req, homeFirst, requestId)
+      ? decodeCursor(req.cursor.trim(), sortSignature(keys, idDir), homeFirst, requestId)
       : null;
   const keyset = cursor === null ? null : keysetClause(keys, idDir, cursor.k, cursor.id);
 
+  // Режим пустого фильтра (REST-контракт): пустой плоский фильтр → HOME
+  // первой + сироты. Проверяется ДО компиляции (плоское тело без критериев).
   if (homeFirst) {
     const showInactive = req.active === 'any' ? 1 : 0;
     return {
@@ -1516,110 +3686,50 @@ function buildFilterQuerySql(
     };
   }
 
-  const where: string[] = [];
-  const params: unknown[] = [];
-
-  // Актуальность: явное значение или дефолт «только активные».
-  if (req.active === 'true' || req.active === undefined) {
-    where.push('t.active = 1');
-  } else if (req.active === 'false') {
-    where.push('t.active = 0');
-  }
-
-  // Пометка на удаление (S13): дефолт — только непомеченные.
-  if (req.trashed === 'true') {
-    where.push('t.marked_for_deletion = 1');
-  } else if (req.trashed === 'false' || req.trashed === undefined) {
-    where.push('t.marked_for_deletion = 0');
-  }
-
-  appendAuthorCondition(where, params, 't.created_by', req.created_by, req.created_by_op);
-  appendAuthorCondition(where, params, 't.updated_by', req.updated_by, req.updated_by_op);
-
-  appendDateBound(where, params, 't.created_at', req.created_after, req.created_before);
-  appendDateBound(where, params, 't.updated_at', req.updated_after, req.updated_before);
-
-  if (req.subtree !== undefined && walk !== null) {
-    if (walk.depths.size === 0) {
-      // Поддерево пустое — кандидатов нет (REST-семантика прежнего движка).
-      where.push('0');
-    } else {
-      const ids = [...walk.depths.keys()];
-      where.push(`t.id IN (${ids.map(() => '?').join(',')})`);
-      params.push(...ids);
+  // Единый вход (ADR 34f6f9d6, требования 91983c20/76e30d9a): критерии отбора —
+  // только из AST; плоское тело компилируется в AST тем же компилятором, отдельной
+  // ветки исполнения критериев нет. Явное AST-тело (`req.ast`) — как передано.
+  const effectiveAst = req.ast ?? compileThoughtQueryToAst(ndb, req, requestId);
+  if (effectiveAst !== undefined) {
+    const clause = filterAstClause(ndb, effectiveAst, requestId, astOpts);
+    const parts: string[] = [`(${clause.sql === '' ? '1=1' : clause.sql})`];
+    const params: unknown[] = [...clause.params];
+    // Фасадное пред-сужение поддерева (REST `parent_ids` / MCP `in_subtree_of`):
+    // применяется ПОВЕРХ критериев, в AST не компилируется (требование 3482a399 —
+    // перечисленные мысли входят в результат; ошибка ad1551ea). `link_filter`
+    // учтён обходом `walkSubtree` через `subtree.link_filter`.
+    if (req.subtree !== undefined) {
+      if (walk === null || walk.depths.size === 0) {
+        // Поддерево пустое — кандидатов нет (REST-семантика прежнего движка).
+        parts.push('0');
+      } else {
+        const ids = [...walk.depths.keys()];
+        parts.push(`t.id IN (${ids.map(() => '?').join(',')})`);
+        params.push(...ids);
+      }
     }
+    // FTS-сужатель полнотекста (требование 314cbb8d) — для конъюнктивных
+    // листьев «Найти слова»; LIKE-семантику мини-языка хранит AST-лист.
+    const fts = astKeywordFtsJoins(effectiveAst);
+    const fromJoinSql = fts.length === 0 ? joinSql : `${joinSql} ${fts.map((j) => j.sql).join(' ')}`;
+    const fromJoinParams = fts.length === 0 ? joinParams : [...joinParams, ...fts.flatMap((j) => j.params)];
+    return {
+      baseSql: `FROM thoughts_v t ${fromJoinSql} WHERE ${parts.join(' AND ')}`,
+      joinParams: fromJoinParams,
+      params,
+      keys,
+      idDir,
+      keyset,
+      homeFirst: false,
+    };
   }
 
-  if (req.has_properties !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
-    where.push(req.has_properties ? sql : `NOT ${sql}`);
-  }
-  if (req.has_comment !== undefined) {
-    const sql =
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')";
-    where.push(req.has_comment ? sql : `NOT ${sql}`);
-  }
-  if (req.has_attachments !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM attachments_v a WHERE a.owner_type = 'thought' AND a.owner_id = t.id)";
-    where.push(req.has_attachments ? sql : `NOT ${sql}`);
-  }
-  if (req.has_chronology !== undefined) {
-    const sql =
-      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')";
-    where.push(req.has_chronology ? sql : `NOT ${sql}`);
-  }
-
-  const keywords = parseFilterKeywords(req.keywords ?? '');
-  const keywordScope = resolveKeywordScope(req.keyword_scope);
-  const keywordClause = buildKeywordClause(keywordScope);
-  // FTS-сужатель (требование 314cbb8d): `fts_thought_names` джойнится по rowid
-  // победившей версии из представления (`t.rowid`), LIKE остаётся остаточным
-  // фильтром и хранит семантику мини-языка §6.10.
-  const keywordFts = buildKeywordFtsJoin(keywords.include, keywordScope);
-  const fromJoinSql = keywordFts === null ? joinSql : `${joinSql} ${keywordFts.sql}`;
-  const fromJoinParams = keywordFts === null ? joinParams : [...joinParams, ...keywordFts.params];
-  for (const word of keywords.include) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(keywordClause.sql);
-    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
-  }
-  for (const word of keywords.exclude) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${keywordClause.sql}`);
-    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
-  }
-
-  if (req.type_ids !== undefined && req.type_ids.length > 0) {
-    // L21: a selected parent type matches its whole subtree (OR semantics).
-    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', req.type_ids);
-    if (expanded.length > 0) {
-      where.push(`t.type_id IN (${expanded.map(() => '?').join(',')})`);
-      params.push(...expanded);
-    }
-  }
-
-  for (const clause of propertyClauses(ndb, req.properties ?? [], requestId)) {
-    where.push(clause.sql);
-    params.push(...clause.params);
-  }
-
-  if (req.link_type_ids !== undefined && req.link_type_ids.length > 0) {
-    // L21: subtree expansion, same as the thought-type filter above.
-    const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids);
-    if (expandedLinks.length > 0) {
-      where.push(
-        `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
-           AND l.type_id IN (${expandedLinks.map(() => '?').join(',')})
-           AND (l.source_id = t.id OR l.target_id = t.id))`,
-      );
-      params.push(...expandedLinks);
-    }
-  }
-
+  // Плоское тело без критериев вне режима HOME (`emptyFilterMode: 'all'`,
+  // например встраивание критериев в чужой SQL): все мысли.
   return {
-    baseSql: `FROM thoughts_v t ${fromJoinSql} WHERE ${where.length > 0 ? where.join(' AND ') : '1=1'}`,
-    joinParams: fromJoinParams,
-    params,
+    baseSql: `FROM thoughts_v t ${joinSql} WHERE 1=1`,
+    joinParams,
+    params: [],
     keys,
     idDir,
     keyset,
@@ -1640,6 +3750,10 @@ function countFilterMatches(ndb: NetworkDb, sql: FilterQuerySql): number {
 interface BuiltQuery {
   sql: FilterQuerySql;
   walk: WalkResult | null;
+  /** Неразрешимые токены AST (пусто — всё разрешено). */
+  unresolved: TokenIssue[];
+  /** Мутируемые счётчики статистики (только при `collectStats`). */
+  stats?: NonNullable<AstExecOptions['stats']>;
 }
 
 function buildQuery(
@@ -1648,10 +3762,42 @@ function buildQuery(
   req: ThoughtQueryRequest,
   emptyFilterMode: 'home_orphans' | 'all',
   requestId?: string,
+  tokenContext?: AstTokenContext,
+  collectStats?: boolean,
+  profile?: FilterProfileId,
+  /**
+   * Опции исполнения AST от встраивающего вызова (хроника ставит
+   * `keywordCommentIncludesLinkComments` — фаза 1 ищет и комментарии связей,
+   * требование ce111b0d). Не критерий выборки: на прочих фасадах не заполняется.
+   */
+  astContext?: AstExecContextOptions,
 ): BuiltQuery {
+  // Красная диагностика (требование 44d61c8a): явное AST-тело, ссылающееся на
+  // удалённую сущность, исполнять запрещено — заведомо неисполнимый отбор не
+  // запускается, пользователь видит причину со снапшотом имени. Применяется
+  // только к ЯВНОМУ wire-AST (`req.ast`); плоские критерии компилируются в AST
+  // внутри движка и проверяются при входе в REST/MCP отдельно (их ссылки —
+  // не AST-сущности пользователя).
+  if (req.ast !== undefined) {
+    // Профиль точки применения (требование 0095daad, ADR 0c02ab4f): операнд,
+    // невидимый в этой точке, отвергается — до исполнения.
+    if (profile !== undefined) assertFilterAstInProfile(req.ast, profile, requestId);
+    const diag = diagnoseFilterAst(ndb, req.ast, { requestId });
+    if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
+  }
   const walk = req.subtree === undefined ? null : walkSubtree(ndb, req.subtree);
-  const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId);
-  return { sql, walk };
+  const unresolved: TokenIssue[] = [];
+  // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
+  const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map(), subqueryBudget: { ids: 0 } };
+  if (tokenContext !== undefined) astOpts.ctx = tokenContext;
+  if (astContext?.keywordCommentIncludesLinkComments === true) {
+    astOpts.keywordCommentIncludesLinkComments = true;
+  }
+  if (collectStats === true) {
+    astOpts.stats = { conditions: 0, nodes_walked: 0, hierarchy_calls: 0, limits_hit: new Set() };
+  }
+  const sql = buildFilterQuerySql(ndb, userId, req, walk, emptyFilterMode, requestId, astOpts);
+  return { sql, walk, unresolved, ...(astOpts.stats !== undefined ? { stats: astOpts.stats } : {}) };
 }
 
 /**
@@ -1664,14 +3810,19 @@ function buildQuery(
  *
  * `emptyFilterMode: 'all'`: пустой фильтр — все мысли (для встраивания в
  * `IN` это корректно); `home_orphans` здесь не имеет смысла.
+ *
+ * `astContext` — контекст исполнения AST от встраивающего вызова: хроника ставит
+ * `keywordCommentIncludesLinkComments`, иначе её фаза 1 (требование ce111b0d)
+ * теряла бы мысли, отобранные по комментариям связей (ошибка fc97548d).
  */
 export function buildThoughtIdSelect(
   ndb: NetworkDb,
   userId: string,
   req: ThoughtQueryRequest,
   requestId?: string,
+  astContext?: AstExecContextOptions,
 ): { sql: string; params: unknown[] } {
-  const built = buildQuery(ndb, userId, req, 'all', requestId);
+  const built = buildQuery(ndb, userId, req, 'all', requestId, undefined, undefined, undefined, astContext);
   return {
     sql: `SELECT t.id ${built.sql.baseSql}`,
     params: [...built.sql.joinParams, ...built.sql.params],
@@ -1694,7 +3845,26 @@ export function queryThoughts(
   opts: ThoughtQueryOptions = {},
 ): ThoughtQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
-  const built = buildQuery(ndb, userId, req, emptyFilterMode);
+  const startedAt = opts.collectStats === true ? performance.now() : 0;
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
+  // Неразрешимый токен AST — пустой результат с пояснением, а не молчаливая
+  // потеря условия (требование b7fdab20).
+  if (built.unresolved.length > 0) {
+    return {
+      items: [],
+      total: req.count === true ? 0 : null,
+      has_more: false,
+      next_cursor: null,
+      directions: {},
+      depths: null,
+      truncated: false,
+      reason: null,
+      unresolved: built.unresolved,
+      ...(built.stats !== undefined
+        ? { stats: finalizeStats(built.stats, startedAt, built, req, opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT) }
+        : {}),
+    };
+  }
   const sql = built.sql;
   const walk = built.walk;
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
@@ -1719,7 +3889,7 @@ export function queryThoughts(
   const items = pageRows.map(rowToThoughtRef);
   // Курсор отдаётся только когда за страницей есть строки: иначе клиент ходил
   // бы за пустым хвостом (требование 3f2fdc41).
-  const nextCursor = hasMore ? buildNextCursor(sql, req, pageRows) : null;
+  const nextCursor = hasMore ? buildNextCursor(sql, pageRows) : null;
   const directions = opts.includeDirections === true ? directionsOf(ndb, items.map((i) => i.id), req.link_filter, opts.showTrash !== false) : {};
   return {
     items,
@@ -1730,6 +3900,34 @@ export function queryThoughts(
     depths: walk === null ? null : new Map(items.map((i) => [i.id, walk.depths.get(i.id)]).filter((e): e is [string, number] => e[1] !== undefined)),
     truncated: walk?.truncated ?? false,
     reason: walk?.reason ?? null,
+    ...(built.stats !== undefined
+      ? { stats: finalizeStats(built.stats, startedAt, built, req, maxLimit) }
+      : {}),
+  };
+}
+
+/**
+ * Собрать итоговую статистику исполнения (требование 0f34a5ff) из мутируемых
+ * счётчиков обхода: время — от старта `queryThoughts`, плюс сработавшие
+ * предохранители, не приведшие к ошибке (обрезка обхода поддерева, потолок
+ * страницы). Вызывается только когда статистика собиралась.
+ */
+function finalizeStats(
+  counters: NonNullable<AstExecOptions['stats']>,
+  startedAt: number,
+  built: BuiltQuery,
+  req: ThoughtQueryRequest,
+  maxLimit: number,
+): QueryStats {
+  const limits = new Set(counters.limits_hit);
+  if (built.walk?.truncated === true) limits.add(`subtree_${built.walk.reason ?? 'nodes'}`);
+  if (req.limit > maxLimit) limits.add('page_limit');
+  return {
+    duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+    conditions: counters.conditions,
+    nodes_walked: counters.nodes_walked,
+    hierarchy_calls: counters.hierarchy_calls,
+    limits_hit: [...limits],
   };
 }
 
@@ -1741,7 +3939,6 @@ export function queryThoughts(
  */
 function buildNextCursor<T extends Record<string, unknown>>(
   sql: FilterQuerySql,
-  req: ThoughtQueryRequest,
   pageRows: T[],
 ): string | null {
   const last = pageRows[pageRows.length - 1];
@@ -1752,8 +3949,7 @@ function buildNextCursor<T extends Record<string, unknown>>(
   });
   return encodeCursor({
     v: CURSOR_VERSION,
-    s: req.sort,
-    o: req.order,
+    sig: sortSignature(sql.keys, sql.idDir),
     h: sql.homeFirst ? 1 : 0,
     k: keys,
     id: String(last['id']),
@@ -1771,7 +3967,21 @@ export function queryThoughtIds(
   opts: ThoughtQueryOptions = {},
 ): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
-  const sql = buildQuery(ndb, userId, req, emptyFilterMode).sql;
+  const startedAt = opts.collectStats === true ? performance.now() : 0;
+  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
+  if (built.unresolved.length > 0) {
+    return {
+      ids: [],
+      total: req.count === true ? 0 : null,
+      has_more: false,
+      next_cursor: null,
+      unresolved: built.unresolved,
+      ...(built.stats !== undefined
+        ? { stats: finalizeStats(built.stats, startedAt, built, req, opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT) }
+        : {}),
+    };
+  }
+  const sql = built.sql;
   const maxLimit = opts.maxLimit ?? STRUCTURES_QUERY_MAX_LIMIT;
   const limit = Math.min(Math.max(req.limit, 1), maxLimit);
   const offset = Math.max(req.offset, 0);
@@ -1795,6 +4005,9 @@ export function queryThoughtIds(
     ids: pageRows.map((r) => r.id),
     total: req.count === true ? countFilterMatches(ndb, sql) : null,
     has_more: hasMore,
-    next_cursor: hasMore ? buildNextCursor(sql, req, pageRows) : null,
+    next_cursor: hasMore ? buildNextCursor(sql, pageRows) : null,
+    ...(built.stats !== undefined
+      ? { stats: finalizeStats(built.stats, startedAt, built, req, maxLimit) }
+      : {}),
   };
 }

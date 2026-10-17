@@ -100,6 +100,45 @@
   width: 100%;
 }
 
+/* Строка поля добавления в режиме-чеклисте: кнопка «Выбрать значения…» и
+   крестик очистки поля — в одну линию (ошибка 50d9bf4e п. C2/C3). */
+.ui-chip-list-add-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-chip-list-add--checklist {
+  width: auto;
+  flex: 1 1 auto;
+}
+
+.ui-chip-list-clear {
+  flex: 0 0 auto;
+}
+
+/* Тело выпадающего списка чекбоксов (ошибка 50d9bf4e п. C3): перечень вариантов
+   в сетке (число колонок — параметр владельца) и кнопка «Выбрать все» под ним. */
+.ui-chip-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: var(--popover-min-w);
+}
+
+.ui-chip-checklist-grid {
+  display: grid;
+  gap: var(--space-1) var(--space-4);
+  align-items: center;
+}
+
+.ui-chip-checklist-footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
 /* Узкий чип-лист: чип не шире контейнера, длинная подпись — многоточием.
    Порог — структурная константа раскладки (guard-ui-tokens: условие запроса). */
 @container ui-chip-list (max-width: 200px) {

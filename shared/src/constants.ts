@@ -374,6 +374,15 @@ export const TRAVERSAL_DEFAULTS = {
   QUERY_TIMEOUT_MS: 5_000,
 } as const satisfies Record<string, number>;
 
+/**
+ * Budget of the «в иерархии» subtree walk (требование aa7a2aea, ADR 588be3f3):
+ * the walk stops with an explicit error (no silent truncation, ADR 58b501d8)
+ * once it has collected this many nodes. Depth is bounded by
+ * {@link TRAVERSAL_DEFAULTS.MAX_DEPTH}, time — by
+ * {@link TRAVERSAL_DEFAULTS.QUERY_TIMEOUT_MS}.
+ */
+export const HIERARCHY_SUBTREE_MAX_NODES = 2_000;
+
 /** Maximum number of ids accepted by `POST /thoughts/resolve` (03-server-api.md §6.9). */
 export const THOUGHT_RESOLVE_MAX_IDS = 100;
 

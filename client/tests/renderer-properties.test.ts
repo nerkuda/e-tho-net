@@ -72,6 +72,9 @@ function shimDocument(): void {
   };
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
+    // Контейнеры значков-облачков (в т.ч. дефолтное облачко мысли, задача
+    // 26006db4) строят SVG через `createElementNS` — как значки Lucide.
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: { style: {} },
     body: new ShimElement('body'),
     addEventListener: (type: string, fn: (event: unknown) => void) => {

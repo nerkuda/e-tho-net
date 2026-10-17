@@ -32,12 +32,13 @@ import type {
   TypeRoles,
   User,
 } from '@etn/shared';
-import { BASE_LAYER_ID, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
+import { BASE_LAYER_ID, defaultFirstDayOfWeek, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
 import { runMigrations } from './migrator.js';
 import { openNetworkDb } from './network-db.js';
+import { walCheckpoint, type WalCheckpointStats } from './wal-checkpoint.js';
 
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
@@ -138,6 +139,7 @@ interface NetworkRow {
   conventions: string | null;
   examples: string | null;
   type_roles: string;
+  first_day_of_week: number;
   created_at: string;
   updated_at: string;
 }
@@ -153,6 +155,10 @@ export function rowToNetwork(r: NetworkRow): Network {
     conventions: r.conventions,
     examples: r.examples,
     type_roles: parseTypeRolesColumn(r.type_roles),
+    first_day_of_week:
+      typeof r.first_day_of_week === 'number' && r.first_day_of_week >= 1 && r.first_day_of_week <= 7
+        ? r.first_day_of_week
+        : 1,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -340,21 +346,22 @@ export class SystemDb {
     this.stInsertNetwork = db.prepare(
       `INSERT INTO networks (id, display_name, owner_id, description,
                              when_to_use, conventions, examples,
-                             type_roles,
+                             type_roles, first_day_of_week,
                              created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stGetNetworkById = db.prepare('SELECT * FROM networks WHERE id = ? LIMIT 1');
     this.stUpdateNetwork = db.prepare(
       `UPDATE networks SET display_name = ?, description = ?, when_to_use = ?,
               conventions = ?, examples = ?, type_roles = ?,
+              first_day_of_week = COALESCE(?, first_day_of_week),
               updated_at = ?
        WHERE id = ?`,
     );
     this.stListNetworksForUser = db.prepare(
       `SELECT n.id AS id, n.display_name AS display_name, n.owner_id AS owner_id,
               n.description AS description, n.when_to_use AS when_to_use,
-              n.type_roles AS type_roles,
+              n.type_roles AS type_roles, n.first_day_of_week AS first_day_of_week,
               n.created_at AS created_at, n.updated_at AS updated_at,
               m.role AS role, ou.display_name AS owner_display_name,
               (SELECT COUNT(*) FROM network_members WHERE network_id = n.id) AS members_count
@@ -774,8 +781,11 @@ export class SystemDb {
     displayName: string,
     description: string | null,
     typeRoles: TypeRoles = {},
+    firstDayOfWeek: number = defaultFirstDayOfWeek(),
   ): Network {
     const now = new Date().toISOString();
+    const firstDay =
+      firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : defaultFirstDayOfWeek();
     this.stInsertNetwork.run(
       id,
       displayName,
@@ -785,6 +795,7 @@ export class SystemDb {
       null,
       null,
       encodeTypeRolesColumn(typeRoles),
+      firstDay,
       now,
       now,
     );
@@ -797,6 +808,7 @@ export class SystemDb {
       conventions: null,
       examples: null,
       type_roles: typeRoles,
+      first_day_of_week: firstDay,
       created_at: now,
       updated_at: now,
     };
@@ -816,6 +828,8 @@ export class SystemDb {
    * underlying UPDATE statement, so callers must read-modify-write the full
    * record via {@link getNetworkById}. `type_roles` (task ba024a45 / 0.7.2)
    * replaces the legacy `node_section_type_id` and is encoded as JSON.
+   * `first_day_of_week` (0.13.1) is optional: когда не задан, значение столбца
+   * сохраняется (`COALESCE`) — так частичный вызов не сбрасывает настройку.
    */
   updateNetwork(
     id: string,
@@ -826,6 +840,7 @@ export class SystemDb {
       conventions: string | null;
       examples: string | null;
       type_roles: TypeRoles;
+      first_day_of_week?: number;
     },
   ): void {
     this.stUpdateNetwork.run(
@@ -835,6 +850,7 @@ export class SystemDb {
       fields.conventions,
       fields.examples,
       encodeTypeRolesColumn(fields.type_roles),
+      fields.first_day_of_week ?? null,
       new Date().toISOString(),
       id,
     );
@@ -866,6 +882,7 @@ export class SystemDb {
       description: string | null;
       when_to_use: string | null;
       type_roles: string;
+      first_day_of_week: number;
       created_at: string;
       updated_at: string;
       role: NetworkRole;
@@ -884,6 +901,9 @@ export class SystemDb {
         description: r.description,
         when_to_use: r.when_to_use,
         has_structure: typeof typeRoles.table_of_contents === 'string',
+        // Настройка сети (задача 8eaeba9a): то же значение, что у
+        // `GET /networks/:id` (`networkDto`) — REST и MCP читают из одного SQL.
+        first_day_of_week: r.first_day_of_week,
       };
     });
   }
@@ -891,25 +911,9 @@ export class SystemDb {
   /** List every network on the server (admin view, 03-server-api.md §4.2). */
   listAllNetworks(): Network[] {
     const rows = this.db
-      .prepare(
-        `SELECT id, display_name, description, when_to_use, conventions, examples,
-                type_roles, owner_id, created_at, updated_at
-           FROM networks
-          ORDER BY created_at ASC`,
-      )
+      .prepare('SELECT * FROM networks ORDER BY created_at ASC')
       .all() as NetworkRow[];
-    return rows.map((r) => ({
-      id: r.id,
-      display_name: r.display_name,
-      description: r.description,
-      when_to_use: r.when_to_use,
-      conventions: r.conventions,
-      examples: r.examples,
-      type_roles: parseTypeRolesColumn(r.type_roles),
-      owner_id: r.owner_id,
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-    }));
+    return rows.map(rowToNetwork);
   }
 
   /** Add a member row. Caller validates role/owner invariants. */
@@ -1413,6 +1417,16 @@ export class SystemDb {
   transaction<T>(fn: () => T): T {
     const wrapped = this.db.transaction(fn);
     return wrapped();
+  }
+
+  /**
+   * Чекпойнт WAL системной БД (ошибка dac92886): при остановке сервера журнал
+   * обеих баз — системной и сетевых — усекается, чтобы `-wal` не оставался
+   * «высокой водой» на диске. Логика одна на все БД —
+   * {@link walCheckpoint} (`db/wal-checkpoint.ts`).
+   */
+  checkpointWal(): WalCheckpointStats {
+    return walCheckpoint(this.db);
   }
 
   /** Close the underlying connection. */

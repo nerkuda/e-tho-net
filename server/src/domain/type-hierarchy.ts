@@ -11,7 +11,14 @@
  * connection's layer resolves, not over raw physical rows of every layer.
  */
 
-import { BASE_LAYER_ID, EtnError, isLinkTypeFilterActive, type LinkTypeFilterInput } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  EtnError,
+  linkFilterToAst,
+  type FilterAstLeaf,
+  type FilterAstNode,
+  type LinkTypeFilterInput,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 
@@ -130,38 +137,127 @@ export function expandTypeIdsToSubtree(
 }
 
 /**
+ * SQL-клауза листа «Тип связи» над ребром (alias `links_v`). Единый операнд
+ * общего AST (задача f7da04d6, требование 8c131cff) в контексте РЕБРА:
+ *
+ *   * `in_hierarchy`/`not_in_hierarchy` — тип вместе с потомками по `link_types`
+ *     (L21), «два режима связей»: список и иерархия. `mode` (structural/
+ *     all_links) к типам связей неприменим (как у операнда «Тип»);
+ *   * `in`/`not_in` — точный список без раскрытия потомков;
+ *   * `eq`/`ne` — одиночный тип;
+ *   * `is_empty`/`not_empty` — нетипизированное/структурное ребро
+ *     (`type_id IS NULL` / `IS NOT NULL`).
+ */
+function edgeLinkTypeLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  alias: string,
+  requestId?: string,
+): { sql: string; params: unknown[] } {
+  const op = leaf.operator;
+  const ids = Array.isArray(leaf.value)
+    ? (leaf.value as unknown[]).filter((v): v is string => typeof v === 'string')
+    : typeof leaf.value === 'string'
+      ? [leaf.value]
+      : [];
+  const fail = (): never => {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Операнд «Тип связи»: оператор «${op}» недопустим.`,
+      { field: 'link_filter' },
+      requestId,
+    );
+  };
+  switch (op) {
+    case 'is_empty':
+      return { sql: `${alias}.type_id IS NULL`, params: [] };
+    case 'not_empty':
+      return { sql: `${alias}.type_id IS NOT NULL`, params: [] };
+    case 'in_hierarchy':
+    case 'not_in_hierarchy': {
+      const expanded = ids.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'link_types', ids);
+      if (expanded.length === 0) return op === 'in_hierarchy' ? { sql: '0', params: [] } : { sql: '1=1', params: [] };
+      return {
+        sql: `${alias}.type_id ${op === 'in_hierarchy' ? 'IN' : 'NOT IN'} (${expanded.map(() => '?').join(',')})`,
+        params: expanded,
+      };
+    }
+    case 'in':
+    case 'not_in': {
+      const list = ids;
+      if (list.length === 0) return op === 'in' ? { sql: '0', params: [] } : { sql: '1=1', params: [] };
+      return {
+        sql: `${alias}.type_id ${op === 'in' ? 'IN' : 'NOT IN'} (${list.map(() => '?').join(',')})`,
+        params: [...list],
+      };
+    }
+    case 'eq':
+    case 'ne': {
+      const id = ids[0];
+      if (id === undefined) return op === 'eq' ? { sql: '0', params: [] } : { sql: '1=1', params: [] };
+      return { sql: `${alias}.type_id ${op === 'eq' ? '=' : '<>'} ?`, params: [id] };
+    }
+    default:
+      return fail();
+  }
+}
+
+/** SQL-клауза канонического AST-условия фильтра типов связей над ребром. */
+function edgeLinkFilterClause(
+  ndb: NetworkDb,
+  node: FilterAstNode,
+  alias: string,
+  requestId?: string,
+): { sql: string; params: unknown[] } {
+  if ('op' in node) {
+    if (node.op === 'not') {
+      const child = edgeLinkFilterClause(ndb, node.children[0]!, alias, requestId);
+      return { sql: `NOT (${child.sql})`, params: child.params };
+    }
+    const parts = node.children.map((c) => edgeLinkFilterClause(ndb, c, alias, requestId));
+    if (node.op === 'and') {
+      return parts.length === 0
+        ? { sql: '1=1', params: [] }
+        : { sql: `(${parts.map((p) => p.sql).join(' AND ')})`, params: parts.flatMap((p) => p.params) };
+    }
+    return parts.length === 0
+      ? { sql: '0', params: [] }
+      : { sql: `(${parts.map((p) => p.sql).join(' OR ')})`, params: parts.flatMap((p) => p.params) };
+  }
+  if (node.entity.kind !== 'link_type') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Фильтр типов связей допускает только операнд «Тип связи», получен «${node.entity.kind}».`,
+      { field: 'link_filter' },
+      requestId,
+    );
+  }
+  return edgeLinkTypeLeafClause(ndb, node, alias, requestId);
+}
+
+/**
  * SQL clause of the traversal link-type filter (задача c965ad03, требование
- * bed23c25 «Фильтр обхода по типам связей»).
+ * bed23c25 «Фильтр обхода по типам связей»; задача f7da04d6 — перевод на общий
+ * AST).
  *
  * `alias` is the SQL alias of a `links_v` reference (`'l'`, `'lp'`, …) whose
  * `type_id` column the clause constrains. Returns `null` when the filter is
  * absent/empty — the caller must then keep the historical "walk every edge"
- * behaviour. The typed ids are expanded to their `link_types` subtrees here,
- * so every caller shares the same descendant semantics; unknown ids are kept
- * verbatim (they match nothing — same preservation rule as the thought-type
- * filters). A filter that selects no types and no structural links yields the
- * guaranteed-false `0` fragment.
+ * behaviour. Плоский `link_filter` компилируется в канонический AST-лист
+ * ({@link linkFilterToAst}) и исполняется {@link edgeLinkFilterClause}: типы
+ * раскрываются вместе с потомками `link_types` (L21), `include_structural`
+ * добавляет нетипизированные рёбра; неизвестные id сохраняются как есть (не
+ * совпадают ни с чем). Фильтр, не отобравший ни типов, ни структурных рёбер,
+ * даёт гарантированно-ложный фрагмент `0`.
  */
 export function linkTypeFilterClause(
   ndb: NetworkDb,
   filter: LinkTypeFilterInput | undefined,
   alias: string,
 ): { sql: string; params: unknown[] } | null {
-  if (!isLinkTypeFilterActive(filter)) return null;
-  const expanded = expandTypeIdsToSubtree(ndb, 'link_types', filter?.type_ids ?? []);
-  const structural = filter?.include_structural === true;
-  if (expanded.length === 0) {
-    return structural
-      ? { sql: `${alias}.type_id IS NULL`, params: [] }
-      : { sql: '0', params: [] };
-  }
-  const placeholders = expanded.map(() => '?').join(',');
-  return {
-    sql: structural
-      ? `(${alias}.type_id IN (${placeholders}) OR ${alias}.type_id IS NULL)`
-      : `${alias}.type_id IN (${placeholders})`,
-    params: expanded,
-  };
+  const node = linkFilterToAst(filter);
+  if (node === undefined) return null;
+  return edgeLinkFilterClause(ndb, node, alias);
 }
 
 /**

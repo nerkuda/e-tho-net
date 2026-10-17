@@ -116,8 +116,8 @@ function view(
     order?: 'asc' | 'desc';
   } = {},
 ): ThoughtTypeView {
-  // `definition` для тестов — это та же JSON-строка, что хранится на сервере;
-  // клиент читает из неё `sort`/`order` и передаёт их в opts `run`.
+  // `definition` для тестов — та же JSON-строка, что хранится на сервере;
+  // сортировку из неё читает сервер (`readSavedSort`), полоса opts не передаёт.
   const definitionObj: Record<string, unknown> = { criteria: [] };
   if (options.sort !== undefined) definitionObj['sort'] = options.sort;
   if (options.order !== undefined) definitionObj['order'] = options.order;
@@ -302,7 +302,7 @@ beforeEach(async () => {
   (globalThis as any).etn = installFakeApi();
   // Drop the module's per-focus caches between tests: `renderStrip(null)`
   // clears `currentFocusId`, so the next `renderStrip(focus)` is a real focus
-  // change and resets the run result and the view `sort`/`order` cache.
+  // change and resets the run result and the view-definition cache.
   // Without this the per-focus caches leak across tests (by design in
   // production: they reset on a focus change, not on a re-render).
   await strip.renderStrip(null);
@@ -685,12 +685,15 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.ok(Array.isArray(result!.unresolved));
   });
 
-  it('runActiveViewIfNeeded: passes sort/order from the view definition as opts (error 119b314f)', async () => {
-    // Сервер по умолчанию сортирует результат отбора «alpha asc», и без
-    // явных sort/order opts в `etn.thoughtTypeViews.run` порядок из
-    // определения отбора теряется. Полоса должна читать `sort`/`order` из
-    // `definition` (один `thoughtTypeViews.list` на viewId, кешируется) и
-    // передавать их серверу, чтобы `sortItems` применил нужный порядок.
+  it('runActiveViewIfNeeded: не передаёт sort/order — сохранённую сортировку читает сервер из определения (ADR 23fab347)', async () => {
+    // Полоса отборов — ИСПОЛНИТЕЛЬ, а не второй конструктор: она не имеет
+    // своего мнения о допустимых сортировках и не подменяет сохранённую
+    // (ADR «условия отбора строит один конструктор…», запрет «фильтровать
+    // состав сортировок на стороне исполнителя»). Определение отбора сервер
+    // читает сам (`readSavedSort`/`ast.sort`) — клиент лишь просит исполнить
+    // отбор, не передавая `sort`/`order`. Прежний контракт (полоса передаёт
+    // плоскую пару, ошибка 119b314f) отпал, когда исполнитель начал читать
+    // сортировку из определения.
     const harness = installShim();
     setNetwork();
     strip.mountFilterStrip(harness.host as any);
@@ -714,31 +717,44 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
     await strip.runActiveViewIfNeeded(FOCUS_ID);
     assert.equal(state.viewRun.calls.length, 1);
-    const opts = state.viewRun.calls[0]?.opts as { sort?: string; order?: string } | undefined;
-    assert.deepEqual(opts, { sort: 'created', order: 'desc' });
-    // Повторный запуск без смены отбора должен идти из кеша — `list` зовётся
-    // ровно один раз, opts не меняются.
+    assert.equal(
+      state.viewRun.calls[0]?.opts,
+      undefined,
+      'полоса не подменяет сортировку: opts уходят без sort/order',
+    );
+    // Повторный запуск и догрузка порции идут тем же путём — без sort/order.
     await strip.runActiveViewIfNeeded(FOCUS_ID);
-    assert.equal(state.viewsList.calls.length, 1);
-    assert.equal(state.viewRun.calls.length, 2);
-    assert.deepEqual(state.viewRun.calls[1]?.opts, { sort: 'created', order: 'desc' });
+    assert.equal(state.viewRun.calls[1]?.opts, undefined);
+    await strip.loadMoreViewResult(FOCUS_ID);
+    assert.equal(
+      state.viewRun.calls[2]?.opts,
+      undefined,
+      'догрузка страницы тоже не передаёт sort/order',
+    );
   });
 
-  it('runActiveViewIfNeeded: сортировка updated из определения передаётся серверу (бывшая легаси, ошибки 33a3e285/4dd14aa3)', async () => {
-    // До 0.8.2 `updated` было легаси-значением вне единого набора и
-    // исполнялось с дефолтом + предупреждением. Сервер поддержал сортировку
-    // «по дате изменения» (ошибка 4dd14aa3) — теперь она в едином наборе
-    // конструктора и передаётся как обычные opts, без дефолта и без notice.
+  it('runActiveViewIfNeeded: AST-сортировка по свойству реестра не фильтруется и не даёт «неподдерживаемого» notice', async () => {
+    // Диалог отбора типа сохраняет определение как AST с многоуровневой
+    // сортировкой `sort: [{ key, order }]`, где ключ может быть свойством
+    // реестра (lib/filter-sort.ts, группа 'properties'). Полоса обязана
+    // исполнить такой отбор, не отбраковывая ключ на своей стороне: раньше
+    // она читала только плоские строки `sort`/`order`, для массива AST
+    // возвращала `null`, а значение вне плоского набора помечала
+    // «неподдерживаемым» (ошибки 33a3e285/119b314f, ADR 23fab347).
     const harness = installShim();
     setNetwork();
-    (globalThis as any).window = globalThis; // notice использует window.setTimeout
     strip.mountFilterStrip(harness.host as any);
-    state.thoughtsGet.response = {
-      meta: [metaViewRow(view('v-u', 'U', { is_default: true, position: 0, sort: 'updated', order: 'asc' }))],
+    const astDefinition = JSON.stringify({
+      version: 1,
+      filter: { op: 'and', children: [] },
+      sort: [{ key: 'p-city', order: 'desc' }],
+    });
+    const astView: ThoughtTypeView = {
+      ...view('v-ast', 'AST', { is_default: true, position: 0 }),
+      definition: astDefinition,
     };
-    state.viewsList.effective = [
-      view('v-u', 'U', { is_default: true, position: 0, sort: 'updated', order: 'asc' }),
-    ];
+    state.thoughtsGet.response = { meta: { views: [metaViewRow(astView)] } };
+    state.viewsList.effective = [astView];
     state.viewRun.response = {
       data: [],
       meta: {
@@ -746,16 +762,18 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
         limit: 50,
         offset: 0,
         directions: {},
-        view: { id: 'v-u', name: 'U', type_id: TYPE_ID },
+        view: { id: 'v-ast', name: 'AST', type_id: TYPE_ID },
         unresolved: [],
       },
     };
     await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
     const result = await strip.runActiveViewIfNeeded(FOCUS_ID);
-    assert.ok(result !== null, 'отбор с сортировкой updated исполняется');
-    // `updated` — валидное значение единого набора: opts уходят на сервер,
-    // дефолт alpha не подменяет сохранённую сортировку.
-    assert.deepEqual(state.viewRun.calls[0]?.opts, { sort: 'updated', order: 'asc' });
+    assert.ok(result !== null, 'AST-отбор с ключом-свойством исполняется полосой');
+    assert.equal(
+      state.viewRun.calls[0]?.opts,
+      undefined,
+      'ключ-свойство не фильтруется полосой — определение читает исполнитель',
+    );
   });
 
   // -------------------------------------------------------------------

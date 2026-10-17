@@ -56,13 +56,54 @@
   overflow-y: auto;
 }
 
+/* Зона настроек — flex-колонка: прокручиваемое ТЕЛО (места поиска + дерево
+   условий) и постоянно видимый ПОДВАЛ команд («Очистить», «Добавить отбор…»).
+   Сама зона не прокручивается — полоса живёт у тела, поэтому команды не
+   уезжают вместе с условиями (задача 4b1cc3d4). */
 .search-settings {
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+/* Тело зоны — единственная прокручиваемая часть настроек. */
+.search-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+}
+
+/* В поиске скроллер — ТЕЛО зоны, а не дерево редактора: строка «места поиска»
+   и условия прокручиваются вместе, подвал команд остаётся видимым. Поэтому у
+   редактора внутри тела свою полосу прокрутки (`filter-editor.css`: `.fe`
+   сжимается, `.ft` скроллится) отбираем — иначе полос было бы две (задача
+   4b1cc3d4). Футера редактора у строки поиска нет, фиксировать нечего. */
+.search-settings-body .fe {
+  flex: 0 0 auto;
+  max-height: none;
+}
+
+.search-settings-body .fe > .ft {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+/* Подвал зоны: постоянно видимые команды отбора (не прокручивается). */
+.search-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 0 auto;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
 }
 
 /* Ширина окна > 1000px: настройки справа от результатов — 30% ширины панели.
@@ -72,8 +113,6 @@
   flex: 0 0 30%;
   border-left: 1px solid var(--border);
   padding-left: 12px;
-  /* Боковая зона растянута на высоту тела — своя вертикальная прокрутка. */
-  overflow-y: auto;
 }
 
 /* Ширина окна ≤ 1000px: настройки сверху над результатами. */
@@ -84,8 +123,9 @@
 /* В колонке настройки не растягиваются и не сжимаются (`flex: 0 0 auto`):
    высоту им задаёт содержимое, но не выше `max-height` — иначе три строки
    настроек съедали бы результаты, а результаты получали нулевую высоту.
-   Сверх предела настройки прокручиваются своей полосой, остаток высоты
-   панели забирают результаты.
+   Сверх предела прокручивается ТЕЛО настроек (`.search-settings-body`) своей
+   полосой, подвал команд остаётся видимым; остаток высоты панели забирают
+   результаты.
    Предел задан в определённых единицах (`px`/`vh`): процент от высоты тела
    не разрешается — тело получает высоту флексингом, и Chromium считает её
    неопределённой, поэтому `max-height: 45%` молча превращался в `none`
@@ -100,7 +140,6 @@
   max-height: min(240px, 25vh);
   border-bottom: 1px solid var(--border);
   padding-bottom: 10px;
-  overflow-y: auto;
 }
 
 /* Одна «строка» настроек. При нехватке ширины элементы строки укладываются
@@ -122,12 +161,6 @@
   margin-bottom: 0;
 }
 
-/* Поле мыслей-подкорней тянется по ширине строки настроек. */
-.search-settings-row .entity-chip-field {
-  flex: 1 1 160px;
-  min-width: 0;
-}
-
 /* Выключенное поле выбора мыслей-подкорней (флажок не установлен). */
 .entity-chip-field.disabled {
   opacity: 0.55;
@@ -136,11 +169,6 @@
 .entity-chip-field.disabled .st-f-chipfield,
 .entity-chip-field.disabled .entity-chip-pick {
   cursor: default;
-}
-
-/* Поля «Автор»/«редактор» в строке ограничений — без нижнего отступа. */
-.search-settings-row .user-select-row {
-  margin: 0;
 }
 
 .search-group {
@@ -233,5 +261,30 @@
 .search-empty {
   color: var(--text-faint);
   padding: 12px 4px;
+}
+
+/* Диагностика неразрешённых токенов отбора — над группами результатов
+   (задача 4b1cc3d4): условие с токеном без контекста (например, «Мысль в
+   иерархии $thought» без мысли в фокусе) видно пользователю, а не выглядит
+   молча пустой выдачей (требование b7fdab20). */
+.search-diagnostics {
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+
+.search-diagnostic-warning {
+  margin: 0 0 4px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.search-diagnostic-item {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: break-word;
 }
 

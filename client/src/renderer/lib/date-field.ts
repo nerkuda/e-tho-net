@@ -50,6 +50,12 @@ export interface DateFieldOptions {
   onPick?: () => Promise<string | null>;
   /** Новое значение поля: валидная дата `YYYY-MM-DD` либо `''` (очистка). */
   onChange?: (value: string) => void;
+  /**
+   * Не рисовать собственный крестик очистки. Нужно, когда поле встроено в
+   * контейнер со своей единой кнопкой очистки/сброса (датовый виджет дерева
+   * отбора, ошибка заказчика 2026-10-14, п.11д) — второй крестик не нужен.
+   */
+  hideClear?: boolean;
 }
 
 /** Рукоятка поля даты. */
@@ -163,7 +169,8 @@ export function dateField(opts: DateFieldOptions = {}): DateFieldHandle {
 
   root.append(input);
   if (opts.onPick !== undefined) root.append(pickBtn);
-  root.append(clearBtn);
+  // Свой крестик не рисуется, когда очисткой заведует контейнер (hideClear).
+  if (opts.hideClear !== true) root.append(clearBtn);
   syncClear();
 
   return {

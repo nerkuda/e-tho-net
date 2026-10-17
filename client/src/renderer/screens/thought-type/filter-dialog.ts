@@ -1,99 +1,69 @@
 /**
- * Диалог создания и правки отбора типа мысли (задача e37f3f04, спека
- * e0257ca5 «Диалог отбора типа мысли», версия 0.7.3).
+ * Диалог создания и правки отбора типа мысли (задача e37f3f04, спека e0257ca5
+ * «Диалог отбора типа мысли», версия 0.7.3; пересобран на ЕДИНЫЙ редактор отбора
+ * — задача cfbe8c74, требование a049bb40 «Диалог отбора типа мысли пересобран на
+ * дерево (эталон)», ADR fc23f9c1 «судьба спец-секций старых панелей», ADR
+ * a9336708 «очерёдность пересборки пяти мест»).
  *
- * Конструктор условий повторяет панель «Структур» (`filter-panel.ts`) БЕЗ
- * блока сохранённых отборов, кнопок применения и сплиттера: ключевые слова,
- * родительские мысли, типы мыслей и связей, свойства, автор/редактор, даты,
- * «Дополнительно» и сортировка. Тяжёлые группы («Свойства», «Дополнительно»,
- * «Автор / Редактор», «Даты») — сворачиваемые, по умолчанию свёрнуты; заголовок
- * любой группы, чьи условия не пусты, подсвечивается и помечается `*`.
+ * Условия собирает ОБЩИЙ редактор (`lib/filter-editor.ts`) с профилем контекста
+ * «мысли»: дерево групп И/ИЛИ/НЕ со строками `[Что][Оператор][Значение]`,
+ * секция сортировки, футер с фразой-превью и общей диагностикой строк. Собственных
+ * секций и парсеров у диалога больше нет — прежние «ключевые слова»,
+ * «родительские мысли», «типы мыслей/связей», автор/редактор, даты, свойства и
+ * «Дополнительно» стали обычными строками дерева (ADR fc23f9c1). Контекстные
+ * токены `$thought.*` и `$thought.[Свойство]` — подсказки ячейки значения
+ * (единый каталог `lib/filter-tokens.ts`): набор выводится по природе операнда,
+ * а свойства берутся из ВСЕГО реестра сети (ошибка 50d9bf4e, пункты A3–A6);
+ * своей токен-кнопочной секции у диалога нет.
  *
- * Значения условий редактирует ОБЩИЙ редактор значения
- * (`editor/value-editor.ts`, стандарт S2): вид значения выбирает он, а
- * токены-кандидаты (поля мысли + свойства типа и его предков + `$today`/
- * `$now`/`$user`, собранные по типу отбора) вызывающий передаёт источником
- * подсказок (`extraSuggest`). Список токенов ограничен операцией условия:
- * списочные токены предлагаются только в «в списке» и «не в списке».
- * «Родительские мысли»/«Типы мыслей»/«Типы связей» и списки автора/редактора
- * строит общий чип-лист сущностей (`lib/entity-picker.ts`) с тем же
- * источником токенов: несколько литералов и токенов свободно смешиваются, а
- * чек-лист/поиск (кнопка «выбрать…») ДОБАВЛЯЕТ к чипам, а не подменяет их.
+ * Сохранение — AST-определение (`{version, filter, sort?}`, форма 0.13.1) через
+ * `etn.thoughtTypeViews.create`/`.update` по IPC. Старую плоскую `definition v1`
+ * единый конструктор компилирует в дерево НА ВХОДЕ (`parseViewDefinition` →
+ * `compileFlatCriteriaToAst`), поэтому сохранённый ранее отбор открывается
+ * деревом с тем же результатом. Пустой отбор сохранить нельзя.
  *
- * Сохранение: `etn.thoughtTypeViews.create`/`.update` через IPC. Пустой отбор
- * (ни одного условия) сохранить нельзя — ошибка показывается под формой.
- *
- * Условия отбора строит единый конструктор `lib/filter-builder.ts`
- * (задача 48b59d00, веха 5 версии 0.8.2): модель состояния, словарь
- * операторов, наборы сортировок/направлений, конвертер в wire и строка
- * условия «автор/редактор» импортируются оттуда; диалог держит только
- * кандидатов-токены и раскладку групп.
+ * Кнопки — модального диалога: в футере редактора стандартный набор погашен
+ * (`buttons: {standard:false}`), «Отмена»/«Применить» живут в панели диалога.
+ * Имя отбора — общее поле футера (элемент ca905fbc), описание и «Открывать по
+ * умолчанию» — собственные поля диалога.
  */
 
 import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
-  type EffectiveTypeProperty,
   type NetworkProperty,
-  type PropertyValueType,
-  type StructurePropertyOp,
-  type ThoughtType,
   type ThoughtTypeView,
-  type ThoughtTypeViewDefinition,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
 } from '@etn/shared';
 import { t } from '../../lib/i18n.js';
 
-import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { div, el, errText } from '../../lib/dom.js';
+import { div, errText } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
-import { fieldError, footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
+import { footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
+import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
 import {
-  buildAuthorshipSection,
-  buildConditionsSection,
-  buildDatesSection,
-  buildEntityChipSection,
-  buildExtrasSection,
-  buildKeywordsSection,
-  buildParentThoughtsSection,
-  buildSortSection,
-  type FilterFormContext,
-  type FilterSection,
-} from '../../lib/filter-form.js';
+  constructorFilterIssues,
+  filterIssuesFromError,
+  hasBlockingIssues,
+  mergeFilterIssues,
+  type FilterIssue,
+} from '../../lib/filter-diagnostics.js';
+import { type FilterCriteriaState } from '../../lib/filter-builder.js';
+import type { FilterTreeData } from '../../lib/filter-tree.js';
 import { notice } from '../../lib/notice.js';
 import { formDirty } from '../../lib/pure.js';
-import {
-  buildEntityChipField,
-  filterEntityOptions,
-  pickEntitiesModal,
-  thoughtTypeEntityOptions,
-  linkTypeEntityOptions,
-  type EntityOption,
-} from '../../lib/entity-picker.js';
-import { wireSuggest, type SuggestEntry, type SuggestSource } from '../../lib/suggest-dropdown.js';
-import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
+import { fieldRow, fieldTextarea } from '../../lib/ui/field.js';
+import { checkboxRow } from '../../lib/ui/choice-row.js';
 import { store } from '../../state.js';
 
 import {
-  buildTokensForField,
-  buildTokensForSpecialField,
-  buildWireDefinition,
-  filterComboOptions,
+  buildViewAst,
+  buildViewAstDefinition,
   hasAnyCriteria,
   parseViewDefinition,
-  tokensToComboOptions,
-  type ChainProperties,
-  type ComboOption,
-  type DialogCriteriaState,
-  type ViewToken,
 } from './filter-dialog-pure.js';
-
-import { withReverseLinkPropertySides } from '../../lib/filter-builder.js';
-import { fieldInput, fieldTextarea } from '../../lib/ui/field.js';
-import { checkboxRow } from '../../lib/ui/choice-row.js';
-import { fieldRow } from '../../lib/ui/field.js';
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -125,74 +95,55 @@ export interface OpenViewEditorOptions {
  */
 export function openViewEditorDialog(opts: OpenViewEditorOptions): void {
   // The body is built lazily after the type chain is loaded (we need the
-  // ancestor types' effective properties to feed the token-picker).
+  // ancestor types' effective properties to feed the context-token source).
   void buildAndShow(opts).catch((err: unknown) => {
     notice(`Не удалось открыть диалог отбора: ${errText(err)}`, 'error');
   });
 }
 
-/** Module-scoped chain of properties for the currently open dialog.
- *  The token-picker reads it lazily — there is at most one dialog open at
- *  a time. Set when the chain loads, cleared in the dialog's `onClose`
- *  (see `buildAndShowImpl`) — NOT in a `finally`, because `buildAndShowImpl`
- *  resolves once the DOM is mounted and the dialog has not closed yet, so a
- *  `finally` would wipe the chain before the user clicks any token button.
- */
-let activeChainProps: ChainProperties[] | null = null;
+/** Module-scoped chain of properties is NOT kept: the context-token source is
+ *  built with the loaded chain closure at dialog build time, so there is no
+ *  shared mutable state to clear on close. */
 
 function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
   return buildAndShowImpl(opts);
 }
 
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
-  const { networkId, thoughtTypeId, typeName } = opts;
-  // 1. Resolve the type chain (own + ancestors). The token-picker needs every
-  //    property available on this type so users can pin a condition value to,
-  //    say, `$thought.[версия]`.
-  const chain = await loadTypeChain(networkId, thoughtTypeId);
-  const chainProps = await loadTypeChainProperties(networkId, chain);
-  activeChainProps = chainProps;
-  // Property registry (registry-level metadata, e.g. name and multiple flag
-  // for each property binding on the chain). Задача df992826: к реестру
-  // добавляются обратные стороны ВСЕХ свойств-связей реестра — в конструкторе
-  // условий обе стороны адресуемы (обе стороны каждой связи, не только
-  // цепочки редактируемого типа).
-  const baseRegistry = new Map<string, NetworkProperty>();
+  const { networkId, typeName } = opts;
+  // Property registry (registry-level metadata, e.g. name and multiple flag for
+  // each property). Обратные стороны свойств-связей добавляют сами модули
+  // редактора (дерево/сортировка) — реестр передаётся как есть. Токены
+  // `$thought.[…]` предлагаются по ВСЕМУ реестру сети (ошибка 50d9bf4e п. A6),
+  // поэтому цепочка типов для подсказок больше не грузится.
+  const registry = new Map<string, NetworkProperty>();
   try {
     const list = await etn.propertyRegistry.list(networkId);
-    for (const row of list) baseRegistry.set(row.id, row);
+    for (const row of list) registry.set(row.id, row);
   } catch {
-    /* empty registry — picker just shows none of the property tokens */
+    /* empty registry — the operand list just shows characteristics only */
   }
-  const registryById = withReverseLinkPropertySides(baseRegistry, store.state.linkTypes);
 
-  // 2. Initialise the form state from the existing view (or defaults).
+  // 2. Initialise the form state from the existing view (or defaults). Старая
+  //    плоская `definition v1` компилируется в дерево здесь же (на входе).
   const isEdit = opts.view !== null;
-  const title = isEdit ? 'Изменить отбор' : 'Создать отбор';
-  const initial = parseViewDefinition(opts.view);
+  // Заголовок диалога (ошибка 23c7d3e9 п. C1): правка существующего отбора —
+  // «Отбор для «<тип>»», создание нового — «Создать отбор для «<тип>»».
+  const title = isEdit
+    ? t('filterEditor.dialogTitleEdit', typeName)
+    : t('filterEditor.dialogTitleCreate', typeName);
+  const state = parseViewDefinition(opts.view, registry);
   const initialName = opts.view?.name ?? '';
   const initialDescription = opts.view?.description ?? '';
   const initialIsDefault = opts.view?.is_default ?? false;
   const initialVersion = opts.view?.version ?? 0;
+  let name = initialName;
 
   // 3. Build the form DOM.
   const body = div('form-stack view-editor-body');
   // Ошибка отбора живёт в панели кнопок (единственное обязательное место
-  // ошибки диалога, требование 397c5a56); у поля имени — дублирование.
+  // ошибки диалога, требование 397c5a56).
   const errorLine = footerErrorLine();
-
-  // Name — required, ≤200.
-  const nameInput = fieldInput() as HTMLInputElement;
-  nameInput.type = 'text';
-  nameInput.value = initialName;
-  nameInput.maxLength = THOUGHT_TYPE_VIEW_NAME_MAX;
-  nameInput.placeholder = 'Название отбора (обязательно)';
-  const nameError = fieldError();
-  const nameField = fieldRow({
-    label: `Имя отбора (тип «${typeName}»)`,
-    control: nameInput,
-    error: nameError,
-  });
 
   // Description — optional, ≤1000.
   const descInput = fieldTextarea() as HTMLTextAreaElement;
@@ -207,41 +158,115 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const defaultCheckbox = defaultRow.input;
   const defaultField = defaultRow.row;
 
-  // Criteria builder. Self-contained: it owns the criteria state for the
-  // dialog lifetime.
-  const criteria = buildCriteriaBuilder({ networkId, initial, registryById });
-  /** Определение условий на момент открытия — база «грязной» проверки
-   *  (требование b58f6aad). Снимок — из того же конструктора, поэтому
-   *  нетронутая форма не считается изменённой. */
-  const criteriaBase = criteria.buildWire();
+  // --- Единый редактор условий (профиль «мысли») --------------------------
+  const data: FilterTreeData = {
+    registry,
+    linkTypes: store.state.linkTypes,
+    thoughtTypes: store.state.thoughtTypes,
+    // Контекстные операнды первыми строками списка «Что» — тем же компонентом
+    // списка, что и в остальных местах. «Потомки» стоят ЗДЕСЬ ЖЕ (верхняя
+    // безымянная группа), а не в «Характеристиках», как было: группировка
+    // списка операндов обязана совпадать во всех местах (ошибка 50d9bf4e
+    // п. A2). Состав сверен со «Структурами», Дневником, картой и рецептом.
+    contextual: ['keywords', 'parents', 'children', 'type', 'link_type'],
+  };
+  /** Записи диагностики ядра (отказ сохранения сервером) — показываются
+   *  деревом и футером наравне с проверками конструктора. */
+  let serverIssues: readonly FilterIssue[] = [];
+  let editorRef: FilterEditorHandle | null = null;
+  /**
+   * Снимок определения на момент открытия — база «грязной» проверки
+   * (требование b58f6aad). Снимок — тем же конвертером, поэтому нетронутая
+   * форма не считается изменённой.
+   *
+   * Объявлен ДО сборки редактора: фабрика синхронно строит футер, его
+   * `refresh` читает `host.baseline()` — обратись к `criteriaBase` из стрелки
+   * `baseline` ниже по коду, получили бы TDZ-ошибку «Cannot access
+   * 'criteriaBase' before initialization» при открытии диалога отбора
+   * (ошибка 609deba0 п. C1).
+   */
+  const criteriaBase = buildViewAst(state);
+  const editor = buildFilterEditor({
+    profile: 'thoughts',
+    networkId,
+    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    data,
+    // ЕДИНСТВЕННОЕ фокусное место (требование 3697eb65): отбор типа мысли
+    // исполняется сервером ОТНОСИТЕЛЬНО мысли-контекста, поэтому подсказки
+    // токенов `$thought*` здесь уместны. Прочие точки профиля `thoughts`
+    // (панель «Структур», строка поиска) и другие экраны признак не ставят.
+    withFocusThought: true,
+    getState: () => state,
+    touch: () => editorRef?.refresh(),
+    // Набор текста в поле значения (ошибка 7d36f439): диалог не пересобирается —
+    // поле ввода сохраняет фокус и каретку (фразу футера обновляет фабрика).
+    touchValue: () => undefined,
+    // Заголовок секции условий (ошибка 23c7d3e9 п. C2): имя типа уже несёт
+    // заголовок диалога, повторять его в секции не нужно.
+    title: t('filterEditor.conditionsTitle'),
+    // Модальное место: кнопки — в панели диалога, стандартный набор погашен.
+    buttons: { standard: false },
+    host: {
+      // Стандартная «Применить» погашена; кнопка живёт в панели диалога.
+      apply: () => {
+        if (closeDialog !== null) void onSave(saveCtx(closeDialog));
+      },
+      getName: () => name,
+      setName: (value: string) => {
+        name = value;
+      },
+      savedName: () => (isEdit ? initialName : null),
+      baseline: () => criteriaBase,
+      current: () => buildViewAst(state),
+      issues: () => serverIssues,
+    },
+  });
+  editorRef = editor;
 
-  // Section title — жирный, чтобы «Критерии отбора» читались как заголовок.
-  const criteriaLabel = el('div', 'view-editor-section-title', 'Критерии отбора');
-
-  body.append(nameField, descField, defaultField, criteriaLabel, criteria.root);
+  body.append(descField, defaultField, editor.root);
+  // Имя отбора — ПЕРВЫМ полем диалога (ошибка 50d9bf4e п. A1). Строку имени
+  // строит футер редактора (одна реализация), но здесь она переносится в начало
+  // разметки диалога: у модального места имя — главный идентификатор отбора, и
+  // оно не должно прятаться под деревом условий.
+  if (editor.nameRow !== null) body.prepend(editor.nameRow);
 
   // 4. Show the dialog. The Save button keeps itself open on validation
   //    failure; we close only when the IPC call resolves.
   let saveBtn: HTMLButtonElement | null = null;
+  let closeDialog: (() => void) | null = null;
   /** Контекст сохранения — общий для кнопки «Применить» и подтверждения
    *  «Сохранить» при закрытии «грязного» редактора (требование b58f6aad). */
   const saveCtx = (close: () => void): SaveCtx => ({
     close,
     saveBtn,
     opts,
-    name: nameInput.value,
-    description: descInput.value,
-    isDefault: defaultCheckbox.checked,
+    state,
+    getName: () => name,
+    getDescription: () => descInput.value,
+    getIsDefault: () => defaultCheckbox.checked,
     version: initialVersion,
-    criteria,
     errorLine,
-    nameError,
-    nameAddress: { field: () => nameInput },
+    nameAddress: {
+      // Имя отбора перенесено в начало разметки диалога (п. A1), поэтому поле
+      // ищем по телу, а не по корню редактора.
+      field: () => (body.querySelector('.ff-name__input') as HTMLElement | null) ?? body,
+    },
+    setServerIssues: (issues) => {
+      serverIssues = issues;
+      editor.refresh();
+    },
+    refreshEditor: () => editor.refresh(),
   });
   showDialog({
     title,
     body,
     size: 'l',
+    // Высота диалога вдвое больше роли `l`, тело — flex-колонка: прокручивается
+    // ТОЛЬКО дерево условий, а имя, описание, секция сортировки и строка полного
+    // представления (футер) остаются постоянно видимыми (ошибка 50d9bf4e
+    // п. A8). Модификатор на боксе задаёт высоту (CSS `view-editor-dialog`).
+    fixedHeight: true,
+    onMount: (_close, box) => box.classList.add('view-editor-dialog'),
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,
@@ -250,10 +275,10 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     // «Сохранить» идёт тем же путём, что «Применить».
     dirty: {
       isDirty: () =>
-        nameInput.value !== initialName ||
+        name !== initialName ||
         descInput.value !== initialDescription ||
         defaultCheckbox.checked !== initialIsDefault ||
-        formDirty(criteriaBase, criteria.buildWire()),
+        formDirty(criteriaBase, buildViewAst(state)),
       save: (close) => void onSave(saveCtx(close)),
     },
     buttons: [
@@ -266,13 +291,11 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
           saveBtn = b;
         },
         onClick: (close) => {
+          closeDialog = close;
           void onSave(saveCtx(close));
         },
       },
     ],
-    onClose: () => {
-      activeChainProps = null;
-    },
   });
 }
 
@@ -284,21 +307,24 @@ interface SaveCtx {
   close: () => void;
   saveBtn: HTMLButtonElement | null;
   opts: OpenViewEditorOptions;
-  name: string;
-  description: string;
-  isDefault: boolean;
+  /** Единая модель отбора (дерево условий + сортировка). */
+  state: FilterCriteriaState;
+  getName: () => string;
+  getDescription: () => string;
+  getIsDefault: () => boolean;
   version: number;
-  criteria: CriteriaBuilder;
   /** Строка ошибки в панели кнопок диалога. */
   errorLine: FooterErrorLine;
-  /** Дублирование ошибки у поля имени. */
-  nameError: HTMLElement;
-  /** Адрес ошибок имени — поле имени для перехода по клику на строку. */
+  /** Адрес ошибок имени — поле имени футера для перехода по клику на строку. */
   nameAddress: ErrorAddress;
+  /** Показать записи диагностики ядра (отказ сохранения сервером). */
+  setServerIssues: (issues: readonly FilterIssue[]) => void;
+  /** Перерисовать редактор из модели (подсветка строк, футер). */
+  refreshEditor: () => void;
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
-  const trimmedName = ctx.name.trim();
+  const trimmedName = ctx.getName().trim();
   if (trimmedName === '') {
     showNameError(ctx, 'Укажите имя отбора.');
     return;
@@ -310,7 +336,7 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     );
     return;
   }
-  const trimmedDesc = ctx.description.trim();
+  const trimmedDesc = ctx.getDescription().trim();
   if (trimmedDesc.length > THOUGHT_TYPE_VIEW_DESCRIPTION_MAX) {
     showFieldError(
       ctx,
@@ -319,17 +345,29 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     return;
   }
   // Запрет пустого отбора (ошибка e8365d29): без условий отбор бессмыслен.
-  if (!ctx.criteria.hasAnyCriteria()) {
+  if (!hasAnyCriteria(ctx.state)) {
     showFieldError(ctx, 'Укажите хотя бы одно условие отбора.');
     return;
   }
+  // Красная диагностика (конструктор + записи ядра) запрещает сохранение
+  // (требование 44d61c8a): отбор с ошибкой на хранение не пишется.
+  const issues = mergeFilterIssues(constructorFilterIssues(ctx.state.tree ?? null));
+  if (hasBlockingIssues(issues)) {
+    showFieldError(ctx, 'В отборе есть ошибки — исправьте их перед сохранением.');
+    ctx.refreshEditor();
+    return;
+  }
 
-  const definition: ThoughtTypeViewDefinition = ctx.criteria.buildWire();
-  const definitionJson = JSON.stringify(definition);
+  let definitionJson: string;
+  try {
+    definitionJson = JSON.stringify(buildViewAstDefinition(ctx.state));
+  } catch (err) {
+    showFieldError(ctx, errText(err));
+    return;
+  }
 
   if (ctx.saveBtn !== null) ctx.saveBtn.disabled = true;
   ctx.errorLine.clear();
-  ctx.nameError.textContent = '';
 
   const { networkId, thoughtTypeId, view } = ctx.opts;
   try {
@@ -339,7 +377,7 @@ async function onSave(ctx: SaveCtx): Promise<void> {
         name: trimmedName,
         description: trimmedDesc === '' ? null : trimmedDesc,
         definition: definitionJson,
-        is_default: ctx.isDefault,
+        is_default: ctx.getIsDefault(),
       };
       saved = await etn.thoughtTypeViews.create(networkId, thoughtTypeId, input);
     } else {
@@ -347,7 +385,7 @@ async function onSave(ctx: SaveCtx): Promise<void> {
         name: trimmedName,
         description: trimmedDesc === '' ? null : trimmedDesc,
         definition: definitionJson,
-        is_default: ctx.isDefault,
+        is_default: ctx.getIsDefault(),
       };
       saved = await etn.thoughtTypeViews.update(
         networkId,
@@ -360,75 +398,24 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     ctx.opts.onSaved?.(saved);
     ctx.close();
   } catch (err) {
+    // Отказ сохранения мог прийти со структурированной диагностикой ядра
+    // (красная строка удалённой сущности) — показываем её строками редактора.
+    ctx.setServerIssues(filterIssuesFromError(err));
     showFieldError(ctx, errText(err));
     if (ctx.saveBtn !== null) ctx.saveBtn.disabled = false;
   }
 }
 
 function showFieldError(ctx: SaveCtx, message: string): void {
-  // Ошибка не про имя — убираем дублирование у поля, чтобы оно не «залипало».
-  ctx.nameError.textContent = '';
   ctx.errorLine.show(message);
 }
 
 /**
- * Ошибка поля имени: строка в панели кнопок (обязательное место) + то же
- * сообщение дублируется у самого поля. Тоста нет — ошибка диалога не
- * неблокирующее уведомление (требование 397c5a56).
+ * Ошибка поля имени: строка в панели кнопок (обязательное место) + переход к
+ * полю имени футера по клику (требование 397c5a56).
  */
 function showNameError(ctx: SaveCtx, message: string): void {
   ctx.errorLine.show(message, ctx.nameAddress);
-  ctx.nameError.textContent = message;
-}
-
-// ---------------------------------------------------------------------------
-// Type chain + effective properties
-// ---------------------------------------------------------------------------
-
-/** Walks the type chain from a type up to the root, inclusive. */
-async function loadTypeChain(networkId: string, typeId: string): Promise<ThoughtType[]> {
-  // Prefer the store's catalogue (kept in sync by realtime-ui); fall back to
-  // a single fetch when the type is not in the catalogue.
-  let catalogue = store.state.thoughtTypes.slice();
-  if (catalogue.length === 0) {
-    try {
-      catalogue = await etn.types.listThoughtTypes(networkId);
-    } catch {
-      catalogue = [];
-    }
-  }
-  const byId = new Map<string, ThoughtType>();
-  for (const t of catalogue) byId.set(t.id, t);
-
-  const chain: ThoughtType[] = [];
-  let current: string | null = typeId;
-  const guard = new Set<string>();
-  while (current !== null && !guard.has(current)) {
-    guard.add(current);
-    const t = byId.get(current);
-    if (t === undefined) break;
-    chain.push(t);
-    current = t.parent_id;
-  }
-  return chain;
-}
-
-/** Loads the effective properties for each level of the chain. */
-async function loadTypeChainProperties(
-  networkId: string,
-  chain: ThoughtType[],
-): Promise<ChainProperties[]> {
-  const out: ChainProperties[] = [];
-  for (const type of chain) {
-    let props: EffectiveTypeProperty[] = [];
-    try {
-      props = await etn.types.listTypeProperties(networkId, 'thought_type', type.id);
-    } catch {
-      props = [];
-    }
-    out.push({ type, props });
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,11 +423,11 @@ async function loadTypeChainProperties(
 // can keep importing from `filter-dialog.js`).
 // ---------------------------------------------------------------------------
 
-export type { ChainProperties, DialogCriteriaState, DialogPropertyCondition, SpecialTokenField, ViewToken } from './filter-dialog-pure.js';
+export type { ChainProperties, DialogCriteriaState, DialogPropertyCondition, ViewToken } from './filter-dialog-pure.js';
 export {
   buildTokensForField,
-  buildTokensForSpecialField,
-  buildWireDefinition,
+  buildViewAst,
+  buildViewAstDefinition,
   defaultDialogCriteriaState,
   hasAnyCriteria,
   parseViewDefinition,
@@ -449,345 +436,4 @@ export {
 /** Length constants re-exported for tests. */
 export const VIEW_NAME_MAX = THOUGHT_TYPE_VIEW_NAME_MAX;
 export const VIEW_DESCRIPTION_MAX = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
-
-// ---------------------------------------------------------------------------
-// Criteria builder
-// ---------------------------------------------------------------------------
-
-interface CriteriaBuilderOpts {
-  networkId: string;
-  initial: DialogCriteriaState;
-  registryById: Map<string, NetworkProperty>;
-}
-
-interface CriteriaBuilder {
-  root: HTMLElement;
-  buildWire: () => ThoughtTypeViewDefinition;
-  hasAnyCriteria: () => boolean;
-}
-
-/**
- * Строит форму критериев отбора. Состав и порядок секций — параметр сборки
- * этого места; вид и поведение каждого элемента — общий каркас
- * `lib/filter-form.ts` (задача 3742dd59). Форма строится один раз и меняется
- * на месте: ввод обновляет состояние и маркеры секций БЕЗ перерисовки DOM
- * (иначе терялся бы фокус). Токены-кандидаты (`$today`, `$thought.*`,
- * свойства цепочки типов) — источники подсказок вызывающего.
- */
-function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
-  const { networkId, registryById } = opts;
-  const state = opts.initial;
-
-  // Transient collapse state (default collapsed, §e0257ca5).
-  let propsCollapsed = true;
-  let extraCollapsed = true;
-  let authorCollapsed = true;
-  let datesCollapsed = true;
-
-  const sections: FilterSection[] = [];
-  const touch = (): void => {
-    for (const section of sections) section.refresh();
-  };
-  const ctx: FilterFormContext = {
-    networkId,
-    getState: () => state,
-    registry: registryById,
-    touch,
-  };
-
-  // --- Ключевые слова (составное поле: токен заменяет слово у каретки) ------
-  sections.push(
-    buildKeywordsSection(ctx, {
-      placeholder: 'счет* -вод*',
-      tooltip: 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
-      showScope: true,
-      composite: true,
-      suggestSource: tokenSourceFor({ kind: 'keywords' }),
-    }),
-  );
-
-  // --- Родительские мысли ---------------------------------------------------
-  // ОБЩИЙ фасад роли (`buildParentThoughtsSection`): тот же чип-лист корней,
-  // живой поиск и ленивая догрузка облачков, что в «Структурах», «Хронике» и
-  // рецепте публикации. Своей копии у диалога больше нет.
-  sections.push(
-    buildParentThoughtsSection(ctx, {
-      placeholder: 'Название мысли или токен…',
-      extraSources: [tokenSourceFor({ kind: 'parent' })],
-      tooltip: 'Ограничить отбор мыслями, подчинёнными указанным',
-      picker: { label: 'Выбрать из списка', open: (managed) => pickParentThoughts(networkId, managed) },
-    }),
-  );
-
-  // --- Типы мыслей и связи --------------------------------------------------
-  sections.push(
-    buildEntityChipSection(ctx, {
-      title: 'Типы мыслей',
-      getValues: () => state.typeIds,
-      setValues: (values) => {
-        state.typeIds = values;
-      },
-      loadOptions: (query) =>
-        filterEntityOptions(thoughtTypeEntityOptions(store.state.thoughtTypes), query),
-      optionsHeader: 'Типы мыслей',
-      extraSources: [tokenSourceFor({ kind: 'thought_type' })],
-      placeholder: 'Название типа или токен…',
-      picker: { label: 'Открыть список типов', open: (managed) => openThoughtTypesPicker(networkId, managed) },
-    }),
-    buildEntityChipSection(ctx, {
-      title: 'Типы связей',
-      getValues: () => state.linkTypeIds,
-      setValues: (values) => {
-        state.linkTypeIds = values;
-      },
-      loadOptions: (query) =>
-        filterEntityOptions(linkTypeEntityOptions(store.state.linkTypes), query),
-      optionsHeader: 'Типы связей',
-      extraSources: [tokenSourceFor({ kind: 'link_type' })],
-      placeholder: 'Название типа или токен…',
-      picker: { label: 'Открыть список типов', open: (managed) => openLinkTypesPicker(networkId, managed) },
-    }),
-  );
-
-  // --- Свойства / Дополнительно / Автор-Редактор / Даты / Сортировка --------
-  sections.push(
-    buildConditionsSection(
-      ctx,
-      { get: () => propsCollapsed, set: (v) => (propsCollapsed = v) },
-      {
-        // Токены значений — у тех же видов, где они были (text/url/date/link).
-        extraSuggestFor: (cond) => {
-          const def = registryById.get(cond.propertyId);
-          const valueType = def?.value_type ?? 'text';
-          const editorType = valueType === 'thought_ref' ? 'link' : valueType;
-          const withTokens =
-            editorType === 'link' || valueType === 'text' || valueType === 'url' || valueType === 'date';
-          return withTokens ? [tokenSourceFor({ kind: 'property', valueType, op: cond.op })] : [];
-        },
-      },
-    ),
-    buildExtrasSection(ctx, { get: () => extraCollapsed, set: (v) => (extraCollapsed = v) }),
-    buildAuthorshipSection(
-      ctx,
-      { get: () => authorCollapsed, set: (v) => (authorCollapsed = v) },
-      {
-        // Редакторы значения — с токенами и живым поиском пользователей.
-        editors: {
-          buildSingle: ({ currentId, onChange }) => buildAuthorSingleEditor(currentId, onChange),
-          buildList: ({ currentIds, onChange }) => buildAuthorListEditor(currentIds, onChange),
-        },
-      },
-    ),
-    buildDatesSection(ctx, { get: () => datesCollapsed, set: (v) => (datesCollapsed = v) }),
-    buildSortSection(ctx),
-  );
-
-  const root = div('st-f-layout view-editor-criteria');
-  for (const section of sections) root.append(section.box);
-  touch();
-
-  return {
-    root,
-    buildWire: () => buildWireDefinition(state, registryById),
-    hasAnyCriteria: () => hasAnyCriteria(state),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Редактор одиночного значения: живой поиск (id, токен или пользователь по
-// имени) + выбор пользователя из каталога.
-// ---------------------------------------------------------------------------
-function buildAuthorSingleEditor(
-  currentId: string,
-  onChange: (id: string) => void,
-): HTMLElement {
-  const single = div('author-single-wrap');
-  const input = fieldInput({ extraClass: 'st-f-input', bare: true }) as HTMLInputElement;
-  input.type = 'text';
-  input.value = currentId === '' || currentId.startsWith('$') ? currentId : (resolveUserName(currentId) ?? currentId);
-  input.placeholder = 'Пользователь, id или токен…';
-  input.addEventListener('input', () => onChange(input.value));
-  // Живой поиск — общая выпадашка (источник вариантов — её параметр):
-  // выбранная строка подставляется в поле, свободный текст фиксирует
-  // `input`-обработчик выше.
-  wireSuggest(input, {
-    sources: [
-      { when: 'always', load: (query) => comboToEntries(authorComboOptions(query)) },
-    ],
-    pickFirstOnEnter: false,
-    onPick: (entry) => {
-      input.value = entry.value.startsWith('$') ? entry.value : (resolveUserName(entry.value) ?? entry.value);
-      onChange(entry.value);
-      input.focus();
-    },
-  });
-  single.append(
-    input,
-    buildUserSelectWidget({
-      label: '',
-      currentId,
-      onChange: (id) => {
-        input.value = resolveUserName(id) ?? id;
-        onChange(id);
-      },
-    }),
-  );
-  return single;
-}
-
-/** Live-search кандидаты для полей «Автор»/«Редактор»: токены (`$…`) +
- *  пользователи сети, отфильтрованные по имени/логину (задача 27472616). */
-function authorComboOptions(query: string): ComboOption[] {
-  // Для обоих полей набор токенов один и тот же (`$thought.author`,
-  // `$thought.editor`, `$user`) — см. `buildTokensForSpecialField`.
-  const tokenOpts = tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], 'author'), null);
-  const userOpts: ComboOption[] = listUsers().map((u) => ({
-    value: u.id,
-    label: `${u.display_name ?? u.username} (${u.username})`,
-    section: 'Пользователи',
-  }));
-  return filterComboOptions([...tokenOpts, ...userOpts], query);
-}
-
-/**
- * Чип-редактор списка автора/редактора (задача 27472616): чипы выбранных
- * значений (имена пользователей или тексты токенов) + живой поиск,
- * смешивающий пользователей сети и токены в одном поле ввода. Чипы строит
- * общий чип-лист сущностей (`lib/entity-picker.ts`).
- */
-function buildAuthorListEditor(
-  currentIds: string[],
-  onChange: (ids: string[]) => void,
-): HTMLElement {
-  // Локальная копия — владелец состояния обновится через `onChange`, а чипы
-  // обязаны перерисоваться сразу (замкнутый массив к этому моменту устарел).
-  let ids = [...currentIds];
-  const fieldEl = buildEntityChipField({
-    getValues: () => ids,
-    onChange: (values) => {
-      ids = values;
-      onChange(values);
-    },
-    loadOptions: (query) => filterEntityOptions(usersEntityOptions(), query),
-    optionsHeader: 'Пользователи',
-    extraSources: [
-      { when: 'always', load: (query) => comboToEntries(authorTokenOptions(query)) },
-    ],
-    cloudOf: (value) =>
-      value.startsWith('$')
-        ? null
-        : { id: value, title: resolveUserName(value) ?? value, icon: '👤', icon_kind: 'emoji' },
-    placeholder: 'Пользователь или токен…',
-  });
-  return fieldEl.root;
-}
-
-/** Варианты пользователей сети для чип-листа автора/редактора. */
-function usersEntityOptions(): EntityOption[] {
-  return listUsers().map((u) => ({
-    id: u.id,
-    title: `${u.display_name ?? u.username} (${u.username})`,
-    selectable: true,
-    cloud: { id: u.id, title: u.display_name ?? u.username, icon: '👤', icon_kind: 'emoji' },
-  }));
-}
-
-/** Токен-кандидаты полей «Автор»/«Редактор» (без пользователей). */
-function authorTokenOptions(query: string): ComboOption[] {
-  return filterComboOptions(
-    tokensToComboOptions(buildTokensForSpecialField(activeChainProps ?? [], 'author'), null),
-    query,
-  );
-}
-
-
-
-// ---------------------------------------------------------------------------
-// Pickers (parent / thought types / link types) — каждый возвращает
-// `Promise<string[] | null>` (`null` — отменено) над УПРАВЛЯЕМЫМ подмножеством
-// значений чип-листа; чипы-токены сохраняются (см. `buildEntityChipField`).
-// ---------------------------------------------------------------------------
-
-async function pickParentThoughts(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
-  const result = await pickThoughtsDialog({
-    networkId,
-    allowCreate: false,
-    allowLinkType: false,
-    selectedIds: [...managedIds],
-  });
-  if (result === null) return null;
-  return pickedThoughtIds(result);
-}
-
-async function openThoughtTypesPicker(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
-  return pickEntitiesModal({
-    networkId,
-    kind: 'thought-types',
-    title: 'Типы мыслей',
-    currentIds: managedIds,
-  });
-}
-
-async function openLinkTypesPicker(networkId: string, managedIds: readonly string[]): Promise<string[] | null> {
-  return pickEntitiesModal({
-    networkId,
-    kind: 'link-types',
-    title: 'Типы связей',
-    currentIds: managedIds,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Токены и кандидаты полей (задача 27472616). Формат хранимых значений НЕ
-// меняется: строка (литерал или `$token`) для скалярных условий, массив строк
-// для списочных; резолвер токенов на сервере не трогается. Токены — источник
-// подсказок вызывающего: их получает либо общий редактор значения
-// (`extraSuggest`), либо общий чип-лист сущностей (`extraSources`).
-// ---------------------------------------------------------------------------
-
-/** Поле, к которому пристёгнут источник токенов. */
-type TokenPickerField =
-  | { kind: 'property'; valueType: PropertyValueType; op: StructurePropertyOp | null }
-  | { kind: 'keywords' }
-  | { kind: 'thought_type' }
-  | { kind: 'link_type' }
-  | { kind: 'parent' }
-  | { kind: 'author' }
-  | { kind: 'editor' };
-
-/** Токен-кандидаты для поля (без учёта текстового запроса). */
-function tokenOptions(field: TokenPickerField): ComboOption[] {
-  const chainProps = activeChainProps ?? [];
-  if (field.kind === 'property') {
-    return tokensToComboOptions(buildTokensForField(chainProps, field.valueType, field.op), field.op);
-  }
-  if (field.kind === 'parent') {
-    const tokens: ViewToken[] = [{ text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' }];
-    return tokensToComboOptions(tokens, null);
-  }
-  return tokensToComboOptions(buildTokensForSpecialField(chainProps, field.kind), null);
-}
-
-/** Токен-кандидаты, отфильтрованные по подстроке `query` (живой поиск). */
-function getTokenOptions(field: TokenPickerField, query: string): ComboOption[] {
-  return filterComboOptions(tokenOptions(field), query);
-}
-
-/** Строка общей выпадашки по кандидату-токену. */
-function comboToEntries(options: readonly ComboOption[]): SuggestEntry[] {
-  return options.map((o) => ({
-    value: o.value,
-    label: o.label,
-    ...(o.section !== undefined ? { section: o.section } : {}),
-    ...(o.disabled === true ? { disabled: true } : {}),
-  }));
-}
-
-/** Источник подсказок «токены поля» — параметр общего редактора/пикера. */
-function tokenSourceFor(field: TokenPickerField): SuggestSource {
-  return {
-    when: 'always',
-    load: (query) => comboToEntries(getTokenOptions(field, query)),
-  };
-}
 

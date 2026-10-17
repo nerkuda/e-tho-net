@@ -1,0 +1,64 @@
+{
+  "name": "filter-bounds-align-token-1b6c49fe",
+  "description": "Ошибка 1b6c49fe: выравнивание границ «между» не работает для токенов. Сценарий: онбординг → «Структуры» → сохранённый отбор с «Дети между» → правка границы-токена → соседняя граница подтягивается к резолвнутому дню. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-bounds-align-token-1b6c49fe.scenario.json --out .tmp/etn-1b6c49fe/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-saved-filter",
+      "api": {
+        "name": "seed-saved-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Токен и дата",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "entity": { "kind": "created_at" },
+                  "operator": "between",
+                  "value": [{ "token": "$today" }, "2020-01-01"]
+                }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "structures-open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "structures-saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "structures-saved-row", "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "structures-focus-search", "click": ".sfd-search" },
+    { "name": "structures-filter-typed", "text": "Токен" },
+    { "name": "structures-select-row", "key": "ArrowDown" },
+    { "name": "structures-confirm-row", "key": "Enter" },
+    { "name": "structures-dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+
+    { "name": "bounds-cell", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] select.fv-date__anchor') !== null && document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input') !== null" },
+    { "name": "bounds-before", "probe": "({ from: document.querySelector('.st-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input')?.value ?? null })", "expect": { "from": "$today", "to": "2020-01-01" } },
+
+    { "name": "retype-to-earlier", "eval": "(() => { const i = document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input'); i.value = '2019-06-01'; i.dispatchEvent(new Event('change', { bubbles: true })); return i.value; })()" },
+    { "name": "from-aligned-to-token-day", "timeout": 10000, "waitFor": "document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input')?.value === '2019-06-01'" },
+    { "name": "bounds-after", "probe": "({ from: document.querySelector('.st-filter .fv-date[data-bound=\"from\"] input')?.value ?? null, to: document.querySelector('.st-filter .fv-date[data-bound=\"to\"] input')?.value ?? null })", "expect": { "from": "2019-06-01", "to": "2019-06-01" } },
+    { "name": "bounds-after-phrase", "probe": "document.querySelector('.st-filter .ff-preview__text')?.textContent ?? null", "expect": "Дата создания между 2019-06-01 и 2019-06-01" }
+  ]
+}

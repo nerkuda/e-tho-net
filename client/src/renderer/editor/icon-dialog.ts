@@ -41,6 +41,7 @@ import { t } from '../lib/i18n.js';
 import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
 import { notice } from '../lib/notice.js';
 import { renderLibraryIcon } from '../lib/ui/icon.js';
+import { renderDefaultThoughtIcon } from '../lib/ui/thought-default-icon.js';
 import { store } from '../state.js';
 import { etnimgUrl } from './markdown-field.js';
 import {
@@ -438,7 +439,7 @@ function buildRecentRow(
     renderLibrary: (cell, name, color) => {
       const options: { size: number; color?: string } = { size: 18 };
       if (color !== null) options.color = color;
-      void renderLibraryIcon(cell, name, options, '💭');
+      void renderLibraryIcon(cell, name, options, () => renderDefaultThoughtIcon(cell));
     },
     resolveAttachment: (id) => resolveRecentAttachmentPreview(id),
     onPick: (entry, preview) => {

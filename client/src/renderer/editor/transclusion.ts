@@ -697,6 +697,23 @@ export function htmlHasTransclusionMarkup(html: string): boolean {
   return html.includes('!<span class="wiki-link"');
 }
 
+/**
+ * Нужна ли превью-фрагменту досборка трансклюзий (ошибка `3b3035cf`, круг 3).
+ *
+ * Серверный HTML публикации, собранный с резолвером публикационных ссылок,
+ * отдаёт трансклюзию как `!Источник` — БЕЗ `!<span class="wiki-link">`, поэтому
+ * прежний признак {@link htmlHasTransclusionMarkup} её не ловит. Надёжнее
+ * смотреть на СЫРОЙ markdown фрагмента (он есть в DTO): если развёртка уже
+ * случилась (в HTML есть `.md-transclusion`), досборка не нужна; иначе — либо
+ * сырой wiki-link span, либо ссылки-трансклюзии в `rawMd`. Разбор ссылок —
+ * только парсером `@etn/markdown` (сторож `own-transclusion-outside-package`).
+ */
+export function previewTextNeedsExpansion(html: string, rawMd: string): boolean {
+  if (html.includes(MD_TRANSCLUSION_BLOCK_CLASS)) return false;
+  if (htmlHasTransclusionMarkup(html)) return true;
+  return parseTransclusions(rawMd).length > 0;
+}
+
 /** Загруженный источник: имя мысли, наличие и полный текст постоянного комментария. */
 export interface TransclusionSource {
   found: boolean;

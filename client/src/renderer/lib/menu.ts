@@ -134,6 +134,22 @@ export function isMenuOpen(): boolean {
   return roots.length > 0;
 }
 
+/**
+ * Находится ли цель события внутри МЕНЮ (`lib/menu.ts`): его строки или
+ * раскрытого подменю. Слои меню порталятся в `document.body`, поэтому клик по
+ * строке меню — это клик «по всплывающему слою» для панелей, из которых меню
+ * открыто. Строка поиска карты обязана не закрываться по такому нажатию: иначе
+ * команда подменю применяется «вслепую», а условия и результаты прячутся вместе
+ * с панелью (задача 4b1cc3d4). Один уровень подменю лежит ВНУТРИ корня меню
+ * (класс `menu-sub` на том же узле `menu`), поэтому `closest('.menu')` покрывает
+ * и строку, и подменю.
+ */
+export function isInsideMenu(target: EventTarget | null): boolean {
+  const node = target as (Element & { closest?(selector: string): Element | null }) | null;
+  if (node === null || typeof node !== 'object') return false;
+  return typeof node.closest === 'function' && node.closest('.menu') !== null;
+}
+
 /** Builds a menu DOM node with items; submenus attach to the root list. */
 function buildMenu(items: MenuItem[]): HTMLDivElement {
   const root = div('menu');

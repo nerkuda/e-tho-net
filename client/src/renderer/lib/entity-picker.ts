@@ -66,8 +66,9 @@ import type {
 
 import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
-import { div, el, span } from './dom.js';
+import { div, el, setTooltip, span } from './dom.js';
 import { etn } from './etn.js';
+import { markThoughtCommentPreview } from './hover-preview.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon, type IconName } from './ui/icon.js';
@@ -142,11 +143,20 @@ export interface EntityOption {
   cloud?: ThoughtCloudInput;
   /** Свотч линии для типа связи. */
   line?: { color: string | null; style: LinkStyle | null; width: number | null } | null;
+  /**
+   * Значок строки выпадашки — иконка дизайн-системы (`lib/ui/icon.ts`) слева от
+   * подписи. Нет — строка без значка (как раньше). Строки свойств «Есть
+   * свойства» несут значок вида значения либо стрелку стороны связи — как в
+   * списке «Мыслесеть → Свойства мыслей» (ошибка заказчика 2026-10-14, п.6а).
+   */
+  icon?: IconName;
   /** Значок конца связи (вариант-свойство-связь): направление и оформление
    *  линии, рисуется общим списком свойств (`buildLinkEndIcon`). */
   linkEnd?: LinkEndIconSpec | null;
   /** Уточнение строки серым (пара имён типа связи «(прямое -> обратное)»). */
   note?: string;
+  /** Подсказка строки (`title`): полное имя/описание варианта. Нет — без подсказки. */
+  tooltip?: string;
   /** Значение варианта для свойства-связи (`kind: 'link-properties'`). */
   linkProperty?: LinkPropertyPick;
 }
@@ -754,21 +764,23 @@ export async function pickEntitiesModal(
         }
         for (const id of checked) {
           const cloud = pickedThoughts.get(id) ?? { id, title: id };
-          chipsBox.append(
-            createThoughtCloud(cloud, {
-              profile: 'chip',
-              // Ширина — по чип-полю выбора: имя обрезается многоточием по
-              // нему, а не раздувает диалог (принцип ширины облачка).
-              width: 'container',
-              actions: {
-                onRemove: () => {
-                  checked.delete(id);
-                  renderChips();
-                  updateButtons();
-                },
+          const chip = createThoughtCloud(cloud, {
+            profile: 'chip',
+            // Ширина — по чип-полю выбора: имя обрезается многоточием по
+            // нему, а не раздувает диалог (принцип ширины облачка).
+            width: 'container',
+            actions: {
+              onRemove: () => {
+                checked.delete(id);
+                renderChips();
+                updateButtons();
               },
-            }),
-          );
+            },
+          });
+          // Мысль (не публикация) — то же поведение чипа, что в редакторе
+          // значения свойства: подсказка полного имени и Ctrl+hover-предпросмотр.
+          if (opts.kind === 'thoughts') wireThoughtChip(chip, id, cloud.title);
+          chipsBox.append(chip);
         }
       };
       const renderSelected = (): void => {
@@ -834,7 +846,17 @@ export async function pickEntitiesModal(
         // а не схлопывается по содержимому при наборе поиска.
         fixedHeight: true,
         buttons,
-        onMount: () => searchInput.focus(),
+        // Роль `s` (320px) заведомо мала для пикера — тело (поиск + чипы)
+        // получает мало места (ошибка ffa55338). Модификатор
+        // `dialog-entity-picker` на боксе берёт именованную высоту (50 % окна,
+        // не менее 450px) через `--dialog-h-entity-picker`
+        // (styles/dialogs.css, styles/tokens.css) — оговорка «Высота вне ролей»
+        // требования 13464c39. Высота остаётся ФИКСИРОВАННОЙ (`fixedHeight`),
+        // роль `s` не меняется: её делят прочие диалоги-списки.
+        onMount: (_close, box) => {
+          box.classList.add('dialog-entity-picker');
+          searchInput.focus();
+        },
         // Любое закрытие каркаса — «Отмена», Esc, ×, программный
         // `closeDialog()` — это отмена: промис резолвится `null`, иначе
         // `await`/`.then` вызывающего висит вечно (ошибка 12dfb87e). При
@@ -998,7 +1020,15 @@ export async function pickEntitiesModal(
       // свободное место — размер не «дёргается» от поиска и числа строк.
       fixedHeight: true,
       buttons,
-      onMount: () => {
+      // Роль `s` (320px) заведомо мала для диалога-списка: дерево выбора
+      // получает ≈150px и ≈7 строк (ошибка ffa55338). Модификатор
+      // `dialog-entity-picker` на боксе берёт именованную высоту (50 % окна, не
+      // менее 450px) через `--dialog-h-entity-picker` (styles/dialogs.css,
+      // styles/tokens.css) — оговорка «Высота вне ролей» требования 13464c39,
+      // как у диалога «Сохранённые отборы». Высота остаётся ФИКСИРОВАННОЙ
+      // (`fixedHeight`), роль `s` не меняется: её делят прочие диалоги-списки.
+      onMount: (_close, box) => {
+        box.classList.add('dialog-entity-picker');
         renderList();
         updateButtons();
         searchInput.focus();
@@ -1071,10 +1101,27 @@ export interface EntityChipFieldOptions {
   pageSize?: number;
   /** Заголовок группы кандидатов. */
   optionsHeader?: string;
+  /**
+   * Нижняя граница (она же — потолок) ширины выпадашки списка, px. Задана —
+   * список свойств заметно шире узкого поля ввода, имена и уточнения
+   * помещаются целиком (ошибка заказчика 2026-10-14, п.6в: «список сделать
+   * шире»). Без значения — прежние 320px.
+   */
+  dropdownMinWidth?: number;
   /** Источники подсказок вызывающего (токены) — общий список выпадашки. */
   extraSources?: readonly SuggestSource[];
   /** Данные облачка значения; `null` — сырой текст (нет данных). */
   cloudOf?: (value: string) => ThoughtCloudInput | null;
+  /**
+   * СИНХРОННЫЙ источник последнего известного ИМЕНИ значения — снапшот подписи
+   * из модели/кеша хоста (например, `labels.values` условия отбора), ещё ДО
+   * ответа серверного резолва облачков. Применяется как последний источник
+   * перед сырым id: чип рисует имя сразу, а не UUID, и сохраняет его, даже если
+   * резолв облачка не удался (ошибка f4e99090: ~37 мс голого id при выборе и
+   * навсегда — при сбое резолва). Данные облачка (значок типа) по-прежнему
+   * приходят `cloudOf`; `null`/отсутствие — имя неизвестно.
+   */
+  titleOf?: (value: string) => string | null;
   placeholder?: string;
   /**
    * Модальный пикер поверх нетокенных значений: получает управляемое
@@ -1103,6 +1150,17 @@ export interface EntityChipFieldOptions {
   onOpen?: (value: string) => void;
   /** Начальное состояние «поле недоступно» (поле ввода и кнопка пикера). */
   disabled?: boolean;
+  /**
+   * Значения поля — МЫСЛИ (только `kind: 'thoughts'`): чип получает то же
+   * поведение, что чип значения свойства-связи в редакторе мысли
+   * (`editor/value-editor.ts`): полное имя — подсказкой на всём облачке,
+   * `role="button"` и Ctrl+hover-предпросмотр постоянного комментария
+   * ({@link markThoughtCommentPreview}). Оформление чипа и так общее
+   * (`createThoughtCloud`, профиль `chip`) — опция добавляет только ПОВЕДЕНИЕ
+   * предпросмотра, чтобы выбор мыслей выглядел и вёл себя единообразно во всех
+   * местах (требование заказчика 2026-10-14, ошибка f4e99090 п.5).
+   */
+  thoughtPreview?: boolean;
 }
 
 /** Собранный чип-лист сущностей. */
@@ -1123,7 +1181,11 @@ function entityEntry(opt: EntityOption): SuggestEntry {
   // Сторона свойства-связи (задача 7cfaba7c, п.3): значок направления и пара имён
   // «(прямое -> обратное)» — как в поле «Свойство связи» диалога добавления мысли.
   if (opt.linkEnd != null) entry.linkEnd = opt.linkEnd;
+  // Иконка строки (свойства «Есть свойства»): значок вида значения/стороны связи
+  // — тот же источник, что у эталонного списка «Свойства мыслей» (п.6а).
+  if (opt.icon !== undefined) entry.icon = opt.icon;
   if (opt.note !== undefined) entry.note = opt.note;
+  if (opt.tooltip !== undefined) entry.tooltip = opt.tooltip;
   return entry;
 }
 
@@ -1160,6 +1222,23 @@ function restoreKeyboardFocus(
   const lost = active == null || active === document.body;
   if (!hadFocus && !(adoptLostFocus && lost)) return;
   target.focus();
+}
+
+/**
+ * Поведение чипа-МЫСЛИ — то же, что у чипа значения свойства-связи в редакторе
+ * мысли (`editor/value-editor.ts`): полное имя подсказкой на всём облачке,
+ * доступность кнопкой (`role`/`aria-label`) и Ctrl+hover-предпросмотр
+ * постоянного комментария. Оформление (классы, значок, цвета) чип получает от
+ * общей фабрики {@link createThoughtCloud} — здесь только поведение, единое
+ * для всех мест выбора мыслей (ошибка f4e99090 п.5: чип обязан показывать
+ * значок и имя, а не голый id, и вести себя как в редакторе мысли).
+ */
+function wireThoughtChip(chip: HTMLElement, id: string, title: string): void {
+  if (id === '' || id.startsWith('$')) return; // токены отбора именам мыслей не соответствуют
+  setTooltip(chip, title);
+  chip.setAttribute('role', 'button');
+  chip.setAttribute('aria-label', title);
+  markThoughtCommentPreview(chip, id, title);
 }
 
 /**
@@ -1242,6 +1321,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     // Свободный текст фиксирует клавиатурная команда контекста ниже; Enter над
     // выделенной строкой выбирает её (общая выпадашка гасит событие).
     pickFirstOnEnter: false,
+    // Ширина списка — параметр вызывающего («Есть свойства» просит шире).
+    ...(opts.dropdownMinWidth !== undefined ? { minWidth: opts.dropdownMinWidth } : {}),
     onPick: (entry) => commit(entry.value),
   });
   // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,
@@ -1291,7 +1372,11 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       // есть лишь `title`, поэтому облачко собирается из имени варианта, а не из
       // сырого id — иначе чип показывал UUID вместо имени (ошибка fb4173d9).
       const cloud: ThoughtCloudInput =
-        explicitCloud ?? known?.cloud ?? { id: value, title: known?.title ?? value };
+        explicitCloud ??
+        known?.cloud ??
+        // Синхронное имя хоста (снапшот подписи) идёт ПЕРЕД сырым id: чип
+        // рисует имя сразу, не дожидаясь резолва (ошибка f4e99090).
+        { id: value, title: known?.title ?? opts.titleOf?.(value) ?? value };
       const chip = createThoughtCloud(cloud, {
         profile: 'chip',
         width: 'container',
@@ -1322,6 +1407,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       if (opts.reorderable === true && !disabled) {
         wireChipReorder(chip, value);
       }
+      // Единый вид чипа-мысли: имя вместо голого id уже в облачке (данные —
+      // `cloudOf`/каталог источника), поведение предпросмотра — общее.
+      if (opts.thoughtPreview === true) wireThoughtChip(chip, value, cloud.title);
       chips.push(chip);
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
@@ -1460,6 +1548,12 @@ export interface EntityComboOptions {
   /** Типы мыслей, сужающие живой поиск (только для `thoughts`). */
   searchTypeIds?: readonly string[];
   /**
+   * Дополнительные источники подсказок (например, токены контекста отбора
+   * `$thought` — ошибка 50d9bf4e п. A3): выбранный токен возвращается как
+   * обычное значение (id-строка), и ячейка значения кладёт его в модель.
+   */
+  extraSources?: readonly SuggestSource[];
+  /**
    * Строки общего списка свойств (`lib/property-list.ts`) — источник вариантов
    * четвёртого источника (`kind: 'link-properties'`): по варианту на КАЖДОЕ имя
    * стороны свойства-связи. Скаляры и структурные строки отсеиваются.
@@ -1483,6 +1577,20 @@ export interface EntityComboOptions {
    */
   pickerTitle?: string;
   /**
+   * Свой модальный пикер для кнопки «…» (как у чип-поля `picker`): получает
+   * управляемое подмножество, возвращает его замену (`null` — отмена). Задан —
+   * `…` открывает ИМЕННО его (например, стандартный `pickThoughtsDialog`), а не
+   * встроенный `pickEntitiesModal` (блокер п.19).
+   */
+  picker?: EntityChipFieldOptions['picker'];
+  /**
+   * Значение поля — МЫСЛЬ: чип получает то же поведение, что чип значения
+   * свойства-связи (`editor/value-editor.ts`) — подсказка полного имени и
+   * Ctrl+hover-предпросмотр постоянного комментария. Единый вид чипа-мысли во
+   * всех местах выбора (ошибка f4e99090 п.5). Значимо только у `thoughts`.
+   */
+  thoughtPreview?: boolean;
+  /**
    * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
    * редактора типа). По умолчанию раскрыт только верхний уровень.
    */
@@ -1501,6 +1609,13 @@ export interface EntityComboOptions {
    * пользователь отказался: поле и список возвращаются к вводу).
    */
   onCreateNew?: (query: string) => Promise<string | null>;
+  /**
+   * СИНХРОННЫЙ источник последнего известного ИМЕНИ значения (снапшот подписи из
+   * модели/кеша хоста): облачко выбранного значения получает имя сразу, не
+   * дожидаясь серверного резолва, и не деградирует до сырого id при его сбое.
+   * Единый механизм с чип-полем ({@link EntityChipFieldOptions.titleOf}).
+   */
+  titleOf?: (value: string) => string | null;
   onChange: (id: string | null) => void;
 }
 
@@ -1671,22 +1786,22 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         })
         .catch(() => undefined);
     }
-    const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? current };
-    valueHost.append(
-      createThoughtCloud(cloud, {
-        profile: 'chip',
-        // Ширина — по полю значения диалога.
-        width: 'container',
-        actions:
-          opts.disabled === true
-            ? undefined
-            : {
-                onRemove: () => {
-                  commitValue(null);
-                },
+    const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? opts.titleOf?.(current) ?? current };
+    const chip = createThoughtCloud(cloud, {
+      profile: 'chip',
+      // Ширина — по полю значения диалога.
+      width: 'container',
+      actions:
+        opts.disabled === true
+          ? undefined
+          : {
+              onRemove: () => {
+                commitValue(null);
               },
-      }),
-    );
+            },
+    });
+    if (opts.thoughtPreview === true) wireThoughtChip(chip, current, cloud.title);
+    valueHost.append(chip);
   };
 
   const commitValue = (id: string | null): void => {
@@ -1728,6 +1843,16 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
    */
   function openPicker(): void {
     if (opts.disabled === true) return;
+    // Свой пикер вызывающего (например, стандартный `pickThoughtsDialog`) —
+    // сильнее встроенного `pickEntitiesModal` (блокер п.19): диалог выбора
+    // единственного значения должен совпадать с чип-полем.
+    if (opts.picker !== undefined) {
+      void opts.picker.open(current !== null ? [current] : []).then((ids) => {
+        if (ids === null) return;
+        commitValue(ids[0] ?? null);
+      });
+      return;
+    }
     const catalogue =
       opts.options !== undefined
         ? opts.options()
@@ -1879,6 +2004,11 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       },
     });
   }
+
+  // Дополнительные источники подсказок (например, токены контекста `$thought`):
+  // у ссылочного операнда значение — id мысли/типа, и токен — такое же значение,
+  // поэтому он предлагается наравне с вариантами (ошибка 50d9bf4e п. A3).
+  if (opts.extraSources !== undefined) sources.push(...opts.extraSources);
 
   // Набранный текст сам по себе значение не меняет — только явный выбор из
   // выпадашки; по потере фокуса строка поиска очищается. Поле принимает ввод

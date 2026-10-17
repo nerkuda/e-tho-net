@@ -23,6 +23,8 @@
 import { div, el, renderHtml } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
 import { commentShell } from '../../lib/ui/comment.js';
+import { store } from '../../state.js';
+import { wireMdZoomWheel } from '../../editor/md-zoom.js';
 
 /** Класс контейнера отрендеренного тела записи. */
 export const RECORD_VIEW_CLASS = 'diary-body';
@@ -49,6 +51,10 @@ export function renderRecordView(
   const view = div(RECORD_VIEW_CLASS);
   if (row.body_html.trim() !== '') {
     renderHtml(view, row.body_html);
+    // Ctrl+колесо над текстом записи масштабирует комментарий так же, как поля
+    // markdown (ошибка 157b7c14): тот же жест `--md-font-size`. Масштабируется
+    // ТОЛЬКО текст записи (`.diary-body`), прочие поля слота — нет.
+    wireMdZoomWheel(view, store.state.networkId);
   } else {
     view.append(el('span', 'diary-snippet-empty muted', t('diary.emptyRecordHint')));
   }

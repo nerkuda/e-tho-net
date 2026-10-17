@@ -47,7 +47,7 @@
 import type { LinkStyle } from '@etn/shared';
 
 import { div, el, positionBodyDropdown, span } from './dom.js';
-import { svgIcon } from './ui/icon.js';
+import { svgIcon, type IconName } from './ui/icon.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
 import { createThoughtCloud, type CloudProfile, type ThoughtCloudInput } from './thought-cloud.js';
 
@@ -85,6 +85,13 @@ export interface SuggestEntry {
    * четвёртый источник «свойство связи»; требование cdb6b52f).
    */
   linkEnd?: LinkEndIconSpec | null;
+  /**
+   * Значок строки — иконка дизайн-системы (`lib/ui/icon.ts`) слева от подписи.
+   * Нет — строка без значка. Строки свойств «Есть свойства» несут значок вида
+   * значения/стороны связи (эталон — список «Свойства мыслей»; ошибка заказчика
+   * 2026-10-14, п.6а). Рисуется у «голых» строк (без облачка).
+   */
+  icon?: IconName;
   /**
    * Уточнение справа от подписи (серым): сторона и имена пары типа связи
    * («источник · связь (прямое - обратное)»). Нет — строка без уточнения.
@@ -296,6 +303,13 @@ export function buildSuggestRow(entry: SuggestEntry, options: SuggestRowOptions 
   // общем списке свойств: второй отрисовки линии со стрелкой нет.
   if (entry.linkEnd !== undefined && entry.linkEnd !== null) {
     row.append(buildLinkEndIcon(entry.linkEnd));
+  }
+  // Значок строки (свойства «Есть свойства»): иконка дизайн-системы слева от
+  // подписи — тот же источник, что у эталонного списка «Свойства мыслей» (п.6а).
+  if (entry.icon !== undefined) {
+    const iconBox = span('', 'type-combo-icon');
+    iconBox.append(svgIcon(entry.icon, 14));
+    row.append(iconBox);
   }
   if (entry.thought !== undefined) {
     // Строка-мысль — готовое облачко фабрики: значок, цвета, начертание,

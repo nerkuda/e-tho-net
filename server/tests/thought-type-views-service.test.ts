@@ -629,8 +629,25 @@ describe(
           });
           assert.throws(
             () => createThoughtTypeView(ndb, typeId, { name: 'X', definition }, USER),
-            /не подключено/,
+            /не найдено в реестре сети/,
           );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('свойство ВНЕ типа отбора принимается — резолв по реестру сети (п. A6)', () => {
+        const { ndb, typeId } = setupLinkProp();
+        try {
+          // Свойство определено в реестре сети, но к типу отбора НЕ привязано.
+          createNetworkProperty(ndb, { name: 'Внешний признак', value_type: 'text' }, USER);
+          const definition = JSON.stringify({
+            properties: [
+              { property_id: 'Внешний признак', op: 'eq', value: '$thought.[Внешний признак]' },
+            ],
+          });
+          const created = createThoughtTypeView(ndb, typeId, { name: 'Внешние', definition }, USER);
+          assert.ok(created.id, 'свойство вне типа сохраняется (ошибка 50d9bf4e п. A6)');
         } finally {
           ndb.close();
         }

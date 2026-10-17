@@ -167,11 +167,6 @@ function validateOwnerType(ownerType: unknown): CommentOwnerType {
   return ownerType as CommentOwnerType;
 }
 
-/** Непустой текст: строка, у которой после `trim()` остались символы. */
-function isNonEmptyText(value: string | null | undefined): boolean {
-  return typeof value === 'string' && value.trim() !== '';
-}
-
 /**
  * Лимит рендера тела комментария (ошибка 2764d7bb, требование 99055dba):
  * единый рендерер `@etn/markdown` отвергает источник длиннее
@@ -614,10 +609,11 @@ export function createComment(
  * must have exactly one target.
  *
  * Throws:
- *   * `VALIDATION_ERROR` (422) for an invalid kind/targets or missing content —
- *     a `permanent` comment needs a non-empty `body_md`; a `chronological` one
- *     needs at least one target and may be created with empty `title`/`body_md`
- *     (требование 26f0aa52, модель немедленного создания);
+ *   * `VALIDATION_ERROR` (422) for an invalid kind or targets — a comment needs
+ *     at least one target; у хронологической записи допустимы пустые
+ *     `title`/`body_md`, у постоянного комментария — тоже (ошибка 00f1d0e6:
+ *     пустое тело допустимо у обоих видов; требование 26f0aa52, модель
+ *     немедленного создания);
  *   * `NOT_FOUND` (404) if any target owner does not exist;
  *   * `DUPLICATE` (409) on a second `permanent` comment for the same owner.
  *
@@ -668,15 +664,12 @@ export function createCommentWithTargets(
     });
   }
   // Содержание записи (требование 26f0aa52, модель немедленного создания
-  // 2026-10-09). Постоянный комментарий — это содержимое мысли, поэтому
-  // `body_md` обязателен. Хронологическая запись валидна уже при наличии хотя
-  // бы одной привязки (проверено выше: `targets.length === 0` → 422); пустые
-  // `title`/`body_md` допустимы — запись создаётся сразу и наполняется позже.
-  if (kind === 'permanent' && !isNonEmptyText(input.body_md)) {
-    throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
-      field: 'body_md',
-    });
-  }
+  // 2026-10-09; пустое тело допустимо у ОБОИХ видов — ошибка 00f1d0e6,
+  // ожидание заказчика 2026-10-13). Хронологическая запись валидна уже при
+  // наличии хотя бы одной привязки (`targets.length === 0` → 422 выше); у
+  // постоянного комментария пустые `title`/`body_md` тоже допустимы — очистка
+  // текста не ошибка, запись сохраняется пустой. Согласованность create/update
+  // сохранена: оба пути принимают пустое тело одинаково.
   const bodyMd = input.body_md ?? '';
   // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb): иначе
   // единый рендерер бросил бы обычный `Error` и запрос ушёл бы в 500.
@@ -789,13 +782,6 @@ export function createCommentWithTargets(
  */
 export interface UpdateCommentOptions {
   /**
-   * Отключает защиту «`body_md` постоянного комментария не пустое» для вызовов
-   * из {@link editComment} (граница 154df95d). На хронологические записи не
-   * влияет — их опустошение разрешено всегда при наличии привязок (требование
-   * 26f0aa52).
-   */
-  allowEmptyBody?: boolean;
-  /**
    * Коллектор предупреждений записи (требование `822a9149`). Если правка
    * `body_md` теряет существовавшие ранее живые трансклюзии, домен добавляет
    * сюда `TRANSCLUSION_LOST`-предупреждение; сама запись при этом применяется.
@@ -816,24 +802,17 @@ export interface UpdateCommentOptions {
  * `body_html` is re-rendered whenever `body_md` changes. `version` is bumped
  * on every successful update.
  *
- * `options.allowEmptyBody` — отключает защиту «`body_md` ПОСТОЯННОГО
- * комментария не пустое» для вызовов из {@link editComment}: удаление
- * единственной секции текста без `#` оставляет пустое тело, но запись в БД
- * сохраняется (граница 154df95d). По умолчанию `false` — REST
- * `PATCH /comments/{id}` и `etn.comments.update` продолжают отвергать
- * опустошение постоянного комментария.
- *
  * `options.warnings` — коллектор предупреждений записи (требование
  * `822a9149`): правка, теряющая живые трансклюзии, добавляет туда
  * `TRANSCLUSION_LOST`, но всё равно применяется.
  *
- * Содержание (требование 26f0aa52, модель немедленного создания): постоянный
- * комментарий всегда требует непустой `body_md`; хронологическую запись
- * разрешено опустошить до пустых `title`/`body_md` при наличии привязок.
+ * Содержание (требование 26f0aa52, модель немедленного создания; ошибка
+ * 00f1d0e6): пустые `title`/`body_md` допустимы у ОБОИХ видов — хронологическую
+ * запись и постоянный комментарий можно опустошить, запись сохраняется пустой.
+ * Прежняя защита «постоянный комментарий не пуст» (граница 154df95d) снята
+ * ожиданием заказчика 2026-10-13: пустой комментарий допустим везде.
  *
- * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), or `VALIDATION_ERROR`
- * (422) when the edit would leave a permanent comment without body and
- * `allowEmptyBody` is not set.
+ * Throws `NOT_FOUND` (404) или `VERSION_CONFLICT` (409).
  */
 export function updateComment(
   ndb: NetworkDb,
@@ -871,15 +850,9 @@ export function updateComment(
       args.push(changes.title);
     }
     if (changes.body_md !== undefined) {
-      // У постоянного комментария пустое тело — потеря содержимого мысли, вне
-      // явного `allowEmptyBody` (граница 154df95d) запрещено. Хронологическую
-      // запись разрешено опустошить до пустых title/body при наличии привязок
-      // (требование 26f0aa52, согласованность create/update).
-      if (changes.body_md === '' && current.kind === 'permanent' && options.allowEmptyBody !== true) {
-        throw new EtnError('VALIDATION_ERROR', 'body_md must not be empty', {
-          field: 'body_md',
-        });
-      }
+      // Пустое тело допустимо у ОБОИХ видов (ошибка 00f1d0e6, ожидание
+      // заказчика 2026-10-13): очистка комментария/записи — обычная правка, не
+      // ошибка. Согласованность create/update: оба пути принимают пустое тело.
       sets.push('body_md = ?', 'body_html = ?');
       // Лимит рендера проверяется ДО `renderMarkdown` (ошибка 2764d7bb).
       assertBodyWithinRenderLimit(changes.body_md, options.bodyField ?? 'body_md');
@@ -1005,7 +978,7 @@ export function editComment(
       { body_md: result.body },
       undefined,
       actorUserId,
-      { allowEmptyBody: result.body === '', warnings },
+      { warnings },
     );
     return {
       id: updated.id,

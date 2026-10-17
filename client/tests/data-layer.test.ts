@@ -573,7 +573,13 @@ describe('паритет: поток событий сети гасит ровн
     );
     assert.deepEqual(
       comment.invalidated,
-      ['chronicle-feed', `indicators:@${focusId}`, 'pub-assembly:@p1'].sort(),
+      // Активность комментария двигает `updated_at` владельца-МЫСЛИ (ошибка
+      // 228df7a4, приравнивание — требование e6d4165e), поэтому состав датовых
+      // отборов «Структур» меняется и страница отбора перечитывается
+      // (`structures-page`, ошибка 04344707). Окрестность фокуса НЕ гасим:
+      // отклик фокуса комментариев не несёт, а его перечитывание трясло
+      // редактор (ошибка 206e33a1).
+      ['chronicle-feed', `indicators:@${focusId}`, 'pub-assembly:@p1', 'structures-page'].sort(),
     );
     assert.deepEqual(comment.patched, ['comment:c1']);
   });

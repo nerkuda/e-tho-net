@@ -215,6 +215,13 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     minWidth: 640,
     minHeight: 480,
     title: 'ETN',
+    // Window icon (task 650f5038). Dev builds read it from
+    // `<repo>/client/build/icon.png` (`__dirname` is `out/main`, so two levels
+    // up); a packaged build bakes the icon into the executable/resources via
+    // electron-builder and `build/` is not part of the asar bundle, so the
+    // option is omitted there — a missing path would only break the window
+    // icon instead of falling back to the stamped one.
+    icon: isDev ? path.join(__dirname, '../../build/icon.png') : undefined,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: THEME_BG[theme],

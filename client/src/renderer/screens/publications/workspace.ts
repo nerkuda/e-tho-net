@@ -70,6 +70,7 @@ import {
 import { buildCover } from './cover.js';
 import {
   htmlHasTransclusionMarkup,
+  previewTextNeedsExpansion,
   renderExpandedTransclusionHtml,
 } from '../../editor/transclusion.js';
 import {
@@ -103,7 +104,10 @@ import {
 import { loadPropertyRows } from './recipe.js';
 import { buildPropertyListRows } from '../../lib/property-list.js';
 import { ensureLink, setOnlyParents, throwOnFailures } from '../../lib/link-ops.js';
-import { parseFilterDefinition } from '../../lib/filter-builder.js';
+import {
+  filterTreeIdsByKind,
+  parseFilterDefinitionTree,
+} from '../../lib/filter-builder.js';
 import {
   commitEntity,
   getEntity,
@@ -255,6 +259,14 @@ export function mountPublicationWorkspace(
   let publicationId: string | null = null;
   let publication: Publication | null = null;
   let assembly: PublicationAssembly | null = null;
+  /**
+   * Исходное резюме, для которого собрана текущая `assembly` (снимок при
+   * загрузке). Пока `publication.summary_md` совпадает с ним — в титуле берём
+   * СЕРВЕРНЫЙ `summary_html` (та же сборка, что у экспорта, вставки уже
+   * развёрнуты); расхождение означает правку резюме в карточке, ещё не
+   * попавшую в сборку, — её рендерит клиент (ошибка 3b3035cf).
+   */
+  let assembledSummaryRaw = '';
   let page = 1;
   let loading = false;
   let loadError: unknown = null;
@@ -781,6 +793,7 @@ export function mountPublicationWorkspace(
       ]);
       publication = card;
       assembly = doc;
+      assembledSummaryRaw = card.summary_md ?? '';
       // Полный снимок публикации — в нормализованный кэш слоя: точечные патчи
       // роутера ложатся поверх полной записи, а не создают частичную.
       commitEntity('publication', card.id, card);
@@ -836,39 +849,52 @@ export function mountPublicationWorkspace(
   const editorHighlightUnsub = store.subscribe(paintEditorHighlight);
 
   /**
-   * Точечно заменяет КОНТЕНТ блоков мысли по готовому HTML (без чтения сборки):
-   * у раздела — предисловие, у текста — сам блок. Используется при активном
-   * `staleRebuild`, когда тянуть полную сборку нельзя (иначе материализуется
-   * отложенный рецепт и порядок разделов сдвигается, замечание-блокер 1 приёмки
-   * b02ef1cf).
+   * Точечно заменяет КОНТЕНТ блоков мысли по её markdown-источнику (без чтения
+   * сборки): у раздела — предисловие, у текста — сам блок. Используется при
+   * активном `staleRebuild`, когда тянуть полную сборку нельзя (иначе
+   * материализуется отложенный рецепт и порядок разделов сдвигается,
+   * замечание-блокер 1 приёмки b02ef1cf).
    *
    * Модель блока (`navBlocks`) обновляется СИНХРОННО с DOM: `blockSignature`
    * включает `preambleHtml`/`html`, и без синхронизации `reconcileKeyed` счёл бы
    * блок неизменным и не перерисовал его при следующем полном рендере — прямой
    * патч DOM «просачивался» бы в сборку (блокер приёмки b02ef1cf).
    *
+   * Трансклюзии достраиваются ОБЩИМ клиентским путём просмотра из НОВОГО
+   * markdown-источника (замечание 2 верификатора, ошибка 3b3035cf): прежний
+   * приём передавал готовый HTML, а `renderTextBody` достраивал вставки из
+   * СТАРОГО `block.md` — после realtime-правки вставка отображалась как до неё.
+   *
    * Компромисс: HTML собирается общим клиентским `renderMarkdown`, а не
    * серверным `renderPublicationFragment` (сервер умеет сдвиг уровней заголовков,
    * якоря и подстановку wiki-ссылок). Для предисловия/текста это несущественно;
    * расхождение снимет ближайшая пересборка.
    */
-  function patchBlockText(thoughtId: string, html: string): void {
+  function patchBlockText(thoughtId: string, md: string): void {
+    const html = renderMarkdown(md);
     for (const node of blockNodesForThought(thoughtId)) {
       const block = blockForKey(node.dataset?.['blockKey']);
       if (node.classList.contains('pub-doc-section')) {
         const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
         if (target === null) continue;
         renderHtml(target, html);
+        // Предисловие с трансклюзией достраиваем из НОВОГО `md` — как текст ниже.
+        if (previewTextNeedsExpansion(html, md)) void expandTextTransclusions(target, md);
       } else {
         // Текст-блок: `renderTextBody` сам решает, что показать при пустом
-        // комментарии; `renderHtml` внутри сносит грип DnD — возвращаем его.
-        renderTextBody(node, html, block !== null && block.kind === 'text' ? block.md : '');
+        // комментарии, и достраивает вставки из НОВОГО `md`; `renderHtml` внутри
+        // сносит грип DnD — возвращаем его.
+        renderTextBody(node, html, md);
         node.prepend(makeGrip(t('publications.ws.dragHandle')));
       }
       // Синхронизируем модель (иначе сигнатура не отразит правку).
       if (block === null) continue;
-      if (block.kind === 'section') block.preambleHtml = html;
-      else if (block.kind === 'text') block.html = html;
+      if (block.kind === 'section') {
+        block.preambleHtml = html;
+      } else if (block.kind === 'text') {
+        block.html = html;
+        block.md = md;
+      }
     }
   }
 
@@ -929,7 +955,7 @@ export function mountPublicationWorkspace(
     }
     if (staleRebuild) {
       if (kind === 'permanent' && ownerId !== undefined && typeof bodyMd === 'string') {
-        patchBlockText(ownerId, renderMarkdown(bodyMd));
+        patchBlockText(ownerId, bodyMd);
       }
       return;
     }
@@ -1837,11 +1863,11 @@ export function mountPublicationWorkspace(
       line.setAttribute('aria-hidden', 'true');
       node.append(line);
     }
-    // Серверный `body_html` собран из исходного `body_md` и ссылку-трансклюзию
-    // не разворачивает (ошибка 075602b4) — блок показывает только ссылку.
-    // Тексты с такой ссылкой достраиваем развёрнутым HTML общим путём просмотра
-    // (`renderExpandedTransclusionHtml`) — тем же, что и комментарий мысли.
-    if (htmlHasTransclusionMarkup(html)) void expandTextTransclusions(node, md);
+    // Серверный `body_html` публикации уже развёрнут (трансклюзии раскрыты с
+    // резолвером публикационных ссылок) — тогда досборка не нужна. Если HTML
+    // пришёл сырым (правка под stale, отставшая сборка), ссылка-трансклюзия
+    // распознаётся по СЫРОМУ `md` и блок достраивается общим путём просмотра.
+    if (previewTextNeedsExpansion(html, md)) void expandTextTransclusions(node, md);
   }
 
   /**
@@ -2027,18 +2053,26 @@ export function mountPublicationWorkspace(
       );
     }
     node.append(titlePage);
-    // Резюме — из СВЕЖЕГО снимка публикации (а не из `assembly.publication`),
-    // чтобы правка резюме в карточке редактора отражалась в титульном блоке без
-    // перечитывания сборки (замечание А2 приёмки b02ef1cf). Рендер — тем же
-    // общим markdown-рендерером, что и у карточки/сервера.
-    const summaryHtml =
-      publication !== null
-        ? renderMarkdown(publication.summary_md ?? '')
-        : (assembly?.publication.summary_html ?? '');
+    // Резюме — markdown-поле публикации: трансклюзии разворачиваются так же, как
+    // в предисловиях/текстах (ошибка 3b3035cf). Снимок совпадает со сборкой —
+    // берём СЕРВЕРНЫЙ `summary_html` (та же сборка, что у экспорта: превью и файл
+    // не расходятся, вставки уже развёрнуты). Снимок изменён правкой резюме в
+    // карточке (замечание А2 приёмки b02ef1cf) — рендерим из свежего `summary_md`
+    // и достраиваем вставки общим клиентским путём просмотра, как тела текстов.
+    const summaryRaw = publication?.summary_md ?? '';
+    const summaryInSync = publication === null || summaryRaw === assembledSummaryRaw;
+    const summaryHtml = summaryInSync
+      ? (assembly?.publication.summary_html ?? '')
+      : summaryRaw === ''
+        ? ''
+        : renderMarkdown(summaryRaw);
     if (summaryHtml !== '') {
       const block = div('pub-doc-summary');
       renderHtml(block, summaryHtml);
       node.append(block);
+      if (!summaryInSync && htmlHasTransclusionMarkup(summaryHtml)) {
+        void expandTextTransclusions(block, summaryRaw);
+      }
     }
     return node;
   }
@@ -2517,16 +2551,28 @@ export function mountPublicationWorkspace(
     if (missed.length > 0) notice(t('publications.ws.createMiss'), 'error');
   }
 
-  /** Типы мыслей из рецепта заголовков публикации (для предзаполнения). */
+  /**
+   * Типы мыслей и корневые мысли отбора РАЗДЕЛОВ из рецепта заголовков: значения
+   * листьев дерева (плоскую запись компилирует тот же единый читатель, ADR
+   * fc23f9c1 — своей формы чтения определения место не заводит). Прежние плоские
+   * поля `type_ids`/`parent_ids` в AST-теле рецепта пусты, поэтому берутся
+   * листья «Тип в иерархии» и «Родители» (`filterTreeIdsByKind`).
+   */
   function publicationTypeIds(): string[] {
     if (publication?.title_recipe == null) return [];
-    return parseFilterDefinition(publication.title_recipe).typeIds;
+    return filterTreeIdsByKind(
+      parseFilterDefinitionTree(publication.title_recipe).tree ?? null,
+      'type',
+    );
   }
 
-  /** Корневые мысли отбора разделов (`parent_ids`) — «Родительская мысль». */
+  /** Корневые мысли отбора разделов — «Родительская мысль». */
   function publicationParentIds(): string[] {
     if (publication?.title_recipe == null) return [];
-    return parseFilterDefinition(publication.title_recipe).parentIds;
+    return filterTreeIdsByKind(
+      parseFilterDefinitionTree(publication.title_recipe).tree ?? null,
+      'parents',
+    );
   }
 
   /** Добавляет мысль значением свойства-связи владельца (аддитивно). */

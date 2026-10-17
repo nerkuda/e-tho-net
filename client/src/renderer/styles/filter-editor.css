@@ -1,0 +1,270 @@
+/*
+ * Вид футера редактора отбора и секции сортировки (0.13.1, задача c74f17a0 ТП
+ * 11b2509a; элементы интерфейса ca905fbc «Футер редактора отбора» и 3f0bf221
+ * «Секция сортировки отбора»).
+ *
+ * Модуль несёт ТОЛЬКО роли, которых в дизайн-системе нет: полосу футера
+ * (имя + маркер изменённости + фраза-превью + кнопки) и чип ключа сортировки.
+ * Поле, кнопки, крестик очистки и выпадающий список — фасады `lib/ui`
+ * (`fieldInput`, `wrapClearable`, `uiButton`, `iconButton`, общий список
+ * `ft-choice` дерева), своих классов под них нет.
+ *
+ * Фраза-превью показывается ≤3 строк: полный текст и список ошибок — в тултипе
+ * (элемент ca905fbc). Число строк клампинга сверяется тестом с
+ * `FILTER_FOOTER_PREVIEW_LINES` модуля `lib/filter-footer.ts`.
+ */
+
+.ff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* --- Каркас редактора: дерево прокручивается, футер закреплён снизу ------ */
+/*
+ * Имя отбора и кнопки не должны уезжать вместе со списком условий (требование
+ * заказчика 2026-10-13): область условий растягивается и прокручивается, футер
+ * (сортировка + имя/превью/кнопки) остаётся в видимой нижней части.
+ */
+.fe {
+  display: flex;
+  flex-direction: column;
+  /* Редактор заполняет высоту места применения (панель отбора — flex-колонка):
+     дерево условий прокручивается, `.fe-foot` (сортировка + два ряда футера)
+     остаётся в непрокручиваемом низу (ошибка 4258e694 п.2). */
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.fe > .ft {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/*
+ * Корневая группа дерева НЕ сжимается: длинный отбор прокручивается самим
+ * `.ft`. Без этого `overflow: hidden` группы обнуляет её `min-height: auto` как
+ * flex-элемента, группа клипует своё содержимое, а `.ft` не получает прокрутки —
+ * длинное дерево молча обрезалось (ошибка 4258e694 п.2, живой замер: группа
+ * `scrollHeight 3228 / clientHeight 141`, дерево не прокручивалось).
+ */
+.fe > .ft > .ft-group {
+  flex-shrink: 0;
+}
+
+.fe-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+/* --- Имя отбора, маркер изменённости и фраза-превью --------------------- */
+
+.ff-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ff-name__input {
+  flex: 1 1 auto;
+}
+
+.ff-changed {
+  color: var(--warn);
+  font-size: var(--font-size-l);
+  line-height: 1;
+}
+
+.ff-preview {
+  min-width: 0;
+}
+
+.ff-preview__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+  line-height: var(--font-size-s);
+  overflow-wrap: anywhere;
+}
+
+.ff-preview[data-severity='error'] .ff-preview__text {
+  color: var(--danger);
+}
+
+.ff-preview[data-severity='warning'] .ff-preview__text {
+  color: var(--warn-strong);
+}
+
+/* Текст фразы с доступным переходом к проблемной строке кликается (п.10);
+   отдельной кнопки «исправить» в футере нет. */
+.ff-preview__text--action {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+/* Горизонтальная линия-разделитель между фразой-превью (редактор отбора) и
+   командами — строкой имени и кнопками (требование заказчика 2026-10-14, п.1). */
+.ff-divider {
+  height: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* --- Кнопки футера: верхний ряд действий, нижний — имя и сохранённые ------ */
+
+.ff-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ff-save,
+.ff-clear {
+  white-space: nowrap;
+}
+
+/* Иконочная кнопка сохранения (💾) и «…» в нижнем ряду не растягиваются. */
+.ff-name .ff-save,
+.ff-name .ff-extra {
+  flex: 0 0 auto;
+}
+
+/* --- Секция сортировки: чипы [поле ↑/↓] и «+» --------------------------- */
+
+.fs-sort {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fs-sort__head {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  font-weight: var(--font-weight-medium);
+}
+
+.fs-sort__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.fs-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-s);
+}
+
+/* Диагностика ключа: красное — свойство сортировки удалено из реестра. */
+.fs-chip--error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.fs-chip--warning {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.fs-add {
+  white-space: nowrap;
+}
+
+/* --- Датовый виджет ячейки значения: одна общая рамка (п.11) --------------- */
+/*
+ * Период (список опор) + количество (±N) + тип количества + крестик — В ОДНУ
+ * строку одной рамки; у каждого поля своей рамки нет (п.11а/11д). При «точной
+ * дате» вместо количества и типа — поле даты с календарём (п.11г). Пропорции
+ * базиса 63% / 20% / 15%, крестик — остаток по содержимому; поля сжимаемы, чтобы
+ * крестик всегда сохранял свой размер на узкой ячейке.
+ */
+
+.fv-date {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.fv-date__frame {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Внутри рамки своих рамок нет — граница одна на контейнер (п.11д). */
+.fv-date__frame .select-input,
+.fv-date__frame .ui-input {
+  height: var(--field-h);
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.fv-date__frame .select-input:focus,
+.fv-date__frame .ui-input:focus {
+  box-shadow: none;
+}
+
+.fv-date__frame > .fv-date__anchor {
+  flex: 0 1 63%;
+  min-width: 0;
+}
+
+.fv-date__frame > .fv-date__shift {
+  flex: 0 1 20%;
+  min-width: 0;
+}
+
+.fv-date__frame > .fv-date__unit {
+  flex: 0 1 15%;
+  min-width: 0;
+}
+
+/* Крестик сброса — в конце строки, по содержимому («остаток», п.11а). */
+.fv-date__frame > .fv-date__reset {
+  flex: 0 0 auto;
+}
+
+/* Точная дата: вместо количества и типа — поле даты, занимающее остаток строки. */
+.fv-date__frame--exact > .date-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fv-date__hint {
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+}

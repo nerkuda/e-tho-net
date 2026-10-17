@@ -50,7 +50,14 @@ import {
   type PublicationExportDocument,
   type PublicationExportSection,
 } from './publication-assembly-service.js';
+import type { AstTokenContext } from './query-service.js';
 import { registerFinishedFileJob } from './export-service.js';
+import {
+  createBodyExpander,
+  createPlainBodyExpander,
+  SERVER_TRANSCLUSION_LABELS,
+  type BodyExpander,
+} from './transclusion-service.js';
 
 /**
  * Потолок числа публикаций в пакетном экспорте (прецедент серверных
@@ -122,10 +129,12 @@ function renderDocument(
   document: PublicationExportDocument,
   format: PublicationExportFormat,
   coverSrc: string | null,
+  expand: BodyExpander,
+  expandPlain: BodyExpander,
 ): string {
   return format === 'md'
-    ? renderMarkdownDocument(document, coverSrc)
-    : renderHtmlDocument(document, coverSrc);
+    ? renderMarkdownDocument(document, coverSrc, expandPlain)
+    : renderHtmlDocument(document, coverSrc, null, expand);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +149,7 @@ function renderDocument(
 function renderMarkdownDocument(
   document: PublicationExportDocument,
   coverSrc: string | null,
+  expand: BodyExpander,
 ): string {
   const parts: string[] = [];
   const { title } = document;
@@ -148,8 +158,12 @@ function renderMarkdownDocument(
   if (coverSrc !== null) parts.push(`![${title.title}](${coverSrc})`);
   parts.push(`**Автор:** ${title.authorship ?? title.creator}`);
   if (title.assembly_date !== null) parts.push(`**Дата сборки:** ${title.assembly_date}`);
-  if (title.summary_md.trim() !== '') parts.push(title.summary_md.trim());
-  for (const section of document.sections) parts.push(renderMarkdownSection(section, document.resolveLink));
+  // Резюме — markdown-поле: трансклюзии раскрываются ЧИСТОЙ развёрткой (без
+  // маркеров etn:transclusion — в файл они попадать не должны, 3b3035cf).
+  if (title.summary_md.trim() !== '') parts.push(expand(title.summary_md).trim());
+  for (const section of document.sections) {
+    parts.push(renderMarkdownSection(section, document.resolveLink, expand));
+  }
   return `${parts.filter((p) => p.trim() !== '').join('\n\n')}\n`;
 }
 
@@ -157,6 +171,7 @@ function renderMarkdownDocument(
 function renderMarkdownSection(
   section: PublicationExportSection,
   resolveLink: PublicationExportDocument['resolveLink'],
+  expand: BodyExpander,
 ): string {
   const parts: string[] = [];
   parts.push(`<a id="${section.anchor}"></a>`);
@@ -169,23 +184,32 @@ function renderMarkdownSection(
       ? `**${section.heading}**`
       : `${'#'.repeat(headingLevel)} ${section.heading}`,
   );
+  // Трансклюзии в предисловии/текстах раскрываются ПЕРЕД рендером markdown-
+  // фрагмента чистой развёрткой (`markers: false`) — маркеры ADR 85a7a01e в
+  // файл не утекают (ошибка 3b3035cf). Пустые поля не разворачиваем.
   if (section.preamble_md.trim() !== '') {
-    parts.push(
-      renderPublicationMarkdownFragment(section.preamble_md, {
-        baseLevel: section.level + 1,
-        resolveLink,
-      }).markdown,
-    );
-  }
-  for (const text of section.texts) {
-    parts.push(`<a id="${text.anchor}"></a>`);
-    if (text.body_md.trim() !== '') {
+    const preamble = expand(section.preamble_md);
+    if (preamble.trim() !== '') {
       parts.push(
-        renderPublicationMarkdownFragment(text.body_md, {
+        renderPublicationMarkdownFragment(preamble, {
           baseLevel: section.level + 1,
           resolveLink,
         }).markdown,
       );
+    }
+  }
+  for (const text of section.texts) {
+    parts.push(`<a id="${text.anchor}"></a>`);
+    if (text.body_md.trim() !== '') {
+      const body = expand(text.body_md);
+      if (body.trim() !== '') {
+        parts.push(
+          renderPublicationMarkdownFragment(body, {
+            baseLevel: section.level + 1,
+            resolveLink,
+          }).markdown,
+        );
+      }
     }
   }
   if (section.extra.length > 0) {
@@ -195,7 +219,7 @@ function renderMarkdownSection(
     }
     parts.push(lines.join('\n'));
   }
-  for (const child of section.children) parts.push(renderMarkdownSection(child, resolveLink));
+  for (const child of section.children) parts.push(renderMarkdownSection(child, resolveLink, expand));
   return parts.filter((p) => p.trim() !== '').join('\n\n');
 }
 
@@ -215,6 +239,7 @@ function renderHtmlDocument(
   document: PublicationExportDocument,
   coverSrc: string | null,
   watermark: string | null = null,
+  expand: BodyExpander,
 ): string {
   const { title } = document;
   const head = `<!doctype html>\n<html lang="ru">\n<head>\n<meta charset="utf-8">\n<title>${escapeHtml(title.title)}</title>\n<style>${PUBLICATION_HTML_STYLES}</style>\n</head>\n<body>\n`;
@@ -235,8 +260,10 @@ function renderHtmlDocument(
     header.push(`<p class="pub-meta">Дата сборки: ${escapeHtml(title.assembly_date)}</p>`);
   }
   if (title.summary_md.trim() !== '') {
+    // Резюме — markdown-поле: разворачиваем трансклюзии (маркеры-комментарии
+    // html-comment-плагин скрывает; обёртки md-transclusion допустимы).
     header.push(
-      `<div class="pub-summary">${renderPublicationFragment(title.summary_md, { resolveLink: document.resolveLink }).html}</div>`,
+      `<div class="pub-summary">${renderPublicationFragment(expand(title.summary_md), { resolveLink: document.resolveLink, transclusion: { labels: SERVER_TRANSCLUSION_LABELS } }).html}</div>`,
     );
   }
   header.push('</header>');
@@ -475,6 +502,22 @@ function collectAssets(ndb: NetworkDb, sources: readonly string[], withAssets: b
   return { replacements, files, warnings };
 }
 
+/**
+ * Источники для сбора ассетов — РАЗВЁРНУТЫЕ поля документа (ошибка `6ab79f3d`):
+ * трансклюзии в текстах раскрываются тем же механизмом, что и при рендере,
+ * поэтому картинка из источника вставки попадает в `assets/`/data-URI, а не
+ * остаётся битой ссылкой в файле. Маркеры ADR `85a7a01e` на набор URL не
+ * влияют, поэтому берётся чистая развёртка (`createPlainBodyExpander`).
+ */
+function collectAssetSources(document: PublicationExportDocument, expand: BodyExpander): string[] {
+  const sources: string[] = [expand(document.title.summary_md)];
+  for (const section of flattenExportSections(document.sections)) {
+    sources.push(expand(section.preamble_md));
+    for (const text of section.texts) sources.push(expand(text.body_md));
+  }
+  return sources;
+}
+
 /** Apply asset URL replacements to rendered text (markdown or HTML). */
 function applyAssetReplacements(text: string, replacements: Map<string, string>): string {
   let out = text;
@@ -592,6 +635,7 @@ export function renderPublicationPrintHtml(
   publicationId: string,
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): PublicationPrint & { warnings: string[] } {
   const pub = getPublication(ndb, publicationId);
   if (pub === null) {
@@ -600,18 +644,26 @@ export function renderPublicationPrintHtml(
       id: publicationId,
     });
   }
-  const document = buildPublicationExportDocument(ndb, publicationId, userId, resolveUserName);
-  const sources: string[] = [document.title.summary_md];
-  for (const section of flattenExportSections(document.sections)) {
-    sources.push(section.preamble_md);
-    for (const text of section.texts) sources.push(text.body_md);
-  }
-
+  const document = buildPublicationExportDocument(
+    ndb,
+    publicationId,
+    userId,
+    resolveUserName,
+    tokenContext,
+  );
   const warnings = [...document.warnings];
-  const assets = collectInlineAssets(ndb, sources);
+  // Развёрнутые источники: картинки из трансклюзий вклеиваются как data-URI
+  // тем же проходом, что и картинки собственных текстов (ошибка 6ab79f3d).
+  const expand = createBodyExpander(ndb);
+  const assets = collectInlineAssets(ndb, collectAssetSources(document, expand));
   warnings.push(...assets.warnings);
   const coverSrc = resolveCoverDataUri(ndb, document, warnings);
-  const rendered = renderHtmlDocument(document, coverSrc, PUBLICATION_PRINT_WATERMARK);
+  const rendered = renderHtmlDocument(
+    document,
+    coverSrc,
+    PUBLICATION_PRINT_WATERMARK,
+    expand,
+  );
   return {
     html: applyAssetReplacements(rendered, assets.replacements),
     slug: publicationSlug(pub.title),
@@ -740,19 +792,19 @@ export function buildPublicationArtifact(
   prefix: string,
   slug: string,
 ): PublicationArtifact {
-  const sources: string[] = [document.title.summary_md];
-  for (const section of flattenExportSections(document.sections)) {
-    sources.push(section.preamble_md);
-    for (const text of section.texts) sources.push(text.body_md);
-  }
-
-  const assets = collectAssets(ndb, sources, withAssets);
+  // Расширители создаются ОДИН раз: тот же набор текстов идёт и в сбор
+  // ассетов (развёрнутые источники трансклюзий — ошибка 6ab79f3d), и в рендер.
+  const expandBlock = createBodyExpander(ndb);
+  const expandPlain = createPlainBodyExpander(ndb);
+  const assets = collectAssets(ndb, collectAssetSources(document, expandPlain), withAssets);
   const warnings = [...document.warnings, ...assets.warnings];
   const coverSrc = resolveCoverSource(ndb, document, assets, withAssets, warnings);
 
   const extension = format === 'md' ? 'md' : 'html';
   const mainName = `${prefix}${slug}.${extension}`;
-  const rendered = renderDocument(document, format, coverSrc);
+  // Markdown-экспорт расширяет трансклюзии ЧИСТО (markers: false), HTML —
+  // блочными обёртками (ошибка 3b3035cf).
+  const rendered = renderDocument(document, format, coverSrc, expandBlock, expandPlain);
   const entries: PublicationFile[] = [
     { name: mainName, data: applyAssetReplacements(rendered, assets.replacements) },
   ];
@@ -847,6 +899,7 @@ export async function startPublicationExportJob(
   opts: { format: PublicationExportFormat; with_assets?: boolean },
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): Promise<ExportJob> {
   const pub = getPublication(ndb, publicationId);
   if (pub === null) {
@@ -855,7 +908,13 @@ export async function startPublicationExportJob(
       id: publicationId,
     });
   }
-  const document = buildPublicationExportDocument(ndb, publicationId, userId, resolveUserName);
+  const document = buildPublicationExportDocument(
+    ndb,
+    publicationId,
+    userId,
+    resolveUserName,
+    tokenContext,
+  );
   const slug = publicationSlug(pub.title);
   const artifact = buildPublicationArtifact(
     ndb,
@@ -948,6 +1007,7 @@ export function buildPublicationBatchArtifact(
   },
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): { entries: PublicationFile[]; report: PublicationExportReport } {
   const warnings: string[] = [];
   let ids: string[];
@@ -996,7 +1056,7 @@ export function buildPublicationBatchArtifact(
       continue;
     }
     try {
-      const document = buildPublicationExportDocument(ndb, id, userId, resolveUserName);
+      const document = buildPublicationExportDocument(ndb, id, userId, resolveUserName, tokenContext);
       const artifact = buildPublicationArtifact(
         ndb,
         document,
@@ -1032,8 +1092,15 @@ export async function startPublicationBatchExportJob(
   opts: { ids?: string[]; active_only?: boolean; format: PublicationExportFormat; with_assets?: boolean },
   userId: string,
   resolveUserName: (userId: string) => string | null,
+  tokenContext?: AstTokenContext,
 ): Promise<ExportJob> {
-  const { entries, report } = buildPublicationBatchArtifact(ndb, opts, userId, resolveUserName);
+  const { entries, report } = buildPublicationBatchArtifact(
+    ndb,
+    opts,
+    userId,
+    resolveUserName,
+    tokenContext,
+  );
   const jobId = randomUUID();
   const filePath = tempZipPath(jobId);
   await writePublicationZip(filePath, entries);

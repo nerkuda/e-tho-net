@@ -1,0 +1,46 @@
+{
+  "name": "diary-period-monthstart-c4343d63",
+  "description": "Ошибка c4343d63: в «Дневнике» период «с» = $monthStart, «по» = 12.10 подсвечивает и льёт записи с 27.09 (первый день недели, содержащей 1-е число). Сценарий: fdw=7 → клик по дню 12.10 (обе границы $today-4d) → смена опоры «с» на $monthStart → проверка нижней границы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.diary-period-monthstart-c4343d63.scenario.json --out .tmp/etn-c4343d63/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "set-fdw-7",
+      "api": { "name": "set-fdw-7", "method": "PATCH", "path": "/networks/{{networkId}}", "body": { "first_day_of_week": 7 }, "expression": "data.first_day_of_week" },
+      "expect": 7
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-diary", "click": "button.view-tab[title=\"Дневник\"]" },
+    { "name": "diary-panel", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null" },
+
+    {
+      "name": "seed-days",
+      "eval": "(async () => { const nid = '{{networkId}}'; const seed = '{{thoughtId}}'; const mk = async (title, day) => { const t = new Date(day + 'T12:00:00').toISOString(); return window.etn.comments.create(nid, 'thought', seed, { kind: 'chronological', title, body_md: 'запись ' + day, valid_from: t, valid_to: t }); }; for (const d of ['2026-09-27','2026-10-01','2026-10-12']) { await mk('Д ' + d, d); } return true; })()"
+    },
+    { "name": "goto-today", "click": ".cal-today" },
+    { "name": "today-shown", "timeout": 10000, "waitFor": "document.querySelector('.chron-filter') !== null" },
+
+    { "name": "click-day-1012", "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-day')).find((e) => e.getAttribute('title') === '2026-10-12'); if (!b) throw new Error('нет дня 2026-10-12'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
+    { "name": "day-applied", "timeout": 10000, "waitFor": "document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__shift') !== null" },
+    { "name": "day-state", "probe": "({ from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null, fromShift: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__shift')?.value ?? null })" },
+
+    { "name": "change-from-anchor-to-monthstart", "eval": "(() => { const s = document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select.fv-date__anchor'); if (!s) throw new Error('нет селекта опоры «с»'); s.value = '$monthStart'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()" },
+    { "name": "from-anchor-monthstart", "timeout": 10000, "waitFor": "document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value === '$monthStart'" },
+    { "name": "from-model-token", "probe": "document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__hint')?.textContent ?? null", "expect": "начало месяца" },
+
+    { "name": "press-apply", "eval": "(() => { const b = document.querySelector('.chron-filter .ff-apply'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
+    { "name": "feed-day-first", "timeout": 15000, "waitFor": "document.querySelector('.chron-feed .diary-day[data-day=\"2026-10-01\"]') !== null" },
+    { "name": "highlight-from", "timeout": 15000, "waitFor": "document.querySelector('.chron-cal .cal-day.is-selected[title=\"2026-10-01\"]') !== null" },
+    { "name": "state-after-apply", "probe": "({ selectedDays: Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).sort(), feedDays: Array.from(document.querySelectorAll('.chron-feed .diary-day')).map((e) => e.dataset.day).sort(), from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, fromHint: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__hint')?.textContent ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null })" },
+    { "name": "min-selected-day", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).sort()[0] ?? null", "expect": "2026-10-01" },
+    { "name": "selected-days-count-1012", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).filter((d) => d >= '2026-10-01' && d <= '2026-10-12').length", "expect": 12 },
+    { "name": "feed-first-day", "probe": "Array.from(document.querySelectorAll('.chron-feed .diary-day')).map((e) => e.dataset.day).sort()[0] ?? null", "expect": "2026-10-01" }
+  ]
+}

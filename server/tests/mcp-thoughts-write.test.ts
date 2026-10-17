@@ -35,6 +35,7 @@ import {
   toolText,
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
+import { closeWritePool, configureWritePool } from '../src/db/write-pool.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
@@ -1758,6 +1759,73 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('через write-пул: ответ и аудит те же, запись исполнил воркер', async () => {
+    // Задача c8920d04: батч `etn.thoughts.write` идёт через write-пул, когда он
+    // настроен. Клиентский контракт не меняется: те же items, тот же аудит и
+    // журнал, но транзакцию и журнал делает воркер, а события публикует главный
+    // поток после коммита.
+    const ctx = await buildMcpContext();
+    const pool = configureWritePool({ size: 1, taskTimeoutMs: 30_000 });
+    assert.ok(pool !== null, 'процессный пул настроен');
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const before = (
+          ctx.rawDb
+            .prepare(`SELECT COUNT(*) AS c FROM audit_log WHERE action = ? AND network_id = ?`)
+            .get('etn.thoughts.write', ctx.networkId) as { c: number }
+        ).c;
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              { ref: 'p1', thought: { title: 'Pooled P1' } },
+              {
+                ref: 'p2',
+                thought: { title: 'Pooled P2' },
+                comment: { body_md: 'текст P2' },
+                links: [{ direction: 'child', target_ref: 'p1' }],
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        assert.equal(data.items.length, 2);
+        assert.ok(
+          data.items.every((i) => i.thought_action === 'created'),
+          'обе мысли созданы',
+        );
+        // Ребро отдаётся ОБЪЯВИВШИМ его элементом (p2), независимо от
+        // направления: `direction: child` делает p1 родителем p2.
+        assert.equal(data.items[1]?.links?.length, 1, 'связь записана');
+
+        // Ответ вернулся командой воркера, а не главного потока.
+        assert.ok(pool.stats().completed >= 1, 'задача исполнена воркером');
+
+        const after = (
+          ctx.rawDb
+            .prepare(`SELECT COUNT(*) AS c FROM audit_log WHERE action = ? AND network_id = ?`)
+            .get('etn.thoughts.write', ctx.networkId) as { c: number }
+        ).c;
+        assert.equal(after - before, 1, 'ровно одна строка аудитлога на батч');
+
+        // Журнал активности сети заполнен воркером (data.db сети).
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const activity = ndb
+          .prepare(`SELECT COUNT(*) AS c FROM activity_log WHERE network_id = ?`)
+          .get(ctx.networkId) as { c: number };
+        assert.ok(activity.c >= 3, `журнал заполнен (строк: ${activity.c})`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeWritePool();
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('writes ONE audit row for the entire batch', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -1834,6 +1902,51 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
             'prompt must document chronicle[].use_time (contract a6cbcdc3)',
           );
         }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Задача 521aa4b9: два правила, на которых спотыкались агенты, должны быть
+  // в САМОМ описании инструмента (`tools/list`), а не только в промпте — агент
+  // читает описание инструмента раньше, чем решает открыть гайд. Проверяем оба
+  // правила дословно, а также что `etn.guide` отдаёт тот же текст (общий
+  // источник — `writeBatchHowToText`, `ops-catalog.ts`).
+  it('описание инструмента документирует ref для новой мысли и synonyms только в thought (521aa4b9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const { tools } = await handle.client.listTools();
+        const tool = tools.find((t) => t.name === 'etn.thoughts.write');
+        assert.ok(tool, 'etn.thoughts.write must be registered');
+        const description = tool.description ?? '';
+        assert.ok(
+          description.includes('нести локальный `ref`'),
+          'описание обязано прямо требовать `ref` у элемента с блоком `thought` (521aa4b9)',
+        );
+        assert.ok(
+          description.includes('ВНУТРИ `thought`'),
+          'описание обязано отправлять `synonyms` внутрь блока `thought` (521aa4b9)',
+        );
+
+        const guide = toolText(
+          await handle.client.callTool({
+            name: 'etn.guide',
+            arguments: { topic: 'etn.how_to_write_batch' },
+          }),
+        );
+        assert.ok(
+          guide.includes('обязательно объяви `ref`'),
+          'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило ref (521aa4b9)',
+        );
+        assert.ok(
+          guide.includes('вместе с блоком `thought` отвергаются'),
+          'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило synonyms (521aa4b9)',
+        );
       } finally {
         await handle.close();
       }

@@ -121,6 +121,74 @@ describe('loadConfig', () => {
     );
   });
 
+  it('write pool: дефолты и разбор ETN_WRITE_POOL_* (ADR ca3a9218)', () => {
+    const defaults = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data' });
+    assert.equal(defaults.writePool.size, 2, 'дефолтный размер пула записи — 2');
+    assert.equal(defaults.writePool.taskTimeoutMs, 120_000);
+    assert.equal(defaults.writePool.idleEvictionMs, 30_000);
+
+    const cfg = loadConfig({
+      ETN_DATA_DIR: '/tmp/etn-data',
+      ETN_WRITE_POOL_SIZE: '4',
+      ETN_WRITE_TASK_TIMEOUT_MS: '5000',
+      ETN_WRITE_EVICT_IDLE_MS: '0',
+    });
+    assert.equal(cfg.writePool.size, 4);
+    assert.equal(cfg.writePool.taskTimeoutMs, 5000);
+    assert.equal(cfg.writePool.idleEvictionMs, 0);
+
+    // 0 — пул выключен: запись идёт синхронно в главном потоке.
+    const off = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WRITE_POOL_SIZE: '0' });
+    assert.equal(off.writePool.size, 0);
+  });
+
+  it('write pool: отвергает недопустимые настройки', () => {
+    // Целые из диапазона 0..16 разбираются (`parseInt`), мусор — ошибка.
+    for (const value of ['-1', '17', 'abc']) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WRITE_POOL_SIZE: value }),
+        (err: unknown) => err instanceof ConfigError && /ETN_WRITE_POOL_SIZE/.test(err.message),
+      );
+    }
+    for (const value of ['0', '999', 'abc', String(600_000 + 1)]) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WRITE_TASK_TIMEOUT_MS: value }),
+        (err: unknown) => err instanceof ConfigError && /ETN_WRITE_TASK_TIMEOUT_MS/.test(err.message),
+      );
+    }
+    for (const value of ['-1', 'abc', String(600_000 + 1)]) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WRITE_EVICT_IDLE_MS: value }),
+        (err: unknown) => err instanceof ConfigError && /ETN_WRITE_EVICT_IDLE_MS/.test(err.message),
+      );
+    }
+  });
+
+  it('WAL checkpoint: дефолт раз в минуту, разбор ETN_WAL_CHECKPOINT_INTERVAL_MS', () => {
+    const defaults = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data' });
+    assert.equal(defaults.walCheckpoint.intervalMs, 60_000);
+
+    const cfg = loadConfig({
+      ETN_DATA_DIR: '/tmp/etn-data',
+      ETN_WAL_CHECKPOINT_INTERVAL_MS: '5000',
+    });
+    assert.equal(cfg.walCheckpoint.intervalMs, 5000);
+
+    // 0 — фоновый чекпойнт выключен (чекпойнт при остановке остаётся).
+    const off = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WAL_CHECKPOINT_INTERVAL_MS: '0' });
+    assert.equal(off.walCheckpoint.intervalMs, 0);
+  });
+
+  it('WAL checkpoint: отвергает недопустимый интервал', () => {
+    for (const value of ['-1', '999', 'abc', '1.5', String(24 * 60 * 60 * 1000 + 1)]) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_WAL_CHECKPOINT_INTERVAL_MS: value }),
+        (err: unknown) =>
+          err instanceof ConfigError && /ETN_WAL_CHECKPOINT_INTERVAL_MS/.test(err.message),
+      );
+    }
+  });
+
   it('accepts ETN_MCP_ENABLED and ETN_MCP_PORT', () => {
     const cfg = loadConfig({
       ETN_DATA_DIR: '/tmp/etn-data',
