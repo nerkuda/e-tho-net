@@ -29,7 +29,7 @@
  * ниже — следующая позиция, пустой список — `empty` с индексом `0`.
  */
 
-import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { defineKeyContext, pushKeyContext, undefineKeyContext } from '../keymap.js';
 
 import {
   AUTO_SCROLL_EDGE,
@@ -361,7 +361,24 @@ export function createDragTree(
 
     const onUp = (upEvent: PointerEvent): void => {
       lastModifiers = modifiersOf(upEvent);
-      finish(dragging, false);
+      if (!dragging) {
+        finish(false, false);
+        return;
+      }
+      // Цель — по точке ОТПУСКАНИЯ, а не по последнему `pointermove`: между
+      // событиями указатель мог сместиться, а подсвеченная ранее цель —
+      // исчезнуть. Точка вне зон броска отменяет жест (модель не меняется).
+      target = adapter.resolveTarget({
+        source: item,
+        clientX: upEvent.clientX,
+        clientY: upEvent.clientY,
+        modifiers: lastModifiers,
+      });
+      if (target === null) {
+        finish(false, true);
+        return;
+      }
+      finish(true, false);
     };
 
     const onCancel = (): void => {
@@ -426,6 +443,9 @@ export function createDragTree(
       boundHandles.clear();
       clearMarks();
       removeGhost();
+      // Объявление контекста живёт вместе с фасадом: без снятия реестр
+      // `lib/keymap` накапливает записи при каждом создании/уничтожении вида.
+      undefineKeyContext(contextId);
     },
   };
 }

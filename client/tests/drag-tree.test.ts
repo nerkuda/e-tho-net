@@ -19,6 +19,7 @@ import {
   type DragTreeAdapter,
   type DragTreeDropEvent,
   type DragTreeItem,
+  type DragTreeResolveRequest,
   type DragTreeRow,
   type DragTreeTarget,
 } from '../src/renderer/lib/ui/drag-tree.js';
@@ -58,7 +59,14 @@ function makeRow(key: string, top: number, bottom: number, explicitHandle = true
 }
 
 /** Установка фасада: строки, цель, журналы дропа/отмены. */
-function setup(rows: Row[], options: { handleSelector?: string; emptyElement?: ShimElement } = {}) {
+function setup(
+  rows: Row[],
+  options: {
+    handleSelector?: string;
+    emptyElement?: ShimElement;
+    resolveTarget?: (request: DragTreeResolveRequest) => DragTreeTarget | null;
+  } = {},
+) {
   const root = new ShimElement('div');
   const drops: DragTreeDropEvent[] = [];
   const cancels: DragTreeItem[] = [];
@@ -66,18 +74,20 @@ function setup(rows: Row[], options: { handleSelector?: string; emptyElement?: S
     new ShimElement('div')) as unknown as HTMLElement;
   const adapter: DragTreeAdapter = {
     items: () => rows.map((row) => row.item),
-    resolveTarget: ({ clientY }: { clientY: number }): DragTreeTarget => {
-      const target = resolveDragTreeRowTarget(
-        rows.map((row): DragTreeRow => ({ key: row.item.key, element: row.item.element })),
-        clientY,
-      );
-      return {
-        groupId: 'g',
-        index: target.index,
-        position: target.position,
-        element: target.row?.element ?? groupBody,
-      };
-    },
+    resolveTarget:
+      options.resolveTarget ??
+      (({ clientY }: DragTreeResolveRequest): DragTreeTarget => {
+        const target = resolveDragTreeRowTarget(
+          rows.map((row): DragTreeRow => ({ key: row.item.key, element: row.item.element })),
+          clientY,
+        );
+        return {
+          groupId: 'g',
+          index: target.index,
+          position: target.position,
+          element: target.row?.element ?? groupBody,
+        };
+      }),
     onDrop: (event) => drops.push(event),
     onCancel: (source) => cancels.push(source),
   };
@@ -262,5 +272,63 @@ describe('drag-tree: канал жеста (31b228f0)', () => {
     tree.destroy();
     drag(a.handle, { x: 10, y: 5 }, { x: 10, y: 35 });
     assert.deepEqual(drops, []);
+  });
+
+  it('destroy снимает объявление клавиатурного контекста: циклы не накапливают записи', () => {
+    const contextsOfTree = () =>
+      keymap.keymapInternals
+        .contextIds()
+        .filter((id) => id.startsWith('ui-drag-tree-'));
+    for (let cycle = 1; cycle <= 5; cycle += 1) {
+      const row = makeRow(`a${cycle}`, 0, 20);
+      const { tree } = setup([row]);
+      assert.equal(contextsOfTree().length, 1, `цикл ${cycle}: контекст объявлен при создании`);
+      tree.destroy();
+      assert.deepEqual(contextsOfTree(), [], `цикл ${cycle}: destroy снял объявление`);
+    }
+  });
+
+  it('цель броска пересчитывается по точке pointerup, а не по последнему pointermove', () => {
+    const a = makeRow('a', 0, 20);
+    const b = makeRow('b', 20, 40);
+    const c = makeRow('c', 40, 60);
+    const { drops } = setup([a, b, c]);
+    a.handle.emit('pointerdown', {
+      button: 0,
+      clientX: 10,
+      clientY: 5,
+      pointerId: 1,
+      preventDefault: () => undefined,
+    });
+    // move — выше середины b (перед b, index 1), up — ниже c (в конец, index 3).
+    a.handle.emit('pointermove', { clientX: 10, clientY: 25, pointerId: 1 });
+    a.handle.emit('pointerup', { clientX: 10, clientY: 55, pointerId: 1 });
+    assert.equal(drops.length, 1);
+    assert.equal(drops[0]!.target.index, 3, 'индекс — по точке отпускания');
+    assert.equal(drops[0]!.target.position, 'after');
+  });
+
+  it('pointerup вне зоны броска отменяет жест: onCancel без onDrop', () => {
+    const a = makeRow('a', 0, 20);
+    const b = makeRow('b', 20, 40);
+    const { drops, cancels } = setup([a, b], {
+      resolveTarget: ({ clientY }) =>
+        clientY > 40
+          ? null
+          : { groupId: 'g', index: 0, position: 'before', element: a.element as unknown as HTMLElement },
+    });
+    a.handle.emit('pointerdown', {
+      button: 0,
+      clientX: 10,
+      clientY: 5,
+      pointerId: 1,
+      preventDefault: () => undefined,
+    });
+    a.handle.emit('pointermove', { clientX: 10, clientY: 25, pointerId: 1 });
+    a.handle.emit('pointerup', { clientX: 10, clientY: 55, pointerId: 1 });
+    assert.deepEqual(drops, [], 'дропа нет — цель на pointerup не резолвится');
+    assert.equal(cancels.length, 1);
+    assert.equal(cancels[0]!.key, 'a');
+    assert.equal(a.element.classList.contains(DRAG_ACTIVE_CLASS), false, 'состояние жеста очищено');
   });
 });

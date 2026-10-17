@@ -40,9 +40,9 @@ function isComment(line: string): boolean {
   return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
 }
 
-/** Собственный drag-канал: HTML5 DnD и pointer-слушатели перетаскивания. */
+/** Собственный drag-канал: HTML5 DnD, pointer-слушатели и присваивание обработчиков. */
 const OWN_DRAG =
-  /\bdraggable\b|['"](?:dragstart|dragenter|dragover|dragleave|dragend|drop)['"]|addEventListener\??\.?\(\s*['"](?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture)['"]/;
+  /\bdraggable\b|['"](?:dragstart|dragenter|dragover|dragleave|dragend|drop)['"]|addEventListener\??\.?\(\s*['"](?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture)['"]|(?:\.|\b)on(?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture|dragstart|dragenter|dragover|dragleave|dragend|drop)\s*=|\[\s*['"]on(?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture|dragstart|dragenter|dragover|dragleave|dragend|drop)['"]\s*\]\s*=/;
 
 const RULES: GuardRule[] = [
   {
@@ -98,16 +98,24 @@ describe('guard: канал перетаскивания в lib/ui (31b228f0)', 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-drag-channel-'));
     try {
       fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, 'lib', 'filter-tree.ts'),
-        "node.draggable = true;\nnode.addEventListener('pointerdown', startDrag);\n",
-        'utf8',
-      );
-      const violations = collectViolations(dir, RULES);
-      assert.ok(
-        violations.some((v) => v.rule === 'no-own-drag-in-filter-modules'),
-        'собственный drag-канал в фильтре обязан попадать в нарушение',
-      );
+      // Каждая мутация проверяется отдельно: присваивание обработчика
+      // (`el.onpointerdown = …`) — не менее запрещённая форма, чем
+      // `addEventListener`, и обязано попадать в нарушение.
+      const mutations = [
+        'node.draggable = true;\n',
+        "node.addEventListener('pointerdown', startDrag);\n",
+        'node.onpointerdown = startDrag;\n',
+        'node.ondragstart = startDrag;\n',
+        "node['ondragover'] = startDrag;\n",
+      ];
+      for (const source of mutations) {
+        fs.writeFileSync(path.join(dir, 'lib', 'filter-tree.ts'), source, 'utf8');
+        const violations = collectViolations(dir, RULES);
+        assert.ok(
+          violations.some((v) => v.rule === 'no-own-drag-in-filter-modules'),
+          `нарушение обязано ловиться: ${source.trim()}`,
+        );
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
