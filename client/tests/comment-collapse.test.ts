@@ -22,10 +22,10 @@ import { fileURLToPath } from 'node:url';
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { EditorState, type TransactionSpec } from '@codemirror/state';
-import { ensureSyntaxTree } from '@codemirror/language';
 import type { EditorView } from '@codemirror/view';
 
 import { ShimElement } from './dom-shim.js';
+import { createParsedState } from './editor-parse.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -308,13 +308,18 @@ describe('сворачивание разделов комментария (edit
 
     const doc = '- один\n  - вложенный\n  > цитата в пункте\n';
     const collapse = mod.createCommentCollapseState('net', undefined);
-    const state = EditorState.create({
-      doc,
-      extensions: [
-        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-        mod.commentCollapseExtension(collapse),
-      ],
-    });
+    // Разбор доводится до конца ПРИ СОЗДАНИИ: `collectSections` читает
+    // `syntaxTree`, и обрезанное дерево молча теряет разделы под нагрузкой
+    // (tests/editor-parse.ts, задача f9b5c36e).
+    const state = createParsedState(() =>
+      EditorState.create({
+        doc,
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+          mod.commentCollapseExtension(collapse),
+        ],
+      }),
+    );
 
     // Один раздел n#1 на родительский пункт; тело — объединение обоих блоков.
     const sections = mod.commentCollapseInternals.collectSections(state);
@@ -355,20 +360,19 @@ describe('сворачивание разделов комментария (edit
     const doc = '## Раздел\n\nтекст\n\n### Подраздел\n\nподтекст\n\n## Второй\n\nещё\n';
     const makeState = (): EditorState => {
       const collapse = mod.createCommentCollapseState('net', undefined);
-      const state = EditorState.create({
-        doc,
-        extensions: [
-          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-          livePreview,
-          mod.commentCollapseExtension(collapse),
-        ],
-      });
       // Полный разбор до конца документа: `collectSections` читает `syntaxTree`,
-      // который без явного `ensureSyntaxTree` может вернуть неполное дерево —
-      // тогда разделы теряются (флейк `c543ea79`: 1 раздел вместо 3). Прогон
-      // разбора до `doc.length` изолирует тест от тайминга/порядка парсера.
-      ensureSyntaxTree(state, state.doc.length, 5_000);
-      return state;
+      // обрезанное дерево теряет разделы под нагрузкой (флейки c543ea79 и
+      // f9b5c36e). Общий приём — `createParsedState` (tests/editor-parse.ts).
+      return createParsedState(() =>
+        EditorState.create({
+          doc,
+          extensions: [
+            markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+            livePreview,
+            mod.commentCollapseExtension(collapse),
+          ],
+        }),
+      );
     };
 
     const field = mod.commentCollapseInternals.collapseDecoField;
@@ -427,13 +431,15 @@ describe('сворачивание разделов комментария (edit
 
     const doc = '## Список\n\n- один\n  - вложенный\n- два\n';
     const collapse = mod.createCommentCollapseState('net', undefined);
-    const state = EditorState.create({
-      doc,
-      extensions: [
-        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-        mod.commentCollapseExtension(collapse),
-      ],
-    });
+    const state = createParsedState(() =>
+      EditorState.create({
+        doc,
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+          mod.commentCollapseExtension(collapse),
+        ],
+      }),
+    );
 
     // Индикатор вложенного блока — у строки РОДИТЕЛЬСКОГО пункта (`- один`),
     // а не у первой строки вложенного списка (ошибка 6007a6ec).
@@ -469,13 +475,15 @@ describe('сворачивание разделов комментария (edit
     // Тело заголовка A — только HTML-комментарий: @etn/markdown не эмитит для
     // него узла, в просмотре у A видимого тела нет, в правке — есть строка.
     const doc = '## A\n<!-- hidden -->\n## B\nx\n';
-    const editor = EditorState.create({
-      doc,
-      extensions: [
-        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-        mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
-      ],
-    });
+    const editor = createParsedState(() =>
+      EditorState.create({
+        doc,
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+          mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
+        ],
+      }),
+    );
     assert.deepEqual(
       mod.commentCollapseInternals.collectSections(editor).map((s) => s.id),
       ['h2#1', 'h2#2'],
@@ -621,13 +629,15 @@ describe('сворачивание разделов комментария (edit
 
     const doc = '## Раздел\n\nтекст\n\n### Подраздел\n\nподтекст\n\n## Второй\n\nещё\n';
     const makeState = (): EditorState =>
-      EditorState.create({
-        doc,
-        extensions: [
-          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-          mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
-        ],
-      });
+      createParsedState(() =>
+        EditorState.create({
+          doc,
+          extensions: [
+            markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+            mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
+          ],
+        }),
+      );
 
     // Каретка на строке заголовка H2#1 — Ctrl+Up сворачивает его тело.
     const view = fakeView(makeState());
@@ -667,21 +677,25 @@ describe('сворачивание разделов комментария (edit
     mod = (await import('../src/renderer/editor/comment-collapse.js')) as Module;
 
     // Текст без заголовков/вложенных блоков — сворачивать нечего.
-    const plain = EditorState.create({
-      doc: 'просто текст без разметки\n',
-      extensions: [
-        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-        mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
-      ],
-    });
+    const plain = createParsedState(() =>
+      EditorState.create({
+        doc: 'просто текст без разметки\n',
+        extensions: [
+          markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+          mod.commentCollapseExtension(mod.createCommentCollapseState('net', undefined)),
+        ],
+      }),
+    );
     assert.equal(mod.toggleCollapseAtCaret(fakeView(plain), 'fold'), false);
     assert.equal(mod.toggleCollapseAtCaret(fakeView(plain), 'unfold'), false);
 
     // Расширение сворачивания к редактору не подключено (поле другого вида).
-    const bare = EditorState.create({
-      doc: '## Заголовок\nтело\n',
-      extensions: [markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] })],
-    });
+    const bare = createParsedState(() =>
+      EditorState.create({
+        doc: '## Заголовок\nтело\n',
+        extensions: [markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] })],
+      }),
+    );
     assert.equal(
       mod.toggleCollapseAtCaret(fakeView(bare), 'fold'),
       false,
