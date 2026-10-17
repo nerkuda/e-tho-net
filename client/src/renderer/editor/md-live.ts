@@ -636,7 +636,16 @@ export const livePreview = StateField.define<DecorationSet>({
     // Переключение свёрнутости раздела (задача 634f1412) меняет набор
     // пропускаемых узлов — декорации перестраиваются вместе с ним.
     const collapseToggled = tr.effects.some((effect) => effect.is(setCollapseEffect));
-    if (tr.docChanged || tr.selection || collapseToggled) return buildDecorations(tr.state);
+    // Parse-worker (`@codemirror/language`, ViewPlugin) доразбирает документ
+    // транзакцией с эффектом `Language.setState`: ни `docChanged`, ни
+    // `selection` в ней нет. Ссылка дерева меняется только на транзакциях
+    // языка (обычные правки/выделения дерево не трогают), поэтому сравнение
+    // ссылок — дешёвый и точный признак доразбора (ошибка `8c890ee7`):
+    // без него хвост длинного комментария остаётся без разметки до правки.
+    const treeGrown = !tr.docChanged && syntaxTree(tr.state) !== syntaxTree(tr.startState);
+    if (tr.docChanged || tr.selection || collapseToggled || treeGrown) {
+      return buildDecorations(tr.state);
+    }
     return decorations;
   },
   provide: (field) => EditorView.decorations.from(field),

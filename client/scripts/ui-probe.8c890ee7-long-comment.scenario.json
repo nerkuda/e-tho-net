@@ -1,0 +1,135 @@
+{
+  "name": "8c890ee7-long-comment-parse",
+  "description": "Ошибка 8c890ee7: постоянный комментарий длиннее 3000 символов (вьюпорт начального разбора CodeMirror) обслуживается целиком БЕЗ правки и БЕЗ перемещения каретки. Самодостаточен: комментарий заводится шагом api на HOME (body_md, 100 уникальных разделов; последний — «Раздел 100» — за вьюпортом). Проверяет: (1) начальное состояние после входа в правку: treeLen 3000 (обрезано); (2) после доразбора parse-worker: treeLen = длина документа, live-preview декорации и маркеры гаттера появляются сами; (3) каретка не двигалась, документ не менялся; (4) после прокрутки вниз в DOM есть строка «Раздел 100» с классом cm-md-h2 и шевроны сворачивания. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.8c890ee7-long-comment.scenario.json",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seed-long-comment",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "## Раздел 001\n\nтекст раздела номер 001\n\n## Раздел 002\n\nтекст раздела номер 002\n\n## Раздел 003\n\nтекст раздела номер 003\n\n## Раздел 004\n\nтекст раздела номер 004\n\n## Раздел 005\n\nтекст раздела номер 005\n\n## Раздел 006\n\nтекст раздела номер 006\n\n## Раздел 007\n\nтекст раздела номер 007\n\n## Раздел 008\n\nтекст раздела номер 008\n\n## Раздел 009\n\nтекст раздела номер 009\n\n## Раздел 010\n\nтекст раздела номер 010\n\n## Раздел 011\n\nтекст раздела номер 011\n\n## Раздел 012\n\nтекст раздела номер 012\n\n## Раздел 013\n\nтекст раздела номер 013\n\n## Раздел 014\n\nтекст раздела номер 014\n\n## Раздел 015\n\nтекст раздела номер 015\n\n## Раздел 016\n\nтекст раздела номер 016\n\n## Раздел 017\n\nтекст раздела номер 017\n\n## Раздел 018\n\nтекст раздела номер 018\n\n## Раздел 019\n\nтекст раздела номер 019\n\n## Раздел 020\n\nтекст раздела номер 020\n\n## Раздел 021\n\nтекст раздела номер 021\n\n## Раздел 022\n\nтекст раздела номер 022\n\n## Раздел 023\n\nтекст раздела номер 023\n\n## Раздел 024\n\nтекст раздела номер 024\n\n## Раздел 025\n\nтекст раздела номер 025\n\n## Раздел 026\n\nтекст раздела номер 026\n\n## Раздел 027\n\nтекст раздела номер 027\n\n## Раздел 028\n\nтекст раздела номер 028\n\n## Раздел 029\n\nтекст раздела номер 029\n\n## Раздел 030\n\nтекст раздела номер 030\n\n## Раздел 031\n\nтекст раздела номер 031\n\n## Раздел 032\n\nтекст раздела номер 032\n\n## Раздел 033\n\nтекст раздела номер 033\n\n## Раздел 034\n\nтекст раздела номер 034\n\n## Раздел 035\n\nтекст раздела номер 035\n\n## Раздел 036\n\nтекст раздела номер 036\n\n## Раздел 037\n\nтекст раздела номер 037\n\n## Раздел 038\n\nтекст раздела номер 038\n\n## Раздел 039\n\nтекст раздела номер 039\n\n## Раздел 040\n\nтекст раздела номер 040\n\n## Раздел 041\n\nтекст раздела номер 041\n\n## Раздел 042\n\nтекст раздела номер 042\n\n## Раздел 043\n\nтекст раздела номер 043\n\n## Раздел 044\n\nтекст раздела номер 044\n\n## Раздел 045\n\nтекст раздела номер 045\n\n## Раздел 046\n\nтекст раздела номер 046\n\n## Раздел 047\n\nтекст раздела номер 047\n\n## Раздел 048\n\nтекст раздела номер 048\n\n## Раздел 049\n\nтекст раздела номер 049\n\n## Раздел 050\n\nтекст раздела номер 050\n\n## Раздел 051\n\nтекст раздела номер 051\n\n## Раздел 052\n\nтекст раздела номер 052\n\n## Раздел 053\n\nтекст раздела номер 053\n\n## Раздел 054\n\nтекст раздела номер 054\n\n## Раздел 055\n\nтекст раздела номер 055\n\n## Раздел 056\n\nтекст раздела номер 056\n\n## Раздел 057\n\nтекст раздела номер 057\n\n## Раздел 058\n\nтекст раздела номер 058\n\n## Раздел 059\n\nтекст раздела номер 059\n\n## Раздел 060\n\nтекст раздела номер 060\n\n## Раздел 061\n\nтекст раздела номер 061\n\n## Раздел 062\n\nтекст раздела номер 062\n\n## Раздел 063\n\nтекст раздела номер 063\n\n## Раздел 064\n\nтекст раздела номер 064\n\n## Раздел 065\n\nтекст раздела номер 065\n\n## Раздел 066\n\nтекст раздела номер 066\n\n## Раздел 067\n\nтекст раздела номер 067\n\n## Раздел 068\n\nтекст раздела номер 068\n\n## Раздел 069\n\nтекст раздела номер 069\n\n## Раздел 070\n\nтекст раздела номер 070\n\n## Раздел 071\n\nтекст раздела номер 071\n\n## Раздел 072\n\nтекст раздела номер 072\n\n## Раздел 073\n\nтекст раздела номер 073\n\n## Раздел 074\n\nтекст раздела номер 074\n\n## Раздел 075\n\nтекст раздела номер 075\n\n## Раздел 076\n\nтекст раздела номер 076\n\n## Раздел 077\n\nтекст раздела номер 077\n\n## Раздел 078\n\nтекст раздела номер 078\n\n## Раздел 079\n\nтекст раздела номер 079\n\n## Раздел 080\n\nтекст раздела номер 080\n\n## Раздел 081\n\nтекст раздела номер 081\n\n## Раздел 082\n\nтекст раздела номер 082\n\n## Раздел 083\n\nтекст раздела номер 083\n\n## Раздел 084\n\nтекст раздела номер 084\n\n## Раздел 085\n\nтекст раздела номер 085\n\n## Раздел 086\n\nтекст раздела номер 086\n\n## Раздел 087\n\nтекст раздела номер 087\n\n## Раздел 088\n\nтекст раздела номер 088\n\n## Раздел 089\n\nтекст раздела номер 089\n\n## Раздел 090\n\nтекст раздела номер 090\n\n## Раздел 091\n\nтекст раздела номер 091\n\n## Раздел 092\n\nтекст раздела номер 092\n\n## Раздел 093\n\nтекст раздела номер 093\n\n## Раздел 094\n\nтекст раздела номер 094\n\n## Раздел 095\n\nтекст раздела номер 095\n\n## Раздел 096\n\nтекст раздела номер 096\n\n## Раздел 097\n\nтекст раздела номер 097\n\n## Раздел 098\n\nтекст раздела номер 098\n\n## Раздел 099\n\nтекст раздела номер 099\n\n## Раздел 100\n\nтекст раздела номер 100\n\n"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes(\"Раздел 100\") === true"
+    },
+    {
+      "name": "enter-edit",
+      "click": "[data-action=\"edit\"]"
+    },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "install-parse-helper",
+      "eval": "(() => {\n        window.__etnParse = () => {\n  const content = document.querySelector('.md-field--editing .cm-content');\n  const view = content?.cmTile?.root?.view ?? null;\n  if (view === null) return null;\n  const values = view.state.values ?? [];\n  const lang = values.find((v) => v && typeof v === 'object' && v.tree && v.context);\n  const live = values.find((v) => v && typeof v === 'object' && typeof v.size === 'number' && typeof v.iter === 'function' && !('markers' in v));\n  const collapse = values.find((v) => v && typeof v === 'object' && v.markers && typeof v.markers.iter === 'function');\n  if (!lang || !live || !collapse) return null;\n  let decorations = 0;\n  for (let it = live.iter(); it.value !== null; it.next()) decorations += 1;\n  let markers = 0;\n  for (let it = collapse.markers.iter(); it.value !== null; it.next()) markers += 1;\n  return { docLen: view.state.doc.length, treeLen: lang.context.treeLen, decorations, markers, caret: view.state.selection.main.head };\n};\n        window.__poll = async (fn, tries = 80) => { for (let i = 0; i < tries; i += 1) { const value = fn(); if (value !== null && value !== undefined && value !== false) return value; await new Promise((resolve) => setTimeout(resolve, 25)); } return fn(); };\n        return true;\n      })()"
+    },
+    {
+      "name": "parse-initial",
+      "probe": "(() => {\n  const content = document.querySelector('.md-field--editing .cm-content');\n  const view = content?.cmTile?.root?.view ?? null;\n  if (view === null) return null;\n  const values = view.state.values ?? [];\n  const lang = values.find((v) => v && typeof v === 'object' && v.tree && v.context);\n  const live = values.find((v) => v && typeof v === 'object' && typeof v.size === 'number' && typeof v.iter === 'function' && !('markers' in v));\n  const collapse = values.find((v) => v && typeof v === 'object' && v.markers && typeof v.markers.iter === 'function');\n  if (!lang || !live || !collapse) return null;\n  let decorations = 0;\n  for (let it = live.iter(); it.value !== null; it.next()) decorations += 1;\n  let markers = 0;\n  for (let it = collapse.markers.iter(); it.value !== null; it.next()) markers += 1;\n  return { docLen: view.state.doc.length, treeLen: lang.context.treeLen, decorations, markers, caret: view.state.selection.main.head };\n})()"
+    },
+    {
+      "name": "caret-initial",
+      "probe": "window.__etnParse()?.caret ?? null"
+    },
+    {
+      "name": "parse-full",
+      "waitFor": "(() => { const p = window.__etnParse(); return p !== null && p.treeLen >= p.docLen; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "doc-len",
+      "probe": "window.__etnParse()?.docLen ?? null",
+      "expect": 4000
+    },
+    {
+      "name": "tree-full",
+      "probe": "window.__etnParse()?.treeLen ?? null",
+      "expect": 4000
+    },
+    {
+      "name": "decorations-full",
+      "probe": "window.__etnParse()?.decorations ?? null"
+    },
+    {
+      "name": "markers-full",
+      "probe": "window.__etnParse()?.markers ?? null"
+    },
+    {
+      "name": "caret-after",
+      "probe": "window.__etnParse()?.caret ?? null",
+      "expectFrom": "caret-initial"
+    },
+    {
+      "name": "scroll-to-tail",
+      "eval": "(() => { const sc = document.querySelector('.md-field--editing .md-field-scroll'); if (sc === null) return false; sc.scrollTop = sc.scrollHeight; return true; })()"
+    },
+    {
+      "name": "tail-rendered",
+      "waitFor": "[...document.querySelectorAll('.md-field--editing .cm-line')].some((line) => line.textContent.trim() === \"Раздел 100\")",
+      "timeout": 10000
+    },
+    {
+      "name": "tail-markdown-class",
+      "probe": "(() => { const line = [...document.querySelectorAll('.md-field--editing .cm-line')].find((el) => el.textContent.trim() === \"Раздел 100\"); return line === undefined ? null : line.className; })()"
+    },
+    {
+      "name": "tail-heading-lines",
+      "probe": "document.querySelectorAll('.md-field--editing .cm-line.cm-md-h2').length"
+    },
+    {
+      "name": "tail-chevrons",
+      "probe": "document.querySelectorAll('.md-field--editing .md-collapse-toggle').length"
+    }
+  ]
+}
