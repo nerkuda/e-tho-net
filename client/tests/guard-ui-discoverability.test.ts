@@ -38,7 +38,6 @@ import { assembledStylesFile } from './renderer-css.js';
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 const UI_ROOT = path.join(RENDERER_ROOT, 'lib', 'ui');
-
 /** Покоящееся «спрятано» — элемент недоступен мыши и клавиатуре. */
 const HIDDEN =
   /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$)|pointer-events\s*:\s*none)/;
@@ -96,6 +95,46 @@ function findHoverOnlyReveals(css: string): string[] {
     }
   }
   return violations;
+}
+
+/**
+ * Потребитель кросс-группового фасада `lib/ui/drag-tree.ts`, у которого нет
+ * клавиатурного пути, оставляет перенос «только перетаскиванием». Правило
+ * машинно проверяет две вещи в том же модуле-потребителе:
+ *  - объявлен контекст команд (`defineKeyContext`) — путь через диспетчер
+ *    `lib/keymap` (ADR b420b08c);
+ *  - у строки есть фокус по умолчанию (`tabIndex = 0`) — иначе команда
+ *    недостижима без мыши.
+ */
+const DRAG_CONSUMER = /\bcreateDragTree\s*\(/;
+const KEYBOARD_PATH = /\bdefineKeyContext\s*\(/;
+const FOCUS_PATH = /\.tabIndex\s*=\s*0\b/;
+
+/** Рекурсивный сбор `.ts` под каталогом. */
+function collectTsFiles(dir: string, base = ''): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = base === '' ? entry.name : `${base}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...collectTsFiles(path.join(dir, entry.name), rel));
+    else if (entry.isFile() && entry.name.endsWith('.ts')) out.push(rel);
+  }
+  return out;
+}
+
+/** Файлы, где перенос доступен только мышью (потребитель drag-tree без клавиатуры). */
+function findDragOnlyActions(dir: string): string[] {
+  const offenders: string[] = [];
+  for (const rel of collectTsFiles(dir)) {
+    const raw = fs.readFileSync(path.join(dir, rel), 'utf8');
+    // Комментарии не считаются кодом: упоминание конструкции в пояснении не
+    // создаёт клавиатурный путь.
+    const source = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    // Сам фасад объявляет `createDragTree`, но не является его потребителем.
+    if (/export function createDragTree\s*\(/.test(source)) continue;
+    if (!DRAG_CONSUMER.test(source)) continue;
+    if (!KEYBOARD_PATH.test(source) || !FOCUS_PATH.test(source)) offenders.push(rel);
+  }
+  return offenders;
 }
 
 describe('guard: обнаружимость действий (e45ca252, стандарт 1b5f6200)', () => {
@@ -179,6 +218,43 @@ describe('guard: обнаружимость действий (e45ca252, стан
         [],
         'парный focus-путь делает действие доступным без мыши',
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('перенос в дереве не остаётся «только перетаскиванием» (31b228f0)', () => {
+    assert.deepEqual(
+      findDragOnlyActions(RENDERER_ROOT),
+      [],
+      'потребитель drag-tree обязан иметь клавиатурный путь (defineKeyContext) ' +
+        'и фокусируемую строку (tabIndex = 0) — иначе действие доступно только мышью',
+    );
+  });
+
+  it('анализ drag-only краснеет на умышленном нарушении', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-drag-only-'));
+    try {
+      const file = path.join(dir, 'filter-drag.ts');
+      fs.writeFileSync(file, 'createDragTree(root, adapter);\n', 'utf8');
+      assert.deepEqual(
+        findDragOnlyActions(dir),
+        ['filter-drag.ts'],
+        'потребитель без клавиатурного пути обязан ловиться',
+      );
+      // Контекст есть, но строки не фокусируемы — действие всё ещё только мышиное.
+      fs.writeFileSync(
+        file,
+        'createDragTree(root, adapter);\ndefineKeyContext({ id, bindings });\n',
+        'utf8',
+      );
+      assert.deepEqual(findDragOnlyActions(dir), ['filter-drag.ts'], 'нет tabIndex = 0 — нарушение');
+      fs.writeFileSync(
+        file,
+        'createDragTree(root, adapter);\ndefineKeyContext({ id, bindings });\nitem.tabIndex = 0;\n',
+        'utf8',
+      );
+      assert.deepEqual(findDragOnlyActions(dir), [], 'клавиатурный путь снимает нарушение');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

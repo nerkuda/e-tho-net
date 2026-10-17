@@ -1,0 +1,114 @@
+{
+  "name": "31b228f0-filter-drag-move",
+  "description": "Этап 2 (критерий 1/2): перенос условия внутри группы в редакторе отбора «Структур». Загружается сохранённый отбор из трёх условий, условие «Есть комментарий» перетаскивается за индикатор И на место после «Есть вложения»; проверяются итоговое дерево, фраза отбора и сохранение определения на сервере. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-filter-drag-move.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "resize-large", "eval": "(() => { window.resizeTo(1600, 1200); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+
+    {
+      "name": "seed-filter",
+      "api": {
+        "name": "seed-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "drag31b228f0-a",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                { "entity": { "kind": "comment" }, "operator": "not_empty" },
+                { "entity": { "kind": "attachments" }, "operator": "not_empty" },
+                { "entity": { "kind": "chronology" }, "operator": "not_empty" }
+              ]
+            },
+            "sort": [{ "key": "title", "order": "asc" }]
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "focus-search", "click": ".sfd-search" },
+    { "name": "search-name", "text": "drag31b228f0-a" },
+    { "name": "select-row", "key": "ArrowDown" },
+    { "name": "confirm-row", "key": "Enter" },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "name-filled",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-name__input')?.value === 'drag31b228f0-a'"
+    },
+    { "name": "tree-ready", "timeout": 10000, "waitFor": "document.querySelectorAll('.st-filter .ft-item').length >= 3" },
+    {
+      "name": "tree-before",
+      "probe": "[...document.querySelectorAll('.st-filter .ft-item')].map((i) => (i.querySelector('.ft-row__what')?.textContent || '').replace('▾','').trim())",
+      "expect": ["Есть комментарий", "Есть вложения", "Есть дневниковые записи"]
+    },
+    {
+      "name": "drag-comment-after-attachments",
+      "drag": {
+        "from": { "x": 29, "y": 197 },
+        "to": { "x": 117, "y": 316 },
+        "expect": ".st-filter .ft-item[data-path=\"2\"]",
+        "steps": 10,
+        "duration": 200
+      }
+    },
+    {
+      "name": "tree-after-ready",
+      "timeout": 10000,
+      "waitFor": "JSON.stringify([...document.querySelectorAll('.st-filter .ft-item')].map((i) => (i.querySelector('.ft-row__what')?.textContent || '').replace('▾','').trim())) === JSON.stringify(['Есть вложения','Есть комментарий','Есть дневниковые записи'])"
+    },
+    {
+      "name": "tree-after",
+      "probe": "[...document.querySelectorAll('.st-filter .ft-item')].map((i) => i.dataset.path + ':' + ((i.querySelector('.ft-row__what')?.textContent) || '').replace('▾','').trim())",
+      "expect": ["0:Есть вложения", "1:Есть комментарий", "2:Есть дневниковые записи"]
+    },
+    {
+      "name": "phrase-order",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text')?.textContent || ''; const a = t.indexOf('Есть вложения'); const b = t.indexOf('Есть комментарий'); return a >= 0 && b >= 0 && a < b; })()",
+      "expect": true
+    },
+    {
+      "name": "changed-marker",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-changed')?.hidden === false"
+    },
+
+    { "name": "save", "click": ".st-filter .ff-save" },
+    {
+      "name": "saved-notice",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('drag31b228f0-a') === true"
+    },
+    {
+      "name": "server-order",
+      "timeout": 10000,
+      "api": {
+        "name": "server-order",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=structures",
+        "expression": "(() => { const f = data.find((x) => x.name === 'drag31b228f0-a'); return (f?.definition?.filter?.children ?? []).map((c) => c.entity?.kind ?? 'group').join(','); })()"
+      },
+      "expect": "attachments,comment,chronology"
+    }
+  ]
+}

@@ -171,6 +171,24 @@ export function resolveDragTreeRowTarget(
   return { index: rows.length, position: 'after', row: rows[rows.length - 1] ?? null };
 }
 
+/** Ближайший предок (включая сам узел), подходящий под селектор ручки. */
+function closestHandle(node: Element | null, selector: string): HTMLElement | null {
+  let current = node as HTMLElement | null;
+  while (current !== null) {
+    if (selector.startsWith('.')) {
+      if (current.classList?.contains(selector.slice(1)) === true) return current;
+    } else if (
+      (current as unknown as { matches?: (value: string) => boolean }).matches?.(selector) === true
+    ) {
+      return current;
+    }
+    current =
+      (current as unknown as { parentElement?: HTMLElement | null }).parentElement ??
+      (current as unknown as { parent?: HTMLElement | null }).parent ?? null;
+  }
+  return null;
+}
+
 /** Прочитать модификаторы события указателя/клавиатуры. */
 function modifiersOf(event: {
   shiftKey?: boolean;
@@ -202,15 +220,18 @@ export function createDragTree(
   options: DragTreeOptions,
 ): DragTreeHandle {
   const ownerDocument = (globalThis as { document?: Document }).document;
-  // Корень нужен для единого вида фасада (`refresh`/`destroy`), поведение —
-  // на ручках узлов. Ссылку сохраняем, чтобы вид не «потерял» контейнер.
-  void root;
   const threshold = options.threshold ?? DRAG_THRESHOLD;
   const scrollStep = options.autoScrollStep ?? AUTO_SCROLL_STEP;
   const scrollEdge = options.autoScrollEdge ?? AUTO_SCROLL_EDGE;
   const handleSelector = options.handleSelector;
-  /** Ручки и их pointerdown-слушатели (для `refresh` и `destroy`). */
-  const boundHandles = new Map<HTMLElement, (event: PointerEvent) => void>();
+  /**
+   * Ручки, которым уже навешен pointerdown. `refresh` только ДОБАВЛЯЕТ: снятие
+   * слушателя с живой ручки оставляло её «мёртвой», если узел временно выпадал
+   * из `items()` между перерисовками. Ссылки слабые — отсоединённые узлы не
+   * удерживаются; `destroy` снимает слушатели по ним.
+   */
+  const boundHandles = new Set<WeakRef<HTMLElement>>();
+  const listenerByHandle = new WeakMap<HTMLElement, (event: PointerEvent) => void>();
   let ghost: HTMLElement | null = null;
   let active: ActiveDrag | null = null;
 
@@ -336,10 +357,12 @@ export function createDragTree(
     const finish = (drop: boolean, cancel: boolean): void => {
       if (finished) return;
       finished = true;
-      handle.removeEventListener?.('pointermove', onMove as EventListener);
-      handle.removeEventListener?.('pointerup', onUp as EventListener);
-      handle.removeEventListener?.('pointercancel', onCancel as EventListener);
-      handle.removeEventListener?.('lostpointercapture', onCancel as EventListener);
+      for (const target of [handle, root]) {
+        target.removeEventListener?.('pointermove', onMove as EventListener);
+        target.removeEventListener?.('pointerup', onUp as EventListener);
+        target.removeEventListener?.('pointercancel', onCancel as EventListener);
+        target.removeEventListener?.('lostpointercapture', onCancel as EventListener);
+      }
       try {
         (handle as unknown as { releasePointerCapture?: (id: number) => void }).releasePointerCapture?.(
           pointerId,
@@ -397,22 +420,47 @@ export function createDragTree(
     } catch {
       /* нет захвата — не критично */
     }
-    handle.addEventListener?.('pointermove', onMove as EventListener);
-    handle.addEventListener?.('pointerup', onUp as EventListener);
-    handle.addEventListener?.('pointercancel', onCancel as EventListener);
-    handle.addEventListener?.('lostpointercapture', onCancel as EventListener);
+    // Слушатели жеста — и на ручке, и на корне: перерисовка дерева может
+    // заменить ручку под указателем; корень переживает перерисовку, поэтому
+    // жест не «зависает» без pointerup (finished делает обработку однократной).
+    for (const target of [handle, root]) {
+      target.addEventListener?.('pointermove', onMove as EventListener);
+      target.addEventListener?.('pointerup', onUp as EventListener);
+      target.addEventListener?.('pointercancel', onCancel as EventListener);
+      target.addEventListener?.('lostpointercapture', onCancel as EventListener);
+    }
   };
 
-  /** Перепривязать ручки: новые узлы получают жест, исчезнувшие — теряют. */
+  /**
+   * Делегированный захват на корне. Переживает перерисовку узлов (ручка могла
+   * быть заменена между `refresh`) и страхует per-handle привязку. Если
+   * per-handle слушатель уже начал жест, `active` не пуст — событие пропускаем,
+   * поэтому двойного старта нет. DOM-шим тестов не всплывает — там работает
+   * per-handle путь.
+   */
+  const onRootPointerDown = (event: PointerEvent): void => {
+    if (active !== null) return;
+    if (event.button !== 0) return;
+    const target = (event.target ?? null) as Element | null;
+    const handle = closestHandle(target, handleSelector);
+    if (handle === null) return;
+    const item = items().find(
+      (candidate) =>
+        candidate.handle === handle || candidate.element.contains?.(handle) === true,
+    );
+    if (item === undefined) return;
+    begin(item, handle, event);
+  };
+  root.addEventListener('pointerdown', onRootPointerDown as EventListener);
+
+  /** Перепривязать ручки: новые узлы получают жест; снятие — только destroy. */
   const refresh = (): void => {
-    const current = new Set<HTMLElement>();
     for (const item of items()) {
       item.element.classList?.add?.(DRAG_ITEM_CLASS);
       const handle =
         item.handle ?? (item.element.querySelector?.(handleSelector) as HTMLElement | null);
       if (handle === null || handle === undefined) continue;
-      current.add(handle);
-      if (boundHandles.has(handle)) continue;
+      if (listenerByHandle.has(handle)) continue;
       // Замыкание хранит КЛЮЧ, а не снимок узла: после перерисовки с тем же
       // ключом жест берёт актуальные данные из `items()`.
       const key = item.key;
@@ -420,25 +468,26 @@ export function createDragTree(
         const currentItem = items().find((candidate) => candidate.key === key) ?? item;
         begin(currentItem, handle, event);
       };
-      boundHandles.set(handle, listener);
+      listenerByHandle.set(handle, listener);
+      boundHandles.add(new WeakRef(handle));
       // Не optional-chaining: сторож обнаружимости ищет мышиный путь модуля
       // (`addEventListener('pointerdown'`) — хоткей Escape живёт вместе с ним.
       handle.addEventListener('pointerdown', listener as EventListener);
-    }
-    for (const [handle, listener] of boundHandles) {
-      if (current.has(handle)) continue;
-      handle.removeEventListener?.('pointerdown', listener as EventListener);
-      boundHandles.delete(handle);
     }
   };
 
   return {
     refresh,
     destroy(): void {
+      root.removeEventListener?.('pointerdown', onRootPointerDown as EventListener);
       active?.cancel();
       active = null;
-      for (const [handle, listener] of boundHandles) {
-        handle.removeEventListener?.('pointerdown', listener as EventListener);
+      for (const reference of boundHandles) {
+        const handle = reference.deref();
+        const listener = handle === undefined ? undefined : listenerByHandle.get(handle);
+        if (handle !== undefined && listener !== undefined) {
+          handle.removeEventListener?.('pointerdown', listener as EventListener);
+        }
       }
       boundHandles.clear();
       clearMarks();

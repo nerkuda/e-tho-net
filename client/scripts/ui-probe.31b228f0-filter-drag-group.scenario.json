@@ -1,0 +1,120 @@
+{
+  "name": "31b228f0-filter-drag-group",
+  "description": "Этап 2 (критерий 1/2): перенос ГРУППЫ между группами в редакторе отбора «Структур». Группа «И» с условием «Есть вложения» перетаскивается за индикатор в группу «ИЛИ» с условием «Есть дневниковые записи»; проверяются вложенность со всем содержимым, фраза и сохранённое определение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-filter-drag-group.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "resize-large", "eval": "(() => { window.resizeTo(1600, 1200); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+
+    {
+      "name": "seed-filter",
+      "api": {
+        "name": "seed-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "drag31b228f0-c",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                { "entity": { "kind": "comment" }, "operator": "not_empty" },
+                {
+                  "op": "and",
+                  "children": [{ "entity": { "kind": "attachments" }, "operator": "not_empty" }]
+                },
+                {
+                  "op": "or",
+                  "children": [{ "entity": { "kind": "chronology" }, "operator": "not_empty" }]
+                }
+              ]
+            },
+            "sort": [{ "key": "title", "order": "asc" }]
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+    { "name": "open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "focus-search", "click": ".sfd-search" },
+    { "name": "search-name", "text": "drag31b228f0-c" },
+    { "name": "select-row", "key": "ArrowDown" },
+    { "name": "confirm-row", "key": "Enter" },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "name-filled",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-name__input')?.value === 'drag31b228f0-c'"
+    },
+    { "name": "tree-ready", "timeout": 10000, "waitFor": "document.querySelectorAll('.st-filter .ft-item').length >= 5" },
+    {
+      "name": "tree-before",
+      "probe": "[...document.querySelectorAll('.st-filter .ft-item')].map((i) => i.dataset.path + ':' + (i.dataset.kind || ''))",
+      "expect": ["0:leaf", "1:group", "1.0:leaf", "2:group", "2.0:leaf"]
+    },
+    {
+      "name": "drag-group-into-group",
+      "drag": {
+        "from": { "x": 29, "y": 275 },
+        "to": { "x": 117, "y": 530 },
+        "expect": ".st-filter .ft-item",
+        "steps": 10,
+        "duration": 200
+      }
+    },
+    {
+      "name": "tree-after-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-item').length === 5 && document.querySelector('.st-filter .ft-item[data-path=\"1.1\"]') !== null"
+    },
+    {
+      "name": "tree-after",
+      "probe": "[...document.querySelectorAll('.st-filter .ft-item')].map((i) => i.dataset.path + ':' + (i.dataset.kind || '')).join('|')",
+      "expect": "0:leaf|1:group|1.0:leaf|1.1:group|1.1.0:leaf"
+    },
+    {
+      "name": "nested-labels",
+      "probe": "[...document.querySelectorAll('.st-filter .ft-group[data-path=\"1\"] .ft-row__what')].map((n) => (n.textContent || '').replace('▾','').trim())",
+      "expect": ["Есть дневниковые записи", "Есть вложения"]
+    },
+    {
+      "name": "changed-marker",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-changed')?.hidden === false"
+    },
+
+    { "name": "save", "click": ".st-filter .ff-save" },
+    {
+      "name": "saved-notice",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('drag31b228f0-c') === true"
+    },
+    {
+      "name": "server-nesting",
+      "timeout": 10000,
+      "api": {
+        "name": "server-nesting",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=structures",
+        "expression": "(() => { const f = data.find((x) => x.name === 'drag31b228f0-c'); const root = f?.definition?.filter; const target = root?.children?.[1]; return [root?.children?.length ?? 0, target?.children?.length ?? 0, target?.children?.[1]?.entity?.kind ?? 'group'].join('/'); })()"
+      },
+      "expect": "2/2/group"
+    }
+  ]
+}

@@ -274,6 +274,46 @@ describe('drag-tree: канал жеста (31b228f0)', () => {
     assert.deepEqual(drops, []);
   });
 
+  it('делегированный pointerdown на корне находит ручку и запускает жест', () => {
+    // Шим не всплывает: событие приходит на корень с `target` = ручка, как
+    // реальное всплытие. Per-handle путь при этом молчит — проверяем страховку.
+    const a = makeRow('a', 0, 20);
+    const b = makeRow('b', 20, 40);
+    const { root, drops } = setup([a, b]);
+    root.emit('pointerdown', {
+      button: 0,
+      clientX: 10,
+      clientY: 5,
+      pointerId: 1,
+      target: a.handle,
+      preventDefault: () => undefined,
+    });
+    a.handle.emit('pointermove', { clientX: 10, clientY: 35, pointerId: 1 });
+    a.handle.emit('pointerup', { clientX: 10, clientY: 35, pointerId: 1 });
+    assert.equal(drops.length, 1);
+    assert.equal(drops[0]!.source.key, 'a');
+  });
+
+  it('жест переживает замену ручки: move/up приходят на корень', () => {
+    // Перерисовка дерева заменяет `.ft-item` и его ручку; слушатели жеста на
+    // корне продолжают вести начатый жест (иначе active «зависал» бы без up).
+    const a = makeRow('a', 0, 20);
+    const b = makeRow('b', 20, 40);
+    const { root, drops } = setup([a, b]);
+    root.emit('pointerdown', {
+      button: 0,
+      clientX: 10,
+      clientY: 5,
+      pointerId: 1,
+      target: a.handle,
+      preventDefault: () => undefined,
+    });
+    root.emit('pointermove', { clientX: 10, clientY: 35, pointerId: 1 });
+    root.emit('pointerup', { clientX: 10, clientY: 35, pointerId: 1 });
+    assert.equal(drops.length, 1);
+    assert.equal(drops[0]!.source.key, 'a');
+  });
+
   it('destroy снимает объявление клавиатурного контекста: циклы не накапливают записи', () => {
     const contextsOfTree = () =>
       keymap.keymapInternals

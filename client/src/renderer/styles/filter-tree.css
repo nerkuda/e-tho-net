@@ -142,14 +142,22 @@
 /* --- Связатор-индикатор: левый столбец ПЕРЕД строкой ------------------- */
 /*
  * Индикаторы И/ИЛИ стоят отдельным левым столбцом перед КАЖДЫМ условием
- * (требование заказчика 2026-10-13), а не между строками; связатор не кликается
- * — коннекцию меняет селектор группы.
+ * (требование заказчика 2026-10-13), а не между строками. С 0.13.2 индикатор —
+ * ручка перетаскивания (задача 31b228f0): тянется ровно то, что стоит за ним;
+ * коннекцию по-прежнему меняет селектор группы.
  */
 .ft-item {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* Строка достижима фокусом: без мыши условие/группу переносят Alt+↑/↓/←/→. */
+.ft-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-s);
 }
 
 .ft-connector {
@@ -162,9 +170,28 @@
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  /* Индикатор не кликается: коннекция меняется селектором группы. */
-  pointer-events: none;
+  /* Ручка перетаскивания: указатель, а не только индикатор. */
+  cursor: grab;
+  touch-action: none;
   user-select: none;
+}
+
+.ft-item.ui-drag-active .ft-connector {
+  cursor: grabbing;
+}
+
+/* Отказ модели (цикл/арность НЕ): подсветка строки и текст причины. */
+.ft-item--drop-rejected {
+  outline: 1px dashed var(--danger);
+  outline-offset: 1px;
+  border-radius: var(--radius-s);
+}
+
+.ft-drop-reject {
+  flex-basis: 100%;
+  margin-left: 2.5em;
+  color: var(--danger);
+  font-size: var(--font-size-3xs);
 }
 
 .ft-item > .ft-group,
