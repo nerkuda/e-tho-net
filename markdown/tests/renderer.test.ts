@@ -285,8 +285,12 @@ test('mailto: — ссылка в просмотре, паритет с реда
   assert.equal(renderMarkdown('`mailto:a@b.c`'), '<p><code>mailto:a@b.c</code></p>\n');
   // Явная markdown-ссылка не задевается.
   assert.equal(renderMarkdown('[a@b.c](mailto:a@b.c)'), '<p><a href="mailto:a@b.c">a@b.c</a></p>\n');
-  // Как и ядровое правило, ссылку решает linkify-it (его схема `mailto:`
-  // принимает и адрес без точки в домене).
+  // Dotless-хост: ссылку решает linkify-it (его схема `mailto:` принимает адрес
+  // без точки в домене), тогда как редактор (Lezer) узел URL ставит только при
+  // хосте С точкой. Расхождение классовое (так же `http://e`, `http://localhost`)
+  // и оставлено осознанно: решение и обоснование — в
+  // `tests/guard-autolink-parity.test.ts` («dotless-хост … won't-fix», задача
+  // 64b69eb3).
   assert.equal(renderMarkdown('mailto:a@b'), '<p><a href="mailto:a@b">mailto:a@b</a></p>\n');
 });
 
