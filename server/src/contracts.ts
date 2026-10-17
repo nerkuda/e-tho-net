@@ -55,6 +55,7 @@ import {
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
   parseLinkTypeFilterValue,
+  THOUGHT_RESOLVE_MAX_IDS,
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
   PUBLICATION_ACTIVE_FILTERS,
@@ -67,6 +68,9 @@ import {
   TYPES_LIST_SCOPES,
   TYPE_OWNER_TYPES,
   type EtnErrorCode,
+  type CommentOwnerType,
+  type FocusDir,
+  type FocusNeighbor,
   type LinkTypeFilterInput,
   type McpThoughtWriteParams,
   type SearchRequest,
@@ -90,13 +94,14 @@ import {
   summaryHasMarkdownHeadings,
 } from './domain/publication-validation.js';
 import { validateLayerColors } from './domain/layer-service.js';
-import type { TraversalBounds } from './domain/graph-traversal.js';
+import type { TraversalBounds, TraverseDirection } from './domain/graph-traversal.js';
 import type {
   AstTokenContext,
   QueryStats,
   ThoughtQueryOptions,
   ThoughtQueryRequest,
 } from './domain/query-service.js';
+import type { NeighborOptions } from './domain/thought-service.js';
 
 // ---------------------------------------------------------------------------
 // Общие zod-куски (до вехи 8 — `mcp/tools/shared.ts`)
@@ -1138,7 +1143,7 @@ export const ThoughtsResolve = defineContract(
   'etn.thoughts.resolve',
   z.object({
     network_id: NetworkId,
-    thought_ids: z.array(ThoughtId).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+    thought_ids: z.array(ThoughtId).min(1).max(THOUGHT_RESOLVE_MAX_IDS),
     view: View,
   }),
   {},
@@ -4285,7 +4290,21 @@ export interface ReaderTaskContext {
 }
 
 /** Имена операций, исполняемых reader-воркером. Только чтение. */
-export type ReaderOp = 'thoughts.query' | 'thoughts.queryIds' | 'search.query' | 'graph.subgraph';
+export type ReaderOp =
+  | 'thoughts.query'
+  | 'thoughts.queryIds'
+  | 'thoughts.resolve'
+  | 'thoughts.resolveCards'
+  | 'thoughts.neighbors'
+  | 'thoughts.findDuplicates'
+  | 'search.query'
+  | 'graph.subgraph'
+  | 'graph.traverse'
+  | 'comments.list'
+  | 'comments.visible'
+  | 'comments.presented'
+  | 'comments.permanentPresented'
+  | 'comments.previewBatch';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
 export interface ReaderThoughtsQueryPayload {
@@ -4319,12 +4338,100 @@ export interface ReaderSubgraphResult {
   truncated: boolean;
 }
 
+/** Payload `thoughts.resolve` / `thoughts.resolveCards` — батч по id. */
+export interface ReaderResolvePayload {
+  ids: string[];
+}
+
+/**
+ * Payload `thoughts.neighbors`: страница соседей одного направления плюс
+ * честный `total` (тот же WHERE без LIMIT/OFFSET). Одна задача вместо двух
+ * (`getNeighbors` + `countNeighbors`) — паритет REST и MCP.
+ */
+export interface ReaderNeighborsPayload {
+  thoughtId: string;
+  dir: FocusDir;
+  opts: NeighborOptions;
+  limit?: number;
+  offset?: number;
+}
+
+/** Результат `thoughts.neighbors`. */
+export interface ReaderNeighborsResult {
+  neighbors: FocusNeighbor[];
+  total: number;
+}
+
+/** Payload `graph.traverse` — ограниченный BFS-обход. */
+export interface ReaderTraversePayload {
+  seedIds: string[];
+  direction: TraverseDirection;
+  bounds: TraversalBounds;
+}
+
+/** Результат `graph.traverse` (совпадает с доменным `TraversalResult`). */
+export interface ReaderTraverseResult {
+  ids: string[];
+  truncated: boolean;
+  reason?: 'max_depth' | 'max_nodes';
+}
+
+/** Payload `thoughts.findDuplicates` — кандидаты дублей по заголовку/синонимам. */
+export interface ReaderFindDuplicatesPayload {
+  title: string;
+  synonyms: string[];
+  typeIds: string[];
+}
+
+/** Payload `comments.list` — комментарии владельца. */
+export interface ReaderCommentsListPayload {
+  ownerType: CommentOwnerType;
+  ownerId: string;
+}
+
+/** Payload `comments.visible` — видимая редакция комментария по id. */
+export interface ReaderCommentByIdPayload {
+  commentId: string;
+}
+
+/** Payload `comments.permanentPresented` — постоянный комментарий владельца. */
+export interface ReaderPermanentCommentPayload {
+  ownerType: CommentOwnerType;
+  ownerId: string;
+}
+
+/**
+ * Payload `comments.previewBatch` — превью комментариев для набора владельцев
+ * (подграф с `include_comments`): один воркер-обход вместо цикла GET в
+ * главном потоке.
+ */
+export interface ReaderCommentsPreviewPayload {
+  ownerType: CommentOwnerType;
+  ownerIds: string[];
+  previewChars: { permanent?: number; chronological?: number };
+  /**
+   * Разворачивать трансклюзии в телах (MCP-фасад подграфа). Воркер создаёт
+   * собственный expander на всю пачку.
+   */
+  expandTransclusions: boolean;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
 export type ReaderTask = { context: ReaderTaskContext } & (
   | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
   | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
+  | { op: 'thoughts.resolve'; payload: ReaderResolvePayload }
+  | { op: 'thoughts.resolveCards'; payload: ReaderResolvePayload }
+  | { op: 'thoughts.neighbors'; payload: ReaderNeighborsPayload }
+  | { op: 'thoughts.findDuplicates'; payload: ReaderFindDuplicatesPayload }
   | { op: 'search.query'; payload: ReaderSearchPayload }
   | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
+  | { op: 'graph.traverse'; payload: ReaderTraversePayload }
+  | { op: 'comments.list'; payload: ReaderCommentsListPayload }
+  | { op: 'comments.visible'; payload: ReaderCommentByIdPayload }
+  | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
+  | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
+  | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
 );
 
 /** `depths` в плоском виде (Map не переживает structured clone). */
