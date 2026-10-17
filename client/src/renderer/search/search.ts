@@ -190,6 +190,7 @@ function resetSearchState(): void {
   lastResults = null;
   lastSelectedKey = null;
   cursor = null;
+  searchEditor?.destroy();
   searchEditor = null;
   if (searchTimer !== null) {
     window.clearTimeout(searchTimer);
@@ -395,6 +396,10 @@ export function mountSearch(next: SearchChrome): () => void {
   // `window`/`document`, not on the host element, so wiping the DOM does not
   // remove them and each remount would add another set (ошибка 37b713de).
   return () => {
+    // Редактор живёт в настройках поиска; снимаем его контексты/подписки до
+    // отключения панели от документа.
+    searchEditor?.destroy();
+    searchEditor = null;
     window.removeEventListener('resize', onWindowResize);
     document.removeEventListener('pointerdown', onDocumentPointerDown);
     input.removeEventListener('focusin', onFieldFocusIn as EventListener);
@@ -1123,6 +1128,9 @@ async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promis
  * клиентов и агентов.
  */
 function buildSettingsZone(zone: HTMLElement): void {
+  // Пересборка зоны настроек заменяет редактор — прежний размонтируем.
+  searchEditor?.destroy();
+  searchEditor = null;
   zone.replaceChildren();
 
   // Поля сняты с UI, но состояние читается из старого L4-снимка (`search_state`)

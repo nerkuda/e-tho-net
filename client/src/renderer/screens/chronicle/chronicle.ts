@@ -152,6 +152,7 @@ import {
   setFilterServerIssues,
   setFilterState,
   setSavedFilterId,
+  unmountChronicleFilterPanel,
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
@@ -652,6 +653,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   });
 
   return () => {
+    unmountChronicleFilterPanel();
     unsubscribe();
     feedNav?.destroy();
     feedNav = null;

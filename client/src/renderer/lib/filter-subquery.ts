@@ -419,23 +419,26 @@ export function openFilterSubqueryModal(
   // трогают лист до «Готово», «Отмена» не меняет ничего.
   const draft = defaultFilterCriteriaState();
   draft.tree = current === null ? filterSubqueryDefaultNode() : copyTreeNode(current);
+  const treeHandle = buildFilterTree({
+    profile: FILTER_SUBQUERY_PROFILE,
+    getState: () => draft,
+    data: opts.data,
+    renderValue: createFilterSubqueryValueRenderer(opts.value, opts),
+  });
   let settle: (value: FilterTreeNode | null) => void = () => undefined;
   let settled = false;
   const done = (value: FilterTreeNode | null): void => {
     if (settled) return;
     settled = true;
+    // Модал закрыт (любая кнопка/Esc/крестик): дерево размонтируем, иначе его
+    // клавиатурные контексты копятся в реестре `lib/keymap` с каждым открытием
+    // (замечание независимой проверки этапа 2 задачи 31b228f0).
+    treeHandle.destroy();
     settle(value);
   };
 
   const body = div(FILTER_SUBQUERY_MODAL_CLASS);
-  body.append(
-    buildFilterTree({
-      profile: FILTER_SUBQUERY_PROFILE,
-      getState: () => draft,
-      data: opts.data,
-      renderValue: createFilterSubqueryValueRenderer(opts.value, opts),
-    }).root,
-  );
+  body.append(treeHandle.root);
 
   const promise = new Promise<FilterTreeNode | null>((resolve) => {
     settle = resolve;

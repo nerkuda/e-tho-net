@@ -34,10 +34,43 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { assembledStylesFile } from './renderer-css.js';
+import { ShimElement } from './dom-shim.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 const UI_ROOT = path.join(RENDERER_ROOT, 'lib', 'ui');
+
+/**
+ * DOM/window-шим для поведенческой проверки сборки дерева: сторож проверяет
+ * не упоминание конструкции в файле, а объявление, которое реально появляется
+ * в реестре `lib/keymap` при вызове `buildFilterTree`.
+ */
+function installDomShim(): void {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  (globalThis as any).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: new ShimElement('html'),
+    body: new ShimElement('body'),
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    activeElement: null,
+    querySelector: () => null,
+  };
+  const win = ((globalThis as any).window ??= {}) as Record<string, unknown>;
+  win['innerWidth'] = 1200;
+  win['innerHeight'] = 800;
+  win['setTimeout'] = () => 1;
+  win['clearTimeout'] = () => undefined;
+  win['addEventListener'] = () => undefined;
+  win['removeEventListener'] = () => undefined;
+  win['matchMedia'] = () => ({
+    matches: false,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  });
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
 /** Покоящееся «спрятано» — элемент недоступен мыши и клавиатуре. */
 const HIDDEN =
   /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$)|pointer-events\s*:\s*none)/;
@@ -230,6 +263,39 @@ describe('guard: обнаружимость действий (e45ca252, стан
       'потребитель drag-tree обязан иметь клавиатурный путь (defineKeyContext) ' +
         'и фокусируемую строку (tabIndex = 0) — иначе действие доступно только мышью',
     );
+  });
+
+  /**
+   * Поведенческая проверка того же правила для единственного сегодняшнего
+   * потребителя `drag-tree`. Статический поиск `defineKeyContext` в файле давал
+   * ложно-зелёный результат: удаление вызова из `buildFilterTree` оставляло
+   * сторож зелёным (замечание независимой проверки этапа 2). Поэтому контекст
+   * ищется в РЕЕСТРЕ после реальной сборки, а `destroy` обязан его снять.
+   */
+  it('контекст переноса регистрируется в пути сборки дерева (31b228f0)', async () => {
+    installDomShim();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const keymap = await import('../src/renderer/lib/keymap.js');
+    const treeModule = await import('../src/renderer/lib/filter-tree.js');
+    keymap.keymapInternals.reset();
+    const state = { tree: { kind: 'group', op: 'and', children: [] } } as any;
+    const tree = treeModule.buildFilterTree({
+      profile: 'thoughts',
+      getState: () => state,
+      data: { registry: new Map(), linkTypes: [] },
+    });
+    const ids = keymap.keymapInternals.contextIds();
+    assert.ok(
+      ids.some((id) => id.startsWith(treeModule.FILTER_TREE_KEY_CONTEXT_ID)),
+      `buildFilterTree обязан объявить клавиатурный контекст переноса; реестр: [${ids.join(', ')}]`,
+    );
+    tree.destroy();
+    assert.deepEqual(
+      keymap.keymapInternals.contextIds(),
+      [],
+      'destroy дерева обязан снять его клавиатурные контексты (ui-filter-tree и drag-фасада)',
+    );
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   });
 
   it('анализ drag-only краснеет на умышленном нарушении', () => {

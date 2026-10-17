@@ -934,6 +934,18 @@ export function mountChronicleFilterPanel(
   return panel;
 }
 
+/**
+ * Размонтировать панель (teardown вида): снять редактор вместе с его
+ * клавиатурными контекстами и подписками. Без этого `destroy` дерева не
+ * вызывается ни разу, и реестр `lib/keymap` растёт с каждой пересборкой вида.
+ */
+export function unmountChronicleFilterPanel(): void {
+  editor?.destroy();
+  editor = null;
+  mounted = false;
+  panel = null;
+}
+
 /** Слой (G6): `saved-filter.*` гасит ключ — панель перечитывает список сама. */
 function wireSavedFiltersToLayer(): void {
   if (savedFiltersWired) return;
@@ -963,6 +975,10 @@ function orderControl(): HTMLElement {
 /** Собирает и перерисовывает панель из текущего состояния. */
 function renderPanel(): void {
   if (!mounted || panel === null) return;
+  // Пересборка = размонтирование прежнего редактора: снять подписки и
+  // клавиатурные контексты дерева, иначе реестр `lib/keymap` копит объявления.
+  editor?.destroy();
+  editor = null;
   panel.replaceChildren();
   panel.classList.add('chron-filter');
 

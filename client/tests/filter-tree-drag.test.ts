@@ -458,3 +458,42 @@ describe('дерево отбора: перенос без мыши (крите�
     assert.equal(itemAt(root, '1').focused, true);
   });
 });
+
+describe('дерево отбора: жизненный цикл клавиатурных контекстов (31b228f0)', () => {
+  it('5 циклов build/destroy не оставляют контекстов дерева в keymap', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    // Базовый набор — объявления модулей, случившиеся при импорте (не сборки).
+    const baseline = keymap.keymapInternals.contextIds();
+    for (let index = 0; index < 5; index += 1) {
+      const state = builder.defaultFilterCriteriaState();
+      state.tree = {
+        kind: 'group',
+        op: 'and',
+        children: [leafOf({ kind: 'property', property_id: CITY.id })],
+      };
+      const tree = mod.buildFilterTree({ profile: 'thoughts', getState: () => state, data: DATA });
+      const during = keymap.keymapInternals.contextIds();
+      assert.ok(
+        during.some((id) => id.startsWith(mod.FILTER_TREE_KEY_CONTEXT_ID)) &&
+          during.some((id) => id.startsWith('ui-drag-tree-')),
+        `сборка ${index + 1} объявляет контексты дерева и drag-фасада`,
+      );
+      tree.destroy();
+      // Повторный destroy идемпотентен.
+      tree.destroy();
+      const after = keymap.keymapInternals.contextIds();
+      assert.deepEqual(
+        after.filter(
+          (id) => id.startsWith(mod.FILTER_TREE_KEY_CONTEXT_ID) || id.startsWith('ui-drag-tree-'),
+        ),
+        [],
+        `после цикла ${index + 1} контексты дерева и drag-фасада сняты`,
+      );
+      assert.deepEqual(
+        after,
+        baseline,
+        `после цикла ${index + 1} реестр keymap вернулся к исходному составу`,
+      );
+    }
+  });
+});

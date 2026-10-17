@@ -348,6 +348,8 @@ export function mountActivity(hostEl: HTMLElement): () => void {
   const unsubscribeUsers = subscribeUsers(() => repaintNames());
 
   return () => {
+    filterEditor?.destroy();
+    filterEditor = null;
     unsubscribe();
     unsubscribeUsers();
     host = null;
@@ -379,6 +381,9 @@ function mountFilterPanel(area: HTMLElement): void {
     // сущности, автор, сущность.
     contextual: ['occurred_at', 'action', 'entity_type', 'entity_title', 'user', 'entity_id'],
   };
+  // Пересборка панели заменяет редактор — прежний размонтируем.
+  filterEditor?.destroy();
+  filterEditor = null;
   const editor = buildFilterEditor({
     profile: 'events',
     networkId: requireNetworkId(),

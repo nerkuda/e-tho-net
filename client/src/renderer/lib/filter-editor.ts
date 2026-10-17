@@ -88,10 +88,12 @@ import {
 const phraseRefreshers = new Set<{ root: HTMLElement; refresh: () => void }>();
 let phraseSourcesSubscribed = false;
 
-/** Подписать фразу редактора на наполнение кэшей подписей (один раз на модуль). */
-function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void }): void {
+/** Подписать фразу редактора на наполнение кэшей подписей (один раз на модуль).
+ *  Возвращает снятие подписки — `destroy` редактора не ждёт, пока корень
+ *  отключат от документа. */
+function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void }): () => void {
   phraseRefreshers.add(entry);
-  if (phraseSourcesSubscribed) return;
+  if (phraseSourcesSubscribed) return () => phraseRefreshers.delete(entry);
   phraseSourcesSubscribed = true;
   const notify = (): void => {
     for (const item of [...phraseRefreshers]) {
@@ -104,6 +106,7 @@ function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void 
   };
   subscribeUsers(notify);
   subscribeThoughtNames(notify);
+  return () => phraseRefreshers.delete(entry);
 }
 
 /** Корень контейнера редактора. */
@@ -300,6 +303,12 @@ export interface FilterEditorHandle {
    * хост сохранил состояние и применил отбор.
    */
   clear: () => void;
+  /**
+   * Размонтировать редактор: снять подписку фразы и клавиатурные контексты
+   * дерева (без этого реестр `lib/keymap` накапливает объявления при
+   * пересборках — замечание независимой проверки этапа 2 задачи 31b228f0).
+   */
+  destroy: () => void;
 }
 
 /**
@@ -454,6 +463,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     userName: labelNames.userName,
     thoughtName: labelNames.thoughtName,
   };
+  let unsubscribePhraseRefresh: (() => void) | null = null;
   if (opts.footer !== false) {
     footer = buildFilterFooter({
       // Место без сохранённых отборов (лента «События») не даёт getName/setName —
@@ -496,7 +506,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     // Фраза-превью — имена сущностей по id: при наполнении кэшей (участники,
     // имена мыслей) перерисовываем фразу, чтобы id не «застыл» (ошибка части 6,
     // п.7; ошибка d17a8bfd).
-    subscribePhraseRefresh({ root, refresh: () => footer?.refresh() });
+    unsubscribePhraseRefresh = subscribePhraseRefresh({ root, refresh: () => footer?.refresh() });
   }
   if (foot.children.length > 0) root.append(foot);
 
@@ -519,5 +529,11 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     touch();
   };
 
-  return { root, profile, nameRow: footer?.nameRow ?? null, refresh, clear };
+  const destroy = (): void => {
+    unsubscribePhraseRefresh?.();
+    unsubscribePhraseRefresh = null;
+    tree.destroy();
+  };
+
+  return { root, profile, nameRow: footer?.nameRow ?? null, refresh, clear, destroy };
 }

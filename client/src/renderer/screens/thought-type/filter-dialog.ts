@@ -267,6 +267,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     // п. A8). Модификатор на боксе задаёт высоту (CSS `view-editor-dialog`).
     fixedHeight: true,
     onMount: (_close, box) => box.classList.add('view-editor-dialog'),
+    // Диалог закрыт любой кнопкой/Esc/крестиком — редактор размонтируем:
+    // его дерево снимает клавиатурные контексты из реестра `lib/keymap`.
+    onClose: () => editor.destroy(),
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,

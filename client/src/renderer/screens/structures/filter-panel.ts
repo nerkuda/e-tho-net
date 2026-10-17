@@ -551,6 +551,19 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
 }
 
 /**
+ * Размонтировать панель (teardown вида): снять редактор вместе с его
+ * клавиатурными контекстами и подписками. Без этого `destroy` дерева не
+ * вызывается ни разу, и реестр диспетчера клавиш растёт с каждой пересборкой
+ * вида.
+ */
+export function unmountFilterPanel(): void {
+  editor?.destroy();
+  editor = null;
+  host = null;
+  callbacks = null;
+}
+
+/**
  * Добавить брошенную мысль в строку «Родители в иерархии (по всем связям)»:
  * строка есть — мысль дописывается в её список; нет — строка создаётся.
  */
@@ -628,6 +641,11 @@ function registryWithSides(): Map<string, NetworkProperty> {
 /** Rebuilds the whole panel from `state` — единый редактор + футер. */
 function renderPanel(): void {
   if (host === null) return;
+  // Пересборка = размонтирование прежнего редактора: снять подписки и
+  // клавиатурные контексты дерева, иначе реестр диспетчера клавиш копит
+  // объявления.
+  editor?.destroy();
+  editor = null;
   clear(host);
   host.classList.add('st-f-layout');
 

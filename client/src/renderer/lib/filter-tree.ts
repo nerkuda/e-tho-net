@@ -60,7 +60,7 @@ import {
 } from '@etn/shared';
 
 import { clear, div, el, setTooltip, span } from './dom.js';
-import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { defineKeyContext, pushKeyContext, undefineKeyContext } from './keymap.js';
 import {
   createDragTree,
   resolveDragTreeRowTarget,
@@ -1219,6 +1219,13 @@ export interface FilterTreeHandle {
    * внутри свёрнутой группы) — ничего не делается.
    */
   focusIssue: (path: string) => void;
+  /**
+   * Размонтировать дерево: снять слушатели фокуса, drag-фасад и объявление
+   * клавиатурного контекста сборки. Обязательна при пересборке/удалении
+   * редактора — без неё реестр `lib/keymap` накапливает `ui-drag-tree-N`
+   * (замечание независимой проверки этапа 2 задачи 31b228f0).
+   */
+  destroy: () => void;
 }
 
 /** Классы вида — единственная точка их имён (адресуются тестами и CSS). */
@@ -1236,14 +1243,18 @@ export const FILTER_TREE_DROP_REJECT_CLASS = 'ft-drop-reject';
 export const FILTER_TREE_DROP_REJECTED_CLASS = 'ft-item--drop-rejected';
 
 /**
- * Клавиатурный контекст дерева условий — ОДИН на приложение (ADR b420b08c,
- * единая точка перехвата `lib/keymap`). Маршрутизация к конкретному дереву —
- * по ближайшему корню `.ft` от элемента в фокусе: на странице могут быть
- * несколько деревьев (под-выборка в модале), и каждое получает только свои
- * команды. Объявление одно, поэтому пересборка деревьев не накапливает
- * контексты в реестре.
+ * Клавиатурный контекст дерева условий: объявление на КАЖДУЮ сборку (ADR
+ * b420b08c, единая точка перехвата `lib/keymap`), идентификатор —
+ * `ui-filter-tree-N`. Маршрутизация к конкретному дереву — по ближайшему корню
+ * `.ft` от элемента в фокусе: на странице могут быть несколько деревьев
+ * (под-выборка в модале), и каждое получает только свои команды. Уникальный
+ * идентификатор нужен `destroy`: снятие объявления не затрагивает другие
+ * деревья и не оставляет записей в реестре при пересборках.
  */
 export const FILTER_TREE_KEY_CONTEXT_ID = 'ui-filter-tree';
+
+/** Счётчик сборок: номер в идентификаторе клавиатурного контекста дерева. */
+let filterTreeKeyContextSeq = 0;
 
 /** Команды переноса без мыши (критерий доступности 7 карточки 31b228f0). */
 export type FilterTreeKeyAction = 'moveUp' | 'moveDown' | 'outdent' | 'intoGroup';
@@ -1280,11 +1291,10 @@ function closestFilterTreeRoot(node: Element | null | undefined): HTMLElement | 
   return closestElementWithClass(node, FILTER_TREE_CLASS);
 }
 
-/** Зарегистрировать общий контекст переноса клавиатурой (идемпотентно:
- *  то же id переобъявляется, реестр не растёт). */
-function ensureFilterTreeKeyContext(): void {
+/** Объявить контекст переноса клавиатурой для ОДНОЙ сборки дерева. */
+function defineFilterTreeKeyContext(contextId: string): void {
   defineKeyContext({
-    id: FILTER_TREE_KEY_CONTEXT_ID,
+    id: contextId,
     bindings: [
       {
         command: 'filterTree.moveUp',
@@ -1761,15 +1771,17 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     }
   };
 
-  // Один общий контекст на приложение: маршрутизация — по ближайшему `.ft`.
-  ensureFilterTreeKeyContext();
+  // Контекст объявляется на сборку и снимается в `destroy`; маршрутизация —
+  // по ближайшему `.ft`.
+  const keyContextId = `${FILTER_TREE_KEY_CONTEXT_ID}-${(filterTreeKeyContextSeq += 1)}`;
+  defineFilterTreeKeyContext(keyContextId);
   filterTreeKeyRouters.set(root, runFilterTreeKeyboard);
 
   // Контекст на вершине стека, пока фокус внутри этого дерева (ADR b420b08c).
   let releaseKeyContext: (() => void) | null = null;
   const onFocusIn = (): void => {
     clearDropRejections();
-    releaseKeyContext ??= pushKeyContext(FILTER_TREE_KEY_CONTEXT_ID);
+    releaseKeyContext ??= pushKeyContext(keyContextId);
   };
   const onFocusOut = (event: FocusEvent): void => {
     const next = event.relatedTarget as Node | null;
@@ -2357,11 +2369,27 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     return row;
   };
 
+  /** `destroy` идемпотентен: повторный вызов ничего не делает. */
+  let destroyed = false;
+  const destroy = (): void => {
+    if (destroyed) return;
+    destroyed = true;
+    root.removeEventListener('focusin', onFocusIn as EventListener);
+    root.removeEventListener('focusout', onFocusOut as EventListener);
+    releaseKeyContext?.();
+    releaseKeyContext = null;
+    filterTreeKeyRouters.delete(root);
+    // Снимает и собственный контекст `ui-drag-tree-N` (реестр `lib/keymap`).
+    dragTree.destroy();
+    undefineKeyContext(keyContextId);
+  };
+
   render();
   return {
     root,
     rerender: render,
     focusIssue: (path: string): void => fixers.get(path)?.(),
+    destroy,
   };
 }
 

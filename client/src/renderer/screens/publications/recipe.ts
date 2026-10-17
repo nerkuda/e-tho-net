@@ -56,6 +56,8 @@ export interface RecipeBuilder {
   root: HTMLElement;
   /** Текущее определение отбора рецепта — AST-тело профиля «публикации». */
   getDefinition: () => PublicationTitleRecipe;
+  /** Размонтировать редактор (пересборка формы/закрытие карточки). */
+  destroy: () => void;
 }
 
 /** Реестр свойств сети в виде строк общего списка (для пикера свойств). */
@@ -231,5 +233,6 @@ export function buildRecipeBuilder(opts: {
         // `sort`/`order` (класс дефектов ca864656, 32fd6125).
         sort: (state.sortKeys ?? []).length > 0,
       }),
+    destroy: () => editor.destroy(),
   };
 }

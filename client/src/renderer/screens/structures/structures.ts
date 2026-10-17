@@ -90,6 +90,7 @@ import {
   preloadFilterRegistry,
   setFilterServerIssues,
   setFilterState,
+  unmountFilterPanel,
   type FilterState,
 } from './filter-panel.js';
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
@@ -705,6 +706,7 @@ export function mountStructures(hostEl: HTMLElement): () => void {
 
   return () => {
     setScreenThoughtSource('structures', null);
+    unmountFilterPanel();
     unsubscribe();
     structuresInvalidationUnsub?.();
     structuresInvalidationUnsub = null;
