@@ -1034,4 +1034,6 @@ export const appInternals = {
   currentThoughtCopyTarget,
   canvasVisible,
   globalKeyBindings,
+  /** Окно локального дебаунса `scheduleRefresh` (read-only для тестов). */
+  refreshDebounceMs: REFRESH_DEBOUNCE_MS,
 };
