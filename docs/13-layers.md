@@ -12,9 +12,11 @@
 
 ```
 GET  /api/v1/networks/{nid}/activity
-     ?from_ms&to_ms&user_id&entity_type&entity_id&limit&offset
+     ?from_ms&to_ms&user_id&entity_type&entity_id&limit&offset   # плоские фильтры
+   | ?ast=<json>&limit&offset                                    # AST-путь (XOR)
      → 200 { data: [ { id, user_id, user_name, action, entity_type,
-                       entity_id, entity_title, layer_id, occurred_at_ms } ] }
+                       entity_id, entity_title, layer_id, occurred_at_ms } ],
+             meta: { total, offset, limit } }
 POST /api/v1/networks/{nid}/activity/rollup   { until_ms }  → 200 { removed, kept }
 POST /api/v1/networks/{nid}/activity/truncate  { until_ms }  → 200 { removed }
 ```
@@ -23,14 +25,20 @@ POST /api/v1/networks/{nid}/activity/truncate  { until_ms }  → 200 { removed }
 - `rollup`/`truncate` необратимы; сервер возвращает счётчики удалённых/оставшихся записей;
 - запись журнала отдельной операцией не редактируется (append-only).
 
----
+### Тело-отбор (AST), 0.13.1 — задача `2b230e8e`
+`GET /activity` и MCP `etn.activity.list` принимают `ast` — тело профиля «события» (`{ version, filter, sort? }`). Коммиты `cb45c574` (компилятор, исполнитель, REST/MCP, профиль, подвыборка `entity_id`) и `e92189c0` (жёсткие AST-эталоны полей компилятора). Требование «События REST/MCP компилируются в общий AST».
 
-**Термины (глоссарий 10).** **Свёртка** (`rollup`) — агрегация повторяющихся событий журнала в одну запись со счётчиком за окно времени. **Обрезка** (`truncate`) — ретенция старых записей журнала по порогу. Авто-свёртка журнала выполняется при слиянии или удалении слоя.
+- **Один источник критериев.** `ast` XOR плоские фильтры (`from_ms`, `to_ms`, `user_id`, `entity_type`, `entity_id`) — одновременная передача `VALIDATION_ERROR` (поле `ast`, `details.conflicts`). Пагинация (`limit`/`offset`) — отдельно от критериев.
+- **Операнды профиля `events`:** `occurred_at` (колонка `occurred_at_ms`; сравнения/«между», границы — миллисекунды, ISO-дата или токен, профиль несёт время), `action` (только «в»/«не в» — множественное перечисление), `entity_type` (только «в»/«не в» — множественное перечисление), `entity_title` (колонка `activity_log.entity_title`; «содержит»/«не содержит» — LIKE по снимку заголовка сущности), `entity_id` (равно/не равно — литеральный id; `in`/`not_in`/`all_of` — значение-под-выборка по мыслям: событие по сущности, чей id ∈ выборке), `user` (колонка `user_id`).
+- **Плоские фильтры** компилируются в AST тем же движком (`compileActivityToAst`); порядок — `occurred_at_ms DESC, id DESC` (как и обещает операция). Токены `$weekStart`/`$weekEnd` учитывают первый день недели сети; профиль несёт время (`$now`/`$hour*`). Грамматика AST, операторы и токены — `etn.guide { topic: "thoughts.query" }`, состав профиля — реестр профилей `@etn/shared/filter-profiles` (ADR `0c02ab4f`).
+- Свёртка (`rollup`) и обрезка (`truncate`) — отдельные операции над `activity_log`, не затронуты.
+
+**Ревизия 0.13.1 (2026-10-15, задача b2aa2444).** В профиль `events` возвращён текстовый операнд `entity_title` («Заголовок сущности»): операторы «содержит»/«не содержит» — LIKE по снимку заголовка в `activity_log.entity_title`; поиск события по слову заголовка, утраченный при пересборке ленты на единый редактор (направление — решение пользователя, вариант 1). Здесь же уточнён состав `action`/`entity_type` — только «в»/«не в» (ошибка 50d9bf4e п. C1).
 
 **Дополнительные материалы**
 - относится к подсистемам: REST API
 - зависит от: activity_log — журнал активности сети
-- применяется к: Требование: свёртка activity_log, Требование: обрезка activity_log
+- применяется к: Требование: свёртка activity_log, Сценарий: события — изменения за последний час, События REST/MCP компилируются в общий AST, Требование: обрезка activity_log
 
 <a id="pub-d7e4d733"></a>
 
