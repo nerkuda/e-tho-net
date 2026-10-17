@@ -355,6 +355,26 @@
   pointer-events: auto;
 }
 
+/* Крестик удаления ГРУППЫ видим только при наведении на СВОЮ группу
+   (требование заказчика 2026-10-17, ошибка a398b169): одновременно с кнопками
+   «+ условие»/«+ группа» и только у ГЛУБОЧАЙШЕЙ наведённой группы (hover
+   всплывает к предкам — отсекаем `:has(.ft-group:hover)`, как у действий).
+   Клавиатурный путь — `:focus-within` той же глубочайшей группы (стандарт
+   1b5f6200): Tab доходит до крестика, потому что механизм — `opacity` +
+   `pointer-events`, а не `visibility`/`display`; последние убрали бы кнопку из
+   порядка обхода и сломали бы фокусировку. */
+.ft-group__remove {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.ft-group:hover:not(:has(.ft-group:hover)) > .ft-group__head > .ft-group__remove,
+.ft-group:focus-within:not(:has(.ft-group:focus-within)) > .ft-group__head > .ft-group__remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* --- Кнопки группы и выпадающие списки --------------------------------- */
 
 /* Кнопки «+ условие»/«+ группу» видны ТОЛЬКО при наведении на СВОЮ группу
