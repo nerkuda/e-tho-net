@@ -1,6 +1,6 @@
 {
   "name": "comment-autolink-37458cbc",
-  "description": "Ошибка 37458cbc: голый http(s)-URL в постоянном комментарии — ссылка и в просмотре. Сценарий проверяет (1) в просмотре URL стал <a href> и выглядит как обычная ссылка (тот же computed style, что у явной [метка](url)); (2) строка javascript: остаётся текстом; (3) клик по внешней ссылке открывает адрес через window.open(…, '_blank') и НЕ уводит окно ETN (location.href не меняется); (4) серверный body_html комментария содержит ссылку; (5) в правке URL виден исходником. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.comment-autolink-37458cbc.scenario.json --seed-comment \"…\".",
+  "description": "Ошибка 37458cbc (круги 1-2): (1) голый http(s)-URL в постоянном комментарии — ссылка в просмотре и выглядит как обычная ссылка; (2) protocol-relative `//example.com/x` остаётся ТЕКСТОМ (ссылка не создаётся); (3) строка `javascript:` остаётся текстом; (4) клик по внешней ссылке открывает её через window.open(…, '_blank') и НЕ уводит окно ETN; (5) клик по ОТНОСИТЕЛЬНОЙ ссылке окно тоже НЕ уводит (will-navigate-гейт); (6) двойной клик открывает браузер ровно один раз и входит в правку; (7) серверный body_html содержит ссылку и не содержит protocol-relative href. Детерминизм: затравка — каждый URL на СВОЕЙ строке (отдельный абзац, ничего не переносится), клики — с точным смещением `at` от верхнего левого угла якоря, а не центром перенесённой inline-ссылки. Запуск: ui-probe-stand.mjs --scenario <этот файл> --seed-comment \"Смотри https://example.com/a?x=1 и [явная](https://explicit.example.com).\\n\\n//example.com/x — не ссылка.\\n\\njavascript:alert(1) — тоже не ссылка.\\n\\n[отн](relative-target.html) — относительная ссылка.\"",
   "timeout": 90000,
   "steps": [
     {
@@ -31,9 +31,9 @@
       "name": "view-autolink-anchor",
       "probe": {
         "name": "autolinkAnchor",
-        "expression": "document.querySelector(\".ui-comment .md-field-view a[href='https://example.com/a?x=1']\") !== null"
+        "expression": "document.querySelector(\".ui-comment .md-field-view a[href='https://example.com/a?x=1']\")?.tagName ?? null"
       },
-      "expect": true
+      "expect": "A"
     },
     {
       "name": "view-autolink-anchor-text",
@@ -47,7 +47,15 @@
       "name": "view-autolink-look-parity",
       "probe": {
         "name": "lookParity",
-        "expression": "(() => { const links = [...document.querySelectorAll('.ui-comment .md-field-view a[href]')]; const auto = links.find((a) => a.getAttribute('href') === 'https://example.com/a?x=1'); const explicit = links.find((a) => a.getAttribute('href') === 'https://explicit.example.com'); if (!auto || !explicit) return 'нет якоря: auto=' + Boolean(auto) + ', explicit=' + Boolean(explicit); const sa = getComputedStyle(auto); const se = getComputedStyle(explicit); return auto.tagName === 'A' && sa.color === se.color && sa.textDecorationLine === se.textDecorationLine && sa.fontWeight === se.fontWeight && sa.cursor === se.cursor ? true : { tag: auto.tagName, color: sa.color, explicitColor: se.color, deco: sa.textDecorationLine, explicitDeco: se.textDecorationLine, cursor: sa.cursor, explicitCursor: se.cursor }; })()"
+        "expression": "(() => { const links = [...document.querySelectorAll('.ui-comment .md-field-view a[href]')]; const auto = links.find((a) => a.getAttribute('href') === 'https://example.com/a?x=1'); const explicit = links.find((a) => a.getAttribute('href') === 'https://explicit.example.com'); if (!auto || !explicit) return 'нет якоря: auto=' + Boolean(auto) + ', explicit=' + Boolean(explicit); const sa = getComputedStyle(auto); const se = getComputedStyle(explicit); return sa.color === se.color && sa.textDecorationLine === se.textDecorationLine && sa.fontWeight === se.fontWeight && sa.cursor === se.cursor ? true : { color: sa.color, explicitColor: se.color, deco: sa.textDecorationLine, explicitDeco: se.textDecorationLine }; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "view-protocol-relative-stays-text",
+      "probe": {
+        "name": "protocolRelativeStaysText",
+        "expression": "(() => { const view = document.querySelector('.ui-comment .md-field-view'); return (view?.textContent ?? '').includes('//example.com/x') && view.querySelector(\"a[href^='//']\") === null; })()"
       },
       "expect": true
     },
@@ -59,6 +67,14 @@
       },
       "expect": true
     },
+    {
+      "name": "view-relative-anchor-present",
+      "probe": {
+        "name": "relativeAnchor",
+        "expression": "document.querySelector(\".ui-comment .md-field-view a[href='relative-target.html']\")?.getAttribute('href') ?? null"
+      },
+      "expect": "relative-target.html"
+    },
 
     {
       "name": "server-html-linkified",
@@ -66,7 +82,7 @@
         "name": "serverBodyHtml",
         "method": "GET",
         "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
-        "expression": "data.find((c) => c.kind === 'permanent').body_html.includes('<a href=\"https://example.com/a?x=1\">')"
+        "expression": "(() => { const html = data.find((c) => c.kind === 'permanent').body_html; return html.includes('<a href=\"https://example.com/a?x=1\">') && html.includes('href=\"//') === false; })()"
       },
       "expect": true
     },
@@ -81,7 +97,10 @@
     },
     {
       "name": "click-autolink",
-      "click": ".ui-comment .md-field-view a[href='https://example.com/a?x=1']"
+      "click": {
+        "selector": ".ui-comment .md-field-view a[href='https://example.com/a?x=1']",
+        "at": [4, 4]
+      }
     },
     {
       "name": "open-called-with-blank",
@@ -96,11 +115,47 @@
       "probe": { "name": "urlAfter", "expression": "location.href" },
       "expectFrom": "url-before-click"
     },
-
-    { "name": "enter-edit", "click": "[data-action=\"edit\"]" },
     {
-      "name": "edit-mode",
-      "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null"
+      "name": "click-relative-link",
+      "click": { "selector": ".ui-comment .md-field-view a[href='relative-target.html']", "at": [4, 4] }
+    },
+    {
+      "name": "relative-click-did-not-navigate",
+      "probe": { "name": "urlAfterRelative", "expression": "location.href" },
+      "expectFrom": "url-before-click"
+    },
+    {
+      "name": "relative-click-not-external",
+      "probe": {
+        "name": "relativeNotOpened",
+        "expression": "window.__etnOpened.length === 1"
+      },
+      "expect": true
+    },
+    {
+      "name": "double-click-autolink",
+      "click": {
+        "selector": ".ui-comment .md-field-view a[href='https://example.com/a?x=1']",
+        "at": [4, 4],
+        "count": 2
+      }
+    },
+    {
+      "name": "double-click-opened-once",
+      "probe": {
+        "name": "doubleClickOpensOnce",
+        "expression": "window.__etnOpened.length === 2 && window.__etnOpened[1][0] === 'https://example.com/a?x=1'"
+      },
+      "expect": true
+    },
+    {
+      "name": "double-click-did-not-navigate",
+      "probe": { "name": "urlAfterDouble", "expression": "location.href" },
+      "expectFrom": "url-before-click"
+    },
+    {
+      "name": "double-click-enters-edit",
+      "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null || document.querySelector('.md-field--editing') !== null"
     },
     {
       "name": "edit-shows-url-source",

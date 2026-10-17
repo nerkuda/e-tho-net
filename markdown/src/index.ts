@@ -122,8 +122,11 @@ export type {
  * constructs.
  *
  * `markdown-it/9`: автолинк голых http(s)-URL (`linkify: true`, только явные
- * схемы) — паритет режимов просмотра и правки (ошибка 37458cbc). Cached
- * `body_html` must re-render so existing comments turn bare URLs into links.
+ * схемы) — паритет режимов просмотра и правки (ошибка 37458cbc). Автолинкует
+ * ТОЛЬКО внутристрочное правило: ядровое `linkify` выключено, поэтому
+ * protocol-relative адреса (`//example.com/x`) остаются текстом, как до фикса.
+ * Cached `body_html` must re-render so existing comments turn bare URLs into
+ * links.
  */
 export const MD_RENDER_VERSION = 'markdown-it/9';
 

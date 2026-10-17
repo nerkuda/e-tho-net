@@ -21,6 +21,7 @@ import { ShimElement } from './dom-shim.js';
 interface ClickEventLike {
   target: unknown;
   button: number;
+  detail: number;
   ctrlKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
@@ -76,6 +77,7 @@ function click(target: unknown, init: Partial<ClickEventLike> = {}): boolean {
   const event: ClickEventLike = {
     target,
     button: 0,
+    detail: 1,
     ctrlKey: false,
     metaKey: false,
     shiftKey: false,
@@ -99,7 +101,6 @@ test('isExternalHref: только http/https/mailto (любой регистр)
     assert.equal(isExternalHref(href), false, href);
   }
 });
-
 test('клик по внешней ссылке гасит событие и открывает её через window.open(_blank)', () => {
   const before = opened.length;
   const prevented = click(targetInside(makeAnchor('https://example.com/a?x=1')));
@@ -143,4 +144,24 @@ test('уже погашенное событие и цель вне ссылки
   );
   assert.equal(click(targetInside(null)), false);
   assert.equal(opened.length, before);
+});
+
+test('isRepeatedClick: повторный клик мультиклика распознаётся', () => {
+  const { isRepeatedClick } = externalLinkInternals;
+  assert.equal(isRepeatedClick(1), false);
+  assert.equal(isRepeatedClick(2), true);
+  assert.equal(isRepeatedClick(3), true);
+});
+
+test('двойной клик по автолинку открывает браузер ОДИН раз и не уводит окно', () => {
+  // Двойной клик — жест входа в правку (markdown-field): первый клик открывает
+  // ссылку, второй обязан остаться погашенным (иначе окно уходит на адрес), но
+  // НЕ открывать браузер повторно (было: две вкладки).
+  const before = opened.length;
+  const anchor = makeAnchor('https://example.com/a');
+  const first = click(targetInside(anchor), { detail: 1 });
+  const second = click(targetInside(anchor), { detail: 2 });
+  assert.equal(first, true, 'первый клик гасится и открывает ссылку');
+  assert.equal(second, true, 'второй клик мультиклика тоже гасится — окно не уводится');
+  assert.deepEqual(opened.slice(before), [{ url: 'https://example.com/a', target: '_blank' }]);
 });

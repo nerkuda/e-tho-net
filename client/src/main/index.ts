@@ -28,6 +28,7 @@ import {
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
+import { decideNavigation } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink, type DeepLinkPayload } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
@@ -254,6 +255,21 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
       void shell.openExternal(url);
     }
     return { action: 'deny' };
+  });
+
+  // Никакой переход НЕ уводит окно ETN со страницы приложения (ошибка
+  // 37458cbc, круг 2). `setWindowOpenHandler` выше закрывает только запросы
+  // нового окна, поэтому обычный клик по ссылке в содержимом комментария
+  // (relative / protocol-relative / экзотическая схема) уводил окно на чужую
+  // страницу или на `chrome-error://chromewebdata/`. Политика вынесена в
+  // `navigation-policy.ts` (чистая функция, покрыта сторожем
+  // `tests/guard-window-navigation.test.ts`): своя страница приложения — можно,
+  // http/https/mailto — в системный браузер, всё остальное — отказ без перехода.
+  win.webContents.on('will-navigate', (event, url) => {
+    const decision = decideNavigation(url, win.webContents.getURL());
+    if (decision.allow) return;
+    event.preventDefault();
+    if (decision.external !== null) void shell.openExternal(decision.external);
   });
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {

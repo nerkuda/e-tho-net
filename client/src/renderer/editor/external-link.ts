@@ -15,7 +15,14 @@
  * single decision point: `setWindowOpenHandler` (`src/main/index.ts`)
  * classifies the target and opens exactly `http`/`https`/`mailto` in the OS
  * browser via `shell.openExternal`, denying everything else. No second copy of
- * the URL allow-list lives in the renderer.
+ * the URL allow-list lives in the renderer. As a backstop for anything this
+ * handler does not own, the main process also gates top-frame navigation
+ * (`will-navigate` + `main/navigation-policy.ts`): the window can never leave
+ * the application, whatever link shape the content contains.
+ *
+ * A double click (the gesture that enters comment editing) must not open the
+ * browser twice: the SECOND click of a multi-click is still prevented from
+ * navigating but does not call `window.open` — the link opens exactly once.
  *
  * Deliberately NOT touched: `.wiki-link` (its own navigation handler), internal
  * transitions, and hash/relative anchors — a publication document's in-page
@@ -23,8 +30,8 @@
  * to the platform / `setWindowOpenHandler`, which already handles them.
  *
  * Known limit (reported, not fixed here): an explicit relative link
- * (`[x](foo)`) still has no navigation guard — only explicit external schemes
- * are intercepted.
+ * (`[x](foo)`) is not opened by this handler — the navigation is denied by the
+ * main process's `will-navigate` gate, so the window simply stays put.
  *
  * Pure helpers are exposed via {@link externalLinkInternals} for unit tests.
  */
@@ -35,6 +42,11 @@ const EXTERNAL_HREF_RE = /^(?:https?|mailto):/i;
 /** True for an href the OS browser must open (see {@link EXTERNAL_HREF_RE}). */
 function isExternalHref(href: string): boolean {
   return EXTERNAL_HREF_RE.test(href);
+}
+
+/** The second (and later) click of a multi-click — see the module doc. */
+function isRepeatedClick(detail: number): boolean {
+  return detail > 1;
 }
 
 let wired = false;
@@ -57,8 +69,12 @@ export function initExternalLinkNavigation(): void {
     if (anchor.classList.contains('wiki-link')) return;
     const href = anchor.getAttribute('href') ?? '';
     if (!isExternalHref(href)) return;
-    // Never let the app window navigate to the external page.
+    // Never let the app window navigate to the external page — on ANY click of
+    // the multi-click gesture.
     event.preventDefault();
+    // ...but open it once: on a double click (which also enters editing) the
+    // second call would spawn a duplicate tab in the system browser.
+    if (isRepeatedClick(event.detail)) return;
     // `_blank` reaches the main process's `setWindowOpenHandler`, which opens
     // http/https/mailto in the system browser and denies everything else.
     window.open(href, '_blank', 'noopener');
@@ -66,4 +82,4 @@ export function initExternalLinkNavigation(): void {
 }
 
 /** Test seam: pure helpers. */
-export const externalLinkInternals = { isExternalHref };
+export const externalLinkInternals = { isExternalHref, isRepeatedClick };

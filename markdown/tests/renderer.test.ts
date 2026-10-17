@@ -253,6 +253,17 @@ test('автолинк — только явные схемы: домены, www
   assert.equal(renderMarkdown('user@example.com'), '<p>user@example.com</p>\n');
 });
 
+test('protocol-relative URL остаётся текстом (ошибка 37458cbc, круг 2)', () => {
+  // `//host/…` — схема `//` в linkify-it; её ловило ЯДРОВОЕ правило linkify,
+  // которое здесь выключено. Такие адреса вне области фикса (голый URL с
+  // ЯВНОЙ схемой) и без разметки позиций — окно ETN от них уводилось.
+  for (const src of ['//example.com/x', 'a //example.com/x b', '//localhost:3000/x']) {
+    assert.equal(renderMarkdown(src).includes('<a'), false, src);
+  }
+  assert.equal(renderMarkdown('//example.com/x'), '<p>//example.com/x</p>\n');
+  assert.equal(renderMarkdown('a //example.com/x b'), '<p>a //example.com/x b</p>\n');
+});
+
 // ---------------------------------------------------------------------------
 // Ссылки и протоколы
 // ---------------------------------------------------------------------------
