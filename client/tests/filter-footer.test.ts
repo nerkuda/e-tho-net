@@ -551,8 +551,22 @@ describe('футер отбора: раскраска фразы и тултип
     handle.refresh();
     const text = exactOne(root, 'ff-preview__text')!;
     assert.equal(text.flatText(), 'фраза хоста');
+    // Текст лежит в узле и пустой `replaceChildren()` его НЕ снимает (п.1
+    // приёмки): проверка по дочерним элементам, а не только по тексту, — так
+    // тест красный при неверном порядке «textContent = …; replaceChildren()».
+    assert.equal(text.childElementCount, 0, 'текст, а не разметка: элементов-детей нет');
     assert.equal(exact(root, 'ff-ph-op').length, 0, 'раскраски нет');
     assert.equal(exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!.flatText().startsWith('фраза хоста'), true);
+
+    // Переключение текст → разметка → текст не оставляет мусора и не теряет текст.
+    state.preview = { text: NESTED_TEXT, tokens: NESTED_TOKENS, issues: [] };
+    handle.refresh();
+    assert.equal(text.flatText(), NESTED_TEXT, 'разметка заменяет текст целиком');
+    assert.equal(text.childElementCount, NESTED_TOKENS.length, 'каждый токен — свой спан');
+    state.preview = { text: 'снова текст', issues: [] };
+    handle.refresh();
+    assert.equal(text.flatText(), 'снова текст', 'и текст возвращается целиком');
+    assert.equal(text.childElementCount, 0, 'спаны разметки сняты');
   });
 
   it('пустое превью снимает фразу и прячет тултип', () => {
@@ -578,5 +592,40 @@ describe('футер отбора: раскраска фразы и тултип
     for (const op of ['and', 'or', 'not'] as const) {
       assert.match(mod.FILTER_FOOTER_OPERATOR_CLASSES[op], /ff-ph-op--/);
     }
+  });
+
+  it('фраза — точка табуляции, подсказка связана aria-describedby (стандарт 1b5f6200)', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    const text = exactOne(root, 'ff-preview__text')!;
+    const tip = exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!;
+    assert.notEqual(tip.id, '', 'у подсказки есть id для связи с фразой');
+    assert.equal(text.getAttribute('aria-describedby'), tip.id, 'фраза описывается подсказкой');
+    assert.equal(text.tabIndex, -1, 'пустая фраза из табуляции выпадает');
+
+    state.preview = { text: NESTED_TEXT, tokens: NESTED_TOKENS, issues: [] };
+    handle.refresh();
+    assert.equal(text.tabIndex, 0, 'непустая фраза — точка табуляции: подсказка не только на hover');
+
+    state.preview = { text: '', issues: [] };
+    handle.refresh();
+    assert.equal(text.tabIndex, -1, 'снятая фраза выпадает из табуляции');
+
+    // id подсказок уникальны: связь `aria-describedby` не путает два футера.
+    const second = buildFooter().handle.root as unknown as ShimElement;
+    assert.notEqual(exactOne(second, mod.FILTER_FOOTER_TIP_CLASS)!.id, tip.id);
+  });
+
+  it('показ подсказки по фокусу и кольцо фокуса — правила CSS из токенов', () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-editor.css'), 'utf8');
+    // Фокус внутри превью показывает тултип (парный путь к :hover —
+    // достижимость проверяется живым стендом: фраза табится и фокусируется).
+    assert.match(
+      css,
+      /\.ff-preview:focus-within\s*>\s*\.ff-preview__tip\s*\{[^}]*display:\s*block/,
+      'фокус внутри превью показывает подсказку',
+    );
+    const ring = /\.ff-preview__text:focus-visible\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    assert.match(ring, /outline:\s*var\(--focus-ring-width\)\s*solid\s*var\(--accent\)/, 'кольцо — токены');
   });
 });

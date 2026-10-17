@@ -17,10 +17,17 @@
  *      кликом вне делает компонент;
  *   3. ручная расстановка хвостика панели (`--hp-arrow-left`) — её задаёт
  *      компонент (`--ui-popover-arrow-left`).
+ *   4. **самодельный слой-панель** (задача 58f77990): новый CSS-модуль вне
+ *      `lib/ui` не заводит НИ подсказку-слой (класс с `tip`/`tooltip` +
+ *      `position: absolute|fixed`), НИ `position: fixed` слой — только через
+ *      `openPopover`. Уже существующие слои и осознанное отклонение перечислены
+ *      закрытыми списками `PANEL_LAYER_FILES_ALLOW` (модули) и
+ *      `TIP_LAYER_SELECTORS_ALLOW` (селектор подсказки фразы, ADR `efa5138c`);
+ *      мёртвая запись списка краснит тест.
  *
- * **Allow-края.** Уже существующие механики закрытия кликом вне, не
- * переведённые на компонент этой задачей (граница задачи: вторая поповерная
- * механика не расширяется), остаются как есть — с обоснованием:
+ * **Allow-края.** Уже существующие механики закрытия кликом вне, не переведённые
+ * на компонент этой задачей (граница задачи: вторая поповерная механика не
+ * расширяется), остаются как есть — с обоснованием:
  *   • `search/search.ts` — панель результатов/настроек поиска (фундамент
  *     строки поиска, отдельная механика с исключениями подсказок и диалогов);
  *   • `lib/menu.ts` — контекстное меню (единый модуль меню, задача меню карты
@@ -42,7 +49,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { assertGuardClean, type GuardRule } from './guard-helpers.js';
+import { assertGuardClean, listSourceFiles, type GuardRule } from './guard-helpers.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -54,6 +61,83 @@ const ALLOW_OUTSIDE_CLICK = new Set([
   'lib/suggest-dropdown.ts',
   'screens/tabs/tab-overflow.ts',
 ]);
+
+// ---------------------------------------------------------------------------
+// Слой-панель вне фасада: закрытый список допустимых модулей и подсказок
+// ---------------------------------------------------------------------------
+
+/**
+ * Слой вне `lib/ui`: подсказка/тултип (`position: absolute|fixed` у класса с
+ * `tip`/`tooltip` в имени) либо любой `position: fixed` слой. Правило задачи
+ * 58f77990: новый самодельный слой не должен проходить молча — он обязан либо
+ * идти через `openPopover`, либо быть внесён сюда вместе с обоснованием (ADR).
+ *
+ * Почему список ФАЙЛОВ, а не селекторов: в рендерере уже 36 правил с
+ * `position: absolute|fixed` + `z-index` (слои холста, раскладки, меню, тостов,
+ * диалогов) — поэлементный allow-список был бы шумом и разрастался бы сам.
+ * Файловый список закрыт: мёртвая запись краснит тест, новый модуль со слоем —
+ * тоже.
+ */
+const PANEL_LAYER_FILES_ALLOW = new Map<string, string>([
+  ['styles/canvas.css', 'холст: слои облачков, связей, бейджей и зон'],
+  ['styles/dialogs.css', 'подложка диалога (каркас lib/dialog)'],
+  ['styles/notifications.css', 'тосты — существующая механика уведомлений'],
+  ['styles/menus.css', 'контекстное меню — allow-край правила «клик вне»'],
+  ['styles/editor.css', 'лупа изображений предпросмотра'],
+  ['styles/type-combobox.css', 'список комбобокса типа — переводится этапом 2'],
+]);
+
+/**
+ * Селекторы-подсказки вне `lib/ui`, допустимые осознанно: самодельный тултип
+ * разрешён ТОЛЬКО этот и только по ADR `efa5138c` (инлайн-элемент превью
+ * вместо `openPopover`: подсказке нужны многострочная раскрашенная разметка,
+ * доступность по фокусу и полное отсутствие перехвата кликов/Escape). Модуль
+ * подсказки — `styles/filter-editor.css`; любой другой самодельный слой-подсказка
+ * (в том числе в другом файле) краснит сторож.
+ */
+const TIP_LAYER_SELECTORS_ALLOW = new Set(['.ff-preview__tip']);
+
+/** Класс-подсказка в селекторе: имя класса содержит `tip`/`tooltip`. */
+const TIP_CLASS = /\.(?:[\w-]*tip|[\w-]*tooltip)[\w-]*/;
+
+/** Правило создаёт плавающий слой (подсказка бывает и `absolute`). */
+const FLOATING_LAYER = /position:\s*(?:fixed|absolute)/;
+
+/** Правило отрывается от потока (`position: fixed`) — общий признак слоя-панели. */
+const FIXED_LAYER = /position:\s*fixed/;
+
+/** Блоки `селектор { … }` без комментариев. */
+function cssRules(css: string): { selector: string; body: string }[] {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...code.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1]!.trim().replace(/\s+/g, ' '),
+    body: match[2]!,
+  }));
+}
+
+/**
+ * Нарушения «самодельный слой вне lib/ui» в одном CSS-модуле: подсказка-класс
+ * или `position: fixed` слой вне закрытых списков.
+ */
+export function layerViolations(rel: string, css: string): string[] {
+  if (rel.startsWith('lib/ui/')) return [];
+  const out: string[] = [];
+  for (const rule of cssRules(css)) {
+    if (TIP_CLASS.test(rule.selector)) {
+      if (!FLOATING_LAYER.test(rule.body)) continue;
+      if (!TIP_LAYER_SELECTORS_ALLOW.has(rule.selector)) {
+        out.push(`${rule.selector} — самодельная подсказка-слой (нужен openPopover или ADR)`);
+      }
+      continue;
+    }
+    if (!FIXED_LAYER.test(rule.body)) continue;
+    if (!PANEL_LAYER_FILES_ALLOW.has(rel)) {
+      out.push(`${rule.selector} — position: fixed слой вне lib/ui (нужен openPopover или ADR)`);
+    }
+  }
+  return out;
+}
+
 
 /** Строка — комментарий? (в пояснениях имена классов/переменных допустимы). */
 function isComment(line: string): boolean {
@@ -142,5 +226,78 @@ describe('guard: всплывающая панель lib/ui', () => {
     assert.match(src, /attachOutsidePointer\(\)/, 'вход в правку ставит слушатель клика вне');
     assert.match(src, /detachOutsidePointer\(\)/, 'выход из правки снимает слушатель клика вне');
     assert.match(src, /const showEdit = [\s\S]*?attachOutsidePointer\(\)/, 'проводка — в showEdit');
+  });
+});
+
+describe('guard: слой-панель вне lib/ui — закрытый список (задача 58f77990)', () => {
+  /** Все CSS-модули рендерера с относительным путём (слеши `/`). */
+  function cssModules(): { rel: string; css: string }[] {
+    return listSourceFiles(RENDERER_ROOT, { extensions: ['.css'] }).map((abs) => ({
+      rel: path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/'),
+      css: fs.readFileSync(abs, 'utf8'),
+    }));
+  }
+
+  it('новый самодельный слой-подсказка или fixed-слой вне lib/ui запрещён', () => {
+    const offenders: string[] = [];
+    for (const { rel, css } of cssModules()) {
+      for (const problem of layerViolations(rel, css)) offenders.push(`  • ${rel} «${problem}»`);
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        `Самодельные слои вне lib/ui (${offenders.length}):\n${offenders.join('\n')}\n\n` +
+          'Всплывающий слой собирает openPopover (lib/ui/popover.ts). Отклонение ' +
+          'допустимо только осознанно: внеси модуль в PANEL_LAYER_FILES_ALLOW ' +
+          '(или селектор в TIP_LAYER_SELECTORS_ALLOW) с обоснованием-ADR.',
+      );
+    }
+  });
+
+  it('закрытые списки не имеют мёртвых записей', () => {
+    const modules = cssModules();
+    for (const rel of PANEL_LAYER_FILES_ALLOW.keys()) {
+      const module = modules.find((m) => m.rel === rel);
+      assert.ok(module !== undefined, `модуль списка существует: ${rel}`);
+      assert.ok(
+        cssRules(module!.css).some(
+          (rule) => FIXED_LAYER.test(rule.body) && !TIP_CLASS.test(rule.selector),
+        ),
+        `запись списка не мёртвая: в ${rel} есть fixed-слой`,
+      );
+    }
+    for (const selector of TIP_LAYER_SELECTORS_ALLOW) {
+      assert.ok(
+        modules.some((m) =>
+          cssRules(m.css).some(
+            (rule) => rule.selector === selector && FLOATING_LAYER.test(rule.body),
+          ),
+        ),
+        `разрешённая подсказка существует и является слоем: ${selector}`,
+      );
+    }
+  });
+
+  it('правила краснеют на умышленном нарушении', () => {
+    // Новый самодельный тултип — в новом модуле и в существующем.
+    assert.deepEqual(layerViolations('styles/new-screen.css', '.foo-tooltip { position: absolute; z-index: 5; }'), [
+      '.foo-tooltip — самодельная подсказка-слой (нужен openPopover или ADR)',
+    ]);
+    assert.deepEqual(
+      layerViolations('styles/filter-editor.css', '.ff-preview__hint-tip { position: absolute; z-index: 5; }'),
+      ['.ff-preview__hint-tip — самодельная подсказка-слой (нужен openPopover или ADR)'],
+    );
+    // Новый fixed-слой вне lib/ui и вне закрытого списка.
+    assert.deepEqual(layerViolations('styles/new-screen.css', '.my-panel { position: fixed; z-index: 5; }'), [
+      '.my-panel — position: fixed слой вне lib/ui (нужен openPopover или ADR)',
+    ]);
+    // Разрешённые формы: фасад, список модулей, известная подсказка.
+    assert.deepEqual(layerViolations('lib/ui/popover.css', '.ui-popover { position: fixed; z-index: 1950; }'), []);
+    assert.deepEqual(layerViolations('styles/canvas.css', '.zone-count { position: fixed; z-index: 2; }'), []);
+    assert.deepEqual(
+      layerViolations('styles/filter-editor.css', '.ff-preview__tip { position: absolute; z-index: 30; }'),
+      [],
+    );
+    // Не слой — не нарушение.
+    assert.deepEqual(layerViolations('styles/new-screen.css', '.foo { position: relative; }'), []);
   });
 });

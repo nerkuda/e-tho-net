@@ -1,6 +1,6 @@
 {
   "name": "filter-phrase-html-58f77990",
-  "description": "HTML-раскраска фразы-превью отбора (задача 58f77990, решение заказчика 2026-10-14 п.12в): в футере редактора отбора операторы И/ИЛИ/НЕ и скобки уровней вложенности раскрашены спанами, тултип фразы несёт ТУ ЖЕ разметку, цвета берутся токенами темы в обеих темах. Отбор с вложенностью (группа ИЛИ внутри И, внутри неё НЕ) засеивается API-шагом как сохранённый отбор и применяется в «Структурах». Строки фразы предсказуемы: «(НЕ Помечено на удаление = да ИЛИ Есть комментарий заполнено) И Есть вложения заполнено», то есть одна пара скобок уровня 1 (тон 2) и одна пара уровня 2 (тон 3). Прогон: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-phrase-html-58f77990.scenario.json --out .tmp/etn-58f77990/out",
+  "description": "HTML-раскраска фразы-превью отбора (задача 58f77990, решение заказчика 2026-10-14 п.12в): в футере редактора отбора операторы И/ИЛИ/НЕ и скобки уровней вложенности раскрашены спанами, тултип фразы несёт ТУ ЖЕ разметку, цвета берутся токенами темы в обеих темах. Подсказка не живёт только на наведении (стандарт 1b5f6200): фраза — точка табуляции с кольцом :focus-visible из токенов и связью aria-describedby, по фокусу подсказка показывается, при уходе фокуса — прячется. Отбор с вложенностью (группа ИЛИ внутри И, внутри неё НЕ) засеивается API-шагом как сохранённый отбор и применяется в «Структурах». Строки фразы предсказуемы: «(НЕ Помечено на удаление = да ИЛИ Есть комментарий заполнено) И Есть вложения заполнено», то есть одна пара скобок уровня 1 (тон 2) и одна пара уровня 2 (тон 3). Прогон: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-phrase-html-58f77990.scenario.json --out .tmp/etn-58f77990/out",
   "timeout": 180000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -155,6 +155,42 @@
     {
       "name": "phrase-still-rendered-after-theme",
       "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); return t !== null && t.querySelectorAll('.ff-ph-op').length === 3; })()",
+      "expect": true
+    },
+
+    {
+      "name": "phrase-is-tab-stop",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return JSON.stringify({ tabIndex: t ? t.tabIndex : null, describedBy: t ? t.getAttribute('aria-describedby') : null, tipId: tip ? tip.id : null }); })()"
+    },
+    {
+      "name": "phrase-tab-stop-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return t !== null && t.tabIndex === 0 && tip !== null && t.getAttribute('aria-describedby') === tip.id; })()",
+      "expect": true
+    },
+    { "name": "focus-phrase", "eval": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); t.focus(); return document.activeElement === t; })()" },
+    { "name": "tooltip-visible-on-focus", "timeout": 5000, "waitFor": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); return tip !== null && getComputedStyle(tip).display === 'block'; })()" },
+    {
+      "name": "focus-shows-tooltip-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return document.activeElement === t && tip !== null && getComputedStyle(tip).display === 'block'; })()",
+      "expect": true
+    },
+    { "name": "move-pointer-away", "hover": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "pointer-away-ready", "timeout": 5000, "waitFor": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); return !t.matches(':hover') && !t.parentElement.matches(':hover'); })()" },
+    { "name": "focus-leaves-phrase", "key": "Tab" },
+    {
+      "name": "focus-leave-hides-tooltip-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return document.activeElement !== t && tip !== null && getComputedStyle(tip).display === 'none'; })()",
+      "expect": true
+    },
+    { "name": "focus-back-by-keyboard", "key": "Tab", "modifiers": ["shift"] },
+    { "name": "focus-back-ready", "timeout": 5000, "waitFor": "document.activeElement !== null && document.activeElement.classList.contains('ff-preview__text')" },
+    {
+      "name": "focus-ring-visible-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (document.activeElement !== t) return 'not-focused'; const cs = getComputedStyle(t); return JSON.stringify({ focusVisible: t.matches(':focus-visible'), outlineStyle: cs.outlineStyle, outlineWidth: cs.outlineWidth, outlineColor: cs.outlineColor, tip: getComputedStyle(document.querySelector('.st-filter .ff-preview__tip')).display }); })()"
+    },
+    {
+      "name": "focus-ring-from-token-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (document.activeElement !== t) return false; const cs = getComputedStyle(t); const host = t.parentElement; const probe = document.createElement('span'); probe.style.outline = 'var(--focus-ring-width) solid var(--accent)'; host.appendChild(probe); const expected = getComputedStyle(probe); const ok = cs.outlineStyle === 'solid' && cs.outlineWidth === expected.outlineWidth && cs.outlineColor === expected.outlineColor; probe.remove(); return ok; })()",
       "expect": true
     }
   ]

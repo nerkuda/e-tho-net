@@ -45,7 +45,10 @@
  * значения во фразу попадают текстом и разметкой стать не могут. Тултип —
  * элемент `.ff-preview__tip` (нативный `title` разметку не умеет), показывается
  * наведением/фокусом; текстовая форма тултипа (`filterFooterTooltip`) остаётся
- * для потребителей без DOM.
+ * для потребителей без DOM. Подсказка не живёт только на наведении (стандарт
+ * 1b5f6200): фраза — точка табуляции (`tabIndex = 0` при непустой фразе, `-1`
+ * без неё), кольцо фокуса — `:focus-visible` из токенов, содержимое подсказки
+ * связано с фразой `aria-describedby`.
  */
 
 import { div, setTooltip, span } from './dom.js';
@@ -104,6 +107,12 @@ export const FILTER_FOOTER_PREVIEW_LINES = 3;
  */
 export const FILTER_FOOTER_TIP_CLASS = 'ff-preview__tip';
 
+/**
+ * Счётчик футеров — для УНИКАЛЬНЫХ id подсказок фразы (`aria-describedby`
+ * связывает фразу с её подсказкой; id обязан быть уникален в документе).
+ */
+let footerSeq = 0;
+
 /** Базовый класс токена-оператора коннекции во фразе. */
 export const FILTER_FOOTER_OPERATOR_BASE_CLASS = 'ff-ph-op';
 
@@ -145,9 +154,11 @@ export function filterPhraseTokenNode(token: FilterPhraseToken): HTMLSpanElement
 
 /**
  * Заполняет узел разметкой фразы. Токенов нет (хост дал только текст) —
- * текстовая деградация: текст кладётся текстом, а не разметкой. Прежний текст
- * снимается ДО вставки узлов: `replaceChildren` шима не чистит `textContent`,
- * а в реальном DOM сброс `textContent` безопасен — узлы ставятся следом.
+ * текстовая деградация: текст кладётся ТЕКСТОМ, а не разметкой, и СНАЧАЛА
+ * снимается прежнее содержимое. Порядок обязателен: `replaceChildren()` без
+ * аргументов снимает ВСЁ содержимое узла, поэтому вызов после `textContent = …`
+ * стёр бы только что вставленный текст (задача 58f77990, п.1 — публичный
+ * контракт `tokens?` ломался; юнит-шим это маскировал до правки `dom-shim.ts`).
  */
 export function renderFilterPhrase(
   host: HTMLElement,
@@ -155,11 +166,10 @@ export function renderFilterPhrase(
   text: string,
 ): void {
   if (tokens === undefined || tokens.length === 0) {
-    host.textContent = text;
     host.replaceChildren();
+    host.textContent = text;
     return;
   }
-  host.textContent = '';
   host.replaceChildren(...tokens.map((token) => filterPhraseTokenNode(token)));
 }
 
@@ -455,6 +465,13 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   const previewText = span('', 'ff-preview__text');
   /** Тултип фразы: та же разметка раскраски (нативный `title` её не умеет). */
   const previewTip = div(FILTER_FOOTER_TIP_CLASS);
+  // Тултип достижим не только мышью (стандарт 1b5f6200): фраза — точка
+  // табуляции (`tabIndex` в `refresh`, кольцо — `:focus-visible` в CSS), фокус
+  // внутри превью показывает подсказку (`:focus-within`), а содержимое подсказки
+  // связано с фразой через `aria-describedby`.
+  previewTip.id = `ff-preview-tip-${(footerSeq += 1)}`;
+  previewText.tabIndex = -1;
+  previewText.setAttribute('aria-describedby', previewTip.id);
   previewBox.append(previewText, previewTip);
   // Разделитель под фразой: отделяет «редактор отбора» (фраза) от команд —
   // имени отбора и кнопок (требование заказчика 2026-10-14, п.1).
@@ -521,8 +538,9 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
       const preview = previewFn();
       if (preview === undefined) {
         // Фразы нет (пустой отбор) — подпись снимается, тултип прячется, запрет
-        // применения тоже.
+        // применения тоже. Пустая фраза не точка табуляции: фокусировать нечего.
         renderFilterPhrase(previewText, undefined, '');
+        previewText.tabIndex = -1;
         previewText.classList.remove(FILTER_FOOTER_PREVIEW_ACTION_CLASS);
         delete previewBox.dataset['severity'];
         previewTip.style.display = 'none';
@@ -531,8 +549,12 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
         fixPath = null;
       } else {
         const issues = preview.issues ?? [];
-        // Фраза и её тултип — ОДНА разметка из одних токенов (п.12в).
+        // Фраза и её тултип — ОДНА разметка из одних токенов (п.12в). Фраза —
+        // точка табуляции, если она непустая: подсказка доступна без мыши
+        // (стандарт 1b5f6200); пустую строку (превью только с диагностикой)
+        // фокусировать нечего.
         renderFilterPhrase(previewText, preview.tokens, preview.text);
+        previewText.tabIndex = preview.text === '' ? -1 : 0;
         const severity = worstFilterIssueSeverity(issues);
         if (severity === null) delete previewBox.dataset['severity'];
         else previewBox.dataset['severity'] = severity;

@@ -293,19 +293,29 @@ const NO_SECOND_PHRASE_BUILDER = {
 };
 
 /**
- * Потребители композера — файлы, собирающие фразу вызовом композера: токенами
- * (`filterPhraseTokens(...)`, задача 58f77990 — из них и текст, и разметка) либо
- * строкой (`composeFilterPhrase(...)`). Их ровно два: фабрика редактора и футер.
- * Новое место обязано звать композер, а не строить фразу само (ошибка d17a8bfd).
+ * Точки СБОРКИ фразы — вызов любого экспорта композера, собирающего фразу
+ * (строка, токены раскраски, определение отбора):
+ *   • `composeFilterPhrase` / `composeFilterPhraseFromDefinition` — текстовая фраза;
+ *   • `filterPhraseTokens` / `filterPhraseTokensFromDefinition` — токены (задача 58f77990);
+ *   • `filterPhraseNodeTokens` — токены узла дерева.
+ * Вспомогательные экспорты композера (`filterPhraseToken`, `filterPhraseValue`,
+ * `filterPhraseThoughtIds` — подписи значений и сбор id) сюда НЕ входят: их
+ * зовут и виджеты значения (`lib/filter-value.ts`), это не сборка фразы.
+ */
+const PHRASE_BUILDER_CALL =
+  /(?:composeFilterPhrase|filterPhraseTokens|filterPhraseNodeTokens)\w*\s*\(/;
+
+/**
+ * Потребители композера — файлы, собирающие фразу вызовом композера
+ * ({@link PHRASE_BUILDER_CALL}). Их ровно два: фабрика редактора и футер. Новое
+ * место обязано звать композер, а не строить фразу само (ошибка d17a8bfd).
  */
 function phraseComposerCallers(): string[] {
   const out: string[] = [];
   for (const abs of listSourceFiles(RENDERER_ROOT)) {
     const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
     if (rel === PHRASE_MODULE) continue;
-    if (/(?:\bcomposeFilterPhrase|\bfilterPhraseTokens)\s*\(/.test(fs.readFileSync(abs, 'utf8'))) {
-      out.push(rel);
-    }
+    if (PHRASE_BUILDER_CALL.test(fs.readFileSync(abs, 'utf8'))) out.push(rel);
   }
   return out.sort();
 }
