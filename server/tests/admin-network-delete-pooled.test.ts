@@ -1,21 +1,30 @@
 /**
- * DELETE /admin/networks/:id после записи через write-pool (ошибка abcd3f0b).
+ * DELETE /admin/networks/:id после записи через write-pool и чтения через
+ * reader-pool (ошибка abcd3f0b).
  *
- * Sticky-привязка воркера держала `data.db`, и `rmSync` падал с EBUSY: сеть
- * оставалась в реестре, а клиенты получали фантомный `network.deleted` ещё до
- * удаления. Проверяем: явное закрытие сети в пуле до удаления файлов, 204,
- * отсутствие фантомного события и освобождение воркера.
+ * Sticky-привязка write-воркера и кэшированное read-only соединение
+ * reader-воркера держали `data.db`, и `rmSync` падал с EBUSY: сеть оставалась в
+ * реестре, а клиенты получали фантомный `network.deleted` ещё до удаления.
+ * Проверяем: явное закрытие сети в обоих пулах до удаления файлов, 204,
+ * отсутствие фантомного события и освобождение воркеров.
  */
 
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { afterEach, describe, it } from 'node:test';
 
+import { FILTER_AST_VERSION } from '@etn/shared';
+
 import {
   closeWritePool,
   configureWritePool,
   getWritePool,
 } from '../src/db/write-pool.js';
+import {
+  closeReaderPool,
+  configureReaderPool,
+  getReaderPool,
+} from '../src/db/reader-pool.js';
 import { networkDir } from '../src/paths.js';
 import {
   authHeaders,
@@ -29,13 +38,15 @@ describe(
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
     afterEach(async () => {
+      await closeReaderPool();
       await closeWritePool();
     });
 
-    it('204: воркер отпущен до rmSync, событие — только после удаления', async () => {
+    it('204: воркеры отпущены до rmSync, событие — только после удаления', async () => {
       const ctx = await buildRestContext();
       try {
         configureWritePool({ size: 1, taskTimeoutMs: 60_000 });
+        configureReaderPool({ size: 1, taskTimeoutMs: 60_000 });
 
         // Запись через REST создаёт sticky-привязку воркера к data.db сети.
         const created = await ctx.app.inject({
@@ -50,6 +61,25 @@ describe(
         assert.ok(
           pool.stats().pinnedNetworks.includes(ctx.networkId),
           'воркер сети должен быть закреплён до удаления',
+        );
+
+        // Тяжёлое чтение уходит в reader-pool и кэширует там read-only
+        // соединение с тем же data.db — второй держатель файла (блокер
+        // верификатора: закрытия только write-пула недостаточно).
+        const queried = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/query`,
+          headers: authHeaders(ctx),
+          payload: {
+            ast: { version: FILTER_AST_VERSION, filter: { op: 'and', children: [] } },
+          },
+        });
+        assert.equal(queried.statusCode, 200, queried.body);
+        const readerPool = getReaderPool();
+        assert.ok(readerPool !== null);
+        assert.ok(
+          readerPool.stats().networks.includes(ctx.networkId),
+          'reader-воркер должен держать соединение сети до удаления',
         );
 
         const seen: Array<{ registryExists: boolean; dirExists: boolean; seq: number }> = [];
@@ -91,11 +121,16 @@ describe(
           'network.deleted записан в event_log',
         );
 
-        // Воркер сети освобождён, сервер жив.
+        // Воркеры обоих пулов освобождены, сервер жив.
         assert.equal(
           getWritePool()?.stats().pinnedNetworks.includes(ctx.networkId),
           false,
-          'привязка воркера снята',
+          'привязка write-воркера снята',
+        );
+        assert.equal(
+          getReaderPool()?.stats().networks.includes(ctx.networkId),
+          false,
+          'reader-воркер сети терминирован',
         );
         const alive = await ctx.app.inject({
           method: 'GET',

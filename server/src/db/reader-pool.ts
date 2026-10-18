@@ -63,6 +63,13 @@ interface Slot {
   worker: Worker;
   job: Job | null;
   dead: boolean;
+  /**
+   * Сеть, к которой воркер держит кэшированное read-only соединение (контекст
+   * последней задачи). Нужна для явного закрытия сети перед удалением
+   * (ошибка abcd3f0b): контекст следующей задачи другой сети переоткрывает
+   * соединение, поэтому «текущая» сеть воркера всегда одна.
+   */
+  networkId: string | null;
 }
 
 /** Прорежённый тип сообщения воркера. */
@@ -108,6 +115,24 @@ export class ReaderPool {
   /** Закрыт ли пул (после {@link close}). */
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /**
+   * Снимок состояния пула: воркеры и сети, к которым они держат соединение.
+   * Нужен наблюдаемости и регресс-тесту «сеть отпущена перед удалением».
+   */
+  stats(): { size: number; workers: number; busy: number; queued: number; networks: string[] } {
+    const networks: string[] = [];
+    for (const slot of this.slots) {
+      if (!slot.dead && slot.networkId !== null) networks.push(slot.networkId);
+    }
+    return {
+      size: this.size,
+      workers: this.slots.filter((s) => !s.dead).length,
+      busy: this.slots.filter((s) => s.job !== null).length,
+      queued: this.queue.length,
+      networks,
+    };
   }
 
   /**
@@ -162,6 +187,42 @@ export class ReaderPool {
     await Promise.all(exits);
   }
 
+  /**
+   * Закрыть сеть явно: отклонить её задачи в очереди и терминировать воркеры,
+   * держащие к ней read-only соединение, дождавшись `exit` (ошибка abcd3f0b:
+   * reader-воркер кэширует соединение и не давал `rmSync` удалить `data.db`).
+   * Пул сам поднимет новые воркеры под следующие задачи.
+   */
+  async closeNetwork(networkId: string): Promise<void> {
+    const error = new EtnError(
+      'INTERNAL',
+      `Сеть ${networkId} удаляется: чтение отклонено.`,
+    );
+    for (let i = this.queue.length - 1; i >= 0; i -= 1) {
+      const job = this.queue[i];
+      if (job !== undefined && job.task.context.networkId === networkId) {
+        this.queue.splice(i, 1);
+        clearTimeout(job.timer);
+        job.reject(error);
+      }
+    }
+    const exits: Promise<void>[] = [];
+    for (const slot of [...this.slots]) {
+      if (slot.networkId !== networkId) continue;
+      slot.dead = true;
+      const index = this.slots.indexOf(slot);
+      if (index >= 0) this.slots.splice(index, 1);
+      if (slot.job !== null) {
+        clearTimeout(slot.job.timer);
+        slot.job.reject(error);
+        slot.job = null;
+      }
+      exits.push(this.terminate(slot.worker));
+    }
+    await Promise.all(exits);
+    this.dispatch();
+  }
+
   /** Завершить воркер и дождаться `exit` (с потолком ожидания). */
   private terminate(worker: Worker): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -187,6 +248,9 @@ export class ReaderPool {
       const job = this.queue.shift();
       if (job === undefined) return;
       slot.job = job;
+      // Воркер откроет/переиспользует соединение под эту сеть — запоминаем её,
+      // чтобы `closeNetwork` знал, какие воркеры держат `data.db`.
+      slot.networkId = job.task.context.networkId;
       slot.worker.postMessage(job.task);
     }
   }
@@ -194,7 +258,7 @@ export class ReaderPool {
   /** Открыть слот и повесить обработчики жизненного цикла воркера. */
   private createSlot(): Slot {
     const worker = spawnWorker();
-    const slot: Slot = { worker, job: null, dead: false };
+    const slot: Slot = { worker, job: null, dead: false, networkId: null };
     worker.on('message', (message: WorkerMessage) => this.onMessage(slot, message));
     worker.on('error', (err: Error) => this.onWorkerFailure(slot, err));
     worker.on('exit', (code: number) => {
@@ -285,4 +349,15 @@ export async function closeReaderPool(): Promise<void> {
   const pool = processPool;
   processPool = null;
   await pool.close();
+}
+
+/**
+ * Явно освободить сеть в процессном reader-пуле: терминировать воркеры,
+ * держащие её read-only соединение, и дождаться `exit` (ошибка abcd3f0b).
+ * Пул не настроен — no-op.
+ */
+export async function closeReaderPoolNetwork(networkId: string): Promise<void> {
+  const pool = getReaderPool();
+  if (pool === null) return;
+  await pool.closeNetwork(networkId);
 }
