@@ -27,8 +27,25 @@ import { describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
 
 function installShim(): void {
+  // Лента «Событий» рисует данные фасадом `lib/ui/table` поверх `<vaadin-grid>`:
+  // шиму нужны методы вендорского элемента, которых у `ShimElement` нет
+  // (образец — tests/network-stats-dialog.test.ts).
+  const gridElement = (): ShimElement => {
+    const el = new ShimElement('vaadin-grid') as ShimElement & {
+      clearCache?: () => void;
+      generateCellPartNames?: () => void;
+      scrollToIndex?: (index: number) => void;
+      getEventContext?: () => null;
+    };
+    el.clearCache = () => undefined;
+    el.generateCellPartNames = () => undefined;
+    el.scrollToIndex = () => undefined;
+    el.getEventContext = () => null;
+    return el;
+  };
   (globalThis as any).document = {
-    createElement: (tag: string) => new ShimElement(tag),
+    createElement: (tag: string) =>
+      tag === 'vaadin-grid' ? gridElement() : new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     createTextNode: (text: string) => new ShimElement('#text', undefined, text),
     documentElement: new ShimElement('html'),
@@ -80,6 +97,12 @@ function installShim(): void {
       remove: async () => undefined,
     },
     chronicleFilters: { list: async () => [] },
+    // Лента «Событий»: `ensureActivityInitialised` → `applyQuery` зовёт
+    // `etn.activity.list`, `persistState` — `etn.tabs.updateState`,
+    // имена слоёв — `etn.layers.list`.
+    activity: { list: async () => ({ rows: [], total: 0 }) },
+    tabs: { updateState: async () => undefined },
+    layers: { list: async () => [] },
     ui: {
       getState: async () => null,
       setState: async () => undefined,
@@ -327,6 +350,80 @@ describe('первый день недели: календарные видже�
     const teardown = activityMod.mountActivity(host as unknown as HTMLElement);
     assertResetIsSafeAndUnsubscribes(baseline, stateMod.store.listenerCount, teardown);
     await flush();
+  });
+
+  // -------------------------------------------------------------------------
+  // Перечитывание ленты «Событий» после повторного открытия той же сети/вкладки
+  // (регресс независимой проверки b5278f9a). Подписка activity.ts сбрасывает
+  // `networkIdSeen` при выходе из сети; без сброса повторное открытие
+  // `net-1:tab-1` считает ленту уже инициализированной и не перечитывает её.
+  // -------------------------------------------------------------------------
+  it('«События»: повторное открытие той же сети/вкладки перечитывает ленту', async () => {
+    const baseline = stateMod.store.listenerCount;
+    const win = (globalThis as any).window as { etn: any };
+
+    // `ensureActivityInitialised` → `applyQuery` → `etn.activity.list` (моста
+    // `etn.activity.query` нет). Счётчик — доказательство перечитывания.
+    let listCalls = 0;
+    const listedNetworks: string[] = [];
+    win.etn.activity.list = async (networkId: string) => {
+      listCalls += 1;
+      listedNetworks.push(networkId);
+      return { rows: [], total: 0 };
+    };
+
+    openNetwork(7);
+    const activityMod = await import('../src/renderer/screens/activity/activity.js');
+    const host = new ShimElement('div');
+    const teardown = activityMod.mountActivity(host as unknown as HTMLElement);
+    assert.ok(stateMod.store.listenerCount > baseline, 'панель подписалась на store');
+
+    // Выход из сети в подписке панели сбрасывает `networkIdSeen` — начинаем с
+    // чистой отметки независимо от предыдущих тестов файла.
+    stateMod.store.update({ network: null, networkId: null });
+    const tab = {
+      tab_id: 'tab-1',
+      network_id: 'net-1',
+      view_mode: 'activity',
+      activity_state: null,
+    };
+    const reopen = (): void => {
+      stateMod.store.update({
+        network: { first_day_of_week: 7 } as any,
+        networkId: 'net-1',
+        tabs: [tab] as any,
+        activeTabId: 'tab-1',
+        activeView: 'activity',
+      });
+    };
+
+    reopen();
+    await flush();
+    // Не вакуумный тест: первый запрос обязан состояться, иначе «роста»
+    // счётчика не от чего отсчитывать.
+    assert.equal(listCalls, 1, 'лента запрошена при первом открытии сети');
+    assert.deepEqual(listedNetworks, ['net-1']);
+
+    assert.doesNotThrow(
+      () => stateMod.store.resetNetwork(),
+      'resetNetwork не прерывается исключением панели (выход из сети возможен)',
+    );
+    await flush();
+
+    // Та же сеть и та же вкладка: ключ `net-1:tab-1` совпадает с прежним,
+    // перечитать ленту обязывает только сброшенная отметка инициализации.
+    reopen();
+    await flush();
+    assert.equal(listCalls, 2, 'повторное открытие перечитало ленту (счётчик вырос)');
+    assert.deepEqual(listedNetworks, ['net-1', 'net-1']);
+
+    teardown();
+    assert.equal(
+      stateMod.store.listenerCount,
+      baseline,
+      'teardown панели снимает store-подписку (нет утечки жизненного цикла)',
+    );
+    stateMod.store.update({ network: null, networkId: null, activeTabId: null, tabs: [] });
   });
 
   it('выход из сети: зона настроек поиска не пересобирается без сети', async () => {
