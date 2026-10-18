@@ -56,8 +56,10 @@ export interface GuardRule {
    * Исключения: вернула `true` — строка не считается нарушением. Сюда
    * попадают разрешённые места (сам общий модуль, легаси-файлы на время
    * переноса) и допустимые формы конструкции (например, `import type`).
+   * `content` — содержимое файла целиком: нужно контекстным исключениям,
+   * которые проверяют охватывающий код, а не номер строки.
    */
-  allow?: (relPath: string, line: string, lineNo: number) => boolean;
+  allow?: (relPath: string, line: string, lineNo: number, content: string) => boolean;
 }
 
 /** Настройки сканирования. */
@@ -137,7 +139,7 @@ export function collectViolations(
         const lines = content.split('\n');
         lines.forEach((line, i) => {
           if (!re.test(line)) return;
-          if (rule.allow && rule.allow(rel, line, i + 1)) return;
+          if (rule.allow && rule.allow(rel, line, i + 1, content)) return;
           push({ rule: rule.name, file: rel, line: i + 1, text: line.trim() });
         });
       }
@@ -149,7 +151,7 @@ export function collectViolations(
           const lineStart = content.lastIndexOf('\n', index) + 1;
           const lineEndRaw = content.indexOf('\n', index);
           const line = content.slice(lineStart, lineEndRaw === -1 ? content.length : lineEndRaw);
-          if (rule.allow && rule.allow(rel, line, lineNo)) continue;
+          if (rule.allow && rule.allow(rel, line, lineNo, content)) continue;
           push({ rule: rule.name, file: rel, line: lineNo, text: line.trim() });
         }
       }

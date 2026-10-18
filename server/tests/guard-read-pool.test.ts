@@ -24,10 +24,13 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import ts from 'typescript';
+
 import {
   assertGuardClean,
   collectViolations,
   type GuardRule,
+  type GuardViolation,
 } from './guard-helpers.js';
 
 const SERVER_SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
@@ -41,15 +44,68 @@ const inComment = (line: string): boolean => /^\s*(?:\/\/|\*|\/\*)/.test(line);
 
 /**
  * Единственное разрешённое синхронное чтение комментариев — в write-пути
- * `etn.comments.edit` (`mcp/tools/comments.ts:179`, внутри `runWriteTool`):
+ * `etn.comments.edit` (`mcp/tools/comments.ts`, внутри `runWriteTool`):
  * постоянный комментарий читается в той же транзакции, что и правка, иначе
  * reader-пул дал бы отдельное соединение и не увидел бы незакоммиченное
- * изменение. Исключение привязано к точной строке и её форме, чтобы любой
- * другой `listComments(...)` в файле краснил сторож.
+ * изменение. Исключение привязано к контексту (охватывающий `runWriteTool`,
+ * зарегистрированный как `etn.comments.edit`) и к точной форме вызова, а не
+ * к номеру строки: вставка кода выше не должна краснить сторож, а любой
+ * другой `listComments(...)` в файле — должен.
  */
-const COMMENTS_EDIT_TX_READ_LINE = 179;
+const COMMENTS_EDIT_TOOL = 'etn.comments.edit';
 const COMMENTS_EDIT_TX_READ =
   /^\s*listComments\(ndb, 'thought', args\.thought_id\)\.find\(\(c\) => c\.kind === 'permanent'\)/;
+
+/** Имя вызываемого выражения: `foo` или `obj.foo`. */
+const calleeName = (node: ts.CallExpression, source: ts.SourceFile): string =>
+  node.expression.getText(source);
+
+/** Ближайший охватывающий вызов с именем `name` (по цепочке родителей). */
+function enclosingCall(
+  node: ts.Node,
+  name: string,
+  source: ts.SourceFile,
+): ts.CallExpression | undefined {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (ts.isCallExpression(current) && calleeName(current, source) === name) return current;
+  }
+  return undefined;
+}
+
+/**
+ * `listComments` на строке `lineNo` лежит внутри `runWriteTool(...)`, который
+ * передан в `mcp.registerTool('etn.comments.edit', ...)`. Разбор AST, а не
+ * окно строк: исключение переживает сдвиг файла и не распространяется на
+ * соседние блоки. Неразобранный или неоднозначный вызов нарушением и
+ * остаётся — fail-closed.
+ */
+function inCommentsEditWritePath(content: string, lineNo: number): boolean {
+  const source = ts.createSourceFile(
+    'comments.ts',
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let target: ts.CallExpression | undefined;
+  const findCall = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      calleeName(node, source) === 'listComments' &&
+      source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1 === lineNo
+    ) {
+      target = node;
+    }
+    ts.forEachChild(node, findCall);
+  };
+  findCall(source);
+  if (target === undefined) return false;
+  const writeTool = enclosingCall(target, 'runWriteTool', source);
+  if (writeTool === undefined) return false;
+  const registration = enclosingCall(writeTool, 'mcp.registerTool', source);
+  const toolName = registration?.arguments[0];
+  return toolName !== undefined && ts.isStringLiteral(toolName) && toolName.text === COMMENTS_EDIT_TOOL;
+}
 
 /**
  * Синхронные доменные чтения, которые обязаны идти через `heavy-read.ts`.
@@ -103,11 +159,11 @@ export const READ_POOL_RULES: GuardRule[] = [
     pattern:
       /(?:\blistComments|\bgetVisibleComment|\bgetPermanentComment|\bgetCommentsPreview)\(/,
     include: inFacades,
-    allow: (rel, line, lineNo) =>
+    allow: (rel, line, lineNo, content) =>
       inComment(line) ||
       (rel === 'mcp/tools/comments.ts' &&
-        COMMENTS_EDIT_TX_READ_LINE === lineNo &&
-        COMMENTS_EDIT_TX_READ.test(line)),
+        COMMENTS_EDIT_TX_READ.test(line) &&
+        inCommentsEditWritePath(content, lineNo)),
   },
 ];
 
@@ -189,34 +245,136 @@ describe('guard: точечные тяжёлые чтения идут чере�
     }
   });
 
-  it('мутационно краснеет: listComments вне write-пути etn.comments.edit ловится', () => {
-    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-read-comments-'));
-    try {
-      fs.mkdirSync(path.join(fixtureRoot, 'mcp', 'tools'), { recursive: true });
-      // Строка 179 — разрешённое чтение в транзакции `etn.comments.edit`;
-      // строка 181 — мутация: синхронное чтение в другом месте файла.
-      const lines = [
-        "import { listComments } from '../../../domain/comment-service.js';",
-        ...Array.from({ length: 177 }, () => '// filler'),
-        "            listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??",
-        '            null;',
-        "      listComments(ndb, 'thought', otherId);",
-      ];
-      fs.writeFileSync(
-        path.join(fixtureRoot, 'mcp', 'tools', 'comments.ts'),
-        lines.join('\n'),
-        'utf8',
-      );
-      const violations = collectViolations(fixtureRoot, READ_POOL_RULES).filter(
-        (v) => v.rule === 'no-sync-comment-reads-in-facades',
-      );
+  it('listComments в транзакции etn.comments.edit — зелёный на старом месте', () => {
+    assert.deepEqual(scanCommentsTool(commentsEditFixture()), []);
+  });
+
+  it('разрешённый listComments переживает сдвиг файла вставкой строк выше', () => {
+    for (const fillerLines of [40, 177, 500]) {
       assert.deepEqual(
-        violations.map((v) => v.line),
-        [181],
-        'разрешён только listComments write-пути etn.comments.edit (строка 179)',
+        scanCommentsTool(commentsEditFixture({ fillerLines })),
+        [],
+        `вставка ${fillerLines} строк выше не должна краснить исключение`,
       );
-    } finally {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
+
+  it('listComments в другом месте файла — красный', () => {
+    const other = "listComments(ndb, 'thought', otherId);";
+    const lines = commentsEditFixture({ afterBlock: [other] });
+    assert.deepEqual(
+      scanCommentsTool(lines).map((v) => v.line),
+      [lineOf(lines, 'otherId')],
+      'вне write-пути etn.comments.edit синхронное чтение запрещено',
+    );
+  });
+
+  it('другая форма listComments внутри того же блока — красный', () => {
+    const other = "      listComments(ndb, 'thought', args.comment_id);";
+    const lines = commentsEditFixture({ insideBlock: [other] });
+    assert.deepEqual(
+      scanCommentsTool(lines).map((v) => v.line),
+      [lineOf(lines, 'args.comment_id')],
+      'исключение привязано к точной форме вызова',
+    );
+  });
+
+  it('мутационно краснеет: listComments без охватывающего runWriteTool', () => {
+    const lines = commentsEditFixture({ wrapInWriteTool: false });
+    assert.deepEqual(
+      scanCommentsTool(lines).map((v) => v.line),
+      [lineOf(lines, 'listComments(ndb')],
+      'без runWriteTool контекст не подтверждён — вызов запрещён',
+    );
+  });
+
+  it('мутационно краснеет: runWriteTool чужого инструмента не даёт исключения', () => {
+    const lines = commentsEditFixture({ toolName: 'etn.comments.update' });
+    assert.deepEqual(
+      scanCommentsTool(lines).map((v) => v.line),
+      [lineOf(lines, 'listComments(ndb')],
+      'исключение действует только внутри etn.comments.edit',
+    );
+  });
 });
+
+/**
+ * Фикстура `mcp/tools/comments.ts`: вызов `listComments` в транзакции
+ * `etn.comments.edit`. Параметры позволяют сдвинуть файл, подложить вызов
+ * в другой форме или сломать контекст.
+ */
+interface CommentsEditFixtureOptions {
+  fillerLines?: number;
+  insideBlock?: string[];
+  afterBlock?: string[];
+  toolName?: string;
+  wrapInWriteTool?: boolean;
+}
+
+const LEGAL_CALL =
+  "listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??";
+
+function commentsEditFixture(options: CommentsEditFixtureOptions = {}): string[] {
+  const {
+    fillerLines = 0,
+    insideBlock = [],
+    afterBlock = [],
+    toolName = COMMENTS_EDIT_TOOL,
+    wrapInWriteTool = true,
+  } = options;
+  const callback = wrapInWriteTool
+    ? [
+        '  (args, extra) =>',
+        '    runWriteTool(rt, args.network_id, () => {',
+        ...insideBlock,
+        '      const permanent =',
+        `        ${LEGAL_CALL}`,
+        '          null;',
+        '      return permanent;',
+        '    }),',
+      ]
+    : [
+        '  (args, extra) => {',
+        ...insideBlock,
+        '    const permanent =',
+        `      ${LEGAL_CALL}`,
+        '        null;',
+        '    return permanent;',
+        '  },',
+      ];
+  return [
+    "import { listComments } from '../../../domain/comment-service.js';",
+    ...Array.from({ length: fillerLines }, () => '// filler'),
+    'mcp.registerTool(',
+    `  '${toolName}',`,
+    '  {},',
+    ...callback,
+    ');',
+    ...afterBlock,
+  ];
+}
+
+/** Номер строки (с 1), содержащей `needle`. */
+function lineOf(lines: string[], needle: string): number {
+  const index = lines.findIndex((line) => line.includes(needle));
+  assert.notEqual(index, -1, `фикстура обязана содержать «${needle}»`);
+  return index + 1;
+}
+
+/** Прогоняет правило комментариев по временной фикстуре. */
+function scanCommentsTool(lines: string[]): GuardViolation[] {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-read-comments-'));
+  try {
+    fs.mkdirSync(path.join(fixtureRoot, 'mcp', 'tools'), { recursive: true });
+    fs.writeFileSync(
+      path.join(fixtureRoot, 'mcp', 'tools', 'comments.ts'),
+      lines.join('\n'),
+      'utf8',
+    );
+    return collectViolations(fixtureRoot, READ_POOL_RULES).filter(
+      (v) => v.rule === 'no-sync-comment-reads-in-facades',
+    );
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}

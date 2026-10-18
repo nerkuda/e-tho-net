@@ -78,6 +78,26 @@ describe('guard-helpers: скан источников на запрещённы
     assert.equal(excluded.length, 0);
   });
 
+  it('allow получает содержимое файла для контекстных исключений', () => {
+    const dir = makeFixture();
+    fs.writeFileSync(
+      path.join(dir, 'contextual.ts'),
+      "// allow-context\nimport { ipcRenderer } from 'electron';\n",
+    );
+    const contextual = {
+      name: 'no-electron-contextual',
+      description: 'запрещён импорт "electron" (контекстное исключение)',
+      pattern: FORBIDDEN,
+      allow: (_rel: string, _line: string, _lineNo: number, content: string): boolean =>
+        content.includes('allow-context'),
+    };
+    const hits = collectViolations(dir, [contextual]);
+    assert.ok(
+      !hits.some((v) => v.file === 'contextual.ts'),
+      'allow обязан видеть содержимое файла целиком, а не только строку',
+    );
+  });
+
   it('assertGuardClean падает с перечислением нарушений и правил', () => {
     const dir = makeFixture();
     assert.throws(
