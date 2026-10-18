@@ -548,6 +548,20 @@ export function buildThoughtMenuItems(
     ...(opts.focusHandler !== undefined
       ? [menuAction('В фокус', () => opts.focusHandler?.())]
       : []),
+    // Сценарий «просмотр и обслуживание ленты «События»», шаг 3 (7a1a354b):
+    // переход «что происходило с этой сущностью» — вид «События» с отбором
+    // по entity_id. Lazy import: active-view уже тянет activity, обратный
+    // статический импорт замкнул бы цикл.
+    menuAction('Что происходило с этой сущностью', () => {
+      void (async () => {
+        const { showActivityForEntity } = await import('../screens/activity/activity.js');
+        // Сначала отложенный фильтр, потом переключение вида: инициализация
+        // ленты иначе успела бы перезаписать его сохранённым снимком.
+        showActivityForEntity(target.id, target.title);
+        const { setActiveView } = await import('../screens/active-view.js');
+        setActiveView('activity');
+      })();
+    }),
     menuAction('Экспорт…', () => void exportSingleThought(networkId, target.id)),
     menuAction('Импорт…', () => void importToThought(networkId, target.id)),
     ...(opts.findOnMapHandler !== undefined

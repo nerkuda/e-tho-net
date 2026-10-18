@@ -408,3 +408,13 @@ describe('buildThoughtMenuItems — «Удалить» / «Удалить/вос
   });
 });
 
+describe('buildThoughtMenuItems — переход в ленту «События» (56ab2902)', () => {
+  it('пункт «Что происходило с этой сущностью» есть и стоит перед «Экспорт…»', () => {
+    // Сценарий 7a1a354b, шаг 3: из контекстного меню мысли — лента по entity_id.
+    const items = labels(buildThoughtMenuItems('net', target));
+    const idx = items.indexOf('Что происходило с этой сущностью');
+    assert.ok(idx >= 0, 'пункт обязан быть в меню мысли');
+    assert.equal(items[idx + 1], 'Экспорт…', 'порядок: после «В фокус», перед «Экспорт…»');
+  });
+});
+

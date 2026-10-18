@@ -33,7 +33,7 @@ import {
   mergeFilterIssues,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
-import { ACTIVITY_ACTION_FILTERS, buildFilterAst } from '../../lib/filter-builder.js';
+import { ACTIVITY_ACTION_FILTERS, buildFilterAst, parseActivityCriteriaTreeDetailed } from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
 import type { FilterValueEnumOption } from '../../lib/filter-value.js';
 import { resolveFirstDayOfWeek } from '../../lib/dates.js';
@@ -53,7 +53,7 @@ import { openPropertyManagerEditor } from '../property-manager.js';
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
-import { UI_STATE_KEY } from '@etn/shared';
+import { FILTER_AST_VERSION, UI_STATE_KEY } from '@etn/shared';
 import { uiButton } from '../../lib/ui/button.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { fieldRow } from '../../lib/ui/field.js';
@@ -119,6 +119,12 @@ let host: HTMLElement | null = null;
  *  (Q4: per-tab snapshot), `null` until the first init. */
 let networkIdSeen: string | null = null;
 let filter: ActivityFilterState = createDefaultActivityFilter();
+/**
+ * Запрос перехода из меню мысли «что происходило с этой сущностью»
+ * (сценарий 7a1a354b, шаг 3): лента по `entity_id`. Живёт до инициализации
+ * вида — иначе первое чтение сохранённого отбора перезаписало бы его.
+ */
+let pendingEntity: { id: string; title: string | null } | null = null;
 let rows: ActivityRow[] = [];
 let total = 0;
 let offset = 0;
@@ -226,10 +232,56 @@ export async function ensureActivityInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter.
   }
+  // Переход из меню мысли сильнее сохранённого снимка: лента открывается
+  // отбором «Сущность = id» (сценарий 7a1a354b, шаг 3).
+  applyPendingEntityFilter();
   // `EnsureLoaded` triggers an async `users` fetch; rows rendered before it
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
   await applyQuery();
+}
+
+/**
+ * Единый путь «что происходило с этой сущностью» (сценарий 7a1a354b, шаг 3):
+ * лента «События» с условием `entity_id = id`. Вызывающий переключает вид
+ * (lazy import active-view), а фильтр ждёт инициализации в `pendingEntity`.
+ */
+export function showActivityForEntity(entityId: string, title?: string): void {
+  pendingEntity = { id: entityId, title: title ?? null };
+  const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
+  if (host !== null && networkId !== null && networkIdSeen === `${networkId}:${tabId ?? ''}`) {
+    applyPendingEntityFilter();
+    persistState();
+    void applyQuery();
+  }
+}
+
+/** Применить отложенный переход к сущности к модели отбора (до запроса). */
+function applyPendingEntityFilter(): void {
+  if (pendingEntity === null) return;
+  const { id, title } = pendingEntity;
+  pendingEntity = null;
+  const ast = {
+    version: FILTER_AST_VERSION,
+    filter: {
+      op: 'and' as const,
+      children: [
+        {
+          entity: { kind: 'entity_id' as const },
+          operator: 'eq' as const,
+          value: id,
+          ...(title !== null && title !== '' ? { labels: { value: title } } : {}),
+        },
+      ],
+    },
+  };
+  const parsed = parseActivityCriteriaTreeDetailed(ast);
+  filter = parsed.state;
+  offset = 0;
+  migrationDropped = [];
+  filterEditor?.refresh();
+  activityFrame?.apply();
 }
 
 /** Persists filter + page to L4 (per-tab snapshot, Q4). В снимок уходит
