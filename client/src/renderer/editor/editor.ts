@@ -2688,11 +2688,24 @@ function buildLinkHeader(initial: Link): HTMLElement {
   row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);
 
+  /**
+   * Чужой захват связи (ошибка 4f18d9f5): выбор типа и «актуально» — только
+   * чтение, как и запись, которую отклонит сервер. Кнопка оформления остаётся:
+   * она открывает диалог, который сам переходит в режим чтения.
+   */
+  const syncLinkHeaderLock = (): void => {
+    const blocked = foreignLockHeld('link', link.id);
+    typeCombo.setDisabled(blocked);
+    activeCheck.disabled = blocked;
+  };
+  syncLinkHeaderLock();
+
   /** Applies another link of the same type to the live header, values only. */
   const applyLink = (next: Link): void => {
     link = next;
     typeCombo.setValue(next.type_id);
     activeCheck.checked = next.active;
+    syncLinkHeaderLock();
   };
   headerRetarget = (ctx): void => {
     if (ctx.ownerType === 'link' && ctx.link !== null) applyLink(ctx.link);

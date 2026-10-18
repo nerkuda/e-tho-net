@@ -378,6 +378,22 @@ function valueCloud(combo: { root: HTMLElement }): ShimElement | undefined {
 // ---------------------------------------------------------------------------
 
 describe('entity-picker: встроенное комбо', () => {
+  it('setDisabled выключает ввод и выбор после сборки (ошибка 4f18d9f5)', () => {
+    installShim();
+    store.update({ thoughtTypes: THOUGHT_TYPES });
+    const combo = buildEntityCombo({ networkId: 'n', kind: 'link-types', value: null, onChange: () => undefined });
+    const { input, pick } = parts(combo);
+
+    combo.setDisabled(true);
+    assert.equal(input.disabled, true, 'ввод выключен');
+    assert.equal(pick.disabled, true, 'кнопка выбора выключена');
+    assert.ok((combo.root as unknown as ShimElement).classList.contains('disabled'));
+
+    combo.setDisabled(false);
+    assert.equal(input.disabled, false, 'ввод снова доступен');
+    assert.equal(pick.disabled, false, 'кнопка выбора снова доступна');
+  });
+
   it('фокус на пустом поле показывает весь каталог, включая верхний уровень', async () => {
     const { body } = installShim();
     store.update({ thoughtTypes: THOUGHT_TYPES });

@@ -1783,6 +1783,12 @@ export interface EntityCombo {
    */
   setValue(id: string | null): void;
   /**
+   * Включает/выключает поле после сборки (ошибка 4f18d9f5: заголовок связи
+   * при чужом захвате). Выключенное поле не принимает ввод, не открывает
+   * выбор и не показывает очистку облачка.
+   */
+  setDisabled(value: boolean): void;
+  /**
    * Перечитывает данные облачка значения после внешнего изменения мысли
    * (команды контекстного меню: актуальность, тип, иконка, удаление/
    * восстановление). Снапшот облачка — производное от модели и обязан
@@ -1849,6 +1855,8 @@ function pickerTitleOf(kind: EntityKind, override?: string): string {
  * ручное открытие кареткой не рисует список дважды.
  */
 export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
+  /** Текущее состояние блокировки: можно менять после сборки (чужой захват). */
+  let disabled = opts.disabled === true;
   let current = opts.value;
   /** Данные облачка текущего значения (для мыслей — из кандидата). */
   let currentCloud: ThoughtCloudInput | null = null;
@@ -1894,7 +1902,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   input.autocomplete = 'off';
   input.spellcheck = false;
   input.placeholder = opts.placeholder ?? '';
-  input.disabled = opts.disabled === true;
+  input.disabled = disabled;
   const caret = span('', 'type-combo-caret entity-combo-caret');
   caret.append(svgIcon('chevron-down', 12));
   const pickBtn = uiButton({
@@ -1990,7 +1998,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         ...(opts.onThoughtTrashBadge !== undefined && isThoughtValue(current)
           ? { onTrashBadgeClick: (id: string) => opts.onThoughtTrashBadge?.(id) }
           : {}),
-        ...(opts.disabled === true
+        ...(disabled
           ? {}
           : {
               onRemove: () => {
@@ -2008,7 +2016,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   };
 
   const commitValue = (id: string | null): void => {
-    if (opts.disabled === true) return;
+    if (disabled) return;
     // Узел с фокусом сейчас исчезнет (крестик облачка) или скроется (строка
     // ввода заполненного поля) — запоминаем фокус, чтобы вернуть его живому
     // узлу поля, а не отдать браузеру на <body> (ошибка 797d0485).
@@ -2035,7 +2043,19 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     valueHost.classList.toggle('hidden', !filled);
     input.classList.toggle('hidden', filled);
     caret.classList.toggle('hidden', filled);
-    pickBtn.disabled = opts.disabled === true;
+    pickBtn.disabled = disabled;
+  };
+
+  /** Переключает блокировку после сборки (чужой захват, ошибка 4f18d9f5). */
+  const setDisabled = (value: boolean): void => {
+    if (disabled === value) return;
+    disabled = value;
+    input.disabled = value;
+    root.classList.toggle('disabled', value);
+    // Облачко значения перерисовывается: у выключенного поля не должно быть
+    // крестика очистки, который всё равно отправил бы запись.
+    renderValue();
+    renderMode();
   };
 
   /**
@@ -2045,7 +2065,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
    * предлагаются.
    */
   function openPicker(): void {
-    if (opts.disabled === true) return;
+    if (disabled) return;
     // Свой пикер вызывающего (например, стандартный `pickThoughtsDialog`) —
     // сильнее встроенного `pickEntitiesModal` (блокер п.19): диалог выбора
     // единственного значения должен совпадать с чип-полем.
@@ -2123,7 +2143,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     sources.push({
       when: 'always',
       load: (query) => {
-        if (opts.disabled === true) return [];
+        if (disabled) return [];
         reloadOptions();
         const q = query.trim().toLowerCase();
         const expandedIds = new Set(allOptions.filter(isExpanded).map((o) => o.id));
@@ -2172,11 +2192,11 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     sources.push({
       when: 'typed',
       load: (query) => {
-        if (opts.disabled === true) return [];
+        if (disabled) return [];
         return loadPublicationOptions(opts.networkId, query).then(publicationEntries);
       },
       loadMore: (query, offset) => {
-        if (opts.disabled === true) return Promise.resolve([]);
+        if (disabled) return Promise.resolve([]);
         return loadPublicationOptions(opts.networkId, query, offset).then(publicationEntries);
       },
       pageSize: PUBLICATIONS_PAGE_SIZE,
@@ -2188,7 +2208,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     sources.push({
       when: 'typed',
       load: (query) => {
-        if (opts.disabled === true) return [];
+        if (disabled) return [];
         const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
         const apply = (hits: DuplicateHit[]): SuggestEntry[] =>
           hits.map((hit) => {
@@ -2266,7 +2286,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   // каталог, а не срез по случайному запросу.
   caret.addEventListener('mousedown', (event) => event.preventDefault());
   caret.addEventListener('click', () => {
-    if (opts.disabled === true) return;
+    if (disabled) return;
     input.value = '';
     handle?.open();
   });
@@ -2277,6 +2297,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     root,
     value: () => current,
     setValue,
+    setDisabled,
     /**
      * Сброс снапшота облачка и перерисовка (см. {@link EntityCombo.refresh}):
      * данные мысли изменились командой контекстного меню — облачко обязано
