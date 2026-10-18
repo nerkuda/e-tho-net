@@ -92,6 +92,39 @@ describe('lock-cache: otherHolder / holderNameByUserId', () => {
     assert.equal(holderNameByUserId('user-X'), 'user-X');
   });
 
+  it('holderNameByUserId resolves the member name once the network roster loads (cb9b466f)', async () => {
+    const users = await import('../src/renderer/lib/users.js');
+    const { store } = await import('../src/renderer/state.js');
+    users.__resetForTests();
+    __resetForTests();
+    (globalThis as unknown as { window: unknown }).window = {
+      etn: {
+        networks: {
+          listMembers: async () => [
+            {
+              network_id: 'net-1',
+              user_id: 'user-X',
+              role: 'member',
+              added_at: '',
+              added_by: '',
+              username: 'bob',
+              display_name: 'Борис',
+            },
+          ],
+        },
+      },
+    };
+    store.update({
+      networkId: 'net-1',
+      me: { id: 'me-1', username: 'me', display_name: 'Я', is_admin: false },
+    });
+    // Первый вызов лениво запускает загрузку и пока честно падает на id.
+    assert.equal(holderNameByUserId('user-X'), 'user-X');
+    for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(holderNameByUserId('user-X'), 'Борис');
+    delete (globalThis as { window?: unknown }).window;
+  });
+
   it('otherHolder returns null when nobody holds the lock', () => {
     __resetForTests();
     assert.equal(otherHolder('thought', 'no-such'), null);

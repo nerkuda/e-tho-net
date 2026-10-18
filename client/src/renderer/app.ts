@@ -71,6 +71,7 @@ import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
+import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
@@ -226,6 +227,9 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // `refresh()` до этого не вызывал никто — захват, взятый до подключения,
   // оставался невидимым. Best-effort, ошибку глотает сам `refresh`.
   void refreshLockCache();
+  // Кэш имён участников — для показа держателя захвата именем, а не UUID
+  // (ошибка cb9b466f): читается один раз на сеть/пользователя, best-effort.
+  ensureUserNamesLoaded();
 
   // Q3: refresh tab list and activate the right entry. When the caller
   // supplies `tabId` (the picker / tab activation), that exact tab wins —

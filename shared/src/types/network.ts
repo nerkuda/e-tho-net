@@ -132,6 +132,15 @@ export interface NetworkMember {
   added_at: string;
   /** User id of the member who performed the add. */
   added_by: string;
+  /**
+   * Display fields joined from `users` by `GET /networks/{id}/members`
+   * (сервер отдаёт их с самого начала, тип отставал). Необязательны: старые
+   * ответы и тестовые фикстуры могут их не нести. Нужны клиенту для показа
+   * имён участников (держатель захвата, списки авторства) не-администратору,
+   * у которого нет доступа к `GET /admin/users`.
+   */
+  username?: string;
+  display_name?: string | null;
 }
 
 /** Lightweight user reference used inside list responses. */
