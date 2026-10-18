@@ -1015,6 +1015,158 @@ describe('suggest-dropdown: иерархический список — стре
     w.input.emit('keydown', key('ArrowLeft'));
     assert.equal(activeLabel(w.body), 'Группа', 'свёрнутая подгруппа ведёт к родителю');
   });
+
+  it('←/→ с модификаторами не принадлежат списку: не раскрывают и не гасят', async () => {
+    const { source, expanded } = fixture();
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus')); // полный каталог: видна свёрнутая «Группа»
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа');
+
+    // Shift+→ на свёрнутой группе — выделение текста, а не раскрытие.
+    const shiftRight = key('ArrowRight', { shiftKey: true });
+    w.input.emit('keydown', shiftRight);
+    assert.equal(shiftRight.defaultPrevented, false, 'Shift+→ не гасится — поле выделяет текст');
+    await flush();
+    assert.notEqual(expanded.get('g'), true, 'Shift+→ не раскрывает группу');
+    assert.deepEqual(labels(w.body), ['Группа', 'Плоская'], 'Shift+→ список не меняет');
+
+    // Ctrl/Alt/Meta ведут себя так же: штатная навигация поля не ломается.
+    const otherMods: Array<Record<string, boolean>> = [
+      { ctrlKey: true },
+      { altKey: true },
+      { metaKey: true },
+    ];
+    for (const mods of otherMods) {
+      const press = key('ArrowRight', mods);
+      w.input.emit('keydown', press);
+      assert.equal(
+        press.defaultPrevented,
+        false,
+        `${Object.keys(mods)[0]}+→ не гасится — работает поведение поля`,
+      );
+    }
+    await flush();
+    assert.notEqual(expanded.get('g'), true, 'группа осталась свёрнутой');
+    assert.deepEqual(labels(w.body), ['Группа', 'Плоская']);
+
+    // Чистая → раскрывает группу — и только после этого проверяем ←.
+    w.input.emit('keydown', key('ArrowRight'));
+    await flush();
+    assert.equal(expanded.get('g'), true, 'чистая → раскрывает группу');
+    assert.equal(activeLabel(w.body), 'Группа');
+
+    // Ctrl+← на раскрытой группе — переход по словам, а не сворачивание.
+    const ctrlLeft = key('ArrowLeft', { ctrlKey: true });
+    w.input.emit('keydown', ctrlLeft);
+    assert.equal(ctrlLeft.defaultPrevented, false, 'Ctrl+← не гасится — работает поведение поля');
+    await flush();
+    assert.equal(expanded.get('g'), true, 'Ctrl+← не сворачивает группу');
+    assert.deepEqual(
+      labels(w.body),
+      ['Группа', 'Подгруппа', 'Лист', 'Плоская'],
+      'Ctrl+← список не меняет',
+    );
+
+    // Shift/Alt/Meta+← — тоже не клавиши списка.
+    const otherLeftMods: Array<Record<string, boolean>> = [
+      { shiftKey: true },
+      { altKey: true },
+      { metaKey: true },
+    ];
+    for (const mods of otherLeftMods) {
+      const press = key('ArrowLeft', mods);
+      w.input.emit('keydown', press);
+      assert.equal(
+        press.defaultPrevented,
+        false,
+        `${Object.keys(mods)[0]}+← не гасится — работает поведение поля`,
+      );
+    }
+    assert.equal(expanded.get('g'), true, 'группа не свернулась');
+  });
+
+  /**
+   * Источник, который при повторной загрузке вставляет лишнюю строку ПЕРЕД
+   * группой: индексы сдвигаются, сущность под курсором — нет. `mode` выбирает,
+   * на каком переходе происходит сдвиг: раскрытие (ArrowRight) или
+   * сворачивание (ArrowLeft).
+   */
+  function shiftingSource(mode: 'expand' | 'collapse'): {
+    source: SuggestSource;
+    expanded: Map<string, boolean>;
+  } {
+    const expanded = new Map<string, boolean>([['g', mode === 'collapse']]);
+    const isExpanded = (): boolean => expanded.get('g') ?? false;
+    const groupEntry = (): SuggestEntry => ({
+      value: 'g',
+      label: 'Группа',
+      indent: 0,
+      toggle: {
+        expanded: isExpanded(),
+        onToggle: () => expanded.set('g', !isExpanded()),
+      },
+    });
+    const zero: SuggestEntry = { value: 'zero', label: 'Ноль' };
+    const extra: SuggestEntry = { value: 'extra', label: 'Добавка' };
+    const child: SuggestEntry = { value: 'c', label: 'Ребёнок', indent: 1 };
+    const source: SuggestSource = {
+      when: 'always',
+      load: () => {
+        if (mode === 'expand') {
+          // Раскрытие добавляет строку перед группой.
+          return isExpanded() ? [zero, extra, groupEntry(), child] : [zero, groupEntry()];
+        }
+        // Сворачивание добавляет строку перед группой.
+        return isExpanded() ? [zero, groupEntry(), child] : [zero, extra, groupEntry()];
+      },
+    };
+    return { source, expanded };
+  }
+
+  it('курсор восстанавливается по value, а не по индексу: → при сдвиге строк', async () => {
+    const { source, expanded } = shiftingSource('expand');
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(labels(w.body), ['Ноль', 'Группа'], 'группа свёрнута');
+
+    w.input.emit('keydown', key('ArrowDown'));
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор на группе (индекс 1)');
+
+    w.input.emit('keydown', key('ArrowRight'));
+    await flush();
+    assert.equal(expanded.get('g'), true);
+    assert.deepEqual(
+      labels(w.body),
+      ['Ноль', 'Добавка', 'Группа', 'Ребёнок'],
+      'перед группой появилась лишняя строка — её индекс сместился',
+    );
+    // Восстановление по индексу оставило бы курсор на «Добавке» (индекс 1).
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор остался на той же сущности');
+  });
+
+  it('курсор восстанавливается по value, а не по индексу: ← при сдвиге строк', async () => {
+    const { source, expanded } = shiftingSource('collapse');
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(labels(w.body), ['Ноль', 'Группа', 'Ребёнок'], 'группа раскрыта');
+
+    w.input.emit('keydown', key('ArrowDown'));
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор на группе (индекс 1)');
+
+    w.input.emit('keydown', key('ArrowLeft'));
+    await flush();
+    assert.equal(expanded.get('g'), false);
+    assert.deepEqual(
+      labels(w.body),
+      ['Ноль', 'Добавка', 'Группа'],
+      'перед группой появилась лишняя строка — её индекс сместился',
+    );
+    // Восстановление по индексу оставило бы курсор на «Добавке» (индекс 1).
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор остался на той же сущности');
+  });
 });
 
 // ---------------------------------------------------------------------------

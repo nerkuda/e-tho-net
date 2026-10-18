@@ -703,7 +703,17 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       paint();
       return;
     }
-    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+    // ←/→ принадлежат списку только в чистом виде: с Shift текст выделяется,
+    // с Ctrl/Alt/Meta работают штатные переходы по словам/истории. Такие
+    // нажатия не гасим — иначе поле теряет своё поведение (регрессия
+    // 74bf33bb; эталон набора — привязки `lib/ui/tree.ts`).
+    if (
+      (event.key === 'ArrowRight' || event.key === 'ArrowLeft') &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
       if (rowEntries.length === 0 || cursor === null) return;
       const entry = rowEntries[cursor];
       if (entry === undefined) return;
