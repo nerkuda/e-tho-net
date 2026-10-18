@@ -47,7 +47,11 @@ export interface WalCheckpointStats {
   skipped: boolean;
   /** `true` — чекпойнт не смог завершиться (кадры удерживает другой читатель). */
   busy: boolean;
-  /** Кадров в журнале на момент вызова (`-1` — сведения недоступны). */
+  /**
+   * Кадров в журнале на момент вызова (`-1` — сведения недоступны).
+   * Для `RESTART`/`TRUNCATE` снимается PASSIVE-проходом перед сбросом журнала
+   * (см. {@link walCheckpoint}).
+   */
   log: number;
   /** Перенесено кадров в основной файл. */
   checkpointed: number;
@@ -116,12 +120,24 @@ export function walCheckpoint(
     const previous = firstPragmaRow(db.pragma('busy_timeout'))['timeout'];
     db.pragma('busy_timeout = 0');
     try {
+      // RESTART/TRUNCATE сбрасывают заголовок журнала (`walRestartHdr`) ДО того,
+      // как SQLite заполнит выходные колонки, поэтому `log`/`checkpointed`
+      // приходят нулями даже после реального переноса кадров (проверено на
+      // SQLite 3.46: журнал 877 КБ → TRUNCATE → `0/0`, файл 0 Б). Счётчики
+      // снимаем PASSIVE-проходом перед сбросом: он и переносит кадры, а
+      // RESTART/TRUNCATE затем только сбрасывает/усекает журнал.
+      const measured =
+        mode === 'RESTART' || mode === 'TRUNCATE'
+          ? firstPragmaRow(db.pragma('wal_checkpoint(PASSIVE)'))
+          : null;
       const row = firstPragmaRow(db.pragma(`wal_checkpoint(${mode})`));
+      const log = measured ? measured['log'] : row['log'];
+      const checkpointed = measured ? measured['checkpointed'] : row['checkpointed'];
       return {
         skipped: false,
         busy: row['busy'] === 1,
-        log: typeof row['log'] === 'number' ? row['log'] : -1,
-        checkpointed: typeof row['checkpointed'] === 'number' ? row['checkpointed'] : -1,
+        log: typeof log === 'number' ? log : -1,
+        checkpointed: typeof checkpointed === 'number' ? checkpointed : -1,
       };
     } finally {
       if (typeof previous === 'number') db.pragma(`busy_timeout = ${previous}`);
@@ -160,14 +176,20 @@ function safeCheckpoint(target: WalCheckpointTarget, mode: WalCheckpointMode): W
   }
 }
 
-/** Лог итога чекпойнта системной БД: info — вызов выполнен, debug — пропуск. */
+/**
+ * Лог итога чекпойнта системной БД по политике сетевого прохода: info — вызов
+ * реально что-то сделал (перенёс кадры или встретил занятость), debug — журнал
+ * пуст (`log = 0`, `checkpointed = 0`) либо вызов пропущен. Иначе штатный тик
+ * раз в минуту писал бы info ~1440 раз в сутки на пустом журнале.
+ */
 function logSystemCheckpoint(
   logger: Logger | undefined,
   mode: WalCheckpointMode,
   stats: WalCheckpointStats,
 ): void {
   const message = 'WAL checkpoint of system database';
-  if (!stats.skipped) {
+  const idle = !stats.busy && stats.log === 0 && stats.checkpointed === 0;
+  if (!stats.skipped && !idle) {
     logger?.info({ mode, ...stats }, message);
   } else {
     logger?.debug({ mode, ...stats }, message);

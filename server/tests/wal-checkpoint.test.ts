@@ -296,6 +296,54 @@ describe(
       }
     });
 
+    it('пустой журнал системной БД пишется debug, реальное усечение — info', () => {
+      const systemDb = SystemDb.open(tmpDataDir);
+      const message = 'WAL checkpoint of system database';
+      try {
+        const records: LogRecord[] = [];
+        const scheduler = startWalCheckpointScheduler({
+          intervalMs: 60_000,
+          logger: capturingLogger(records),
+          systemDb,
+        });
+        try {
+          // Пустой журнал: чекпойнт выполнен (не skipped и не busy), но
+          // переносить нечего — это штатный тик, а не событие.
+          writeAuditRows(systemDb, 10, 64);
+          scheduler.runNow();
+          records.length = 0;
+          const idle = scheduler.runNow();
+          assert.equal(idle.system?.skipped, false, 'пустой журнал не пропускается');
+          assert.equal(idle.system?.busy, false, 'читателей нет');
+          assert.equal(idle.system?.log, 0, 'журнал пуст');
+          assert.equal(idle.system?.checkpointed, 0, 'переносить нечего');
+          const idleRecord = records.find((r) => r.msg === message);
+          assert.equal(idleRecord?.level, 'debug', 'пустой журнал логируется debug');
+          assert.equal(
+            records.filter((r) => r.msg === message && r.level === 'info').length,
+            0,
+            'info на пустом журнале не пишется',
+          );
+
+          // Реальное усечение: в журнале есть кадры — событие пишется info.
+          // Объём ниже авто-чекпойнта SQLite (1000 страниц), иначе к моменту
+          // прохода журнал окажется уже перенесённым.
+          writeAuditRows(systemDb, 20, 128);
+          records.length = 0;
+          const truncated = scheduler.runNow();
+          assert.equal(truncated.system?.skipped, false);
+          assert.ok((truncated.system?.log ?? 0) > 0, 'перед усечением журнал непустой');
+          assert.ok((truncated.system?.checkpointed ?? 0) > 0, 'кадры перенесены');
+          const infoRecord = records.find((r) => r.msg === message && r.level === 'info');
+          assert.ok(infoRecord, 'реальное усечение логируется info');
+        } finally {
+          scheduler.stop();
+        }
+      } finally {
+        systemDb.close();
+      }
+    });
+
     it('закрытая системная БД не роняет фоновый проход', () => {
       const systemDb = SystemDb.open(tmpDataDir);
       systemDb.close();
