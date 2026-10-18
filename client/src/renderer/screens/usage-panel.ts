@@ -31,6 +31,7 @@ import { BASE_LAYER_ID, type HoldingLayerRef, type ThoughtUsage } from '@etn/sha
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import { div, span } from '../lib/dom.js';
+import { t } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { MENU_SEPARATOR, menuAction, type MenuItem } from '../lib/menu.js';
@@ -78,10 +79,10 @@ export function mountUsagePanel(hostEl: HTMLElement, resizerEl: HTMLElement): ()
   host.replaceChildren();
 
   const header = div('usage-header');
-  const title = span('Использование', 'usage-title');
+  const title = span(t('usagePanel.title'), 'usage-title');
   const close = iconButton({
     icon: svgIcon('x', 14),
-    title: 'Закрыть панель использования',
+    title: t('usagePanel.close'),
     role: 'ghost',
     size: 's',
     onClick: () => closeUsagePanel(),
@@ -142,10 +143,10 @@ async function load(target: UsagePanelTarget): Promise<void> {
   const networkId = store.state.networkId;
   if (bodyBox === null) return;
   if (networkId === null) {
-    bodyBox.replaceChildren(errorState('Сеть не открыта.'));
+    bodyBox.replaceChildren(errorState(t('usagePanel.noNetwork')));
     return;
   }
-  bodyBox.replaceChildren(loadingState('Загрузка использования…'));
+  bodyBox.replaceChildren(loadingState(t('usagePanel.loading')));
 
   let usage: ThoughtUsage | null = null;
   let layersFromCheck: HoldingLayerRef[] = [];
@@ -164,7 +165,7 @@ async function load(target: UsagePanelTarget): Promise<void> {
   } catch (err) {
     if (generation === loadGeneration && bodyBox !== null) {
       bodyBox.replaceChildren(errorState(errText(err), {
-        label: 'Повторить',
+        label: t('usagePanel.retry'),
         onClick: () => void load(target),
       }));
     }
@@ -202,7 +203,7 @@ function renderBody(target: UsagePanelTarget, data: UsagePanelData): void {
 /** Группа «Используется в свойствах» (только мысль). */
 function buildPropertiesGroup(target: UsagePanelTarget, data: UsagePanelData): HTMLElement {
   const clearAllBtn = uiButton({
-    label: 'Очистить все свойства',
+    label: t('usagePanel.properties.clearAll'),
     size: 's',
     onClick: () => {
       void clearAllProperties(target);
@@ -211,14 +212,14 @@ function buildPropertiesGroup(target: UsagePanelTarget, data: UsagePanelData): H
   clearAllBtn.disabled = data.total === 0;
 
   const group = collapsibleSection({
-    title: 'Используется в свойствах',
+    title: t('usagePanel.properties.title'),
     count: String(data.total),
     collapsed: false,
     actions: [clearAllBtn],
     classes: { root: 'usage-group', header: 'usage-group-header', body: 'usage-group-body' },
     buildBody: () =>
       data.properties.length === 0
-        ? span('Ни одно свойство на эту мысль не ссылается.', 'usage-empty')
+        ? span(t('usagePanel.properties.empty'), 'usage-empty')
         : rowsBox(data.properties, target),
   });
   group.root.id = 'usage_panel:properties';
@@ -267,7 +268,7 @@ async function openRowMenu(
   if (networkId === null) return;
   const extraItems: MenuItem[] = [
     MENU_SEPARATOR,
-    menuAction('Очистить свойство', () => {
+    menuAction(t('usagePanel.properties.clearOne'), () => {
       void clearProperty(row, target);
     }),
   ];
@@ -290,10 +291,10 @@ async function clearProperty(row: UsagePropertyRow, target: UsagePanelTarget): P
   if (networkId === null) return;
   try {
     await etn.properties.remove(networkId, 'thought', row.thought.id, row.propertyKey);
-    notice('Свойство очищено.');
+    notice(t('usagePanel.properties.cleared'));
     await reloadAfterMutation(target);
   } catch (err) {
-    errorDialog('Очистить свойство', err);
+    errorDialog(t('usagePanel.properties.clearOne'), err);
   }
 }
 
@@ -302,31 +303,35 @@ async function clearAllProperties(target: UsagePanelTarget): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const ok = await confirmDialog(
-    'Очистить все свойства',
-    'Все ссылки на эту мысль через свойства будут удалены. Действие необратимо и затрагивает другие мысли.',
+    t('usagePanel.properties.clearAllTitle'),
+    t('usagePanel.properties.clearAllMessage'),
     true,
-    'Очистить',
+    t('usagePanel.properties.clearAllConfirm'),
   );
   if (!ok) return;
   try {
     const { cleared } = await etn.thoughts.usageClear(networkId, target.id);
-    notice(cleared > 0 ? `Очищено ссылок: ${cleared}.` : 'Ссылок не было.');
+    notice(
+      cleared > 0
+        ? t('usagePanel.properties.clearedCount', String(cleared))
+        : t('usagePanel.properties.nothingCleared'),
+    );
     await reloadAfterMutation(target);
   } catch (err) {
-    errorDialog('Очистить все свойства', err);
+    errorDialog(t('usagePanel.properties.clearAllTitle'), err);
   }
 }
 
 /** Группа «Используется в слоях» (мысль и связь). */
 function buildLayersGroup(target: UsagePanelTarget, data: UsagePanelData): HTMLElement {
   const group = collapsibleSection({
-    title: 'Используется в слоях',
+    title: t('usagePanel.layers.title'),
     count: String(data.layers.length),
     collapsed: false,
     classes: { root: 'usage-group', header: 'usage-group-header', body: 'usage-group-body' },
     buildBody: () =>
       data.layers.length === 0
-        ? span('Ни один слой не удерживает сущность.', 'usage-empty')
+        ? span(t('usagePanel.layers.empty'), 'usage-empty')
         : buildLayerRows(target, data.layers),
   });
   group.root.id = 'usage_panel:layers';
@@ -342,13 +347,13 @@ function buildLayerRows(target: UsagePanelTarget, layers: readonly HoldingLayerR
     // «Основу» удалить нельзя — она не слой правок; показываем строку без кнопки.
     if (layer.id !== BASE_LAYER_ID) {
       const del = uiButton({
-        label: 'Удалить слой',
+        label: t('usagePanel.layers.delete'),
         size: 's',
         role: 'danger',
         onClick: () => {
           const networkId = store.state.networkId;
           if (networkId === null) return;
-          openDeleteLayerDialog(networkId, layer.id, () => {
+          void openDeleteLayerDialog(networkId, layer.id, () => {
             void reloadAfterMutation(target);
           });
         },

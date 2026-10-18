@@ -528,12 +528,25 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
  * Экспортируется для панели использования (f7623077): «Удалить слой» —
  * тот же диалог каскада, что в меню слоёв; `onDeleted` — перечитать панель.
  */
-export function openDeleteLayerDialog(
+export async function openDeleteLayerDialog(
   networkId: string,
   layerId: string,
   onDeleted?: () => void,
-): void {
-  const layer = store.state.layers.find((l) => l.id === layerId);
+): Promise<void> {
+  let layer = store.state.layers.find((l) => l.id === layerId);
+  if (layer === undefined) {
+    // Слой мог создать другой участник/агент уже после загрузки store, а
+    // панель использования показывает его из `holding_layers`. Перечитываем
+    // список один раз, иначе «Удалить слой» молча ничего не делала бы
+    // (замечание верификации 0.13.2; образец — selectLayerForTab выше).
+    try {
+      const layers = await etn.layers.list(networkId);
+      store.update({ layers });
+      layer = layers.find((l) => l.id === layerId);
+    } catch {
+      // Нет сети — диалог не открываем; список починится при следующем входе.
+    }
+  }
   if (layer === undefined) return;
 
   const body = div('form-stack');

@@ -89,7 +89,7 @@ export function openEntityDeleteDialog(opts: EntityDeleteDialogOptions): void {
   };
   fillLines(opts.lines ?? []);
   body.append(linesBox);
-  const usageLink = el('button', 'link-btn', 'Открыть использование…');
+  const usageLink = el('button', 'link-btn', t('usagePanel.openLink'));
   usageLink.type = 'button';
   usageLink.classList.toggle('hidden', !opts.blocked);
   if (opts.usageLink !== undefined) body.append(usageLink);

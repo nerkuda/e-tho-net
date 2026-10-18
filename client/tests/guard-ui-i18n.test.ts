@@ -40,6 +40,9 @@ const TRANSLATED_FILES = (rel: string): boolean =>
   // строки экрана и карточки — только из словаря.
   rel.startsWith('screens/publications/') ||
   rel === 'editor/publication-card.ts' ||
+  // Панель использования (спека f7623077, ошибка aca92904): новый экран —
+  // строки только из словаря (требование 0e5ff1c6).
+  rel === 'screens/usage-panel.ts' ||
   rel === 'lib/dialog.ts' ||
   rel === 'lib/i18n.ts' ||
   rel === 'lib/lang.ts';
