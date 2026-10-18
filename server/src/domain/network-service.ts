@@ -19,6 +19,7 @@ import { EtnError, type Network, type TypeRoles } from '@etn/shared';
 
 import type { SystemDb } from '../db/system-db.js';
 import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
+import { closeWritePoolNetwork } from '../db/write-pool.js';
 import { networkDir } from '../paths.js';
 import { ensureDefaultShelf } from './publication-service.js';
 import type { Logger } from '../logger.js';
@@ -139,6 +140,11 @@ export class NetworkServiceImpl implements NetworkService {
 
   async deleteNetwork(networkId: string): Promise<void> {
     this.log?.debug({ networkId }, 'deleting network');
+
+    // 0. Освободить сеть в write-пуле ДО удаления файлов (ошибка abcd3f0b):
+    //    sticky-привязка держит writer-соединение к `data.db`, и `rmSync`
+    //    получает EBUSY. Явный API закрывает воркер и ждёт его выхода.
+    await closeWritePoolNetwork(networkId);
 
     // 1. Open (if not already) so we can checkpoint, then close.
     const ndb = openNetworkDb(this.dataDir, networkId, this.log);

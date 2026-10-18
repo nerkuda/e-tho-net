@@ -294,6 +294,7 @@ export class SystemDb {
   private readonly stSetSetting: Database.Statement;
   private readonly stListNetworkIds: Database.Statement;
   private readonly stNextNetworkSeq: Database.Statement;
+  private readonly stNextNetworkSeqAfterDelete: Database.Statement;
   private readonly stInsertEvent: Database.Statement;
   private readonly stReadEventsAfter: Database.Statement;
   private readonly stMinEventSeq: Database.Statement;
@@ -420,6 +421,11 @@ export class SystemDb {
     this.stListNetworkIds = db.prepare('SELECT id FROM networks ORDER BY id');
     this.stNextNetworkSeq = db.prepare(
       'INSERT INTO network_seq (network_id, last_seq) VALUES (?, 1) ON CONFLICT(network_id) DO UPDATE SET last_seq = last_seq + 1 RETURNING last_seq',
+    );
+    // После удаления сети `network_seq` снят каскадом, а FK не даст вставить
+    // новую строку — seq терминального события берём из event_log (ошибка abcd3f0b).
+    this.stNextNetworkSeqAfterDelete = db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM event_log WHERE network_id = ?',
     );
     this.stInsertEvent = db.prepare(
       'INSERT INTO event_log (network_id, seq, ts, type, data) VALUES (?, ?, ?, ?, ?)',
@@ -1099,6 +1105,17 @@ export class SystemDb {
   nextNetworkSeq(networkId: string): number {
     const row = this.stNextNetworkSeq.get(networkId) as { last_seq: number };
     return row.last_seq;
+  }
+
+  /**
+   * Следующий `seq` события сети, чья запись реестра УЖЕ удалена (ошибка
+   * abcd3f0b): `network_seq` снят каскадом с `networks`, поэтому счётчик
+   * восстанавливается из самого `event_log` (у него FK нет). Нужен
+   * терминальному `network.deleted`, которое эмитится после успешного удаления.
+   */
+  nextNetworkSeqAfterDelete(networkId: string): number {
+    const row = this.stNextNetworkSeqAfterDelete.get(networkId) as { next: number };
+    return row.next;
   }
 
   /**

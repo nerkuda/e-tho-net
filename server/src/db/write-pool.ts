@@ -355,6 +355,47 @@ export class WritePool {
     await Promise.all([...exits, ...this.closing.values()]);
   }
 
+  /**
+   * Закрыть сеть явно: остановить закреплённый за ней воркер и дождаться
+   * `exit`, чтобы writer-соединение отпустило `data.db` (ошибка abcd3f0b:
+   * sticky-привязка держала файл, и `rmSync` получал EBUSY). Незавершённые
+   * задачи сети отклоняются: база удаляется, писать в неё больше некуда.
+   */
+  async closeNetwork(networkId: string): Promise<void> {
+    const error = new EtnError(
+      'INTERNAL',
+      `Сеть ${networkId} удаляется: запись отклонена.`,
+    );
+    // Задачи сети могли ждать допуска (привязки ещё нет) — снимаем их тоже,
+    // иначе `admit` поднял бы воркер к удаляемой базе.
+    for (let i = this.admission.length - 1; i >= 0; i -= 1) {
+      const job = this.admission[i];
+      if (job !== undefined && job.task.context.networkId === networkId) {
+        this.admission.splice(i, 1);
+        this.rejectJob(job, error);
+      }
+    }
+    const pin = this.pins.find((p) => p.networkId === networkId);
+    if (pin !== undefined) {
+      pin.dead = true;
+      this.pins.splice(this.pins.indexOf(pin), 1);
+      if (pin.job !== null) {
+        this.rejectJob(pin.job, error);
+        pin.job = null;
+      }
+      for (const job of pin.queue.splice(0, pin.queue.length)) this.rejectJob(job, error);
+      const exiting = this.terminate(pin.worker).then(() => {
+        this.closing.delete(networkId);
+        this.admit();
+      });
+      this.closing.set(networkId, exiting);
+      await exiting;
+    }
+    // Воркер мог уже завершаться (вытеснение/тайм-аут) — дожидаемся и его.
+    const alreadyClosing = this.closing.get(networkId);
+    if (alreadyClosing !== undefined) await alreadyClosing;
+  }
+
   // -------------------------------------------------------------------------
   // Маршрутизация
   // -------------------------------------------------------------------------
@@ -925,4 +966,15 @@ export async function closeWritePool(): Promise<void> {
   const pool = processPool;
   processPool = null;
   await pool.close();
+}
+
+/**
+ * Явно освободить сеть в процессном пуле записи: остановить её воркер и
+ * дождаться `exit`, чтобы соединение отпустило `data.db` перед удалением
+ * (ошибка abcd3f0b). Пул не настроен — no-op.
+ */
+export async function closeWritePoolNetwork(networkId: string): Promise<void> {
+  const pool = getWritePool();
+  if (pool === null) return;
+  await pool.closeNetwork(networkId);
 }
