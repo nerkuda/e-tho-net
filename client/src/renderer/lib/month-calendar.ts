@@ -156,6 +156,12 @@ export interface MonthCalendarHandle {
   showDate(day: string): void;
   /** Показанный месяц. */
   getMonth(): { year: number; month: number };
+  /**
+   * Сменить первый день недели сети без пересоздания календаря (требование
+   * 1b77decd): сетка, подписи столбцов и строки недель перерисовываются сразу.
+   * Некорректное значение трактуется как понедельник (1).
+   */
+  setFirstDayOfWeek(firstDayOfWeek: number): void;
 }
 
 /**
@@ -196,7 +202,7 @@ let yearInputContextSeq = 0;
 export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHandle {
   const weekNumbers = opts.weekNumbers !== false;
   const dragEnabled = opts.enableRangeDrag === true;
-  const firstDayOfWeek =
+  let firstDayOfWeek =
     typeof opts.firstDayOfWeek === 'number' && opts.firstDayOfWeek >= 1 && opts.firstDayOfWeek <= 7
       ? opts.firstDayOfWeek
       : 1;
@@ -618,6 +624,10 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       render();
     },
     getMonth: () => ({ year, month }),
+    setFirstDayOfWeek: (next) => {
+      firstDayOfWeek = next >= 1 && next <= 7 ? next : 1;
+      render();
+    },
   };
 }
 

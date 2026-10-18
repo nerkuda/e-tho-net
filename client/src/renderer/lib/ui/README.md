@@ -73,7 +73,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `tabs.ts` / `tabs.css` | `uiTabs` | Полоса вкладок диалогов и экранов (`.ui-tab*`) поверх `wa-tab-group` | задача `a57e7998`, требование `88a9225a` |
 | `collapsible.ts` | `collapsibleSection` | Сворачиваемые секции (группы редактора, панели) | задача `a57e7998` |
 | `messages.ts` / `messages.css` | `errorLine`, `fieldError`, `operationError`, `setStatusText`, `footerErrorLine`, классы `ERROR_LINE_CLASS`/`FIELD_ERROR_CLASS`/`FOOTER_ERROR_CLASS` | Единый вид сообщений и строк ошибок | задача `e20761c2`, требование `397c5a56` |
-| `field.ts` / `field.css` | `fieldInput`, `fieldTextarea`, `fieldRow`, `wrapClearable`, `setFieldDisabled`, классы `FIELD_*` | Поля ввода: базовые классы, подпись/подсказка/ошибка, clearable | задача `f351b894`, требование `e64083b5` |
+| `field.ts` / `field.css` | `fieldInput`, `fieldTextarea`, `fieldSelect`, `fieldRow`, `wrapClearable`, `setFieldDisabled`, классы `FIELD_*` | Поля ввода: базовые классы, подпись/подсказка/ошибка, clearable, выбор из закрытого списка | задача `f351b894`, требование `e64083b5` |
 | `choice-row.ts` / `choice-row.css` | `choiceRow`, `checkboxRow`, `radioRow`, `choiceControl`, `choiceGroup` | Строка-переключатель (флажок/радио) | задача `f351b894`, требование `e64083b5` |
 | `segmented.ts` / `segmented.css` | `segmentedControl` | Сегментный переключатель (взаимоисключающие кнопки) | задача `f351b894` |
 | `toggle.ts` / `toggle.css` | `toggleButton` | Тумблер — кнопка с состоянием «нажато» | требование `e64083b5` |

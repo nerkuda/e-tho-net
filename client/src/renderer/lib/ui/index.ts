@@ -68,6 +68,7 @@ export {
   FIELD_CLEAR_BTN_CLASS,
   fieldInput,
   fieldTextarea,
+  fieldSelect,
   fieldRow,
   wrapClearable,
   setFieldDisabled,
@@ -77,6 +78,8 @@ export type {
   FieldControlOptions,
   FieldInputOptions,
   FieldTextareaOptions,
+  FieldSelectOption,
+  FieldSelectOptions,
   FieldRowOptions,
 } from './field.js';
 

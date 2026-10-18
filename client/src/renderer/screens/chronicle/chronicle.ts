@@ -241,6 +241,12 @@ interface CardEditor {
 const cardEditors = new WeakMap<HTMLElement, CardEditor>();
 let statusEl: HTMLElement | null = null;
 let calendar: MonthCalendarHandle | null = null;
+/**
+ * Первый день недели, на который сейчас построен календарь (требование
+ * 1b77decd). Смена настройки сети — событие `network.updated` или «Применить»
+ * в диалоге настроек — перестраивает раскладку без перезапуска.
+ */
+let calendarFirstDayOfWeek: number | null = null;
 /** Persisted month of the calendar (`chronicle_state.month`). */
 let month: { year: number; month: number } | null = null;
 /** Счётчики записей по дням (для календаря), пересчитываются при отрисовке. */
@@ -540,11 +546,12 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
 
   // Календарь — первый элемент панели отбора (0.10.1, элемент 9b424548).
   const calWrap = div('chron-cal');
+  calendarFirstDayOfWeek = networkFirstDayOfWeek();
   calendar = buildMonthCalendar({
     today: todayLocal(),
     month: month ?? undefined,
     counts: (day) => dayCount(day),
-    firstDayOfWeek: networkFirstDayOfWeek(),
+    firstDayOfWeek: calendarFirstDayOfWeek,
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
     onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
     onToday: () => goToday(),
@@ -643,6 +650,18 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       store.state.activeView === 'chronicle'
     ) {
       void ensureChronicleInitialised();
+    }
+    // Смена первого дня недели сети (настройки мыслесети, требование
+    // 1b77decd) перестраивает раскладку календаря сразу и пересчитывает
+    // границы периода: сетка, подписи столбцов и неделя `$weekStart`/
+    // `$weekEnd` не должны ждать перезапуска или переоткрытия вида.
+    const firstDayOfWeek = networkFirstDayOfWeek();
+    if (firstDayOfWeek !== calendarFirstDayOfWeek) {
+      calendarFirstDayOfWeek = firstDayOfWeek;
+      calendar?.setFirstDayOfWeek(firstDayOfWeek);
+      syncCalendar();
+      scheduleChronicleFeedRefresh();
+      if (store.state.activeView === 'chronicle') void refreshCalendarCounts();
     }
     // Показ скрытого вида снимает отложенную пометку одним перезапросом
     // (ошибка 8e702d8c) — событий копилось сколько угодно, запрос один.
