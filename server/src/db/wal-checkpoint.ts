@@ -16,8 +16,10 @@
  *     `TRUNCATE` усекает `-wal` до нуля.
  *
  * Отсюда решение: периодический (по умолчанию раз в минуту) чекпойнт открытых
- * сетей в промежутках между запросами + чекпойнт всех открытых сетей и
- * системной БД при остановке сервера. Прежний код чекпойнтил WAL только при
+ * сетей И системной БД в промежутках между запросами (задача 28c2a2f2: на
+ * проде `-wal` системной БД держался константно ~4,2 МБ — «высокая вода»
+ * авто-чекпойнта без усечения) + чекпойнт всех открытых сетей и системной БД
+ * при остановке сервера. Прежний код чекпойнтил WAL только при
  * удалении сети (`network-service`), а выход процесса шёл через `process.exit`,
  * поэтому чекпойнт «при закрытии последнего соединения» SQLite не успевал
  * выполнить.
@@ -55,6 +57,38 @@ export interface WalCheckpointStats {
 export interface WalCheckpointSource {
   pragma(pragma: string): unknown;
 }
+
+/**
+ * База с собственной реализацией чекпойнта — системная БД
+ * ({@link SystemDb.checkpointWal}). Позволяет фоновому проходу включить её в
+ * тот же тик, не раскрывая наружу соединение `better-sqlite3`.
+ */
+export interface WalCheckpointTarget {
+  /** Чекпойнт WAL; идемпотентен, ошибки/закрытое соединение → `skipped`. */
+  checkpointWal(mode?: WalCheckpointMode): WalCheckpointStats;
+}
+
+/**
+ * Предел «высокой воды» WAL, байт (`PRAGMA journal_size_limit`).
+ *
+ * Авто-чекпойнт SQLite переносит кадры, но журнал не усекает: после всплеска
+ * записи `-wal` остаётся на «высокой воде» (на проде — ~4,2 МБ у системной БД,
+ * замер в 49e05ea0), пока его не усечёт `TRUNCATE` или не закроется последнее
+ * соединение. С лимитом SQLite при ближайшем коммите после сброса WAL
+ * срезает файл до лимита (docs: сравнение размера при коммите/сбросе WAL),
+ * поэтому размер журнала перестаёт зависеть от самого крупного всплеска за
+ * всё время жизни БД.
+ *
+ * 1 МиБ — ниже авто-чекпойнта (1000 страниц ≈ 4 МиБ): штатный журнал до
+ * сброса успевает вырасти до этой же величины, а после сброса не остаётся
+ * многомегабайтной «высокой водой». Фоновый `TRUNCATE` по-прежнему усекает
+ * журнал до нуля.
+ *
+ * Лимит задаётся соединению, а не файлу БД: применяется при открытии системной
+ * БД (`SystemDb.open`). У соединений сети профиль зафиксирован ADR ff2ee606 —
+ * их журнал обслуживает тот же фоновый проход, отдельный лимит там не вводится.
+ */
+export const WAL_JOURNAL_SIZE_LIMIT_BYTES = 1_048_576;
 
 const SKIPPED: WalCheckpointStats = { skipped: true, busy: false, log: 0, checkpointed: 0 };
 
@@ -98,7 +132,7 @@ export function walCheckpoint(
   }
 }
 
-/** Итог одного прохода по открытым сетям. */
+/** Итог одного прохода по открытым сетям и (если включена) системной БД. */
 export interface WalCheckpointRun {
   /** Сколько ФАЙЛОВ `data.db` проверено (соединения разных слоёв схлопнуты). */
   files: number;
@@ -110,6 +144,34 @@ export interface WalCheckpointRun {
   skipped: number;
   /** Длительность прохода, мс. */
   ms: number;
+  /**
+   * Итог чекпойнта системной БД; `null` — проход шёл только по сетям
+   * (`checkpointOpenNetworkDbs` и шаг остановки сервера).
+   */
+  system: WalCheckpointStats | null;
+}
+
+/** Итог чекпойнта одной БД, устойчивый к ошибке/закрытому соединению. */
+function safeCheckpoint(target: WalCheckpointTarget, mode: WalCheckpointMode): WalCheckpointStats {
+  try {
+    return target.checkpointWal(mode);
+  } catch {
+    return SKIPPED;
+  }
+}
+
+/** Лог итога чекпойнта системной БД: info — вызов выполнен, debug — пропуск. */
+function logSystemCheckpoint(
+  logger: Logger | undefined,
+  mode: WalCheckpointMode,
+  stats: WalCheckpointStats,
+): void {
+  const message = 'WAL checkpoint of system database';
+  if (!stats.skipped) {
+    logger?.info({ mode, ...stats }, message);
+  } else {
+    logger?.debug({ mode, ...stats }, message);
+  }
 }
 
 /** Открытые сети, по одному соединению на файл `data.db` (слои одного файла схлопнуты). */
@@ -148,11 +210,13 @@ export function checkpointOpenNetworkDbs(
     busy,
     skipped,
     ms: Math.round(performance.now() - started),
+    system: null,
   };
   const shouldAdvance = busy > 0 || skipped < databases.length;
   const message = 'WAL checkpoint of network databases';
-  if (shouldAdvance && databases.length > 0) opts.logger?.info({ mode, ...run }, message);
-  else opts.logger?.debug({ mode, ...run }, message);
+  const fields = { mode, files: run.files, checkpointed, busy, skipped, ms: run.ms };
+  if (shouldAdvance && databases.length > 0) opts.logger?.info(fields, message);
+  else opts.logger?.debug(fields, message);
   return run;
 }
 
@@ -174,23 +238,34 @@ export interface WalCheckpointScheduler {
 }
 
 /**
- * Запустить фоновый чекпойнт с интервалом {@link intervalMs}. Таймер `unref()`-нут
- * — он не удерживает процесс живым; ошибки не роняют сервер, а логируются.
+ * Запустить фоновый чекпойнт с интервалом {@link intervalMs}: открытые сети и
+ * системная БД (`systemDb`) — одним проходом. Таймер `unref()`-нут — он не
+ * удерживает процесс живым; ошибки не роняют сервер, а логируются.
  */
 export function startWalCheckpointScheduler(opts: {
   intervalMs: number;
   logger?: Logger;
   mode?: WalCheckpointMode;
+  /** Системная БД (`SystemDb`); не передана — проход только по сетям. */
+  systemDb?: WalCheckpointTarget;
 }): WalCheckpointScheduler {
   const run = (): WalCheckpointRun => {
     try {
-      return checkpointOpenNetworkDbs({
+      const started = performance.now();
+      const mode = opts.mode ?? 'TRUNCATE';
+      const networks = checkpointOpenNetworkDbs({
         ...(opts.logger !== undefined ? { logger: opts.logger } : {}),
         ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
       });
+      if (opts.systemDb === undefined) return networks;
+      // Системная БД может быть уже закрыта (остановка сервера, повторный
+      // проход в тестах) — чекпойнт идемпотентен и возвращает `skipped`.
+      const system = safeCheckpoint(opts.systemDb, mode);
+      logSystemCheckpoint(opts.logger, mode, system);
+      return { ...networks, ms: Math.round(performance.now() - started), system };
     } catch (err) {
       opts.logger?.warn({ err }, 'WAL checkpoint failed');
-      return { files: 0, checkpointed: 0, busy: 0, skipped: 0, ms: 0 };
+      return { files: 0, checkpointed: 0, busy: 0, skipped: 0, ms: 0, system: null };
     }
   };
   const timer = setInterval(run, opts.intervalMs);
