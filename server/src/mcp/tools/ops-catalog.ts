@@ -297,7 +297,13 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: true,
     effects:
-      'чтение, без записи. Два пути (XOR): ключевые слова `q` (объединение title/description/url/file_path) ЛИБО тело `ast` — операнды `name` (заголовок: равно/содержит/в списке/«есть слова»), `kind` (file/url), `mime_type` (равно/содержит/в списке), `owner` (владельцы: заполнено/не заполнено; в списке по типу; под-выборка по мыслям-владельцам `in`/`not_in`/`all_of`; «в иерархии»; количество), `size` (байты: сравнения/«между»/заполнено). Грамматика AST — `etn.guide { topic: "thoughts.query" }`; порядок результата — `created_at DESC`.',
+      'чтение, без записи. Два пути (XOR): ключевые слова `q` (объединение title/description/url/file_path) ЛИБО тело `ast` — операнды профиля «вложения» (наборы — зеркало реестра `ATTACHMENT_OPERATOR_SETS`; паритет держит `guard-guide-filter-operators.test.ts`):\n' +
+      '- `name` — `eq/ne/contains/not_contains/in/not_in/matches` (заголовок; `matches` — «есть слова»);\n' +
+      '- `kind` — `eq/ne/in/not_in` (file/url);\n' +
+      '- `mime_type` — `eq/ne/contains/not_contains/in/not_in` (MIME-подтип);\n' +
+      '- `owner` — `in/not_in/all_of/in_hierarchy/not_in_hierarchy/eq/ne/gt/gte/lt/lte/is_empty/not_empty` (владельцы: заполнено/не заполнено; в списке по типу; под-выборка по мыслям-владельцам `in`/`not_in`/`all_of`; «в иерархии»; количество);\n' +
+      '- `size` — `eq/ne/gt/gte/lt/lte/between/not_between/is_empty/not_empty` (байты: сравнения/«между»/заполнено).\n' +
+      'Грамматика AST — `etn.guide { topic: "thoughts.query" }`; порядок результата — `created_at DESC`.',
     errors:
       '`VALIDATION_ERROR` (в т.ч. XOR `ast` с плоскими фильтрами и операнд вне профиля «вложения»), красная диагностика (удалённая сущность).',
     paramsContract: AttachmentsSearch,

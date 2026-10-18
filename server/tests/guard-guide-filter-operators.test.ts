@@ -17,10 +17,18 @@
  * Каждый операнд профиля документирован и называет РОВНО набор реестра;
  * тема не объявляет операндов вне профиля.
  *
- * Охвачены три темы-списка: `thoughts.query` (профиль `thoughts`, включая
- * `property: <value_type>`), `activity.list` (профиль `events`) и секция
- * «Профиль «хроника»» темы мыслей (профиль `chronicle`). Справка профиля
- * «вложения» списка операторов не содержит — он покрыт исполнителем ниже.
+ * Охвачены четыре источника-списка: `thoughts.query` (профиль `thoughts`,
+ * включая `property: <value_type>`), `activity.list` (профиль `events`),
+ * секция «Профиль «хроника»» темы мыслей (профиль `chronicle`) и секция
+ * «Эффекты» действия `attachments.search` (профиль `attachments`; отдельной
+ * темы `etn.guide` у вложений нет). Списки обязаны быть буллет-формата
+ * `` - `operand` — `a/b/c` … `` — иначе парсер их не увидит.
+ *
+ * **ВНИМАНИЕ: реестр читается из собранного `@etn/shared` (`dist`).**
+ * Мутации `shared/src/filter-profiles.ts` проверяй только после
+ * `npm -w @etn/shared run build`: без сборки сторож останется зелёным на
+ * старом `dist`. Процесс тестов намеренно не собирает shared (pretest —
+ * отдельное решение).
  *
  * ## Реестр ↔ исполнитель
  *
@@ -79,7 +87,7 @@ import { parseFilterAst } from '../src/domain/filter-ast.js';
 import { diagnoseFilterAst } from '../src/domain/filter-diagnostics.js';
 import { assertFilterAstInProfile } from '../src/domain/filter-profile-validation.js';
 import { buildThoughtIdSelect } from '../src/domain/query-service.js';
-import { GUIDE_TOPICS_BY_NAME } from '../src/mcp/tools/ops-catalog.js';
+import { GUIDE_TOPICS_BY_NAME, OPS_ACTIONS_BY_NAME } from '../src/mcp/tools/ops-catalog.js';
 
 const REQUEST_ID = 'guard-filter-operators';
 
@@ -143,21 +151,19 @@ function declaredOperators(section: string): Map<string, Set<string>> {
 }
 
 /**
- * Сверка одной темы с реестром её профиля: полнота и точность по каждому
- * операнду (прямая проверка) плюс отсутствие операндов вне профиля (обратная).
+ * Сверка извлекаемого списка операндов с реестром профиля: полнота и точность
+ * по каждому операнду (прямая проверка) плюс отсутствие операндов вне профиля
+ * (обратная). `sourceLabel` — человекочитаемое имя источника для сообщения.
  */
-function assertTopicMatchesRegistry(
+function assertSectionMatchesRegistry(
   profileId: FilterProfileId,
-  topicName: string,
-  marker: string,
+  sourceLabel: string,
+  section: string,
 ): void {
-  const topic = GUIDE_TOPICS_BY_NAME.get(topicName);
-  assert.ok(topic !== undefined, `тема ${topicName} обязана быть в реестре гайда`);
-
   const profile = FILTER_PROFILES[profileId];
   const registry = profile.operand_operators!;
   const byValueType = profile.operand_operators_by_value_type;
-  const declared = declaredOperators(operandSection(topic.body_md, marker));
+  const declared = declaredOperators(section);
 
   /** Ключи-поднаборы полиморфного операнда (`property: <value_type>`). */
   const variantKeys = new Set<string>();
@@ -165,37 +171,67 @@ function assertTopicMatchesRegistry(
   for (const [operand, expected] of Object.entries(registry)) {
     if (byValueType !== undefined && operand === 'property') {
       // Полиморфный операнд: буллет-указатель + по одному набору на `value_type`.
-      assert.ok(declared.has('property'), `операнд «property» не документирован в теме ${topicName}`);
+      assert.ok(declared.has('property'), `операнд «property» не документирован в ${sourceLabel}`);
       for (const [valueType, vtOps] of Object.entries(byValueType)) {
         const key = `property: ${valueType}`;
         variantKeys.add(key);
         const actual = declared.get(key);
-        assert.ok(actual !== undefined, `«${key}» не документирован в теме ${topicName}`);
+        assert.ok(actual !== undefined, `«${key}» не документирован в ${sourceLabel}`);
         assert.deepEqual(
           [...actual].sort(),
           [...vtOps].sort(),
-          `операторы «${key}» в теме ${topicName} разошлись с реестром профиля ${profileId}`,
+          `операторы «${key}» в ${sourceLabel} разошлись с реестром профиля ${profileId}`,
         );
       }
       continue;
     }
     const actual = declared.get(operand);
-    assert.ok(actual !== undefined, `операнд «${operand}» не документирован в теме ${topicName}`);
-    assert.ok(actual.size > 0, `буллет «${operand}» в теме ${topicName} не называет операторов`);
+    assert.ok(actual !== undefined, `операнд «${operand}» не документирован в ${sourceLabel}`);
+    assert.ok(actual.size > 0, `буллет «${operand}» в ${sourceLabel} не называет операторов`);
     assert.deepEqual(
       [...actual].sort(),
       [...expected].sort(),
-      `операторы «${operand}» в теме ${topicName} разошлись с реестром профиля ${profileId}`,
+      `операторы «${operand}» в ${sourceLabel} разошлись с реестром профиля ${profileId}`,
     );
   }
 
-  // Обратная сторона: тема не объявляет операндов, которых нет в профиле.
+  // Обратная сторона: источник не объявляет операндов, которых нет в профиле.
   for (const operand of declared.keys()) {
     assert.ok(
       operand in registry || variantKeys.has(operand),
-      `тема ${topicName} документирует операнд «${operand}», которого нет в профиле ${profileId}`,
+      `${sourceLabel} документирует операнд «${operand}», которого нет в профиле ${profileId}`,
     );
   }
+}
+
+/** Сверка буллет-секции темы `etn.guide` с реестром профиля. */
+function assertTopicMatchesRegistry(
+  profileId: FilterProfileId,
+  topicName: string,
+  marker: string,
+): void {
+  const topic = GUIDE_TOPICS_BY_NAME.get(topicName);
+  assert.ok(topic !== undefined, `тема ${topicName} обязана быть в реестре гайда`);
+  assertSectionMatchesRegistry(
+    profileId,
+    `теме ${topicName}`,
+    operandSection(topic.body_md, marker),
+  );
+}
+
+/**
+ * Сверка секции «Эффекты» действия MCP (`etn.guide` отдаёт её в `effects`)
+ * с реестром профиля. Профиль «вложения» документирован только здесь — темы
+ * `etn.guide` для него нет.
+ */
+function assertEffectsMatchRegistry(profileId: FilterProfileId, action: string): void {
+  const entry = OPS_ACTIONS_BY_NAME.get(action);
+  assert.ok(entry !== undefined, `действие ${action} обязано быть в реестре гайда`);
+  assert.ok(
+    typeof entry.effects === 'string' && entry.effects !== '',
+    `у действия ${action} обязана быть секция «Эффекты» со списком операндов`,
+  );
+  assertSectionMatchesRegistry(profileId, `эффектах ${action}`, entry.effects);
 }
 
 describe('guard: списки операторов темы гайда = реестр профилей (71f547c1, 6a224eba)', () => {
@@ -209,6 +245,10 @@ describe('guard: списки операторов темы гайда = рее�
 
   it('thoughts.query: операнды профиля «хроника» документированы ровно по реестру', () => {
     assertTopicMatchesRegistry('chronicle', 'thoughts.query', '### Профиль «хроника»');
+  });
+
+  it('attachments.search: операнды профиля «вложения» документированы ровно по реестру', () => {
+    assertEffectsMatchRegistry('attachments', 'attachments.search');
   });
 });
 
