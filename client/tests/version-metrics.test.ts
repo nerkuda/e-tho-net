@@ -11,6 +11,9 @@
  *                               и без) с постоянными комментариями;
  *   * `chrono-samples.json`   — хроники отдельных работ (first-pass, повторная
  *                               делегация);
+ *   * `polish-0.13.1.json`    — 7 эталонов эвристики замечаний заказчика:
+ *                               6 карточек «полировка по визуальной проверке»
+ *                               0.13.1 + a1100e0c («со слов пользователя»);
  *   * `mcp-config-sample.json` — образец MCP-конфига ZCode (ключ обезличен).
  *
  * Тела комментариев в фикстурах обрезаны до 2500 (хроно) / 5000 (постоянные)
@@ -122,6 +125,49 @@ test('hasUserGuiFinding: источник-пользователь в посто
   const summary = summariseWorks({ works: fixture.works, commentsById: fixture.comments });
   assert.equal(summary.userGuiFindings, flagged.length);
   assert.equal(summary.byType['ошибка'], fixture.works.length);
+});
+
+test('hasUserGuiFinding: маркеры заказчика — 6 полировочных карточек + a1100e0c', () => {
+  const fixture = readJson<{
+    works: { id: string; title: string; type_id: string; active: boolean }[];
+    comments: Record<string, { kind: string; title?: string; body_md?: string }[]>;
+  }>('polish-0.13.1.json');
+  const permanent = (id: string): string => {
+    const c = (fixture.comments[id] ?? []).find((x) => x.kind === 'permanent');
+    return c ? `${c.title ?? ''}\n${c.body_md ?? ''}` : '';
+  };
+
+  // Эталонный снимок 4258e694: в одном комментарии — «замечаний заказчика»,
+  // «по визуальной проверке», «формулировки заказчика».
+  assert.equal(hasUserGuiFinding(permanent('4258e694-47b0-4d7e-8d19-61387dee396a')), true);
+
+  // Каждый новый маркер по отдельности (ретро 0.13.1, задача 92674032).
+  for (const text of [
+    'замечания заказчика по экрану',
+    'замечаний заказчика по визуальной проверке',
+    'по визуальной проверке',
+    'Заказчик ТРЕБУЕТ (третий раз)',
+    'заказчику надоело вылавливать ID',
+    'Полировочная карточка: формулировки заказчика',
+  ]) {
+    assert.equal(hasUserGuiFinding(text), true, `маркер не сработал: ${text}`);
+  }
+  // «Формулировки заказчика» — уточняющий маркер: вне полировочной карточки
+  // (ранний визуальный аудит 0.13.1, 498876c4) один не считается.
+  assert.equal(
+    hasUserGuiFinding('Чек-лист исправлений (формулировки заказчика, все обязательны)'),
+    false,
+  );
+  // Точность: простое упоминание заказчика без маркеров — не находка.
+  assert.equal(hasUserGuiFinding('Заказчик попросил добавить кнопку; карточка заведена оркестратором.'), false);
+
+  // Ровно 6 полировочных карточек + a1100e0c («со слов пользователя»).
+  const summary = summariseWorks({ works: fixture.works, commentsById: fixture.comments });
+  assert.equal(summary.userGuiFindings, 7);
+  assert.deepEqual(
+    [...summary.userGuiFindingIds].sort(),
+    fixture.works.map((w) => w.id).sort(),
+  );
 });
 
 test('summariseWorks: first-pass ТП «Общие вложения» = 11/14', () => {
