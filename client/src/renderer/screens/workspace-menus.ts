@@ -139,16 +139,27 @@ async function membersDialog(): Promise<void> {
   tableWrap.style.maxHeight = '260px';
   body.append(tableWrap);
 
+  // Список «кого добавить» — админ-ростер (доступен только администратору).
+  // Имена уже добавленных берутся из ответа `/members` (memberLabel) —
+  // не-администратор тоже видит имена, а не UUID (ошибка cb9b466f).
   let users: User[] = [];
   if (store.state.me?.is_admin === true) {
     try {
       users = await etn.admin.listUsers();
     } catch {
-      users = []; // fall back to raw ids
+      users = [];
     }
   }
+  /** Имена участников для подтверждений передачи/исключения. */
+  const memberNames = new Map<string, string>();
 
-  const userById = new Map(users.map((u) => [u.id, u]));
+  const memberLabel = (member: NetworkMember): string => {
+    const name = member.display_name ?? member.username;
+    if (name === undefined || name === '') return 'неизвестный участник';
+    return member.username === undefined || member.username === ''
+      ? name
+      : `${name} (${member.username})`;
+  };
 
   async function refresh(): Promise<void> {
     await refreshLockCounts();
@@ -167,12 +178,11 @@ async function membersDialog(): Promise<void> {
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
+    memberNames.clear();
     for (const member of members) {
-      const user = userById.get(member.user_id);
       const row = el('tr');
-      const name = user
-        ? `${user.display_name ?? user.username} (${user.username})`
-        : member.user_id;
+      const name = memberLabel(member);
+      memberNames.set(member.user_id, name);
       row.append(
         el('td', undefined, name),
         el('td', undefined, member.role === 'owner' ? 'владелец' : 'участник'),
@@ -238,8 +248,7 @@ async function membersDialog(): Promise<void> {
   }
 
   async function transfer(userId: string): Promise<void> {
-    const user = userById.get(userId);
-    const name = user?.display_name ?? user?.username ?? userId;
+    const name = memberNames.get(userId) ?? 'неизвестный участник';
     if (
       !(await confirmDialog('Передача владения', `Передать владение сетью пользователю «${name}»?`))
     ) {
@@ -254,8 +263,7 @@ async function membersDialog(): Promise<void> {
   }
 
   async function removeMemberRow(userId: string): Promise<void> {
-    const user = userById.get(userId);
-    const name = user?.display_name ?? user?.username ?? userId;
+    const name = memberNames.get(userId) ?? 'неизвестный участник';
     if (!(await confirmDialog('Исключить участника', `Исключить «${name}» из сети?`))) return;
     try {
       await etn.networks.removeMember(networkId, userId);
