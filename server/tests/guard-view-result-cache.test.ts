@@ -32,6 +32,21 @@ const CACHE_USERS = new Set([
   'domain/heavy-write.ts',
 ]);
 
+/**
+ * Точки входа записи фасада `heavy-write.ts`, переведённые на writer-задачи.
+ * Каждая обязана идти через единый helper инвалидации — иначе бамп на одном из
+ * путей можно снять незаметно (замечание независимой проверки 3f2b0958).
+ */
+const WRITE_PATHS = [
+  'runThoughtsWrite',
+  'runThoughtCreate',
+  'runThoughtsBatch',
+  'runThoughtsCopy',
+] as const;
+
+/** Имя helper'а, в котором живёт единственный бамп поколения кэша. */
+const INVALIDATION_HELPER = 'runWriteTaskWithInvalidation';
+
 function readSource(relativePath: string): string {
   return fs.readFileSync(path.join(SERVER_SRC_ROOT, relativePath), 'utf8');
 }
@@ -72,13 +87,41 @@ describe('guard: кэш результатов отборов — единая �
     assert.ok(before < transaction && transaction < bump, 'порядок: снимок → транзакция → инвалидация');
   });
 
-  it('write-пул инвалидирует кэш в главном потоке', () => {
+  it('write-пул инвалидирует кэш в главном потоке через единый helper', () => {
     const source = readSource('domain/heavy-write.ts');
-    assert.match(
-      source,
-      /bumpNetworkDataVersion\(/,
-      'после ответа writer-воркера главный поток обязан отметить изменение сети',
+
+    // 1. Бамп поколения — ровно в одном месте — внутри helper'а.
+    const bumps = [...source.matchAll(/bumpNetworkDataVersion\s*\(/g)];
+    assert.equal(bumps.length, 1, 'инвалидация обязана жить в единственном месте');
+    const helperStart = source.indexOf(`async function ${INVALIDATION_HELPER}(`);
+    assert.ok(helperStart >= 0, `helper ${INVALIDATION_HELPER} обязан существовать`);
+    assert.ok(
+      (bumps[0]?.index ?? -1) > helperStart,
+      'единственный бамп обязан находиться внутри helper\'а',
     );
+
+    // 2. Прямой вызов runWriteTask допустим только внутри helper'а: все
+    //    writer-задачи фасада идут через обёртку с инвалидацией.
+    const directCalls = [...source.matchAll(/\brunWriteTask\s*\(/g)];
+    assert.equal(directCalls.length, 1, 'все writer-задачи обязаны идти через helper');
+    assert.ok(
+      (directCalls[0]?.index ?? -1) > helperStart,
+      'прямой runWriteTask вне helper\'а обошёл бы инвалидацию',
+    );
+
+    // 3. Каждый путь записи вызывает helper (мутация «обойти helper на одном
+    //    пути» обязана краснить этот тест).
+    for (const path of WRITE_PATHS) {
+      const start = source.indexOf(`export async function ${path}(`);
+      assert.ok(start >= 0, `путь записи ${path} не найден`);
+      const next = source.indexOf('\nexport ', start + 1);
+      const body = source.slice(start, next === -1 ? source.length : next);
+      assert.match(
+        body,
+        new RegExp(`${INVALIDATION_HELPER}\\(`),
+        `${path} обязан идти через ${INVALIDATION_HELPER}: иначе коммит воркера не инвалидирует кэш`,
+      );
+    }
   });
 
   it('домен отборов читает и пишет кэш', () => {

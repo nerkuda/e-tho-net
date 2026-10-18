@@ -382,6 +382,48 @@ describe(
       }
     });
 
+    it('расхождение input.userId и tokenContext.userId — fail-closed (кэш не используется)', async () => {
+      const { ndb, focusId } = makeFixture();
+      try {
+        const definition = { keywords: 'item' };
+        // `$user` движка резолвится из tokenContext.userId, а ключ иначе брал бы
+        // input.userId. Транспорты держат их равными, но инварианта нет:
+        // расхождение обязано отключать кэш, а не смешивать контексты.
+        const options: RunViewQueryOptions = {
+          tokenContext: { ...TOKEN_CONTEXT, userId: OTHER_USER },
+        };
+        await runView(ndb, focusId, definition, options);
+        await runView(ndb, focusId, definition, options);
+
+        const stats = getViewResultCacheStats();
+        assert.equal(stats.stores, 0, 'при расхождении результата в кэш не кладём');
+        assert.equal(stats.hits, 0, 'и не читаем из кэша');
+        assert.equal(stats.size, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('совпадение input.userId и tokenContext.userId — кэш работает', async () => {
+      const { ndb, focusId } = makeFixture();
+      try {
+        const definition = { keywords: 'item' };
+        // Пользователь передан так же, как транспорты: оба источника равны.
+        const options: RunViewQueryOptions = {
+          tokenContext: { ...TOKEN_CONTEXT, userId: USER },
+        };
+        const first = await runView(ndb, focusId, definition, options);
+        const second = await runView(ndb, focusId, definition, options);
+
+        assert.equal(second, first, 'равные контексты обязаны делить запись');
+        const stats = getViewResultCacheStats();
+        assert.equal(stats.hits, 1);
+        assert.equal(stats.stores, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('запись через writer-воркер инвалидирует кэш главного потока', async () => {
       const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-view-cache-'));
       const networkId = 'net-worker';

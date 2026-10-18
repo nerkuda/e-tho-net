@@ -131,6 +131,13 @@ export interface ViewResultCacheKeyInput {
   networkId: string;
   layerId: string;
   instanceId: string;
+  /**
+   * Пользователь контекста. Вызывающий обязан передать ТОТ ЖЕ id, из которого
+   * движок AST резолвит `$user` (`tokenContext.userId`), а при расхождении с
+   * `input.userId` — не кэшировать вовсе (fail-closed). Инвариант держится в
+   * `executeViewDefinitionForThought`: ключ и результат не должны описывать
+   * разных пользователей (замечание независимой проверки 3f2b0958).
+   */
   userId: string;
   /** Полный id фокусной мысли (после резолва короткого префикса). */
   thoughtId: string;

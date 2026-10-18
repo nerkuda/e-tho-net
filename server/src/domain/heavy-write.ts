@@ -57,7 +57,11 @@ import type {
   WriteThoughtsPayload,
 } from '../contracts.js';
 import type { NetworkDb } from '../db/network-db.js';
-import { runWriteTask, writeContextFor } from '../db/write-pool.js';
+import {
+  runWriteTask,
+  writeContextFor,
+  type RunWriteTaskOptions,
+} from '../db/write-pool.js';
 import { copyAttachmentFiles } from './attachment-service.js';
 import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import type { ThoughtWriteResult } from './thought-write-service.js';
@@ -96,6 +100,31 @@ function taskContext(ndb: NetworkDb): WriteTaskContext {
   );
 }
 
+/**
+ * Исполнить задачу записи и НЕОТДЕЛИМО инвалидировать кэш результатов отборов.
+ *
+ * Единственная точка, через которую проходят все writer-задачи этого фасада
+ * (задача 3f2b0958). Почему инвалидация здесь, а не в вызывающих: в воркере
+ * `runWriteCore` двигает счётчик СВОЕГО модуля, а главный поток его не видит;
+ * забытый бамп на одном из путей записи давал бы устаревший результат отбора
+ * после реального коммита. Поэтому бамп — свойство ОТПРАВКИ задачи, а не
+ * дисциплина четырёх фасадов: прямых `runWriteTask` в этом файле больше нет,
+ * и сторож `guard-view-result-cache.test.ts` это проверяет.
+ *
+ * На синхронном пути `runWriteTask` исполнит `sync`, где `runWriteCore` уже
+ * двигает счётчик; повторный инкремент безвреден (поколение — монотонный
+ * счётчик, важно лишь его изменение).
+ */
+async function runWriteTaskWithInvalidation(
+  ndb: NetworkDb,
+  task: WriteTask,
+  options: RunWriteTaskOptions,
+): Promise<unknown> {
+  const result = await runWriteTask(task, options);
+  bumpNetworkDataVersion(ndb.networkId);
+  return result;
+}
+
 /** Опции фасада батч-записи. */
 export interface ThoughtsWriteOptions {
   /**
@@ -130,19 +159,13 @@ export async function runThoughtsWrite(
   };
   const poolable = options.poolable ?? !thoughtsBatchNeedsMainThread(input);
   const task: WriteTask = { context: taskContext(ndb), op: 'write.thoughts', payload };
-  const outcome = (await runWriteTask(task, {
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
     poolable,
     // Деградация: пул выключен, сеть в памяти или задача непереводима — та же
     // запись исполняется синхронно, аудита в исходе нет (его пишет фасад).
     sync: () =>
       runWriteCore(ndb, ctx, () => composeThoughtsWrite(ndb, payload, options.crossNetworkAccess)),
   })) as ThoughtsWriteOutcome;
-
-  // Запись исполнена воркером (или синхронно) — данные сети сдвинулись.
-  // В воркере `runWriteCore` двигает счётчик СВОЕГО потока, поэтому главный
-  // поток обязан отметить изменение сам (задача 3f2b0958). На синхронном пути
-  // `runWriteCore` уже отметил — повторный инкремент безвреден.
-  bumpNetworkDataVersion(ndb.networkId);
 
   for (const ev of outcome.events ?? []) {
     // `ev` — объединение пар (type, data); в цикле корреляция пары теряется.
@@ -179,13 +202,10 @@ export async function runThoughtCreate(
     layerId: fx.layerId,
   };
   const task: WriteTask = { context: taskContext(ndb), op: 'write.thought', payload };
-  const outcome = (await runWriteTask(task, {
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
     poolable: options.poolable ?? true,
     sync: () => runWriteCore(ndb, ctx, () => composeThoughtCreate(ndb, payload)),
   })) as ThoughtCreateOutcome;
-
-  // См. `runThoughtsWrite`: коммит мог произойти в writer-воркере.
-  bumpNetworkDataVersion(ndb.networkId);
 
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
@@ -236,16 +256,13 @@ export async function runThoughtsBatch(
     layerId: fx.layerId,
   };
   const task: WriteTask = { context: taskContext(ndb), op: 'write.thought.batch', payload };
-  const outcome = (await runWriteTask(task, {
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
     poolable: options.poolable ?? true,
     sync: () => {
       const out = runWriteCore(ndb, ctx, () => composeThoughtBatch(ndb, payload));
       return { result: out.result, events: out.events ?? [] } satisfies ThoughtBatchOutcome;
     },
   })) as ThoughtBatchOutcome;
-
-  // См. `runThoughtsWrite`: коммит мог произойти в writer-воркере.
-  bumpNetworkDataVersion(ndb.networkId);
 
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
@@ -294,13 +311,10 @@ export async function runThoughtsCopy(
     sourceAttachmentsDir: options.sourceAttachmentsDir ?? null,
   };
   const task: WriteTask = { context: taskContext(ndb), op: 'write.thought.copy', payload };
-  const outcome = (await runWriteTask(task, {
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
     poolable: options.poolable ?? true,
     sync: () => composeThoughtCopyOutcome(ndb, payload),
   })) as ThoughtCopyOutcome;
-
-  // См. `runThoughtsWrite`: коммит мог произойти в writer-воркере.
-  bumpNetworkDataVersion(ndb.networkId);
 
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);

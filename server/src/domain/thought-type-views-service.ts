@@ -1004,14 +1004,21 @@ export async function executeViewDefinitionForThought(
   //
   // `collectStats` — диагностический режим журналирования: длительности в
   // ответе не должны браться из чужого прогона, поэтому кэш обходим.
+  //
+  // Пользователь для ключа — из ТОГО ЖЕ источника, что у движка AST: `$user`
+  // резолвится из `tokenContext.userId`, а не из `input.userId`. Транспорты
+  // держат их равными, но это не инвариант: при расхождении ключ и результат
+  // описывали бы разных пользователей, поэтому кэш fail-closed — не кэшируем.
+  const tokenUserId = options?.tokenContext?.userId;
+  const userMismatch = tokenUserId !== undefined && tokenUserId !== userId;
   const cacheKey =
-    options?.collectStats === true
+    options?.collectStats === true || userMismatch
       ? null
       : buildViewResultCacheKey({
           networkId: ndb.networkId,
           layerId: ndb.layerId,
           instanceId: ndb.instanceId,
-          userId,
+          userId: tokenUserId ?? userId,
           // Полный id после резолва короткого префикса (`getThought`) — чтобы
           // `abc12345` и полный UUID одного фокуса не раздваивали ключ.
           thoughtId: thought.id,
