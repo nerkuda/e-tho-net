@@ -28,6 +28,15 @@ export interface EntityDeleteDialogOptions {
   lines?: readonly string[];
   /** Физическое удаление недоступно — «Удалить совсем» выключено. */
   blocked: boolean;
+  /** Ссылка «Открыть использование…» (панель использования, f7623077). */
+  usageLink?: () => void;
+  /**
+   * Перечитать блокировки после мутации панели использования: возвращает
+   * новые строки и флаг «удалить совсем нельзя». Окно обновляет тело и
+   * доступность кнопки, не пересоздаваясь (спека f7623077: панель обновляет
+   * открытые диалоги удаления).
+   */
+  refresh?: () => Promise<DeleteDialogRefreshState | null>;
   /** Сущность уже в корзине — кнопка корзины становится «Вернуть». */
   alreadyMarked: boolean;
   /** Переопределить подпись кнопки корзины (по умолчанию toTrash/restore). */
@@ -42,18 +51,48 @@ export interface EntityDeleteDialogOptions {
   onClose?: () => void;
 }
 
+/** Новое состояние тела открытого диалога удаления после перечитывания. */
+export interface DeleteDialogRefreshState {
+  lines: readonly string[];
+  blocked: boolean;
+}
+
+/** Живые диалоги удаления — панель использования обновляет их после мутаций. */
+const openDeleteDialogs = new Set<() => void>();
+
+/**
+ * Перечитывает блокировки всех открытых диалогов удаления (панель
+ * использования зовёт после очистки свойств/удаления слоя, f7623077).
+ */
+export function refreshOpenDeleteDialogs(): void {
+  for (const refresh of [...openDeleteDialogs]) refresh();
+}
+
 /**
  * Открыть диалог удаления сущности. Кнопка «Удалить совсем» получает фокус и
  * выключается при `blocked`; вторая кнопка — «В корзину»/«Вернуть из корзины».
+ *
+ * При `blocked` под причинами показывается ссылка «Открыть использование…»
+ * (переход в панель использования, спека f7623077); окно при переходе
+ * закрывается, чтобы модальная подложка не перекрывала панель.
  */
 export function openEntityDeleteDialog(opts: EntityDeleteDialogOptions): void {
   const body = div('form-stack');
   if (opts.caption !== undefined && opts.caption.trim() !== '') {
     body.append(el('p', 'dialog-text link-caption', opts.caption));
   }
-  for (const line of opts.lines ?? []) {
-    body.append(el('p', 'dialog-text', line));
-  }
+  const linesBox = div('form-stack');
+  const fillLines = (lines: readonly string[]): void => {
+    linesBox.replaceChildren(
+      ...lines.map((line) => el('p', 'dialog-text', line)),
+    );
+  };
+  fillLines(opts.lines ?? []);
+  body.append(linesBox);
+  const usageLink = el('button', 'link-btn', 'Открыть использование…');
+  usageLink.type = 'button';
+  usageLink.classList.toggle('hidden', !opts.blocked);
+  if (opts.usageLink !== undefined) body.append(usageLink);
 
   let deleteBtn: HTMLButtonElement | null = null;
   const buttons: DialogButton[] = [
@@ -75,15 +114,37 @@ export function openEntityDeleteDialog(opts: EntityDeleteDialogOptions): void {
     { label: t('actions.cancel') },
   ];
 
-  showDialog({
+  // Перечитывание блокировок по запросу панели использования (f7623077).
+  const refresh = (): void => {
+    if (opts.refresh === undefined) return;
+    void opts.refresh().then((state) => {
+      if (state === null) return;
+      fillLines(state.lines);
+      if (deleteBtn !== null) deleteBtn.disabled = state.blocked;
+      usageLink.classList.toggle('hidden', !state.blocked);
+    });
+  };
+
+  const close = showDialog({
     title: opts.title,
     size: 's',
     body,
     buttons,
     onMount: () => {
       deleteBtn?.focus();
+      if (opts.refresh !== undefined) openDeleteDialogs.add(refresh);
       opts.onMount?.();
     },
-    ...(opts.onClose !== undefined ? { onClose: opts.onClose } : {}),
+    onClose: () => {
+      openDeleteDialogs.delete(refresh);
+      opts.onClose?.();
+    },
+  });
+
+  // Переход в панель использования: сначала закрываем модальное окно, затем
+  // открываем панель — иначе подложка диалога перекрыла бы её.
+  usageLink.addEventListener('click', () => {
+    close();
+    opts.usageLink?.();
   });
 }

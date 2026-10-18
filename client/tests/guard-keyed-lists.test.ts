@@ -113,6 +113,12 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
   ['screens/history-bar.ts', 'панель истории — слоты по смене контекста'],
   ['screens/pinned-bar.ts', 'закреплённые мысли — слоты панели'],
   ['screens/layers.ts', 'панель диффа слоёв, пересборка по запросу'],
+  [
+    'screens/usage-panel.ts',
+    'панель использования: тело пересобирается только при смене сущности/после ' +
+      'явной мутации (load), а строки групп — по одному построению на раскрытие ' +
+      'секции; инкрементальная сверка неприменима к смене набора групп целиком',
+  ],
   ['screens/workspace-menus.ts', 'выпадающие меню — слоты'],
   ['screens/chronicle/filter-panel.ts', 'панель отбора — пересборка формы'],
   ['screens/chronicle/chronicle.ts', 'монтирование вида и точечные слоты; лента — на reconcileKeyed'],

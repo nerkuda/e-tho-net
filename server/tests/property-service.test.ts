@@ -396,6 +396,51 @@ describe(
       }
     });
 
+    it('DELETE значения свойства-связи снимает рёбра (панель использования f7623077)', () => {
+      // «Очистить свойство» в панели использования — DELETE …/properties/{key}.
+      // У свойства-связи значения живут рёбрами, а не строками property_values,
+      // поэтому DELETE обязан помечать рёбра корзиной; иначе команда была
+      // no-op и блокировка удаления не снималась.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'затрагивает', name_reverse: 'затронут' },
+          USER,
+        );
+        const grabli = createThoughtType(ndb, { name: 'ГраблиDel' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентDel' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          grabli.id,
+          {
+            key: 'затрагивает',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out', blocks_target_deletion: true },
+          },
+          USER,
+        );
+        const target = seedTypedThought(ndb, comp.id);
+        const owner = seedTypedThought(ndb, grabli.id);
+        setPropertyValue(ndb, 'thought', owner, 'затрагивает', target, USER);
+        assert.equal(findThoughtUsage(ndb, target).total, 1);
+        assert.equal(countThoughtRefUsages(ndb, target), 1);
+
+        const removed = deletePropertyValue(ndb, 'thought', owner, 'затрагивает', USER);
+        assert.equal(removed.deleted, true);
+        assert.equal(removed.link_ids?.length, 1, 'ребро названо для realtime-события');
+        assert.equal(findThoughtUsage(ndb, target).total, 0);
+        assert.equal(countThoughtRefUsages(ndb, target), 0);
+
+        // Повторный DELETE — идемпотентный no-op.
+        const again = deletePropertyValue(ndb, 'thought', owner, 'затрагивает', USER);
+        assert.equal(again.deleted, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('учёт блокирующих ссылок берёт сторону привязки: владелец-цель (ошибка 083dcde5)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

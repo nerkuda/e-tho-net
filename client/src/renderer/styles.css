@@ -23,6 +23,7 @@
 @import './styles/editor.css';
 @import './styles/screens/search.css';
 @import './styles/screens/selection.css';
+@import './styles/screens/usage-panel.css';
 @import './styles/screens/structures.css';
 @import './styles/condition-combo.css';
 @import './styles/filter-panel.css';

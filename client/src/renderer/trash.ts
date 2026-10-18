@@ -255,6 +255,30 @@ export async function openThoughtDeleteDialog(
     lines,
     blocked: check.blocked,
     alreadyMarked,
+    // Панель использования (спека f7623077, ошибка aca92904): ссылка при
+    // блокировке; ленивый импорт — панель тянет редактор, а редактор уже
+    // зависит от этого модуля (цикл импортов на старте не нужен).
+    usageLink: () => {
+      void import('./screens/usage-panel.js').then((m) =>
+        m.openUsagePanel({ kind: 'thought', id: target.id, title: target.title }),
+      );
+    },
+    refresh: async () => {
+      const next = (await etn.thoughts.deletionCheck(networkId, [target.id]))[target.id];
+      if (next === undefined) return null;
+      const nextLines: string[] = [];
+      if (next.blocked) {
+        for (const reason of blockingReasons('мысль', next.blocking)) {
+          nextLines.push(`Нельзя удалить совсем — ${reason}.`);
+        }
+      }
+      if (next.orphaned_children > 0) {
+        nextLines.push(
+          `${next.orphaned_children} потомк${next.orphaned_children === 1 ? '' : 'ов'} останется без родителей.`,
+        );
+      }
+      return { lines: nextLines, blocked: next.blocked };
+    },
     onPurge: async (close) => {
       try {
         await etn.thoughts.remove(
@@ -351,6 +375,25 @@ export async function openLinkDeleteDialog(
     lines,
     blocked,
     alreadyMarked,
+    // Панель использования для связи: группы свойств нет, показываются
+    // удерживающие слои (спека f7623077).
+    usageLink: () => {
+      void import('./screens/usage-panel.js').then((m) =>
+        m.openUsagePanel({ kind: 'link', id: linkId, title: caption }),
+      );
+    },
+    refresh: async () => {
+      const result = (await etn.links.deletionCheck(networkId, [linkId]))[linkId];
+      if (result === undefined) return null;
+      return {
+        lines: result.blocked
+          ? blockingReasons('связь', result.blocking).map(
+              (reason) => `Нельзя удалить совсем — ${reason}.`,
+            )
+          : [],
+        blocked: result.blocked,
+      };
+    },
     onPurge: async (close) => {
       try {
         const purged = await purgeLinkCompletely(networkId, linkId, link.marked_for_deletion);

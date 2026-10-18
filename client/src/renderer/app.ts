@@ -205,6 +205,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     editorW: editorSize.w,
     editorH: editorSize.h,
     selectionW: editorSize.s,
+    usageW: editorSize.u,
     eventAreaW,
     zoneTopSplit: canvasLayout.topSplit,
     zoneChildrenShare: canvasLayout.childrenShare,

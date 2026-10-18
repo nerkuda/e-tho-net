@@ -523,8 +523,16 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
   });
 }
 
-/** Delete-layer dialog (§2.4): descendant count + titles, «основа не пострадает». */
-function openDeleteLayerDialog(networkId: string, layerId: string): void {
+/**
+ * Delete-layer dialog (§2.4): descendant count + titles, «основа не пострадает».
+ * Экспортируется для панели использования (f7623077): «Удалить слой» —
+ * тот же диалог каскада, что в меню слоёв; `onDeleted` — перечитать панель.
+ */
+export function openDeleteLayerDialog(
+  networkId: string,
+  layerId: string,
+  onDeleted?: () => void,
+): void {
   const layer = store.state.layers.find((l) => l.id === layerId);
   if (layer === undefined) return;
 
@@ -572,6 +580,7 @@ function openDeleteLayerDialog(networkId: string, layerId: string): void {
               store.update({ tabs });
             }
             await syncLayersForTab(networkId, layer.parent_id);
+            onDeleted?.();
           } catch (err) {
             errorDialog('Не удалось удалить слой', err);
           }

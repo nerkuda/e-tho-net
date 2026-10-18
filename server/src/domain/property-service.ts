@@ -72,6 +72,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
+import { listThoughtHoldingLayers } from './holding-layers.js';
 import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import {
@@ -3951,7 +3952,10 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
   }
 
   const total = groups.reduce((acc, g) => acc + g.thoughts.length, 0);
-  return { total, groups, holding_layers: [] };
+  // Удерживающие слои (спека f7623077: «Источник данных — GET …/usage
+  // (с полем holding_layers)»). Функция слоёв уже есть и используется
+  // deletion-check — панель использования получает их тем же вызовом.
+  return { total, groups, holding_layers: listThoughtHoldingLayers(ndb, thoughtId) };
 }
 
 /**
@@ -4983,7 +4987,7 @@ export function deletePropertyValue(
   ownerId: string,
   key: string,
   actorUserId: string,
-): { property_id: string; deleted: boolean } {
+): { property_id: string; deleted: boolean; link_ids?: string[] } {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
       field: 'owner_type',
@@ -4997,6 +5001,35 @@ export function deletePropertyValue(
         owner_id: ownerId,
         key,
       });
+    }
+    // Свойство-связь: значения — это рёбра (ADR «свойство-связь — проекция
+    // ребра»), строки `property_values` у него нет. DELETE обязан снимать
+    // рёбра так же, как запись пустого набора (панель использования,
+    // f7623077: «Очистить свойство» = `DELETE …/properties/{key}`).
+    if (prop.value_type === 'link' && !isStructuralLinkProperty(prop.config ?? {})) {
+      if (ownerType !== 'thought') {
+        throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+          owner_type: ownerType,
+          key,
+        });
+      }
+      const cfg = prop.config ?? {};
+      const direction =
+        prop.direction ?? linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
+      const existing = listLiveLinkTargets(
+        ndb,
+        ownerId,
+        linkPropertyLinkTypeId(cfg),
+        direction,
+      );
+      if (existing.size === 0) {
+        // Ничего не снято — идемпотентный no-op (ошибка cefb4db0).
+        return { property_id: prop.id, deleted: false };
+      }
+      const linkIds = [...existing.values()].map((link) => link.id);
+      setLinkPropertyTargets(ndb, ownerId, prop, [], actorUserId, prop.direction);
+      touchOwner(ndb, ownerType, ownerId, actorUserId);
+      return { property_id: prop.id, deleted: true, link_ids: linkIds };
     }
     // S4: в слое значение скрывается надгробием (13-layers.md §5.2), в основе —
     // прежний физический DELETE.
