@@ -1566,6 +1566,23 @@ function buildPartialCandidateFilter(
 }
 
 /**
+ * Размер порции `IN (…)` для батч-чтения синонимов: ниже лимита bind-
+ * параметров SQLite (999 в старых сборках) с запасом, а число запросов растёт
+ * как O(кандидатов / порция), не O(кандидатов).
+ */
+const DUPLICATE_SYNONYM_CHUNK = 900;
+
+/** Разбить список id на порции для `IN (…)`. */
+function chunkDuplicateIds(ids: readonly string[]): string[][] {
+  if (ids.length <= DUPLICATE_SYNONYM_CHUNK) return [ids as string[]];
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += DUPLICATE_SYNONYM_CHUNK) {
+    out.push(ids.slice(i, i + DUPLICATE_SYNONYM_CHUNK));
+  }
+  return out;
+}
+
+/**
  * Find existing thoughts that look like duplicates of the proposed
  * `title`/`synonyms` (docs/08-ui-spec.md add-thought dialog; MCP
  * `find_duplicates`).
@@ -1633,13 +1650,15 @@ export function findDuplicates(
   }): DuplicateHit => {
     let hit = byId.get(row.id);
     if (!hit) {
-      const synRows = ndb
-        .prepare('SELECT synonym FROM thought_synonyms_v WHERE thought_id = ? ORDER BY synonym')
-        .all(row.id) as Array<{ synonym: string }>;
       hit = {
         id: row.id,
         title: row.title,
-        synonyms: synRows.map((s) => s.synonym),
+        // Синонимы грузятся одним батчем после обхода тиров (задача
+        // 8abc413f): поштучный SELECT в ensure() давал N+1 и доминировал в
+        // стоимости полного вызова на широком запросе. До финального
+        // заполнения hit.synonyms никто не читает — см. блок перед
+        // parent_title.
+        synonyms: [],
         matched_on: 'partial',
         type_id: row.type_id,
         icon: row.icon,
@@ -1903,6 +1922,31 @@ export function findDuplicates(
           hit.matched_synonym = r.synonym;
         }
       }
+    }
+  }
+
+  // Synonym lists of every candidate in O(size / chunk) queries (задача
+  // 8abc413f). Порядок внутри мысли — `ORDER BY synonym`, как в прежнем
+  // поштучном запросе; порции не пересекаются, поэтому склейка по id даёт
+  // прежний результат один-в-один.
+  if (byId.size > 0) {
+    const synonymsById = new Map<string, string[]>();
+    for (const part of chunkDuplicateIds([...byId.keys()])) {
+      const rows = ndb
+        .prepare(
+          `SELECT thought_id, synonym FROM thought_synonyms_v
+           WHERE thought_id IN (${part.map(() => '?').join(',')})
+           ORDER BY thought_id, synonym`,
+        )
+        .all(...part) as Array<{ thought_id: string; synonym: string }>;
+      for (const r of rows) {
+        const list = synonymsById.get(r.thought_id);
+        if (list) list.push(r.synonym);
+        else synonymsById.set(r.thought_id, [r.synonym]);
+      }
+    }
+    for (const [id, hit] of byId) {
+      hit.synonyms = synonymsById.get(id) ?? [];
     }
   }
 
