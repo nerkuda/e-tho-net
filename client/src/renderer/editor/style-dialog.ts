@@ -20,6 +20,7 @@ import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
 import { div, el } from '../lib/dom.js';
+import { blockEditingSurface } from '../lib/lock-surface.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { fieldInput } from '../lib/ui/field.js';
 import { TOGGLE_GROUP_CLASS, toggleButton } from '../lib/ui/toggle.js';
@@ -64,6 +65,12 @@ function colorCaption(caption: string, input: HTMLElement): HTMLElement {
   return wrap;
 }
 
+/** Дескриптор открытого диалога оформления: позволяет перевести его в чтение. */
+export interface StyleDialogHandle {
+  /** Чужой захват: поля выключаются, значения остаются видимыми. */
+  setBlocked(message: string): void;
+}
+
 /** Opens the thought settings dialog (colours + font style + reset). */
 export function showThoughtStyleDialog(opts: {
   resolved: ResolvedThoughtStyle;
@@ -76,7 +83,7 @@ export function showThoughtStyleDialog(opts: {
    * auto-acquired object lock.
    */
   onClose?: () => void;
-}): void {
+}): StyleDialogHandle {
   const { resolved, onApply, mode = 'thought', onClose } = opts;
   const body = div('form-stack');
 
@@ -123,6 +130,7 @@ export function showThoughtStyleDialog(opts: {
   fontToggle('З', 'Зачёркнутый', resolved.strike, (v) => onApply({ font_strike: v }));
   body.append(toggles);
 
+  let resetBtn: HTMLButtonElement | null = null;
   showDialog({
     title: mode === 'type' ? 'Настройки типа мысли' : 'Настройки мысли',
     size: 'm',
@@ -132,6 +140,9 @@ export function showThoughtStyleDialog(opts: {
         label: t('actions.reset'),
         danger: true,
         keepOpen: true,
+        ref: (btn) => {
+          resetBtn = btn;
+        },
         onClick: (close) => {
           // Both modes reset to «inherit» since L21: a thought inherits its
           // type chain, a type inherits its parent (the root falls back to
@@ -154,6 +165,11 @@ export function showThoughtStyleDialog(opts: {
     ],
     onClose,
   });
+  return {
+    setBlocked: (message: string) => {
+      blockEditingSurface({ root: body, message, commitButtons: [resetBtn] });
+    },
+  };
 }
 
 /** Opens the link settings dialog (line colour/style/width + reset). */
@@ -164,7 +180,7 @@ export function showLinkStyleDialog(opts: {
   mode?: 'link' | 'type';
   /** Fires on any close (see `showThoughtStyleDialog` for details). */
   onClose?: () => void;
-}): void {
+}): StyleDialogHandle {
   const { resolved, onApply, mode = 'link', onClose } = opts;
   const body = div('form-stack');
 
@@ -201,6 +217,7 @@ export function showLinkStyleDialog(opts: {
   });
   body.append(colorCaption('Толщина', widthInput));
 
+  let resetBtn: HTMLButtonElement | null = null;
   showDialog({
     title: mode === 'type' ? 'Настройки типа связи' : 'Настройки связи',
     size: 'm',
@@ -210,6 +227,9 @@ export function showLinkStyleDialog(opts: {
         label: t('actions.reset'),
         danger: true,
         keepOpen: true,
+        ref: (btn) => {
+          resetBtn = btn;
+        },
         onClick: (close) => {
           // Since L21 both modes reset to «inherit»: a link inherits its type
           // chain, a type inherits its parent (the root falls back to the
@@ -221,4 +241,9 @@ export function showLinkStyleDialog(opts: {
     ],
     onClose,
   });
+  return {
+    setBlocked: (message: string) => {
+      blockEditingSurface({ root: body, message, commitButtons: [resetBtn] });
+    },
+  };
 }

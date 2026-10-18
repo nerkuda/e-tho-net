@@ -140,6 +140,9 @@ import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldTextarea } from '../lib/ui/field.js';
 import {
   acquireOrShowBlocked,
+  blockedByLockMessage,
+  foreignLockBlocksEdit,
+  foreignLockHeld,
   lockHandleFromOutcome,
   releaseHeld,
   type LockHandle,
@@ -2300,6 +2303,26 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   });
   box.append(synonymsInput);
 
+  /**
+   * Чужой захват (ошибка 4f18d9f5): заголовок и синонимы — только чтение,
+   * как и запись, которую всё равно отклонит сервер. Значения остаются
+   * видимыми — чтение не блокируется (ADR 705fb6d3). Состояние синхронизируется
+   * с кэшем захватов при сборке, смене мысли и попытке входа в поле; при
+   * холодном кэше запись отсекает обычный путь ошибки.
+   */
+  const syncThoughtHeaderLock = (): void => {
+    const blocked = foreignLockHeld('thought', thought.id);
+    titleArea.readOnly = blocked;
+    synonymsInput.readOnly = blocked;
+  };
+  syncThoughtHeaderLock();
+  const guardHeaderEdit = (field: HTMLInputElement | HTMLTextAreaElement): void => {
+    syncThoughtHeaderLock();
+    if (foreignLockBlocksEdit('thought', thought.id)) field.blur();
+  };
+  titleArea.addEventListener('focus', () => guardHeaderEdit(titleArea));
+  synonymsInput.addEventListener('focus', () => guardHeaderEdit(synonymsInput));
+
   // --- Строка 3: тип ▾ · «актуально» · подменю «Действия» -----------------
   const row = div('editor-header-row');
 
@@ -2374,6 +2397,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     typeCombo.setValue(next.type_id);
     activeCheck.checked = next.active;
     activeCheck.disabled = next.is_protected && next.is_root;
+    syncThoughtHeaderLock();
   };
   headerRetarget = (ctx): void => {
     if (ctx.ownerType === 'thought' && ctx.thought !== null) applyThought(ctx.thought);
@@ -2448,11 +2472,8 @@ function openThoughtSettings(thought: Thought): void {
   // outlives the dialog itself. The helper handles LOCKED with a toast;
   // `onClose` releases on any close path (Save / Reset / Cancel / × / Esc).
   let handle: LockHandle | null = null;
-  void acquireOrShowBlocked('thought', thought.id).then((outcome) => {
-    handle = lockHandleFromOutcome('thought', thought.id, outcome);
-  });
   const style = resolveCloudStyle(thought);
-  void showThoughtStyleDialog({
+  const dialog = showThoughtStyleDialog({
     resolved: {
       fg: style.fg,
       bg: style.bg,
@@ -2463,6 +2484,14 @@ function openThoughtSettings(thought: Thought): void {
     },
     onApply: (patch) => saveThought(patch),
     onClose: () => void releaseHeld(handle),
+  });
+  // Чужой захват: диалог открывается для чтения, но поля и «Сброс» выключены
+  // (ошибка 4f18d9f5) — иначе «поля заблокированы» расходилось с поведением.
+  void acquireOrShowBlocked('thought', thought.id).then((outcome) => {
+    handle = lockHandleFromOutcome('thought', thought.id, outcome);
+    if (outcome.kind === 'blocked') {
+      dialog.setBlocked(blockedByLockMessage('thought', outcome.holder));
+    }
   });
 }
 
@@ -2677,13 +2706,10 @@ function buildLinkHeader(initial: Link): HTMLElement {
 function openLinkSettings(link: Link): void {
   // Auto-acquire the link lock (task 4f141756) — see `openThoughtSettings`.
   let handle: LockHandle | null = null;
-  void acquireOrShowBlocked('link', link.id).then((outcome) => {
-    handle = lockHandleFromOutcome('link', link.id, outcome);
-  });
   // L21: the type line style resolves along the ancestor chain; an untyped
   // link resolves the root type.
   const type = resolveLinkTypeVisual(store.state.linkTypes, link.type_id);
-  void showLinkStyleDialog({
+  const dialog = showLinkStyleDialog({
     resolved: {
       color: link.color ?? type.color,
       style: link.style ?? type.style,
@@ -2691,6 +2717,13 @@ function openLinkSettings(link: Link): void {
     },
     onApply: (patch) => saveLink(link, patch).then(() => undefined),
     onClose: () => void releaseHeld(handle),
+  });
+  // Чужой захват — диалог только для чтения (ошибка 4f18d9f5).
+  void acquireOrShowBlocked('link', link.id).then((outcome) => {
+    handle = lockHandleFromOutcome('link', link.id, outcome);
+    if (outcome.kind === 'blocked') {
+      dialog.setBlocked(blockedByLockMessage('link', outcome.holder));
+    }
   });
 }
 

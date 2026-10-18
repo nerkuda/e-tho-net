@@ -79,10 +79,7 @@ export async function acquireOrShowBlocked(
     if (me !== null && existing.user_id === me.id) {
       return { kind: 'self', lock: existing };
     }
-    notice(
-      `${entityLabel(entityType)} редактирует ${holderName(existing)} — поля заблокированы.`,
-      'info',
-    );
+    notice(blockedByLockMessage(entityType, existing), 'info');
     return { kind: 'blocked', holder: existing };
   }
 
@@ -120,10 +117,7 @@ export async function acquireOrShowBlocked(
         client_id: details.holder?.client_id ?? null,
         acquired_at_ms: Date.now(),
       };
-      notice(
-        `${entityLabel(entityType)} редактирует ${holderName(holder)} — поля заблокированы.`,
-        'info',
-      );
+      notice(blockedByLockMessage(entityType, holder), 'info');
       return { kind: 'blocked', holder };
     }
     notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'info');
@@ -145,11 +139,22 @@ export async function acquireOrShowBlocked(
 export function foreignLockBlocksEdit(entityType: LockEntityType | string, entityId: string): boolean {
   const existing = otherHolder(entityType, entityId);
   if (existing === null) return false;
-  notice(
-    `${entityLabel(entityType)} редактирует ${holderName(existing)} — поля заблокированы.`,
-    'info',
-  );
+  notice(blockedByLockMessage(entityType, existing), 'info');
   return true;
+}
+
+/**
+ * Чужой захват по кэшу без тоста — для синхронизации состояния полей
+ * (ошибка 4f18d9f5): заголовок мысли и прочие поверхности должны выглядеть
+ * заблокированными ровно так же, как ведёт себя запись.
+ */
+export function foreignLockHeld(entityType: LockEntityType | string, entityId: string): boolean {
+  return otherHolder(entityType, entityId) !== null;
+}
+
+/** Единый текст «объект редактирует <имя> — поля заблокированы». */
+export function blockedByLockMessage(entityType: LockEntityType | string, holder: LockRow): string {
+  return `${entityLabel(entityType)} редактирует ${holderName(holder)} — поля заблокированы.`;
 }
 
 /**
