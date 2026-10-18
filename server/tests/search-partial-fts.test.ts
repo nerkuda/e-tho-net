@@ -158,6 +158,24 @@ const CORPUS: Array<{ title: string; synonyms: string[] }> = [
   // поэтому `*`-исключения обязаны оставаться на LIKE.
   { title: 'alpha gamma beta', synonyms: [] },
   { title: 'Foo bar baz', synonyms: ['bar foo'] },
+  // NFD-корпус (данные, записанные, например, macOS): raw-форма
+  // декомпозирована, `*_norm` — NFC. Индекс `fts_thought_names` строится из
+  // raw, поэтому фраза сужателя обязана покрывать ОБЕ канонические формы
+  // (грабли 6898ef75). Без этого NFC-запрос давал 0 кандидатов там, где
+  // прежний LIKE по `_norm` находил совпадение.
+  {
+    title: 'Йогуртовая история'.normalize('NFD'),
+    synonyms: ['йогурт натуральный'.normalize('NFD')],
+  },
+  { title: 'Тёмный лес'.normalize('NFD'), synonyms: ['ёлка пушистая'.normalize('NFD')] },
+  // Контрольные пары «е/ё» и «и/й»: NFC-соседи не должны ложно совпадать.
+  { title: 'Иод и еж', synonyms: [] },
+  { title: 'Ёжик в тумане'.normalize('NFD'), synonyms: [] },
+  { title: 'Ежевика', synonyms: [] },
+  { title: 'Елки в парке', synonyms: [] },
+  { title: 'Ёлки-палки'.normalize('NFD'), synonyms: [] },
+  { title: 'Напиток кефир'.normalize('NFD'), synonyms: [] },
+  { title: 'Напиток йогурт'.normalize('NFD'), synonyms: [] },
 ];
 
 /** Queries that must produce identical results in both implementations. */
@@ -186,6 +204,21 @@ const QUERIES: Array<{ label: string; query: string }> = [
   { label: 'спецсимвол "', query: 'quo"te' },
   { label: 'пустая строка', query: '' },
   { label: 'только исключение', query: '-dog' },
+  // NFD-корпус ↔ NFC-запрос: обе канонические формы покрывает одна FTS-фраза.
+  { label: 'NFD-данные, NFC-запрос (й)', query: 'йогурт' },
+  { label: 'NFD-данные, NFC-инфикс (ё)', query: 'тёмн' },
+  { label: 'NFD-данные, NFC-инфикс по синониму (ёлк)', query: 'ёлк' },
+  { label: 'NFD-данные, исключение (NFC-запрос)', query: 'напит -йогурт' },
+  // Фактический путь findDuplicates: `norm()` приводит запрос к NFC, поэтому
+  // NFD-ввод проверяет нормализацию входа, а не FTS-фразу.
+  { label: 'NFD-запрос нормализуется в NFC', query: 'йогурт'.normalize('NFD') },
+  // «е/ё» и «и/й» — разные буквы: ложных срабатываний быть не должно.
+  // Слова <3 символов идут LIKE-фолбэком, 4+ — через FTS.
+  { label: 'еж ≠ ёж (LIKE-фолбэк)', query: 'еж' },
+  { label: 'ёж ≠ еж (LIKE-фолбэк)', query: 'ёж' },
+  { label: 'ёлки ≠ елки (FTS)', query: 'ёлки' },
+  { label: 'елки ≠ ёлки (FTS)', query: 'елки' },
+  { label: 'й нет в «Иод» (FTS)', query: 'йод' },
 ];
 
 describe(
@@ -236,6 +269,76 @@ describe(
         ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
         assert.deepEqual(partialIds(ndb, 'дор'), []);
         assert.deepEqual(legacyPartialIds(ndb, 'дор'), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('NFD-данные: NFC-запрос находит partial и по title, и по синониму', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const viaTitle = seedThought(ndb, 'Йогуртовая история'.normalize('NFD'));
+        const viaSynonym = seedThought(ndb, 'Напиток'.normalize('NFD'));
+        seedSynonym(ndb, viaSynonym, 'йогурт натуральный'.normalize('NFD'));
+
+        const ids = partialIds(ndb, 'йогурт');
+        assert.deepEqual(ids, [viaTitle, viaSynonym].sort());
+        // Эталон прежней реализации (LIKE по NFC-колонкам) находил оба —
+        // значит, разрыв был именно в FTS-сужателе, а не в постфильтре.
+        assert.deepEqual(ids, legacyPartialIds(ndb, 'йогурт'));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('NFC-данные: NFD-запрос находит (фактический путь — norm() в NFC)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const id = seedThought(ndb, 'Йогуртовая история');
+        const nfdQuery = 'йогурт'.normalize('NFD');
+        assert.notEqual(nfdQuery, 'йогурт', 'NFD-форма должна отличаться от NFC');
+        // findDuplicates нормализует термин `norm()` (NFC) ДО разбора, поэтому
+        // до FTS доходит уже NFC-форма; тест фиксирует этот фактический путь.
+        assert.deepEqual(partialIds(ndb, nfdQuery), [id]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('исключение в NFD-данных отсекает NFD-мысль, как прежний LIKE', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const excluded = seedThought(ndb, 'Напиток йогурт'.normalize('NFD'));
+        const kept = seedThought(ndb, 'Напиток кефир'.normalize('NFD'));
+
+        const ids = partialIds(ndb, 'напит -йогурт');
+        assert.ok(!ids.includes(excluded), 'NFD-форма исключения должна отсечь мысль');
+        assert.deepEqual(ids, [kept]);
+        assert.deepEqual(ids, legacyPartialIds(ndb, 'напит -йогурт'));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('кириллица й/ё: обе формы находятся, соседние буквы не дают ложных совпадений', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const yozhik = seedThought(ndb, 'Ёжик в тумане'.normalize('NFD'));
+        const ezhevika = seedThought(ndb, 'Ежевика');
+        const yolki = seedThought(ndb, 'Ёлки-палки'.normalize('NFD'));
+        const elki = seedThought(ndb, 'Елки в парке');
+        const iogurt = seedThought(ndb, 'Иогурт без й'.normalize('NFD'));
+
+        // ё/е, 4 символа → FTS-фраза `("nfc" OR "nfd")`.
+        assert.deepEqual(partialIds(ndb, 'ёлки'), [yolki]);
+        assert.deepEqual(partialIds(ndb, 'елки'), [elki]);
+        // ё/е, 2 символа → документированный LIKE-фолбэк по NFC-колонке.
+        assert.deepEqual(partialIds(ndb, 'ёж'), [yozhik]);
+        assert.deepEqual(partialIds(ndb, 'еж'), [ezhevika]);
+        // й/и — разные буквы: «Иогурт» не должен находиться по «йогурт».
+        assert.deepEqual(partialIds(ndb, 'йогурт'), []);
+        assert.deepEqual(partialIds(ndb, 'йогурт'), legacyPartialIds(ndb, 'йогурт'));
+        assert.deepEqual(partialIds(ndb, 'иогурт'), [iogurt]);
       } finally {
         ndb.close();
       }

@@ -153,6 +153,47 @@ function tokenize(text: string): string[] {
 const TRIGRAM_MIN_LEN = 3;
 
 /**
+ * Quote one literal fragment for an FTS5 `MATCH` expression. A double quote is
+ * the phrase delimiter, so a quote inside the fragment is doubled — the escape
+ * FTS5 expects inside a string literal.
+ */
+function quoteFtsPhrase(fragment: string): string {
+  return `"${fragment.replace(/"/g, '""')}"`;
+}
+
+/**
+ * One fragment's trigram phrase covering BOTH canonical Unicode forms, or
+ * `null` when the fragment cannot be narrowed safely.
+ *
+ * The `trigram` tokenizer works over code points and does NOT normalise
+ * Unicode (`case_sensitive 0` only folds case), while the LIKE columns this
+ * phrase narrows — `title_norm`/`synonym_norm` — are NFC. Raw names may be
+ * stored in NFD (e.g. written by macOS), so a single NFC phrase produced a
+ * false negative and made the FTS narrower than the old LIKE scan
+ * (review of e4f26158, pitfall 6898ef75). When the NFC and NFD spellings of a
+ * fragment differ, the phrase becomes `("nfc" OR "nfd")`: one `MATCH` now
+ * covers both stored forms, and for an exclusion `NOT (…)` the group means
+ * "absent in both forms" — exactly the old `NOT (… LIKE …)` over the NFC
+ * column for wholly-NFC/wholly-NFD rows. Mixed-per-character raw text remains
+ * a documented limitation; the phrase is still a candidate narrower, and the
+ * JS post-filter keeps the exact semantics.
+ *
+ * Returns `null` when the spellings differ and EITHER one is shorter than
+ * {@link TRIGRAM_MIN_LEN}: that branch cannot produce trigrams, so the `OR`
+ * would lose candidates instead of being a superset. The caller then drops
+ * the fragment and keeps the LIKE fallback for the whole word.
+ */
+function dualFormTrigramPhrase(fragment: string): string | null {
+  const nfc = fragment.normalize('NFC');
+  const nfd = fragment.normalize('NFD');
+  if (nfc === nfd) {
+    return nfc.length >= TRIGRAM_MIN_LEN ? quoteFtsPhrase(nfc) : null;
+  }
+  if (nfc.length < TRIGRAM_MIN_LEN || nfd.length < TRIGRAM_MIN_LEN) return null;
+  return `(${quoteFtsPhrase(nfc)} OR ${quoteFtsPhrase(nfd)})`;
+}
+
+/**
  * Build one word's trigram phrase for the boolean MATCH expression, or
  * `null` when every literal fragment (split on `*`) is shorter than
  * {@link TRIGRAM_MIN_LEN}. A `*` splits the word into independent literal
@@ -161,9 +202,10 @@ const TRIGRAM_MIN_LEN = 3;
  * `%…%…%` pattern is not preserved, but `*` inside a single word is a rare
  * edge case of the keywords mini-syntax (03-server-api.md §6.10), not the
  * bug's primary scenario (whole-word infix search, 0258fd9d). Fragments
- * shorter than {@link TRIGRAM_MIN_LEN} are dropped rather than failing the
- * whole word, so `сло*во` still filters on `сло` even if `во`-equivalent
- * fragments were too short.
+ * shorter than {@link TRIGRAM_MIN_LEN} — and fragments with no safely
+ * indexable canonical form ({@link dualFormTrigramPhrase}) — are dropped
+ * rather than failing the whole word, so `сло*во` still filters on `сло` even
+ * if `во`-equivalent fragments were too short.
  */
 function trigramPhrase(word: string): string | null {
   const fragments = word
@@ -171,7 +213,12 @@ function trigramPhrase(word: string): string | null {
     .map((f) => f.toLowerCase())
     .filter((f) => f.length >= TRIGRAM_MIN_LEN);
   if (fragments.length === 0) return null;
-  return fragments.map((f) => `"${f.replace(/"/g, '""')}"`).join(' AND ');
+  const parts: string[] = [];
+  for (const fragment of fragments) {
+    const phrase = dualFormTrigramPhrase(fragment);
+    if (phrase !== null) parts.push(phrase);
+  }
+  return parts.length === 0 ? null : parts.join(' AND ');
 }
 
 /**

@@ -180,6 +180,44 @@ describe(
       }
     });
 
+    it('NFC/NFD: include-фраза покрывает обе канонические формы (грабли 6898ef75)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Йогуртовая история'.normalize('NFD'));
+        const [partial] = capturePartialStatements(ndb, 'йогурт');
+        assert.ok(partial, 'partial-запрос не найден');
+        const match = partial.params[0];
+        assert.equal(typeof match, 'string');
+        const nfc = 'йогурт';
+        const nfd = nfc.normalize('NFD');
+        assert.notEqual(nfd, nfc, 'для этого слова формы обязаны различаться');
+        // Мутация «оставить только NFC-фразу» (как в 7c7ddbc5) проходит первую
+        // проверку и краснит вторую; снятие группировки краснит третью.
+        assert.ok((match as string).includes(`"${nfc}"`), String(match));
+        assert.ok((match as string).includes(`"${nfd}"`), String(match));
+        assert.match(match as string, /\(.*OR.*\)/, 'обе формы должны быть в OR-группе');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('NFC/NFD: исключение покрывает обе формы группой NOT', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Напиток йогурт'.normalize('NFD'));
+        const [partial] = capturePartialStatements(ndb, 'напит -йогурт');
+        assert.ok(partial, 'partial-запрос не найден');
+        const match = partial.params[0] as string;
+        const nfc = 'йогурт';
+        const nfd = nfc.normalize('NFD');
+        // `NOT ("nfc" OR "nfd")` = «фрагмент отсутствует в обеих формах» —
+        // ровно то, что делал прежний `NOT (… LIKE …)` по NFC-колонке.
+        assert.ok(match.includes(`NOT ("${nfc}" OR "${nfd}")`), match);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('мутация: откатанный на полный LIKE-скан SQL нарушает правило', () => {
       const reverted =
         "SELECT id FROM thoughts_v thoughts WHERE (title_norm LIKE ? ESCAPE '\\'" +
