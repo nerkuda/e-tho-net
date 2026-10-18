@@ -1254,6 +1254,12 @@ export interface EtnApi {
    */
   deepLink: {
     onDeepLink(cb: (payload: DeepLinkPayload) => void): () => void;
+    /**
+     * Сообщает main, что слушатель установлен: до этого сигнала холодные
+     * deep-link'и копятся в буфере (ошибка d8b81425). Вызывается один раз
+     * после `onDeepLink`.
+     */
+    signalReady(): void;
   };
   ui: {
     getState(networkId: string, key: string, tabId?: string | null): Promise<string | null>;

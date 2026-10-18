@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { extractDeepLink } from '../src/main/ipc/deep-link.js';
+import { DeepLinkBuffer, extractDeepLink } from '../src/main/ipc/deep-link.js';
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
@@ -61,5 +61,28 @@ test('extractDeepLink: форма публикации приоритетна и
 
 test('extractDeepLink: невалидный publication-uuid не даёт deep-link', () => {
   assert.equal(extractDeepLink([`etn://open?net=${ID_A}&publication=not-a-uuid`]), null);
+});
+
+// ---------------------------------------------------------------------------
+// Буфер до готовности renderer (ошибка d8b81425)
+// ---------------------------------------------------------------------------
+
+test('DeepLinkBuffer: холодная цель ждёт готовности и доставляется по ack', () => {
+  const buffer = new DeepLinkBuffer();
+  const link = { networkId: ID_A, thoughtId: ID_B };
+  assert.equal(buffer.offer(link), false, 'до ack — только буфер');
+  assert.equal(buffer.size, 1);
+  assert.deepEqual(buffer.setReady(true), [link], 'ack сливает накопленное');
+  assert.equal(buffer.size, 0);
+  assert.equal(buffer.offer({ ...link, thoughtId: ID_A }), true, 'после ack — сразу');
+});
+
+test('DeepLinkBuffer: перезагрузка сбрасывает готовность, новые цели снова копятся', () => {
+  const buffer = new DeepLinkBuffer();
+  buffer.setReady(true);
+  assert.deepEqual(buffer.setReady(false), [], 'сброс не отдаёт старых целей');
+  const link = { networkId: ID_A, thoughtId: ID_B };
+  assert.equal(buffer.offer(link), false);
+  assert.deepEqual(buffer.setReady(true), [link]);
 });
 

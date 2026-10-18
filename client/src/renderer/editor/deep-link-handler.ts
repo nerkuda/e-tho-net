@@ -32,6 +32,9 @@ export function initDeepLinkHandler(): void {
   etn.deepLink.onDeepLink((link) => {
     void handleDeepLink(link);
   });
+  // Main копит холодные deep-link'и до этого сигнала (ошибка d8b81425):
+  // `did-finish-load` приходил раньше подписки, и цель терялась.
+  etn.deepLink.signalReady();
 }
 
 async function handleDeepLink(link: DeepLinkPayload): Promise<void> {

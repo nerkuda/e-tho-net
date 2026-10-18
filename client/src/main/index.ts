@@ -12,7 +12,7 @@
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
  */
-import { app, BrowserWindow, powerMonitor, protocol, screen, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, protocol, screen, session, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { CLIENT_META_KEY } from '@etn/shared';
@@ -30,7 +30,13 @@ import { getOrCreateClientId } from './client-id.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { decideNavigation, EXTERNAL_SCHEMES } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
-import { dispatchDeepLink, extractDeepLink, type DeepLinkPayload } from './ipc/deep-link.js';
+import {
+  DEEP_LINK_READY_CHANNEL,
+  DeepLinkBuffer,
+  dispatchDeepLink,
+  extractDeepLink,
+  type DeepLinkPayload,
+} from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
 import {
   loadWindowBounds,
@@ -179,12 +185,24 @@ const THEME_BG: Record<'light' | 'dark', string> = {
 };
 
 /**
- * Deep-link payload captured at cold start (task R11) before the main window
- * exists. On Win/Linux the URL is in `process.argv`; on macOS it arrives
- * asynchronously via `app.on('open-url')`. We buffer it here and dispatch
- * once the renderer is ready.
+ * Deep-link цели до подтверждения готовности renderer (ошибка d8b81425).
+ * На Win/Linux URL приходит в `process.argv`, на macOS — `open-url`; renderer
+ * сигналит `etn:deep-link-ready` после подписки на канал, и только тогда буфер
+ * сливается. `did-finish-load` для этого не годится: событие приходит раньше
+ * регистрации слушателя.
  */
-let pendingDeepLink: DeepLinkPayload | null = null;
+const deepLinks = new DeepLinkBuffer();
+
+/** Доставить цель сразу, если renderer готов, иначе — в буфер. */
+function dispatchOrBuffer(win: BrowserWindow | undefined, payload: DeepLinkPayload): void {
+  if (win === undefined) {
+    // Окна ещё нет: готовности быть не может — цель ждёт в буфере.
+    deepLinks.setReady(false);
+    deepLinks.offer(payload);
+    return;
+  }
+  if (deepLinks.offer(payload)) dispatchDeepLink(win, payload);
+}
 
 /** Reads the stored L5 theme, defaulting to light. */
 function storedTheme(db: LocalDb): 'light' | 'dark' {
@@ -564,19 +582,24 @@ app
 
     const win = createWindow(theme, localDb);
 
-    // Pick up a deep link from this process's argv (Win/Linux cold start:
-    // the OS launches the registered protocol handler with the URL appended
-    // as the last argument). Buffer it — the renderer may not be ready yet.
+    // Готовность renderer (ошибка d8b81425): холодный deep-link ждёт не
+    // `did-finish-load` (он раньше подписки), а IPC-сигнал после установки
+    // слушателя. Перезагрузка окна сбрасывает готовность — новый renderer
+    // снова подпишется и просигналит.
+    deepLinks.setReady(false);
+    win.webContents.on('did-start-loading', () => {
+      deepLinks.setReady(false);
+    });
+    ipcMain.on(DEEP_LINK_READY_CHANNEL, () => {
+      const target = BrowserWindow.getAllWindows()[0];
+      for (const payload of deepLinks.setReady(true)) {
+        if (target !== undefined) dispatchDeepLink(target, payload);
+      }
+    });
+
+    // Cold start (Win/Linux): URL в argv — цель ждёт в буфере до ack renderer.
     const initial = extractDeepLink(process.argv);
-    if (initial !== null) {
-      pendingDeepLink = initial;
-      win.webContents.once('did-finish-load', () => {
-        if (pendingDeepLink !== null) {
-          dispatchDeepLink(win, pendingDeepLink);
-          pendingDeepLink = null;
-        }
-      });
-    }
+    if (initial !== null) dispatchOrBuffer(win, initial);
 
     // Auto-update (K4): quiet check in packaged builds; inert in dev.
     void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
@@ -608,7 +631,7 @@ app.on('second-instance', (_event, argv) => {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
-    if (link !== null) dispatchDeepLink(win, link);
+    if (link !== null) dispatchOrBuffer(win, link);
   }
 });
 
@@ -622,12 +645,7 @@ app.on('open-url', (event, url) => {
   event.preventDefault();
   const link = extractDeepLink([url]);
   if (link === null) return;
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win === undefined) {
-    pendingDeepLink = link;
-  } else {
-    dispatchDeepLink(win, link);
-  }
+  dispatchOrBuffer(BrowserWindow.getAllWindows()[0], link);
 });
 
 app.on('window-all-closed', () => {
