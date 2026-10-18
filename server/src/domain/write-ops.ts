@@ -198,24 +198,28 @@ export function composeThoughtsWrite(
   const events: AnyWriteEvent[] = [];
   const activity: WriteActivityEntry[] = [];
   for (const item of written.items) {
-    if (item.thought_action === 'reused') continue;
-    if (item.thought_action === 'created') {
-      const thought = getThoughtOrThrow(ndb, item.id);
-      events.push({ type: 'thought.created', data: { thought } });
-      activity.push({ kind: 'thought', action: 'created', thought });
-    } else {
-      // 'updated' — also covers the 'set_active' scenario: a batch item that
-      // only sets `active: false` (HOME is rejected, see domain service) lands
-      // here as a normal `thought.updated`. Empty `changes` is the contract for
-      // batched updates: the granular changes live across
-      // `comment`/`chronicle`/`properties`/`links`/`attachments` blocks of the
-      // same item, and the audit_log row carries the full story.
-      events.push({
-        type: 'thought.updated',
-        data: { id: item.id, version: item.version, changes: {} },
-      });
-      const thought = getThoughtOrThrow(ndb, item.id);
-      activity.push({ kind: 'thought', action: 'updated', thought });
+    // `reused` пропускает ТОЛЬКО событие самой мысли: вложенные блоки
+    // (`comment`/`chronicle`/`links`/`properties`/`attachments`) записаны и
+    // обязаны дать события и журнал (ошибка d3da79e0).
+    if (item.thought_action !== 'reused') {
+      if (item.thought_action === 'created') {
+        const thought = getThoughtOrThrow(ndb, item.id);
+        events.push({ type: 'thought.created', data: { thought } });
+        activity.push({ kind: 'thought', action: 'created', thought });
+      } else {
+        // 'updated' — also covers the 'set_active' scenario: a batch item that
+        // only sets `active: false` (HOME is rejected, see domain service) lands
+        // here as a normal `thought.updated`. Empty `changes` is the contract for
+        // batched updates: the granular changes live across
+        // `comment`/`chronicle`/`properties`/`links`/`attachments` blocks of the
+        // same item, and the audit_log row carries the full story.
+        events.push({
+          type: 'thought.updated',
+          data: { id: item.id, version: item.version, changes: {} },
+        });
+        const thought = getThoughtOrThrow(ndb, item.id);
+        activity.push({ kind: 'thought', action: 'updated', thought });
+      }
     }
     if (item.comment !== undefined) {
       if (item.comment.action === 'created') {
