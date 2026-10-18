@@ -39,7 +39,7 @@ export interface TrendComment {
 }
 export declare function firstPassAccepted(comments: TrendComment[]): boolean;
 export declare function verifierRoundCount(comments: TrendComment[]): number;
-export declare function hasUserGuiFinding(text: string): boolean;
+export declare function hasUserGuiFinding(text: string, title?: string): boolean;
 export declare function hasRepeatedDelegation(text: string): boolean;
 
 export interface WorkRef {

@@ -161,6 +161,23 @@ test('hasUserGuiFinding: маркеры заказчика — 6 полиров�
   // Точность: простое упоминание заказчика без маркеров — не находка.
   assert.equal(hasUserGuiFinding('Заказчик попросил добавить кнопку; карточка заведена оркестратором.'), false);
 
+  // Заголовок работы — часть уточнения: у реальных полировочных карточек
+  // «полировка» есть только в title (4258e694), а «формулировки заказчика» —
+  // в теле. Тело без заголовка уточнение не проходит, с заголовком — проходит.
+  const formulationsOnly = 'Чек-лист исправлений (формулировки заказчика, все обязательны)';
+  assert.equal(hasUserGuiFinding(formulationsOnly), false);
+  assert.equal(
+    hasUserGuiFinding(formulationsOnly, 'Редактор отбора: полировка по визуальной проверке, часть 1'),
+    true,
+  );
+  assert.equal(
+    hasUserGuiFinding(
+      permanent('4258e694-47b0-4d7e-8d19-61387dee396a'),
+      fixture.works.find((w) => w.id === '4258e694-47b0-4d7e-8d19-61387dee396a')?.title,
+    ),
+    true,
+  );
+
   // Ровно 6 полировочных карточек + a1100e0c («со слов пользователя»).
   const summary = summariseWorks({ works: fixture.works, commentsById: fixture.comments });
   assert.equal(summary.userGuiFindings, 7);

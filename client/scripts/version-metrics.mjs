@@ -179,8 +179,11 @@ export function verifierRoundCount(comments) {
  *     заказчика», «по визуальной проверке», «формулировки заказчика»,
  *     «заказчик требует/надоело». До 0.13.2 такие карточки не считались —
  *     метрика показывала 1 находку вместо ~65 (задача 92674032).
+ *
+ * `title` — название работы: у реальных полировочных карточек слово
+ * «полировка» есть только в заголовке, а «формулировки заказчика» — в теле.
  */
-export function hasUserGuiFinding(text) {
+export function hasUserGuiFinding(text, title = '') {
   const body = String(text ?? '');
   // Классические маркеры источника-пользователя.
   const fromUser =
@@ -194,9 +197,11 @@ export function hasUserGuiFinding(text) {
     );
   // «Формулировки заказчика» — уточняющий маркер: сам по себе это заголовок
   // чек-листа, который встречается и в ранних визуальных аудитах (0.13.1:
-  // 498876c4); в счёт идёт только в карточке, явно помеченной «полировка».
+  // 498876c4); в счёт идёт только в карточке, явно помеченной «полировка» —
+  // в заголовке работы (у реальных карточек 0.13.1) или в тексте комментария.
   const customerFormulations = /формулировк[а-яё]*\s+заказчик[а-яё]*/i.test(body);
-  return fromUser || polish || (customerFormulations && /полиров/i.test(body));
+  const polishContext = `${title}\n${body}`;
+  return fromUser || polish || (customerFormulations && /полиров/i.test(polishContext));
 }
 
 /** Повторная делегация: работа делегирована вновь после того, как была сделана. */
@@ -223,7 +228,7 @@ export function summariseWorks({ works, commentsById, groups = [] }) {
   const comments = (id) => commentsById[id] ?? [];
 
   const errors = works.filter((w) => w.type_id === WORK_TYPE_IDS.error);
-  const userGuiFindings = errors.filter((w) => hasUserGuiFinding(permanentText(comments(w.id))));
+  const userGuiFindings = errors.filter((w) => hasUserGuiFinding(permanentText(comments(w.id)), w.title));
   const repeatedDelegations = works.filter((w) => hasRepeatedDelegation(chronologicalText(comments(w.id))));
 
   const byGroup = [];
