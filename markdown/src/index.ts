@@ -35,6 +35,7 @@ export {
   WIKI_LINK_ID_ATTR,
   WIKI_LINK_NETWORK_ATTR,
   WIKI_LINK_MISSING_CLASS,
+  remapSameNetworkLinks,
 } from './wiki-link.js';
 export type {
   WikiLinkRef,

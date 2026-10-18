@@ -21,6 +21,7 @@
  * handler) call {@link subscribe} to be notified when the snapshot changes.
  */
 
+import { remapSameNetworkLinks } from '@etn/markdown';
 import type {
   IconKind,
   ThoughtCopyItem,
@@ -165,6 +166,14 @@ export function rewriteCrossNetworkLinks(
 }
 
 /**
+ * Ремап id-ссылок внутри той же сети при копировании подграфа (ошибка
+ * 5f03ebc5) живёт в `@etn/markdown` — единственном доме разбора wiki-ссылок
+ * и трансклюзий (сторож guard-markdown-single-renderer). Здесь только
+ * ре-экспорт для потребителей снимка буфера.
+ */
+export { remapSameNetworkLinks };
+
+/**
  * Format one thought's id as an id-based wiki-link for the given network.
  * Used when pasting into a comment: the server stores the raw `[[…]]` and
  * the markdown renderer wires the link up.
@@ -240,11 +249,47 @@ export async function pasteThoughtsTo(targetId: string): Promise<void> {
       thoughts: rewrittenThoughts,
       links: rewrittenLinks,
     });
+    // Внутри одной сети id меняются, но ссылки `[[#id]]` остаются
+    // внутрисетевыми — их ремапим на копии по карте ответа (ошибка 5f03ebc5).
+    if (snap.sourceNetworkId === networkId) {
+      await remapCopiedThoughtComments(networkId, snap.thoughts, result.thought_id_map);
+    }
     notice(
       `Вставлено: ${result.created_thoughts.length} ${pluraliseRu(result.created_thoughts.length)}`,
     );
   } catch (err) {
     errorDialog('Вставить', err);
+  }
+}
+
+/**
+ * После копирования внутри сети переписать id-ссылки в постоянных
+ * комментариях созданных мыслей на id копий (ошибка 5f03ebc5). Тело
+ * отправляется в copy-batch до появления карты id, поэтому правка идёт
+ * вторым шагом — `comments.update` по созданному комментарию. Ошибки
+ * отдельного комментария не отменяют вставку: копии уже созданы.
+ */
+async function remapCopiedThoughtComments(
+  networkId: string,
+  items: readonly ThoughtCopyItem[],
+  thoughtIdMap: Record<string, string>,
+): Promise<void> {
+  for (const item of items) {
+    const sourceId = item.source_id;
+    const body = item.permanent_comment?.body_md;
+    if (sourceId === undefined || typeof body !== 'string') continue;
+    const newId = thoughtIdMap[sourceId];
+    if (newId === undefined) continue;
+    const next = remapSameNetworkLinks(body, thoughtIdMap);
+    if (next === body) continue;
+    try {
+      const comments = await etn.comments.list(networkId, 'thought', newId);
+      const permanent = comments.find((c) => c.kind === 'permanent');
+      if (permanent === undefined) continue;
+      await etn.comments.update(networkId, permanent.id, { body_md: next }, permanent.version);
+    } catch {
+      // Комментарий уже создан с исходным телом — вставка не отменяется.
+    }
   }
 }
 
