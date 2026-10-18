@@ -49,6 +49,20 @@ describe('buildContentDisposition', () => {
     assert.ok(header.includes("UTF-8''a%27b%28c%29%2Ad.txt"), header);
   });
 
+  it('одиночный суррогат заменяется на U+FFFD и не бросает URIError', () => {
+    const loneHigh = 'a\uD800b.txt';
+    const loneLow = 'a\uDC00b.txt';
+    for (const name of [loneHigh, loneLow]) {
+      const header = buildContentDisposition('attachment', name);
+      assertAsciiOnly(header);
+      // U+FFFD в UTF-8 — EF BF BD.
+      assert.ok(header.includes('%EF%BF%BD'), `суррогат должен стать U+FFFD: ${header}`);
+    }
+    // Пара суррогатов — валидный code point, кодируется как есть (U+1F600).
+    const pair = buildContentDisposition('attachment', 'a\uD83D\uDE00b.txt');
+    assert.ok(pair.includes('%F0%9F%98%80'), pair);
+  });
+
   it('пустое имя превращается в download', () => {
     assert.equal(buildContentDisposition('attachment', ''), `attachment; filename="download"; filename*=UTF-8''download`);
     assert.equal(buildContentDisposition('attachment', null), `attachment; filename="download"; filename*=UTF-8''download`);

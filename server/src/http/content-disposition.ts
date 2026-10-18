@@ -15,9 +15,22 @@
 
 export type ContentDispositionKind = 'attachment' | 'inline';
 
+/**
+ * Заменить одиночные суррогаты на U+FFFD: `encodeURIComponent` бросает
+ * `URIError` на непарном суррогате, а имя файла приходит из пользовательских
+ * данных (замечание верификатора к 175b2803). `String#toWellFormed` есть в
+ * Node 22, но ручная замена не зависит от версии lib в tsconfig.
+ */
+function toWellFormed(value: string): string {
+  return value.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    '\uFFFD',
+  );
+}
+
 /** Процентное кодирование по RFC 5987 (attr-char, UTF-8). */
 function encodeRfc5987(value: string): string {
-  return encodeURIComponent(value).replace(
+  return encodeURIComponent(toWellFormed(value)).replace(
     /['()*]/g,
     (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
   );
