@@ -18,6 +18,7 @@ import { createReadStream } from 'node:fs';
 import { EtnError, type SystemLoggingStatus } from '@etn/shared';
 
 import { FileLog, RETENTION_DAYS } from '../log/file-log.js';
+import { buildContentDisposition } from '../http/content-disposition.js';
 import { sendSuccess } from '../http/responses.js';
 
 declare module 'fastify' {
@@ -92,7 +93,7 @@ export const systemLoggingRoutes: FastifyPluginAsync = async (app: FastifyInstan
       reply
         .header('content-type', 'text/plain; charset=utf-8')
         .header('content-length', String(file.size))
-        .header('content-disposition', `attachment; filename="${filename}"`)
+        .header('content-disposition', buildContentDisposition('attachment', filename))
         .send(createReadStream(file.filePath));
       return reply;
     },
