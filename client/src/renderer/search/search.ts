@@ -59,6 +59,7 @@ import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
 } from '../editor/wiki-link-resolver.js';
+import { resolveFirstDayOfWeek } from '../lib/dates.js';
 import { div, el, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
@@ -164,6 +165,8 @@ const rowActivations = new WeakMap<HTMLElement, () => void>();
 
 /** Рукоятка единого редактора мыслевых настроек поиска (профиль `thoughts`). */
 let searchEditor: FilterEditorHandle | null = null;
+/** Последний увиденный первый день недели сети (пересборка зоны на смене). */
+let firstDayOfWeekSeen = 1;
 
 /**
  * Сбрасывает модульное состояние строки поиска перед новым монтированием.
@@ -239,6 +242,16 @@ export function mountSearch(next: SearchChrome): () => void {
 
   settingsToggle = toggle;
   settingsZone = settings;
+  // Смена первого дня недели в «Все настройки» перестраивает открытую зону
+  // настроек: календарь точной даты читает настройку заново (ошибка b5278f9a).
+  firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+  const unsubscribeFirstDayOfWeek = store.subscribe(() => {
+    if (chrome === null || settingsZone === null) return;
+    const next = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+    if (next === firstDayOfWeekSeen) return;
+    firstDayOfWeekSeen = next;
+    rebuildSettingsZone();
+  });
   setSettingsOpen(settingsOpen);
   // Нажатость лейки — клиентское состояние (переживает перезапуск); читаем
   // сразу при монтировании, не дожидаясь первого фокуса инпута. Ширина окна
@@ -424,6 +437,7 @@ export function mountSearch(next: SearchChrome): () => void {
     // отключения панели от документа.
     searchEditor?.destroy();
     searchEditor = null;
+    unsubscribeFirstDayOfWeek();
     window.removeEventListener('resize', onWindowResize);
     document.removeEventListener('pointerdown', onDocumentPointerDown);
     document.removeEventListener('pointerup', onDocumentPointerUp);
@@ -1199,7 +1213,9 @@ function buildSettingsZone(zone: HTMLElement): void {
   searchEditor = buildFilterEditor({
     profile: 'thoughts',
     networkId: requireNetworkId(),
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     title: t('filterEditor.titleSearch'),
     data: {
       registry: new Map(),

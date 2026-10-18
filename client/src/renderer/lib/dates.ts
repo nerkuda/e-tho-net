@@ -108,6 +108,23 @@ export function mondayIndex(day: string): number {
 }
 
 /**
+ * Источник первого дня недели сети (ISO 1 = пн … 7 = вс): готовое значение или
+ * функция-резолвер. Функция читается В МОМЕНТ вызова — настройка сети может
+ * измениться, пока панель отбора уже смонтирована (ошибка b5278f9a: календарь
+ * диалога точной даты запоминал значение при сборке и оставался со старым).
+ */
+export type FirstDayOfWeekSource = number | (() => number | undefined) | undefined;
+
+/**
+ * Нормализованный первый день недели сети: значение из источника (число или
+ * функция), допустимый диапазон ISO 1…7; всё остальное — понедельник (1).
+ */
+export function resolveFirstDayOfWeek(source: FirstDayOfWeekSource): number {
+  const value = typeof source === 'function' ? source() : source;
+  return typeof value === 'number' && value >= 1 && value <= 7 ? value : 1;
+}
+
+/**
  * Смещение дня от НАЧАЛА его недели при первом дне недели `firstDayOfWeek`
  * (ISO 1 = понедельник … 7 = воскресенье), в сутках: 0 — сам первый день.
  * Настройка сети «первый день недели» (требование 1b77decd) общая для

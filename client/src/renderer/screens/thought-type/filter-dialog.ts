@@ -189,7 +189,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const editor = buildFilterEditor({
     profile: 'thoughts',
     networkId,
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     data,
     // ЕДИНСТВЕННОЕ фокусное место (требование 3697eb65): отбор типа мысли
     // исполняется сервером ОТНОСИТЕЛЬНО мысли-контекста, поэтому подсказки

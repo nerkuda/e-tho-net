@@ -79,7 +79,15 @@ import {
   filterTokenNature,
 } from './filter-tokens.js';
 import { dateField } from './date-field.js';
-import { isValidLocalDay, resolveDateToken, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
+import {
+  isValidLocalDay,
+  resolveDateToken,
+  resolveFirstDayOfWeek,
+  setPeriodFrom,
+  setPeriodTo,
+  todayLocal,
+  type FirstDayOfWeekSource,
+} from './dates.js';
 import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
 import {
   canonicalGlobalToken,
@@ -190,9 +198,11 @@ export interface FilterValueContext {
   /**
    * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
    * передаётся в календарь диалога «Дата/период» для ячейки точной даты.
-   * Не задан — понедельник.
+   * Допускается функция-резолвер: она читается в момент ОТКРЫТИЯ диалога и при
+   * раскрытии границ, поэтому смена настройки сети не оставляет панель со
+   * старым значением (ошибка b5278f9a). Не задан — понедельник.
    */
-  firstDayOfWeek?: number;
+  firstDayOfWeek?: FirstDayOfWeekSource;
   /**
    * Место исполняет отбор относительно мысли-контекста — значениям доступны
    * токены полей мысли (`$thought*`); иначе фокусные токены не предлагаются
@@ -1349,7 +1359,9 @@ function exactDatePicker(
       allowTime: false,
       title: 'Точная дата',
       initial: { mode: 'date', from: fallback, to: fallback },
-      ...(ctx.firstDayOfWeek !== undefined ? { firstDayOfWeek: ctx.firstDayOfWeek } : {}),
+      // Настройка сети читается В МОМЕНТ открытия: панель могла быть собрана
+      // до смены первого дня недели в «Все настройки» (ошибка b5278f9a).
+      firstDayOfWeek: resolveFirstDayOfWeek(ctx.firstDayOfWeek),
     });
     return result === null ? null : result.from;
   };
@@ -1433,7 +1445,8 @@ function boundsControl(
   // день недели сети, требование 1b77decd) — сравнение границ идёт по резолвнутому
   // дню (ошибка 1b6c49fe).
   const resolveDay = dateCell
-    ? (token: string): string => resolveDateToken(token, todayLocal(), ctx.firstDayOfWeek ?? 1)
+    ? (token: string): string =>
+        resolveDateToken(token, todayLocal(), resolveFirstDayOfWeek(ctx.firstDayOfWeek))
     : undefined;
   // Запись границы — структурная (ошибка 7d36f439): ячейка границ держит
   // собственное состояние частей (опора/сдвиг/единица, точная дата) и

@@ -199,7 +199,9 @@ export function buildRecipeBuilder(opts: {
   editor = buildFilterEditor({
     profile: 'publications',
     networkId: store.state.networkId ?? '',
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     data,
     getState: () => state,
     touch,

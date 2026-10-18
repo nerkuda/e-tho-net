@@ -42,6 +42,7 @@ import {
 import { requireNetworkId } from '../../app.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
+import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import { div, fmtDate } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { defineKeyContext, pushKeyContext } from '../../lib/keymap.js';
@@ -145,6 +146,13 @@ let savedRows: SavedFilterRow[] = [];
 let savedFiltersWired = false;
 /** Признак: панель уже смонтирована (перерисовка допустима). */
 let mounted = false;
+/**
+ * Подписка на смену первого дня недели сети (ошибка b5278f9a): открытая
+ * панель пересобирается сразу, не дожидаясь переоткрытия вида.
+ */
+let unsubscribeFirstDayOfWeek: (() => void) | null = null;
+/** Последний увиденный первый день недели — пересборка только на реальной смене. */
+let firstDayOfWeekSeen = 1;
 
 interface SavedFilterRow {
   id: string;
@@ -926,6 +934,18 @@ export function mountChronicleFilterPanel(
   mounted = true;
   host.replaceChildren();
   panel = host;
+  // Смена первого дня недели в «Все настройки» перестраивает уже открытую
+  // панель: календарь точной даты и раскрытие границ читают настройку заново
+  // (ошибка b5278f9a).
+  unsubscribeFirstDayOfWeek?.();
+  firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+  unsubscribeFirstDayOfWeek = store.subscribe(() => {
+    if (!mounted) return;
+    const next = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+    if (next === firstDayOfWeekSeen) return;
+    firstDayOfWeekSeen = next;
+    renderPanel();
+  });
   renderPanel();
   wireSavedFiltersToLayer();
   void reloadSavedFilters();
@@ -942,6 +962,8 @@ export function mountChronicleFilterPanel(
 export function unmountChronicleFilterPanel(): void {
   editor?.destroy();
   editor = null;
+  unsubscribeFirstDayOfWeek?.();
+  unsubscribeFirstDayOfWeek = null;
   mounted = false;
   panel = null;
 }
@@ -991,7 +1013,9 @@ function renderPanel(): void {
   editor = buildFilterEditor({
     profile: FILTER_PROFILE,
     networkId: requireNetworkId(),
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты и раскрытие границ читают
+    // настройку в момент открытия/рендера (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     data: {
       registry: registryWithSides(),
       linkTypes: store.state.linkTypes,

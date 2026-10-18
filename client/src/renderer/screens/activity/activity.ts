@@ -36,6 +36,7 @@ import {
 import { ACTIVITY_ACTION_FILTERS, buildFilterAst } from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
 import type { FilterValueEnumOption } from '../../lib/filter-value.js';
+import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import { div, el, span, setTooltip } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { loadingState } from '../../lib/ui/empty-state.js';
@@ -123,6 +124,8 @@ let total = 0;
 let offset = 0;
 /** Loading guard against stale data. */
 let querySeq = 0;
+/** Последний увиденный первый день недели сети (пересборка панели на смене). */
+let firstDayOfWeekSeen = 1;
 /** id строки под курсором клавиатуры (`null` — курсора нет). */
 let currentRowId: string | null = null;
 /** Рукоятка единой таблицы ленты (фасад `lib/ui/table.ts`). */
@@ -269,6 +272,7 @@ export function mountActivity(hostEl: HTMLElement): () => void {
     legacySize: () => panelWidth,
   });
 
+  firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
   mountFilterPanel(panel);
   // Maintenance commands + pager live inside the results column so destructive
   // actions stay visibly apart from the table.
@@ -325,6 +329,13 @@ export function mountActivity(hostEl: HTMLElement): () => void {
   // Restore the view when the network opens with `active_view = 'activity'`.
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Смена первого дня недели в «Все настройки» перестраивает открытую панель:
+    // календарь точной даты читает настройку заново (ошибка b5278f9a).
+    const firstDayOfWeek = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+    if (firstDayOfWeek !== firstDayOfWeekSeen) {
+      firstDayOfWeekSeen = firstDayOfWeek;
+      mountFilterPanel(panel);
+    }
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
     if (
@@ -388,7 +399,9 @@ function mountFilterPanel(area: HTMLElement): void {
   const editor = buildFilterEditor({
     profile: 'events',
     networkId: requireNetworkId(),
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     data,
     getState: () => filter,
     touch: () => {

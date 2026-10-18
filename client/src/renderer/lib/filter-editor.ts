@@ -31,6 +31,7 @@
 
 import type { FilterAstSortKey, FilterProfileId } from '@etn/shared';
 
+import type { FirstDayOfWeekSource } from './dates.js';
 import { div } from './dom.js';
 import type { EntityChipFieldOptions } from './entity-picker.js';
 import {
@@ -190,10 +191,12 @@ export interface FilterEditorOptionsBase {
   networkId: string;
   /**
    * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
-   * передаётся виджетам даты (календарь диалога «Дата/период»). Не задан —
-   * понедельник.
+   * передаётся виджетам даты (календарь диалога «Дата/период»). Допускается
+   * функция-резолвер: виджеты читают её в момент открытия календаря и
+   * раскрытия границ, поэтому смена настройки сети не оставляет открытую
+   * панель со старым значением (ошибка b5278f9a). Не задан — понедельник.
    */
-  firstDayOfWeek?: number;
+  firstDayOfWeek?: FirstDayOfWeekSource;
   /** Данные сети: реестр свойств, типы связей, типы мыслей, контекстные операнды. */
   data: FilterTreeData;
   /** Живая модель отбора (единственная — `FilterCriteriaState`). */
