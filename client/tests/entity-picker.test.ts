@@ -759,6 +759,56 @@ describe('entity-picker: выбор из списка не роняет клав
     );
   });
 
+  it('чип-поле: множественный выбор — чекбоксы в выпадающем списке (da24f1e7)', async () => {
+    const { body } = installShim();
+    let values = ['a'];
+    const field = buildEntityChipField({
+      getValues: () => values,
+      onChange: (next) => {
+        values = next;
+      },
+      loadOptions: () => [
+        { id: 'a', title: 'А', cloud: { id: 'a', title: 'А' } },
+        { id: 'b', title: 'Б', cloud: { id: 'b', title: 'Б' } },
+      ],
+    });
+    await flush();
+    const root = field.root as unknown as ShimElement;
+    const input = findByClass(root, 'entity-chip-input');
+    assert.ok(input !== undefined, 'у чип-поля есть строка ввода');
+    input!.emit('focus');
+    await flush();
+
+    const rowA = itemRows(body).find(
+      (r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'a',
+    );
+    const rowB = itemRows(body).find(
+      (r) => findByClass(r, 'prop-ref-cloud')?.dataset['id'] === 'b',
+    );
+    assert.ok(rowA !== undefined && rowB !== undefined, 'обе строки списка показаны');
+
+    // Требование 73bf1489: чекбоксы — только в выпадающем списке; состояние
+    // отражает текущий набор значения.
+    const checkA = rowA!.querySelector('.type-combo-check') as unknown as ShimElement | null;
+    const checkB = rowB!.querySelector('.type-combo-check') as unknown as ShimElement | null;
+    assert.ok(checkA !== null && checkB !== null, 'в каждой строке есть чекбокс');
+    assert.equal((checkA as unknown as { type: string }).type, 'checkbox');
+    assert.equal((checkA as unknown as { checked: boolean }).checked, true, 'выбранное отмечено');
+    assert.equal((checkB as unknown as { checked: boolean }).checked, false, 'невыбранное — нет');
+    assert.equal(findByClass(root, 'type-combo-check'), undefined, 'в поле чекбоксов нет');
+
+    // Повторный выбор отмеченной строки снимает значение; список не закрывается.
+    setActive(input!);
+    rowA!.emit('mousedown', mousedownEvent(rowA));
+    rowA!.click();
+    assert.deepEqual(values, [], 'значение снято');
+    assert.equal(itemRows(body).length, 2, 'список остался открыт (множественный режим)');
+
+    rowB!.emit('mousedown', mousedownEvent(rowB));
+    rowB!.click();
+    assert.deepEqual(values, ['b'], 'новое значение добавлено');
+  });
+
   it('чип-поле: снятие чипа крестиком возвращает фокус в поле ввода', () => {
     installShim();
     let values = ['x'];

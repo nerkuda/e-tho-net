@@ -708,7 +708,12 @@ export async function pickEntitiesModal(
 
       /** Строка выпадашки по варианту публикации (облачко с мини-обложкой). */
       const publicationEntries = (options: EntityOption[]): SuggestEntry[] =>
-        options.map((opt) => ({ value: opt.id, label: opt.title, thought: opt.cloud }));
+        options.map((opt) => ({
+          value: opt.id,
+          label: opt.title,
+          thought: opt.cloud,
+          checked: checked.has(opt.id),
+        }));
 
       const searchSource: SuggestSource = {
         when: 'typed',
@@ -719,8 +724,14 @@ export async function pickEntitiesModal(
           const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
           return loadThoughtHits(opts.networkId, query, typeIds).then((hits) =>
             // Строка-мысль — облачком: DTO кандидата структурно совместим с
-            // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
-            hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
+            // `ThoughtCloudInput`, визуал резолвит фабрика (S1). Чекбокс
+            // множественного режима отражает текущий набор.
+            hits.map((hit) => ({
+              value: hit.id,
+              label: hit.title,
+              thought: { ...hit },
+              checked: checked.has(hit.id),
+            })),
           );
         },
         // Публикации — порционный серверный источник: скролл выпадашки вниз
@@ -735,9 +746,19 @@ export async function pickEntitiesModal(
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
+        // Множественный режим — чекбоксы в выпадашке; одиночный — без них.
+        multiSelect: !single,
         onPick: (entry) => {
           if (single) {
             finish([entry.value]);
+            return;
+          }
+          // Повторный выбор отмеченной строки снимает значение.
+          if (checked.has(entry.value)) {
+            checked.delete(entry.value);
+            pickedThoughts.delete(entry.value);
+            renderChips();
+            updateButtons();
             return;
           }
           checked.add(entry.value);
@@ -1360,7 +1381,10 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
 
   const mapOptions = (options: EntityOption[]): SuggestEntry[] => {
     for (const opt of options) byId.set(opt.id, opt);
-    return options.map(entityEntry);
+    // Множественный режим: чекбокс строки отражает текущий набор значений
+    // (требование 73bf1489 — «чекбоксы выбора только в выпадающем списке»).
+    const values = opts.getValues();
+    return options.map((opt) => ({ ...entityEntry(opt), checked: values.includes(opt.id) }));
   };
   const source: SuggestSource = {
     when: opts.optionsWhen ?? 'always',
@@ -1384,7 +1408,18 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     pickFirstOnEnter: false,
     // Ширина списка — параметр вызывающего («Есть свойства» просит шире).
     ...(opts.dropdownMinWidth !== undefined ? { minWidth: opts.dropdownMinWidth } : {}),
-    onPick: (entry) => commit(entry.value),
+    // Чип-поле — множественный выбор: чекбоксы в строках списка, выбор не
+    // закрывает список; повторный клик по отмеченной строке снимает значение.
+    multiSelect: true,
+    onPick: (entry) => {
+      const values = opts.getValues();
+      if (values.includes(entry.value)) {
+        opts.onChange(values.filter((value) => value !== entry.value));
+      } else {
+        commit(entry.value);
+      }
+      renderChips();
+    },
   });
   // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,
   // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Общая
@@ -1512,7 +1547,15 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       chips.push(chip);
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
-    field.replaceChildren(...chips, input);
+    // Ввод НЕ переставляем через `replaceChildren`: перенос сфокусированного
+    // узла даёт blur и закрывает выпадашку множественного выбора, хотя строка
+    // выбрана и список должен остаться открытым (ошибка da24f1e7, требование
+    // 73bf1489 — можно отметить несколько подряд). Снимаем только чипы и
+    // ставим новые перед полем.
+    for (const node of [...field.children]) {
+      if (node !== input) node.remove();
+    }
+    field.prepend(...chips);
     // Приглашение: пусто — «Название…», есть значения — «+ ещё один …»
     // (единый вид с полем значения свойства-связи, приёмка №2).
     const empty = opts.getValues().length === 0;

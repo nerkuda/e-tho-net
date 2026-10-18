@@ -62,6 +62,15 @@
   white-space: nowrap;
 }
 
+/* Чекбокс множественного выбора (требование 73bf1489): индикатор состояния,
+ * клик обрабатывает строка — второй обработчик не нужен. */
+.type-combo-check {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+
 .type-combo-item:hover,
 .type-combo-item.active {
   background: var(--accent-soft);

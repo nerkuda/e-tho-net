@@ -33,8 +33,9 @@
  * Модуль не подключает себя к полям — подключение делает веха 4 (задача
  * 77e7cafd). Потолок истории «10 значений» — дело источника
  * (`RECENT_VALUES_MAX` в editor/recent-values.ts), модуль рендерит всё, что
- * вернул `load`. Множественный выбор (галочки, «Готово») остаётся вне
- * контракта: это отдельный режим ввода, а не подсказка.
+ * вернул `load`. Множественный выбор — режим `multiSelect` (чекбокс в строке,
+ * список не закрывается при выборе; требование 73bf1489, элемент 21955e84);
+ * кнопка «Готово» остаётся делом вызывающего.
  *
  * Строка, показывающая мысль, строится фабрикой облачка
  * (`createThoughtCloud`, профиль `chip`, ширина по контейнеру): значок, цвета,
@@ -47,6 +48,7 @@
 import type { LinkStyle } from '@etn/shared';
 
 import { div, el, positionBodyDropdown, span } from './dom.js';
+import { choiceControl } from './ui/choice-row.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
 import { createThoughtCloud, type CloudProfile, type ThoughtCloudInput } from './thought-cloud.js';
@@ -57,6 +59,12 @@ export interface SuggestEntry {
   value: string;
   /** Подпись строки (может отличаться от значения: id → название). */
   label: string;
+  /**
+   * Отмечен ли вариант (множественный выбор): в режиме `multiSelect` строка
+   * несёт чекбокс, отражающий состояние. Требование 73bf1489, элемент
+   * 21955e84: «чекбоксы выбора — только в выпадающем списке».
+   */
+  checked?: boolean;
   /**
    * Данные мысли: строка рисуется готовым облачком общей фабрики — значок,
    * цвета, начертание, бледность неактуальной, метка корзины и обрезка имени
@@ -181,7 +189,13 @@ export interface WireSuggestOptions {
    * 5817b009); значение поднимает и потолок ширины, если он ниже.
    */
   minWidth?: number;
-  /** Выбрана строка (клик или Enter). Список к этому моменту уже закрыт. */
+  /**
+   * Множественный выбор: строки несут чекбокс (`entry.checked`), выбор НЕ
+   * закрывает список — можно отметить несколько подряд (требование 73bf1489,
+   * элемент 21955e84). Одиночный режим — без чекбоксов, список закрывается.
+   */
+  multiSelect?: boolean;
+  /** Выбрана строка (клик или Enter). В одиночном режиме список уже закрыт. */
   onPick(entry: SuggestEntry): void;
 }
 
@@ -260,6 +274,11 @@ export interface SuggestRowOptions {
   onPick?: (entry: SuggestEntry) => void;
   /** Клик по треугольнику раскрытия — владелец меняет состояние и перерисовывает. */
   onToggle?: (entry: SuggestEntry) => void;
+  /**
+   * Множественный режим: каждая строка получает чекбокс выбора (`entry.checked`
+   * — состояние). Выбор не закрывает список (см. `wireSuggest.multiSelect`).
+   */
+  multiSelect?: boolean;
 }
 
 /**
@@ -274,6 +293,17 @@ export function buildSuggestRow(entry: SuggestEntry, options: SuggestRowOptions 
   const row = div('type-combo-item');
   if (entry.create === true) row.classList.add('type-combo-create');
   if (entry.disabled === true) row.classList.add('disabled');
+  // Множественный выбор — чекбокс в строке списка (требование 73bf1489:
+  // «чекбоксы выбора — только в выпадающем списке»). Чекбокс — индикатор
+  // состояния: клик обрабатывает строка (`pointer-events: none` в CSS), поэтому
+  // переключение ровно одно.
+  if (options.multiSelect === true) {
+    const check = choiceControl('checkbox', { checked: entry.checked === true });
+    check.className = 'type-combo-check';
+    check.tabIndex = -1;
+    check.setAttribute('aria-label', entry.label);
+    row.append(check);
+  }
   // Отступ дерева типов: строки с отступом получают колонку тоггла,
   // у листа она пустая — подписи соседних уровней не разъезжаются.
   if (entry.indent !== undefined) {
@@ -539,7 +569,18 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
         // Разметку строки собирает общий модуль — второго места нет.
         const row = buildSuggestRow(entry, {
           onToggle: () => refresh(false),
+          multiSelect: opts.multiSelect === true,
           onPick: (picked) => {
+            if (opts.multiSelect === true) {
+              // Чекбокс — состояние; список остаётся открытым. Локальный
+              // переключатель даёт мгновенный отклик, вызывающий обновляет
+              // модель и чипы.
+              picked.checked = picked.checked !== true;
+              const check = row.querySelector<HTMLInputElement>('.type-combo-check');
+              if (check !== null) check.checked = picked.checked;
+              opts.onPick(picked);
+              return;
+            }
             close();
             opts.onPick(picked);
           },
@@ -760,6 +801,15 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       const entry = rowEntries[index];
       if (entry === undefined || entry.disabled === true) return;
       event.preventDefault();
+      if (opts.multiSelect === true) {
+        // Множественный режим: Enter отмечает/снимает и не закрывает список.
+        const row = rows[index];
+        entry.checked = entry.checked !== true;
+        const check = row?.querySelector<HTMLInputElement>('.type-combo-check');
+        if (check !== null && check !== undefined) check.checked = entry.checked;
+        opts.onPick(entry);
+        return;
+      }
       close();
       opts.onPick(entry);
     }
