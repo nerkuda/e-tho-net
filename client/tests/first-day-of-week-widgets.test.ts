@@ -58,6 +58,19 @@ function installShim(): void {
     getItem: () => null,
     setItem: () => undefined,
   };
+  // Каркас панели отбора и строка поиска наблюдают за размером контейнера;
+  // в тесте достаточно no-op-наблюдателя.
+  (globalThis as any).ResizeObserver = class {
+    observe(): void {
+      /* раскладки в шиме нет */
+    }
+    unobserve(): void {
+      /* раскладки в шиме нет */
+    }
+    disconnect(): void {
+      /* раскладки в шиме нет */
+    }
+  };
   win['etn'] = {
     propertyRegistry: { list: async () => [] },
     savedFilters: {
@@ -66,6 +79,12 @@ function installShim(): void {
       update: async () => ({}),
       remove: async () => undefined,
     },
+    chronicleFilters: { list: async () => [] },
+    ui: {
+      getState: async () => null,
+      setState: async () => undefined,
+    },
+    admin: { listUsers: async () => [] },
   };
 }
 
@@ -209,5 +228,122 @@ describe('первый день недели: календарные видже�
     current = undefined;
     assert.equal(datesMod.resolveFirstDayOfWeek(source), 1, 'нет настройки — понедельник');
     assert.equal(datesMod.resolveFirstDayOfWeek(9), 1, 'вне ISO 1…7 — понедельник');
+  });
+
+  // -------------------------------------------------------------------------
+  // Выход из сети при first_day_of_week ≠ 1 (регресс независимой проверки
+  // b5278f9a): resetNetwork синхронно рассылает networkId: null, и подписки
+  // панелей обязаны выйти ДО пересборки. Иначе requireNetworkId() бросает, а
+  // исключение обрывает resetNetwork до showScreen('networks'/'onboarding').
+  // -------------------------------------------------------------------------
+
+  /** Открыть сеть (по умолчанию с воскресеньем первым днём недели). */
+  function openNetwork(firstDayOfWeek = 7): void {
+    stateMod.store.update({
+      network: { first_day_of_week: firstDayOfWeek } as any,
+      networkId: 'net-1',
+    });
+  }
+
+  /** Общая проверка жизненного цикла: resetNetwork не бросает, teardown снимает подписку. */
+  function assertResetIsSafeAndUnsubscribes(
+    baseline: number,
+    mountedListeners: number,
+    unmount: () => void,
+  ): void {
+    assert.ok(mountedListeners > baseline, 'панель подписалась на store');
+    assert.doesNotThrow(
+      () => stateMod.store.resetNetwork(),
+      'resetNetwork не прерывается исключением панели (выход из сети возможен)',
+    );
+    unmount();
+    assert.equal(
+      stateMod.store.listenerCount,
+      baseline,
+      'teardown панели снимает store-подписку (нет утечки жизненного цикла)',
+    );
+  }
+
+  it('выход из сети: панель «Структур» не пересобирается без сети', async () => {
+    const baseline = stateMod.store.listenerCount;
+    openNetwork();
+    const panelMod = await import('../src/renderer/screens/structures/filter-panel.js');
+    const host = new ShimElement('div');
+    panelMod.mountFilterPanel(host as unknown as HTMLElement, {
+      onApply: () => undefined,
+      onStatePersist: () => undefined,
+      onCommands: () => undefined,
+    });
+    // Фиксируем подпись каталога текущей сети до выхода: без сброса подписи
+    // при выходе она совпала бы при повторном открытии той же сети, и панель
+    // не перечиталась бы (залипание catalogueSignature).
+    stateMod.store.update({ showInactive: false });
+    await flush();
+    const before = host.querySelector('.fe');
+    assert.ok(before !== null, 'редактор смонтирован');
+    assert.ok(stateMod.store.listenerCount > baseline, 'панель подписалась на store');
+
+    assert.doesNotThrow(
+      () => stateMod.store.resetNetwork(),
+      'resetNetwork не прерывается исключением панели (выход из сети возможен)',
+    );
+
+    // Повторное открытие с тем же первым днём недели, что панель увидела при
+    // выходе (1): пересборку обязана вызвать сброшенная подпись каталога, а не
+    // fdw-ветка. Иначе catalogueSignature залип и панель не перечиталась бы.
+    openNetwork(1);
+    await flush();
+    const after = host.querySelector('.fe');
+    assert.ok(after !== null, 'редактор на месте после повторного открытия сети');
+    assert.notEqual(after, before, 'панель перечиталась после повторного открытия сети');
+
+    panelMod.unmountFilterPanel();
+    assert.equal(
+      stateMod.store.listenerCount,
+      baseline,
+      'teardown панели снимает store-подписку (нет утечки жизненного цикла)',
+    );
+  });
+
+  it('выход из сети: панель «Дневника» не пересобирается без сети', async () => {
+    const baseline = stateMod.store.listenerCount;
+    openNetwork();
+    const panelMod = await import('../src/renderer/screens/chronicle/filter-panel.js');
+    const host = new ShimElement('div');
+    panelMod.mountChronicleFilterPanel(host as unknown as HTMLElement, {
+      apply: () => undefined,
+    });
+    assertResetIsSafeAndUnsubscribes(baseline, stateMod.store.listenerCount, () =>
+      panelMod.unmountChronicleFilterPanel(),
+    );
+    await flush();
+  });
+
+  it('выход из сети: панель «Событий» не пересобирается без сети', async () => {
+    const baseline = stateMod.store.listenerCount;
+    openNetwork();
+    const activityMod = await import('../src/renderer/screens/activity/activity.js');
+    const host = new ShimElement('div');
+    const teardown = activityMod.mountActivity(host as unknown as HTMLElement);
+    assertResetIsSafeAndUnsubscribes(baseline, stateMod.store.listenerCount, teardown);
+    await flush();
+  });
+
+  it('выход из сети: зона настроек поиска не пересобирается без сети', async () => {
+    const baseline = stateMod.store.listenerCount;
+    openNetwork();
+    const searchMod = await import('../src/renderer/search/search.js');
+    const host = new ShimElement('div');
+    const input = new ShimElement('input');
+    // Шиму не нужна настоящая раскладка: позиционирование панели выходит
+    // раньше (parentElement у узлов шима не объявлен).
+    (host as any).parentElement = null;
+    (input as any).parentElement = null;
+    const teardown = searchMod.mountSearch({
+      host: host as unknown as HTMLElement,
+      input: input as unknown as HTMLInputElement,
+    });
+    assertResetIsSafeAndUnsubscribes(baseline, stateMod.store.listenerCount, teardown);
+    await flush();
   });
 });

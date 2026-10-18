@@ -941,6 +941,15 @@ export function mountChronicleFilterPanel(
   firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
   unsubscribeFirstDayOfWeek = store.subscribe(() => {
     if (!mounted) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // `renderPanel()` зовёт `requireNetworkId()` и бросил бы, оборвав
+    // `resetNetwork` до перехода на экран списка сетей (ошибка b5278f9a).
+    // Синхронизируем отслеживаемое значение — при следующем открытии сети
+    // подписка снова отработает штатно.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      return;
+    }
     const next = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
     if (next === firstDayOfWeekSeen) return;
     firstDayOfWeekSeen = next;

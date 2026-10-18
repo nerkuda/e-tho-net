@@ -247,6 +247,16 @@ export function mountSearch(next: SearchChrome): () => void {
   firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
   const unsubscribeFirstDayOfWeek = store.subscribe(() => {
     if (chrome === null || settingsZone === null) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // пересобирать зону настроек не из чего — `requireNetworkId()` в
+    // `buildSettingsZone` бросил бы, а исключение в подписчике оборвало бы
+    // `resetNetwork` до перехода на экран списка сетей (ошибка b5278f9a).
+    // Синхронизируем отслеживаемое значение: при следующем открытии сети
+    // подписка снова отработает штатно.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      return;
+    }
     const next = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
     if (next === firstDayOfWeekSeen) return;
     firstDayOfWeekSeen = next;

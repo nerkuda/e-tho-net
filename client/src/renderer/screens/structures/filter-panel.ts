@@ -548,6 +548,17 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
   unsubscribeStore?.();
   unsubscribeStore = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // панель пересобирать не из чего — `renderPanel()` зовёт
+    // `requireNetworkId()` и бросил бы, оборвав `resetNetwork` до перехода на
+    // экран списка сетей (ошибка b5278f9a). Синхронизируем отслеживаемые
+    // значения: при следующем открытии сети подпись каталога не совпадёт и
+    // панель перечитает реестр и перерисуется.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      catalogueSignature = '';
+      return;
+    }
     // Смена первого дня недели в «Все настройки» перестраивает открытую
     // панель: календарь точной даты читает настройку заново (ошибка b5278f9a).
     const firstDayOfWeek = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);

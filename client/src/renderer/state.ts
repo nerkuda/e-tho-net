@@ -286,6 +286,16 @@ class Store {
     };
   }
 
+  /**
+   * Текущее число подписчиков. Тестовый шов жизненного цикла: регресс-тесты
+   * проверяют, что смонтированная панель снимает свои подписки при teardown
+   * (утечка подписчика = повторная пересборка после переоткрытия вида).
+   * Публичный контракт подписки не меняется.
+   */
+  public get listenerCount(): number {
+    return this.listeners.size;
+  }
+
   /** Resets connection-related state (disconnect / network switch). */
   public resetNetwork(): void {
     this.update({

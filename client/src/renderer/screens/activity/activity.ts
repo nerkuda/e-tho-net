@@ -329,6 +329,17 @@ export function mountActivity(hostEl: HTMLElement): () => void {
   // Restore the view when the network opens with `active_view = 'activity'`.
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // пересобирать панель не из чего — `mountFilterPanel()` зовёт
+    // `requireNetworkId()` и бросил бы, оборвав `resetNetwork` до перехода на
+    // экран списка сетей (ошибка b5278f9a). Сбрасываем отметку инициализации:
+    // при повторном открытии той же сети/вкладки `ensureActivityInitialised`
+    // обязан перечитать снимок.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      networkIdSeen = null;
+      return;
+    }
     // Смена первого дня недели в «Все настройки» перестраивает открытую панель:
     // календарь точной даты читает настройку заново (ошибка b5278f9a).
     const firstDayOfWeek = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
