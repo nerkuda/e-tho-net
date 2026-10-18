@@ -95,6 +95,15 @@ export class NetworkDb {
   layerId: string;
   /** Абсолютный путь underlying `data.db` (`:memory:` for tests). */
   readonly dbPath: string;
+  /**
+   * Identity of this particular connection object (не сети и не слоя).
+   *
+   * Нужен кэшу результатов отборов: после закрытия и повторного открытия
+   * соединения `PRAGMA data_version` начинается заново, поэтому пара
+   * «сеть + слой» не различает старое и новое соединение. Записи кэша,
+   * сделанные на закрытом соединении, не должны отдаваться новому.
+   */
+  readonly instanceId: string = randomUUID();
   private readonly db: Database.Database;
   private closed = false;
   /**
@@ -168,6 +177,32 @@ export class NetworkDb {
     const changes = (this.signalStmt.get() as { c: number }).c;
     const dataVersion = this.db.pragma('data_version', { simple: true }) as number;
     return `${dataVersion}:${changes}`;
+  }
+
+  /**
+   * Число строк, изменённых ЭТИМ соединением (`SELECT total_changes()`).
+   *
+   * Дешёвый скаляр; используется сигналом слоя ({@link readSignal}) и обёрткой
+   * записи, чтобы понять, реально ли транзакция что-то изменила (событие-only
+   * `runWrite` не должен инвалидировать кэш отборов).
+   */
+  totalChanges(): number {
+    this.signalStmt ??= this.db.prepare('SELECT total_changes() AS c');
+    return (this.signalStmt.get() as { c: number }).c;
+  }
+
+  /**
+   * `PRAGMA data_version` — счётчик, который меняется при коммитах ДРУГИХ
+   * соединений с тем же файлом `data.db`. Вместе с {@link totalChanges} даёт
+   * сигнал «состояние данных сдвинулось» без записи в БД (см. `readSignal`).
+   *
+   * Для кэша результатов отборов это единственный способ заметить запись,
+   * пришедшую из другого соединения процесса (write-pool worker) или из
+   * другого процесса; `:memory:`-сети второго соединения не имеют, и там
+   * остаётся только `total_changes`.
+   */
+  dataVersion(): number {
+    return this.db.pragma('data_version', { simple: true }) as number;
   }
 
   /**
@@ -625,7 +660,10 @@ export function closeAll(): void {
  * Requires the `better-sqlite3` native binding; callers usually gate the whole
  * suite on a `nativeAvailable()` check.
  */
-export function createInMemoryNetworkDb(layerId: string = BASE_LAYER_ID): NetworkDb {
+export function createInMemoryNetworkDb(
+  layerId: string = BASE_LAYER_ID,
+  networkId = 'in-memory',
+): NetworkDb {
   const db = new DatabaseConstructor(':memory:');
   db.pragma('foreign_keys = ON');
   applyConnectionPragmas(db);
@@ -635,5 +673,5 @@ export function createInMemoryNetworkDb(layerId: string = BASE_LAYER_ID): Networ
   if (migrationResult.applied.length > 0) {
     db.exec('ANALYZE');
   }
-  return new NetworkDb(db, 'in-memory', ':memory:', layerId);
+  return new NetworkDb(db, networkId, ':memory:', layerId);
 }

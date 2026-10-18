@@ -77,6 +77,7 @@ import {
   type WriteFx,
   type WriteJournalContext,
 } from './write-wrapper.js';
+import { bumpNetworkDataVersion } from './view-result-cache.js';
 
 /**
  * Контекст задачи из соединения главного потока. Для пула его строит
@@ -137,6 +138,12 @@ export async function runThoughtsWrite(
       runWriteCore(ndb, ctx, () => composeThoughtsWrite(ndb, payload, options.crossNetworkAccess)),
   })) as ThoughtsWriteOutcome;
 
+  // Запись исполнена воркером (или синхронно) — данные сети сдвинулись.
+  // В воркере `runWriteCore` двигает счётчик СВОЕГО потока, поэтому главный
+  // поток обязан отметить изменение сам (задача 3f2b0958). На синхронном пути
+  // `runWriteCore` уже отметил — повторный инкремент безвреден.
+  bumpNetworkDataVersion(ndb.networkId);
+
   for (const ev of outcome.events ?? []) {
     // `ev` — объединение пар (type, data); в цикле корреляция пары теряется.
     // Приведение безопасно: транспорт получает ровно ту пару, которую вернула
@@ -176,6 +183,9 @@ export async function runThoughtCreate(
     poolable: options.poolable ?? true,
     sync: () => runWriteCore(ndb, ctx, () => composeThoughtCreate(ndb, payload)),
   })) as ThoughtCreateOutcome;
+
+  // См. `runThoughtsWrite`: коммит мог произойти в writer-воркере.
+  bumpNetworkDataVersion(ndb.networkId);
 
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
@@ -234,6 +244,9 @@ export async function runThoughtsBatch(
     },
   })) as ThoughtBatchOutcome;
 
+  // См. `runThoughtsWrite`: коммит мог произойти в writer-воркере.
+  bumpNetworkDataVersion(ndb.networkId);
+
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
   }
@@ -285,6 +298,9 @@ export async function runThoughtsCopy(
     poolable: options.poolable ?? true,
     sync: () => composeThoughtCopyOutcome(ndb, payload),
   })) as ThoughtCopyOutcome;
+
+  // См. `runThoughtsWrite`: коммит мог произойти в writer-воркере.
+  bumpNetworkDataVersion(ndb.networkId);
 
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);

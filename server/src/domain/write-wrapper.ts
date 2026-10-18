@@ -41,6 +41,7 @@ import type {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { bumpNetworkDataVersion } from './view-result-cache.js';
 import {
   recordAttachmentActivity,
   recordCommentActivity,
@@ -271,9 +272,18 @@ export function runWriteCore<T>(
   fn: () => WriteOutcome<T>,
 ): WriteOutcome<T> {
   let outcome!: WriteOutcome<T>;
+  // Сигнал «данные сдвинулись» для кэша результатов отборов (задача
+  // 3f2b0958): сравниваем до и после транзакции. Событие-only запись
+  // (`thought-type-view.run`, пустой исход) счётчик не двигает — иначе кэш
+  // инвалидировался бы собственным прогоном отбора. Журнал активности пишется
+  // НИЖЕ, после снимка, и тоже не учитывается: это не данные отборов.
+  const changesBefore = ndb.totalChanges();
   ndb.transaction(() => {
     outcome = fn();
   });
+  if (ndb.totalChanges() !== changesBefore) {
+    bumpNetworkDataVersion(ctx.networkId);
+  }
   const activityEntries = outcome.activity ?? [];
   if (activityEntries.length > 0) {
     // Строки журнала получают монотонно возрастающие метки времени от одной
