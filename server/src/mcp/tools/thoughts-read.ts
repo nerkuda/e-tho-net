@@ -556,7 +556,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   // спека 85b94925, P1-паритет MCP↔REST `POST /thoughts/resolve`).
   // Возвращает карточки в порядке первого появления id в запросе плюс
   // `missing[]` для отсутствующих. Лимит по размеру пачки —
-  // `rt.limits.maxNodesPerSubgraph` (тот же, что у `etn.thoughts.subgraph`).
+  // `THOUGHT_RESOLVE_MAX_IDS` (100), как в REST `POST /thoughts/resolve`.
   mcp.registerTool(
     'etn.thoughts.resolve',
     {
@@ -572,7 +572,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
         'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
         '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
-        'Лимит — `maxNodesPerSubgraph`.',
+        'Лимит — 100 id за вызов.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
     },

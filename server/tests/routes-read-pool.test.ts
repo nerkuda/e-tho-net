@@ -124,5 +124,31 @@ describe(
       const comments = pooled[3] as { data: Array<{ body_md: string }> };
       assert.equal(comments.data[0]?.body_md, 'REST постоянный');
     });
+
+    it('resolve: 100 id — ок, 101 — VALIDATION_ERROR, пустой массив — ок', async () => {
+      const post = (payloadIds: string[]) =>
+        ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/resolve`,
+          headers: authHeaders(ctx),
+          payload: { ids: payloadIds },
+        });
+
+      const ok100 = await post(ids.slice(0, 100));
+      assert.equal(ok100.statusCode, 200, ok100.body);
+      assert.equal((ok100.json().data as unknown[]).length, 100);
+
+      // Паритет с MCP: `etn.thoughts.resolve` на 101 отвечает VALIDATION_ERROR.
+      const bad101 = await post(ids.slice(0, 101));
+      assert.equal(bad101.statusCode, 422, bad101.body);
+      const error = bad101.json().error as { code: string; details?: { field?: string } };
+      assert.equal(error.code, 'VALIDATION_ERROR');
+      assert.equal(error.details?.field, 'ids');
+
+      // Пустой массив по-прежнему допустим (ids может быть пустым).
+      const empty = await post([]);
+      assert.equal(empty.statusCode, 200, empty.body);
+      assert.deepEqual(empty.json().data, []);
+    });
   },
 );

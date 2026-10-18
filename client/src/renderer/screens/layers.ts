@@ -31,6 +31,7 @@ import {
 import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
+import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import {
   MENU_SEPARATOR,
   menuAction,
@@ -940,7 +941,9 @@ async function pageToRows(networkId: string, page: LayerDiffPage): Promise<DiffR
   const titles = new Map<string, string>();
   if (ids.size > 0) {
     try {
-      const refs = await etn.thoughts.resolve(networkId, [...ids]);
+      // На странице диффа до 100 записей, id из них может быть больше
+      // серверного лимита resolve — батчер режет по `THOUGHT_RESOLVE_MAX_IDS`.
+      const refs = await resolveThoughtRefs(networkId, [...ids]);
       for (const ref of refs) titles.set(ref.id, ref.title);
     } catch {
       // Заголовки деградируют к id — сам список отличий всё равно показан.

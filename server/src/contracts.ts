@@ -3595,16 +3595,16 @@ export const RestNeighborsQuery = defineContract(
   },
 );
 
-/** Тело resolve (ids может быть пустым) и focus-операций. */
+/** Тело resolve (ids может быть пустым, но не больше `THOUGHT_RESOLVE_MAX_IDS`). */
 export const RestResolveIdsBody = defineContract(
   'rest:thoughts.resolve-body',
   z.object({}),
   {
     ids: {
       from: { kind: 'body' },
-      t: z.array(z.string()),
+      t: z.array(z.string()).max(THOUGHT_RESOLVE_MAX_IDS),
       req: true,
-      msg: 'ids обязателен (массив строк).',
+      msg: `ids должен быть массивом строк (до ${THOUGHT_RESOLVE_MAX_IDS} элементов).`,
     },
   },
 );

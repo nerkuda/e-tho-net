@@ -42,6 +42,7 @@ import { loadingState } from '../../lib/ui/empty-state.js';
 import { createTable, type TableHandle } from '../../lib/ui/table.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
+import { resolveThoughtRefs } from '../../lib/thought-ref-batch.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
 import { openLayerPropsDialog } from '../layers.js';
@@ -821,7 +822,9 @@ async function resolveMissingThoughtTitles(
   const ids = collectMissingThoughtIds(page);
   if (ids.length === 0) return;
   try {
-    const refs = await etn.thoughts.resolve(networkId, ids);
+    // Снимки страницы могут дать больше id, чем серверный лимит resolve
+    // (100 за вызов) — батчер отправляет их чанками.
+    const refs = await resolveThoughtRefs(networkId, ids);
     for (const ref of refs) thoughtTitles.set(ref.id, ref.title);
     if (seq !== querySeq) return;
     renderTable();

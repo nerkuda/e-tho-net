@@ -45,6 +45,7 @@ import { errorDialog, showDialog } from './lib/dialog.js';
 import { openEntityDeleteDialog } from './lib/delete-dialog.js';
 import { div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
+import { resolveThoughtRefs } from './lib/thought-ref-batch.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { uiButton } from './lib/ui/button.js';
@@ -461,9 +462,11 @@ export async function openThoughtGroupDeleteDialog(
   let checks: Record<string, ThoughtDeletionCheckResult>;
   let refs: import('@etn/shared').ThoughtRef[];
   try {
+    // Выбор может быть больше серверного лимита resolve (100 id) — батчер
+    // режет его на чанки и склеивает карточки.
     [checks, refs] = await Promise.all([
       etn.thoughts.deletionCheck(networkId, ids),
-      etn.thoughts.resolve(networkId, ids),
+      resolveThoughtRefs(networkId, ids),
     ]);
   } catch (err) {
     errorDialog('Удаление выбранного', err);

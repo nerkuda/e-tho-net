@@ -40,6 +40,18 @@ const inFacades = (rel: string): boolean =>
 const inComment = (line: string): boolean => /^\s*(?:\/\/|\*|\/\*)/.test(line);
 
 /**
+ * Единственное разрешённое синхронное чтение комментариев — в write-пути
+ * `etn.comments.edit` (`mcp/tools/comments.ts:179`, внутри `runWriteTool`):
+ * постоянный комментарий читается в той же транзакции, что и правка, иначе
+ * reader-пул дал бы отдельное соединение и не увидел бы незакоммиченное
+ * изменение. Исключение привязано к точной строке и её форме, чтобы любой
+ * другой `listComments(...)` в файле краснил сторож.
+ */
+const COMMENTS_EDIT_TX_READ_LINE = 179;
+const COMMENTS_EDIT_TX_READ =
+  /^\s*listComments\(ndb, 'thought', args\.thought_id\)\.find\(\(c\) => c\.kind === 'permanent'\)/;
+
+/**
  * Синхронные доменные чтения, которые обязаны идти через `heavy-read.ts`.
  * `getComment(` намеренно не в списке: точечное чтение по id остаётся
  * синхронным (комментарии-снапшоты внутри транзакций записи и импорта).
@@ -91,8 +103,11 @@ export const READ_POOL_RULES: GuardRule[] = [
     pattern:
       /(?:\blistComments|\bgetVisibleComment|\bgetPermanentComment|\bgetCommentsPreview)\(/,
     include: inFacades,
-    allow: (rel, line) =>
-      inComment(line) || (rel === 'mcp/tools/comments.ts' && /\blistComments\(/.test(line)),
+    allow: (rel, line, lineNo) =>
+      inComment(line) ||
+      (rel === 'mcp/tools/comments.ts' &&
+        COMMENTS_EDIT_TX_READ_LINE === lineNo &&
+        COMMENTS_EDIT_TX_READ.test(line)),
   },
 ];
 
@@ -168,6 +183,37 @@ describe('guard: точечные тяжёлые чтения идут чере�
       assert.ok(
         violations.some((v) => v.rule === 'no-sync-neighbors-in-facades'),
         'сторож обязан поймать прямой getNeighbors( в фасаде',
+      );
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('мутационно краснеет: listComments вне write-пути etn.comments.edit ловится', () => {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-read-comments-'));
+    try {
+      fs.mkdirSync(path.join(fixtureRoot, 'mcp', 'tools'), { recursive: true });
+      // Строка 179 — разрешённое чтение в транзакции `etn.comments.edit`;
+      // строка 181 — мутация: синхронное чтение в другом месте файла.
+      const lines = [
+        "import { listComments } from '../../../domain/comment-service.js';",
+        ...Array.from({ length: 177 }, () => '// filler'),
+        "            listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??",
+        '            null;',
+        "      listComments(ndb, 'thought', otherId);",
+      ];
+      fs.writeFileSync(
+        path.join(fixtureRoot, 'mcp', 'tools', 'comments.ts'),
+        lines.join('\n'),
+        'utf8',
+      );
+      const violations = collectViolations(fixtureRoot, READ_POOL_RULES).filter(
+        (v) => v.rule === 'no-sync-comment-reads-in-facades',
+      );
+      assert.deepEqual(
+        violations.map((v) => v.line),
+        [181],
+        'разрешён только listComments write-пути etn.comments.edit (строка 179)',
       );
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
