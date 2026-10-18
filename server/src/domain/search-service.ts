@@ -284,7 +284,15 @@ interface TrigramQuery {
  * unary NOT).
  */
 function buildTrigramQuery(text: string): TrigramQuery {
-  const { include, exclude } = parseFilterKeywords(text);
+  // NFC-нормализация ДО выбора «короткое/длинное» и до LIKE-фолбэка: длина
+  // фрагмента и колонки `title_norm`/`synonym_norm` считаются по composed-форме.
+  // Без этого NFD-ввод короткого слова («йо» = 3 code points) уходил в LIKE-
+  // фолбэк, но паттерн строился из NFD и не находил NFC-колонку (блокер
+  // проверки e4f26158). Длинные слова не страдают: dual-form-фраза
+  // ({@link dualFormTrigramPhrase}) всё равно покрывает обе канонические формы.
+  const parsed = parseFilterKeywords(text);
+  const include = parsed.include.map((word) => word.normalize('NFC'));
+  const exclude = parsed.exclude.map((word) => word.normalize('NFC'));
   if (include.length === 0) {
     // No include words at all (empty query, or pure exclusions like `-dog`)
     // — nothing to anchor a match or even a LIKE fallback to.
@@ -637,6 +645,13 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
  * {@link findDuplicates} (same escaping, same `ESCAPE '\'` — copied
  * deliberately rather than re-derived, see the bug's chronological comment on
  * why re-deriving it went wrong last time).
+ *
+ * Words arrive from {@link buildTrigramQuery}, which normalises them to NFC
+ * BEFORE the short/long decision: a decomposed («NFD») two-character word is
+ * three code points, so without that step it would land here still
+ * decomposed and its `%…%` pattern would never match the NFC column
+ * (review of e4f26158). Keep the normalisation at that single entry point —
+ * here the word is already composed.
  */
 function buildShortWordNameClause(word: string, negate: boolean): Clause {
   const pattern = buildLikePattern(word.toLowerCase());

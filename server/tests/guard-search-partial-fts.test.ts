@@ -50,7 +50,7 @@ function seedThought(ndb: NetworkDb, title: string): void {
                              version, created_at, created_by, updated_at, updated_by)
        VALUES (?, ?, ?, NULL, 1, 0, 0, 1, '2024-01-01T00:00:00Z', 'u', '2024-01-01T00:00:00Z', 'u')`,
     )
-    .run(id, title, title.toLowerCase());
+    .run(id, title, title.normalize('NFC').toLowerCase());
 }
 
 /**
@@ -124,7 +124,14 @@ describe(
       try {
         seedThought(ndb, 'Cats and dogs');
         seedThought(ndb, 'Dogs and cats');
-        for (const sql of capturePartialSql(ndb, 'cats')) {
+        const captures = capturePartialSql(ndb, 'cats');
+        // Непустота — часть сторожа: при переименовании алиаса
+        // `thoughts_v thoughts` выборка пуста и цикл ниже прошёл бы вхолостую.
+        assert.ok(
+          captures.length > 0,
+          'partial-запрос не перехвачен: проверь alias thoughts_v thoughts в isPartialQuery',
+        );
+        for (const sql of captures) {
           assert.deepEqual(violations(sql, true), [], sql);
         }
       } finally {
@@ -136,7 +143,12 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 'Cats and dogs');
-        for (const sql of capturePartialSql(ndb, 'cats до')) {
+        const captures = capturePartialSql(ndb, 'cats до');
+        assert.ok(
+          captures.length > 0,
+          'partial-запрос не перехвачен: проверь alias thoughts_v thoughts в isPartialQuery',
+        );
+        for (const sql of captures) {
           assert.ok(/fts_thought_names\s+MATCH\s+\?/.test(sql), sql);
         }
       } finally {
@@ -148,7 +160,12 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 'Cats and dogs');
-        for (const sql of capturePartialSql(ndb, 'до')) {
+        const captures = capturePartialSql(ndb, 'до');
+        assert.ok(
+          captures.length > 0,
+          'partial-запрос не перехвачен: проверь alias thoughts_v thoughts в isPartialQuery',
+        );
+        for (const sql of captures) {
           assert.equal(/fts_thought_names\s+MATCH\s+\?/.test(sql), false, sql);
           assert.ok(/\bLIKE\b/.test(sql), sql);
         }
