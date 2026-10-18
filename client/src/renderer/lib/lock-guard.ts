@@ -132,6 +132,27 @@ export async function acquireOrShowBlocked(
 }
 
 /**
+ * Синхронная проверка чужого захвата перед входом в правку (ошибка
+ * 132c80bd): если объект держит другой пользователь — сообщаем об этом тем же
+ * тостом, что и {@link acquireOrShowBlocked}, и возвращаем `true` («правка
+ * запрещена»). Сервер всё равно отклонит запись 409, поэтому редактор не
+ * должен притворяться редактируемым; чтение при этом не блокируется
+ * (ADR 705fb6d3 — «чтение не блокируется»).
+ *
+ * Кэш захватов может быть ещё холодным (тогда `false` — вход разрешён, а
+ * `acquireOrShowBlocked` добьёт проверку запросом и отменит правку на 409).
+ */
+export function foreignLockBlocksEdit(entityType: LockEntityType | string, entityId: string): boolean {
+  const existing = otherHolder(entityType, entityId);
+  if (existing === null) return false;
+  notice(
+    `${entityLabel(entityType)} редактирует ${holderName(existing)} — поля заблокированы.`,
+    'info',
+  );
+  return true;
+}
+
+/**
  * Build a {@link LockHandle} from an {@link AcquireOutcome}. When the
  * outcome is `Blocked` or `Failed` the `lockId` is `null` (nothing to
  * release); the editor still renders the foreign-holder overlay when the

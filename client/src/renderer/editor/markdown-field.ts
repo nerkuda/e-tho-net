@@ -693,6 +693,13 @@ export function createMarkdownField(opts: {
    */
   onEditChange?: (editing: boolean) => void;
   /**
+   * Гейт входа в правку (ошибка 132c80bd): `false` — поле остаётся в
+   * просмотре (двойной клик, программный вход, команды). Нужен мягкому
+   * захвату: чужой захват блокирует запись (сервер ответит 409), но НЕ
+   * чтение — просмотр остаётся доступен (ADR 705fb6d3).
+   */
+  beforeEdit?: () => boolean;
+  /**
    * When set, pasting an image from the clipboard saves it as an attachment of
    * this entity and inserts the markdown image reference at the caret.
    */
@@ -1656,6 +1663,8 @@ export function createMarkdownField(opts: {
     locate?: MdSourceSelection,
     enterBlockAt?: { position: number; findText?: string },
   ): void => {
+    // Чужой захват: правка не начинается, текст остаётся доступен в просмотре.
+    if (!editing && opts.beforeEdit !== undefined && !opts.beforeEdit()) return;
     if (md !== undefined) currentMd = md;
     view.classList.add('hidden');
     area.classList.remove('hidden');
