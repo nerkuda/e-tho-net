@@ -388,6 +388,12 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
   const pageState = new Map<SuggestSource, { offset: number; done: boolean }>();
   /** Идёт ли запрос следующей порции прямо сейчас. */
   let loadingMore = false;
+  /**
+   * `value` строки, на которой курсор должен остаться после перерисовки
+   * (раскрытие/сворачивание группы): индексы строк после неё меняются, а
+   * сущность под курсором — нет. `null` — обычное поведение (курсор по индексу).
+   */
+  let pendingCursorValue: string | null = null;
 
   /** Размер порции источника (по умолчанию 50). */
   const pageSizeOf = (source: SuggestSource): number => source.pageSize ?? 50;
@@ -438,6 +444,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     lastGroups = [];
     pageState.clear();
     loadingMore = false;
+    pendingCursorValue = null;
   };
 
   const paint = (): void => {
@@ -463,6 +470,35 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       if (rowEntries[next]?.disabled !== true) return next;
       if (next === cur) return null; // упёрлись в край, выбираемых дальше нет
       cur = next;
+    }
+    return null;
+  };
+
+  /**
+   * Индекс первого видимого ребёнка строки — следующая строка с большим
+   * отступом. Иерархия плоская и в порядке обхода: ребёнок идёт сразу за
+   * родителем, внук — за ребёнком, поэтому отдельная модель дерева не нужна.
+   * `null` — детей (видимых) нет.
+   */
+  const childIndexOf = (index: number): number | null => {
+    const indent = rowEntries[index]?.indent;
+    if (indent === undefined) return null;
+    const next = index + 1;
+    const nextIndent = rowEntries[next]?.indent;
+    return nextIndent !== undefined && nextIndent > indent ? next : null;
+  };
+
+  /**
+   * Индекс ближайшего родителя строки — ближайшая предыдущая строка с меньшим
+   * отступом (в плоском обходе это ровно родитель). `null` — строка верхнего
+   * уровня или строка без иерархии.
+   */
+  const parentIndexOf = (index: number): number | null => {
+    const indent = rowEntries[index]?.indent;
+    if (indent === undefined) return null;
+    for (let i = index - 1; i >= 0; i--) {
+      const rowIndent = rowEntries[i]?.indent;
+      if (rowIndent !== undefined && rowIndent < indent) return i;
     }
     return null;
   };
@@ -521,6 +557,13 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       box.scrollTop = prevScroll;
     }
     if (cursor !== null) cursor = Math.min(cursor, rowEntries.length - 1);
+    // Раскрытие/сворачивание группы сдвигает индексы: курсор возвращаем на ту
+    // же сущность (по `value`), а не на тот же номер строки.
+    if (pendingCursorValue !== null) {
+      const kept = rowEntries.findIndex((entry) => entry.value === pendingCursorValue);
+      if (kept >= 0) cursor = kept;
+      pendingCursorValue = null;
+    }
     paint();
   }
 
@@ -658,6 +701,44 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       if (next === null) return;
       cursor = next;
       paint();
+      return;
+    }
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      if (rowEntries.length === 0 || cursor === null) return;
+      const entry = rowEntries[cursor];
+      if (entry === undefined) return;
+      // Горизонтальные стрелки принадлежат списку: гасим нажатие, чтобы
+      // каретка поля ввода не прыгала (даже если строке нечего раскрывать).
+      event.preventDefault();
+      if (entry.toggle === undefined) return; // плоская строка — нечего менять
+      if (event.key === 'ArrowRight') {
+        if (entry.toggle.expanded) {
+          // Раскрытая группа: курсор на первого видимого ребёнка.
+          const child = childIndexOf(cursor);
+          if (child !== null) {
+            cursor = child;
+            paint();
+          }
+          return;
+        }
+        entry.toggle.onToggle();
+        pendingCursorValue = entry.value;
+        refresh(false);
+        return;
+      }
+      if (entry.toggle.expanded) {
+        // Раскрытая группа сворачивается, курсор остаётся на ней.
+        entry.toggle.onToggle();
+        pendingCursorValue = entry.value;
+        refresh(false);
+        return;
+      }
+      // Свёрнутая группа: курсор идёт к родителю.
+      const parent = parentIndexOf(cursor);
+      if (parent !== null) {
+        cursor = parent;
+        paint();
+      }
       return;
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey) {
