@@ -8,7 +8,7 @@
 
 import { boot, initKeyboard } from './app.js';
 import { initDrafts } from './drafts.js';
-import { initDeepLinkHandler } from './editor/deep-link-handler.js';
+import { startDeepLinks } from './editor/deep-link-handler.js';
 import { initExternalLinkNavigation } from './editor/external-link.js';
 import { initWikiLinkNavigation } from './editor/wiki-link.js';
 import { div, el } from './lib/dom.js';
@@ -36,9 +36,10 @@ initEtnimgLinkNavigation();
 // External http(s)/mailto links in view mode (ошибка 37458cbc): open in the
 // system browser instead of navigating the ETN window.
 initExternalLinkNavigation();
-initDeepLinkHandler();
 
-void boot().catch((err: unknown) => {
+// Подписка на deep-link и ack главному процессу — внутри startDeepLinks:
+// ack уходит только после boot() (ошибка d8b81425).
+void startDeepLinks(boot).catch((err: unknown) => {
   // Catastrophic boot failure (local DB unavailable) — render a static message.
   const fallback = div('screen screen-onboarding');
   const card = div('card onboarding-card');
