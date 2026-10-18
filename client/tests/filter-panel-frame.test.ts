@@ -189,8 +189,8 @@ describe('размер панели перетаскиванием границ�
     );
     assert.match(
       css,
-      /\.fp-host\.fp-top > \.fp-panel \{\s*flex-basis: 240px;/,
-      'верхнее положение задаёт высоту панели',
+      /\.fp-host\.fp-top > \.fp-panel \{[^}]*flex-basis: auto;[^}]*max-height: calc\(100% - 160px\);/s,
+      'верхнее положение: высота по содержимому с резервом результатов (ошибка b562f4db)',
     );
     assert.match(css, /\.fp-host > \.fp-splitter\.fp-side \{\s*cursor: col-resize;/, 'слева граница тянется по горизонтали');
     assert.match(css, /\.fp-host > \.fp-splitter\.fp-top \{\s*cursor: row-resize;/, 'вверху граница тянется по вертикали');
