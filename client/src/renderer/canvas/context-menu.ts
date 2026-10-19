@@ -549,10 +549,11 @@ export function buildThoughtMenuItems(
       ? [menuAction('В фокус', () => opts.focusHandler?.())]
       : []),
     // Сценарий «просмотр и обслуживание ленты «События»», шаг 3 (7a1a354b):
-    // переход «что происходило с этой сущностью» — вид «События» с отбором
-    // по entity_id. Lazy import: active-view уже тянет activity, обратный
-    // статический импорт замкнул бы цикл.
-    menuAction('Что происходило с этой сущностью', () => {
+    // переход в ленту по выбранной сущности — вид «События» с отбором по
+    // entity_id. Формулировка пункта — заказчика (ошибка 56ab2902):
+    // «Смотреть события», строка только из словаря. Lazy import: active-view
+    // уже тянет activity, обратный статический импорт замкнул бы цикл.
+    menuAction(t('thoughtMenu.activityForEntity'), () => {
       void (async () => {
         const { showActivityForEntity } = await import('../screens/activity/activity.js');
         // Сначала отложенный фильтр, потом переключение вида: инициализация
