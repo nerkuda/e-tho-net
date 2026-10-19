@@ -56,8 +56,10 @@ import {
   createSavedFilter,
   deleteSavedFilter,
   getHierarchy,
+  getSavedFilter,
   isFilterEmpty,
   listSavedFilters,
+  parseActivitySavedFilterDefinition,
   parseSavedFilterDefinition,
   parseStructureFilter,
   updateSavedFilter,
@@ -435,10 +437,18 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const view = (input.view ?? 'structures') as SavedFilterView;
         const name = input.name as string;
         const definitionRaw = input.definition;
+        // Определение разбирает парсер ВИДА: «Дневник» — своя форма
+        // `{ ast, order }`, «События» — AST профиля `events` без сортировки,
+        // «Структуры» — AST либо легаси-плоская форма.
         const definition =
           view === 'chronicle'
             ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
-            : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
+            : view === 'events'
+              ? parseActivitySavedFilterDefinition(
+                  definitionRaw as Record<string, unknown>,
+                  req.id,
+                )
+              : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const filter = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const created = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
@@ -463,17 +473,25 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, fid } = req.params as SavedFilterIdParams;
         const input = parseRest(RestSavedFilterPatchBody, req);
-        const view = (input.view ?? 'structures') as SavedFilterView;
         const name = input.name as string | undefined;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Вид определяется СОХРАНЁННОЙ строкой, а не телом (0.13.3, задача
+        // c0c7b834): присланный `view` не управляет парсером определения.
+        // PATCH вид не меняет — так же, как и прежде.
+        const view = getSavedFilter(ndb, req.auth!.user.id, fid).view;
         let definition: Parameters<typeof updateSavedFilter>[3]['definition'];
         const definitionRaw = input.definition;
         if (definitionRaw !== undefined) {
           definition =
             view === 'chronicle'
               ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
-              : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
+              : view === 'events'
+                ? parseActivitySavedFilterDefinition(
+                    definitionRaw as Record<string, unknown>,
+                    req.id,
+                  )
+                : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const filter = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateSavedFilter(ndb, req.auth!.user.id, fid, {
             ...(name !== undefined ? { name } : {}),

@@ -22,6 +22,7 @@ import {
   authHeaders,
   buildRestContext,
   closeRestContext,
+  createPlainUser,
   type RestTestContext,
 } from './rest-helpers.js';
 
@@ -30,6 +31,18 @@ const STRUCTURE_DEFINITION = { sort: 'alpha', order: 'asc' } satisfies SavedFilt
 
 /** Минимальное валидное определение отбора «Хроники» (order обязателен). */
 const CHRONICLE_DEFINITION = { order: 'desc' };
+
+/** Минимальное валидное определение «Событий»: AST профиля `events` (0.13.3). */
+const EVENTS_DEFINITION: FilterAst = {
+  version: FILTER_AST_VERSION,
+  filter: {
+    op: 'and',
+    children: [
+      { entity: { kind: 'action' }, operator: 'in', value: ['created', 'updated'] },
+      { entity: { kind: 'user' }, operator: 'eq', value: 'u-1' },
+    ],
+  },
+};
 
 /** Определение «Структур» в форме AST (её пишет единый редактор, задача 46eba874). */
 const AST_DEFINITION: FilterAst = {
@@ -264,5 +277,213 @@ describe('GET/PATCH /networks/:networkId/saved-filters', () => {
     const patchedChronicle = patchChronicle.json().data as SavedFilter;
     assert.equal(patchedChronicle.view, 'chronicle');
     assert.equal((patchedChronicle.definition as { order?: string }).order, 'asc');
+  });
+});
+
+describe('saved-filters view=events («События», 0.13.3, задача c0c7b834)', () => {
+  it('с view=events создаёт отбор «Событий» и снимает сортировку', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const withSort: FilterAst = {
+      ...EVENTS_DEFINITION,
+      sort: [{ key: 'created_at', order: 'desc' }],
+    };
+    const created = await postFilter(ctx, {
+      view: 'events',
+      name: 'Мои действия',
+      definition: withSort,
+    });
+    assert.equal(created.statusCode, 201, JSON.stringify(created.error));
+    assert.equal(created.data?.view, 'events');
+    const definition = created.data?.definition as FilterAst;
+    assert.equal(definition.version, FILTER_AST_VERSION);
+    assert.deepEqual(definition.filter, EVENTS_DEFINITION.filter);
+    assert.equal(definition.sort, undefined, 'сортировка профилю ленты не принадлежит и не сохраняется');
+
+    // Список вида содержит отбор; имя уникально в пределах вида.
+    const list = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters?view=events`,
+      headers: authHeaders(ctx),
+    });
+    assert.equal(list.statusCode, 200);
+    assert.deepEqual(
+      (list.json().data as Array<{ name: string }>).map((f) => f.name),
+      ['Мои действия'],
+    );
+  });
+
+  it('GET view=events разделяет списки: отборы «Событий» не видны в других местах', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    await postFilter(ctx, { view: 'events', name: 'Действия', definition: EVENTS_DEFINITION });
+    await postFilter(ctx, { name: 'Мысли', definition: STRUCTURE_DEFINITION });
+    await postFilter(ctx, {
+      view: 'chronicle',
+      name: 'Записи',
+      definition: CHRONICLE_DEFINITION,
+    });
+
+    const read = async (view?: string): Promise<string[]> => {
+      const url =
+        view === undefined
+          ? `/api/v1/networks/${ctx.networkId}/saved-filters`
+          : `/api/v1/networks/${ctx.networkId}/saved-filters?view=${view}`;
+      const res = await ctx.app.inject({ method: 'GET', url, headers: authHeaders(ctx) });
+      assert.equal(res.statusCode, 200, res.body);
+      return (res.json().data as Array<{ name: string }>).map((f) => f.name);
+    };
+
+    assert.deepEqual(await read('events'), ['Действия']);
+    assert.deepEqual(await read('structures'), ['Мысли']);
+    assert.deepEqual(await read('chronicle'), ['Записи']);
+    assert.deepEqual(await read(), ['Мысли'], 'GET без view — по-прежнему structures');
+  });
+
+  it('PATCH определяет вид по сохранённой строке (view=events)', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const events = await postFilter(ctx, {
+      view: 'events',
+      name: 'Действия',
+      definition: EVENTS_DEFINITION,
+    });
+    assert.equal(events.statusCode, 201, JSON.stringify(events.error));
+
+    // Тело говорит `structures` и несёт плоскую структуру — если бы вид брался
+    // из тела, определение разобрал бы парсер «Структур». Сохранённая строка —
+    // events, поэтому определение разбирается профилем `events`, и `view`
+    // остаётся events.
+    const patched = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters/${events.data!.id}`,
+      headers: authHeaders(ctx),
+      payload: { view: 'structures', definition: EVENTS_DEFINITION },
+    });
+    assert.equal(patched.statusCode, 200, patched.body);
+    const data = patched.json().data as { view: string; definition: FilterAst };
+    assert.equal(data.view, 'events', 'вид не меняется и берётся из сохранённой строки');
+    assert.deepEqual(data.definition.filter, EVENTS_DEFINITION.filter);
+
+    // Тело говорит `chronicle` — если бы вид брался из тела, парсер «Хроники»
+    // потребовал бы `order` и запись отбилась бы 422.
+    const again = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters/${events.data!.id}`,
+      headers: authHeaders(ctx),
+      payload: { view: 'chronicle', definition: EVENTS_DEFINITION },
+    });
+    assert.equal(again.statusCode, 200, again.body);
+    assert.equal((again.json().data as { view: string }).view, 'events');
+  });
+
+  it('events отвергает чужую форму определения и операнд вне профиля', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    // Форма «Структур» (`sort`/`order`) и форма «Хроники» (`order`) — не AST.
+    for (const definition of [STRUCTURE_DEFINITION, CHRONICLE_DEFINITION]) {
+      const bad = await postFilter(ctx, {
+        view: 'events',
+        name: 'Кривая форма',
+        definition,
+      });
+      assert.equal(bad.statusCode, 422, JSON.stringify(bad.error));
+      assert.equal(bad.error?.code, 'VALIDATION_ERROR');
+    }
+
+    // Операнд мыслей (`type`) в ленте не виден — профиль `events` отвергает.
+    const foreign: FilterAst = {
+      version: FILTER_AST_VERSION,
+      filter: { op: 'and', children: [{ entity: { kind: 'type' }, operator: 'in', value: ['t-1'] }] },
+    };
+    const rejected = await postFilter(ctx, {
+      view: 'events',
+      name: 'Чужой операнд',
+      definition: foreign,
+    });
+    assert.equal(rejected.statusCode, 422, JSON.stringify(rejected.error));
+    assert.equal(rejected.error?.code, 'VALIDATION_ERROR');
+
+    const list = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters?view=events`,
+      headers: authHeaders(ctx),
+    });
+    assert.deepEqual(list.json().data, [], 'ни одна кривая запись не сохранена');
+  });
+
+  it('events: повтор имени внутри вида — 409, одинаковые имена в разных местах разрешены', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const first = await postFilter(ctx, {
+      view: 'events',
+      name: 'Действия',
+      definition: EVENTS_DEFINITION,
+    });
+    assert.equal(first.statusCode, 201, JSON.stringify(first.error));
+    const dup = await postFilter(ctx, {
+      view: 'events',
+      name: 'действия',
+      definition: EVENTS_DEFINITION,
+    });
+    assert.equal(dup.statusCode, 409, JSON.stringify(dup.error));
+    assert.equal(dup.error?.code, 'DUPLICATE');
+
+    const otherView = await postFilter(ctx, { name: 'Действия', definition: STRUCTURE_DEFINITION });
+    assert.equal(otherView.statusCode, 201, JSON.stringify(otherView.error));
+    assert.equal(otherView.data?.view, 'structures');
+  });
+
+  it('личная изоляция: чужие отборы «Событий» не видны и не правятся', async (t) => {
+    const ctx = await buildRestContext();
+    t.after(async () => closeRestContext(ctx));
+
+    const mine = await postFilter(ctx, {
+      view: 'events',
+      name: 'Мои действия',
+      definition: EVENTS_DEFINITION,
+    });
+    assert.equal(mine.statusCode, 201, JSON.stringify(mine.error));
+
+    const other = createPlainUser(ctx);
+    ctx.sys.addNetworkMember(ctx.networkId, other.userId, 'member', ctx.adminId);
+    const otherHeaders = { authorization: `Bearer ${other.key}` };
+
+    const list = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters?view=events`,
+      headers: otherHeaders,
+    });
+    assert.equal(list.statusCode, 200, list.body);
+    assert.deepEqual(list.json().data, [], 'чужие отборы не видны');
+
+    const patch = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters/${mine.data!.id}`,
+      headers: otherHeaders,
+      payload: { name: 'Захват' },
+    });
+    assert.equal(patch.statusCode, 404, patch.body);
+    const remove = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters/${mine.data!.id}`,
+      headers: otherHeaders,
+    });
+    assert.equal(remove.statusCode, 404, remove.body);
+
+    // Своё имя в том же виде другой пользователь может занять — уникальность
+    // в пределах пары (пользователь, вид).
+    const own = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/networks/${ctx.networkId}/saved-filters`,
+      headers: otherHeaders,
+      payload: { view: 'events', name: 'Мои действия', definition: EVENTS_DEFINITION },
+    });
+    assert.equal(own.statusCode, 201, own.body);
   });
 });

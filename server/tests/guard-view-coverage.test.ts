@@ -98,6 +98,8 @@ const WRITE_VIEW_COVERAGE: readonly WriteViewEntry[] = [
         'routes-saved-filters.test.ts::с view=chronicle создаёт отбор «Хроники», с view=structures — «Структур»',
       chronicle:
         'routes-saved-filters.test.ts::с view=chronicle создаёт отбор «Хроники», с view=structures — «Структур»',
+      events:
+        'routes-saved-filters.test.ts::с view=events создаёт отбор «Событий» и снимает сортировку',
     },
   },
   {
@@ -107,6 +109,8 @@ const WRITE_VIEW_COVERAGE: readonly WriteViewEntry[] = [
     tests: {
       structures: 'routes-saved-filters.test.ts::PATCH с явным view сохраняет отбор своего вида',
       chronicle: 'routes-saved-filters.test.ts::PATCH с явным view сохраняет отбор своего вида',
+      events:
+        'routes-saved-filters.test.ts::PATCH определяет вид по сохранённой строке (view=events)',
     },
   },
   {
