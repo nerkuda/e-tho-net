@@ -1970,15 +1970,19 @@ export function applyManifest(
       }
 
     // 10. Attach roots to parent_thought_id -------------------------------
+    // Прикрепляются ТОЛЬКО мысли, созданные этим импортом (ошибка e1082889):
+    // у созданной мысли финальный id новый и `resolvedId !== t.id`, поэтому
+    // прежняя проверка по совпадению id пропускала как раз их. Совпадение по
+    // id/названию — уже существующие мысли целевой сети, их двигать нельзя.
+    const createdThoughtIdSet = new Set(createdThoughtIds);
     const incomingTargets = new Set(manifest.links.map((l) => l.target_id));
     for (const t of manifest.thoughts) {
       if (incomingTargets.has(t.id)) continue; // not a root
       const resolvedId = thoughtIdRemap.get(t.id);
       if (resolvedId === undefined) continue;
-      // Only re-parent thoughts whose manifest id matches the final id — that
-      // means they were *created* by this import. Existing-by-id/by-title
+      // Only re-parent thoughts created by this import: existing-by-id/by-title
       // matches are already part of the target graph and shouldn't be moved.
-      if (resolvedId !== t.id) continue;
+      if (!createdThoughtIdSet.has(resolvedId)) continue;
       const linkId = randomUUID();
       const inserted = ndb
         .prepare(
