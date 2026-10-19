@@ -451,7 +451,7 @@ describe('guard: единые правила диалогов-списков (11
 describe('guard: единые правила диалогов-списков (11ddd910, партия 2)', () => {
   it('R1: поиск — первая строка над списком, плейсхолдер из словаря', () => {
     for (const [name, src, layout] of [
-      ['Корзина', trashDialog(), 'body.append(searchRow, toolbar, listHost)'],
+      ['Корзина', trashDialog(), 'trashContent.append(searchRow, toolbar, listHost)'],
       ['Сохранённые отборы', savedFilterDialog(), 'body.append(search, toolbar, listHost)'],
     ] as const) {
       assert.ok(
@@ -463,6 +463,28 @@ describe('guard: единые правила диалогов-списков (11
         `${name}: поиск обязан идти первой строкой перед управлением и списком`,
       );
     }
+    // Корзина с 0.13.3 — док-раскладка (задача d23279f6): тело-список несёт
+    // `.trash-main` (flex-row), а поиск/тулбар/список живут в правой колонке
+    // `.trash-content`; при закрытой док-панели она занимает всю ширину.
+    const trash = trashDialog();
+    assert.ok(
+      trash.includes('body.append(trashMain)'),
+      'Корзина: тело диалога-списка не собирает док-раскладку .trash-main',
+    );
+    assert.ok(
+      trash.includes('trashContent.append(searchRow, toolbar, listHost)'),
+      'Корзина: поиск/тулбар/список не собраны в правой колонке дока',
+    );
+    assert.match(
+      source('styles/dialogs.css'),
+      /\.trash-main\s*\{[^}]*display:\s*flex/s,
+      'Корзина: нет flex-раскладки док-панели (.trash-main)',
+    );
+    assert.match(
+      source('styles/dialogs.css'),
+      /\.trash-content\s*\{[^}]*min-width:\s*0/s,
+      'Корзина: правая колонка дока без min-width: 0 (грабли f2a047ee)',
+    );
     // admin: общий хелпер строки поиска и подключение его в первой строке
     // каждой вкладки (правило 1).
     const admin = source('admin/admin.ts');
@@ -557,16 +579,25 @@ describe('guard: единые правила диалогов-списков (11
     );
   });
 
-  it('R6: двойной клик по строке открывает редактор', () => {
+  it('R6: двойной клик/Enter — действие активации списка; у корзины это панель использования', () => {
+    // Правило 6 по умолчанию — редактор строки. У корзины элемент-спецификация
+    // (35e580d4, дополнение 0.13.3 к 11ddd910) задаёт своё действие: двойной
+    // клик и Enter открывают панель использования, не закрывая корзину.
+    // Фасад таблицы разводит события — обязаны быть заданы ОБА обработчика.
     assert.match(
       trashDialog(),
-      /onDblActivate: \(row\) => openRowInEditor\(row\)/,
-      'Корзина: редактор строки не подключён на двойной клик',
+      /onDblActivate: \(row\) => openDockUsage\(row\)/,
+      'Корзина: двойной клик не открывает панель использования',
+    );
+    assert.match(
+      trashDialog(),
+      /onActivate: \(row\) => openDockUsage\(row\)/,
+      'Корзина: Enter не открывает панель использования',
     );
     assert.ok(
-      trashDialog().includes('openThoughtInEditor(row.id)') &&
-        trashDialog().includes('openLinkInEditor(link)'),
-      'Корзина: двойной клик не открывает мысль/связь в редакторе',
+      !trashDialog().includes('openThoughtInEditor') &&
+        !trashDialog().includes('openLinkInEditor'),
+      'Корзина: двойной клик не должен открывать редактор (исключение из правила 6)',
     );
     // Отборы — ПИКЕР одиночного значения (есть кнопка «Выбрать»): по правилу 6
     // требования 11ddd910 редактор на двойной клик НЕ вешается, иначе двойной

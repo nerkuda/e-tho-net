@@ -184,6 +184,16 @@ export interface DialogOptions {
      */
     ctrlShiftEnter?: () => void;
   };
+  /**
+   * Слои Escape (задача d23279f6): спрашивается capture-обработчиком ДО
+   * {@link requestClose}. `true` — нажатие обработано вызывающим, диалог
+   * остаётся открытым (корзина закрывает док-панель, а не себя); `false`/
+   * отсутствие — обычное закрытие. Вызывается только у верхнего диалога стека
+   * и только на неавтоповторный `Escape`. Так внешний обработчик видит Esc
+   * раньше диспетчера сочетаний (`lib/keymap.ts`, bubble-фаза) и может,
+   * например, отменить клавиатурную сессию сплиттера.
+   */
+  onEscape?: () => boolean;
   /** Called after the dialog is mounted (focus management, etc.). */
   onMount?: (close: () => void, box: HTMLElement) => void;
   /**
@@ -757,6 +767,10 @@ export function showDialog(opts: DialogOptions): () => void {
       // closed the whole stack). Key auto-repeat is ignored for the same
       // reason: a held Escape would otherwise walk the stack down.
       event.preventDefault();
+      // Слои Escape (задача d23279f6): вызывающий может обработать нажатие
+      // сам (закрыть док-панель, отменить клавиатурный драг сплиттера) и
+      // оставить диалог открытым.
+      if (opts.onEscape?.() === true) return;
       requestClose();
     }
   };

@@ -52,18 +52,22 @@ export function usageLayers(
 }
 
 /**
- * Что делает повторный вызов панели для той же цели (спека f7623077):
- * из диалога удаления — toggle (закрыть), из корзины — `forceOpen` (открыть
- * заново). Для другой цели всегда открытие/перерисовка.
+ * Видимость действий шапки панели по свежим данным (спека f7623077, задача
+ * d23279f6): «Вернуть из корзины» — только у помеченной цели; «Удалить
+ * совсем» — только у помеченной И незаблокированной (`deletion-check.blocked`
+ * перечитывается перед отрисовкой и перед действием). Чистая модель —
+ * проверяется юнит-тестом без DOM.
  */
-export function usagePanelRepeatAction(
-  current: { kind: string; id: string } | null,
-  next: { kind: string; id: string },
-  forceOpen: boolean,
-): 'close' | 'open' {
-  if (forceOpen) return 'open';
-  if (current !== null && current.kind === next.kind && current.id === next.id) return 'close';
-  return 'open';
+export interface UsageActionVisibility {
+  restore: boolean;
+  purge: boolean;
+}
+
+export function usageActionVisibility(
+  marked: boolean,
+  blocked: boolean,
+): UsageActionVisibility {
+  return { restore: marked, purge: marked && !blocked };
 }
 
 /**

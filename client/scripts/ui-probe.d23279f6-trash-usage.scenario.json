@@ -1,7 +1,7 @@
 {
   "name": "d23279f6-trash-usage",
-  "description": "Задача d23279f6: выход в «Панель использования» из корзины. Полный маршрут живого клиента: онбординг → сеть → затравка (свойство-связь, вторая мысль и структурная связь, все три сущности в корзине) → меню сети «Корзина» → в тулбаре «Открыть использование…» погашена без текущей строки, построчных кнопок нет (R8), у blocked-строки вход доступен → фильтр и текущая строка → контекстное меню строки → панель (фокус в панели, чистое имя, свойства+слои+restore) → «Очистить все свойства» → «Вернуть из корзины» → повторное открытие корзины (фильтр сохранён, строки нет, панель закрыта) → вход по тулбару для второй мысли → restore → связь (только слои+restore) → restore → в корзине остаётся ребро, помеченное самим «Очистить все свойства» (0:1) → холст без меток. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d23279f6-trash-usage.scenario.json --out .tmp/d23279f6/out",
-  "timeout": 420000,
+  "description": "Задача d23279f6 (ревизия 0.13.3): выход в «Панель использования» из корзины БЕЗ её закрытия. Маршрут: онбординг → сеть → затравка (свойство-связь, вторая мысль со структурной связью, все три сущности в корзине) → корзина → одиночный клик только делает строку текущей → двойной клик и Enter открывают ДОК-панель внутри диалога (корзина жива) → Esc закрывает только панель, фокус в таблице → сплиттер (мышь + стрелки, Esc отменяет клавиатурную сессию) → ширина/фильтр/текущая строка переживают переоткрытие корзины → очистка всех свойств синхронизирует строку (замок снят, «Ссылок» = 0) и включает «Удалить совсем» → purge с danger-подтверждением → строка исчезла, панель закрыта, фокус в таблице → restore из панели закрывает её и убирает строку → строка-связь (только слои) → restore действием корзины при открытой панели закрывает её → слой: строка «Основа» объясняет причину, purge скрыт. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d23279f6-trash-usage.scenario.json --out .tmp/d23279f6/out --keep",
+  "timeout": 600000,
   "steps": [
     {
       "name": "onboarding-visible",
@@ -78,7 +78,12 @@
     },
     {
       "name": "install-helpers",
-      "eval": "(() => { const D = { top: () => { const b=document.querySelectorAll('.dialog-backdrop'); return b.length ? b[b.length-1] : null; }, lastMenu: () => { const m=document.querySelectorAll('.menu'); return m.length ? m[m.length-1] : null; }, labels: () => { const m=D.lastMenu(); return m ? [...m.querySelectorAll('.menu-item')].map((e)=>(e.textContent||'').trim()).filter((x)=>x!=='') : []; }, menuClick: (text) => { const m=D.lastMenu(); if(!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find((e)=>(e.textContent||'').trim().startsWith(text)); if(!it) return 'no-item'; it.click(); return 'ok'; }, grid: () => document.querySelector('.trash vaadin-grid') || document.querySelector('vaadin-grid'), rows: () => { const g=D.grid(); return g && g.shadowRoot ? [...g.shadowRoot.querySelectorAll('tr')] : []; }, rowById: (id) => { const g=D.grid(); if(!g) return null; const idx=(g.items||[]).findIndex((x)=>x && x.id===id); if(idx<0) return null; return D.rows().find((r)=>r.index===idx) || D.rows()[idx] || null; }, clickNode: (n) => { if(!n) return 'no-node'; const b=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return 'ok'; }, ctxNode: (n) => { if(!n) return 'no-node'; const b=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,composed:true,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return 'ok'; }, rowCell: (id) => { const g=D.grid(); const idx=g ? (g.items||[]).findIndex((x)=>x.id===id) : -1; if(idx<0) return null; const r=D.rows().find((x)=>x.index===idx) || D.rows()[idx]; return r ? (r.querySelector('td') || r) : null; }, clickRow: (id) => D.clickNode(D.rowCell(id)), ctxRow: (id) => D.ctxNode(D.rowCell(id)), activeId: () => { const g=D.grid(); return g && g.activeItem ? g.activeItem.id : null; }, ids: () => { const g=D.grid(); return g ? (g.items||[]).map((x)=>x.id) : []; }, btn: (text, sel) => { const root=sel ? document.querySelector(sel) : D.top(); if(!root) return null; return [...root.querySelectorAll('button')].find((b)=>(b.textContent||'').trim()===text) || null; }, toolbar: (text) => D.btn(text, '.trash-toolbar'), clickToolbar: (text) => { const b=D.toolbar(text); if(!b) return 'no-btn'; b.click(); return 'ok'; }, panel: () => document.querySelector('.usage-panel'), panelOpen: () => { const p=D.panel(); return p!==null && !p.classList.contains('hidden'); }, panelTarget: () => { const e=document.querySelector('.usage-panel .usage-target'); return e ? (e.textContent||'') : ''; }, panelRestore: () => { const p=D.panel(); if(!p) return null; return [...p.querySelectorAll('.usage-header button')].find((b)=>(b.textContent||'').trim()==='Вернуть из корзины') || null; }, panelProps: () => document.getElementById('usage_panel:properties'), panelLayers: () => document.getElementById('usage_panel:layers'), propsCount: () => { const g=D.panelProps(); const e=g ? g.querySelector('.ui-collapsible-count') : null; return e ? (e.textContent||'').trim() : null; }, setFilter: (v) => { const i=document.querySelector('.trash-search'); if(!i) return 'no-input'; i.focus(); i.value=v; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; }, filter: () => { const i=document.querySelector('.trash-search'); return i ? i.value : null; }, cloudTrash: (id) => { const c=document.querySelector('[data-id=\"'+id+'\"] .cloud'); if(!c) return 'absent'; return c.querySelector('.cloud-trash-badge')!==null; } }; window.__d = D; return 'ok'; })()"
+      "eval": "(() => { const D = { top: () => { const b=document.querySelectorAll('.dialog-backdrop'); return b.length ? b[b.length-1] : null; }, topTitle: () => { const d=D.top(); const t=d ? d.querySelector('.dialog-title') : null; return t ? (t.textContent||'').trim() : null; }, lastMenu: () => { const m=document.querySelectorAll('.menu'); return m.length ? m[m.length-1] : null; }, labels: () => { const m=D.lastMenu(); return m ? [...m.querySelectorAll('.menu-item')].map((e)=>(e.textContent||'').trim()).filter((x)=>x!=='') : []; }, menuClick: (text) => { const m=D.lastMenu(); if(!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find((e)=>(e.textContent||'').trim().startsWith(text)); if(!it) return 'no-item'; it.click(); return 'ok'; }, grid: () => document.querySelector('.trash vaadin-grid') || document.querySelector('vaadin-grid'), rows: () => { const g=D.grid(); return g && g.shadowRoot ? [...g.shadowRoot.querySelectorAll('tr')] : []; }, rowCell: (id) => { const g=D.grid(); const idx=g ? (g.items||[]).findIndex((x)=>x && x.id===id) : -1; if(idx<0) return null; const r=D.rows().find((x)=>x.index===idx) || D.rows()[idx]; return r ? (r.querySelector('td') || r) : null; }, clickNode: (n, detail) => { if(!n) return 'no-node'; const b=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true,detail:detail===undefined?1:detail,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return 'ok'; }, ctxNode: (n) => { if(!n) return 'no-node'; const b=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,composed:true,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return 'ok'; }, clickRow: (id) => D.clickNode(D.rowCell(id),1), dblRow: (id) => D.clickNode(D.rowCell(id),2), ctxRow: (id) => D.ctxNode(D.rowCell(id)), activeId: () => { const g=D.grid(); return g && g.activeItem ? g.activeItem.id : null; }, ids: () => { const g=D.grid(); return g ? (g.items||[]).map((x)=>x.id) : []; }, rowData: (id) => { const g=D.grid(); return g ? ((g.items||[]).find((x)=>x && x.id===id) || null) : null; }, rowText: (id) => { const c=D.rowCell(id); return c ? (c.textContent||'') : ''; }, btn: (text, sel) => { const root=sel ? document.querySelector(sel) : D.top(); if(!root) return null; return [...root.querySelectorAll('button')].find((b)=>(b.textContent||'').trim()===text) || null; }, toolbar: (text) => D.btn(text, '.trash-toolbar'), clickToolbar: (text) => { const b=D.toolbar(text); if(!b) return 'no-btn'; b.click(); return 'ok'; }, panel: () => document.querySelector('.usage-panel--dock'), panelOpen: () => { const p=D.panel(); return p!==null && !p.classList.contains('hidden'); }, panelInDialog: () => { const p=D.panel(), d=D.top(); return p!==null && d!==null && d.contains(p); }, panelTarget: () => { const e=D.panel() ? D.panel().querySelector('.usage-target') : null; return e ? (e.textContent||'') : ''; }, panelTargetTitle: () => { const e=D.panel() ? D.panel().querySelector('.usage-target') : null; return e ? (e.getAttribute('title')||'') : ''; }, panelAction: (name) => D.panel() ? D.panel().querySelector('[data-usage-action=\"'+name+'\"]') : null, actionVisible: (name) => { const b=D.panelAction(name); return b!==null && !b.hidden && !b.disabled; }, panelProps: () => document.getElementById('usage_panel:properties'), panelLayers: () => document.getElementById('usage_panel:layers'), propsCount: () => { const g=D.panelProps(); const e=g ? g.querySelector('.ui-collapsible-count') : null; return e ? (e.textContent||'').trim() : null; }, baseHint: () => { const e=D.panel() ? D.panel().querySelector('.usage-layer-row--base .usage-layer-hint') : null; return e ? (e.textContent||'').trim() : null; }, panelWidth: () => { const p=D.panel(); return p ? Math.round(p.getBoundingClientRect().width) : 0; }, splitter: () => { const d=D.top(); return d ? d.querySelector('.usage-dock-splitter') : null; }, setFilter: (v) => { const i=document.querySelector('.trash-search'); if(!i) return 'no-input'; i.focus(); i.value=v; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; }, filter: () => { const i=document.querySelector('.trash-search'); return i ? i.value : null; }, focusInPanel: () => { const p=D.panel(); return p!==null && p.contains(document.activeElement); }, focusInTable: () => { const w=document.querySelector('.trash .ui-table'); return w!==null && (w===document.activeElement || w.contains(document.activeElement)); }, pressKey: (key) => { const el=document.activeElement || document.body; const ev=new KeyboardEvent('keydown',{key:key,code:key===' '?'Space':key,bubbles:true,cancelable:true}); el.dispatchEvent(ev); return ev.defaultPrevented ? 'ok' : 'not-handled'; }, pressEnter: () => { const w=document.querySelector('.trash .ui-table'); if(!w) return 'no-wrap'; w.focus(); const ev=new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true}); w.dispatchEvent(ev); return ev.defaultPrevented ? 'ok' : 'not-handled'; }, splitArrow: (key) => { const s=D.splitter(); if(!s) return 'no-splitter'; s.focus(); const ev=new KeyboardEvent('keydown',{key:key,code:key,bubbles:true,cancelable:true}); s.dispatchEvent(ev); return ev.defaultPrevented ? 'ok' : 'not-handled'; }, dragSplitter: (dx) => { const s=D.splitter(); if(!s) return 'no-splitter'; const r=s.getBoundingClientRect(); const x=Math.round(r.left+r.width/2), y=Math.round(r.top+40); const orig=Element.prototype.setPointerCapture; Element.prototype.setPointerCapture=function(){}; const base={bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',isPrimary:true,button:0}; s.dispatchEvent(new PointerEvent('pointerdown',{...base,buttons:1,clientX:x,clientY:y})); for(let k=1;k<=6;k+=1) s.dispatchEvent(new PointerEvent('pointermove',{...base,buttons:1,clientX:x+Math.round(dx*k/6),clientY:y})); s.dispatchEvent(new PointerEvent('pointerup',{...base,buttons:0,clientX:x+dx,clientY:y})); Element.prototype.setPointerCapture=orig; return 'ok'; }, cloudTrash: (id) => { const c=document.querySelector('[data-id=\"'+id+'\"] .cloud'); if(!c) return 'absent'; return c.querySelector('.cloud-trash-badge')!==null; } }; window.__d = D; return 'ok'; })()"
+    },
+    {
+      "name": "helpers-installed",
+      "probe": "typeof window.__d.dragSplitter",
+      "expect": "function"
     },
     {
       "name": "open-net-menu",
@@ -111,23 +116,135 @@
     },
     {
       "name": "blocked-row-has-lock",
-      "probe": "(() => { const g=window.__d.grid(); const a=g ? (g.items||[]).find((x)=>x.id==='{{thoughtId}}') : null; const texts=[...document.querySelectorAll('vaadin-grid-cell-content')].map((c)=>(c.textContent||'').trim()).join('|'); return JSON.stringify({ blocked: a ? a.blocked : null, lock: texts.includes('🔒') }); })()",
+      "probe": "(() => { const a=window.__d.rowData('{{thoughtId}}'); const texts=[...document.querySelectorAll('vaadin-grid-cell-content')].map((c)=>(c.textContent||'').trim()).join('|'); return JSON.stringify({ blocked: a ? a.blocked : null, lock: texts.includes('🔒') }); })()",
       "expect": "{\"blocked\":true,\"lock\":true}"
     },
     {
-      "name": "click-blocked-row",
-      "probe": "window.__d.clickRow('{{thoughtId}}')",
+      "name": "single-click-only-current",
+      "probe": "(() => { window.__d.clickRow('{{thoughtId}}'); return JSON.stringify({ current: window.__d.activeId(), panel: window.__d.panelOpen(), trash: window.__d.topTitle() }); })()",
+      "expect": "{\"current\":\"{{thoughtId}}\",\"panel\":false,\"trash\":\"Корзина\"}"
+    },
+    {
+      "name": "double-click-opens-dock",
+      "probe": "window.__d.dblRow('{{thoughtId}}')",
       "expect": "ok"
     },
     {
-      "name": "blocked-row-current",
-      "probe": "window.__d.activeId()",
-      "expect": "{{thoughtId}}"
+      "name": "dock-open-in-dialog",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen() && window.__d.panelInDialog() && window.__d.topTitle()==='Корзина'"
     },
     {
-      "name": "usage-enabled-for-blocked",
-      "probe": "(() => { const b=window.__d.toolbar('Открыть использование…'); return b ? b.disabled : 'no-btn'; })()",
-      "expect": false
+      "name": "dock-data-loaded",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelProps()!==null && window.__d.panelLayers()!==null && !window.__d.panelAction('restore').hidden"
+    },
+    {
+      "name": "dock-target-clean",
+      "probe": "(() => { const t=window.__d.panelTarget(); return JSON.stringify({ text: t, title: window.__d.panelTargetTitle(), icon: t.includes('📝') || t.includes('🔗') }); })()",
+      "expect": "{\"text\":\"Проба стенда\",\"title\":\"Проба стенда\",\"icon\":false}"
+    },
+    {
+      "name": "dock-actions-blocked",
+      "probe": "JSON.stringify({ restore: window.__d.actionVisible('restore'), purge: window.__d.actionVisible('purge'), props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null })",
+      "expect": "{\"restore\":true,\"purge\":false,\"props\":true,\"layers\":true}"
+    },
+    {
+      "name": "dock-focus-in-panel",
+      "probe": "window.__d.focusInPanel()",
+      "expect": true
+    },
+    {
+      "name": "esc-closes-panel-only",
+      "probe": "window.__d.pressKey('Escape')",
+      "expect": "ok"
+    },
+    {
+      "name": "esc-panel-closed-trash-alive",
+      "timeout": 15000,
+      "waitFor": "!window.__d.panelOpen() && window.__d.topTitle()==='Корзина' && window.__d.focusInTable()"
+    },
+    {
+      "name": "enter-opens-panel",
+      "probe": "window.__d.pressEnter()",
+      "expect": "ok"
+    },
+    {
+      "name": "enter-panel-open",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen() && window.__d.panelInDialog() && window.__d.topTitle()==='Корзина'"
+    },
+    {
+      "name": "esc-before-splitter",
+      "probe": "window.__d.pressKey('Escape')",
+      "expect": "ok"
+    },
+    {
+      "name": "panel-closed-before-splitter",
+      "timeout": 15000,
+      "waitFor": "!window.__d.panelOpen() && window.__d.topTitle()==='Корзина'"
+    },
+    {
+      "name": "toolbar-opens-panel",
+      "probe": "window.__d.clickToolbar('Открыть использование…')",
+      "expect": "ok"
+    },
+    {
+      "name": "panel-open-for-splitter",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen() && window.__d.panelWidth() >= 180"
+    },
+    {
+      "name": "remember-width-start",
+      "eval": "window.__d.__w0 = window.__d.panelWidth(); 'ok'"
+    },
+    {
+      "name": "splitter-mouse-drag",
+      "probe": "window.__d.dragSplitter(120)",
+      "expect": "ok"
+    },
+    {
+      "name": "splitter-width-grew",
+      "timeout": 15000,
+      "waitFor": "window.__d.panelWidth() >= window.__d.__w0 + 100"
+    },
+    {
+      "name": "splitter-width-after-drag",
+      "probe": "window.__d.panelWidth()"
+    },
+    {
+      "name": "remember-width-keyboard-start",
+      "eval": "window.__d.__w1 = window.__d.panelWidth(); 'ok'"
+    },
+    {
+      "name": "splitter-keyboard-right",
+      "probe": "window.__d.splitArrow('ArrowRight')",
+      "expect": "ok"
+    },
+    {
+      "name": "splitter-width-keyboard",
+      "timeout": 15000,
+      "waitFor": "window.__d.panelWidth() === window.__d.__w1 + 8"
+    },
+    {
+      "name": "splitter-keyboard-end",
+      "probe": "window.__d.splitArrow('End')",
+      "expect": "ok"
+    },
+    {
+      "name": "splitter-max-keeps-list",
+      "timeout": 15000,
+      "waitFor": "window.__d.panelWidth() <= 520 && document.querySelector('.trash-table').getBoundingClientRect().width >= 300"
+    },
+    {
+      "name": "esc-cancels-keyboard",
+      "probe": "window.__d.pressKey('Escape')",
+      "expect": "ok"
+    },
+    {
+      "name": "keyboard-cancel-kept-panel",
+      "timeout": 15000,
+      "waitFor": "window.__d.panelOpen() && window.__d.topTitle()==='Корзина' && window.__d.panelWidth() === window.__d.__w1"
     },
     {
       "name": "set-filter",
@@ -140,54 +257,63 @@
       "expect": "[\"{{thoughtId}}\"]"
     },
     {
-      "name": "open-usage-via-row-menu",
-      "probe": "window.__d.ctxRow('{{thoughtId}}')",
+      "name": "close-trash-esc",
+      "probe": "window.__d.pressKey('Escape')",
       "expect": "ok"
     },
     {
-      "name": "row-menu-open",
+      "name": "trash-close-panel-esc",
       "timeout": 15000,
-      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Открыть использование')))()"
+      "waitFor": "!window.__d.panelOpen()"
     },
     {
-      "name": "click-row-menu-usage",
-      "probe": "window.__d.menuClick('Открыть использование')",
+      "name": "close-trash-esc-2",
+      "probe": "window.__d.pressKey('Escape')",
       "expect": "ok"
     },
     {
-      "name": "panel-open",
-      "timeout": 20000,
-      "waitFor": "window.__d.panelOpen()"
-    },
-    {
-      "name": "trash-closed-for-panel",
+      "name": "trash-closed-session",
       "timeout": 15000,
       "waitFor": "window.__d.top() === null"
     },
     {
-      "name": "panel-focus",
-      "probe": "(() => { const p=window.__d.panel(); return p !== null && p.contains(document.activeElement); })()",
-      "expect": true
+      "name": "reopen-net-menu",
+      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
     },
     {
-      "name": "panel-title",
-      "probe": "(document.querySelector('.usage-panel .usage-title')?.textContent||'').trim()",
-      "expect": "Использование"
+      "name": "reopen-net-menu-open",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
     },
     {
-      "name": "panel-target-clean",
-      "probe": "(() => { const t=window.__d.panelTarget(); return JSON.stringify({ text: t, icon: t.includes('📝') || t.includes('🔗') }); })()",
-      "expect": "{\"text\":\"Проба стенда\",\"icon\":false}"
+      "name": "reopen-trash-click",
+      "probe": "window.__d.menuClick('Корзина')",
+      "expect": "ok"
     },
     {
-      "name": "panel-thought-actions",
-      "probe": "(() => { const r=window.__d.panelRestore(); return JSON.stringify({ restore: r!==null && !r.hidden, props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null }); })()",
-      "expect": "{\"restore\":true,\"props\":true,\"layers\":true}"
+      "name": "trash-reopened",
+      "timeout": 20000,
+      "waitFor": "(() => { const g=window.__d.grid(); return window.__d.topTitle()==='Корзина' && g!==null && (g.items||[]).length===1; })()"
     },
     {
-      "name": "panel-property-row",
-      "probe": "(() => { const g=window.__d.panelProps(); const row=g ? g.querySelector('.usage-row') : null; if(!row) return 'no-row'; return JSON.stringify({ title: (row.querySelector('.prc-title')?.textContent||''), prop: (row.querySelector('.usage-row-property')?.textContent||'') }); })()",
-      "expect": "{\"title\":\"Вторая проба\",\"prop\":\"ссылается на\"}"
+      "name": "session-preserved",
+      "probe": "JSON.stringify({ filter: window.__d.filter(), current: window.__d.activeId() })",
+      "expect": "{\"filter\":\"Проба стенда\",\"current\":\"{{thoughtId}}\"}"
+    },
+    {
+      "name": "reopen-usage-toolbar",
+      "probe": "window.__d.clickToolbar('Открыть использование…')",
+      "expect": "ok"
+    },
+    {
+      "name": "dock-width-preserved",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen() && window.__d.panelWidth() === window.__d.__w1"
+    },
+    {
+      "name": "reopened-panel-data",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelProps()!==null && window.__d.propsCount()==='1'"
     },
     {
       "name": "clear-all-properties",
@@ -220,58 +346,39 @@
       "waitFor": "window.__d.propsCount() === '0'"
     },
     {
-      "name": "restore-from-panel",
-      "probe": "(() => { const b=window.__d.panelRestore(); if(!b) return 'no-btn'; if(b.hidden) return 'hidden'; b.click(); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
-      "name": "restore-action-hidden",
-      "timeout": 15000,
-      "waitFor": "(() => { const b=window.__d.panelRestore(); return b===null || b.hidden; })()"
-    },
-    {
-      "name": "thought-restored",
-      "api": {
-        "name": "thought-restored",
-        "method": "GET",
-        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}",
-        "expression": "data.marked_for_deletion"
-      },
-      "expect": false
-    },
-    {
-      "name": "open-trash-again",
-      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
-    },
-    {
-      "name": "net-menu-again",
-      "timeout": 15000,
-      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
-    },
-    {
-      "name": "trash-again-click",
-      "probe": "window.__d.menuClick('Корзина')",
-      "expect": "ok"
-    },
-    {
-      "name": "trash-again-open",
+      "name": "trash-row-synced",
       "timeout": 20000,
-      "waitFor": "(() => window.__d.top()!==null && window.__d.filter()==='Проба стенда')()"
+      "waitFor": "(() => { const r=window.__d.rowData('{{thoughtId}}'); const texts=[...document.querySelectorAll('vaadin-grid-cell-content')].map((c)=>(c.textContent||'').trim()).join('|'); return r!==null && r.blocked===false && r.count===0 && texts.indexOf('🔒')<0; })()"
     },
     {
-      "name": "panel-closed-by-trash",
-      "probe": "window.__d.panelOpen()",
-      "expect": false
+      "name": "purge-appeared",
+      "timeout": 15000,
+      "waitFor": "window.__d.actionVisible('purge')"
     },
     {
-      "name": "filter-preserved",
-      "probe": "window.__d.filter()",
-      "expect": "Проба стенда"
+      "name": "purge-click",
+      "probe": "(() => { const b=window.__d.panelAction('purge'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
     },
     {
-      "name": "restored-row-absent",
-      "probe": "window.__d.ids().includes('{{thoughtId}}')",
-      "expect": false
+      "name": "purge-confirm-open",
+      "timeout": 15000,
+      "waitFor": "(() => { const d=window.__d.top(); return d!==null && (d.querySelector('.dialog-title')?.textContent||'')==='Удалить совсем' && (d.textContent||'').includes('без возможности восстановления'); })()"
+    },
+    {
+      "name": "purge-confirm-click",
+      "probe": "(() => { const b=window.__d.btn('Удалить совсем'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "purged-row-absent",
+      "timeout": 20000,
+      "waitFor": "(() => !window.__d.ids().includes('{{thoughtId}}') && !window.__d.panelOpen() && window.__d.topTitle()==='Корзина')()"
+    },
+    {
+      "name": "purge-focus-table",
+      "timeout": 15000,
+      "waitFor": "window.__d.focusInTable()"
     },
     {
       "name": "reset-filter",
@@ -279,58 +386,44 @@
       "expect": "ok"
     },
     {
-      "name": "second-thought-row",
+      "name": "second-thought-current",
       "probe": "(() => { const id=window.__d232seed.b; window.__d.clickRow(id); return window.__d.activeId()===id ? 'ok' : 'no'; })()",
       "expect": "ok"
     },
     {
-      "name": "open-usage-via-toolbar",
+      "name": "open-second-usage",
       "probe": "window.__d.clickToolbar('Открыть использование…')",
       "expect": "ok"
     },
     {
-      "name": "panel-second-open",
+      "name": "second-panel-open",
       "timeout": 20000,
-      "waitFor": "window.__d.panelOpen()"
+      "waitFor": "window.__d.panelOpen() && window.__d.panelTarget()==='Вторая проба'"
     },
     {
-      "name": "panel-second-target",
-      "probe": "window.__d.panelTarget()",
-      "expect": "Вторая проба"
+      "name": "second-data-loaded",
+      "timeout": 20000,
+      "waitFor": "!window.__d.panelAction('restore').hidden && !window.__d.panelAction('purge').hidden"
     },
     {
-      "name": "panel-second-thought-actions",
-      "probe": "(() => { const r=window.__d.panelRestore(); return JSON.stringify({ restore: r!==null && !r.hidden, props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null }); })()",
-      "expect": "{\"restore\":true,\"props\":true,\"layers\":true}"
+      "name": "second-restore-visible",
+      "probe": "JSON.stringify({ restore: window.__d.actionVisible('restore'), purge: window.__d.actionVisible('purge') })",
+      "expect": "{\"restore\":true,\"purge\":true}"
     },
     {
-      "name": "restore-second",
-      "probe": "(() => { const b=window.__d.panelRestore(); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "name": "restore-from-panel",
+      "probe": "(() => { const b=window.__d.panelAction('restore'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
-      "name": "second-restored",
-      "timeout": 15000,
-      "waitFor": "(() => { const b=window.__d.panelRestore(); return b===null || b.hidden; })()"
-    },
-    {
-      "name": "open-trash-third",
-      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
-    },
-    {
-      "name": "net-menu-third",
-      "timeout": 15000,
-      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
-    },
-    {
-      "name": "trash-third-click",
-      "probe": "window.__d.menuClick('Корзина')",
-      "expect": "ok"
-    },
-    {
-      "name": "trash-third-open",
+      "name": "restore-closes-dock",
       "timeout": 20000,
-      "waitFor": "(() => { const g=window.__d.grid(); return window.__d.top()!==null && g!==null && (g.items||[]).length>=1; })()"
+      "waitFor": "(() => { const id=window.__d232seed.b; return !window.__d.panelOpen() && !window.__d.ids().includes(id) && window.__d.topTitle()==='Корзина'; })()"
+    },
+    {
+      "name": "second-thought-restored",
+      "probe": "window.etn.thoughts.get('{{networkId}}', window.__d232seed.b).then((r) => r.marked_for_deletion)",
+      "expect": false
     },
     {
       "name": "link-row-current",
@@ -338,24 +431,19 @@
       "expect": "ok"
     },
     {
-      "name": "open-link-usage-via-menu",
-      "probe": "(() => { const id=window.__d232seed.link; window.__d.ctxRow(id); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
-      "name": "link-row-menu-open",
-      "timeout": 15000,
-      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Открыть использование')))()"
-    },
-    {
-      "name": "click-link-menu-usage",
-      "probe": "window.__d.menuClick('Открыть использование')",
+      "name": "enter-opens-link-panel",
+      "probe": "window.__d.pressEnter()",
       "expect": "ok"
     },
     {
       "name": "link-panel-open",
       "timeout": 20000,
-      "waitFor": "window.__d.panelOpen()"
+      "waitFor": "window.__d.panelOpen() && window.__d.topTitle()==='Корзина'"
+    },
+    {
+      "name": "link-data-loaded",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelLayers()!==null && !window.__d.panelAction('restore').hidden"
     },
     {
       "name": "link-panel-target",
@@ -364,47 +452,109 @@
     },
     {
       "name": "link-panel-actions",
-      "probe": "(() => { const r=window.__d.panelRestore(); return JSON.stringify({ restore: r!==null && !r.hidden, props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null }); })()",
-      "expect": "{\"restore\":true,\"props\":false,\"layers\":true}"
+      "probe": "JSON.stringify({ restore: window.__d.actionVisible('restore'), purge: window.__d.actionVisible('purge'), props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null })",
+      "expect": "{\"restore\":true,\"purge\":true,\"props\":false,\"layers\":true}"
     },
     {
-      "name": "restore-link",
-      "probe": "(() => { const b=window.__d.panelRestore(); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "name": "trash-action-closes-panel",
+      "probe": "window.__d.clickToolbar('Восстановить')",
       "expect": "ok"
     },
     {
-      "name": "link-restored",
-      "timeout": 15000,
-      "waitFor": "(() => { const b=window.__d.panelRestore(); return b===null || b.hidden; })()"
+      "name": "trash-restore-synced",
+      "timeout": 20000,
+      "waitFor": "(() => { const id=window.__d232seed.link; return !window.__d.panelOpen() && !window.__d.ids().includes(id) && window.__d.topTitle()==='Корзина'; })()"
     },
     {
-      "name": "final-trash",
+      "name": "link-restored",
       "api": {
-        "name": "final-trash",
+        "name": "link-restored",
         "method": "GET",
         "path": "/networks/{{networkId}}/trash",
         "expression": "data.thoughts.length + ':' + data.links.length"
       },
-      "expect": "0:1"
+      "expect": "0:0"
     },
     {
-      "name": "close-trash",
-      "eval": "(() => { const b=window.__d.btn('Закрыть'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+      "name": "layer-setup",
+      "eval": "(async () => { const nid='{{networkId}}'; const home='{{homeId}}'; const c=await window.etn.thoughts.create(nid,{title:'Слойная проба',create_link:{direction:'parent',target_thought_id:home}}); const cf=await window.etn.thoughts.get(nid,c.id); await window.etn.thoughts.update(nid,c.id,{marked_for_deletion:true},cf.version); const layer=await window.etn.layers.create(nid,{title:'Правки стенда'}); await window.etn.layers.select(nid,layer.id); window.__layer={id:layer.id,thought:c.id,base:'00000000-0000-4000-8000-0000000000ba5e'}; return JSON.stringify(window.__layer); })()"
     },
     {
-      "name": "trash-closed",
+      "name": "layer-recorded",
+      "probe": "JSON.stringify(window.__layer)"
+    },
+    {
+      "name": "close-trash-for-layer",
+      "probe": "window.__d.pressKey('Escape')",
+      "expect": "ok"
+    },
+    {
+      "name": "trash-closed-for-layer",
       "timeout": 15000,
       "waitFor": "window.__d.top() === null"
     },
     {
-      "name": "canvas-seed-clean",
-      "timeout": 20000,
-      "waitFor": "window.__d.cloudTrash('{{thoughtId}}') === false || window.__d.cloudTrash('{{thoughtId}}') === 'absent'"
+      "name": "layer-net-menu",
+      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
     },
     {
-      "name": "canvas-second-clean",
-      "probe": "(() => { const v=window.__d.cloudTrash(window.__d232seed.b); return v === false || v === 'absent'; })()",
-      "expect": true
+      "name": "layer-net-menu-open",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
+    },
+    {
+      "name": "layer-trash-click",
+      "probe": "window.__d.menuClick('Корзина')",
+      "expect": "ok"
+    },
+    {
+      "name": "layer-trash-open",
+      "timeout": 20000,
+      "waitFor": "(() => { const g=window.__d.grid(); return window.__d.topTitle()==='Корзина' && g!==null && (g.items||[]).some((x)=>x.id===window.__layer.thought); })()"
+    },
+    {
+      "name": "layer-row-blocked",
+      "timeout": 15000,
+      "waitFor": "(() => { const r=window.__d.rowData(window.__layer.thought); const texts=[...document.querySelectorAll('vaadin-grid-cell-content')].map((c)=>(c.textContent||'').trim()).join('|'); return r!==null && r.blocked===true && texts.indexOf('🔒')>=0; })()"
+    },
+    {
+      "name": "layer-row-usage-open",
+      "probe": "(() => { const id=window.__layer.thought; window.__d.clickRow(id); return window.__d.clickToolbar('Открыть использование…'); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "layer-panel-open",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen() && window.__d.panelTarget()==='Слойная проба'"
+    },
+    {
+      "name": "base-hint-loaded",
+      "timeout": 20000,
+      "waitFor": "window.__d.baseHint() !== null"
+    },
+    {
+      "name": "base-hint-text",
+      "probe": "window.__d.baseHint()",
+      "expect": "Сущность существует в основе: в рабочем слое её можно только пометить на удаление, «Удалить совсем» доступно в основе."
+    },
+    {
+      "name": "layer-purge-hidden",
+      "probe": "window.__d.actionVisible('purge')",
+      "expect": false
+    },
+    {
+      "name": "restore-base-session",
+      "eval": "(async () => { await window.etn.layers.select('{{networkId}}', window.__layer.base); return 'ok'; })()"
+    },
+    {
+      "name": "base-session-restored",
+      "probe": "window.__d.pressKey('Escape')",
+      "expect": "ok"
+    },
+    {
+      "name": "final-canvas-clean",
+      "timeout": 20000,
+      "waitFor": "window.__d.cloudTrash('{{thoughtId}}') === false || window.__d.cloudTrash('{{thoughtId}}') === 'absent'"
     }
   ]
 }

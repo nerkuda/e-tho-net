@@ -13,6 +13,9 @@
 
 import {
   BASE_LAYER_ID,
+  USAGE_W_DEFAULT,
+  USAGE_W_MAX,
+  USAGE_W_MIN,
   type Link,
   type LinkDeletionBlocking,
   type Thought,
@@ -34,14 +37,10 @@ import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
 // `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
 // со всеми остальными списками клиента.
 import { createThoughtCloud } from './lib/thought-cloud.js';
-// Правило 6 требования 11ddd910: двойной клик по строке корзины открывает
-// сущность в редакторе (мысль — редактором мысли, связь — редактором связи).
-import {
-  openLinkInEditor,
-  openThoughtInEditor,
-  reflectLinkUpdate,
-  reflectThoughtUpdate,
-} from './editor/editor.js';
+// Правило 6 требования 11ddd910 в корзине уточнено (ревизия 0.13.3, задача
+// d23279f6): двойной клик и Enter по строке открывают панель использования,
+// а не редактор. Общий путь отражения сущностей после мутаций остаётся.
+import { reflectLinkUpdate, reflectThoughtUpdate } from './editor/editor.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
 import { refreshSelectionPanel } from './selection/selection.js';
@@ -57,6 +56,7 @@ import { uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
 import { fieldInput } from './lib/ui/field.js';
 import { createTable } from './lib/ui/table.js';
+import { splitterElement, wireSplitter, type SplitterHandle } from './lib/ui/splitter.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -769,10 +769,17 @@ interface TrashDialogRow {
  * фильтр и текущая строка переживают закрытие диалога. Строка, которой больше
  * нет в списке (восстановлена/удалена), текущей не становится.
  */
-const trashSession: { networkId: string | null; filter: string; currentId: string | null } = {
+const trashSession: {
+  networkId: string | null;
+  filter: string;
+  currentId: string | null;
+  /** Ширина док-панели в сессии клиента (в `window_layout` не пишется). */
+  dockWidth: number;
+} = {
   networkId: null,
   filter: '',
   currentId: null,
+  dockWidth: USAGE_W_DEFAULT,
 };
 
 export async function openTrashDialog(networkId: string): Promise<void> {
@@ -784,16 +791,37 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     trashSession.currentId = null;
   }
 
-  // Корзина модальная: при открытой панели использования устаревшая панель
-  // не остаётся на экране (задача d23279f6). Импорт панели — только ленивый:
-  // статический даёт цикл с редактором/меню.
-  const usagePanel = await import('./screens/usage-panel.js');
-  usagePanel.closeUsagePanel();
+  // Корзина модальная: при открытой ЭКРАННОЙ панели использования устаревшая
+  // панель не остаётся на экране (задача d23279f6). Импорт панели — только
+  // ленивый: статический даёт цикл с редактором/меню.
+  const { createUsagePanel, closeUsagePanel } = await import('./screens/usage-panel.js');
+  closeUsagePanel();
 
+  // Раскладка дока: тело — `.list-dialog-body` (R9b требования 11ddd910),
+  // внутри flex-row `.trash-main`: слева док-панель, шов, справа содержимое
+  // корзины (поиск → тулбар → список). `min-width: 0` на всех уровнях —
+  // грабли f2a047ee: иначе min-content списка распирает строку.
   const body = div('trash list-dialog-body');
+  const trashMain = div('trash-main');
+  const usageHost = div('usage-panel usage-panel--dock hidden');
+  const dockSplitter = splitterElement('usage-dock-splitter hidden');
+  const trashContent = div('trash-content');
   const listHost = div('trash-table');
   // Высоту области списка задаёт раскладка диалога-списка (`.list-dialog-body`,
   // правило 9 требования 11ddd910) — она тянется на свободную высоту роли.
+
+  /**
+   * Ширина дока — в сессии клиента (в `window_layout` не пишется) и в
+   * локальной переменной экземпляра: экранная панель (`--usage-w`) не
+   * затрагивается. Старт — `USAGE_W_DEFAULT`.
+   */
+  let dockWidth = trashSession.dockWidth;
+  const applyDockWidth = (value: number): void => {
+    dockWidth = value;
+    trashSession.dockWidth = value;
+    trashMain.style.setProperty('--usage-dock-w', `${value}px`);
+  };
+  applyDockWidth(dockWidth);
 
   // Правило 1 требования 11ddd910: поле горячего поиска — ПЕРВАЯ строка
   // диалога, над строкой управления и списком; плейсхолдер — из словаря.
@@ -823,7 +851,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
    *  заблокированной строки удаление погашено. Словарь — `lib/i18n.ts`. */
   function trashRowMenu(row: TrashDialogRow): MenuItem[] {
     return [
-      menuAction(t('usagePanel.openLink'), () => openRowUsage(row)),
+      menuAction(t('usagePanel.openLink'), () => openDockUsage(row)),
       MENU_SEPARATOR,
       menuAction(t('actions.restore'), () => void row.onRestore()),
       menuAction(t('actions.deleteForever'), () => void row.onDelete(), {
@@ -863,12 +891,50 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       trashSession.currentId = key;
       updateButtons();
     },
-    onDblActivate: (row) => openRowInEditor(row),
+    // Исключение из правила 6 требования 11ddd910 (дополнение 0.13.3, ревизия
+    // d23279f6): двойной клик и Enter открывают панель использования, не
+    // редактор и не закрывают корзину. Фасад таблицы разводит события —
+    // заданы ОБА обработчика.
+    onDblActivate: (row) => openDockUsage(row),
+    onActivate: (row) => openDockUsage(row),
     // Правило 8 требования 11ddd910: команды над строкой — в её контекстном
     // меню (построчных крестиков «Восстановить»/«Удалить» в строках нет).
     rowMenu: (row) => trashRowMenu(row),
   });
   listHost.append(table.element);
+
+  // Док-панель — ОТДЕЛЬНЫЙ экземпляр панели (спека f7623077): экранная панель
+  // из диалога удаления остаётся как была. Док живёт только пока открыта
+  // корзина, ширина — сессионная, сплиттер — свой.
+  let closingDialog = false;
+  const dockPanel = createUsagePanel({
+    host: usageHost,
+    mode: 'dock',
+    // Любая мутация в панели — корзина перечитывает строки, замок, «Ссылок»
+    // и доступность кнопок тулбара без повторного открытия.
+    onChanged: () => void render(),
+    onClosed: () => {
+      dockSplitter.classList.add('hidden');
+      if (!closingDialog) table.focus();
+    },
+  });
+  const dockSplitterHandle: SplitterHandle = wireSplitter(dockSplitter, {
+    title: t('splitter.resizeHint'),
+    ariaLabel: t('splitter.resizeAriaHorizontal'),
+    stateHost: () => trashMain,
+    stateClass: 'resizing',
+    // Шов двигают мышью или стрелками (клавиатурный контракт lib/ui/splitter);
+    // максимум не оставляет списку меньше ~320px.
+    plan: () => {
+      if (!dockPanel.isOpen()) return null;
+      const max = Math.max(
+        USAGE_W_MIN,
+        Math.min(USAGE_W_MAX, trashMain.clientWidth - 320),
+      );
+      return { axis: 'x', sign: 1, start: dockWidth, min: USAGE_W_MIN, max };
+    },
+    apply: (value) => applyDockWidth(value),
+  });
 
   // Правило 2 требования 11ddd910: строка управления НАД списком. «Вернуть из
   // корзины» и «Удалить совсем» действуют на ТЕКУЩУЮ строку и гаснут без неё
@@ -884,7 +950,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     size: 's',
     title: t('usagePanel.openFromTrashTitle'),
     disabled: true,
-    onClick: () => openRowUsage(currentRow()),
+    onClick: () => openDockUsage(currentRow()),
   });
   const restoreBtn = uiButton({
     label: t('trash.action.restore'),
@@ -911,8 +977,11 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   });
   toolbar.append(usageBtn, restoreBtn, deleteBtn, purgeAllBtn);
 
-  // Правила 1–2: поиск (первая строка), под ним управление, затем список.
-  body.append(searchRow, toolbar, listHost);
+  // Правила 1–2: поиск (первая строка), под ним управление, затем список —
+  // внутри правой колонки дока; слева панель использования и её шов.
+  trashContent.append(searchRow, toolbar, listHost);
+  trashMain.append(usageHost, dockSplitter, trashContent);
+  body.append(trashMain);
 
   // Возврат фильтра и текущей строки между открытиями в сессии (d23279f6):
   // поле поиска начинается с сохранённого запроса, строка восстанавливается
@@ -921,9 +990,6 @@ export async function openTrashDialog(networkId: string): Promise<void> {
 
   /** Строки всей корзины до фильтра поиска (правило 1, клиентский фильтр). */
   let allRows: TrashDialogRow[] = [];
-
-  /** Закрытие диалога; присваивается сразу после `showDialog`. */
-  let closeDialog: () => void = () => undefined;
 
   /** Текущая строка списка — на неё действует строка управления (правило 2). */
   function currentRow(): TrashDialogRow | null {
@@ -943,36 +1009,19 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   }
 
   /**
-   * Вход в панель использования из корзины (задача d23279f6): корзина
-   * модальная — сначала закрывается, затем панель открывается в режиме
-   * `forceOpen` (не toggle) с чистым именем строки. Импорт панели ленивый —
-   * статический даёт цикл с редактором/меню.
+   * Вход в панель использования из корзины (задача d23279f6): корзина НЕ
+   * закрывается — панель встраивается слева, список остаётся справа. Док не
+   * toggle-ит: повторный вход для той же строки перерисовывает панель, для
+   * другой — открывает её на новой цели. Импорт панели ленивый (сделан выше).
    */
-  function openRowUsage(row: TrashDialogRow | null): void {
+  function openDockUsage(row: TrashDialogRow | null): void {
     if (row === null) return;
-    closeDialog();
-    void import('./screens/usage-panel.js').then((m) =>
-      m.openUsagePanel(
-        { kind: row.kind, id: row.id, title: row.title },
-        { forceOpen: true },
-      ),
-    );
-  }
-
-  /** Правило 6: двойной клик по строке открывает сущность в редакторе. */
-  function openRowInEditor(row: TrashDialogRow): void {
-    if (row.kind === 'thought') {
-      closeDialog();
-      openThoughtInEditor(row.id);
-      return;
-    }
-    void etn.links
-      .get(networkId, row.id)
-      .then((link) => {
-        closeDialog();
-        openLinkInEditor(link);
-      })
-      .catch(() => undefined);
+    usageHost.classList.remove('hidden');
+    dockSplitter.classList.remove('hidden');
+    trashSession.currentId = row.id;
+    table.setCurrent(row.id);
+    updateButtons();
+    dockPanel.open({ kind: row.kind, id: row.id, title: row.title });
   }
 
   /** Клиентский фильтр по подписи строки; пустой запрос — вся корзина. */
@@ -1069,6 +1118,17 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       });
     }
     allRows = out;
+    // Обратная синхронизация (задача d23279f6): действия корзины (restore,
+    // «Удалить», «Удалить всё, что возможно»), затронувшие цель панели, не
+    // оставляют панель на удалённой/восстановленной сущности. Исчезнувшая
+    // цель закрывает панель; текущая строка очищается в `applyFilter`.
+    const openTarget = dockPanel.currentTarget();
+    if (
+      openTarget !== null &&
+      !out.some((row) => row.id === openTarget.id && row.kind === openTarget.kind)
+    ) {
+      dockPanel.close();
+    }
     applyFilter();
   };
 
@@ -1128,7 +1188,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
 
   // Правило 3 требования 11ddd910: футер — только кнопка решения. Массовое
   // «Удалить всё, что возможно» ушло в строку управления над списком.
-  closeDialog = showDialog({
+  showDialog({
     title: 'Корзина',
     size: 'xl',
     body,
@@ -1136,7 +1196,23 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     // (правило 9 требования 11ddd910, ошибка f68bb43c).
     fixedHeight: true,
     buttons: [{ label: t('actions.close'), primary: true }],
+    // Esc-слои (задача d23279f6): каркас спрашивает обработчик ДО закрытия.
+    // (1) активная клавиатурная сессия сплиттера — отменить её, не закрывая
+    // ничего; (2) открыта док-панель — закрыть только панель; (3) иначе —
+    // обычное закрытие корзины.
+    onEscape: () => {
+      if (dockSplitterHandle.cancelKeyboard()) return true;
+      if (dockPanel.isOpen()) {
+        dockPanel.close();
+        return true;
+      }
+      return false;
+    },
     onMount: () => void render(),
-    onClose: () => table.destroy(),
+    onClose: () => {
+      closingDialog = true;
+      dockPanel.close();
+      table.destroy();
+    },
   });
 }

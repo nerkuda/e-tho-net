@@ -13,8 +13,8 @@ import type { HoldingLayerRef, ThoughtUsage } from '@etn/shared';
 
 import {
   isRestorePanelError,
+  usageActionVisibility,
   usageLayers,
-  usagePanelRepeatAction,
   usagePropertyRows,
 } from '../src/renderer/lib/usage.js';
 
@@ -96,22 +96,17 @@ describe('usageLayers: группа «Используется в слоях»',
   });
 });
 
-describe('вход из корзины: режим открытия (задача d23279f6)', () => {
-  const target = { kind: 'thought', id: 't-1' };
-
-  it('из диалога удаления повторный вызов для той же цели закрывает панель', () => {
-    assert.equal(usagePanelRepeatAction(target, target, false), 'close');
+describe('видимость действий шапки (задача d23279f6, критерии 5 и 7)', () => {
+  it('не помечена — нет ни restore, ни purge', () => {
+    assert.deepEqual(usageActionVisibility(false, false), { restore: false, purge: false });
   });
 
-  it('из корзины forceOpen открывает заново даже для той же цели', () => {
-    assert.equal(usagePanelRepeatAction(target, target, true), 'open');
+  it('помечена и заблокирована — только restore', () => {
+    assert.deepEqual(usageActionVisibility(true, true), { restore: true, purge: false });
   });
 
-  it('другая цель всегда перерисовывает панель', () => {
-    assert.equal(
-      usagePanelRepeatAction(target, { kind: 'link', id: 'l-1' }, false),
-      'open',
-    );
+  it('помечена и незаблокирована — restore и purge', () => {
+    assert.deepEqual(usageActionVisibility(true, false), { restore: true, purge: true });
   });
 });
 
