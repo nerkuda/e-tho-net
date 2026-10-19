@@ -79,6 +79,22 @@ function seedThoughtType(ndb: NetworkDb, name: string): string {
   return id;
 }
 
+/** Вставить структурное ребро (для операндов наличия связей). */
+function seedStructuralLink(
+  ndb: NetworkDb,
+  sourceId: string,
+  targetId: string,
+  opts: { active?: number; marked?: number } = {},
+): void {
+  ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion,
+                          version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, NULL, ?, ?, 1, '2024', '2024', 'u', 'u')`,
+    )
+    .run(randomUUID(), sourceId, targetId, opts.active ?? 1, opts.marked ?? 0);
+}
+
 function canon(over: Partial<CanonicalQueryRequest> = {}): CanonicalQueryRequest {
   return { sort: 'alpha', order: 'asc', limit: 100, offset: 0, ...over };
 }
@@ -563,6 +579,243 @@ describe('POST /thoughts/query: AST-тело через REST (задача c1376
         assert.equal(meta.unresolved?.length, 1, `${JSON.stringify(value)}: ${JSON.stringify(res.json)}`);
         assert.match(meta.unresolved?.[0]?.token ?? '', /\$thought/);
       }
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+});
+
+/**
+ * REST-контракт новых операндов «Есть входящие связи»/«Есть исходящие связи»
+ * (задача 60db9614): направления, состояния рёбер (включая пустую пару и
+ * wire-дефолт), отказ на `value`/неизвестном состоянии/чужом профиле.
+ */
+describe('POST /thoughts/query: AST наличия связей (60db9614)', { skip: !nativeAvailable() }, () => {
+  async function postQuery(
+    ctx: RestTestContext,
+    payload: Record<string, unknown>,
+  ): Promise<{ statusCode: number; json: Record<string, unknown> }> {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/networks/${ctx.networkId}/thoughts/query`,
+      headers: authHeaders(ctx),
+      payload,
+    });
+    return { statusCode: res.statusCode, json: res.json() as Record<string, unknown> };
+  }
+
+  async function queryIds(
+    ctx: RestTestContext,
+    entity: Record<string, unknown>,
+    operator: 'is_empty' | 'not_empty',
+  ): Promise<string[]> {
+    // Ограничиваем выборку фикстурой: у сети есть корневая мысль, иначе
+    // «пустые» направления включили бы её.
+    const res = await postQuery(ctx, {
+      ast: {
+        version: FILTER_AST_VERSION,
+        filter: {
+          op: 'and',
+          children: [
+            { entity, operator },
+            {
+              entity: { kind: 'keywords', scope: ['title'] },
+              operator: 'matches',
+              value: 'LP-',
+            },
+          ],
+        },
+      },
+      sort: 'alpha',
+      order: 'asc',
+      limit: 50,
+    });
+    assert.equal(res.statusCode, 200, JSON.stringify(res.json));
+    return (res.json['data'] as Array<{ id: string }>).map((item) => item.id).sort();
+  }
+
+  it('направления: входящие — target, исходящие — source; структурные рёбра учитываются', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const target = seedThought(ctx.ndb, 'LP-цель');
+      const source = seedThought(ctx.ndb, 'LP-источник');
+      seedStructuralLink(ctx.ndb, source, target);
+      const lonely = seedThought(ctx.ndb, 'LP-без-связей');
+
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links' }, 'not_empty'),
+        [target].sort(),
+        'входящее ребро принадлежит target',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'outgoing_links' }, 'not_empty'),
+        [source].sort(),
+        'исходящее ребро принадлежит source',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links' }, 'is_empty'),
+        [source, lonely].sort(),
+        'без входящих — source и мысль без рёбер',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'outgoing_links' }, 'is_empty'),
+        [target, lonely].sort(),
+        'без исходящих — target и мысль без рёбер',
+      );
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('состояния рёбер: пары по И, пустая пара не ограничивает, пустой/отсутствующий states — все', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const live = seedThought(ctx.ndb, 'LP-живое');
+      const inactive = seedThought(ctx.ndb, 'LP-неактуальное');
+      const trashed = seedThought(ctx.ndb, 'LP-корзина');
+      const inactiveTrashed = seedThought(ctx.ndb, 'LP-неактуальное-в-корзине');
+      seedStructuralLink(ctx.ndb, seedThought(ctx.ndb, 'LP-источник-живой'), live, {
+        active: 1,
+        marked: 0,
+      });
+      seedStructuralLink(ctx.ndb, seedThought(ctx.ndb, 'LP-источник-неактивный'), inactive, {
+        active: 0,
+        marked: 0,
+      });
+      seedStructuralLink(ctx.ndb, seedThought(ctx.ndb, 'LP-источник-корзина'), trashed, {
+        active: 1,
+        marked: 1,
+      });
+      seedStructuralLink(
+        ctx.ndb,
+        seedThought(ctx.ndb, 'LP-источник-неактивный-корзина'),
+        inactiveTrashed,
+        { active: 0, marked: 1 },
+      );
+      const all = [inactive, inactiveTrashed, live, trashed].sort();
+
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links', states: ['active', 'not_trashed'] }, 'not_empty'),
+        [live].sort(),
+        'обе пары: живое и не в корзине',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links', states: ['inactive'] }, 'not_empty'),
+        [inactive, inactiveTrashed].sort(),
+        'вторая пара не задана — не ограничивает',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links', states: ['trashed'] }, 'not_empty'),
+        [inactiveTrashed, trashed].sort(),
+        'первая пара пуста — не ограничивает',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links', states: ['active', 'inactive'] }, 'not_empty'),
+        all,
+        'оба члена первой пары — ограничения нет',
+      );
+      assert.deepEqual(
+        await queryIds(
+          ctx,
+          { kind: 'incoming_links', states: ['trashed', 'not_trashed'] },
+          'not_empty',
+        ),
+        all,
+        'оба члена второй пары — ограничения нет',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links', states: [] }, 'not_empty'),
+        all,
+        'пустой states — wire-дефолт «все состояния»',
+      );
+      assert.deepEqual(
+        await queryIds(ctx, { kind: 'incoming_links' }, 'not_empty'),
+        all,
+        'отсутствующий states — «все состояния»',
+      );
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('валидация: value, неизвестное состояние, оператор и чужой профиль — 422', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const withValue = await postQuery(ctx, {
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'incoming_links' },
+            operator: 'not_empty',
+            value: 'x',
+          },
+        },
+        sort: 'alpha',
+        order: 'asc',
+      });
+      assert.equal(withValue.statusCode, 422, JSON.stringify(withValue.json));
+      const valueError = withValue.json['error'] as {
+        code?: string;
+        details?: { field?: string };
+      };
+      assert.equal(valueError.code, 'VALIDATION_ERROR');
+      assert.equal(valueError.details?.field, 'filter.value', 'путь — лист, не entity');
+
+      const badState = await postQuery(ctx, {
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'outgoing_links', states: ['active', 'unknown'] },
+            operator: 'not_empty',
+          },
+        },
+        sort: 'alpha',
+        order: 'asc',
+      });
+      assert.equal(badState.statusCode, 422, JSON.stringify(badState.json));
+      const stateError = badState.json['error'] as {
+        code?: string;
+        details?: { field?: string };
+      };
+      assert.equal(stateError.code, 'VALIDATION_ERROR');
+      assert.equal(stateError.details?.field, 'filter.entity.states');
+
+      const badOperator = await postQuery(ctx, {
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: { entity: { kind: 'incoming_links' }, operator: 'eq' },
+        },
+        sort: 'alpha',
+        order: 'asc',
+      });
+      assert.equal(badOperator.statusCode, 422, JSON.stringify(badOperator.json));
+      const operatorError = badOperator.json['error'] as {
+        code?: string;
+        details?: { field?: string };
+      };
+      assert.equal(operatorError.code, 'VALIDATION_ERROR');
+      assert.equal(operatorError.details?.field, 'filter.operator', 'путь — лист, не entity');
+
+      // Чужой профиль (хроника): операнд мысли в его AST невидим.
+      const foreign = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/chronicle/query`,
+        headers: authHeaders(ctx),
+        payload: {
+          ast: {
+            version: FILTER_AST_VERSION,
+            filter: { entity: { kind: 'incoming_links' }, operator: 'not_empty' },
+          },
+        },
+      });
+      assert.equal(foreign.statusCode, 422, JSON.stringify(foreign.json()));
+      const foreignError = foreign.json()['error'] as {
+        code?: string;
+        details?: { field?: string; profile?: string };
+      };
+      assert.equal(foreignError.code, 'VALIDATION_ERROR');
+      assert.equal(foreignError.details?.field, 'filter.entity');
+      assert.equal(foreignError.details?.profile, 'chronicle');
     } finally {
       await closeRestContext(ctx);
     }

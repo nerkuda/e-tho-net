@@ -677,14 +677,31 @@ describe('guard: операнды профиля мыслей — операто
     for (const kind of profile.operands) {
       const ops = profile.operand_operators?.[kind] ?? [];
       assert.ok(ops.length > 0, `операнд «${kind}» обязан иметь непустой набор операторов`);
-      // «Свойство» подписывается именем из реестра сети — служебной подписи у
-      // него нет по устройству профиля.
-      if (kind === 'property') continue;
-      const label = builder.OPERAND_KIND_LABELS[kind];
+      // «Свойство» подписывается именем из реестра сети/снапшота — служебной
+      // подписи у него нет по устройству профиля. Проверяем тот же путь
+      // подписи, которым пользуется редактор: реестр пуст, значит обязан
+      // сработать снапшот `labels.entity`, а не пустая строка/id.
+      const snapshotLabel = 'Подпись свойства из снапшота';
+      const label =
+        kind === 'property'
+          ? builder.filterOperandLabel(
+              {
+                kind: 'leaf',
+                entity: { kind: 'property', property_id: 'guard-property' },
+                operator: 'eq',
+                value: '',
+                labels: { entity: snapshotLabel },
+              } as unknown as Parameters<typeof builder.filterOperandLabel>[0],
+              { registry: new Map() },
+            )
+          : builder.OPERAND_KIND_LABELS[kind];
       assert.ok(
         typeof label === 'string' && label.trim() !== '',
-        `операнд «${kind}» обязан иметь подпись в OPERAND_KIND_LABELS`,
+        `операнд «${kind}» обязан иметь непустую подпись`,
       );
+      if (kind === 'property') {
+        assert.equal(label, snapshotLabel, 'property: подпись берётся из снапшота, а не из id');
+      }
     }
     for (const kind of ['incoming_links', 'outgoing_links'] as const) {
       assert.ok(profile.operands.includes(kind), `${kind}: доступен в профиле мыслей`);

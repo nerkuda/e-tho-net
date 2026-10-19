@@ -592,6 +592,22 @@ function seedSqlThought(ndb: NetworkDb, title: string, author: string): string {
   return id;
 }
 
+/** Вставить структурное ребро напрямую в сетевую БД. */
+function seedSqlLink(
+  ndb: NetworkDb,
+  sourceId: string,
+  targetId: string,
+  opts: { active?: number; marked?: number } = {},
+): void {
+  ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion,
+                          version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, NULL, ?, ?, 1, '2024', '2024', 'u', 'u')`,
+    )
+    .run(randomUUID(), sourceId, targetId, opts.active ?? 1, opts.marked ?? 0);
+}
+
 describe('MCP etn.thoughts.query: ast + link_filter (паритет с REST, c5381a2d)', { skip }, () => {
   it('ast+link_filter принимается и совпадает с REST; ast+link_filter+плоский критерий — VALIDATION_ERROR', async () => {
     const w = await pairedWorld();
@@ -648,6 +664,196 @@ describe('MCP etn.thoughts.query: ast + link_filter (паритет с REST, c53
       });
       assert.equal(conflict.isError, true);
       assert.match(conflict.text, /VALIDATION_ERROR/);
+    } finally {
+      await closePairedWorld(w);
+    }
+  });
+});
+
+/**
+ * MCP-контракт новых операндов наличия связей (задача 60db9614): направления,
+ * состояния (включая пустую пару и wire-дефолт), отказ на `value`/неизвестном
+ * состоянии/чужом профиле.
+ */
+describe('MCP etn.thoughts.query: AST наличия связей (60db9614)', { skip }, () => {
+  async function queryIds(
+    client: Client,
+    networkId: string,
+    entity: Record<string, unknown>,
+    operator: 'is_empty' | 'not_empty',
+  ): Promise<string[]> {
+    const res = await client.callTool({
+      name: 'etn.thoughts.query',
+      arguments: {
+        network_id: networkId,
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            op: 'and',
+            children: [
+              { entity, operator },
+              {
+                entity: { kind: 'keywords', scope: ['title'] },
+                operator: 'matches',
+                value: 'LP-',
+              },
+            ],
+          },
+        },
+      },
+    });
+    assert.equal(res.isError, undefined, toolText(res));
+    const parsed = JSON.parse(toolText(res)) as { hits: Array<{ id: string }> };
+    return parsed.hits.map((hit) => hit.id).sort();
+  }
+
+  it('направления: входящие — target, исходящие — source; структурные рёбра учитываются', async () => {
+    const w = await pairedWorld();
+    try {
+      const target = seedSqlThought(w.rest.ndb, 'LP-цель', w.rest.adminId);
+      const source = seedSqlThought(w.rest.ndb, 'LP-источник', w.rest.adminId);
+      seedSqlLink(w.rest.ndb, source, target);
+      const lonely = seedSqlThought(w.rest.ndb, 'LP-без-связей', w.rest.adminId);
+
+      assert.deepEqual(
+        await queryIds(w.handle.client, w.rest.networkId, { kind: 'incoming_links' }, 'not_empty'),
+        [target].sort(),
+        'входящее ребро принадлежит target',
+      );
+      assert.deepEqual(
+        await queryIds(w.handle.client, w.rest.networkId, { kind: 'outgoing_links' }, 'not_empty'),
+        [source].sort(),
+        'исходящее ребро принадлежит source',
+      );
+      assert.deepEqual(
+        await queryIds(w.handle.client, w.rest.networkId, { kind: 'incoming_links' }, 'is_empty'),
+        [source, lonely].sort(),
+        'без входящих — source и мысль без рёбер',
+      );
+      assert.deepEqual(
+        await queryIds(w.handle.client, w.rest.networkId, { kind: 'outgoing_links' }, 'is_empty'),
+        [target, lonely].sort(),
+        'без исходящих — target и мысль без рёбер',
+      );
+    } finally {
+      await closePairedWorld(w);
+    }
+  });
+
+  it('состояния рёбер: пары по И, пустая пара не ограничивает, пустой/отсутствующий states — все', async () => {
+    const w = await pairedWorld();
+    try {
+      const live = seedSqlThought(w.rest.ndb, 'LP-живое', w.rest.adminId);
+      const inactive = seedSqlThought(w.rest.ndb, 'LP-неактуальное', w.rest.adminId);
+      const trashed = seedSqlThought(w.rest.ndb, 'LP-корзина', w.rest.adminId);
+      const inactiveTrashed = seedSqlThought(
+        w.rest.ndb,
+        'LP-неактуальное-в-корзине',
+        w.rest.adminId,
+      );
+      seedSqlLink(
+        w.rest.ndb,
+        seedSqlThought(w.rest.ndb, 'LP-источник-живой', w.rest.adminId),
+        live,
+        { active: 1, marked: 0 },
+      );
+      seedSqlLink(
+        w.rest.ndb,
+        seedSqlThought(w.rest.ndb, 'LP-источник-неактивный', w.rest.adminId),
+        inactive,
+        { active: 0, marked: 0 },
+      );
+      seedSqlLink(
+        w.rest.ndb,
+        seedSqlThought(w.rest.ndb, 'LP-источник-корзина', w.rest.adminId),
+        trashed,
+        { active: 1, marked: 1 },
+      );
+      seedSqlLink(
+        w.rest.ndb,
+        seedSqlThought(w.rest.ndb, 'LP-источник-неактивный-корзина', w.rest.adminId),
+        inactiveTrashed,
+        { active: 0, marked: 1 },
+      );
+      const all = [inactive, inactiveTrashed, live, trashed].sort();
+      const ids = (states?: readonly string[]): Promise<string[]> =>
+        queryIds(
+          w.handle.client,
+          w.rest.networkId,
+          states === undefined
+            ? { kind: 'incoming_links' }
+            : { kind: 'incoming_links', states },
+          'not_empty',
+        );
+
+      assert.deepEqual(await ids(['active', 'not_trashed']), [live].sort(), 'обе пары');
+      assert.deepEqual(await ids(['inactive']), [inactive, inactiveTrashed].sort(), 'вторая пара пуста');
+      assert.deepEqual(await ids(['trashed']), [inactiveTrashed, trashed].sort(), 'первая пара пуста');
+      assert.deepEqual(await ids(['active', 'inactive']), all, 'оба члена первой пары');
+      assert.deepEqual(await ids(['trashed', 'not_trashed']), all, 'оба члена второй пары');
+      assert.deepEqual(await ids([]), all, 'пустой states — wire-дефолт');
+      assert.deepEqual(await ids(), all, 'отсутствующий states — все состояния');
+    } finally {
+      await closePairedWorld(w);
+    }
+  });
+
+  it('валидация: value, неизвестное состояние и чужой профиль — ошибка', async () => {
+    const w = await pairedWorld();
+    try {
+      const withValue = await rawQuery(w.handle.client, {
+        network_id: w.rest.networkId,
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'incoming_links' },
+            operator: 'not_empty',
+            value: 'x',
+          },
+        },
+      });
+      assert.equal(withValue.isError, true, withValue.text);
+      assert.match(withValue.text, /VALIDATION_ERROR/);
+      assert.match(withValue.text, /не принимает значение/);
+
+      const badState = await rawQuery(w.handle.client, {
+        network_id: w.rest.networkId,
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: {
+            entity: { kind: 'outgoing_links', states: ['active', 'unknown'] },
+            operator: 'not_empty',
+          },
+        },
+      });
+      assert.equal(badState.isError, true, badState.text);
+      assert.match(badState.text, /VALIDATION_ERROR/);
+      assert.match(badState.text, /filter\.entity\.states/);
+
+      const badOperator = await rawQuery(w.handle.client, {
+        network_id: w.rest.networkId,
+        ast: {
+          version: FILTER_AST_VERSION,
+          filter: { entity: { kind: 'incoming_links' }, operator: 'eq' },
+        },
+      });
+      assert.equal(badOperator.isError, true, badOperator.text);
+      assert.match(badOperator.text, /VALIDATION_ERROR/);
+
+      // Чужой профиль (хроника): операнд мысли в её AST невидим.
+      const foreign = await w.handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: {
+          network_id: w.rest.networkId,
+          ast: {
+            version: FILTER_AST_VERSION,
+            filter: { entity: { kind: 'incoming_links' }, operator: 'not_empty' },
+          },
+        },
+      });
+      assert.equal(foreign.isError, true, toolText(foreign));
+      assert.match(toolText(foreign), /VALIDATION_ERROR/);
+      assert.match(toolText(foreign), /не виден в точке применения/);
     } finally {
       await closePairedWorld(w);
     }

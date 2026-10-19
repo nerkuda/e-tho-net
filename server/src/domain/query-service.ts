@@ -2413,7 +2413,9 @@ function filterAstLeafClause(
 
     case 'incoming_links':
     case 'outgoing_links':
-      return linkPresenceLeafClause(entity, leaf, `${path}.entity`, requestId);
+      // Путь листа, а не сущности: defensive-ошибки `value`/`operator` должны
+      // адресовать `filter.value`/`filter.operator` (как у прочих операндов).
+      return linkPresenceLeafClause(entity, leaf, path, requestId);
 
     case 'attachments':
       return collectionLeafClause(
@@ -2633,11 +2635,13 @@ function linkPresenceLeafClause(
  * значения или ни одного — пара не ограничивает (эквивалент `IN (0,1)` у
  * NOT NULL-флага); пустой/отсутствующий `states` означает «все состояния».
  *
- * Пара всегда выражается явным предикатом пары (даже когда она не
- * ограничивает). Это не только точная запись семантики: с предикатом по
- * `active`/`marked_for_deletion` планировщик идёт по `idx_links_target_live`,
- * а без него выбирает полный скан покрывающего `idx_links_triple_live`
- * (измерено perf-стендом: 286 мс против 4,5 мс на 1500 мыслях).
+ * Пара всегда выражается явным предикатом (даже когда она не ограничивает) —
+ * это прямая запись семантики, а не доказанная оптимизация: выигрыш плана
+ * зависит от фикстуры. На равномерной фикстуре (1500 мыслей) явный предикат
+ * даёт 4,14 мс против 2,41 мс без него, и планировщик выбирает другой план;
+ * на перекошенных данных (высокостепенный узел) поведение иное. Новый индекс
+ * не добавлялся: предикат оставлен ради однозначности SQL и независимости от
+ * неявного `NOT NULL`.
  */
 function linkEdgeStateClauses(
   states: readonly FilterLinkEdgeState[] | undefined,
