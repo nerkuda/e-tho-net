@@ -29,31 +29,31 @@ const RENDERER = path.resolve(
 const STRUCTURES = fs.readFileSync(path.join(RENDERER, 'screens', 'structures', 'filter-panel.ts'), 'utf8');
 const CHRONICLE = fs.readFileSync(path.join(RENDERER, 'screens', 'chronicle', 'filter-panel.ts'), 'utf8');
 const BAR = fs.readFileSync(path.join(RENDERER, 'lib', 'saved-filter-bar.ts'), 'utf8');
+const CONTROLLER = fs.readFileSync(
+  path.join(RENDERER, 'lib', 'saved-filter-controller.ts'),
+  'utf8',
+);
 const CANONICAL = fs.readFileSync(path.join(RENDERER, 'lib', 'filter-canonical.ts'), 'utf8');
 const SEED = fs.readFileSync(path.join(RENDERER, 'lib', 'predefined-filters.ts'), 'utf8');
 
-/** Тело функции `openSavedPicker` (до следующей функции верхнего уровня). */
-function openSavedPickerBody(source: string): string {
-  const start = source.indexOf('async function openSavedPicker(');
-  assert.notEqual(start, -1, 'openSavedPicker присутствует');
-  const next = source.indexOf('\nasync function ', start + 1);
-  const end = next === -1 ? source.length : next;
-  return source.slice(start, end);
-}
-
 describe('сторож предопределённых наборов отборов (задача 347b307e)', () => {
-  it('посев вызывается в openSavedPicker ОБЕИХ панелей до открытия диалога', () => {
+  it('посев подключён хуком beforePicker ОБЕИХ панелей и идёт до открытия диалога', () => {
     for (const [name, source] of [
       ['structures', STRUCTURES],
       ['chronicle', CHRONICLE],
     ] as const) {
-      const body = openSavedPickerBody(source);
-      const seedAt = body.indexOf('await seedPredefinedFilters()');
-      const dialogAt = body.indexOf('openSavedFilterDialog(');
-      assert.notEqual(seedAt, -1, `${name}: посев вызван при открытии списка`);
-      assert.notEqual(dialogAt, -1, `${name}: диалог открывается`);
-      assert.ok(seedAt < dialogAt, `${name}: посев ДО открытия диалога`);
+      assert.match(
+        source,
+        /beforePicker: seedPredefinedFilters/,
+        `${name}: посев подключён единым хуком контроллера`,
+      );
     }
+    // Контроллер — единственная точка открытия списка: посев до диалога.
+    const seedAt = CONTROLLER.indexOf('await opts.beforePicker()');
+    const dialogAt = CONTROLLER.indexOf('openSavedFilterDialog(');
+    assert.notEqual(seedAt, -1, 'контроллер вызывает beforePicker');
+    assert.notEqual(dialogAt, -1, 'контроллер открывает диалог');
+    assert.ok(seedAt < dialogAt, 'посев ДО открытия диалога');
   });
 
   it('каждая панель объявляет свои предопределённые наборы и канонизатор', () => {

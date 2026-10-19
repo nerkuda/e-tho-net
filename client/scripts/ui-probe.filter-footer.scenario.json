@@ -1,7 +1,7 @@
 {
   "name": "filter-footer",
-  "description": "Футер и личное сохранение отборов в «Структурах» и «Дневнике» (задача 46eba874, требование b202326e, сценарий 2b0bb289): онбординг → открыть «Структуры» → в футере есть строка имени и маркер ● → «Отборы…» открывает диалог, выбор сохранённого отбора заполняет имя → правка определения показывает ● → смена имени + «Сохранить» создаёт КОПИЮ (старое имя остаётся) → то же имя+копия во «Дневнике». Сохранённые отборы засеиваются шагом api (сервер принимает AST-определение, 0.13.1). Списочные проверки на сервере фильтруют имена по префиксу, который создаёт сам сценарий: с 0.13.1 в списке есть ещё и предопределённые наборы отбора (predefined-filters). Плюс пробы высоты диалога сохранённых отборов (ошибка d8eac984): высота бокса = min(max(450px, 50vh), calc(100vh - 60px)) на двух размерах окна, пустой поиск не схлопывает область списка (регресс f68bb43c), список прокручивается. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-footer.scenario.json --out .tmp/etn-d8eac984/out",
-  "timeout": 120000,
+  "description": "Футер и личное сохранение отборов в «Структурах», «Дневнике» и «Событиях» (задачи 46eba874 и c0c7b834; требования b202326e, 8cd9ad55; сценарии 2b0bb289 и 296a40f4): онбординг → «Структуры»: строка имени и маркер ●, «Отборы…», открытие сохранённого, ● после правки, смена имени + «Сохранить» = КОПИЯ → то же во «Дневнике» → «События» (0.13.3): стандартный футер с секцией имени, динамические даты $now/h, сохранение (определение без sort), открытие, ● после правки, копия по смене имени, удаление (условия остаются, идентичность снимается), восстановление отбора и имени при переключении воркспейс-вкладки (savedFilterId в L4). Сохранённые отборы засеиваются шагом api (сервер принимает AST-определение, 0.13.1). Списочные проверки на сервере фильтруют имена по префиксу, который создаёт сам сценарий: с 0.13.1 в списке есть ещё и предопределённые наборы отбора (predefined-filters). Плюс пробы высоты диалога сохранённых отборов (ошибка d8eac984): высота бокса = min(max(450px, 50vh), calc(100vh - 60px)) на двух размерах окна, пустой поиск не схлопывает область списка (регресс f68bb43c), список прокручивается. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-footer.scenario.json --out .tmp/etn-d8eac984/out",
+  "timeout": 240000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
     { "name": "fill-server-url", "click": "input[placeholder^='http']" },
@@ -305,6 +305,223 @@
         "expression": "data.map((f) => f.name).filter((n) => n.startsWith('Мой дневник')).sort().join('|')"
       },
       "expect": "Мой дневник|Мой дневник (копия)"
+    },
+
+    { "name": "open-activity", "click": "button.view-tab[title=\"События\"]" },
+    { "name": "activity-editor", "timeout": 15000, "waitFor": "document.querySelector('.activity-filter .fe .ff-name__input') !== null" },
+    {
+      "name": "activity-view-visible",
+      "probe": "document.querySelector('.activity')?.classList.contains('hidden') === false && document.querySelector('button.view-tab[title=\"События\"]')?.classList.contains('ui-btn--active') === true",
+      "expect": true
+    },
+    {
+      "name": "activity-footer-standard-name",
+      "probe": "document.querySelector('.activity-filter .ff-name__input') !== null && document.querySelector('.activity-filter .ff-save') !== null && document.querySelector('.activity-filter .ff-extra--saved') !== null && document.querySelector('.activity-filter .ff-changed') !== null",
+      "expect": true
+    },
+    {
+      "name": "activity-standard-apply-clear",
+      "probe": "document.querySelector('.activity-filter .ff-apply') !== null && document.querySelector('.activity-filter .ff-clear') !== null",
+      "expect": true
+    },
+    {
+      "name": "activity-no-own-apply-clear",
+      "probe": "document.querySelector('.activity-filter .ff-extra--apply') === null && document.querySelector('.activity-filter .ff-extra--clear') === null",
+      "expect": true
+    },
+
+    { "name": "activity-add-period-row", "click": ".activity-filter .ft-add-condition" },
+    { "name": "activity-row-appeared", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 1" },
+    { "name": "activity-open-operand", "click": ".activity-filter .ft-row[data-path=\"0\"] .ft-row__what" },
+    { "name": "activity-operand-choice", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"occurred_at\"]') !== null" },
+    { "name": "activity-pick-period-operand", "click": ".ft-choice__item[data-key=\"occurred_at\"]" },
+    { "name": "activity-open-operator", "click": ".activity-filter .ft-row[data-path=\"0\"] .ft-row__op" },
+    { "name": "activity-between-choice", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"between\"]') !== null" },
+    { "name": "activity-pick-between", "click": ".ft-choice__item[data-key=\"between\"]" },
+    { "name": "activity-period-submenu", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"between:manual\"]') !== null" },
+    { "name": "activity-pick-manual", "click": ".ft-choice__item[data-key=\"between:manual\"]" },
+    { "name": "activity-bounds-ready", "waitFor": "document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"anchor\"]') !== null" },
+    {
+      "name": "activity-from-anchor-now",
+      "eval": "(() => { const s = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"anchor\"]'); s.value = '$now'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "activity-from-shift-minus-1",
+      "eval": "(() => { const i = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] input[data-part=\"shift\"]'); i.value = '-1'; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "activity-from-unit-hour",
+      "eval": "(() => { const s = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"unit\"]'); s.value = 'h'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "activity-to-anchor-now",
+      "eval": "(() => { const s = document.querySelector('.activity-filter .fv-bounds [data-bound=\"to\"] select[data-part=\"anchor\"]'); s.value = '$now'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "activity-dynamic-date-set",
+      "probe": "document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"anchor\"]').value === '$now' && document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] select[data-part=\"unit\"]').value === 'h' && document.querySelector('.activity-filter .fv-bounds [data-bound=\"to\"] select[data-part=\"anchor\"]').value === '$now'",
+      "expect": true
+    },
+
+    {
+      "name": "activity-type-name",
+      "eval": "(() => { const i = document.querySelector('.activity-filter .ff-name__input'); i.value = 'События стенда'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "activity-marker-hidden-before-save",
+      "probe": "document.querySelector('.activity-filter .ff-changed').hidden",
+      "expect": true
+    },
+    { "name": "activity-save", "click": ".activity-filter .ff-save" },
+    {
+      "name": "activity-saved-notice",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('События стенда') === true"
+    },
+    {
+      "name": "activity-marker-hidden-after-save",
+      "probe": "document.querySelector('.activity-filter .ff-changed').hidden",
+      "expect": true
+    },
+    {
+      "name": "activity-saved-definition-on-server",
+      "timeout": 10000,
+      "api": {
+        "name": "activity-saved-definition-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=events",
+        "expression": "(() => { const f = data.find((x) => x.name === 'События стенда'); if (!f) return 'missing'; const def = typeof f.definition === 'string' ? JSON.parse(f.definition) : f.definition; return JSON.stringify({ version: def.version, sort: def.sort ?? null, dynamic: JSON.stringify(def.filter).includes('$now') }); })()"
+      },
+      "expect": "{\"version\":1,\"sort\":null,\"dynamic\":true}"
+    },
+
+    { "name": "activity-open-picker", "click": ".activity-filter .ff-extra--saved" },
+    { "name": "activity-picker-open", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "activity-picker-search", "click": ".sfd-search" },
+    { "name": "activity-picker-type", "text": "События стенда" },
+    { "name": "activity-picker-select", "key": "ArrowDown" },
+    { "name": "activity-picker-confirm", "key": "Enter" },
+    { "name": "activity-picker-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "activity-name-restored-from-saved",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.activity-filter .ff-name__input')?.value === 'События стенда'"
+    },
+    {
+      "name": "activity-marker-hidden-after-open",
+      "probe": "document.querySelector('.activity-filter .ff-changed').hidden",
+      "expect": true
+    },
+    {
+      "name": "activity-edit-shift",
+      "eval": "(() => { const i = document.querySelector('.activity-filter .fv-bounds [data-bound=\"from\"] input[data-part=\"shift\"]'); i.value = '-2'; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "activity-marker-visible-after-edit",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.activity-filter .ff-changed').hidden === false"
+    },
+    {
+      "name": "activity-rename-copy",
+      "eval": "(() => { const i = document.querySelector('.activity-filter .ff-name__input'); i.value = 'События стенда (копия)'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    { "name": "activity-save-copy", "click": ".activity-filter .ff-save" },
+    {
+      "name": "activity-copy-saved",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('События стенда (копия)') === true"
+    },
+    {
+      "name": "activity-both-filters-on-server",
+      "timeout": 10000,
+      "api": {
+        "name": "activity-both-filters-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=events",
+        "expression": "data.map((f) => f.name).filter((n) => n.startsWith('События стенда')).sort().join('|')"
+      },
+      "expect": "События стенда|События стенда (копия)"
+    },
+
+    { "name": "activity-open-picker-delete", "click": ".activity-filter .ff-extra--saved" },
+    { "name": "activity-picker-delete-open", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "activity-picker-delete-search", "click": ".sfd-search" },
+    { "name": "activity-picker-delete-type", "text": "События стенда (копия)" },
+    { "name": "activity-picker-delete-select", "key": "ArrowDown" },
+    {
+      "name": "activity-picker-click-delete",
+      "eval": "(() => { const b = [...document.querySelectorAll('.sfd-toolbar button')].find((x) => (x.textContent ?? '').trim() === 'Удалить'); if (!b) return 'no-delete'; b.click(); return 'clicked'; })()"
+    },
+    {
+      "name": "activity-delete-confirm-open",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.dialog-text')?.textContent?.includes('Удалить сохранённый отбор') === true"
+    },
+    {
+      "name": "activity-delete-confirm-click",
+      "eval": "(() => { const b = [...document.querySelectorAll('.dialog-footer button, .dialog-buttons button')].find((x) => (x.textContent ?? '').trim() === 'Подтвердить'); if (!b) return 'no-confirm'; b.click(); return 'confirmed'; })()"
+    },
+    {
+      "name": "activity-copy-deleted",
+      "timeout": 10000,
+      "api": {
+        "name": "activity-copy-deleted",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=events",
+        "expression": "data.map((f) => f.name).filter((n) => n.startsWith('События стенда')).sort().join('|')"
+      },
+      "expect": "События стенда"
+    },
+    { "name": "activity-close-picker", "key": "Escape" },
+    { "name": "activity-picker-closed-after-delete", "timeout": 8000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "activity-conditions-remain-after-delete",
+      "probe": "document.querySelectorAll('.activity-filter .ft-row').length > 0",
+      "expect": true
+    },
+    {
+      "name": "activity-name-cleared-after-delete",
+      "probe": "document.querySelector('.activity-filter .ff-name__input')?.value === ''",
+      "expect": true
+    },
+
+    { "name": "activity-reopen-original", "click": ".activity-filter .ff-extra--saved" },
+    { "name": "activity-reopen-picker", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "activity-reopen-search", "click": ".sfd-search" },
+    { "name": "activity-reopen-type", "text": "События стенда" },
+    { "name": "activity-reopen-select", "key": "ArrowDown" },
+    { "name": "activity-reopen-confirm", "key": "Enter" },
+    { "name": "activity-reopen-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "activity-capture-tab",
+      "eval": "(async () => { const b = document.querySelector('.tab.tab-active'); const id = b?.dataset?.tabId ?? null; window.__eventsTabId = id; const list = await window.etn.tabs.list(); const t = list.find((x) => x.tab_id === id); return JSON.stringify({ id: id, view: t?.view_mode ?? null }); })()"
+    },
+    { "name": "activity-open-new-tab", "click": ".tab.tab-plus" },
+    { "name": "activity-network-picker", "waitFor": "document.querySelector('.picker-list .network-item') !== null" },
+    { "name": "activity-pick-network", "click": ".picker-list .network-item" },
+    { "name": "activity-two-tabs", "timeout": 20000, "waitFor": "document.querySelectorAll('.tab[data-tab-id]').length >= 2" },
+    {
+      "name": "activity-back-to-events-tab",
+      "eval": "(() => { const b = document.querySelector('.tab[data-tab-id=\"' + window.__eventsTabId + '\"]'); if (!b) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "activity-view-restored",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.activity')?.classList.contains('hidden') === false && document.querySelector('.activity-filter .fe .ff-name__input') !== null"
+    },
+    {
+      "name": "activity-name-restored-after-tab",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.activity-filter .ff-name__input')?.value === 'События стенда'"
+    },
+    {
+      "name": "activity-marker-hidden-after-tab",
+      "probe": "document.querySelector('.activity-filter .ff-changed').hidden",
+      "expect": true
+    },
+    {
+      "name": "activity-state-saved-filter-id",
+      "eval": "(async () => { const list = await window.etn.tabs.list(); const t = list.find((x) => x.tab_id === window.__eventsTabId); const raw = t?.activity_state ?? null; const s = raw ? JSON.parse(raw) : {}; return JSON.stringify({ hasId: typeof s.savedFilterId === 'string' && s.savedFilterId.length > 0, offset: s.offset ?? null, hasFilter: !!s.filter }); })()"
     }
   ]
 }

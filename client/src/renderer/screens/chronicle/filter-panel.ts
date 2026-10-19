@@ -41,7 +41,6 @@ import {
 
 import { requireNetworkId } from '../../app.js';
 import { loadRecentValues, recordRecentValue } from '../../editor/recent-values.js';
-import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import { div, fmtDate } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -74,14 +73,16 @@ import { canonicalFilterTree } from '../../lib/filter-canonical.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
-import { notice } from '../../lib/notice.js';
 import {
   predefinedFilterIds,
   predefinedFiltersToCreate,
   type PredefinedFilter,
 } from '../../lib/predefined-filters.js';
-import { duplicateFilterName } from '../../lib/pure.js';
-import { openSavedFilterDialog } from '../../lib/saved-filter-bar.js';
+import {
+  createSavedFilterController,
+  type SavedFilterController,
+  type SavedFilterRow,
+} from '../../lib/saved-filter-controller.js';
 import { segmentedControl } from '../../lib/ui/segmented.js';
 import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import { store } from '../../state.js';
@@ -140,8 +141,8 @@ let serverIssues: readonly FilterIssue[] = [];
 let headerNodes: readonly HTMLElement[] = [];
 /** Реестр свойств сети (условия под-выборки целей), один REST-вызов на открытие. */
 const propertyDefs = new Map<string, NetworkProperty>();
-/** Список сохранённых отборов панели (кэш диалога выбора). */
-let savedRows: SavedFilterRow[] = [];
+/** Общий контроллер личных отборов «Дневника» (0.13.3, задача c0c7b834). */
+let savedFilters: SavedFilterController | null = null;
 /** Слой (G6) подписан на инвалидации списка отборов — один раз. */
 let savedFiltersWired = false;
 /** Признак: панель уже смонтирована (перерисовка допустима). */
@@ -153,14 +154,6 @@ let mounted = false;
 let unsubscribeFirstDayOfWeek: (() => void) | null = null;
 /** Последний увиденный первый день недели — пересборка только на реальной смене. */
 let firstDayOfWeekSeen = 1;
-
-interface SavedFilterRow {
-  id: string;
-  name: string;
-  definition: unknown;
-  /** Условия строки совпали с предопределённым набором (метка в списке). */
-  predefined?: boolean;
-}
 
 function defaultState(): FilterState {
   return { ...defaultFilterCriteriaState(), tree: defaultFilterTreeGroup('and'), sortKeys: [] };
@@ -620,7 +613,7 @@ export function addThoughtToFilter(id: string): void {
 
 /** Reloads the saved-filter list (real-time `saved-filter.*`). */
 export async function reloadSavedFilters(): Promise<void> {
-  await reloadSavedRows();
+  await ensureSavedFilters().syncRealtime();
 }
 
 /** Очищает критерии панели (порядок сохраняется). */
@@ -681,16 +674,64 @@ export function chronicleQueryDefinition(): ChronicleFilterDefinition {
 }
 
 /** REST-хранилище отборов вида «Дневник» (`/saved-filters?view=chronicle`). */
-async function reloadSavedRows(): Promise<void> {
-  try {
-    savedRows = (await etn.chronicleFilters.list(requireNetworkId())).map((f) => ({
-      id: f.id,
-      name: f.name,
-      definition: f.definition,
-    }));
-  } catch {
-    savedRows = [];
-  }
+function chronicleFilterStore(): {
+  list: () => Promise<SavedFilterRow[]>;
+  create: (name: string, definition: unknown) => Promise<SavedFilterRow>;
+  update: (id: string, patch: { name?: string; definition?: unknown }) => Promise<SavedFilterRow>;
+  remove: (id: string) => Promise<void>;
+} {
+  return {
+    list: async () => etn.chronicleFilters.list(requireNetworkId()),
+    create: (name, definition) =>
+      etn.chronicleFilters.create(requireNetworkId(), {
+        name,
+        definition: definition as ChronicleFilterDefinition,
+      }),
+    update: (id, patch) =>
+      etn.chronicleFilters.update(requireNetworkId(), id, {
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.definition !== undefined
+          ? { definition: patch.definition as ChronicleFilterDefinition }
+          : {}),
+      }),
+    remove: (id) => etn.chronicleFilters.remove(requireNetworkId(), id),
+  };
+}
+
+/** Создать контроллер один раз на панель (перерисовки его переиспользуют). */
+function ensureSavedFilters(): SavedFilterController {
+  savedFilters ??= createSavedFilterController({
+    store: chronicleFilterStore(),
+    getName: () => filterName,
+    setName: (name) => {
+      filterName = name;
+    },
+    buildDefinition: () => chronicleDefinition(),
+    applyEntry: (entry) => applySavedFilter(entry),
+    getSelectedId: () => savedFilterId,
+    setSelectedId: (id) => {
+      savedFilterId = id;
+    },
+    onSaved: ({ name, definition }) => {
+      filterName = name;
+      savedFilterName = name;
+      savedDefinition = definition;
+    },
+    onRenamed: (id, name) => {
+      if (savedFilterId === id) {
+        filterName = name;
+        savedFilterName = name;
+      }
+    },
+    onUnselected: () => {
+      savedFilterName = null;
+      savedDefinition = null;
+    },
+    onRefresh: () => editor?.refresh(),
+    beforePicker: seedPredefinedFilters,
+    afterReload: markPredefinedRows,
+  });
+  return savedFilters;
 }
 
 // ---------------------------------------------------------------------------
@@ -753,11 +794,8 @@ export function canonicalDefinition(def: unknown): string {
  * следующем открытии.
  */
 async function seedPredefinedFilters(): Promise<void> {
-  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
-  if (toCreate.length === 0) {
-    markPredefinedRows();
-    return;
-  }
+  const controller = ensureSavedFilters();
+  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, controller.rows(), canonicalDefinition);
   for (const item of toCreate) {
     try {
       await etn.chronicleFilters.create(requireNetworkId(), {
@@ -768,14 +806,13 @@ async function seedPredefinedFilters(): Promise<void> {
       // набор досоздастся при следующем открытии списка
     }
   }
-  await reloadSavedRows();
-  markPredefinedRows();
+  await controller.reload();
 }
 
 /** Пометить строки, условия которых совпали с предопределённым набором. */
-function markPredefinedRows(): void {
-  const ids = predefinedFilterIds(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
-  for (const row of savedRows) row.predefined = ids.has(row.id);
+function markPredefinedRows(rows: SavedFilterRow[]): void {
+  const ids = predefinedFilterIds(PREDEFINED_FILTERS, rows, canonicalDefinition);
+  for (const row of rows) row.predefined = ids.has(row.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -982,7 +1019,7 @@ function wireSavedFiltersToLayer(): void {
   if (savedFiltersWired) return;
   savedFiltersWired = true;
   onQueryInvalidated((prefix) => {
-    if (matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) void reloadSavedRows();
+    if (matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) void ensureSavedFilters().syncRealtime();
   });
 }
 
@@ -1089,109 +1126,12 @@ function footerExtraButtons(): FilterFooterButtonSpec[] {
 // Сохранённые отборы (личные, `?view=chronicle`)
 // ---------------------------------------------------------------------------
 
-async function saveFilter(request: { name: string; asCopy: boolean }): Promise<void> {
-  const name = request.name.trim();
-  if (name === '') {
-    notice('Введите имя отбора');
-    return;
-  }
-  const definition = chronicleDefinition();
-  try {
-    await reloadSavedRows();
-    const existing = savedRows.find((row) => row.name.toLowerCase() === name.toLowerCase());
-    const target = request.asCopy ? undefined : existing;
-    if (target !== undefined) {
-      await etn.chronicleFilters.update(requireNetworkId(), target.id, {
-        name,
-        definition: definition as ChronicleFilterDefinition,
-      });
-      savedFilterId = target.id;
-    } else {
-      const created = await etn.chronicleFilters.create(requireNetworkId(), {
-        name,
-        definition: definition as ChronicleFilterDefinition,
-      });
-      savedFilterId = created.id;
-    }
-  } catch (err) {
-    errorDialog('Сохранить отбор', err);
-    return;
-  }
-  filterName = name;
-  savedFilterName = name;
-  savedDefinition = definition;
-  editor?.refresh();
-  notice(`Отбор «${name}» сохранён`);
+function saveFilter(request: { name: string; asCopy: boolean }): void {
+  void ensureSavedFilters().save(request);
 }
 
-async function openSavedPicker(): Promise<void> {
-  await reloadSavedRows();
-  await seedPredefinedFilters();
-  // Перечитывание списка в ходе диалога: предопределённые наборы ВНУТРИ сессии
-  // не досоздаются (посев — только при открытии); метка пересчитывается.
-  const reload = async (): Promise<void> => {
-    await reloadSavedRows();
-    markPredefinedRows();
-  };
-  openSavedFilterDialog({
-    entries: () => savedRows,
-    selectedId: () => savedFilterId,
-    onPick: (entry) => applySavedFilter(entry),
-    onRename: async (entry) => {
-      const name = (await promptDialog('Переименовать отбор', 'Имя', entry.name) ?? '').trim();
-      if (name === '' || name === entry.name) return null;
-      try {
-        await etn.chronicleFilters.update(requireNetworkId(), entry.id, { name });
-      } catch (err) {
-        errorDialog('Переименовать отбор', err);
-        return null;
-      }
-      await reload();
-      if (savedFilterId === entry.id) {
-        filterName = name;
-        savedFilterName = name;
-        editor?.refresh();
-      }
-      return name;
-    },
-    onCopy: async (entry) => {
-      const copyName = duplicateFilterName(
-        entry.name,
-        savedRows.map((row) => row.name),
-      );
-      try {
-        const created = await etn.chronicleFilters.create(requireNetworkId(), {
-          name: copyName,
-          definition: entry.definition as ChronicleFilterDefinition,
-        });
-        await reload();
-        return created.id;
-      } catch (err) {
-        errorDialog('Скопировать отбор', err);
-        return null;
-      }
-    },
-    onDelete: async (entry) => {
-      const confirmed = await confirmDialog(
-        'Удалить отбор',
-        `Удалить сохранённый отбор «${entry.name}»?`,
-        true,
-      );
-      if (!confirmed) return;
-      try {
-        await etn.chronicleFilters.remove(requireNetworkId(), entry.id);
-      } catch (err) {
-        errorDialog('Удалить отбор', err);
-        return;
-      }
-      if (savedFilterId === entry.id) {
-        savedFilterId = null;
-        savedFilterName = null;
-      }
-      await reload();
-    },
-    onRefresh: reload,
-  });
+function openSavedPicker(): void {
+  void ensureSavedFilters().openPicker();
 }
 
 /** Применить сохранённый отбор (в т.ч. прежний плоский v1) и выполнить запрос. */

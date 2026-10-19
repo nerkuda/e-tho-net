@@ -2913,6 +2913,63 @@ export class RestClient {
   }
 
   // -------------------------------------------------------------------------
+  // «События»: личные сохранённые отборы (0.13.3, задача c0c7b834)
+  // -------------------------------------------------------------------------
+
+  /** `GET /networks/{nid}/saved-filters?view=events` — the user's events filters. */
+  public async listActivityFilters(
+    networkId: string,
+  ): Promise<import('@etn/shared').ActivitySavedFilter[]> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters`,
+      { query: { view: 'events' } },
+    );
+  }
+
+  /** `POST /networks/{nid}/saved-filters` — create an events filter (idempotent). */
+  public async createActivityFilter(
+    networkId: string,
+    input: { name: string; definition: import('@etn/shared').FilterAst },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ActivitySavedFilter> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      body: { view: 'events', ...input },
+      requestOptions: opts,
+    });
+  }
+
+  /** `PATCH /networks/{nid}/saved-filters/{fid}` — rename/redefine (idempotent). */
+  public async updateActivityFilter(
+    networkId: string,
+    filterId: string,
+    input: {
+      name?: string;
+      definition?: import('@etn/shared').FilterAst;
+    },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ActivitySavedFilter> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
+      { body: { view: 'events', ...input }, requestOptions: opts },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/saved-filters/{fid}` — delete (idempotent). */
+  public async deleteActivityFilter(
+    networkId: string,
+    filterId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
+      { requestOptions: opts },
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // §19 Pinned thoughts (L18)
   // -------------------------------------------------------------------------
 

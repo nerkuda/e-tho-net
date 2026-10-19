@@ -51,9 +51,15 @@ import { showThoughtTypeEditor } from '../type-manager.js';
 import { openPropertyManagerEditor } from '../property-manager.js';
 
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
+import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
+import {
+  createSavedFilterController,
+  type SavedFilterController,
+  type SavedFilterRow,
+} from '../../lib/saved-filter-controller.js';
 import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
-import { FILTER_AST_VERSION, UI_STATE_KEY } from '@etn/shared';
+import { FILTER_AST_VERSION, UI_STATE_KEY, type FilterAst } from '@etn/shared';
 import { uiButton } from '../../lib/ui/button.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { fieldRow } from '../../lib/ui/field.js';
@@ -119,6 +125,18 @@ let host: HTMLElement | null = null;
  *  (Q4: per-tab snapshot), `null` until the first init. */
 let networkIdSeen: string | null = null;
 let filter: ActivityFilterState = createDefaultActivityFilter();
+/** id применённого личного сохранённого отбора «Событий» (0.13.3). */
+let savedFilterId: string | null = null;
+/** Имя отбора в поле футера — переживает перерисовку панели. */
+let filterName = '';
+/** Имя применённого сохранённого отбора; `null` — отбор ещё не сохранён. */
+let savedFilterName: string | null = null;
+/** Снимок определения на момент сохранения (маркер ● футера). */
+let savedDefinition: unknown = null;
+/** Общий контроллер личных отборов «Событий» (создаётся при монтировании). */
+let savedFilters: SavedFilterController | null = null;
+/** Слой подписан на `saved-filter.*` — один раз. */
+let savedFiltersWired = false;
 /**
  * Запрос перехода из меню мысли «что происходило с этой сущностью»
  * (сценарий 7a1a354b, шаг 3): лента по `entity_id`. Живёт до инициализации
@@ -202,6 +220,12 @@ export async function ensureActivityInitialised(): Promise<void> {
   migrationDropped = [];
   serverIssues = [];
   panelWidth = null;
+  // Смена сети/вкладки сбрасывает идентичность сохранённого отбора: имя и
+  // baseline принадлежат конкретному L4-снимку вкладки (0.13.3, задача c0c7b834).
+  savedFilterId = null;
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
 
   try {
     let raw: string | null = null;
@@ -220,6 +244,7 @@ export async function ensureActivityInitialised(): Promise<void> {
       filter = parsed.filter;
       offset = parsed.offset;
       panelWidth = parsed.panelWidth;
+      savedFilterId = parsed.savedFilterId;
       // Потеря миграции (например, автор «не заполнено») видна жёлтой
       // диагностикой футера — до первого касания отбора пользователем.
       migrationDropped = parsed.dropped;
@@ -232,6 +257,10 @@ export async function ensureActivityInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter.
   }
+  // Идентичность сохранённого отбора восстанавливается ПО id: список личных
+  // отборов перечитывается, имя и baseline берутся из найденной строки. Отбор
+  // исчез (удалён другим клиентом) — идентичность снимается, условия остаются.
+  await resolveSavedFilterIdentity();
   // Переход из меню мысли сильнее сохранённого снимка: лента открывается
   // отбором «Сущность = id» (сценарий 7a1a354b, шаг 3).
   applyPendingEntityFilter();
@@ -239,6 +268,29 @@ export async function ensureActivityInitialised(): Promise<void> {
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
   await applyQuery();
+}
+
+/**
+ * Восстановить идентичность применённого сохранённого отбора по `savedFilterId`
+ * (0.13.3, задача c0c7b834): перечитать список личных отборов «Событий» и взять
+ * из найденной строки имя и baseline (маркер ●). Отбор не найден — идентичность
+ * очищается, условия снимка остаются как есть.
+ */
+async function resolveSavedFilterIdentity(): Promise<void> {
+  if (savedFilterId === null || savedFilters === null) return;
+  await savedFilters.reload();
+  const row = savedFilters.rows().find((entry) => entry.id === savedFilterId);
+  if (row === undefined) {
+    savedFilterId = null;
+    filterName = '';
+    savedFilterName = null;
+    savedDefinition = null;
+    return;
+  }
+  filterName = row.name;
+  savedFilterName = row.name;
+  savedDefinition = row.definition;
+  filterEditor?.refresh();
 }
 
 /**
@@ -280,6 +332,12 @@ function applyPendingEntityFilter(): void {
   filter = parsed.state;
   offset = 0;
   migrationDropped = [];
+  // Переход к сущности — собственный отбор, не сохранённый: идентичность и
+  // маркер ● прежнего отбора к нему не относятся.
+  savedFilterId = null;
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
   filterEditor?.refresh();
   activityFrame?.apply();
 }
@@ -294,6 +352,7 @@ function persistState(): void {
       activity_state: JSON.stringify({
         filter: buildFilterAst(filter, { profile: 'events', sort: false }),
         offset,
+        savedFilterId,
       }),
     })
     .catch(() => undefined);
@@ -325,6 +384,10 @@ export function mountActivity(hostEl: HTMLElement): () => void {
   });
 
   firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+  // Контроллер личных отборов создаётся ДО панели: футер обращается к нему
+  // сразу при сборке (кнопки «Сохранить»/«Отборы…»).
+  savedFilters = createSavedFilterController({ ...savedFilterControllerOptions() });
+  wireSavedFiltersToLayer();
   mountFilterPanel(panel);
   // Maintenance commands + pager live inside the results column so destructive
   // actions stay visibly apart from the table.
@@ -442,10 +505,12 @@ let filterEditor: FilterEditorHandle | null = null;
  * Собирает панель отбора единым редактором (профиль «события»): спец-поля
  * «Событий» — строки дерева (время события, тип действия, вид сущности,
  * сущность с под-выборкой, автор события), словари — enum-ячейки с флажками
- * (`enumOptions`). Футер места — фраза-превью и диагностика плюс свои кнопки
- * «Применить»/«Очистить»; сохранённых отборов у ленты нет, поэтому строка имени
- * не рисуется (`standard: false`, без `save`). Сортировку не показываем: порядок
- * ленты задаёт сервер (`occurred_at_ms DESC`).
+ * (`enumOptions`). Футер — СТАНДАРТНЫЙ набор «Сохранить/Применить/Очистить» и
+ * секция имени (0.13.3, задача c0c7b834): у ленты есть личные сохранённые
+ * отборы места «События» (`?view=events`). Определение сохраняется и
+ * сравнивается с baseline БЕЗ сортировки (`sort: false`) — иначе маркер ● горел
+ * бы всегда. Сортировку не показываем: порядок ленты задаёт сервер
+ * (`occurred_at_ms DESC`).
  */
 function mountFilterPanel(area: HTMLElement): void {
   const data: FilterTreeData = {
@@ -489,33 +554,32 @@ function mountFilterPanel(area: HTMLElement): void {
       // (дата/время, выбор сущности, текстовый ввод).
       return [];
     },
-    // Лента сохранённых отборов не имеет: свой набор кнопок, без строки имени.
+    // Стандартный набор кнопок + «Отборы…» в секции имени: личные сохранённые
+    // отборы места «События» (0.13.3, задача c0c7b834).
     buttons: {
-      standard: false,
       extra: [
         {
-          id: 'apply',
-          label: 'Применить',
-          role: 'primary',
-          title: 'Применить отбор событий',
-          onClick: () => void applyQuery(),
-        },
-        {
-          id: 'clear',
-          label: 'Очистить',
-          title: 'Очистить условия отбора',
-          onClick: () => {
-            filter = createDefaultActivityFilter();
-            migrationDropped = [];
-            serverIssues = [];
-            editor.refresh();
-            void applyQuery();
-          },
+          id: 'saved',
+          label: 'Отборы…',
+          title: 'Выбрать сохранённый отбор',
+          place: 'name',
+          onClick: () => void savedFilters?.openPicker(),
         },
       ],
     },
     host: {
       apply: () => void applyQuery(),
+      save: (request) => void savedFilters?.save(request),
+      reset: () => clearActivityFilter(),
+      getName: () => filterName,
+      setName: (name) => {
+        filterName = name;
+      },
+      savedName: () => savedFilterName,
+      baseline: () => savedDefinition,
+      // Определение без сортировки: порядок ленты задаёт сервер, а baseline
+      // сохранённого отбора тоже без `sort` — маркер ● не горит зря.
+      current: () => buildFilterAst(filter, { profile: 'events', sort: false }),
       // Диагностика строк (требования 44d61c8a, 0fd1dc5d): красное ядро
       // (битая сущность условия — применение запрещено) плюс конструкторское
       // жёлтое без адреса (потеря миграции прежнего пресета — в тултипе
@@ -535,6 +599,110 @@ function mountFilterPanel(area: HTMLElement): void {
   });
   filterEditor = editor;
   area.replaceChildren(editor.root);
+}
+
+/**
+ * «Очистить» стандартного футера: снять условия, идентичность сохранённого
+ * отбора и диагностику, затем выполнить запрос (0.13.3, задача c0c7b834).
+ */
+function clearActivityFilter(): void {
+  filter = createDefaultActivityFilter();
+  migrationDropped = [];
+  serverIssues = [];
+  savedFilterId = null;
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
+  filterEditor?.refresh();
+  persistState();
+  void applyQuery();
+}
+
+// ---------------------------------------------------------------------------
+// Личные сохранённые отборы «Событий» (0.13.3, задача c0c7b834)
+// ---------------------------------------------------------------------------
+
+/** REST-хранилище отборов места «События» (`/saved-filters?view=events`). */
+function savedFilterControllerOptions(): Parameters<typeof createSavedFilterController>[0] {
+  return {
+    store: {
+      list: async () => etn.activityFilters.list(requireNetworkId()),
+      create: (name, definition) =>
+        etn.activityFilters.create(requireNetworkId(), {
+          name,
+          definition: definition as FilterAst,
+        }),
+      update: (id, patch) =>
+        etn.activityFilters.update(requireNetworkId(), id, {
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.definition !== undefined
+            ? { definition: patch.definition as FilterAst }
+            : {}),
+        }),
+      remove: (id) => etn.activityFilters.remove(requireNetworkId(), id),
+    },
+    getName: () => filterName,
+    setName: (name) => {
+      filterName = name;
+    },
+    buildDefinition: () => buildFilterAst(filter, { profile: 'events', sort: false }),
+    applyEntry: (entry) => applySavedFilter(entry),
+    getSelectedId: () => savedFilterId,
+    setSelectedId: (id) => {
+      savedFilterId = id;
+    },
+    onSaved: ({ name, definition }) => {
+      filterName = name;
+      savedFilterName = name;
+      savedDefinition = definition;
+    },
+    onRenamed: (id, name) => {
+      if (savedFilterId === id) {
+        filterName = name;
+        savedFilterName = name;
+      }
+    },
+    // Удаление текущего (в т.ч. другим клиентом) снимает идентичность, а
+    // условия на экране остаются как есть (критерий 5).
+    onUnselected: () => {
+      filterName = '';
+      savedFilterName = null;
+      savedDefinition = null;
+    },
+    onPersist: () => persistState(),
+    onRefresh: () => filterEditor?.refresh(),
+  };
+}
+
+/**
+ * Применить личный сохранённый отбор: условия из определения, сброс смещения,
+ * идентичность/baseline, обновление таблицы (динамические даты переоцениваются
+ * при выполнении запроса).
+ */
+function applySavedFilter(entry: SavedFilterRow): void {
+  const parsed = parseActivityCriteriaTreeDetailed(entry.definition);
+  filter = parsed.state;
+  migrationDropped = [];
+  serverIssues = [];
+  savedFilterId = entry.id;
+  filterName = entry.name;
+  savedFilterName = entry.name;
+  savedDefinition = entry.definition;
+  offset = 0;
+  filterEditor?.refresh();
+  persistState();
+  void applyQuery();
+}
+
+/** Слой (G6): `saved-filter.*` — перечитать список; исчезнувший текущий снять. */
+function wireSavedFiltersToLayer(): void {
+  if (savedFiltersWired) return;
+  savedFiltersWired = true;
+  onQueryInvalidated((prefix) => {
+    if (matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) {
+      void savedFilters?.syncRealtime();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

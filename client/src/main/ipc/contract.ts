@@ -31,6 +31,7 @@ import type {
   AttachmentSearchQuery,
   AttachmentUpdateInput,
   AttachmentUsage,
+  ActivitySavedFilter,
   ChronicleFilterDefinition,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
@@ -620,6 +621,21 @@ export interface EtnApi {
       filterId: string,
       input: { name?: string; definition?: ChronicleFilterDefinition },
     ): Promise<ChronicleSavedFilter>;
+    remove(networkId: string, filterId: string): Promise<void>;
+  };
+  /** Личные сохранённые отборы места «События» (`view=events`, 0.13.3). */
+  activityFilters: {
+    /** `GET /saved-filters?view=events` — the user's events filters. */
+    list(networkId: string): Promise<ActivitySavedFilter[]>;
+    create(
+      networkId: string,
+      input: { name: string; definition: FilterAst },
+    ): Promise<ActivitySavedFilter>;
+    update(
+      networkId: string,
+      filterId: string,
+      input: { name?: string; definition?: FilterAst },
+    ): Promise<ActivitySavedFilter>;
     remove(networkId: string, filterId: string): Promise<void>;
   };
   pins: {
