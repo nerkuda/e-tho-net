@@ -21,6 +21,9 @@
  *      как были сделаны/исправлены (по хроно).
  *   5. пользовательские GUI-находки — ошибки, в постоянном комментарии которых
  *      источником указан пользователь (найдено/сообщил/выявлено пользователем).
+ *      С 0.13.2 находки делятся на полировку и дефекты (`userGuiFindings` с
+ *      полями `polish`/`defect`): реальные ошибки агента — отдельно от
+ *      неизбежной доводки интерфейса (задача 3e30f200).
  *   6. длительность версии — от создания мысли-версии до даты публикации.
  *
  * Вывод: человекочитаемый отчёт + машинный JSON (`--json <файл>`); `--compare`
@@ -211,13 +214,65 @@ export function hasRepeatedDelegation(text) {
   );
 }
 
+/** Маркеры полировки: доводка интерфейса, а не неверное поведение (задача 3e30f200). */
+export const POLISH_MARKERS = Object.freeze([
+  /полиров/i,
+  /стало\s+(?:значительно\s+)?(?:лучше|удобн)/i,
+  /переименова/i,
+  /компактн/i,
+  /перенест/i,
+  /убрать\s+(?:кнопк|строк)/i,
+  /порядок\s+пар/i,
+  /вместо\s+id/i,
+  /(?:не\s+)?помеща/i,
+  // «ширина» — только про UI-объект: техническое «из-за ширины блока» в
+  // описании причины дефекта полировкой не считается (пример 39553204).
+  /ширин[а-яё]*[^\n]{0,30}(?:колонк|строк|пол[яе]|панел|диалог|таблиц|окн|меню|кнопк|чип|редактор|элемент)/i,
+  /тултип/i,
+]);
+
+/**
+ * Маркеры дефекта. «ОШИБКА»/«КРИТИЧНО» — только капсом: строчное «ошибка» —
+ * обычное слово в тексте карточки и маркером не является.
+ */
+export const DEFECT_MARKERS = Object.freeze([
+  /ОШИБКА/,
+  /КРИТИЧНО/,
+  /не\s+работает/i,
+  /падает|роняет/i,
+  /теряется/i,
+  /не\s+совпадает\s+с/i,
+  /нарушает\s+(?:требовани|ADR)/i,
+  /пустой\s+результат/i,
+]);
+
+/**
+ * Класс пользовательской GUI-находки: `polish` (доводка) или `defect`
+ * (реальная ошибка агента). Эвристика по формулировкам карточки: заголовок
+ * работы + текст постоянного комментария.
+ *
+ * Правила (границы — в `version-metrics.md`):
+ *   * есть любой маркер дефекта → `defect` — даже если рядом маркеры
+ *     полировки: смешанный состав классифицируется консервативно (карточка
+ *     «полировка» с пунктом «ОШИБКА:» — дефект);
+ *   * иначе есть маркер полировки → `polish`;
+ *   * ни одного маркера → `defect` — сомнительная находка не раздувает
+ *     полировки.
+ */
+export function classifyUserGuiFinding(text, title = '') {
+  const source = `${title}\n${String(text ?? '')}`;
+  if (DEFECT_MARKERS.some((re) => re.test(source))) return 'defect';
+  if (POLISH_MARKERS.some((re) => re.test(source))) return 'polish';
+  return 'defect';
+}
+
 /**
  * Сводка по работам версии. Вход:
  *   works        — [{ id, title, type_id, active }];
  *   commentsById — { [thoughtId]: [{ kind, title, body_md, valid_from? }] };
  *   groups       — [{ name, taskIds }] (проекты версии и их задачи).
  * Возвращает счётчики, разбивку по типам, first-pass по проектам и в целом,
- * пользовательские находки и повторные делегации.
+ * пользовательские находки (всего/полировка/дефект) и повторные делегации.
  */
 export function summariseWorks({ works, commentsById, groups = [] }) {
   const byType = {};
@@ -228,7 +283,15 @@ export function summariseWorks({ works, commentsById, groups = [] }) {
   const comments = (id) => commentsById[id] ?? [];
 
   const errors = works.filter((w) => w.type_id === WORK_TYPE_IDS.error);
-  const userGuiFindings = errors.filter((w) => hasUserGuiFinding(permanentText(comments(w.id)), w.title));
+  const userGuiFindingWorks = errors.filter((w) =>
+    hasUserGuiFinding(permanentText(comments(w.id)), w.title),
+  );
+  const polishWorks = userGuiFindingWorks.filter(
+    (w) => classifyUserGuiFinding(permanentText(comments(w.id)), w.title) === 'polish',
+  );
+  const defectWorks = userGuiFindingWorks.filter(
+    (w) => classifyUserGuiFinding(permanentText(comments(w.id)), w.title) === 'defect',
+  );
   const repeatedDelegations = works.filter((w) => hasRepeatedDelegation(chronologicalText(comments(w.id))));
 
   const byGroup = [];
@@ -255,8 +318,14 @@ export function summariseWorks({ works, commentsById, groups = [] }) {
     inactive: works.filter((w) => !w.active).length,
     byType,
     errors: errors.length,
-    userGuiFindings: userGuiFindings.length,
-    userGuiFindingIds: userGuiFindings.map((w) => w.id),
+    userGuiFindings: {
+      total: userGuiFindingWorks.length,
+      polish: polishWorks.length,
+      defect: defectWorks.length,
+    },
+    userGuiFindingIds: userGuiFindingWorks.map((w) => w.id),
+    userGuiPolishIds: polishWorks.map((w) => w.id),
+    userGuiDefectIds: defectWorks.map((w) => w.id),
     repeatedDelegations: repeatedDelegations.length,
     repeatedDelegationIds: repeatedDelegations.map((w) => w.id),
     firstPass: {
@@ -713,7 +782,10 @@ export function formatReport(r) {
       .map(([k, v]) => `${k} ${v}`)
       .join(', ')}`,
   );
-  lines.push(`Ошибок: ${r.works.errors}; пользовательских GUI-находок: ${r.works.userGuiFindings}`);
+  lines.push(
+    `Ошибок: ${r.works.errors}; пользовательских GUI-находок: ${r.works.userGuiFindings.total}` +
+      ` (полировка ${r.works.userGuiFindings.polish}, дефект ${r.works.userGuiFindings.defect})`,
+  );
   lines.push(`Повторных делегаций: ${r.works.repeatedDelegations}`);
   lines.push('');
   lines.push('## First-pass (принято с первой сдачи)');
@@ -749,7 +821,13 @@ export function formatComparison(a, b) {
   lines.push(row('работ всего', num(a.works.total), num(b.works.total), num(b.works.total - a.works.total)));
   lines.push(row('ошибок', num(a.works.errors), num(b.works.errors), num(b.works.errors - a.works.errors)));
   lines.push(
-    row('пользовательских находок', num(a.works.userGuiFindings), num(b.works.userGuiFindings), num(b.works.userGuiFindings - a.works.userGuiFindings)),
+    row('пользовательских находок', num(a.works.userGuiFindings.total), num(b.works.userGuiFindings.total), num(b.works.userGuiFindings.total - a.works.userGuiFindings.total)),
+  );
+  lines.push(
+    row('  — полировка', num(a.works.userGuiFindings.polish), num(b.works.userGuiFindings.polish), num(b.works.userGuiFindings.polish - a.works.userGuiFindings.polish)),
+  );
+  lines.push(
+    row('  — дефект', num(a.works.userGuiFindings.defect), num(b.works.userGuiFindings.defect), num(b.works.userGuiFindings.defect - a.works.userGuiFindings.defect)),
   );
   lines.push(
     row('повторных делегаций', num(a.works.repeatedDelegations), num(b.works.repeatedDelegations), num(b.works.repeatedDelegations - a.works.repeatedDelegations)),

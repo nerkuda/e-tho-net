@@ -14,6 +14,9 @@
  *   * `polish-0.13.1.json`    — 7 эталонов эвристики замечаний заказчика:
  *                               6 карточек «полировка по визуальной проверке»
  *                               0.13.1 + a1100e0c («со слов пользователя»);
+ *   * `mixed-498876c4.json`     — спорный пример смешанного состава: ранний
+ *                               визуальный аудит 498876c4 (полировочные
+ *                               формулировки + пункт «ОШИБКА:»);
  *   * `mcp-config-sample.json` — образец MCP-конфига ZCode (ключ обезличен).
  *
  * Тела комментариев в фикстурах обрезаны до 2500 (хроно) / 5000 (постоянные)
@@ -33,6 +36,7 @@ import {
   firstPassAccepted,
   verifierRoundCount,
   hasUserGuiFinding,
+  classifyUserGuiFinding,
   hasRepeatedDelegation,
   summariseWorks,
   orderTags,
@@ -121,9 +125,12 @@ test('hasUserGuiFinding: источник-пользователь в посто
   assert.equal(flagged.length, 10); // 10 реальных находок пользователя в выборке
   assert.ok(flagged.every((w) => w.type_id === '3d31c615-d6b0-42e9-a027-e8197f7cbe8b'));
 
-  // Сводка повторяет тот же счёт и не путает ошибки с задачами.
+  // Сводка повторяет тот же счёт и не путает ошибки с задачами. Классификация
+  // находок: в выборке нет маркеров полировки, все дефекты по умолчанию.
   const summary = summariseWorks({ works: fixture.works, commentsById: fixture.comments });
-  assert.equal(summary.userGuiFindings, flagged.length);
+  assert.equal(summary.userGuiFindings.total, flagged.length);
+  assert.equal(summary.userGuiFindings.polish + summary.userGuiFindings.defect, flagged.length);
+  assert.equal(summary.userGuiFindings.defect, flagged.length);
   assert.equal(summary.byType['ошибка'], fixture.works.length);
 });
 
@@ -179,12 +186,97 @@ test('hasUserGuiFinding: маркеры заказчика — 6 полиров�
   );
 
   // Ровно 6 полировочных карточек + a1100e0c («со слов пользователя»).
+  // Разбиение 0.13.2: полировка только 4258e694; в остальных есть маркеры
+  // дефекта (f4e99090/696b3c3b/609deba0/23c7d3e9 — «ОШИБКА», 50d9bf4e —
+  // «КРИТИЧНО», a1100e0c — маркеров нет, консервативно дефект).
   const summary = summariseWorks({ works: fixture.works, commentsById: fixture.comments });
-  assert.equal(summary.userGuiFindings, 7);
+  assert.equal(summary.userGuiFindings.total, 7);
+  assert.equal(summary.userGuiFindings.polish, 1);
+  assert.equal(summary.userGuiFindings.defect, 6);
+  assert.deepEqual(summary.userGuiPolishIds, ['4258e694-47b0-4d7e-8d19-61387dee396a']);
   assert.deepEqual(
     [...summary.userGuiFindingIds].sort(),
     fixture.works.map((w) => w.id).sort(),
   );
+  assert.equal(
+    summary.userGuiPolishIds.length + summary.userGuiDefectIds.length,
+    summary.userGuiFindings.total,
+  );
+});
+
+test('classifyUserGuiFinding: маркеры полировки и дефекта', () => {
+  // Каждый маркер полировки по отдельности.
+  for (const text of [
+    'Полировка по визуальной проверке',
+    'Стало значительно лучше и понятней',
+    'Переименовать пункт меню',
+    'Переключатели — компактнее',
+    'Перенести кнопку в футер',
+    'Убрать кнопку «Сохранить»',
+    'Порядок пар «операнд — оператор»',
+    'Вместо ID — имена пользователей',
+    'Поле не помещается в строку',
+    'Ширина панели отбора',
+    'Добавить тултип к иконке',
+  ]) {
+    assert.equal(classifyUserGuiFinding(text), 'polish', `маркер полировки не сработал: ${text}`);
+  }
+
+  // Каждый маркер дефекта по отдельности.
+  for (const text of [
+    'ОШИБКА: множественный выбор не сохраняется',
+    'КРИТИЧНО: лента не обновляется',
+    'Поле не работает',
+    'Клиент падает при открытии',
+    'Роняет соединение',
+    'Значение теряется при правке',
+    'Результат не совпадает с отбором',
+    'Поведение нарушает требование ADR',
+    'Код нарушает требования спецификации',
+    'Пустой результат при непустом отборе',
+  ]) {
+    assert.equal(classifyUserGuiFinding(text), 'defect', `маркер дефекта не сработал: ${text}`);
+  }
+
+  // Смешанный состав — консервативно дефект (даже если карточка «полировка»).
+  assert.equal(
+    classifyUserGuiFinding('Полировка по визуальной проверке. ОШИБКА: значение теряется.', 'Полировка, часть 2'),
+    'defect',
+  );
+  assert.equal(
+    classifyUserGuiFinding('Компактнее кнопки; не работает поиск', 'Полировка, часть 3'),
+    'defect',
+  );
+
+  // Строчное «ошибка» — обычное слово, а не маркер: карточка остаётся полировкой.
+  assert.equal(classifyUserGuiFinding('Переименовать пункт; в тексте была ошибка'), 'polish');
+
+  // Техническое «ширина блока» в описании причины — не маркер полировки
+  // (реальный случай 39553204: дефект с рамкой выделения, а не доводка).
+  assert.equal(
+    classifyUserGuiFinding('Внешний outline уходил за границы поля из-за ширины блока.'),
+    'defect',
+  );
+
+  // Ни одного маркера — консервативно дефект (сомнительное не раздувает полировки).
+  assert.equal(classifyUserGuiFinding('Поправить кнопку сохранения'), 'defect');
+});
+
+test('classifyUserGuiFinding: спорный пример 498876c4 — смешанный состав', () => {
+  // Ранний визуальный аудит: «Пользователь (заказчик) осмотрел…» + чек-лист
+  // «формулировки заказчика» (полировочная лексика) и пункт 15 «ОШИБКА».
+  // В счёт находок карточка не входит (задача 92674032: «формулировки
+  // заказчика» без «полировки» не считаются), но при классификации — дефект.
+  const fixture = readJson<{
+    works: { id: string; title: string; type_id: string; active: boolean }[];
+    comments: Record<string, { kind: string; title?: string; body_md?: string }[]>;
+  }>('mixed-498876c4.json');
+  const work = fixture.works[0];
+  assert.ok(work !== undefined);
+  const c = (fixture.comments[work.id] ?? []).find((x) => x.kind === 'permanent');
+  const text = c ? `${c.title ?? ''}\n${c.body_md ?? ''}` : '';
+  assert.equal(hasUserGuiFinding(text, work.title), false);
+  assert.equal(classifyUserGuiFinding(text, work.title), 'defect');
 });
 
 test('summariseWorks: first-pass ТП «Общие вложения» = 11/14', () => {

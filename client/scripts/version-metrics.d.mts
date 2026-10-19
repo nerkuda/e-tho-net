@@ -40,6 +40,11 @@ export interface TrendComment {
 export declare function firstPassAccepted(comments: TrendComment[]): boolean;
 export declare function verifierRoundCount(comments: TrendComment[]): number;
 export declare function hasUserGuiFinding(text: string, title?: string): boolean;
+/** Класс пользовательской GUI-находки: доводка интерфейса или дефект. */
+export type UserGuiFindingClass = 'polish' | 'defect';
+export declare function classifyUserGuiFinding(text: string, title?: string): UserGuiFindingClass;
+export declare const POLISH_MARKERS: readonly RegExp[];
+export declare const DEFECT_MARKERS: readonly RegExp[];
 export declare function hasRepeatedDelegation(text: string): boolean;
 
 export interface WorkRef {
@@ -67,8 +72,11 @@ export interface WorksSummary {
   inactive: number;
   byType: Record<string, number>;
   errors: number;
-  userGuiFindings: number;
+  userGuiFindings: { total: number; polish: number; defect: number };
   userGuiFindingIds: string[];
+  /** Id находок по классам: доводка интерфейса / реальный дефект. */
+  userGuiPolishIds: string[];
+  userGuiDefectIds: string[];
   repeatedDelegations: number;
   repeatedDelegationIds: string[];
   firstPass: {
