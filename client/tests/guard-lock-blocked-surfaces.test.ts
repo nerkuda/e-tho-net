@@ -52,6 +52,9 @@ describe('guard: чужой захват переводит поверхност
       'titleArea.readOnly = blocked;',
       'synonymsInput.readOnly = blocked;',
       "if (foreignLockBlocksEdit('thought', thought.id)) field.blur();",
+      // Ошибка 201233ba: снятие чужого захвата — realtime-переход кэша,
+      // шапка обязана пересчитаться сама, без смены фокуса.
+      'bindHeaderLockSync(syncThoughtHeaderLock);',
     ]);
   });
 
@@ -66,7 +69,26 @@ describe('guard: чужой захват переводит поверхност
       'typeCombo.setDisabled(blocked);',
       'activeCheck.disabled = blocked;',
       'syncLinkHeaderLock();',
+      // Тот же класс дефекта (ошибка 201233ba): связь пересчитывается по
+      // переходу кэша, а не только по сборке/фокусу.
+      'bindHeaderLockSync(syncLinkHeaderLock);',
     ]);
+  });
+
+  it('подписка шапки отпускается при демонтаже и полной пересборке', () => {
+    // Иначе слушатели копятся на пересборках шапки и держат отсоединённый DOM.
+    const body = section(
+      'editor/editor.ts',
+      'export function mountEditor(editorHost: HTMLElement): void {',
+      'function buildHeaderFor(',
+    );
+    requireAll('демонтаж редактора', body, ['releaseHeaderLockSync();']);
+    const rebuild = section(
+      'editor/editor.ts',
+      'function renderFull(ctx: EditorContext | null): void {',
+      'function restoreEditorFocus(',
+    );
+    requireAll('полная пересборка', rebuild, ['releaseHeaderLockSync();']);
   });
 
   it('настройки мысли/связи переводятся в чтение через setBlocked', () => {

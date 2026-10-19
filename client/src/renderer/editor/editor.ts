@@ -145,6 +145,7 @@ import {
   foreignLockHeld,
   lockHandleFromOutcome,
   releaseHeld,
+  subscribeLockCache,
   type LockHandle,
 } from '../lib/lock-guard.js';
 import { disposePublicationCard, showPublicationTarget } from './publication-card.js';
@@ -543,6 +544,36 @@ let headerRetarget: ((ctx: EditorContext) => void) | null = null;
 let headerShapeKey: string | null = null;
 
 /**
+ * Пересчёт блокировки «живой» шапки по кэшу захватов. Регистрирует конструктор
+ * шапки (мысль или связь); вызывается не только при сборке/перепривязке/
+ * фокусе, но и на каждый переход кэша захватов (ошибка 201233ba): без этого
+ * снятие чужого захвата другим клиентом оставляло поля `readOnly` до смены
+ * фокуса.
+ */
+let headerLockSync: (() => void) | null = null;
+/** Отписка от кэша захватов; живёт ровно столько же, сколько «живая» шапка. */
+let headerLockUnsubscribe: (() => void) | null = null;
+
+/**
+ * Привязать пересчёт блокировки шапки к кэшу захватов. Повторный вызов
+ * заменяет прежнюю подписку — в редакторе одновременно живёт одна шапка.
+ */
+function bindHeaderLockSync(sync: () => void): void {
+  headerLockUnsubscribe?.();
+  headerLockSync = sync;
+  headerLockUnsubscribe = subscribeLockCache(() => {
+    headerLockSync?.();
+  });
+}
+
+/** Отпустить подписку шапки: шапка пересобирается или редактор демонтируется. */
+function releaseHeaderLockSync(): void {
+  headerLockUnsubscribe?.();
+  headerLockUnsubscribe = null;
+  headerLockSync = null;
+}
+
+/**
  * Эпоха рендера: инкрементируется на каждом пути, привязывающем полосу вкладок
  * к (возможно) новой сущности. Асинхронные загрузчики счётчиков «(N)» захватывают
  * её и отбрасывают устаревший результат — при переиспользованной полосе вкладок
@@ -667,6 +698,7 @@ export function mountEditor(editorHost: HTMLElement): void {
   reflowOverflow = null;
   headerRetarget = null;
   headerShapeKey = null;
+  releaseHeaderLockSync();
   stalePanes = new Set();
   lastSignature = '';
   lastIdentitySignature = '';
@@ -1644,6 +1676,7 @@ function renderFull(ctx: EditorContext | null): void {
   // (the builder re-registers it). Placeholders leave it null.
   headerRetarget = null;
   headerShapeKey = null;
+  releaseHeaderLockSync();
   stalePanes = new Set();
   renderCtx = ctx;
 
@@ -2307,8 +2340,10 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
    * Чужой захват (ошибка 4f18d9f5): заголовок и синонимы — только чтение,
    * как и запись, которую всё равно отклонит сервер. Значения остаются
    * видимыми — чтение не блокируется (ADR 705fb6d3). Состояние синхронизируется
-   * с кэшем захватов при сборке, смене мысли и попытке входа в поле; при
-   * холодном кэше запись отсекает обычный путь ошибки.
+   * с кэшем захватов при сборке, смене мысли, попытке входа в поле и на каждый
+   * переход кэша (realtime): снятие захвата другим клиентом разблокирует поля
+   * сразу, без смены фокуса (ошибка 201233ba). При холодном кэше запись
+   * отсекает обычный путь ошибки.
    */
   const syncThoughtHeaderLock = (): void => {
     const blocked = foreignLockHeld('thought', thought.id);
@@ -2316,6 +2351,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     synonymsInput.readOnly = blocked;
   };
   syncThoughtHeaderLock();
+  bindHeaderLockSync(syncThoughtHeaderLock);
   const guardHeaderEdit = (field: HTMLInputElement | HTMLTextAreaElement): void => {
     syncThoughtHeaderLock();
     if (foreignLockBlocksEdit('thought', thought.id)) field.blur();
@@ -2699,6 +2735,7 @@ function buildLinkHeader(initial: Link): HTMLElement {
     activeCheck.disabled = blocked;
   };
   syncLinkHeaderLock();
+  bindHeaderLockSync(syncLinkHeaderLock);
 
   /** Applies another link of the same type to the live header, values only. */
   const applyLink = (next: Link): void => {
@@ -2752,6 +2789,13 @@ export const editorInternals = {
   buildThoughtHeaderLoading,
   /** Loader-only link header (kept for symmetry with the thought header). */
   buildLinkHeaderLoading,
+  /**
+   * Подписка «живой» шапки на кэш захватов (ошибка 201233ba): тест проверяет,
+   * что переход кэша (снятие чужого захвата) пересчитывает поля без смены
+   * фокуса, а `releaseHeaderLockSync` снимает подписку при пересборке.
+   */
+  bindHeaderLockSync,
+  releaseHeaderLockSync,
   /**
    * Метка корзины в заголовке панели (задача ff991fb2): тест проверяет, что
    * помеченная мысль открывается с кликабельным признаком корзины, ведущим в
