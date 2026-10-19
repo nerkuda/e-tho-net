@@ -38,9 +38,18 @@ import {
   type PropertyListRow,
 } from './property-list.js';
 import { fieldRow } from './ui/field.js';
-import { walkDropField } from './thought-drop-pure.js';
+import {
+  walkDropField,
+  type ThoughtDropAcceptor,
+} from './thought-drop-pure.js';
 
-export { resolveFieldDrop, type FieldDropPlan } from './thought-drop-pure.js';
+export {
+  acceptThoughtDrop,
+  resolveFieldDrop,
+  type FieldDropPlan,
+  type ThoughtDropAcceptor,
+  type ThoughtDropPayload,
+} from './thought-drop-pure.js';
 
 /**
  * Вид поля-приёмника. `link-value` — поле значения свойства-связи (между такими
@@ -53,11 +62,12 @@ export type ThoughtDropFieldKind = 'link-value' | 'filter';
 /**
  * Приёмник дропа мысли. `accept` синхронно меняет состояние поля и возвращает
  * `true`, если набор изменился (мысль уже была — `false`, чтобы перенос не снял
- * её из поля-источника впустую).
+ * её из поля-источника впустую). `acceptPayload` (этап 3 задачи 31b228f0) —
+ * типизированный приёмник: если объявлен, получает ЛЮБОЙ вид значения;
+ * исторические поля без него принимают только мысль.
  */
-export interface ThoughtDropField {
+export interface ThoughtDropField extends ThoughtDropAcceptor {
   kind: ThoughtDropFieldKind;
-  accept: (thoughtId: string) => boolean;
 }
 
 const dropFields = new WeakMap<HTMLElement, ThoughtDropField>();

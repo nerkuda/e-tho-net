@@ -37,6 +37,9 @@ import {
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
   SELECTION_W_MIN,
+  USAGE_W_DEFAULT,
+  USAGE_W_MAX,
+  USAGE_W_MIN,
   splitCompoundTitle,
   type AnyRealtimeEvent,
   type PropertyConfig,
@@ -300,6 +303,8 @@ export interface ParsedEditorSize {
   h: number;
   /** Selection panel width (left of the canvas), px. */
   s: number;
+  /** Usage panel width (left of the canvas, правое панели выделения), px. */
+  u: number;
   /** Status-bar event area width in pixels — the right-most fixed-width
    *  region of the status bar (08-ui-spec §11). `null` when the stored
    *  payload has no `e` key yet (older clients), so the renderer can pick the
@@ -426,6 +431,7 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
     w: EDITOR_W_DEFAULT,
     h: EDITOR_H_DEFAULT,
     s: SELECTION_W_DEFAULT,
+    u: USAGE_W_DEFAULT,
     e: null,
   };
   if (raw === null || raw === '') return fallback;
@@ -436,6 +442,7 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
       const wNum = Number(obj['w']);
       const hNum = Number(obj['h']);
       const sNum = Number(obj['s']);
+      const uNum = Number(obj['u']);
       const eRaw = obj['e'];
       const eNum = typeof eRaw === 'number' ? eRaw : Number(eRaw);
       // The window-width-relative cap (30 %) cannot be applied here because
@@ -451,6 +458,9 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
         s: Number.isFinite(sNum)
           ? clip(Math.round(sNum), SELECTION_W_MIN, SELECTION_W_MAX)
           : fallback.s,
+        u: Number.isFinite(uNum)
+          ? clip(Math.round(uNum), USAGE_W_MIN, USAGE_W_MAX)
+          : fallback.u,
         e,
       };
     }
@@ -461,6 +471,7 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
         w: clip(Math.round(single), EDITOR_W_MIN, EDITOR_W_MAX),
         h: fallback.h,
         s: fallback.s,
+        u: fallback.u,
         e: null,
       };
     }

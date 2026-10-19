@@ -888,7 +888,11 @@ const collapseDecoField = StateField.define<CollapseDecoState>({
     // Пересборка: правка документа (в т.ч. вход/выход из правки блока), смена
     // набора контейнера либо refresh-эффект производной области трансклюзии.
     const refreshed = tr.effects.some((effect) => effect.is(refreshCollapseEffect));
-    if (!tr.docChanged && current === value.setRef && !refreshed) return value;
+    // Доразбор parse-worker'ом (`Language.setState`, без `docChanged` и
+    // `selection`) виден по смене ссылки дерева: иначе разделы и маркеры
+    // хвоста длинного комментария не появляются до правки (ошибка `8c890ee7`).
+    const treeGrown = !tr.docChanged && syntaxTree(tr.state) !== syntaxTree(tr.startState);
+    if (!tr.docChanged && current === value.setRef && !refreshed && !treeGrown) return value;
     return buildDecorations(tr.state);
   },
   provide: (field) => EditorView.decorations.from(field, (state) => state.deco),

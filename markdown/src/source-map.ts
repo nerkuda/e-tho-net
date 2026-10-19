@@ -41,7 +41,8 @@
  * are read from the first nested `tokenize` call of markdown-it's `link` rule,
  * autolink coordinates come from its angle brackets, and an image contributes
  * only an after-anchor (its label renders to the `alt` attribute, not to
- * characters).
+ * characters). Bare http(s) URLs autolinked by the `linkify` rule get the range
+ * of the URL itself — scheme included (ошибка `37458cbc`).
  *
  * A construct is marked `data-md-leaf` (verbatim 1:1 text) only when it has no
  * annotated descendant: nested constructs (`==a [[Мысль]] b==`,
@@ -93,10 +94,15 @@
  * - A link whose URL is rejected by the safety allow-list renders as plain text
  *   (its `<a>` and attributes are dropped), so the label markup of that
  *   construct is not compensated — the nearest annotated ancestor is the block.
+ *   The same holds for a bare URL with a scheme outside the allow-list
+ *   (`ftp://…`): `linkify` matches it, the safety plugin drops the `<a>`, and
+ *   the text stays unannotated.
  */
 
 import type MarkdownIt from 'markdown-it';
 import type Token from 'markdown-it/lib/token.mjs';
+
+import { SCHEME_AUTOLINK_RULE } from './autolink.js';
 
 /** `data-`attribute holding the source start offset of an annotated node. */
 export const MD_SOURCE_START_ATTR = 'data-md-start';
@@ -687,6 +693,11 @@ interface InlineStateLike {
   src: string;
   pos: number;
   posMax: number;
+  /**
+   * Plain text accumulated since the last pushed token. Read only by the
+   * `linkify` capture (the scheme run sits at its end, as in markdown-it).
+   */
+  pending: string;
   env: unknown;
   tokens: Token[];
   delimiters: InlineDelimiter[];
@@ -814,6 +825,15 @@ function applyDelimiterPairs(
   }
 }
 
+/**
+ * Scheme run immediately before the `://` of a bare URL, exactly as
+ * markdown-it's `linkify` rule reads it from `state.pending` (its own SCHEME_RE,
+ * RFC3986: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`, preceded by the string
+ * start or a non-scheme character). Kept in sync with the rule so the recovered
+ * URL start is exact.
+ */
+const LINKIFY_SCHEME_RE = /(?:^|[^a-z0-9.+-])([a-z][a-z0-9+.-]*)$/i;
+
 /** Registers position capture for emphasis-like and code-span inline rules. */
 function installInlineCapture(md: MarkdownIt): void {
   const positions = new WeakMap<Token, RecordedMarker>();
@@ -935,6 +955,45 @@ function installInlineCapture(md: MarkdownIt): void {
     }
     return ok;
   });
+
+  // Явные схемы автолинкуются ДВУМЯ внутристрочными правилами (ошибка
+  // 37458cbc): встроенным `linkify` (схема + `://`) и своим
+  // `SCHEME_AUTOLINK_RULE` (схема БЕЗ `//` — `mailto:`). Оба срабатывают на `:`
+  // схемы, оба снимают схему из `state.pending` и оставляют `link_open`
+  // (info `auto`), видимый текст которого — ВЕСЬ адрес, включая схему (не так,
+  // как у углового `autolink` выше). Разметка позиций у них общая: диапазон
+  // считается от начала схемы (`posBefore - proto.length`) до новой позиции
+  // парсера. Без неё автолинк рендерился бы обычным текстом и позиции после него
+  // «уезжали» (прецедент 809fb567).
+  for (const ruleName of ['linkify', SCHEME_AUTOLINK_RULE]) {
+    wrapInlineRule(md, ruleName, (orig) => (state, silent) => {
+      const posBefore = state.pos;
+      // Cheap gate first: правила срабатывают только на `:` схемы, поэтому
+      // остальные позиции не стоят ничего.
+      if (
+        silent ||
+        !sourceMapEnabled(state.env) ||
+        state.src.charCodeAt(posBefore) !== 0x3a /* : */
+      ) {
+        return orig(state, silent);
+      }
+      const before = state.tokens.length;
+      // Схема лежит в конце `state.pending` (регулярка встроенного правила,
+      // зеркало — `LINKIFY_SCHEME_RE`), а правило СРЕЗАЕТ её перед выталкиванием
+      // токенов — читаем сейчас, чтобы восстановить начало адреса.
+      const proto = state.pending.match(LINKIFY_SCHEME_RE)?.[1];
+      const ok = orig(state, silent);
+      if (ok && proto !== undefined) {
+        const open = firstTokenOfType(state.tokens, before, 'link_open');
+        if (open !== undefined) {
+          const meta = (open.meta ?? (open.meta = {})) as RangeCarrier;
+          meta.mdRelative = { start: posBefore - proto.length, end: state.pos };
+          meta.mdRelativeAfter = state.pos;
+        }
+      }
+      return ok;
+    });
+  }
 
   md.inline.ruler2.after('emphasis', 'source_map_inline', (state) => {
     if (!sourceMapEnabled(state.env)) return true;

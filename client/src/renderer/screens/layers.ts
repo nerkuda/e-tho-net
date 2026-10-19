@@ -31,6 +31,7 @@ import {
 import { t } from '../lib/i18n.js';
 
 import { etn } from '../lib/etn.js';
+import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import {
   MENU_SEPARATOR,
   menuAction,
@@ -522,9 +523,30 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
   });
 }
 
-/** Delete-layer dialog (§2.4): descendant count + titles, «основа не пострадает». */
-function openDeleteLayerDialog(networkId: string, layerId: string): void {
-  const layer = store.state.layers.find((l) => l.id === layerId);
+/**
+ * Delete-layer dialog (§2.4): descendant count + titles, «основа не пострадает».
+ * Экспортируется для панели использования (f7623077): «Удалить слой» —
+ * тот же диалог каскада, что в меню слоёв; `onDeleted` — перечитать панель.
+ */
+export async function openDeleteLayerDialog(
+  networkId: string,
+  layerId: string,
+  onDeleted?: () => void,
+): Promise<void> {
+  let layer = store.state.layers.find((l) => l.id === layerId);
+  if (layer === undefined) {
+    // Слой мог создать другой участник/агент уже после загрузки store, а
+    // панель использования показывает его из `holding_layers`. Перечитываем
+    // список один раз, иначе «Удалить слой» молча ничего не делала бы
+    // (замечание верификации 0.13.2; образец — selectLayerForTab выше).
+    try {
+      const layers = await etn.layers.list(networkId);
+      store.update({ layers });
+      layer = layers.find((l) => l.id === layerId);
+    } catch {
+      // Нет сети — диалог не открываем; список починится при следующем входе.
+    }
+  }
   if (layer === undefined) return;
 
   const body = div('form-stack');
@@ -571,6 +593,7 @@ function openDeleteLayerDialog(networkId: string, layerId: string): void {
               store.update({ tabs });
             }
             await syncLayersForTab(networkId, layer.parent_id);
+            onDeleted?.();
           } catch (err) {
             errorDialog('Не удалось удалить слой', err);
           }
@@ -940,7 +963,9 @@ async function pageToRows(networkId: string, page: LayerDiffPage): Promise<DiffR
   const titles = new Map<string, string>();
   if (ids.size > 0) {
     try {
-      const refs = await etn.thoughts.resolve(networkId, [...ids]);
+      // На странице диффа до 100 записей, id из них может быть больше
+      // серверного лимита resolve — батчер режет по `THOUGHT_RESOLVE_MAX_IDS`.
+      const refs = await resolveThoughtRefs(networkId, [...ids]);
       for (const ref of refs) titles.set(ref.id, ref.title);
     } catch {
       // Заголовки деградируют к id — сам список отличий всё равно показан.

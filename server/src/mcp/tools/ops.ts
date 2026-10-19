@@ -107,8 +107,8 @@ import { layerDiffDoc, resolveDiffTarget, structuralLayerDiffPage } from '../../
 import { listPendingMergeConflicts, mergeLayer, mergeLayerThought, resetLayerOverride, discardLayerThought } from '../../domain/merge-service.js';
 import type { MergeSelection } from '../../domain/merge-service.js';
 import { findPath } from '../../domain/graph-traversal.js';
-import { subgraphAsync } from '../../domain/heavy-read.js';
-import { getHomeThoughtId, getThoughtOrThrow, resolveThoughts, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
+import { subgraphAsync, resolveThoughtRefsAsync } from '../../domain/heavy-read.js';
+import { getHomeThoughtId, getThoughtOrThrow, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
 import { getLink, updateLink } from '../../domain/link-service.js';
 import { findMentions } from '../../domain/search-service.js';
 import { findBacklinks } from '../../domain/backlinks-service.js';
@@ -127,7 +127,7 @@ import type { CrossNetworkAccessContext } from '../../domain/cross-network-ref-s
 import { updateNetwork } from '../../domain/network-write-service.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../../domain/layer-service.js';
 import { isEventVisibleInLayer } from '../../realtime/layer-visibility.js';
-import { emitDomainEvent } from '../../realtime/emit.js';
+import { emitDomainEvent, emitNetworkDeletedEvent } from '../../realtime/emit.js';
 import { projectLinkRow, projectThoughtRows } from '../../domain/response-projection.js';
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
 import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
@@ -903,13 +903,15 @@ const HANDLERS: Record<string, OpHandler> = {
   // ---- thoughts ------------------------------------------------------------
   'thoughts.path': (rt, p) => {
     const a = p as unknown as z.infer<typeof ThoughtsPath.schema>;
-    return runTool(() => {
+    return runTool(async () => {
       const ndb = openMemberNetwork(rt, a.network_id);
       const path = findPath(ndb, a.from_id, a.to_id, a.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, a.link_filter);
       const thoughts =
         path === null
           ? undefined
-          : projectThoughtRows(resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t)));
+          : projectThoughtRows(
+              (await resolveThoughtRefsAsync(ndb, path)).map((t) => withSanitizedIcon(t)),
+            );
       return {
         from_id: a.from_id,
         to_id: a.to_id,
@@ -1571,15 +1573,15 @@ const HANDLERS: Record<string, OpHandler> = {
       if (existing === null) {
         throw new EtnError('NOT_FOUND', `Сеть ${a.network_id} не найдена.`, { network_id: a.network_id });
       }
-      emitDomainEvent(
+      // Удаление → событие (ошибка abcd3f0b): при сбое удаления фантомного
+      // network.deleted быть не должно.
+      await rt.deps.networkService.deleteNetwork(a.network_id);
+      emitNetworkDeletedEvent(
         { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
         a.network_id,
-        'network.deleted',
-        { id: a.network_id },
         { user_id: rt.deps.auth.userId, client_id: rt.deps.auth.keyId },
         { meta: { request_id: String(extra.requestId) } },
       );
-      await rt.deps.networkService.deleteNetwork(a.network_id);
       rt.deps.systemDb.insertAuditLog({
         actorUserId: rt.deps.auth.userId,
         networkId: a.network_id,

@@ -34,6 +34,13 @@ export const SELECTION_W_MAX = 480;
 /** Default selection panel width for a fresh client installation. */
 export const SELECTION_W_DEFAULT = 210;
 
+/** Minimum usage-panel width in pixels (спека «Панель использования» f7623077). */
+export const USAGE_W_MIN = 180;
+/** Maximum usage-panel width in pixels. */
+export const USAGE_W_MAX = 520;
+/** Default usage-panel width for a fresh client installation. */
+export const USAGE_W_DEFAULT = 260;
+
 /** Minimum editor width (left/right dock) in pixels. */
 export const EDITOR_W_MIN = 240;
 /** Maximum editor width (left/right dock) in pixels. */

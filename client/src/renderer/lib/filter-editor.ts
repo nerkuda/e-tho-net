@@ -31,6 +31,7 @@
 
 import type { FilterAstSortKey, FilterProfileId } from '@etn/shared';
 
+import type { FirstDayOfWeekSource } from './dates.js';
 import { div } from './dom.js';
 import type { EntityChipFieldOptions } from './entity-picker.js';
 import {
@@ -49,7 +50,7 @@ import {
   type FilterFooterButtonSpec,
   type FilterFooterHandle,
 } from './filter-footer.js';
-import { composeFilterPhrase, filterPhraseThoughtIds, type FilterPhraseContext } from './filter-phrase.js';
+import { filterPhraseThoughtIds, filterPhraseTokens, type FilterPhraseContext } from './filter-phrase.js';
 import {
   buildFilterSortSection,
   filterSortKeyOptions,
@@ -88,10 +89,12 @@ import {
 const phraseRefreshers = new Set<{ root: HTMLElement; refresh: () => void }>();
 let phraseSourcesSubscribed = false;
 
-/** Подписать фразу редактора на наполнение кэшей подписей (один раз на модуль). */
-function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void }): void {
+/** Подписать фразу редактора на наполнение кэшей подписей (один раз на модуль).
+ *  Возвращает снятие подписки — `destroy` редактора не ждёт, пока корень
+ *  отключат от документа. */
+function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void }): () => void {
   phraseRefreshers.add(entry);
-  if (phraseSourcesSubscribed) return;
+  if (phraseSourcesSubscribed) return () => phraseRefreshers.delete(entry);
   phraseSourcesSubscribed = true;
   const notify = (): void => {
     for (const item of [...phraseRefreshers]) {
@@ -104,6 +107,7 @@ function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void 
   };
   subscribeUsers(notify);
   subscribeThoughtNames(notify);
+  return () => phraseRefreshers.delete(entry);
 }
 
 /** Корень контейнера редактора. */
@@ -187,10 +191,12 @@ export interface FilterEditorOptionsBase {
   networkId: string;
   /**
    * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
-   * передаётся виджетам даты (календарь диалога «Дата/период»). Не задан —
-   * понедельник.
+   * передаётся виджетам даты (календарь диалога «Дата/период»). Допускается
+   * функция-резолвер: виджеты читают её в момент открытия календаря и
+   * раскрытия границ, поэтому смена настройки сети не оставляет открытую
+   * панель со старым значением (ошибка b5278f9a). Не задан — понедельник.
    */
-  firstDayOfWeek?: number;
+  firstDayOfWeek?: FirstDayOfWeekSource;
   /** Данные сети: реестр свойств, типы связей, типы мыслей, контекстные операнды. */
   data: FilterTreeData;
   /** Живая модель отбора (единственная — `FilterCriteriaState`). */
@@ -300,6 +306,12 @@ export interface FilterEditorHandle {
    * хост сохранил состояние и применил отбор.
    */
   clear: () => void;
+  /**
+   * Размонтировать редактор: снять подписку фразы и клавиатурные контексты
+   * дерева (без этого реестр `lib/keymap` накапливает объявления при
+   * пересборках — замечание независимой проверки этапа 2 задачи 31b228f0).
+   */
+  destroy: () => void;
 }
 
 /**
@@ -454,6 +466,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     userName: labelNames.userName,
     thoughtName: labelNames.thoughtName,
   };
+  let unsubscribePhraseRefresh: (() => void) | null = null;
   if (opts.footer !== false) {
     footer = buildFilterFooter({
       // Место без сохранённых отборов (лента «События») не даёт getName/setName —
@@ -470,11 +483,14 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
         // собираем id ссылок и просим кэш имён; когда батч вернётся, подписка
         // перерисует фразу с именами (ошибка d17a8bfd).
         requestThoughtNames(opts.networkId, filterPhraseThoughtIds(phraseState, data.registry));
-        const text = composeFilterPhrase(phraseState, phraseContext);
+        // Токены раскраски (задача 58f77990): строка фразы и её тултип — одна
+        // разметка; текст — та же фраза строкой для текстовых потребителей.
+        const tokens = filterPhraseTokens(phraseState, phraseContext);
+        const text = tokens.map((token) => token.text).join('');
         const list = issues();
         // Ни фразы, ни диагностики — превью не подписывается.
         if (text === '' && list.length === 0) return undefined;
-        return { text, issues: list };
+        return { text, tokens, issues: list };
       },
       onSave: (request) => host.save?.(request),
       onApply: host.apply,
@@ -493,7 +509,7 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     // Фраза-превью — имена сущностей по id: при наполнении кэшей (участники,
     // имена мыслей) перерисовываем фразу, чтобы id не «застыл» (ошибка части 6,
     // п.7; ошибка d17a8bfd).
-    subscribePhraseRefresh({ root, refresh: () => footer?.refresh() });
+    unsubscribePhraseRefresh = subscribePhraseRefresh({ root, refresh: () => footer?.refresh() });
   }
   if (foot.children.length > 0) root.append(foot);
 
@@ -516,5 +532,11 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     touch();
   };
 
-  return { root, profile, nameRow: footer?.nameRow ?? null, refresh, clear };
+  const destroy = (): void => {
+    unsubscribePhraseRefresh?.();
+    unsubscribePhraseRefresh = null;
+    tree.destroy();
+  };
+
+  return { root, profile, nameRow: footer?.nameRow ?? null, refresh, clear, destroy };
 }

@@ -21,11 +21,14 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { LinkType, NetworkProperty } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import { dispatchKeyEvent } from '../src/renderer/lib/keymap.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -1125,5 +1128,198 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(options.find((o: any) => o.id === 'p-fwd')!.icon, 'arrow-down', 'источник — стрелка вниз');
     assert.equal(options.find((o: any) => o.id === 'p-rev')!.icon, 'arrow-up', 'назначение — стрелка вверх');
     assert.ok(options.every((o: any) => o.note === 'связь'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Контекстное меню чипа-мысли в условии отбора (ошибка ada6a69d)
+// ---------------------------------------------------------------------------
+
+const RENDERER_SRC = resolve(import.meta.dirname, '..', 'src', 'renderer');
+const FILTER_VALUE_SRC = readFileSync(resolve(RENDERER_SRC, 'lib', 'filter-value.ts'), 'utf8');
+const FILTER_FORM_SRC = readFileSync(resolve(RENDERER_SRC, 'lib', 'filter-form.ts'), 'utf8');
+const CONTEXT_MENU_SRC = readFileSync(resolve(RENDERER_SRC, 'canvas', 'context-menu.ts'), 'utf8');
+
+/** Тело объявления по сигнатуре до закрывающей строки. */
+function declarationBody(src: string, signature: string, end = '\n}\n'): string {
+  const start = src.indexOf(signature);
+  assert.ok(start >= 0, `ожидалось объявление ${signature}`);
+  const stop = src.indexOf(end, start);
+  assert.ok(stop > start, `${signature}: тело не закрыто`);
+  return src.slice(start, stop);
+}
+
+/**
+ * Клавиатурный путь чипа-мысли живёт в общеклиентском диспетчере сочетаний
+ * (ADR b420b08c): пока фокус внутри поля, его контекст на вершине стека, а
+ * `Shift+F10`/`ContextMenu` зовут меню чипа В ФОКУСЕ. Проверяем именно
+ * диспетчер: `focusin` по внутреннему полю поднимает контекст, фокус ставим на
+ * чип — команда должна быть разобрана.
+ */
+function chipHasMenu(root: ShimElement): boolean {
+  const chip = one(root, 'prop-ref-cloud');
+  if (chip === null) return false;
+  const field = one(root, 'entity-chip-field-inner') ?? one(root, 'entity-combo');
+  if (field === null) return false;
+  field.emit('focusin', {});
+  const previous = (globalThis as any).document.activeElement;
+  (globalThis as any).document.activeElement = chip;
+  try {
+    return dispatchKeyEvent(keyEvent({ key: 'F10', code: 'F10', shiftKey: true }));
+  } finally {
+    (globalThis as any).document.activeElement = previous;
+    field.emit('focusout', {});
+  }
+}
+
+/** Событие клавиатуры для диспетчера (DOM-шим события не даёт). */
+function keyEvent(init: { key: string; code: string; shiftKey?: boolean }): any {
+  const event: any = {
+    key: init.key,
+    code: init.code,
+    shiftKey: init.shiftKey === true,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    repeat: false,
+    defaultPrevented: false,
+    preventDefault: () => {
+      event.defaultPrevented = true;
+    },
+  };
+  return event;
+}
+
+/** Подписи общих команд мысли — их не собирают вручную в модулях отбора. */
+const SHARED_THOUGHT_COMMANDS = [
+  'Изменить актуальность',
+  'Изменить тип',
+  'Изменить иконку',
+  'Копировать ID',
+  'Закрепить мысль',
+  'Экспорт…',
+  'Найти на карте мыслей',
+  'Вставить',
+  'сделать первой',
+];
+
+describe('меню чипа-мысли в условии отбора (ошибка ada6a69d)', () => {
+  it('чипы-мысли ссылочных операндов несут меню: и кратные, и одиночный', () => {
+    for (const kind of ['parents', 'children', 'id', 'targets'] as const) {
+      const many = render(
+        leaf({ kind }, 'in_hierarchy', { kind: 'list', items: ['uuid-1'] }),
+        slot().api,
+        ctx({ touch: () => undefined }),
+      );
+      assert.ok(chipHasMenu(many), `${kind}: чип-мысль кратного операнда получает меню`);
+      const single = render(leaf({ kind }, 'eq', { kind: 'scalar', value: 'uuid-1' }), slot().api);
+      assert.ok(chipHasMenu(single), `${kind}: чип-мысль одиночного значения получает меню`);
+    }
+  });
+
+  it('чипы типов мыслей и типов связей меню НЕ получают', () => {
+    for (const kind of ['type', 'link_type'] as const) {
+      const box = render(
+        leaf({ kind }, 'in', { kind: 'list', items: ['t-1'] }),
+        slot().api,
+        ctx({ touch: () => undefined }),
+      );
+      const chip = one(box, 'prop-ref-cloud');
+      assert.ok(chip !== null, `${kind}: чип значения построен`);
+      assert.equal(chipHasMenu(box), false, `${kind}: у чипа-типа контекстного меню мысли нет`);
+    }
+  });
+
+  it('токен `$…` меню не получает — это не мысль', () => {
+    const box = render(
+      leaf({ kind: 'parents' }, 'in_hierarchy', { kind: 'list', items: [{ token: '$thought' }] }),
+      slot().api,
+      ctx({ touch: () => undefined }),
+    );
+    const chip = one(box, 'prop-ref-cloud');
+    assert.ok(chip !== null, 'чип-токен построен');
+    assert.equal(chipHasMenu(box), false, 'токену меню не полагается');
+  });
+
+  it('меню строится ОБЩИМ конструктором, а не рукописным списком команд', () => {
+    const body = declarationBody(FILTER_VALUE_SRC, 'export function openFilterThoughtMenu');
+    assert.ok(
+      body.includes("await import('../canvas/context-menu.js')"),
+      'общий конструктор подключается лениво (цикл canvas → editor → lib/filter-value)',
+    );
+    assert.ok(body.includes('showThoughtMenuUnder('), 'меню мысли строит showThoughtMenuUnder');
+    assert.ok(
+      body.includes("openLabel: 'Открыть в редакторе'"),
+      'контекст условия — «Открыть в редакторе» (фокус холста не сдвигается)',
+    );
+    assert.ok(body.includes('focusHandler'), '«В фокус» — от общего набора, а не своей командой');
+    assert.ok(body.includes('siblingParentId'), 'родитель для «налево (родственник)» передан контекстом');
+    assert.ok(
+      body.includes("menuAction('Убрать из значения условия'"),
+      'команда значения — через словарь пунктов меню',
+    );
+    assert.ok(!body.includes('{ label:'), 'своего объекта-пункта у чипа условия нет');
+    assert.ok(
+      body.includes('unresolvable'),
+      'недоступной в сети мысли набор урезает тот же конструктор',
+    );
+  });
+
+  it('подписи общих команд мысли в модулях отбора не дублируются (паритет меню)', () => {
+    for (const [name, src] of [
+      ['filter-value.ts', FILTER_VALUE_SRC],
+      ['filter-form.ts', FILTER_FORM_SRC],
+    ] as const) {
+      for (const label of SHARED_THOUGHT_COMMANDS) {
+        assert.ok(
+          !src.includes(`menuAction('${label}`),
+          `${name}: команда «${label}» — из общего конструктора, не своя`,
+        );
+        assert.ok(
+          !src.includes(`label: '${label}`),
+          `${name}: пункт «${label}» собран вручную`,
+        );
+      }
+    }
+  });
+
+  it('«Родительские мысли» панелей отбора зовут тот же обработчик и инвалидируют снапшот', () => {
+    assert.match(
+      FILTER_FORM_SRC,
+      /import\s*\{[^}]*openFilterThoughtMenu[^}]*\}\s*from\s*'\.\/filter-value\.js'/s,
+      'секция корней импортирует ТОТ ЖЕ обработчик меню, а не свою копию',
+    );
+    const body = declarationBody(FILTER_FORM_SRC, 'export function buildParentThoughtsSection');
+    assert.ok(body.includes('openFilterThoughtMenu('), 'чип-корень зовёт общее меню мысли');
+    assert.ok(body.includes('onThoughtTrashBadge'), 'метка корзины чипа-корня кликабельна');
+    assert.ok(body.includes('watchFilterClouds('), 'снапшот облачков корней инвалидируется');
+  });
+
+  it('инвалидация снапшота — по сигналу сброса ref-кэша, а не правкой в замыкании (48f35eba)', () => {
+    assert.ok(
+      FILTER_VALUE_SRC.includes('onThoughtRefInvalidated'),
+      'снапшот пересобирается по точечному сигналу сброса ref-кэша (не по всему store)',
+    );
+    const wire = declarationBody(FILTER_VALUE_SRC, 'function wireFilterCloudInvalidation');
+    assert.ok(wire.includes('snapshot.invalidate('), 'зарегистрированные снапшоты виджетов инвалидируются');
+    assert.ok(wire.includes('isConnected'), 'снятый со страницы виджет снимается с подписки');
+    const invalidate = declarationBody(FILTER_VALUE_SRC, 'const invalidateClouds', '\n  };\n');
+    assert.ok(invalidate.includes('clouds.delete('), 'снапшот именно инвалидируется');
+    assert.ok(invalidate.includes('fillClouds('), 'облачка пересобираются из модели');
+  });
+
+  it('урезанный набор недоступной мысли собирает ОБЩИЙ конструктор (решение 2)', () => {
+    const body = declarationBody(CONTEXT_MENU_SRC, 'export function buildThoughtMenuItems');
+    assert.ok(
+      body.includes('opts.unresolvable === true'),
+      'контекст «мысли нет в сети» — опция конструктора, а не второй список',
+    );
+    const reduced = body.slice(0, body.indexOf('const focus = store.state.focus'));
+    assert.ok(reduced.includes('copyIdItem()'), 'остаётся «Копировать ID»');
+    assert.ok(reduced.includes('opts.extraItems'), 'и команды контекста значения');
+    assert.ok(
+      !reduced.includes('Меню'),
+      'в урезанном наборе нет общих команд мысли',
+    );
   });
 });

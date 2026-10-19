@@ -20,6 +20,8 @@ import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
 import { div, el } from '../lib/dom.js';
+import { blockedByLockMessage, subscribeForeignLockState } from '../lib/lock-guard.js';
+import { blockEditingSurface, unblockEditingSurface } from '../lib/lock-surface.js';
 import { colorField } from '../lib/ui/color-field.js';
 import { fieldInput } from '../lib/ui/field.js';
 import { TOGGLE_GROUP_CLASS, toggleButton } from '../lib/ui/toggle.js';
@@ -64,6 +66,13 @@ function colorCaption(caption: string, input: HTMLElement): HTMLElement {
   return wrap;
 }
 
+/** Дескриптор открытого диалога оформления: позволяет перевести его в чтение. */
+export interface StyleDialogLock {
+  /** Тип объекта, чей захват определяет режим формы (`thought`, `thought_type`, …). */
+  entityType: string;
+  entityId: string;
+}
+
 /** Opens the thought settings dialog (colours + font style + reset). */
 export function showThoughtStyleDialog(opts: {
   resolved: ResolvedThoughtStyle;
@@ -76,8 +85,14 @@ export function showThoughtStyleDialog(opts: {
    * auto-acquired object lock.
    */
   onClose?: () => void;
+  /**
+   * Объект, чей чужой захват делает форму только для чтения. Диалог сам
+   * следит за кэшем захватов: снятие блокировки возвращает редактирование без
+   * переоткрытия (ошибка 2301d73d).
+   */
+  lock?: StyleDialogLock;
 }): void {
-  const { resolved, onApply, mode = 'thought', onClose } = opts;
+  const { resolved, onApply, mode = 'thought', onClose, lock } = opts;
   const body = div('form-stack');
 
   const fgInput = colorField({
@@ -123,6 +138,9 @@ export function showThoughtStyleDialog(opts: {
   fontToggle('З', 'Зачёркнутый', resolved.strike, (v) => onApply({ font_strike: v }));
   body.append(toggles);
 
+  let resetBtn: HTMLButtonElement | null = null;
+  /** Отписка от кэша захватов; назначается после сборки диалога (нужен resetBtn). */
+  let unbindLock: () => void = () => undefined;
   showDialog({
     title: mode === 'type' ? 'Настройки типа мысли' : 'Настройки мысли',
     size: 'm',
@@ -132,6 +150,9 @@ export function showThoughtStyleDialog(opts: {
         label: t('actions.reset'),
         danger: true,
         keepOpen: true,
+        ref: (btn) => {
+          resetBtn = btn;
+        },
         onClick: (close) => {
           // Both modes reset to «inherit» since L21: a thought inherits its
           // type chain, a type inherits its parent (the root falls back to
@@ -152,8 +173,27 @@ export function showThoughtStyleDialog(opts: {
       },
       { label: t('actions.close'), primary: true },
     ],
-    onClose,
+    onClose: () => {
+      unbindLock();
+      onClose?.();
+    },
   });
+  if (lock !== undefined) {
+    const { entityType, entityId } = lock;
+    // Диалог следует за кэшем захватов: чужой захват — чтение, его снятие —
+    // обратно в редактирование, без закрытия/переоткрытия (ошибка 2301d73d).
+    unbindLock = subscribeForeignLockState(entityType, entityId, (holder) => {
+      if (holder === null) {
+        unblockEditingSurface(body);
+      } else {
+        blockEditingSurface({
+          root: body,
+          message: blockedByLockMessage(entityType, holder),
+          commitButtons: [resetBtn],
+        });
+      }
+    });
+  }
 }
 
 /** Opens the link settings dialog (line colour/style/width + reset). */
@@ -164,8 +204,10 @@ export function showLinkStyleDialog(opts: {
   mode?: 'link' | 'type';
   /** Fires on any close (see `showThoughtStyleDialog` for details). */
   onClose?: () => void;
+  /** Объект, чей чужой захват делает форму только для чтения (см. выше). */
+  lock?: StyleDialogLock;
 }): void {
-  const { resolved, onApply, mode = 'link', onClose } = opts;
+  const { resolved, onApply, mode = 'link', onClose, lock } = opts;
   const body = div('form-stack');
 
   const colorInput = colorField({
@@ -201,6 +243,9 @@ export function showLinkStyleDialog(opts: {
   });
   body.append(colorCaption('Толщина', widthInput));
 
+  let resetBtn: HTMLButtonElement | null = null;
+  /** Отписка от кэша захватов; назначается после сборки диалога (нужен resetBtn). */
+  let unbindLock: () => void = () => undefined;
   showDialog({
     title: mode === 'type' ? 'Настройки типа связи' : 'Настройки связи',
     size: 'm',
@@ -210,6 +255,9 @@ export function showLinkStyleDialog(opts: {
         label: t('actions.reset'),
         danger: true,
         keepOpen: true,
+        ref: (btn) => {
+          resetBtn = btn;
+        },
         onClick: (close) => {
           // Since L21 both modes reset to «inherit»: a link inherits its type
           // chain, a type inherits its parent (the root falls back to the
@@ -219,6 +267,25 @@ export function showLinkStyleDialog(opts: {
       },
       { label: t('actions.close'), primary: true },
     ],
-    onClose,
+    onClose: () => {
+      unbindLock();
+      onClose?.();
+    },
   });
+  if (lock !== undefined) {
+    const { entityType, entityId } = lock;
+    // Снятие чужого захвата возвращает редактирование без переоткрытия
+    // (ошибка 2301d73d) — тем же механизмом, что у диалога мысли.
+    unbindLock = subscribeForeignLockState(entityType, entityId, (holder) => {
+      if (holder === null) {
+        unblockEditingSurface(body);
+      } else {
+        blockEditingSurface({
+          root: body,
+          message: blockedByLockMessage(entityType, holder),
+          commitButtons: [resetBtn],
+        });
+      }
+    });
+  }
 }

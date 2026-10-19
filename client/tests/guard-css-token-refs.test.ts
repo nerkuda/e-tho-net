@@ -59,6 +59,9 @@ const RUNTIME_TOKENS = new Set([
   '--event-area-w',
   // screens/selection-resizer.ts
   '--selection-w',
+  // screens/usage-panel.ts (ширина) + screens/workspace.ts (шов панели)
+  '--usage-w',
+  '--usage-seam',
   // screens/structures/structures.ts
   '--st-indent',
   // screens/publications/workspace.ts

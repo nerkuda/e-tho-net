@@ -52,7 +52,8 @@ function seedThought(
                              version, created_at, created_by, updated_at, updated_by)
        VALUES (?, ?, ?, ?, ?, 0, 0, 1, '2024-01-01T00:00:00Z', 'u', '2024-01-01T00:00:00Z', 'u')`,
     )
-    .run(id, title, title.toLowerCase(), opts.type_id ?? null, opts.active ?? 1);
+    // `title_norm` — как в production (`normalizeTitle`): NFC + lowercase.
+    .run(id, title, title.normalize('NFC').toLowerCase(), opts.type_id ?? null, opts.active ?? 1);
   return id;
 }
 
@@ -62,7 +63,7 @@ function seedSynonym(ndb: NetworkDb, thoughtId: string, synonym: string): void {
     .prepare(
       'INSERT OR IGNORE INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)',
     )
-    .run(thoughtId, synonym, synonym.toLowerCase());
+    .run(thoughtId, synonym, synonym.normalize('NFC').toLowerCase());
 }
 
 /** Insert a thought-owned comment directly. */
@@ -740,6 +741,161 @@ describe(
         seedThought(ndb, 'Бета-тема тестовая');
         const res = search(ndb, { q: 'БЕТА' });
         assert.equal(res.by_names.length, 1, 'uppercase Cyrillic query still matches');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names covers both NFC and NFD stored names (pitfall 6898ef75)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // NFD-данные (например, записанные macOS) ↔ NFC-запрос.
+        seedThought(ndb, 'Йогуртовая история'.normalize('NFD'));
+        // NFC-данные ↔ NFD-запрос: `search()` НЕ нормализует `q`, поэтому
+        // совпадение даёт именно FTS-фраза, покрывающая обе формы.
+        seedThought(ndb, 'Тёмный лес');
+
+        assert.deepEqual(
+          search(ndb, { q: 'йогурт' }).by_names.map((h) => h.title),
+          ['Йогуртовая история'.normalize('NFD')],
+          'NFC-запрос находит NFD-мысль',
+        );
+        const nfdQuery = 'тёмный'.normalize('NFD');
+        assert.notEqual(nfdQuery, 'тёмный', 'NFD-форма должна отличаться от NFC');
+        assert.deepEqual(
+          search(ndb, { q: nfdQuery }).by_names.map((h) => h.title),
+          ['Тёмный лес'],
+          'NFD-запрос находит NFC-мысль',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names honours an NFD exclusion and never confuses й/и, ё/е', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Напиток йогурт'.normalize('NFD'));
+        seedThought(ndb, 'Напиток кефир');
+        seedThought(ndb, 'Ёжик в тумане'.normalize('NFD'));
+        seedThought(ndb, 'Ежевика');
+        // Контроль «и/й»: «Иод» не должен находиться по «йод».
+        seedThought(ndb, 'Иод и еж');
+
+        assert.deepEqual(
+          search(ndb, { q: 'напит -йогурт' }).by_names.map((h) => h.title),
+          ['Напиток кефир'],
+          'NFD-исключение отсекает NFD-мысль',
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'ёжик' }).by_names.map((h) => h.title),
+          ['Ёжик в тумане'.normalize('NFD')],
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'ежик' }).by_names.map((h) => h.title),
+          [],
+          '«ежик» не должен находить «Ёжик»',
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'йод' }).by_names.map((h) => h.title),
+          [],
+          '«йод» не должен находить «Иод»',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names: an NFD short word still matches NFD-stored names (LIKE fallback)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Короткое слово — 3 code points в NFD, 2 символа в NFC. После
+        // нормализации входа оно обязано уйти в LIKE-фолбэк по NFC-колонке
+        // `title_norm`/`synonym_norm` и найти NFD-сохранённые данные (блокер
+        // проверки e4f26158: до исправления паттерн строился из NFD → 0 строк).
+        const yoyo = seedThought(ndb, 'Йо-йо техника'.normalize('NFD'));
+        const viaSynonym = seedThought(ndb, 'Техника');
+        seedSynonym(ndb, viaSynonym, 'Йо-йо'.normalize('NFD'));
+        const hedgehog = seedThought(ndb, 'Ёжик в тумане'.normalize('NFD'));
+        seedThought(ndb, 'Ежевика');
+
+        const nfdYo = 'йо'.normalize('NFD');
+        assert.notEqual(nfdYo, 'йо', 'NFD-форма должна отличаться от NFC');
+        assert.deepEqual(
+          search(ndb, { q: nfdYo, scope: 'names' })
+            .by_names.map((h) => h.thought_id)
+            .sort(),
+          [yoyo, viaSynonym].sort(),
+          'NFD-«йо» находит NFD-мысль и NFD-синоним через LIKE-фолбэк',
+        );
+
+        const nfdEzh = 'ёж'.normalize('NFD');
+        assert.notEqual(nfdEzh, 'ёж', 'NFD-форма должна отличаться от NFC');
+        assert.deepEqual(
+          search(ndb, { q: nfdEzh, scope: 'names' }).by_names.map((h) => h.thought_id),
+          [hedgehog],
+          'NFD-«ёж» находит NFD-мысль и не путает её с «Ежевикой»',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names: an NFD short exclusion is applied through the NFC LIKE column', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Заметка Йо-йо'.normalize('NFD'));
+        const kept = seedThought(ndb, 'Заметка прочее'.normalize('NFD'));
+        const nfdExclusion = '-йо'.normalize('NFD');
+        // Ввод нормализуется в NFC целиком: `-йо` (NFD) → короткое исключение
+        // в `nameShortExclude`, `NOT LIKE '%йо%'` по NFC-колонке.
+        assert.deepEqual(
+          search(ndb, { q: `заметк ${nfdExclusion}`, scope: 'names' }).by_names.map(
+            (h) => h.thought_id,
+          ),
+          [kept],
+          'NFD-исключение отсекает NFD-мысль',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names: NFD short input never confuses ё/е and й/и', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const yozhik = seedThought(ndb, 'Ёжик в тумане'.normalize('NFD'));
+        const ezhevika = seedThought(ndb, 'Ежевика');
+        const iod = seedThought(ndb, 'Иод и еж');
+
+        assert.deepEqual(
+          search(ndb, { q: 'ёж'.normalize('NFD'), scope: 'names' }).by_names.map(
+            (h) => h.thought_id,
+          ),
+          [yozhik],
+          'NFD-«ёж» не должен находить «Ежевику»',
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'еж'.normalize('NFD'), scope: 'names' })
+            .by_names.map((h) => h.thought_id)
+            .sort(),
+          [ezhevika, iod].sort(),
+          'NFD-«еж» не должен находить «Ёжик»',
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'йод'.normalize('NFD'), scope: 'names' }).by_names.map(
+            (h) => h.thought_id,
+          ),
+          [],
+          'NFD-«йод» не должен находить «Иод»',
+        );
+        assert.deepEqual(
+          search(ndb, { q: 'иод'.normalize('NFD'), scope: 'names' }).by_names.map(
+            (h) => h.thought_id,
+          ),
+          [iod],
+          '«иод» по-прежнему находит «Иод»',
+        );
       } finally {
         ndb.close();
       }

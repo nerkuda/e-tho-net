@@ -419,6 +419,13 @@ function buildApi(): EtnBridgeApi {
         ipcRenderer.on('etn:deep-link', listener);
         return () => ipcRenderer.removeListener('etn:deep-link', listener);
       },
+      /**
+       * Готовность слушателя (ошибка d8b81425): main сливает буфер холодных
+       * deep-link'ов только после этого сигнала.
+       */
+      signalReady() {
+        ipcRenderer.send('etn:deep-link-ready');
+      },
     },
     meta: {
       get: (key) => invoke('meta.get', key),

@@ -136,13 +136,14 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     });
   }
 
-  // Фоновый чекпойнт WAL сетей (ошибка dac92886): авто-чекпойнт SQLite —
-  // PASSIVE и не продвигается, пока читатель держит снапшот, а `-wal` не
-  // усекается вовсе. Таймер `unref()`-нут и работает между запросами
-  // (better-sqlite3 синхронный), интервал — `ETN_WAL_CHECKPOINT_INTERVAL_MS`.
+  // Фоновый чекпойнт WAL сетей и системной БД (ошибки dac92886, 49e05ea0;
+  // задача 28c2a2f2): авто-чекпойнт SQLite — PASSIVE и не продвигается, пока
+  // читатель держит снапшот, а `-wal` не усекается вовсе. Таймер `unref()`-нут
+  // и работает между запросами (better-sqlite3 синхронный), интервал —
+  // `ETN_WAL_CHECKPOINT_INTERVAL_MS`.
   const walCheckpoint: WalCheckpointScheduler | null =
     config.walCheckpoint.intervalMs > 0
-      ? startWalCheckpointScheduler({ intervalMs: config.walCheckpoint.intervalMs, logger })
+      ? startWalCheckpointScheduler({ intervalMs: config.walCheckpoint.intervalMs, logger, systemDb })
       : null;
   if (walCheckpoint === null) {
     logger.info('WAL background checkpoint disabled (ETN_WAL_CHECKPOINT_INTERVAL_MS=0)');
@@ -170,6 +171,8 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     // Чекпойнт всех БД и закрытие соединений сетей (ошибка dac92886): иначе
     // `-wal` остаётся «высокой водой», а `process.exit` не даёт SQLite
     // выполнить собственный чекпойнт при закрытии последнего соединения.
+    // Системная БД чекпойнтится отдельно и после сетей — порядок остановки
+    // этой задачей (28c2a2f2) не менялся.
     checkpointAndCloseAllNetworkDbs({ logger });
     systemDb.checkpointWal();
     systemDb.close();

@@ -60,6 +60,17 @@ import {
 } from '@etn/shared';
 
 import { clear, div, el, setTooltip, span } from './dom.js';
+import { defineKeyContext, pushKeyContext, undefineKeyContext } from './keymap.js';
+import { registerThoughtDropField } from './thought-drop.js';
+import type { ThoughtDropPayload } from './thought-drop-pure.js';
+import {
+  createDragTree,
+  resolveDragTreeRowTarget,
+  type DragTreeDropEvent,
+  type DragTreeDropPosition,
+  type DragTreeItem,
+  type DragTreeTarget,
+} from './ui/drag-tree.js';
 import {
   astOperatorLabel,
   defaultFilterTreeGroup,
@@ -205,6 +216,181 @@ export function filterTreeRemoveAt(root: FilterTreeNode, path: FilterTreePath): 
   if (parent.children[index] === undefined) return false;
   parent.children.splice(index, 1);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Перемещение и копирование узлов (задача 31b228f0, этап 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Контракт индекса вставки для {@link filterTreeInsertAt} и
+ * {@link filterTreeMoveNode}.
+ *
+ * `index` считается по массиву детей ГРУППЫ-ПРИЁМНИКА ДО операции: `0` — перед
+ * текущим первым ребёнком, `children.length` — в конец. При переносе внутри
+ * одной группы источник сначала удаляется, и позиция цели сдвигается на одну
+ * единицу (классическая ошибка): `move([0] → 2)` в `[a,b,c]` даёт `[b,a,c]`
+ * (узел встаёт перед `c`, а не после него). Внутренняя реализация учитывает
+ * сдвиг сама — вызывающий передаёт индекс в координатах исходного массива.
+ */
+
+/** `true`, если пути совпадают поэлементно. */
+function isSamePath(a: FilterTreePath, b: FilterTreePath): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** `true`, если путь `path` лежит СТРОГО ниже узла `ancestor`. */
+function filterTreePathInside(path: FilterTreePath, ancestor: FilterTreePath): boolean {
+  if (path.length <= ancestor.length) return false;
+  for (let i = 0; i < ancestor.length; i += 1) {
+    if (path[i] !== ancestor[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Вставить готовый узел в группу по пути на позицию `index`
+ * ({@link FilterTreePath} — контракт индекса выше). Мутация атомарна: при
+ * недопустимом пути/индексе модель НЕ меняется и возвращается `false`.
+ *
+ * Арность `НЕ` (элемент fc65b647): группа `not` всегда имеет ровно одного
+ * ребёнка, поэтому вставка в `not`-группу, где ребёнок уже есть, запрещена
+ * (иначе модель получила бы двух детей). В пустую `not`-группу вставка
+ * допустима — она восстанавливает инвариант.
+ */
+export function filterTreeInsertAt(
+  root: FilterTreeNode,
+  path: FilterTreePath,
+  index: number,
+  child: FilterTreeNode,
+): boolean {
+  const group = filterTreeGroupAt(root, path);
+  if (group === null) return false;
+  if (!Number.isInteger(index) || index < 0 || index > group.children.length) return false;
+  if (group.op === 'not' && group.children.length > 0) return false;
+  group.children.splice(index, 0, child);
+  return true;
+}
+
+/**
+ * Атомарно перенести узел из пути `fromPath` в группу `toGroupPath` на позицию
+ * `index` ({@link FilterTreePath} — контракт индекса, включая сдвиг при
+ * переносе внутри одной группы). Возврат `false` — перенос недопустим, модель
+ * НЕ изменена (никаких частичных мутаций: все проверки идут до `splice`).
+ *
+ * Недопустимы:
+ * - корень (`fromPath === []`) и несуществующий путь/группа/индекс;
+ * - вложение группы в саму себя (`toGroupPath === fromPath`) или в своего
+ *   потомка (цикл); перенос ВНУТРИ группы (`[0,0] → [0]`) допустим;
+ * - перенос ЕДИНСТВЕННОГО ребёнка из `not`-группы (осталась бы пустая `not`);
+ * - вставка в `not`-группу, у которой уже есть ребёнок (было бы два ребёнка).
+ *
+ * Перенос внутри `not`-группы с единственным ребёнком — допустимый no-op:
+ * арность не меняется, модель остаётся прежней. Перенос внутри одной группы с
+ * `index === sourceIndex` или `index === sourceIndex + 1` также ничего не
+ * меняет по смыслу, но считается допустимым (`true`).
+ */
+export function filterTreeMoveNode(
+  root: FilterTreeNode,
+  fromPath: FilterTreePath,
+  toGroupPath: FilterTreePath,
+  index: number,
+): boolean {
+  if (fromPath.length === 0) return false;
+  const sourceParent = filterTreeGroupAt(root, fromPath.slice(0, -1));
+  if (sourceParent === null) return false;
+  const sourceIndex = fromPath[fromPath.length - 1]!;
+  const node = sourceParent.children[sourceIndex];
+  if (node === undefined) return false;
+  const target = filterTreeGroupAt(root, toGroupPath);
+  if (target === null) return false;
+  if (!Number.isInteger(index) || index < 0 || index > target.children.length) return false;
+  // Цикл: группу нельзя вложить в саму себя (`toGroupPath` равен её пути) или
+  // в своего потомка. Перенос ВНУТРИ группы — это когда совпадают родители, а
+  // не пути: `[0,0] → [0]` допустим, `[0] → [0]` — цикл.
+  if (filterTreePathInside(toGroupPath, fromPath) || isSamePath(toGroupPath, fromPath)) return false;
+
+  const sameGroup = sourceParent === target;
+  if (sameGroup) {
+    // Арность `НЕ` при переносе внутри группы не меняется. У одиночного ребёнка
+    // любая позиция — no-op, модель не трогаем.
+    if (sourceParent.op === 'not' && sourceParent.children.length === 1) return true;
+  } else {
+    if (sourceParent.op === 'not' && sourceParent.children.length === 1) return false;
+    if (target.op === 'not' && target.children.length > 0) return false;
+  }
+
+  sourceParent.children.splice(sourceIndex, 1);
+  const insertAt = sameGroup && sourceIndex < index ? index - 1 : index;
+  target.children.splice(insertAt, 0, node);
+  return true;
+}
+
+/**
+ * Глубокий клон узла дерева для `Shift`-копирования (критерий 3 карточки
+ * 31b228f0): у модели нет идентификаторов (адресация только путём), поэтому
+ * копия — полная независимая структура. Клонируются и вложенные группы, и
+ * значения листьев (скаляры/списки/токены/под-выборки), и снапшоты подписей:
+ * изменение копии не меняет оригинал (и наоборот).
+ */
+export function filterTreeCloneNode(node: FilterTreeNode): FilterTreeNode {
+  if (node.kind === 'group') {
+    return { kind: 'group', op: node.op, children: node.children.map(filterTreeCloneNode) };
+  }
+  const clone: FilterTreeLeaf = {
+    kind: 'leaf',
+    entity: cloneFilterTreeOperand(node.entity),
+    operator: node.operator,
+    value: cloneFilterTreeValue(node.value),
+    ...(node.labels !== undefined ? { labels: cloneFilterTreeLabels(node.labels) } : {}),
+    ...(node.mode !== undefined ? { mode: node.mode } : {}),
+  };
+  return clone;
+}
+
+/** Клон операнда листа (массивы `scope` — новые). */
+function cloneFilterTreeOperand(entity: FilterTreeOperand): FilterTreeOperand {
+  if (entity.kind === 'keywords' && entity.scope !== undefined) {
+    return { ...entity, scope: [...entity.scope] };
+  }
+  return { ...entity };
+}
+
+/** Клон значения листа (списки, токены и под-выборка — независимые). */
+function cloneFilterTreeValue(value: FilterTreeValue): FilterTreeValue {
+  switch (value.kind) {
+    case 'none':
+      return { kind: 'none' };
+    case 'scalar':
+      return { kind: 'scalar', value: value.value };
+    case 'token':
+      return { kind: 'token', token: value.token };
+    case 'list':
+      return {
+        kind: 'list',
+        items: value.items.map((item) =>
+          typeof item === 'object' && item !== null ? { ...item } : item,
+        ),
+      };
+    case 'subquery':
+      return {
+        kind: 'subquery',
+        operator: value.operator,
+        node: filterTreeCloneNode(value.node),
+      };
+  }
+}
+
+/** Клон снапшотов подписей (карта значений — новый объект). */
+function cloneFilterTreeLabels(labels: NonNullable<FilterTreeLeaf['labels']>): NonNullable<FilterTreeLeaf['labels']> {
+  return {
+    ...labels,
+    ...(labels.values !== undefined ? { values: { ...labels.values } } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -971,6 +1157,14 @@ export interface FilterTreeValueSlotApi {
    * НОВОМУ узлу поля (ошибка 50d9bf4e, п. C2/C3).
    */
   readonly slotKey?: string;
+  /**
+   * Приёмник перетаскиваемого значения для ВСЕЙ строки условия (этап 3 задачи
+   * 31b228f0): виджет значения решает совместимость вида и пишет значение тем
+   * же путём, что ручной ввод. Каркас вешает его на `.ft-item` — строка
+   * побеждает приёмник панели «Структур» (ближайший предок, критерий 6).
+   * Не задан — строка значения не принимает (и бросок идёт хосту панели).
+   */
+  acceptDrop?: (payload: ThoughtDropPayload) => boolean;
 }
 
 /** Контекст сборки дерева: профиль — параметр, данные и модель — снаружи. */
@@ -1035,15 +1229,284 @@ export interface FilterTreeHandle {
    * внутри свёрнутой группы) — ничего не делается.
    */
   focusIssue: (path: string) => void;
+  /**
+   * Размонтировать дерево: снять слушатели фокуса, drag-фасад и объявление
+   * клавиатурного контекста сборки. Обязательна при пересборке/удалении
+   * редактора — без неё реестр `lib/keymap` накапливает `ui-drag-tree-N`
+   * (замечание независимой проверки этапа 2 задачи 31b228f0).
+   */
+  destroy: () => void;
 }
 
 /** Классы вида — единственная точка их имён (адресуются тестами и CSS). */
 export const FILTER_TREE_CLASS = 'ft';
 export const FILTER_TREE_GROUP_CLASS = 'ft-group';
+export const FILTER_TREE_GROUP_BODY_CLASS = 'ft-group__body';
+export const FILTER_TREE_ITEM_CLASS = 'ft-item';
 export const FILTER_TREE_ROW_CLASS = 'ft-row';
 export const FILTER_TREE_CONNECTOR_CLASS = 'ft-connector';
 /** Строка диагностики узла: причина + кнопка «исправить» (элемент 4e634c9a). */
 export const FILTER_TREE_ISSUE_CLASS = 'ft-issue';
+/** Сообщение об отказе переноса (цикл/арность `НЕ`): видно, затем снимается. */
+export const FILTER_TREE_DROP_REJECT_CLASS = 'ft-drop-reject';
+/** Класс подсветки строки, чей перенос отклонён моделью. */
+export const FILTER_TREE_DROP_REJECTED_CLASS = 'ft-item--drop-rejected';
+
+/**
+ * Клавиатурный контекст дерева условий: объявление на КАЖДУЮ сборку (ADR
+ * b420b08c, единая точка перехвата `lib/keymap`), идентификатор —
+ * `ui-filter-tree-N`. Маршрутизация к конкретному дереву — по ближайшему корню
+ * `.ft` от элемента в фокусе: на странице могут быть несколько деревьев
+ * (под-выборка в модале), и каждое получает только свои команды. Уникальный
+ * идентификатор нужен `destroy`: снятие объявления не затрагивает другие
+ * деревья и не оставляет записей в реестре при пересборках.
+ */
+export const FILTER_TREE_KEY_CONTEXT_ID = 'ui-filter-tree';
+
+/** Счётчик сборок: номер в идентификаторе клавиатурного контекста дерева. */
+let filterTreeKeyContextSeq = 0;
+
+/** Команды переноса без мыши (критерий доступности 7 карточки 31b228f0). */
+export type FilterTreeKeyAction = 'moveUp' | 'moveDown' | 'outdent' | 'intoGroup';
+
+const FILTER_TREE_KEY_ACTIONS: Readonly<Record<string, FilterTreeKeyAction>> = {
+  'filterTree.moveUp': 'moveUp',
+  'filterTree.moveDown': 'moveDown',
+  'filterTree.outdent': 'outdent',
+  'filterTree.intoGroup': 'intoGroup',
+};
+
+/** Маршрутизатор команд конкретного дерева. */
+type FilterTreeKeyRouter = (action: FilterTreeKeyAction, event: KeyboardEvent) => boolean;
+
+const filterTreeKeyRouters = new WeakMap<HTMLElement, FilterTreeKeyRouter>();
+
+/** Ближайший предок (включая сам узел) с классом — DOM и DOM-шим. */
+function closestElementWithClass(
+  node: Element | null | undefined,
+  className: string,
+): HTMLElement | null {
+  let current = (node ?? null) as HTMLElement | null;
+  while (current !== null) {
+    if (current.classList?.contains(className) === true) return current;
+    current =
+      (current as unknown as { parentElement?: HTMLElement | null }).parentElement ??
+      (current as unknown as { parent?: HTMLElement | null }).parent ?? null;
+  }
+  return null;
+}
+
+/** Ближайший корень дерева условий (для маршрутизации клавиатуры/адресации). */
+function closestFilterTreeRoot(node: Element | null | undefined): HTMLElement | null {
+  return closestElementWithClass(node, FILTER_TREE_CLASS);
+}
+
+/** Объявить контекст переноса клавиатурой для ОДНОЙ сборки дерева. */
+function defineFilterTreeKeyContext(contextId: string): void {
+  defineKeyContext({
+    id: contextId,
+    bindings: [
+      {
+        command: 'filterTree.moveUp',
+        chord: 'Alt+ArrowUp',
+        run: (event) => runFilterTreeKey('filterTree.moveUp', event),
+      },
+      {
+        command: 'filterTree.moveDown',
+        chord: 'Alt+ArrowDown',
+        run: (event) => runFilterTreeKey('filterTree.moveDown', event),
+      },
+      {
+        command: 'filterTree.outdent',
+        chord: 'Alt+ArrowLeft',
+        run: (event) => runFilterTreeKey('filterTree.outdent', event),
+      },
+      {
+        command: 'filterTree.intoGroup',
+        chord: 'Alt+ArrowRight',
+        run: (event) => runFilterTreeKey('filterTree.intoGroup', event),
+      },
+    ],
+  });
+}
+
+/** Разослать команду дереву, которому принадлежит элемент в фокусе. */
+function runFilterTreeKey(command: string, event: KeyboardEvent): boolean {
+  const action = FILTER_TREE_KEY_ACTIONS[command];
+  if (action === undefined) return false;
+  const target = (event.target ?? null) as Element | null;
+  const root = closestFilterTreeRoot(target);
+  const router = root === null ? undefined : filterTreeKeyRouters.get(root);
+  return router?.(action, event) ?? false;
+}
+
+/** Ключ пути → путь. Пустой ключ — корневая группа. */
+export function parseFilterTreePathKey(key: string): FilterTreePath {
+  if (key === '') return [];
+  return key.split('.').map((part) => Number(part));
+}
+
+/** `true`, если путь `path` лежит в `ancestor` (включая совпадение). */
+function filterTreePathWithin(path: FilterTreePath, ancestor: FilterTreePath): boolean {
+  if (path.length < ancestor.length) return false;
+  for (let index = 0; index < ancestor.length; index += 1) {
+    if (path[index] !== ancestor[index]) return false;
+  }
+  return true;
+}
+
+/** Данные перетаскивания узла дерева (кладёт {@link filterTreeDragItems}). */
+interface FilterTreeDragData {
+  path: FilterTreePath;
+  kind: 'leaf' | 'group';
+}
+
+/** Видимые узлы-строки дерева: обёртка `.ft-item` + точная ручка-индикатор. */
+function filterTreeDragItems(root: HTMLElement): DragTreeItem[] {
+  const items = Array.from(
+    root.querySelectorAll(`.${FILTER_TREE_ITEM_CLASS}`),
+  ) as HTMLElement[];
+  const out: DragTreeItem[] = [];
+  for (const element of items) {
+    // Вложенное дерево (под-выборка в модале) — не наше: его узлы адресуются
+    // своим корнем и в родительское дерево не входят.
+    if (closestFilterTreeRoot(element) !== root) continue;
+    const key = element.dataset['path'];
+    if (key === undefined) continue;
+    const handle = Array.from(element.children as ArrayLike<Element>).find(
+      (child) => child.classList?.contains(FILTER_TREE_CONNECTOR_CLASS) === true,
+    ) as HTMLElement | undefined;
+    const kind: FilterTreeDragData['kind'] =
+      element.dataset['kind'] === 'group' ? 'group' : 'leaf';
+    out.push({
+      key,
+      element,
+      ...(handle !== undefined ? { handle } : {}),
+      data: { path: parseFilterTreePathKey(key), kind } satisfies FilterTreeDragData,
+    });
+  }
+  return out;
+}
+
+/** Цель броска в дереве: группа-приёмник и индекс вставки. */
+export interface FilterTreeDropTarget {
+  groupPath: FilterTreePath;
+  index: number;
+  position: DragTreeDropPosition;
+  element: HTMLElement;
+}
+
+/**
+ * Резолв цели броска по точке. Приёмник — ближайшее тело группы
+ * (`.ft-group__body`); индекс — по вертикали между видимыми строками
+ * (`.ft-item`), пустая группа — `empty` с индексом `0`. Точка вне тела —
+ * `null` (жест отменяется). `document.elementFromPoint` — основной путь;
+ * без него (DOM-шим юнит-тестов) — по прямоугольникам тел, самое глубокое.
+ */
+export function resolveFilterTreeDropTarget(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number,
+): FilterTreeDropTarget | null {
+  const bodies = (
+    Array.from(root.querySelectorAll(`.${FILTER_TREE_GROUP_BODY_CLASS}`)) as HTMLElement[]
+  ).filter((candidate) => closestFilterTreeRoot(candidate) === root);
+
+  let body: HTMLElement | null = null;
+  const ownerDocument = (globalThis as { document?: Document }).document;
+  const hit = ownerDocument?.elementFromPoint?.(clientX, clientY) as HTMLElement | null | undefined;
+  if (hit !== null && hit !== undefined) {
+    const found = closestElementWithClass(hit, FILTER_TREE_GROUP_BODY_CLASS);
+    if (found !== null && closestFilterTreeRoot(found) === root) body = found;
+  }
+  if (body === null) {
+    let best: { body: HTMLElement; depth: number; area: number } | null = null;
+    for (const candidate of bodies) {
+      const rect = candidate.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+        continue;
+      }
+      const key = candidate.dataset['groupPath'] ?? '';
+      const depth = parseFilterTreePathKey(key).length;
+      const area = rect.width * rect.height;
+      if (
+        best === null ||
+        depth > best.depth ||
+        (depth === best.depth && area < best.area)
+      ) {
+        best = { body: candidate, depth, area };
+      }
+    }
+    body = best?.body ?? null;
+  }
+  if (body === null) return null;
+
+  const groupPath = parseFilterTreePathKey(body.dataset['groupPath'] ?? '');
+  const rows = Array.from(body.children as ArrayLike<Element>)
+    .filter((child) => child.classList?.contains(FILTER_TREE_ITEM_CLASS) === true)
+    .map((element) => ({
+      key: (element as HTMLElement).dataset['path'] ?? '',
+      element: element as HTMLElement,
+    }));
+  const rowTarget = resolveDragTreeRowTarget(rows, clientY);
+  return {
+    groupPath,
+    index: rowTarget.index,
+    position: rowTarget.position,
+    element: rowTarget.row?.element ?? body,
+  };
+}
+
+/** Данные жеста: из `data` адаптера, с запасным чтением `data-path`. */
+function filterTreeDragDataOf(item: DragTreeItem): FilterTreeDragData | null {
+  const data = item.data as Partial<FilterTreeDragData> | undefined;
+  if (data !== undefined && Array.isArray(data.path) && (data.kind === 'leaf' || data.kind === 'group')) {
+    return { path: data.path, kind: data.kind };
+  }
+  const key = item.element.dataset['path'];
+  if (key === undefined) return null;
+  return {
+    path: parseFilterTreePathKey(key),
+    kind: item.element.dataset['kind'] === 'group' ? 'group' : 'leaf',
+  };
+}
+
+/**
+ * Причина отказа переноса — для видимого объяснения (критерий 4 карточки
+ * 31b228f0). Сами правила — в модели (`filterTreeMoveNode`); здесь только
+ * формулировка для пользователя.
+ */
+export function filterTreeMoveRejectionReason(
+  root: FilterTreeNode,
+  fromPath: FilterTreePath,
+  toGroupPath: FilterTreePath,
+): string {
+  if (fromPath.length === 0) return 'Корневую группу переносить нельзя';
+  const sourceParent = filterTreeGroupAt(root, fromPath.slice(0, -1));
+  const target = filterTreeGroupAt(root, toGroupPath);
+  if (sourceParent === null) return 'Исходное условие не найдено';
+  if (target === null) return 'Группа-приёмник не найдена';
+  if (filterTreePathWithin(toGroupPath, fromPath)) {
+    return 'Группу нельзя вложить в саму себя или в её потомка';
+  }
+  if (sourceParent.op === 'not' && sourceParent.children.length === 1) {
+    return 'Из группы НЕ нельзя убрать единственное условие';
+  }
+  if (target.op === 'not' && target.children.length > 0) {
+    return 'В группу НЕ можно вложить только одно условие';
+  }
+  return 'Перенос невозможен';
+}
+
+/** Причина отказа `Shift`-копирования: исходник остаётся, важна только арность `НЕ`. */
+function filterTreeCloneRejectionReason(root: FilterTreeNode, toGroupPath: FilterTreePath): string {
+  const target = filterTreeGroupAt(root, toGroupPath);
+  if (target === null) return 'Группа-приёмник не найдена';
+  if (target.op === 'not' && target.children.length > 0) {
+    return 'В группу НЕ можно вложить только одно условие';
+  }
+  return 'Копирование невозможно';
+}
 
 /**
  * Операнды, у которых ячейка ОПЕРАТОРА в редакторе скрыта (требование заказчика
@@ -1162,6 +1625,231 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
   const model = (): FilterTreeGroup => ensureTree();
 
+  // -----------------------------------------------------------------------
+  // Перенос условий и групп (задача 31b228f0, этап 2)
+  // -----------------------------------------------------------------------
+
+  /** Адрес строки, которой вернуть фокус после полной перерисовки. */
+  let pendingItemFocusPath: string | null = null;
+
+  /** Элемент `.ft-item` по пути модели. */
+  const itemElementAt = (path: FilterTreePath): HTMLElement | null => {
+    const key = filterTreePathKey(path);
+    const items = Array.from(
+      root.querySelectorAll(`.${FILTER_TREE_ITEM_CLASS}`),
+    ) as HTMLElement[];
+    return items.find((node) => node.dataset['path'] === key) ?? null;
+  };
+
+  /** Снять временные сообщения об отказе переноса. */
+  const clearDropRejections = (): void => {
+    const lines = Array.from(
+      root.querySelectorAll(`.${FILTER_TREE_DROP_REJECT_CLASS}`),
+    ) as HTMLElement[];
+    for (const line of lines) line.remove?.();
+    const marked = Array.from(
+      root.querySelectorAll('[data-drop-rejected]'),
+    ) as HTMLElement[];
+    for (const node of marked) {
+      node.classList?.remove?.(FILTER_TREE_DROP_REJECTED_CLASS);
+      node.removeAttribute?.('data-drop-rejected');
+    }
+  };
+
+  /**
+   * Визуально объяснить отказ модели (цикл/арность `НЕ`): подсветка строки и
+   * текст причины. Модель при отказе не меняется, поэтому сообщение живёт
+   * отдельно и снимается по таймеру или на следующем фокусе/перерисовке.
+   */
+  const rejectDrop = (element: HTMLElement | null, reason: string): void => {
+    if (element === null) return;
+    clearDropRejections();
+    element.classList?.add?.(FILTER_TREE_DROP_REJECTED_CLASS);
+    element.setAttribute?.('data-drop-rejected', '1');
+    setTooltip(element, reason);
+    const line = el('div', FILTER_TREE_DROP_REJECT_CLASS, reason);
+    element.append(line);
+    const windowTimer = (globalThis as {
+      window?: { setTimeout?: (fn: () => void, ms: number) => unknown };
+    }).window?.setTimeout;
+    const timer =
+      windowTimer ??
+      (globalThis as { setTimeout: (fn: () => void, ms: number) => unknown }).setTimeout;
+    timer(() => {
+      line.remove?.();
+      element.classList?.remove?.(FILTER_TREE_DROP_REJECTED_CLASS);
+      element.removeAttribute?.('data-drop-rejected');
+    }, 2400);
+  };
+
+  /** Сдвиг узла на соседа внутри его группы (`Alt+↑/↓`). */
+  const moveWithinGroup = (path: FilterTreePath, delta: -1 | 1): boolean => {
+    if (path.length === 0) return false;
+    const parentPath = path.slice(0, -1);
+    const parent = filterTreeGroupAt(model(), parentPath);
+    if (parent === null) return false;
+    const index = path[path.length - 1]!;
+    // Индекс модели — в координатах ДО операции: чтобы узел встал после
+    // следующего соседа, цель — «перед соседом через один».
+    const targetIndex = delta === 1 ? index + 2 : index - 1;
+    if (targetIndex < 0 || targetIndex > parent.children.length) return false;
+    if (filterTreeMoveNode(model(), path, parentPath, targetIndex)) {
+      pendingItemFocusPath = filterTreePathKey([...parentPath, index + delta]);
+      touch();
+      return true;
+    }
+    rejectDrop(itemElementAt(path), filterTreeMoveRejectionReason(model(), path, parentPath));
+    return true;
+  };
+
+  /** Вынести узел из группы на уровень выше — сразу после родителя (`Alt+←`). */
+  const moveToParentGroup = (path: FilterTreePath): boolean => {
+    // Прямой ребёнок корня выносить некуда.
+    if (path.length < 2) return false;
+    const parentPath = path.slice(0, -1);
+    const grandparentPath = path.slice(0, -2);
+    const parentIndex = parentPath[parentPath.length - 1]!;
+    const targetIndex = parentIndex + 1;
+    if (filterTreeMoveNode(model(), path, grandparentPath, targetIndex)) {
+      pendingItemFocusPath = filterTreePathKey([...grandparentPath, targetIndex]);
+      touch();
+      return true;
+    }
+    rejectDrop(
+      itemElementAt(path),
+      filterTreeMoveRejectionReason(model(), path, grandparentPath),
+    );
+    return true;
+  };
+
+  /** Вложить узел в соседнюю группу — предыдущую, иначе следующую (`Alt+→`). */
+  const moveIntoAdjacentGroup = (path: FilterTreePath): boolean => {
+    if (path.length === 0) return false;
+    const parentPath = path.slice(0, -1);
+    const parent = filterTreeGroupAt(model(), parentPath);
+    if (parent === null) return false;
+    const sourceIndex = path[path.length - 1]!;
+    let siblingIndex = -1;
+    for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+      if (parent.children[index]?.kind === 'group') {
+        siblingIndex = index;
+        break;
+      }
+    }
+    if (siblingIndex < 0) {
+      for (let index = sourceIndex + 1; index < parent.children.length; index += 1) {
+        if (parent.children[index]?.kind === 'group') {
+          siblingIndex = index;
+          break;
+        }
+      }
+    }
+    if (siblingIndex < 0) return false;
+    const sibling = parent.children[siblingIndex] as FilterTreeGroup;
+    const siblingPath = [...parentPath, siblingIndex];
+    const appendIndex = sibling.children.length;
+    if (filterTreeMoveNode(model(), path, siblingPath, appendIndex)) {
+      // После удаления источника индексы соседей справа сдвигаются на один.
+      const siblingNewIndex = siblingIndex - (sourceIndex < siblingIndex ? 1 : 0);
+      pendingItemFocusPath = filterTreePathKey([...parentPath, siblingNewIndex, appendIndex]);
+      touch();
+      return true;
+    }
+    rejectDrop(itemElementAt(path), filterTreeMoveRejectionReason(model(), path, siblingPath));
+    return true;
+  };
+
+  /** Команда переноса без мыши для элемента в фокусе. */
+  const runFilterTreeKeyboard = (
+    action: FilterTreeKeyAction,
+    event: KeyboardEvent,
+  ): boolean => {
+    const target = (event.target ?? null) as HTMLElement | null;
+    const item = closestElementWithClass(target, FILTER_TREE_ITEM_CLASS);
+    const key = item?.dataset['path'];
+    if (key === undefined) return false;
+    const path = parseFilterTreePathKey(key);
+    switch (action) {
+      case 'moveUp':
+        return moveWithinGroup(path, -1);
+      case 'moveDown':
+        return moveWithinGroup(path, 1);
+      case 'outdent':
+        return moveToParentGroup(path);
+      case 'intoGroup':
+        return moveIntoAdjacentGroup(path);
+    }
+  };
+
+  // Контекст объявляется на сборку и снимается в `destroy`; маршрутизация —
+  // по ближайшему `.ft`.
+  const keyContextId = `${FILTER_TREE_KEY_CONTEXT_ID}-${(filterTreeKeyContextSeq += 1)}`;
+  defineFilterTreeKeyContext(keyContextId);
+  filterTreeKeyRouters.set(root, runFilterTreeKeyboard);
+
+  // Контекст на вершине стека, пока фокус внутри этого дерева (ADR b420b08c).
+  let releaseKeyContext: (() => void) | null = null;
+  const onFocusIn = (): void => {
+    clearDropRejections();
+    releaseKeyContext ??= pushKeyContext(keyContextId);
+  };
+  const onFocusOut = (event: FocusEvent): void => {
+    const next = event.relatedTarget as Node | null;
+    if (next !== null && root.contains?.(next)) return;
+    releaseKeyContext?.();
+    releaseKeyContext = null;
+  };
+  root.addEventListener('focusin', onFocusIn as EventListener);
+  root.addEventListener('focusout', onFocusOut as EventListener);
+
+  /** Бросок из общего drag-фасада: перенос либо `Shift`-копия. */
+  const applyDragDrop = ({ source, target, modifiers }: DragTreeDropEvent): void => {
+    const data = filterTreeDragDataOf(source);
+    if (data === null) return;
+    const targetGroupPath = parseFilterTreePathKey(target.groupId);
+    if (modifiers.shift) {
+      const node = filterTreeNodeAt(model(), data.path);
+      if (node === null) return;
+      // Копия — глубокий клон поддерева; исходник остаётся на месте.
+      if (filterTreeInsertAt(model(), targetGroupPath, target.index, filterTreeCloneNode(node))) {
+        touch();
+      } else {
+        rejectDrop(source.element, filterTreeCloneRejectionReason(model(), targetGroupPath));
+      }
+      return;
+    }
+    if (filterTreeMoveNode(model(), data.path, targetGroupPath, target.index)) {
+      touch();
+    } else {
+      rejectDrop(
+        source.element,
+        filterTreeMoveRejectionReason(model(), data.path, targetGroupPath),
+      );
+    }
+  };
+
+  // Кросс-групповой канал — общий фасад `lib/ui` (ADR 442e7ff5): модуль дерева
+  // отдаёт ему пути/ключи групп и получает готовый дроп, своих pointer-событий
+  // перетаскивания не заводит (сторож `guard-drag-channel`).
+  const dragTree = createDragTree(
+    root,
+    {
+      items: () => filterTreeDragItems(root),
+      resolveTarget: ({ clientX, clientY }): DragTreeTarget | null => {
+        const found = resolveFilterTreeDropTarget(root, clientX, clientY);
+        if (found === null) return null;
+        return {
+          groupId: filterTreePathKey(found.groupPath),
+          index: found.index,
+          position: found.position,
+          element: found.element,
+        };
+      },
+      onDrop: applyDragDrop,
+    },
+    { handleSelector: `.${FILTER_TREE_CONNECTOR_CLASS}` },
+  );
+
   /** Записи диагностики — перечитываются на каждой отрисовке дерева. */
   let issueMap: FilterIssue[] = [];
   /**
@@ -1243,6 +1931,17 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     root.append(el('div', 'ft-title', title));
     root.append(renderGroup([], 0));
     restoreChipsInputFocus(focusPath);
+    // Клавиатурный перенос: вернуть фокус строке на её новом месте.
+    if (pendingItemFocusPath !== null) {
+      const key = pendingItemFocusPath;
+      pendingItemFocusPath = null;
+      const target = (Array.from(
+        root.querySelectorAll(`.${FILTER_TREE_ITEM_CLASS}`),
+      ) as HTMLElement[]).find((node) => node.dataset['path'] === key);
+      target?.focus?.();
+    }
+    // Перепривязать ручки И/ИЛИ к новым `.ft-item` после полной перерисовки.
+    dragTree.refresh();
   };
 
   /**
@@ -1436,7 +2135,9 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     if (isCollapsed) return section;
 
     // --- Тело: связаторы-индикаторы слева ПЕРЕД каждым условием, дети, кнопки --
-    const body = div('ft-group__body');
+    const body = div(FILTER_TREE_GROUP_BODY_CLASS);
+    // Адрес группы-приёмника для hit-test перетаскивания (задача 31b228f0).
+    body.dataset['groupPath'] = filterTreePathKey(group.bodyPath);
     if (group.children.length === 0) {
       body.append(el('div', 'ft-group__empty', 'группа пуста — добавьте условие или группу'));
     } else {
@@ -1444,13 +2145,24 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         const childPath = [...group.bodyPath, index];
         // Индикатор И/ИЛИ — левый столбец ПЕРЕД строкой (требование заказчика
         // 2026-10-13), а не между строками: связатор меняет селектор группы.
-        const item = div('ft-item');
+        // Это же ручка перетаскивания (задача 31b228f0): тянется ровно то, что
+        // стоит за индикатором, — условие или группа со всем содержимым.
+        const item = div(FILTER_TREE_ITEM_CLASS);
+        item.dataset['path'] = filterTreePathKey(childPath);
+        item.dataset['kind'] = child.kind;
+        // Строка достижима фокусом: без мыши условие/группу переносят команды
+        // Alt+↑/↓/←/→ (критерий доступности 7, сторож обнаружимости).
+        item.tabIndex = 0;
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('aria-label', child.kind === 'group' ? 'Группа условий' : 'Условие отбора');
         const indicator = span(filterTreeConnectorIndicator(group.op), FILTER_TREE_CONNECTOR_CLASS);
+        // Индикатор — ручка указателя; клавиатурный путь ведёт строка (`item`),
+        // поэтому сам индикатор остаётся декоративным для скринридера.
         indicator.setAttribute('aria-hidden', 'true');
-        setTooltip(indicator, 'Коннекция задаётся селектором группы');
+        setTooltip(indicator, 'Перетащить условие или группу');
         item.append(indicator);
         item.append(
-          child.kind === 'group' ? renderGroup(childPath, depth + 1) : renderRow(child, childPath),
+          child.kind === 'group' ? renderGroup(childPath, depth + 1) : renderRow(child, childPath, item),
         );
         body.append(item);
       });
@@ -1494,7 +2206,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
   };
 
   /** Строка-условие: [Что][Оператор][Значение][×] (+ строка диагностики снизу). */
-  const renderRow = (leaf: FilterTreeLeaf, path: FilterTreePath): HTMLElement => {
+  const renderRow = (leaf: FilterTreeLeaf, path: FilterTreePath, item?: HTMLElement): HTMLElement => {
     const row = div(FILTER_TREE_ROW_CLASS);
     row.dataset['path'] = filterTreePathKey(path);
     const rowIssue = applyIssue(row, path);
@@ -1639,6 +2351,20 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     }
     row.append(valueBox);
 
+    // Приёмник перетаскиваемого значения на ВСЕЙ строке условия (этап 3 задачи
+    // 31b228f0): ближайший зарегистрированный предок побеждает приёмник панели
+    // «Структур», поэтому бросок в «Что»/оператор строки тоже не добавляет
+    // корень отбора. Совместимость и запись — виджета значения (`acceptDrop`),
+    // каркас лишь передаёт payload.
+    if (item !== undefined && api.acceptDrop !== undefined) {
+      const acceptDrop = api.acceptDrop;
+      registerThoughtDropField(item, {
+        kind: 'filter',
+        accept: (id: string): boolean => acceptDrop({ kind: 'thought', id }),
+        acceptPayload: acceptDrop,
+      });
+    }
+
     // Обязательное условие места (например, «Период записи» панели «Дневника»)
     // удалить нельзя — крестик не рисуется (ошибка 609deba0 п.2).
     if (ctx.isLeafLocked?.(leaf) !== true) {
@@ -1667,11 +2393,27 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     return row;
   };
 
+  /** `destroy` идемпотентен: повторный вызов ничего не делает. */
+  let destroyed = false;
+  const destroy = (): void => {
+    if (destroyed) return;
+    destroyed = true;
+    root.removeEventListener('focusin', onFocusIn as EventListener);
+    root.removeEventListener('focusout', onFocusOut as EventListener);
+    releaseKeyContext?.();
+    releaseKeyContext = null;
+    filterTreeKeyRouters.delete(root);
+    // Снимает и собственный контекст `ui-drag-tree-N` (реестр `lib/keymap`).
+    dragTree.destroy();
+    undefineKeyContext(keyContextId);
+  };
+
   render();
   return {
     root,
     rerender: render,
     focusIssue: (path: string): void => fixers.get(path)?.(),
+    destroy,
   };
 }
 

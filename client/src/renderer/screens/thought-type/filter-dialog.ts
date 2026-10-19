@@ -189,7 +189,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const editor = buildFilterEditor({
     profile: 'thoughts',
     networkId,
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     data,
     // ЕДИНСТВЕННОЕ фокусное место (требование 3697eb65): отбор типа мысли
     // исполняется сервером ОТНОСИТЕЛЬНО мысли-контекста, поэтому подсказки
@@ -267,6 +269,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     // п. A8). Модификатор на боксе задаёт высоту (CSS `view-editor-dialog`).
     fixedHeight: true,
     onMount: (_close, box) => box.classList.add('view-editor-dialog'),
+    // Диалог закрыт любой кнопкой/Esc/крестиком — редактор размонтируем:
+    // его дерево снимает клавиатурные контексты из реестра `lib/keymap`.
+    onClose: () => editor.destroy(),
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,

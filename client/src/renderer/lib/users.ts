@@ -9,17 +9,20 @@
  *
  *  - текущий пользователь — всегда известен (`state.me`) и резолвится без
  *    сети;
- *  - остальные пользователи — best-effort через `etn.admin.listUsers()`
- *    (требует админа; для не-админа запрос тихо отказывается, кэш остаётся
- *    пустым, UI показывает нейтральный плейсхолдер вместо имени, а не UUID —
- *    требование 9d5e3c4e).
+ *  - остальные участники — best-effort: администратор берёт полный ростер
+ *    (`etn.admin.listUsers`), обычный участник — список участников открытой
+ *    сети (`etn.networks.listMembers`, доступен любому члену и уже несёт
+ *    `username`/`display_name` с сервера). Без этого не-администратор видел
+ *    UUID держателя захвата вместо имени (ошибка cb9b466f). Запрос тихо
+ *    отказывается — кэш остаётся пустым, UI показывает нейтральный
+ *    плейсхолдер вместо имени, а не UUID — требование 9d5e3c4e.
  *
  * Кэш обновляется по мере появления новых запросов и реактивно
  * перерисовывает все узлы, которые показали «неизвестен» для только что
  * загруженного пользователя.
  */
 
-import type { User } from '@etn/shared';
+import type { NetworkMember, User } from '@etn/shared';
 
 import { div, el } from './dom.js';
 import { etn } from './etn.js';
@@ -48,6 +51,8 @@ interface CacheState {
   byId: Map<string, User>;
   /** Pending fetch so concurrent callers share one network roundtrip. */
   pending: Promise<void> | null;
+  /** Сеть+пользователь, для которых ростер уже загружен (против retry storms). */
+  loadedKey: string | null;
   /** Listeners notified when the cache transitions. */
   listeners: Set<() => void>;
 }
@@ -55,6 +60,7 @@ interface CacheState {
 const state: CacheState = {
   byId: new Map(),
   pending: null,
+  loadedKey: null,
   listeners: new Set(),
 };
 
@@ -84,30 +90,78 @@ export function seedCurrentUser(): void {
 
 /**
  * Kicks off a best-effort fetch of the user list. Resolves immediately when
- * the cache is already populated or the fetch fails (non-admin user, no
- * network, etc.); the caller never has to await this — UI can subscribe via
- * {@link subscribe} for re-rendering when the cache fills in.
+ * the roster for the current network/user is already loaded or the fetch fails
+ * (no rights, no network, etc.); the caller never has to await this — UI can
+ * subscribe via {@link subscribe} for re-rendering when the cache fills in.
+ *
+ * Источник — по правам (ошибка cb9b466f): администратор читает полный ростер
+ * `GET /admin/users`, обычный участник — участников открытой сети
+ * `GET /networks/{id}/members` (сервер отдаёт `username`/`display_name`).
+ * Смена сети/пользователя сбрасывает кэш, поэтому имена одного ростера не
+ * всплывают в другом.
  */
 export function ensureLoaded(): void {
   seedCurrentUser();
   if (state.pending !== null) return;
-  // Avoid retry storms — only fetch when the cache is empty AND we have no
-  // pending promise. Users that join later (the admin path) are not handled
-  // here; the «Вкладка Метаданные» does not require a live user roster.
-  if (state.byId.size > 1) return;
-  const promise = etn.admin
-    .listUsers()
+  const networkId = store.state.networkId;
+  const me = store.state.me;
+  // Ключ ростера: сменилась сеть/пользователь/права — читаем заново.
+  const loadedKey = `${networkId ?? ''}|${me?.id ?? ''}|${me?.is_admin === true ? 1 : 0}`;
+  if (state.loadedKey === loadedKey) return;
+  if (state.loadedKey !== null) {
+    state.byId.clear();
+    seedCurrentUser();
+  }
+
+  const loadRoster = async (): Promise<User[]> => {
+    // Без открытой сети (и в юнит-тестах) остаётся прежний путь — админ-ростер.
+    if (networkId === null || me?.is_admin === true) {
+      try {
+        const users = await etn.admin.listUsers();
+        if (users.length > 0 || networkId === null) return users;
+      } catch {
+        // Не админ или сеть недоступна — падаем на список участников.
+      }
+    }
+    try {
+      const members = await etn.networks.listMembers(networkId as string);
+      return members.flatMap(memberToUser);
+    } catch {
+      return [];
+    }
+  };
+
+  const promise = loadRoster()
     .then((users) => {
       for (const user of users) state.byId.set(user.id, user);
     })
-    .catch(() => {
-      // Non-admin user, network down — fall back to id-only display.
-    })
     .finally(() => {
       state.pending = null;
+      state.loadedKey = loadedKey;
       for (const listener of state.listeners) listener();
     });
   state.pending = promise;
+}
+
+/**
+ * Membership row → `User` для кэша имён. Поля `username`/`display_name`
+ * приходят с сервера (`GET /networks/{id}/members`); запись без них не
+ * заводим, чтобы не показывать пустое имя вместо реального участника.
+ */
+function memberToUser(member: NetworkMember): User[] {
+  if (member.username === undefined) return [];
+  return [
+    {
+      id: member.user_id,
+      username: member.username,
+      display_name: member.display_name ?? null,
+      is_admin: false,
+      is_first_user: false,
+      disabled: false,
+      created_at: '',
+      updated_at: '',
+    },
+  ];
 }
 
 /**
@@ -148,6 +202,7 @@ export function subscribe(listener: () => void): () => void {
 export function __resetForTests(): void {
   state.byId.clear();
   state.pending = null;
+  state.loadedKey = null;
   state.listeners.clear();
 }
 

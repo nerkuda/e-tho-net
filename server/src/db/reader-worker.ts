@@ -11,9 +11,10 @@
  *
  * **Только чтение.** Воркер не применяет миграции, не чистит `object_locks` и
  * вообще не пишет в `main`: соединение открывается `readonly: true`, а состав
- * операций ограничен выборками (движок отбора, поиск, обход подграфа).
- * Единственный писатель сети — writer-воркер её write-пула (ADR ca3a9218,
- * `db/write-pool.ts`); запись из reader-воркера запрещена. Сторож
+ * операций ограничен выборками (движок отбора, поиск, обходы графа, батчи
+ * `resolve`/`neighbors`/`find_duplicates` и чтения комментариев — задача
+ * 514dc30f). Единственный писатель сети — writer-воркер её write-пула (ADR
+ * ca3a9218, `db/write-pool.ts`); запись из reader-воркера запрещена. Сторож
  * `guard-reader-pool.test.ts` не даёт появиться здесь записывающему SQL.
  *
  * Инвалидация состояния между задачами (запрет ADR «изменяемое состояние без
@@ -37,8 +38,21 @@ import type {
   ReaderThoughtsQueryIdsResult,
 } from '../contracts.js';
 import { queryThoughts, queryThoughtIds } from '../domain/query-service.js';
-import { search } from '../domain/search-service.js';
-import { subgraph } from '../domain/graph-traversal.js';
+import { findDuplicates, search } from '../domain/search-service.js';
+import { subgraph, traverse } from '../domain/graph-traversal.js';
+import {
+  countNeighbors,
+  getNeighbors,
+  getThoughtsByIdsResolved,
+  resolveThoughts,
+} from '../domain/thought-service.js';
+import {
+  getCommentsPreview,
+  getPermanentComment,
+  getVisibleComment,
+  listComments,
+} from '../domain/comment-service.js';
+import { createBodyExpander, createBodyPresenter } from '../domain/transclusion-service.js';
 import { NetworkDb, registerQueryFunctions } from './network-db.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
@@ -155,6 +169,58 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         ok: true,
         result: subgraph(ndb, task.payload.seedIds, task.payload.radius, task.payload.bounds),
       };
+    case 'graph.traverse':
+      return {
+        ok: true,
+        result: traverse(ndb, task.payload.seedIds, task.payload.direction, task.payload.bounds),
+      };
+    case 'thoughts.resolve':
+      return { ok: true, result: resolveThoughts(ndb, task.payload.ids) };
+    case 'thoughts.resolveCards':
+      return { ok: true, result: getThoughtsByIdsResolved(ndb, task.payload.ids) };
+    case 'thoughts.neighbors': {
+      // Одна задача отдаёт и страницу, и честный total: оба запроса идут на
+      // одном соединении воркера и видят один контекст слоя (норма ADR).
+      const { thoughtId, dir, opts, limit, offset } = task.payload;
+      return {
+        ok: true,
+        result: {
+          neighbors: getNeighbors(ndb, thoughtId, dir, { ...opts, limit, offset }),
+          total: countNeighbors(ndb, thoughtId, dir, opts),
+        },
+      };
+    }
+    case 'thoughts.findDuplicates': {
+      const { title, synonyms, typeIds } = task.payload;
+      return { ok: true, result: findDuplicates(ndb, title, synonyms, typeIds) };
+    }
+    case 'comments.list':
+      return {
+        ok: true,
+        result: listComments(ndb, task.payload.ownerType, task.payload.ownerId),
+      };
+    case 'comments.visible':
+      return { ok: true, result: getVisibleComment(ndb, task.payload.commentId) };
+    case 'comments.presented': {
+      const comment = getVisibleComment(ndb, task.payload.commentId);
+      if (comment === null) return { ok: true, result: null };
+      return { ok: true, result: { ...comment, ...createBodyPresenter(ndb)(comment.body_md) } };
+    }
+    case 'comments.permanentPresented': {
+      const comment = getPermanentComment(ndb, task.payload.ownerType, task.payload.ownerId);
+      if (comment === null) return { ok: true, result: null };
+      return { ok: true, result: { ...comment, ...createBodyPresenter(ndb)(comment.body_md) } };
+    }
+    case 'comments.previewBatch': {
+      const { ownerType, ownerIds, previewChars, expandTransclusions } = task.payload;
+      const expand = expandTransclusions ? createBodyExpander(ndb) : undefined;
+      return {
+        ok: true,
+        result: ownerIds.map((ownerId) =>
+          getCommentsPreview(ndb, ownerType, ownerId, previewChars, expand),
+        ),
+      };
+    }
     default: {
       // Исчерпывающий разбор: новый op обязан появиться выше и в контракте.
       const never: never = task;

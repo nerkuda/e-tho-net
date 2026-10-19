@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import {
   getClipboard,
   initNativeCopyTracking,
+  remapSameNetworkLinks,
   rewriteCrossNetworkLinks,
   setClipboard,
   subscribe,
@@ -74,6 +75,37 @@ describe('clipboard.rewriteCrossNetworkLinks', () => {
     const text = `[[n:${NET_B}#${T1}]]`;
     const out = rewriteCrossNetworkLinks(text, NET_A, NET_B);
     assert.equal(out, text);
+  });
+});
+
+describe('clipboard.remapSameNetworkLinks (5f03ebc5)', () => {
+  const COPY = '99999999-8888-7777-6666-555555555555';
+
+  it('ремапит id-ссылку на копию и сохраняет псевдоним', () => {
+    const map = { [T1]: COPY };
+    assert.equal(remapSameNetworkLinks(`См. [[#${T1}]]`, map), `См. [[#${COPY}]]`);
+    assert.equal(remapSameNetworkLinks(`[[#${T1}|примечание]]`, map), `[[#${COPY}|примечание]]`);
+  });
+
+  it('ремапит трансклюзию ![[#id]] (тот же механизм)', () => {
+    const map = { [T1]: COPY };
+    assert.equal(remapSameNetworkLinks(`![[#${T1}]]`, map), `![[#${COPY}]]`);
+  });
+
+  it('нормализует регистр исходного id', () => {
+    const map = { [T1]: COPY };
+    assert.equal(remapSameNetworkLinks(`[[#${T1.toUpperCase()}]]`, map), `[[#${COPY}]]`);
+  });
+
+  it('не трогает ссылки вне выделения и legacy-имена', () => {
+    const map = { [T1]: COPY };
+    const text = `[[#${T2}]] и [[#abc]] и [[Имя]]`;
+    assert.equal(remapSameNetworkLinks(text, map), text);
+  });
+
+  it('не трогает уже межсетевые ссылки', () => {
+    const text = `[[n:${NET_B}#${T1}]]`;
+    assert.equal(remapSameNetworkLinks(text, { [T1]: COPY }), text);
   });
 });
 

@@ -473,8 +473,9 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
  * полной форме, а view-проекция остаётся на стороне фасада (как в
  * `subgraph`/`neighbors`).
  *
- * Лимит на размер пачки: `THOUGHT_RESOLVE_MAX_IDS` — совпадает с лёгкой
- * `resolveThoughts` и с лимитом `maxNodesPerSubgraph` в MCP-фасаде.
+ * Лимит на размер пачки: `THOUGHT_RESOLVE_MAX_IDS` (100) — совпадает с лёгкой
+ * `resolveThoughts` и с лимитом `thought_ids` в MCP-фасаде и REST
+ * `POST /thoughts/resolve`.
  */
 export function getThoughtsByIdsResolved(
   ndb: NetworkDb,

@@ -241,6 +241,55 @@ test('hover: та же форма точки, что у click; ошибки на
   );
 });
 
+test('drag: составной жест нормализуется; expect обязателен', () => {
+  const scenario = validateScenario(
+    scenarioFrom([
+      {
+        drag: {
+          from: '#handle',
+          to: { selector: '.row', at: [10, 2] },
+          expect: '.row',
+          steps: 6,
+          duration: 120,
+          modifiers: ['shift'],
+          targetTimeout: 3000,
+        },
+      },
+      { drag: { from: [1, 2], to: [30, 40], expect: '.drop' } },
+    ]),
+  );
+  assert.deepEqual(scenario.steps[0]?.drag, {
+    from: { selector: '#handle', at: null, x: null, y: null },
+    to: { selector: '.row', at: [10, 2], x: null, y: null },
+    expect: '.row',
+    steps: 6,
+    duration: 120,
+    modifiers: 8,
+    targetTimeout: 3000,
+  });
+  assert.deepEqual(scenario.steps[1]?.drag, {
+    from: { selector: null, at: null, x: 1, y: 2 },
+    to: { selector: null, at: null, x: 30, y: 40 },
+    expect: '.drop',
+    steps: 8,
+    duration: 0,
+    modifiers: 0,
+    targetTimeout: 2000,
+  });
+  // expect обязателен: без него промах координат молча давал бы «ok».
+  assert.throws(() => validateScenario(scenarioFrom([{ drag: { from: '#h', to: '#t' } }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ drag: { to: '#t', expect: '#t' } }])), ScenarioError);
+  assert.throws(() => validateScenario(scenarioFrom([{ drag: { from: '#h', expect: '#t' } }])), ScenarioError);
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ drag: { from: '#h', to: '#t', expect: '#t', steps: 0 } }])),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ drag: { from: '#h', to: '#t', expect: '#t', bogus: 1 } }])),
+    ScenarioError,
+  );
+});
+
 test('text и timeout: пустая строка и нечисловой лимит отвергаются', () => {
   assert.throws(() => validateScenario(scenarioFrom([{ text: '' }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', timeout: 0 }])), ScenarioError);

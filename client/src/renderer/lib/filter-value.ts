@@ -45,7 +45,7 @@ import {
   type StructureKeywordScope,
 } from '@etn/shared';
 
-import { div, el, span } from './dom.js';
+import { div, el, errText, span } from './dom.js';
 import { buildValueEditor } from '../editor/value-editor.js';
 import {
   buildEntityChipField,
@@ -79,7 +79,15 @@ import {
   filterTokenNature,
 } from './filter-tokens.js';
 import { dateField } from './date-field.js';
-import { isValidLocalDay, resolveDateToken, setPeriodFrom, setPeriodTo, todayLocal } from './dates.js';
+import {
+  isValidLocalDay,
+  resolveDateToken,
+  resolveFirstDayOfWeek,
+  setPeriodFrom,
+  setPeriodTo,
+  todayLocal,
+  type FirstDayOfWeekSource,
+} from './dates.js';
 import { VALUE_TYPE_LABELS, valueTypeIconName } from './property-list.js';
 import {
   canonicalGlobalToken,
@@ -88,6 +96,10 @@ import {
   parseBound,
 } from './period-editor.js';
 import type { SuggestEntry, SuggestSource } from './suggest-dropdown.js';
+import { menuAction } from './menu.js';
+import { notice } from './notice.js';
+import { registerThoughtDropField } from './thought-drop.js';
+import type { ThoughtDropPayload } from './thought-drop-pure.js';
 import { uiButton } from './ui/button.js';
 import { chipList } from './ui/chip-list.js';
 import type { IconName } from './ui/icon.js';
@@ -97,6 +109,7 @@ import { segmentedControl } from './ui/segmented.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from './users.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
 import { etn } from './etn.js';
+import { resolveThoughtRefs } from './thought-ref-batch.js';
 
 // ---------------------------------------------------------------------------
 // Классы вида — единственная точка имён (адресуются тестами и CSS)
@@ -185,9 +198,11 @@ export interface FilterValueContext {
   /**
    * Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd) —
    * передаётся в календарь диалога «Дата/период» для ячейки точной даты.
-   * Не задан — понедельник.
+   * Допускается функция-резолвер: она читается в момент ОТКРЫТИЯ диалога и при
+   * раскрытии границ, поэтому смена настройки сети не оставляет панель со
+   * старым значением (ошибка b5278f9a). Не задан — понедельник.
    */
-  firstDayOfWeek?: number;
+  firstDayOfWeek?: FirstDayOfWeekSource;
   /**
    * Место исполняет отбор относительно мысли-контекста — значениям доступны
    * токены полей мысли (`$thought*`); иначе фокусные токены не предлагаются
@@ -226,13 +241,6 @@ const COUNT_OPS: ReadonlySet<FilterAstOperator> = new Set(['gt', 'gte', 'lt', 'l
 
 /** Операторы «в иерархии»/«не в иерархии» (корни поддерева). */
 const HIERARCHY_OPS: ReadonlySet<FilterAstOperator> = new Set(['in_hierarchy', 'not_in_hierarchy']);
-
-/**
- * Предел одного пакетного `etn.thoughts.resolve` (серверный лимит батча).
- * Тот же предел, что у догрузки облачков значения свойства-связи
- * (`editor/value-editor.ts`).
- */
-const FILTER_VALUE_RESOLVE_BATCH = 100;
 
 /** Значения-перечисления вида вложения (`kind`) — словарь спецификации. */
 const ATTACHMENT_KIND_OPTIONS: readonly FilterValueEnumOption[] = [
@@ -366,6 +374,132 @@ export function filterValueEditor(leaf: FilterTreeLeaf, ctx: FilterValueContext)
   if (filterValueIsBounds(operator)) return 'bounds';
   if (enumCatalogue(leaf, ctx).length > 0) return 'enum';
   return 'value-editor';
+}
+
+/**
+ * Принимает ли ЯЧЕЙКА значение перетаскиваемого вида (этап 3 задачи 31b228f0).
+ * ЕДИНСТВЕННЫЙ предикат совместимости: опирается на тот же вид редактора
+ * ({@link filterValueEditor}) и определение свойства из реестра — второго
+ * словаря совместимости нет (критерий 5; стандарт S2, `guard-value-editor`).
+ *
+ * - `thought` — ссылочный операнд-мысль (`entity` с родом `thoughts`: «Мысль»,
+ *   «Родители»/«Потомки», «Цели») либо значение свойства-связи
+ *   (`value-editor` с `value_type: 'link'`, там редактор чипов);
+ * - `type` — ссылочный операнд «Тип»/«Тип связи»;
+ * - `date` — датовая ячейка (опорный виджет, в т.ч. свойство-дата);
+ * - `string` — текстовое/URL-значение свойства.
+ */
+export function filterValueAcceptsPayload(
+  leaf: FilterTreeLeaf,
+  ctx: FilterValueContext,
+  payload: ThoughtDropPayload,
+): boolean {
+  const editor = filterValueEditor(leaf, ctx);
+  switch (payload.kind) {
+    case 'thought':
+      if (editor === 'entity') return entityKindOf(leaf) === 'thoughts';
+      if (editor === 'value-editor') {
+        return filterValueRegistryEntry(leaf, ctx.data)?.value_type === 'link';
+      }
+      return false;
+    case 'type':
+      if (editor === 'entity') {
+        return leaf.entity.kind === 'type' || leaf.entity.kind === 'link_type';
+      }
+      return false;
+    case 'date':
+      return editor === 'date';
+    case 'string': {
+      // Текстовое значение принимает ЛЮБОЙ текстовый операнд: и свойство
+      // реестра (`text`/`url`), и текстовые не-свойства («Имя вложения»,
+      // «Заголовок сущности», «Заголовок/Текст записи», MIME-подтип). Природа
+      // значения — из ЕДИНОГО каталога операндов (`lib/filter-tokens.ts`),
+      // второго словаря совместимости нет.
+      if (editor !== 'value-editor') return false;
+      return filterTokenNature(leaf, ctx) === 'text';
+    }
+    default:
+      return false;
+  }
+}
+
+/** Вид значения для объяснения отказа (пользовательский текст). */
+const DROP_PAYLOAD_LABELS: Readonly<Record<ThoughtDropPayload['kind'], string>> = {
+  thought: 'мысль',
+  type: 'тип',
+  string: 'строку',
+  date: 'дату',
+};
+
+/** Объяснение несовместимого броска: модель не меняется, причина видна. */
+export function filterValueDropRejectionText(payload: ThoughtDropPayload): string {
+  return `Это условие не принимает ${DROP_PAYLOAD_LABELS[payload.kind]}: его значение другого вида`;
+}
+
+/**
+ * Значение модели для payload. `null` — менять нечего/значение некорректно
+ * (приёмник вернёт `false`, модель останется прежней).
+ */
+function filterValuePayloadValue(
+  leaf: FilterTreeLeaf,
+  payload: ThoughtDropPayload,
+): FilterTreeValue | null {
+  switch (payload.kind) {
+    case 'thought':
+    case 'type': {
+      const multiple = filterValueIsMultiple(leaf.operator) || HIERARCHY_OPS.has(leaf.operator);
+      if (!multiple) return operandSingleValue(payload.id);
+      const current = currentList(leaf.value);
+      if (current.includes(payload.id)) return null;
+      return operandListValue([...current, payload.id]);
+    }
+    case 'string': {
+      if (payload.value === '') return null;
+      // Семантика РУЧНОГО ввода (`filterValueFromEditor`): одиночное значение —
+      // литерал либо `$…`-токен. Токены существующего набора при дополнении не
+      // выбрасываются: ручное добавление чипа их сохраняет, значит и бросок
+      // обязан сохранять (дедупликация и порядок — как у чип-редактора).
+      if (!filterValueIsMultiple(leaf.operator)) return filterValueFromEditor(payload.value);
+      const current = currentList(leaf.value);
+      if (current.includes(payload.value)) return null;
+      return { kind: 'list', items: [...current, payload.value] };
+    }
+    case 'date': {
+      if (!isValidLocalDay(payload.value)) return null;
+      return { kind: 'scalar', value: payload.value };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Приёмник значений на ячейке и строке условия (критерий 6). Совместимость —
+ * {@link filterValueAcceptsPayload}, значение — {@link filterValuePayloadValue}.
+ *
+ * Запись идёт СТРУКТУРНЫМ путём ручной правки (`api.setStructuralValue` →
+ * `touch()` → полная перерисовка): бросок меняет модель ВНЕ виджета, поэтому
+ * «лёгкий» путь значения (`api.setValue` → `touchValue`) оставлял бы ячейку со
+ * старым содержимым — модель и сервер новые, DOM старый (блокер проверки этапа
+ * 3). Виджеты `entity` перекрывают этот приёмник своим и обновляют разметку
+ * сами (чипы/комбо). Несовместимый бросок модель не меняет и объясняет причину
+ * тостом; в приёмник панели «Структур» он не проваливается — ближайший
+ * зарегистрированный предок (`walkDropField`) остаётся этим.
+ */
+function acceptFilterValueDrop(
+  leaf: FilterTreeLeaf,
+  api: FilterTreeValueSlotApi,
+  ctx: FilterValueContext,
+  payload: ThoughtDropPayload,
+): boolean {
+  if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
+    notice(filterValueDropRejectionText(payload), 'warning');
+    return false;
+  }
+  const value = filterValuePayloadValue(leaf, payload);
+  if (value === null) return false;
+  (api.setStructuralValue ?? api.setValue)(value);
+  return true;
 }
 
 /** Варианты перечисления: каталог хоста, словарь модуля либо свойства сети. */
@@ -609,6 +743,21 @@ export function renderFilterValue(
   const editor = filterValueEditor(leaf, ctx);
   box.dataset['editor'] = editor;
   if (filterValueIsOff(leaf)) box.classList.add(FILTER_VALUE_OFF_CLASS);
+  // Приёмник перетаскиваемого значения (этап 3 задачи 31b228f0): общий для
+  // ячейки и строки условия; виджет `entity` перекрывает его своим (чипы и
+  // имена значений), а значение свойства-связи принимает вложенный общий
+  // редактор (`editor/value-editor.ts`, регистрация `link-value`).
+  const acceptPayload = (payload: ThoughtDropPayload): boolean =>
+    acceptFilterValueDrop(leaf, api, ctx, payload);
+  api.acceptDrop = acceptPayload;
+  registerThoughtDropField(box, {
+    kind: 'filter',
+    // Читаем `api.acceptDrop` в момент дропа: виджет `entity` перекрывает
+    // общий приёмник своим (чипы и имена значений) уже ПОСЛЕ регистрации.
+    accept: (id: string): boolean => (api.acceptDrop ?? acceptPayload)({ kind: 'thought', id }),
+    acceptPayload: (payload: ThoughtDropPayload): boolean =>
+      (api.acceptDrop ?? acceptPayload)(payload),
+  });
   switch (editor) {
     case 'none':
       // Значение не требуется («заполнено»/«не заполнено», есть/нет —
@@ -1210,7 +1359,9 @@ function exactDatePicker(
       allowTime: false,
       title: 'Точная дата',
       initial: { mode: 'date', from: fallback, to: fallback },
-      ...(ctx.firstDayOfWeek !== undefined ? { firstDayOfWeek: ctx.firstDayOfWeek } : {}),
+      // Настройка сети читается В МОМЕНТ открытия: панель могла быть собрана
+      // до смены первого дня недели в «Все настройки» (ошибка b5278f9a).
+      firstDayOfWeek: resolveFirstDayOfWeek(ctx.firstDayOfWeek),
     });
     return result === null ? null : result.from;
   };
@@ -1294,7 +1445,8 @@ function boundsControl(
   // день недели сети, требование 1b77decd) — сравнение границ идёт по резолвнутому
   // дню (ошибка 1b6c49fe).
   const resolveDay = dateCell
-    ? (token: string): string => resolveDateToken(token, todayLocal(), ctx.firstDayOfWeek ?? 1)
+    ? (token: string): string =>
+        resolveDateToken(token, todayLocal(), resolveFirstDayOfWeek(ctx.firstDayOfWeek))
     : undefined;
   // Запись границы — структурная (ошибка 7d36f439): ячейка границ держит
   // собственное состояние частей (опора/сдвиг/единица, точная дата) и
@@ -1398,6 +1550,165 @@ function sameValues(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
+// ---------------------------------------------------------------------------
+// Меню чипа-мысли условия отбора (ошибка ada6a69d)
+// ---------------------------------------------------------------------------
+
+/** Опции контекстного меню чипа-мысли в условии отбора. */
+export interface FilterThoughtMenuOptions {
+  networkId: string;
+  /** id мысли — значение условия. */
+  id: string;
+  /** Полное имя значения (подпись меню). */
+  title: string;
+  /** Мысль помечена на удаление — подпись «Удалить/восстановить» (S13). */
+  trashed?: boolean;
+  /** Якорь меню — сам чип. */
+  anchor: Element;
+  /** Убрать это значение из условия (прямой аналог «✕» чипа). */
+  onRemoveFromValue: () => void;
+}
+
+/** Выполняет отложенную операцию, показывая сбой тостом (как чипы редактора). */
+function lazily(run: () => Promise<unknown>): void {
+  void run().catch((err: unknown) => notice(errText(err), 'error'));
+}
+
+/** Открыть мысль в текущем редакторе, не сдвигая фокус холста (контекст условия). */
+function openThoughtInEditorById(id: string): void {
+  lazily(async () => {
+    const { openThoughtInEditor } = await import('../editor/editor.js');
+    openThoughtInEditor(id);
+  });
+}
+
+/** Поставить мысль в фокус и показать карту мыслей (общий помощник, 562356a9). */
+function focusThoughtOnMapById(id: string): void {
+  lazily(async () => {
+    const { focusThoughtOnMap } = await import('../screens/active-view.js');
+    await focusThoughtOnMap(id);
+  });
+}
+
+/**
+ * Есть ли мысль в сети. Значение условия живёт и по снапшоту имени, когда мысли
+ * уже нет (удалена) — такому чипу общий набор команд не годится: почти все
+ * команды упали бы 404 (решение по ошибке ada6a69d). Сбой резолва урезанию не
+ * повод: считаем мысль доступной.
+ */
+async function thoughtAvailable(networkId: string, id: string): Promise<boolean> {
+  try {
+    const refs = await etn.thoughts.resolve(networkId, [id]);
+    return refs.some((ref) => ref.id === id);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Контекстное меню чипа-МЫСЛИ в условиях отбора: набор команд — ОБЩИЙ
+ * (`canvas/context-menu.ts` — единственный конструктор меню мысли; второй
+ * рукописный список команд недопустим, грабли f072db61). Отличия контекста
+ * задаются его опциями: «Открыть в редакторе» (мысль открывается в текущем
+ * редакторе, фокус холста не сдвигается), «В фокус» и команда значения
+ * «Убрать из значения условия» (аналог «✕»). Недоступной в сети мысли —
+ * урезанный набор (`unresolvable`). Импорт ленивый: статический замкнул бы цикл
+ * `canvas/context-menu → editor/editor → lib/filter-value`.
+ *
+ * Сбои (в т.ч. отложенный импорт) уходят тостом: функция ничего не возвращает и
+ * не отклоняется — вызывающий не обязан держать `catch`.
+ */
+export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
+  lazily(async () => {
+    const { showThoughtMenuUnder, resolveSiblingParentId } =
+      await import('../canvas/context-menu.js');
+    // Родитель для «налево (родственник)» и доступность мысли — параллельно.
+    const [siblingParentId, available] = await Promise.all([
+      resolveSiblingParentId(opts.networkId, opts.id),
+      thoughtAvailable(opts.networkId, opts.id),
+    ]);
+    wireFilterCloudInvalidation();
+    showThoughtMenuUnder(
+      opts.anchor,
+      {
+        id: opts.id,
+        title: opts.title,
+        dir: 'siblings',
+        // Чип не живёт в зоне холста — родителя резолвим запросом (как чипы
+        // редактора: value-editor).
+        siblingParentId,
+        trashed: opts.trashed === true,
+      },
+      {
+        openLabel: 'Открыть в редакторе',
+        openHandler: (id) => openThoughtInEditorById(id),
+        focusHandler: () => focusThoughtOnMapById(opts.id),
+        extraItems: [menuAction('Убрать из значения условия', opts.onRemoveFromValue)],
+        ...(available ? {} : { unresolvable: true }),
+      },
+    );
+  });
+}
+
+/** Метка корзины чипа-мысли — двухфазный диалог «Удалить/Восстановить». */
+export async function openFilterThoughtTrashDialog(
+  networkId: string,
+  id: string,
+  title: string,
+): Promise<void> {
+  const { openThoughtDeleteDialog } = await import('../trash.js');
+  await openThoughtDeleteDialog(networkId, { id, title });
+}
+
+/**
+ * Живой снапшот облачков виджета отбора: по сигналу сброса ref-кэша мыслей
+ * снапшот пересобирается, чипы перерисовываются (грабля 48f35eba).
+ */
+export interface FilterCloudSnapshot {
+  /** Корень виджета: снятый со страницы снапшот снимается с подписки лениво. */
+  readonly root: HTMLElement;
+  /**
+   * Данные мысли `id` (`null` — все значения) устарели. `realtime` — сигнал
+   * пришёл из волны событий: догрузка id коалесируется в окне, действие
+   * пользователя (команда меню) — нет.
+   */
+  invalidate(id: string | null, realtime?: boolean): void;
+}
+
+const filterCloudSnapshots = new Set<FilterCloudSnapshot>();
+let filterCloudInvalidationWired = false;
+
+/**
+ * Регистрирует снапшот облачков виджета отбора. Команды контекстного меню
+ * (актуальность, тип, иконка, удаление/восстановление) и realtime меняют данные
+ * мысли — снапшот обязан пересобраться из модели, а не «поправить значение в
+ * замыкании» (грабля 48f35eba). Сигнал — точечный сброс ref-кэша
+ * (`onThoughtRefInvalidated`), а не весь store: подписка на каждое событие
+ * магазина заставляла бы панель мигать (ошибка 3a64e680).
+ */
+export function watchFilterClouds(snapshot: FilterCloudSnapshot): void {
+  filterCloudSnapshots.add(snapshot);
+}
+
+/** Подписка на сброс ref-кэша — один раз на процесс, лениво (первое меню). */
+function wireFilterCloudInvalidation(): void {
+  if (filterCloudInvalidationWired) return;
+  filterCloudInvalidationWired = true;
+  void import('../canvas/canvas.js')
+    .then(({ onThoughtRefInvalidated }) => {
+      onThoughtRefInvalidated((id, realtime) => {
+        for (const snapshot of [...filterCloudSnapshots]) {
+          if (!snapshot.root.isConnected) {
+            filterCloudSnapshots.delete(snapshot);
+            continue;
+          }
+          snapshot.invalidate(id, realtime === true);
+        }
+      });
+    })
+    .catch(() => undefined);
+}
+
 /** Ссылочный ОПЕРАНД: одиночно — комбо, кратно — чип-поле (элемент 21955e84). */
 function entityOperandControl(
   leaf: FilterTreeLeaf,
@@ -1462,23 +1773,51 @@ function entityOperandControl(
   };
 
   /**
-   * Догрузить облачка значений (значок+имя чипа) пакетным
-   * `etn.thoughts.resolve` — только те id, которых ещё нет в кеше. Нужна для
-   * НАЧАЛЬНОЙ отрисовки сохранённого значения: живого поиска ещё не было, и без
-   * догрузки чип показывал бы голый id (ошибка f4e99090 п.5).
+   * Пересобрать облачка значений (значок+имя чипа) пакетным
+   * `etn.thoughts.resolve` — только те id, которых ещё нет в кеше. Нужна и для
+   * НАЧАЛЬНОЙ отрисовки сохранённого значения (живого поиска ещё не было, и без
+   * догрузки чип показывал бы голый id — ошибка f4e99090 п.5), и для
+   * инвалидации снапшота после команд контекстного меню: снапшот — производное
+   * от модели, он пересобирается из неё, а не правится в замыкании (грабля
+   * 48f35eba). Перерисовку обещает сам резолв: пустой ответ (мысль удалена)
+   * тоже обязан обновить чип.
    */
-  const fillClouds = (values: readonly string[]): void => {
+  const fillClouds = (values: readonly string[], realtime = false): void => {
     if (kind !== 'thoughts' || ctx.networkId === '') return;
     const missing = values.filter((id) => id !== '' && !id.startsWith('$') && !clouds.has(id));
     if (missing.length === 0) return;
-    void etn.thoughts
-      .resolve(ctx.networkId, missing.slice(0, FILTER_VALUE_RESOLVE_BATCH))
+    // Батчер собирает затронутые волной id от ВСЕХ виджетов и делает один
+    // `thoughts.resolve` по окну; действия пользователя уходят в микротаске.
+    void resolveThoughtRefs(ctx.networkId, missing, { windowed: realtime })
       .then((refs) => {
         for (const ref of refs) clouds.set(ref.id, { ...ref });
-        if (refs.length > 0) fieldRef?.refresh();
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => fieldRef?.refresh());
   };
+
+  /**
+   * Данные мысли изменились (команда контекстного меню или realtime): снапшот
+   * облачков затронутых значений инвалидируется, чипы перерисовываются из
+   * модели (грабля 48f35eba). `id` — конкретная мысль, `null` — все значения.
+   */
+  const invalidateClouds = (id: string | null, realtime = false): void => {
+    const values = currentList(leaf.value);
+    const affected = values.filter(
+      (value) => value !== '' && !value.startsWith('$') && (id === null || value === id),
+    );
+    if (affected.length === 0) return;
+    for (const value of affected) clouds.delete(value);
+    fillClouds(values, realtime);
+  };
+
+  /** Полное имя значения для меню: снапшот данных → имя варианта → сырой id. */
+  const menuTitle = (value: string): string =>
+    cloudOf(value)?.title ?? titleOf(value) ?? value;
+
+  /** Мысль помечена на удаление — меню подпишет «Удалить/восстановить» (S13). */
+  const menuTrashed = (value: string): boolean =>
+    cloudOf(value)?.marked_for_deletion === true;
 
   /**
    * Записать снапшоты имён выбранных значений по id: имена известных вариантов и
@@ -1521,6 +1860,9 @@ function entityOperandControl(
       .catch(() => undefined);
   };
 
+  /** Программная установка значения одиночного комбо (облачко обновится сразу). */
+  let comboSetValue: ((id: string | null) => void) | null = null;
+
   if (!multiple) {
     const currentValue = filterValueScalarText(leaf.value);
     const combo = buildEntityCombo({
@@ -1529,6 +1871,29 @@ function entityOperandControl(
       value: currentValue === '' ? null : currentValue,
       placeholder: 'выбрать…',
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
+      ...(kind === 'thoughts' && ctx.networkId !== ''
+        ? {
+            // Чип-значение условия — то же облачко мысли: правый клик/
+            // Shift+F10 открывают ОБЩЕЕ меню мысли (ошибка ada6a69d).
+            onThoughtMenu: (value: string, anchor: HTMLElement) => {
+              openFilterThoughtMenu({
+                networkId: ctx.networkId,
+                id: value,
+                title: menuTitle(value),
+                trashed: menuTrashed(value),
+                anchor,
+                // «Убрать из значения условия» — аналог «✕»: ячейка меняет вид
+                // (заполнено → пусто), поэтому структурный путь (48f35eba).
+                onRemoveFromValue: () => {
+                  (api.setStructuralValue ?? api.setValue)(operandSingleValue(null));
+                },
+              });
+            },
+            onThoughtTrashBadge: (value: string) => {
+              void openFilterThoughtTrashDialog(ctx.networkId, value, menuTitle(value));
+            },
+          }
+        : {}),
       titleOf,
       ...(picker !== undefined ? { picker } : {}),
       // Токены контекста (`$thought` и пр.) — наравне с вариантами поиска
@@ -1553,9 +1918,23 @@ function entityOperandControl(
       },
     });
     wrap.append(combo.root);
+    // Программный путь для дропа: `setValue` перерисовывает облачко значения
+    // без вызова `onChange` (модель пишет приёмник) — тот же способ, что у
+    // внешней перепривязки поля (задача 90b2256e).
+    comboSetValue = (id) => combo.setValue(id);
     // Сохранённое значение рисуется облачком сразу, даже если каталог его не
     // знает (мысль ищется живым поиском) — догружаем данные чипа.
     fillClouds(currentList(leaf.value));
+    // Команды меню меняют данные мысли — снапшот комбо пересобирается по
+    // сигналу сброса ref-кэша (грабля 48f35eba).
+    const comboValue = combo.value();
+    watchFilterClouds({
+      root: wrap,
+      invalidate: (id) => {
+        if (comboValue === null || (id !== null && id !== comboValue)) return;
+        combo.refresh();
+      },
+    });
   } else {
     const options = staticEntityOptions(kind, ctx);
     const field = buildEntityChipField({
@@ -1576,6 +1955,32 @@ function entityOperandControl(
       cloudOf,
       titleOf,
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
+      ...(kind === 'thoughts' && ctx.networkId !== ''
+        ? {
+            // Тот же чип-мысль, что и в одиночном значении: общее меню мысли
+            // (ошибка ada6a69d) и кликабельная метка корзины.
+            onThoughtMenu: (value: string, anchor: HTMLElement) => {
+              openFilterThoughtMenu({
+                networkId: ctx.networkId,
+                id: value,
+                title: menuTitle(value),
+                trashed: menuTrashed(value),
+                anchor,
+                // «Убрать из значения условия» — прямой аналог «✕» чипа:
+                // набор правят тем же путём, что и крестик.
+                onRemoveFromValue: () => {
+                  const next = currentList(leaf.value).filter((id) => id !== value);
+                  applyValueLabel(next);
+                  api.setValue(operandListValue(next));
+                  fieldRef?.refresh();
+                },
+              });
+            },
+            onThoughtTrashBadge: (value: string) => {
+              void openFilterThoughtTrashDialog(ctx.networkId, value, menuTitle(value));
+            },
+          }
+        : {}),
       ...(picker !== undefined ? { picker } : {}),
     });
     fieldRef = field;
@@ -1586,7 +1991,40 @@ function entityOperandControl(
     // было), иначе чип показывал бы голый id (ошибка f4e99090 п.5).
     fillClouds(currentList(leaf.value));
     wrap.append(field.root);
+    watchFilterClouds({ root: wrap, invalidate: invalidateClouds });
   }
+
+  // Приёмник перетаскиваемых значений (этап 3 задачи 31b228f0): совместимость
+  // — общий предикат {@link filterValueAcceptsPayload}, запись — ТОТ ЖЕ путь,
+  // что выбор в комбо/чип-поле (`applyValueLabel` → `api.setValue` →
+  // перерисовка чипов), второго способа записи значения нет.
+  const acceptEntityPayload = (payload: ThoughtDropPayload): boolean => {
+    if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
+      notice(filterValueDropRejectionText(payload), 'warning');
+      return false;
+    }
+    const id = payload.kind === 'thought' || payload.kind === 'type' ? payload.id : null;
+    if (id === null) return false;
+    const current = currentList(leaf.value);
+    if (current.includes(id)) return false;
+    if (!multiple) {
+      applyValueLabel([id]);
+      comboSetValue?.(id);
+      api.setValue(operandSingleValue(id));
+      return true;
+    }
+    const next = [...current, id];
+    applyValueLabel(next);
+    api.setValue(operandListValue(next));
+    fieldRef?.refresh();
+    return true;
+  };
+  api.acceptDrop = acceptEntityPayload;
+  registerThoughtDropField(wrap, {
+    kind: 'filter',
+    accept: (id: string): boolean => acceptEntityPayload({ kind: 'thought', id }),
+    acceptPayload: acceptEntityPayload,
+  });
 
   if (hierarchyOp && !structuralOnlyHierarchy) {
     wrap.append(hierarchyModeControl(leaf, ctx));

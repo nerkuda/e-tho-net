@@ -197,6 +197,136 @@ test('обычные [текст](url) ссылки не задеваются', 
 });
 
 // ---------------------------------------------------------------------------
+// Автолинк голых URL (ошибка 37458cbc)
+// ---------------------------------------------------------------------------
+
+test('голый https-URL в тексте становится ссылкой (ошибка 37458cbc)', () => {
+  const html = renderMarkdown('см. https://example.com и дальше');
+  assert.ok(html.includes('<a href="https://example.com">https://example.com</a>'), html);
+  assert.equal(html, '<p>см. <a href="https://example.com">https://example.com</a> и дальше</p>\n');
+});
+
+test('голый http-URL: два адреса в строке, знаки вокруг не съедаются', () => {
+  assert.equal(
+    renderMarkdown('https://e.com http://f.org'),
+    '<p><a href="https://e.com">https://e.com</a> <a href="http://f.org">http://f.org</a></p>\n',
+  );
+  assert.equal(
+    renderMarkdown('см. https://e.com.'),
+    '<p>см. <a href="https://e.com">https://e.com</a>.</p>\n',
+  );
+  assert.equal(
+    renderMarkdown('(https://e.com)'),
+    '<p>(<a href="https://e.com">https://e.com</a>)</p>\n',
+  );
+});
+
+test('автолинк не трогает уже разобранные явные ссылки', () => {
+  assert.equal(
+    renderMarkdown('[метка](https://e.com) и https://f.com'),
+    '<p><a href="https://e.com">метка</a> и <a href="https://f.com">https://f.com</a></p>\n',
+  );
+});
+
+test('внутри code span и fence автолинка нет', () => {
+  assert.equal(renderMarkdown('`https://e.com`'), '<p><code>https://e.com</code></p>\n');
+  const fenced = renderMarkdown('```\nhttps://e.com\n```');
+  assert.ok(!fenced.includes('<a'), fenced);
+});
+
+test('небезопасные и неразрешённые схемы автолинком не становятся ссылками (ошибка 37458cbc)', () => {
+  // `javascript:`/`data:` не имеют зарегистрированной схемы linkify — остаются текстом.
+  assert.ok(!renderMarkdown('javascript:alert(1)').includes('<a'), 'javascript:');
+  assert.ok(!renderMarkdown('data:text/plain,hi').includes('<a'), 'data:');
+  // `ftp://` linkify ловит, но allow-list единого рендерера его отклоняет —
+  // плагин безопасности роняет <a>, текст остаётся текстом.
+  const ftp = renderMarkdown('см. ftp://e.com/x тут');
+  assert.ok(!ftp.includes('<a'), ftp);
+  assert.ok(ftp.includes('ftp://e.com/x'), ftp);
+  // Незавершённая схема — не ссылка.
+  assert.ok(!renderMarkdown('https://').includes('<a'));
+});
+
+test('автолинк — только явные схемы: домены, www и адреса остаются текстом', () => {
+  assert.equal(renderMarkdown('www.example.com'), '<p>www.example.com</p>\n');
+  assert.equal(renderMarkdown('example.com'), '<p>example.com</p>\n');
+  assert.equal(renderMarkdown('user@example.com'), '<p>user@example.com</p>\n');
+});
+
+test('protocol-relative URL остаётся текстом (ошибка 37458cbc, круг 2)', () => {
+  // `//host/…` — схема `//` в linkify-it; её ловило ЯДРОВОЕ правило linkify,
+  // которое здесь выключено. Такие адреса вне области фикса (голый URL с
+  // ЯВНОЙ схемой) и без разметки позиций — окно ETN от них уводилось.
+  for (const src of ['//example.com/x', 'a //example.com/x b', '//localhost:3000/x']) {
+    assert.equal(renderMarkdown(src).includes('<a'), false, src);
+  }
+  assert.equal(renderMarkdown('//example.com/x'), '<p>//example.com/x</p>\n');
+  assert.equal(renderMarkdown('a //example.com/x b'), '<p>a //example.com/x b</p>\n');
+});
+
+test('mailto: — ссылка в просмотре, паритет с редактором (ошибка 37458cbc, круг 3)', () => {
+  // Редактор (GFM Autolink у lezer) подсвечивает узел `mailto:` как URL —
+  // в просмотре строка тоже должна стать ссылкой.
+  assert.equal(renderMarkdown('mailto:a@b.c'), '<p><a href="mailto:a@b.c">mailto:a@b.c</a></p>\n');
+  assert.equal(
+    renderMarkdown('см. mailto:a@b.c и всё'),
+    '<p>см. <a href="mailto:a@b.c">mailto:a@b.c</a> и всё</p>\n',
+  );
+  assert.equal(
+    renderMarkdown('MAILTO:A@B.C'),
+    '<p><a href="MAILTO:A@B.C">MAILTO:A@B.C</a></p>\n',
+  );
+  // Внутри strong — ссылка (встроенное правило и ядровое на этом тоже ссылались).
+  assert.equal(
+    renderMarkdown('**mailto:a@b.c**'),
+    '<p><strong><a href="mailto:a@b.c">mailto:a@b.c</a></strong></p>\n',
+  );
+  // Внутри code span — текст.
+  assert.equal(renderMarkdown('`mailto:a@b.c`'), '<p><code>mailto:a@b.c</code></p>\n');
+  // Явная markdown-ссылка не задевается.
+  assert.equal(renderMarkdown('[a@b.c](mailto:a@b.c)'), '<p><a href="mailto:a@b.c">a@b.c</a></p>\n');
+  // Dotless-хост: ссылку решает linkify-it (его схема `mailto:` принимает адрес
+  // без точки в домене), тогда как редактор (Lezer) узел URL ставит только при
+  // хосте С точкой. Расхождение классовое (так же `http://e`, `http://localhost`)
+  // и оставлено осознанно: решение и обоснование — в
+  // `tests/guard-autolink-parity.test.ts` («dotless-хост … won't-fix», задача
+  // 64b69eb3).
+  assert.equal(renderMarkdown('mailto:a@b'), '<p><a href="mailto:a@b">mailto:a@b</a></p>\n');
+});
+
+test('mailto-правило не трогает чужие схемы, домены и адреса без схемы', () => {
+  assert.equal(renderMarkdown('a@b.c'), '<p>a@b.c</p>\n');
+  assert.equal(renderMarkdown('mailto:'), '<p>mailto:</p>\n');
+  assert.equal(renderMarkdown('mailto'), '<p>mailto</p>\n');
+  // Схемы без `//`, которых нет в схемах linkify-it или в allow-list.
+  for (const src of ['data:text/plain,hi', 'javascript:alert(1)', 'http:foo', 'tel:+70000000000']) {
+    assert.equal(renderMarkdown(src).includes('<a'), false, src);
+  }
+});
+
+test('underscore-контекст: `__`-разметка не превращает адрес в «полуссылку» (37458cbc)', () => {
+  // Паритет с редактором: подчёркивание — разделитель, а не часть адреса.
+  // Редактор (GFM Autolink) ссылку внутри `__…__` не подсвечивает, и просмотр
+  // её не линкует: `__` остаётся разметкой, текст — текстом.
+  assert.equal(renderMarkdown('__mailto:a@b.c__'), '<p><strong>mailto:a@b.c</strong></p>\n');
+  // Известное ограничение стокового markdown-it (не наша дельта): встроенное
+  // правило обрезает у адреса только концевые `*` и не обрезает `_`, поэтому
+  // здесь `__` уезжает в href и `<strong>` ломается. Поведение одинаково при
+  // включённом и выключенном ядровом правиле linkify (проверено в круге 3) и
+  // НЕ исправляется здесь: правка внутренностей встроенного правила рискует
+  // путём явных `http(s)`-ссылок (DoD: «не деградируют»). Отмечено как известное.
+  assert.equal(
+    renderMarkdown('__https://e.com/a__'),
+    '<p>__<a href="https://e.com/a__">https://e.com/a__</a></p>\n',
+  );
+  // А `**`-разметка работает: markdown-it обрезает концевые `*`.
+  assert.equal(
+    renderMarkdown('**https://e.com/a**'),
+    '<p><strong><a href="https://e.com/a">https://e.com/a</a></strong></p>\n',
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Ссылки и протоколы
 // ---------------------------------------------------------------------------
 
@@ -262,8 +392,13 @@ test('сброшенная ссылка рядом с валидной не съ
 test('ссылка в ссылке: внутренняя разбирается, внешняя остаётся текстом (CommonMark)', () => {
   const html = renderMarkdown('[a [b](https://e.com/1)](https://e.com/2)');
   assert.ok(html.includes('<a href="https://e.com/1">b</a>'), html);
-  assert.ok(!html.includes('<a href="https://e.com/2"'), html);
-  assert.equal(html.split('</a>').length - 1, 1, html);
+  // Внешняя ссылка НЕ разбирается — скобочный синтаксис остаётся текстом
+  // (синтаксис `](` виден в выводе)…
+  assert.ok(html.includes('](<a href='), html);
+  // …а вот URL внутри этого текста — обычный автолинк linkify (ошибка
+  // 37458cbc), а не «внешняя ссылка»: он обёрнут ровно вокруг самой строки URL.
+  assert.ok(html.includes('<a href="https://e.com/2">https://e.com/2</a>'), html);
+  assert.equal(html.split('</a>').length - 1, 2, html);
 });
 
 // ---------------------------------------------------------------------------

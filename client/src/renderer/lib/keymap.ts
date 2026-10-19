@@ -464,4 +464,8 @@ export const keymapInternals = {
   /** Разбор сочетания — для проверок нормализации. */
   parseChord,
   codeVariants,
+  /** Идентификаторы объявленных контекстов — для проверок утечки объявлений. */
+  contextIds(): string[] {
+    return [...contexts.keys()];
+  },
 };

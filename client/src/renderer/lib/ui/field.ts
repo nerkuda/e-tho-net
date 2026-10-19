@@ -6,9 +6,10 @@
  * **Состав фасада.** Единый набор поля: подпись, подсказка, строка ошибки,
  * кнопка очистки и состояния (hover / focus / disabled / readonly). Режимы
  * контрола: однострочный ({@link fieldInput}), многострочный
- * ({@link fieldTextarea}) и числовой (`fieldInput({ type: 'number', min, max,
- * step })`). Строка поля собирается {@link fieldRow}; очистка —
- * {@link wrapClearable} (перенесена из `editor/value-editor.ts`).
+ * ({@link fieldTextarea}), числовой (`fieldInput({ type: 'number', min, max,
+ * step })`) и выбор из закрытого списка ({@link fieldSelect}). Строка поля
+ * собирается {@link fieldRow}; очистка — {@link wrapClearable} (перенесена из
+ * `editor/value-editor.ts`).
  *
  * **Реализация — нативная, а не `wa-input`.** Web Awesome Core подключён и
  * красится токенами (задача 95dd50b9), но фасад намеренно строит НАТИВНЫЙ
@@ -115,6 +116,21 @@ export interface FieldTextareaOptions extends FieldControlOptions {
   rows?: number;
 }
 
+/** Один вариант закрытого списка {@link fieldSelect}. */
+export interface FieldSelectOption {
+  value: string;
+  label: string;
+}
+
+/** Опции выбора из закрытого списка. */
+export interface FieldSelectOptions extends FieldControlOptions {
+  /** Варианты в порядке показа. */
+  options: ReadonlyArray<FieldSelectOption>;
+}
+
+/** Контролы, которые собирает фасад поля. */
+type FieldControlElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
 /** Собирает строку классов контрола: базовый (если не `bare`) + модификаторы. */
 function controlClass(o: FieldControlOptions, base: string): string {
   const parts: string[] = [];
@@ -124,15 +140,12 @@ function controlClass(o: FieldControlOptions, base: string): string {
 }
 
 /** Навешивает общие для всех контролов атрибуты и обработчики. */
-function applyCommon(
-  node: HTMLInputElement | HTMLTextAreaElement,
-  o: FieldControlOptions,
-): void {
+function applyCommon(node: FieldControlElement, o: FieldControlOptions): void {
   if (o.id !== undefined) node.id = o.id;
   if (o.value !== undefined) node.value = o.value;
-  if (o.placeholder !== undefined) node.placeholder = o.placeholder;
+  if (o.placeholder !== undefined && 'placeholder' in node) node.placeholder = o.placeholder;
   if (o.disabled === true) node.disabled = true;
-  if (o.readonly === true) node.readOnly = true;
+  if (o.readonly === true && 'readOnly' in node) node.readOnly = true;
   if (o.required === true) node.required = true;
   if (o.title !== undefined) node.title = o.title;
   if (o.ariaLabel !== undefined) node.setAttribute('aria-label', o.ariaLabel);
@@ -161,6 +174,24 @@ export function fieldTextarea(o: FieldTextareaOptions = {}): HTMLTextAreaElement
   const node = el('textarea', controlClass(o, FIELD_CONTROL_CLASS));
   if (o.bare !== true) node.classList.add(FIELD_MULTILINE_CLASS);
   if (o.rows !== undefined) node.rows = o.rows;
+  applyCommon(node, o);
+  return node;
+}
+
+/**
+ * Выбор одного значения из закрытого списка — `<select>` с базовым видом
+ * поля (`ui-input`). Список задаёт потребитель; фасад владеет разметкой,
+ * состоянием и событиями, чтобы экраны не собирали свои контролы (правило
+ * «один вид на все случаи» `lib/ui`).
+ */
+export function fieldSelect(o: FieldSelectOptions): HTMLSelectElement {
+  const node = el('select', controlClass(o, FIELD_CONTROL_CLASS));
+  for (const option of o.options) {
+    const item = el('option');
+    item.value = option.value;
+    item.textContent = option.label;
+    node.append(item);
+  }
   applyCommon(node, o);
   return node;
 }

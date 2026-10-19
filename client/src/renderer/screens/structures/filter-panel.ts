@@ -69,6 +69,7 @@ import {
   buildFilterEditor,
   type FilterEditorHandle,
 } from '../../lib/filter-editor.js';
+import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
@@ -157,6 +158,10 @@ let serverIssues: readonly FilterIssue[] = [];
 const propertyDefs = new Map<string, NetworkProperty>();
 /** Signature of the catalogues the panel depends on (rebuild on change). */
 let catalogueSignature = '';
+/** Последний увиденный первый день недели сети (пересборка на смене). */
+let firstDayOfWeekSeen = 1;
+/** Отписка store-подписки панели (teardown вида, ошибка b5278f9a). */
+let unsubscribeStore: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Public API (used by structures.ts / realtime)
@@ -537,10 +542,30 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
     },
   });
   wireSavedFiltersToLayer();
+  firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
   renderPanel();
 
-  store.subscribe(() => {
+  unsubscribeStore?.();
+  unsubscribeStore = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // панель пересобирать не из чего — `renderPanel()` зовёт
+    // `requireNetworkId()` и бросил бы, оборвав `resetNetwork` до перехода на
+    // экран списка сетей (ошибка b5278f9a). Синхронизируем отслеживаемые
+    // значения: при следующем открытии сети подпись каталога не совпадёт и
+    // панель перечитает реестр и перерисуется.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      catalogueSignature = '';
+      return;
+    }
+    // Смена первого дня недели в «Все настройки» перестраивает открытую
+    // панель: календарь точной даты читает настройку заново (ошибка b5278f9a).
+    const firstDayOfWeek = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+    if (firstDayOfWeek !== firstDayOfWeekSeen) {
+      firstDayOfWeekSeen = firstDayOfWeek;
+      renderPanel();
+    }
     const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}`;
     if (signature !== catalogueSignature) {
       catalogueSignature = signature;
@@ -548,6 +573,21 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
     }
   });
   void loadPropertyDefs().then(() => renderPanel());
+}
+
+/**
+ * Размонтировать панель (teardown вида): снять редактор вместе с его
+ * клавиатурными контекстами и подписками. Без этого `destroy` дерева не
+ * вызывается ни разу, и реестр диспетчера клавиш растёт с каждой пересборкой
+ * вида.
+ */
+export function unmountFilterPanel(): void {
+  editor?.destroy();
+  editor = null;
+  unsubscribeStore?.();
+  unsubscribeStore = null;
+  host = null;
+  callbacks = null;
 }
 
 /**
@@ -628,13 +668,20 @@ function registryWithSides(): Map<string, NetworkProperty> {
 /** Rebuilds the whole panel from `state` — единый редактор + футер. */
 function renderPanel(): void {
   if (host === null) return;
+  // Пересборка = размонтирование прежнего редактора: снять подписки и
+  // клавиатурные контексты дерева, иначе реестр диспетчера клавиш копит
+  // объявления.
+  editor?.destroy();
+  editor = null;
   clear(host);
   host.classList.add('st-f-layout');
 
   editor = buildFilterEditor({
     profile: FILTER_PROFILE,
     networkId: requireNetworkId(),
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     // Заголовок панели — из словаря (ошибка 23c7d3e9 п. B1): прежде секция
     // подписывалась профильным «Показать мысли по условиям:».
     title: t('filterEditor.titleThoughts'),

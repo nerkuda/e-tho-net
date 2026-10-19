@@ -1,0 +1,64 @@
+{
+  "name": "56ab2902-thought-menu-activity",
+  "description": "Ошибка 56ab2902: переименование пункта контекстного меню мысли «Что происходило с этой сущностью» → «Смотреть события» (формулировка заказчика, строка из словаря). Онбординг → сеть → правый клик по засеянной мысли → в меню есть «Смотреть события» и нет прежней формулировки → клик по пункту переключает вид на «События» (активная закладка, лента с отбором по entity_id). Доказательство — текстовые пробы labels/active; PNG не нужен. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.56ab2902.scenario.json --out .tmp/56ab2902/out",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "map-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-thought-menu",
+      "eval": "(() => { const el = document.querySelector('[data-id=\"{{thoughtId}}\"] .cloud') || document.querySelector('[data-id=\"{{thoughtId}}\"]'); if (!el) throw new Error('нет облачка засеянной мысли'); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5 })); return true; })()"
+    },
+    {
+      "name": "thought-menu-visible",
+      "timeout": 8000,
+      "waitFor": "document.querySelectorAll('.menu-item').length > 0"
+    },
+    {
+      "name": "menu-labels",
+      "probe": "(() => { const labels = Array.from(document.querySelectorAll('.menu-item')).map((e) => (e.textContent || '').trim()); const has = (s) => labels.some((l) => l.includes(s)); const i = labels.findIndex((l) => l.includes('Смотреть события')); return JSON.stringify({ newItem: has('Смотреть события'), oldItem: has('Что происходило'), beforeExport: i >= 0 && labels[i + 1] === 'Экспорт…' }); })()",
+      "expect": "{\"newItem\":true,\"oldItem\":false,\"beforeExport\":true}"
+    },
+    {
+      "name": "click-activity-item",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.menu-item')); const row = rows.find((e) => (e.textContent || '').includes('Смотреть события')); if (!row) throw new Error('нет пункта «Смотреть события»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "activity-view-active",
+      "timeout": 15000,
+      "waitFor": "(() => { const tab = document.querySelector('button.view-tab[title=\"События\"]'); const host = document.querySelector('.activity.view-host'); return tab !== null && tab.classList.contains('ui-btn--active') && host !== null && !host.classList.contains('hidden'); })()"
+    },
+    {
+      "name": "activity-entity-filter",
+      "probe": "(() => { const what = document.querySelector('.activity-filter .ft-row__what')?.textContent ?? ''; const value = document.querySelector('.activity-filter .ft-row__value')?.textContent ?? ''; return JSON.stringify({ operand: what.includes('Сущность'), entity: value.includes('{{seedTitle}}') || value.includes('{{thoughtId}}') }); })()",
+      "expect": "{\"operand\":true,\"entity\":true}"
+    },
+    {
+      "name": "page-visible",
+      "probe": "document.hidden === false",
+      "expect": true
+    }
+  ]
+}

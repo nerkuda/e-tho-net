@@ -4,9 +4,13 @@
  * поведения: фасады разбиты на модули по областям, логика — в домене.
  *
  * Веха 9 (задача 8b2efe2d): каждый изменяющий тул исполняет запись через
- * доменную обёртку {@link runWrite} — «транзакция → событие → журнал →
- * аудит»; тул собирает только исход записи из результата, а публикует и
- * пишет обёртка после коммита.
+ * доменную обёртку «транзакция → событие → журнал → аудит»; тул собирает
+ * только исход записи из результата, а публикует и пишет обёртка после коммита.
+ *
+ * `etn.thoughts.bulk_update` переведён на фасад write-пула
+ * {@link runThoughtsBatch} (задача dba7fabc, ADR ca3a9218): транзакция и журнал
+ * активности идут в воркере, события публикует фасад после коммита, а строка
+ * аудита остаётся у тула (фасад аудит не пишет).
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -18,7 +22,7 @@ import {
   ThoughtsBulkUpdate,
 } from '../../contracts.js';
 import { MCP_TOOL_ANNOTATIONS } from '@etn/shared';
-import { applyBulkThoughtOp } from '../../domain/thought-bulk-service.js';
+import { runThoughtsBatch } from '../../domain/heavy-write.js';
 import { resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { resolveLinkTypeIdByName } from '../../domain/link-type-service.js';
 import {
@@ -26,7 +30,6 @@ import {
   openMemberNetwork,
   requireWritable,
   requireWriteBudget,
-  runWrite,
   runWriteTool,
 } from '../context.js';
 
@@ -103,7 +106,7 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.bulk_update'],
     },
     (args, extra) =>
-      runWriteTool(rt, args.network_id, () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -111,26 +114,29 @@ export function registerThoughtsWriteTools(mcp: McpServer, rt: McpRuntime): void
         const normalized = normalizeBulkUpdateArgs(ndb, args.op, args.args ?? {});
         const ids = [...new Set(args.ids)];
         // Изменение, журнал активности и real-time-эффекты — в домене
-        // (задача fffe76f2, ADR 162d8e7a); исполняет обёртка записи после
-        // коммита. Аудит — одна запись на КАЖДЫЙ вызов (контракт бюджета
-        // 0ff98632), из результата.
-        const result = runWrite(ndb, fx, () => {
-          const applied = applyBulkThoughtOp(ndb, fx.userId, ids, args.op, normalized);
-          return {
-            ...applied,
-            audit: {
-              action: 'etn.thoughts.bulk_update',
-              targetType: 'thought',
-              targetId: ids[0] ?? '',
-              details: {
-                op: args.op,
-                ids: ids.length,
-                affected: applied.result.affected,
-                failures: applied.result.failures.length,
-              },
-            },
-          };
+        // (задача fffe76f2, ADR 162d8e7a); транзакцию и журнал исполняет
+        // write-пул через фасад `runThoughtsBatch`, события фасад публикует
+        // строго после коммита (задача dba7fabc, ADR ca3a9218). Аудит — одна
+        // запись на КАЖДЫЙ вызов (контракт бюджета 0ff98632); фасад его не
+        // пишет, поэтому строка остаётся здесь и появляется после коммита.
+        const result = await runThoughtsBatch(ndb, fx, {
+          ids,
+          op: args.op,
+          bulk: normalized,
         });
+        if (fx.audit !== undefined) {
+          fx.audit({
+            action: 'etn.thoughts.bulk_update',
+            targetType: 'thought',
+            targetId: ids[0] ?? '',
+            details: {
+              op: args.op,
+              ids: ids.length,
+              affected: result.affected,
+              failures: result.failures.length,
+            },
+          });
+        }
         return { affected: result.affected, failures: result.failures };
       }),
   );

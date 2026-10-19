@@ -35,6 +35,7 @@ import {
   type TokenIssue,
 } from '@etn/shared';
 
+import { buildContentDisposition } from '../http/content-disposition.js';
 import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, restTokenContext, type RouteDeps } from './helpers.js';
 import { parseRest, RestExport, RestJobById, RestMentionsScan, RestSearchQuery } from '../contracts.js';
@@ -349,7 +350,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           reply
             .header('content-type', file.contentType)
             .header('content-length', String(file.size))
-            .header('content-disposition', `attachment; filename="${filename}"`);
+            .header('content-disposition', buildContentDisposition('attachment', filename));
           return reply.send(createReadStream(file.filePath));
         }
 
@@ -368,7 +369,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const filename = content.filename ?? `etn-export.${extension}`;
         reply
           .header('content-type', content.contentType)
-          .header('content-disposition', `attachment; filename="${filename}"`)
+          .header('content-disposition', buildContentDisposition('attachment', filename))
           .send(content.body);
       },
     );

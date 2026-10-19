@@ -839,6 +839,337 @@ describe('suggest-dropdown: строка-мысль — облачко обще�
 });
 
 // ---------------------------------------------------------------------------
+// Иерархический список: стрелки ←/→ раскрывают и сворачивают группы
+// (ошибка 74bf33bb; семантика дерева — lib/ui/tree.ts)
+// ---------------------------------------------------------------------------
+
+describe('suggest-dropdown: иерархический список — стрелки ←/→ (74bf33bb)', () => {
+  interface TreeNode {
+    id: string;
+    label: string;
+    /** Глубина с 1 (как `EntityOption.depth`); отступ строки — depth - 1. */
+    depth: number;
+    parent: string | null;
+  }
+
+  /** Дерево: группа G → подгруппа C → лист L; рядом плоская строка F. */
+  const tree: TreeNode[] = [
+    { id: 'g', label: 'Группа', depth: 1, parent: null },
+    { id: 'c', label: 'Подгруппа', depth: 2, parent: 'g' },
+    { id: 'l', label: 'Лист', depth: 3, parent: 'c' },
+    { id: 'f', label: 'Плоская', depth: 1, parent: null },
+  ];
+
+  const hasChildren = (id: string): boolean => tree.some((node) => node.parent === id);
+
+  /** Состояние раскрытия: подгруппа C раскрыта по умолчанию (как expandAll). */
+  function fixture(): { source: SuggestSource; expanded: Map<string, boolean> } {
+    const expanded = new Map<string, boolean>([['c', true]]);
+    const isExpanded = (id: string): boolean => expanded.get(id) ?? false;
+    const entryOf = (node: TreeNode): SuggestEntry => {
+      const entry: SuggestEntry = {
+        value: node.id,
+        label: node.label,
+        indent: node.depth - 1,
+      };
+      if (hasChildren(node.id)) {
+        entry.toggle = {
+          expanded: isExpanded(node.id),
+          onToggle: () => expanded.set(node.id, !isExpanded(node.id)),
+        };
+      }
+      return entry;
+    };
+    /** Видимые строки: пустой запрос — по раскрытию, непустой — совпадения с предками. */
+    const visibleIds = (query: string): Set<string> => {
+      const q = query.trim().toLowerCase();
+      if (q === '') {
+        const visible = new Set<string>();
+        for (const node of tree) {
+          if (node.parent === null || (visible.has(node.parent) && isExpanded(node.parent))) {
+            visible.add(node.id);
+          }
+        }
+        return visible;
+      }
+      const visible = new Set<string>();
+      for (const node of tree) {
+        if (!node.label.toLowerCase().includes(q)) continue;
+        let cur: TreeNode | undefined = node;
+        while (cur !== undefined) {
+          visible.add(cur.id);
+          cur = tree.find((n) => n.id === cur?.parent);
+        }
+      }
+      return visible;
+    };
+    const source: SuggestSource = {
+      when: 'always',
+      load: (query) => tree.filter((node) => visibleIds(query).has(node.id)).map(entryOf),
+    };
+    return { source, expanded };
+  }
+
+  const labelOf = (row: ShimElement | undefined): string =>
+    row?.children.find((c) => c.classList.contains('type-combo-label'))?.textContent ?? '';
+
+  const labels = (body: ShimElement): string[] => itemRows(body).map(labelOf);
+
+  const activeLabel = (body: ShimElement): string | null => {
+    const row = itemRows(body).find((r) => r.classList.contains('active'));
+    return row === undefined ? null : labelOf(row);
+  };
+
+  it('→ раскрывает свёрнутую группу и ведёт курсор к ребёнку, ← сворачивает и возвращает к родителю', async () => {
+    const { source, expanded } = fixture();
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus')); // полный каталог: пустой запрос
+    assert.deepEqual(labels(w.body), ['Группа', 'Плоская'], 'свёрнутая группа скрывает поддерево');
+
+    // Курсор на свёрнутой группе.
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа');
+
+    // → раскрывает группу; курсор остаётся на той же сущности (не на том же индексе).
+    const right1 = key('ArrowRight');
+    w.input.emit('keydown', right1);
+    assert.ok(right1.defaultPrevented, '→ потреблена выпадашкой — каретка поля не двигается');
+    await flush();
+    assert.equal(expanded.get('g'), true, 'состояние раскрытия источника изменено');
+    assert.deepEqual(
+      labels(w.body),
+      ['Группа', 'Подгруппа', 'Лист', 'Плоская'],
+      'подчинённые строки появились',
+    );
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор остался на раскрытой группе');
+
+    // → ещё раз — курсор на первом видимом ребёнке.
+    w.input.emit('keydown', key('ArrowRight'));
+    assert.equal(activeLabel(w.body), 'Подгруппа', 'курсор перешёл к первому ребёнку');
+
+    // ← на раскрытой подгруппе — сворачивает её, курсор на ней.
+    w.input.emit('keydown', key('ArrowLeft'));
+    await flush();
+    assert.equal(expanded.get('c'), false, 'подгруппа свёрнута');
+    assert.deepEqual(labels(w.body), ['Группа', 'Подгруппа', 'Плоская'], 'лист скрыт');
+    assert.equal(activeLabel(w.body), 'Подгруппа', 'курсор остался на свёрнутой группе');
+
+    // ← на свёрнутой группе — курсор к родителю.
+    w.input.emit('keydown', key('ArrowLeft'));
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор перешёл к родителю');
+  });
+
+  it('плоская строка и лист на ←/→ не меняют список и курсор', async () => {
+    const { source } = fixture();
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus')); // полный каталог (пустой запрос)
+    assert.deepEqual(labels(w.body), ['Группа', 'Плоская'], 'по умолчанию видны корневые строки');
+
+    // Плоская строка F (без toggle, без иерархии).
+    w.input.emit('keydown', key('ArrowDown'));
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Плоская');
+
+    for (const name of ['ArrowRight', 'ArrowLeft']) {
+      const press = key(name);
+      w.input.emit('keydown', press);
+      assert.ok(press.defaultPrevented, `${name} на плоской строке гасится`);
+      assert.deepEqual(labels(w.body), ['Группа', 'Плоская'], `${name} список не меняет`);
+      assert.equal(activeLabel(w.body), 'Плоская', `${name} курсор не двигает`);
+    }
+
+    // Лист L (indent есть, toggle нет).
+    w.input.emit('keydown', key('ArrowUp'));
+    w.input.emit('keydown', key('ArrowUp')); // на «Группе»
+    w.input.emit('keydown', key('ArrowRight'));
+    await flush();
+    w.input.emit('keydown', key('ArrowRight')); // на «Подгруппе»
+    w.input.emit('keydown', key('ArrowRight')); // на «Листе» (C раскрыта)
+    assert.equal(activeLabel(w.body), 'Лист');
+    for (const name of ['ArrowRight', 'ArrowLeft']) {
+      w.input.emit('keydown', key(name));
+      assert.equal(activeLabel(w.body), 'Лист', `${name} на листе курсор не двигает`);
+    }
+  });
+
+  it('фильтр: цепочка предков навигируется по indent, даже если предок свёрнут', async () => {
+    const { source, expanded } = fixture();
+    const w = wire(source);
+    w.input.value = 'подгруппа';
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(labels(w.body), ['Группа', 'Подгруппа']);
+
+    // Родитель в фильтре показан, но в состоянии свёрнут: → «раскрывает» его.
+    w.input.emit('keydown', key('ArrowDown'));
+    w.input.emit('keydown', key('ArrowRight'));
+    await flush();
+    assert.equal(expanded.get('g'), true);
+    assert.equal(activeLabel(w.body), 'Группа');
+
+    // → ведёт к ребёнку, ← сворачивает его, ещё ← — к родителю.
+    w.input.emit('keydown', key('ArrowRight'));
+    assert.equal(activeLabel(w.body), 'Подгруппа');
+    w.input.emit('keydown', key('ArrowLeft'));
+    await flush();
+    assert.equal(activeLabel(w.body), 'Подгруппа', 'раскрытая подгруппа свернулась, курсор на ней');
+    w.input.emit('keydown', key('ArrowLeft'));
+    assert.equal(activeLabel(w.body), 'Группа', 'свёрнутая подгруппа ведёт к родителю');
+  });
+
+  it('←/→ с модификаторами не принадлежат списку: не раскрывают и не гасят', async () => {
+    const { source, expanded } = fixture();
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus')); // полный каталог: видна свёрнутая «Группа»
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа');
+
+    // Shift+→ на свёрнутой группе — выделение текста, а не раскрытие.
+    const shiftRight = key('ArrowRight', { shiftKey: true });
+    w.input.emit('keydown', shiftRight);
+    assert.equal(shiftRight.defaultPrevented, false, 'Shift+→ не гасится — поле выделяет текст');
+    await flush();
+    assert.notEqual(expanded.get('g'), true, 'Shift+→ не раскрывает группу');
+    assert.deepEqual(labels(w.body), ['Группа', 'Плоская'], 'Shift+→ список не меняет');
+
+    // Ctrl/Alt/Meta ведут себя так же: штатная навигация поля не ломается.
+    const otherMods: Array<Record<string, boolean>> = [
+      { ctrlKey: true },
+      { altKey: true },
+      { metaKey: true },
+    ];
+    for (const mods of otherMods) {
+      const press = key('ArrowRight', mods);
+      w.input.emit('keydown', press);
+      assert.equal(
+        press.defaultPrevented,
+        false,
+        `${Object.keys(mods)[0]}+→ не гасится — работает поведение поля`,
+      );
+    }
+    await flush();
+    assert.notEqual(expanded.get('g'), true, 'группа осталась свёрнутой');
+    assert.deepEqual(labels(w.body), ['Группа', 'Плоская']);
+
+    // Чистая → раскрывает группу — и только после этого проверяем ←.
+    w.input.emit('keydown', key('ArrowRight'));
+    await flush();
+    assert.equal(expanded.get('g'), true, 'чистая → раскрывает группу');
+    assert.equal(activeLabel(w.body), 'Группа');
+
+    // Ctrl+← на раскрытой группе — переход по словам, а не сворачивание.
+    const ctrlLeft = key('ArrowLeft', { ctrlKey: true });
+    w.input.emit('keydown', ctrlLeft);
+    assert.equal(ctrlLeft.defaultPrevented, false, 'Ctrl+← не гасится — работает поведение поля');
+    await flush();
+    assert.equal(expanded.get('g'), true, 'Ctrl+← не сворачивает группу');
+    assert.deepEqual(
+      labels(w.body),
+      ['Группа', 'Подгруппа', 'Лист', 'Плоская'],
+      'Ctrl+← список не меняет',
+    );
+
+    // Shift/Alt/Meta+← — тоже не клавиши списка.
+    const otherLeftMods: Array<Record<string, boolean>> = [
+      { shiftKey: true },
+      { altKey: true },
+      { metaKey: true },
+    ];
+    for (const mods of otherLeftMods) {
+      const press = key('ArrowLeft', mods);
+      w.input.emit('keydown', press);
+      assert.equal(
+        press.defaultPrevented,
+        false,
+        `${Object.keys(mods)[0]}+← не гасится — работает поведение поля`,
+      );
+    }
+    assert.equal(expanded.get('g'), true, 'группа не свернулась');
+  });
+
+  /**
+   * Источник, который при повторной загрузке вставляет лишнюю строку ПЕРЕД
+   * группой: индексы сдвигаются, сущность под курсором — нет. `mode` выбирает,
+   * на каком переходе происходит сдвиг: раскрытие (ArrowRight) или
+   * сворачивание (ArrowLeft).
+   */
+  function shiftingSource(mode: 'expand' | 'collapse'): {
+    source: SuggestSource;
+    expanded: Map<string, boolean>;
+  } {
+    const expanded = new Map<string, boolean>([['g', mode === 'collapse']]);
+    const isExpanded = (): boolean => expanded.get('g') ?? false;
+    const groupEntry = (): SuggestEntry => ({
+      value: 'g',
+      label: 'Группа',
+      indent: 0,
+      toggle: {
+        expanded: isExpanded(),
+        onToggle: () => expanded.set('g', !isExpanded()),
+      },
+    });
+    const zero: SuggestEntry = { value: 'zero', label: 'Ноль' };
+    const extra: SuggestEntry = { value: 'extra', label: 'Добавка' };
+    const child: SuggestEntry = { value: 'c', label: 'Ребёнок', indent: 1 };
+    const source: SuggestSource = {
+      when: 'always',
+      load: () => {
+        if (mode === 'expand') {
+          // Раскрытие добавляет строку перед группой.
+          return isExpanded() ? [zero, extra, groupEntry(), child] : [zero, groupEntry()];
+        }
+        // Сворачивание добавляет строку перед группой.
+        return isExpanded() ? [zero, groupEntry(), child] : [zero, extra, groupEntry()];
+      },
+    };
+    return { source, expanded };
+  }
+
+  it('курсор восстанавливается по value, а не по индексу: → при сдвиге строк', async () => {
+    const { source, expanded } = shiftingSource('expand');
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(labels(w.body), ['Ноль', 'Группа'], 'группа свёрнута');
+
+    w.input.emit('keydown', key('ArrowDown'));
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор на группе (индекс 1)');
+
+    w.input.emit('keydown', key('ArrowRight'));
+    await flush();
+    assert.equal(expanded.get('g'), true);
+    assert.deepEqual(
+      labels(w.body),
+      ['Ноль', 'Добавка', 'Группа', 'Ребёнок'],
+      'перед группой появилась лишняя строка — её индекс сместился',
+    );
+    // Восстановление по индексу оставило бы курсор на «Добавке» (индекс 1).
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор остался на той же сущности');
+  });
+
+  it('курсор восстанавливается по value, а не по индексу: ← при сдвиге строк', async () => {
+    const { source, expanded } = shiftingSource('collapse');
+    const w = wire(source);
+    await openBy(() => w.input.emit('focus'));
+    assert.deepEqual(labels(w.body), ['Ноль', 'Группа', 'Ребёнок'], 'группа раскрыта');
+
+    w.input.emit('keydown', key('ArrowDown'));
+    w.input.emit('keydown', key('ArrowDown'));
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор на группе (индекс 1)');
+
+    w.input.emit('keydown', key('ArrowLeft'));
+    await flush();
+    assert.equal(expanded.get('g'), false);
+    assert.deepEqual(
+      labels(w.body),
+      ['Ноль', 'Добавка', 'Группа'],
+      'перед группой появилась лишняя строка — её индекс сместился',
+    );
+    // Восстановление по индексу оставило бы курсор на «Добавке» (индекс 1).
+    assert.equal(activeLabel(w.body), 'Группа', 'курсор остался на той же сущности');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Слой выпадашки как «свой» для панелей, закрывающихся кликом вне себя
 // (ошибка 72a06e01: строка поиска карты пряталась от клика по подсказке)
 // ---------------------------------------------------------------------------

@@ -542,6 +542,12 @@
   order: 2;
 }
 
+/* Панель использования идёт сразу за панелью выделения (спека f7623077):
+ * при скрытой панели выделения занимает её место, при видимой — стоит правее. */
+.workspace-body[data-editor-pos='left'] > .usage-panel {
+  order: 2;
+}
+
 .workspace-body[data-editor-pos='left'] > .view-host {
   order: 3;
 }
@@ -574,6 +580,10 @@
 }
 
 .workspace-body[data-editor-pos='top'] > .selection-panel {
+  order: 1;
+}
+
+.workspace-body[data-editor-pos='top'] > .usage-panel {
   order: 1;
 }
 
@@ -709,6 +719,39 @@
    Асимметрично, как у `.editor-resizer`: полоса прокрутки панели выделения
    прижата к шву слева, поэтому зона растёт только вправо (3 + 15 = 18px). */
 .workspace-body > .selection-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  inline-size: calc(var(--hit-area) - 3px);
+}
+
+/* Сплиттер панели использования: правый шов панели. Смещение считает
+   workspace (`--usage-seam` = левый док редактора + видимая панель выделения
+   + ширина панели использования), потому что шов зависит от видимости соседа. */
+.workspace-body > .usage-resizer {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--usage-seam, var(--usage-w)) - 3px);
+  width: 6px;
+  background: var(--border);
+  transition: background 0.12s ease;
+  touch-action: none;
+  cursor: col-resize;
+}
+.workspace-body > .usage-resizer:hover,
+.workspace-body > .usage-resizer.dragging {
+  background: var(--accent);
+}
+/* The panel is a horizontal strip in the top/bottom docks — no width resizer. */
+.workspace-body[data-editor-pos='top'] > .usage-resizer,
+.workspace-body[data-editor-pos='bottom'] > .usage-resizer {
+  display: none;
+}
+.workspace-body > .usage-resizer::after {
   content: '';
   position: absolute;
   top: 0;

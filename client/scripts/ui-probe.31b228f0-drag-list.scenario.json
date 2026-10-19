@@ -1,0 +1,133 @@
+{
+  "name": "31b228f0-drag-list-smoke",
+  "description": "Smoke-тест составного шага `drag` раннера стенда на РЕАЛЬНОМ общем drag-list (задача 31b228f0, этап 1): засеивает два раздела и публикацию, открывает рабочую область публикации, тащит вторую строку оглавления за грип выше первой и проверяет порядок оглавления. Попадание в цель проверяется по `document.elementFromPoint` (грабли 7c521541), ожидание — по условию (03e33360). Прогон: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-drag-list.scenario.json --out .tmp/31b228f0",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "seed-section-a",
+      "api": {
+        "name": "seed-section-a",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Раздел А",
+          "comment": { "body_md": "Первый раздел смоке-публикации." },
+          "create_link": { "direction": "parent", "target_thought_id": "{{homeId}}" }
+        },
+        "expression": "data.id"
+      }
+    },
+    {
+      "name": "seed-section-b",
+      "api": {
+        "name": "seed-section-b",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Раздел Б",
+          "comment": { "body_md": "Второй раздел смоке-публикации." },
+          "create_link": { "direction": "parent", "target_thought_id": "{{homeId}}" }
+        },
+        "expression": "data.id"
+      }
+    },
+    {
+      "name": "seed-publication",
+      "api": {
+        "name": "seed-publication",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/publications",
+        "body": {
+          "title": "DRAG-СМОКЕ",
+          "title_recipe": {
+            "keywords": "Раздел",
+            "keyword_scope": ["title"],
+            "sort": "alpha",
+            "order": "asc"
+          }
+        },
+        "expression": "data.id"
+      }
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "eval": "(() => { const el = document.querySelector('.networks-list .network-item'); if (!el) return false; el.click(); return true; })()"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "open-publications-view",
+      "eval": "(() => { const el = document.querySelector('[title=\"Публикации\"]'); if (!el) return false; el.click(); return true; })()"
+    },
+    {
+      "name": "publication-card-visible",
+      "waitFor": "[...document.querySelectorAll('.pub-entry, .pub-card')].some((e) => (e.textContent || '').includes('DRAG-СМОКЕ'))"
+    },
+    {
+      "name": "open-workspace",
+      "eval": "(() => { const el = [...document.querySelectorAll('.pub-entry, .pub-card')].find((e) => (e.textContent || '').includes('DRAG-СМОКЕ')); if (!el) return false; el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "workspace-visible",
+      "waitFor": "document.querySelector('.pub-ws') !== null && !document.querySelector('.pub-ws').classList.contains('hidden')"
+    },
+    {
+      "name": "toc-ready",
+      "waitFor": "document.querySelectorAll('.pub-toc-line').length >= 2"
+    },
+    {
+      "name": "toc-order-before",
+      "probe": "[...document.querySelectorAll('.pub-toc-line .pub-toc-label')].map((e) => e.textContent)",
+      "expect": ["Раздел А", "Раздел Б"]
+    },
+    {
+      "name": "drag-second-above-first",
+      "drag": {
+        "from": ".pub-toc-line:nth-child(2) .ui-drag-handle",
+        "to": { "selector": ".pub-toc-line:nth-child(1)", "at": [12, 2] },
+        "expect": ".pub-toc-line:nth-child(1)",
+        "steps": 10,
+        "duration": 200
+      }
+    },
+    {
+      "name": "toc-order-after",
+      "waitFor": "JSON.stringify([...document.querySelectorAll('.pub-toc-line .pub-toc-label')].map((e) => e.textContent)) === JSON.stringify(['Раздел Б', 'Раздел А'])"
+    },
+    {
+      "name": "toc-order-probe",
+      "probe": "[...document.querySelectorAll('.pub-toc-line .pub-toc-label')].map((e) => e.textContent)",
+      "expect": ["Раздел Б", "Раздел А"]
+    }
+  ]
+}

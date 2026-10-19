@@ -340,6 +340,12 @@ export class ShimElement {
   replaceChildren(...nodes: Array<ShimElement | string>): void {
     for (const child of this.children) child.parent = null;
     this.children = [];
+    // `textContent` в шиме хранится ОТДЕЛЬНЫМ полем, а в настоящем DOM текст —
+    // это текстовый ребёнок, поэтому `replaceChildren` его снимает. Без этой
+    // очистки шим маскировал ошибку порядка «textContent = …; replaceChildren()»
+    // (пустой `replaceChildren` в жизни стирает только что вставленный текст, а
+    // шим оставлял его — ложно-зелёный тест деградации фразы, задача 58f77990).
+    this.textContent = '';
     this.append(...nodes);
   }
 

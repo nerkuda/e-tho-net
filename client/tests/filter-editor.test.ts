@@ -443,7 +443,9 @@ describe('фабрика редактора: диагностика запира
 
     const { root } = buildEditor('thoughts', { getState: () => state });
     assert.match(one(root, 'ff-preview__text')!.flatText(), /Город/, 'фраза построена');
-    const tooltip = one(root, 'ff-preview')!.title;
+    // Тултип фразы — размеченный элемент `.ff-preview__tip` (задача 58f77990):
+    // нативный `title` разметку не умеет, причина проверки — в тексте тултипа.
+    const tooltip = one(root, 'ff-preview__tip')!.flatText();
     for (const issue of expectedIssues) {
       assert.ok(
         tooltip.includes(diagnosticsMod.filterIssueReason(issue)),

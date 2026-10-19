@@ -23,6 +23,14 @@ import {
 export const DEEP_LINK_CHANNEL = 'etn:deep-link';
 
 /**
+ * Готовность renderer (ошибка d8b81425): обработчик подписан на
+ * {@link DEEP_LINK_CHANNEL}. До сигнала main копит deep-link'и в
+ * {@link DeepLinkBuffer} — `did-finish-load` приходит раньше подписки и терял
+ * холодный старт с URL в argv.
+ */
+export const DEEP_LINK_READY_CHANNEL = 'etn:deep-link-ready';
+
+/**
  * Разобранная цель deep-link: мысль (`thoughtId`) или публикация
  * (`publicationId`, 0.11.1, задача 3275fd8d, требование 7f583ef9). Формы
  * взаимоисключающи — URL несёт ровно один параметр.
@@ -46,4 +54,45 @@ export function extractDeepLink(argv: readonly string[]): DeepLinkPayload | null
  */
 export function dispatchDeepLink(window: BrowserWindow, payload: DeepLinkPayload): void {
   window.webContents.send(DEEP_LINK_CHANNEL, payload);
+}
+
+/**
+ * Буфер deep-link'ов до подтверждения готовности renderer (ошибка d8b81425).
+ * Чистая логика без Electron — юнит-тестируется; main вызывает
+ * {@link DeepLinkBuffer.offer} при каждом URL и {@link DeepLinkBuffer.setReady}
+ * по IPC-сигналу `etn:deep-link-ready`.
+ */
+export class DeepLinkBuffer {
+  private ready = false;
+  private readonly pending: DeepLinkPayload[] = [];
+
+  /** Готов ли renderer принимать события. */
+  get isReady(): boolean {
+    return this.ready;
+  }
+
+  /** Сколько целей ждёт готовности. */
+  get size(): number {
+    return this.pending.length;
+  }
+
+  /**
+   * Принять цель: `true` — renderer готов, доставляй сразу; `false` — цель
+   * лежит в буфере до {@link setReady}(true).
+   */
+  offer(payload: DeepLinkPayload): boolean {
+    if (this.ready) return true;
+    this.pending.push(payload);
+    return false;
+  }
+
+  /**
+   * Переключить готовность. Возвращает накопленные цели при переходе в
+   * готовность — вызывающий доставляет их по порядку. При `false` (перезагрузка
+   * окна) — пустой массив, новые цели снова буферизуются.
+   */
+  setReady(ready: boolean): DeepLinkPayload[] {
+    this.ready = ready;
+    return ready ? this.pending.splice(0, this.pending.length) : [];
+  }
 }

@@ -67,6 +67,12 @@ import {
 } from './query-service.js';
 import { queryThoughtsAsync } from './heavy-read.js';
 import {
+  buildViewResultCacheKey,
+  lookupViewResult,
+  storeViewResult,
+  viewResultCacheGeneration,
+} from './view-result-cache.js';
+import {
   buildResolveContext,
   resolveThoughtTokensInAst,
   resolveTokensInDefinition as resolveTokensDefinition,
@@ -990,6 +996,49 @@ export async function executeViewDefinitionForThought(
   // здесь отбор не выполнится с невалидными токенами — выбросим 422.
   validateDefinitionForTokens(parsed, undefined, requestId);
 
+  // Кэш результата (задача 3f2b0958, ошибка 49e05ea0). Точка одна для REST и
+  // MCP: ключ нормализован (сеть, слой, соединение, пользователь, фокус, тип,
+  // определение и параметры запуска), поэтому обе формы входа делят записи
+  // только при одинаковом ключе. Проверки выше (доступ — в фасадах, мысль и
+  // токены — здесь) уже выполнены; попадание не обходит их.
+  //
+  // `collectStats` — диагностический режим журналирования: длительности в
+  // ответе не должны браться из чужого прогона, поэтому кэш обходим.
+  //
+  // Пользователь для ключа — из ТОГО ЖЕ источника, что у движка AST: `$user`
+  // резолвится из `tokenContext.userId`, а не из `input.userId`. Транспорты
+  // держат их равными, но это не инвариант: при расхождении ключ и результат
+  // описывали бы разных пользователей, поэтому кэш fail-closed — не кэшируем.
+  const tokenUserId = options?.tokenContext?.userId;
+  const userMismatch = tokenUserId !== undefined && tokenUserId !== userId;
+  const cacheKey =
+    options?.collectStats === true || userMismatch
+      ? null
+      : buildViewResultCacheKey({
+          networkId: ndb.networkId,
+          layerId: ndb.layerId,
+          instanceId: ndb.instanceId,
+          userId: tokenUserId ?? userId,
+          // Полный id после резолва короткого префикса (`getThought`) — чтобы
+          // `abc12345` и полный UUID одного фокуса не раздваивали ключ.
+          thoughtId: thought.id,
+          thoughtTypeId: input.thoughtTypeId ?? null,
+          definition: parsed,
+          ...(options !== undefined ? { options } : {}),
+        });
+  const cacheGeneration = cacheKey === null ? null : viewResultCacheGeneration(ndb);
+  if (cacheKey !== null && cacheGeneration !== null) {
+    const cached = lookupViewResult(cacheKey, cacheGeneration);
+    if (cached !== null) return cached;
+  }
+  /** Положить успешный результат в кэш (ошибки сюда не доходят). */
+  const finish = (value: RunViewResult): RunViewResult => {
+    if (cacheKey !== null && cacheGeneration !== null) {
+      storeViewResult(cacheKey, cacheGeneration, value);
+    }
+    return value;
+  };
+
   // Сортировка/направление: тело запроса переопределяет сохранённые в
   // определении отбора (контракт 95273103 «sort/order в теле переопределяют
   // сортировку, сохранённую в отборе»). Значение из определения проходит
@@ -1058,7 +1107,7 @@ export async function executeViewDefinitionForThought(
     // 23c7d3e9 п. C3).
     const resolvedAst = resolveThoughtTokensInAst(parsed, resolveContext);
     if (resolvedAst.unresolved.length > 0) {
-      return {
+      return finish({
         items: [],
         total: 0,
         directions: {},
@@ -1067,14 +1116,14 @@ export async function executeViewDefinitionForThought(
         order,
         has_more: false,
         next_cursor: null,
-      };
+      });
     }
     resolvedDefinition = resolvedAst.definition as Record<string, unknown>;
   } else {
     const resolved = resolveTokensInDefinitionProxy(parsed, resolveContext);
 
     if (resolved.unresolved.length > 0) {
-      return {
+      return finish({
         items: [],
         total: 0,
         directions: {},
@@ -1083,7 +1132,7 @@ export async function executeViewDefinitionForThought(
         order,
         has_more: false,
         next_cursor: null,
-      };
+      });
     }
     resolvedDefinition = resolved.definition as Record<string, unknown>;
   }
@@ -1170,7 +1219,7 @@ export async function executeViewDefinitionForThought(
   // запроса. Это редкая операция (лимит 100), цена невелика.
   const items = result.items.filter((i) => i.id !== thoughtId);
   const total = Math.max(0, (result.total ?? 0) - (result.items.length > items.length ? 1 : 0));
-  return {
+  return finish({
     items,
     total,
     directions: result.directions,
@@ -1186,7 +1235,7 @@ export async function executeViewDefinitionForThought(
     next_cursor: result.next_cursor,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(result.stats !== undefined ? { stats: result.stats } : {}),
-  };
+  });
 }
 
 /**

@@ -35,7 +35,6 @@ import {
   type LinkTypeFilterInput,
   type SortKind,
   type SortOrder,
-  type ThoughtBatchFailure,
   type ThoughtBatchOp,
   type ThoughtBatchResult,
   type ThoughtCopyInput,
@@ -54,9 +53,7 @@ import {
   resolveShowTrash,
   restWriteFx,
   runWrite,
-  type AnyWriteEvent,
   type RouteDeps,
-  type WriteActivityEntry,
 } from './helpers.js';
 import {
   parseRest,
@@ -80,36 +77,28 @@ import {
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { networkDir } from '../paths.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
-import { runThoughtCreate } from '../domain/heavy-write.js';
+import { runThoughtCreate, runThoughtsBatch, runThoughtsCopy } from '../domain/heavy-write.js';
 import { assertLibraryIcon } from '../domain/icon-view.js';
-import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
 import {
   clearThoughtRefUsages,
   findThoughtUsage,
   listNetworkProperties,
 } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
-import { findDuplicates, findMentions } from '../domain/search-service.js';
+import { findMentions } from '../domain/search-service.js';
 import {
   fanOutFindDuplicates,
   type CrossNetworkAccess,
 } from '../domain/cross-network-search-service.js';
+import { findDuplicatesAsync, neighborsWithTotalAsync, resolveThoughtRefsAsync } from '../domain/heavy-read.js';
 import {
   checkThoughtDeletion,
-  countNeighbors,
   deleteThought,
   focus,
-  getNeighbors,
   getThought,
-  resolveThoughts,
   updateThought,
 } from '../domain/thought-service.js';
-import { copyThoughtsBatch, makeCopyFileCopier } from '../domain/thought-copy-service.js';
-import {
-  applyBulkThoughtOp,
-  BULK_THOUGHT_OPS,
-  type BulkThoughtOp,
-} from '../domain/thought-bulk-service.js';
+import { BULK_THOUGHT_OPS } from '../domain/thought-bulk-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -540,17 +529,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           typeId,
           linkFilter,
         };
-        const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, {
-          ...neighborOpts,
-          limit,
-          offset,
-        });
+        const page = await neighborsWithTotalAsync(
+          ndb,
+          id,
+          dirRaw as FocusDir,
+          neighborOpts,
+          { limit, offset },
+        );
         // Bug fix (0.6.3, thought f2c7c7d3): `total` used to echo the
         // returned page's length, so a neighbour list longer than `limit`
         // looked complete — no signal ever told the caller more rows exist.
-        // `countNeighbors` runs the identical WHERE without LIMIT/OFFSET.
-        const total = countNeighbors(ndb, id, dirRaw as FocusDir, neighborOpts);
-        sendList(reply, neighbors, total, offset, limit);
+        // `total` считается тем же WHERE без LIMIT/OFFSET в reader-воркере
+        // (одна задача пула, ошибка 49e05ea0).
+        sendList(reply, page.neighbors, page.total, offset, limit);
       },
     );
 
@@ -680,87 +671,40 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const fx = restWriteFx(deps, req, networkId);
-        const userId = fx.userId;
 
         // Групповые операции, общие с `etn.thoughts.bulk_update` (задача
-        // fffe76f2, ADR 162d8e7a): изменение, журнал активности и
-        // real-time-эффекты формируются в домене, а исполняются обёрткой
-        // записи (веха 9). Остальные операции батча (`delete`/`purge`, связь
-        // с фокусом) — ниже, в локальном исходе записи.
-        if ((BULK_THOUGHT_OPS as readonly string[]).includes(op)) {
-          const outcome = runWrite(ndb, fx, () =>
-            applyBulkThoughtOp(ndb, userId, ids, op as BulkThoughtOp, {
-              type_id: setTypeId,
-              parent_ids: anchorParentIds,
-              child_ids: anchorChildIds,
-              link_type_id: bulkLinkType,
-            }),
-          );
-          sendSuccess(reply, outcome);
-          return;
-        }
-
-        const outcome = runWrite(ndb, fx, () => {
-          const failures: ThoughtBatchFailure[] = [];
-          const events: AnyWriteEvent[] = [];
-          const activity: WriteActivityEntry[] = [];
-          let affected = 0;
-          for (const id of ids) {
-            try {
-              switch (op) {
-                case 'delete':
-                case 'purge': {
-                  // S13: `delete` is an alias of `purge` — both physically delete
-                  // with the same blocking check (deleteThought refuses when the
-                  // thought is referenced by a property). actorUserId — для
-                  // object-lock enforcement (задача 2031df5e).
-                  const existing = getThought(ndb, id);
-                  deleteThought(ndb, id, undefined, userId);
-                  events.push({ type: 'thought.deleted', data: { id } });
-                  if (existing) {
-                    activity.push({ kind: 'thought', action: 'deleted', thought: existing });
-                  }
-                  break;
-                }
-                case 'link_to_focus': {
-                  const [sourceId, targetId] =
-                    direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
-                  const link = createLink(
-                    ndb,
-                    { source_id: sourceId, target_id: targetId, type_id: linkTypeForCreate },
-                    userId,
-                  );
-                  events.push({ type: 'link.created', data: { link } });
-                  activity.push({ kind: 'link', action: 'created', link });
-                  break;
-                }
-                case 'unlink_from_focus': {
-                  const [sourceId, targetId] =
-                    direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
-                  const found = findLinksBetween(ndb, sourceId, targetId, linkTypeForFind);
-                  if (found.length === 0) {
-                    throw new EtnError('NOT_FOUND', `Нет связи между ${sourceId} и ${targetId}.`);
-                  }
-                  for (const link of found) {
-                    deleteLink(ndb, link.id, undefined);
-                    events.push({ type: 'link.deleted', data: { id: link.id } });
-                    activity.push({ kind: 'link', action: 'deleted', link });
-                  }
-                  break;
-                }
+        // fffe76f2, ADR 162d8e7a), и локальные операции батча
+        // (`delete`/`purge`/связь с фокусом) переведены на write-пул (задача
+        // b9c70dd8): изменение, журнал активности и real-time-эффекты
+        // формируются в домене (`composeThoughtBatch`), а исполняет фасад
+        // `runThoughtsBatch` — пул, либо тот же код синхронно (деградация).
+        const isBulk = (BULK_THOUGHT_OPS as readonly string[]).includes(op);
+        const isFocusOp = op === 'link_to_focus' || op === 'unlink_from_focus';
+        const result = await runThoughtsBatch(ndb, fx, {
+          ids,
+          op,
+          ...(isBulk
+            ? {
+                bulk: {
+                  type_id: setTypeId,
+                  parent_ids: anchorParentIds,
+                  child_ids: anchorChildIds,
+                  link_type_id: bulkLinkType,
+                },
               }
-              affected += 1;
-            } catch (err) {
-              if (err instanceof EtnError) {
-                failures.push({ id, code: err.code, message: err.message });
-              } else {
-                failures.push({ id, code: 'INTERNAL', message: 'internal error' });
+            : {}),
+          ...(isFocusOp
+            ? {
+                focus: {
+                  direction,
+                  focus_thought_id: focusThoughtId!,
+                  link_type_id: linkTypeForCreate ?? null,
+                  find_link_type_id: linkTypeForFind,
+                },
               }
-            }
-          }
-          return { result: { affected, failures }, events, activity };
+            : {}),
         });
-        sendSuccess(reply, outcome satisfies ThoughtBatchResult);
+        sendSuccess(reply, result satisfies ThoughtBatchResult);
       },
     );
 
@@ -780,35 +724,17 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Межсетевое копирование: файлы вложений физически переносятся в
         // сеть-получатель (ошибка b83a7d89). `path.basename` отсекает
         // traversal в `source_network_id` — у реального id (UUID) это no-op.
+        // Перевод на write-пул (задача b9c70dd8): фасад исполняет запись в пуле
+        // (имена копий планирует исполнитель), а файлы пишет САМ фасад после
+        // коммита — при откате транзакции осиротевших файлов не остаётся.
         const sourceAttachmentsDir = path.join(
           networkDir(deps.dataDir, path.basename(input.source_network_id)),
           'attachments',
         );
-        const fileCopier = makeCopyFileCopier(ndb, input, sourceAttachmentsDir, (message, details) =>
-          app.appLogger.warn({ ...details }, message),
-        );
-        const result = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const copied = copyThoughtsBatch(ndb, input, req.auth!.user.id, { fileCopier });
-          const events: AnyWriteEvent[] = [];
-          const activity: WriteActivityEntry[] = [];
-          // Real-time: emit a `thought.created` for every new thought and a
-          // `link.created` for every new link so connected clients refresh
-          // without polling. Since B1 the author receives its own event too
-          // (asynchronously); the local refresh below keeps the canvas /
-          // structures view in sync instantly and is idempotent.
-          for (const thought of copied.created_thoughts) {
-            events.push({ type: 'thought.created', data: { thought } });
-            activity.push({ kind: 'thought', action: 'created', thought });
-          }
-          for (const link of copied.created_links) {
-            events.push({ type: 'link.created', data: { link } });
-            activity.push({ kind: 'link', action: 'created', link });
-          }
-          return { result: copied, events, activity };
+        const result = await runThoughtsCopy(ndb, restWriteFx(deps, req, networkId), input, {
+          sourceAttachmentsDir,
+          warn: (message, details) => app.appLogger.warn({ ...details }, message),
         });
-        // Файлы вложений пишутся после успешного коммита БД: при откате
-        // транзакции осиротевших файлов не остаётся (ошибка b83a7d89).
-        fileCopier?.commit();
         sendSuccess(reply, result);
       },
     );
@@ -823,7 +749,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const networkId = (req.params as NetworkIdParams).networkId;
         const ids = input.ids as unknown as string[];
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const refs = resolveThoughts(ndb, ids);
+        const refs = await resolveThoughtRefsAsync(ndb, ids);
         sendList(reply, refs, refs.length, 0, refs.length);
       },
     );
@@ -930,7 +856,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
               `rest:${req.auth!.user.id}`,
             logger: app.appLogger,
           };
-          const result = fanOutFindDuplicates(access, {
+          const result = await fanOutFindDuplicates(access, {
             networkIds: accessibleIds,
             title,
             synonyms,
@@ -948,7 +874,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           return;
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const hits = findDuplicates(ndb, title, synonyms, typeIds);
+        const hits = await findDuplicatesAsync(ndb, title, synonyms, typeIds);
         sendList(reply, hits, hits.length, 0, hits.length);
       },
     );

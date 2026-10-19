@@ -1,0 +1,197 @@
+{
+  "name": "filter-phrase-html-58f77990",
+  "description": "HTML-раскраска фразы-превью отбора (задача 58f77990, решение заказчика 2026-10-14 п.12в): в футере редактора отбора операторы И/ИЛИ/НЕ и скобки уровней вложенности раскрашены спанами, тултип фразы несёт ТУ ЖЕ разметку, цвета берутся токенами темы в обеих темах. Подсказка не живёт только на наведении (стандарт 1b5f6200): фраза — точка табуляции с кольцом :focus-visible из токенов и связью aria-describedby, по фокусу подсказка показывается, при уходе фокуса — прячется. Отбор с вложенностью (группа ИЛИ внутри И, внутри неё НЕ) засеивается API-шагом как сохранённый отбор и применяется в «Структурах». Строки фразы предсказуемы: «(НЕ Помечено на удаление = да ИЛИ Есть комментарий заполнено) И Есть вложения заполнено», то есть одна пара скобок уровня 1 (тон 2) и одна пара уровня 2 (тон 3). Прогон: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-phrase-html-58f77990.scenario.json --out .tmp/etn-58f77990/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    {
+      "name": "seed-nested-filter",
+      "api": {
+        "name": "seed-nested-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "Раскраска 58f77990",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "op": "or",
+                  "children": [
+                    {
+                      "op": "not",
+                      "children": [{ "entity": { "kind": "trashed" }, "operator": "eq", "value": true }]
+                    },
+                    { "entity": { "kind": "comment" }, "operator": "not_empty" }
+                  ]
+                },
+                { "entity": { "kind": "attachments" }, "operator": "not_empty" }
+              ]
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null" },
+
+    { "name": "open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "saved-dialog", "timeout": 20000, "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "search-saved", "click": ".sfd-search" },
+    { "name": "search-saved-typed", "text": "Раскраска 58f77990" },
+    { "name": "search-saved-row", "timeout": 10000, "waitFor": "(() => { const g = document.querySelector('.sfd vaadin-grid'); const r = g && g.shadowRoot; return !!(r && r.querySelector('tr')); })()" },
+    { "name": "select-saved-row", "key": "ArrowDown" },
+    { "name": "confirm-saved-row", "key": "Enter" },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    { "name": "phrase-shown", "timeout": 10000, "waitFor": "document.querySelector('.st-filter .ff-preview__text')?.textContent?.includes('Есть вложения') === true" },
+
+    {
+      "name": "phrase-plain-text-intact",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const s = t ? t.textContent : ''; return JSON.stringify({ s: s, hasNot: s.includes('НЕ '), hasOr: s.includes(' ИЛИ '), hasAnd: s.includes(' И '), hasTail: s.includes('Есть вложения заполнено') }); })()"
+    },
+    {
+      "name": "phrase-plain-text-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const s = t ? t.textContent : ''; return s.includes('НЕ ') && s.includes(' ИЛИ ') && s.includes(' И ') && s.includes('Есть вложения заполнено') && s.includes('(') && s.includes(')'); })()",
+      "expect": true
+    },
+    {
+      "name": "phrase-markup-classes",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const n = (c) => t.querySelectorAll('.' + c).length; return JSON.stringify({ and: n('ff-ph-op--and'), or: n('ff-ph-op--or'), not: n('ff-ph-op--not'), parens: [...t.querySelectorAll('.ff-ph-paren')].map((e) => e.className.split(' ').pop()) }); })()"
+    },
+    {
+      "name": "phrase-markup-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return false; const n = (c) => t.querySelectorAll('.' + c).length; const parens = [...t.querySelectorAll('.ff-ph-paren')].map((e) => e.className.split(' ').pop()); return n('ff-ph-op--and') === 1 && n('ff-ph-op--or') === 1 && n('ff-ph-op--not') === 1 && parens.length === 4 && new Set(parens).size === 2; })()",
+      "expect": true
+    },
+    {
+      "name": "operators-three-distinct-colors",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const and = color('ff-ph-op--and'); const or = color('ff-ph-op--or'); const not = color('ff-ph-op--not'); const base = getComputedStyle(t).color; return JSON.stringify({ theme: document.documentElement.dataset.theme ?? 'light', and: and, or: or, not: not, base: base, distinct: new Set([and, or, not]).size }); })()"
+    },
+    {
+      "name": "operators-tree-distinct-and-not-base",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return false; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const set = new Set([color('ff-ph-op--and'), color('ff-ph-op--or'), color('ff-ph-op--not')]); return set.size === 3 && !set.has(getComputedStyle(t).color); })()",
+      "expect": true
+    },
+    {
+      "name": "colors-are-theme-tokens-light",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const host = t.parentElement; const resolve = (token) => { const probe = document.createElement('span'); probe.style.color = 'var(' + token + ')'; host.appendChild(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const and = color('ff-ph-op--and'); const or = color('ff-ph-op--or'); const not = color('ff-ph-op--not'); const t2 = color('ff-ph-paren--t2'); const t3 = color('ff-ph-paren--t3'); return and === resolve('--accent') && or === resolve('--selection') && not === resolve('--danger') && t2 === resolve('--selection') && t3 === resolve('--warn-strong') && t2 !== t3; })()",
+      "expect": true
+    },
+    {
+      "name": "phrase-flow-keeps-tokens-inline",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const spans = [...t.querySelectorAll('.ff-ph-op, .ff-ph-paren')]; const tops = new Set(spans.map((e) => e.offsetTop)); return JSON.stringify({ spans: spans.length, tops: tops.size, sh: t.scrollHeight, ch: t.clientHeight }); })()"
+    },
+    {
+      "name": "phrase-flow-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return false; const spans = [...t.querySelectorAll('.ff-ph-op, .ff-ph-paren')]; const tops = new Set(spans.map((e) => e.offsetTop)); return spans.length === 7 && tops.size < spans.length; })()",
+      "expect": true
+    },
+
+    {
+      "name": "tooltip-hidden-before-hover",
+      "probe": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); return tip ? getComputedStyle(tip).display : 'no-tip'; })()"
+    },
+    {
+      "name": "tooltip-hidden-ok",
+      "probe": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); return tip !== null && getComputedStyle(tip).display === 'none'; })()",
+      "expect": true
+    },
+    {
+      "name": "tooltip-same-markup",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); if (!t || !tip) return 'no-nodes'; const n = (root, c) => root.querySelectorAll('.' + c).length; return JSON.stringify({ html: tip.innerHTML, textOps: n(t, 'ff-ph-op'), tipOps: n(tip, 'ff-ph-op'), textParens: n(t, 'ff-ph-paren'), tipParens: n(tip, 'ff-ph-paren') }); })()"
+    },
+    {
+      "name": "tooltip-same-markup-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); if (!t || !tip) return false; const n = (root, c) => root.querySelectorAll('.' + c).length; return n(t, 'ff-ph-op') === n(tip, 'ff-ph-op') && n(t, 'ff-ph-paren') === n(tip, 'ff-ph-paren') && tip.innerHTML.includes('ff-ph-op--and') && tip.innerHTML.includes('ff-ph-paren--t'); })()",
+      "expect": true
+    },
+    {
+      "name": "tooltip-same-text",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); if (!t || !tip) return false; return tip.textContent.startsWith(t.textContent); })()",
+      "expect": true
+    },
+
+    { "name": "hover-phrase", "hover": ".st-filter .ff-preview__text" },
+    { "name": "tooltip-visible-after-hover", "timeout": 5000, "waitFor": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); return tip !== null && getComputedStyle(tip).display === 'block'; })()" },
+    {
+      "name": "tooltip-visible-ok",
+      "probe": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); return tip !== null && getComputedStyle(tip).display === 'block'; })()",
+      "expect": true
+    },
+    {
+      "name": "tooltip-colors-match-line",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); if (!t || !tip) return false; const color = (root, c) => { const e = root.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; return color(t, 'ff-ph-op--and') === color(tip, 'ff-ph-op--and') && color(t, 'ff-ph-paren--t3') === color(tip, 'ff-ph-paren--t3'); })()",
+      "expect": true
+    },
+
+    { "name": "switch-dark", "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()" },
+    { "name": "dark-applied", "timeout": 5000, "waitFor": "document.documentElement.dataset.theme === 'dark'" },
+    {
+      "name": "colors-are-theme-tokens-dark",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const host = t.parentElement; const resolve = (token) => { const probe = document.createElement('span'); probe.style.color = 'var(' + token + ')'; host.appendChild(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const and = color('ff-ph-op--and'); const or = color('ff-ph-op--or'); const not = color('ff-ph-op--not'); const t2 = color('ff-ph-paren--t2'); const t3 = color('ff-ph-paren--t3'); return and === resolve('--accent') && or === resolve('--selection') && not === resolve('--danger') && t2 === resolve('--selection') && t3 === resolve('--warn-strong') && new Set([and, or, not, t2, t3]).size >= 4; })()",
+      "expect": true
+    },
+    {
+      "name": "dark-colors-report",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; return JSON.stringify({ theme: document.documentElement.dataset.theme ?? 'light', and: color('ff-ph-op--and'), or: color('ff-ph-op--or'), not: color('ff-ph-op--not'), t2: color('ff-ph-paren--t2'), t3: color('ff-ph-paren--t3') }); })()"
+    },
+    { "name": "restore-light", "eval": "(() => { document.documentElement.dataset.theme = 'light'; return document.documentElement.dataset.theme; })()" },
+    {
+      "name": "phrase-still-rendered-after-theme",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); return t !== null && t.querySelectorAll('.ff-ph-op').length === 3; })()",
+      "expect": true
+    },
+
+    {
+      "name": "phrase-is-tab-stop",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return JSON.stringify({ tabIndex: t ? t.tabIndex : null, describedBy: t ? t.getAttribute('aria-describedby') : null, tipId: tip ? tip.id : null }); })()"
+    },
+    {
+      "name": "phrase-tab-stop-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return t !== null && t.tabIndex === 0 && tip !== null && t.getAttribute('aria-describedby') === tip.id; })()",
+      "expect": true
+    },
+    { "name": "focus-phrase", "eval": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); t.focus(); return document.activeElement === t; })()" },
+    { "name": "tooltip-visible-on-focus", "timeout": 5000, "waitFor": "(() => { const tip = document.querySelector('.st-filter .ff-preview__tip'); return tip !== null && getComputedStyle(tip).display === 'block'; })()" },
+    {
+      "name": "focus-shows-tooltip-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return document.activeElement === t && tip !== null && getComputedStyle(tip).display === 'block'; })()",
+      "expect": true
+    },
+    { "name": "move-pointer-away", "hover": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "pointer-away-ready", "timeout": 5000, "waitFor": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); return !t.matches(':hover') && !t.parentElement.matches(':hover'); })()" },
+    { "name": "focus-leaves-phrase", "key": "Tab" },
+    {
+      "name": "focus-leave-hides-tooltip-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); const tip = document.querySelector('.st-filter .ff-preview__tip'); return document.activeElement !== t && tip !== null && getComputedStyle(tip).display === 'none'; })()",
+      "expect": true
+    },
+    { "name": "focus-back-by-keyboard", "key": "Tab", "modifiers": ["shift"] },
+    { "name": "focus-back-ready", "timeout": 5000, "waitFor": "document.activeElement !== null && document.activeElement.classList.contains('ff-preview__text')" },
+    {
+      "name": "focus-ring-visible-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (document.activeElement !== t) return 'not-focused'; const cs = getComputedStyle(t); return JSON.stringify({ focusVisible: t.matches(':focus-visible'), outlineStyle: cs.outlineStyle, outlineWidth: cs.outlineWidth, outlineColor: cs.outlineColor, tip: getComputedStyle(document.querySelector('.st-filter .ff-preview__tip')).display }); })()"
+    },
+    {
+      "name": "focus-ring-from-token-ok",
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (document.activeElement !== t) return false; const cs = getComputedStyle(t); const host = t.parentElement; const probe = document.createElement('span'); probe.style.outline = 'var(--focus-ring-width) solid var(--accent)'; host.appendChild(probe); const expected = getComputedStyle(probe); const ok = cs.outlineStyle === 'solid' && cs.outlineWidth === expected.outlineWidth && cs.outlineColor === expected.outlineColor; probe.remove(); return ok; })()",
+      "expect": true
+    }
+  ]
+}

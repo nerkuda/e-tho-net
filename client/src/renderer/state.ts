@@ -17,6 +17,7 @@ import {
   EDITOR_W_DEFAULT,
   EVENT_AREA_W_DEFAULT_PX,
   SELECTION_W_DEFAULT,
+  USAGE_W_DEFAULT,
   type CurrentUser,
   type FocusEdge,
   type FocusResponse,
@@ -106,6 +107,8 @@ export interface AppState {
   editorH: number;
   /** L4 `window_layout` selection panel width (left of the canvas), px. */
   selectionW: number;
+  /** L4 `window_layout` usage panel width (спека f7623077), px. */
+  usageW: number;
   /** Status-bar event-area width (08-ui-spec §11), px. The right-most region
    *  of the status bar holds counts + last realtime event text and is bounded
    *  by a drag-resize splitter. The window-width-relative upper bound
@@ -222,6 +225,7 @@ const initial: AppState = {
   editorW: EDITOR_W_DEFAULT,
   editorH: EDITOR_H_DEFAULT,
   selectionW: SELECTION_W_DEFAULT,
+  usageW: USAGE_W_DEFAULT,
   // Initialised to the px floor; openNetwork overrides with the persisted
   // value (clipped against the current window width) or the default for the
   // window width when the legacy ui_state has no `e` key.
@@ -284,6 +288,16 @@ class Store {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /**
+   * Текущее число подписчиков. Тестовый шов жизненного цикла: регресс-тесты
+   * проверяют, что смонтированная панель снимает свои подписки при teardown
+   * (утечка подписчика = повторная пересборка после переоткрытия вида).
+   * Публичный контракт подписки не меняется.
+   */
+  public get listenerCount(): number {
+    return this.listeners.size;
   }
 
   /** Resets connection-related state (disconnect / network switch). */

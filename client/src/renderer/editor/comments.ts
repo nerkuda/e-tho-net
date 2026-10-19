@@ -30,12 +30,18 @@ import {
   queryKeys,
   signalPermanentCommentSaved,
 } from '../lib/live/index.js';
-import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
+import {
+  acquireOrShowBlocked,
+  foreignLockBlocksEdit,
+  lockHandleFromOutcome,
+  releaseHeld,
+  type LockHandle,
+} from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
-import { createMarkdownField, setMarkdownField } from './markdown-field.js';
+import { createMarkdownField, cancelMarkdownFieldEdit, setMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
 
 /** Reference to the currently mounted permanent-comment field, if any. */
@@ -156,11 +162,16 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     if (next === isEditing) return;
     isEditing = next;
     if (next) {
-      // Fire-and-forget: the helper surfaces its own notice on LOCKED, and
-      // the editor stays editable so the user can still read the comment
-      // (writes would 409 server-side, which is handled in `onSave`).
+      // Fire-and-forget: the helper surfaces its own notice on LOCKED.
+      // Чужой захват проверяется дважды (ошибка 132c80bd): синхронно по кэшу
+      // (вход в правку не начинается — см. `beforeEdit` ниже) и запросом при
+      // холодном кэше; во втором случае уже открытую правку отменяем, чтобы
+      // редактор не оставался «редактируемым» при фактическом 409 на записи.
       void acquireOrShowBlocked(ctx.ownerType, ctx.ownerId).then((outcome) => {
         editLock = lockHandleFromOutcome(ctx.ownerType, ctx.ownerId, outcome);
+        if (outcome.kind === 'blocked' && isEditing && field !== null) {
+          cancelMarkdownFieldEdit(field);
+        }
       });
     } else {
       void releaseHeld(editLock);
@@ -249,6 +260,10 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
       placeholder: 'Введите комментарий…',
+      // Чужой захват — правка не начинается: тост честно говорит «поля
+      // заблокированы», и поле действительно не редактируется (ошибка
+      // 132c80bd). Просмотр остаётся доступен — чтение не блокируется.
+      beforeEdit: () => !foreignLockBlocksEdit(ctx.ownerType, ctx.ownerId),
       // Вход в правку двойным кликом ставит каретку/выделение в место клика
       // (требование bac754e4, задача 189da39e): просмотр размечен позициями.
       sourceMapView: true,

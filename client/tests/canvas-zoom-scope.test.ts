@@ -16,6 +16,14 @@
  * visible — `screen === 'workspace'` AND `activeView === 'map'` AND no overlay
  * covers it. The test drives the REAL bindings through the REAL dispatcher
  * (`lib/keymap.ts`, ADR b420b08c), so dropping the guard turns it red.
+ *
+ * Также закрывает ошибку 1a3a476e: при ОТКРЫТОМ модальном диалоге
+ * (`lib/dialog.ts`) подложка `.dialog-backdrop` полупрозрачна — холст «виден»,
+ * но взаимодействие модально заблокировано, поэтому команды масштаба обязаны
+ * молчать. Признак модальности берётся из того же стека диалогов
+ * (`hasOpenDialog`), а не из собственного флага: тест открывает НАСТОЯЩИЙ
+ * диалог через `showDialog`, поэтому снятие проверки `hasOpenDialog` в гейте
+ * делает тест красным.
  */
 
 import assert from 'node:assert/strict';
@@ -117,6 +125,19 @@ function baseState(): Record<string, unknown> {
   };
 }
 
+/**
+ * Открывает НАСТОЯЩИЙ модальный диалог через каркас `lib/dialog.ts` и отдаёт
+ * функцию закрытия. Гейт масштаба обязан читать тот же стек диалогов, поэтому
+ * подделка «признака модальности» тут недопустима: диалог кладётся в реальный
+ * `stack` каркаса. Возвращённую функцию тест обязан вызвать — иначе стек
+ * останется непустым и сломает соседние проверки.
+ */
+async function openModalDialog(): Promise<() => void> {
+  const { showDialog } = await import('../src/renderer/lib/dialog.js');
+  const modalBody = new ShimElement('div', 'dialog-body');
+  return showDialog({ title: 'Модальный диалог', body: modalBody as unknown as HTMLElement });
+}
+
 describe('масштаб холста срабатывает только при видимом холсте (bug 63967c21)', () => {
   beforeEach(async () => {
     shimDom();
@@ -177,5 +198,33 @@ describe('масштаб холста срабатывает только при
     store.update({ ...baseState(), canvasZoom: 1 } as any);
     assert.equal(dispatch(keyEvent({ key: '-', code: 'Minus', ctrlKey: true })), true);
     assert.ok(store.state.canvasZoom < 1, `масштаб уменьшился: ${store.state.canvasZoom}`);
+  });
+
+  it('при открытом модальном диалоге Ctrl+±/0 не меняют масштаб, после закрытия — снова меняют (bug 1a3a476e)', async () => {
+    const { appInternals, store, dispatch } = await installAppKeymap();
+    store.update(baseState() as any);
+
+    const close = await openModalDialog();
+    try {
+      for (const { name: chord, event } of ZOOM_CHORDS) {
+        assert.equal(dispatch(event), false, `диалог открыт: ${chord} не перехватывается`);
+        assert.equal(store.state.canvasZoom, 1, `диалог открыт: ${chord} не меняет масштаб`);
+      }
+      assert.equal(
+        appInternals.canvasVisible(),
+        false,
+        'диалог открыт: холст не доступен для взаимодействия',
+      );
+    } finally {
+      close();
+    }
+
+    assert.equal(appInternals.canvasVisible(), true, 'диалог закрыт: холст снова доступен');
+    assert.equal(
+      dispatch(keyEvent({ key: '=', code: 'Equal', ctrlKey: true })),
+      true,
+      'после закрытия Ctrl+= снова перехватывается',
+    );
+    assert.ok(store.state.canvasZoom > 1, `после закрытия масштаб растёт: ${store.state.canvasZoom}`);
   });
 });

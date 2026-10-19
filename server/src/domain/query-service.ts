@@ -2334,17 +2334,29 @@ function filterAstLeafClause(
         return operator === 'has' ? match : astNegate(match);
       }
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
-      if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
+      // «Тип» — одиночный операнд: наборные `any_of`/`none_of` (значение —
+      // список типов; так их строит конструктор UI, MULTIPLE_OPS) тождественны
+      // `in`/`not_in`: у мысли один тип. `all_of` («все в выборке») на одиночном
+      // операнде неприменим (требование c088f9e1, задача 19e7f439).
+      if (
+        operator !== 'in' &&
+        operator !== 'not_in' &&
+        operator !== 'eq' &&
+        operator !== 'ne' &&
+        operator !== 'any_of' &&
+        operator !== 'none_of'
+      ) {
         astUnsupported(`Оператор «${operator}» для операнда «Тип»`, opPath, requestId);
       }
       const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
       const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', list);
-      if (expanded.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
+      const positive = operator === 'in' || operator === 'eq' || operator === 'any_of';
+      if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
       const match: Clause = {
         sql: `t.type_id IN (${expanded.map(() => '?').join(',')})`,
         params: [...expanded],
       };
-      return operator === 'in' || operator === 'eq' ? match : { sql: `NOT (${match.sql})`, params: match.params };
+      return positive ? match : { sql: `NOT (${match.sql})`, params: match.params };
     }
 
     case 'link_type': {

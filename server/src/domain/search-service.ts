@@ -52,6 +52,16 @@
  * panel; {@link findMentionsInTexts} powers the comment view-mode
  * auto-annotation of thought mentions (§21, L24) — the reverse direction:
  * many thoughts scanned against one caller-supplied text.
+ *
+ * `findDuplicates` uses the same `fts_thought_names` index as a CANDIDATE
+ * NARROWER for its partial tier (задача e4f26158, ошибка 49e05ea0): include
+ * words of ≥3 characters are a boolean `MATCH` conjunct instead of a full
+ * `LIKE '%…%'` scan. Words the trigram tokenizer cannot index (<3 characters)
+ * and `*`-exclusions (whose order semantics a boolean `NOT` cannot reproduce)
+ * stay on the LIKE fallback; with no long include word at all the pass remains
+ * LIKE. The exact mini-language semantics — fragments inside CONSECUTIVE words
+ * in the typed order, §6.10 — are still enforced by the JS post-filter
+ * (`synonymPatternToRegex`), so the narrower only has to be a superset.
  */
 
 import {
@@ -143,6 +153,47 @@ function tokenize(text: string): string[] {
 const TRIGRAM_MIN_LEN = 3;
 
 /**
+ * Quote one literal fragment for an FTS5 `MATCH` expression. A double quote is
+ * the phrase delimiter, so a quote inside the fragment is doubled — the escape
+ * FTS5 expects inside a string literal.
+ */
+function quoteFtsPhrase(fragment: string): string {
+  return `"${fragment.replace(/"/g, '""')}"`;
+}
+
+/**
+ * One fragment's trigram phrase covering BOTH canonical Unicode forms, or
+ * `null` when the fragment cannot be narrowed safely.
+ *
+ * The `trigram` tokenizer works over code points and does NOT normalise
+ * Unicode (`case_sensitive 0` only folds case), while the LIKE columns this
+ * phrase narrows — `title_norm`/`synonym_norm` — are NFC. Raw names may be
+ * stored in NFD (e.g. written by macOS), so a single NFC phrase produced a
+ * false negative and made the FTS narrower than the old LIKE scan
+ * (review of e4f26158, pitfall 6898ef75). When the NFC and NFD spellings of a
+ * fragment differ, the phrase becomes `("nfc" OR "nfd")`: one `MATCH` now
+ * covers both stored forms, and for an exclusion `NOT (…)` the group means
+ * "absent in both forms" — exactly the old `NOT (… LIKE …)` over the NFC
+ * column for wholly-NFC/wholly-NFD rows. Mixed-per-character raw text remains
+ * a documented limitation; the phrase is still a candidate narrower, and the
+ * JS post-filter keeps the exact semantics.
+ *
+ * Returns `null` when the spellings differ and EITHER one is shorter than
+ * {@link TRIGRAM_MIN_LEN}: that branch cannot produce trigrams, so the `OR`
+ * would lose candidates instead of being a superset. The caller then drops
+ * the fragment and keeps the LIKE fallback for the whole word.
+ */
+function dualFormTrigramPhrase(fragment: string): string | null {
+  const nfc = fragment.normalize('NFC');
+  const nfd = fragment.normalize('NFD');
+  if (nfc === nfd) {
+    return nfc.length >= TRIGRAM_MIN_LEN ? quoteFtsPhrase(nfc) : null;
+  }
+  if (nfc.length < TRIGRAM_MIN_LEN || nfd.length < TRIGRAM_MIN_LEN) return null;
+  return `(${quoteFtsPhrase(nfc)} OR ${quoteFtsPhrase(nfd)})`;
+}
+
+/**
  * Build one word's trigram phrase for the boolean MATCH expression, or
  * `null` when every literal fragment (split on `*`) is shorter than
  * {@link TRIGRAM_MIN_LEN}. A `*` splits the word into independent literal
@@ -151,9 +202,10 @@ const TRIGRAM_MIN_LEN = 3;
  * `%…%…%` pattern is not preserved, but `*` inside a single word is a rare
  * edge case of the keywords mini-syntax (03-server-api.md §6.10), not the
  * bug's primary scenario (whole-word infix search, 0258fd9d). Fragments
- * shorter than {@link TRIGRAM_MIN_LEN} are dropped rather than failing the
- * whole word, so `сло*во` still filters on `сло` even if `во`-equivalent
- * fragments were too short.
+ * shorter than {@link TRIGRAM_MIN_LEN} — and fragments with no safely
+ * indexable canonical form ({@link dualFormTrigramPhrase}) — are dropped
+ * rather than failing the whole word, so `сло*во` still filters on `сло` even
+ * if `во`-equivalent fragments were too short.
  */
 function trigramPhrase(word: string): string | null {
   const fragments = word
@@ -161,7 +213,12 @@ function trigramPhrase(word: string): string | null {
     .map((f) => f.toLowerCase())
     .filter((f) => f.length >= TRIGRAM_MIN_LEN);
   if (fragments.length === 0) return null;
-  return fragments.map((f) => `"${f.replace(/"/g, '""')}"`).join(' AND ');
+  const parts: string[] = [];
+  for (const fragment of fragments) {
+    const phrase = dualFormTrigramPhrase(fragment);
+    if (phrase !== null) parts.push(phrase);
+  }
+  return parts.length === 0 ? null : parts.join(' AND ');
 }
 
 /**
@@ -227,7 +284,15 @@ interface TrigramQuery {
  * unary NOT).
  */
 function buildTrigramQuery(text: string): TrigramQuery {
-  const { include, exclude } = parseFilterKeywords(text);
+  // NFC-нормализация ДО выбора «короткое/длинное» и до LIKE-фолбэка: длина
+  // фрагмента и колонки `title_norm`/`synonym_norm` считаются по composed-форме.
+  // Без этого NFD-ввод короткого слова («йо» = 3 code points) уходил в LIKE-
+  // фолбэк, но паттерн строился из NFD и не находил NFC-колонку (блокер
+  // проверки e4f26158). Длинные слова не страдают: dual-form-фраза
+  // ({@link dualFormTrigramPhrase}) всё равно покрывает обе канонические формы.
+  const parsed = parseFilterKeywords(text);
+  const include = parsed.include.map((word) => word.normalize('NFC'));
+  const exclude = parsed.exclude.map((word) => word.normalize('NFC'));
   if (include.length === 0) {
     // No include words at all (empty query, or pure exclusions like `-dog`)
     // — nothing to anchor a match or even a LIKE fallback to.
@@ -580,6 +645,13 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
  * {@link findDuplicates} (same escaping, same `ESCAPE '\'` — copied
  * deliberately rather than re-derived, see the bug's chronological comment on
  * why re-deriving it went wrong last time).
+ *
+ * Words arrive from {@link buildTrigramQuery}, which normalises them to NFC
+ * BEFORE the short/long decision: a decomposed («NFD») two-character word is
+ * three code points, so without that step it would land here still
+ * decomposed and its `%…%` pattern would never match the NFC column
+ * (review of e4f26158). Keep the normalisation at that single entry point —
+ * here the word is already composed.
  */
 function buildShortWordNameClause(word: string, negate: boolean): Clause {
   const pattern = buildLikePattern(word.toLowerCase());
@@ -1396,6 +1468,121 @@ function anchoredWildcardFor(synonymNorm: string): AnchoredWildcardPattern {
 }
 
 /**
+ * LIKE prefilter clause of the partial duplicate tier for one typed word
+ * (implicit `*` wrappers are expressed as `%…%`). Used by the FTS-less
+ * fallback and by words the trigram index cannot express: shorter than 3
+ * characters, or an exclusion containing `*` (see
+ * {@link buildPartialCandidateFilter}). `title_norm`/`synonym_norm` are stored
+ * NFC+lowercase, so the fragment is folded before it becomes a pattern
+ * (bug 6bba224b-…; same reasoning as {@link buildShortWordNameClause}).
+ *
+ * The synonym half is an UNCORRELATED `IN (SELECT …)`. `thought_synonyms_v` is
+ * a layer-chain view: a correlated `EXISTS` makes SQLite re-evaluate the whole
+ * view once per outer thought (measured on 5 000 thoughts × 3 500 synonyms:
+ * 1 194 ms for one word), while the uncorrelated subquery is materialised once
+ * and probed by id (1.3 ms) — same result set, ~900× cheaper (ошибка
+ * 5e35eb7b).
+ */
+function buildPartialLikeClause(word: string, negate: boolean): Clause {
+  const pattern = buildLikePattern(word.toLowerCase());
+  const sql =
+    "(thoughts.title_norm LIKE ? ESCAPE '\\' OR thoughts.id IN (SELECT ts.thought_id" +
+    " FROM thought_synonyms_v ts WHERE ts.synonym_norm LIKE ? ESCAPE '\\'))";
+  return { sql: negate ? `NOT ${sql}` : sql, params: [pattern, pattern] };
+}
+
+/** Candidate prefilter of the partial duplicate tier (see {@link findDuplicates}). */
+interface PartialCandidateFilter {
+  /**
+   * Boolean `MATCH` expression over `fts_thought_names`, or `null` when no
+   * include word clears the trigram floor — the caller must then skip the FTS
+   * join/MATCH entirely and rely on {@link PartialCandidateFilter.clauses}.
+   */
+  ftsMatch: string | null;
+  /** LIKE clauses for words the trigram index cannot express. */
+  clauses: Clause[];
+}
+
+/**
+ * Split the §6.10 include/exclude words of one duplicate term into an FTS5
+ * narrowing condition and the LIKE clauses that remain necessary.
+ *
+ * FTS5 trigram is a CANDIDATE NARROWER, not the semantics: it indexes only
+ * literal fragments of ≥3 characters (migration `038_search_trigram.sql`), so
+ * shorter words (and `*` fragments that are short) stay on the LIKE fallback.
+ * The JS post-filter ({@link synonymPatternToRegex}) still enforces the
+ * consecutive-words/order rules; the FTS expression may be broader (it matches
+ * fragments anywhere and cannot see word order), which is safe for a
+ * prefilter.
+ *
+ * Exclusions go through FTS only when that is exactly equivalent to the old
+ * LIKE clause: a long word without `*` excludes the same candidates —
+ * `NOT "phrase"` means "the fragment is absent from title + all synonyms",
+ * the same as `NOT (title LIKE … OR synonym LIKE …)`. An exclusion containing
+ * `*` keeps the LIKE path: the old pattern requires the fragments in the typed
+ * order, whereas FTS `NOT (a AND b)` would also drop rows that merely contain
+ * both in any order.
+ *
+ * With no anchor at all (every include word shorter than the trigram floor)
+ * the whole filter falls back to the original LIKE pass for include and
+ * exclude alike.
+ */
+function buildPartialCandidateFilter(
+  include: string[],
+  exclude: string[],
+): PartialCandidateFilter {
+  if (include.length === 0) return { ftsMatch: null, clauses: [] };
+
+  const positives: string[] = [];
+  const shortInclude: string[] = [];
+  for (const word of include) {
+    const phrase = trigramPhrase(word);
+    if (phrase === null) shortInclude.push(word);
+    else positives.push(phrase);
+  }
+
+  if (positives.length === 0) {
+    // No trigram anchor: keep the original full LIKE pass.
+    return {
+      ftsMatch: null,
+      clauses: [
+        ...include.map((w) => buildPartialLikeClause(w, false)),
+        ...exclude.map((w) => buildPartialLikeClause(w, true)),
+      ],
+    };
+  }
+
+  let ftsMatch = positives.join(' AND ');
+  const clauses = shortInclude.map((w) => buildPartialLikeClause(w, false));
+  for (const word of exclude) {
+    const phrase = trigramPhrase(word);
+    if (phrase === null || word.includes('*')) {
+      clauses.push(buildPartialLikeClause(word, true));
+    } else {
+      ftsMatch += ` NOT ${phrase}`;
+    }
+  }
+  return { ftsMatch, clauses };
+}
+
+/**
+ * Размер порции `IN (…)` для батч-чтения синонимов: ниже лимита bind-
+ * параметров SQLite (999 в старых сборках) с запасом, а число запросов растёт
+ * как O(кандидатов / порция), не O(кандидатов).
+ */
+const DUPLICATE_SYNONYM_CHUNK = 900;
+
+/** Разбить список id на порции для `IN (…)`. */
+function chunkDuplicateIds(ids: readonly string[]): string[][] {
+  if (ids.length <= DUPLICATE_SYNONYM_CHUNK) return [ids as string[]];
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += DUPLICATE_SYNONYM_CHUNK) {
+    out.push(ids.slice(i, i + DUPLICATE_SYNONYM_CHUNK));
+  }
+  return out;
+}
+
+/**
  * Find existing thoughts that look like duplicates of the proposed
  * `title`/`synonyms` (docs/08-ui-spec.md add-thought dialog; MCP
  * `find_duplicates`).
@@ -1463,13 +1650,15 @@ export function findDuplicates(
   }): DuplicateHit => {
     let hit = byId.get(row.id);
     if (!hit) {
-      const synRows = ndb
-        .prepare('SELECT synonym FROM thought_synonyms_v WHERE thought_id = ? ORDER BY synonym')
-        .all(row.id) as Array<{ synonym: string }>;
       hit = {
         id: row.id,
         title: row.title,
-        synonyms: synRows.map((s) => s.synonym),
+        // Синонимы грузятся одним батчем после обхода тиров (задача
+        // 8abc413f): поштучный SELECT в ensure() давал N+1 и доминировал в
+        // стоимости полного вызова на широком запросе. До финального
+        // заполнения hit.synonyms никто не читает — см. блок перед
+        // parent_title.
+        synonyms: [],
         matched_on: 'partial',
         type_id: row.type_id,
         icon: row.icon,
@@ -1610,42 +1799,51 @@ export function findDuplicates(
     // `*`-synonym match below) keep the duplicate semantics, so a
     // partial-only hit never auto-substitutes in the dialog.
     //
-    // Infix LIKE cannot express the consecutive-words rule, so it stays a
-    // cheap SQL pre-filter for every word while the exact semantics are
-    // enforced in JS over the surviving rows.
+    // Infix matching cannot express the consecutive-words rule, so it stays a
+    // cheap candidate prefilter for every word while the exact semantics are
+    // enforced in JS over the surviving rows. Candidates for words ≥3
+    // characters come from the `trigram` FTS index (`fts_thought_names`), not
+    // from a full LIKE scan; words the index cannot represent (shorter than 3
+    // characters, `*`-exclusions — see buildPartialCandidateFilter) keep the
+    // LIKE clause, and with no long include word at all the whole pass stays
+    // LIKE (the trigram floor is a physical limit of the tokenizer).
+    //
+    // The FTS join is by `rowid` with `thoughts_v`, exactly like `searchNames`:
+    // the index holds one row per PHYSICAL row of every layer, while the view
+    // exposes the winning row's rowid, so stale ancestor revisions, other
+    // layers' rows and tombstones (no view row) never become candidates
+    // (13-layers.md §9).
+    //
+    // `CROSS JOIN` is load-bearing, not stylistic: with a plain `JOIN` the
+    // planner keeps `thoughts_v` as the outer loop and evaluates the FTS
+    // `MATCH` once per thought (plan `SEARCH t` → `SCAN fnames VIRTUAL TABLE
+    // INDEX 0:=M3`; measured on 3 000 thoughts: 26 ms for a non-matching term
+    // and 557 ms for a term hitting every row, versus 0.01 ms / 4.6 ms when
+    // the FTS table drives). `CROSS JOIN` pins the FTS scan first; the
+    // following view lookup uses the rowid primary key, so the join stays an
+    // inner join with the same rows.
     const keywords = parseFilterKeywords(n);
     if (keywords.include.length > 0) {
-      const conditions: string[] = [];
-      const params: unknown[] = [];
-      const push = (word: string, negate: boolean): void => {
-        // `title_norm`/`synonym_norm` are stored NFC+lowercase (001_thoughts.sql),
-        // so the fragment must be folded before it becomes a pattern. The
-        // caller already feeds these words through `norm()` (NFC+trim+lower) —
-        // bug 6bba224b-… — but folding explicitly here keeps the pattern
-        // correct if that upstream normalisation ever changes and matches the
-        // neighbouring `buildLikePattern(word.toLowerCase())` callers.
-        const pattern = buildLikePattern(word.toLowerCase());
-        // The synonym half of the clause is an UNCORRELATED `IN (SELECT …)`.
-        // `thought_synonyms_v` is a layer-chain view: a correlated `EXISTS`
-        // makes SQLite re-evaluate the whole view once per outer thought
-        // (measured on 5 000 thoughts × 3 500 synonyms: 1 194 ms for one word),
-        // while the uncorrelated subquery is materialised once and probed by id
-        // (1.3 ms) — same result set, ~900× cheaper (ошибка 5e35eb7b).
-        const clause =
-          "(title_norm LIKE ? ESCAPE '\\' OR thoughts.id IN (SELECT ts.thought_id" +
-          " FROM thought_synonyms_v ts WHERE ts.synonym_norm LIKE ? ESCAPE '\\'))";
-        conditions.push(negate ? `NOT ${clause}` : clause);
-        params.push(pattern, pattern);
-      };
-      for (const word of keywords.include) push(word, false);
-      for (const word of keywords.exclude) push(word, true);
+      const filter = buildPartialCandidateFilter(keywords.include, keywords.exclude);
+      const from =
+        filter.ftsMatch !== null
+          ? 'fts_thought_names fnames CROSS JOIN thoughts_v thoughts' +
+            ' ON fnames.rowid = thoughts.rowid'
+          : 'thoughts_v thoughts';
+      // The MATCH parameter comes first, then the LIKE fallbacks — the order
+      // joinClauses assembles.
+      const { where, params } = joinClauses([
+        filter.ftsMatch !== null
+          ? { sql: 'fts_thought_names MATCH ?', params: [filter.ftsMatch] }
+          : null,
+        ...filter.clauses,
+      ]);
       // Bug a01893c7-ed1e-4c1b-a215-d4398135e049: filter trashed rows out of
       // partial-match candidates.
       let partialRows = ndb
         .prepare(
-          `SELECT ${DUP_COLUMNS} FROM thoughts_v thoughts WHERE ${conditions.join(
-            ' AND ',
-          )} AND thoughts.marked_for_deletion = 0${typeDirect}`,
+          `SELECT ${DUP_COLUMNS} FROM ${from} WHERE ${where}
+             AND thoughts.marked_for_deletion = 0${typeDirect}`,
         )
         .all(...params, ...typeArgs) as Array<{
         id: string;
@@ -1724,6 +1922,31 @@ export function findDuplicates(
           hit.matched_synonym = r.synonym;
         }
       }
+    }
+  }
+
+  // Synonym lists of every candidate in O(size / chunk) queries (задача
+  // 8abc413f). Порядок внутри мысли — `ORDER BY synonym`, как в прежнем
+  // поштучном запросе; порции не пересекаются, поэтому склейка по id даёт
+  // прежний результат один-в-один.
+  if (byId.size > 0) {
+    const synonymsById = new Map<string, string[]>();
+    for (const part of chunkDuplicateIds([...byId.keys()])) {
+      const rows = ndb
+        .prepare(
+          `SELECT thought_id, synonym FROM thought_synonyms_v
+           WHERE thought_id IN (${part.map(() => '?').join(',')})
+           ORDER BY thought_id, synonym`,
+        )
+        .all(...part) as Array<{ thought_id: string; synonym: string }>;
+      for (const r of rows) {
+        const list = synonymsById.get(r.thought_id);
+        if (list) list.push(r.synonym);
+        else synonymsById.set(r.thought_id, [r.synonym]);
+      }
+    }
+    for (const [id, hit] of byId) {
+      hit.synonyms = synonymsById.get(id) ?? [];
     }
   }
 

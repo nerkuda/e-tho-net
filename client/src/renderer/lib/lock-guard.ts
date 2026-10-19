@@ -79,10 +79,7 @@ export async function acquireOrShowBlocked(
     if (me !== null && existing.user_id === me.id) {
       return { kind: 'self', lock: existing };
     }
-    notice(
-      `${entityLabel(entityType)} редактирует ${holderName(existing)} — поля заблокированы.`,
-      'info',
-    );
+    notice(blockedByLockMessage(entityType, existing), 'info');
     return { kind: 'blocked', holder: existing };
   }
 
@@ -120,15 +117,44 @@ export async function acquireOrShowBlocked(
         client_id: details.holder?.client_id ?? null,
         acquired_at_ms: Date.now(),
       };
-      notice(
-        `${entityLabel(entityType)} редактирует ${holderName(holder)} — поля заблокированы.`,
-        'info',
-      );
+      notice(blockedByLockMessage(entityType, holder), 'info');
       return { kind: 'blocked', holder };
     }
     notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'info');
     return { kind: 'failed', error: err };
   }
+}
+
+/**
+ * Синхронная проверка чужого захвата перед входом в правку (ошибка
+ * 132c80bd): если объект держит другой пользователь — сообщаем об этом тем же
+ * тостом, что и {@link acquireOrShowBlocked}, и возвращаем `true` («правка
+ * запрещена»). Сервер всё равно отклонит запись 409, поэтому редактор не
+ * должен притворяться редактируемым; чтение при этом не блокируется
+ * (ADR 705fb6d3 — «чтение не блокируется»).
+ *
+ * Кэш захватов может быть ещё холодным (тогда `false` — вход разрешён, а
+ * `acquireOrShowBlocked` добьёт проверку запросом и отменит правку на 409).
+ */
+export function foreignLockBlocksEdit(entityType: LockEntityType | string, entityId: string): boolean {
+  const existing = otherHolder(entityType, entityId);
+  if (existing === null) return false;
+  notice(blockedByLockMessage(entityType, existing), 'info');
+  return true;
+}
+
+/**
+ * Чужой захват по кэшу без тоста — для синхронизации состояния полей
+ * (ошибка 4f18d9f5): заголовок мысли и прочие поверхности должны выглядеть
+ * заблокированными ровно так же, как ведёт себя запись.
+ */
+export function foreignLockHeld(entityType: LockEntityType | string, entityId: string): boolean {
+  return otherHolder(entityType, entityId) !== null;
+}
+
+/** Единый текст «объект редактирует <имя> — поля заблокированы». */
+export function blockedByLockMessage(entityType: LockEntityType | string, holder: LockRow): string {
+  return `${entityLabel(entityType)} редактирует ${holderName(holder)} — поля заблокированы.`;
 }
 
 /**
@@ -182,6 +208,27 @@ export function foreignHolderName(handle: LockHandle | null | undefined): string
   const me = store.state.me;
   if (me !== null && handle.ownerUserId === me.id) return null;
   return holderNameByUserId(handle.ownerUserId);
+}
+
+/**
+ * Подписка на состояние чужого захвата объекта: `onChange` вызывается сразу
+ * (по текущему кэшу) и на каждый переход кэша — `holder` равен строке захвата,
+ * когда объект держит ДРУГОЙ пользователь, и `null`, когда захвата нет.
+ *
+ * Нужен поверхностям, которые уже открыты: диалог, переведённый в чтение,
+ * обязан вернуться в редактирование, как только чужой захват снят (ошибка
+ * 2301d73d), без переоткрытия. Возвращает функцию отписки — вызывать при
+ * закрытии/демонтаже поверхности.
+ */
+export function subscribeForeignLockState(
+  entityType: LockEntityType | string,
+  entityId: string,
+  onChange: (holder: LockRow | null) => void,
+): () => void {
+  const apply = (): void => onChange(otherHolder(entityType, entityId));
+  const unsubscribe = subscribeLockCache(apply);
+  apply();
+  return unsubscribe;
 }
 
 /**

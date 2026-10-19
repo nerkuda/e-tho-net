@@ -59,6 +59,7 @@ import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
 } from '../editor/wiki-link-resolver.js';
+import { resolveFirstDayOfWeek } from '../lib/dates.js';
 import { div, el, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
@@ -164,6 +165,8 @@ const rowActivations = new WeakMap<HTMLElement, () => void>();
 
 /** Рукоятка единого редактора мыслевых настроек поиска (профиль `thoughts`). */
 let searchEditor: FilterEditorHandle | null = null;
+/** Последний увиденный первый день недели сети (пересборка зоны на смене). */
+let firstDayOfWeekSeen = 1;
 
 /**
  * Сбрасывает модульное состояние строки поиска перед новым монтированием.
@@ -190,6 +193,7 @@ function resetSearchState(): void {
   lastResults = null;
   lastSelectedKey = null;
   cursor = null;
+  searchEditor?.destroy();
   searchEditor = null;
   if (searchTimer !== null) {
     window.clearTimeout(searchTimer);
@@ -238,6 +242,26 @@ export function mountSearch(next: SearchChrome): () => void {
 
   settingsToggle = toggle;
   settingsZone = settings;
+  // Смена первого дня недели в «Все настройки» перестраивает открытую зону
+  // настроек: календарь точной даты читает настройку заново (ошибка b5278f9a).
+  firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+  const unsubscribeFirstDayOfWeek = store.subscribe(() => {
+    if (chrome === null || settingsZone === null) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // пересобирать зону настроек не из чего — `requireNetworkId()` в
+    // `buildSettingsZone` бросил бы, а исключение в подписчике оборвало бы
+    // `resetNetwork` до перехода на экран списка сетей (ошибка b5278f9a).
+    // Синхронизируем отслеживаемое значение: при следующем открытии сети
+    // подписка снова отработает штатно.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      return;
+    }
+    const next = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+    if (next === firstDayOfWeekSeen) return;
+    firstDayOfWeekSeen = next;
+    rebuildSettingsZone();
+  });
   setSettingsOpen(settingsOpen);
   // Нажатость лейки — клиентское состояние (переживает перезапуск); читаем
   // сразу при монтировании, не дожидаясь первого фокуса инпута. Ширина окна
@@ -340,14 +364,24 @@ export function mountSearch(next: SearchChrome): () => void {
   const panelObserver = new ResizeObserver(positionPanel);
   panelObserver.observe(input);
 
-  // Close the panel on any click outside it (the input and the toggle inside
-  // the panel keep it open) and on Escape while it is visible, even if the
-  // input lost focus.
+  // Close the panel on a completed click outside it (the input and the toggle
+  // inside the panel keep it open) and on Escape while it is visible, even if
+  // the input lost focus. The outside click is applied on `pointerup`, not on
+  // `pointerdown` — see the drag-cloud exception below.
   // Клик по всплывающему слою, открытому ИЗ панели, — не «вне панели»:
   // общая выпадашка подсказок и модальный диалог живут в `document.body`.
   // Иначе нажатие на строку подсказки прячет панель, поле теряет фокус,
   // список подсказок закрывается до `click` — выбранный тип (фокус, тип
   // связи) не доезжает до отбора (ошибка 72a06e01).
+  /**
+   * Нажатие вне панели НЕ закрывает её сразу: закрытие откладывается до
+   * `pointerup`. Иначе жест «облачко карты → условие отбора» невозможен —
+   * панель исчезает на старте перетаскивания вместе с целью броска (критерий 6
+   * задачи 31b228f0). Обычный клик вне панели закрывает её на отпускании;
+   * начавшийся drag-cloud отменяет закрытие (признак активного жеста —
+   * класс `cloud-dragging`, который ставит `canvas/drag-cloud.ts`).
+   */
+  let panelClosePending = false;
   const onDocumentPointerDown = (event: Event): void => {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
@@ -369,9 +403,23 @@ export function mountSearch(next: SearchChrome): () => void {
     })) {
       return;
     }
+    panelClosePending = true;
+  };
+  const onDocumentPointerUp = (): void => {
+    if (!panelClosePending) return;
+    panelClosePending = false;
+    // Жест перетаскивания начался после нажатия — панель обязана дожить до
+    // броска в условие. `pointerup` приходит раньше `mouseup`, поэтому класс
+    // ещё стоит (снимает его drag-cloud на своём `mouseup`).
+    if (document.body.classList.contains('cloud-dragging')) return;
     hidePanel();
   };
+  const onDocumentPointerCancel = (): void => {
+    panelClosePending = false;
+  };
   document.addEventListener('pointerdown', onDocumentPointerDown);
+  document.addEventListener('pointerup', onDocumentPointerUp);
+  document.addEventListener('pointercancel', onDocumentPointerCancel);
   // Контекст панели: Escape при видимой панели, даже когда фокус не в поле
   // (раньше — document-слушатель; ADR b420b08c, задача fd3d84f4).
   defineKeyContext({
@@ -395,8 +443,15 @@ export function mountSearch(next: SearchChrome): () => void {
   // `window`/`document`, not on the host element, so wiping the DOM does not
   // remove them and each remount would add another set (ошибка 37b713de).
   return () => {
+    // Редактор живёт в настройках поиска; снимаем его контексты/подписки до
+    // отключения панели от документа.
+    searchEditor?.destroy();
+    searchEditor = null;
+    unsubscribeFirstDayOfWeek();
     window.removeEventListener('resize', onWindowResize);
     document.removeEventListener('pointerdown', onDocumentPointerDown);
+    document.removeEventListener('pointerup', onDocumentPointerUp);
+    document.removeEventListener('pointercancel', onDocumentPointerCancel);
     input.removeEventListener('focusin', onFieldFocusIn as EventListener);
     input.removeEventListener('focusout', onFieldFocusOut as EventListener);
     releaseSearchFieldContext?.();
@@ -1123,6 +1178,9 @@ async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promis
  * клиентов и агентов.
  */
 function buildSettingsZone(zone: HTMLElement): void {
+  // Пересборка зоны настроек заменяет редактор — прежний размонтируем.
+  searchEditor?.destroy();
+  searchEditor = null;
   zone.replaceChildren();
 
   // Поля сняты с UI, но состояние читается из старого L4-снимка (`search_state`)
@@ -1165,7 +1223,9 @@ function buildSettingsZone(zone: HTMLElement): void {
   searchEditor = buildFilterEditor({
     profile: 'thoughts',
     networkId: requireNetworkId(),
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     title: t('filterEditor.titleSearch'),
     data: {
       registry: new Map(),

@@ -28,13 +28,17 @@
  * переустанавливается на каждой задаче (`useLayer`), поэтому запись видит
  * ровно ту видимость слоя, которая пришла с задачей (сценарий 83bf13f1).
  *
- * **Операции.** Переведены две: батч-запись мыслей `write.thoughts`
+ * **Операции.** Переведены четыре: батч-запись мыслей `write.thoughts`
  * (`composeThoughtsWrite` — валидация конверта, три фазы, ОДНА транзакция;
- * возвращает `{ result: ThoughtWriteResult, events }`) и единичное создание
+ * возвращает `{ result: ThoughtWriteResult, events }`), единичное создание
  * мысли REST-путём `POST /thoughts` — `write.thought` (`composeThoughtCreate`,
- * задача c744e05c). Остальные пути `runWrite`
- * переезжают сюда поэтапно (ADR «Этапность»): непереведённые op исполняются
- * синхронно в главном потоке.
+ * задача c744e05c), батчевая операция `POST /thoughts/batch` и MCP
+ * `etn.thoughts.bulk_update` — `write.thought.batch` (`composeThoughtBatch`,
+ * задачи b9c70dd8 и dba7fabc) и пакетное копирование
+ * `POST /thoughts/copy-batch` — `write.thought.copy` (планировщик файлов
+ * строится здесь, физические копии делает главный поток после коммита; задача
+ * b9c70dd8). Остальные пути `runWrite` переезжают сюда поэтапно (ADR
+ * «Этапность»): непереведённые op исполняются синхронно в главном потоке.
  */
 
 import { parentPort } from 'node:worker_threads';
@@ -46,8 +50,12 @@ import { EtnError, type EtnErrorCode } from '@etn/shared';
 
 import type { WriteTask, WriteTaskContext, WriteTaskResponse } from '../contracts.js';
 import {
+  composeThoughtBatch,
+  composeThoughtCopyOutcome,
   composeThoughtCreate,
   composeThoughtsWrite,
+  type ThoughtBatchOutcome,
+  type ThoughtCopyOutcome,
   type ThoughtCreateOutcome,
   type ThoughtsWriteOutcome,
 } from '../domain/write-ops.js';
@@ -184,6 +192,38 @@ function execute(task: WriteTask): WriteTaskResponse {
         events: outcome.events ?? [],
       };
       return { ok: true, result: response };
+    }
+    case 'write.thought.batch': {
+      // Батчевая операция REST-пути `POST /thoughts/batch` и MCP
+      // `etn.thoughts.bulk_update` (задачи b9c70dd8, dba7fabc): та же обёртка
+      // «транзакция → журнал», композиция — композиция роута (общие групповые
+      // операции + локальные delete/purge/link_to_focus/unlink_from_focus).
+      // Кросс-сетевого резолва не делает — `poolable` всегда.
+      const outcome = runWriteCore(
+        ndb,
+        {
+          networkId: task.context.networkId,
+          userId: task.payload.actorUserId,
+          layerId: task.context.layerId,
+        },
+        () => composeThoughtBatch(ndb, task.payload),
+      );
+      const response: ThoughtBatchOutcome = {
+        result: outcome.result,
+        events: outcome.events ?? [],
+      };
+      return { ok: true, result: response };
+    }
+    case 'write.thought.copy': {
+      // Пакетное копирование REST-пути `POST /thoughts/copy-batch` (задача
+      // b9c70dd8). Планировщик копирования файлов строится здесь по плоским
+      // фактам задачи; ФИЗИЧЕСКИЕ копии файлов воркер не делает — их список
+      // («источник → назначение») уходит в ответе, а копирует главный поток
+      // после коммита (эффект после коммита, как события и аудит). Источник —
+      // только каталог вложений, чужая БД не открывается, потому задача
+      // допускает воркер.
+      const outcome: ThoughtCopyOutcome = composeThoughtCopyOutcome(ndb, task.payload);
+      return { ok: true, result: outcome };
     }
   }
   // Новый op обязан появиться и в ветке выше, и в контракте: сюда попадаем

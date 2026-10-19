@@ -5,10 +5,10 @@
  *   DELETE /admin/networks/:id                  — remove a network (admin)
  *   PATCH  /admin/networks/:id/members/:uid     — force membership changes
  *
- * All routes require `requireAdmin`. Deletion emits `network.deleted` **before**
- * the registry row is removed: `network_seq`/`event_log` rows reference the
- * network, so the event must be persisted while the row still exists
- * (04-realtime.md §4.6, task E3 handoff).
+ * All routes require `requireAdmin`. Deletion emits `network.deleted` **after**
+ * the network is actually removed (ошибка abcd3f0b: эмиссия до удаления давала
+ * фантомные события при ошибке EBUSY). Запись реестра и `network_seq` к этому
+ * моменту уже удалены, поэтому `seq` восстанавливается из `event_log`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
@@ -17,7 +17,7 @@ import { EtnError, type NetworkRole } from '@etn/shared';
 
 import { sendList, sendSuccess } from '../http/responses.js';
 import { parseRest, RestAdminMemberRole } from '../contracts.js';
-import { emitDomainEvent } from '../realtime/emit.js';
+import { emitNetworkDeletedEvent } from '../realtime/emit.js';
 import type { NetworkService } from '../domain/network-service.js';
 
 interface NetworkIdParams {
@@ -48,17 +48,15 @@ export function createAdminNetworksRoutes(networkService: NetworkService): Fasti
           throw new EtnError('NOT_FOUND', 'Сеть не найдена.', { id }, req.id);
         }
 
-        // Emit before the registry row is gone (network_seq/event_log FK).
-        emitDomainEvent(
+        // Сначала реальное удаление (файлы + запись реестра), потом событие:
+        // при сбое удаления клиенты не должны получить фантомный network.deleted.
+        await networkService.deleteNetwork(id);
+        emitNetworkDeletedEvent(
           { systemDb: app.systemDb, pubsub: app.pubsub },
           id,
-          'network.deleted',
-          { id },
           { user_id: req.auth!.user.id, client_id: req.auth?.clientId ?? null },
           { meta: { request_id: req.id } },
         );
-
-        await networkService.deleteNetwork(id);
 
         app.systemDb.insertAuditLog({
           actorUserId: req.auth!.user.id,

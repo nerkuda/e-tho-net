@@ -4,6 +4,42 @@
  * (диалоги, entity-picker, app.js) — по конвенции репозитория `*-pure`.
  */
 
+/**
+ * Вид перетаскиваемого значения (контракт приёмника, этап 3 задачи 31b228f0).
+ * Источники сегодня дают только `thought` (облачка мыслей); `string`/`date`/
+ * `type` — приёмная сторона на будущее, чтобы строка условия принимала
+ * значения по тому же контракту, что и вид её ячейки.
+ */
+export type ThoughtDropPayload =
+  | { kind: 'thought'; id: string }
+  | { kind: 'type'; id: string }
+  | { kind: 'string'; value: string }
+  | { kind: 'date'; value: string };
+
+/**
+ * Минимальный контракт приёмника для диспетчеризации payload. Историческое
+ * поле `accept` принимает ТОЛЬКО мысль (обратная совместимость полей
+ * `link-value`/`filter`); `acceptPayload` — типизированный приёмник, если поле
+ * его объявило.
+ */
+export interface ThoughtDropAcceptor {
+  accept: (thoughtId: string) => boolean;
+  acceptPayload?: (payload: ThoughtDropPayload) => boolean;
+}
+
+/**
+ * Отдать payload приёмнику с обратной совместимостью: поле без
+ * `acceptPayload` понимает только мысль. Несовместимый вид — `false` (модель не
+ * меняется), без проваливания в другие приёмники.
+ */
+export function acceptThoughtDrop(
+  field: ThoughtDropAcceptor,
+  payload: ThoughtDropPayload,
+): boolean {
+  if (field.acceptPayload !== undefined) return field.acceptPayload(payload);
+  return payload.kind === 'thought' ? field.accept(payload.id) : false;
+}
+
 /** Что делает дроп в поле: добавить в приёмник и/или снять из источника. */
 export interface FieldDropPlan {
   /** Приёмник принял мысль (её не было) — надо отрисовать/сохранить. */

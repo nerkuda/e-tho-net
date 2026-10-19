@@ -29,7 +29,7 @@
  */
 
 import { span } from '../dom.js';
-import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import { defineKeyContext, pushKeyContext, undefineKeyContext } from '../keymap.js';
 
 import { isReorderAction, resolveNavAction } from './nav-core.js';
 
@@ -406,6 +406,9 @@ export function createDragList<E>(
       releaseContext = null;
       clearDropMarks();
       removeGhost();
+      // Объявление контекста живёт вместе с фасадом: без снятия реестр
+      // `lib/keymap` накапливает записи при каждом создании/уничтожении списка.
+      undefineKeyContext(contextId);
     },
   };
 }

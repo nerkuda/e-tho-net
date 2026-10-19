@@ -13,7 +13,7 @@
 
 import type { Thought } from '@etn/shared';
 
-import { closeDialog, errorDialog } from './lib/dialog.js';
+import { closeDialog, errorDialog, hasOpenDialog } from './lib/dialog.js';
 import { hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import {
@@ -34,7 +34,16 @@ import {
   type KeyCommandHandler,
 } from './lib/keymap.js';
 import { queryKeys } from './lib/live/query-keys.js';
-import { invalidateQueries, setQueryData } from './lib/live/query-registry.js';
+import {
+  LOCAL_CAUSE,
+  REALTIME_CONTROL_CAUSE,
+  REALTIME_REFETCH_MAX_WAIT_MS,
+  REALTIME_REFETCH_WINDOW_MS,
+  invalidateQueries,
+  isRealtimeCause,
+  setQueryData,
+  type InvalidationCause,
+} from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
@@ -62,6 +71,7 @@ import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
+import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
@@ -79,6 +89,26 @@ import { syncLayersForTab } from './screens/layers.js';
 const REFRESH_DEBOUNCE_MS = 200;
 
 let refreshTimer: number | null = null;
+/** Жёсткий срок realtime-волны fallback-перечитывания (не продлевается). */
+let refreshMaxWaitTimer: number | null = null;
+
+/** Снять оба таймера fallback-перечитывания окрестности. */
+function clearRefreshTimers(): void {
+  if (refreshTimer !== null) {
+    window.clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  if (refreshMaxWaitTimer !== null) {
+    window.clearTimeout(refreshMaxWaitTimer);
+    refreshMaxWaitTimer = null;
+  }
+}
+
+/** Принудительный/финальный проход fallback-перечитывания. */
+function runFallbackRefresh(): void {
+  clearRefreshTimers();
+  void refreshFocus().catch(() => undefined);
+}
 
 /**
  * Re-exported from `lib/layer-resync.ts` for callers that already import
@@ -175,6 +205,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     editorW: editorSize.w,
     editorH: editorSize.h,
     selectionW: editorSize.s,
+    usageW: editorSize.u,
     eventAreaW,
     zoneTopSplit: canvasLayout.topSplit,
     zoneChildrenShare: canvasLayout.childrenShare,
@@ -197,6 +228,9 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // `refresh()` до этого не вызывал никто — захват, взятый до подключения,
   // оставался невидимым. Best-effort, ошибку глотает сам `refresh`.
   void refreshLockCache();
+  // Кэш имён участников — для показа держателя захвата именем, а не UUID
+  // (ошибка cb9b466f): читается один раз на сеть/пользователя, best-effort.
+  ensureUserNamesLoaded();
 
   // Q3: refresh tab list and activate the right entry. When the caller
   // supplies `tabId` (the picker / tab activation), that exact tab wins —
@@ -402,13 +436,39 @@ export async function refreshFocus(): Promise<void> {
  *
  * Слой данных (G2): вместо прямого перечитывания `thoughts.focus()` гасим
  * `focus`-ключи реестра — активная окрестность (подписана, пока холст
- * смонтирован) перезапросится роутером/слоем. Дебаунс окна сохранён.
+ * смонтирован) перезапросится роутером/слоем.
+ *
+ * `cause` — причина инвалидации. Realtime-событие отдаётся реестру как есть:
+ * он сам коалесирует волну в окне {@link REALTIME_REFETCH_WINDOW_MS} с жёстким
+ * сроком {@link REALTIME_REFETCH_MAX_WAIT_MS} от первого события, поэтому
+ * второй дебаунс здесь не нужен (иначе задержка складывалась бы). Локальные
+ * вызовы сохраняют прежнее окно {@link REFRESH_DEBOUNCE_MS} и микротаску —
+ * действия пользователя не задерживаются.
  */
-export function scheduleRefresh(): void {
-  if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+export function scheduleRefresh(cause?: InvalidationCause): void {
+  if (isRealtimeCause(cause)) {
+    const touched = invalidateQueries(queryKeys.focusAll(), cause);
+    // Переходный fallback: экрана на слое ещё нет (или запрос не подписан) —
+    // окрестность перечитываем напрямую, но тоже по закрытию окна волны.
+    if (touched.length === 0) {
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(runFallbackRefresh, REALTIME_REFETCH_WINDOW_MS);
+      // Жёсткий срок волны — от первого события, поток его не продлевает
+      // (иначе fallback так же голодал бы, как реестр до блокера 96d7f05d).
+      if (refreshMaxWaitTimer === null) {
+        refreshMaxWaitTimer = window.setTimeout(
+          runFallbackRefresh,
+          REALTIME_REFETCH_MAX_WAIT_MS,
+        );
+      }
+    }
+    return;
+  }
+  // Локальная причина: прежнее окно дебаунса и микротаска, без realtime-срока.
+  clearRefreshTimers();
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
-    const touched = invalidateQueries(queryKeys.focusAll());
+    const touched = invalidateQueries(queryKeys.focusAll(), LOCAL_CAUSE);
     // Переходный fallback: экрана на слое ещё нет (или запрос не подписан) —
     // окрестность перечитываем напрямую, как раньше. Как только холст
     // подпишется на `focus:@id`, перезапрос пойдёт через слой.
@@ -441,7 +501,7 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
   // A stale trash badge here is exactly bug 0.5.4: a mark lifted in a layer
   // kept hiding on the base cloud after switching back.
   invalidateAllRefs();
-  invalidateQueries(queryKeys.indicatorsAll());
+  invalidateQueries(queryKeys.indicatorsAll(), LOCAL_CAUSE);
   // Re-read the focus FIRST: the editor follows it once the cached snapshots
   // are dropped below, and this way it renders straight into the new layer's
   // data instead of flashing the old layer's focus for a frame.
@@ -465,11 +525,14 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
   });
   scheduleStructuresRefresh();
   // «Дневник» (G3) — тем же слоем: гасим ключ ленты, экран перечитает её сам.
-  invalidateQueries(queryKeys.chronicleFeedAll());
+  invalidateQueries(queryKeys.chronicleFeedAll(), LOCAL_CAUSE);
 }
 
 /** Returns to the network list (e.g. after `network-lost`). */
 export function backToNetworks(): void {
+  // Смена сети — уничтожение контекста: отложенные fallback-перечитывания
+  // окрестности старой сети не должны сработать после перехода.
+  clearRefreshTimers();
   deactivateFocusQuery();
   store.resetNetwork();
   showScreen('networks');
@@ -514,6 +577,7 @@ export async function restoreSession(): Promise<void> {
 /** Disconnects the profile and returns to onboarding (H18 user menu). */
 export async function disconnect(): Promise<void> {
   await etn.server.disconnect();
+  clearRefreshTimers();
   deactivateFocusQuery();
   // Сочетания клавиш принадлежат пользователю сервера (L3s): при отключении
   // возвращаем умолчания, чтобы их не унаследовал следующий пользователь.
@@ -543,9 +607,12 @@ export function requireNetworkId(): string {
  *     the protected root thought (HOME);
  *   * otherwise the canvas just refreshes (the thought leaves its zone).
  */
-export async function onThoughtDeleted(deletedId: string): Promise<void> {
+export async function onThoughtDeleted(deletedId: string, realtime = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // Причина дальнейших инвалидаций: realtime-канал (focus-lost от сервера)
+  // или локальное действие (удаление из корзины/контекстного меню).
+  const cause = realtime ? REALTIME_CONTROL_CAUSE : LOCAL_CAUSE;
   const wasFocus = store.state.focus?.focused.id === deletedId;
   if (store.state.selection.includes(deletedId)) {
     store.update({ selection: store.state.selection.filter((id) => id !== deletedId) });
@@ -571,7 +638,7 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
       }
     }
   } else {
-    scheduleRefresh();
+    scheduleRefresh(cause);
   }
   // setFocus's rotation may have just pushed the deleted id (as the old
   // focus) into the unified history — prune it afterwards so it never
@@ -579,8 +646,8 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   // is never resurrected as "the previous thought" on the next transition.
   noteThoughtRemoved(deletedId);
   await etn.history.remove(deletedId, store.state.activeTabId).catch(() => undefined);
-  invalidateQueries(queryKeys.indicators(deletedId));
-  invalidateRef(deletedId);
+  invalidateQueries(queryKeys.indicators(deletedId), cause);
+  invalidateRef(deletedId, realtime);
   invalidateHistoryBar();
   invalidateStructuresThought(deletedId);
   refreshSearchIfVisible();
@@ -643,12 +710,12 @@ export async function boot(): Promise<void> {
   initTransclusionSourceCache();
   initRealtime();
   setRealtimeEffects({
-    onStale: () => scheduleRefresh(),
+    onStale: () => scheduleRefresh(REALTIME_CONTROL_CAUSE),
     onFocusLost: () => {
       // Another user deleted our focused thought — same recovery as the
       // local delete: previous from the history, else HOME.
       const deletedId = store.state.focus?.focused.id;
-      if (deletedId !== undefined) void onThoughtDeleted(deletedId);
+      if (deletedId !== undefined) void onThoughtDeleted(deletedId, true);
     },
     onNetworkLost: () => backToNetworks(),
     onLayerControl: (payload) => {
@@ -740,6 +807,11 @@ function globalKeyBindings(): KeyBindingDef[] {
   // (CM6 comment editor, add dialog input, …).
   bind('app.copyThought', ['Ctrl+C', 'Meta+C'], (event) => {
     if (isEditableTarget(event.target)) return false;
+    // Открытый модальный диалог приоритетнее команд карты (ошибка 82346a49):
+    // на кнопке диалога `isEditableTarget` уже не спасает, и Ctrl+C копировал
+    // мысль под подложкой. В полях диалога Ctrl+C по-прежнему остаётся
+    // нативным — проверка выше отдаёт событие раньше.
+    if (hasOpenDialog()) return false;
     if (event.shiftKey || event.altKey) return false;
     // A visible DOM text selection (e.g. inside the comment view mode,
     // b6690109) outranks the thought copy: no preventDefault, the native copy
@@ -756,6 +828,9 @@ function globalKeyBindings(): KeyBindingDef[] {
 
   bind('app.pasteThought', ['Ctrl+V', 'Meta+V'], (event) => {
     if (isEditableTarget(event.target)) return false;
+    // Модальный диалог глушит команды карты (ошибка 82346a49); в полях
+    // диалога нативная вставка остаётся — её отдаёт проверка выше.
+    if (hasOpenDialog()) return false;
     if (event.shiftKey || event.altKey) return false;
     if (store.state.screen !== 'workspace' || store.state.networkId === null) return false;
     if (!supportsThoughtCopy()) return false;
@@ -771,6 +846,9 @@ function globalKeyBindings(): KeyBindingDef[] {
     // (§15.1) and while a comment/field is being edited (native find should
     // not be hijacked there), so the shortcut does nothing in those cases.
     if (isEditableTarget(event.target)) return false;
+    // Под модальным диалогом поиск карты молчит (ошибка 82346a49): иначе фокус
+    // уходил в строку поиска за подложкой и ломал Tab-ловушку диалога.
+    if (hasOpenDialog()) return false;
     if (store.state.screen === 'workspace' && store.state.activeView === 'map') {
       document.querySelector<HTMLInputElement>('.search-input')?.focus();
       return true;
@@ -822,19 +900,23 @@ function supportsThoughtCopy(): boolean {
   return view === 'map' || view === 'structures';
 }
 
-/** Холст карты реально виден пользователю (ошибка 63967c21): рабочий стол, вид
- *  «Карта» и ни одного непрозрачного перекрытия поверх холста. Перекрытия —
- *  ровно те, что накрывают холст в `screens/workspace.ts`: сеть без доступа
- *  (`.workspace-placeholder`, `inaccessibleTabIds`) и панель выбора сети
+/** Холст карты реально виден И доступен для взаимодействия (ошибки 63967c21,
+ *  1a3a476e): рабочий стол, вид «Карта» и ни одного перекрытия поверх холста.
+ *  Перекрытия — ровно те, что накрывают холст в `screens/workspace.ts`: сеть без
+ *  доступа (`.workspace-placeholder`, `inaccessibleTabIds`) и панель выбора сети
  *  (`.workspace-picker`, `pickerOpen`); оба — `position: absolute; inset: 0`
- *  с непрозрачным фоном, то есть холст под ними не виден. Раскладка холст не
- *  скрывает: позиция редактора его только сужает, доли зон (`canvas_layout`) —
+ *  с непрозрачным фоном, то есть холст под ними не виден. Плюс открытый
+ *  модальный диалог (`hasOpenDialog`): его подложка `.dialog-backdrop`
+ *  полупрозрачна — холст «виден», но взаимодействие модально заблокировано,
+ *  поэтому команды масштаба обязаны молчать (ошибка 1a3a476e). Раскладка холст
+ *  не скрывает: позиция редактора его только сужает, доли зон (`canvas_layout`) —
  *  внутренние границы. Команды масштаба не должны срабатывать «невидимо» —
  *  тот же класс, что ошибка 00275531 (команда по состоянию чужого вида). */
 function canvasVisible(): boolean {
   const st = store.state;
   if (st.screen !== 'workspace' || st.activeView !== 'map') return false;
   if (st.pickerOpen) return false;
+  if (hasOpenDialog()) return false;
   const tabId = st.activeTabId;
   return !(tabId !== null && st.inaccessibleTabIds.has(tabId));
 }
@@ -925,7 +1007,7 @@ async function globalPaste(targetId: string | null): Promise<void> {
   // exactly as when there is no snapshot at all.
   if (hasClipboard() && (await systemClipboardHasThoughts())) {
     await pasteThoughtsTo(targetId);
-    scheduleRefresh();
+    scheduleRefresh(LOCAL_CAUSE);
     return;
   }
   // Snapshot absent or stale — the system clipboard text wins (paste into
@@ -934,7 +1016,7 @@ async function globalPaste(targetId: string | null): Promise<void> {
     const text = await navigator.clipboard.readText();
     if (text.trim() === '') return;
     await pasteTextToCloud(text, targetId);
-    scheduleRefresh();
+    scheduleRefresh(LOCAL_CAUSE);
   } catch (err) {
     // Clipboard read denied or unavailable — surface the error so the user
     // isn't left wondering why nothing happened.
@@ -957,4 +1039,6 @@ export const appInternals = {
   currentThoughtCopyTarget,
   canvasVisible,
   globalKeyBindings,
+  /** Окно локального дебаунса `scheduleRefresh` (read-only для тестов). */
+  refreshDebounceMs: REFRESH_DEBOUNCE_MS,
 };

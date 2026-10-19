@@ -24,9 +24,14 @@
  * фан-аут идёт в порядке коммитов сети.
  *
  * **Точки входа фасада** (по операциям, переведённым на плоские задачи):
- * {@link runThoughtsWrite} — батч `etn.thoughts.write` (MCP), и
+ * {@link runThoughtsWrite} — батч `etn.thoughts.write` (MCP),
  * {@link runThoughtCreate} — единичное создание мысли REST-путём `POST /thoughts`
- * (клиентский путь GUI, задача c744e05c).
+ * (клиентский путь GUI, задача c744e05c),
+ * {@link runThoughtsBatch} — батчевая операция `POST /thoughts/batch` и MCP
+ * `etn.thoughts.bulk_update` (задача dba7fabc),
+ * {@link runThoughtsCopy} — пакетное копирование `POST /thoughts/copy-batch`
+ * (задача b9c70dd8). У копирования файлы вложений — эффект ПОСЛЕ коммита на
+ * главном потоке: исполнитель транзакции планирует имена копий, фасад их пишет.
  */
 
 import type {
@@ -34,23 +39,40 @@ import type {
   RealtimeEventMap,
   RealtimeEventType,
   Thought,
+  ThoughtBatchOp,
+  ThoughtBatchResult,
+  ThoughtCopyInput,
+  ThoughtCopyResult,
   ThoughtCreateInput,
 } from '@etn/shared';
 
 import type {
   WriteTask,
   WriteTaskContext,
+  WriteThoughtBatchBulkArgs,
+  WriteThoughtBatchFocusArgs,
+  WriteThoughtBatchPayload,
+  WriteThoughtCopyPayload,
   WriteThoughtPayload,
   WriteThoughtsPayload,
 } from '../contracts.js';
 import type { NetworkDb } from '../db/network-db.js';
-import { runWriteTask, writeContextFor } from '../db/write-pool.js';
+import {
+  runWriteTask,
+  writeContextFor,
+  type RunWriteTaskOptions,
+} from '../db/write-pool.js';
+import { copyAttachmentFiles } from './attachment-service.js';
 import type { CrossNetworkAccessContext } from './cross-network-ref-service.js';
 import type { ThoughtWriteResult } from './thought-write-service.js';
 import {
+  composeThoughtBatch,
+  composeThoughtCopyOutcome,
   composeThoughtCreate,
   composeThoughtsWrite,
   thoughtsBatchNeedsMainThread,
+  type ThoughtBatchOutcome,
+  type ThoughtCopyOutcome,
   type ThoughtCreateOutcome,
 } from './write-ops.js';
 import type { ThoughtsWriteOutcome } from './write-ops.js';
@@ -59,6 +81,7 @@ import {
   type WriteFx,
   type WriteJournalContext,
 } from './write-wrapper.js';
+import { bumpNetworkDataVersion } from './view-result-cache.js';
 
 /**
  * Контекст задачи из соединения главного потока. Для пула его строит
@@ -75,6 +98,31 @@ function taskContext(ndb: NetworkDb): WriteTaskContext {
       schemaVersion: 0,
     }
   );
+}
+
+/**
+ * Исполнить задачу записи и НЕОТДЕЛИМО инвалидировать кэш результатов отборов.
+ *
+ * Единственная точка, через которую проходят все writer-задачи этого фасада
+ * (задача 3f2b0958). Почему инвалидация здесь, а не в вызывающих: в воркере
+ * `runWriteCore` двигает счётчик СВОЕГО модуля, а главный поток его не видит;
+ * забытый бамп на одном из путей записи давал бы устаревший результат отбора
+ * после реального коммита. Поэтому бамп — свойство ОТПРАВКИ задачи, а не
+ * дисциплина четырёх фасадов: прямых `runWriteTask` в этом файле больше нет,
+ * и сторож `guard-view-result-cache.test.ts` это проверяет.
+ *
+ * На синхронном пути `runWriteTask` исполнит `sync`, где `runWriteCore` уже
+ * двигает счётчик; повторный инкремент безвреден (поколение — монотонный
+ * счётчик, важно лишь его изменение).
+ */
+async function runWriteTaskWithInvalidation(
+  ndb: NetworkDb,
+  task: WriteTask,
+  options: RunWriteTaskOptions,
+): Promise<unknown> {
+  const result = await runWriteTask(task, options);
+  bumpNetworkDataVersion(ndb.networkId);
+  return result;
 }
 
 /** Опции фасада батч-записи. */
@@ -111,7 +159,7 @@ export async function runThoughtsWrite(
   };
   const poolable = options.poolable ?? !thoughtsBatchNeedsMainThread(input);
   const task: WriteTask = { context: taskContext(ndb), op: 'write.thoughts', payload };
-  const outcome = (await runWriteTask(task, {
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
     poolable,
     // Деградация: пул выключен, сеть в памяти или задача непереводима — та же
     // запись исполняется синхронно, аудита в исходе нет (его пишет фасад).
@@ -154,7 +202,7 @@ export async function runThoughtCreate(
     layerId: fx.layerId,
   };
   const task: WriteTask = { context: taskContext(ndb), op: 'write.thought', payload };
-  const outcome = (await runWriteTask(task, {
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
     poolable: options.poolable ?? true,
     sync: () => runWriteCore(ndb, ctx, () => composeThoughtCreate(ndb, payload)),
   })) as ThoughtCreateOutcome;
@@ -162,5 +210,120 @@ export async function runThoughtCreate(
   for (const ev of outcome.events ?? []) {
     fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
   }
+  return outcome.result;
+}
+
+/** Нормализованный вход фасада батчевой операции {@link runThoughtsBatch}. */
+export interface ThoughtsBatchInput {
+  ids: string[];
+  op: ThoughtBatchOp;
+  /** Аргументы общей групповой операции (`op` ∈ `BULK_THOUGHT_OPS`). */
+  bulk?: WriteThoughtBatchBulkArgs;
+  /** Аргументы локальной операции связи с фокусом. */
+  focus?: WriteThoughtBatchFocusArgs;
+}
+
+/**
+ * Батчевая операция `POST /thoughts/batch` (задача b9c70dd8) и MCP
+ * `etn.thoughts.bulk_update` (задача dba7fabc): в write-пуле, если
+ * он настроен; иначе — тем же кодом синхронно в главном потоке (деградация
+ * {@link runWriteTask}). Композиция записи — {@link composeThoughtBatch},
+ * дословно повторяющая прежний роут (общие групповые операции + локальные
+ * `delete`/`purge`/`link_to_focus`/`unlink_from_focus`). События публикуются
+ * здесь, по факту коммита; строку аудита пишет фасад транспорта (у MCP —
+ * `etn.thoughts.bulk_update`, у data-записей REST аудита нет).
+ *
+ * Кросс-сетевого резолва операция не делает, потому задача всегда допускает
+ * воркер (`poolable` по умолчанию `true`); сеть в памяти и выключенный пул дают
+ * синхронную деградацию.
+ */
+export async function runThoughtsBatch(
+  ndb: NetworkDb,
+  fx: WriteFx,
+  input: ThoughtsBatchInput,
+  options: { poolable?: boolean } = {},
+): Promise<ThoughtBatchResult> {
+  const payload: WriteThoughtBatchPayload = {
+    actorUserId: fx.userId,
+    ids: input.ids,
+    op: input.op,
+    ...(input.bulk !== undefined ? { bulk: input.bulk } : {}),
+    ...(input.focus !== undefined ? { focus: input.focus } : {}),
+  };
+  const ctx: WriteJournalContext = {
+    networkId: fx.networkId,
+    userId: fx.userId,
+    layerId: fx.layerId,
+  };
+  const task: WriteTask = { context: taskContext(ndb), op: 'write.thought.batch', payload };
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
+    poolable: options.poolable ?? true,
+    sync: () => {
+      const out = runWriteCore(ndb, ctx, () => composeThoughtBatch(ndb, payload));
+      return { result: out.result, events: out.events ?? [] } satisfies ThoughtBatchOutcome;
+    },
+  })) as ThoughtBatchOutcome;
+
+  for (const ev of outcome.events ?? []) {
+    fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
+  }
+  return outcome.result;
+}
+
+/** Опции фасада пакетного копирования {@link runThoughtsCopy}. */
+export interface ThoughtsCopyOptions {
+  /**
+   * Абсолютный каталог вложений СЕТИ-ИСТОЧНИКА. Задан — при копировании в другую
+   * сеть файлы `kind='file'` получают уникальные физические копии в сети-получателе
+   * (ошибка b83a7d89). `undefined` — внутрисетевое копирование (файл шарится).
+   */
+  sourceAttachmentsDir?: string;
+  /** Приёмник нефатальных замечаний (исходный файл не найден, сбой копирования). */
+  warn?: (message: string, details?: Record<string, unknown>) => void;
+  /** Можно ли задачу унести в пул (по умолчанию `true`). */
+  poolable?: boolean;
+}
+
+/**
+ * Пакетное создание мыслей `POST /thoughts/copy-batch` (задача b9c70dd8): в
+ * write-пуле, если он настроен; иначе — тем же кодом синхронно в главном потоке.
+ * Композиция записи — {@link composeThoughtCopyOutcome}: доменный
+ * {@link import('./thought-copy-service.js').copyThoughtsBatch} + события.
+ *
+ * Файлы вложений при межсетевом копировании физически переносятся ПОСЛЕ коммита
+ * на главном потоке (как события и аудит): имена копий планирует исполнитель
+ * транзакции, а запись файлов делает фасад — при откате транзакции осиротевших
+ * файлов не остаётся (ошибка b83a7d89).
+ *
+ * Кросс-сетевой источник здесь — только КАТАЛОГ ВЛОЖЕНИЙ (чужая БД не
+ * открывается), поэтому задача всегда допускает воркер; сеть в памяти и
+ * выключенный пул дают синхронную деградацию.
+ */
+export async function runThoughtsCopy(
+  ndb: NetworkDb,
+  fx: WriteFx,
+  input: ThoughtCopyInput,
+  options: ThoughtsCopyOptions = {},
+): Promise<ThoughtCopyResult> {
+  const payload: WriteThoughtCopyPayload = {
+    input,
+    actorUserId: fx.userId,
+    sourceAttachmentsDir: options.sourceAttachmentsDir ?? null,
+  };
+  const task: WriteTask = { context: taskContext(ndb), op: 'write.thought.copy', payload };
+  const outcome = (await runWriteTaskWithInvalidation(ndb, task, {
+    poolable: options.poolable ?? true,
+    sync: () => composeThoughtCopyOutcome(ndb, payload),
+  })) as ThoughtCopyOutcome;
+
+  for (const ev of outcome.events ?? []) {
+    fx.emit(ev.type, ev.data as RealtimeEventMap[RealtimeEventType], ev.options);
+  }
+  // Замечания исполнителя (пропавший исходный файл) и физическое копирование —
+  // на главном потоке: наблюдаемость и файловый эффект остаются у фасада.
+  for (const warning of outcome.warnings ?? []) {
+    options.warn?.(warning.message, warning.details);
+  }
+  copyAttachmentFiles(outcome.files ?? [], options.warn);
   return outcome.result;
 }

@@ -35,7 +35,11 @@ import { etn } from './etn.js';
 import { requireNetworkId } from '../app.js';
 import { onRoutedRealtimeEvent } from './live/index.js';
 import { store } from '../state.js';
-import { resolve as resolveCachedUserName } from './users.js';
+import {
+  ensureLoaded as ensureUsersLoaded,
+  resolve as resolveCachedUserName,
+  subscribe as subscribeUsers,
+} from './users.js';
 
 /** Stable key for the cache map and `state.lockCache`. */
 export type LockKey = string;
@@ -113,12 +117,14 @@ export function isOwnLock(entityType: string, entityId: string): boolean {
 }
 
 /**
- * Best-effort display name of the holder. Resolves through `lib/users.ts`;
- * falls back to `<id>` when the cache is empty AND the holder is not the
- * current user (the typical case for `otherHolder` callers — the admin
- * roster is only fetched when the panel is open).
+ * Best-effort display name of the holder. Resolves through `lib/users.ts`
+ * (админ-ростер или участники открытой сети — ошибка cb9b466f); падает на
+ * `<id>` только пока имя неизвестно, чтобы строка никогда не оставалась
+ * пустой. Ленивая загрузка кэша имён запускается здесь же: первый показ
+ * держателя обычно и есть первый потребитель ростера.
  */
 export function holderName(row: LockRow): string {
+  ensureUsersLoaded();
   return resolveCachedUserName(row.user_id) ?? row.user_id;
 }
 
@@ -128,6 +134,7 @@ export function holderName(row: LockRow): string {
  * is fetched inside a tight SVG-draw loop).
  */
 export function holderNameByUserId(userId: string): string {
+  ensureUsersLoaded();
   return resolveCachedUserName(userId) ?? userId;
 }
 
@@ -241,6 +248,12 @@ export function initLockCache(): void {
   // pick it up through their normal `store.subscribe` wiring.
   listeners.add(syncToStore);
   syncToStore();
+
+  // Имена держателей приходят из кэша участников асинхронно (ошибка
+  // cb9b466f): когда ростер догрузился, перерисовываем все поверхности
+  // захватов — бейджи холста, чипы трансклюзий, панель участников. Без этого
+  // бейдж, нарисованный до загрузки имени, остался бы с UUID.
+  subscribeUsers(() => notify());
 
   // Слой (G6): мягкие захваты `edit.*` намеренно игнорируются таблицей
   // запросов (эфемерные, без ключа) и приходят через `onRoutedRealtimeEvent`.

@@ -22,15 +22,16 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
+import type { Comment } from '@etn/shared';
+
 import { getThoughtOrThrow } from '../domain/thought-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
 import { findThoughtUsage } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
-import { getNeighbors } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
 import { listTrash } from '../domain/trash-service.js';
-import { listComments } from '../domain/comment-service.js';
 import { createBodyExpander } from '../domain/transclusion-service.js';
+import { listCommentsAsync, neighborsWithTotalAsync } from '../domain/heavy-read.js';
 import { listAttachments } from '../domain/attachment-service.js';
 import { getPublication } from '../domain/publication-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
@@ -64,11 +65,20 @@ function guarded<T>(fn: () => T): T {
   }
 }
 
+/** Асинхронный вариант: чтение идёт в reader-пул (задача 514dc30f). */
+async function guardedAsync<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new Error(etnErrorText(err));
+  }
+}
+
 /** MIME type for JSON resources (constant kept in one place). */
 const JSON_MIME = 'application/json';
 
 /** Render a thought's comments as Markdown (05 §3: comments as Markdown). */
-function commentsMarkdown(title: string, comments: ReturnType<typeof listComments>): string {
+function commentsMarkdown(title: string, comments: Comment[]): string {
   const lines: string[] = [`# Комментарии: ${title}`, ''];
   if (comments.length === 0) {
     lines.push('_Комментариев нет._');
@@ -186,22 +196,23 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
-      guarded(() => {
+      guardedAsync(async () => {
         const networkId = requireVar(vars, 'network_id');
         const thoughtId = requireVar(vars, 'thought_id');
         const ndb = openMemberNetwork(rt, networkId);
         const thought = getThoughtOrThrow(ndb, thoughtId);
         // Bug fix (§5.1e): sanitize each neighbour's `icon` — `FocusNeighbor`
         // is not gated by a `view` param, a `data:` URL would otherwise leak.
-        const parents = getNeighbors(ndb, thoughtId, 'parents', { userId: rt.deps.auth.userId }).map(
-          (n) => withSanitizedIcon(n),
-        );
-        const children = getNeighbors(ndb, thoughtId, 'children', {
-          userId: rt.deps.auth.userId,
-        }).map((n) => withSanitizedIcon(n));
-        const siblings = getNeighbors(ndb, thoughtId, 'siblings', {
-          userId: rt.deps.auth.userId,
-        }).map((n) => withSanitizedIcon(n));
+        // Три направления — три задачи reader-пула (задача 514dc30f).
+        const opts = { userId: rt.deps.auth.userId };
+        const [parentsPage, childrenPage, siblingsPage] = await Promise.all([
+          neighborsWithTotalAsync(ndb, thoughtId, 'parents', opts),
+          neighborsWithTotalAsync(ndb, thoughtId, 'children', opts),
+          neighborsWithTotalAsync(ndb, thoughtId, 'siblings', opts),
+        ]);
+        const parents = parentsPage.neighbors.map((n) => withSanitizedIcon(n));
+        const children = childrenPage.neighbors.map((n) => withSanitizedIcon(n));
+        const siblings = siblingsPage.neighbors.map((n) => withSanitizedIcon(n));
         const all = [...parents, ...children, ...siblings];
         return jsonContents(uri.href, {
           thought: { id: thought.id, title: thought.title },
@@ -274,15 +285,17 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       mimeType: 'text/markdown',
     },
     (uri, vars) =>
-      guarded(() => {
+      guardedAsync(async () => {
         const networkId = requireVar(vars, 'network_id');
         const thoughtId = requireVar(vars, 'thought_id');
         const ndb = openMemberNetwork(rt, networkId);
         const thought = getThoughtOrThrow(ndb, thoughtId);
         // MCP-ресурс комментариев разворачивает трансклюзии (ТП2, задача
-        // bcfc7eb7, ADR 85a7a01e): в базе хранится исходная ссылка.
+        // bcfc7eb7, ADR 85a7a01e): в базе хранится исходная ссылка. Само
+        // чтение — в reader-пуле (задача 514dc30f); разворот остаётся здесь:
+        // у него своя семантика (маркеры границ) на весь набор.
         const expand = createBodyExpander(ndb);
-        const comments = listComments(ndb, 'thought', thoughtId).map((c) => ({
+        const comments = (await listCommentsAsync(ndb, 'thought', thoughtId)).map((c) => ({
           ...c,
           body_md: expand(c.body_md),
         }));

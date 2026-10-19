@@ -55,6 +55,14 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Realtime-перечитывания коалесируются окном реестра (задача 96d7f05d):
+ * после события ждём закрытия окна, а не одной микротаски.
+ */
+function settleRealtime(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 400));
+}
+
 describe('chronicle G3: контракт слоя (поведенчески)', () => {
   it('роутер гасит ключ chronicle-feed на чужое comment.created и уведомляет наблюдателя', () => {
     resetQueryRegistry();
@@ -164,7 +172,7 @@ describe('chronicle G3: контракт слоя (поведенчески)', (
     );
     assert.equal(res.routed, true);
     assert.ok(res.invalidated.includes(key));
-    await settle();
+    await settleRealtime();
     assert.equal(calls, 2, 'чужая правка перезапросила ленту');
     unsub();
     resetQueryRegistry();

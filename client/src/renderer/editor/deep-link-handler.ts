@@ -25,6 +25,25 @@ import { openPublicationInWorkspace } from '../screens/active-view.js';
 
 let wired = false;
 
+/**
+ * Прикладные операции, нужные обработчику deep-link. Выделены в интерфейс,
+ * чтобы холодный старт проверялся интеграционно: `applyDeepLink` прогоняется
+ * на подставных операциях, в том числе с целью, отличной от HOME.
+ */
+export interface DeepLinkDeps {
+  currentNetworkId: () => string | null;
+  openNetwork: (networkId: string) => Promise<void>;
+  getThought: (
+    networkId: string,
+    thoughtId: string,
+  ) => Promise<{ id: string; active: boolean }>;
+  setFocus: (id: string) => Promise<void>;
+  showInactive: () => boolean;
+  notice: (text: string, kind: 'error') => void;
+  getPublication: (networkId: string, publicationId: string) => Promise<unknown>;
+  openPublicationInWorkspace: (publicationId: string) => Promise<void>;
+}
+
 /** Installs the `etn:deep-link` listener (call once from `main.ts`). */
 export function initDeepLinkHandler(): void {
   if (wired) return;
@@ -34,14 +53,61 @@ export function initDeepLinkHandler(): void {
   });
 }
 
+/**
+ * Сообщает главному процессу, что приложение готово принимать холодные
+ * deep-link'и (ошибка d8b81425). Вызывать ТОЛЬКО после `await boot()`:
+ * `boot → restoreSession → openNetwork` восстанавливает сохранённый фокус и
+ * перекрыл бы `setFocus` цели, если буфер слить раньше.
+ */
+export function signalDeepLinkReady(): void {
+  etn.deepLink.signalReady();
+}
+
+/**
+ * Запуск приёма deep-link с жёстким порядком: подписка → `await boot()` → ack.
+ * Вынесено ради интеграционного теста холодного старта (ошибка d8b81425):
+ * если ack уйдёт раньше восстановления сессии, `openNetwork` перекроет
+ * `setFocus` цели сохранённым фокусом.
+ */
+export async function startDeepLinks(
+  bootApp: () => Promise<void>,
+  subscribe: () => void = initDeepLinkHandler,
+  ready: () => void | Promise<void> = signalDeepLinkReady,
+): Promise<void> {
+  subscribe();
+  await bootApp();
+  await ready();
+}
+
 async function handleDeepLink(link: DeepLinkPayload): Promise<void> {
+  await applyDeepLink(link, {
+    currentNetworkId: safeCurrentNetworkId,
+    openNetwork,
+    getThought: (networkId, thoughtId) => etn.thoughts.get(networkId, thoughtId),
+    setFocus,
+    showInactive: () => store.state.showInactive,
+    notice,
+    getPublication: (networkId, publicationId) =>
+      etn.publications.get(networkId, publicationId),
+    openPublicationInWorkspace,
+  });
+}
+
+/**
+ * Применяет deep-link к уже загруженному приложению. Чистая оркестрация над
+ * {@link DeepLinkDeps} — вызывается после boot, поэтому восстановление сессии
+ * не может перекрыть фокус цели.
+ */
+export async function applyDeepLink(
+  link: DeepLinkPayload,
+  deps: DeepLinkDeps,
+): Promise<void> {
   // 1. Switch to the target network if needed.
-  const currentNetworkId = safeCurrentNetworkId();
-  if (currentNetworkId !== link.networkId) {
+  if (deps.currentNetworkId() !== link.networkId) {
     try {
-      await openNetwork(link.networkId);
+      await deps.openNetwork(link.networkId);
     } catch (err) {
-      notice(`Сеть недоступна: ${errToText(err)}`, 'error');
+      deps.notice(`Сеть недоступна: ${errToText(err)}`, 'error');
       return;
     }
   }
@@ -50,26 +116,26 @@ async function handleDeepLink(link: DeepLinkPayload): Promise<void> {
   //    в рабочей области экрана «Публикации».
   if ('publicationId' in link) {
     try {
-      await etn.publications.get(link.networkId, link.publicationId);
+      await deps.getPublication(link.networkId, link.publicationId);
     } catch (err) {
-      notice(`Публикация удалена или недоступна: ${errToText(err)}`, 'error');
+      deps.notice(`Публикация удалена или недоступна: ${errToText(err)}`, 'error');
       return;
     }
-    await openPublicationInWorkspace(link.publicationId);
+    await deps.openPublicationInWorkspace(link.publicationId);
     return;
   }
 
   // 3. Try to fetch + open the thought.
   let thought;
   try {
-    thought = await etn.thoughts.get(link.networkId, link.thoughtId);
+    thought = await deps.getThought(link.networkId, link.thoughtId);
   } catch (err) {
-    notice(`Мысль удалена или недоступна: ${errToText(err)}`, 'error');
+    deps.notice(`Мысль удалена или недоступна: ${errToText(err)}`, 'error');
     return;
   }
 
-  if (!thought.active && !store.state.showInactive) {
-    notice(
+  if (!thought.active && !deps.showInactive()) {
+    deps.notice(
       'Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.',
       'error',
     );
@@ -81,7 +147,7 @@ async function handleDeepLink(link: DeepLinkPayload): Promise<void> {
   //    `openThoughtByRef` because the latter is opinionated about the active
   //    view; a deep-link should always go to the canvas (the user's natural
   //    landing surface).
-  await setFocus(thought.id);
+  await deps.setFocus(thought.id);
 }
 
 function safeCurrentNetworkId(): string | null {

@@ -1,0 +1,130 @@
+{
+  "name": "settings-first-day-of-week",
+  "description": "Задача b5278f9a: первый день недели меняется в разделе «Мыслесеть» диалога «Все настройки», уходит одним PATCH /networks/{id}, сохраняется на сервере и сразу перестраивает календарь «Дневника» (подписи столбцов и границы недели $weekStart/$weekEnd). Блокер независимой проверки: календарь диалога «Точная дата» уже смонтированной панели отбора тоже обязан строиться по новому значению — проверяются «Дневник» и «События». Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.settings-first-day-of-week.scenario.json --out .tmp/etn-b5278f9a/run1",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "set-fdw-1",
+      "api": { "name": "set-fdw-1", "method": "PATCH", "path": "/networks/{{networkId}}", "body": { "first_day_of_week": 1 }, "expression": "data.first_day_of_week" },
+      "expect": 1
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-diary", "click": "button.view-tab[title=\"Дневник\"]" },
+    { "name": "diary-panel", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.chron-cal .cal-wd') !== null" },
+    {
+      "name": "calendar-labels-before",
+      "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-wd')).map((e) => e.textContent)",
+      "expect": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    },
+
+    { "name": "open-user-menu", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    { "name": "settings-dialog", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null" },
+    {
+      "name": "open-network-section",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Мыслесеть'); if (!b) throw new Error('нет раздела «Мыслесеть»'); b.click(); return true; })()"
+    },
+    { "name": "network-section", "timeout": 10000, "waitFor": "document.querySelector('.settings-section select') !== null" },
+    {
+      "name": "settings-fdw-before",
+      "probe": "(() => { const row = Array.from(document.querySelectorAll('.ui-field')).find((r) => ((r.querySelector('.ui-field-label') || {}).textContent || '') === 'Первый день недели'); const s = row ? row.querySelector('select') : null; if (!s) throw new Error('нет поля «Первый день недели»'); return { value: s.value, disabled: s.disabled, options: Array.from(s.options).map((o) => o.textContent) }; })()",
+      "expect": { "value": "1", "disabled": false, "options": ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"] }
+    },
+    {
+      "name": "settings-fdw-change",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.ui-field')).find((r) => ((r.querySelector('.ui-field-label') || {}).textContent || '') === 'Первый день недели'); const s = row ? row.querySelector('select') : null; if (!s) throw new Error('нет поля «Первый день недели»'); s.value = '7'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "apply-enabled",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'Применить' && !b.disabled)"
+    },
+    {
+      "name": "apply-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => e.textContent === 'Применить'); if (!b) throw new Error('нет кнопки «Применить»'); b.click(); return true; })()"
+    },
+    { "name": "apply-saved", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.notice-text')).some((e) => (e.textContent || '').includes('Настройки сохранены'))" },
+    {
+      "name": "server-fdw",
+      "api": { "name": "server-fdw", "method": "GET", "path": "/networks/{{networkId}}", "expression": "data.first_day_of_week" },
+      "expect": 7
+    },
+    {
+      "name": "settings-fdw-after",
+      "probe": "(() => { const row = Array.from(document.querySelectorAll('.ui-field')).find((r) => ((r.querySelector('.ui-field-label') || {}).textContent || '') === 'Первый день недели'); const s = row ? row.querySelector('select') : null; if (!s) throw new Error('нет поля «Первый день недели»'); return { value: s.value, disabled: s.disabled }; })()",
+      "expect": { "value": "7", "disabled": false }
+    },
+    {
+      "name": "close-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => e.textContent === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()"
+    },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+
+    {
+      "name": "calendar-labels-after",
+      "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-wd')).map((e) => e.textContent)",
+      "expect": ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"]
+    },
+    {
+      "name": "week-row-title-after",
+      "probe": "(() => { const row = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes('2026-10-11')); return row ? row.getAttribute('title') : null; })()",
+      "expect": "Неделя 42: 2026-10-11 — 2026-10-17"
+    },
+    {
+      "name": "click-week-row",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes('2026-10-11')); if (!b) throw new Error('нет строки недели 2026-10-11'); b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); b.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "week-tokens-applied",
+      "timeout": 10000,
+      "waitFor": "(() => { const f = document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select'); const t = document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select'); const days = document.querySelectorAll('.cal-day.is-selected').length; return f?.value === '$weekStart' && t?.value === '$weekEnd' && days === 7; })()"
+    },
+    {
+      "name": "week-period-state",
+      "probe": "({ from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null, selectedDays: Array.from(document.querySelectorAll('.cal-day.is-selected')).map((e) => e.getAttribute('title')) })",
+      "expect": { "from": "$weekStart", "to": "$weekEnd", "selectedDays": ["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"] }
+    },
+
+    { "name": "filter-add-date", "eval": "(() => { const b = document.querySelector('.chron-filter .ft-add-condition'); if (!b) throw new Error('нет «+ условие» в панели отбора'); b.click(); return true; })()" },
+    { "name": "filter-date-row", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.chron-filter .fv-date__anchor')).some((s) => s.value === '$today')" },
+    { "name": "filter-switch-exact", "eval": "(() => { const s = Array.from(document.querySelectorAll('.chron-filter .fv-date__anchor')).find((e) => e.value === '$today'); if (!s) throw new Error('нет опоры $today в новой строке даты'); s.value = 'exact'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()" },
+    { "name": "filter-exact-cell", "timeout": 10000, "waitFor": "document.querySelector('.chron-filter .fv-date__frame--exact .date-field-pick') !== null" },
+    { "name": "filter-open-calendar", "eval": "(() => { const b = document.querySelector('.chron-filter .fv-date__frame--exact .date-field-pick'); if (!b) throw new Error('нет кнопки календаря в ячейке точной даты'); b.click(); return true; })()" },
+    { "name": "filter-calendar-open", "timeout": 10000, "waitFor": "document.querySelector('.dpd .cal-wd') !== null" },
+    {
+      "name": "filter-calendar-labels",
+      "probe": "({ title: document.querySelector('.dialog-title')?.textContent ?? null, labels: Array.from(document.querySelectorAll('.dpd .cal-wd')).map((e) => e.textContent) })",
+      "expect": { "title": "Точная дата", "labels": ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"] }
+    },
+    { "name": "filter-calendar-close", "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-footer button')).find((e) => (e.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()" },
+    { "name": "filter-calendar-closed", "timeout": 10000, "waitFor": "document.querySelector('.dpd') === null" },
+
+    { "name": "open-activity", "click": "button.view-tab[title=\"События\"]" },
+    { "name": "activity-panel", "timeout": 15000, "waitFor": "document.querySelector('.activity-filter .ft-add-condition') !== null" },
+    { "name": "activity-add-date", "click": ".activity-filter .ft-add-condition" },
+    { "name": "activity-date-row", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.activity-filter .fv-date__anchor')).some((s) => s.value === '$today')" },
+    { "name": "activity-switch-exact", "eval": "(() => { const s = Array.from(document.querySelectorAll('.activity-filter .fv-date__anchor')).find((e) => e.value === '$today'); if (!s) throw new Error('нет опоры $today в строке времени события'); s.value = 'exact'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()" },
+    { "name": "activity-exact-cell", "timeout": 10000, "waitFor": "document.querySelector('.activity-filter .fv-date__frame--exact .date-field-pick') !== null" },
+    { "name": "activity-open-calendar", "eval": "(() => { const b = document.querySelector('.activity-filter .fv-date__frame--exact .date-field-pick'); if (!b) throw new Error('нет кнопки календаря в «Событиях»'); b.click(); return true; })()" },
+    { "name": "activity-calendar-open", "timeout": 10000, "waitFor": "document.querySelector('.dpd .cal-wd') !== null" },
+    {
+      "name": "activity-calendar-labels",
+      "probe": "Array.from(document.querySelectorAll('.dpd .cal-wd')).map((e) => e.textContent)",
+      "expect": ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"]
+    },
+    { "name": "activity-calendar-close", "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-footer button')).find((e) => (e.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()" },
+    { "name": "activity-calendar-closed", "timeout": 10000, "waitFor": "document.querySelector('.dpd') === null" }
+  ]
+}

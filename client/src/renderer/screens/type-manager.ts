@@ -86,7 +86,15 @@ import { footerErrorLine, operationError, type ErrorAddress, type FooterErrorLin
 import { loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { etn } from '../lib/etn.js';
-import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
+import {
+  acquireOrShowBlocked,
+  blockedByLockMessage,
+  lockHandleFromOutcome,
+  releaseHeld,
+  subscribeForeignLockState,
+  type LockHandle,
+} from '../lib/lock-guard.js';
+import { blockEditingSurface, unblockEditingSurface } from '../lib/lock-surface.js';
 import {
   MAX_TYPE_DEPTH,
   aggregateTypeCounts,
@@ -921,11 +929,10 @@ export function showThoughtTypeEditor(
   // the type-id once create returns, and the helper no-ops on the empty
   // pair (it just returns a soft «failed» outcome which the editor ignores).
   let editLock: LockHandle | null = null;
-  if (type !== null) {
-    void acquireOrShowBlocked('thought_type', type.id).then((outcome) => {
-      editLock = lockHandleFromOutcome('thought_type', type.id, outcome);
-    });
-  }
+  /** Корень диалога — нужен, чтобы перевести форму в чтение при чужом захвате. */
+  let dialogRoot: HTMLElement | null = null;
+  /** Заполняется при чужом захвате: вложенные диалоги тоже только для чтения. */
+  let blockedMessage: string | null = null;
   // The type as last seen by the SERVER: the initial one, the freshly created
   // one, or the patched one after a successful apply (a failed apply keeps it
   // at the last consistent state so a retry re-diffs correctly).
@@ -958,6 +965,13 @@ export function showThoughtTypeEditor(
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
   let saveBtn: HTMLButtonElement | null = null;
+  /** Отписка от кэша захватов: снятие чужого захвата возвращает редактирование. */
+  let unbindLock: () => void = () => undefined;
+  if (type !== null) {
+    void acquireOrShowBlocked('thought_type', type.id).then((outcome) => {
+      editLock = lockHandleFromOutcome('thought_type', type.id, outcome);
+    });
+  }
   /** Заголовок диалога — после первой записи «Новый тип мысли» становится
    *  «Тип мысли»: содержимое диалога обновилось, шапка не должна врать. */
   let dialogTitleEl: HTMLElement | null = null;
@@ -1200,8 +1214,11 @@ export function showThoughtTypeEditor(
     } else if (errorLine.textContent === DUP_NAME_MSG) {
       errorLine.clear();
     }
-    if (applyBtn !== null) applyBtn.disabled = clash;
-    if (saveBtn !== null) saveBtn.disabled = clash;
+    // Чужой захват сильнее проверки имени (ошибка 4f18d9f5): асинхронная
+    // догрузка каталога не должна снова включать кнопки записи.
+    const blocked = blockedMessage !== null;
+    if (applyBtn !== null) applyBtn.disabled = blocked || clash;
+    if (saveBtn !== null) saveBtn.disabled = blocked || clash;
   }
 
   // Fresh catalogue for the live duplicate check (the server re-checks anyway).
@@ -1388,6 +1405,8 @@ export function showThoughtTypeEditor(
   }
 
   function openStyle(): void {
+    // Вложенный диалог оформления сам следит за захватом типа: снятие
+    // блокировки возвращает редактирование (ошибка 2301d73d).
     showThoughtStyleDialog({
       resolved: {
         fg: draft.fg_color,
@@ -1411,6 +1430,7 @@ export function showThoughtTypeEditor(
         if (patch.font_strike !== undefined) draft.font_strike = patch.font_strike;
         return Promise.resolve(true);
       },
+      lock: type !== null ? { entityType: 'thought_type', entityId: type.id } : undefined,
     });
   }
 
@@ -1438,6 +1458,17 @@ export function showThoughtTypeEditor(
         { id: 'properties', label: t('typeEditor.tab.properties'), content: propertiesPane },
         { id: 'views', label: t('typeEditor.tab.views'), content: viewsPane },
       ],
+      // Панели вкладок строятся лениво: при чужом захвате поля новой
+      // вкладки тоже нужно выключить (ошибка 4f18d9f5).
+      onTabChange: () => {
+        if (blockedMessage !== null && dialogRoot !== null) {
+          blockEditingSurface({
+            root: dialogRoot,
+            message: blockedMessage,
+            commitButtons: [saveBtn, applyBtn],
+          });
+        }
+      },
       // Идентичность сущности для повторного открытия (ошибки c2d243bb,
       // 74d9b4ed): второй клик по строке этого типа — или по «Добавить» при
       // ещё не созданном типе (`thought-type:new`) — поднимает этот диалог,
@@ -1480,13 +1511,33 @@ export function showThoughtTypeEditor(
         },
       ],
       onMount: (_close, box) => {
+        dialogRoot = box;
         // Шапку диалога можно переписать после первой записи: каркас отдаёт
         // бокс диалога (оба уже в DOM к моменту onMount).
         dialogTitleEl = box.querySelector<HTMLElement>('.dialog-title');
         syncDialogTitle();
         nameInput.focus();
+        // Чужой захват (ошибка 4f18d9f5) и его снятие (2301d73d): форма
+        // следует за кэшем захватов — чтение, затем снова редактирование,
+        // без закрытия/переоткрытия диалога.
+        if (type !== null) {
+          unbindLock = subscribeForeignLockState('thought_type', type.id, (holder) => {
+            blockedMessage = holder === null ? null : blockedByLockMessage('thought_type', holder);
+            if (blockedMessage !== null) {
+              blockEditingSurface({
+                root: box,
+                message: blockedMessage,
+                commitButtons: [saveBtn, applyBtn],
+              });
+            } else {
+              unblockEditingSurface(box);
+            }
+            revalidateName();
+          });
+        }
       },
       onClose: () => {
+        unbindLock();
         viewsTab.dispose();
         void releaseHeld(editLock);
         editLock = null;

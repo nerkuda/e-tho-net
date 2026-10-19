@@ -79,6 +79,28 @@ describe('lib/ui/field: контрол и строка поля', () => {
     assert.equal(bare.classList.contains(f.FIELD_CONTROL_CLASS), false, 'bare — без базового класса');
   });
 
+  it('fieldSelect: закрытый список, значение, состояние и событие', async () => {
+    const f = await field();
+    const changes: string[] = [];
+    const select = f.fieldSelect({
+      value: '7',
+      options: [
+        { value: '1', label: 'Понедельник' },
+        { value: '7', label: 'Воскресенье' },
+      ],
+      onChange: (value) => changes.push(value),
+    });
+    assert.equal(select.value, '7', 'значение выбрано');
+    const shimSelect = shim(select);
+    assert.deepEqual(shimSelect.children.map((c) => c.value), ['1', '7']);
+    assert.deepEqual(shimSelect.children.map((c) => c.textContent), ['Понедельник', 'Воскресенье']);
+    assert.ok(select.classList.contains(f.FIELD_CONTROL_CLASS), 'базовый класс поля');
+    shimSelect.value = '1';
+    shimSelect.emit('change');
+    assert.deepEqual(changes, ['1'], 'смена значения доходит до потребителя');
+    assert.equal(f.fieldSelect({ options: [], disabled: true }).disabled, true);
+  });
+
   it('fieldTextarea несёт многострочный класс', async () => {
     const f = await field();
     const area = f.fieldTextarea({ rows: 3, value: 'x' });

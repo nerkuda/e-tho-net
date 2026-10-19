@@ -752,7 +752,10 @@ describe('etn.import.* + etn.export.subgraph { format: "etnx" } (0.7.2 P3)', {
         };
       }>(importRes);
       assert.equal(importData.imported.thoughts_created, beforeThoughts);
-      assert.equal(importData.imported.links_created, beforeLinks);
+      // Внутренние связи архива + одна корневая связь HOME → корень подграфа
+      // (ошибка e1082889: раньше корень оставался без привязки к родителю,
+      // и тест закреплял дефектное поведение).
+      assert.equal(importData.imported.links_created, beforeLinks + 1);
     } finally {
       await w.closeAll();
     }

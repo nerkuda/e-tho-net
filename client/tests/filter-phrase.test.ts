@@ -674,6 +674,118 @@ describe('композер фразы: футер берёт preview из ком
 });
 
 // ---------------------------------------------------------------------------
+// 4б. Разметка раскраски: операторы И/ИЛИ/НЕ и скобки уровней
+// (правка заказчика 2026-10-14, п.12в; задача 58f77990)
+// ---------------------------------------------------------------------------
+
+describe('композер фразы: разметка раскраски (задача 58f77990)', () => {
+  const a = leaf({ kind: 'active' }, 'eq', { kind: 'scalar', value: true });
+  const b = leaf({ kind: 'trashed' }, 'eq', { kind: 'scalar', value: false });
+  const comment = leaf({ kind: 'comment' }, 'not_empty');
+
+  it('операторы и скобки — отдельные токены, а текст фразы не меняется', () => {
+    const nested = group('and', [group('or', [a, b]), comment]);
+    const tokens = mod.filterPhraseTokens({ tree: nested }, ctx());
+    // Текстовая версия — конкатенация токенов: одна модель, две проекции.
+    assert.equal(
+      tokens.map((t) => t.text).join(''),
+      '(Актуальность = да ИЛИ Помечено на удаление = нет) И Есть комментарий заполнено',
+    );
+    assert.equal(tokens.map((t) => t.text).join(''), mod.composeFilterPhrase({ tree: nested }, ctx()));
+    const operators = tokens.filter((t) => t.kind === 'operator');
+    assert.deepEqual(operators.map((t) => t.operator), ['or', 'and'], 'коннекторы — токены-операторы');
+    assert.deepEqual(operators.map((t) => t.text), [' ИЛИ ', ' И ']);
+    const parens = tokens.filter((t) => t.kind === 'paren');
+    assert.deepEqual(parens.map((t) => t.text), ['(', ')'], 'скобка — самостоятельный токен');
+    // Уровень вложенности группы — на скобках (тон считает представление,
+    // источник цикла тонов — `lib/filter-tree.ts`).
+    assert.deepEqual(parens.map((t) => t.depth), [1, 1], 'скобки несут уровень вложенности группы');
+  });
+
+  it('«НЕ» — оператор-префикс, у одиночного ребёнка коннектора нет', () => {
+    const tokens = mod.filterPhraseTokens({ tree: group('not', [a]) }, ctx());
+    assert.deepEqual(tokens[0], { kind: 'operator', text: 'НЕ ', operator: 'not' });
+    assert.equal(tokens.map((t) => t.text).join(''), 'НЕ Актуальность = да');
+    // Одиночный ребёнок группы «И» оператора не получает (п.12а).
+    const single = mod.filterPhraseTokens({ tree: group('and', [a]) }, ctx());
+    assert.deepEqual(single.map((t) => t.kind), ['text']);
+  });
+
+  it('скобки несут уровень вложенности, уровни растут по дереву', () => {
+    // Пять уровней вложенности разных коннекций: каждая вложенная группа берётся
+    // в скобки, уровень пары — глубина группы в дереве.
+    let node: any = a;
+    for (const op of ['and', 'or', 'and', 'or', 'and'] as const) node = group(op, [node]);
+    const tokens = mod.filterPhraseTokens({ tree: node }, ctx());
+    const opens = tokens.filter((t) => t.kind === 'paren' && t.text === '(').map((t) => t.depth);
+    assert.deepEqual(opens, [1, 2, 3, 4], 'уровень вложенности растёт по дереву');
+    // Открывающая и закрывающая скобки пары — один уровень (стек-алгоритм).
+    const stack: number[] = [];
+    for (const token of tokens) {
+      if (token.kind !== 'paren') continue;
+      if (token.text === '(') stack.push(token.depth!);
+      else assert.equal(stack.pop(), token.depth, 'скобки пары — одного уровня');
+    }
+    assert.deepEqual(stack, [], 'все пары закрыты');
+  });
+
+  it('обрезка: токены режутся ДО раскраски, текстовый предел тот же', () => {
+    const tree = group('and', [
+      leaf({ kind: 'property', property_id: CITY.id }, 'eq', { kind: 'scalar', value: 'Москва' }),
+      leaf({ kind: 'property', property_id: TERM.id }, 'eq', { kind: 'scalar', value: '2026-01-31' }),
+    ]);
+    const short = mod.composeFilterPhrase({ tree }, ctx({ limit: 30 }));
+    const tokens = mod.filterPhraseTokens({ tree }, ctx({ limit: 30 }));
+    assert.equal(tokens.map((t) => t.text).join(''), short, 'текст токенов = обрезанная фраза');
+    assert.ok(short.length <= 30, 'предел соблюдён и в токенах');
+    assert.ok(short.endsWith('…'), 'обрезка помечена');
+    assert.equal(tokens[tokens.length - 1]!.text, '…', 'многоточие — свой токен, не часть тега');
+    assert.equal(
+      tokens.every((t) => t.kind === 'text' || t.text.length > 0),
+      true,
+      'пустых/разорванных токенов нет',
+    );
+    // Не обрезанная фраза: последний токен — не многоточие.
+    const full = mod.filterPhraseTokens({ tree }, ctx());
+    assert.notEqual(full[full.length - 1]!.text, '…');
+  });
+
+  it('вредоносное имя значения остаётся ТЕКСТОМ токена — разметки модель не несёт', () => {
+    const evil = '<img src=x onerror="alert(1)">';
+    const tokens = mod.filterPhraseTokens(
+      {
+        tree: group('and', [
+          leaf({ kind: 'property', property_id: CITY.id }, 'eq', { kind: 'scalar', value: evil }),
+        ]),
+      },
+      ctx(),
+    );
+    assert.equal(tokens.map((t) => t.text).join(''), `Город = ${evil}`);
+    assert.deepEqual(tokens.map((t) => t.kind), ['text'], 'пользовательские данные — только текст');
+  });
+
+  it('сохранённое определение отбора тоже даёт токены раскраски', () => {
+    const definition = {
+      version: 1,
+      filter: {
+        op: 'and',
+        children: [
+          { entity: { kind: 'active' }, operator: 'eq', value: true },
+          { entity: { kind: 'property', property_id: CITY.id }, operator: 'eq', value: 'Москва' },
+        ],
+      },
+    };
+    const tokens = mod.filterPhraseTokensFromDefinition(definition, ctx());
+    assert.equal(
+      tokens.map((t) => t.text).join(''),
+      mod.composeFilterPhraseFromDefinition(definition, ctx()),
+    );
+    assert.deepEqual(tokens.filter((t) => t.kind === 'operator').map((t) => t.operator), ['and']);
+    assert.deepEqual(mod.filterPhraseTokensFromDefinition(null, ctx()), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 5. Сбор id мыслей для догрузки имён (ошибка d17a8bfd)
 // ---------------------------------------------------------------------------
 

@@ -45,6 +45,7 @@ import { errorDialog, showDialog } from './lib/dialog.js';
 import { openEntityDeleteDialog } from './lib/delete-dialog.js';
 import { div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
+import { resolveThoughtRefs } from './lib/thought-ref-batch.js';
 import { notice } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { uiButton } from './lib/ui/button.js';
@@ -254,6 +255,30 @@ export async function openThoughtDeleteDialog(
     lines,
     blocked: check.blocked,
     alreadyMarked,
+    // Панель использования (спека f7623077, ошибка aca92904): ссылка при
+    // блокировке; ленивый импорт — панель тянет редактор, а редактор уже
+    // зависит от этого модуля (цикл импортов на старте не нужен).
+    usageLink: () => {
+      void import('./screens/usage-panel.js').then((m) =>
+        m.openUsagePanel({ kind: 'thought', id: target.id, title: target.title }),
+      );
+    },
+    refresh: async () => {
+      const next = (await etn.thoughts.deletionCheck(networkId, [target.id]))[target.id];
+      if (next === undefined) return null;
+      const nextLines: string[] = [];
+      if (next.blocked) {
+        for (const reason of blockingReasons('мысль', next.blocking)) {
+          nextLines.push(`Нельзя удалить совсем — ${reason}.`);
+        }
+      }
+      if (next.orphaned_children > 0) {
+        nextLines.push(
+          `${next.orphaned_children} потомк${next.orphaned_children === 1 ? '' : 'ов'} останется без родителей.`,
+        );
+      }
+      return { lines: nextLines, blocked: next.blocked };
+    },
     onPurge: async (close) => {
       try {
         await etn.thoughts.remove(
@@ -350,6 +375,25 @@ export async function openLinkDeleteDialog(
     lines,
     blocked,
     alreadyMarked,
+    // Панель использования для связи: группы свойств нет, показываются
+    // удерживающие слои (спека f7623077).
+    usageLink: () => {
+      void import('./screens/usage-panel.js').then((m) =>
+        m.openUsagePanel({ kind: 'link', id: linkId, title: caption }),
+      );
+    },
+    refresh: async () => {
+      const result = (await etn.links.deletionCheck(networkId, [linkId]))[linkId];
+      if (result === undefined) return null;
+      return {
+        lines: result.blocked
+          ? blockingReasons('связь', result.blocking).map(
+              (reason) => `Нельзя удалить совсем — ${reason}.`,
+            )
+          : [],
+        blocked: result.blocked,
+      };
+    },
     onPurge: async (close) => {
       try {
         const purged = await purgeLinkCompletely(networkId, linkId, link.marked_for_deletion);
@@ -461,9 +505,11 @@ export async function openThoughtGroupDeleteDialog(
   let checks: Record<string, ThoughtDeletionCheckResult>;
   let refs: import('@etn/shared').ThoughtRef[];
   try {
+    // Выбор может быть больше серверного лимита resolve (100 id) — батчер
+    // режет его на чанки и склеивает карточки.
     [checks, refs] = await Promise.all([
       etn.thoughts.deletionCheck(networkId, ids),
-      etn.thoughts.resolve(networkId, ids),
+      resolveThoughtRefs(networkId, ids),
     ]);
   } catch (err) {
     errorDialog('Удаление выбранного', err);

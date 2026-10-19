@@ -40,6 +40,11 @@ const TRANSLATED_FILES = (rel: string): boolean =>
   // строки экрана и карточки — только из словаря.
   rel.startsWith('screens/publications/') ||
   rel === 'editor/publication-card.ts' ||
+  // Панель использования (спека f7623077, ошибка aca92904): новый экран и
+  // ссылка «Открыть использование…» из диалога удаления — строки только из
+  // словаря (требование 0e5ff1c6). Возврат литерала в диалог должен краснить.
+  rel === 'screens/usage-panel.ts' ||
+  rel === 'lib/delete-dialog.ts' ||
   rel === 'lib/dialog.ts' ||
   rel === 'lib/i18n.ts' ||
   rel === 'lib/lang.ts';

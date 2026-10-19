@@ -1149,6 +1149,37 @@ export function createAttachmentFromInputResult(
   );
 }
 
+/** Одна отложенная копия файла вложения: источник → назначение (абсолютные пути). */
+export interface AttachmentFileCopy {
+  source: string;
+  dest: string;
+}
+
+/**
+ * Физически скопировать файлы, отложенные планировщиком
+ * ({@link AttachmentFileCopier.pendingCopies}). Best-effort: сбой отдельного
+ * файла логируется и не роняет операцию (строка вложения уже создана; недостачу
+ * видно в логе). Выполняется на ГЛАВНОМ потоке после коммита — тем же порядком,
+ * что события и аудит: при откате транзакции файлы не создаются.
+ */
+export function copyAttachmentFiles(
+  files: readonly AttachmentFileCopy[],
+  warn?: (message: string, details?: Record<string, unknown>) => void,
+): void {
+  for (const { source, dest } of files) {
+    try {
+      mkdirSync(path.dirname(dest), { recursive: true });
+      copyFileSync(source, dest);
+    } catch (err) {
+      warn?.('вложение: не удалось скопировать файл в целевую сеть', {
+        source,
+        dest,
+        error: String(err),
+      });
+    }
+  }
+}
+
 /**
  * Планировщик физического копирования файлов вложений при **межсетевом**
  * копировании (ошибка b83a7d89 «При копировании мысли между мыслесетями
@@ -1231,25 +1262,23 @@ export class AttachmentFileCopier {
   }
 
   /**
+   * Отложенные копии «источник → назначение» БЕЗ исполнения. Нужны там, где
+   * планирование пути происходит в воркере, а физическая запись — на главном
+   * потоке после коммита (write-пул, задача b9c70dd8): копия файла — эффект
+   * после коммита, как событие или аудит.
+   */
+  pendingCopies(): AttachmentFileCopy[] {
+    return this.pending.map(({ source, dest }) => ({ source, dest }));
+  }
+
+  /**
    * Записать все отложенные копии. Вызывать ПОСЛЕ фиксации БД. Best-effort: сбой
    * отдельного файла логируется и не роняет операцию (строка вложения уже
    * создана; недостачу видно в логе).
    */
   commit(): void {
     if (this.pending.length === 0) return;
-    mkdirSync(this.targetDir(), { recursive: true });
-    for (const { source, dest } of this.pending) {
-      try {
-        copyFileSync(source, dest);
-      } catch (err) {
-        this.warn?.('вложение: не удалось скопировать файл в целевую сеть', {
-          source,
-          dest,
-          error: String(err),
-        });
-      }
-    }
-    this.pending.length = 0;
+    copyAttachmentFiles(this.pending.splice(0, this.pending.length), this.warn);
   }
 
   /** Наименьшее свободное имя `<stem>-<n><ext>` (n ≥ 2) в целевом каталоге. */

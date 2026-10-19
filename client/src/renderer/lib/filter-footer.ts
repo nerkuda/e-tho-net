@@ -30,12 +30,25 @@
  * (`styles/filter-editor.css`) несёт только роли футера, секции сортировки и
  * подсветки строк.
  *
- * Фраза-превью — точка расширения: её текст и список ошибок даёт хост
- * (`preview`), футер отвечает за показ ≤3 строк, окраску по серьёзности и
- * тултип с полным текстом и перечнем ошибок. Когда красная запись запрещает
+ * Фраза-превью — точка расширения: её текст, токены раскраски и список ошибок
+ * даёт хост (`preview`), футер отвечает за показ ≤3 строк, окраску по серьёзности
+ * и тултип с полным текстом и перечнем ошибок. Когда красная запись запрещает
  * применение и у неё есть адрес строки, текст фразы становится точкой перехода
  * к проблемной строке (клик) — отдельной кнопки «исправить» нет (требование
  * заказчика 2026-10-14, п.10).
+ *
+ * Раскраска фразы (правка заказчика 2026-10-14, п.12в; задача 58f77990): строка
+ * фразы и её тултип собираются ИЗ ОДНИХ токенов композера — операторы И/ИЛИ/НЕ
+ * и скобки уровней вложенности отдельными спанами (`ff-ph-op--*`,
+ * `ff-ph-paren--t*`, цвета — токены темы). Разметка строится ТОЛЬКО узлами
+ * (`renderFilterPhrase`, `innerHTML` не используется), поэтому имена мыслей и
+ * значения во фразу попадают текстом и разметкой стать не могут. Тултип —
+ * элемент `.ff-preview__tip` (нативный `title` разметку не умеет), показывается
+ * наведением/фокусом; текстовая форма тултипа (`filterFooterTooltip`) остаётся
+ * для потребителей без DOM. Подсказка не живёт только на наведении (стандарт
+ * 1b5f6200): фраза — точка табуляции (`tabIndex = 0` при непустой фразе, `-1`
+ * без неё), кольцо фокуса — `:focus-visible` из токенов, содержимое подсказки
+ * связано с фразой `aria-describedby`.
  */
 
 import { div, setTooltip, span } from './dom.js';
@@ -47,10 +60,14 @@ import {
   type FilterIssue,
 } from './filter-diagnostics.js';
 import {
-  composeFilterPhrase,
+  filterPhraseTokens,
   type FilterPhraseContext,
+  type FilterPhraseOperator,
   type FilterPhraseState,
+  type FilterPhraseToken,
 } from './filter-phrase.js';
+// Цикл тонов вложенности — ОДИН источник на дерево и фразу (`filterTreeToneIndex`).
+import { filterTreeToneIndex } from './filter-tree.js';
 import { fieldInput, wrapClearable } from './ui/field.js';
 import { iconButton, uiButton, type ButtonRole } from './ui/button.js';
 import { svgIcon } from './ui/icon.js';
@@ -83,6 +100,79 @@ export const FILTER_FOOTER_DIVIDER_CLASS = 'ff-divider';
  */
 export const FILTER_FOOTER_PREVIEW_LINES = 3;
 
+/**
+ * Класс тултипа фразы (задача 58f77990, п.12в): подсказка несёт ТУ ЖЕ разметку
+ * раскраски, что и строка фразы. Нативный `title` разметку не умеет, поэтому
+ * тултип — элемент превью, показываемый наведением/фокусом (`styles/filter-editor.css`).
+ */
+export const FILTER_FOOTER_TIP_CLASS = 'ff-preview__tip';
+
+/**
+ * Счётчик футеров — для УНИКАЛЬНЫХ id подсказок фразы (`aria-describedby`
+ * связывает фразу с её подсказкой; id обязан быть уникален в документе).
+ */
+let footerSeq = 0;
+
+/** Базовый класс токена-оператора коннекции во фразе. */
+export const FILTER_FOOTER_OPERATOR_BASE_CLASS = 'ff-ph-op';
+
+/** Базовый класс токена-скобки во фразе. */
+export const FILTER_FOOTER_PAREN_BASE_CLASS = 'ff-ph-paren';
+
+/**
+ * Классы операторов коннекции И/ИЛИ/НЕ (цвета — `styles/filter-editor.css`,
+ * токены темы; hex в модуле и его CSS нет).
+ */
+export const FILTER_FOOTER_OPERATOR_CLASSES: Readonly<Record<FilterPhraseOperator, string>> = {
+  and: `${FILTER_FOOTER_OPERATOR_BASE_CLASS} ${FILTER_FOOTER_OPERATOR_BASE_CLASS}--and`,
+  or: `${FILTER_FOOTER_OPERATOR_BASE_CLASS} ${FILTER_FOOTER_OPERATOR_BASE_CLASS}--or`,
+  not: `${FILTER_FOOTER_OPERATOR_BASE_CLASS} ${FILTER_FOOTER_OPERATOR_BASE_CLASS}--not`,
+};
+
+/**
+ * Класс скобки по уровню вложенности группы: тон берётся из цикла тонов
+ * вложенности дерева условий ({@link filterTreeToneIndex}, `lib/filter-tree.ts`) —
+ * источник тонов один, второго словаря цветов нет. Цвета классов — токены темы.
+ */
+export function filterPhraseParenClass(depth: number): string {
+  return `${FILTER_FOOTER_PAREN_BASE_CLASS} ${FILTER_FOOTER_PAREN_BASE_CLASS}--t${filterTreeToneIndex(depth) + 1}`;
+}
+
+/**
+ * Токен фразы узлом разметки: текст — инертный спан-текст (пользовательские
+ * данные идут текстом, разметку из имени мысли собрать нельзя), оператор и
+ * скобка — спаны раскраски. `innerHTML` не используется нигде: фраза собирается
+ * узлами, поэтому экранирование не требуется по построению.
+ */
+export function filterPhraseTokenNode(token: FilterPhraseToken): HTMLSpanElement {
+  if (token.kind === 'operator' && token.operator !== undefined) {
+    return span(token.text, FILTER_FOOTER_OPERATOR_CLASSES[token.operator]);
+  }
+  if (token.kind === 'paren') return span(token.text, filterPhraseParenClass(token.depth ?? 0));
+  return span(token.text);
+}
+
+/**
+ * Заполняет узел разметкой фразы. Токенов нет (хост дал только текст) —
+ * текстовая деградация: текст кладётся ТЕКСТОМ, а не разметкой, и СНАЧАЛА
+ * снимается прежнее содержимое. Порядок обязателен: `replaceChildren()` без
+ * аргументов снимает ВСЁ содержимое узла, поэтому вызов после `textContent = …`
+ * стёр бы только что вставленный текст (задача 58f77990, п.1 — публичный
+ * контракт `tokens?` ломался; юнит-шим это маскировал до правки `dom-shim.ts`).
+ */
+export function renderFilterPhrase(
+  host: HTMLElement,
+  tokens: readonly FilterPhraseToken[] | undefined,
+  text: string,
+): void {
+  if (tokens === undefined || tokens.length === 0) {
+    host.replaceChildren();
+    host.textContent = text;
+    return;
+  }
+  host.replaceChildren(...tokens.map((token) => filterPhraseTokenNode(token)));
+}
+
 // ---------------------------------------------------------------------------
 // Параметры
 // ---------------------------------------------------------------------------
@@ -91,6 +181,12 @@ export const FILTER_FOOTER_PREVIEW_LINES = 3;
 export interface FilterFooterPreview {
   /** Фраза отбора (полный текст; показывается ≤3 строк, тултип — весь). */
   text: string;
+  /**
+   * Токены раскраски фразы (задача 58f77990, п.12в): из них собирается И строка
+   * фразы, И тултип — разметка одна. Не заданы (хост дал только текст) —
+   * текстовая деградация без раскраски.
+   */
+  tokens?: readonly FilterPhraseToken[];
   /** Записи диагностики: красное запрещает применение, жёлтое — нет. */
   issues?: readonly FilterIssue[];
 }
@@ -215,8 +311,20 @@ export function filterFooterApplyBlocked(preview: FilterFooterPreview | undefine
 }
 
 /**
+ * Подсказка о переходе к проблемной строке — ОДИН текст на текстовый тултип
+ * ({@link filterFooterTooltip}) и на разметочный тултип фразы.
+ */
+export const FILTER_FOOTER_TIP_HINT = 'Нажмите на текст, чтобы перейти к строке с ошибкой';
+
+/** Классы частей разметочного тултипа фразы (вид — `styles/filter-editor.css`). */
+const TIP_ISSUES_CLASS = 'ff-preview__tip-issues';
+const TIP_ISSUE_CLASS = 'ff-preview__tip-issue';
+const TIP_HINT_CLASS = 'ff-preview__tip-hint';
+
+/**
  * Тултип превью: полный текст фразы и список ошибок — включая те, что редактор
- * не смог локализовать в строку (требование cf8fdd4d).
+ * не смог локализовать в строку (требование cf8fdd4d). Это ТЕКСТОВАЯ форма для
+ * потребителей без DOM; футер показывает тултип разметкой (`fillPreviewTip`).
  */
 export function filterFooterTooltip(preview: FilterFooterPreview): string {
   const lines: string[] = [preview.text];
@@ -229,12 +337,34 @@ export function filterFooterTooltip(preview: FilterFooterPreview): string {
 
 /**
  * Стандартный источник превью из композера: фраза дерева с хвостом сортировки
- * (задача 3cb50258, элемент ca905fbc). Пустая фраза — «превью нет»: отбор без
- * условий и сортировки футер не подписывает.
+ * (задача 3cb50258, элемент ca905fbc) — токенами раскраски и строкой (задача
+ * 58f77990). Пустая фраза — «превью нет»: отбор без условий и сортировки футер
+ * не подписывает.
  */
 export function filterFooterPhrasePreview(source: FilterFooterPhraseSource): FilterFooterPreview | undefined {
-  const text = composeFilterPhrase(source.state(), source.phrase);
-  return text === '' ? undefined : { text };
+  const tokens = filterPhraseTokens(source.state(), source.phrase);
+  if (tokens.length === 0) return undefined;
+  return { text: tokens.map((token) => token.text).join(''), tokens };
+}
+
+/**
+ * Наполняет тултип фразы той же разметкой, что и строку фразы, плюс список
+ * ошибок и подсказка о переходе (задача 58f77990, п.12в). Строку и тултип
+ * собирает одна функция ({@link renderFilterPhrase}) — разойтись не могут.
+ */
+function fillPreviewTip(tip: HTMLElement, preview: FilterFooterPreview, fixPath: string | null): void {
+  const line = span('');
+  renderFilterPhrase(line, preview.tokens, preview.text);
+  const parts: Node[] = [line];
+  const issues = preview.issues ?? [];
+  if (issues.length > 0) {
+    const list = div(TIP_ISSUES_CLASS);
+    for (const issue of issues) list.append(span(`• ${filterIssueReason(issue)}`, TIP_ISSUE_CLASS));
+    parts.push(list);
+  }
+  if (fixPath !== null) parts.push(span(FILTER_FOOTER_TIP_HINT, TIP_HINT_CLASS));
+  tip.textContent = '';
+  tip.replaceChildren(...parts);
 }
 
 /** Кнопка профиля места применения — общий вид для обоих рядов футера. */
@@ -333,7 +463,16 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     (phraseSource === undefined ? undefined : () => filterFooterPhrasePreview(phraseSource));
   const previewBox = div(FILTER_FOOTER_PREVIEW_CLASS);
   const previewText = span('', 'ff-preview__text');
-  previewBox.append(previewText);
+  /** Тултип фразы: та же разметка раскраски (нативный `title` её не умеет). */
+  const previewTip = div(FILTER_FOOTER_TIP_CLASS);
+  // Тултип достижим не только мышью (стандарт 1b5f6200): фраза — точка
+  // табуляции (`tabIndex` в `refresh`, кольцо — `:focus-visible` в CSS), фокус
+  // внутри превью показывает подсказку (`:focus-within`), а содержимое подсказки
+  // связано с фразой через `aria-describedby`.
+  previewTip.id = `ff-preview-tip-${(footerSeq += 1)}`;
+  previewText.tabIndex = -1;
+  previewText.setAttribute('aria-describedby', previewTip.id);
+  previewBox.append(previewText, previewTip);
   // Разделитель под фразой: отделяет «редактор отбора» (фраза) от команд —
   // имени отбора и кнопок (требование заказчика 2026-10-14, п.1).
   const divider = div(FILTER_FOOTER_DIVIDER_CLASS);
@@ -398,15 +537,24 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     if (previewFn !== undefined) {
       const preview = previewFn();
       if (preview === undefined) {
-        // Фразы нет (пустой отбор) — подпись снимается, запрет применения тоже.
-        previewText.textContent = '';
+        // Фразы нет (пустой отбор) — подпись снимается, тултип прячется, запрет
+        // применения тоже. Пустая фраза не точка табуляции: фокусировать нечего.
+        renderFilterPhrase(previewText, undefined, '');
+        previewText.tabIndex = -1;
         previewText.classList.remove(FILTER_FOOTER_PREVIEW_ACTION_CLASS);
         delete previewBox.dataset['severity'];
+        previewTip.style.display = 'none';
+        previewTip.replaceChildren();
         if (applyButton !== null) applyButton.disabled = false;
         fixPath = null;
       } else {
         const issues = preview.issues ?? [];
-        previewText.textContent = preview.text;
+        // Фраза и её тултип — ОДНА разметка из одних токенов (п.12в). Фраза —
+        // точка табуляции, если она непустая: подсказка доступна без мыши
+        // (стандарт 1b5f6200); пустую строку (превью только с диагностикой)
+        // фокусировать нечего.
+        renderFilterPhrase(previewText, preview.tokens, preview.text);
+        previewText.tabIndex = preview.text === '' ? -1 : 0;
         const severity = worstFilterIssueSeverity(issues);
         if (severity === null) delete previewBox.dataset['severity'];
         else previewBox.dataset['severity'] = severity;
@@ -417,17 +565,18 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
         const target = blocked ? firstLocalizedErrorIssue(issues) : null;
         fixPath = target === null ? null : target.path;
         previewText.classList.toggle(FILTER_FOOTER_PREVIEW_ACTION_CLASS, fixPath !== null);
-        const tooltip = filterFooterTooltip(preview);
-        setTooltip(
-          previewBox,
-          fixPath === null
-            ? tooltip
-            : `${tooltip}\n\nНажмите на текст, чтобы перейти к строке с ошибкой`,
-        );
+        // Тултип показывается, когда есть что показать: фразу или диагностику.
+        fillPreviewTip(previewTip, preview, fixPath);
+        if (preview.text !== '' || issues.length > 0) {
+          previewTip.style.display = '';
+        } else {
+          previewTip.style.display = 'none';
+          previewTip.replaceChildren();
+        }
       }
       // Линия-разделитель есть только под непустой фразой: пустой отбор не
       // отделяет «ничего» от команд (п.1).
-      divider.hidden = previewText.textContent === '';
+      divider.hidden = preview === undefined || preview.text === '';
     }
   }
 

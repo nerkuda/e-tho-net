@@ -1954,4 +1954,80 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  // Ошибка d3da79e0: для reused-мысли `continue` стоял до обработки вложенных
+  // блоков — строки создавались, но событий, activity_log и WS не было.
+  it('reused thought: comment/chronicle дают события, журнал и WS (d3da79e0)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ ref: 'a', thought: { title: 'Существующая мысль' } }],
+          },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const thoughtId = toolJson<WriteResult>(created).items[0]!.id;
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const beforeActivity = (
+          ndb
+            .prepare('SELECT COUNT(*) AS c FROM activity_log WHERE network_id = ?')
+            .get(ctx.networkId) as { c: number }
+        ).c;
+        const beforeSeq = ctx.sys.readEventsAfter(ctx.networkId, 0, 10_000).at(-1)?.seq ?? 0;
+
+        const live: string[] = [];
+        const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event) => {
+          live.push(event.type);
+        });
+
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [
+              {
+                thought_id: thoughtId,
+                comment: { body_md: 'Обновлённое описание' },
+                chronicle: [{ title: 'Запись 1', body_md: 'Тело записи' }],
+              },
+            ],
+          },
+        });
+        unsubscribe();
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        assert.equal(data.items[0]?.thought_action, 'reused', 'мысль должна быть reused');
+
+        // События вложенных блоков записаны и опубликованы.
+        const appended = ctx.sys.readEventsAfter(ctx.networkId, beforeSeq, 20);
+        const types = appended.map((e) => e.type);
+        assert.ok(
+          types.filter((t) => t === 'comment.created').length >= 2,
+          `permanent + chronicle обязаны дать comment.created: ${types.join(', ')}`,
+        );
+        assert.ok(!types.includes('thought.updated'), 'событие самой reused-мысли не эмитится');
+        assert.ok(live.includes('comment.created'), 'WS-событие comment.created опубликовано');
+
+        // Журнал активности пополнился записями комментариев.
+        const afterActivity = (
+          ndb
+            .prepare('SELECT COUNT(*) AS c FROM activity_log WHERE network_id = ?')
+            .get(ctx.networkId) as { c: number }
+        ).c;
+        assert.ok(
+          afterActivity - beforeActivity >= 2,
+          `журнал должен вырасти на 2+ записи (${beforeActivity} → ${afterActivity})`,
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });

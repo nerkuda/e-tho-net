@@ -24,6 +24,7 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
+import { closeNetworkDb } from '../src/db/network-db.js';
 
 const yauzlFromBuffer = promisify<
   Buffer,
@@ -408,6 +409,69 @@ describe(
         });
         assert.equal(missing.statusCode, 404);
       } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    // Ошибка 175b2803: имя файла с кириллицей уходило в content-disposition
+    // сырым → ERR_INVALID_CHAR в setHeader и падение процесса. Заголовок
+    // обязан быть ASCII-only (RFC 5987 + fallback), скачивание — 200.
+    it('download .etnx сети с кириллическим именем: ASCII-заголовок, сервер жив', async () => {
+      const ctx = await buildRestContext();
+      const extraNetworkId: string[] = [];
+      try {
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: authHeaders(ctx),
+          payload: { display_name: 'Кириллица-краш' },
+        });
+        assert.equal(created.statusCode, 201, created.body);
+        const networkId = (created.json().data as { id: string }).id;
+        extraNetworkId.push(networkId);
+
+        const thought = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${networkId}/thoughts`,
+          headers: authHeaders(ctx),
+          payload: { title: 'Кириллица' },
+        });
+        assert.equal(thought.statusCode, 201, thought.body);
+        const thoughtId = (thought.json().data as { id: string }).id;
+
+        const start = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${networkId}/export`,
+          headers: authHeaders(ctx),
+          payload: { thought_ids: [thoughtId], format: 'etnx' },
+        });
+        assert.equal(start.statusCode, 202, start.body);
+        const jobId = (start.json().data as { job_id: string }).job_id;
+
+        const download = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/jobs/${jobId}/download`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(download.statusCode, 200, download.body);
+
+        const cd = String(download.headers['content-disposition'] ?? '');
+        assert.match(cd, /^[\x20-\x7e]+$/, `заголовок обязан быть ASCII-only: ${cd}`);
+        assert.match(cd, /^attachment; filename="etn-.*\.etnx"; filename\*=UTF-8''etn-/, cd);
+        assert.ok(cd.includes('%D0%9A'), 'кириллица должна быть percent-encoded в filename*');
+
+        const fallback = /filename="([^"]+)"/.exec(cd)?.[1] ?? '';
+        assert.match(fallback, /^[\x20-\x7e]+$/, `fallback обязан быть ASCII-only: ${fallback}`);
+
+        // Процесс не упал: следующий запрос обслуживается тем же приложением.
+        const alive = await ctx.app.inject({
+          method: 'GET',
+          url: '/api/v1/networks',
+          headers: authHeaders(ctx),
+        });
+        assert.equal(alive.statusCode, 200);
+      } finally {
+        for (const id of extraNetworkId) closeNetworkDb(id);
         await closeRestContext(ctx);
       }
     });

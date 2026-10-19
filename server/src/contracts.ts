@@ -55,6 +55,7 @@ import {
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
   parseLinkTypeFilterValue,
+  THOUGHT_RESOLVE_MAX_IDS,
   PROPERTY_OWNER_TYPES,
   PROPERTY_VALUE_TYPES,
   PUBLICATION_ACTIVE_FILTERS,
@@ -67,11 +68,16 @@ import {
   TYPES_LIST_SCOPES,
   TYPE_OWNER_TYPES,
   type EtnErrorCode,
+  type CommentOwnerType,
+  type FocusDir,
+  type FocusNeighbor,
   type LinkTypeFilterInput,
   type McpThoughtWriteParams,
   type SearchRequest,
   type StructureDirectionFlags,
   type SubgraphEdge,
+  type ThoughtBatchOp,
+  type ThoughtCopyInput,
   type ThoughtCreateInput,
   type ThoughtRef,
 } from '@etn/shared';
@@ -88,13 +94,14 @@ import {
   summaryHasMarkdownHeadings,
 } from './domain/publication-validation.js';
 import { validateLayerColors } from './domain/layer-service.js';
-import type { TraversalBounds } from './domain/graph-traversal.js';
+import type { TraversalBounds, TraverseDirection } from './domain/graph-traversal.js';
 import type {
   AstTokenContext,
   QueryStats,
   ThoughtQueryOptions,
   ThoughtQueryRequest,
 } from './domain/query-service.js';
+import type { NeighborOptions } from './domain/thought-service.js';
 
 // ---------------------------------------------------------------------------
 // Общие zod-куски (до вехи 8 — `mcp/tools/shared.ts`)
@@ -1136,7 +1143,7 @@ export const ThoughtsResolve = defineContract(
   'etn.thoughts.resolve',
   z.object({
     network_id: NetworkId,
-    thought_ids: z.array(ThoughtId).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+    thought_ids: z.array(ThoughtId).min(1).max(THOUGHT_RESOLVE_MAX_IDS),
     view: View,
   }),
   {},
@@ -3588,16 +3595,16 @@ export const RestNeighborsQuery = defineContract(
   },
 );
 
-/** Тело resolve (ids может быть пустым) и focus-операций. */
+/** Тело resolve (ids может быть пустым, но не больше `THOUGHT_RESOLVE_MAX_IDS`). */
 export const RestResolveIdsBody = defineContract(
   'rest:thoughts.resolve-body',
   z.object({}),
   {
     ids: {
       from: { kind: 'body' },
-      t: z.array(z.string()),
+      t: z.array(z.string()).max(THOUGHT_RESOLVE_MAX_IDS),
       req: true,
-      msg: 'ids обязателен (массив строк).',
+      msg: `ids должен быть массивом строк (до ${THOUGHT_RESOLVE_MAX_IDS} элементов).`,
     },
   },
 );
@@ -4283,7 +4290,21 @@ export interface ReaderTaskContext {
 }
 
 /** Имена операций, исполняемых reader-воркером. Только чтение. */
-export type ReaderOp = 'thoughts.query' | 'thoughts.queryIds' | 'search.query' | 'graph.subgraph';
+export type ReaderOp =
+  | 'thoughts.query'
+  | 'thoughts.queryIds'
+  | 'thoughts.resolve'
+  | 'thoughts.resolveCards'
+  | 'thoughts.neighbors'
+  | 'thoughts.findDuplicates'
+  | 'search.query'
+  | 'graph.subgraph'
+  | 'graph.traverse'
+  | 'comments.list'
+  | 'comments.visible'
+  | 'comments.presented'
+  | 'comments.permanentPresented'
+  | 'comments.previewBatch';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
 export interface ReaderThoughtsQueryPayload {
@@ -4317,12 +4338,100 @@ export interface ReaderSubgraphResult {
   truncated: boolean;
 }
 
+/** Payload `thoughts.resolve` / `thoughts.resolveCards` — батч по id. */
+export interface ReaderResolvePayload {
+  ids: string[];
+}
+
+/**
+ * Payload `thoughts.neighbors`: страница соседей одного направления плюс
+ * честный `total` (тот же WHERE без LIMIT/OFFSET). Одна задача вместо двух
+ * (`getNeighbors` + `countNeighbors`) — паритет REST и MCP.
+ */
+export interface ReaderNeighborsPayload {
+  thoughtId: string;
+  dir: FocusDir;
+  opts: NeighborOptions;
+  limit?: number;
+  offset?: number;
+}
+
+/** Результат `thoughts.neighbors`. */
+export interface ReaderNeighborsResult {
+  neighbors: FocusNeighbor[];
+  total: number;
+}
+
+/** Payload `graph.traverse` — ограниченный BFS-обход. */
+export interface ReaderTraversePayload {
+  seedIds: string[];
+  direction: TraverseDirection;
+  bounds: TraversalBounds;
+}
+
+/** Результат `graph.traverse` (совпадает с доменным `TraversalResult`). */
+export interface ReaderTraverseResult {
+  ids: string[];
+  truncated: boolean;
+  reason?: 'max_depth' | 'max_nodes';
+}
+
+/** Payload `thoughts.findDuplicates` — кандидаты дублей по заголовку/синонимам. */
+export interface ReaderFindDuplicatesPayload {
+  title: string;
+  synonyms: string[];
+  typeIds: string[];
+}
+
+/** Payload `comments.list` — комментарии владельца. */
+export interface ReaderCommentsListPayload {
+  ownerType: CommentOwnerType;
+  ownerId: string;
+}
+
+/** Payload `comments.visible` — видимая редакция комментария по id. */
+export interface ReaderCommentByIdPayload {
+  commentId: string;
+}
+
+/** Payload `comments.permanentPresented` — постоянный комментарий владельца. */
+export interface ReaderPermanentCommentPayload {
+  ownerType: CommentOwnerType;
+  ownerId: string;
+}
+
+/**
+ * Payload `comments.previewBatch` — превью комментариев для набора владельцев
+ * (подграф с `include_comments`): один воркер-обход вместо цикла GET в
+ * главном потоке.
+ */
+export interface ReaderCommentsPreviewPayload {
+  ownerType: CommentOwnerType;
+  ownerIds: string[];
+  previewChars: { permanent?: number; chronological?: number };
+  /**
+   * Разворачивать трансклюзии в телах (MCP-фасад подграфа). Воркер создаёт
+   * собственный expander на всю пачку.
+   */
+  expandTransclusions: boolean;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
 export type ReaderTask = { context: ReaderTaskContext } & (
   | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
   | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
+  | { op: 'thoughts.resolve'; payload: ReaderResolvePayload }
+  | { op: 'thoughts.resolveCards'; payload: ReaderResolvePayload }
+  | { op: 'thoughts.neighbors'; payload: ReaderNeighborsPayload }
+  | { op: 'thoughts.findDuplicates'; payload: ReaderFindDuplicatesPayload }
   | { op: 'search.query'; payload: ReaderSearchPayload }
   | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
+  | { op: 'graph.traverse'; payload: ReaderTraversePayload }
+  | { op: 'comments.list'; payload: ReaderCommentsListPayload }
+  | { op: 'comments.visible'; payload: ReaderCommentByIdPayload }
+  | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
+  | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
+  | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
 );
 
 /** `depths` в плоском виде (Map не переживает structured clone). */
@@ -4436,9 +4545,15 @@ export interface WriteCrossNetworkFacts {
 /**
  * Имена операций, исполняемых write-воркером. Этап 1 переноса — батч-запись
  * мыслей (`write.thoughts`); REST-путь создания мысли GUI-клиента — единичная
- * запись `write.thought` (задача c744e05c, та же архитектура пула).
+ * запись `write.thought` (задача c744e05c); батчевые REST-пути `POST /thoughts/batch`
+ * (`write.thought.batch`) и `POST /thoughts/copy-batch` (`write.thought.copy`) —
+ * задача b9c70dd8.
  */
-export type WriteOp = 'write.thoughts' | 'write.thought';
+export type WriteOp =
+  | 'write.thoughts'
+  | 'write.thought'
+  | 'write.thought.batch'
+  | 'write.thought.copy';
 
 /** Payload `write.thoughts` — тот же вход, что у `writeThoughts` в домене. */
 export interface WriteThoughtsPayload {
@@ -4462,6 +4577,65 @@ export interface WriteThoughtPayload {
 }
 
 /**
+ * Нормализованные аргументы общей групповой операции батча (подмножество
+ * `ThoughtBatchArgs`): резолв имён и валидация уже выполнены фасадом (роутом),
+ * воркеру остаётся только применить операцию. Плоский структурно-клонируемый DTO.
+ */
+export interface WriteThoughtBatchBulkArgs {
+  type_id?: string | null;
+  parent_ids?: string[];
+  child_ids?: string[];
+  link_type_id?: string | null;
+}
+
+/**
+ * Нормализованные аргументы локальных операций батча
+ * (`link_to_focus`/`unlink_from_focus`). `delete`/`purge` аргументов не имеют.
+ */
+export interface WriteThoughtBatchFocusArgs {
+  direction: 'parent' | 'child';
+  focus_thought_id: string;
+  /** Тип создаваемой связи (`null` — нетипизированная). */
+  link_type_id: string | null;
+  /**
+   * Тип искомой связи при отвязке: `undefined` — любой тип, `null` — только
+   * нетипизированные (семантика `findLinksBetween`).
+   */
+  find_link_type_id?: string | null;
+}
+
+/**
+ * Payload `write.thought.batch` — батчевая операция REST-пути
+ * `POST /thoughts/batch` (задача b9c70dd8): нормализованные фасадом ids/op/args.
+ * Композиция исхода — `composeThoughtBatch` в `domain/write-ops.ts`.
+ */
+export interface WriteThoughtBatchPayload {
+  actorUserId: string;
+  ids: string[];
+  op: ThoughtBatchOp;
+  /** Аргументы общей групповой операции (op ∈ `BULK_THOUGHT_OPS`). */
+  bulk?: WriteThoughtBatchBulkArgs;
+  /** Аргументы локальной операции связи с фокусом. */
+  focus?: WriteThoughtBatchFocusArgs;
+}
+
+/**
+ * Payload `write.thought.copy` — пакетное создание мыслей REST-пути
+ * `POST /thoughts/copy-batch` (задача b9c70dd8). Кросс-сетевой источник здесь —
+ * только КАТАЛОГ ВЛОЖЕНИЙ (`sourceAttachmentsDir`): чужая БД не открывается,
+ * `cross_network_ref` не резолвится, потому задача всегда допускает воркер.
+ * Физическое копирование файлов планируется в воркере (имена копий зависят от
+ * состояния каталога-получателя) и исполняется ГЛАВНЫМ потоком после коммита
+ * (см. `composeThoughtCopyOutcome`).
+ */
+export interface WriteThoughtCopyPayload {
+  input: ThoughtCopyInput;
+  actorUserId: string;
+  /** Абсолютный каталог вложений сети-источника; `null` — внутрисетевое копирование. */
+  sourceAttachmentsDir: string | null;
+}
+
+/**
  * Одна задача write-пула: контекст + op + payload. Замыкания через границу
  * потока не передаются (ADR ca3a9218), поэтому op назван строкой, а данные —
  * плоский structured-clone DTO. Размеченное объединение по `op`: воркер
@@ -4470,6 +4644,8 @@ export interface WriteThoughtPayload {
 export type WriteTask = { context: WriteTaskContext } & (
   | { op: 'write.thoughts'; payload: WriteThoughtsPayload }
   | { op: 'write.thought'; payload: WriteThoughtPayload }
+  | { op: 'write.thought.batch'; payload: WriteThoughtBatchPayload }
+  | { op: 'write.thought.copy'; payload: WriteThoughtCopyPayload }
 );
 
 /**

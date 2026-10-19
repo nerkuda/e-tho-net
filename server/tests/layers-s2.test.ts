@@ -30,7 +30,7 @@ import { networkMigrationsDir } from '../src/paths.js';
 import { networkMigrationFilesFrom } from './migration-files.js';
 import { createComment } from '../src/domain/comment-service.js';
 import { createLink, deleteLink, checkLinkDeletion } from '../src/domain/link-service.js';
-import { createTypeProperty, setPropertyValue, setTypePropertyDefaultOverride } from '../src/domain/property-service.js';
+import { createTypeProperty, findThoughtUsage, setPropertyValue, setTypePropertyDefaultOverride } from '../src/domain/property-service.js';
 import { createThought, deleteThought, checkThoughtDeletion } from '../src/domain/thought-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 
@@ -697,6 +697,11 @@ describe(
         const thoughtCheck = checkThoughtDeletion(ndb, a.id);
         assert.equal(thoughtCheck.blocked, true);
         assert.deepEqual(thoughtCheck.blocking.layers, [{ id: layer, title: 'Слой с правками' }]);
+        // GET …/usage несёт то же удержание (спека f7623077: панель
+        // использования читает holding_layers именно оттуда).
+        assert.deepEqual(findThoughtUsage(ndb, a.id).holding_layers, [
+          { id: layer, title: 'Слой с правками' },
+        ]);
         assert.throws(() => deleteThought(ndb, a.id, undefined, USER), /VALIDATION_ERROR|held/);
 
         // Turn the thought's shadow row into a tombstone — the thought is

@@ -174,9 +174,13 @@ export function disposePublicationCard(): void {
   // синхронно забирает `pendingChanges`, поэтому после сброса терять нечего;
   // поздний `apply` ответа уже no-op (`instance` равен null).
   if (instance !== null && Object.keys(pendingChanges).length > 0) void flushSave();
+  const cardRoot = instance?.root ?? null;
   instance = null;
   pendingChanges = {};
   updaters.length = 0;
+  // Ленивая вкладка «Рецепт» могла быть построена: её редактор отбора снимает
+  // клавиатурные контексты только по явному сигналу (DOM удаляется без событий).
+  cardRoot?.querySelector('.pub-card-recipe')?.dispatchEvent(new CustomEvent('etn:recipe-dispose'));
   coverThumbRef = null;
   tabsHandleRef = null;
   rebuildButtonRef = null;
@@ -694,6 +698,12 @@ function buildRecipePane(): HTMLElement {
   pane.append(textsGroup.root, extrasGroup.root);
 
   let builder: RecipeBuilder | null = null;
+  // Карточку закрывают удалением DOM (события remove в Chromium нет) —
+  // размонтируем редактор отбора по явному сигналу смены цели.
+  recipeHost.addEventListener('etn:recipe-dispose', () => {
+    builder?.destroy();
+    builder = null;
+  });
   /** Снимок определения, из которого билдер собран последний раз: пересборка —
    *  только на ВНЕШНЕМ изменении рецепта, собственный эхо-ответ сервера её не
    *  запускает (ошибка 82aada28 — иначе терялись фокус и свёрнутость групп). */
@@ -794,6 +804,9 @@ function buildRecipePane(): HTMLElement {
     const builderKey = builder === null ? null : JSON.stringify(builder.getDefinition());
     if (registry !== null && (builder === null || (recipeKey !== builderKey && recipeKey !== recipeFromKey))) {
       recipeFromKey = recipeKey;
+      // Пересборка = размонтирование прежнего редактора отбора: иначе его
+      // клавиатурные контексты остаются в реестре `lib/keymap`.
+      builder?.destroy();
       while (recipeHost.firstChild !== null) recipeHost.removeChild(recipeHost.firstChild);
       builder = buildRecipeBuilder({
         registry,

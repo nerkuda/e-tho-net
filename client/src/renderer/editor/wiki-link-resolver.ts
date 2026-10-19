@@ -22,6 +22,7 @@ import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { etn } from '../lib/etn.js';
+import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import { commitEntity, getEntity } from '../lib/live/index.js';
 import { t } from '../lib/i18n.js';
 import { store } from '../state.js';
@@ -565,7 +566,9 @@ export async function resolveLegacyWikiCandidates(
   const exact = exactLegacyCandidates(hits, name);
   if (exact.length === 0) return [];
   try {
-    const refs = await etn.thoughts.resolve(networkId, exact.map((hit) => hit.id));
+    // Кандидатов может быть больше серверного лимита resolve (100) —
+    // батчер режет пачку по `THOUGHT_RESOLVE_MAX_IDS`.
+    const refs = await resolveThoughtRefs(networkId, exact.map((hit) => hit.id));
     const activeById = new Map(refs.map((ref) => [ref.id, ref.active]));
     return exact.filter((hit) => activeById.get(hit.id) !== false);
   } catch {

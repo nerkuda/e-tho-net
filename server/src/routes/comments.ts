@@ -39,11 +39,10 @@ import {
   createCommentWithTargets,
   deleteComment,
   getComment,
-  getVisibleComment,
-  listComments,
   removeCommentTarget,
   updateComment,
 } from '../domain/comment-service.js';
+import { getVisibleCommentAsync, listCommentsAsync } from '../domain/heavy-read.js';
 import {
   parseRest,
   RestCommentAddTarget,
@@ -68,7 +67,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const input = parseRest(RestCommentListOwner, req);
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-          const comments = listComments(ndb, ownerType, input.owner_id);
+          const comments = await listCommentsAsync(ndb, ownerType, input.owner_id);
           sendList(reply, comments, comments.length, 0, comments.length);
         },
       );
@@ -154,7 +153,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         // Паритет с MCP `etn.comments.get` (ошибка ec9918b3): по-id чтение
         // постоянного комментария отдаёт видимую редакцию владельца.
-        const comment = getVisibleComment(ndb, input.comment_id);
+        const comment = await getVisibleCommentAsync(ndb, input.comment_id);
         if (comment === null) {
           throw new EtnError(
             'NOT_FOUND',

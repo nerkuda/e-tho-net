@@ -182,6 +182,23 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
                     property_id: removed.property_id,
                   },
                 },
+                // Свойство-связь: снятие значения пометило рёбра корзиной —
+                // подписчики должны увидеть новое состояние связей.
+                ...(removed.link_ids ?? []).flatMap((linkId) => {
+                  const link = getLink(ndb, linkId);
+                  return link === null
+                    ? []
+                    : [
+                        {
+                          type: 'link.updated' as const,
+                          data: {
+                            id: link.id,
+                            changes: { marked_for_deletion: true },
+                            version: link.version,
+                          },
+                        },
+                      ];
+                }),
               ],
               ...(ownerEntity === null
                 ? {}

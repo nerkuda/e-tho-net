@@ -1,0 +1,164 @@
+{
+  "name": "31b228f0-filter-drop-link-property-row",
+  "description": "Блокер проверки этапа 3: облачко (закреплённое) бросается в ЯЧЕЙКУ «Что» строки условия по свойству-связи «Место» (не в ячейку значения). Ожидание: чип значения появился в строке (виджет обновлён из модели), корень отбора НЕ добавлен, отбор сохранён на сервере со значением-мыслью. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-filter-drop-link-row.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "seed-link-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "Место",
+          "value_type": "link",
+          "name_forward": "Место",
+          "name_reverse": "Здесь"
+        },
+        "expression": "typeof data.id === 'string' && data.value_type === 'link' && data.name === 'Место'"
+      },
+      "expect": true
+    },
+    {
+      "name": "seed-link-filter",
+      "api": {
+        "name": "seed-link-filter",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "body": {
+          "view": "structures",
+          "name": "drop31b228f0-link-row",
+          "definition": {
+            "version": 1,
+            "filter": {
+              "entity": {
+                "kind": "property",
+                "property": "Место"
+              },
+              "operator": "in"
+            }
+          }
+        },
+        "expression": "typeof data.id === 'string'"
+      },
+      "expect": true
+    },
+    {
+      "name": "seed-pin",
+      "api": {
+        "name": "seed-pin",
+        "method": "PUT",
+        "path": "/networks/{{networkId}}/pins",
+        "body": { "ordered_ids": ["{{thoughtId}}"] },
+        "expression": "Array.isArray(data) && data.some((x) => x.thought_id === '{{thoughtId}}')"
+      },
+      "expect": true
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "pin-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.pinned-chip[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "resize-large",
+      "eval": "(() => { window.resizeTo(1600, 1200); return window.innerWidth + 'x' + window.innerHeight; })()"
+    },
+    { "name": "large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    {
+      "name": "structures-editor",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    { "name": "open-saved", "click": ".st-filter .ff-extra--saved" },
+    { "name": "saved-dialog", "waitFor": "document.querySelector('.sfd') !== null" },
+    { "name": "focus-search", "click": ".sfd-search" },
+    { "name": "search-name", "text": "drop31b228f0-link-row" },
+    { "name": "select-row", "key": "ArrowDown" },
+    { "name": "confirm-row", "key": "Enter" },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.sfd') === null" },
+    {
+      "name": "name-filled",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-name__input')?.value === 'drop31b228f0-link-row'"
+    },
+    {
+      "name": "tree-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-item[data-kind=\"leaf\"]').length === 1"
+    },
+    {
+      "name": "operand-is-link-property",
+      "probe": "(document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__what')?.textContent || '').replace('▾','').trim()",
+      "expect": "Место"
+    },
+    {
+      "name": "value-empty-before",
+      "probe": "!document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value [data-id]')",
+      "expect": true
+    },
+    {
+      "name": "drop-pinned-into-what",
+      "drag": {
+        "from": ".pinned-chip[data-id=\"{{thoughtId}}\"]",
+        "to": ".st-filter .ft-item[data-path=\"0\"] .ft-row__what",
+        "expect": ".st-filter .ft-item[data-path=\"0\"]",
+        "steps": 12,
+        "duration": 240
+      }
+    },
+    {
+      "name": "value-chip-in-row",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value [data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "value-cell-not-empty",
+      "probe": "(() => { const cell = document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value'); return cell?.querySelector('[data-id]')?.dataset?.id === '{{thoughtId}}'; })()",
+      "expect": true
+    },
+    {
+      "name": "no-root-added",
+      "probe": "document.querySelectorAll('.st-filter .ft-item[data-kind=\"leaf\"]').length",
+      "expect": 1
+    },
+    {
+      "name": "changed-marker",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ff-changed')?.hidden === false"
+    },
+    { "name": "save", "click": ".st-filter .ff-save" },
+    {
+      "name": "saved-notice",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('drop31b228f0-link-row') === true"
+    },
+    {
+      "name": "server-value",
+      "timeout": 10000,
+      "api": {
+        "name": "server-value",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=structures",
+        "expression": "(() => { const f = data.find((x) => x.name === 'drop31b228f0-link-row'); const leaf = (f?.definition?.filter?.children ?? [f?.definition?.filter])[0]; const v = leaf?.value; const list = Array.isArray(v) ? v : [v]; return list.includes('{{thoughtId}}'); })()"
+      },
+      "expect": true
+    }
+  ]
+}

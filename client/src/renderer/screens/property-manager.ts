@@ -100,7 +100,15 @@ import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { showLinkStyleDialog } from '../editor/style-dialog.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
-import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
+import {
+  acquireOrShowBlocked,
+  blockedByLockMessage,
+  lockHandleFromOutcome,
+  releaseHeld,
+  subscribeForeignLockState,
+  type LockHandle,
+} from '../lib/lock-guard.js';
+import { blockEditingSurface, unblockEditingSurface } from '../lib/lock-surface.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
@@ -940,16 +948,20 @@ export function openPropertyManagerEditor(
   // there is no id yet, so we skip acquire (the editor stays usable; the
   // server gates the apply on the duplicate-name check instead).
   let editLock: LockHandle | null = null;
-  if (property !== null) {
-    void acquireOrShowBlocked('property', property.id).then((outcome) => {
-      editLock = lockHandleFromOutcome('property', property.id, outcome);
-    });
-  }
+  /** Заполняется при чужом захвате: вложенные диалоги тоже только для чтения. */
+  let blockedMessage: string | null = null;
+  /** Отписка от кэша захватов: снятие чужого захвата возвращает редактирование. */
+  let unbindLock: () => void = () => undefined;
 
   // Live duplicate-name check (case-insensitive, by `name_key`).
   const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
+  if (property !== null) {
+    void acquireOrShowBlocked('property', property.id).then((outcome) => {
+      editLock = lockHandleFromOutcome('property', property.id, outcome);
+    });
+  }
   /**
    * Собственные привязки свойства на момент загрузки (id привязки + тип).
    * По нему на «Применить и закрыть» вычисляются снятые строки таблиц: ✕
@@ -1111,6 +1123,11 @@ export function openPropertyManagerEditor(
     } else {
       draft.scalarKind = vt as Exclude<PropertyValueType, 'link'>;
       renderScalarBody();
+    }
+    // Чужой захват (ошибка 4f18d9f5): перерисовка создаёт новые поля —
+    // возвращаем их в режим чтения, иначе часть формы снова станет активной.
+    if (blockedMessage !== null) {
+      blockEditingSurface({ root: body, message: blockedMessage, commitButtons: [applyBtn] });
     }
   }
 
@@ -1564,6 +1581,7 @@ export function openPropertyManagerEditor(
       store.state.linkTypes,
       draft.parentLinkTypeId ?? null,
     );
+    // Вложенный диалог сам следит за захватом свойства (ошибка 2301d73d).
     showLinkStyleDialog({
       resolved: {
         color: draft.linkColor,
@@ -1576,6 +1594,7 @@ export function openPropertyManagerEditor(
         if (patch.style !== undefined) draft.linkStyle = patch.style;
         if (patch.width !== undefined) draft.linkWidth = patch.width;
       },
+      lock: property !== null ? { entityType: 'property', entityId: property.id } : undefined,
     });
   }
 
@@ -1618,12 +1637,15 @@ export function openPropertyManagerEditor(
   });
 
   function revalidateName(): void {
+    // Чужой захват сильнее проверки имени (ошибка 4f18d9f5): асинхронная
+    // догрузка реестра не должна снова включать «Применить и закрыть».
+    const blocked = blockedMessage !== null;
     if (nameClash(draft.name) !== null) {
       errorLine.show(DUP_NAME_MSG);
       if (applyBtn !== null) applyBtn.disabled = true;
     } else {
       if (errorLine.textContent === DUP_NAME_MSG) errorLine.clear();
-      if (applyBtn !== null) applyBtn.disabled = false;
+      if (applyBtn !== null) applyBtn.disabled = blocked;
     }
   }
   function nameClash(name: string): RegistryRow | null {
@@ -1922,8 +1944,28 @@ export function openPropertyManagerEditor(
     onMount: () => {
       const firstInput = body.querySelector('input, textarea, select') as HTMLElement | null;
       firstInput?.focus();
+      // Чужой захват (ошибка 4f18d9f5) и его снятие (2301d73d): форма следует
+      // за кэшем захватов — чтение, затем снова редактирование без переоткрытия.
+      if (property !== null) {
+        unbindLock = subscribeForeignLockState('property', property.id, (holder) => {
+          blockedMessage = holder === null ? null : blockedByLockMessage('property', holder);
+          if (blockedMessage !== null) {
+            blockEditingSurface({
+              root: body,
+              message: blockedMessage,
+              commitButtons: [applyBtn],
+            });
+          } else {
+            unblockEditingSurface(body);
+          }
+          revalidateName();
+        });
+      }
     },
-    onClose: () => void releaseHeld(editLock),
+    onClose: () => {
+      unbindLock();
+      void releaseHeld(editLock);
+    },
   });
 }
 

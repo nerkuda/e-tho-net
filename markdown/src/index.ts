@@ -35,6 +35,7 @@ export {
   WIKI_LINK_ID_ATTR,
   WIKI_LINK_NETWORK_ATTR,
   WIKI_LINK_MISSING_CLASS,
+  remapSameNetworkLinks,
 } from './wiki-link.js';
 export type {
   WikiLinkRef,
@@ -120,8 +121,20 @@ export type {
  * (`<!-- … -->`) в просмотре/публикациях. Cached `body_html` must re-render
  * so existing comments lose the previously escaped comments and gain the new
  * constructs.
+ *
+ * `markdown-it/9`: автолинк голых http(s)-URL (`linkify: true`, только явные
+ * схемы) — паритет режимов просмотра и правки (ошибка 37458cbc, круг 1).
+ * Автолинкует ТОЛЬКО внутристрочное правило: ядровое `linkify` выключено
+ * (круг 2), поэтому protocol-relative адреса (`//example.com/x`) остаются
+ * текстом, как до фикса. Cached `body_html` must re-render so existing comments
+ * turn bare URLs into links.
+ *
+ * `markdown-it/10`: автолинк схем БЕЗ `//` — `mailto:` (ошибка 37458cbc, круг 3:
+ * ядровое правило выключено с круга 2, а встроенное внутристрочное ловит только
+ * `://`, поэтому `mailto:` перестал быть ссылкой). Cached `body_html` must
+ * re-render so `mailto:`-строки снова становятся ссылками.
  */
-export const MD_RENDER_VERSION = 'markdown-it/8';
+export const MD_RENDER_VERSION = 'markdown-it/10';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {

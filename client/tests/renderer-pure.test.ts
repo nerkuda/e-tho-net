@@ -28,6 +28,9 @@ import {
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
   SELECTION_W_MIN,
+  USAGE_W_DEFAULT,
+  USAGE_W_MAX,
+  USAGE_W_MIN,
 } from '@etn/shared';
 
 import {
@@ -130,97 +133,96 @@ describe('cloud geometry', () => {
 });
 
 describe('parseWindowLayout', () => {
+  /** Ожидаемая форма с шириной панели использования по умолчанию. */
+  const layout = (
+    w: number,
+    h: number,
+    s: number,
+    e: number | null = null,
+    u: number = USAGE_W_DEFAULT,
+  ) => ({ w, h, s, u, e });
+
   it('falls back to defaults for missing/invalid input', () => {
     assert.deepEqual(parseWindowLayout(null), {
-      w: EDITOR_W_DEFAULT,
-      h: EDITOR_H_DEFAULT,
-      s: SELECTION_W_DEFAULT,
-      e: null,
+      ...layout(EDITOR_W_DEFAULT, EDITOR_H_DEFAULT, SELECTION_W_DEFAULT),
     });
     assert.deepEqual(parseWindowLayout(''), {
-      w: EDITOR_W_DEFAULT,
-      h: EDITOR_H_DEFAULT,
-      s: SELECTION_W_DEFAULT,
-      e: null,
+      ...layout(EDITOR_W_DEFAULT, EDITOR_H_DEFAULT, SELECTION_W_DEFAULT),
     });
     assert.deepEqual(parseWindowLayout('not json'), {
-      w: EDITOR_W_DEFAULT,
-      h: EDITOR_H_DEFAULT,
-      s: SELECTION_W_DEFAULT,
-      e: null,
+      ...layout(EDITOR_W_DEFAULT, EDITOR_H_DEFAULT, SELECTION_W_DEFAULT),
     });
   });
 
   it('parses a {w,h,s} JSON object and clamps to editor/selection constants', () => {
-    assert.deepEqual(parseWindowLayout('{"w":500,"h":400,"s":250}'), {
-      w: 500,
-      h: 400,
-      s: 250,
-      e: null,
-    });
-    assert.deepEqual(parseWindowLayout('{"w":10,"h":10,"s":10}'), {
-      w: EDITOR_W_MIN,
-      h: EDITOR_H_MIN,
-      s: SELECTION_W_MIN,
-      e: null,
-    });
-    assert.deepEqual(parseWindowLayout('{"w":99999,"h":99999,"s":99999}'), {
-      w: EDITOR_W_MAX,
-      h: EDITOR_H_MAX,
-      s: SELECTION_W_MAX,
-      e: null,
-    });
+    assert.deepEqual(
+      parseWindowLayout('{"w":500,"h":400,"s":250}'),
+      layout(500, 400, 250),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":10,"h":10,"s":10}'),
+      layout(EDITOR_W_MIN, EDITOR_H_MIN, SELECTION_W_MIN),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":99999,"h":99999,"s":99999}'),
+      layout(EDITOR_W_MAX, EDITOR_H_MAX, SELECTION_W_MAX),
+    );
   });
 
   it('keeps a valid dimension when the other is missing/invalid', () => {
-    assert.deepEqual(parseWindowLayout('{"w":450}'), {
-      w: 450,
-      h: EDITOR_H_DEFAULT,
-      s: SELECTION_W_DEFAULT,
-      e: null,
-    });
-    assert.deepEqual(parseWindowLayout('{"h":250}'), {
-      w: EDITOR_W_DEFAULT,
-      h: 250,
-      s: SELECTION_W_DEFAULT,
-      e: null,
-    });
-    assert.deepEqual(parseWindowLayout('{"w":"abc","h":300,"s":200}'), {
-      w: EDITOR_W_DEFAULT,
-      h: 300,
-      s: 200,
-      e: null,
-    });
+    assert.deepEqual(
+      parseWindowLayout('{"w":450}'),
+      layout(450, EDITOR_H_DEFAULT, SELECTION_W_DEFAULT),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"h":250}'),
+      layout(EDITOR_W_DEFAULT, 250, SELECTION_W_DEFAULT),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":"abc","h":300,"s":200}'),
+      layout(EDITOR_W_DEFAULT, 300, 200),
+    );
+  });
+
+  it('parses the optional usage-panel width (u) for newer clients', () => {
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"u":300}'),
+      layout(400, 300, 200, null, 300),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"u":10}'),
+      layout(400, 300, 200, null, USAGE_W_MIN),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"u":99999}'),
+      layout(400, 300, 200, null, USAGE_W_MAX),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"u":"abc"}'),
+      layout(400, 300, 200),
+    );
   });
 
   it('parses the optional event-area width (e) for newer clients', () => {
     // In-range values land rounded.
-    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200,"e":260}'), {
-      w: 400,
-      h: 300,
-      s: 200,
-      e: 260,
-    });
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":260}'),
+      layout(400, 300, 200, 260),
+    );
     // Sub-minimum / NaN / missing => null (the renderer then picks the
     // window-relative default).
-    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200,"e":50}'), {
-      w: 400,
-      h: 300,
-      s: 200,
-      e: null,
-    });
-    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200,"e":"abc"}'), {
-      w: 400,
-      h: 300,
-      s: 200,
-      e: null,
-    });
-    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200}'), {
-      w: 400,
-      h: 300,
-      s: 200,
-      e: null,
-    });
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":50}'),
+      layout(400, 300, 200, null),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":"abc"}'),
+      layout(400, 300, 200, null),
+    );
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200}'),
+      layout(400, 300, 200, null),
+    );
   });
 });
 

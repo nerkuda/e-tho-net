@@ -30,7 +30,10 @@ import {
   checkpointOpenNetworkDbs,
   startWalCheckpointScheduler,
   walCheckpoint,
+  WAL_JOURNAL_SIZE_LIMIT_BYTES,
 } from '../src/db/wal-checkpoint.js';
+import { SystemDb } from '../src/db/system-db.js';
+import { systemDbPath } from '../src/paths.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -92,6 +95,18 @@ function writeRows(ndb: ReturnType<typeof openNetworkDb>, rows: number, payloadB
   } catch (err) {
     ndb.exec('ROLLBACK');
     throw err;
+  }
+}
+
+/** Заполнить `audit_log` системной БД (каждая вставка — отдельный коммит). */
+function writeAuditRows(systemDb: SystemDb, rows: number, payloadBytes: number): void {
+  const payload = 'x'.repeat(payloadBytes);
+  for (let i = 0; i < rows; i += 1) {
+    systemDb.insertAuditLog({
+      category: 'system',
+      action: 'wal_probe',
+      details: { i, payload },
+    });
   }
 }
 
@@ -245,6 +260,160 @@ describe(
       writeRows(ndb, 50, 1_024);
       await new Promise((resolve) => setTimeout(resolve, 150));
       assert.ok(fileSize(wal) > 0, 'после stop() таймер больше не усекает журнал');
+    });
+
+    it('фоновый проход усекает WAL системной БД вместе с сетями', async () => {
+      const systemDb = SystemDb.open(tmpDataDir);
+      const systemWal = `${systemDbPath(tmpDataDir)}-wal`;
+      try {
+        writeAuditRows(systemDb, 300, 1_024);
+        const grown = fileSize(systemWal);
+        assert.ok(grown > 0, `журнал системной БД непустой после записи (${grown} Б)`);
+
+        const records: LogRecord[] = [];
+        const scheduler = startWalCheckpointScheduler({
+          intervalMs: 25,
+          logger: capturingLogger(records),
+          systemDb,
+        });
+        try {
+          assert.ok(
+            await waitFor(() => fileSize(systemWal) === 0),
+            `фоновый таймер усекает журнал системной БД (${grown} → 0 Б)`,
+          );
+          // Повторный проход идемпотентен: пустой журнал, без ошибок и busy.
+          const again = scheduler.runNow();
+          assert.equal(again.system?.skipped, false, 'повторный чекпойнт не пропускается');
+          assert.equal(again.system?.busy, false, 'повторный чекпойнт свободен');
+          assert.equal(fileSize(systemWal), 0, 'повторный чекпойнт не наполняет журнал');
+          const logged = records.find((r) => r.msg === 'WAL checkpoint of system database');
+          assert.ok(logged, 'проход системной БД пишется в лог');
+        } finally {
+          scheduler.stop();
+        }
+      } finally {
+        systemDb.close();
+      }
+    });
+
+    it('пустой журнал системной БД пишется debug, реальное усечение — info', () => {
+      const systemDb = SystemDb.open(tmpDataDir);
+      const message = 'WAL checkpoint of system database';
+      try {
+        const records: LogRecord[] = [];
+        const scheduler = startWalCheckpointScheduler({
+          intervalMs: 60_000,
+          logger: capturingLogger(records),
+          systemDb,
+        });
+        try {
+          // Пустой журнал: чекпойнт выполнен (не skipped и не busy), но
+          // переносить нечего — это штатный тик, а не событие.
+          writeAuditRows(systemDb, 10, 64);
+          scheduler.runNow();
+          records.length = 0;
+          const idle = scheduler.runNow();
+          assert.equal(idle.system?.skipped, false, 'пустой журнал не пропускается');
+          assert.equal(idle.system?.busy, false, 'читателей нет');
+          assert.equal(idle.system?.log, 0, 'журнал пуст');
+          assert.equal(idle.system?.checkpointed, 0, 'переносить нечего');
+          const idleRecord = records.find((r) => r.msg === message);
+          assert.equal(idleRecord?.level, 'debug', 'пустой журнал логируется debug');
+          assert.equal(
+            records.filter((r) => r.msg === message && r.level === 'info').length,
+            0,
+            'info на пустом журнале не пишется',
+          );
+
+          // Реальное усечение: в журнале есть кадры — событие пишется info.
+          // Объём ниже авто-чекпойнта SQLite (1000 страниц), иначе к моменту
+          // прохода журнал окажется уже перенесённым.
+          writeAuditRows(systemDb, 20, 128);
+          records.length = 0;
+          const truncated = scheduler.runNow();
+          assert.equal(truncated.system?.skipped, false);
+          assert.ok((truncated.system?.log ?? 0) > 0, 'перед усечением журнал непустой');
+          assert.ok((truncated.system?.checkpointed ?? 0) > 0, 'кадры перенесены');
+          const infoRecord = records.find((r) => r.msg === message && r.level === 'info');
+          assert.ok(infoRecord, 'реальное усечение логируется info');
+        } finally {
+          scheduler.stop();
+        }
+      } finally {
+        systemDb.close();
+      }
+    });
+
+    it('закрытая системная БД не роняет фоновый проход', () => {
+      const systemDb = SystemDb.open(tmpDataDir);
+      systemDb.close();
+      const scheduler = startWalCheckpointScheduler({ intervalMs: 25, systemDb });
+      try {
+        const run = scheduler.runNow();
+        assert.equal(run.system?.skipped, true, 'закрытое соединение → skipped');
+        assert.equal(run.system?.busy, false, 'закрытая БД не считается занятой');
+        assert.equal(run.files, 0, 'сетей нет — проход не падает');
+      } finally {
+        scheduler.stop();
+      }
+    });
+
+    it('journal_size_limit ограничивает «высокую воду» WAL системной БД', () => {
+      const systemDb = SystemDb.open(tmpDataDir);
+      const systemWal = `${systemDbPath(tmpDataDir)}-wal`;
+      try {
+        writeAuditRows(systemDb, 2_000, 1_024);
+        assert.ok(
+          fileSize(systemWal) > WAL_JOURNAL_SIZE_LIMIT_BYTES,
+          `журнал перерос лимит: ${fileSize(systemWal)} > ${WAL_JOURNAL_SIZE_LIMIT_BYTES} Б`,
+        );
+
+        // PASSIVE сбрасывает WAL; ближайший коммит усекает файл до лимита
+        // (PRAGMA journal_size_limit сравнивает размер при коммите/сбросе WAL).
+        const passive = systemDb.checkpointWal('PASSIVE');
+        assert.equal(passive.skipped, false, 'системная БД в режиме WAL');
+        assert.equal(passive.busy, false, 'читателей нет');
+        systemDb.insertAuditLog({
+          category: 'system',
+          action: 'wal_probe',
+          details: { tail: true },
+        });
+        assert.equal(
+          fileSize(systemWal),
+          WAL_JOURNAL_SIZE_LIMIT_BYTES,
+          'журнал усечён до journal_size_limit',
+        );
+      } finally {
+        systemDb.close();
+      }
+    });
+
+    it('шаг остановки не трогает системную БД — её чекпойнтит shutdown-путь отдельно', () => {
+      const networkId = randomUUID();
+      const ndb = openNetworkDb(tmpDataDir, networkId);
+      writeRows(ndb, 100, 1_024);
+      const systemDb = SystemDb.open(tmpDataDir);
+      const systemWal = `${systemDbPath(tmpDataDir)}-wal`;
+      try {
+        writeAuditRows(systemDb, 100, 1_024);
+        const beforeSystem = fileSize(systemWal);
+        assert.ok(beforeSystem > 0, 'журнал системной БД непустой');
+
+        checkpointAndCloseAllNetworkDbs();
+        assert.equal(fileSize(`${ndb.dbPath}-wal`), 0, 'сети усечены и закрыты');
+        assert.equal(
+          fileSize(systemWal),
+          beforeSystem,
+          'системная БД не задваивается шагом остановки',
+        );
+
+        const systemCheckpoint = systemDb.checkpointWal();
+        assert.equal(systemCheckpoint.skipped, false, 'shutdown-путь чекпойнтит системную БД');
+        assert.equal(systemCheckpoint.busy, false);
+        assert.equal(fileSize(systemWal), 0, 'системный журнал усечён отдельным вызовом');
+      } finally {
+        systemDb.close();
+      }
     });
 
     it('пропускает не-WAL базу и закрытое соединение, не бросая', () => {

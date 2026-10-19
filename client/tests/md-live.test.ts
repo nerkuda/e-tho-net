@@ -10,6 +10,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { EditorSelection, EditorState } from '@codemirror/state';
 
 import { isIdWikiLinkTarget, isInRangeInclusive, isNearInline, livePreview, wikiLabel } from '../src/renderer/editor/md-live.js';
+import { createParsedState } from './editor-parse.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
 
 /** Каретка в одной позиции. */
@@ -21,14 +22,19 @@ const caret = (pos: number) => [EditorSelection.range(pos, pos)];
 // ---------------------------------------------------------------------------
 
 function buildState(doc: string, selection = 0): EditorState {
-  return EditorState.create({
-    doc,
-    selection: { anchor: selection },
-    extensions: [
-      markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
-      livePreview,
-    ],
-  });
+  // Разбор полный УЖЕ ПРИ СОЗДАНИИ: `livePreview` — ленивое StateField-поле,
+  // строящее decorations из `syntaxTree`; обрезанное дерево молча теряет
+  // разметку под нагрузкой (tests/editor-parse.ts, задача f9b5c36e).
+  return createParsedState(() =>
+    EditorState.create({
+      doc,
+      selection: { anchor: selection },
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+        livePreview,
+      ],
+    }),
+  );
 }
 
 type DecoSpec = Record<string, unknown>;

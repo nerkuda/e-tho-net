@@ -33,15 +33,17 @@ import {
   mergeFilterIssues,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
-import { ACTIVITY_ACTION_FILTERS, buildFilterAst } from '../../lib/filter-builder.js';
+import { ACTIVITY_ACTION_FILTERS, buildFilterAst, parseActivityCriteriaTreeDetailed } from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
 import type { FilterValueEnumOption } from '../../lib/filter-value.js';
+import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import { div, el, span, setTooltip } from '../../lib/dom.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { loadingState } from '../../lib/ui/empty-state.js';
 import { createTable, type TableHandle } from '../../lib/ui/table.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { etn } from '../../lib/etn.js';
+import { resolveThoughtRefs } from '../../lib/thought-ref-batch.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
 import { openLayerPropsDialog } from '../layers.js';
@@ -51,7 +53,7 @@ import { openPropertyManagerEditor } from '../property-manager.js';
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
 import { store } from '../../state.js';
-import { UI_STATE_KEY } from '@etn/shared';
+import { FILTER_AST_VERSION, UI_STATE_KEY } from '@etn/shared';
 import { uiButton } from '../../lib/ui/button.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { fieldRow } from '../../lib/ui/field.js';
@@ -117,11 +119,19 @@ let host: HTMLElement | null = null;
  *  (Q4: per-tab snapshot), `null` until the first init. */
 let networkIdSeen: string | null = null;
 let filter: ActivityFilterState = createDefaultActivityFilter();
+/**
+ * Запрос перехода из меню мысли «что происходило с этой сущностью»
+ * (сценарий 7a1a354b, шаг 3): лента по `entity_id`. Живёт до инициализации
+ * вида — иначе первое чтение сохранённого отбора перезаписало бы его.
+ */
+let pendingEntity: { id: string; title: string | null } | null = null;
 let rows: ActivityRow[] = [];
 let total = 0;
 let offset = 0;
 /** Loading guard against stale data. */
 let querySeq = 0;
+/** Последний увиденный первый день недели сети (пересборка панели на смене). */
+let firstDayOfWeekSeen = 1;
 /** id строки под курсором клавиатуры (`null` — курсора нет). */
 let currentRowId: string | null = null;
 /** Рукоятка единой таблицы ленты (фасад `lib/ui/table.ts`). */
@@ -222,10 +232,56 @@ export async function ensureActivityInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter.
   }
+  // Переход из меню мысли сильнее сохранённого снимка: лента открывается
+  // отбором «Сущность = id» (сценарий 7a1a354b, шаг 3).
+  applyPendingEntityFilter();
   // `EnsureLoaded` triggers an async `users` fetch; rows rendered before it
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
   await applyQuery();
+}
+
+/**
+ * Единый путь «что происходило с этой сущностью» (сценарий 7a1a354b, шаг 3):
+ * лента «События» с условием `entity_id = id`. Вызывающий переключает вид
+ * (lazy import active-view), а фильтр ждёт инициализации в `pendingEntity`.
+ */
+export function showActivityForEntity(entityId: string, title?: string): void {
+  pendingEntity = { id: entityId, title: title ?? null };
+  const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
+  if (host !== null && networkId !== null && networkIdSeen === `${networkId}:${tabId ?? ''}`) {
+    applyPendingEntityFilter();
+    persistState();
+    void applyQuery();
+  }
+}
+
+/** Применить отложенный переход к сущности к модели отбора (до запроса). */
+function applyPendingEntityFilter(): void {
+  if (pendingEntity === null) return;
+  const { id, title } = pendingEntity;
+  pendingEntity = null;
+  const ast = {
+    version: FILTER_AST_VERSION,
+    filter: {
+      op: 'and' as const,
+      children: [
+        {
+          entity: { kind: 'entity_id' as const },
+          operator: 'eq' as const,
+          value: id,
+          ...(title !== null && title !== '' ? { labels: { value: title } } : {}),
+        },
+      ],
+    },
+  };
+  const parsed = parseActivityCriteriaTreeDetailed(ast);
+  filter = parsed.state;
+  offset = 0;
+  migrationDropped = [];
+  filterEditor?.refresh();
+  activityFrame?.apply();
 }
 
 /** Persists filter + page to L4 (per-tab snapshot, Q4). В снимок уходит
@@ -268,6 +324,7 @@ export function mountActivity(hostEl: HTMLElement): () => void {
     legacySize: () => panelWidth,
   });
 
+  firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
   mountFilterPanel(panel);
   // Maintenance commands + pager live inside the results column so destructive
   // actions stay visibly apart from the table.
@@ -324,6 +381,24 @@ export function mountActivity(hostEl: HTMLElement): () => void {
   // Restore the view when the network opens with `active_view = 'activity'`.
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
+    // пересобирать панель не из чего — `mountFilterPanel()` зовёт
+    // `requireNetworkId()` и бросил бы, оборвав `resetNetwork` до перехода на
+    // экран списка сетей (ошибка b5278f9a). Сбрасываем отметку инициализации:
+    // при повторном открытии той же сети/вкладки `ensureActivityInitialised`
+    // обязан перечитать снимок.
+    if (store.state.networkId === null) {
+      firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      networkIdSeen = null;
+      return;
+    }
+    // Смена первого дня недели в «Все настройки» перестраивает открытую панель:
+    // календарь точной даты читает настройку заново (ошибка b5278f9a).
+    const firstDayOfWeek = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+    if (firstDayOfWeek !== firstDayOfWeekSeen) {
+      firstDayOfWeekSeen = firstDayOfWeek;
+      mountFilterPanel(panel);
+    }
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
     if (
@@ -348,6 +423,8 @@ export function mountActivity(hostEl: HTMLElement): () => void {
   const unsubscribeUsers = subscribeUsers(() => repaintNames());
 
   return () => {
+    filterEditor?.destroy();
+    filterEditor = null;
     unsubscribe();
     unsubscribeUsers();
     host = null;
@@ -379,10 +456,15 @@ function mountFilterPanel(area: HTMLElement): void {
     // сущности, автор, сущность.
     contextual: ['occurred_at', 'action', 'entity_type', 'entity_title', 'user', 'entity_id'],
   };
+  // Пересборка панели заменяет редактор — прежний размонтируем.
+  filterEditor?.destroy();
+  filterEditor = null;
   const editor = buildFilterEditor({
     profile: 'events',
     networkId: requireNetworkId(),
-    firstDayOfWeek: store.state.network?.first_day_of_week ?? 1,
+    // Функция, а не снимок: календарь точной даты читает настройку в момент
+    // открытия (ошибка b5278f9a).
+    firstDayOfWeek: () => store.state.network?.first_day_of_week,
     data,
     getState: () => filter,
     touch: () => {
@@ -816,7 +898,9 @@ async function resolveMissingThoughtTitles(
   const ids = collectMissingThoughtIds(page);
   if (ids.length === 0) return;
   try {
-    const refs = await etn.thoughts.resolve(networkId, ids);
+    // Снимки страницы могут дать больше id, чем серверный лимит resolve
+    // (100 за вызов) — батчер отправляет их чанками.
+    const refs = await resolveThoughtRefs(networkId, ids);
     for (const ref of refs) thoughtTitles.set(ref.id, ref.title);
     if (seq !== querySeq) return;
     renderTable();

@@ -69,7 +69,7 @@ import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, setTooltip, span } from './dom.js';
 import { etn } from './etn.js';
 import { markThoughtCommentPreview } from './hover-preview.js';
-import { defineKeyContext, pushKeyContext } from './keymap.js';
+import { defineKeyContext, pushKeyContext, type KeyBindingDef } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import {
@@ -708,7 +708,12 @@ export async function pickEntitiesModal(
 
       /** Строка выпадашки по варианту публикации (облачко с мини-обложкой). */
       const publicationEntries = (options: EntityOption[]): SuggestEntry[] =>
-        options.map((opt) => ({ value: opt.id, label: opt.title, thought: opt.cloud }));
+        options.map((opt) => ({
+          value: opt.id,
+          label: opt.title,
+          thought: opt.cloud,
+          checked: checked.has(opt.id),
+        }));
 
       const searchSource: SuggestSource = {
         when: 'typed',
@@ -719,8 +724,14 @@ export async function pickEntitiesModal(
           const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
           return loadThoughtHits(opts.networkId, query, typeIds).then((hits) =>
             // Строка-мысль — облачком: DTO кандидата структурно совместим с
-            // `ThoughtCloudInput`, визуал резолвит фабрика (S1).
-            hits.map((hit) => ({ value: hit.id, label: hit.title, thought: { ...hit } })),
+            // `ThoughtCloudInput`, визуал резолвит фабрика (S1). Чекбокс
+            // множественного режима отражает текущий набор.
+            hits.map((hit) => ({
+              value: hit.id,
+              label: hit.title,
+              thought: { ...hit },
+              checked: checked.has(hit.id),
+            })),
           );
         },
         // Публикации — порционный серверный источник: скролл выпадашки вниз
@@ -735,9 +746,19 @@ export async function pickEntitiesModal(
       };
       const handle = wireSuggest(searchInput, {
         sources: [searchSource],
+        // Множественный режим — чекбоксы в выпадашке; одиночный — без них.
+        multiSelect: !single,
         onPick: (entry) => {
           if (single) {
             finish([entry.value]);
+            return;
+          }
+          // Повторный выбор отмеченной строки снимает значение.
+          if (checked.has(entry.value)) {
+            checked.delete(entry.value);
+            pickedThoughts.delete(entry.value);
+            renderChips();
+            updateButtons();
             return;
           }
           checked.add(entry.value);
@@ -1161,6 +1182,21 @@ export interface EntityChipFieldOptions {
    * местах (требование заказчика 2026-10-14, ошибка f4e99090 п.5).
    */
   thoughtPreview?: boolean;
+  /**
+   * Контекстное меню чипа-МЫСЛИ (значения поля — мысли, `kind: 'thoughts'`):
+   * правый клик по чипу и клавиатурный путь `Shift+F10`/клавиша `ContextMenu`
+   * (привязки общеклиентского диспетчера, `lib/keymap.ts`) открывают меню — то
+   * же поведение, что у чипа значения свойства-связи в редакторе мысли
+   * (`editor/value-editor.ts`). `anchor` — сам чип: меню раскрывается под ним.
+   * Токенам `$…` и пустому значению меню не полагается: это не мысль (та же
+   * граница, что у предпросмотра ниже).
+   */
+  onThoughtMenu?: (value: string, anchor: HTMLElement, event?: MouseEvent) => void;
+  /**
+   * Клик по метке корзины чипа-МЫСЛИ — диалог «Удалить/Восстановить» (та же
+   * метка, что у чипа значения свойства-связи; ошибка ada6a69d).
+   */
+  onThoughtTrashBadge?: (value: string) => void;
 }
 
 /** Собранный чип-лист сущностей. */
@@ -1242,6 +1278,51 @@ function wireThoughtChip(chip: HTMLElement, id: string, title: string): void {
 }
 
 /**
+ * Действие меню чипа-МЫСЛИ для конкретного значения: `undefined` — меню не
+ * полагается (пустой id, токен `$…`) либо вызывающий его не дал. Токен отбора
+ * мыслью не является — та же граница, что у {@link wireThoughtChip}.
+ */
+function thoughtMenuOf(
+  id: string,
+  onThoughtMenu: EntityChipFieldOptions['onThoughtMenu'],
+): ((anchor: HTMLElement, event?: MouseEvent) => void) | undefined {
+  if (id === '' || id.startsWith('$') || onThoughtMenu === undefined) return undefined;
+  return (anchor, event) => onThoughtMenu(id, anchor, event);
+}
+
+/** Есть ли у значения метка корзины/меню — только у настоящей мысли. */
+function isThoughtValue(id: string): boolean {
+  return id !== '' && !id.startsWith('$');
+}
+
+/**
+ * Привязки меню чипа-МЫСЛИ в общеклиентском диспетчере сочетаний
+ * (`lib/keymap.ts`): `Shift+F10` и клавиша `ContextMenu` открывают меню чипа,
+ * на котором стоит фокус. Мышь даёт жест фабрики облачка
+ * (`actions.onContextMenu`), клавиатуру навешивает диспетчер — локального
+ * `keydown` у чипа нет: перехват клавиш в клиенте один (ADR `b420b08c`, сторож
+ * `guard-keymap-single-point`). `run` возвращает `false`, когда открывать
+ * нечего (у чипа в фокусе нет меню) — событие уходит по стеку контекстов ниже.
+ */
+function thoughtMenuBindings(openFocusedChipMenu: () => boolean): KeyBindingDef[] {
+  const command = 'thoughtChip.menu';
+  return [
+    { command, chord: 'Shift+F10', run: openFocusedChipMenu },
+    { command, chord: 'ContextMenu', run: openFocusedChipMenu },
+  ];
+}
+
+/**
+ * Фокус принадлежит облачку (само облачко или его внутренняя кнопка —
+ * «✕» удаления, метка корзины)? Сочетание «меню клавиатурой» действует на
+ * фокусе ВНУТРИ облачка, а не только на самом узле: иначе `Tab` на «✕» ломал
+ * бы клавиатурный путь (ошибка ada6a69d, круг 3).
+ */
+function focusedWithinChip(node: HTMLElement, active: Element | null): boolean {
+  return active !== null && (active === node || node.contains(active));
+}
+
+/**
  * Чип-лист множественного выбора сущностей: выбранные значения — мини-облачка
  * общей фабрики (значок, цвета, бледность неактуальной, метка корзины;
  * инструкция «Использовать унифицированные поля выбора ссылок в диалогах»),
@@ -1251,7 +1332,8 @@ function wireThoughtChip(chip: HTMLElement, id: string, title: string): void {
  * автор/редактор) сохраняют смешение литералов и токенов. Отдельная сборка
  * чипов вне общих модулей запрещена сторожем `guard-value-editor`.
  */
-/** Счётчик чип-полей: у каждого свой контекст сочетаний (замыкание `commit`). */
+/** Счётчик полей выбора: у каждого свой контекст сочетаний (`entity-chip-field-*`
+ *  и `entity-combo-*`; контекст задаёт Enter/меню, замыкания — своё поле). */
 let chipFieldContextSeq = 0;
 
 export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipField {
@@ -1299,7 +1381,10 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
 
   const mapOptions = (options: EntityOption[]): SuggestEntry[] => {
     for (const opt of options) byId.set(opt.id, opt);
-    return options.map(entityEntry);
+    // Множественный режим: чекбокс строки отражает текущий набор значений
+    // (требование 73bf1489 — «чекбоксы выбора только в выпадающем списке»).
+    const values = opts.getValues();
+    return options.map((opt) => ({ ...entityEntry(opt), checked: values.includes(opt.id) }));
   };
   const source: SuggestSource = {
     when: opts.optionsWhen ?? 'always',
@@ -1323,7 +1408,18 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     pickFirstOnEnter: false,
     // Ширина списка — параметр вызывающего («Есть свойства» просит шире).
     ...(opts.dropdownMinWidth !== undefined ? { minWidth: opts.dropdownMinWidth } : {}),
-    onPick: (entry) => commit(entry.value),
+    // Чип-поле — множественный выбор: чекбоксы в строках списка, выбор не
+    // закрывает список; повторный клик по отмеченной строке снимает значение.
+    multiSelect: true,
+    onPick: (entry) => {
+      const values = opts.getValues();
+      if (values.includes(entry.value)) {
+        opts.onChange(values.filter((value) => value !== entry.value));
+      } else {
+        commit(entry.value);
+      }
+      renderChips();
+    },
   });
   // Клавиатура поля — через общеклиентский диспетчер: пока фокус внутри поля,
   // его контекст на вершине стека (ADR b420b08c, задача fd3d84f4). Общая
@@ -1338,13 +1434,35 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     commit(input.value);
     return true;
   };
+  /**
+   * Открытие меню чипа, стоящего в фокусе (пересобирается вместе с чипами):
+   * клавиатурные привязки ниже берут обработчик отсюда — правый клик фокуса не
+   * даёт, поэтому путь мышью живёт отдельно, жестом фабрики (ошибка ada6a69d).
+   * Фокус ищем внутри облачка, а не строго на нём: `Tab` с чипа уводит фокус на
+   * его кнопку «✕» (`thought-cloud.ts`), и меню должно открываться так же.
+   */
+  const chipMenuByNode = new Map<HTMLElement, () => void>();
+  const openFocusedChipMenu = (): boolean => {
+    const active: Element | null = document.activeElement ?? null;
+    for (const [chip, open] of chipMenuByNode) {
+      if (!focusedWithinChip(chip, active)) continue;
+      open();
+      return true;
+    }
+    return false;
+  };
   defineKeyContext({
     id: contextId,
-    bindings: modifierChordVariants('Enter', ['Ctrl', 'Alt', 'Meta']).map((chord) => ({
-      command: 'entityChip.commit',
-      chord,
-      run: handleCommitKey,
-    })),
+    bindings: [
+      ...modifierChordVariants('Enter', ['Ctrl', 'Alt', 'Meta']).map((chord) => ({
+        command: 'entityChip.commit',
+        chord,
+        run: handleCommitKey,
+      })),
+      // Меню чипа-мысли — тот же контекст поля, что и Enter: `Shift+F10` и
+      // клавиша `ContextMenu` открывают меню чипа в фокусе.
+      ...thoughtMenuBindings(openFocusedChipMenu),
+    ],
   });
   let releaseContext: (() => void) | null = null;
   const onFocusIn = (): void => {
@@ -1365,6 +1483,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     // поля, браузер уводит его на <body> — вернём его в строку ввода (797d0485).
     const hadFocus = hasKeyboardFocus(field);
     const chips: HTMLElement[] = [];
+    // Чипы пересобираются — карта «чип → открытие меню» живёт с ними.
+    chipMenuByNode.clear();
     for (const value of opts.getValues()) {
       const known = byId.get(value);
       const explicitCloud = opts.cloudOf?.(value) ?? null;
@@ -1377,11 +1497,22 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
         // Синхронное имя хоста (снапшот подписи) идёт ПЕРЕД сырым id: чип
         // рисует имя сразу, не дожидаясь резолва (ошибка f4e99090).
         { id: value, title: known?.title ?? opts.titleOf?.(value) ?? value };
+      // Меню чипа-мысли: нет токена/пустого значения и нет обработчика — нет меню.
+      const openMenu = thoughtMenuOf(value, opts.onThoughtMenu);
       const chip = createThoughtCloud(cloud, {
         profile: 'chip',
         width: 'container',
         actions: {
           ...(opts.onOpen !== undefined ? { onClick: (id: string) => opts.onOpen?.(id) } : {}),
+          // Контекстное меню — жест фабрики; правый клик уже гасит системное
+          // меню, обработчик вызывающего открывает меню мысли (ошибка ada6a69d).
+          ...(openMenu !== undefined
+            ? { onContextMenu: (event: MouseEvent) => openMenu(chip, event) }
+            : {}),
+          // Метка корзины — диалог «Удалить/Восстановить» вместо «мёртвого» значка.
+          ...(opts.onThoughtTrashBadge !== undefined && isThoughtValue(value)
+            ? { onTrashBadgeClick: (id: string) => opts.onThoughtTrashBadge?.(id) }
+            : {}),
           ...(disabled
             ? {}
             : {
@@ -1392,6 +1523,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
               }),
         },
       });
+      // Клавиатурный путь меню — привязки контекста поля: чип с меню
+      // регистрируется картой, обработчик берёт узел из фокуса.
+      if (openMenu !== undefined) chipMenuByNode.set(chip, () => openMenu(chip));
       // Знак варианта-свойства-связи — значок конца связи, как в строках
       // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
       // значка светился глиф мысли по умолчанию. Условие не зависит от
@@ -1413,7 +1547,15 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       chips.push(chip);
     }
     // Поле ввода сохраняется (слушатели выпадашки) — набор чипов заменяем.
-    field.replaceChildren(...chips, input);
+    // Ввод НЕ переставляем через `replaceChildren`: перенос сфокусированного
+    // узла даёт blur и закрывает выпадашку множественного выбора, хотя строка
+    // выбрана и список должен остаться открытым (ошибка da24f1e7, требование
+    // 73bf1489 — можно отметить несколько подряд). Снимаем только чипы и
+    // ставим новые перед полем.
+    for (const node of [...field.children]) {
+      if (node !== input) node.remove();
+    }
+    field.prepend(...chips);
     // Приглашение: пусто — «Название…», есть значения — «+ ещё один …»
     // (единый вид с полем значения свойства-связи, приёмка №2).
     const empty = opts.getValues().length === 0;
@@ -1591,6 +1733,15 @@ export interface EntityComboOptions {
    */
   thoughtPreview?: boolean;
   /**
+   * Контекстное меню чипа-МЫСЛИ заполненного поля (правый клик,
+   * `Shift+F10`/клавиша `ContextMenu` — привязки контекста комбо в общем
+   * диспетчере). Тот же контракт, что у чип-поля
+   * ({@link EntityChipFieldOptions.onThoughtMenu}); значимо только у `thoughts`.
+   */
+  onThoughtMenu?: (value: string, anchor: HTMLElement, event?: MouseEvent) => void;
+  /** Клик по метке корзины чипа-МЫСЛИ — диалог «Удалить/Восстановить». */
+  onThoughtTrashBadge?: (value: string) => void;
+  /**
    * Режим `expandAll`: дерево типов раскрыто целиком (родительский пикер
    * редактора типа). По умолчанию раскрыт только верхний уровень.
    */
@@ -1631,6 +1782,20 @@ export interface EntityCombo {
    * поле). Перерисовывает облачко/режим поля, значение владельцу не сохраняет.
    */
   setValue(id: string | null): void;
+  /**
+   * Включает/выключает поле после сборки (ошибка 4f18d9f5: заголовок связи
+   * при чужом захвате). Выключенное поле не принимает ввод, не открывает
+   * выбор и не показывает очистку облачка.
+   */
+  setDisabled(value: boolean): void;
+  /**
+   * Перечитывает данные облачка значения после внешнего изменения мысли
+   * (команды контекстного меню: актуальность, тип, иконка, удаление/
+   * восстановление). Снапшот облачка — производное от модели и обязан
+   * пересобираться из неё, а не «поправляться» в замыкании (грабля 48f35eba);
+   * значение и `onChange` не трогаются.
+   */
+  refresh(): void;
   /** Закрывает выпадашку и снимает слушатели. */
   dispose(): void;
 }
@@ -1690,6 +1855,8 @@ function pickerTitleOf(kind: EntityKind, override?: string): string {
  * ручное открытие кареткой не рисует список дважды.
  */
 export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
+  /** Текущее состояние блокировки: можно менять после сборки (чужой захват). */
+  let disabled = opts.disabled === true;
   let current = opts.value;
   /** Данные облачка текущего значения (для мыслей — из кандидата). */
   let currentCloud: ThoughtCloudInput | null = null;
@@ -1735,7 +1902,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   input.autocomplete = 'off';
   input.spellcheck = false;
   input.placeholder = opts.placeholder ?? '';
-  input.disabled = opts.disabled === true;
+  input.disabled = disabled;
   const caret = span('', 'type-combo-caret entity-combo-caret');
   caret.append(svgIcon('chevron-down', 12));
   const pickBtn = uiButton({
@@ -1746,6 +1913,35 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   });
   field.append(valueHost, input, caret, pickBtn);
   root.append(field);
+
+  /**
+   * Клавиатурный путь меню чипа-мысли заполненного поля: контекст комбо (как у
+   * чип-поля) поднимается на `focusin` — при фокусе на облачке `Shift+F10` и
+   * клавиша `ContextMenu` открывают его меню (ошибка ada6a69d). Правый клик —
+   * отдельный путь (жест фабрики), фокуса он не требует.
+   */
+  let comboChipNode: HTMLElement | null = null;
+  let comboChipMenu: (() => void) | null = null;
+  const comboContextId = `entity-combo-${(chipFieldContextSeq += 1)}`;
+  defineKeyContext({
+    id: comboContextId,
+    bindings: thoughtMenuBindings(() => {
+      const active: Element | null = document.activeElement ?? null;
+      if (comboChipNode === null || comboChipMenu === null) return false;
+      // Как и в чип-поле: фокус внутри облачка (в том числе на кнопке «✕»).
+      if (!focusedWithinChip(comboChipNode, active)) return false;
+      comboChipMenu();
+      return true;
+    }),
+  });
+  let releaseComboContext: (() => void) | null = null;
+  root.addEventListener('focusin', () => {
+    releaseComboContext ??= pushKeyContext(comboContextId);
+  });
+  root.addEventListener('focusout', () => {
+    releaseComboContext?.();
+    releaseComboContext = null;
+  });
 
   /** Облачко выбранного значения (пусто — поле ввода без подписи). */
   const renderValue = (): void => {
@@ -1787,25 +1983,40 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         .catch(() => undefined);
     }
     const cloud = currentCloud ?? opt?.cloud ?? { id: current, title: opt?.title ?? opts.titleOf?.(current) ?? current };
+    // Меню чипа-мысли: нет токена/пустого значения и нет обработчика — нет меню.
+    const openMenu = thoughtMenuOf(current, opts.onThoughtMenu);
     const chip = createThoughtCloud(cloud, {
       profile: 'chip',
       // Ширина — по полю значения диалога.
       width: 'container',
-      actions:
-        opts.disabled === true
-          ? undefined
+      // Меню — навигация, а не правка: у недоступного поля оно тоже работает
+      // (решение по ошибке ada6a69d); очистка значения — только у активного.
+      actions: {
+        ...(openMenu !== undefined
+          ? { onContextMenu: (event: MouseEvent) => openMenu(chip, event) }
+          : {}),
+        ...(opts.onThoughtTrashBadge !== undefined && isThoughtValue(current)
+          ? { onTrashBadgeClick: (id: string) => opts.onThoughtTrashBadge?.(id) }
+          : {}),
+        ...(disabled
+          ? {}
           : {
               onRemove: () => {
                 commitValue(null);
               },
-            },
+            }),
+      },
     });
+    // Клавиатурный путь меню — привязки контекста комбо: держим чип и его
+    // открытие для обработчика, который берёт узел из фокуса.
+    comboChipNode = chip;
+    comboChipMenu = openMenu === undefined ? null : () => openMenu(chip);
     if (opts.thoughtPreview === true) wireThoughtChip(chip, current, cloud.title);
     valueHost.append(chip);
   };
 
   const commitValue = (id: string | null): void => {
-    if (opts.disabled === true) return;
+    if (disabled) return;
     // Узел с фокусом сейчас исчезнет (крестик облачка) или скроется (строка
     // ввода заполненного поля) — запоминаем фокус, чтобы вернуть его живому
     // узлу поля, а не отдать браузеру на <body> (ошибка 797d0485).
@@ -1832,7 +2043,19 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     valueHost.classList.toggle('hidden', !filled);
     input.classList.toggle('hidden', filled);
     caret.classList.toggle('hidden', filled);
-    pickBtn.disabled = opts.disabled === true;
+    pickBtn.disabled = disabled;
+  };
+
+  /** Переключает блокировку после сборки (чужой захват, ошибка 4f18d9f5). */
+  const setDisabled = (value: boolean): void => {
+    if (disabled === value) return;
+    disabled = value;
+    input.disabled = value;
+    root.classList.toggle('disabled', value);
+    // Облачко значения перерисовывается: у выключенного поля не должно быть
+    // крестика очистки, который всё равно отправил бы запись.
+    renderValue();
+    renderMode();
   };
 
   /**
@@ -1842,7 +2065,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
    * предлагаются.
    */
   function openPicker(): void {
-    if (opts.disabled === true) return;
+    if (disabled) return;
     // Свой пикер вызывающего (например, стандартный `pickThoughtsDialog`) —
     // сильнее встроенного `pickEntitiesModal` (блокер п.19): диалог выбора
     // единственного значения должен совпадать с чип-полем.
@@ -1920,7 +2143,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     sources.push({
       when: 'always',
       load: (query) => {
-        if (opts.disabled === true) return [];
+        if (disabled) return [];
         reloadOptions();
         const q = query.trim().toLowerCase();
         const expandedIds = new Set(allOptions.filter(isExpanded).map((o) => o.id));
@@ -1969,11 +2192,11 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     sources.push({
       when: 'typed',
       load: (query) => {
-        if (opts.disabled === true) return [];
+        if (disabled) return [];
         return loadPublicationOptions(opts.networkId, query).then(publicationEntries);
       },
       loadMore: (query, offset) => {
-        if (opts.disabled === true) return Promise.resolve([]);
+        if (disabled) return Promise.resolve([]);
         return loadPublicationOptions(opts.networkId, query, offset).then(publicationEntries);
       },
       pageSize: PUBLICATIONS_PAGE_SIZE,
@@ -1985,7 +2208,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     sources.push({
       when: 'typed',
       load: (query) => {
-        if (opts.disabled === true) return [];
+        if (disabled) return [];
         const typeIds = (opts.searchTypeIds ?? []).filter((id) => id !== '');
         const apply = (hits: DuplicateHit[]): SuggestEntry[] =>
           hits.map((hit) => {
@@ -2063,7 +2286,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
   // каталог, а не срез по случайному запросу.
   caret.addEventListener('mousedown', (event) => event.preventDefault());
   caret.addEventListener('click', () => {
-    if (opts.disabled === true) return;
+    if (disabled) return;
     input.value = '';
     handle?.open();
   });
@@ -2074,6 +2297,16 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
     root,
     value: () => current,
     setValue,
+    setDisabled,
+    /**
+     * Сброс снапшота облачка и перерисовка (см. {@link EntityCombo.refresh}):
+     * данные мысли изменились командой контекстного меню — облачко обязано
+     * пересобраться из модели (грабля 48f35eba), а не остаться прежним.
+     */
+    refresh: () => {
+      currentCloud = null;
+      if (root.isConnected) renderValue();
+    },
     dispose: () => handle?.dispose(),
   };
 }

@@ -14,17 +14,24 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
 import type { McpViewMode } from '@etn/shared';
-import { countNeighbors, getNeighbors, getThoughtOrThrow, getThoughtsByIdsResolved } from '../../domain/thought-service.js';
+import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
-import { getCommentsPreview } from '../../domain/comment-service.js';
-import { createBodyExpander } from '../../domain/transclusion-service.js';
 import { findThoughtUsage, getNetworkProperty, getPropertyValuesResolved, resolveConditionPropertyRef } from '../../domain/property-service.js';
-import { findDuplicates, resolveThoughts } from '../../domain/search-service.js';
 import { shrinkSubgraphToBudget } from '../subgraph-budget.js';
 import { mcpRequestToQuery } from '../../domain/query-service.js';
 import { parseFilterAst } from '../../domain/filter-ast.js';
-import { queryThoughtsAsync, searchAsync, subgraphAsync } from '../../domain/heavy-read.js';
+import {
+  commentsPreviewBatchAsync,
+  findDuplicatesAsync,
+  neighborsWithTotalAsync,
+  queryThoughtsAsync,
+  resolveThoughtCardsAsync,
+  resolveThoughtRefsAsync,
+  searchAsync,
+  subgraphAsync,
+  traverseAsync,
+} from '../../domain/heavy-read.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
@@ -34,7 +41,6 @@ import {
   projectThoughtRows,
   stripStructuralLinkProperties,
 } from '../../domain/response-projection.js';
-import { traverse } from '../../domain/graph-traversal.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
 import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
@@ -550,7 +556,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   // спека 85b94925, P1-паритет MCP↔REST `POST /thoughts/resolve`).
   // Возвращает карточки в порядке первого появления id в запросе плюс
   // `missing[]` для отсутствующих. Лимит по размеру пачки —
-  // `rt.limits.maxNodesPerSubgraph` (тот же, что у `etn.thoughts.subgraph`).
+  // `THOUGHT_RESOLVE_MAX_IDS` (100), как в REST `POST /thoughts/resolve`.
   mcp.registerTool(
     'etn.thoughts.resolve',
     {
@@ -566,7 +572,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
         'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
         '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
-        'Лимит — `maxNodesPerSubgraph`.',
+        'Лимит — 100 id за вызов.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
     },
@@ -574,7 +580,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const view: McpViewMode = args.view ?? 'compact';
-        const result = getThoughtsByIdsResolved(ndb, args.thought_ids);
+        const result = await resolveThoughtCardsAsync(ndb, args.thought_ids);
         // O10: count reads for `etn.metrics.reads` analytics.
         recordReads(
           ndb,
@@ -654,11 +660,23 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           // and would map `both` to siblings; we call it twice and glue the
           // results here. Each entry carries its own `direction: "in"|"out"`.
           if (args.dir === 'both') {
-            const parents = getNeighbors(ndb, args.thought_id, 'parents', neighborOpts).map((n) => ({
+            const parentsPage = await neighborsWithTotalAsync(
+              ndb,
+              args.thought_id,
+              'parents',
+              neighborOpts,
+            );
+            const childrenPage = await neighborsWithTotalAsync(
+              ndb,
+              args.thought_id,
+              'children',
+              neighborOpts,
+            );
+            const parents = parentsPage.neighbors.map((n) => ({
               ...n,
               direction: 'in' as const,
             }));
-            const children = getNeighbors(ndb, args.thought_id, 'children', neighborOpts).map((n) => ({
+            const children = childrenPage.neighbors.map((n) => ({
               ...n,
               direction: 'out' as const,
             }));
@@ -684,12 +702,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             // 0.8.3: справочник типов связей в списках — худой (id + оба
             // имени), `view` его не меняет. Описания типов — в `etn.types.list`.
             const linkTypes = linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id));
-            // Bug fix (0.6.3): honest counts come from the domain `countNeighbors`
-            // (one SQL per direction — same shape, no LIMIT). Sum them and
-            // compare to the trimmed page; `truncated` is per the page size.
-            const parentsTotal = countNeighbors(ndb, args.thought_id, 'parents', neighborOpts);
-            const childrenTotal = countNeighbors(ndb, args.thought_id, 'children', neighborOpts);
-            const total = parentsTotal + childrenTotal;
+            // Bug fix (0.6.3): honest counts come from the pooled neighbours
+            // op — `total` считается тем же WHERE без LIMIT/OFFSET.
+            const total = parentsPage.total + childrenPage.total;
             return omitEmptyContainers({
               thought: { id: thought.id, title: thought.title },
               dir: args.dir,
@@ -701,7 +716,13 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
             });
           }
-          const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
+          const page = await neighborsWithTotalAsync(
+            ndb,
+            args.thought_id,
+            args.dir,
+            neighborOpts,
+          );
+          const rawNeighbors = page.neighbors;
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
           // which is semantic), so the only O12 effect at depth=1 is on the
           // link-type catalogue. Bug fix (§5.1e): sanitize the `icon` itself —
@@ -722,14 +743,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           });
           // 0.8.3: справочник типов связей в списках — худой (`view` его не меняет).
           const linkTypes = linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id));
-          // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
-          // of its own and silently applied the domain default page size
-          // (50) — a thought with more neighbours than that looked complete,
-          // with nothing telling the agent otherwise. `total`/`truncated`
-          // give the same honesty `etn.thoughts.query` already has; use
+          // Bug fix (0.6.3, thought f2c7c7d3): `total`/`truncated` give the
+          // same honesty `etn.thoughts.query` already has; use
           // `etn.thoughts.query { in_subtree_of, max_depth: 1 }` to page
-          // through the rest when `truncated` is true.
-          const total = countNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
+          // through the rest when `truncated` is true. `total` приходит из
+          // той же pooled-задачи, что и страница (ошибка 49e05ea0).
+          const total = page.total;
           return omitEmptyContainers({
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
@@ -746,7 +765,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // (explicit) and `dir: "siblings"` (legacy remap). For `parents`/
         // `children` we pass the dir as-is.
         const direction = args.dir === 'siblings' ? 'both' : args.dir;
-        const walk = traverse(ndb, [args.thought_id], direction, {
+        const walk = await traverseAsync(ndb, [args.thought_id], direction, {
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
           linkFilter: args.link_filter,
@@ -754,7 +773,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
         // any inline `data:` icon URL, not just the compact projection.
-        const thoughts = resolveThoughts(ndb, walk.ids).map((t) => withSanitizedIcon(t));
+        const thoughts = (await resolveThoughtRefsAsync(ndb, walk.ids)).map((t) =>
+          withSanitizedIcon(t),
+        );
         // Depth>1 returns ThoughtRef rows (the lightweight identity slice);
         // project each entry through the single list serializer under
         // `view: 'compact'`.
@@ -818,26 +839,28 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           );
         }
         // MCP-выдача подграфа отдаёт превью с развёрнутыми трансклюзиями
-        // (ТП2, задача bcfc7eb7); один expander с кешем источников на весь обход.
-        const expandComments = createBodyExpander(ndb);
+        // (ТП2, задача bcfc7eb7). Превью всех узлов — одна задача reader-пула:
+        // expander создаётся в воркере и переиспользует кэш источников между
+        // владельцами, а главный поток не читает комментарии по одному
+        // (ошибка 49e05ea0).
         const comments =
           args.include_comments === true
-            ? result.nodes.map((id) => ({
-                thought_id: id,
-                ...omitEmptyContainers(
-                  getCommentsPreview(
-                    ndb,
-                    'thought',
-                    id,
-                    {
-                      // Требование «Бюджет ответа subgraph: max_chars», блок
-                      // «Актуализация 0.8.3»: постоянный комментарий узла —
-                      // 600 символов; хронология остаётся 2000.
-                      permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
-                    },
-                    expandComments,
-                  ),
-                ),
+            ? (
+                await commentsPreviewBatchAsync(
+                  ndb,
+                  'thought',
+                  result.nodes,
+                  {
+                    // Требование «Бюджет ответа subgraph: max_chars», блок
+                    // «Актуализация 0.8.3»: постоянный комментарий узла —
+                    // 600 символов; хронология остаётся 2000.
+                    permanent: SUBGRAPH_PERMANENT_PREVIEW_CHARS,
+                  },
+                  true,
+                )
+              ).map((preview, index) => ({
+                thought_id: result.nodes[index]!,
+                ...omitEmptyContainers(preview),
               }))
             : undefined;
         // O10: one batched UPSERT covers every node returned by the subgraph.
@@ -1025,7 +1048,7 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
           if (access.networks.length === 0) {
             return { hits: [], networks: [] };
           }
-          const result = fanOutFindDuplicates(access, {
+          const result = await fanOutFindDuplicates(access, {
             networkIds: access.accessibleIds,
             title: args.title,
             synonyms: args.synonyms,
@@ -1043,11 +1066,8 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
         // only at this MCP-facing call site: every list record goes through the
         // single serializer (`icon` sanitized and kept, visual/service dropped,
         // empty containers omitted).
-        return projectThoughtRows(
-          findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
-            withSanitizedIcon(hit),
-          ),
-        );
+        const hits = await findDuplicatesAsync(ndb, args.title, args.synonyms ?? []);
+        return projectThoughtRows(hits.map((hit) => withSanitizedIcon(hit)));
       }),
   );
 

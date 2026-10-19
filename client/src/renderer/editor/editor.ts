@@ -140,8 +140,11 @@ import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldTextarea } from '../lib/ui/field.js';
 import {
   acquireOrShowBlocked,
+  foreignLockBlocksEdit,
+  foreignLockHeld,
   lockHandleFromOutcome,
   releaseHeld,
+  subscribeLockCache,
   type LockHandle,
 } from '../lib/lock-guard.js';
 import { disposePublicationCard, showPublicationTarget } from './publication-card.js';
@@ -540,6 +543,36 @@ let headerRetarget: ((ctx: EditorContext) => void) | null = null;
 let headerShapeKey: string | null = null;
 
 /**
+ * Пересчёт блокировки «живой» шапки по кэшу захватов. Регистрирует конструктор
+ * шапки (мысль или связь); вызывается не только при сборке/перепривязке/
+ * фокусе, но и на каждый переход кэша захватов (ошибка 201233ba): без этого
+ * снятие чужого захвата другим клиентом оставляло поля `readOnly` до смены
+ * фокуса.
+ */
+let headerLockSync: (() => void) | null = null;
+/** Отписка от кэша захватов; живёт ровно столько же, сколько «живая» шапка. */
+let headerLockUnsubscribe: (() => void) | null = null;
+
+/**
+ * Привязать пересчёт блокировки шапки к кэшу захватов. Повторный вызов
+ * заменяет прежнюю подписку — в редакторе одновременно живёт одна шапка.
+ */
+function bindHeaderLockSync(sync: () => void): void {
+  headerLockUnsubscribe?.();
+  headerLockSync = sync;
+  headerLockUnsubscribe = subscribeLockCache(() => {
+    headerLockSync?.();
+  });
+}
+
+/** Отпустить подписку шапки: шапка пересобирается или редактор демонтируется. */
+function releaseHeaderLockSync(): void {
+  headerLockUnsubscribe?.();
+  headerLockUnsubscribe = null;
+  headerLockSync = null;
+}
+
+/**
  * Эпоха рендера: инкрементируется на каждом пути, привязывающем полосу вкладок
  * к (возможно) новой сущности. Асинхронные загрузчики счётчиков «(N)» захватывают
  * её и отбрасывают устаревший результат — при переиспользованной полосе вкладок
@@ -664,6 +697,7 @@ export function mountEditor(editorHost: HTMLElement): void {
   reflowOverflow = null;
   headerRetarget = null;
   headerShapeKey = null;
+  releaseHeaderLockSync();
   stalePanes = new Set();
   lastSignature = '';
   lastIdentitySignature = '';
@@ -1641,6 +1675,7 @@ function renderFull(ctx: EditorContext | null): void {
   // (the builder re-registers it). Placeholders leave it null.
   headerRetarget = null;
   headerShapeKey = null;
+  releaseHeaderLockSync();
   stalePanes = new Set();
   renderCtx = ctx;
 
@@ -2300,6 +2335,29 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   });
   box.append(synonymsInput);
 
+  /**
+   * Чужой захват (ошибка 4f18d9f5): заголовок и синонимы — только чтение,
+   * как и запись, которую всё равно отклонит сервер. Значения остаются
+   * видимыми — чтение не блокируется (ADR 705fb6d3). Состояние синхронизируется
+   * с кэшем захватов при сборке, смене мысли, попытке входа в поле и на каждый
+   * переход кэша (realtime): снятие захвата другим клиентом разблокирует поля
+   * сразу, без смены фокуса (ошибка 201233ba). При холодном кэше запись
+   * отсекает обычный путь ошибки.
+   */
+  const syncThoughtHeaderLock = (): void => {
+    const blocked = foreignLockHeld('thought', thought.id);
+    titleArea.readOnly = blocked;
+    synonymsInput.readOnly = blocked;
+  };
+  syncThoughtHeaderLock();
+  bindHeaderLockSync(syncThoughtHeaderLock);
+  const guardHeaderEdit = (field: HTMLInputElement | HTMLTextAreaElement): void => {
+    syncThoughtHeaderLock();
+    if (foreignLockBlocksEdit('thought', thought.id)) field.blur();
+  };
+  titleArea.addEventListener('focus', () => guardHeaderEdit(titleArea));
+  synonymsInput.addEventListener('focus', () => guardHeaderEdit(synonymsInput));
+
   // --- Строка 3: тип ▾ · «актуально» · подменю «Действия» -----------------
   const row = div('editor-header-row');
 
@@ -2374,6 +2432,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     typeCombo.setValue(next.type_id);
     activeCheck.checked = next.active;
     activeCheck.disabled = next.is_protected && next.is_root;
+    syncThoughtHeaderLock();
   };
   headerRetarget = (ctx): void => {
     if (ctx.ownerType === 'thought' && ctx.thought !== null) applyThought(ctx.thought);
@@ -2448,11 +2507,10 @@ function openThoughtSettings(thought: Thought): void {
   // outlives the dialog itself. The helper handles LOCKED with a toast;
   // `onClose` releases on any close path (Save / Reset / Cancel / × / Esc).
   let handle: LockHandle | null = null;
-  void acquireOrShowBlocked('thought', thought.id).then((outcome) => {
-    handle = lockHandleFromOutcome('thought', thought.id, outcome);
-  });
   const style = resolveCloudStyle(thought);
-  void showThoughtStyleDialog({
+  // Чужой захват: диалог открывается для чтения, а после его снятия сам
+  // возвращается в редактирование (ошибки 4f18d9f5, 2301d73d).
+  showThoughtStyleDialog({
     resolved: {
       fg: style.fg,
       bg: style.bg,
@@ -2463,6 +2521,10 @@ function openThoughtSettings(thought: Thought): void {
     },
     onApply: (patch) => saveThought(patch),
     onClose: () => void releaseHeld(handle),
+    lock: { entityType: 'thought', entityId: thought.id },
+  });
+  void acquireOrShowBlocked('thought', thought.id).then((outcome) => {
+    handle = lockHandleFromOutcome('thought', thought.id, outcome);
   });
 }
 
@@ -2659,11 +2721,25 @@ function buildLinkHeader(initial: Link): HTMLElement {
   row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);
 
+  /**
+   * Чужой захват связи (ошибка 4f18d9f5): выбор типа и «актуально» — только
+   * чтение, как и запись, которую отклонит сервер. Кнопка оформления остаётся:
+   * она открывает диалог, который сам переходит в режим чтения.
+   */
+  const syncLinkHeaderLock = (): void => {
+    const blocked = foreignLockHeld('link', link.id);
+    typeCombo.setDisabled(blocked);
+    activeCheck.disabled = blocked;
+  };
+  syncLinkHeaderLock();
+  bindHeaderLockSync(syncLinkHeaderLock);
+
   /** Applies another link of the same type to the live header, values only. */
   const applyLink = (next: Link): void => {
     link = next;
     typeCombo.setValue(next.type_id);
     activeCheck.checked = next.active;
+    syncLinkHeaderLock();
   };
   headerRetarget = (ctx): void => {
     if (ctx.ownerType === 'link' && ctx.link !== null) applyLink(ctx.link);
@@ -2677,13 +2753,12 @@ function buildLinkHeader(initial: Link): HTMLElement {
 function openLinkSettings(link: Link): void {
   // Auto-acquire the link lock (task 4f141756) — see `openThoughtSettings`.
   let handle: LockHandle | null = null;
-  void acquireOrShowBlocked('link', link.id).then((outcome) => {
-    handle = lockHandleFromOutcome('link', link.id, outcome);
-  });
   // L21: the type line style resolves along the ancestor chain; an untyped
   // link resolves the root type.
   const type = resolveLinkTypeVisual(store.state.linkTypes, link.type_id);
-  void showLinkStyleDialog({
+  // Чужой захват — диалог только для чтения с обратным переходом при снятии
+  // (ошибки 4f18d9f5, 2301d73d).
+  showLinkStyleDialog({
     resolved: {
       color: link.color ?? type.color,
       style: link.style ?? type.style,
@@ -2691,6 +2766,10 @@ function openLinkSettings(link: Link): void {
     },
     onApply: (patch) => saveLink(link, patch).then(() => undefined),
     onClose: () => void releaseHeld(handle),
+    lock: { entityType: 'link', entityId: link.id },
+  });
+  void acquireOrShowBlocked('link', link.id).then((outcome) => {
+    handle = lockHandleFromOutcome('link', link.id, outcome);
   });
 }
 
@@ -2706,6 +2785,13 @@ export const editorInternals = {
   buildThoughtHeaderLoading,
   /** Loader-only link header (kept for symmetry with the thought header). */
   buildLinkHeaderLoading,
+  /**
+   * Подписка «живой» шапки на кэш захватов (ошибка 201233ba): тест проверяет,
+   * что переход кэша (снятие чужого захвата) пересчитывает поля без смены
+   * фокуса, а `releaseHeaderLockSync` снимает подписку при пересборке.
+   */
+  bindHeaderLockSync,
+  releaseHeaderLockSync,
   /**
    * Метка корзины в заголовке панели (задача ff991fb2): тест проверяет, что
    * помеченная мысль открывается с кликабельным признаком корзины, ведущим в

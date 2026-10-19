@@ -1,0 +1,80 @@
+{
+  "name": "31b228f0-filter-drop-incompatible",
+  "description": "Этап 3 (критерий 5): облачко из закреплённых бросается в НЕСОВМЕСТИМОЕ условие (дата создания). Ожидание: значение/модель не изменились, показано объяснение (тост), корень отбора не добавлен, в приёмник панели бросок не провалился. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.31b228f0-filter-drop-incompatible.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-pin",
+      "api": {
+        "name": "seed-pin",
+        "method": "PUT",
+        "path": "/networks/{{networkId}}/pins",
+        "body": { "ordered_ids": ["{{thoughtId}}"] },
+        "expression": "Array.isArray(data) && data.some((x) => x.thought_id === '{{thoughtId}}')"
+      },
+      "expect": true
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "pin-visible", "timeout": 10000, "waitFor": "document.querySelector('.pinned-chip[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "resize-large", "eval": "(() => { window.resizeTo(1600, 1200); return window.innerWidth + 'x' + window.innerHeight; })()" },
+    { "name": "large-ready", "timeout": 10000, "waitFor": "window.innerHeight > 900" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .ft-add-condition') !== null" },
+
+    { "name": "add-condition", "click": ".st-filter .ft-add-condition" },
+    { "name": "one-row", "timeout": 10000, "waitFor": "document.querySelectorAll('.st-filter .ft-item[data-kind=\"leaf\"]').length === 1" },
+    { "name": "open-operand-picker", "click": ".st-filter .ft-item[data-path=\"0\"] .ft-row__what" },
+    { "name": "date-operand-offered", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"created_at\"]') !== null" },
+    { "name": "pick-date-operand", "click": ".ft-choice__item[data-key=\"created_at\"]" },
+    {
+      "name": "date-cell-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-item[data-path=\"0\"] .fv[data-editor=\"date\"] .fv-date') !== null"
+    },
+    {
+      "name": "value-before",
+      "probe": "document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value')?.textContent || ''"
+    },
+
+    {
+      "name": "drop-pinned-into-date",
+      "drag": {
+        "from": ".pinned-chip[data-id=\"{{thoughtId}}\"]",
+        "to": ".st-filter .ft-item[data-path=\"0\"] .ft-row__value",
+        "expect": ".st-filter .ft-item[data-path=\"0\"]",
+        "steps": 12,
+        "duration": 240
+      }
+    },
+    {
+      "name": "explanation-shown",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.notice-text')?.textContent?.includes('не принимает мысль') === true"
+    },
+    {
+      "name": "value-unchanged",
+      "probe": "document.querySelector('.st-filter .ft-item[data-path=\"0\"] .ft-row__value')?.textContent || ''",
+      "expectFrom": "value-before"
+    },
+    {
+      "name": "no-thought-chip",
+      "probe": "document.querySelector('.st-filter .ft-item[data-path=\"0\"] [data-id=\"{{thoughtId}}\"]') === null",
+      "expect": true
+    },
+    {
+      "name": "no-root-added",
+      "probe": "document.querySelectorAll('.st-filter .ft-item[data-kind=\"leaf\"]').length",
+      "expect": 1
+    }
+  ]
+}

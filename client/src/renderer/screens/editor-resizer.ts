@@ -47,6 +47,7 @@ export function scheduleLayoutPersist(): void {
       w: store.state.editorW,
       h: store.state.editorH,
       s: store.state.selectionW,
+      u: store.state.usageW,
       e: store.state.eventAreaW,
     });
     void etn.ui.setState(networkId, UI_STATE_KEY.WINDOW_LAYOUT, payload).catch(() => undefined);

@@ -37,8 +37,8 @@
  * | `attachment.*`            | /attachments CRUD                                  | `{ attachment }` / `{ id, changes }` / `{ id }`         |
  * | `property-value.set`      | property value upsert                             | `{ owner_type, owner_id, property_id, value }`          |
  * | `property-value.deleted`  | property value delete                             | `{ owner_type, owner_id, property_id }`                 |
- * | `network.deleted`         | DELETE /admin/networks/:id (D7) — emit **before**  | `{ id }`                                                |
- * |                           | the registry row is removed (network_seq has an FK) |                                                       |
+ * | `network.deleted`         | DELETE /admin/networks/:id (D7) — emit **after**   | `{ id }`                                                |
+ * |                           | successful removal (`emitNetworkDeletedEvent`)     |                                                       |
  * | L3 `user-*` / `thought-view.updated` | settings routes (me/preferences)     | 11-settings-and-state.md §4.4 — `audience: 'user'`     |
  *
  * Events already wired in this branch (see `routes/networks.ts`):
@@ -121,6 +121,42 @@ export function emitDomainEvent<E extends RealtimeEventType>(
   actor: DomainEventActor,
   options?: EmitDomainEventOptions,
 ): RealtimeEvent<E> {
+  return emitWithSeq(deps, networkId, type, data, actor, () => deps.systemDb.nextNetworkSeq(networkId), options);
+}
+
+/**
+ * Терминальное `network.deleted` — эмитится ПОСЛЕ успешного удаления сети
+ * (ошибка abcd3f0b: раньше событие уходило до удаления, и клиенты закрывали
+ * живую сеть при ошибке). Запись реестра и `network_seq` к этому моменту уже
+ * удалены (каскад), поэтому `seq` восстанавливается из `event_log`.
+ */
+export function emitNetworkDeletedEvent(
+  deps: EmitDomainEventDeps,
+  networkId: string,
+  actor: DomainEventActor,
+  options?: EmitDomainEventOptions,
+): RealtimeEvent<'network.deleted'> {
+  return emitWithSeq(
+    deps,
+    networkId,
+    'network.deleted',
+    { id: networkId },
+    actor,
+    () => deps.systemDb.nextNetworkSeqAfterDelete(networkId),
+    options,
+  );
+}
+
+/** Общая часть эмиссии: seq из переданного распределителя + запись + publish. */
+function emitWithSeq<E extends RealtimeEventType>(
+  deps: EmitDomainEventDeps,
+  networkId: string,
+  type: E,
+  data: RealtimeEventMap[E],
+  actor: DomainEventActor,
+  allocateSeq: () => number,
+  options?: EmitDomainEventOptions,
+): RealtimeEvent<E> {
   const audience = options?.audience ?? REALTIME_EVENT_AUDIENCE[type];
   const layerId = options?.layerId ?? BASE_LAYER_ID;
   const ts = new Date().toISOString();
@@ -132,7 +168,7 @@ export function emitDomainEvent<E extends RealtimeEventType>(
   // seq increment + log append are atomic: a reader can never observe an
   // incremented counter without the matching event_log row.
   const seq = deps.systemDb.transaction(() => {
-    const assigned = deps.systemDb.nextNetworkSeq(networkId);
+    const assigned = allocateSeq();
     const stored: unknown = {
       actor: storedActor,
       audience,

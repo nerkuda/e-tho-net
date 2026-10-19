@@ -309,6 +309,15 @@ export interface ThoughtMenuOptions {
   focusHandler?: () => void;
   /** Команды конкретного контекста (значение свойства) — блоком перед «Удалить». */
   extraItems?: MenuItem[];
+  /**
+   * Мысль недоступна в сети: значение условия осталось по снапшоту имени, но
+   * самой мысли нет (удалена). Из общего набора остаются только команды, которым
+   * объект мысли на сервере не нужен, — «Копировать ID» и команды контекста
+   * значения (`extraItems`); остальные команды упали бы 404. Урезание —
+   * отличие контекста, а не второй список команд (ошибка ada6a69d, спека
+   * «Контекстное меню мысли»).
+   */
+  unresolvable?: boolean;
 }
 
 /** Opens the thought context menu at the event position. */
@@ -383,6 +392,23 @@ export function buildThoughtMenuItems(
   target: CloudMenuTarget,
   opts: ThoughtMenuOptions = {},
 ): MenuItem[] {
+  /** Команда «Копировать ID» — единственная, не требующая объекта мысли. */
+  const copyIdItem = (): MenuItem =>
+    menuAction('Копировать ID', () => {
+      void navigator.clipboard.writeText(target.id).then(
+        () => notice('ID мысли скопирован.'),
+        () => notice('Не удалось скопировать ID.', 'error'),
+      );
+    });
+  // Мысль недоступна в сети (значение условия осталось по снапшоту имени):
+  // остальные команды упали бы 404 — урезаем набор до «Копировать ID» и команд
+  // контекста значения (ошибка ada6a69d).
+  if (opts.unresolvable === true) {
+    return [
+      copyIdItem(),
+      ...(opts.extraItems !== undefined && opts.extraItems.length > 0 ? opts.extraItems : []),
+    ];
+  }
   const focus = store.state.focus;
   // «налево (родственник)»: на холсте — родитель фокуса (зона «Родственники»),
   // вне холста — родитель самой мысли, который резолвит вызывающий.
@@ -522,6 +548,21 @@ export function buildThoughtMenuItems(
     ...(opts.focusHandler !== undefined
       ? [menuAction('В фокус', () => opts.focusHandler?.())]
       : []),
+    // Сценарий «просмотр и обслуживание ленты «События»», шаг 3 (7a1a354b):
+    // переход в ленту по выбранной сущности — вид «События» с отбором по
+    // entity_id. Формулировка пункта — заказчика (ошибка 56ab2902):
+    // «Смотреть события», строка только из словаря. Lazy import: active-view
+    // уже тянет activity, обратный статический импорт замкнул бы цикл.
+    menuAction(t('thoughtMenu.activityForEntity'), () => {
+      void (async () => {
+        const { showActivityForEntity } = await import('../screens/activity/activity.js');
+        // Сначала отложенный фильтр, потом переключение вида: инициализация
+        // ленты иначе успела бы перезаписать его сохранённым снимком.
+        showActivityForEntity(target.id, target.title);
+        const { setActiveView } = await import('../screens/active-view.js');
+        setActiveView('activity');
+      })();
+    }),
     menuAction('Экспорт…', () => void exportSingleThought(networkId, target.id)),
     menuAction('Импорт…', () => void importToThought(networkId, target.id)),
     ...(opts.findOnMapHandler !== undefined
@@ -542,12 +583,7 @@ export function buildThoughtMenuItems(
     menuAction('Вставить', () => void pasteThoughtsTo(networkId, target.id), {
       disabled: !hasClipboard(),
     }),
-    menuAction('Копировать ID', () => {
-      void navigator.clipboard.writeText(target.id).then(
-        () => notice('ID мысли скопирован.'),
-        () => notice('Не удалось скопировать ID.', 'error'),
-      );
-    }),
+    copyIdItem(),
     // Задача f5c363a3: разрешение изменений мысли в слое («Отказаться» /
     // «Переписать» / «Объединить»).
     ...(overriddenInLayer

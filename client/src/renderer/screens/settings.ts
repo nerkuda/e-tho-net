@@ -58,7 +58,7 @@ import { store, type Theme } from '../state.js';
 import { buildLogsSection } from './settings-logs.js';
 import { scheduleStructuresRefresh } from './structures/structures.js';
 import { uiButton } from '../lib/ui/button.js';
-import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { fieldInput, fieldRow, fieldSelect } from '../lib/ui/field.js';
 import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
@@ -98,6 +98,21 @@ const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
 const NETWORK_FIELDS_TEXT_MAX = 20_000;
 
 /**
+ * Варианты первого дня недели сети (требование 1b77decd): ISO 1 = понедельник
+ * … 7 = воскресенье. Один список на диалог — значение уходит числом в тот же
+ * `PATCH /networks/{id}`, что и остальные поля раздела.
+ */
+const FIRST_DAY_OF_WEEK_OPTIONS = [
+  { value: '1', label: 'Понедельник' },
+  { value: '2', label: 'Вторник' },
+  { value: '3', label: 'Среда' },
+  { value: '4', label: 'Четверг' },
+  { value: '5', label: 'Пятница' },
+  { value: '6', label: 'Суббота' },
+  { value: '7', label: 'Воскресенье' },
+] as const;
+
+/**
  * Both `type_roles` entries live as separate keys in the same dictionary
  * (ADR `46d17a91`). The form keeps them as two flat draft fields so the
  * dirty check stays a simple per-field comparison; persistence merges them
@@ -112,6 +127,8 @@ interface Draft {
   networkExamples: string;
   networkNodeSectionTypeId: string | null;
   networkInstructionsTypeId: string | null;
+  /** Первый день недели сети, ISO 1 = пн … 7 = вс (требование 1b77decd). */
+  networkFirstDayOfWeek: number;
   showInactive: boolean;
   showTrash: boolean;
   theme: Theme;
@@ -140,6 +157,12 @@ function readInitialDraft(): Draft {
       typeof net?.type_roles?.instructions === 'string'
         ? net.type_roles.instructions
         : null,
+    networkFirstDayOfWeek:
+      typeof net?.first_day_of_week === 'number' &&
+      net.first_day_of_week >= 1 &&
+      net.first_day_of_week <= 7
+        ? net.first_day_of_week
+        : 1,
     showInactive: store.state.showInactive,
     showTrash: store.state.showTrash,
     theme: store.state.theme,
@@ -160,6 +183,7 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.networkExamples !== b.networkExamples ||
     a.networkNodeSectionTypeId !== b.networkNodeSectionTypeId ||
     a.networkInstructionsTypeId !== b.networkInstructionsTypeId ||
+    a.networkFirstDayOfWeek !== b.networkFirstDayOfWeek ||
     a.showInactive !== b.showInactive ||
     a.showTrash !== b.showTrash ||
     a.theme !== b.theme ||
@@ -377,17 +401,35 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
   function renderNetworkSection(): HTMLElement {
     const root = div('settings-section');
-    const isOwner =
-      store.state.network !== null && store.state.network.owner_id === store.state.me?.id;
+    const me = store.state.me;
+    const isOwner = store.state.network !== null && store.state.network.owner_id === me?.id;
+    // Серверный PATCH /networks/{id} разрешён владельцу ИЛИ администратору
+    // (06-auth.md §4.1), поэтому и поля раздела доступны тем же ролям.
+    const canEditNetwork = isOwner || me?.is_admin === true;
 
     const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.value = draft.networkName;
     nameInput.maxLength = 200;
-    nameInput.disabled = !isOwner;
+    nameInput.disabled = !canEditNetwork;
     nameInput.addEventListener('input', () => {
       draft.networkName = nameInput.value;
       markDirty();
+    });
+
+    // Первый день недели сети (требование 1b77decd) — общая настройка всех
+    // календарных виджетов и токенов `$weekStart`/`$weekEnd`. Значение уходит
+    // тем же единым `PATCH`, что и остальные поля раздела.
+    const firstDaySelect = fieldSelect({
+      value: String(draft.networkFirstDayOfWeek),
+      options: FIRST_DAY_OF_WEEK_OPTIONS,
+      disabled: !canEditNetwork,
+      onChange: (value) => {
+        const next = Number(value);
+        if (!Number.isInteger(next) || next < 1 || next > 7) return;
+        draft.networkFirstDayOfWeek = next;
+        markDirty();
+      },
     });
 
     // Вкладки четырёх markdown-полей самоописания сети (O5) — общий механизм
@@ -424,7 +466,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
               tab: key,
               getValue: fieldGetters[key],
               setValue: fieldSetters[key],
-              disabled: !isOwner,
+              disabled: !canEditNetwork,
             }),
         }),
       ),
@@ -440,7 +482,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       value: draft.networkNodeSectionTypeId,
       emptyLabel: '— не задано —',
       placeholder: 'Тип мысли…',
-      disabled: !isOwner,
+      disabled: !canEditNetwork,
       onChange: (typeId) => {
         draft.networkNodeSectionTypeId = typeId;
         markDirty();
@@ -456,7 +498,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       value: draft.networkInstructionsTypeId,
       emptyLabel: '— не задано —',
       placeholder: 'Тип мысли…',
-      disabled: !isOwner,
+      disabled: !canEditNetwork,
       onChange: (typeId) => {
         draft.networkInstructionsTypeId = typeId;
         markDirty();
@@ -486,19 +528,26 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     });
     const showTrashLabel = showTrashRow.row;
 
-    const ownerHint = isOwner
-      ? 'Эти поля задаёт владелец сети; изменения сохраняются для всех участников.'
-      : 'Эти поля задаёт владелец сети. Вы можете посмотреть их, но не изменить.';
+    const ownerHint = canEditNetwork
+      ? 'Эти поля задаёт владелец сети или администратор сервера; изменения сохраняются для всех участников.'
+      : 'Эти поля задаёт владелец сети или администратор сервера. Вы можете посмотреть их, но не изменить.';
 
     root.append(
       el('h3', 'settings-section-title', 'Настройки сети'),
       fieldRow({ label: 'Название сети', control: nameInput }),
+      fieldRow({ label: 'Первый день недели', control: firstDaySelect }),
+      el(
+        'p',
+        'muted',
+        'Общая настройка для всех календарных виджетов сети и календарных токенов $weekStart/$weekEnd. При создании сети значение берётся из локали ОС сервера.',
+      ),
       el(
         'p',
         'muted',
         'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
       ),
-      mdTabs.root,      el(
+      mdTabs.root,
+      el(
         'p',
         'muted',
         'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
@@ -642,13 +691,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
-    // Network: display_name + 4 markdown fields + both type_roles entries
-    // (L2 / O5 / task ba024a45 / 0.7.2 `instructions` role).
-    // One PATCH so the server-side update is a single transaction; partial
-    // mismatches between client and server are tolerated because we always
-    // send the full current draft for changed fields.
+    // Network: display_name + first day of week + 4 markdown fields + both
+    // type_roles entries (L2 / O5 / task ba024a45 / 0.7.2 `instructions` role /
+    // требование 1b77decd). One PATCH so the server-side update is a single
+    // transaction and one `network.updated`; partial mismatches between client
+    // and server are tolerated because we always send the full current draft
+    // for changed fields.
     const networkFieldsDirty =
       draft.networkName !== original.networkName ||
+      draft.networkFirstDayOfWeek !== original.networkFirstDayOfWeek ||
       draft.networkDescription !== original.networkDescription ||
       draft.networkWhenToUse !== original.networkWhenToUse ||
       draft.networkConventions !== original.networkConventions ||
@@ -662,6 +713,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       const existingRoles = store.state.network?.type_roles ?? {};
       const fields: Parameters<typeof etn.networks.update>[1] = {
         display_name: draft.networkName.trim() || (store.state.network?.display_name ?? ''),
+        first_day_of_week: draft.networkFirstDayOfWeek,
         description: draft.networkDescription.trim() === '' ? null : draft.networkDescription,
         when_to_use: draft.networkWhenToUse.trim() === '' ? null : draft.networkWhenToUse,
         conventions: draft.networkConventions.trim() === '' ? null : draft.networkConventions,
@@ -773,6 +825,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.networkExamples = draft.networkExamples;
       original.networkNodeSectionTypeId = draft.networkNodeSectionTypeId;
       original.networkInstructionsTypeId = draft.networkInstructionsTypeId;
+      original.networkFirstDayOfWeek = draft.networkFirstDayOfWeek;
       original.showInactive = draft.showInactive;
       original.showTrash = draft.showTrash;
       original.theme = draft.theme;

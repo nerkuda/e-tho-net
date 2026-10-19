@@ -64,6 +64,15 @@ function exactOne(root: ShimElement, cls: string): ShimElement | null {
   return exact(root, cls)[0] ?? null;
 }
 
+/**
+ * Текст тултипа фразы. Тултип фразы — элемент с РАЗМЕТКОЙ раскраски (задача
+ * 58f77990, п.12в): нативный `title` разметку не умеет, поэтому подсказка —
+ * `.{@link mod.FILTER_FOOTER_TIP_CLASS}` внутри превью.
+ */
+function tipText(root: ShimElement): string {
+  return exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)?.flatText() ?? '';
+}
+
 /** Кнопка-потомок с точным текстом. */
 function buttonByText(root: ShimElement, text: string): ShimElement | null {
   return root.findAll((node) => node.tagName === 'button' && node.flatText().trim() === text)[0] ?? null;
@@ -293,9 +302,9 @@ describe('футер отбора: фраза-превью и запрет пр�
     const box = exactOne(root, mod.FILTER_FOOTER_PREVIEW_CLASS)!;
     assert.equal(exactOne(root, 'ff-preview__text')!.flatText(), 'Показать мысли: город = Москва');
     assert.equal(box.dataset['severity'], 'warning');
-    assert.match(box.title, /Показать мысли: город = Москва/, 'тултип несёт полный текст');
-    assert.match(box.title, /свойство отвязано · «Город»/, 'и причину локализованной ошибки');
-    assert.match(box.title, /сборку нельзя локализовать в строку/, 'и нелокализуемую ошибку');
+    assert.match(tipText(root), /Показать мысли: город = Москва/, 'тултип несёт полный текст');
+    assert.match(tipText(root), /свойство отвязано · «Город»/, 'и причину локализованной ошибки');
+    assert.match(tipText(root), /сборку нельзя локализовать в строку/, 'и нелокализуемую ошибку');
 
     // Клампинг строк живёт в CSS-правиле: число сверяется с константой модуля.
     const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-editor.css'), 'utf8');
@@ -328,7 +337,7 @@ describe('футер отбора: фраза-превью и запрет пр�
     handle.refresh();
     assert.equal(box.dataset['severity'], 'error');
     assert.equal(apply.disabled, true, 'применение красного отбора запрещено');
-    assert.match(box.title, /удалено 2026-10-01T00:00:00\.000Z/);
+    assert.match(tipText(root), /удалено 2026-10-01T00:00:00\.000Z/);
 
     state.preview = {
       text: 'жёлтый отбор',
@@ -357,7 +366,6 @@ describe('футер отбора: фраза-превью и запрет пр�
     const { handle, state } = buildFooter({ onFixIssue: (path) => fixed.push(path) });
     const root = handle.root as unknown as ShimElement;
     assert.equal(exactOne(root, 'ff-fix'), null, 'отдельной кнопки «исправить» нет (п.10)');
-    const box = exactOne(root, mod.FILTER_FOOTER_PREVIEW_CLASS)!;
     const text = exactOne(root, 'ff-preview__text')!;
     const actionClass = mod.FILTER_FOOTER_PREVIEW_ACTION_CLASS;
     assert.equal(text.classList.contains(actionClass), false, 'пока ошибок нет — перехода нет');
@@ -377,7 +385,7 @@ describe('футер отбора: фраза-превью и запрет пр�
     };
     handle.refresh();
     assert.equal(text.classList.contains(actionClass), true, 'красное с адресом делает текст кликабельным');
-    assert.match(box.title, /Нажмите на текст/, 'тултип подсказывает про клик');
+    assert.match(tipText(root), /Нажмите на текст/, 'тултип подсказывает про клик');
     text.emit('click', {});
     assert.deepEqual(fixed, ['filter.children[0].entity'], 'клик по тексту ведёт в строку ошибки');
 
@@ -397,7 +405,7 @@ describe('футер отбора: фраза-превью и запрет пр�
     };
     handle.refresh();
     assert.equal(text.classList.contains(actionClass), false, 'без адреса строки перехода нет');
-    assert.doesNotMatch(box.title, /Нажмите на текст/, 'подсказки о клике нет');
+    assert.doesNotMatch(tipText(root), /Нажмите на текст/, 'подсказки о клике нет');
 
     // Жёлтое не запрещает применение — перехода тоже нет.
     state.preview = {
@@ -446,5 +454,178 @@ describe('футер отбора: фраза-превью и запрет пр�
       const source = fs.readFileSync(path.join(RENDERER, file), 'utf8');
       assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b/, `нет hex в ${file}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Фраза-превью: HTML-раскраска и тултип с разметкой
+// (правка заказчика 2026-10-14, п.12в; задача 58f77990)
+// ---------------------------------------------------------------------------
+
+describe('футер отбора: раскраска фразы и тултип с разметкой (задача 58f77990)', () => {
+  before(async () => {
+    installShim();
+    mod = await import('../src/renderer/lib/filter-footer.js');
+    filterMod = await import('../src/renderer/lib/filter-diagnostics.js');
+  });
+
+  /** Токены фразы `(A ИЛИ B) И C` — как их отдаёт композер. */
+  const NESTED_TOKENS = [
+    { kind: 'paren', text: '(', depth: 1 },
+    { kind: 'text', text: 'Актуальность = да' },
+    { kind: 'operator', text: ' ИЛИ ', operator: 'or' },
+    { kind: 'text', text: 'Помечено на удаление = нет' },
+    { kind: 'paren', text: ')', depth: 1 },
+    { kind: 'operator', text: ' И ', operator: 'and' },
+    { kind: 'text', text: 'Есть комментарий заполнено' },
+  ] as const;
+  const NESTED_TEXT = '(Актуальность = да ИЛИ Помечено на удаление = нет) И Есть комментарий заполнено';
+
+  it('операторы и скобки — спаны раскраски, текст фразы не меняется', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    state.preview = { text: NESTED_TEXT, tokens: NESTED_TOKENS, issues: [] };
+    handle.refresh();
+    const text = exactOne(root, 'ff-preview__text')!;
+    assert.equal(text.flatText(), NESTED_TEXT, 'видимый текст фразы не изменился');
+    // Считаем разметку В СТРОКЕ фразы: тултип несёт такую же (проверка ниже).
+    assert.equal(exact(text, 'ff-ph-op').length, 2, 'оба коннектора — спаны-операторы');
+    assert.equal(exact(text, 'ff-ph-op--and').length, 1);
+    assert.equal(exact(text, 'ff-ph-op--or').length, 1);
+    assert.equal(exact(text, 'ff-ph-paren').length, 2, 'скобка пары — свой спан');
+    // Тон скобки — цикл тонов вложенности: уровень 1 даёт второй тон цикла
+    // (`ft-tone-2` у группы того же уровня в дереве).
+    assert.equal(exact(text, 'ff-ph-paren--t2').length, 2, 'тон скобок — уровень вложенности');
+  });
+
+  it('тултип несёт ТУ ЖЕ разметку, что и строка фразы, плюс ошибки', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    state.preview = {
+      text: NESTED_TEXT,
+      tokens: NESTED_TOKENS,
+      issues: [
+        {
+          severity: 'warning',
+          source: 'server',
+          code: 'property_detached',
+          path: 'sort[0]',
+          message: 'свойство сортировки отвязано',
+        },
+      ],
+    };
+    handle.refresh();
+    const text = exactOne(root, 'ff-preview__text')!;
+    const tip = exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!;
+    assert.notEqual(tip, null, 'тултип фразы нарисован');
+    assert.ok(tip.flatText().startsWith(NESTED_TEXT), 'тултип начинается с той же фразы');
+    for (const cls of ['ff-ph-op--and', 'ff-ph-op--or', 'ff-ph-paren--t2']) {
+      assert.equal(exact(tip, cls).length, exact(text, cls).length, `разметка «${cls}» та же, что в строке`);
+    }
+    assert.match(tip.flatText(), /свойство сортировки отвязано/, 'и список ошибок');
+  });
+
+  it('вредоносное имя значения не создаёт разметку (только текстовые узлы)', () => {
+    const evil = '<img src=x onerror="alert(1)">';
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    state.preview = {
+      text: `Город = ${evil}`,
+      tokens: [{ kind: 'text', text: `Город = ${evil}` }],
+      issues: [],
+    };
+    handle.refresh();
+    const text = exactOne(root, 'ff-preview__text')!;
+    const tip = exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!;
+    assert.equal(text.flatText(), `Город = ${evil}`, 'имя показано как есть — текстом');
+    assert.equal(tip.flatText().includes(evil), true);
+    assert.equal(root.findAll((node) => node.tagName === 'img').length, 0, 'разметка из имени не создана');
+    assert.equal(text.innerHTML, '', 'innerHTML не используется — фраза собрана узлами');
+    assert.equal(tip.innerHTML, '', 'innerHTML не используется — тултип собран узлами');
+  });
+
+  it('разметки нет — текстовая деградация узлом (для мест без раскраски)', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    state.preview = { text: 'фраза хоста', issues: [] };
+    handle.refresh();
+    const text = exactOne(root, 'ff-preview__text')!;
+    assert.equal(text.flatText(), 'фраза хоста');
+    // Текст лежит в узле и пустой `replaceChildren()` его НЕ снимает (п.1
+    // приёмки): проверка по дочерним элементам, а не только по тексту, — так
+    // тест красный при неверном порядке «textContent = …; replaceChildren()».
+    assert.equal(text.childElementCount, 0, 'текст, а не разметка: элементов-детей нет');
+    assert.equal(exact(root, 'ff-ph-op').length, 0, 'раскраски нет');
+    assert.equal(exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!.flatText().startsWith('фраза хоста'), true);
+
+    // Переключение текст → разметка → текст не оставляет мусора и не теряет текст.
+    state.preview = { text: NESTED_TEXT, tokens: NESTED_TOKENS, issues: [] };
+    handle.refresh();
+    assert.equal(text.flatText(), NESTED_TEXT, 'разметка заменяет текст целиком');
+    assert.equal(text.childElementCount, NESTED_TOKENS.length, 'каждый токен — свой спан');
+    state.preview = { text: 'снова текст', issues: [] };
+    handle.refresh();
+    assert.equal(text.flatText(), 'снова текст', 'и текст возвращается целиком');
+    assert.equal(text.childElementCount, 0, 'спаны разметки сняты');
+  });
+
+  it('пустое превью снимает фразу и прячет тултип', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    state.preview = { text: NESTED_TEXT, tokens: NESTED_TOKENS, issues: [] };
+    handle.refresh();
+    const tip = exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!;
+    assert.equal(tip.style.display, '', 'тултип доступен при непустой фразе');
+
+    state.preview = { text: '', issues: [] };
+    handle.refresh();
+    assert.equal(exactOne(root, 'ff-preview__text')!.flatText(), '', 'фраза снята');
+    assert.equal(tip.style.display, 'none', 'тултип без фразы скрыт');
+    assert.equal(tip.flatText(), '', 'и пуст');
+  });
+
+  it('классы раскраски и токены — единый источник модуля', () => {
+    // Тона скобок берутся из цикла тонов вложенности (`lib/filter-tree.ts`):
+    // четвёртый уровень замыкает цикл на первый.
+    assert.equal(mod.filterPhraseParenClass(0), mod.filterPhraseParenClass(4), 'цикл тонов замкнут');
+    assert.notEqual(mod.filterPhraseParenClass(0), mod.filterPhraseParenClass(1));
+    for (const op of ['and', 'or', 'not'] as const) {
+      assert.match(mod.FILTER_FOOTER_OPERATOR_CLASSES[op], /ff-ph-op--/);
+    }
+  });
+
+  it('фраза — точка табуляции, подсказка связана aria-describedby (стандарт 1b5f6200)', () => {
+    const { handle, state } = buildFooter();
+    const root = handle.root as unknown as ShimElement;
+    const text = exactOne(root, 'ff-preview__text')!;
+    const tip = exactOne(root, mod.FILTER_FOOTER_TIP_CLASS)!;
+    assert.notEqual(tip.id, '', 'у подсказки есть id для связи с фразой');
+    assert.equal(text.getAttribute('aria-describedby'), tip.id, 'фраза описывается подсказкой');
+    assert.equal(text.tabIndex, -1, 'пустая фраза из табуляции выпадает');
+
+    state.preview = { text: NESTED_TEXT, tokens: NESTED_TOKENS, issues: [] };
+    handle.refresh();
+    assert.equal(text.tabIndex, 0, 'непустая фраза — точка табуляции: подсказка не только на hover');
+
+    state.preview = { text: '', issues: [] };
+    handle.refresh();
+    assert.equal(text.tabIndex, -1, 'снятая фраза выпадает из табуляции');
+
+    // id подсказок уникальны: связь `aria-describedby` не путает два футера.
+    const second = buildFooter().handle.root as unknown as ShimElement;
+    assert.notEqual(exactOne(second, mod.FILTER_FOOTER_TIP_CLASS)!.id, tip.id);
+  });
+
+  it('показ подсказки по фокусу и кольцо фокуса — правила CSS из токенов', () => {
+    const css = fs.readFileSync(path.join(RENDERER, 'styles', 'filter-editor.css'), 'utf8');
+    // Фокус внутри превью показывает тултип (парный путь к :hover —
+    // достижимость проверяется живым стендом: фраза табится и фокусируется).
+    assert.match(
+      css,
+      /\.ff-preview:focus-within\s*>\s*\.ff-preview__tip\s*\{[^}]*display:\s*block/,
+      'фокус внутри превью показывает подсказку',
+    );
+    const ring = /\.ff-preview__text:focus-visible\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    assert.match(ring, /outline:\s*var\(--focus-ring-width\)\s*solid\s*var\(--accent\)/, 'кольцо — токены');
   });
 });

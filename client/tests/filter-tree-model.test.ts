@@ -51,6 +51,13 @@ import {
   type FilterTreeLeaf,
   type FilterTreeNode,
 } from '../src/renderer/lib/filter-builder.js';
+import {
+  filterTreeCloneNode,
+  filterTreeGroupAt,
+  filterTreeInsertAt,
+  filterTreeMoveNode,
+  type FilterTreePath,
+} from '../src/renderer/lib/filter-tree.js';
 
 /** Лист дерева по операнду — краткая запись условий в тестах. */
 function leaf(
@@ -665,6 +672,218 @@ describe('хелперы модели дерева', () => {
       null,
     );
     assert.equal(filterLeafDefaultValue(defaultFilterTreeLeaf({ kind: 'keywords' })), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Операции переноса/копирования модели (задача 31b228f0, этап 1)
+// ---------------------------------------------------------------------------
+
+/** Лист с узнаваемым скалярным значением (для проверки порядка). */
+function namedLeaf(name: string): FilterTreeLeaf {
+  return leaf({ kind: 'id' }, 'eq', { kind: 'scalar', value: name });
+}
+
+/** Подписи детей группы по пути: лист — его значение, группа — `group:<op>`. */
+function childLabels(root: FilterTreeNode, path: FilterTreePath): string[] {
+  const group = filterTreeGroupAt(root, path);
+  assert.ok(group !== null, `путь ${JSON.stringify(path)} ведёт к группе`);
+  return group.children.map((node) =>
+    node.kind === 'leaf' && node.value.kind === 'scalar'
+      ? String(node.value.value)
+      : `group:${node.kind === 'group' ? node.op : '?'}`,
+  );
+}
+
+/** Независимый снимок модели: deepEqual после неудачной операции. */
+function snapshot(node: FilterTreeNode): unknown {
+  return JSON.parse(JSON.stringify(node)) as unknown;
+}
+
+describe('модель дерева: вставка по индексу (31b228f0)', () => {
+  it('вставляет перед текущим элементом индекса; N = children.length — в конец', () => {
+    const root = group('and', [namedLeaf('a'), namedLeaf('c')]);
+    assert.equal(filterTreeInsertAt(root, [], 1, namedLeaf('b')), true);
+    assert.deepEqual(childLabels(root, []), ['a', 'b', 'c']);
+    assert.equal(filterTreeInsertAt(root, [], 3, namedLeaf('d')), true);
+    assert.deepEqual(childLabels(root, []), ['a', 'b', 'c', 'd']);
+  });
+
+  it('вставляет в пустую группу и во вложенную группу', () => {
+    const root = group('and', [group('or', [])]);
+    assert.equal(filterTreeInsertAt(root, [0], 0, namedLeaf('a')), true);
+    assert.deepEqual(childLabels(root, [0]), ['a']);
+  });
+
+  it('недопустимый путь/индекс модель не меняет', () => {
+    const root = group('and', [namedLeaf('a'), group('or', [namedLeaf('b')])]);
+    const before = snapshot(root);
+    assert.equal(filterTreeInsertAt(root, [0], 0, namedLeaf('x')), false, 'лист — не группа');
+    assert.equal(filterTreeInsertAt(root, [1], 2, namedLeaf('x')), false, 'индекс за границей');
+    assert.equal(filterTreeInsertAt(root, [1], -1, namedLeaf('x')), false, 'отрицательный индекс');
+    assert.equal(filterTreeInsertAt(root, [1], 0.5, namedLeaf('x')), false, 'дробный индекс');
+    assert.deepEqual(snapshot(root), before, 'модель не изменилась');
+  });
+});
+
+describe('модель дерева: перенос внутри и между группами (31b228f0)', () => {
+  it('перенос внутри группы учитывает сдвиг индекса после удаления источника', () => {
+    // Классическая ошибка: index=2 в [a,b,c] — это «перед c»; после удаления
+    // a массив [b,c], и вставка обязана идти в позицию 1, а не 2.
+    const down = group('and', [namedLeaf('a'), namedLeaf('b'), namedLeaf('c')]);
+    assert.equal(filterTreeMoveNode(down, [0], [], 2), true);
+    assert.deepEqual(childLabels(down, []), ['b', 'a', 'c']);
+
+    const up = group('and', [namedLeaf('a'), namedLeaf('b'), namedLeaf('c')]);
+    assert.equal(filterTreeMoveNode(up, [2], [], 0), true);
+    assert.deepEqual(childLabels(up, []), ['c', 'a', 'b']);
+
+    const tail = group('and', [namedLeaf('a'), namedLeaf('b'), namedLeaf('c')]);
+    assert.equal(filterTreeMoveNode(tail, [0], [], 3), true);
+    assert.deepEqual(childLabels(tail, []), ['b', 'c', 'a']);
+  });
+
+  it('перенос между группами и в пустую группу', () => {
+    const root = group('and', [
+      group('or', [namedLeaf('a'), namedLeaf('b')]),
+      group('and', [namedLeaf('c')]),
+    ]);
+    assert.equal(filterTreeMoveNode(root, [0, 0], [1], 0), true);
+    assert.deepEqual(childLabels(root, [0]), ['b']);
+    assert.deepEqual(childLabels(root, [1]), ['a', 'c']);
+
+    const empty = group('and', [namedLeaf('x'), group('or', [])]);
+    assert.equal(filterTreeMoveNode(empty, [0], [1], 0), true);
+    assert.deepEqual(childLabels(empty, []), ['group:or']);
+    assert.deepEqual(childLabels(empty, [0]), ['x']);
+  });
+
+  it('группу нельзя вложить в саму себя или в потомка (цикл), модель не меняется', () => {
+    const root = group('and', [
+      group('or', [group('and', [namedLeaf('a')])]),
+      namedLeaf('b'),
+    ]);
+    const before = snapshot(root);
+    assert.equal(filterTreeMoveNode(root, [0], [0, 0], 0), false, 'в собственного потомка');
+    assert.equal(filterTreeMoveNode(root, [0], [0], 0), false, 'в саму себя — цикл');
+    assert.deepEqual(snapshot(root), before, 'модель не изменилась');
+    assert.equal(filterTreeMoveNode(root, [0, 0], [0], 0), true, 'внутри группы — допустимый no-op');
+    assert.deepEqual(childLabels(root, [0]), ['group:and']);
+  });
+
+  it('недопустимый путь/индекс — атомарный отказ', () => {
+    const root = group('and', [namedLeaf('a'), group('or', [namedLeaf('b')])]);
+    const before = snapshot(root);
+    assert.equal(filterTreeMoveNode(root, [], [], 0), false, 'корень не переносится');
+    assert.equal(filterTreeMoveNode(root, [9], [], 0), false, 'источника нет');
+    assert.equal(filterTreeMoveNode(root, [0], [9], 0), false, 'цели нет');
+    assert.equal(filterTreeMoveNode(root, [0], [1], 2), false, 'индекс за границей');
+    assert.deepEqual(snapshot(root), before, 'ни одной частичной мутации');
+  });
+});
+
+describe('модель дерева: арность НЕ при переносе (31b228f0)', () => {
+  it('единственного ребёнка нельзя вынуть из not-группы', () => {
+    const root = group('and', [group('not', [namedLeaf('a')]), namedLeaf('b')]);
+    const before = snapshot(root);
+    assert.equal(filterTreeMoveNode(root, [0, 0], [], 1), false);
+    assert.equal(filterTreeMoveNode(root, [0, 0], [0], 0), true, 'внутри not — допустимый no-op');
+    assert.deepEqual(childLabels(root, [0]), ['a'], 'арность НЕ сохранена');
+    assert.deepEqual(snapshot(root), before, 'перенос внутрь остался no-op');
+  });
+
+  it('второго ребёнка в not-группу не вставить (ни переносом, ни вставкой)', () => {
+    const root = group('and', [group('not', [namedLeaf('a')]), namedLeaf('b')]);
+    const before = snapshot(root);
+    assert.equal(filterTreeMoveNode(root, [1], [0], 1), false, 'перенос второго ребёнка');
+    assert.equal(filterTreeInsertAt(root, [0], 1, namedLeaf('c')), false, 'вставка второго ребёнка');
+    assert.deepEqual(snapshot(root), before, 'модель не изменилась');
+    assert.deepEqual(childLabels(root, [0]), ['a']);
+  });
+
+  it('в пустую not-группу вставить первого ребёнка можно', () => {
+    const root = group('and', [group('not', []), namedLeaf('b')]);
+    assert.equal(filterTreeMoveNode(root, [1], [0], 0), true);
+    assert.deepEqual(childLabels(root, [0]), ['b']);
+    assert.deepEqual(childLabels(root, []), ['group:not']);
+  });
+});
+
+describe('модель дерева: глубокий клон для Shift-копирования (31b228f0)', () => {
+  it('копия структурно равна оригиналу и независима от него', () => {
+    const original = group('and', [
+      group('or', [
+        leaf(
+          { kind: 'keywords', scope: ['title', 'comment'] },
+          'matches',
+          { kind: 'list', items: [{ token: '$today' }, 'слово'] },
+          { labels: { entity: 'Найти слова', value: 'слово', values: { t1: 'Первая' } } },
+        ),
+        leaf(
+          { kind: 'parents' },
+          'in',
+          {
+            kind: 'subquery',
+            operator: 'all_in',
+            node: group('and', [namedLeaf('inner')]),
+          },
+        ),
+      ]),
+      leaf({ kind: 'updated_at' }, 'between', {
+        kind: 'list',
+        items: [{ token: '$monthStart' }, { token: '$monthEnd' }],
+      }, { mode: 'structural' }),
+    ]);
+
+    const copy = filterTreeCloneNode(original) as FilterTreeGroup;
+    assert.deepEqual(copy, original, 'копия совпадает по содержимому');
+    assert.notEqual(copy, original, 'корень — новый объект');
+    assert.notEqual(copy.children[0], original.children[0], 'вложенная группа — новый объект');
+
+    // Меняем копию на всех уровнях: оригинал не должен пострадать.
+    const copyKeywords = (copy.children[0] as FilterTreeGroup).children[0] as FilterTreeLeaf;
+    assert.equal(copyKeywords.value.kind, 'list');
+    if (copyKeywords.value.kind === 'list') {
+      const token = copyKeywords.value.items[0];
+      if (typeof token === 'object') token.token = '$weekStart';
+      copyKeywords.value.items.push('добавлено');
+    }
+    if (copyKeywords.entity.kind === 'keywords') copyKeywords.entity.scope?.push('synonyms');
+    if (copyKeywords.labels?.values !== undefined) {
+      copyKeywords.labels.values['t1'] = 'Изменено';
+    }
+
+    const copyParent = (copy.children[0] as FilterTreeGroup).children[1] as FilterTreeLeaf;
+    if (copyParent.value.kind === 'subquery' && copyParent.value.node.kind === 'group') {
+      copyParent.value.node.children.push(namedLeaf('лишний'));
+    }
+
+    const fresh = filterTreeCloneNode(original) as FilterTreeGroup;
+    assert.deepEqual(original.children[0], fresh.children[0]);
+    const originalKeywords = ((original.children[0] as FilterTreeGroup).children[0] as FilterTreeLeaf);
+    assert.equal(originalKeywords.value.kind, 'list');
+    if (originalKeywords.value.kind === 'list') {
+      const token = originalKeywords.value.items[0];
+      assert.equal(typeof token === 'object' ? token.token : token, '$today', 'токен не изменён');
+      assert.equal(originalKeywords.value.items.length, 2, 'список не вырос');
+    }
+    if (originalKeywords.entity.kind === 'keywords') {
+      assert.deepEqual(originalKeywords.entity.scope, ['title', 'comment'], 'scope не изменён');
+    }
+    assert.equal(originalKeywords.labels?.values?.['t1'], 'Первая', 'карта подписей независима');
+    const originalParent = (original.children[0] as FilterTreeGroup).children[1] as FilterTreeLeaf;
+    if (originalParent.value.kind === 'subquery' && originalParent.value.node.kind === 'group') {
+      assert.equal(originalParent.value.node.children.length, 1, 'под-выборка независима');
+    }
+  });
+
+  it('клон листа-скаляра и токена не делит объекты значений', () => {
+    const scalar = filterTreeCloneNode(namedLeaf('x')) as FilterTreeLeaf;
+    const tokenLeaf = leaf({ kind: 'created_at' }, 'eq', { kind: 'token', token: '$today' });
+    const token = filterTreeCloneNode(tokenLeaf) as FilterTreeLeaf;
+    assert.deepEqual(scalar, namedLeaf('x'));
+    assert.deepEqual(token, tokenLeaf);
+    assert.notEqual(token.value, tokenLeaf.value);
   });
 });
 

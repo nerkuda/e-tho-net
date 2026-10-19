@@ -28,8 +28,8 @@ import type { NetworkDb } from '../db/network-db.js';
 import type { Logger } from 'pino';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer } from './layer-service.js';
-import { findDuplicates, search } from './search-service.js';
-import { queryThoughtsAsync } from './heavy-read.js';
+import { search } from './search-service.js';
+import { findDuplicatesAsync, queryThoughtsAsync } from './heavy-read.js';
 import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
 import type { CrossNetworkSearchResponse, CrossNetworkTokenIssue, DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
@@ -402,15 +402,15 @@ export interface CrossNetworkFindDuplicatesArgs {
 }
 
 /** Запустить веером {@link findDuplicates}. */
-export function fanOutFindDuplicates(
+export async function fanOutFindDuplicates(
   access: CrossNetworkAccess,
   args: CrossNetworkFindDuplicatesArgs,
-): {
+): Promise<{
   hits: DuplicateHit[];
   networks: NetworksCatalog;
   truncated: boolean;
   reason: 'cross_network_max_hits' | null;
-} {
+}> {
   const ids = normalizeNetworkIds(args.networkIds);
   const accessible = access.networks.filter((n) => ids.includes(n.id));
   const cap = args.maxHits ?? CROSS_NETWORK_MAX_HITS;
@@ -419,9 +419,23 @@ export function fanOutFindDuplicates(
   // Объединяем по `(network_id, thought_id)` — одинаковые id в разных сетях
   // (теоретически возможно при кросс-DB ссылках) трактуются как разные хиты.
   const keyOf = (networkId: string, thoughtId: string): string => `${networkId}:${thoughtId}`;
-  for (const net of accessible) {
-    const ndb = openNetworkDbForCrossNetwork(access.dataDir, access.userId, access.clientId, net.id, access.logger);
-    const local = findDuplicates(ndb, args.title, args.synonyms ?? [], args.typeIds ?? []);
+  // Каждая сеть — тяжёлое чтение дублей; уводим все в reader-пул и ждём
+  // параллельно. `Promise.all` сохраняет порядок сетей, поэтому бюджет
+  // расходуется ровно как в прежнем последовательном цикле (ошибка 49e05ea0).
+  const locals = await Promise.all(
+    accessible.map((net) => {
+      const ndb = openNetworkDbForCrossNetwork(
+        access.dataDir,
+        access.userId,
+        access.clientId,
+        net.id,
+        access.logger,
+      );
+      return findDuplicatesAsync(ndb, args.title, args.synonyms ?? [], args.typeIds ?? []);
+    }),
+  );
+  for (const [index, local] of locals.entries()) {
+    const net = accessible[index]!;
     for (const hit of acceptWithBudget(budget, local)) {
       const key = keyOf(net.id, hit.id);
       const existing = byId.get(key);

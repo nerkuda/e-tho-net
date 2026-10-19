@@ -314,3 +314,28 @@ export function inlinePlainText(token: Token): string {
   }
   return out.trim();
 }
+
+/**
+ * Remaps same-network id links `[[#<id>]]` (and their transclusion form) to
+ * new ids according to `thoughtIdMap` — used when a copy of a subgraph lands
+ * in the SAME network (ошибка 5f03ebc5): the text points at source thoughts
+ * but must point at their copies. Links whose id is absent from the map
+ * (targets outside the copied selection) and cross-network `[[n:…#…]]`
+ * links stay untouched; the alias survives.
+ *
+ * The pattern intentionally matches the inner `[[…]]` of a transclusion, so
+ * the leading `!` is preserved by the replacement without being parsed here.
+ * Parsing/expansion of transclusions still belongs to this package only.
+ */
+export function remapSameNetworkLinks(
+  bodyMd: string,
+  thoughtIdMap: Readonly<Record<string, string>>,
+): string {
+  return bodyMd.replace(
+    /\[\[#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\|[^\]]+)?\]\]/gi,
+    (match, id: string, alias: string | undefined) => {
+      const mapped = thoughtIdMap[id.toLowerCase()] ?? thoughtIdMap[id];
+      return mapped === undefined ? match : `[[#${mapped}${alias ?? ''}]]`;
+    },
+  );
+}

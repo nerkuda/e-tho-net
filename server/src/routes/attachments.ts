@@ -33,6 +33,7 @@ import {
   type AttachmentUpdateInput,
 } from '@etn/shared';
 
+import { buildContentDisposition } from '../http/content-disposition.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
   openRouteNetworkDb,
@@ -258,7 +259,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         return reply
           .header('content-type', file.mime_type)
           .header('content-length', String(file.size))
-          .header('content-disposition', `inline; filename="${encodeURIComponent(file.filename)}"`)
+          .header('content-disposition', buildContentDisposition('inline', file.filename))
           .send(createReadStream(file.filePath));
       },
     );

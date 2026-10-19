@@ -73,7 +73,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `tabs.ts` / `tabs.css` | `uiTabs` | Полоса вкладок диалогов и экранов (`.ui-tab*`) поверх `wa-tab-group` | задача `a57e7998`, требование `88a9225a` |
 | `collapsible.ts` | `collapsibleSection` | Сворачиваемые секции (группы редактора, панели) | задача `a57e7998` |
 | `messages.ts` / `messages.css` | `errorLine`, `fieldError`, `operationError`, `setStatusText`, `footerErrorLine`, классы `ERROR_LINE_CLASS`/`FIELD_ERROR_CLASS`/`FOOTER_ERROR_CLASS` | Единый вид сообщений и строк ошибок | задача `e20761c2`, требование `397c5a56` |
-| `field.ts` / `field.css` | `fieldInput`, `fieldTextarea`, `fieldRow`, `wrapClearable`, `setFieldDisabled`, классы `FIELD_*` | Поля ввода: базовые классы, подпись/подсказка/ошибка, clearable | задача `f351b894`, требование `e64083b5` |
+| `field.ts` / `field.css` | `fieldInput`, `fieldTextarea`, `fieldSelect`, `fieldRow`, `wrapClearable`, `setFieldDisabled`, классы `FIELD_*` | Поля ввода: базовые классы, подпись/подсказка/ошибка, clearable, выбор из закрытого списка | задача `f351b894`, требование `e64083b5` |
 | `choice-row.ts` / `choice-row.css` | `choiceRow`, `checkboxRow`, `radioRow`, `choiceControl`, `choiceGroup` | Строка-переключатель (флажок/радио) | задача `f351b894`, требование `e64083b5` |
 | `segmented.ts` / `segmented.css` | `segmentedControl` | Сегментный переключатель (взаимоисключающие кнопки) | задача `f351b894` |
 | `toggle.ts` / `toggle.css` | `toggleButton` | Тумблер — кнопка с состоянием «нажато» | требование `e64083b5` |
@@ -87,6 +87,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `nav-core.ts` | `NAV_KEY_ACTIONS`, `resolveNavAction`, `nextNavIndex`, `listTargetIndex`, `isEditingTarget` | **Общее ядро клавиатурной навигации** таблиц и списков: клавиши, границы, Home/End, PgUp/PgDn, отсутствие выделения, отсечка полей ввода | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
 | `list.ts` | `createListNav` | **Общий компонент списка**: навигация списков (лента «Дневника», библиотека «Публикаций») через ядро; разметку caller рисует keyed-сверкой | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
 | `drag-list.ts` / `drag-list.css` | `createDragList`, `dragHandle`, классы `DRAG_*` | **Общий drag-фасад ручного порядка**: сортируемый список поверх `createListNav` — pointer-драг с порогом, клон-призрак, линии вставки, авто-скролл и клавиатурный сдвиг `Alt+↑/↓` (действия ядра `moveUp`/`moveDown`). Группа — «соседи одного родителя»; drag-логика только здесь | задача `d13fd645`, ADR `fadf99e0` |
+| `drag-tree.ts` / `drag-tree.css` | `createDragTree`, `resolveDragTreeRowTarget`, `DRAG_TREE_OVER_EMPTY_CLASS`, интерфейсы `DragTree*` | **Общий drag-фасад кросс-группового переноса узлов дерева**: pointer-жест с порогом, клон-призрак, авто-скролл, подсветка цели (`before`/`after`/`empty`), `Shift`-признак копирования, отмена `Escape` через `lib/keymap`; цель броска (`groupId`, `index`) резолвит адаптер вызывающего. Нужен там, где контракт `drag-list` («порядок одной группы») недостаточен; цели пересчитываются по точке `pointerup` | задача `31b228f0`, ADR `442e7ff5`, ADR `e538090f` |
 | `keyed-list.ts` | `reconcileKeyed`, `DEFAULT_KEY_ATTR` | Инкрементальная сверка списка по ключу (identity неизменных узлов) | задача `6952c619`, ADR keyed-обновления |
 | `scroll-anchor.ts` | `preserveScroll` | Возврат позиции прокрутки при легитимной полной пересборке | задача `3bfef1f7` |
 | `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы); строки — вендорский Grid, выделение синхронизируется точечно; навигация — из общего ядра `nav-core.ts` | задача `dad2b029`, требование `93115633`, задача `d59fdfb9`, задача `7893e429` |
@@ -150,4 +151,4 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
 `guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
 `guard-ui-licenses`, `guard-ui-dialog`, `guard-ui-icons`, `guard-keyed-lists`,
-`guard-list-nav`.
+`guard-list-nav`, `guard-drag-channel`.

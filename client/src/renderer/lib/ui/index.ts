@@ -68,6 +68,7 @@ export {
   FIELD_CLEAR_BTN_CLASS,
   fieldInput,
   fieldTextarea,
+  fieldSelect,
   fieldRow,
   wrapClearable,
   setFieldDisabled,
@@ -77,6 +78,8 @@ export type {
   FieldControlOptions,
   FieldInputOptions,
   FieldTextareaOptions,
+  FieldSelectOption,
+  FieldSelectOptions,
   FieldRowOptions,
 } from './field.js';
 
@@ -301,6 +304,28 @@ export type {
   DragListOptions,
   DragListHandle,
 } from './drag-list.js';
+
+// Кросс-групповой перенос узлов дерева (задача 31b228f0, ADR 442e7ff5):
+// pointer-канал с целью «группа + индекс вставки», Shift-копированием и
+// Escape-отменой. Drag-логика — только здесь; фильтры передают пути/ключи.
+export {
+  DRAG_TREE_OVER_EMPTY_CLASS,
+  createDragTree,
+  resolveDragTreeRowTarget,
+} from './drag-tree.js';
+export type {
+  DragTreeItem,
+  DragTreeAdapter,
+  DragTreeTarget,
+  DragTreeResolveRequest,
+  DragTreeDropEvent,
+  DragTreeDropPosition,
+  DragTreeModifiers,
+  DragTreeOptions,
+  DragTreeHandle,
+  DragTreeRow,
+  DragTreeRowTarget,
+} from './drag-tree.js';
 
 // Единое дерево списков — общий рендер строк над типом-деревом данных
 // (задача d1c15a2d, требование 0086037c, компонент 24a05c95). Единственный

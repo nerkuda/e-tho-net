@@ -123,6 +123,7 @@ import {
 } from './focus-filter-strip.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { onQueryInvalidated } from '../lib/live/query-registry.js';
+import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
 // Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6): облачка
@@ -532,9 +533,9 @@ export function getRef(id: string): ThoughtRef | null {
  * otherwise skip the repaint — the stale icon of the thought while it is not
  * the focus persisted until the next focus switch (ошибка 1ea2d05a).
  */
-export function invalidateRef(id: string): void {
+export function invalidateRef(id: string, realtime = false): void {
   if (refCache.delete(id)) refEpoch++;
-  notifyRefInvalidated(id);
+  notifyRefInvalidated(id, realtime);
 }
 
 /**
@@ -546,7 +547,7 @@ export function invalidateRef(id: string): void {
 export function invalidateAllRefs(): void {
   if (refCache.size > 0) refEpoch++;
   refCache.clear();
-  notifyRefInvalidated(null);
+  notifyRefInvalidated(null, false);
 }
 
 /**
@@ -556,19 +557,25 @@ export function invalidateAllRefs(): void {
  * магазина — в т.ч. на догрузку длинных списков — и мигала (ошибка 3a64e680).
  * `id` — конкретная мысль, `null` — сброшен весь кэш.
  */
-const refInvalidationListeners = new Set<(id: string | null) => void>();
+const refInvalidationListeners = new Set<(id: string | null, realtime?: boolean) => void>();
 
 /** Регистрирует подписчика на сброс ref-кэша; возвращает отписку. */
-export function onThoughtRefInvalidated(cb: (id: string | null) => void): () => void {
+export function onThoughtRefInvalidated(
+  cb: (id: string | null, realtime?: boolean) => void,
+): () => void {
   refInvalidationListeners.add(cb);
   return () => {
     refInvalidationListeners.delete(cb);
   };
 }
 
-/** Оповещает подписчиков о сбросе ref-кэша (см. {@link onThoughtRefInvalidated}). */
-function notifyRefInvalidated(id: string | null): void {
-  for (const cb of [...refInvalidationListeners]) cb(id);
+/**
+ * Оповещает подписчиков о сбросе ref-кэша (см. {@link onThoughtRefInvalidated}).
+ * `realtime` — причина-событие шины: потребитель вправе собрать затронутые id
+ * в окно (батчер `thoughts.resolve`), не задерживая действия пользователя.
+ */
+function notifyRefInvalidated(id: string | null, realtime = false): void {
+  for (const cb of [...refInvalidationListeners]) cb(id, realtime);
 }
 
 /** Returns the currently rendered focus cloud (H6 line anchoring). */
@@ -1824,7 +1831,7 @@ async function enrichRefs(focus: FocusResponse): Promise<void> {
   const unique = [...new Set(ids)];
   if (unique.length === 0) return;
   try {
-    const resolved = await etn.thoughts.resolve(networkId, unique.slice(0, 100));
+    const resolved = await resolveThoughtRefs(networkId, unique);
     for (const ref of resolved) refCache.set(ref.id, ref);
   } catch {
     // Enrichment is best-effort: clouds render with default styling.
@@ -1838,7 +1845,7 @@ async function resolveZoneRefs(networkId: string, ids: string[]): Promise<void> 
   const missing = [...new Set(ids.filter((id) => !refCache.has(id)))];
   if (missing.length === 0) return;
   try {
-    const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, 100));
+    const resolved = await resolveThoughtRefs(networkId, missing);
     for (const ref of resolved) refCache.set(ref.id, ref);
   } catch {
     // Best effort.

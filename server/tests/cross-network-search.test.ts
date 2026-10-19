@@ -218,7 +218,7 @@ describe(
         for (let i = 0; i < 4; i += 1) {
           await createThought(ctx, ctx.networkId, ctx.adminKey, 'Дубль-кап');
         }
-        const result = fanOutFindDuplicates(makeAccess(ctx, ctx.networkId), {
+        const result = await fanOutFindDuplicates(makeAccess(ctx, ctx.networkId), {
           networkIds: [ctx.networkId],
           title: 'Дубль-кап',
           maxHits: 2,

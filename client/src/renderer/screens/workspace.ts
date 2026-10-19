@@ -35,7 +35,7 @@ import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
 import { mountEventAreaResizer } from './event-area-resizer.js';
-import { mountSelectionResizer } from './selection-resizer.js';
+import { mountSelectionResizer, mountUsageResizer } from './selection-resizer.js';
 import {
   clampEventAreaW,
   LAYER_MENU_LABEL_FALLBACK,
@@ -44,6 +44,7 @@ import {
 } from '../lib/pure.js';
 import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
+import { mountUsagePanel } from './usage-panel.js';
 import { mountStructures } from './structures/structures.js';
 import { mountChronicle } from './chronicle/chronicle.js';
 import { mountActivity } from './activity/activity.js';
@@ -308,6 +309,9 @@ export function buildWorkspace(): HTMLElement {
   // --- body -------------------------------------------------------------------
   const body = div('workspace-body');
   const selectionHost = div('selection-panel hidden');
+  // Панель использования (спека f7623077): слева, сразу правее панели
+  // выделения (если та скрыта — на её месте), со своей шириной `--usage-w`.
+  const usageHost = div('usage-panel hidden');
   // Every view hangs its content host off the body next to the editor. The
   // shared `view-host` marker is the single anchor the dock-order rules
   // (`styles/layout.css`) key on — the editor position is a global setting and
@@ -328,8 +332,12 @@ export function buildWorkspace(): HTMLElement {
   // Draggable splitter between the selection panel and the canvas (08-ui-spec.md
   // §5). Positioned on the panel's right seam via the --selection-w variable.
   const selectionResizer = splitterElement('selection-resizer hidden');
+  // Сплиттер панели использования — та же механика (lib/ui/splitter),
+  // ширина в `window_layout.u`.
+  const usageResizer = splitterElement('usage-resizer hidden');
   body.append(
     selectionHost,
+    usageHost,
     canvasHost,
     structuresHost,
     chronicleHost,
@@ -338,6 +346,7 @@ export function buildWorkspace(): HTMLElement {
     editorHost,
     editorResizer,
     selectionResizer,
+    usageResizer,
   );
 
   // Q5: full-body placeholder shown when the active tab is inaccessible
@@ -442,9 +451,11 @@ export function buildWorkspace(): HTMLElement {
   mountEditor(editorHost);
   mountEditorResizer(editorResizer, body);
   mountSelectionResizer(selectionResizer, body);
+  mountUsageResizer(usageResizer, body);
   mountEventAreaResizer(eventAreaResizer, statusbar);
   onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));
   onWorkspaceTeardown(mountSelection(selectionHost));
+  onWorkspaceTeardown(mountUsagePanel(usageHost, usageResizer));
   onWorkspaceTeardown(mountStructures(structuresHost));
   onWorkspaceTeardown(mountChronicle(chronicleHost));
   onWorkspaceTeardown(mountActivity(activityHost));
@@ -471,6 +482,14 @@ export function buildWorkspace(): HTMLElement {
     body.style.setProperty('--editor-w', `${st.editorW}px`);
     body.style.setProperty('--editor-h', `${st.editorH}px`);
     body.style.setProperty('--selection-w', `${st.selectionW}px`);
+    body.style.setProperty('--usage-w', `${st.usageW}px`);
+    // Шов панели использования: левый док редактора + видимая панель
+    // выделения + ширина панели использования (спека f7623077).
+    const leftPanelsW =
+      (st.editorPosition === 'left' ? st.editorW : 0) +
+      (st.selection.length > 0 ? st.selectionW : 0) +
+      st.usageW;
+    body.style.setProperty('--usage-seam', `${leftPanelsW}px`);
     // The selection panel (and its resizer) are visible only while the list is
     // non-empty (mountSelection toggles the panel's own hidden class).
     selectionResizer.classList.toggle('hidden', st.selection.length === 0);

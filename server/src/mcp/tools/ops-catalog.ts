@@ -297,7 +297,13 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: true,
     effects:
-      'чтение, без записи. Два пути (XOR): ключевые слова `q` (объединение title/description/url/file_path) ЛИБО тело `ast` — операнды `name` (заголовок: равно/содержит/в списке/«есть слова»), `kind` (file/url), `mime_type` (равно/содержит/в списке), `owner` (владельцы: заполнено/не заполнено; в списке по типу; под-выборка по мыслям-владельцам `in`/`not_in`/`all_of`; «в иерархии»; количество), `size` (байты: сравнения/«между»/заполнено). Грамматика AST — `etn.guide { topic: "thoughts.query" }`; порядок результата — `created_at DESC`.',
+      'чтение, без записи. Два пути (XOR): ключевые слова `q` (объединение title/description/url/file_path) ЛИБО тело `ast` — операнды профиля «вложения» (наборы — зеркало реестра `ATTACHMENT_OPERATOR_SETS`; паритет держит `guard-guide-filter-operators.test.ts`):\n' +
+      '- `name` — `eq/ne/contains/not_contains/in/not_in/matches` (заголовок; `matches` — «есть слова»);\n' +
+      '- `kind` — `eq/ne/in/not_in` (file/url);\n' +
+      '- `mime_type` — `eq/ne/contains/not_contains/in/not_in` (MIME-подтип);\n' +
+      '- `owner` — `in/not_in/all_of/in_hierarchy/not_in_hierarchy/eq/ne/gt/gte/lt/lte/is_empty/not_empty` (владельцы: заполнено/не заполнено; в списке по типу; под-выборка по мыслям-владельцам `in`/`not_in`/`all_of`; «в иерархии»; количество);\n' +
+      '- `size` — `eq/ne/gt/gte/lt/lte/between/not_between/is_empty/not_empty` (байты: сравнения/«между»/заполнено).\n' +
+      'Грамматика AST — `etn.guide { topic: "thoughts.query" }`; порядок результата — `created_at DESC`.',
     errors:
       '`VALIDATION_ERROR` (в т.ч. XOR `ast` с плоскими фильтрами и операнд вне профиля «вложения»), красная диагностика (удалённая сущность).',
     paramsContract: AttachmentsSearch,
@@ -1625,7 +1631,7 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       'держит сторож `guard-guide-filter-operators.test.ts`.',
       '',
       '- `id` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy` (тождественность: id мысли или под-выборка; `in_hierarchy`/`not_in_hierarchy` — выбранные мысли и их потомки по структурным связям);',
-      '- `type` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy/has/not_has/any_of/none_of` (тип + подтипы; `in_hierarchy`/`not_in_hierarchy` — тип и подтипы типов; `has`/`not_has` — значение id/имена свойств: эффективные свойства типа; `any_of`/`none_of` — под-выборка типов, `all_of` на типе неприменим);',
+      '- `type` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy/has/not_has/any_of/none_of` (тип + подтипы; `in_hierarchy`/`not_in_hierarchy` — тип и подтипы типов; `has`/`not_has` — значение id/имена свойств: эффективные свойства типа; `any_of`/`none_of` — список типов: «любой из»/«ни один из» (у мысли один тип, набор тождественен `in`/`not_in`), `all_of` на типе неприменим);',
       '- `link_type` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy/is_empty/not_empty` (тип связи + подтипы `link_types`, `mode` неприменим; `is_empty`/`not_empty` — нет/есть типизированных инцидентных связей; единый операнд фильтра типов связей и `link_filter`, задача f7da04d6);',
       '- `property` — адресация `property_id` или `property` (плюс `direction`: `out`/`in`); набор операторов — по природе свойства (`value_type`), буллеты ниже;',
       '- `property: text` — `contains/not_contains/eq/ne/gt/gte/lt/lte/between/not_between/in/not_in/any_of/all_of/none_of/is_empty/not_empty`;',
@@ -1696,18 +1702,15 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '',
       '### Профиль «хроника» (записи дневника)',
       '`POST /chronicle/query` и `etn.chronicle.query` принимают `ast`-тело профиля `chronicle` —',
-      'ЛИБО `ast`, ЛИБО плоские критерии (XOR). Операнды записи: `record_time` (пересечение интервала',
-      'записи `[valid_from, valid_to]`; операторы `eq/ne/gt/gte/lt/lte/between/not_between`, границы —',
-      'даты или токены; равенство «голой даты» — пересечение с её СУТКАМИ), `record_title`',
-      '(`eq/ne/contains/not_contains/matches`), `record_body`',
-      '(`eq/ne/contains/not_contains/matches`), `record_author`/`record_editor` (`eq/ne/in/not_in`).',
-      'Операнд `targets` — СПИСОК мыслей-целей либо под-выборка МЫСЛЕЙ (профиль `thoughts`)',
-      '(`in/not_in/all_of`; `in_hierarchy`/`not_in_hierarchy` — выбранные цели и их структурные',
-      'потомки; `is_empty`/`not_empty` — явный отбор записей без целей / с целями): запись проходит,',
-      'если привязана к мысли-цели ИЛИ к связи, конец которой ∈ набору',
-      '(«хотя бы одна цель» — `in`; `all_of` — «все цели»; запись без целей не проходит). Плоское',
-      '`link_scope != "both"` и `link_type_ids` в AST не выражаются — явный отказ',
-      '(`VALIDATION_ERROR`), а не молчаливая подмена на `both`.',
+      'ЛИБО `ast`, ЛИБО плоские критерии (XOR). Наборы операторов — зеркало реестра профиля',
+      '`chronicle` (`CHRONICLE_OPERATOR_SETS`); паритет держит сторож `guard-guide-filter-operators.test.ts`.',
+      '',
+      '- `record_time` — `eq/ne/gt/gte/lt/lte/between/not_between` (пересечение интервала записи `[valid_from, valid_to]`; границы — даты или токены; равенство «голой даты» — пересечение с её СУТКАМИ);',
+      '- `record_title` — `eq/ne/contains/not_contains/matches` (`matches` — «Найти слова», путь Б живой строки поиска; в меню строки условия не предлагается);',
+      '- `record_body` — `eq/ne/contains/not_contains/matches` (те же операторы, что у заголовка);',
+      '- `record_author` — `eq/ne/in/not_in`;',
+      '- `record_editor` — `eq/ne/in/not_in`;',
+      '- `targets` — `in/not_in/all_of/in_hierarchy/not_in_hierarchy/is_empty/not_empty` (СПИСОК мыслей-целей либо под-выборка МЫСЛЕЙ (профиль `thoughts`); `in_hierarchy`/`not_in_hierarchy` — выбранные цели и их структурные потомки; `is_empty`/`not_empty` — явный отбор записей без целей / с целями): запись проходит, если привязана к мысли-цели ИЛИ к связи, конец которой ∈ набору («хотя бы одна цель» — `in`; `all_of` — «все цели»; запись без целей не проходит). Плоское `link_scope != "both"` и `link_type_ids` в AST не выражаются — явный отказ (`VALIDATION_ERROR`), а не молчаливая подмена на `both`.',
       '',
       '### Сортировка',
       'Отдельное поле корня (не узел): `"sort": [{ "key": "title", "order": "asc" }]` — многоуровневое,',

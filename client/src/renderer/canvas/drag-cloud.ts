@@ -60,6 +60,7 @@ import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { store } from '../state.js';
 import { TABLE_ROW_KEY_ATTR } from '../lib/ui/table.js';
 import {
+  acceptThoughtDrop,
   openLinkPropertyDropDialog,
   resolveFieldDrop,
   resolveThoughtDropField,
@@ -418,7 +419,12 @@ function onCloudMouseUp(event: MouseEvent): void {
       // adds — the property value in the editor must not be lost (d144ef71).
       const fieldEl = target.fieldEl!;
       const field = resolveThoughtDropField(fieldEl);
-      const accepted = field?.handlers.accept(g.id) ?? false;
+      // Типизированный контракт (этап 3 задачи 31b228f0): облачко — payload
+      // `thought`; поле без `acceptPayload` получает id через исторический
+      // `accept`. Несовместимый вид приёмник отклоняет сам — в приёмник панели
+      // бросок не проваливается.
+      const accepted =
+        field !== null && acceptThoughtDrop(field.handlers, { kind: 'thought', id: g.id });
       const plan = resolveFieldDrop({
         accepted,
         originIsField: g.origin === 'field-chip',

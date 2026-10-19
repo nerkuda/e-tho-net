@@ -1,0 +1,118 @@
+/* ---------------------------------------------------------------------------
+ * Usage panel (спека f7623077 «Панель использования», задача aca92904).
+ * Слева от холста, сразу правее панели выделения; та же механика ширины,
+ * что у панели выделения (`--usage-w`, `window_layout.u`).
+ * ------------------------------------------------------------------------- */
+
+.usage-panel {
+  flex: 0 0 var(--usage-w, 260px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.usage-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.usage-title {
+  flex: 1;
+  font-weight: var(--font-weight-bold, 700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-target {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.usage-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.usage-group-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+}
+
+.usage-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.usage-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+  cursor: default;
+  min-width: 0;
+}
+
+.usage-row:hover {
+  background: var(--surface-2);
+}
+
+.usage-row-property {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-layer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+}
+
+.usage-layer-row:hover {
+  background: var(--surface-2);
+}
+
+.usage-layer-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-empty {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  padding: var(--space-1) var(--space-2);
+}
