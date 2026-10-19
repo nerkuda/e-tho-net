@@ -32,10 +32,6 @@
       "waitFor": "document.querySelectorAll('.network-item').length > 0"
     },
     {
-      "name": "networks-settled",
-      "waitFor": "new Promise((r)=>setTimeout(()=>r(true),400))"
-    },
-    {
       "name": "open-network",
       "click": ".networks-list .network-item"
     },

@@ -116,7 +116,7 @@ describe('вход из корзины: режим открытия (задач�
 });
 
 describe('restore из панели: коды, при которых панель остаётся открытой', () => {
-  it('404/412/409 — сообщение в панели, без падения', () => {
+  it('404/409 (VERSION_CONFLICT/LOCKED) — сообщение в панели, без падения', () => {
     for (const code of ['NOT_FOUND', 'VERSION_CONFLICT', 'LOCKED']) {
       assert.equal(isRestorePanelError(code), true, code);
     }

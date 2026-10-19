@@ -36,7 +36,12 @@ import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
 import { createThoughtCloud } from './lib/thought-cloud.js';
 // Правило 6 требования 11ddd910: двойной клик по строке корзины открывает
 // сущность в редакторе (мысль — редактором мысли, связь — редактором связи).
-import { openLinkInEditor, openThoughtInEditor, reflectThoughtUpdate } from './editor/editor.js';
+import {
+  openLinkInEditor,
+  openThoughtInEditor,
+  reflectLinkUpdate,
+  reflectThoughtUpdate,
+} from './editor/editor.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { scheduleStructuresRefresh } from './screens/structures/structures.js';
 import { refreshSelectionPanel } from './selection/selection.js';
@@ -1086,13 +1091,15 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   };
   const restoreLink = async (networkId: string, id: string): Promise<void> => {
     try {
-      await etn.links.update(
+      const updated = await etn.links.update(
         networkId,
         id,
         { marked_for_deletion: false },
         await linkVersion(networkId, id),
       );
-      scheduleRefresh();
+      // Общий путь отражения связи (ребро фокуса, холст, открытый редактор,
+      // структуры) — тот же, что у restore из панели и `saveLink`.
+      reflectLinkUpdate(updated);
       await render();
     } catch (err) {
       errorDialog('Вернуть из корзины', err);

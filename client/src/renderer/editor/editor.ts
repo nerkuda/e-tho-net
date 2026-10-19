@@ -2068,6 +2068,29 @@ export function reflectThoughtUpdate(
 }
 
 /**
+ * Отражение обновлённой связи во всех местах, где она может быть видна —
+ * зеркало {@link reflectThoughtUpdate} для ссылок (задача d23279f6: restore
+ * связи из панели использования/корзины). Своё realtime-эхо приходит позже
+ * (04-realtime §5), поэтому обновляем из ответа PATCH: ребро фокуса, холст
+ * (стиль/метка корзины), открытый редактор связи (снимок `editorTarget.link`
+ * — иначе шапка и вкладки живут на старом объекте) и список структур.
+ */
+export function reflectLinkUpdate(updated: Link): void {
+  patchFocusEdge(updated);
+  // Связь могла сменить `marked_for_deletion`/`active` — зоны и связки
+  // пересобираются с сервера, как при `saveLink`.
+  scheduleRefresh();
+  const target = store.state.editorTarget;
+  if (target !== null && target.kind === 'link' && target.id === updated.id) {
+    store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
+  }
+  // Список структур обновляет серверную выборку; смена метки связи видна в
+  // счётчиках/строках редактора, поэтому перечитываем тем же путём, что
+  // `saveLink`.
+  scheduleStructuresRefresh();
+}
+
+/**
  * Saves thought header fields. On success the change is reflected everywhere
  * through {@link reflectThoughtUpdate}; on a version conflict the focus is
  * refetched and the user is notified (09-scenarios.md F2). Resolves `true` on

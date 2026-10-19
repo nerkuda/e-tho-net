@@ -12,8 +12,8 @@
  * У помеченной на удаление цели в шапке есть действие «Вернуть из корзины»:
  * пометка читается свежим запросом при каждом открытии/перечитывании, restore —
  * обычный PATCH со свежим If-Match, без захвата. После успеха действие
- * скрывается, панель перечитывается; 404/412/409 оставляют панель открытой с
- * сообщением.
+ * скрывается, панель перечитывается; 404 и 409 (`VERSION_CONFLICT`/`LOCKED`)
+ * оставляют панель открытой с сообщением.
  *
  * Источники данных:
  *  - `GET /thoughts/{id}/usage` (`etn.thoughts.usage`) — группы «кто и через
@@ -56,7 +56,7 @@ import {
 import { errorState, loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
-import { openThoughtInEditor, reflectThoughtUpdate } from '../editor/editor.js';
+import { openThoughtInEditor, reflectLinkUpdate, reflectThoughtUpdate } from '../editor/editor.js';
 import { openDeleteLayerDialog } from './layers.js';
 import { refreshOpenDeleteDialogs } from '../lib/delete-dialog.js';
 
@@ -269,9 +269,10 @@ async function load(target: UsagePanelTarget): Promise<void> {
 /**
  * «Вернуть из корзины» из панели. Пометка и версия читаются СВЕЖИМ запросом
  * (без захвата, обычный PATCH с If-Match): чужая пометка восстанавливается,
- * `blocked` не препятствует. 404/412/409 оставляют панель открытой с
- * сообщением в строке состояния; после успеха действие скрывается, панель
- * перечитывается, а холст/редактор получают обновлённую сущность.
+ * `blocked` не препятствует. 404 и 409 (`VERSION_CONFLICT`/`LOCKED`) оставляют
+ * панель открытой с сообщением в строке состояния; после успеха действие
+ * скрывается, панель перечитывается, а холст/редактор получают обновлённую
+ * сущность.
  */
 async function restoreTarget(): Promise<void> {
   const target = current;
@@ -302,20 +303,21 @@ async function restoreTarget(): Promise<void> {
         setStatus(t('usagePanel.restoreNotMarked'));
         return;
       }
-      await etn.links.update(
+      const updated = await etn.links.update(
         networkId,
         target.id,
         { marked_for_deletion: false },
         entity.version,
       );
-      // Не полагаемся на собственное эхо: холст перечитывает связи вручную.
-      const { scheduleRefresh } = await import('../app.js');
-      scheduleRefresh();
+      // Не полагаемся на собственное эхо: ребро фокуса, холст, открытый
+      // редактор связи и список структур обновляются тем же общим путём, что
+      // для мысли (замечание верификатора).
+      reflectLinkUpdate(updated);
     }
     updateRestoreButton(false);
     await reloadAfterMutation(target);
   } catch (err) {
-    // 404/412/409 — панель остаётся открытой и объясняет причину строкой.
+    // 404/409 (VERSION_CONFLICT/LOCKED) — панель остаётся открытой и объясняет причину строкой.
     if (err instanceof EtnError && isRestorePanelError(err.code)) {
       setStatus(errText(err));
       return;
