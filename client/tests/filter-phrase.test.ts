@@ -143,6 +143,46 @@ describe('композер фразы: лист условия', () => {
     );
   });
 
+  it('состояния рёбер: полный набор — без суффикса, иначе список выбранных', () => {
+    // Требование 60db9614: формат суффикса закрепляется здесь.
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'incoming_links' }, 'not_empty'), ctx()),
+      'Есть входящие связи заполнено',
+      'отсутствие states = все состояния — без суффикса',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'incoming_links', states: [] }, 'not_empty'), ctx()),
+      'Есть входящие связи заполнено',
+      'пустой states = все состояния — без суффикса',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'incoming_links', states: ['active', 'inactive', 'trashed', 'not_trashed'] }, 'not_empty'),
+        ctx(),
+      ),
+      'Есть входящие связи заполнено',
+      'все четыре состояния — полный набор, без суффикса',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(
+        leaf({ kind: 'incoming_links', states: ['active', 'inactive', 'not_trashed'] }, 'not_empty'),
+        ctx(),
+      ),
+      'Есть входящие связи заполнено (связи: актуальные, не актуальные, не в корзине)',
+      'UI-дефолт виден во фразе',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'outgoing_links', states: ['trashed'] }, 'is_empty'), ctx()),
+      'Есть исходящие связи не заполнено (связи: в корзине)',
+      'выбранные состояния идут в порядке общего словаря',
+    );
+    assert.equal(
+      mod.filterPhraseLeaf(leaf({ kind: 'outgoing_links', states: ['inactive', 'active'] }, 'not_empty'), ctx()),
+      'Есть исходящие связи заполнено (связи: актуальные, не актуальные)',
+      'порядок суффикса не зависит от порядка в массиве',
+    );
+  });
+
   it('«Найти слова»: оператор не дублируется, области видны', () => {
     assert.equal(
       mod.filterPhraseLeaf(leaf({ kind: 'keywords', scope: ['title'] }, 'matches', { kind: 'scalar', value: 'расход' }), ctx()),

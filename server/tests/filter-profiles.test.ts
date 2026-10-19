@@ -99,6 +99,8 @@ describe('реестр профилей контекста (задача 7a798b1
       link_type: true,
       parents: true,
       children: true,
+      incoming_links: true,
+      outgoing_links: true,
       attachments: true,
       chronology: true,
       comment: true,

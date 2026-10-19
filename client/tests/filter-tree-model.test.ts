@@ -894,7 +894,69 @@ function entityForKind(kind: FilterAstEntityKind): FilterAstEntity {
       return { kind: 'property', property_id: 'p-size', property: 'Размер', direction: 'out' };
     case 'keywords':
       return { kind: 'keywords', scope: ['title', 'comment'] };
+    // Модель читает отсутствующий `states` как ПОЛНЫЙ набор, поэтому исходный
+    // AST для кругового рейса несёт явный массив (требование 60db9614).
+    case 'incoming_links':
+    case 'outgoing_links':
+      return { kind, states: ['active', 'inactive', 'trashed', 'not_trashed'] };
     default:
       return { kind } as FilterAstEntity;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Наличие рёбер: состояния — явный массив, клон независим (60db9614)
+// ---------------------------------------------------------------------------
+
+describe('операнды наличия рёбер: чтение, запись и клонирование', () => {
+  it('отсутствующий и пустой states читаются как ПОЛНЫЙ набор, запись — явная', () => {
+    for (const entity of [{ kind: 'incoming_links' }, { kind: 'outgoing_links', states: [] }]) {
+      const wire = { version: 1, filter: { entity, operator: 'not_empty' } } as unknown as FilterAst;
+      const state = parseFilterAstState(wire);
+      const read = state.tree as FilterTreeLeaf;
+      assert.equal(read.kind, 'leaf');
+      if (read.entity.kind !== 'incoming_links' && read.entity.kind !== 'outgoing_links') {
+        assert.fail('операнд наличия рёбер не прочитан');
+      }
+      assert.deepEqual(
+        read.entity.states,
+        ['active', 'inactive', 'trashed', 'not_trashed'],
+        'wire-дефолт «нет/пусто» читается как все отмеченные',
+      );
+      const back = buildFilterAst(state);
+      const written = back.filter as FilterAstLeafLike;
+      assert.deepEqual(
+        written.entity.states,
+        ['active', 'inactive', 'trashed', 'not_trashed'],
+        'пересохранение пишет массив явно',
+      );
+    }
+  });
+
+  it('неизвестное состояние — лист не читается (без молчаливой потери)', () => {
+    const state = parseFilterAstState({
+      version: 1,
+      filter: { entity: { kind: 'incoming_links', states: ['active', 'bogus'] }, operator: 'not_empty' },
+    } as unknown as FilterAst);
+    assert.equal(state.tree, null);
+  });
+
+  it('клон листа копирует states — правка копии не меняет оригинал', () => {
+    const original = leaf(
+      { kind: 'incoming_links', states: ['active', 'not_trashed'] },
+      'not_empty',
+      { kind: 'none' },
+    );
+    const clone = filterTreeCloneNode(original) as FilterTreeLeaf;
+    if (clone.entity.kind !== 'incoming_links' || original.entity.kind !== 'incoming_links') {
+      assert.fail('вид операнда потерян при клонировании');
+    }
+    clone.entity.states!.push('trashed');
+    assert.deepEqual(original.entity.states, ['active', 'not_trashed']);
+  });
+});
+
+/** Форма листа AST для чтения записанного `states` (тестовая проекция). */
+interface FilterAstLeafLike {
+  entity: { states?: string[] };
 }

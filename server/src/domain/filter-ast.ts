@@ -20,6 +20,7 @@ import {
   FILTER_AST_HIERARCHY_MODES,
   FILTER_AST_OPERATORS,
   FILTER_AST_VERSION,
+  FILTER_LINK_EDGE_STATES,
   STRUCTURE_KEYWORD_SCOPES,
   type FilterAst,
   type FilterAstEntity,
@@ -35,6 +36,7 @@ import {
   type FilterAstSortKey,
   type FilterAstTokenValue,
   type FilterAstValue,
+  type FilterLinkEdgeState,
   type StructureKeywordScope,
 } from '@etn/shared';
 
@@ -55,6 +57,15 @@ const SUBQUERY_KEYS = ['query', 'operator'] as const;
 
 /** Операторы под-выборки как значения. */
 const SUBQUERY_OPERATORS = ['in', 'not_in', 'all_in'] as const;
+
+/**
+ * Операнды-предикаты наличия: значение не требуется, а переданное `value` —
+ * `VALIDATION_ERROR` (требование 60db9614: не молчаливый игнор).
+ */
+const NO_VALUE_OPERAND_KINDS: ReadonlySet<FilterAstEntity['kind']> = new Set([
+  'incoming_links',
+  'outgoing_links',
+]);
 
 /**
  * Согласованные операторы листа для квантификатора под-выборки (`value.operator`):
@@ -81,6 +92,8 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   link_type: ['kind'],
   parents: ['kind'],
   children: ['kind'],
+  incoming_links: ['kind', 'states'],
+  outgoing_links: ['kind', 'states'],
   attachments: ['kind'],
   chronology: ['kind'],
   comment: ['kind'],
@@ -229,6 +242,13 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
     }, requestId);
   }
   const leaf: FilterAstLeaf = { entity, operator: operator as FilterAstOperator };
+  // Предикаты наличия связей значения не несут: `value` при них — явная ошибка,
+  // иначе форма молча принимала бы бессмысленное поле (требование 60db9614).
+  if (NO_VALUE_OPERAND_KINDS.has(entity.kind) && input['value'] !== undefined) {
+    fail(`${path}: операнд «${entity.kind}» не принимает значение.`, {
+      field: `${path}.value`,
+    }, requestId);
+  }
   if (input['value'] !== undefined) {
     leaf.value = parseValue(input['value'], `${path}.value`, requestId);
     // Значение-под-выборка: внешний оператор листа обязан быть согласован с
@@ -332,6 +352,28 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
         return { kind: 'keywords', scope: [...new Set(scope as StructureKeywordScope[])] };
       }
       return { kind: 'keywords' };
+    }
+    case 'incoming_links':
+    case 'outgoing_links': {
+      // Необязательный `states` — массив состояний РЕБРА. Отсутствие/пустой
+      // массив = все состояния (wire-дефолт); неизвестное значение — ошибка.
+      const states = input['states'];
+      if (states === undefined) return { kind };
+      if (
+        !Array.isArray(states) ||
+        states.some(
+          (v) => typeof v !== 'string' || !(FILTER_LINK_EDGE_STATES as readonly string[]).includes(v),
+        )
+      ) {
+        fail(`${path}.states: ожидается массив состояний ребра.`, {
+          field: `${path}.states`,
+          allowed: FILTER_LINK_EDGE_STATES,
+        }, requestId);
+      }
+      const unique = [...new Set(states as FilterLinkEdgeState[])];
+      // Пустой массив нормализуется в ОТСУТСТВИЕ поля: обе формы означают «все
+      // состояния», лишний ключ в сохранённом AST не нужен.
+      return unique.length === 0 ? { kind } : { kind, states: unique };
     }
     default:
       return { kind } as FilterAstEntity;

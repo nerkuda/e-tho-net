@@ -240,6 +240,8 @@ const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
   'property',
   'parents',
   'children',
+  'incoming_links',
+  'outgoing_links',
   'attachments',
   'chronology',
   'comment',
@@ -460,6 +462,11 @@ const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[
     'all_of',
     'none_of',
   ],
+  // «Есть входящие/исходящие связи»: только наличие/отсутствие; учитываются
+  // любые рёбра (включая структурные), состояние ребра — в `states`
+  // (требование 60db9614, сущность 489c394f).
+  incoming_links: ['is_empty', 'not_empty'],
+  outgoing_links: ['is_empty', 'not_empty'],
   attachments: ['eq', 'ne', 'is_empty', 'not_empty', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   chronology: ['eq', 'ne', 'is_empty', 'not_empty', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   comment: ['eq', 'ne', 'is_empty', 'not_empty'],

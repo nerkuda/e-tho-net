@@ -34,6 +34,7 @@ import {
   FILTER_AST_GROUP_OPS,
   FILTER_AST_OPERATORS,
   FILTER_AST_VERSION,
+  FILTER_LINK_EDGE_STATES,
   SORT_ORDERS,
   STRUCTURE_AUTHOR_OPS,
   STRUCTURE_SORTS,
@@ -57,6 +58,7 @@ import {
   type FilterAstSortKey,
   type FilterAstSubqueryValue,
   type FilterAstValue,
+  type FilterLinkEdgeState,
   type FilterProfileId,
   type FilterTokenFamily,
   type LinkType,
@@ -677,6 +679,8 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   link_type: 'Тип связи',
   parents: 'Родители',
   children: 'Потомки',
+  incoming_links: 'Есть входящие связи',
+  outgoing_links: 'Есть исходящие связи',
   attachments: 'Есть вложения',
   chronology: 'Есть дневниковые записи',
   comment: 'Есть комментарий',
@@ -1865,6 +1869,24 @@ export function filterLeafImplicitValue(leaf: FilterTreeLeaf): FilterTreeValue |
 }
 
 /**
+ * Оператор по умолчанию при выборе операнда: первый из набора профиля, кроме
+ * предикатов наличия рёбер — у них видимое по умолчанию «да» (`not_empty`),
+ * а не «нет» (требование 60db9614).
+ */
+export function filterOperandDefaultOperator(
+  kind: FilterAstEntityKind,
+  operators: readonly FilterAstOperator[],
+): FilterAstOperator | undefined {
+  if (
+    (kind === 'incoming_links' || kind === 'outgoing_links') &&
+    operators.includes('not_empty')
+  ) {
+    return 'not_empty';
+  }
+  return operators[0];
+}
+
+/**
  * Операнды «наличие коллекции»: «Есть вложения», «Есть дневниковые записи»,
  * «Есть комментарий». Ячейка значения у них — «(да) (нет)», оператор в строке
  * не показывается (`is_empty`/`not_empty` перезаписывает сам виджет). Один
@@ -1876,6 +1898,10 @@ export const FILTER_COLLECTION_PREDICATE_KINDS: ReadonlySet<string> = new Set([
   'comment',
   'attachments',
   'chronology',
+  // Наличие рёбер любого типа (требование 60db9614): «да/нет» — это оператор
+  // `not_empty`/`is_empty`, плюс полоса состояний ребра под строкой.
+  'incoming_links',
+  'outgoing_links',
 ]);
 
 /**
@@ -2076,6 +2102,32 @@ function parseFilterAstEntity(raw: unknown): FilterAstEntity | null {
   const kind = rec['kind'];
   if (typeof kind !== 'string' || !(FILTER_AST_ENTITY_KINDS as readonly string[]).includes(kind)) {
     return null;
+  }
+  // Операнды наличия рёбер: `states` — замкнутый словарь. При чтении
+  // отсутствующий/пустой набор нормализуется в ПОЛНЫЙ (все флаги отмечены):
+  // wire-дефолт «нет поля» означает «все состояния», а модель редактора держит
+  // выбор явно и при пересохранении пишет массив (требование 60db9614).
+  // Неизвестное значение — лист не читаем (строгость чтения AST сохранена).
+  if (kind === 'incoming_links' || kind === 'outgoing_links') {
+    const rawStates = rec['states'];
+    if (rawStates === undefined) {
+      return { kind, states: [...FILTER_LINK_EDGE_STATES] };
+    }
+    if (!Array.isArray(rawStates)) return null;
+    const states: FilterLinkEdgeState[] = [];
+    for (const state of rawStates) {
+      if (
+        typeof state !== 'string' ||
+        !(FILTER_LINK_EDGE_STATES as readonly string[]).includes(state)
+      ) {
+        return null;
+      }
+      const typed = state as FilterLinkEdgeState;
+      if (!states.includes(typed)) states.push(typed);
+    }
+    return states.length === 0
+      ? { kind, states: [...FILTER_LINK_EDGE_STATES] }
+      : { kind, states };
   }
   // Операнд хранится как есть (вид + адрес свойства/область/направление) —
   // незнакомые поля не выдумываем и не теряем: модель обязана быть без потерь.
