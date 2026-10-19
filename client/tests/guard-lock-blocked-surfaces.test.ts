@@ -5,7 +5,9 @@
  * поверхность обязана перевестись в режим чтения, а не оставлять поля
  * редактируемыми (запись всё равно отклоняется 409). Заголовки мысли и связи
  * синхронно спрашивают кэш захватов (`foreignLockHeld`), диалоги-редакторы
- * вызывают `blockEditingSurface` / `setBlocked`.
+ * вызывают `blockEditingSurface`; снятие чужого захвата возвращает форму в
+ * редактирование (`subscribeForeignLockState` → `unblockEditingSurface`,
+ * ошибка 2301d73d).
  *
  * Сторож текстовый, как соседние `guard-*`: он ловит удаление вызова и
  * «выключение» условия (`if (false && …)`), которое оставляет suite зелёным,
@@ -91,15 +93,14 @@ describe('guard: чужой захват переводит поверхност
     requireAll('полная пересборка', rebuild, ['releaseHeaderLockSync();']);
   });
 
-  it('настройки мысли/связи переводятся в чтение через setBlocked', () => {
+  it('настройки мысли/связи получают привязку к захвату сущности', () => {
     const thought = section(
       'editor/editor.ts',
       'function openThoughtSettings(thought: Thought): void {',
       'function changeThoughtIcon(thought: Thought): void {',
     );
     requireAll('настройки мысли', thought, [
-      "if (outcome.kind === 'blocked') {",
-      "dialog.setBlocked(blockedByLockMessage('thought', outcome.holder));",
+      "lock: { entityType: 'thought', entityId: thought.id },",
     ]);
 
     const link = section(
@@ -108,39 +109,62 @@ describe('guard: чужой захват переводит поверхност
       'export const editorInternals',
     );
     requireAll('настройки связи', link, [
-      "if (outcome.kind === 'blocked') {",
-      "dialog.setBlocked(blockedByLockMessage('link', outcome.holder));",
+      "lock: { entityType: 'link', entityId: link.id },",
     ]);
   });
 
-  it('редактор типа: исход Blocked выключает форму и кнопки записи', () => {
+  it('диалог оформления следует за кэшем захватов в обе стороны', () => {
+    const body = section(
+      'editor/style-dialog.ts',
+      'export function showThoughtStyleDialog(',
+      'export function showLinkStyleDialog(',
+    );
+    requireAll('диалог оформления мысли', body, [
+      'subscribeForeignLockState(entityType, entityId, (holder) => {',
+      'blockEditingSurface({',
+      'unblockEditingSurface(body);',
+      'unbindLock();',
+    ]);
+    const source = fs.readFileSync(path.join(RENDERER_ROOT, 'editor', 'style-dialog.ts'), 'utf8');
+    const link = source.slice(source.indexOf('export function showLinkStyleDialog('));
+    requireAll('диалог оформления связи', link, [
+      'subscribeForeignLockState(entityType, entityId, (holder) => {',
+      'unblockEditingSurface(body);',
+      'unbindLock();',
+    ]);
+  });
+
+  it('редактор типа: форма следует за захватом и возвращается в редактирование', () => {
     const body = section(
       'screens/type-manager.ts',
       'export function showThoughtTypeEditor(',
       '// Property-definition tables + property dialog',
     );
     requireAll('редактор типа', body, [
-      "if (outcome.kind === 'blocked') {",
+      "unbindLock = subscribeForeignLockState('thought_type', type.id, (holder) => {",
       'blockEditingSurface({',
       'commitButtons: [saveBtn, applyBtn],',
+      'unblockEditingSurface(box);',
+      'revalidateName();',
       'if (applyBtn !== null) applyBtn.disabled = blocked || clash;',
       'if (saveBtn !== null) saveBtn.disabled = blocked || clash;',
       'if (blockedMessage !== null && dialogRoot !== null) {',
     ]);
   });
 
-  it('редактор свойства: исход Blocked выключает форму и перерисовку', () => {
+  it('редактор свойства: форма следует за захватом и возвращается в редактирование', () => {
     const body = section(
       'screens/property-manager.ts',
       'export function openPropertyManagerEditor(',
       '// Сборка PropertyConfig из черновика',
     );
     requireAll('редактор свойства', body, [
-      "if (outcome.kind === 'blocked') {",
+      "unbindLock = subscribeForeignLockState('property', property.id, (holder) => {",
       'blockEditingSurface({',
       'commitButtons: [applyBtn],',
+      'unblockEditingSurface(body);',
+      'revalidateName();',
       'if (applyBtn !== null) applyBtn.disabled = blocked;',
-      'if (blockedMessage !== null) {',
     ]);
   });
 });

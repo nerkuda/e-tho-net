@@ -211,6 +211,27 @@ export function foreignHolderName(handle: LockHandle | null | undefined): string
 }
 
 /**
+ * Подписка на состояние чужого захвата объекта: `onChange` вызывается сразу
+ * (по текущему кэшу) и на каждый переход кэша — `holder` равен строке захвата,
+ * когда объект держит ДРУГОЙ пользователь, и `null`, когда захвата нет.
+ *
+ * Нужен поверхностям, которые уже открыты: диалог, переведённый в чтение,
+ * обязан вернуться в редактирование, как только чужой захват снят (ошибка
+ * 2301d73d), без переоткрытия. Возвращает функцию отписки — вызывать при
+ * закрытии/демонтаже поверхности.
+ */
+export function subscribeForeignLockState(
+  entityType: LockEntityType | string,
+  entityId: string,
+  onChange: (holder: LockRow | null) => void,
+): () => void {
+  const apply = (): void => onChange(otherHolder(entityType, entityId));
+  const unsubscribe = subscribeLockCache(apply);
+  apply();
+  return unsubscribe;
+}
+
+/**
  * Subscribe to lock-cache transitions so an editor re-renders its overlay
  * when a foreign client grabs or drops the same object mid-session (the
  * store already gets a `lockCacheTick` bump on every transition — this is

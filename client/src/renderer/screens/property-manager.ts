@@ -105,9 +105,10 @@ import {
   blockedByLockMessage,
   lockHandleFromOutcome,
   releaseHeld,
+  subscribeForeignLockState,
   type LockHandle,
 } from '../lib/lock-guard.js';
-import { blockEditingSurface } from '../lib/lock-surface.js';
+import { blockEditingSurface, unblockEditingSurface } from '../lib/lock-surface.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
@@ -949,6 +950,8 @@ export function openPropertyManagerEditor(
   let editLock: LockHandle | null = null;
   /** Заполняется при чужом захвате: вложенные диалоги тоже только для чтения. */
   let blockedMessage: string | null = null;
+  /** Отписка от кэша захватов: снятие чужого захвата возвращает редактирование. */
+  let unbindLock: () => void = () => undefined;
 
   // Live duplicate-name check (case-insensitive, by `name_key`).
   const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
@@ -957,16 +960,6 @@ export function openPropertyManagerEditor(
   if (property !== null) {
     void acquireOrShowBlocked('property', property.id).then((outcome) => {
       editLock = lockHandleFromOutcome('property', property.id, outcome);
-      // Ошибка 4f18d9f5: чужой захват — поля и «Применить и закрыть»
-      // выключены, значения остаются видимыми (чтение не блокируется).
-      if (outcome.kind === 'blocked') {
-        blockedMessage = blockedByLockMessage('property', outcome.holder);
-        blockEditingSurface({
-          root: body,
-          message: blockedMessage,
-          commitButtons: [applyBtn],
-        });
-      }
     });
   }
   /**
@@ -1588,7 +1581,8 @@ export function openPropertyManagerEditor(
       store.state.linkTypes,
       draft.parentLinkTypeId ?? null,
     );
-    const dialog = showLinkStyleDialog({
+    // Вложенный диалог сам следит за захватом свойства (ошибка 2301d73d).
+    showLinkStyleDialog({
       resolved: {
         color: draft.linkColor,
         style: (draft.linkStyle ?? resolved.style) as LinkStyle,
@@ -1600,10 +1594,8 @@ export function openPropertyManagerEditor(
         if (patch.style !== undefined) draft.linkStyle = patch.style;
         if (patch.width !== undefined) draft.linkWidth = patch.width;
       },
+      lock: property !== null ? { entityType: 'property', entityId: property.id } : undefined,
     });
-    // Родительское свойство захвачено чужим — вложенный диалог тоже только
-    // для чтения (ошибка 4f18d9f5): черновик всё равно некуда записать.
-    if (blockedMessage !== null) dialog.setBlocked(blockedMessage);
   }
 
   // Первая отрисовка формы.
@@ -1952,8 +1944,28 @@ export function openPropertyManagerEditor(
     onMount: () => {
       const firstInput = body.querySelector('input, textarea, select') as HTMLElement | null;
       firstInput?.focus();
+      // Чужой захват (ошибка 4f18d9f5) и его снятие (2301d73d): форма следует
+      // за кэшем захватов — чтение, затем снова редактирование без переоткрытия.
+      if (property !== null) {
+        unbindLock = subscribeForeignLockState('property', property.id, (holder) => {
+          blockedMessage = holder === null ? null : blockedByLockMessage('property', holder);
+          if (blockedMessage !== null) {
+            blockEditingSurface({
+              root: body,
+              message: blockedMessage,
+              commitButtons: [applyBtn],
+            });
+          } else {
+            unblockEditingSurface(body);
+          }
+          revalidateName();
+        });
+      }
     },
-    onClose: () => void releaseHeld(editLock),
+    onClose: () => {
+      unbindLock();
+      void releaseHeld(editLock);
+    },
   });
 }
 

@@ -91,9 +91,10 @@ import {
   blockedByLockMessage,
   lockHandleFromOutcome,
   releaseHeld,
+  subscribeForeignLockState,
   type LockHandle,
 } from '../lib/lock-guard.js';
-import { blockEditingSurface } from '../lib/lock-surface.js';
+import { blockEditingSurface, unblockEditingSurface } from '../lib/lock-surface.js';
 import {
   MAX_TYPE_DEPTH,
   aggregateTypeCounts,
@@ -964,21 +965,11 @@ export function showThoughtTypeEditor(
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
   let saveBtn: HTMLButtonElement | null = null;
+  /** Отписка от кэша захватов: снятие чужого захвата возвращает редактирование. */
+  let unbindLock: () => void = () => undefined;
   if (type !== null) {
     void acquireOrShowBlocked('thought_type', type.id).then((outcome) => {
       editLock = lockHandleFromOutcome('thought_type', type.id, outcome);
-      // Ошибка 4f18d9f5: чужой захват — форма только для чтения, «Записать»
-      // и «Применить и закрыть» выключены; закрытие и вкладки остаются.
-      if (outcome.kind === 'blocked') {
-        blockedMessage = blockedByLockMessage('thought_type', outcome.holder);
-        if (dialogRoot !== null) {
-          blockEditingSurface({
-            root: dialogRoot,
-            message: blockedMessage,
-            commitButtons: [saveBtn, applyBtn],
-          });
-        }
-      }
     });
   }
   /** Заголовок диалога — после первой записи «Новый тип мысли» становится
@@ -1414,7 +1405,9 @@ export function showThoughtTypeEditor(
   }
 
   function openStyle(): void {
-    const dialog = showThoughtStyleDialog({
+    // Вложенный диалог оформления сам следит за захватом типа: снятие
+    // блокировки возвращает редактирование (ошибка 2301d73d).
+    showThoughtStyleDialog({
       resolved: {
         fg: draft.fg_color,
         bg: draft.bg_color,
@@ -1437,10 +1430,8 @@ export function showThoughtTypeEditor(
         if (patch.font_strike !== undefined) draft.font_strike = patch.font_strike;
         return Promise.resolve(true);
       },
+      lock: type !== null ? { entityType: 'thought_type', entityId: type.id } : undefined,
     });
-    // Родительский тип захвачен чужим — вложенный диалог тоже только для
-    // чтения (ошибка 4f18d9f5): черновик всё равно некуда записать.
-    if (blockedMessage !== null) dialog.setBlocked(blockedMessage);
   }
 
   /** Markdown → HTML для просмотра шаблона. Пустой ввод — пусто. */
@@ -1526,8 +1517,27 @@ export function showThoughtTypeEditor(
         dialogTitleEl = box.querySelector<HTMLElement>('.dialog-title');
         syncDialogTitle();
         nameInput.focus();
+        // Чужой захват (ошибка 4f18d9f5) и его снятие (2301d73d): форма
+        // следует за кэшем захватов — чтение, затем снова редактирование,
+        // без закрытия/переоткрытия диалога.
+        if (type !== null) {
+          unbindLock = subscribeForeignLockState('thought_type', type.id, (holder) => {
+            blockedMessage = holder === null ? null : blockedByLockMessage('thought_type', holder);
+            if (blockedMessage !== null) {
+              blockEditingSurface({
+                root: box,
+                message: blockedMessage,
+                commitButtons: [saveBtn, applyBtn],
+              });
+            } else {
+              unblockEditingSurface(box);
+            }
+            revalidateName();
+          });
+        }
       },
       onClose: () => {
+        unbindLock();
         viewsTab.dispose();
         void releaseHeld(editLock);
         editLock = null;

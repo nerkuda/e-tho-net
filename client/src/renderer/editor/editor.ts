@@ -140,7 +140,6 @@ import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldTextarea } from '../lib/ui/field.js';
 import {
   acquireOrShowBlocked,
-  blockedByLockMessage,
   foreignLockBlocksEdit,
   foreignLockHeld,
   lockHandleFromOutcome,
@@ -2509,7 +2508,9 @@ function openThoughtSettings(thought: Thought): void {
   // `onClose` releases on any close path (Save / Reset / Cancel / × / Esc).
   let handle: LockHandle | null = null;
   const style = resolveCloudStyle(thought);
-  const dialog = showThoughtStyleDialog({
+  // Чужой захват: диалог открывается для чтения, а после его снятия сам
+  // возвращается в редактирование (ошибки 4f18d9f5, 2301d73d).
+  showThoughtStyleDialog({
     resolved: {
       fg: style.fg,
       bg: style.bg,
@@ -2520,14 +2521,10 @@ function openThoughtSettings(thought: Thought): void {
     },
     onApply: (patch) => saveThought(patch),
     onClose: () => void releaseHeld(handle),
+    lock: { entityType: 'thought', entityId: thought.id },
   });
-  // Чужой захват: диалог открывается для чтения, но поля и «Сброс» выключены
-  // (ошибка 4f18d9f5) — иначе «поля заблокированы» расходилось с поведением.
   void acquireOrShowBlocked('thought', thought.id).then((outcome) => {
     handle = lockHandleFromOutcome('thought', thought.id, outcome);
-    if (outcome.kind === 'blocked') {
-      dialog.setBlocked(blockedByLockMessage('thought', outcome.holder));
-    }
   });
 }
 
@@ -2759,7 +2756,9 @@ function openLinkSettings(link: Link): void {
   // L21: the type line style resolves along the ancestor chain; an untyped
   // link resolves the root type.
   const type = resolveLinkTypeVisual(store.state.linkTypes, link.type_id);
-  const dialog = showLinkStyleDialog({
+  // Чужой захват — диалог только для чтения с обратным переходом при снятии
+  // (ошибки 4f18d9f5, 2301d73d).
+  showLinkStyleDialog({
     resolved: {
       color: link.color ?? type.color,
       style: link.style ?? type.style,
@@ -2767,13 +2766,10 @@ function openLinkSettings(link: Link): void {
     },
     onApply: (patch) => saveLink(link, patch).then(() => undefined),
     onClose: () => void releaseHeld(handle),
+    lock: { entityType: 'link', entityId: link.id },
   });
-  // Чужой захват — диалог только для чтения (ошибка 4f18d9f5).
   void acquireOrShowBlocked('link', link.id).then((outcome) => {
     handle = lockHandleFromOutcome('link', link.id, outcome);
-    if (outcome.kind === 'blocked') {
-      dialog.setBlocked(blockedByLockMessage('link', outcome.holder));
-    }
   });
 }
 
