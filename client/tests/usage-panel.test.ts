@@ -11,7 +11,12 @@ import { describe, it } from 'node:test';
 
 import type { HoldingLayerRef, ThoughtUsage } from '@etn/shared';
 
-import { usageLayers, usagePropertyRows } from '../src/renderer/lib/usage.js';
+import {
+  isRestorePanelError,
+  usageLayers,
+  usagePanelRepeatAction,
+  usagePropertyRows,
+} from '../src/renderer/lib/usage.js';
 
 function ref(id: string, title: string) {
   return {
@@ -88,5 +93,38 @@ describe('usageLayers: группа «Используется в слоях»',
 
   it('нет удержаний — пустой список', () => {
     assert.deepEqual(usageLayers(undefined, null), []);
+  });
+});
+
+describe('вход из корзины: режим открытия (задача d23279f6)', () => {
+  const target = { kind: 'thought', id: 't-1' };
+
+  it('из диалога удаления повторный вызов для той же цели закрывает панель', () => {
+    assert.equal(usagePanelRepeatAction(target, target, false), 'close');
+  });
+
+  it('из корзины forceOpen открывает заново даже для той же цели', () => {
+    assert.equal(usagePanelRepeatAction(target, target, true), 'open');
+  });
+
+  it('другая цель всегда перерисовывает панель', () => {
+    assert.equal(
+      usagePanelRepeatAction(target, { kind: 'link', id: 'l-1' }, false),
+      'open',
+    );
+  });
+});
+
+describe('restore из панели: коды, при которых панель остаётся открытой', () => {
+  it('404/412/409 — сообщение в панели, без падения', () => {
+    for (const code of ['NOT_FOUND', 'VERSION_CONFLICT', 'LOCKED']) {
+      assert.equal(isRestorePanelError(code), true, code);
+    }
+  });
+
+  it('прочие коды — обычная ошибка', () => {
+    for (const code of ['VALIDATION_ERROR', 'INTERNAL', 'FORBIDDEN']) {
+      assert.equal(isRestorePanelError(code), false, code);
+    }
   });
 });

@@ -50,3 +50,28 @@ export function usageLayers(
   }
   return out;
 }
+
+/**
+ * Что делает повторный вызов панели для той же цели (спека f7623077):
+ * из диалога удаления — toggle (закрыть), из корзины — `forceOpen` (открыть
+ * заново). Для другой цели всегда открытие/перерисовка.
+ */
+export function usagePanelRepeatAction(
+  current: { kind: string; id: string } | null,
+  next: { kind: string; id: string },
+  forceOpen: boolean,
+): 'close' | 'open' {
+  if (forceOpen) return 'open';
+  if (current !== null && current.kind === next.kind && current.id === next.id) return 'close';
+  return 'open';
+}
+
+/**
+ * Коды отказа действия «Вернуть из корзины», при которых панель остаётся
+ * открытой и показывает сообщение (задача d23279f6): сущность уже удалена
+ * (`NOT_FOUND`), пометку успел снять/изменить кто-то другой
+ * (`VERSION_CONFLICT`) или сущность захвачена (`LOCKED`).
+ */
+export function isRestorePanelError(code: string): boolean {
+  return code === 'NOT_FOUND' || code === 'VERSION_CONFLICT' || code === 'LOCKED';
+}

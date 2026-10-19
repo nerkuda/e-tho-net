@@ -1,10 +1,19 @@
 /**
- * Панель использования (спека f7623077, ошибка aca92904).
+ * Панель использования (спека f7623077, ошибка aca92904; выход из корзины —
+ * задача d23279f6).
  *
  * Интерактивный разбор блокировок удаления — не путать с пассивной группой
- * «Использование» вкладки «Связи» редактора. Открывается по ссылке
- * «Открыть использование…» из диалогов удаления (мысль/связь) и закрывается
- * крестиком или повторным вызовом для той же сущности (toggle).
+ * «Использование» вкладки «Связи» редактора. Точки входа: ссылка
+ * «Открыть использование…» из диалогов удаления (toggle — повторный вызов для
+ * той же сущности закрывает панель) и команда «Открыть использование…» в
+ * корзине (режим `forceOpen`: корзина закрывается, панель открывается всегда,
+ * даже если была открыта для этой же цели).
+ *
+ * У помеченной на удаление цели в шапке есть действие «Вернуть из корзины»:
+ * пометка читается свежим запросом при каждом открытии/перечитывании, restore —
+ * обычный PATCH со свежим If-Match, без захвата. После успеха действие
+ * скрывается, панель перечитывается; 404/412/409 оставляют панель открытой с
+ * сообщением.
  *
  * Источники данных:
  *  - `GET /thoughts/{id}/usage` (`etn.thoughts.usage`) — группы «кто и через
@@ -26,7 +35,7 @@
  * screens/selection-resizer.ts).
  */
 
-import { BASE_LAYER_ID, type HoldingLayerRef, type ThoughtUsage } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, type HoldingLayerRef, type ThoughtUsage } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
@@ -38,14 +47,16 @@ import { MENU_SEPARATOR, menuAction, type MenuItem } from '../lib/menu.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import {
+  isRestorePanelError,
   usageLayers,
+  usagePanelRepeatAction,
   usagePropertyRows,
   type UsagePropertyRow,
 } from '../lib/usage.js';
 import { errorState, loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
-import { openThoughtInEditor } from '../editor/editor.js';
+import { openThoughtInEditor, reflectThoughtUpdate } from '../editor/editor.js';
 import { openDeleteLayerDialog } from './layers.js';
 import { refreshOpenDeleteDialogs } from '../lib/delete-dialog.js';
 
@@ -61,13 +72,28 @@ export interface UsagePanelData {
   properties: UsagePropertyRow[];
   total: number;
   layers: HoldingLayerRef[];
+  /** Цель помечена на удаление — в шапке видно «Вернуть из корзины». */
+  marked: boolean;
+}
+
+/** Параметры открытия панели. */
+export interface OpenUsagePanelOptions {
+  /**
+   * Открыть панель, даже если она уже открыта для этой же цели (вход из
+   * корзины). Без опции повторный вызов для той же цели закрывает панель
+   * (toggle — вход из диалога удаления).
+   */
+  forceOpen?: boolean;
 }
 
 /** Открытая панель (одна на клиент): хост и сплиттер монтирует workspace. */
 let host: HTMLElement | null = null;
 let resizer: HTMLElement | null = null;
 let targetBox: HTMLElement | null = null;
+let statusBox: HTMLElement | null = null;
 let bodyBox: HTMLElement | null = null;
+let closeBtn: HTMLButtonElement | null = null;
+let restoreBtn: HTMLButtonElement | null = null;
 let current: UsagePanelTarget | null = null;
 /** Поколение загрузки: поздний ответ прошлой цели не перерисовывает новую. */
 let loadGeneration = 0;
@@ -80,35 +106,55 @@ export function mountUsagePanel(hostEl: HTMLElement, resizerEl: HTMLElement): ()
 
   const header = div('usage-header');
   const title = span(t('usagePanel.title'), 'usage-title');
-  const close = iconButton({
+  // «Вернуть из корзины» — только у помеченной цели; видимость обновляет
+  // `load` по свежему чтению пометки (задача d23279f6).
+  restoreBtn = uiButton({
+    label: t('actions.restore'),
+    role: 'secondary',
+    size: 's',
+    title: t('usagePanel.restoreTitle'),
+    onClick: () => void restoreTarget(),
+  });
+  restoreBtn.hidden = true;
+  closeBtn = iconButton({
     icon: svgIcon('x', 14),
     title: t('usagePanel.close'),
     role: 'ghost',
     size: 's',
     onClick: () => closeUsagePanel(),
   });
-  header.append(title, close);
+  header.append(title, restoreBtn, closeBtn);
   targetBox = div('usage-target');
+  statusBox = div('usage-status');
+  statusBox.hidden = true;
   bodyBox = div('usage-body');
-  host.append(header, targetBox, bodyBox);
+  host.append(header, targetBox, statusBox, bodyBox);
 
   current = null;
   return () => {
     host = null;
     resizer = null;
     targetBox = null;
+    statusBox = null;
     bodyBox = null;
+    closeBtn = null;
+    restoreBtn = null;
     current = null;
   };
 }
 
 /**
- * Открывает панель для сущности. Повторный вызов для той же цели закрывает
- * её (toggle по спеке). Для другой цели панель просто перерисовывается.
+ * Открывает панель для сущности. Без `forceOpen` повторный вызов для той же
+ * цели закрывает её (toggle — вход из диалога удаления). `forceOpen` (вход из
+ * корзины) открывает панель всегда. Для другой цели панель перерисовывается.
+ * Фокус после открытия переводится в панель (крестик).
  */
-export function openUsagePanel(target: UsagePanelTarget): void {
+export function openUsagePanel(
+  target: UsagePanelTarget,
+  options: OpenUsagePanelOptions = {},
+): void {
   if (host === null) return;
-  if (current !== null && current.kind === target.kind && current.id === target.id) {
+  if (usagePanelRepeatAction(current, target, options.forceOpen === true) === 'close') {
     closeUsagePanel();
     return;
   }
@@ -116,7 +162,12 @@ export function openUsagePanel(target: UsagePanelTarget): void {
   host.classList.remove('hidden');
   resizer?.classList.remove('hidden');
   if (targetBox !== null) targetBox.textContent = target.title;
+  setStatus(null);
+  // Пока не пришло свежее чтение пометки — действие скрыто (чужая цель не
+  // должна показывать restore от предыдущей).
+  updateRestoreButton(false);
   void load(target);
+  closeBtn?.focus();
 }
 
 /** Закрывает панель и очищает содержимое. */
@@ -130,6 +181,22 @@ export function closeUsagePanel(): void {
   resizer?.classList.add('hidden');
   bodyBox?.replaceChildren();
   if (targetBox !== null) targetBox.textContent = '';
+  setStatus(null);
+  if (restoreBtn !== null) restoreBtn.hidden = true;
+}
+
+/** Строка состояния панели (сообщение об ошибке restore); `null` — скрыть. */
+function setStatus(text: string | null): void {
+  if (statusBox === null) return;
+  statusBox.textContent = text ?? '';
+  statusBox.hidden = text === null;
+}
+
+/** Видимость действия «Вернуть из корзины» — только у помеченной цели. */
+function updateRestoreButton(marked: boolean): void {
+  if (restoreBtn === null) return;
+  restoreBtn.hidden = !marked;
+  restoreBtn.disabled = !marked;
 }
 
 /** Открыта ли панель для указанной сущности (для toggle-точек входа). */
@@ -150,20 +217,30 @@ async function load(target: UsagePanelTarget): Promise<void> {
 
   let usage: ThoughtUsage | null = null;
   let layersFromCheck: HoldingLayerRef[] = [];
+  // Пометка на удаление читается свежим запросом при каждом открытии и
+  // перечитывании панели (задача d23279f6) — устаревшее действие не висит.
+  let marked = false;
   try {
     if (target.kind === 'thought') {
-      const [loadedUsage, checks] = await Promise.all([
+      const [loadedUsage, checks, entity] = await Promise.all([
         etn.thoughts.usage(networkId, target.id),
         etn.thoughts.deletionCheck(networkId, [target.id]),
+        etn.thoughts.get(networkId, target.id),
       ]);
       usage = loadedUsage;
       layersFromCheck = checks[target.id]?.blocking.layers ?? [];
+      marked = entity.marked_for_deletion;
     } else {
-      const checks = await etn.links.deletionCheck(networkId, [target.id]);
+      const [checks, entity] = await Promise.all([
+        etn.links.deletionCheck(networkId, [target.id]),
+        etn.links.get(networkId, target.id),
+      ]);
       layersFromCheck = checks[target.id]?.blocking.layers ?? [];
+      marked = entity.marked_for_deletion;
     }
   } catch (err) {
     if (generation === loadGeneration && bodyBox !== null) {
+      updateRestoreButton(false);
       bodyBox.replaceChildren(errorState(errText(err), {
         label: t('usagePanel.retry'),
         onClick: () => void load(target),
@@ -179,12 +256,72 @@ async function load(target: UsagePanelTarget): Promise<void> {
     properties: usagePropertyRows(usage),
     total: usage?.total ?? 0,
     layers: usageLayers(usage?.holding_layers, layersFromCheck),
+    marked,
   };
   renderBody(target, data);
+  updateRestoreButton(marked);
 
   // «После удаления слоя панель перечитывает deletion-check и обновляет
   // открытые диалоги удаления» (f7623077): обновляем видимую блокировку.
   bodyBox.dataset['blocked'] = data.layers.length > 0 ? 'true' : 'false';
+}
+
+/**
+ * «Вернуть из корзины» из панели. Пометка и версия читаются СВЕЖИМ запросом
+ * (без захвата, обычный PATCH с If-Match): чужая пометка восстанавливается,
+ * `blocked` не препятствует. 404/412/409 оставляют панель открытой с
+ * сообщением в строке состояния; после успеха действие скрывается, панель
+ * перечитывается, а холст/редактор получают обновлённую сущность.
+ */
+async function restoreTarget(): Promise<void> {
+  const target = current;
+  const networkId = store.state.networkId;
+  if (target === null || networkId === null) return;
+  setStatus(null);
+  try {
+    if (target.kind === 'thought') {
+      const entity = await etn.thoughts.get(networkId, target.id);
+      if (!entity.marked_for_deletion) {
+        updateRestoreButton(false);
+        setStatus(t('usagePanel.restoreNotMarked'));
+        return;
+      }
+      const updated = await etn.thoughts.update(
+        networkId,
+        target.id,
+        { marked_for_deletion: false },
+        entity.version,
+      );
+      // B1: собственное realtime-эхо приходит позже — отражаем ответ сразу
+      // (холст, редактор, структуры, полосы истории/закреплённых).
+      reflectThoughtUpdate(updated, { marked_for_deletion: false });
+    } else {
+      const entity = await etn.links.get(networkId, target.id);
+      if (!entity.marked_for_deletion) {
+        updateRestoreButton(false);
+        setStatus(t('usagePanel.restoreNotMarked'));
+        return;
+      }
+      await etn.links.update(
+        networkId,
+        target.id,
+        { marked_for_deletion: false },
+        entity.version,
+      );
+      // Не полагаемся на собственное эхо: холст перечитывает связи вручную.
+      const { scheduleRefresh } = await import('../app.js');
+      scheduleRefresh();
+    }
+    updateRestoreButton(false);
+    await reloadAfterMutation(target);
+  } catch (err) {
+    // 404/412/409 — панель остаётся открытой и объясняет причину строкой.
+    if (err instanceof EtnError && isRestorePanelError(err.code)) {
+      setStatus(errText(err));
+      return;
+    }
+    errorDialog(t('actions.restore'), err);
+  }
 }
 
 /** Собирает две сворачиваемые группы панели. */

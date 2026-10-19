@@ -1,0 +1,414 @@
+{
+  "name": "d23279f6-trash-usage",
+  "description": "Задача d23279f6: выход в «Панель использования» из корзины. Полный маршрут живого клиента: онбординг → сеть → затравка (свойство-связь, вторая мысль и структурная связь, все три сущности в корзине) → меню сети «Корзина» → в тулбаре «Открыть использование…» погашена без текущей строки, построчных кнопок нет (R8), у blocked-строки вход доступен → фильтр и текущая строка → контекстное меню строки → панель (фокус в панели, чистое имя, свойства+слои+restore) → «Очистить все свойства» → «Вернуть из корзины» → повторное открытие корзины (фильтр сохранён, строки нет, панель закрыта) → вход по тулбару для второй мысли → restore → связь (только слои+restore) → restore → в корзине остаётся ребро, помеченное самим «Очистить все свойства» (0:1) → холст без меток. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d23279f6-trash-usage.scenario.json --out .tmp/d23279f6/out",
+  "timeout": 420000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "networks-settled",
+      "waitFor": "new Promise((r)=>setTimeout(()=>r(true),400))"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "map-ready",
+      "timeout": 30000,
+      "waitFor": "(() => { if (document.querySelector('[data-id]')) return true; const item=document.querySelector('.networks-list .network-item'); if (!item) return false; const now=Date.now(); if (!window.__netClickAt || now-window.__netClickAt>2000) { window.__netClickAt=now; item.click(); } return false; })()"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "focus-seed",
+      "eval": "(() => { const el=document.querySelector('[data-id=\"{{thoughtId}}\"] .cloud'); if(!el) return 'no-cloud'; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return 'ok'; })()"
+    },
+    {
+      "name": "seed-setup",
+      "eval": "(async () => { const nid='{{networkId}}'; const home='{{homeId}}'; const prop=await window.etn.propertyRegistry.create(nid,{name:'Ссылается на',value_type:'link',config:{blocks_target_deletion:true},name_forward:'ссылается на',name_reverse:'используется в'}); const b=await window.etn.thoughts.create(nid,{title:'Вторая проба',create_link:{direction:'parent',target_thought_id:home}}); await window.etn.properties.set(nid,'thought',b.id,prop.name,['{{thoughtId}}']); const a=await window.etn.thoughts.get(nid,'{{thoughtId}}'); await window.etn.thoughts.update(nid,'{{thoughtId}}',{marked_for_deletion:true},a.version); const bf=await window.etn.thoughts.get(nid,b.id); await window.etn.thoughts.update(nid,b.id,{marked_for_deletion:true},bf.version); const g=await window.etn.links.listByThought(nid,home); const items=[...(g.untyped_parents||[]),...(g.untyped_children||[]),...(g.by_type||[]).flatMap((x)=>x.items||[])]; const pair=items.find((x)=>{ const other=x.target_thought||x.source_thought; return other !== undefined && other.id===b.id; }); let linkId=null; if(pair){ linkId=pair.link.id; const lf=await window.etn.links.get(nid,linkId); await window.etn.links.update(nid,linkId,{marked_for_deletion:true},lf.version); } window.__d232seed={b:b.id,prop:prop.id,link:linkId}; return JSON.stringify(window.__d232seed); })()"
+    },
+    {
+      "name": "seed-recorded",
+      "probe": "JSON.stringify(window.__d232seed)"
+    },
+    {
+      "name": "usage-seeded",
+      "api": {
+        "name": "usage-seeded",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/usage",
+        "expression": "JSON.stringify({total:data.total,groups:data.groups.map((g)=>g.key)})"
+      }
+    },
+    {
+      "name": "trash-seeded",
+      "api": {
+        "name": "trash-seeded",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/trash",
+        "expression": "data.thoughts.length + ':' + data.links.length"
+      },
+      "expect": "2:1"
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { const D = { top: () => { const b=document.querySelectorAll('.dialog-backdrop'); return b.length ? b[b.length-1] : null; }, lastMenu: () => { const m=document.querySelectorAll('.menu'); return m.length ? m[m.length-1] : null; }, labels: () => { const m=D.lastMenu(); return m ? [...m.querySelectorAll('.menu-item')].map((e)=>(e.textContent||'').trim()).filter((x)=>x!=='') : []; }, menuClick: (text) => { const m=D.lastMenu(); if(!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find((e)=>(e.textContent||'').trim().startsWith(text)); if(!it) return 'no-item'; it.click(); return 'ok'; }, grid: () => document.querySelector('.trash vaadin-grid') || document.querySelector('vaadin-grid'), rows: () => { const g=D.grid(); return g && g.shadowRoot ? [...g.shadowRoot.querySelectorAll('tr')] : []; }, rowById: (id) => { const g=D.grid(); if(!g) return null; const idx=(g.items||[]).findIndex((x)=>x && x.id===id); if(idx<0) return null; return D.rows().find((r)=>r.index===idx) || D.rows()[idx] || null; }, clickNode: (n) => { if(!n) return 'no-node'; const b=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return 'ok'; }, ctxNode: (n) => { if(!n) return 'no-node'; const b=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,composed:true,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return 'ok'; }, rowCell: (id) => { const g=D.grid(); const idx=g ? (g.items||[]).findIndex((x)=>x.id===id) : -1; if(idx<0) return null; const r=D.rows().find((x)=>x.index===idx) || D.rows()[idx]; return r ? (r.querySelector('td') || r) : null; }, clickRow: (id) => D.clickNode(D.rowCell(id)), ctxRow: (id) => D.ctxNode(D.rowCell(id)), activeId: () => { const g=D.grid(); return g && g.activeItem ? g.activeItem.id : null; }, ids: () => { const g=D.grid(); return g ? (g.items||[]).map((x)=>x.id) : []; }, btn: (text, sel) => { const root=sel ? document.querySelector(sel) : D.top(); if(!root) return null; return [...root.querySelectorAll('button')].find((b)=>(b.textContent||'').trim()===text) || null; }, toolbar: (text) => D.btn(text, '.trash-toolbar'), clickToolbar: (text) => { const b=D.toolbar(text); if(!b) return 'no-btn'; b.click(); return 'ok'; }, panel: () => document.querySelector('.usage-panel'), panelOpen: () => { const p=D.panel(); return p!==null && !p.classList.contains('hidden'); }, panelTarget: () => { const e=document.querySelector('.usage-panel .usage-target'); return e ? (e.textContent||'') : ''; }, panelRestore: () => { const p=D.panel(); if(!p) return null; return [...p.querySelectorAll('.usage-header button')].find((b)=>(b.textContent||'').trim()==='Вернуть из корзины') || null; }, panelProps: () => document.getElementById('usage_panel:properties'), panelLayers: () => document.getElementById('usage_panel:layers'), propsCount: () => { const g=D.panelProps(); const e=g ? g.querySelector('.ui-collapsible-count') : null; return e ? (e.textContent||'').trim() : null; }, setFilter: (v) => { const i=document.querySelector('.trash-search'); if(!i) return 'no-input'; i.focus(); i.value=v; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; }, filter: () => { const i=document.querySelector('.trash-search'); return i ? i.value : null; }, cloudTrash: (id) => { const c=document.querySelector('[data-id=\"'+id+'\"] .cloud'); if(!c) return 'absent'; return c.querySelector('.cloud-trash-badge')!==null; } }; window.__d = D; return 'ok'; })()"
+    },
+    {
+      "name": "open-net-menu",
+      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "net-menu-open",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
+    },
+    {
+      "name": "click-trash-menu",
+      "probe": "window.__d.menuClick('Корзина')",
+      "expect": "ok"
+    },
+    {
+      "name": "trash-open",
+      "timeout": 20000,
+      "waitFor": "(() => { const d=window.__d.top(); const g=window.__d.grid(); return d!==null && (d.querySelector('.dialog-title')?.textContent||'')==='Корзина' && g!==null && (g.items||[]).length===3; })()"
+    },
+    {
+      "name": "no-per-row-buttons",
+      "probe": "(() => { const rows=window.__d.rows(); return rows.length>0 && rows.every((r)=>r.querySelectorAll('button').length===0); })()",
+      "expect": true
+    },
+    {
+      "name": "usage-disabled-without-current",
+      "probe": "(() => { const b=window.__d.toolbar('Открыть использование…'); return b ? b.disabled : 'no-btn'; })()",
+      "expect": true
+    },
+    {
+      "name": "blocked-row-has-lock",
+      "probe": "(() => { const g=window.__d.grid(); const a=g ? (g.items||[]).find((x)=>x.id==='{{thoughtId}}') : null; const texts=[...document.querySelectorAll('vaadin-grid-cell-content')].map((c)=>(c.textContent||'').trim()).join('|'); return JSON.stringify({ blocked: a ? a.blocked : null, lock: texts.includes('🔒') }); })()",
+      "expect": "{\"blocked\":true,\"lock\":true}"
+    },
+    {
+      "name": "click-blocked-row",
+      "probe": "window.__d.clickRow('{{thoughtId}}')",
+      "expect": "ok"
+    },
+    {
+      "name": "blocked-row-current",
+      "probe": "window.__d.activeId()",
+      "expect": "{{thoughtId}}"
+    },
+    {
+      "name": "usage-enabled-for-blocked",
+      "probe": "(() => { const b=window.__d.toolbar('Открыть использование…'); return b ? b.disabled : 'no-btn'; })()",
+      "expect": false
+    },
+    {
+      "name": "set-filter",
+      "probe": "window.__d.setFilter('Проба стенда')",
+      "expect": "ok"
+    },
+    {
+      "name": "filter-applied",
+      "probe": "JSON.stringify(window.__d.ids())",
+      "expect": "[\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "open-usage-via-row-menu",
+      "probe": "window.__d.ctxRow('{{thoughtId}}')",
+      "expect": "ok"
+    },
+    {
+      "name": "row-menu-open",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Открыть использование')))()"
+    },
+    {
+      "name": "click-row-menu-usage",
+      "probe": "window.__d.menuClick('Открыть использование')",
+      "expect": "ok"
+    },
+    {
+      "name": "panel-open",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen()"
+    },
+    {
+      "name": "trash-closed-for-panel",
+      "timeout": 15000,
+      "waitFor": "window.__d.top() === null"
+    },
+    {
+      "name": "panel-focus",
+      "probe": "(() => { const p=window.__d.panel(); return p !== null && p.contains(document.activeElement); })()",
+      "expect": true
+    },
+    {
+      "name": "panel-title",
+      "probe": "(document.querySelector('.usage-panel .usage-title')?.textContent||'').trim()",
+      "expect": "Использование"
+    },
+    {
+      "name": "panel-target-clean",
+      "probe": "(() => { const t=window.__d.panelTarget(); return JSON.stringify({ text: t, icon: t.includes('📝') || t.includes('🔗') }); })()",
+      "expect": "{\"text\":\"Проба стенда\",\"icon\":false}"
+    },
+    {
+      "name": "panel-thought-actions",
+      "probe": "(() => { const r=window.__d.panelRestore(); return JSON.stringify({ restore: r!==null && !r.hidden, props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null }); })()",
+      "expect": "{\"restore\":true,\"props\":true,\"layers\":true}"
+    },
+    {
+      "name": "panel-property-row",
+      "probe": "(() => { const g=window.__d.panelProps(); const row=g ? g.querySelector('.usage-row') : null; if(!row) return 'no-row'; return JSON.stringify({ title: (row.querySelector('.prc-title')?.textContent||''), prop: (row.querySelector('.usage-row-property')?.textContent||'') }); })()",
+      "expect": "{\"title\":\"Вторая проба\",\"prop\":\"ссылается на\"}"
+    },
+    {
+      "name": "clear-all-properties",
+      "probe": "(() => { const g=window.__d.panelProps(); const b=g ? g.querySelector('button') : null; if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "clear-confirm-open",
+      "timeout": 15000,
+      "waitFor": "(() => { const d=window.__d.top(); return d!==null && (d.textContent||'').includes('Все ссылки на эту мысль'); })()"
+    },
+    {
+      "name": "clear-confirm-click",
+      "probe": "(() => { const b=window.__d.btn('Очистить'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "usage-cleared",
+      "api": {
+        "name": "usage-cleared",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/usage",
+        "expression": "data.total"
+      },
+      "expect": 0
+    },
+    {
+      "name": "panel-count-zero",
+      "timeout": 15000,
+      "waitFor": "window.__d.propsCount() === '0'"
+    },
+    {
+      "name": "restore-from-panel",
+      "probe": "(() => { const b=window.__d.panelRestore(); if(!b) return 'no-btn'; if(b.hidden) return 'hidden'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "restore-action-hidden",
+      "timeout": 15000,
+      "waitFor": "(() => { const b=window.__d.panelRestore(); return b===null || b.hidden; })()"
+    },
+    {
+      "name": "thought-restored",
+      "api": {
+        "name": "thought-restored",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}",
+        "expression": "data.marked_for_deletion"
+      },
+      "expect": false
+    },
+    {
+      "name": "open-trash-again",
+      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "net-menu-again",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
+    },
+    {
+      "name": "trash-again-click",
+      "probe": "window.__d.menuClick('Корзина')",
+      "expect": "ok"
+    },
+    {
+      "name": "trash-again-open",
+      "timeout": 20000,
+      "waitFor": "(() => window.__d.top()!==null && window.__d.filter()==='Проба стенда')()"
+    },
+    {
+      "name": "panel-closed-by-trash",
+      "probe": "window.__d.panelOpen()",
+      "expect": false
+    },
+    {
+      "name": "filter-preserved",
+      "probe": "window.__d.filter()",
+      "expect": "Проба стенда"
+    },
+    {
+      "name": "restored-row-absent",
+      "probe": "window.__d.ids().includes('{{thoughtId}}')",
+      "expect": false
+    },
+    {
+      "name": "reset-filter",
+      "probe": "window.__d.setFilter('')",
+      "expect": "ok"
+    },
+    {
+      "name": "second-thought-row",
+      "probe": "(() => { const id=window.__d232seed.b; window.__d.clickRow(id); return window.__d.activeId()===id ? 'ok' : 'no'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-usage-via-toolbar",
+      "probe": "window.__d.clickToolbar('Открыть использование…')",
+      "expect": "ok"
+    },
+    {
+      "name": "panel-second-open",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen()"
+    },
+    {
+      "name": "panel-second-target",
+      "probe": "window.__d.panelTarget()",
+      "expect": "Вторая проба"
+    },
+    {
+      "name": "panel-second-thought-actions",
+      "probe": "(() => { const r=window.__d.panelRestore(); return JSON.stringify({ restore: r!==null && !r.hidden, props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null }); })()",
+      "expect": "{\"restore\":true,\"props\":true,\"layers\":true}"
+    },
+    {
+      "name": "restore-second",
+      "probe": "(() => { const b=window.__d.panelRestore(); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "second-restored",
+      "timeout": 15000,
+      "waitFor": "(() => { const b=window.__d.panelRestore(); return b===null || b.hidden; })()"
+    },
+    {
+      "name": "open-trash-third",
+      "eval": "(() => { const b=document.querySelector('button[title=\"Меню мыслесети\"]'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "net-menu-third",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Корзина')))()"
+    },
+    {
+      "name": "trash-third-click",
+      "probe": "window.__d.menuClick('Корзина')",
+      "expect": "ok"
+    },
+    {
+      "name": "trash-third-open",
+      "timeout": 20000,
+      "waitFor": "(() => { const g=window.__d.grid(); return window.__d.top()!==null && g!==null && (g.items||[]).length>=1; })()"
+    },
+    {
+      "name": "link-row-current",
+      "probe": "(() => { const id=window.__d232seed.link; if(!id) return 'no-link'; window.__d.clickRow(id); return window.__d.activeId()===id ? 'ok' : 'no'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-link-usage-via-menu",
+      "probe": "(() => { const id=window.__d232seed.link; window.__d.ctxRow(id); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "link-row-menu-open",
+      "timeout": 15000,
+      "waitFor": "(() => window.__d.labels().some((l)=>l.startsWith('Открыть использование')))()"
+    },
+    {
+      "name": "click-link-menu-usage",
+      "probe": "window.__d.menuClick('Открыть использование')",
+      "expect": "ok"
+    },
+    {
+      "name": "link-panel-open",
+      "timeout": 20000,
+      "waitFor": "window.__d.panelOpen()"
+    },
+    {
+      "name": "link-panel-target",
+      "probe": "(() => { const t=window.__d.panelTarget(); return JSON.stringify({ text: t, arrow: t.includes('→'), icon: t.includes('🔗') }); })()",
+      "expect": "{\"text\":\"HOME → Вторая проба · связь\",\"arrow\":true,\"icon\":false}"
+    },
+    {
+      "name": "link-panel-actions",
+      "probe": "(() => { const r=window.__d.panelRestore(); return JSON.stringify({ restore: r!==null && !r.hidden, props: window.__d.panelProps()!==null, layers: window.__d.panelLayers()!==null }); })()",
+      "expect": "{\"restore\":true,\"props\":false,\"layers\":true}"
+    },
+    {
+      "name": "restore-link",
+      "probe": "(() => { const b=window.__d.panelRestore(); if(!b) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "link-restored",
+      "timeout": 15000,
+      "waitFor": "(() => { const b=window.__d.panelRestore(); return b===null || b.hidden; })()"
+    },
+    {
+      "name": "final-trash",
+      "api": {
+        "name": "final-trash",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/trash",
+        "expression": "data.thoughts.length + ':' + data.links.length"
+      },
+      "expect": "0:1"
+    },
+    {
+      "name": "close-trash",
+      "eval": "(() => { const b=window.__d.btn('Закрыть'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "trash-closed",
+      "timeout": 15000,
+      "waitFor": "window.__d.top() === null"
+    },
+    {
+      "name": "canvas-seed-clean",
+      "timeout": 20000,
+      "waitFor": "window.__d.cloudTrash('{{thoughtId}}') === false || window.__d.cloudTrash('{{thoughtId}}') === 'absent'"
+    },
+    {
+      "name": "canvas-second-clean",
+      "probe": "(() => { const v=window.__d.cloudTrash(window.__d232seed.b); return v === false || v === 'absent'; })()",
+      "expect": true
+    }
+  ]
+}

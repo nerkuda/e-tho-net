@@ -21,7 +21,7 @@ import {
   type TrashListResult,
 } from '@etn/shared';
 import { t } from './lib/i18n.js';
-import { menuAction, type MenuItem } from './lib/menu.js';
+import { MENU_SEPARATOR, menuAction, type MenuItem } from './lib/menu.js';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
@@ -154,27 +154,38 @@ export function referencesText(total: number | null): string {
  * мест использования) — проверяется юнит-тестом без DOM.
  */
 export interface TrashRowView {
-  /** Колонка 1: название мысли либо подпись связи «источник → назначение · тип». */
+  /**
+   * Колонка 1: название мысли либо подпись связи «источник → назначение · тип»
+   * с префиксом-иконкой — только для показа в таблице.
+   */
   label: string;
+  /**
+   * Чистое имя сущности без префикса-иконки: название мысли либо подпись
+   * связи. Его получает панель использования (`.usage-target`, задача
+   * d23279f6) — в шапке панели всегда «Использование», имя идёт отдельно.
+   */
+  title: string;
   /** Колонка 2: мест использования; `null` — показывается прочерком. */
   count: number | null;
 }
 
 /** Строка помеченной мысли: колонка 1 — название, колонка 2 — `usage.total`. */
 export function thoughtTrashRow(item: { title: string }, usageTotal: number | null): TrashRowView {
-  return { label: `📝 ${item.title}`, count: usageTotal };
+  return { label: `📝 ${item.title}`, title: item.title, count: usageTotal };
 }
 
 /**
  * Строка помеченного ребра: у связи нет названия, её колонка 1 — подпись
  * «источник → назначение · тип связи» (имена концов — из `titles`), а колонка 2
- * пуста: использования в свойствах у связей нет (§5a.3).
+ * пуста: использования в свойствах у связей нет (§5a.3). Чистое имя (`title`) —
+ * та же подпись без префикса-иконки.
  */
 export function linkTrashRow(
   link: { source_id: string; target_id: string; type_id: string | null },
   titles: ReadonlyMap<string, string>,
 ): TrashRowView {
-  return { label: `🔗 ${linkCaption(link, titles)}`, count: null };
+  const caption = linkCaption(link, titles);
+  return { label: `🔗 ${caption}`, title: caption, count: null };
 }
 
 /** Resolve the current version of a link (for If-Match). */
@@ -737,7 +748,10 @@ export async function openThoughtGroupDeleteDialog(
 interface TrashDialogRow {
   id: string;
   kind: 'thought' | 'link';
+  /** Подпись для таблицы (с префиксом-иконкой). */
   label: string;
+  /** Чистое имя сущности — его получает панель использования. */
+  title: string;
   count: number | null;
   blocked: boolean;
   reason: string;
@@ -745,7 +759,32 @@ interface TrashDialogRow {
   onDelete: () => Promise<void>;
 }
 
+/**
+ * Состояние корзины между открытиями в рамках сессии (задача d23279f6):
+ * фильтр и текущая строка переживают закрытие диалога. Строка, которой больше
+ * нет в списке (восстановлена/удалена), текущей не становится.
+ */
+const trashSession: { networkId: string | null; filter: string; currentId: string | null } = {
+  networkId: null,
+  filter: '',
+  currentId: null,
+};
+
 export async function openTrashDialog(networkId: string): Promise<void> {
+  // Сессия корзины привязана к сети: при её смене фильтр и строка прежней
+  // сети не должны прятать/подсвечивать строки новой.
+  if (trashSession.networkId !== networkId) {
+    trashSession.networkId = networkId;
+    trashSession.filter = '';
+    trashSession.currentId = null;
+  }
+
+  // Корзина модальная: при открытой панели использования устаревшая панель
+  // не остаётся на экране (задача d23279f6). Импорт панели — только ленивый:
+  // статический даёт цикл с редактором/меню.
+  const usagePanel = await import('./screens/usage-panel.js');
+  usagePanel.closeUsagePanel();
+
   const body = div('trash list-dialog-body');
   const listHost = div('trash-table');
   // Высоту области списка задаёт раскладка диалога-списка (`.list-dialog-body`,
@@ -774,10 +813,13 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   };
 
   /** Пункты контекстного меню строки корзины (правило 8 требования 11ddd910):
-   *  «Вернуть из корзины» и «Удалить совсем»; у заблокированной строки
-   *  удаление погашено. Словарь подписей — `lib/i18n.ts`. */
+   *  «Открыть использование…» (доступно и заблокированной строке — это
+   *  основной смысл входа), «Вернуть из корзины» и «Удалить совсем»; у
+   *  заблокированной строки удаление погашено. Словарь — `lib/i18n.ts`. */
   function trashRowMenu(row: TrashDialogRow): MenuItem[] {
     return [
+      menuAction(t('usagePanel.openLink'), () => openRowUsage(row)),
+      MENU_SEPARATOR,
       menuAction(t('actions.restore'), () => void row.onRestore()),
       menuAction(t('actions.deleteForever'), () => void row.onDelete(), {
         danger: true,
@@ -812,7 +854,10 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     rowKey: (row) => row.id,
     emptyText: t('trash.empty'),
     emptyHint: t('trash.emptyHint'),
-    onCurrentChange: () => updateButtons(),
+    onCurrentChange: (key) => {
+      trashSession.currentId = key;
+      updateButtons();
+    },
     onDblActivate: (row) => openRowInEditor(row),
     // Правило 8 требования 11ddd910: команды над строкой — в её контекстном
     // меню (построчных крестиков «Восстановить»/«Удалить» в строках нет).
@@ -825,6 +870,17 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   // (`updateButtons`); «Удалить всё, что возможно» — массовое действие над
   // списком (прежде стояло в футере, который правило 3 оставляет решению).
   const toolbar = div('form-row type-list-toolbar trash-toolbar');
+  // Вход в панель использования по текущей строке (задача d23279f6, R8:
+  // построчных кнопок нет — только тулбар и меню строки). Доступен и
+  // заблокированной строке; без текущей строки погашен.
+  const usageBtn = uiButton({
+    label: t('usagePanel.openLink'),
+    role: 'secondary',
+    size: 's',
+    title: t('usagePanel.openFromTrashTitle'),
+    disabled: true,
+    onClick: () => openRowUsage(currentRow()),
+  });
   const restoreBtn = uiButton({
     label: t('trash.action.restore'),
     role: 'secondary',
@@ -848,10 +904,15 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     title: 'Физически удалить все незаблокированные строки корзины',
     onClick: () => void purgeAll(),
   });
-  toolbar.append(restoreBtn, deleteBtn, purgeAllBtn);
+  toolbar.append(usageBtn, restoreBtn, deleteBtn, purgeAllBtn);
 
   // Правила 1–2: поиск (первая строка), под ним управление, затем список.
   body.append(searchRow, toolbar, listHost);
+
+  // Возврат фильтра и текущей строки между открытиями в сессии (d23279f6):
+  // поле поиска начинается с сохранённого запроса, строка восстанавливается
+  // после загрузки списка.
+  searchInput.value = trashSession.filter;
 
   /** Строки всей корзины до фильтра поиска (правило 1, клиентский фильтр). */
   let allRows: TrashDialogRow[] = [];
@@ -864,11 +925,33 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     return table.getCurrent()?.row ?? null;
   }
 
-  /** Гасит кнопки текущей строки без неё (и «Удалить совсем» — у заблокированной). */
+  /**
+   * Гасит кнопки текущей строки без неё (и «Удалить совсем» — у
+   * заблокированной). «Открыть использование…» доступно и заблокированной
+   * строке: ради этого вход и сделан (задача d23279f6).
+   */
   function updateButtons(): void {
     const row = currentRow();
+    usageBtn.disabled = row === null;
     restoreBtn.disabled = row === null;
     deleteBtn.disabled = row === null || row.blocked;
+  }
+
+  /**
+   * Вход в панель использования из корзины (задача d23279f6): корзина
+   * модальная — сначала закрывается, затем панель открывается в режиме
+   * `forceOpen` (не toggle) с чистым именем строки. Импорт панели ленивый —
+   * статический даёт цикл с редактором/меню.
+   */
+  function openRowUsage(row: TrashDialogRow | null): void {
+    if (row === null) return;
+    closeDialog();
+    void import('./screens/usage-panel.js').then((m) =>
+      m.openUsagePanel(
+        { kind: row.kind, id: row.id, title: row.title },
+        { forceOpen: true },
+      ),
+    );
   }
 
   /** Правило 6: двойной клик по строке открывает сущность в редакторе. */
@@ -890,6 +973,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   /** Клиентский фильтр по подписи строки; пустой запрос — вся корзина. */
   function applyFilter(): void {
     const query = searchInput.value.trim().toLowerCase();
+    trashSession.filter = searchInput.value;
     const visible =
       query === '' ? allRows : allRows.filter((row) => row.label.toLowerCase().includes(query));
     table.setEmpty(
@@ -898,6 +982,16 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         : { title: t('trash.emptySearch'), hint: t('trash.emptySearchHint') },
     );
     table.setRows(visible);
+    // Текущая строка переживает закрытие корзины (d23279f6): возвращаем её
+    // только если она есть в отфильтрованном наборе; исчезнувшую (restore/
+    // purge) забываем.
+    if (trashSession.currentId !== null) {
+      if (visible.some((row) => row.id === trashSession.currentId)) {
+        table.setCurrent(trashSession.currentId);
+      } else if (!allRows.some((row) => row.id === trashSession.currentId)) {
+        trashSession.currentId = null;
+      }
+    }
     updateButtons();
   }
   searchInput.addEventListener('input', () => applyFilter());
@@ -947,6 +1041,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         id: t.id,
         kind: 'thought',
         label: view.label,
+        title: view.title,
         count: view.count,
         blocked: t.blocked,
         reason: blockingReasons('мысль', t.blocking).join('; '),
@@ -960,6 +1055,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         id: l.id,
         kind: 'link',
         label: view.label,
+        title: view.title,
         count: view.count,
         blocked: l.blocked,
         reason: blockingReasons('связь', l.blocking).join('; '),

@@ -43,6 +43,8 @@ describe('строки таблицы корзины (§5a.4)', () => {
   it('мысль показывается названием, а не id; счёт ссылок — usage.total', () => {
     const view = thoughtTrashRow({ title: 'Мысль A' }, 3);
     assert.equal(view.label, '📝 Мысль A');
+    // Чистое имя для панели использования — без префикса-иконки (d23279f6).
+    assert.equal(view.title, 'Мысль A');
     assert.equal(view.count, 3);
   });
 
@@ -61,6 +63,8 @@ describe('строки таблицы корзины (§5a.4)', () => {
         ]),
       );
       assert.equal(view.label, '🔗 Мысль A → Мысль B · вызывает');
+      // Чистое имя — та же подпись без префикса-иконки (d23279f6).
+      assert.equal(view.title, 'Мысль A → Мысль B · вызывает');
       // У связи нет использования в свойствах — колонка «Ссылок» пуста.
       assert.equal(view.count, null);
     } finally {

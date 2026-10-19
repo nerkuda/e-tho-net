@@ -42,6 +42,19 @@
   text-overflow: ellipsis;
 }
 
+/* Сообщение об ошибке действия из панели (restore: 404/412/409) — панель
+ * остаётся открытой, строка объясняет причину (задача d23279f6). */
+.usage-status {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--danger);
+  font-size: var(--font-size-s);
+}
+
+.usage-status[hidden] {
+  display: none;
+}
+
 .usage-body {
   flex: 1;
   min-height: 0;
