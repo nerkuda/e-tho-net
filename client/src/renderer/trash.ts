@@ -57,6 +57,7 @@ import { choiceControl } from './lib/ui/choice-row.js';
 import { fieldInput } from './lib/ui/field.js';
 import { createTable } from './lib/ui/table.js';
 import { splitterElement, wireSplitter, type SplitterHandle } from './lib/ui/splitter.js';
+import { pluralRu } from './lib/plural.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -254,7 +255,7 @@ export async function openThoughtDeleteDialog(
   }
   if (check.orphaned_children > 0) {
     lines.push(
-      `${check.orphaned_children} потомк${check.orphaned_children === 1 ? '' : 'ов'} останется без родителей.`,
+      `${check.orphaned_children} ${pluralRu(check.orphaned_children, 'потомок', 'потомка', 'потомков')} останется без родителей.`,
     );
   }
 
@@ -290,7 +291,7 @@ export async function openThoughtDeleteDialog(
       }
       if (next.orphaned_children > 0) {
         nextLines.push(
-          `${next.orphaned_children} потомк${next.orphaned_children === 1 ? '' : 'ов'} останется без родителей.`,
+          `${next.orphaned_children} ${pluralRu(next.orphaned_children, 'потомок', 'потомка', 'потомков')} останется без родителей.`,
         );
       }
       return { lines: nextLines, blocked: next.blocked };
@@ -664,7 +665,7 @@ export async function openThoughtGroupDeleteDialog(
       el(
         'p',
         'dialog-text group-delete-warning',
-        `${totalOrphaned} потомк${totalOrphaned === 1 ? '' : 'ов'} лишится родителя.`,
+        `${totalOrphaned} ${pluralRu(totalOrphaned, 'потомок', 'потомка', 'потомков')} лишится родителя.`,
       ),
     );
   }
@@ -864,7 +865,8 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   // Единая таблица корзины (задача ae76b75e, требование 93115633): текущая
   // строка, клавиатура, копирование; строки — из словаря локализации.
   // Правило 6 требования 11ddd910 (список, не выбор): клик делает строку
-  // текущей, двойной клик открывает сущность в редакторе.
+  // текущей; двойной клик и Enter открывают док-панель использования этой
+  // строки (исключение из правила 6, дополнение 0.13.3, задача d23279f6).
   const table = createTable<TrashDialogRow>({
     ariaLabel: t('trash.aria'),
     columns: [

@@ -13,6 +13,7 @@ import type { HoldingLayerRef, ThoughtUsage } from '@etn/shared';
 
 import {
   isRestorePanelError,
+  purgePrecheck,
   usageActionVisibility,
   usageLayers,
   usagePropertyRows,
@@ -107,6 +108,23 @@ describe('видимость действий шапки (задача d23279f6,
 
   it('помечена и незаблокирована — restore и purge', () => {
     assert.deepEqual(usageActionVisibility(true, false), { restore: true, purge: true });
+  });
+});
+
+describe('purge: свежая проверка пометки перед физическим удалением (d23279f6)', () => {
+  it('помечена и не заблокирована — удаляем', () => {
+    assert.equal(purgePrecheck(true, false), 'purge');
+  });
+
+  it('другой клиент восстановил сущность — удаление отменяется', () => {
+    // Регресс: раньше проверялся только `blocked`, и восстановленная сущность
+    // физически удалялась.
+    assert.equal(purgePrecheck(false, false), 'already-restored');
+    assert.equal(purgePrecheck(false, true), 'already-restored', 'приоритет — «уже восстановлена»');
+  });
+
+  it('пометка есть, но появилась блокировка — удаление отменяется', () => {
+    assert.equal(purgePrecheck(true, true), 'blocked');
   });
 });
 

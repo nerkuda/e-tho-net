@@ -49,11 +49,14 @@ import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import {
   isRestorePanelError,
+  purgePrecheck,
   usageActionVisibility,
   usageLayers,
   usagePropertyRows,
+  type PurgePrecheck,
   type UsagePropertyRow,
 } from '../lib/usage.js';
+import { pluralCategory } from '../lib/plural.js';
 import { errorState, loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -83,6 +86,13 @@ export interface UsagePanelData {
 
 /** Где живёт экземпляр панели: экран или док корзины. */
 export type UsagePanelMode = 'screen' | 'dock';
+
+/** Формы предупреждения об осиротевших потомках (согласование числа). */
+const ORPHANED_KEYS = {
+  one: 'usagePanel.purgeOrphaned.one',
+  few: 'usagePanel.purgeOrphaned.few',
+  many: 'usagePanel.purgeOrphaned.many',
+} as const;
 
 /** Параметры экземпляра панели. */
 export interface CreateUsagePanelOptions {
@@ -400,7 +410,10 @@ export function createUsagePanel(options: CreateUsagePanelOptions): UsagePanelHa
 
     const message =
       orphanedChildren > 0
-        ? `${t('usagePanel.purgeConfirmMessage', target.title)} ${t('usagePanel.purgeOrphaned', String(orphanedChildren))}`
+        ? `${t('usagePanel.purgeConfirmMessage', target.title)} ${t(
+            ORPHANED_KEYS[pluralCategory(orphanedChildren)],
+            String(orphanedChildren),
+          )}`
         : t('usagePanel.purgeConfirmMessage', target.title);
     const ok = await confirmDialog(
       t('usagePanel.purgeConfirmTitle'),
@@ -410,18 +423,57 @@ export function createUsagePanel(options: CreateUsagePanelOptions): UsagePanelHa
     );
     if (!ok) return;
 
+    /**
+     * Удаление отменено по свежим данным: цель уже восстановлена или снова
+     * заблокирована. Панель/строка перечитываются, сущность не трогаем.
+     */
+    const abortPurge = async (verdict: Exclude<PurgePrecheck, 'purge'>): Promise<void> => {
+      if (verdict === 'already-restored') {
+        // Сообщение — тостом: панель сейчас закроется (цель уже не в корзине),
+        // строку состояния пользователь не успел бы прочитать.
+        notice(t('usagePanel.purgeAlreadyRestored'));
+      } else {
+        setStatus(t('usagePanel.purgeRace'));
+      }
+      await reloadAfterMutation(target);
+    };
+
     try {
       if (target.kind === 'thought') {
-        const entity = await etn.thoughts.get(networkId, target.id);
+        // Свежие данные ПОСЛЕ подтверждения: пока пользователь читал диалог,
+        // другой клиент мог снять пометку (удалять восстановленную сущность
+        // нельзя) или снова заблокировать её. Версия тоже берётся свежая.
+        const [entity, checks] = await Promise.all([
+          etn.thoughts.get(networkId, target.id),
+          etn.thoughts.deletionCheck(networkId, [target.id]),
+        ]);
+        const verdict = purgePrecheck(
+          entity.marked_for_deletion,
+          checks[target.id]?.blocked ?? true,
+        );
+        if (verdict !== 'purge') {
+          await abortPurge(verdict);
+          return;
+        }
         await etn.thoughts.remove(networkId, target.id, entity.version);
         await onThoughtDeleted(target.id);
       } else {
-        const link = await etn.links.get(networkId, target.id);
+        const [link, checks] = await Promise.all([
+          etn.links.get(networkId, target.id),
+          etn.links.deletionCheck(networkId, [target.id]),
+        ]);
+        const verdict = purgePrecheck(
+          link.marked_for_deletion,
+          checks[target.id]?.blocked ?? true,
+        );
+        if (verdict !== 'purge') {
+          await abortPurge(verdict);
+          return;
+        }
         const { purged } = await etn.trash.purge(networkId, [target.id]);
         if (purged === 0) {
           // Гонка с удерживающим слоем, появившимся после проверки.
-          setStatus(t('usagePanel.purgeRace'));
-          await reloadAfterMutation(target);
+          await abortPurge('blocked');
           return;
         }
         patchFocusEdge({ ...link, active: false });
@@ -434,6 +486,12 @@ export function createUsagePanel(options: CreateUsagePanelOptions): UsagePanelHa
       close();
       options.onChanged?.();
     } catch (err) {
+      // Сущность исчезла между подтверждением и чтением — то же «уже
+      // восстановлена»: панель перечитывается и закрывается.
+      if (err instanceof EtnError && err.code === 'NOT_FOUND') {
+        await abortPurge('already-restored');
+        return;
+      }
       errorDialog(t('actions.deleteForever'), err);
     }
   }
