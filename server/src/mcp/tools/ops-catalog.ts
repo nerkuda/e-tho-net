@@ -1024,7 +1024,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects:
       'Умное удаление (0.14.1, ADR a967d865): в основе и для ребра, созданного в текущем слое, — физическое удаление (`link.deleted`); для ребра из основы/предка в слое — пометка корзины (`link.updated`, `marked_for_deletion: true`). Уже помеченное ребро — no-op без события. Возвращает `{ link_id }` (idempotent).',
     errors:
-      '`VALIDATION_ERROR` — неизвестное свойство, свойство не вида `link`, конфликт `side` с именем (обе стороны симметричного имени живые, а `side` не задан). Отсутствующее ребро к цели — идемпотентный no-op (`link_id: null`, `action: null`).',
+      '`VALIDATION_ERROR` — неизвестное свойство, свойство не вида `link`, цель соединена рёбрами обеих сторон свойства — укажите `side`. Отсутствующее ребро к цели — идемпотентный no-op (`link_id: null`, `action: null`).',
     paramsContract: PropertiesRemove,
   },
 
