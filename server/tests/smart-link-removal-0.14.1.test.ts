@@ -580,10 +580,16 @@ describe(
         await closeRestContext(ctx);
       }
     });
-    it('usage/clear атомарен: 422 на ребре, удерживаемом слоем, не удаляет остальные', async () => {
+    /**
+     * Атомарность usage/clear: одна из двух блокирующих связей удерживается
+     * живой тенью слоя (S13), вторая — нет. Независимо от порядка сканирования
+     * (`rowid`/план запроса) 422 обязан откатить и уже выполненные удаления.
+     * Пара тестов ниже ставит удержание на оба ребра — регресс ловится при
+     * любом плане запроса.
+     */
+    async function assertUsageClearAtomic(heldIndex: 0 | 1): Promise<void> {
       const ctx = await buildRestContext();
       try {
-        // Блокирующее свойство и две живые связи к одной цели.
         const prop = createNetworkProperty(
           ctx.ndb,
           {
@@ -599,16 +605,17 @@ describe(
         const target = createThought(ctx.ndb, { title: 'Цель usage' }, USER);
         const owner1 = createThought(ctx.ndb, { title: 'Владелец 1' }, USER);
         const owner2 = createThought(ctx.ndb, { title: 'Владелец 2' }, USER);
-        // Первое ребро создаётся раньше — при сканировании удаляется первым.
         setPropertyValue(ctx.ndb, 'thought', owner1.id, 'usage-block', target.id, USER);
         setPropertyValue(ctx.ndb, 'thought', owner2.id, 'usage-block', target.id, USER);
-        const first = getLinkPropertyValues(ctx.ndb, 'thought', owner1.id, linkTypeId, 'out')[0]!.link_id;
-        const second = getLinkPropertyValues(ctx.ndb, 'thought', owner2.id, linkTypeId, 'out')[0]!.link_id;
+        const links = [
+          getLinkPropertyValues(ctx.ndb, 'thought', owner1.id, linkTypeId, 'out')[0]!.link_id,
+          getLinkPropertyValues(ctx.ndb, 'thought', owner2.id, linkTypeId, 'out')[0]!.link_id,
+        ] as const;
 
-        // У второго ребра — живая тень слоя: S13 запретит физическое удаление.
+        // Живая тень слоя на выбранном ребре: S13 запретит физическое удаление.
         insertLayer(ctx.ndb);
         ctx.ndb.useLayer(LAYER_A);
-        updateLink(ctx.ndb, second, { active: true }, undefined, USER);
+        updateLink(ctx.ndb, links[heldIndex], { active: true }, undefined, USER);
         ctx.ndb.useLayer(BASE_LAYER_ID);
 
         const res = await ctx.app.inject({
@@ -618,12 +625,21 @@ describe(
         });
         assert.equal(res.statusCode, 422, res.body);
 
-        // Атомарность: первое ребро не осталось удалённым.
-        assert.equal(getLink(ctx.ndb, first)?.marked_for_deletion, false, 'первое ребро живо');
-        assert.equal(getLink(ctx.ndb, second)?.marked_for_deletion, false, 'второе ребро живо');
+        // Атомарность: ни одно ребро не осталось удалённым.
+        assert.equal(getLink(ctx.ndb, links[0])?.marked_for_deletion, false, 'первое ребро живо');
+        assert.equal(getLink(ctx.ndb, links[1])?.marked_for_deletion, false, 'второе ребро живо');
       } finally {
+        ctx.ndb.useLayer(BASE_LAYER_ID);
         await closeRestContext(ctx);
       }
+    }
+
+    it('usage/clear атомарен: удерживается второе ребро', async () => {
+      await assertUsageClearAtomic(1);
+    });
+
+    it('usage/clear атомарен: удерживается первое ребро (независимость от порядка)', async () => {
+      await assertUsageClearAtomic(0);
     });
 
     it('usage/clear без удерживающих слоёв удаляет все рёбра физически', async () => {
