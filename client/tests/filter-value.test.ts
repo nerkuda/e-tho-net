@@ -1075,13 +1075,21 @@ describe('ячейка значения: сборка виджета и прав
     assert.deepEqual(writes[1], { kind: 'list', items: [3, 3] });
   });
 
-  it('перечисление: чип-поле выбранных значений, без «простыни» чекбоксов (п. C2/C3)', () => {
+  it('перечисление: общий редактор значения — чип-поле с подписями и кареткой (1f3f0df5)', () => {
     const { api } = slot();
     const box = render(leaf({ kind: 'kind' }, 'in'), api);
     assert.equal(box.dataset['editor'], 'enum');
-    assert.ok(one(box, 'ui-chip-list') !== null, 'перечисление — чип-поле множественных значений');
-    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы ушли в выпадающий список, а не «простынёй»');
-    assert.ok(one(box, 'ui-chip-list-add') !== null, 'поле добавления значений');
+    // Перечисление строит ТОТ ЖЕ редактор, что «Тип места» и строковые
+    // свойства с `config.options` + `multiple` (ревизия ошибки 1f3f0df5):
+    // рамка чип-поля, поле ввода с живым поиском и каретка «▾».
+    assert.ok(one(box, 'st-f-chipfield') !== null, 'стандартное чип-поле общего редактора');
+    assert.ok(one(box, 'value-chips-input') !== null, 'поле добавления значения');
+    assert.ok(
+      box.findAll((node) => (node.textContent ?? '').trim() === '▾').length > 0,
+      'каретка полного списка вариантов',
+    );
+    assert.equal(one(box, 'ui-chip-list'), null, 'своего чип-листа у перечисления нет');
+    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы «простынёй» не рисуются');
   });
 
   it('«не имеет свойство» по «Типу мысли»: чип-поле строится, оператор не переписывается (п.5)', () => {

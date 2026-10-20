@@ -23,9 +23,13 @@
  *     списком и сдвиг со знаком, человекочитаемая композиция (27b2a011);
  *   • «Найти слова» — инпут + инлайн-чекбоксы областей (9ecf405b);
  *   • «количество» — числовой инпут с подписью единицы (af7bdee2);
- *   • триада «да / нет / не важно» у операторных предикатов;
- *   • перечисления, которых нет у общего редактора (виды вложения, свойства, а
- *     также каталоги хоста — типы действий, виды сущностей).
+ *   • триада «да / нет / не важно» у операторных предикатов.
+ *
+ * Перечисления (виды вложения, а также каталоги хоста — типы действий, виды
+ * сущностей) строит ТОТ ЖЕ общий редактор значения: синтетическое текстовое
+ * определение с `config.multiple` и подписями словаря в `config.options`;
+ * единый адаптер {@link filterValueEnumCodec} переводит код AST ↔ подпись
+ * (ошибка 1f3f0df5). Своего чип-листа у перечислений нет.
  *
  * Переиспользование обязательно (стандарт a2488f05, ADR «Основа lib/ui»):
  * значение свойства — `editor/value-editor.ts`; чип-поле и комбо —
@@ -101,7 +105,6 @@ import { notice } from './notice.js';
 import { registerThoughtDropField } from './thought-drop.js';
 import type { ThoughtDropPayload } from './thought-drop-pure.js';
 import { uiButton } from './ui/button.js';
-import { chipList } from './ui/chip-list.js';
 import type { IconName } from './ui/icon.js';
 import { choiceRow } from './ui/choice-row.js';
 import { fieldInput } from './ui/field.js';
@@ -989,12 +992,77 @@ function propertyOptionIcon(
 }
 
 /**
- * Перечисление: ЧИП-ПОЛЕ множественных значений (ошибка 50d9bf4e п. C2) —
- * выбранные варианты облачками с крестиками, очистка крестиком в поле, добавление
- * из выпадающего списка чекбоксов в 2 колонки с кнопкой «Выбрать все» (п. C3).
- * Раньше варианты рисовались «простынёй» чекбоксов прямо в ячейке. Компонент —
- * общий чип-лист `lib/ui/chip-list.ts` (режим `checklist`), своей разметки поле
- * не заводит (стандарт S2, ADR «Основа lib/ui»).
+ * Адаптер КОД ↔ ПОДПИСЬ перечисления — один на все перечисления редактора
+ * (типы действий журнала, виды сущностей, виды вложения; ошибка 1f3f0df5).
+ * AST хранит коды (`created`, `thought`, `file`), а общий редактор значения
+ * работает подписями из `config.options` («Создано», «Мысль», «Файл»).
+ *
+ * Прямое направление показывает подпись; код, которого в словаре уже нет
+ * (устаревшее значение), показывается как есть — сохранённые данные не
+ * теряются. Обратное направление принимает подпись словаря либо известный код
+ * и сообщает, отброшен ли свободный текст: неизвестный ввод в AST не попадает.
+ */
+export interface FilterValueEnumCodec {
+  /** Коды AST → подписи для редактора. */
+  toLabels(codes: readonly string[]): string[];
+  /**
+   * Подписи редактора → коды AST; `dropped` — был неизвестный текст.
+   * `keepCodes` — коды, уже показанные ячейкой как есть (устаревшее значение
+   * вне словаря): такой текст не свободный ввод, а сохранённый код, и обязан
+   * пережить правку.
+   */
+  toCodes(
+    labels: readonly string[],
+    keepCodes?: readonly string[],
+  ): { codes: string[]; dropped: boolean };
+}
+
+/** Собрать адаптер перечисления по словарю вариантов хоста/модуля. */
+export function filterValueEnumCodec(
+  options: readonly FilterValueEnumOption[],
+): FilterValueEnumCodec {
+  const labelByCode = new Map<string, string>();
+  const codeByLabel = new Map<string, string>();
+  for (const option of options) {
+    if (labelByCode.has(option.value)) continue;
+    labelByCode.set(option.value, option.label);
+    if (!codeByLabel.has(option.label)) codeByLabel.set(option.label, option.value);
+  }
+  return {
+    toLabels: (codes) => codes.map((code) => labelByCode.get(code) ?? code),
+    toCodes: (labels, keepCodes = []) => {
+      const kept = new Set(keepCodes);
+      const codes: string[] = [];
+      let dropped = false;
+      for (const label of labels) {
+        // Подпись словаря либо код, который ячейка уже показывает как есть
+        // (`toLabels` не нашёл подписи) — обратный путь обязан его сохранить.
+        const code = codeByLabel.get(label) ?? (kept.has(label) ? label : undefined);
+        if (code === undefined) {
+          dropped = true;
+          continue;
+        }
+        if (!codes.includes(code)) codes.push(code);
+      }
+      return { codes, dropped };
+    },
+  };
+}
+
+/**
+ * Перечисление (коды действий журнала, виды сущностей, виды вложений) —
+ * СТАНДАРТНЫЙ редактор значения (`editor/value-editor.ts`, ветка `text` +
+ * `config.multiple`): рамка `.st-f-chipfield`, компактные чипы, поле
+ * `.value-chips-input` с живым поиском по подписям и подсказкой «+ ещё одно
+ * значение», каретка «▾» — тот же компонент, что у «Типа места» и строковых
+ * свойств со списком (ревизия ошибки 1f3f0df5). Своего чип-листа, чеклиста и
+ * кнопки «Выбрать значения…» здесь нет: компонент один на все перечисления.
+ *
+ * Код ↔ подпись переводит единый адаптер {@link filterValueEnumCodec}. Значение
+ * редактора — массив ПОДПИСЕЙ (`textListAsArray: true`), в AST уходят КОДЫ.
+ * Неизвестный свободный текст отбрасывается, а ячейка перерисовывается из
+ * модели (`setStructuralValue`): редактор успел нарисовать свой чип, и без
+ * пересборки «чужой» текст остался бы на экране.
  */
 function enumControl(
   leaf: FilterTreeLeaf,
@@ -1003,30 +1071,40 @@ function enumControl(
 ): HTMLElement {
   const options = enumCatalogue(leaf, ctx);
   const box = div('fv-enum');
-  const labelOf = (value: string): string => options.find((o) => o.value === value)?.label ?? value;
-  const list = chipList({
-    getValues: () => currentList(leaf.value),
-    labelOf,
-    onRemove: (value) => {
-      api.setValue(valueFromList(currentList(leaf.value).filter((v) => v !== value)));
-    },
-    getOptions: () => options.map((o) => ({ value: o.value, label: o.label })),
-    onAdd: (value) => {
-      const current = currentList(leaf.value);
-      if (!current.includes(value)) api.setValue(valueFromList([...current, value]));
-    },
-    addMode: 'checklist',
-    checklistColumns: 2,
-    addLabel: 'Выбрать значения…',
-    selectAllLabel: 'Выбрать все',
-    clearTitle: 'Очистить поле',
-    removeTitle: 'Убрать значение',
-    // Адрес слота дерева — ключ перепривязки панели-чеклиста: правка значения
-    // перерисовывает дерево ЦЕЛИКОМ, панель обязана переехать к новому узлу
-    // поля, а не остаться на координатах удалённого (п. C2/C3 ошибки 50d9bf4e).
-    ...(api.slotKey !== undefined ? { anchorKey: api.slotKey } : {}),
-  });
-  box.append(list.root);
+  const codec = filterValueEnumCodec(options);
+  /** Коды, уже показанные ячейкой (устаревшие значения переживают правку). */
+  const shownCodes = currentList(leaf.value);
+  box.append(
+    buildValueEditor({
+      networkId: ctx.networkId,
+      // Синтетическое определение значения свойства: перечисление — это
+      // текстовое поле с закрытым списком и множественным выбором, поэтому
+      // редактор строит ровно тот же вид, что у свойства с `config.options`.
+      // Отдельного вида значения у общего редактора не заводим (стандарт S2).
+      definition: registryDefinition({
+        value_type: 'text',
+        config: { multiple: true, options: options.map((option) => option.label) },
+      }),
+      value: codec.toLabels(shownCodes),
+      commitOn: 'change',
+      textListAsArray: true,
+      save: (next) => {
+        const labels = Array.isArray(next)
+          ? next.filter((item): item is string => typeof item === 'string')
+          : [];
+        const { codes, dropped } = codec.toCodes(labels, shownCodes);
+        const value = valueFromList(codes);
+        if (dropped) {
+          // Неизвестный ввод в модель не попадает; пересборка строки убирает
+          // уже нарисованный редактором чип с этим текстом.
+          (api.setStructuralValue ?? api.setValue)(value);
+        } else {
+          api.setValue(value);
+        }
+        return true;
+      },
+    }),
+  );
   return box;
 }
 

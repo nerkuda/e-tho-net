@@ -1,96 +1,266 @@
 {
-  "name": "1f3f0df5-enum-width",
-  "description": "Регресс ошибки 1f3f0df5: ячейка-перечисление редактора отбора (`.fv-enum` внутри `.ft-row__value`) получает ширину колонки значения; выбранные значения «Тип действия» и «Вид сущности» видны подписями в чипах, ширина чипа и подписи > 0. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.1f3f0df5-enum-width.scenario.json",
+  "name": "1f3f0df5-enum-standard-editor",
+  "description": "Регресс ошибки 1f3f0df5 (ревизия 2026-10-19): перечисления редактора отбора («Тип действия», «Вид сущности») строит стандартный редактор значения — рамка .st-f-chipfield, чипы-облачка с подписями, поле .value-chips-input с живым поиском, каретка «▾», полный список открывается кареткой; чеклист-кнопки «Выбрать значения…» и .ui-chip-list нет. На узкой колонке значения чипы переносятся, поле ввода доступно. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.1f3f0df5-enum-width.scenario.json",
   "timeout": 90000,
   "steps": [
-    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
-    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
-    { "name": "server-url-typed", "text": "{{serverUrl}}" },
-    { "name": "fill-api-key", "click": "input[type=password]" },
-    { "name": "api-key-typed", "text": "{{apiKey}}" },
-    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
-    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
-    { "name": "open-network", "click": ".networks-list .network-item" },
-    { "name": "map-ready", "waitFor": "document.querySelector('[data-id]') !== null" },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "map-ready",
+      "waitFor": "document.querySelector('[data-id]') !== null"
+    },
     {
       "name": "workspace-ready",
       "timeout": 20000,
       "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
     },
-    { "name": "open-activity-view", "click": "button.view-tab[title=\"События\"]" },
-    { "name": "editor-mounted", "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null" },
-
-    { "name": "add-action-row", "click": ".activity-filter .ft-add-condition" },
-    { "name": "row-appeared", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 1" },
-    { "name": "open-operand-picker", "click": ".activity-filter .ft-row__what" },
-    { "name": "operand-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"action\"]') !== null" },
-    { "name": "pick-action-operand", "click": ".ft-choice__item[data-key=\"action\"]" },
+    {
+      "name": "open-activity-view",
+      "click": "button.view-tab[title=\"События\"]"
+    },
+    {
+      "name": "editor-mounted",
+      "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null"
+    },
+    {
+      "name": "add-action-row",
+      "click": ".activity-filter .ft-add-condition"
+    },
+    {
+      "name": "row-appeared",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 1"
+    },
+    {
+      "name": "open-operand-picker",
+      "click": ".activity-filter .ft-row__what"
+    },
+    {
+      "name": "operand-choice-open",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"action\"]') !== null"
+    },
+    {
+      "name": "pick-action-operand",
+      "click": ".ft-choice__item[data-key=\"action\"]"
+    },
     {
       "name": "operand-is-action",
       "waitFor": "document.querySelector('.activity-filter .ft-row__what')?.textContent?.includes('Тип действия') === true"
     },
-    { "name": "open-operator-picker", "click": ".activity-filter .ft-row__op" },
-    { "name": "operator-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
-    { "name": "pick-in-operator", "click": ".ft-choice__item[data-key=\"in\"]" },
-    { "name": "enum-field-ready", "waitFor": "document.querySelector('.activity-filter .fv-enum .ui-chip-list-add--checklist') !== null" },
-
-    { "name": "open-enum-checklist", "eval": "(() => { const b=document.querySelector('.activity-filter .fv-enum .ui-chip-list-add--checklist'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()" },
-    { "name": "enum-checklist-open", "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover .ui-chip-checklist-grid') !== null" },
-    { "name": "pick-created", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='created'); if(!inp) return 'no-created'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
-    { "name": "pick-updated", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='updated'); if(!inp) return 'no-updated'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
-    { "name": "close-enum-checklist", "key": "Escape" },
-    { "name": "enum-checklist-closed", "timeout": 8000, "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover') === null" },
-
     {
-      "name": "action-enum-widths",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const box=row.querySelector('.fv-enum'); const list=row.querySelector('.fv-enum .ui-chip-list'); const add=row.querySelector('.fv-enum .ui-chip-list-add--checklist'); const chips=[...row.querySelectorAll('.fv-enum .ui-chip')]; const labels=[...row.querySelectorAll('.fv-enum .ui-chip-label')]; const w=(e)=>e===null||e===undefined?-1:Math.round(e.getBoundingClientRect().width*100)/100; return JSON.stringify({cell:w(cell),box:w(box),list:w(list),add:w(add),chips:chips.map(w),labels:labels.map(w),texts:labels.map((l)=>l.textContent)}); })()"
+      "name": "open-operator-picker",
+      "click": ".activity-filter .ft-row__op"
     },
     {
-      "name": "action-enum-chips-nonzero",
-      "probe": "(() => { const chips=[...document.querySelectorAll('.activity-filter .fv-enum .ui-chip')]; const labels=[...document.querySelectorAll('.activity-filter .fv-enum .ui-chip-label')]; const list=document.querySelector('.activity-filter .fv-enum .ui-chip-list'); const box=document.querySelector('.activity-filter .fv-enum'); return chips.length===2 && box!==null && box.getBoundingClientRect().width>0 && list!==null && list.getBoundingClientRect().width>0 && chips.every((c)=>c.getBoundingClientRect().width>0) && labels.length===2 && labels.every((l)=>l.getBoundingClientRect().width>0 && (l.textContent??'').trim()!==''); })()",
+      "name": "operator-choice-open",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null"
+    },
+    {
+      "name": "pick-in-operator",
+      "click": ".ft-choice__item[data-key=\"in\"]"
+    },
+    {
+      "name": "action-field-ready",
+      "waitFor": "document.querySelector('.activity-filter .ft-row .fv-enum .st-f-chipfield') !== null && document.querySelector('.activity-filter .ft-row .fv-enum .value-chips-input') !== null"
+    },
+    {
+      "name": "action-field-markup",
+      "probe": {
+        "name": "actionField",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); return { field: field!==null, input: input!==null, placeholder: input===null?null:input.placeholder, caret: caret!==undefined, chipList: row.querySelector('.ui-chip-list')!==null, checklistBtn: [...row.querySelectorAll('.fv-enum button')].some((b)=>(b.textContent??'').includes('Выбрать значения')) }; })()"
+      },
+      "expect": {
+        "field": true,
+        "input": true,
+        "placeholder": "+ ещё одно значение",
+        "caret": true,
+        "chipList": false,
+        "checklistBtn": false
+      }
+    },
+    {
+      "name": "open-action-list",
+      "eval": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); if(!caret) return 'no-caret'; caret.click(); return 'ok'; })()"
+    },
+    {
+      "name": "action-list-open",
+      "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null"
+    },
+    {
+      "name": "pick-created",
+      "eval": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=items.find((i)=>(i.textContent??'').includes('создал(а)')); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "action-chip-added",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
+    },
+    {
+      "name": "action-chip-visible",
+      "probe": {
+        "name": "actionChip",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), labels: labels.map(w), texts: labels.map((l)=>l.textContent) }; })()"
+      }
+    },
+    {
+      "name": "action-chip-nonzero",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return field.getBoundingClientRect().width>0 && input.getBoundingClientRect().width>0 && chips.length===1 && chips.every((c)=>c.getBoundingClientRect().width>0) && labels.length===1 && labels[0].getBoundingClientRect().width>0 && (labels[0].textContent??'').trim()==='создал(а)'; })()",
       "expect": true
     },
-
-    { "name": "add-entity-row", "click": ".activity-filter .ft-add-condition" },
-    { "name": "two-rows", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 2" },
-    { "name": "open-second-operand-picker", "click": ".activity-filter .ft-row[data-path=\"1\"] .ft-row__what" },
-    { "name": "entity-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"entity_type\"]') !== null" },
-    { "name": "pick-entity-operand", "click": ".ft-choice__item[data-key=\"entity_type\"]" },
+    {
+      "name": "focus-action-input",
+      "click": ".activity-filter .ft-row .fv-enum .value-chips-input"
+    },
+    {
+      "name": "type-action-search",
+      "text": "измен"
+    },
+    {
+      "name": "action-search-suggests",
+      "timeout": 8000,
+      "waitFor": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; return items.some((i)=>(i.textContent??'').includes('изменил(а)')); })() === true"
+    },
+    {
+      "name": "pick-updated",
+      "eval": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=items.find((i)=>(i.textContent??'').includes('изменил(а)')); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "two-action-chips",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 2"
+    },
+    {
+      "name": "action-chips-texts",
+      "probe": {
+        "name": "actionChipTexts",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); return [...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')].map((l)=>l.textContent); })()"
+      },
+      "expect": [
+        "создал(а)",
+        "изменил(а)"
+      ]
+    },
+    {
+      "name": "narrow-value-cell",
+      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 120px'; cell.style.width='120px'; const field=cell.querySelector('.fv-enum .st-f-chipfield'); const input=cell.querySelector('.fv-enum .value-chips-input'); return JSON.stringify({field:Math.round(field.getBoundingClientRect().width),input:Math.round(input.getBoundingClientRect().width)}); })()"
+    },
+    {
+      "name": "narrow-panel-wraps",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const fw=field.getBoundingClientRect().width; const fh=field.getBoundingClientRect().height; return fw>0 && fw<=130 && input.getBoundingClientRect().width>0 && chips.length===2 && chips.every((c)=>c.getBoundingClientRect().width>0 && c.getBoundingClientRect().width<=fw+0.5) && fh>40; })()",
+      "expect": true
+    },
+    {
+      "name": "add-entity-row",
+      "click": ".activity-filter .ft-add-condition"
+    },
+    {
+      "name": "two-rows",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 2"
+    },
+    {
+      "name": "open-second-operand-picker",
+      "click": ".activity-filter .ft-row[data-path=\"1\"] .ft-row__what"
+    },
+    {
+      "name": "entity-choice-open",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"entity_type\"]') !== null"
+    },
+    {
+      "name": "pick-entity-operand",
+      "click": ".ft-choice__item[data-key=\"entity_type\"]"
+    },
     {
       "name": "operand-is-entity",
       "waitFor": "document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .ft-row__what')?.textContent?.includes('Вид сущности') === true"
     },
-    { "name": "open-second-operator-picker", "click": ".activity-filter .ft-row[data-path=\"1\"] .ft-row__op" },
-    { "name": "second-in-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
-    { "name": "pick-second-in", "click": ".ft-choice__item[data-key=\"in\"]" },
-    { "name": "entity-enum-field-ready", "waitFor": "document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .ui-chip-list-add--checklist') !== null" },
-    { "name": "open-entity-checklist", "eval": "(() => { const b=document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .ui-chip-list-add--checklist'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()" },
-    { "name": "entity-checklist-open", "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover .ui-chip-checklist-grid') !== null" },
-    { "name": "pick-thought-entity", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='thought'); if(!inp) return 'no-thought'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
-    { "name": "close-entity-checklist", "key": "Escape" },
-    { "name": "entity-checklist-closed", "timeout": 8000, "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover') === null" },
     {
-      "name": "entity-enum-widths",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const box=row.querySelector('.fv-enum'); const list=row.querySelector('.fv-enum .ui-chip-list'); const chips=[...row.querySelectorAll('.fv-enum .ui-chip')]; const labels=[...row.querySelectorAll('.fv-enum .ui-chip-label')]; const w=(e)=>e===null||e===undefined?-1:Math.round(e.getBoundingClientRect().width*100)/100; return JSON.stringify({box:w(box),list:w(list),chips:chips.map(w),labels:labels.map(w),texts:labels.map((l)=>l.textContent)}); })()"
+      "name": "open-second-operator-picker",
+      "click": ".activity-filter .ft-row[data-path=\"1\"] .ft-row__op"
     },
     {
-      "name": "entity-enum-chips-nonzero",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const chips=[...row.querySelectorAll('.fv-enum .ui-chip')]; const labels=[...row.querySelectorAll('.fv-enum .ui-chip-label')]; const list=row.querySelector('.fv-enum .ui-chip-list'); return chips.length===1 && list!==null && list.getBoundingClientRect().width>0 && chips.every((c)=>c.getBoundingClientRect().width>0) && labels.length===1 && labels.every((l)=>l.getBoundingClientRect().width>0 && (l.textContent??'').trim()!==''); })()",
+      "name": "second-in-choice-open",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null"
+    },
+    {
+      "name": "pick-second-in",
+      "click": ".ft-choice__item[data-key=\"in\"]"
+    },
+    {
+      "name": "entity-field-ready",
+      "waitFor": "document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .st-f-chipfield') !== null && document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .value-chips-input') !== null"
+    },
+    {
+      "name": "entity-field-markup",
+      "probe": {
+        "name": "entityField",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); return { field: field!==null, input: input!==null, placeholder: input===null?null:input.placeholder, caret: caret!==undefined, chipList: row.querySelector('.ui-chip-list')!==null, checklistBtn: [...row.querySelectorAll('.fv-enum button')].some((b)=>(b.textContent??'').includes('Выбрать значения')) }; })()"
+      },
+      "expect": {
+        "field": true,
+        "input": true,
+        "placeholder": "+ ещё одно значение",
+        "caret": true,
+        "chipList": false,
+        "checklistBtn": false
+      }
+    },
+    {
+      "name": "open-entity-list",
+      "eval": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); if(!caret) return 'no-caret'; caret.click(); return 'ok'; })()"
+    },
+    {
+      "name": "entity-list-open",
+      "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null"
+    },
+    {
+      "name": "pick-thought-entity",
+      "eval": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=items.find((i)=>(i.textContent??'').trim()==='мысль'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "entity-chip-added",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
+    },
+    {
+      "name": "entity-chip-nonzero",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return field.getBoundingClientRect().width>0 && input.getBoundingClientRect().width>0 && chips.length===1 && chips[0].getBoundingClientRect().width>0 && labels.length===1 && labels[0].getBoundingClientRect().width>0 && (labels[0].textContent??'').trim()==='мысль'; })()",
       "expect": true
     },
-
     {
-      "name": "narrow-value-cell",
-      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 160px'; cell.style.width='160px'; const box=cell.querySelector('.fv-enum'); const list=cell.querySelector('.fv-enum .ui-chip-list'); return JSON.stringify({cell:Math.round(cell.getBoundingClientRect().width),box:Math.round(box.getBoundingClientRect().width),list:Math.round(list.getBoundingClientRect().width)}); })()"
-    },
-    {
-      "name": "narrow-panel-widths",
-      "probe": "(() => { const rows=[...document.querySelectorAll('.activity-filter .ft-row')]; const list=rows[0].querySelector('.fv-enum .ui-chip-list'); const chips=[...rows[0].querySelectorAll('.fv-enum .ui-chip')]; const labels=[...rows[0].querySelectorAll('.fv-enum .ui-chip-label')]; const w=(e)=>e===null||e===undefined?-1:Math.round(e.getBoundingClientRect().width*100)/100; const h=(e)=>e===null||e===undefined?-1:Math.round(e.getBoundingClientRect().height*100)/100; return JSON.stringify({list:w(list),chips:chips.map(w),labels:labels.map(w),rowHeights:rows.map(h)}); })()"
-    },
-    {
-      "name": "narrow-panel-keeps-chips-visible",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const list=row.querySelector('.fv-enum .ui-chip-list'); const chips=[...row.querySelectorAll('.fv-enum .ui-chip')]; const labels=[...row.querySelectorAll('.fv-enum .ui-chip-label')]; const lw=list.getBoundingClientRect().width; return lw>0 && lw<=170 && chips.length===2 && chips.every((c)=>c.getBoundingClientRect().width>0 && c.getBoundingClientRect().width<=lw+0.5) && labels.every((l)=>l.getBoundingClientRect().width>0 && (l.textContent??'').trim()!=='') && row.getBoundingClientRect().height<200; })()",
-      "expect": true
+      "name": "no-legacy-chip-list-anywhere",
+      "probe": "(() => { const panel=document.querySelector('.activity-filter'); return { chipLists: panel.querySelectorAll('.ui-chip-list').length, checklistButtons: [...panel.querySelectorAll('.fv-enum button')].filter((b)=>(b.textContent??'').includes('Выбрать значения')).length, standardFields: panel.querySelectorAll('.fv-enum .st-f-chipfield').length, inputs: panel.querySelectorAll('.fv-enum .value-chips-input').length }; })()",
+      "expect": {
+        "chipLists": 0,
+        "checklistButtons": 0,
+        "standardFields": 2,
+        "inputs": 2
+      }
     }
   ]
 }
