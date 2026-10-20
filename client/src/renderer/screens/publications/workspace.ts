@@ -24,6 +24,7 @@
  */
 
 import type {
+  LinkPropertySide,
   LinkPropertyValues,
   Publication,
   PublicationAssembly,
@@ -1711,12 +1712,17 @@ export function mountPublicationWorkspace(
       for (const value of values) {
         if (!('values' in value)) continue;
         if (!value.values.some((item) => item.target_id === block.thoughtId)) continue;
-        // Свойство-связь вне цепочки типа приходит с `property_id: ''` —
-        // сверяем по имени стороны (`linkEntryMatchesPick`), иначе перенос
-        // не находит свойство (блокер 3 верификации ea1b5f14).
+        // У свойства-связи обе стороны несут ОДИН реестровый `property_id`
+        // (ошибка 45248206), поэтому запись ищем по id + стороне
+        // (`linkEntryMatchesPick`); у легаси-ребра без свойства — по имени
+        // стороны (блокер 3 верификации ea1b5f14).
         const candidate =
           listRows.find((item) =>
-            linkEntryMatchesPick(value, { propertyId: item.propertyId, key: item.name }),
+            linkEntryMatchesPick(value, {
+              propertyId: item.propertyId,
+              key: item.name,
+              side: item.side,
+            }),
           ) ?? null;
         if (candidate === null) continue;
         row = candidate;
@@ -1734,7 +1740,7 @@ export function mountPublicationWorkspace(
       await addPropertyValue(
         networkId,
         targetSectionId,
-        { propertyId, key: propertyKey },
+        { propertyId, key: propertyKey, side: row.side },
         block.thoughtId,
       );
       const remaining = entry.values
@@ -2442,7 +2448,11 @@ export function mountPublicationWorkspace(
     // Первое свойство-источник текстов: выбранная/созданная мысль добавляется
     // в его значение, даже если в диалоге свойство не подтвердили (карточка
     // ea1b5f14, пункт 3). Пользователь может выбрать другое свойство явно.
-    let textDefaultPick: { propertyId: string; key: string } | null = null;
+    let textDefaultPick: {
+      propertyId: string;
+      key: string;
+      side?: LinkPropertySide | null;
+    } | null = null;
     if (kind === 'text') {
       const sources = publication?.text_sources ?? [];
       if (sources.length === 0) {
@@ -2461,7 +2471,9 @@ export function mountPublicationWorkspace(
       // Берём сторону-ИСТОЧНИК (раздел — владелец текста): у свойства-связи
       // две строки сторон, и только source-строка добавляет ребро от раздела.
       const first = listRows.find((row) => row.side === 'source') ?? listRows[0];
-      if (first !== undefined) textDefaultPick = { propertyId: first.propertyId, key: first.name };
+      if (first !== undefined) {
+        textDefaultPick = { propertyId: first.propertyId, key: first.name, side: first.side };
+      }
     }
     const result = await pickThoughtsDialog({
       networkId,
@@ -2579,15 +2591,16 @@ export function mountPublicationWorkspace(
   async function addPropertyValue(
     networkId: string,
     ownerId: string,
-    pick: { propertyId: string; key: string },
+    pick: { propertyId: string; key: string; side?: LinkPropertySide | null },
     targetId: string,
   ): Promise<void> {
     let existing: string[] = [];
     try {
       const values = await etn.properties.get(networkId, 'thought', ownerId);
-      // Свойство-связь вне цепочки типа отдаётся с `property_id: ''` — сверяем
-      // по id И по имени стороны, иначе существующие значения теряются при
-      // добавлении (блокер 2 верификации ea1b5f14).
+      // Обе стороны свойства-связи несут один `property_id` (ошибка 45248206):
+      // запись ищем по id + стороне, иначе чужая сторона подменит набор при
+      // добавлении. Для легаси-ребра без реестрового свойства — по имени
+      // стороны (блокер 2 верификации ea1b5f14).
       const entry = values.find(
         (v): v is LinkPropertyValues => 'values' in v && linkEntryMatchesPick(v, pick),
       );

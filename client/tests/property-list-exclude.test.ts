@@ -91,6 +91,23 @@ describe('пикер свойств: исключение присутствую
     assert.equal(out.length, 3);
   });
 
+  it('одна сторона исключена — вторая доступна в любом направлении (предикат потребителя)', () => {
+    // Потребитель вкладки «Свойства» строит предикат из УЖЕ присутствующих
+    // значений: `property_id:side`. Исключение одной стороны не должно
+    // скрывать вторую — ни прямую, ни обратную.
+    const present = new Set(['p3:target']);
+    const withoutTarget = excludePropertyListRows(sampleRows(), (row) => present.has(row.id));
+    assert.ok(!withoutTarget.some((row) => row.id === 'p3:target'), 'target исключён');
+    assert.ok(withoutTarget.some((row) => row.id === 'p3:source'), 'source остаётся доступен');
+
+    present.clear();
+    present.add('p3:source');
+    const withoutSource = excludePropertyListRows(sampleRows(), (row) => present.has(row.id));
+    assert.ok(!withoutSource.some((row) => row.id === 'p3:source'), 'source исключён');
+    assert.ok(withoutSource.some((row) => row.id === 'p3:target'), 'target остаётся доступен');
+    assert.equal(withoutSource.length, 3);
+  });
+
   it('одноимённые стороны симметричной связи исключаются независимо', () => {
     const rows = buildPropertyListRows(
       [

@@ -127,8 +127,8 @@ describe('ea1b5f14: рабочая область публикации — пу�
     );
     assert.match(
       WS,
-      /linkEntryMatchesPick\(value, \{ propertyId: item\.propertyId, key: item\.name \}\)/,
-      'перенос текста находит внетиповое значение (блокер 3)',
+      /linkEntryMatchesPick\(value, \{\s*propertyId: item\.propertyId,\s*key: item\.name,\s*side: item\.side,\s*\}\)/,
+      'перенос текста находит запись своей стороны (id + side, блокер 3)',
     );
     // Блокер 4: ожидание поля сверяет владельца отрисованной панели.
     const editor = fs.readFileSync(path.join(ROOT, 'editor', 'editor.ts'), 'utf8');

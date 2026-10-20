@@ -539,7 +539,35 @@ describe('модель рабочей области: операции с бло
     assert.deepEqual(offered, ['B', 'B1'], 'себя и потомков в дереве нет');
   });
 
-  it('linkEntryMatchesPick находит свойство-связь вне типа (property_id пуст) — блокеры 2 и 3', () => {
+  it('linkEntryMatchesPick: id общий у сторон — сторону различает side (ошибка 45248206)', () => {
+    // Двухстороннее внетиповое свойство: обе стороны несут один property_id,
+    // но у каждой свой набор целей. Выбор стороны target обязан найти запись
+    // target, а не первую попавшуюся source (блокер верификации 0.14.1).
+    const source = {
+      property_id: 'pid-1',
+      property_name: 'Содержит',
+      side: 'source' as const,
+      values: [{ target_id: 'text-a' }],
+    };
+    const target = {
+      property_id: 'pid-1',
+      property_name: 'Содержится в',
+      side: 'target' as const,
+      values: [{ target_id: 'text-b' }],
+    };
+    const pick = { propertyId: 'pid-1', key: 'Содержится в', side: 'target' as const };
+    assert.equal(linkEntryMatchesPick(source, pick), false, 'чужая сторона не совпадает по id');
+    assert.equal(linkEntryMatchesPick(target, pick), true, 'своя сторона совпадает');
+    // Логика addPropertyValue: выбор target берёт набор target, а не source.
+    const found = [source, target].find((entry) => linkEntryMatchesPick(entry, pick));
+    assert.deepEqual(
+      found?.values.map((value) => value.target_id),
+      ['text-b'],
+      'чужой набор не подменяет выбранную сторону',
+    );
+  });
+
+  it('linkEntryMatchesPick без стороны — прежнее поведение по id/имени (блокеры 2 и 3)', () => {
     const pick = { propertyId: 'pid-1', key: 'Содержит' };
     // Сервер отдаёт внетиповое значение с пустым id, но именем стороны.
     const outsideType = { property_id: '', property_name: 'Содержит' };
@@ -548,7 +576,7 @@ describe('модель рабочей области: операции с бло
       true,
       'совпадение по имени стороны при пустом property_id',
     );
-    // Обычная привязка — по id.
+    // Обычная привязка без стороны — по id (старые вызовы, легаси-запись).
     assert.equal(linkEntryMatchesPick({ property_id: 'pid-1', property_name: 'иначе' }, pick), true);
     // Чужое свойство не совпадает (иначе затронули бы чужой список).
     assert.equal(linkEntryMatchesPick({ property_id: '', property_name: 'Другое' }, pick), false);
