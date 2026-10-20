@@ -752,7 +752,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: false,
     readOnly: false,
-    effects: 'обратимая операция: снимает пометку `marked_for_deletion` со связи, событие `link.updated`, журнал `restored`.',
+    effects: 'обратимая операция: снимает пометку `marked_for_deletion` со связи, событие `link.updated`, журнал `restored` (паритет REST `PATCH /links/{id}` с `marked_for_deletion: false`). Работает одинаково для основы и слоя, в том числе для рёбер, помеченных умным удалением свойства-связи.',
     errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
     paramsContract: LinksRestore,
   },
@@ -1007,18 +1007,24 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'properties.remove',
     tool: 'etn.properties.remove',
     group: 'properties',
-    when: 'убрать одну цель из свойства-связи (помечает ребро на удаление, комментарий сохраняется)',
+    when: 'убрать одну цель из свойства-связи: живое ребро удаляется по правилу «основа/слой», уже помеченное — no-op',
     params: [
       { name: 'network_id', required: true, desc: 'сеть' },
       { name: 'owner_type', required: true, desc: '`thought` | `link`' },
       { name: 'owner_id', required: true, desc: 'id владельца свойства' },
       { name: 'key', required: true, desc: 'ключ свойства-связи' },
       { name: 'value', required: true, desc: 'id цели' },
+      {
+        name: 'side',
+        desc: '`source` | `target` — адрес стороны, когда одна и та же цель соединена рёбрами обеих сторон симметричного имени; без него направление задаёт живое ребро к цели',
+      },
     ],
     destructive: false,
     readOnly: false,
-    effects: 'помечает ребро на удаление; возвращает `{ link_id }` (idempotent).',
-    errors: '`VALIDATION_ERROR`.',
+    effects:
+      'Умное удаление (0.14.1, ADR a967d865): в основе и для ребра, созданного в текущем слое, — физическое удаление (`link.deleted`); для ребра из основы/предка в слое — пометка корзины (`link.updated`, `marked_for_deletion: true`). Уже помеченное ребро — no-op без события. Возвращает `{ link_id }` (idempotent).',
+    errors:
+      '`VALIDATION_ERROR` — неизвестное свойство, свойство не вида `link` или неразрешённая сторона/цель; `NOT_FOUND`.',
     paramsContract: PropertiesRemove,
   },
 

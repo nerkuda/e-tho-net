@@ -604,9 +604,16 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `first_day_of_week` (настройка `$weekStart`/`$weekEnd`, паритет с
         // `GET /networks/:id`). Прирост — только проза: 44 997 → 45 126 Б.
         // Планка поднята ровно под прирост: 45 100 → 45 200.
+        // 0.14.1 (задача 4084a108, приёмка ТП «Внетиповые свойства мысли»):
+        // контрактная ясность для агента — `side` в `etn.properties.add`,
+        // свободная запись любого свойства справочника в `etn.thoughts.write`,
+        // эффективный порядок значений в `etn.thoughts.get`. Прирост — только
+        // проза описаний: 45 126 → 45 979 Б (+853). Умное удаление
+        // `properties.remove` описано в `etn.guide`/`etn.ops`, на `tools/list`
+        // не влияет. Планка поднята ровно под прирост: 45 200 → 46 100.
         assert.ok(
-          bytes <= 45_200,
-          `tools/list JSON is ${bytes} bytes — over the 0.13.1 budget of 45200`,
+          bytes <= 46_100,
+          `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 46100`,
         );
         // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
         // граница ориентира техпроекта 22e34ba5). Превышение — только
@@ -693,9 +700,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `inputSchema` (+15 Б), проза инструментов намеренно не менялась
         // (актуализация описаний — Z9). D+I 40 361 → 40 376 Б.
         // Планка: 40 400 → 40 450 (малый запас).
+        // 0.14.1 (задача 4084a108/Z9): актуализация описаний — `side` в
+        // `etn.properties.add`, свободная запись любого свойства в
+        // `etn.thoughts.write`, эффективный порядок значений в
+        // `etn.thoughts.get`. Прирост только прозы: D+I 40 376 → 41 214 Б
+        // (+838). Планка: 40 450 → 41 400 (малый запас).
         assert.ok(
-          descriptionsPlusInputSchema <= 40_450,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40450`,
+          descriptionsPlusInputSchema <= 41_400,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 41400`,
         );
       } finally {
         await handle.close();
