@@ -580,11 +580,93 @@ describe(
         await closeRestContext(ctx);
       }
     });
+    it('usage/clear атомарен: 422 на ребре, удерживаемом слоем, не удаляет остальные', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Блокирующее свойство и две живые связи к одной цели.
+        const prop = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'usage-block',
+            value_type: 'link',
+            name_forward: 'usage-block',
+            name_reverse: 'usage-block-обратно',
+            config: { blocks_target_deletion: true },
+          },
+          USER,
+        );
+        const linkTypeId = (prop.config?.link_type_id ?? '') as string;
+        const target = createThought(ctx.ndb, { title: 'Цель usage' }, USER);
+        const owner1 = createThought(ctx.ndb, { title: 'Владелец 1' }, USER);
+        const owner2 = createThought(ctx.ndb, { title: 'Владелец 2' }, USER);
+        // Первое ребро создаётся раньше — при сканировании удаляется первым.
+        setPropertyValue(ctx.ndb, 'thought', owner1.id, 'usage-block', target.id, USER);
+        setPropertyValue(ctx.ndb, 'thought', owner2.id, 'usage-block', target.id, USER);
+        const first = getLinkPropertyValues(ctx.ndb, 'thought', owner1.id, linkTypeId, 'out')[0]!.link_id;
+        const second = getLinkPropertyValues(ctx.ndb, 'thought', owner2.id, linkTypeId, 'out')[0]!.link_id;
+
+        // У второго ребра — живая тень слоя: S13 запретит физическое удаление.
+        insertLayer(ctx.ndb);
+        ctx.ndb.useLayer(LAYER_A);
+        updateLink(ctx.ndb, second, { active: true }, undefined, USER);
+        ctx.ndb.useLayer(BASE_LAYER_ID);
+
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${target.id}/usage/clear`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 422, res.body);
+
+        // Атомарность: первое ребро не осталось удалённым.
+        assert.equal(getLink(ctx.ndb, first)?.marked_for_deletion, false, 'первое ребро живо');
+        assert.equal(getLink(ctx.ndb, second)?.marked_for_deletion, false, 'второе ребро живо');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('usage/clear без удерживающих слоёв удаляет все рёбра физически', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const prop = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'usage-ok',
+            value_type: 'link',
+            name_forward: 'usage-ok',
+            name_reverse: 'usage-ok-обратно',
+            config: { blocks_target_deletion: true },
+          },
+          USER,
+        );
+        const linkTypeId = (prop.config?.link_type_id ?? '') as string;
+        const target = createThought(ctx.ndb, { title: 'Цель usage ok' }, USER);
+        const owner1 = createThought(ctx.ndb, { title: 'Владелец ok 1' }, USER);
+        const owner2 = createThought(ctx.ndb, { title: 'Владелец ok 2' }, USER);
+        setPropertyValue(ctx.ndb, 'thought', owner1.id, 'usage-ok', target.id, USER);
+        setPropertyValue(ctx.ndb, 'thought', owner2.id, 'usage-ok', target.id, USER);
+        const first = getLinkPropertyValues(ctx.ndb, 'thought', owner1.id, linkTypeId, 'out')[0]!.link_id;
+        const second = getLinkPropertyValues(ctx.ndb, 'thought', owner2.id, linkTypeId, 'out')[0]!.link_id;
+
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${target.id}/usage/clear`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        assert.deepEqual(res.json().data, { cleared: 2 });
+        assert.equal(getLink(ctx.ndb, first), null);
+        assert.equal(getLink(ctx.ndb, second), null);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );
 
 // ---------------------------------------------------------------------------
-// MCP: set-запись without target -> события; links.restore
+// MCP: set-запись без цели -> события; links.restore
 // ---------------------------------------------------------------------------
 
 describe(

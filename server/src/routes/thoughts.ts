@@ -800,7 +800,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const cleared = clearThoughtRefUsages(ndb, id);
+        // Умное удаление цели (0.14.1, ADR a967d865) может отказать 422 на
+        // ребре, удерживаемом живой тенью слоя (S13). Очистка обязана быть
+        // атомарной: без транзакции ранее удалённые рёбра остались бы
+        // удалёнными при отказе на одном из следующих. События/журнал — по
+        // прежнему не эмитятся (решение оркестратора для usage_clear).
+        // Умное удаление цели (0.14.1, ADR a967d865) может отказать 422 на
+        // ребре, удерживаемом живой тенью слоя (S13). Очистка обязана быть
+        // атомарной: без транзакции ранее удалённые рёбра остались бы
+        // удалёнными при отказе на одном из следующих. События/журнал — по
+        // прежнему не эмитятся (решение оркестратора для usage_clear).
+        const cleared = runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: clearThoughtRefUsages(ndb, id),
+        }));
         sendSuccess(reply, { cleared } satisfies UsageClearResult);
       },
     );

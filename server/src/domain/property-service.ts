@@ -4482,7 +4482,8 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
     )
     .run(new Date().toISOString(), thoughtId, refLikePattern(thoughtId), ndb.layerId);
   cleared += legacyRes.changes;
-  // Рёбра блокирующих свойств-связей — помечаем в корзину (комментарий не теряется).
+  // Рёбра блокирующих свойств-связей — умное удаление цели: в основе
+  // физически, в слое корзина для ребра из основы/предков (ADR a967d865).
   for (const bp of listBlockingLinkProperties(ndb)) {
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
     const typeClause = bp.link_type_id === null ? 'type_id IS NULL' : 'type_id = ?';
