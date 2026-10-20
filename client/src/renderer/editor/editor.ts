@@ -168,14 +168,36 @@ export type EditorTabId =
   | 'graph'
   | 'metadata';
 
+/**
+ * Lifecycle of ONE cached editor pane. A pane is detached from the DOM while
+ * another tab is active (the editor keeps only the active pane in
+ * `paneHostEl`) — that is NOT disposal. The editor calls the registered
+ * callbacks when the pane is really evicted: its cache entry is dropped
+ * (`invalidatePanes`), it is rebuilt for another entity (`stalePanes`) or the
+ * whole editor is remounted. Tabs register their store subscriptions here so
+ * a hidden pane keeps listening and reloads its data after reconnect, while a
+ * rebuilt pane drops the old subscriptions (defect de34b35b, verifier
+ * blocker: inactive tabs stayed on the connection error).
+ */
+export interface TabPaneLifecycle {
+  /** Registers a cleanup callback for this pane; safe to call after mount. */
+  onDispose(callback: () => void): void;
+}
+
 /** Builds the content of one tab for the current entity. */
-export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
+export type TabContentBuilder = (
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+) => HTMLElement;
 
 /** Resolves a tab's `(N)` badge count for the current entity. */
 export type TabCountLoader = (ctx: EditorContext) => Promise<number | undefined>;
 
 /** Builds one collapsible group of the «Комментарий» tab (or null to skip). */
-export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
+export type MainSectionBuilder = (
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+) => GroupSpec | null;
 
 /** Static tab bar definition; badges come from registered count loaders. */
 interface EditorTabDef {
@@ -502,6 +524,32 @@ let paneHostEl: HTMLElement | null = null;
 let tabButtons = new Map<EditorTabId, HTMLButtonElement>();
 let builtPanes = new Map<EditorTabId, HTMLElement>();
 /**
+ * Cleanup callbacks of the cached panes, one set per tab id. Registered by the
+ * pane builders through {@link TabPaneLifecycle.onDispose} and fired only when
+ * the pane is really evicted or rebuilt — never when it is merely detached
+ * because another tab is active.
+ */
+const paneDisposers = new Map<EditorTabId, Set<() => void>>();
+
+/** Runs and forgets the cleanup callbacks of one pane (best-effort). */
+function disposePane(id: EditorTabId): void {
+  const callbacks = paneDisposers.get(id);
+  paneDisposers.delete(id);
+  if (callbacks === undefined) return;
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch {
+      // One failing cleanup must not block the rest of the eviction.
+    }
+  }
+}
+
+/** Runs and forgets the cleanup callbacks of every cached pane. */
+function disposeAllPanes(): void {
+  for (const id of [...paneDisposers.keys()]) disposePane(id);
+}
+/**
  * Сколько раз строилась вкладка за время жизни модуля. Нужен только
  * регрессионному тесту ошибки 786bcd69 («редактор обязан перечитать набор
  * свойств при смене типа»): кэш вкладок снаружи не наблюдаем.
@@ -693,6 +741,7 @@ export function mountEditor(editorHost: HTMLElement): void {
   tabBarEl = null;
   paneHostEl = null;
   tabButtons = new Map();
+  disposeAllPanes();
   builtPanes = new Map();
   reflowOverflow = null;
   headerRetarget = null;
@@ -860,6 +909,16 @@ export function mountEditor(editorHost: HTMLElement): void {
  */
 function buildTabPane(id: EditorTabId): HTMLElement {
   const ctx = renderCtx;
+  // Every build starts a fresh lifecycle: a rebuild of the same tab (stale
+  // pane, invalidatePanes) must not keep the previous pane's subscriptions.
+  disposePane(id);
+  const disposers = new Set<() => void>();
+  paneDisposers.set(id, disposers);
+  const lifecycle: TabPaneLifecycle = {
+    onDispose: (callback) => {
+      disposers.add(callback);
+    },
+  };
   const pane = div('tab-pane fixed');
   paneBuildCounts.set(id, (paneBuildCounts.get(id) ?? 0) + 1);
   if (ctx === null) return pane;
@@ -871,7 +930,7 @@ function buildTabPane(id: EditorTabId): HTMLElement {
     // «top + splitter + bottom»; сейчас — одиночная секция (комментарий) на
     // всю высоту.
     const specs = mainSectionBuilders
-      .map((section) => section(ctx))
+      .map((section) => section(ctx, lifecycle))
       .filter((spec): spec is GroupSpec => spec !== null);
     if (specs.length === 0) {
       pane.append(el('p', 'muted', 'Нет содержимого.'));
@@ -919,7 +978,9 @@ function buildTabPane(id: EditorTabId): HTMLElement {
     return pane;
   }
   const builder = tabContentBuilders.get(id);
-  pane.append(builder !== undefined ? builder(ctx) : el('p', 'muted', 'Нет содержимого.'));
+  pane.append(
+    builder !== undefined ? builder(ctx, lifecycle) : el('p', 'muted', 'Нет содержимого.'),
+  );
   return pane;
 }
 
@@ -972,6 +1033,9 @@ function activateEditorTab(id: EditorTabId): void {
 function invalidatePanes(ids: readonly EditorTabId[]): void {
   const shownWasDropped = ids.includes(shownTab) ? builtPanes.delete(shownTab) : false;
   for (const id of ids) {
+    // The cache entry dies here — release its subscriptions before the pane
+    // node is forgotten (verifier blocker de34b35b).
+    disposePane(id);
     builtPanes.delete(id);
     stalePanes.delete(id);
   }
@@ -1670,6 +1734,7 @@ function renderFull(ctx: EditorContext | null): void {
   tabBarEl = null;
   paneHostEl = null;
   tabButtons = new Map();
+  disposeAllPanes();
   builtPanes = new Map();
   // A fresh header is about to be built; the old retarget hook must not survive
   // (the builder re-registers it). Placeholders leave it null.

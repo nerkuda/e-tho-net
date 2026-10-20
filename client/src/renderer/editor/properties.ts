@@ -53,7 +53,7 @@ import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
 import { onReconnected, store } from '../state.js';
-import { registerTabContent, registerTabRetarget, type EditorContext } from './editor.js';
+import { registerTabContent, registerTabRetarget, type EditorContext, type TabPaneLifecycle } from './editor.js';
 import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
@@ -161,7 +161,7 @@ export function registerPropertiesGroup(): void {
 }
 
 /** Builds the «Свойства» tab content (two collapsible groups). */
-function buildPropertiesTab(ctx: EditorContext): HTMLElement {
+function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const box = div('properties-tab');
   // No type → no properties at all (an owner with no type resolves the root,
   // but a network mid-migration might have no root either — show empty state).
@@ -183,7 +183,7 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
     id: 'properties.type',
     title: 'Свойства типа',
     defaultCollapsed: false,
-    buildBody: () => buildPropertiesBodyFor(target),
+    buildBody: () => buildPropertiesBodyFor(target, lifecycle),
   });
   // Group 2 — «Свойства вне типа» (collapsed by default). Hidden entirely
   // when there are no such values (rendered inside the main body once the
@@ -213,7 +213,7 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
         return undefined;
       }
     },
-    buildBody: () => buildOutsidePropertiesBody(target),
+    buildBody: () => buildOutsidePropertiesBody(target, lifecycle),
   });
   // Retarget of the SHOWN pane to another owner of the same type: the pane is
   // reused (editor's `registerTabRetarget`), its bodies reload under the new
@@ -308,7 +308,10 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
  * (task 90b2256e). The owner-id is read at reload time, never captured per row,
  * so a retarget never writes to the previous entity.
  */
-function buildPropertiesBodyFor(target: PropertiesTarget): HTMLElement {
+function buildPropertiesBodyFor(
+  target: PropertiesTarget,
+  lifecycle?: TabPaneLifecycle,
+): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('properties-body');
   if (target.typeId === null) {
@@ -316,7 +319,13 @@ function buildPropertiesBodyFor(target: PropertiesTarget): HTMLElement {
     return box;
   }
   const typeOwner = target.ownerType === 'thought' ? 'thought_type' : 'link_type';
-  const typeBody = buildTypePropertiesBody(networkId, target, typeOwner, target.typeId);
+  const typeBody = buildTypePropertiesBody(
+    networkId,
+    target,
+    typeOwner,
+    target.typeId,
+    lifecycle,
+  );
   box.append(typeBody);
   return box;
 }
@@ -327,7 +336,10 @@ function buildPropertiesBodyFor(target: PropertiesTarget): HTMLElement {
  * вне типа сохраняются»). The group is hidden entirely when no such values
  * exist (`loadCount` returns `(0)` and the section is rendered empty).
  */
-function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
+function buildOutsidePropertiesBody(
+  target: PropertiesTarget,
+  lifecycle?: TabPaneLifecycle,
+): HTMLElement {
   const networkId = requireNetworkId();
 
   const box = div('properties-outside-body');
@@ -348,16 +360,24 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   let shownOwnerId: string | null = null;
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle?.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
 
   const rowSpec = outsideRowSpec(networkId, target, () => void reload());
 
-  async function reload(): Promise<void> {
+  async function reload(force = false): Promise<void> {
     // Owner token of this reload (same guard as the in-type table): a slow
     // response of the previous owner must not be rendered after a retarget
     // (task 90b2256e, круг 2); an owner CHANGE proceeds even while detached
     // (круг 3).
     const requestOwnerId = target.ownerId;
-    if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
+    // A reconnect retry forces the read even while the pane is detached (the
+    // editor keeps only the active tab in the DOM; a cached pane is alive).
+    if (!force && everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
     if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
@@ -366,6 +386,7 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
+      if (disposed) return;
       // The table is NOT bound to this owner: drop the shown-owner mark so a
       // retarget back to the previous owner is not mistaken for "already shown"
       // and gets re-read instead of leaving the error text on screen
@@ -375,13 +396,15 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       wrap.replaceChildren(operationError(err));
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload(true));
       }
       return;
     }
     if (requestOwnerId !== target.ownerId) return;
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
+    if (disposed) return;
     if (box.isConnected) everMounted = true;
     shownOwnerId = requestOwnerId;
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
@@ -849,7 +872,13 @@ function buildUrlOpenBtn(value: string): HTMLButtonElement {
   }
 
 /** Builds the «Свойства типа» body — основная таблица редактирования. */
-function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, typeOwner: 'thought_type' | 'link_type', typedId: string): HTMLElement {
+function buildTypePropertiesBody(
+  networkId: string,
+  target: PropertiesTarget,
+  typeOwner: 'thought_type' | 'link_type',
+  typedId: string,
+  lifecycle?: TabPaneLifecycle,
+): HTMLElement {
   const box = div('properties-type-body');
   const tableWrap = div('admin-table-wrap prop-wrap');
   tableWrap.append(span('Загрузка…', 'muted'));
@@ -955,6 +984,12 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
 
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle?.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
   currentReload = () => void reload();
   // Слушаем локальное уведомление о правке значений (общий канал
   // `PROPERTY_VALUES_REFRESHED_EVENT`, задача 7849008a / ошибка ec5ba58c):
@@ -971,7 +1006,7 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
   }
   void reload();
 
-  async function reload(): Promise<void> {
+  async function reload(force = false): Promise<void> {
     // Token of THIS reload: the owner it reads for. The pane survives an entity
     // switch (registerTabRetarget → retargetCurrent), so a slow response of the
     // PREVIOUS owner must not be applied to the NEW one — otherwise its values
@@ -979,8 +1014,9 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
     // entity (task 90b2256e, круг 2).
     const requestOwnerId = target.ownerId;
     // A detached pane skips only a REDUNDANT reload of the owner it already
-    // shows; an owner change must proceed even while hidden (круг 3).
-    if (everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
+    // shows; an owner change must proceed even while hidden (круг 3), and a
+    // reconnect retry must always read (force).
+    if (!force && everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
     const startedAt = Date.now();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
@@ -990,6 +1026,7 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
+      if (disposed) return;
       // Same as the outside-type body: forgotten owner mark so returning to the
       // previous entity re-reads instead of keeping the error (90b2256e, круг 3).
       shownOwnerId = null;
@@ -997,7 +1034,7 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
       tableAttached = false;
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload(true));
       }
       return;
     }
@@ -1006,6 +1043,7 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
     if (requestOwnerId !== target.ownerId) return;
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     if (box.isConnected) everMounted = true;
     // From here the table is considered bound to this owner (even the empty-set
     // branch below) — the detached-pane guard keys off it.

@@ -381,17 +381,18 @@ export function getRtStatusDetail(state: AppState): RtStatusDetail | null {
  * once, then unsubscribes (defect de34b35b, GUI review remark: an outage must
  * not leave an editor tab stuck on an error until it is rebuilt).
  *
- * The handler also drops itself when `isAlive()` reports the host element
- * unmounted or the user switched networks — no leaked store listeners.
+ * There is deliberately NO DOM-liveness check: the editor keeps only the
+ * active pane in the DOM and detaches the others while caching them — a
+ * detached pane is still alive and must reload after reconnect (verifier
+ * blocker: inactive tabs stayed on the error). Lifecycle is explicit now:
+ * the owner disposes the subscription when the pane is really evicted,
+ * rebuilt, or the user switches networks (network check below).
+ *
  * Returns the unsubscribe function for the caller's own teardown paths.
  */
-export function onReconnected(
-  networkId: string | null,
-  isAlive: () => boolean,
-  retry: () => void,
-): () => void {
+export function onReconnected(networkId: string | null, retry: () => void): () => void {
   const unsubscribe = store.subscribe(() => {
-    if (!isAlive() || store.state.networkId !== networkId) {
+    if (store.state.networkId !== networkId) {
       unsubscribe();
       return;
     }

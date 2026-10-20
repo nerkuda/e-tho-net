@@ -540,8 +540,10 @@ export const ru = {
   'errors.prefix': 'Ошибка',
   /** Ошибка с `details.kind === 'connection-lost'` (ошибка de34b35b). */
   'errors.connectionLost': 'нет соединения с сервером',
-  /** `INTERNAL` и сырые сетевые ошибки (fetch/ECONN/ETIMEDOUT/AbortError). */
+  /** `INTERNAL` и сырые сетевые ошибки (fetch/ECONN/ETIMEDOUT). */
   'errors.serverUnavailable': 'сервер недоступен, попробуйте позже',
+  /** Пользовательская отмена операции (не сетевой сбой). */
+  'errors.actionCancelled': 'действие отменено',
 
   // -- Редактор типа -------------------------------------------------------
   /** Подсказка кнопки записи несохранённого типа: диалог остаётся открытым. */

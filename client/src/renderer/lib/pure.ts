@@ -447,10 +447,18 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
       const eNum = typeof eRaw === 'number' ? eRaw : Number(eRaw);
       // The window-width-relative cap (30 %) cannot be applied here because
       // the window width is unknown at parse time; `clampEventAreaW` is run
-      // by the renderer right after the value lands in the store.
+      // by the renderer right after the value lands in the store. A finite
+      // saved width BELOW the new minimum (legacy profiles defaulted to
+      // 150–200 px) is clamped UP to `EVENT_AREA_W_MIN` — resetting it to the
+      // default would throw the user's setting away (verifier remark,
+      // defect de34b35b). Missing/garbage values yield `null` → default.
       const e =
-        Number.isFinite(eNum) && eNum >= EVENT_AREA_W_MIN
-          ? Math.round(eNum)
+        typeof eRaw !== 'undefined' &&
+        eRaw !== null &&
+        eRaw !== '' &&
+        Number.isFinite(eNum) &&
+        eNum > 0
+          ? Math.max(EVENT_AREA_W_MIN, Math.round(eNum))
           : null;
       return {
         w: Number.isFinite(wNum) ? clip(Math.round(wNum), EDITOR_W_MIN, EDITOR_W_MAX) : fallback.w,

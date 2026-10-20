@@ -57,10 +57,15 @@ describe('повторная загрузка после связи', () => {
       } catch (err) {
         state = 'error';
         if (isConnectionLostError(err)) {
-          stop = onReconnected('n1', () => true, () => void loadPermanent());
+          stop = onReconnected('n1', () => void loadPermanent());
         }
       }
     }
+
+    // Панель отсоединена от DOM: активна другая вкладка. Это НЕ dispose —
+    // повтор обязан сработать (verifier blocker de34b35b).
+    const detachedPanel = { isConnected: false };
+    assert.equal(detachedPanel.isConnected, false);
 
     await loadPermanent();
     assert.equal(state, 'error', 'первая попытка показывает ошибку');
@@ -71,25 +76,38 @@ describe('повторная загрузка после связи', () => {
     await new Promise((resolveTick) => setTimeout(resolveTick, 0));
 
     assert.equal(state, 'ready', 'после connected состояние стало ready');
-    assert.equal(rendered, 'Текст комментария', 'комментарий отрисован');
+    assert.equal(rendered, 'Текст комментария', 'комментарий отрисован в отсоединённой панели');
     stop();
   });
 
-  it('подписка снимается: размонтированная вкладка не перезагружается', async () => {
+  it('dispose панели снимает подписку (вытесненная вкладка не перезагружается)', () => {
     store.update({ networkId: 'n1', rtStatusByNetwork: { n1: 'offline' } });
     let retried = 0;
-    const stop = onReconnected('n1', () => false, () => {
+    let retryStop: (() => void) | null = null;
+    const disposeCallbacks: Array<() => void> = [];
+    const lifecycle = {
+      onDispose(callback: () => void): void {
+        disposeCallbacks.push(callback);
+      },
+    };
+    lifecycle.onDispose(() => {
+      retryStop?.();
+      retryStop = null;
+    });
+    retryStop = onReconnected('n1', () => {
       retried += 1;
     });
+
+    // Редактор вытеснил панель: жизненный цикл освобождает подписку.
+    for (const callback of disposeCallbacks) callback();
     store.update({ rtStatusByNetwork: { n1: 'connected' } });
     assert.equal(retried, 0);
-    stop();
   });
 
   it('смена сети снимает подписку (чужой connected не будит вкладку)', () => {
     store.update({ networkId: 'n1', rtStatusByNetwork: { n1: 'offline' } });
     let retried = 0;
-    const stop = onReconnected('n1', () => true, () => {
+    const stop = onReconnected('n1', () => {
       retried += 1;
     });
     store.update({ networkId: 'n2', rtStatusByNetwork: { n2: 'connected' } });
@@ -102,6 +120,25 @@ describe('повторная загрузка после связи', () => {
     assert.match(src, /async function loadPermanent\(\): Promise<void>/);
     assert.match(src, /shell\.setState\(\{ kind: 'loading' \}\)/);
     assert.match(src, /if \(isConnectionLostError\(err\)\) watchForReconnect\(\)/);
-    assert.match(src, /onReconnected\(\s*networkId,\s*\(\) => box\.isConnected,/);
+    // Никакой DOM-связности: панель может быть отсоединена (другая вкладка).
+    assert.doesNotMatch(src, /onReconnected\([^)]*isConnected/);
+    assert.match(src, /onReconnected\(networkId, \(\) => void loadPermanent\(\)\)/);
+    assert.match(src, /lifecycle\.onDispose\(\(\) => \{/);
+  });
+
+  it('редактор освобождает подписки только при вытеснении панели', () => {
+    const src = readFileSync(resolve(RENDERER, 'editor', 'editor.ts'), 'utf8');
+    // Тип жизненного цикла доходит до строителей вкладок и секций.
+    assert.match(src, /export interface TabPaneLifecycle/);
+    assert.match(src, /export type TabContentBuilder = \(\s*ctx: EditorContext,\s*lifecycle: TabPaneLifecycle,?\s*\) => HTMLElement/);
+    assert.match(src, /export type MainSectionBuilder = \(\s*ctx: EditorContext,\s*lifecycle: TabPaneLifecycle,?\s*\) => GroupSpec \| null/);
+    // Вытеснение/пересборка: dispose перед удалением из кэша и при полном
+    // сбросе кэша (`mountEditor` / `renderFull`).
+    assert.match(src, /function disposePane\(/);
+    assert.match(src, /function disposeAllPanes\(/);
+    assert.match(src, /disposePane\(id\);\s*builtPanes\.delete\(id\)/);
+    assert.match(src, /disposeAllPanes\(\);\s*builtPanes = new Map\(\)/);
+    // Отсоединение панели само по себе подписку не снимает.
+    assert.doesNotMatch(src, /isConnected[^\n]*onDispose/);
   });
 });

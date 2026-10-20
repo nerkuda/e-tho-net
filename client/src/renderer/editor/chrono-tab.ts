@@ -48,7 +48,7 @@ import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { ensureLoaded, resolve as resolveUser } from '../lib/users.js';
 import { notice } from '../lib/notice.js';
-import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext } from './editor.js';
+import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext, type TabPaneLifecycle } from './editor.js';
 import {
   cancelMarkdownFieldEdit,
   commitMarkdownField,
@@ -91,7 +91,7 @@ export function registerChronoTab(): void {
 }
 
 /** Builds the whole «Дневник» tab pane content for the entity. */
-function buildChronoTab(ctx: EditorContext): HTMLElement {
+function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const root = div('chrono-tab');
   // Имена «Редактор»/авторов берём из кэша пользователей (best-effort): пока он
@@ -184,6 +184,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
 
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
 
   /** Loads and renders the chronological table. */
   async function reload(keepSelection = true): Promise<void> {
@@ -191,18 +197,21 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
+      if (disposed) return;
       table.element.hidden = true;
       tableWrap.replaceChildren(operationError(err));
       // «Нет соединения» — временная причина: перечитать, как только сеть
-      // снова станет `connected`, не дожидаясь пересборки вкладки.
+      // снова станет `connected`, не дожидаясь пересборки вкладки. Панель
+      // может быть отсоединена (активна другая вкладка) — это не dispose.
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => root.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload());
       }
       return;
     }
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     const chrono = comments.filter((c) => c.kind === 'chronological');
     if (!keepSelection || !chrono.some((c) => c.id === selectedId)) {
       selectedId = null;

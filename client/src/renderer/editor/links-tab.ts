@@ -40,6 +40,7 @@ import {
   openThoughtInEditor,
   registerTabContent,
   type EditorContext,
+  type TabPaneLifecycle,
 } from './editor.js';
 import { groupSection } from './group.js';
 import { applyTabGroupClamp } from './list-heights.js';
@@ -55,9 +56,9 @@ export function registerLinksTab(): void {
 }
 
 /** Builds the whole tab pane content for the entity. */
-function buildLinksTab(ctx: EditorContext): HTMLElement {
+function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   if (ctx.ownerType === 'link' && ctx.link !== null) {
-    return buildLinkThoughtsTab(ctx);
+    return buildLinkThoughtsTab(ctx, lifecycle);
   }
 
   const root = div('links-tab');
@@ -71,7 +72,7 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       title: 'Ссылки на мысль',
       lazyCount: true,
       defaultCollapsed: true,
-      buildBody: () => buildBacklinksBody(ctx),
+      buildBody: () => buildBacklinksBody(ctx, lifecycle),
     },
   );
   const textMentions = groupSection(
@@ -80,7 +81,7 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       title: 'Упоминания в текстах',
       lazyCount: true,
       defaultCollapsed: true,
-      buildBody: () => buildMentionsBody(ctx),
+      buildBody: () => buildMentionsBody(ctx, lifecycle),
     },
   );
   // Группа «Публикации» (0.11.1, задача 3275fd8d, элемент интерфейса 928fb3fc):
@@ -91,7 +92,7 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       title: t('publications.mentions.title'),
       lazyCount: true,
       defaultCollapsed: true,
-      buildBody: () => buildPublicationsBody(ctx),
+      buildBody: () => buildPublicationsBody(ctx, lifecycle),
     },
   );
   // Раскладка групп (приёмка 0.8.1): сплиттеры и фиксированные высоты
@@ -127,13 +128,19 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
  * «Назначение» (`target_id`). Both cards come from one `thoughts.resolve`
  * batch; an endpoint that fails to resolve gets no block at all.
  */
-function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
+function buildLinkThoughtsTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const root = div('link-thoughts-tab');
   if (ctx.link === null) return root;
   const link = ctx.link;
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
   void reload();
 
   async function reload(): Promise<void> {
@@ -142,15 +149,17 @@ function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
     try {
       refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
     } catch (err) {
+      if (disposed) return;
       root.replaceChildren(operationError(err));
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => root.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload());
       }
       return;
     }
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     const byId = new Map(refs.map((r) => [r.id, r]));
     const source = byId.get(link.source_id);
     const target = byId.get(link.target_id);
@@ -210,10 +219,16 @@ function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
 }
 
 /** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */
-function buildBacklinksBody(ctx: EditorContext): HTMLElement {
+function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
   void reload();
 
   async function reload(): Promise<void> {
@@ -222,15 +237,17 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
     try {
       hits = await etn.thoughts.backlinks(networkId, ctx.ownerId);
     } catch (err) {
+      if (disposed) return;
       box.replaceChildren(operationError(err));
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload());
       }
       return;
     }
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     const visible = hits.filter((hit) => hit.active || store.state.showInactive);
     box.replaceChildren();
     if (visible.length === 0) {
@@ -308,10 +325,16 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
 }
 
 /** Builds the mentions body (search on expansion; badge via etn:set-count). */
-function buildMentionsBody(ctx: EditorContext): HTMLElement {
+function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
   void reload();
 
   async function reload(): Promise<void> {
@@ -320,15 +343,17 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
     try {
       hits = await etn.thoughts.mentions(networkId, ctx.ownerId);
     } catch (err) {
+      if (disposed) return;
       box.replaceChildren(operationError(err));
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload());
       }
       return;
     }
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     // Inactive mentioning thoughts/links follow the `show_inactive` setting.
     const visible = hits.filter((hit) => hit.active || store.state.showInactive);
     // `…` → the resolved count in the group header (08-ui-spec.md §6.7). The
@@ -442,10 +467,16 @@ function publicationRoleLabel(item: PublicationUsageItem): string {
  * открывает публикацию на странице и якоре, которые посчитал сервер
  * (`usage.page`/`usage.anchor`); у прямой ссылки раздела нет — верх документа.
  */
-function buildPublicationsBody(ctx: EditorContext): HTMLElement {
+function buildPublicationsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
   void reload();
 
   async function reload(): Promise<void> {
@@ -459,15 +490,17 @@ function buildPublicationsBody(ctx: EditorContext): HTMLElement {
       total = result.total;
       hasMore = result.has_more;
     } catch (err) {
+      if (disposed) return;
       box.replaceChildren(operationError(err));
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload());
       }
       return;
     }
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     box
       .closest('.group')
       ?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${total})` }));

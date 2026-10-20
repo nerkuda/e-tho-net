@@ -49,6 +49,7 @@ import {
   registerTabContent,
   registerTabCount,
   type EditorContext,
+  type TabPaneLifecycle,
 } from './editor.js';
 import { rowSplitter } from './splitter.js';
 import { badge } from '../lib/ui/badge.js';
@@ -280,15 +281,18 @@ export interface AttachmentsPaneOptions {
   extraMenuItems?: (attachment: Attachment) => MenuItem[];
   /** Уведомление о смене числа вложений (бейдж вкладки панели мысли). */
   onCountChange?: () => void;
+  /** Жизненный цикл панели редактора (вкладка «Вложения»); у публикации — нет. */
+  lifecycle?: TabPaneLifecycle;
 }
 
 /** Вкладка «Вложения» панели мысли: общая панель над владельцем-мыслью/связью. */
-function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
+function buildAttachmentsTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   return buildAttachmentsPane({
     ownerType: ctx.ownerType,
     ownerId: ctx.ownerId,
     thought: ctx.thought,
     onCountChange: () => refreshTabCount('attachments'),
+    lifecycle,
   });
 }
 
@@ -305,6 +309,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
   const thought = opts.thought ?? null;
   const extraMenuItems = opts.extraMenuItems;
   const onCountChange = opts.onCountChange;
+  const lifecycle = opts.lifecycle;
   const networkId = requireNetworkId();
   const root = div('attachments-tab');
   /**
@@ -436,6 +441,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
 
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle?.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
 
   /** Renders the attachment list. */
   async function reload(): Promise<void> {
@@ -444,15 +455,19 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     try {
       attachments = await etn.attachments.list(networkId, ownerType, ownerId);
     } catch (err) {
+      if (disposed) return;
       list.replaceChildren(operationError(err));
+      // The pane may be detached (another tab is active) — that is not a
+      // disposal; keep listening and reload once the network is back.
       if (isConnectionLostError(err)) {
         retryStop?.();
-        retryStop = onReconnected(networkId, () => root.isConnected, () => void reload());
+        retryStop = onReconnected(networkId, () => void reload());
       }
       return;
     }
     retryStop?.();
     retryStop = null;
+    if (disposed) return;
     // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
     // владельца событий `attachment.updated/deleted`, несущих только id.
     for (const attachment of attachments) commitEntity('attachment', attachment.id, attachment);

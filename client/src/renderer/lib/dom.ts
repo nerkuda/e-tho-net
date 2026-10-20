@@ -122,30 +122,35 @@ export function isConnectionLostError(err: unknown): boolean {
 /**
  * Raw transport failures that must never reach the user as-is (they name
  * `fetch`, sockets and abort codes). Matched against the message of an
- * `Error`; `AbortError` is also matched by name.
+ * `Error`.
  */
 const RAW_NETWORK_ERROR_RE =
-  /fetch failed|failed to fetch|networkerror|econn(?:refused|reset|aborted)|etimedout|ehostunreach|enotfound|abort(?:ed)?|сетевая ошибка/i;
+  /fetch failed|failed to fetch|networkerror|econn(?:refused|reset|aborted)|etimedout|ehostunreach|enotfound|сетевая ошибка/i;
+
+/** Неудачное завершение отменённой операции (`AbortError`, «aborted»). */
+const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
 
 /**
  * Converts any thrown value into a readable Russian message (замечания
  * заказчика после проверки GUI: «Дружелюбные сообщения»).
  *
  * - `connection-lost` (`details.kind`) → «нет соединения с сервером»;
+ * - прочий `AbortError` → «действие отменено» (пользовательская отмена — не
+ *   сетевой сбой; verifier remark);
  * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
- *   `ETIMEDOUT`, `AbortError`, «Сетевая ошибка») → «сервер недоступен,
- *   попробуйте позже» — technical words, codes and stacks never leak;
+ *   `ETIMEDOUT`, «Сетевая ошибка») → «сервер недоступен, попробуйте позже» —
+ *   technical words, codes and stacks never leak;
  * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
  *   `VERSION_CONFLICT`, …) keep their server-authored message verbatim.
  */
 export function errText(err: unknown): string {
   if (isConnectionLostError(err)) return t('errors.connectionLost');
   const like = asErrorLike(err);
+  if (like?.name === 'AbortError') return t('errors.actionCancelled');
   if (like?.code === 'INTERNAL') return t('errors.serverUnavailable');
   const message = err instanceof Error ? err.message : String(err);
-  if (like?.name === 'AbortError' || RAW_NETWORK_ERROR_RE.test(message)) {
-    return t('errors.serverUnavailable');
-  }
+  if (ABORT_ERROR_RE.test(message)) return t('errors.actionCancelled');
+  if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
   return message;
 }
 

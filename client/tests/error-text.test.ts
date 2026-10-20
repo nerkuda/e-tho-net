@@ -17,6 +17,7 @@ import { errText, isConnectionLostError } from '../src/renderer/lib/dom.js';
 
 const CONNECTION_LOST = 'нет соединения с сервером';
 const SERVER_UNAVAILABLE = 'сервер недоступен, попробуйте позже';
+const ACTION_CANCELLED = 'действие отменено';
 
 /** Слова, которых не должно быть в дружелюбном сообщении. */
 const TECHNICAL_RE = /запрос|IPC|fetch|abort|сокет|WebSocket|REST|ECONN|ETIMEDOUT|stack/i;
@@ -57,15 +58,24 @@ describe('errText: дружелюбные сообщения', () => {
       'read ECONNRESET',
       'ETIMEDOUT',
       'Сетевая ошибка',
-      'The operation was aborted',
     ]) {
       const text = errText(new Error(message));
       assert.equal(text, SERVER_UNAVAILABLE, `сообщение «${message}»`);
       assertFriendly(text);
     }
+  });
+
+  it('пользовательская отмена — «действие отменено», не сетевой сбой', () => {
     const abortLike = new Error('The operation was aborted');
     abortLike.name = 'AbortError';
-    assert.equal(errText(abortLike), SERVER_UNAVAILABLE);
+    assert.equal(errText(abortLike), ACTION_CANCELLED);
+
+    // Plain DOMException-shaped object (contextBridge теряет класс, имя живёт).
+    assert.equal(errText({ name: 'AbortError', message: 'Aborted' }), ACTION_CANCELLED);
+
+    // Сообщение без имени тоже распознаётся; «ECONNABORTED» — сетевой сбой.
+    assert.equal(errText(new Error('aborted')), ACTION_CANCELLED);
+    assert.equal(errText(new Error('read ECONNABORTED')), SERVER_UNAVAILABLE);
   });
 
   it('бизнес-ошибки сохраняют серверный текст', () => {

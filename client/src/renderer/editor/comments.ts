@@ -41,7 +41,7 @@ import {
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { onReconnected, store } from '../state.js';
-import { registerMainSection, type EditorContext } from './editor.js';
+import { registerMainSection, type EditorContext, type TabPaneLifecycle } from './editor.js';
 import { createMarkdownField, cancelMarkdownFieldEdit, setMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
 
@@ -136,17 +136,17 @@ function wireCommentRealtime(): void {
 
 /** Registers the permanent-comment section and the «Дневник» tab (L7). */
 export function registerCommentSections(): void {
-  registerMainSection((ctx) => ({
+  registerMainSection((ctx, lifecycle) => ({
     id: 'permanent',
     title: 'Комментарий',
-    buildBody: () => buildPermanentBody(ctx),
+    buildBody: () => buildPermanentBody(ctx, lifecycle),
   }));
   registerChronoTab();
   wireCommentRealtime();
 }
 
 /** Builds the permanent-comment group body (HTML view ↔ markdown edit). */
-function buildPermanentBody(ctx: EditorContext): HTMLElement {
+function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const startedAt = Date.now();
   const shell = commentShell({ variant: 'fill', scroll: true, state: { kind: 'loading' } });
@@ -248,8 +248,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
 
   let inFlight = false;
   let retryUnsubscribe: (() => void) | null = null;
+  let disposed = false;
 
-  /** Drops the reconnect watch (successful load, unmounted body, network switch). */
+  /** Drops the reconnect watch (successful load, pane disposed, network switch). */
   const stopRetryWatch = (): void => {
     if (retryUnsubscribe !== null) {
       retryUnsubscribe();
@@ -257,21 +258,25 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     }
   };
 
+  // The pane is detached from the DOM while another tab is active — it is
+  // still alive and MUST reload after reconnect. Real eviction/rebuild is
+  // signalled by the editor through the lifecycle (verifier blocker).
+  lifecycle.onDispose(() => {
+    disposed = true;
+    stopRetryWatch();
+  });
+
   /**
    * Waits for the network to report `connected` again and retries the load
    * (defect de34b35b, GUI review remark: an outage must not leave the tab
    * stuck on «Невозможно загрузить: нет соединения с сервером»). The watch
-   * lives only while the error is on screen and drops itself when the body is
-   * unmounted (editor rebuild) or the user switches networks; every retry
-   * starts with `{kind:'loading'}` so the user sees the attempt.
+   * survives tab switches (the pane is cached, only detached) and is dropped
+   * by the pane lifecycle or a network switch; every retry starts with
+   * `{kind:'loading'}` so the user sees the attempt.
    */
   function watchForReconnect(): void {
     stopRetryWatch();
-    retryUnsubscribe = onReconnected(
-      networkId,
-      () => box.isConnected,
-      () => void loadPermanent(),
-    );
+    retryUnsubscribe = onReconnected(networkId, () => void loadPermanent());
   }
 
   /**
@@ -281,7 +286,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
    * errors (validation, 404) are terminal — retrying them would not help.
    */
   async function loadPermanent(): Promise<void> {
-    if (inFlight) return;
+    if (inFlight || disposed) return;
     inFlight = true;
     stopRetryWatch();
     shell.setState({ kind: 'loading' });
@@ -290,13 +295,13 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
       inFlight = false;
-      if (!box.isConnected) return;
+      if (disposed) return;
       shell.setState({ kind: 'error', error: err });
       if (isConnectionLostError(err)) watchForReconnect();
       return;
     }
     inFlight = false;
-    if (!box.isConnected) return;
+    if (disposed) return;
     permanent = comments.find((c) => c.kind === 'permanent') ?? null;
     draftKind = permanent === null ? 'comment-new' : 'comment';
 

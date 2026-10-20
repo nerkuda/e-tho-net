@@ -204,17 +204,26 @@ describe('parseWindowLayout', () => {
   });
 
   it('parses the optional event-area width (e) for newer clients', () => {
-    // In-range values (>= EVENT_AREA_W_MIN = 320) land rounded.
+    // In-range values land as is.
     assert.deepEqual(
-      parseWindowLayout('{"w":400,"h":300,"s":200,"e":360}'),
-      layout(400, 300, 200, 360),
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":320}'),
+      layout(400, 300, 200, 320),
     );
-    // Sub-minimum / NaN / missing => null (the renderer then picks the
-    // window-relative default).
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":400}'),
+      layout(400, 300, 200, 400),
+    );
+    // Legacy widths below the new minimum are CLAMPED UP, not reset to the
+    // default — the user's saved setting survives the upgrade.
+    assert.deepEqual(
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":200}'),
+      layout(400, 300, 200, 320),
+    );
     assert.deepEqual(
       parseWindowLayout('{"w":400,"h":300,"s":200,"e":50}'),
-      layout(400, 300, 200, null),
+      layout(400, 300, 200, 320),
     );
+    // Missing / garbage => null (the renderer then picks the window default).
     assert.deepEqual(
       parseWindowLayout('{"w":400,"h":300,"s":200,"e":"abc"}'),
       layout(400, 300, 200, null),
