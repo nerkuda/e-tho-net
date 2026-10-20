@@ -107,6 +107,14 @@ interface PropertiesTarget {
   ownerType: 'thought' | 'link';
   ownerId: string;
   typeId: string | null;
+  /**
+   * Есть ли у владельца СОБСТВЕННЫЙ живой тип. `typeId` — эффективный тип
+   * вкладки: для владельца без типа он подставляет корневой «основной тип»
+   * (его настройки действуют на всех нетипизированных), поэтому проверка
+   * `typeId !== null` не отличает нетипизированного владельца от типизированного.
+   * Меню строки вне типа («Перенести в типовые свойства») спрашивает это поле.
+   */
+  hasOwnType: boolean;
 }
 
 /** Перепривязка показанной вкладки «Свойства» к другому владельцу (или null). */
@@ -492,7 +500,7 @@ function wireOutsideRowMenu(
       return {
         structural: false,
         typed: false,
-        hasType: target.typeId !== null,
+        hasType: target.hasOwnType,
         hasRegistryProperty: ref.propertyId !== '',
         sources: [],
         ...(slot === null ? {} : { reorder: { index: slot.index, count: slot.count } }),
@@ -505,7 +513,10 @@ function wireOutsideRowMenu(
         else void clearRowValue(ref);
       },
       promote: () => {
-        if (target.typeId === null) return;
+        // Своими типовыми свойствами владеет только владелец со своим живым
+        // типом: у нетипизированного `typeId` — подставленный корневой тип,
+        // и перенос «в типовые» менял бы определения корневого типа.
+        if (!target.hasOwnType || target.typeId === null) return;
         void promoteRowProperty({
           ownerType: target.ownerType,
           typeId: target.typeId,
@@ -640,7 +651,12 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // The mutable target this pane renders: a same-type entity switch retargets it
   // WITHOUT rebuilding the pane, and the built tables reload under the new owner
   // (task 90b2256e, круг 1).
-  const target: PropertiesTarget = { ownerType: ctx.ownerType, ownerId: ctx.ownerId, typeId };
+  const target: PropertiesTarget = {
+    ownerType: ctx.ownerType,
+    ownerId: ctx.ownerId,
+    typeId,
+    hasOwnType: hasOwnLiveType(ctx),
+  };
   // A fresh pane resets the stale reload callbacks of the previous one.
   currentReload = null;
   outsideReload = null;
@@ -712,6 +728,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     target.ownerType = next.ownerType;
     target.ownerId = next.ownerId;
     target.typeId = resolveEditorTypeId(next);
+    target.hasOwnType = hasOwnLiveType(next);
     currentReload?.();
     outsideReload?.();
     outsideRefreshCount?.();
@@ -749,9 +766,23 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
  * несуществующему типу вернул бы ошибку вместо набора корневого типа.
  */
 function resolveEditorTypeId(ctx: EditorContext): string | null {
+  return ownLiveTypeId(ctx) ?? rootTypeIdFor(ctx.ownerType);
+}
+
+/** Собственный живой тип владельца (тип, удалённый realtime, не в счёт). */
+function ownLiveTypeId(ctx: EditorContext): string | null {
   const own = ctx.ownerType === 'thought' ? ctx.thought?.type_id : ctx.link?.type_id;
-  if (own != null && !isTypeDeleted({ ownerType: ownerTypeOf(ctx), ownerId: own })) return own;
-  return rootTypeIdFor(ctx.ownerType);
+  if (own == null || isTypeDeleted({ ownerType: ownerTypeOf(ctx), ownerId: own })) return null;
+  return own;
+}
+
+/**
+ * Есть ли у владельца собственный живой тип. Корневой тип, подставленный
+ * `resolveEditorTypeId`, собственным не считается: нетипизированный владелец
+ * не должен получать действия, которые меняют определения типа.
+ */
+function hasOwnLiveType(ctx: EditorContext): boolean {
+  return ownLiveTypeId(ctx) !== null;
 }
 
 /** `TypeOwnerType` ('thought_type' | 'link_type') matching the editor owner. */
@@ -788,6 +819,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     ownerType: ctx.ownerType,
     ownerId: ctx.ownerId,
     typeId: resolveEditorTypeId(ctx),
+    hasOwnType: hasOwnLiveType(ctx),
   });
 }
 
@@ -1397,7 +1429,13 @@ function buildOutsideTypeTable(
   // свойства, вторая — редактор/чип/крестик.
   const { table, tbody } = makeOutsideTypeTable();
   root.append(table);
-  const target: PropertiesTarget = { ownerType, ownerId, typeId: null };
+  const target: PropertiesTarget = {
+    ownerType,
+    ownerId,
+    typeId: null,
+    // Тест-сим одноразовой группы: владелец без типа и без подстановки.
+    hasOwnType: false,
+  };
   reconcileKeyed(tbody, outsideRows(values, ownerId), outsideRowSpec(networkId, target, onRemove));
   return root;
 }

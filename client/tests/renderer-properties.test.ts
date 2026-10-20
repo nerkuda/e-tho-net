@@ -773,7 +773,7 @@ describe('editor properties — внетиповые свойства-связи
     const { store } = await import('../src/renderer/state.js');
     store.update({ networkId: 'n1' } as any);
 
-    const target = { ownerType: 'thought' as const, ownerId: 't1', typeId: null };
+    const target = { ownerType: 'thought' as const, ownerId: 't1', typeId: null, hasOwnType: false };
     const body = propertiesInternals.buildOutsidePropertiesBody(target) as unknown as ShimElement;
     (globalThis as any).document.body.append(body);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1347,6 +1347,7 @@ describe('порядок и клавиатурная навигация табл
       ownerType: 'thought',
       ownerId: 't1',
       typeId: 'ty1',
+      hasOwnType: true,
     }) as unknown as ShimElement;
     await new Promise((resolve) => setTimeout(resolve, 50));
     return { box, getCount: counter.getCount };
