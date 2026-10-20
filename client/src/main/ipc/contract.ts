@@ -981,12 +981,20 @@ export interface EtnApi {
       ownerId: string,
       key: string,
       value: unknown,
+      /**
+       * Сторона свойства-связи (0.14.1, требование 87039bc8): у симметричного
+       * типа связи display-имя одинаково у обеих сторон — без стороны сервер
+       * не может различить адрес записи.
+       */
+      side?: 'source' | 'target' | null,
     ): Promise<void>;
     remove(
       networkId: string,
       ownerType: 'thought' | 'link',
       ownerId: string,
       key: string,
+      /** Сторона свойства-связи — см. {@link set}. */
+      side?: 'source' | 'target' | null,
     ): Promise<void>;
     /**
      * Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a).

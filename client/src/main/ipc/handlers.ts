@@ -1340,22 +1340,31 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ownerId: string,
         key: string,
         value: unknown,
+        side?: 'source' | 'target' | null,
       ) => {
         const rest = requireRest(deps);
         return ownerType === 'thought'
-          ? rest.setThoughtProperty(networkId, ownerId, key, value as never)
-          : rest.setLinkProperty(networkId, ownerId, key, value as never);
+          ? rest.setThoughtProperty(networkId, ownerId, key, value as never, side)
+          : rest.setLinkProperty(networkId, ownerId, key, value as never, side);
       },
     ),
   );
   handlers.set(
     'properties.remove',
-    bind((networkId: string, ownerType: 'thought' | 'link', ownerId: string, key: string) => {
-      const rest = requireRest(deps);
-      return ownerType === 'thought'
-        ? rest.deleteThoughtProperty(networkId, ownerId, key)
-        : rest.deleteLinkProperty(networkId, ownerId, key);
-    }),
+    bind(
+      (
+        networkId: string,
+        ownerType: 'thought' | 'link',
+        ownerId: string,
+        key: string,
+        side?: 'source' | 'target' | null,
+      ) => {
+        const rest = requireRest(deps);
+        return ownerType === 'thought'
+          ? rest.deleteThoughtProperty(networkId, ownerId, key, side)
+          : rest.deleteLinkProperty(networkId, ownerId, key, side);
+      },
+    ),
   );
   // Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a,
   // REST `POST …/properties/{key}/cross-resolve`). Пока реализован для

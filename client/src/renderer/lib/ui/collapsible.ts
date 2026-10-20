@@ -183,6 +183,11 @@ export function collapsibleSection(spec: CollapsibleSpec): CollapsibleSection {
     });
   };
   if (!lazy) updateCount();
+  // Ленивый счётчик при РАЗВЁРНУТОЙ по умолчанию группе: она уже показана
+  // пользователю, поэтому «первое раскрытие» наступило сразу — бейдж не должен
+  // висеть на «…» до ручного сворачивания/раскрытия (0.14.1, группа
+  // «Свойства вне типа», задача 626b29bd).
+  if (lazy && !collapsed) updateCount();
   root.addEventListener('etn:refresh-count', updateCount);
   root.addEventListener('etn:set-count', (event) => {
     const detail = (event as CustomEvent<string>).detail;

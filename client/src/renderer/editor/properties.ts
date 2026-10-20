@@ -23,6 +23,7 @@
 import type {
   CrossNetworkRefValue,
   EffectiveTypeProperty,
+  LinkPropertySide,
   LinkPropertyValues,
   PropertyValue,
   ThoughtRef,
@@ -44,9 +45,10 @@ import {
   setTooltip,
   span,
 } from '../lib/dom.js';
-import { operationError } from '../lib/ui/messages.js';
-import { confirmDialog } from '../lib/dialog.js';
+import { footerErrorLine, operationError } from '../lib/ui/messages.js';
+import { errorDialog, showDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
+import { t } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
 import { PROPERTY_VALUES_REFRESHED_EVENT } from '../lib/property-values-refresh.js';
 import { logUiEvent } from '../lib/ui-log.js';
@@ -58,9 +60,21 @@ import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
-import { uiButton } from '../lib/ui/button.js';
+import { iconButton, uiButton } from '../lib/ui/button.js';
+import { svgIcon } from '../lib/ui/icon.js';
 import { reconcileKeyed, type KeyedRenderSpec } from '../lib/ui/keyed-list.js';
 import { deepEqual } from '../lib/ui/state.js';
+import {
+  buildLinkEndIcon,
+  buildPropertyList,
+  buildPropertyListRows,
+  ensurePropertyLinkTypes,
+  linkEndIconSpec,
+  type PropertyListRow,
+  type PropertyRegistryRow,
+} from '../lib/property-list.js';
+import { openPropertyManagerEditor } from '../screens/property-manager.js';
+import { resolveLinkTypeVisual } from '../lib/type-tree.js';
 import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
@@ -89,6 +103,136 @@ let retargetCurrent: ((ctx: EditorContext) => void) | null = null;
 /** Перечитывание тела группы «Свойства вне типа» (или null, если не построено). */
 let outsideReload: (() => void) | null = null;
 let wired = false;
+/** Перечитывание счётчика группы «Свойства вне типа» (или null). */
+let outsideRefreshCount: (() => void) | null = null;
+
+/**
+ * Выбранное в пикере, но ещё не записанное внетиповое свойство (0.14.1,
+ * задача 626b29bd, сценарии 9aea535d/1c0d0192): строка появляется в группе
+ * «Свойства вне типа» сразу после выбора, с пустым редактором значения, и
+ * исчезает из локального набора, как только значение появилось на сервере.
+ * Хранится по владельцу: карточка того же типа переиспользует панель, и
+ * черновики не должны переезжать на другую сущность (задача 90b2256e).
+ */
+interface PendingOutsideProperty {
+  propertyId: string;
+  /** Снимок реестровой строки — из него собирается определение свойства. */
+  property: PropertyRegistryRow;
+  /** Отображаемое имя строки: у связи — имя выбранной стороны. */
+  name: string;
+  side: LinkPropertySide | null;
+  linkTypeId: string | null;
+  /** Поставить курсор в редактор значения при следующей отрисовке. */
+  focus: boolean;
+}
+
+const pendingOutside = new Map<string, PendingOutsideProperty[]>();
+
+function pendingOwnerKey(ownerType: 'thought' | 'link', ownerId: string): string {
+  return `${ownerType}:${ownerId}`;
+}
+
+/** Ключ строки-черновика совпадает с ключом серверной строки (см. outsideRowKey). */
+function pendingOutsideKey(item: PendingOutsideProperty): string {
+  return item.side === null ? item.propertyId : `${item.propertyId}:${item.side}`;
+}
+
+function pendingOutsideFor(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+): PendingOutsideProperty[] {
+  return pendingOutside.get(pendingOwnerKey(ownerType, ownerId)) ?? [];
+}
+
+function setPendingOutside(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  items: PendingOutsideProperty[],
+): void {
+  const key = pendingOwnerKey(ownerType, ownerId);
+  if (items.length === 0) pendingOutside.delete(key);
+  else pendingOutside.set(key, items);
+}
+
+/**
+ * Добавляет выбранное в пикере свойство в группу «Свойства вне типа» и
+ * перечитывает тело/счётчик группы. Идемпотентно по ключу строки: повторный
+ * выбор того же конца связи не плодит второй черновик.
+ */
+function addPendingOutside(target: PropertiesTarget, row: PropertyListRow): void {
+  const existing = pendingOutsideFor(target.ownerType, target.ownerId).filter(
+    (item) => pendingOutsideKey(item) !== row.id,
+  );
+  const linkTypeId = row.registry.config?.link_type_id;
+  existing.push({
+    propertyId: row.propertyId,
+    property: row.registry,
+    name: row.name,
+    side: row.side,
+    linkTypeId: typeof linkTypeId === 'string' && linkTypeId !== '' ? linkTypeId : null,
+    focus: true,
+  });
+  setPendingOutside(target.ownerType, target.ownerId, existing);
+  outsideReload?.();
+  outsideRefreshCount?.();
+}
+
+/** Направление стороны связи для значка и определения (server: side → direction). */
+function sideDirection(side: LinkPropertySide | null): 'out' | 'in' {
+  return side === 'target' ? 'in' : 'out';
+}
+
+/** Сторона конца связи из определения/значения с fallback на `direction`. */
+function linkSideOf(value: {
+  side?: LinkPropertySide | null;
+  direction?: 'out' | 'in';
+  config?: { direction?: 'out' | 'in' } | null;
+}): LinkPropertySide {
+  if (value.side === 'source' || value.side === 'target') return value.side;
+  const direction = value.direction ?? value.config?.direction;
+  return direction === 'in' ? 'target' : 'source';
+}
+
+/** Значок конца связи для строки таблицы карточки (симметричные имена различаются). */
+function buildRowLinkMark(
+  linkTypeId: string | null,
+  side: LinkPropertySide | null,
+): SVGSVGElement {
+  const visual =
+    linkTypeId === null ? null : resolveLinkTypeVisual(store.state.linkTypes, linkTypeId);
+  return buildLinkEndIcon(linkEndIconSpec(side, visual));
+}
+
+/** Определение свойства для строки-черновика (валидация — по реестру). */
+function pendingOutsideDefinition(
+  item: PendingOutsideProperty,
+  ownerType: 'thought' | 'link',
+): EffectiveTypeProperty {
+  const isLink = item.property.value_type === 'link';
+  return {
+    id: item.propertyId,
+    property_id: item.propertyId,
+    owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
+    owner_id: '',
+    key: item.name,
+    value_type: item.property.value_type,
+    config: isLink
+      ? {
+          ...(item.linkTypeId !== null ? { link_type_id: item.linkTypeId } : {}),
+          direction: sideDirection(item.side),
+        }
+      : item.property.config,
+    required: false,
+    position: 0,
+    description: item.property.description,
+    inherited: false,
+    defined_on: '',
+    defined_on_name: '',
+    default_value: null,
+    overridden_here: false,
+    description_overridden: false,
+  };
+}
 
 /**
  * Довести локальную запись значения свойства-СВЯЗИ до холста и панелей
@@ -177,6 +321,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // A fresh pane resets the stale reload callbacks of the previous one.
   currentReload = null;
   outsideReload = null;
+  outsideRefreshCount = null;
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
   const typeGroup = groupSection({
@@ -185,14 +330,26 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     defaultCollapsed: false,
     buildBody: () => buildPropertiesBodyFor(target, lifecycle),
   });
-  // Group 2 — «Свойства вне типа» (collapsed by default). Hidden entirely
-  // when there are no such values (rendered inside the main body once the
-  // reload pass resolves).
+  // Group 2 — «Свойства вне типа» (0.14.1: expanded by default, требование
+  // 87039bc8). Заголовок несёт «(+) Добавить свойство» — ранний визуальный
+  // срез задачи 626b29bd; пикер и «Создать новое…» живут в диалоге.
+  const addPropertyBtn = iconButton({
+    icon: svgIcon('plus', 14),
+    title: 'Добавить свойство',
+    role: 'ghost',
+    size: 's',
+    class: 'prop-outside-add',
+    onClick: (event) => {
+      event.stopPropagation();
+      void openOutsidePropertyPicker(target);
+    },
+  });
   const outsideGroup = groupSection({
     id: 'properties.outside',
     title: 'Свойства вне типа',
-    defaultCollapsed: true,
+    defaultCollapsed: false,
     lazyCount: true,
+    actions: [addPropertyBtn],
     loadCount: async () => {
       // Owner token: a slow badge count of the previous owner must not land on
       // the new one (task 90b2256e, круг 3).
@@ -208,13 +365,22 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
         // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
         // вне типа (dfaacb05), сервер отдаёт его формой LinkPropertyValues.
         const outside = values.filter((v) => v.outside_type === true);
-        return outside.length === 0 ? '(0)' : `(${outside.length})`;
+        // Выбранные, но ещё не записанные строки тоже видны в группе — считаем
+        // их, пока серверного значения нет (задача 626b29bd).
+        const present = new Set(outside.map((v) => outsideRowKey(v)));
+        const pending = pendingOutsideFor(target.ownerType, requestOwnerId).filter(
+          (item) => !present.has(pendingOutsideKey(item)),
+        );
+        const total = outside.length + pending.length;
+        return total === 0 ? '(0)' : `(${total})`;
       } catch {
         return undefined;
       }
     },
     buildBody: () => buildOutsidePropertiesBody(target, lifecycle),
   });
+  outsideRefreshCount = () =>
+    outsideGroup.dispatchEvent(new CustomEvent('etn:refresh-count'));
   // Retarget of the SHOWN pane to another owner of the same type: the pane is
   // reused (editor's `registerTabRetarget`), its bodies reload under the new
   // owner and the outside-type badge is re-resolved (its owner lives on the
@@ -225,7 +391,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     target.typeId = resolveEditorTypeId(next);
     currentReload?.();
     outsideReload?.();
-    outsideGroup.dispatchEvent(new CustomEvent('etn:refresh-count'));
+    outsideRefreshCount?.();
   };
   // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
   // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
@@ -331,10 +497,199 @@ function buildPropertiesBodyFor(
 }
 
 /**
- * Builds the «Свойства вне типа» body — read-only table for values whose
- * property is no longer attached to the owner's type (0.6.5; спека «Значения
- * вне типа сохраняются»). The group is hidden entirely when no such values
- * exist (`loadCount` returns `(0)` and the section is rendered empty).
+ * Ключи строк, уже присутствующих у владельца: обе группы «Свойства»
+ * (типовая и внетиповая), по стороне связи. Типовая группа — эффективные
+ * определения типа (скаляр без значения тоже присутствует), внетиповая —
+ * прочитанные значения плюс локальные черновики, ещё не записанные на сервер.
+ * Совпадает с идентификаторами строк общего списка (`property_id` /
+ * `property_id:side`). Используется пикером: такие строки из него исключаются
+ * целиком (требование 87039bc8).
+ */
+function presentPropertyRowIds(
+  values: readonly (PropertyValue | LinkPropertyValues)[],
+  definitions: readonly EffectiveTypeProperty[],
+  pending: readonly PendingOutsideProperty[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const def of definitions) {
+    if (def.property_id === '') continue;
+    if (def.value_type === 'link') {
+      if (def.config?.structural === true) continue;
+      ids.add(`${def.property_id}:${linkSideOf(def)}`);
+    } else {
+      ids.add(def.property_id);
+    }
+  }
+  for (const value of values) {
+    if (value.outside_type !== true) continue;
+    if (isLinkPropertyValues(value)) {
+      if (value.property_id === '') continue;
+      ids.add(`${value.property_id}:${linkSideOf(value)}`);
+    } else if (value.property_id !== '') {
+      ids.add(value.property_id);
+    }
+  }
+  for (const item of pending) ids.add(pendingOutsideKey(item));
+  return ids;
+}
+
+/**
+ * Пикер «(+) Добавить свойство» вкладки «Свойства» (0.14.1, задача 626b29bd,
+ * требование 87039bc8). Общий `property-list` в режиме picker по всему
+ * справочнику сети: живой поиск, свойство-связь — двумя строками, выбор — со
+ * стороной. Строки, уже присутствующие у мысли (обе группы, по стороне),
+ * ИСКЛЮЧЕНЫ из выдачи (`excludeRow`), системные «Родители»/«Потомки» — тоже.
+ *
+ * Внизу — «Создать новое…»: единый диалог «Свойство/связь» (спека 465495a9);
+ * созданное свойство сразу выбирается в карточку. Выбранная строка становится
+ * черновиком группы «Свойства вне типа» (пустой редактор значения) и с этого
+ * момента из пикера исчезает — повторного выбора того же конца связи нет.
+ */
+async function openOutsidePropertyPicker(target: PropertiesTarget): Promise<void> {
+  const networkId = requireNetworkId();
+  const errorLine = footerErrorLine();
+  const typeOwner = target.ownerType === 'thought' ? 'thought_type' : 'link_type';
+
+  let registryRows: PropertyRegistryRow[];
+  let values: Array<PropertyValue | LinkPropertyValues>;
+  let definitions: EffectiveTypeProperty[];
+  try {
+    [registryRows, values] = await Promise.all([
+      etn.propertyRegistry.list(networkId),
+      etn.properties.get(networkId, target.ownerType, target.ownerId),
+    ]);
+    definitions =
+      target.typeId === null
+        ? []
+        : await etn.types.listTypeProperties(networkId, typeOwner, target.typeId);
+  } catch (err) {
+    errorDialog('Добавить свойство', err);
+    return;
+  }
+  await ensurePropertyLinkTypes(networkId, registryRows);
+
+  let builtRows = buildPropertyListRows(registryRows, store.state.linkTypes);
+  let excludedIds = presentPropertyRowIds(
+    values,
+    definitions,
+    pendingOutsideFor(target.ownerType, target.ownerId),
+  );
+
+  return new Promise<void>((resolve) => {
+    /** Перечитывает реестр/значения и перерисовывает список (после создания/
+     *  правки свойства и после своей записи значения-черновика). */
+    async function reloadData(): Promise<void> {
+      try {
+        const [nextRegistry, nextValues] = await Promise.all([
+          etn.propertyRegistry.list(networkId),
+          etn.properties.get(networkId, target.ownerType, target.ownerId),
+        ]);
+        registryRows = nextRegistry;
+        values = nextValues;
+        definitions =
+          target.typeId === null
+            ? []
+            : await etn.types.listTypeProperties(networkId, typeOwner, target.typeId);
+      } catch {
+        /* оставляем прежний снимок — редактор уже отчитался об ошибке */
+      }
+      await ensurePropertyLinkTypes(networkId, registryRows);
+      builtRows = buildPropertyListRows(registryRows, store.state.linkTypes);
+      excludedIds = presentPropertyRowIds(
+        values,
+        definitions,
+        pendingOutsideFor(target.ownerType, target.ownerId),
+      );
+      list.setRows(builtRows);
+    }
+
+    /** Выбор строки: свойство немедленно появляется в группе «Свойства вне
+     *  типа» (строка-черновик с курсором в редакторе значения). */
+    function choose(row: PropertyListRow): void {
+      if (row.structural) return;
+      addPendingOutside(target, row);
+      close();
+      resolve();
+    }
+
+    /** Созданное в едином диалоге свойство сразу выбирается в карточку
+     *  (скаляр — своей строкой, связь — строкой источника). */
+    function chooseCreated(createdId: string, isLink: boolean): void {
+      const rowId = isLink ? `${createdId}:source` : createdId;
+      const row = builtRows.find((candidate) => candidate.id === rowId) ?? null;
+      if (row === null) return;
+      choose(row);
+    }
+
+    const list = buildPropertyList({
+      mode: 'picker',
+      searchPlaceholder: t('actions.search'),
+      excludeRow: (row) => row.structural || excludedIds.has(row.id),
+      callbacks: {
+        onActivate: (row) => choose(row),
+        // Контекстное меню «Изменить» — тот же единый редактор свойства.
+        onEdit: (row) =>
+          openPropertyManagerEditor(
+            row.registry,
+            () => void reloadData(),
+            (created) => chooseCreated(created.id, created.value_type === 'link'),
+          ),
+      },
+    });
+    list.setRows(builtRows);
+
+    const body = div('form-stack list-dialog-body');
+    body.append(list.root);
+
+    const close = showDialog({
+      title: 'Добавить свойство',
+      body,
+      size: 'l',
+      // Высота стабильна: задана ролью, не содержимым списка (правило 9
+      // требования 11ddd910, ошибка f68bb43c).
+      fixedHeight: true,
+      footerError: errorLine,
+      buttons: [
+        { label: t('actions.cancel') },
+        {
+          label: 'Создать новое…',
+          keepOpen: true,
+          onClick: () => {
+            openPropertyManagerEditor(
+              null,
+              () => void reloadData(),
+              (created) => {
+                // Единый диалог закроется сам; карточка получает строку сразу,
+                // а список реестра — свежий снимок для следующего открытия.
+                void reloadData().then(() => {
+                  chooseCreated(created.id, created.value_type === 'link');
+                });
+              },
+            );
+          },
+        },
+        {
+          label: 'Выбрать',
+          primary: true,
+          keepOpen: true,
+          onClick: () => {
+            const row = list.selected();
+            if (row !== null) choose(row);
+          },
+        },
+      ],
+      onMount: () => list.focus(),
+    });
+  });
+}
+
+/**
+ * Builds the «Свойства вне типа» body — редактируемая таблица значений, чьё
+ * свойство не подключено к типу владельца (0.6.5; спека «Значения вне типа
+ * сохраняются»). Строка — та же, что в таблице «Свойства типа»: общий редактор
+ * значения и валидация по определению свойства (0.14.1, задача 626b29bd).
+ * Строки-черновики (выбранные в пикере, но ещё не записанные) рисуются здесь
+ * же и заменяются серверной строкой после первой записи значения.
  */
 function buildOutsidePropertiesBody(
   target: PropertiesTarget,
@@ -367,7 +722,24 @@ function buildOutsidePropertiesBody(
     retryStop = null;
   });
 
-  const rowSpec = outsideRowSpec(networkId, target, () => void reload());
+  /**
+   * Реестр свойств сети для внетиповых СКАЛЯРОВ: из него берётся `config`
+   * (список вариантов, множественность) — редактор валидирует значение по
+   * определению свойства (0.14.1, задача 626b29bd). Недоступен — деградация до
+   * формы значения, список всё равно читается.
+   */
+  let registryById = new Map<string, PropertyRegistryRow>();
+  async function loadRegistryRows(): Promise<PropertyRegistryRow[]> {
+    try {
+      return await etn.propertyRegistry.list(networkId);
+    } catch {
+      return [];
+    }
+  }
+
+  const rowSpec = outsideRowSpec(networkId, target, () => void reload(), (propertyId) =>
+    registryById.get(propertyId),
+  );
 
   async function reload(force = false): Promise<void> {
     // Owner token of this reload (same guard as the in-type table): a slow
@@ -383,7 +755,12 @@ function buildOutsidePropertiesBody(
     if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: Array<PropertyValue | LinkPropertyValues>;
     try {
-      values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
+      const [nextValues, registryRows] = await Promise.all([
+        etn.properties.get(networkId, target.ownerType, requestOwnerId),
+        loadRegistryRows(),
+      ]);
+      values = nextValues;
+      registryById = new Map(registryRows.map((row) => [row.id, row]));
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
       if (disposed) return;
@@ -412,7 +789,14 @@ function buildOutsidePropertiesBody(
     const outside: Array<PropertyValue | LinkPropertyValues> = values.filter(
       (v) => v.outside_type === true,
     );
-    if (outside.length === 0) {
+    // Локальные черновики (выбранные в пикере, но ещё не записанные): как
+    // только сервер отдал строку с тем же ключом, черновик больше не нужен.
+    const present = new Set(outside.map((value) => outsideRowKey(value)));
+    const pending = pendingOutsideFor(target.ownerType, requestOwnerId).filter(
+      (item) => !present.has(pendingOutsideKey(item)),
+    );
+    setPendingOutside(target.ownerType, requestOwnerId, pending);
+    if (outside.length === 0 && pending.length === 0) {
       tableAttached = false;
       wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
@@ -421,7 +805,14 @@ function buildOutsidePropertiesBody(
       wrap.replaceChildren(table);
       tableAttached = true;
     }
-    reconcileKeyed(tbody, outsideRows(outside, requestOwnerId), rowSpec);
+    reconcileKeyed(tbody, outsideRows(outside, requestOwnerId, pending), rowSpec);
+    // Курсор в редактор значения свежевыбранной строки (сценарии 9aea535d,
+    // e77c6e52): фокус ставится после того, как таблица уже в документе.
+    const focusItem = pending.find((item) => item.focus);
+    if (focusItem !== undefined) {
+      focusItem.focus = false;
+      focusOutsideValueEditor(tbody, pendingOutsideKey(focusItem));
+    }
   }
   outsideReload = () => void reload();
   void reload();
@@ -446,17 +837,6 @@ function buildOutsidePropertiesBody(
     });
   }
   return box;
-}
-
-/**
- * Confirmed deletion of an outside-type value (custom confirmation dialog).
- */
-async function confirmOutsideRemove(name: string): Promise<boolean> {
-  return confirmDialog(
-    'Удалить значение свойства',
-    `Свойство «${name}» больше не подключено к типу. Удалить сохранённое значение? Действие необратимо — таких значений система сама не очищает.`,
-    true,
-  );
 }
 
 /**
@@ -506,37 +886,61 @@ function makeOutsideTypeTable(): { table: HTMLElement; tbody: HTMLElement } {
   return { table, tbody };
 }
 
-/** Строка таблицы «Свойства вне типа»: владелец + само внетиповое значение. */
+/** Строка таблицы «Свойства вне типа»: серверное значение либо черновик
+ *  выбранного в пикере свойства (значения ещё нет — рисуется пустой редактор). */
 interface OutsideRow {
   /** Владелец, под которого прочитано значение (меняется при перепривязке). */
   ownerId: string;
-  value: PropertyValue | LinkPropertyValues;
+  value: PropertyValue | LinkPropertyValues | null;
+  pending: PendingOutsideProperty | null;
 }
 
-/** Оборачивает внетиповые значения в строки keyed-сверки. */
+/** Оборачивает внетиповые значения и черновики в строки keyed-сверки. */
 function outsideRows(
   values: Array<PropertyValue | LinkPropertyValues>,
   ownerId: string,
+  pending: readonly PendingOutsideProperty[] = [],
 ): OutsideRow[] {
-  return values.map((value) => ({ ownerId, value }));
+  return [
+    ...values.map((value) => ({ ownerId, value, pending: null })),
+    ...pending.map((item) => ({ ownerId, value: null, pending: item })),
+  ];
 }
 
 /**
  * Ключ строки «Свойства вне типа»: внетиповое значение привязано к свойству
- * реестра — его `property_id` и служит ключом (аналог id привязки основной
- * таблицы). У рёбер типа связи без свойства в реестре `property_id` пуст —
- * ключом становится уникальная серверная пара «тип связи + направление»
- * (`link_type_id`/`direction`): display-имя стороны для этого не годится —
- * уникальность имён типа связи только по паре forward/reverse, и два типа с
- * одинаковым `name_forward` дали бы один и тот же ключ (регрессия круга 1).
+ * реестра — `property_id` плюс СТОРОНА связи (0.14.1, аудит цикл 2 требования
+ * 87039bc8: у симметричного типа связи «см. также» обе стороны несут одно имя
+ * и один property_id — без стороны строки схлопнулись бы в одну). У рёбер типа
+ * связи без свойства в реестре `property_id` пуст — ключом становится
+ * уникальная серверная пара «тип связи + направление»; display-имя стороны для
+ * этого не годится — уникальность имён типа связи только по паре
+ * forward/reverse (регрессия круга 1).
  */
 function outsideRowKey(value: PropertyValue | LinkPropertyValues): string {
   if (isLinkPropertyValues(value)) {
     return value.property_id !== ''
-      ? value.property_id
+      ? `${value.property_id}:${linkSideOf(value)}`
       : `link:${value.link_type_id ?? ''}|${value.direction}`;
   }
   return value.property_id;
+}
+
+/** Ставит курсор в редактор значения строки-черновика (после отрисовки). */
+function focusOutsideValueEditor(tbody: HTMLElement, key: string): void {
+  const focus = (): boolean => {
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const row = rows.find(
+      (candidate) => candidate.getAttribute('data-outside-key') === key,
+    );
+    const field = row?.querySelector<HTMLElement>(
+      'input, textarea, select, [contenteditable="true"]',
+    );
+    if (field === undefined || field === null) return false;
+    field.focus();
+    return true;
+  };
+  if (!focus()) window.setTimeout(focus, 0);
 }
 
 /**
@@ -550,43 +954,157 @@ function outsideRowSpec(
   networkId: string,
   target: PropertiesTarget,
   onRemove: () => void,
+  registryLookup?: (propertyId: string) => PropertyRegistryRow | undefined,
 ): KeyedRenderSpec<OutsideRow> {
-  const fill = (row: HTMLElement, value: PropertyValue | LinkPropertyValues): void => {
+  const fill = (
+    row: HTMLElement,
+    value: PropertyValue | LinkPropertyValues | null,
+    pending: PendingOutsideProperty | null,
+  ): void => {
     row.replaceChildren();
-    if (isLinkPropertyValues(value)) {
-      const nameCell = el('td', undefined, `${value.property_name} (связь)`);
+    row.removeAttribute('data-outside-key');
+    if (pending !== null) {
+      fillPendingOutsideRow(row, pending, networkId, target, onRemove);
+      return;
+    }
+    const current = value!;
+    if (isLinkPropertyValues(current)) {
+      const nameCell = el('td', 'prop-name-cell', `${current.property_name} (связь)`);
+      const linkTypeId = current.link_type_id ?? null;
+      nameCell.prepend(buildRowLinkMark(linkTypeId, linkSideOf(current)));
       setTooltip(
         nameCell,
-        value.property_id !== ''
+        current.property_id !== ''
           ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
           : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
       );
       row.append(nameCell);
-      row.append(buildOutsideLinkCell(value, networkId, target.ownerType, target.ownerId, onRemove));
+      row.append(buildOutsideLinkCell(current, networkId, target.ownerType, target.ownerId, onRemove));
       return;
     }
     const nameCell = el(
       'td',
-      undefined,
-      `${value.property_name} (${valueTypeName(value.value_type)})`,
+      'prop-name-cell',
+      `${current.property_name} (${valueTypeName(current.value_type)})`,
     );
     setTooltip(
       nameCell,
       'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
     );
     row.append(nameCell);
-    row.append(buildOutsideValueCell(value, networkId, target.ownerType, target.ownerId, onRemove));
+    row.append(
+      buildEditorCell({
+        networkId,
+        ownerType: target.ownerType,
+        ownerId: target.ownerId,
+        definition: outsideDefinitionFromValue(
+          current,
+          target.ownerType,
+          registryLookup?.(current.property_id),
+        ),
+        current,
+        onSaved: onRemove,
+      }),
+    );
   };
   return {
-    key: (row) => outsideRowKey(row.value),
+    key: (row) => (row.pending !== null ? pendingOutsideKey(row.pending) : outsideRowKey(row.value!)),
     build: (row) => {
       const tr = el('tr');
-      fill(tr, row.value);
+      fill(tr, row.value, row.pending);
       return tr;
     },
-    update: (tr, row) => fill(tr, row.value),
-    equals: (a, b) => a.ownerId === b.ownerId && deepEqual(a.value, b.value),
+    update: (tr, row) => fill(tr, row.value, row.pending),
+    equals: (a, b) => {
+      if (a.ownerId !== b.ownerId) return false;
+      if (a.pending !== null || b.pending !== null) {
+        return (
+          a.pending !== null &&
+          b.pending !== null &&
+          a.pending.propertyId === b.pending.propertyId &&
+          a.pending.side === b.pending.side
+        );
+      }
+      return deepEqual(a.value, b.value);
+    },
   };
+}
+
+/**
+ * Определение внетипового СКАЛЯРНОГО значения — по реестровой записи, если она
+ * ещё известна клиенту (валидация редактора: список вариантов, множественность),
+ * иначе только по форме значения. Свойство-связь собирает определение у себя.
+ */
+function outsideDefinitionFromValue(
+  value: PropertyValue,
+  ownerType: 'thought' | 'link',
+  registry?: PropertyRegistryRow,
+): EffectiveTypeProperty {
+  return {
+    id: value.property_id,
+    property_id: value.property_id,
+    owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
+    owner_id: '',
+    key: value.property_name,
+    value_type: value.value_type,
+    config: registry?.config ?? null,
+    required: false,
+    position: 0,
+    description: registry?.description ?? null,
+    inherited: false,
+    defined_on: '',
+    defined_on_name: '',
+    default_value: null,
+    overridden_here: false,
+    description_overridden: false,
+  };
+}
+
+/**
+ * Ячейка строки-черновика: имя выбранного свойства (у связи — сторона, значок
+ * направления) и тот же общий редактор значения, что у серверной строки.
+ * Значение пишется ключом display-имени стороны + `side` — это различает
+ * симметричные имена типа связи (аудит цикл 2 требования 87039bc8).
+ */
+function fillPendingOutsideRow(
+  row: HTMLElement,
+  pending: PendingOutsideProperty,
+  networkId: string,
+  target: PropertiesTarget,
+  onChanged: () => void,
+): void {
+  const definition = pendingOutsideDefinition(pending, target.ownerType);
+  const isLink = definition.value_type === 'link';
+  row.setAttribute('data-outside-key', pendingOutsideKey(pending));
+  const nameCell = el(
+    'td',
+    'prop-name-cell',
+    `${pending.name} (${isLink ? 'связь' : valueTypeName(definition.value_type)})`,
+  );
+  if (isLink) {
+    nameCell.prepend(buildRowLinkMark(pending.linkTypeId, pending.side));
+    setTooltip(
+      nameCell,
+      'Свойство-связь не подключено к типу владельца — введите значения здесь; подключение свойства к типу вернёт их в основную таблицу.',
+    );
+  } else {
+    setTooltip(
+      nameCell,
+      'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
+    );
+  }
+  row.append(nameCell);
+  row.append(
+    buildEditorCell({
+      networkId,
+      ownerType: target.ownerType,
+      ownerId: target.ownerId,
+      definition,
+      current: undefined,
+      side: pending.side,
+      onSaved: onChanged,
+    }),
+  );
 }
 
 /**
@@ -605,165 +1123,134 @@ function buildOutsideLinkCell(
   ownerId: string,
   onRemove: () => void,
 ): HTMLElement {
-    const cell = el('td', 'prop-outside-cell');
-
-    /**
-     * Обычная запись значения-связи ключом `key` (сервер помечает отозванные
-     * рёбра в корзину). Общий `commit` для диалога снятия значения (задача
-     * 96d27fc0) — карта перечитывает окрестность сразу (ошибка f0b959dd).
-     */
-    const writeOutsideEdgeSet = async (key: string, remaining: string[]): Promise<boolean> => {
-      try {
-        await etn.properties.set(
-          networkId,
-          ownerType,
-          ownerId,
-          key,
-          remaining.length > 0 ? remaining : null,
-        );
-        repaintAfterLinkValueWrite(ownerType, ownerId);
-        // Своё значение свойства-связи меняет состав публикации: сигнал слоя
-        // (до B1; гейт `repaintAfterLinkValueWrite` по фокусу здесь не годится —
-        // публикация может быть открыта и без фокуса на владельце).
-        signalCompositionForOwner(ownerType, ownerId);
-        onRemove();
-        return true;
-      } catch (err) {
-        notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
-        return false;
-      }
+  if (value.property_id !== '') {
+    // Внетиповое свойство-связь: определение собирается на лету по ребру,
+    // ограничения типов у него нет (`allowed_opposite_type_ids` не задан) —
+    // внетиповое значение возникает как раз тогда, когда привязок к типу
+    // владельца нет, значит фильтровать кандидатов нечем (модель dde92461).
+    // Сторона передаётся в запись/удаление: у симметричного типа связи имена
+    // обеих сторон одинаковы (аудит цикл 2 требования 87039bc8).
+    const side = linkSideOf(value);
+    const definition: EffectiveTypeProperty = {
+      id: value.property_id,
+      property_id: value.property_id,
+      owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
+      owner_id: '',
+      key: value.property_name,
+      value_type: 'link',
+      config: value.link_type_id !== null
+        ? { link_type_id: value.link_type_id, direction: sideDirection(side) }
+        : { direction: sideDirection(side), structural: true },
+      required: false,
+      position: 0,
+      description: value.description ?? null,
+      inherited: false,
+      defined_on: '',
+      defined_on_name: '',
+      default_value: null,
+      overridden_here: false,
+      description_overridden: false,
     };
-    const clearOutsideLinkValue = (key: string): Promise<boolean> => writeOutsideEdgeSet(key, []);
+    const cell = buildEditorCell({
+      networkId,
+      ownerType,
+      ownerId,
+      definition,
+      current: value,
+      side,
+      onSaved: onRemove,
+    });
+    cell.classList.add('prop-outside-cell');
+    return cell;
+  }
 
-    if (value.property_id !== '') {
-      // Внетиповое свойство-связь: определение собирается на лету по ребру,
-      // ограничения типов у него нет (`allowed_opposite_type_ids` не задан) —
-      // внетиповое значение возникает как раз тогда, когда привязок к типу
-      // владельца нет, значит фильтровать кандидатов нечем (модель dde92461).
-      const definition: EffectiveTypeProperty = {
-        id: value.property_id,
-        property_id: value.property_id,
-        owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
-        owner_id: '',
-        key: value.property_name,
-        value_type: 'link',
-        config: value.link_type_id !== null
-          ? { link_type_id: value.link_type_id, direction: value.direction }
-          : { direction: value.direction, structural: true },
-        required: false,
-        position: 0,
-        description: value.description ?? null,
-        inherited: false,
-        defined_on: '',
-        defined_on_name: '',
-        default_value: null,
-        overridden_here: false,
-        description_overridden: false,
-      };
-      const save = async (next: unknown): Promise<boolean> => {
-        try {
-          await etn.properties.set(networkId, ownerType, ownerId, definition.key, next);
-          // Внетиповое свойство-связь меняет рёбра так же, как типовое, —
-          // окрестность фокуса перечитываем сразу (ошибка f0b959dd).
-          repaintAfterLinkValueWrite(ownerType, ownerId);
-          signalCompositionForOwner(ownerType, ownerId);
-          onRemove();
-          return true;
-        } catch (err) {
-          notice(`Не удалось сохранить «${definition.key}»: ${errText(err)}`, 'error');
-          return false;
-        }
-      };
-      cell.append(
-        buildValueEditor({
-          networkId,
-          ownerType,
-          ownerId,
-          definition,
-          value: value.values,
-          save,
-          historyPropertyId: value.property_id,
-        }),
+  const cell = el('td', 'prop-outside-cell');
+  // Сторона выведенного из имени ребра: у симметричного типа связи имя одно
+  // для обеих сторон, и адрес записи/удаления без `side` неоднозначен.
+  const side = linkSideOf(value);
+
+  /**
+   * Обычная запись значения-связи ключом `key` (сервер помечает отозванные
+   * рёбра в корзину). Общий `commit` для диалога снятия значения (задача
+   * 96d27fc0) — карта перечитывает окрестность сразу (ошибка f0b959dd).
+   */
+  const writeOutsideEdgeSet = async (key: string, remaining: string[]): Promise<boolean> => {
+    try {
+      await etn.properties.set(
+        networkId,
+        ownerType,
+        ownerId,
+        key,
+        remaining.length > 0 ? remaining : null,
+        side,
       );
-      // Крестик «×» очищает значение внетипового свойства-связи целиком
-      // (cab38479): без него у пользователя нет способа снять значение из
-      // группы «Свойства вне типа»; сервер при `set(key, null)` отзовёт
-      // рёбра. Способ снятия выбирается автоматически без диалога
-      // (задача 0d4f793a): возможно удалить — удаляем, иначе в корзину.
-      const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
-      clearBtn.type = 'button';
-      clearBtn.title = 'Удалить значение';
-      clearBtn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        if (value.values.length === 0) return;
-        void removeLinkValueEdges({
-          networkId,
-          ownerType,
-          ownerId,
-          propertyKey: value.property_name,
-          propertyId: value.property_id,
-          removedTargetIds: value.values.map((edge) => edge.target_id),
-          mode: 'auto',
-          commit: () => clearOutsideLinkValue(value.property_name),
-        });
-      });
-      cell.append(clearBtn);
-      return cell;
+      repaintAfterLinkValueWrite(ownerType, ownerId);
+      // Своё значение свойства-связи меняет состав публикации: сигнал слоя
+      // (до B1; гейт `repaintAfterLinkValueWrite` по фокусу здесь не годится —
+      // публикация может быть открыта и без фокуса на владельце).
+      signalCompositionForOwner(ownerType, ownerId);
+      onRemove();
+      return true;
+    } catch (err) {
+      notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+      return false;
     }
+  };
 
-    // Read-only рёбра вне типа (тип связи без реестрового свойства): те же
-    // оформление и обработчики, что у чипа основной таблицы — cab38479.
-    //
-    // 0.8.2, ошибка 748b80fd: ключом записи служит display-имя стороны связи
-    // (`value.property_name`), которое сервер понимает (`resolveDefinition`
-    // шаг 3). Поэтому у чипов появляются команды «Удалить связь с мыслью» /
-    // «Поместить связь в корзину» (задача 0d4f793a), а у ячейки — крестик «×»
-    // очистки набора целиком без диалога (как у реестровых внетиповых,
-    // cab38479). Направление сервер берёт из имени стороны, так что удаляется
-    // именно это ребро, а не типовое входящее.
-    const propertyKey = value.property_name;
-    const currentIds = value.values.map((edge) => edge.target_id);
-    // Команды меню чипа снимают одно ребро тем же авто-выбором (задача
-    // 0d4f793a). Запись значения сервер понимает по display-имени стороны.
-    const removeTarget = (targetId: string, mode: LinkValueRemovalMode): void => {
-      void removeLinkValueEdges({
-        networkId,
-        ownerType,
-        ownerId,
-        propertyKey,
-        propertyId: value.property_id,
-        removedTargetIds: [targetId],
-        mode,
-        commit: () => writeOutsideEdgeSet(propertyKey, currentIds.filter((id) => id !== targetId)),
-      });
-    };
-    const wrap = div('link-value-editor');
-    if (value.values.length === 0) {
-      wrap.append(span('—', 'muted'));
-    }
-    const refs = new Map<string, ThoughtRef>();
-    for (const edge of value.values) {
-      wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs, { removeTarget }));
-    }
-    cell.append(wrap);
-    // Крестик очищает внетиповой набор целиком: запись без целей отзывает все
-    // рёбра выведенной из имени стороны; способ выбирается автоматически без
-    // диалога (задача 0d4f793a).
-    const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
-    clearBtn.type = 'button';
-    clearBtn.title = 'Удалить значение';
-    clearBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (currentIds.length === 0) return;
-      void removeLinkValueEdges({
-        networkId,
-        ownerType,
-        ownerId,
-        propertyKey,
-        propertyId: value.property_id,
-        removedTargetIds: currentIds,
-        mode: 'auto',
-        commit: () => writeOutsideEdgeSet(propertyKey, []),
+  // Read-only рёбра вне типа (тип связи без реестрового свойства): те же
+  // оформление и обработчики, что у чипа основной таблицы — cab38479.
+  //
+  // 0.8.2, ошибка 748b80fd: ключом записи служит display-имя стороны связи
+  // (`value.property_name`), которое сервер понимает (`resolveDefinition`
+  // шаг 3). Поэтому у чипов появляются команды «Удалить связь с мыслью» /
+  // «Поместить связь в корзину» (задача 0d4f793a), а у ячейки — крестик «×»
+  // очистки набора целиком без диалога (как у реестровых внетиповых,
+  // cab38479). Направление сервер берёт из имени стороны (или из `side`, когда
+  // имена симметричны), так что удаляется именно это ребро, а не типовое
+  // входящее.
+  const propertyKey = value.property_name;
+  const currentIds = value.values.map((edge) => edge.target_id);
+  // Команды меню чипа снимают одно ребро тем же авто-выбором (задача
+  // 0d4f793a). Запись значения сервер понимает по display-имени стороны.
+  const removeTarget = (targetId: string, mode: LinkValueRemovalMode): void => {
+    void removeLinkValueEdges({
+      networkId,
+      ownerType,
+      ownerId,
+      propertyKey,
+      propertyId: value.property_id,
+      removedTargetIds: [targetId],
+      mode,
+      commit: () => writeOutsideEdgeSet(propertyKey, currentIds.filter((id) => id !== targetId)),
+    });
+  };
+  const wrap = div('link-value-editor');
+  if (value.values.length === 0) {
+    wrap.append(span('—', 'muted'));
+  }
+  const refs = new Map<string, ThoughtRef>();
+  for (const edge of value.values) {
+    wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs, { removeTarget }));
+  }
+  cell.append(wrap);
+  // Крестик очищает внетиповой набор целиком: запись без целей отзывает все
+  // рёбра выведенной из имени стороны; способ выбирается автоматически без
+  // диалога (задача 0d4f793a).
+  const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
+  clearBtn.type = 'button';
+  clearBtn.title = 'Удалить значение';
+  clearBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (currentIds.length === 0) return;
+    void removeLinkValueEdges({
+      networkId,
+      ownerType,
+      ownerId,
+      propertyKey,
+      propertyId: value.property_id,
+      removedTargetIds: currentIds,
+      mode: 'auto',
+      commit: () => writeOutsideEdgeSet(propertyKey, []),
       });
     });
     cell.append(clearBtn);
@@ -791,85 +1278,6 @@ function buildOutsideLinkCell(
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
-
-  /** Read-only value cell for an outside-type value: same visuals, no editor. */
-function buildOutsideValueCell(
-  value: PropertyValue,
-  networkId: string,
-  ownerType: 'thought' | 'link',
-  ownerId: string,
-  onRemove: () => void,
-): HTMLElement {
-    const cell = el('td', 'prop-outside-cell');
-    const remove = (): void => {
-      void (async () => {
-        const ok = await confirmOutsideRemove(value.property_name);
-        if (!ok) return;
-        try {
-          await etn.properties.remove(networkId, ownerType, ownerId, value.property_name);
-          signalCompositionForOwner(ownerType, ownerId);
-          onRemove();
-        } catch (err) {
-          notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
-        }
-      })();
-    };
-
-    // Read-only отображение скаляра: ветвление по форме значения (вид здесь
-    // не строит ПОЛЕ ВВОДА — это подпись, строит её value-editor-ветка
-    // только для редактируемых значений).
-    const stored = value.value;
-    if (value.value_type === 'url' && Array.isArray(stored) && typeof stored[0] === 'string') {
-      cell.append(buildMultiUrlReadonly({ urls: stored as string[], onOpen: openOneUrl }));
-    } else if (value.value_type === 'url' && typeof stored === 'string') {
-      const row = div('form-row');
-      row.style.marginBottom = '0';
-      row.append(span(stored, 'prop-outside-text'), buildUrlOpenBtn(stored));
-      cell.append(row);
-    } else if (value.value_type === 'cross_network_ref' && Array.isArray(stored)) {
-      // cross_network_ref внетипового значения (задача 7849008a) — снапшот
-      // адреса отдельным узлом. Здесь только подпись; переход/обновление —
-      // через основную таблицу и value-editor.
-      cell.append(buildCrossNetworkRefReadonly(stored as CrossNetworkRefValue[]));
-    } else if (typeof stored === 'string' || typeof stored === 'number') {
-      cell.append(span(String(stored), 'prop-outside-text'));
-    } else if (typeof stored === 'boolean') {
-      cell.append(span(stored ? 'да' : 'нет', 'prop-outside-text'));
-    } else {
-      cell.append(span('—', 'muted'));
-    }
-
-    const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
-    clearBtn.type = 'button';
-    clearBtn.title = 'Удалить значение';
-    clearBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      remove();
-    });
-    cell.append(clearBtn);
-    return cell;
-  }
-
-  /** Hand a single URL to the OS default handler; failure → toast. */
-  async function openOneUrl(value: string): Promise<void> {
-    const trimmed = value.trim();
-    if (trimmed === '') return;
-    const err = await etn.system.openExternal(trimmed);
-    if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
-  }
-
-  /** Read-only «Открыть» button for a single URL value. */
-function buildUrlOpenBtn(value: string): HTMLButtonElement {
-    const btn = uiButton({
-      label: 'Открыть',
-      role: 'secondary',
-      size: 's',
-      title: 'Открыть в системном обработчике',
-      onClick: () => void openOneUrl(value),
-    });
-    btn.disabled = value.trim() === '';
-    return btn;
-  }
 
 /** Builds the «Свойства типа» body — основная таблица редактирования. */
 function buildTypePropertiesBody(
@@ -929,6 +1337,17 @@ function buildTypePropertiesBody(
     // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
     const count = valueCountOf(definition, value);
     const nameCell = el('td', 'prop-name-cell');
+    // Симметричный тип связи: обе привязки несут одно имя — строки различаются
+    // значком направления конца связи (аудит цикл 2 требования 87039bc8).
+    if (definition.value_type === 'link') {
+      const ltId = definition.config?.link_type_id;
+      nameCell.append(
+        buildRowLinkMark(
+          typeof ltId === 'string' && ltId !== '' ? ltId : null,
+          linkSideOf(definition),
+        ),
+      );
+    }
     const nameText = span(propertyNameLabel(definition, count));
     nameCell.append(nameText);
     const hint = propertyHint(definition);
@@ -945,6 +1364,9 @@ function buildTypePropertiesBody(
         ownerId: target.ownerId,
         definition,
         current: value,
+        // Сторона адресует запись связи при симметричных именах (аудит цикл 2
+        // требования 87039bc8).
+        side: definition.value_type === 'link' ? linkSideOf(definition) : null,
         // Своя запись значения-связи не поднимает версию мысли (гейт полной
         // пересборки `mountEditor` не срабатывает), а realtime-эхо своего
         // клиента приходит асинхронно (B1) (G8) — счётчик строки, нарисованный
@@ -1089,61 +1511,79 @@ function buildTypePropertiesBody(
 /** Builds the value editor cell for one property — поле строит общий
  *  `buildValueEditor` (стандарт S2); здесь только сохранение и форма значения. */
 function buildEditorCell(opts: {
-    networkId: string;
-    ownerType: 'thought' | 'link';
-    ownerId: string;
-    definition: EffectiveTypeProperty,
-    current: PropertyValue | LinkPropertyValues | undefined,
-    /** Обновление счётчика значений в заголовке строки после своей записи
-     *  свойства-связи (ошибка 9ee8e608). Скаляры его не зовут. */
-    onLinkCountChange?: (count: number) => void,
-  }): HTMLElement {
-    const { networkId, ownerType, ownerId, definition, current } = opts;
-    const cell = el('td');
-    const stored = current !== undefined && current.value_type !== 'link' ? current.value : null;
+  networkId: string;
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+  definition: EffectiveTypeProperty;
+  current: PropertyValue | LinkPropertyValues | undefined;
+  /**
+   * Сторона записи свойства-связи (0.14.1, требование 87039bc8): у
+   * симметричного типа связи display-имя одинаково у обеих сторон, и без
+   * `side` сервер не может различить адрес. `null`/не задано — обычная
+   * запись по имени.
+   */
+  side?: LinkPropertySide | null;
+  /** Обновление счётчика значений в заголовке строки после своей записи
+   *  свойства-связи (ошибка 9ee8e608). Скаляры его не зовут. */
+  onLinkCountChange?: (count: number) => void;
+  /** Своя запись прошла успешно — перечитать таблицу (внетиповые строки,
+   *  черновики: после записи строка становится серверной). */
+  onSaved?: () => void;
+}): HTMLElement {
+  const { networkId, ownerType, ownerId, definition, current } = opts;
+  const cell = el('td');
+  const stored = current !== undefined && current.value_type !== 'link' ? current.value : null;
 
-    const save = async (value: unknown | null): Promise<boolean> => {
-      try {
-        if (value === null && definition.value_type !== 'link') {
-          await etn.properties.remove(networkId, ownerType, ownerId, definition.key);
-        } else {
-          // Свойство-связь очищается тоже через set: `set(null)` убирает все
-          // рёбра свойства (normalizeLinkTargets → []), а DELETE /properties
-          // для связей — no-op (в property_values ничего не хранится).
-          await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
-        }
-        // Своя запись значения свойства меняет состав публикации: сигнал слоя
-        // (до B1). Скаляр — как в realtime `property-value.set` — тоже помечает
-        // живой текст устаревшим.
-        signalCompositionForOwner(ownerType, ownerId);
-        // Свойство-связь создало/убрало РЕБРО серверной записью (ошибка
-        // f0b959dd): своё событие приходит асинхронно (B1) — окрестность фокуса
-        // перечитываем сразу после успешного сохранения (идемпотентный ускоритель).
-        if (definition.value_type === 'link') {
-          repaintAfterLinkValueWrite(ownerType, ownerId);
-          // Число целей в заголовке строки рисуется при `reload()` и после
-          // своей записи не перечитывалось (ошибка 9ee8e608): своё событие
-          // приходит асинхронно (B1), версию мысли
-          // запись значения не поднимает — гейт полной пересборки редактора не
-          // срабатывает. Новое число целей известно из записанного набора
-          // (`save` получает массив target_id, `null` — очистка).
-          opts.onLinkCountChange?.(linkTargetCount(value));
-        }
-        return true;
-      } catch (err) {
-        // The cell is owned by a now-possibly-orphaned DOM: a slow save (the
-        // rest client retries 5xx/network errors up to 3 times with backoff,
-        // ~30s in the worst case) outlives the rebuild that opened the next
-        // thought. Writing the error into `cell` makes it invisible. The
-        // toast (`notice`) is anchored to the document and survives the
-        // rebuild — it is the only reliable surface for a deferred failure.
-        notice(
-          `Не удалось сохранить «${definition.key}»: ${errText(err)}`,
-          'error',
+  const save = async (value: unknown | null): Promise<boolean> => {
+    try {
+      if (value === null && definition.value_type !== 'link') {
+        await etn.properties.remove(networkId, ownerType, ownerId, definition.key);
+      } else {
+        // Свойство-связь очищается тоже через set: `set(null)` убирает все
+        // рёбра свойства (normalizeLinkTargets → []), а DELETE /properties
+        // для связей — no-op (в property_values ничего не хранится).
+        await etn.properties.set(
+          networkId,
+          ownerType,
+          ownerId,
+          definition.key,
+          value,
+          definition.value_type === 'link' ? opts.side ?? null : null,
         );
-        return false;
       }
-    };
+      // Своя запись значения свойства меняет состав публикации: сигнал слоя
+      // (до B1). Скаляр — как в realtime `property-value.set` — тоже помечает
+      // живой текст устаревшим.
+      signalCompositionForOwner(ownerType, ownerId);
+      // Свойство-связь создало/убрало РЕБРО серверной записью (ошибка
+      // f0b959dd): своё событие приходит асинхронно (B1) — окрестность фокуса
+      // перечитываем сразу после успешного сохранения (идемпотентный ускоритель).
+      if (definition.value_type === 'link') {
+        repaintAfterLinkValueWrite(ownerType, ownerId);
+        // Число целей в заголовке строки рисуется при `reload()` и после
+        // своей записи не перечитывалось (ошибка 9ee8e608): своё событие
+        // приходит асинхронно (B1), версию мысли
+        // запись значения не поднимает — гейт полной пересборки редактора не
+        // срабатывает. Новое число целей известно из записанного набора
+        // (`save` получает массив target_id, `null` — очистка).
+        opts.onLinkCountChange?.(linkTargetCount(value));
+      }
+      opts.onSaved?.();
+      return true;
+    } catch (err) {
+      // The cell is owned by a now-possibly-orphaned DOM: a slow save (the
+      // rest client retries 5xx/network errors up to 3 times with backoff,
+      // ~30s in the worst case) outlives the rebuild that opened the next
+      // thought. Writing the error into `cell` makes it invisible. The
+      // toast (`notice`) is anchored to the document and survives the
+      // rebuild — it is the only reliable surface for a deferred failure.
+      notice(
+        `Не удалось сохранить «${definition.key}»: ${errText(err)}`,
+        'error',
+      );
+      return false;
+    }
+  };
 
     // Свойство-связь — форма LinkPropertyValues: значения это живые рёбра
     // (`values[].target_id`), поля `.value` у формы нет. Редактор всегда
@@ -1164,8 +1604,8 @@ function buildEditorCell(opts: {
         historyPropertyId: definition.property_id,
       }),
     );
-    return cell;
-  }
+  return cell;
+}
 
 /**
  * Заголовок строки свойства в таблице «Свойства типа»: имя, маркер
@@ -1259,6 +1699,8 @@ export const propertiesInternals = {
   buildPropertiesBody,
   buildOutsideTypeTable,
   buildOutsidePropertiesBody,
+  outsideRowKey,
+  presentPropertyRowIds,
 };
 
 /**

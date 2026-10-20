@@ -1,0 +1,534 @@
+{
+  "name": "626b29bd-properties-add",
+  "description": "Z5 (0.14.1, задача 626b29bd): вкладка «Свойства» — кнопка (+) «Добавить свойство», пикер property-list с исключением уже присутствующих (обе группы, по стороне), «Создать новое…» единым диалогом, редактируемые внетиповые строки, обе группы развёрнуты. Покрывает сценарии 9aea535d (C1), e77c6e52 (P3), 1c0d0192 (C2), 21b9d23b (P2 частично). Данные заводятся шагами api на изолированном стенде. Состояние пикера проверяется по модели данных grid.items: в скрытом окне виртуализированная сетка не перерисовывает DOM после фильтра, а модель и клавиатура (Enter) работают штатно.",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "seed-scalar-property",
+      "api": {
+        "name": "seed-scalar-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "Период проживания",
+          "value_type": "text"
+        },
+        "expression": "data.name"
+      },
+      "expect": "Период проживания"
+    },
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "seed-link-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "читал в",
+          "value_type": "link",
+          "name_forward": "читал в",
+          "name_reverse": "читальный зал"
+        },
+        "expression": "data.name"
+      },
+      "expect": "читал в"
+    },
+    {
+      "name": "seed-symmetric-property",
+      "api": {
+        "name": "seed-symmetric-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "см. также",
+          "value_type": "link",
+          "name_forward": "см. также",
+          "name_reverse": "см. также"
+        },
+        "expression": "data.name"
+      },
+      "expect": "см. также"
+    },
+    {
+      "name": "seed-target-thought",
+      "api": {
+        "name": "seed-target-thought",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Зал №3"
+        },
+        "expression": "data.title"
+      },
+      "expect": "Зал №3"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "editor-tabs-visible",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0"
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-group-expanded",
+      "waitFor": "document.querySelector('.prop-outside-add') !== null && document.querySelector('.properties-outside-body') !== null"
+    },
+    {
+      "name": "both-groups-expanded",
+      "probe": "(() => { const headers=[...document.querySelectorAll('.properties-tab .group-header')]; const bodies=[...document.querySelectorAll('.properties-tab .group-body')]; const outside=headers.find((h)=>h.textContent.includes('Свойства вне типа')); return { headers: headers.length, bodies: bodies.length, outsideHasBody: outside ? outside.parentElement?.querySelector('.group-body') !== null : false }; })()",
+      "expect": {
+        "headers": 2,
+        "bodies": 2,
+        "outsideHasBody": true
+      }
+    },
+    {
+      "name": "outside-badge-loaded",
+      "waitFor": "(() => { const header=[...document.querySelectorAll('.properties-tab .group-header')].find((h)=>h.textContent.includes('Свойства вне типа')); return (header?.querySelector('.ui-badge')?.textContent ?? '') === '(0)'; })()"
+    },
+    {
+      "name": "open-picker",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items?.length === 5"
+    },
+    {
+      "name": "picker-full-registry",
+      "probe": "(() => { const items=document.querySelector('.property-list vaadin-grid').items; return { total: items.length, scalar: items.some((r)=>r.name==='Период проживания'), source: items.some((r)=>r.name==='читал в'), target: items.some((r)=>r.name==='читальный зал'), symmetric: items.filter((r)=>r.name==='см. также').length }; })()",
+      "expect": {
+        "total": 5,
+        "scalar": true,
+        "source": true,
+        "target": true,
+        "symmetric": 2
+      }
+    },
+    {
+      "name": "filter-scalar",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "filter-scalar-typed",
+      "text": "Период"
+    },
+    {
+      "name": "filter-scalar-input",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "scalar-row-filtered",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 1 && items[0].name === 'Период проживания'; })()"
+    },
+    {
+      "name": "focus-picker-grid",
+      "expect": true,
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()"
+    },
+    {
+      "name": "select-scalar",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choose-scalar",
+      "key": "Enter"
+    },
+    {
+      "name": "scalar-row-appeared",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('Период проживания') === true"
+    },
+    {
+      "name": "focus-in-value-editor",
+      "probe": "(() => { const body=document.querySelector('.properties-outside-body'); const active=document.activeElement; return { tag: active?.tagName ?? null, inside: body !== null && active !== null && body.contains(active) }; })()",
+      "expect": {
+        "tag": "INPUT",
+        "inside": true
+      }
+    },
+    {
+      "name": "type-scalar-value",
+      "text": "2020-01-01"
+    },
+    {
+      "name": "commit-scalar",
+      "key": "Tab"
+    },
+    {
+      "name": "scalar-value-saved",
+      "waitFor": "(async () => { const vs = await window.etn.properties.get('{{networkId}}', 'thought', '{{thoughtId}}'); return vs.some((v) => v.property_name === 'Период проживания' && v.value === '2020-01-01'); })()"
+    },
+    {
+      "name": "scalar-value-in-db",
+      "api": {
+        "name": "scalar-value-in-db",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(Array.isArray(data) ? data : data.items).find((v) => v.property_name === 'Период проживания')?.value"
+      },
+      "expect": "2020-01-01"
+    },
+    {
+      "name": "reopen-picker",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "picker-reopened",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items?.length === 4"
+    },
+    {
+      "name": "scalar-excluded",
+      "probe": "(() => { const items=document.querySelector('.property-list vaadin-grid').items; return { total: items.length, scalar: items.some((r)=>r.name==='Период проживания') }; })()",
+      "expect": {
+        "total": 4,
+        "scalar": false
+      }
+    },
+    {
+      "name": "cancel-picker",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Отмена'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker-link",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "link-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items?.length === 4"
+    },
+    {
+      "name": "filter-link-source",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "filter-link-source-typed",
+      "text": "читал в"
+    },
+    {
+      "name": "filter-link-source-input",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "source-side-filtered",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].name === 'читал в' && items[0].side === 'source' && items[1].side === 'target'; })()"
+    },
+    {
+      "name": "focus-source-grid",
+      "expect": true,
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()"
+    },
+    {
+      "name": "select-source",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choose-source",
+      "key": "Enter"
+    },
+    {
+      "name": "link-source-row-appeared",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('читал в (связь)') === true"
+    },
+    {
+      "name": "open-picker-link-target",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "target-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items?.length === 3"
+    },
+    {
+      "name": "reverse-side-available",
+      "probe": "(() => { const items=document.querySelector('.property-list vaadin-grid').items; return { total: items.length, source: items.some((r)=>r.name==='читал в'), target: items.some((r)=>r.name==='читальный зал') }; })()",
+      "expect": {
+        "total": 3,
+        "source": false,
+        "target": true
+      }
+    },
+    {
+      "name": "filter-link-target",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "filter-link-target-typed",
+      "text": "читальный зал"
+    },
+    {
+      "name": "filter-link-target-input",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "target-side-filtered",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 1 && items[0].name === 'читальный зал' && items[0].side === 'target'; })()"
+    },
+    {
+      "name": "focus-target-grid",
+      "expect": true,
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()"
+    },
+    {
+      "name": "select-target",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choose-target",
+      "key": "Enter"
+    },
+    {
+      "name": "both-sides-in-card",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('читальный зал (связь)') === true"
+    },
+    {
+      "name": "side-icons-in-card",
+      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const pick=(name)=>{ const row=rows.find((r)=>r.textContent.includes(name)); return row ? row.querySelector('.property-list-link-icon')?.getAttribute('data-direction') ?? null : 'no-row'; }; return { source: pick('читал в'), target: pick('читальный зал') }; })()",
+      "expect": {
+        "source": "down",
+        "target": "up"
+      }
+    },
+    {
+      "name": "open-picker-link-both",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "both-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items?.length === 2"
+    },
+    {
+      "name": "both-link-sides-excluded",
+      "probe": "(() => { const items=document.querySelector('.property-list vaadin-grid').items; return { total: items.length, source: items.some((r)=>r.name==='читал в'), target: items.some((r)=>r.name==='читальный зал') }; })()",
+      "expect": {
+        "total": 2,
+        "source": false,
+        "target": false
+      }
+    },
+    {
+      "name": "cancel-picker-both",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Отмена'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker-symmetric",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "symmetric-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items?.length === 2"
+    },
+    {
+      "name": "symmetric-two-rows",
+      "probe": "(() => { const items=document.querySelector('.property-list vaadin-grid').items; return { names: items.map((r)=>r.name), sides: items.map((r)=>r.side) }; })()",
+      "expect": {
+        "names": [
+          "см. также",
+          "см. также"
+        ],
+        "sides": [
+          "source",
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "filter-symmetric",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "filter-symmetric-typed",
+      "text": "см. также"
+    },
+    {
+      "name": "filter-symmetric-input",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "symmetric-still-two",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items.every((r)=>r.name==='см. также'); })()"
+    },
+    {
+      "name": "focus-symmetric-grid",
+      "expect": true,
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()"
+    },
+    {
+      "name": "select-symmetric-source",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "select-symmetric-target",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choose-symmetric-target",
+      "key": "Enter"
+    },
+    {
+      "name": "symmetric-row-in-card",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('см. также (связь)') === true"
+    },
+    {
+      "name": "symmetric-row-direction",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('см. также')); return row?.querySelector('.property-list-link-icon')?.getAttribute('data-direction') ?? null; })()",
+      "expect": "up"
+    },
+    {
+      "name": "focus-link-field",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в (связь)')); const input=row?.querySelector('input'); if(!input) return 'no-input'; input.focus(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "type-link-target",
+      "text": "Зал"
+    },
+    {
+      "name": "suggestions-visible",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0"
+    },
+    {
+      "name": "pick-link-target",
+      "probe": "(() => { const item=[...document.querySelectorAll('.type-combo-item')].find((e)=>e.textContent.includes('Зал №3')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "link-value-in-card",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('Зал №3') === true"
+    },
+    {
+      "name": "link-value-saved",
+      "waitFor": "(async () => { const vs = await window.etn.properties.get('{{networkId}}', 'thought', '{{thoughtId}}'); const v = vs.find((x) => x.property_name === 'читал в' && Array.isArray(x.values)); return v?.values.length === 1; })()"
+    },
+    {
+      "name": "link-value-count",
+      "api": {
+        "name": "link-value-count",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(Array.isArray(data) ? data : data.items).find((v) => v.property_name === 'читал в' && Array.isArray(v.values))?.values.length"
+      },
+      "expect": 1
+    },
+    {
+      "name": "remove-link-target",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в (связь)')); const btn=row?.querySelector('[title=\"Убрать из значения\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "link-value-removed-saved",
+      "waitFor": "(async () => { const vs = await window.etn.properties.get('{{networkId}}', 'thought', '{{thoughtId}}'); const v = vs.find((x) => x.property_name === 'читал в' && Array.isArray(x.values)); return v === undefined || v.values.length === 0; })()"
+    },
+    {
+      "name": "link-value-removed",
+      "api": {
+        "name": "link-value-removed",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "((Array.isArray(data) ? data : data.items).find((v) => v.property_name === 'читал в' && Array.isArray(v.values))?.values.length ?? 0)"
+      },
+      "expect": 0
+    },
+    {
+      "name": "open-picker-create",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "create-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined"
+    },
+    {
+      "name": "open-create-dialog",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Создать новое…'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "create-dialog-visible",
+      "waitFor": "document.querySelector(\"input[placeholder='Заголовок свойства (обязательно)']\") !== null"
+    },
+    {
+      "name": "fill-new-name",
+      "click": "input[placeholder='Заголовок свойства (обязательно)']"
+    },
+    {
+      "name": "new-name-typed",
+      "text": "Личный период"
+    },
+    {
+      "name": "new-name-input",
+      "eval": "(() => { document.activeElement?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "apply-new-property",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Применить и закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "created-row-in-card",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('Личный период') === true"
+    },
+    {
+      "name": "created-property-in-registry",
+      "api": {
+        "name": "created-property-in-registry",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/properties",
+        "expression": "(Array.isArray(data) ? data : data.items).some((p) => p.name === 'Личный период')"
+      },
+      "expect": true
+    },
+    {
+      "name": "created-row-focused",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('Личный период')); const body=document.querySelector('.properties-outside-body'); const active=document.activeElement; return { row: row !== undefined, inside: body !== null && active !== null && body.contains(active) }; })()",
+      "expect": {
+        "row": true,
+        "inside": true
+      }
+    }
+  ]
+}

@@ -39,6 +39,12 @@
  * подключённые имена этой стороны заблокированы и помечены, второе имя той же
  * связи остаётся доступным.
  *
+ * **Исключение присутствующих (0.14.1, задача 626b29bd, требование 87039bc8).**
+ * Пикер вкладки «Свойства» передаёт `excludeRow`: строки, уже присутствующие
+ * у мысли (обе группы, по стороне), просто ОТСУТСТВУЮТ в выдаче — без
+ * блокировки и пометок. Второй режим блокировки не отменяет: без предиката
+ * список ведёт себя как раньше (оба существующих потребителя).
+ *
  * Модуль самодостаточен: модель строк, форматирование ячеек, фильтр и поиск
  * живут здесь — параллельных списков свойств в экранах нет (сторож
  * `guard-property-list.test.ts`).
@@ -221,6 +227,20 @@ export function propertyListColumns(): readonly string[] {
  *  (скаляры и концы связей). Не мутирует вход. Чистая — юнит-тест. */
 export function sortPropertyListRows(rows: readonly PropertyListRow[]): PropertyListRow[] {
   return [...rows].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+}
+
+/**
+ * Исключение строк предикатом потребителя (пикер вкладки «Свойства», 0.14.1,
+ * требование 87039bc8): строки, для которых предикат истинен, отсутствуют в
+ * выдаче ЦЕЛИКОМ — без пометок-блокировок. Без предиката возвращается копия
+ * входа (прежнее поведение менеджера и пикера редактора типа). Чистая —
+ * юнит-тест.
+ */
+export function excludePropertyListRows(
+  rows: readonly PropertyListRow[],
+  excludeRow?: (row: PropertyListRow) => boolean,
+): PropertyListRow[] {
+  return excludeRow === undefined ? [...rows] : rows.filter((row) => !excludeRow(row));
 }
 
 /**
@@ -515,6 +535,16 @@ export function buildPropertyList(opts: {
   searchPlaceholder?: string;
   emptyText?: string;
   emptyHint?: string;
+  /**
+   * Пикер: строки, для которых предикат истинен, ИСКЛЮЧАЮТСЯ из выдачи
+   * целиком — без пометки-блокировки (требование 87039bc8, задача 626b29bd:
+   * «свойства, уже присутствующие у мысли», обе группы, по стороне).
+   * Потребитель сам знает, что считается присутствующим у его владельца;
+   * компонент лишь убирает такие строки из списка, поиска и выбора.
+   * Не задан — прежнее поведение (менеджер свойств, пикер редактора типа:
+   * подключённые имена блокируются через {@link PropertyListCallbacks.rowBlocked}).
+   */
+  excludeRow?: (row: PropertyListRow) => boolean;
 }): PropertyListHandle {
   const { mode, callbacks } = opts;
 
@@ -589,12 +619,20 @@ export function buildPropertyList(opts: {
   const blockReason = (row: PropertyListRow): string | null =>
     row.structural ? null : callbacks.rowBlocked?.(row) ?? null;
 
+  /** Исключена ли строка предикатом потребителя (её просто нет в выдаче). */
+  const isExcluded = (row: PropertyListRow): boolean => opts.excludeRow?.(row) === true;
+
   const visibleRows = (): PropertyListRow[] =>
-    filterPropertyListRows(sortPropertyListRows(allRows), query);
+    filterPropertyListRows(
+      sortPropertyListRows(excludePropertyListRows(allRows, opts.excludeRow)),
+      query,
+    );
 
   /** Текущая строка списка (правило 5 требования 11ddd910). */
   function selected(): PropertyListRow | null {
-    return selectedId === null ? null : allRows.find((r) => r.id === selectedId) ?? null;
+    if (selectedId === null) return null;
+    const row = allRows.find((r) => r.id === selectedId) ?? null;
+    return row !== null && !isExcluded(row) ? row : null;
   }
 
   /** Копирует текущую строку в буфер обмена (TSV фасада `lib/ui/table`). */
@@ -779,7 +817,10 @@ export function buildPropertyList(opts: {
     root,
     setRows: (rows: readonly PropertyListRow[]) => {
       allRows = rows;
-      if (selectedId !== null && !rows.some((r) => r.id === selectedId)) {
+      if (
+        selectedId !== null &&
+        !rows.some((r) => r.id === selectedId && !isExcluded(r))
+      ) {
         selectedId = null;
         table.setCurrent(null);
       }
@@ -789,7 +830,7 @@ export function buildPropertyList(opts: {
     selected,
     selectRow: (id: string) => {
       const row = allRows.find((r) => r.id === id) ?? null;
-      if (row === null || row.structural || blockReason(row) !== null) return;
+      if (row === null || row.structural || isExcluded(row) || blockReason(row) !== null) return;
       selectedId = id;
       table.setCurrent(id);
       updateButtons();

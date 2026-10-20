@@ -1740,12 +1740,13 @@ export class RestClient {
     thoughtId: string,
     key: string,
     value: import('@etn/shared').PropertyValueValue,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyValue> {
     return this.request(
       'PUT',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}`,
-      { body: { value }, requestOptions: opts },
+      { body: side == null ? { value } : { value, side }, requestOptions: opts },
     );
   }
 
@@ -1754,12 +1755,13 @@ export class RestClient {
     networkId: string,
     thoughtId: string,
     key: string,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<void> {
     await this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}`,
-      { requestOptions: opts },
+      { query: side == null ? undefined : { side }, requestOptions: opts },
     );
   }
 
@@ -1798,12 +1800,13 @@ export class RestClient {
     linkId: string,
     key: string,
     value: import('@etn/shared').PropertyValueValue,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyValue> {
     return this.request(
       'PUT',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(linkId)}/properties/${encodeURIComponent(key)}`,
-      { body: { value }, requestOptions: opts },
+      { body: side == null ? { value } : { value, side }, requestOptions: opts },
     );
   }
 
@@ -1812,12 +1815,13 @@ export class RestClient {
     networkId: string,
     linkId: string,
     key: string,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<void> {
     await this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(linkId)}/properties/${encodeURIComponent(key)}`,
-      { requestOptions: opts },
+      { query: side == null ? undefined : { side }, requestOptions: opts },
     );
   }
 

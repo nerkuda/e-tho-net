@@ -9,6 +9,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
 
@@ -716,11 +718,17 @@ describe('editor properties — внетиповые свойства-связи
       false,
       'registry-less link chips must not carry editor corner buttons',
     );
-    // Ошибка 748b80fd: у внетипового ребра появился крестик очистки набора
-    // (ключ записи — display-имя стороны связи), поэтому крестиков теперь два —
-    // у скаляра и у набора рёбер.
+    // 0.14.1 (задача 626b29bd): скаляр вне типа — полноценная редактируемая
+    // строка общего редактора значения, а не read-only подпись.
+    assert.ok(
+      (table as unknown as ShimElement).querySelectorAll('input').length > 0,
+      'скаляр вне типа редактируется общим редактором значения',
+    );
+    // Ошибка 748b80fd: у внетипового ребра без реестрового свойства остался
+    // крестик очистки набора (ключ записи — display-имя стороны связи);
+    // у скаляра теперь штатный крестик поля редактора, а не `prop-outside-remove`.
     const clearButtons = json.split('prop-outside-remove').length - 1;
-    assert.equal(clearButtons, 2, '748b80fd: outside-type link set gained a clear button');
+    assert.equal(clearButtons, 1, '748b80fd: outside-type link set keeps its clear button');
   });
 
   /**
@@ -859,6 +867,133 @@ describe('editor properties — внетиповые свойства-связи
     const json = JSON.stringify(table);
     assert.ok(json.includes('связано с'), 'display-имя отрисовано');
     assert.ok(json.includes('p1') && json.includes('p2'), 'обе строки несут своё ребро');
+  });
+});
+
+describe('внетиповые строки: сторона и исключение присутствующих (626b29bd)', () => {
+  /** Модуль строится поверх шимов (DOM нужен для констант модуля). */
+  async function internals(): Promise<any> {
+    if (loadedModule === null) {
+      shimDocument();
+      (globalThis as any).window = {
+        etn: {},
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      loadedModule = await import('../src/renderer/editor/properties.js');
+    }
+    return loadedModule.propertiesInternals;
+  }
+
+  function linkValue(
+    propertyId: string,
+    side: 'source' | 'target',
+    direction: 'out' | 'in',
+    propertyName: string,
+  ): any {
+    return {
+      property_id: propertyId,
+      property_name: propertyName,
+      value_type: 'link',
+      outside_type: true,
+      direction,
+      side,
+      link_type_id: 'lt1',
+      structural: false,
+      count: 1,
+      values: [],
+    };
+  }
+
+  it('симметричные стороны одного свойства — разные ключи строк', async () => {
+    const { outsideRowKey } = await internals();
+    const source = outsideRowKey(linkValue('p-sym', 'source', 'out', 'см. также'));
+    const target = outsideRowKey(linkValue('p-sym', 'target', 'in', 'см. также'));
+    assert.notEqual(source, target, 'стороны одного property_id не схлопываются');
+  });
+
+  it('уникальность по стороне сохраняется и у рёбер без реестрового свойства', async () => {
+    const { outsideRowKey } = await internals();
+    assert.equal(
+      outsideRowKey(linkValue('', 'source', 'out', 'одно имя')),
+      'link:lt1|out',
+      'legacy-ключ — тип связи + направление',
+    );
+  });
+
+  it('присутствующие: типовая группа (определения) + внетиповые значения по стороне', async () => {    const { presentPropertyRowIds } = await internals();
+    const ids = presentPropertyRowIds(
+      [
+        linkValue('p-out', 'source', 'out', 'вперёд'),
+        {
+          id: 'v1',
+          property_id: 'p-scalar-out',
+          property_name: 'Личное',
+          value_type: 'text',
+          value: 'x',
+          outside_type: true,
+          owner_type: 'thought',
+          owner_id: 't1',
+          updated_at: '2026',
+        },
+      ],
+      [
+        {
+          property_id: 'p-scalar-typed',
+          value_type: 'text',
+          config: null,
+          side: null,
+        },
+        {
+          property_id: 'p-link-typed',
+          value_type: 'link',
+          config: { link_type_id: 'lt2' },
+          side: 'target',
+        },
+        // Структурные «Родители»/«Потомки» в пикер не попадают вовсе.
+        {
+          property_id: 'p-structural',
+          value_type: 'link',
+          config: { structural: true, link_type_id: null },
+          side: null,
+        },
+      ],
+      [],
+    );
+    assert.ok(ids.has('p-scalar-typed'), 'типовой скаляр присутствует');
+    assert.ok(ids.has('p-link-typed:target'), 'типовая сторона связи присутствует по стороне');
+    assert.ok(!ids.has('p-link-typed:source'), 'вторая сторона не исключается');
+    assert.ok(ids.has('p-out:source'), 'внетиповое значение по стороне');
+    assert.ok(ids.has('p-scalar-out'), 'внетиповой скаляр');
+    assert.ok(!ids.has('p-structural'), 'системное структурное свойство не считается');
+  });
+
+  it('обе группы «Свойства» развёрнуты по умолчанию; сохранённые свёртости не трогаются', () => {
+    const src = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+      'utf8',
+    );
+    assert.match(
+      src,
+      /id: 'properties\.type',[\s\S]{0,120}?defaultCollapsed: false/,
+      '«Свойства типа» развёрнута по умолчанию',
+    );
+    assert.match(
+      src,
+      /id: 'properties\.outside',[\s\S]{0,120}?defaultCollapsed: false/,
+      '«Свойства вне типа» развёрнута по умолчанию (было true)',
+    );
+    // Дефолт применяется только без сохранённого значения: `groupSection`
+    // читает `collapsedGroups[groupId]` раньше `defaultCollapsed`.
+    const group = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'group.ts'),
+      'utf8',
+    );
+    assert.match(
+      group,
+      /const saved = store\.state\.collapsedGroups\[spec\.id\];\s*return saved === undefined \? spec\.defaultCollapsed === true : saved;/,
+      'сохранённая свёрнутость пользователя сильнее дефолта',
+    );
   });
 });
 

@@ -681,6 +681,9 @@ const DIALOG_FILES = new Set([
   'admin/admin.ts',
   'canvas/add-dialog.ts',
   'editor/attachments.ts',
+  // Пикер «(+) Добавить свойство» вкладки «Свойства» (0.14.1, задача
+  // 626b29bd): общий список property-list в режиме picker + «Создать новое…».
+  'editor/properties.ts',
   'editor/publication-card.ts',
   // Диалог настройки сочетаний клавиш комментария (0.12.1, задача d534eb35):
   // список команд с контролами переназначения; не диалог-список по правилам
@@ -741,6 +744,9 @@ const DIALOG_FILES = new Set([
  */
 const LIST_DIALOG_FILES = new Set([
   'admin/admin.ts',
+  // Пикер вкладки «Свойства» (0.14.1, задача 626b29bd) — общий
+  // property-list с раскладкой `.list-dialog-body`.
+  'editor/properties.ts',
   'lib/entity-picker.ts',
   'lib/saved-filter-bar.ts',
   'screens/property-manager.ts',
