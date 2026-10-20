@@ -27,7 +27,7 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/s
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
-import { clear, div, el, setTooltip, span } from '../lib/dom.js';
+import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
 import { takeFocusOrigin } from '../lib/focus-origin.js';
 import { etn } from '../lib/etn.js';
@@ -2783,9 +2783,6 @@ async function createLinkFromDrop(
     scheduleRefresh();
     notice('Связь создана.', 'success');
   } catch (err) {
-    notice(
-      `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,
-      'error',
-    );
+    notice(`Не удалось создать связь: ${errText(err)}`, 'error');
   }
 }

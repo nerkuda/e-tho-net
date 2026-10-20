@@ -361,12 +361,17 @@ export function serverUnavailableReason(err: unknown): string {
   if (/права администратора|FORBIDDEN/i.test(msg)) {
     return 'Нет прав администратора: управление журналом сервера доступно только администратору.';
   }
+  // `errText` already maps connection-lost/INTERNAL/raw transport failures to
+  // friendly lowercase phrases (GUI review remark); recognise them here while
+  // still classifying legacy raw messages.
   if (
+    msg === t('errors.connectionLost') ||
+    msg === t('errors.serverUnavailable') ||
     /not connected|fetch|network|econnrefused|enotfound|etimedout|timeout|unavailable|502|503|504/i.test(
       msg,
     )
   ) {
-    return `Сервер недоступен (${msg}).`;
+    return 'Сервер недоступен, попробуйте позже.';
   }
   return `Не удалось получить состояние журнала сервера: ${msg}`;
 }

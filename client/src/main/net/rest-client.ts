@@ -473,7 +473,7 @@ export class RestClient {
       if (mutating && linkDown) {
         throw connectionLostError(
           networkId,
-          'Нет связи с сервером — действие не отправлено. Повторите после восстановления связи.',
+          'Нет соединения с сервером. Действие не выполнено — повторите после восстановления.',
         );
       }
       // Compose headers per attempt: the API-key is resolved lazily so a key
@@ -548,7 +548,10 @@ export class RestClient {
             networkId: networkId ?? '',
             attempt,
           });
-          throw connectionLostError(networkId, 'Нет связи с сервером — запрос отменён');
+          throw connectionLostError(
+            networkId,
+            'Нет соединения с сервером. Действие не выполнено — повторите после восстановления.',
+          );
         }
         // Network-level failure (DNS, connection refused, timeout abort, etc.).
         // Retryable unless the caller aborted the request themselves.

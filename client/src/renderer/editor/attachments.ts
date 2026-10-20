@@ -28,7 +28,7 @@ import {
   registerQuery,
 } from '../lib/live/index.js';
 import { closeDialog, confirmDialog, showDialog } from '../lib/dialog.js';
-import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { div, el, errText, isConnectionLostError, isHttpUrl, span } from '../lib/dom.js';
 import { radioRow } from '../lib/ui/choice-row.js';
 import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { filePathField } from '../lib/ui/file-path-field.js';
@@ -40,6 +40,7 @@ import { notice } from '../lib/notice.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { requireNetworkId } from '../app.js';
+import { onReconnected } from '../state.js';
 import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { etnimgUrl, createMarkdownField, guessMimeFromName } from './markdown-field.js';
 import {
@@ -433,6 +434,9 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     );
   }
 
+  /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
+  let retryStop: (() => void) | null = null;
+
   /** Renders the attachment list. */
   async function reload(): Promise<void> {
     list.replaceChildren(el('span', 'muted', 'Загрузка…'));
@@ -441,8 +445,14 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       attachments = await etn.attachments.list(networkId, ownerType, ownerId);
     } catch (err) {
       list.replaceChildren(operationError(err));
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => root.isConnected, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
     // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
     // владельца событий `attachment.updated/deleted`, несущих только id.
     for (const attachment of attachments) commitEntity('attachment', attachment.id, attachment);

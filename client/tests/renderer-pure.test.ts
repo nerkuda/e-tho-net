@@ -204,10 +204,10 @@ describe('parseWindowLayout', () => {
   });
 
   it('parses the optional event-area width (e) for newer clients', () => {
-    // In-range values land rounded.
+    // In-range values (>= EVENT_AREA_W_MIN = 320) land rounded.
     assert.deepEqual(
-      parseWindowLayout('{"w":400,"h":300,"s":200,"e":260}'),
-      layout(400, 300, 200, 260),
+      parseWindowLayout('{"w":400,"h":300,"s":200,"e":360}'),
+      layout(400, 300, 200, 360),
     );
     // Sub-minimum / NaN / missing => null (the renderer then picks the
     // window-relative default).
@@ -228,12 +228,12 @@ describe('parseWindowLayout', () => {
 
 describe('defaultEventAreaW', () => {
   it('returns the px floor on a narrow window', () => {
-    // 800 * 0.18 = 144 → below the 200 px floor, so the floor wins.
+    // 800 * 0.18 = 144 → below the 360 px floor, so the floor wins.
     assert.equal(defaultEventAreaW(800), EVENT_AREA_W_DEFAULT_PX);
   });
   it('returns the ratio on a wide window', () => {
-    // 2000 * 0.18 = 360 → above the 200 px floor.
-    assert.equal(defaultEventAreaW(2000), Math.round(2000 * EVENT_AREA_W_DEFAULT_RATIO));
+    // 2400 * 0.18 = 432 → above the 360 px floor.
+    assert.equal(defaultEventAreaW(2400), Math.round(2400 * EVENT_AREA_W_DEFAULT_RATIO));
   });
   it('rounds the ratio result', () => {
     // 1024 * 0.18 = 184.32 → 184 (below the floor anyway, but the function
@@ -241,17 +241,14 @@ describe('defaultEventAreaW', () => {
     assert.equal(defaultEventAreaW(1024), EVENT_AREA_W_DEFAULT_PX);
   });
   it('leaves at least 40% of a typical status bar for the history strip', () => {
-    // Status-bar geometry (client/src/renderer/screens/workspace.ts):
-    //   padding 20 (10+10) + status-light 10 + zoom ~50 + event-area-resizer
-    //   6 + 4 gaps of 12 = 134 px of fixed chrome. The history strip lives
-    //   between the zoom indicator and the event-area resizer (flex: 1 1
-    //   auto; min-width: 0). The strip must keep a meaningful share of the
-    //   bar even when the event area lands at its default — otherwise every
-    //   chip collapses into the `▾ N` dropdown (regression bug 3ccacc1c-…
-    //   «Мысли истории не отображаются в нижней панели»).
-    const fixedChrome = 20 + 10 + 50 + 6 + 4 * 12;
+    // Status-bar geometry (client/src/renderer/screens/workspace.ts; GUI
+    // review): zoom ~50 + resizer 6 + padding 20 + three 12 px gaps, with the
+    // event area cancelling one gap against the splitter (-12) = 100 px of
+    // fixed chrome. The indicator now lives INSIDE the event area, so the
+    // invariant is checked on the APPLIED (clamped) width.
+    const fixedChrome = 20 + 50 + 6 + 3 * 12 - 12;
     for (const w of [800, 1024, 1280, 1600, 1920, 2560]) {
-      const eventAreaW = defaultEventAreaW(w);
+      const eventAreaW = clampEventAreaW(defaultEventAreaW(w), w);
       const historyW = w - fixedChrome - eventAreaW;
       assert.ok(
         historyW > w * 0.4,
@@ -262,11 +259,10 @@ describe('defaultEventAreaW', () => {
   it('stays within the drag-resize window-relative cap', () => {
     // The value the renderer ACTUALLY applies is `defaultEventAreaW` clamped
     // by `clampEventAreaW`. The upper bound is `floor(w * MAX_RATIO)`, but
-    // on very narrow windows the clamp substitutes `EVENT_AREA_W_MIN`
-    // (150 px) so the event area keeps enough room for the count + label —
-    // we therefore only assert the cap on windows wide enough that the
-    // ratio is the binding constraint.
-    for (const w of [800, 1280, 1920, 3200]) {
+    // on narrow windows the clamp substitutes `EVENT_AREA_W_MIN` (320 px) so
+    // the area keeps enough room for the indicator + counts — we therefore
+    // only assert the cap on windows wide enough that the ratio is binding.
+    for (const w of [1280, 1920, 3200]) {
       const applied = clampEventAreaW(defaultEventAreaW(w), w);
       const cap = Math.floor(w * EVENT_AREA_W_MAX_RATIO);
       assert.ok(applied <= cap, `applied=${applied} at w=${w} > cap ${cap}`);
@@ -284,7 +280,7 @@ describe('clampEventAreaW', () => {
     assert.equal(clampEventAreaW(cap + 100, w), cap);
   });
   it('returns the value unchanged when inside the range', () => {
-    assert.equal(clampEventAreaW(220, 1200), 220);
+    assert.equal(clampEventAreaW(340, 1200), 340);
   });
   it('falls back to the absolute minimum on a zero-width window', () => {
     assert.equal(clampEventAreaW(400, 0), EVENT_AREA_W_MIN);

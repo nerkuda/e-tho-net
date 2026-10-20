@@ -17,7 +17,7 @@ import { confirmDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { errorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
-import { store } from '../state.js';
+import { serverLabelOf, store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
 import { fieldRow } from '../lib/ui/field.js';
@@ -88,12 +88,19 @@ export function buildOnboarding(): HTMLElement {
    *  be430215): a previously used server reopens its last tab instead of
    *  offering a network re-pick. A first-time connect has no saved tabs and
    *  still lands on the network list. */
-  async function connectProfile(profileId: string): Promise<void> {
+  async function connectProfile(profile: {
+    id: string;
+    label: string;
+    baseUrl: string;
+  }): Promise<void> {
     connectError.hidden = true;
     submit.disabled = true;
     try {
-      const me = await etn.server.connect(profileId);
-      store.update({ profileId, me });
+      // The status tooltip names the server (de34b35b, GUI review); the row
+      // already carries label/baseUrl, no extra IPC needed.
+      const serverLabel = serverLabelOf(profile);
+      const me = await etn.server.connect(profile.id);
+      store.update({ profileId: profile.id, serverLabel, me });
       await restoreSession();
     } catch (err) {
       connectError.textContent = errText(err);
@@ -125,7 +132,7 @@ export function buildOnboarding(): HTMLElement {
       removeBtn.addEventListener('click', (ev) => ev.stopPropagation());
       item.append(info, removeBtn);
       item.addEventListener('click', () => {
-        void connectProfile(p.id);
+        void connectProfile(p);
       });
       profileList.append(item);
     }
@@ -155,7 +162,7 @@ export function buildOnboarding(): HTMLElement {
       // there is no need (and no point) to call `showScreen('onboarding')` —
       // that would tear down `root` mid-function and orphan the rest of this
       // code path.
-      store.update({ profileId: null, me: null });
+      store.update({ profileId: null, serverLabel: null, me: null });
     }
     await loadProfiles();
   }
@@ -182,7 +189,11 @@ export function buildOnboarding(): HTMLElement {
       });
       const profiles = await etn.server.listProfiles();
       const active = profiles.find((p) => p.isActive);
-      store.update({ profileId: active?.id ?? null, me });
+      store.update({
+        profileId: active?.id ?? null,
+        serverLabel: serverLabelOf(active ?? { label: labelInput.value, baseUrl }),
+        me,
+      });
       // New profile → no saved tabs → `restoreSession` shows the network
       // list, same as before (H3 first-connect flow).
       await restoreSession();

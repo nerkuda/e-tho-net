@@ -27,23 +27,91 @@ const ALL_STATUSES: RtStatus[] = [
 ];
 
 describe('guard: статусы realtime-соединения', () => {
-  it('каждому RtStatus соответствует цвет и непустой текст', () => {
+  it('каждому RtStatus соответствует цвет, непустая подпись и тултип', () => {
     for (const status of ALL_STATUSES) {
       const glyph = statusGlyph(status, null);
       assert.ok(
         ['ok', 'warn', 'bad', ''].includes(glyph.cls),
         `${status}: неизвестный класс «${glyph.cls}»`,
       );
-      assert.ok(glyph.text.trim().length > 0, `${status}: пустой текст`);
+      assert.ok(glyph.text.trim().length > 0, `${status}: пустая подпись`);
+      assert.ok(glyph.title.trim().length > 0, `${status}: пустой тултип`);
     }
-    // Специальная подпись detail`server-restart` — жёлтая, отдельный текст.
-    const restart = statusGlyph('reconnecting', 'server-restart');
-    assert.equal(restart.cls, 'warn');
-    assert.equal(restart.text, 'Сервер перезапускается…');
     // `idle` — нейтральный, не красный (нет открытой сети — не авария).
     assert.equal(statusGlyph('idle', null).cls, '');
     // Красный только у настоящей потери связи.
     assert.equal(statusGlyph('offline', null).cls, 'bad');
+  });
+
+  it('подписи и тултипы совпадают с таблицей заказчика', () => {
+    const server = 'ETN Local';
+    assert.deepEqual(statusGlyph('connected', null, server), {
+      cls: 'ok',
+      text: 'Сервер: ОК',
+      title: `Подключено к ${server}`,
+    });
+    assert.deepEqual(statusGlyph('connecting', null, server), {
+      cls: 'warn',
+      text: 'Сервер: ???',
+      title: `Подключение к ${server}…`,
+    });
+    const recovering = `Попытка восстановить соединение с ${server}…`;
+    for (const [status, detail] of [
+      ['suspect', null],
+      ['reconnecting', null],
+      ['reconnecting', 'server-restart'],
+    ] as const) {
+      assert.deepEqual(statusGlyph(status, detail, server), {
+        cls: 'warn',
+        text: 'Сервер: ???',
+        title: recovering,
+      });
+    }
+    assert.deepEqual(statusGlyph('offline', null, server), {
+      cls: 'bad',
+      text: 'Нет соединения',
+      title: 'Соединения с сервером нет. Данные доступны только для просмотра',
+    });
+    assert.deepEqual(statusGlyph('idle', null, server), {
+      cls: '',
+      text: 'Сервер: —',
+      title: 'Сеть не открыта',
+    });
+    // Имя сервера неизвестно — общие формулировки без подстановки.
+    assert.equal(statusGlyph('connected', null, null).title, 'Подключено к серверу');
+    assert.equal(statusGlyph('connecting', null, null).title, 'Подключение к серверу…');
+    assert.equal(
+      statusGlyph('suspect', null, null).title,
+      'Попытка восстановить соединение с сервером…',
+    );
+  });
+
+  it('индикатор живёт в правой event-area, бейджа «Только чтение» нет', () => {
+    // Замечание заказчика: точка и подпись — один блок, первый элемент
+    // правой области после сплиттера; отдельного read-only бейджа нет.
+    const workspace = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'screens', 'workspace.ts'),
+      'utf8',
+    );
+    assert.match(workspace, /const sbStatus = div\('sb-status'\)/);
+    assert.match(workspace, /sbStatus\.append\(statusLeft, statusText\)/);
+    assert.match(workspace, /eventArea\.append\(sbStatus, countsLabel, eventLabel\)/);
+    assert.match(
+      workspace,
+      /statusbar\.append\(\s*zoomLabel,\s*historyHost,\s*eventAreaResizer,\s*eventArea,\s*conflictHost,?\s*\)/,
+    );
+    assert.doesNotMatch(workspace, /sb-readonly/);
+    assert.doesNotMatch(workspace, /isReadOnlyStatus/);
+    const layout = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'styles', 'layout.css'),
+      'utf8',
+    );
+    assert.doesNotMatch(layout, /\.sb-readonly/);
+    const dictionary = fs.readFileSync(
+      path.join(RENDERER_ROOT, 'lib', 'locales', 'ru.ts'),
+      'utf8',
+    );
+    assert.doesNotMatch(dictionary, /'realtime\.readOnly'/);
   });
 
   it('эффективный статус читается только через getRtStatus', () => {

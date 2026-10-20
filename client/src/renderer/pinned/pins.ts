@@ -16,7 +16,7 @@ import { PINNED_THOUGHTS_LIMIT } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import { showDialog } from '../lib/dialog.js';
-import { el } from '../lib/dom.js';
+import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { queryKeys, setQueryData } from '../lib/live/index.js';
 import { notice } from '../lib/notice.js';
@@ -56,8 +56,7 @@ export async function setPins(networkId: string, orderedIds: string[]): Promise<
     setQueryData(queryKeys.pins(), ids);
     return true;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    notice(`Не удалось изменить закреплённые: ${message}`, 'error');
+    notice(`Не удалось изменить закреплённые: ${errText(err)}`, 'error');
     return false;
   }
 }

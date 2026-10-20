@@ -14,7 +14,7 @@
 import type { Thought } from '@etn/shared';
 
 import { closeDialog, errorDialog, hasOpenDialog } from './lib/dialog.js';
-import { hasTextSelection } from './lib/dom.js';
+import { errText, hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import {
   activateFocusQuery,
@@ -82,7 +82,7 @@ import {
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
-import { store, type WorkspaceView } from './state.js';
+import { serverLabelOf, store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 
 /** Debounce for coalescing realtime-triggered refreshes, ms. */
@@ -745,9 +745,12 @@ export async function boot(): Promise<void> {
   const profiles = await etn.server.listProfiles();
   const active = profiles.find((p) => p.isActive);
   if (active !== undefined) {
+    // The status tooltip names the server; resolve it before the first
+    // connect attempt so even «Подключение…» has a name (de34b35b, GUI review).
+    const serverLabel = serverLabelOf(active);
     try {
       const me = await etn.server.connect(active.id);
-      store.update({ profileId: active.id, me });
+      store.update({ profileId: active.id, serverLabel, me });
       // The realtime pool now exists: pull the per-network status snapshot
       // (defect de34b35b, verify remark 4).
       void refreshRealtimeStatuses();
@@ -757,12 +760,12 @@ export async function boot(): Promise<void> {
       return;
     } catch {
       // Connection failed (server down, key revoked) — onboarding offers a retry.
-      store.update({ profileId: active.id, me: null });
+      store.update({ profileId: active.id, serverLabel, me: null });
       showScreen('onboarding');
       return;
     }
   }
-  store.update({ profileId: null, me: null });
+  store.update({ profileId: null, serverLabel: null, me: null });
   showScreen('onboarding');
 }
 
@@ -1032,10 +1035,7 @@ async function globalPaste(targetId: string | null): Promise<void> {
   } catch (err) {
     // Clipboard read denied or unavailable — surface the error so the user
     // isn't left wondering why nothing happened.
-    notice(
-      `Не удалось прочитать системный буфер: ${err instanceof Error ? err.message : String(err)}`,
-      'error',
-    );
+    notice(`Не удалось прочитать системный буфер: ${errText(err)}`, 'error');
   }
 }
 

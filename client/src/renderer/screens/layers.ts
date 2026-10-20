@@ -40,7 +40,7 @@ import {
   type MenuItem,
 } from '../lib/menu.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
-import { div, span } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { colorField } from '../lib/ui/color-field.js';
@@ -781,8 +781,8 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
       setState(
         errorState(
           rows.length === 0
-            ? `Не удалось загрузить отличия: ${String(err)}`
-            : `Не удалось догрузить отличия: ${String(err)}`,
+            ? `Не удалось загрузить отличия: ${errText(err)}`
+            : `Не удалось догрузить отличия: ${errText(err)}`,
           { label: 'Повторить', onClick: () => void loadNext() },
         ),
       );
@@ -1034,7 +1034,7 @@ function openThoughtDiffDialog(
       host.replaceChildren(renderThoughtDiff(diff));
     } catch (err) {
       host.replaceChildren(
-        errorState(`Не удалось загрузить текстовый дифф: ${String(err)}`, {
+        errorState(`Не удалось загрузить текстовый дифф: ${errText(err)}`, {
           label: 'Повторить',
           onClick: () => void load(),
         }),

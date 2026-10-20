@@ -149,34 +149,70 @@ export function getWorkspace(): WorkspaceHandles | null {
   return current;
 }
 
-/**
- * Status indicator colour class + visible text per realtime status (§11, L13,
- * defect de34b35b). `detail === 'server-restart'` qualifies the yellow
- * `reconnecting` state with «Сервер перезапускается…».
- */
-export function statusGlyph(status: RtStatus, detail?: RtStatusDetail | null): { cls: string; text: string } {
-  switch (status) {
-    case 'connected':
-      return { cls: 'ok', text: t('realtime.status.connected') };
-    case 'connecting':
-      return { cls: 'warn', text: t('realtime.status.connecting') };
-    case 'suspect':
-      return { cls: 'warn', text: t('realtime.status.suspect') };
-    case 'reconnecting':
-      return detail === 'server-restart'
-        ? { cls: 'warn', text: t('realtime.status.serverRestart') }
-        : { cls: 'warn', text: t('realtime.status.reconnecting') };
-    case 'offline':
-      return { cls: 'bad', text: t('realtime.status.offline') };
-    default:
-      // `idle` — no open network is a neutral state, not a failure.
-      return { cls: '', text: t('realtime.status.idle') };
-  }
+/** Visible status glyph: colour class, short caption and the tooltip. */
+export interface StatusGlyph {
+  cls: string;
+  text: string;
+  title: string;
 }
 
-/** `true` for states where changing actions are blocked (yellow/red). */
-export function isReadOnlyStatus(status: RtStatus): boolean {
-  return status === 'connecting' || status === 'suspect' || status === 'reconnecting' || status === 'offline';
+/**
+ * Status indicator colour class, visible caption and tooltip per realtime
+ * status (§11, L13, defect de34b35b; замечания заказчика после проверки GUI).
+ *
+ * The caption is deliberately short — the server name lives in the tooltip
+ * (`serverLabel` = label of the active profile, fallback host). Yellow covers
+ * every "link is not usable right now" state (`connecting`, `suspect`,
+ * `reconnecting`, planned restart), red is the 60 s `offline`, neutral is
+ * `idle` (no network open — not a failure).
+ */
+export function statusGlyph(
+  status: RtStatus,
+  detail?: RtStatusDetail | null,
+  serverLabel?: string | null,
+): StatusGlyph {
+  const label = serverLabel?.trim() ?? '';
+  const named = label !== '';
+  switch (status) {
+    case 'connected':
+      return {
+        cls: 'ok',
+        text: t('realtime.status.connected'),
+        title: named ? t('realtime.tip.connected', label) : t('realtime.tip.connectedGeneric'),
+      };
+    case 'connecting':
+      return {
+        cls: 'warn',
+        text: t('realtime.status.connecting'),
+        title: named ? t('realtime.tip.connecting', label) : t('realtime.tip.connectingGeneric'),
+      };
+    case 'suspect':
+      return {
+        cls: 'warn',
+        text: t('realtime.status.suspect'),
+        title: named ? t('realtime.tip.recovering', label) : t('realtime.tip.recoveringGeneric'),
+      };
+    case 'reconnecting':
+      return {
+        cls: 'warn',
+        // Planned server restart shares the caption; the tooltip is the same
+        // «try to restore» wording (customer wording table).
+        text:
+          detail === 'server-restart'
+            ? t('realtime.status.serverRestart')
+            : t('realtime.status.reconnecting'),
+        title: named ? t('realtime.tip.recovering', label) : t('realtime.tip.recoveringGeneric'),
+      };
+    case 'offline':
+      return {
+        cls: 'bad',
+        text: t('realtime.status.offline'),
+        title: t('realtime.tip.offline'),
+      };
+    default:
+      // `idle` — no open network is a neutral state, not a failure.
+      return { cls: '', text: t('realtime.status.idle'), title: t('realtime.tip.idle') };
+  }
 }
 
 /** Applies `editor_position` (left/right/top/bottom/hidden) to the body. */
@@ -383,14 +419,14 @@ export function buildWorkspace(): HTMLElement {
   const statusbar = div('statusbar');
 
   const statusLeft = span('', 'status-light');
-  // Visible status caption (defect de34b35b): the dot alone was not enough —
-  // the user must see «Проверяем связь…» / «Сервер перезапускается…» / «Нет
-  // связи». Width is reserved in CSS so the history strip does not jitter
-  // when the text changes (bug de07e690).
+  // Visible status caption (defect de34b35b; замечания заказчика после
+  // проверки GUI). The dot and the caption form ONE unit `.sb-status` and
+  // live in the right `event-area`, immediately after the splitter, pinned
+  // to its left edge. The caption width is reserved in CSS so the counts and
+  // the event text do not shift when the status text changes.
   const statusText = span('', 'sb-status-text');
-  // Read-only affordance for yellow/red states (defect de34b35b): a minimal
-  // visible marker — controls stay enabled, the main-process gate blocks writes.
-  const readOnlyBadge = span(t('realtime.readOnly'), 'sb-readonly is-hidden');
+  const sbStatus = div('sb-status');
+  sbStatus.append(statusLeft, statusText);
   // Zoom indicator (08-ui-spec §11): sits to the LEFT of the history strip,
   // immediately after the connection dot — the old position next to the
   // event area invited the layout to repaint the history chips every time
@@ -405,13 +441,14 @@ export function buildWorkspace(): HTMLElement {
   // visible without JS on every render.
   const eventAreaResizer = splitterElement('event-area-resizer');
   setTooltip(eventAreaResizer, t('workspace.eventArea.resize'));
-  // Fixed-width region of the status bar. The history strip and the
-  // status-light live OUTSIDE this container so they no longer repaint when
-  // a realtime event arrives and the event text reflows.
+  // Fixed-width region of the status bar: connection indicator (dot +
+  // caption), thought counts and the last realtime event text. The history
+  // strip lives OUTSIDE this container so it no longer repaints when a
+  // realtime event arrives and the event text reflows.
   const eventArea = div('event-area');
   const countsLabel = span('', 'sb-item sb-counts');
   const eventLabel = span('', 'sb-item sb-event');
-  eventArea.append(countsLabel, eventLabel);
+  eventArea.append(sbStatus, countsLabel, eventLabel);
   const conflictHost = div('sb-conflict hidden');
   const conflictText = span(t('workspace.conflict.changed'));
   conflictHost.append(svgIcon('alert', 14), conflictText);
@@ -419,10 +456,9 @@ export function buildWorkspace(): HTMLElement {
   showConflictButton.type = 'button';
   conflictHost.append(showConflictButton);
 
+  // Status-bar order (замечания заказчика после проверки GUI): zoom, history,
+  // splitter, event area (indicator + caption first, flush left), conflict.
   statusbar.append(
-    statusLeft,
-    statusText,
-    readOnlyBadge,
     zoomLabel,
     historyHost,
     eventAreaResizer,
@@ -499,11 +535,11 @@ export function buildWorkspace(): HTMLElement {
     layerMenuLabel.textContent = truncateLayerMenuLabel(st.currentLayer?.title);
     setTooltip(layerMenuButton, layerMenuTooltip(st.currentLayer?.title));
     const rtStatus = getRtStatus(st);
-    const glyph = statusGlyph(rtStatus, getRtStatusDetail(st));
+    const glyph = statusGlyph(rtStatus, getRtStatusDetail(st), st.serverLabel);
     statusLeft.className = `status-light ${glyph.cls}`.trimEnd();
-    setTooltip(statusLeft, glyph.text);
+    // One tooltip for the whole indicator block (dot + caption).
+    setTooltip(sbStatus, glyph.title);
     statusText.textContent = glyph.text;
-    readOnlyBadge.classList.toggle('is-hidden', !isReadOnlyStatus(rtStatus));
     applyEditorPosition(body, st.editorPosition);
     const editorHidden = st.editorPosition === 'hidden';
     editorHost.classList.toggle('hidden', editorHidden);

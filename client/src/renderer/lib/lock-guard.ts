@@ -27,6 +27,7 @@ import type { LockEntityType, LockRow } from '@etn/shared';
 import { EtnError } from '@etn/shared';
 
 import { etn } from './etn.js';
+import { errText } from './dom.js';
 import {
   otherHolder,
   getLock,
@@ -260,6 +261,5 @@ function entityLabel(entityType: string): string {
 
 /** Compact `Error.message` rendering for notices. */
 function stringifyError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  return errText(err);
 }

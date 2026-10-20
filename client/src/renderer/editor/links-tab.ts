@@ -28,12 +28,12 @@ import { requireNetworkId, setFocus } from '../app.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { t } from '../lib/i18n.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
-import { div, el, renderHtml, span } from '../lib/dom.js';
+import { div, el, isConnectionLostError, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { toggleSelection } from '../selection/selection.js';
-import { store } from '../state.js';
+import { onReconnected, store } from '../state.js';
 import { openPublicationInWorkspace } from '../screens/active-view.js';
 import {
   openLinkInEditor,
@@ -132,6 +132,8 @@ function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
   const root = div('link-thoughts-tab');
   if (ctx.link === null) return root;
   const link = ctx.link;
+  /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
+  let retryStop: (() => void) | null = null;
   void reload();
 
   async function reload(): Promise<void> {
@@ -141,8 +143,14 @@ function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
       refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
     } catch (err) {
       root.replaceChildren(operationError(err));
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => root.isConnected, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
     const byId = new Map(refs.map((r) => [r.id, r]));
     const source = byId.get(link.source_id);
     const target = byId.get(link.target_id);
@@ -205,6 +213,7 @@ function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
 function buildBacklinksBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
+  let retryStop: (() => void) | null = null;
   void reload();
 
   async function reload(): Promise<void> {
@@ -214,8 +223,14 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
       hits = await etn.thoughts.backlinks(networkId, ctx.ownerId);
     } catch (err) {
       box.replaceChildren(operationError(err));
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
     const visible = hits.filter((hit) => hit.active || store.state.showInactive);
     box.replaceChildren();
     if (visible.length === 0) {
@@ -296,6 +311,7 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
 function buildMentionsBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
+  let retryStop: (() => void) | null = null;
   void reload();
 
   async function reload(): Promise<void> {
@@ -305,8 +321,14 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       hits = await etn.thoughts.mentions(networkId, ctx.ownerId);
     } catch (err) {
       box.replaceChildren(operationError(err));
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
     // Inactive mentioning thoughts/links follow the `show_inactive` setting.
     const visible = hits.filter((hit) => hit.active || store.state.showInactive);
     // `…` → the resolved count in the group header (08-ui-spec.md §6.7). The
@@ -423,6 +445,7 @@ function publicationRoleLabel(item: PublicationUsageItem): string {
 function buildPublicationsBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
+  let retryStop: (() => void) | null = null;
   void reload();
 
   async function reload(): Promise<void> {
@@ -437,8 +460,14 @@ function buildPublicationsBody(ctx: EditorContext): HTMLElement {
       hasMore = result.has_more;
     } catch (err) {
       box.replaceChildren(operationError(err));
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
     box
       .closest('.group')
       ?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${total})` }));

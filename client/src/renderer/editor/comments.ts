@@ -22,6 +22,7 @@ import {
   type DraftKind,
 } from '../drafts.js';
 import { commentShell } from '../lib/ui/comment.js';
+import { isConnectionLostError } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import {
   asRealtimeCause,
@@ -39,7 +40,7 @@ import {
 } from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
-import { store } from '../state.js';
+import { onReconnected, store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
 import { createMarkdownField, cancelMarkdownFieldEdit, setMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
@@ -245,14 +246,57 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     draftTimer = null;
   };
 
-  void (async () => {
+  let inFlight = false;
+  let retryUnsubscribe: (() => void) | null = null;
+
+  /** Drops the reconnect watch (successful load, unmounted body, network switch). */
+  const stopRetryWatch = (): void => {
+    if (retryUnsubscribe !== null) {
+      retryUnsubscribe();
+      retryUnsubscribe = null;
+    }
+  };
+
+  /**
+   * Waits for the network to report `connected` again and retries the load
+   * (defect de34b35b, GUI review remark: an outage must not leave the tab
+   * stuck on «Невозможно загрузить: нет соединения с сервером»). The watch
+   * lives only while the error is on screen and drops itself when the body is
+   * unmounted (editor rebuild) or the user switches networks; every retry
+   * starts with `{kind:'loading'}` so the user sees the attempt.
+   */
+  function watchForReconnect(): void {
+    stopRetryWatch();
+    retryUnsubscribe = onReconnected(
+      networkId,
+      () => box.isConnected,
+      () => void loadPermanent(),
+    );
+  }
+
+  /**
+   * Loads the permanent comment. Repeatable by design: a `connection-lost`
+   * failure leaves the error visible and arms {@link watchForReconnect}; a
+   * successful retry builds the field and renders the comment. Business
+   * errors (validation, 404) are terminal — retrying them would not help.
+   */
+  async function loadPermanent(): Promise<void> {
+    if (inFlight) return;
+    inFlight = true;
+    stopRetryWatch();
+    shell.setState({ kind: 'loading' });
     let comments: Comment[];
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
+      inFlight = false;
+      if (!box.isConnected) return;
       shell.setState({ kind: 'error', error: err });
+      if (isConnectionLostError(err)) watchForReconnect();
       return;
     }
+    inFlight = false;
+    if (!box.isConnected) return;
     permanent = comments.find((c) => c.kind === 'permanent') ?? null;
     draftKind = permanent === null ? 'comment-new' : 'comment';
 
@@ -365,7 +409,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       hasComment: permanent !== null,
     });
     await cleanupStaleDrafts();
-  })();
+  }
+
+  void loadPermanent();
 
   return box;
 }

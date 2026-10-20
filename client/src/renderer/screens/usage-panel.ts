@@ -40,7 +40,7 @@ import {
 import { onThoughtDeleted, scheduleRefresh } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { patchFocusEdge, store } from '../state.js';
-import { div, span } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
@@ -733,9 +733,4 @@ export function closeUsagePanel(): void {
 /** Открыта ли экранная панель для указанной сущности. */
 export function isUsagePanelOpenFor(kind: 'thought' | 'link', id: string): boolean {
   return screenPanel?.isOpenFor(kind, id) ?? false;
-}
-
-/** Текст ошибки для состояния «не загрузилось». */
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

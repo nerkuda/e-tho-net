@@ -38,9 +38,9 @@ import { t } from '../lib/i18n.js';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateQueries, queryKeys, signalOwnerActivity } from '../lib/live/index.js';
-import { store } from '../state.js';
+import { onReconnected, store } from '../state.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { div, el, errText } from '../lib/dom.js';
+import { div, el, errText, isConnectionLostError } from '../lib/dom.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { MENU_SEPARATOR, menuAction, type MenuItem } from '../lib/menu.js';
@@ -182,6 +182,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   // on a table row, a new one starts via «Добавить» (08-ui-spec.md §6.6).
   showEmptyEditor();
 
+  /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
+  let retryStop: (() => void) | null = null;
+
   /** Loads and renders the chronological table. */
   async function reload(keepSelection = true): Promise<void> {
     let comments: Comment[];
@@ -190,8 +193,16 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     } catch (err) {
       table.element.hidden = true;
       tableWrap.replaceChildren(operationError(err));
+      // «Нет соединения» — временная причина: перечитать, как только сеть
+      // снова станет `connected`, не дожидаясь пересборки вкладки.
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => root.isConnected, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
     const chrono = comments.filter((c) => c.kind === 'chronological');
     if (!keepSelection || !chrono.some((c) => c.id === selectedId)) {
       selectedId = null;

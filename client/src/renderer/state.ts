@@ -70,6 +70,11 @@ export interface AppState {
   screen: Screen;
   /** Active server profile id (L5), null before onboarding finishes. */
   profileId: string | null;
+  /** Human name of the active server for the status tooltip (замечания
+   *  заказчика после проверки GUI): the profile label, falling back to the
+   *  host of its `baseUrl`. Filled on every successful profile connect and
+   *  kept across network/tab switches (the server does not change). */
+  serverLabel: string | null;
   /** Current user (`GET /me`). */
   me: CurrentUser | null;
   /** Opened network meta (L2). */
@@ -216,6 +221,7 @@ export interface AppState {
 const initial: AppState = {
   screen: 'onboarding',
   profileId: null,
+  serverLabel: null,
   me: null,
   network: null,
   networkId: null,
@@ -368,6 +374,52 @@ export function getRtStatusDetail(state: AppState): RtStatusDetail | null {
   const networkId = state.networkId;
   if (networkId === null) return null;
   return state.rtStatusDetailByNetwork[networkId] ?? null;
+}
+
+/**
+ * Subscribes to "the active network is connected again" and calls `retry`
+ * once, then unsubscribes (defect de34b35b, GUI review remark: an outage must
+ * not leave an editor tab stuck on an error until it is rebuilt).
+ *
+ * The handler also drops itself when `isAlive()` reports the host element
+ * unmounted or the user switched networks — no leaked store listeners.
+ * Returns the unsubscribe function for the caller's own teardown paths.
+ */
+export function onReconnected(
+  networkId: string | null,
+  isAlive: () => boolean,
+  retry: () => void,
+): () => void {
+  const unsubscribe = store.subscribe(() => {
+    if (!isAlive() || store.state.networkId !== networkId) {
+      unsubscribe();
+      return;
+    }
+    if (getRtStatus(store.state) !== 'connected') return;
+    unsubscribe();
+    retry();
+  });
+  return unsubscribe;
+}
+
+/**
+ * Human server name for the realtime tooltip (замечания заказчика после
+ * проверки GUI): the profile label, falling back to the host of `baseUrl`.
+ * `null` when neither is usable — the tooltip then uses the generic wording
+ * («Подключено к серверу»).
+ */
+export function serverLabelOf(
+  profile: { label?: string | null; baseUrl?: string | null } | null | undefined,
+): string | null {
+  const label = profile?.label?.trim() ?? '';
+  if (label !== '') return label;
+  const baseUrl = profile?.baseUrl?.trim() ?? '';
+  if (baseUrl === '') return null;
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
 }
 
 /**

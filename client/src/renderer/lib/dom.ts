@@ -7,6 +7,7 @@
  * those paths use {@link renderHtml} and are documented at call sites.
  */
 
+import { t } from './i18n.js';
 import { splitHighlightRuns } from './pure.js';
 
 /** Creates an element with an optional class and text. */
@@ -92,10 +93,60 @@ export function renderHighlightedText(
   }
 }
 
-/** Converts any thrown value into a readable Russian message. */
+/** Structural view of an error carrying the main-process wire fields. */
+interface ErrorLike {
+  code?: unknown;
+  details?: unknown;
+  message?: unknown;
+  name?: unknown;
+}
+
+function asErrorLike(err: unknown): ErrorLike | null {
+  if (typeof err === 'object' && err !== null) return err as ErrorLike;
+  return null;
+}
+
+/**
+ * `true` when the failure is OUR link-down rejection (main-process gate or a
+ * cancelled REST request, defect de34b35b). The main process marks both with
+ * `details.kind === 'connection-lost'`; the renderer receives a revived
+ * `EtnError`, but the check is structural so a plain IPC/replay object works
+ * too.
+ */
+export function isConnectionLostError(err: unknown): boolean {
+  const details = asErrorLike(err)?.details;
+  if (typeof details !== 'object' || details === null) return false;
+  return (details as { kind?: unknown }).kind === 'connection-lost';
+}
+
+/**
+ * Raw transport failures that must never reach the user as-is (they name
+ * `fetch`, sockets and abort codes). Matched against the message of an
+ * `Error`; `AbortError` is also matched by name.
+ */
+const RAW_NETWORK_ERROR_RE =
+  /fetch failed|failed to fetch|networkerror|econn(?:refused|reset|aborted)|etimedout|ehostunreach|enotfound|abort(?:ed)?|сетевая ошибка/i;
+
+/**
+ * Converts any thrown value into a readable Russian message (замечания
+ * заказчика после проверки GUI: «Дружелюбные сообщения»).
+ *
+ * - `connection-lost` (`details.kind`) → «нет соединения с сервером»;
+ * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
+ *   `ETIMEDOUT`, `AbortError`, «Сетевая ошибка») → «сервер недоступен,
+ *   попробуйте позже» — technical words, codes and stacks never leak;
+ * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
+ *   `VERSION_CONFLICT`, …) keep their server-authored message verbatim.
+ */
 export function errText(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  if (isConnectionLostError(err)) return t('errors.connectionLost');
+  const like = asErrorLike(err);
+  if (like?.code === 'INTERNAL') return t('errors.serverUnavailable');
+  const message = err instanceof Error ? err.message : String(err);
+  if (like?.name === 'AbortError' || RAW_NETWORK_ERROR_RE.test(message)) {
+    return t('errors.serverUnavailable');
+  }
+  return message;
 }
 
 /** Formats an ISO date as `ДД.ММ.ГГГГ` (Russian locale). */

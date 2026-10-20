@@ -499,33 +499,26 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
-/* Visible status caption (defect de34b35b). The caption box has a FIXED width
-   covering the longest label («Сервер перезапускается…», measured 143.64 px
-   at 12 px; 13.5em = 162 px with margin) so the history strip never shifts
-   when the status changes (bug de07e690, verify run7). */
+/* Connection indicator block (замечания заказчика после проверки GUI): the
+   dot and the visible caption form one unit and are the FIRST element of the
+   right `event-area`, flush against the splitter's right edge. The caption
+   has a FIXED width covering the longest label («Нет соединения», measured
+   ~86 px at 12 px; 7.5em = 90 px) so the counts and the event text never
+   shift when the status changes (bug de07e690, verify run7). */
+.sb-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sb-status-text {
   flex: none;
-  inline-size: 13.5em;
+  inline-size: 7.5em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
-}
-
-/* Minimal read-only marker for yellow/red connection states (de34b35b).
-   `visibility:hidden` (NOT `display:none`) keeps the badge's width and the
-   status-bar gap reserved in every state, so `.history-bar.left` is identical
-   for connected/suspect/reconnecting/offline (verify run7). */
-.sb-readonly {
-  flex: none;
-  padding: 0 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  color: var(--text-dim);
-}
-
-.sb-readonly.is-hidden {
-  visibility: hidden;
 }
 
 /* Inline SVG chrome icons (L13, lib/icons.ts): colour follows the host text
@@ -814,20 +807,23 @@
   font-style: italic;
 }
 
-/* Status-bar event area (08-ui-spec §11): right-most fixed-width region of
- * the status bar. Holds the thought counts and the last realtime event text;
- * its width is driven by `--event-area-w` (set from `store.eventAreaW` on
- * every `refresh` tick and clamped against the window-relative upper bound).
- * Lives OUTSIDE the history strip so a new event text does NOT trigger a
- * reflow of the history chips (bug de07e690-…: «Дергание нижней строки
- * клиента»). */
+/* Status-bar event area (08-ui-spec §11; замечания заказчика после проверки
+ * GUI): right-most fixed-width region of the status bar. Holds the connection
+ * indicator (dot + caption), the thought counts and the last realtime event
+ * text; its width is driven by `--event-area-w` (set from `store.eventAreaW`
+ * on every `refresh` tick and clamped against the window-relative upper
+ * bound). Lives OUTSIDE the history strip so a new event text does NOT
+ * trigger a reflow of the history chips (bug de07e690-…). The negative
+ * margin cancels the status-bar gap so the indicator sits right against the
+ * splitter. */
 .event-area {
-  flex: 0 0 var(--event-area-w, 200px);
+  flex: 0 0 var(--event-area-w, 360px);
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding-left: 8px;
+  margin-left: -12px;
+  padding-left: 0;
   overflow: hidden;
   white-space: nowrap;
 }

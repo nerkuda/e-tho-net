@@ -2502,7 +2502,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function connectionLostIpcError(networkId: string): EtnError {
   return new EtnError(
     'INTERNAL',
-    'Нет связи с сервером — действие не отправлено. Повторите после восстановления связи.',
+    'Нет соединения с сервером. Действие не выполнено — повторите после восстановления.',
     { kind: 'connection-lost', networkId },
   );
 }

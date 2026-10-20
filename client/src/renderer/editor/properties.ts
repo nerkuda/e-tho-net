@@ -40,6 +40,7 @@ import {
   div,
   el,
   errText,
+  isConnectionLostError,
   setTooltip,
   span,
 } from '../lib/dom.js';
@@ -51,7 +52,7 @@ import { PROPERTY_VALUES_REFRESHED_EVENT } from '../lib/property-values-refresh.
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
-import { store } from '../state.js';
+import { onReconnected, store } from '../state.js';
 import { registerTabContent, registerTabRetarget, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
@@ -345,6 +346,8 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
   let everMounted = false;
   /** Owner currently rendered in this body (see the in-type table's guard). */
   let shownOwnerId: string | null = null;
+  /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
+  let retryStop: (() => void) | null = null;
 
   const rowSpec = outsideRowSpec(networkId, target, () => void reload());
 
@@ -370,9 +373,15 @@ function buildOutsidePropertiesBody(target: PropertiesTarget): HTMLElement {
       shownOwnerId = null;
       tableAttached = false;
       wrap.replaceChildren(operationError(err));
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+      }
       return;
     }
     if (requestOwnerId !== target.ownerId) return;
+    retryStop?.();
+    retryStop = null;
     if (box.isConnected) everMounted = true;
     shownOwnerId = requestOwnerId;
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
@@ -944,6 +953,8 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
       deepEqual(a.value, b.value),
   };
 
+  /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
+  let retryStop: (() => void) | null = null;
   currentReload = () => void reload();
   // Слушаем локальное уведомление о правке значений (общий канал
   // `PROPERTY_VALUES_REFRESHED_EVENT`, задача 7849008a / ошибка ec5ba58c):
@@ -984,11 +995,17 @@ function buildTypePropertiesBody(networkId: string, target: PropertiesTarget, ty
       shownOwnerId = null;
       tableWrap.replaceChildren(operationError(err));
       tableAttached = false;
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => box.isConnected, () => void reload());
+      }
       return;
     }
     // The owner changed while the definitions were in flight — the retarget's
     // own reload (fired by `retargetCurrent`) is authoritative; drop this one.
     if (requestOwnerId !== target.ownerId) return;
+    retryStop?.();
+    retryStop = null;
     if (box.isConnected) everMounted = true;
     // From here the table is considered bound to this owner (even the empty-set
     // branch below) — the detached-pane guard keys off it.
