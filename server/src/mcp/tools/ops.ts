@@ -1702,6 +1702,7 @@ const HANDLERS: Record<string, OpHandler> = {
           a.key,
           a.value,
           rt.deps.auth.userId,
+          a.side ?? null,
         );
         const marked = result.link_id !== null ? getLink(ndb, result.link_id) : null;
         return {

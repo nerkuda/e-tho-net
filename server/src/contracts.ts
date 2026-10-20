@@ -1351,6 +1351,12 @@ export const PropertiesRemove = defineContract(
     owner_id: z.string().min(1),
     key: z.string().min(1),
     value: z.string().min(1),
+    /**
+     * Адрес стороны (0.14.1, правка по верификации Z1): нужен, когда одна и
+     * та же цель соединена рёбрами обеих сторон симметричного типа связи.
+     * Без `side` направление задаёт живое ребро к конкретной цели.
+     */
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
   }),
   {},
 );

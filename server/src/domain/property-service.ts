@@ -3529,8 +3529,10 @@ function linkDirectionsByDisplayName(
 
 /**
  * Вывести сторону симметричного имени по ФАКТИЧЕСКИМ живым рёбрам мысли.
- * Обе стороны живые — имя неоднозначно, нужен `side` (422). Ни одной живой —
- * `config.direction` (каноническая сторона определения).
+ * Обе стороны живые — имя неоднозначно, нужен `side` (422; либо `null`, когда
+ * вызывающий разрешает неоднозначность и разбирается сам — удаление по
+ * конкретной цели, `allowAmbiguous`). Ни одной живой — сторона привязки
+ * владельца, иначе `config.direction` (каноническая сторона определения).
  */
 function resolveLiveLinkDirection(
   ndb: NetworkDb,
@@ -3538,7 +3540,8 @@ function resolveLiveLinkDirection(
   key: string,
   config: PropertyConfig | null,
   bindingSide: LinkPropertySide | null = null,
-): LinkPropertyDirection {
+  allowAmbiguous = false,
+): LinkPropertyDirection | null {
   const linkTypeId = linkPropertyLinkTypeId(config);
   if (linkTypeId !== null) {
     const live: LinkPropertyDirection[] = [];
@@ -3548,6 +3551,7 @@ function resolveLiveLinkDirection(
       }
     }
     if (live.length === 2) {
+      if (allowAmbiguous) return null;
       throw new EtnError(
         'VALIDATION_ERROR',
         `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
@@ -3575,7 +3579,8 @@ function resolveLinkDirectionForWrite(
   config: PropertyConfig | null,
   side: LinkPropertySide | null,
   bindingSide: LinkPropertySide | null,
-): LinkPropertyDirection {
+  allowAmbiguous = false,
+): LinkPropertyDirection | null {
   const matched = linkDirectionsByDisplayName(ndb, config, key);
   const sideDir = side === null ? null : directionFromSide(side);
   if (matched.length === 1) {
@@ -3591,11 +3596,66 @@ function resolveLinkDirectionForWrite(
   }
   if (matched.length === 2) {
     // Симметричный тип связи: имя адресует обе стороны.
-    return sideDir ?? resolveLiveLinkDirection(ndb, ownerId, key, config, bindingSide);
+    return (
+      sideDir ??
+      resolveLiveLinkDirection(ndb, ownerId, key, config, bindingSide, allowAmbiguous)
+    );
   }
   // Имя не совпало ни с одной текущей стороной (канонический ключ реестра,
   // устаревший снимок имени) — сторона из параметра, иначе из привязки.
   return sideDir ?? linkPropertyDirection(config, bindingSide);
+}
+
+/**
+ * Направление для случая «одно имя — несколько записей эффективного набора»
+ * (0.14.1, правка по верификации Z1): привязка source + target-зеркало дают
+ * ДВЕ записи с одним симметричным ключом ещё до появления рёбер. `422` тут
+ * допустим только когда обе стороны ЖИВЫ (спека 906a29c9); иначе сторона
+ * выводится из живых рёбер, а при их отсутствии — из канонического
+ * направления определений (`config.direction`), если они согласованы.
+ */
+function resolveAmbiguousTypedLinkDirection(
+  ndb: NetworkDb,
+  ownerId: string,
+  key: string,
+  matches: EffectiveTypeProperty[],
+  allowAmbiguous: boolean,
+): LinkPropertyDirection | null {
+  const linkTypeIds = new Set<string>();
+  const defaultDirections = new Set<LinkPropertyDirection>();
+  for (const match of matches) {
+    const linkTypeId = linkPropertyLinkTypeId(match.config);
+    if (linkTypeId !== null) linkTypeIds.add(linkTypeId);
+    defaultDirections.add(linkPropertyDirection(match.config));
+  }
+  const live: LinkPropertyDirection[] = [];
+  for (const direction of ['out', 'in'] as const) {
+    if (
+      [...linkTypeIds].some(
+        (linkTypeId) => listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).size > 0,
+      )
+    ) {
+      live.push(direction);
+    }
+  }
+  if (live.length === 2) {
+    if (allowAmbiguous) return null;
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
+      { field: 'side', key, allowed: LINK_PROPERTY_SIDES },
+    );
+  }
+  if (live.length === 1) return live[0]!;
+  // Живых рёбер нет: каноническое направление определений. Расходятся —
+  // имя действительно неоднозначно.
+  if (defaultDirections.size === 1) return [...defaultDirections][0]!;
+  if (allowAmbiguous) return null;
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    `имя свойства «${key}» адресует обе стороны связи — укажите side`,
+    { field: 'side', key, allowed: LINK_PROPERTY_SIDES },
+  );
 }
 
 /**
@@ -3640,7 +3700,17 @@ export function resolveDefinition(
   ownerId: string,
   key: string,
   side: LinkPropertySide | null = null,
+  options: {
+    /**
+     * Разрешить неоднозначное симметричное имя без `side`: вместо 422 вернуть
+     * определение с `direction: null`. Нужно удалению по конкретной цели
+     * (`properties.remove`): ребро owner→target однозначно задаёт направление,
+     * и вызывающий решает сам (0.14.1, правка по верификации Z1).
+     */
+    allowAmbiguousLink?: boolean;
+  } = {},
 ): ResolvedDefinition | null {
+  const allowAmbiguous = options.allowAmbiguousLink === true;
   if (ownerType === 'thought') {
     // 1) Эффективный набор типа владельца — ключи, которые отдаёт чтение.
     const row = ndb
@@ -3664,6 +3734,7 @@ export function resolveDefinition(
                 def.config,
                 side,
                 def.side ?? linkPropertySideFromConfig(def.value_type, def.config),
+                allowAmbiguous,
               )
             : null;
         return {
@@ -3675,21 +3746,40 @@ export function resolveDefinition(
         };
       }
       if (matches.length > 1) {
-        // Обе стороны одного типа связи у владельца (или коллизия имён).
+        // Обе стороны одного типа связи у владельца (привязка source +
+        // target-зеркало) или коллизия имён. Сторону выводим по ФАКТИЧЕСКИМ
+        // живым рёбрам (0.14.1): 422 — только когда обе стороны живы.
         const allLink = matches.every((m) => m.value_type === 'link');
-        if (allLink && side !== null) {
-          const sideDir = directionFromSide(side);
-          const filtered = matches.filter(
-            (m) => linkPropertyDirection(m.config, m.side ?? null) === sideDir,
-          );
-          if (filtered.length === 1) {
-            const def = filtered[0]!;
+        if (allLink) {
+          const sameProperty = new Set(matches.map((m) => m.property_id)).size === 1;
+          const wanted =
+            side !== null
+              ? directionFromSide(side)
+              : resolveAmbiguousTypedLinkDirection(ndb, ownerId, key, matches, allowAmbiguous);
+          if (wanted !== null) {
+            const filtered = matches.filter(
+              (m) => linkPropertyDirection(m.config, m.side ?? null) === wanted,
+            );
+            if (filtered.length === 1) {
+              const def = filtered[0]!;
+              return {
+                id: def.property_id,
+                name: def.key,
+                value_type: def.value_type,
+                config: def.config,
+                direction: wanted,
+              };
+            }
+          } else if (sameProperty) {
+            // Неоднозначность разрешена вызывающему: возвращаем определение
+            // без направления — конкретное ребро он выберет по цели.
+            const def = matches[0]!;
             return {
               id: def.property_id,
               name: def.key,
               value_type: def.value_type,
               config: def.config,
-              direction: sideDir,
+              direction: null,
             };
           }
         }
@@ -3721,6 +3811,7 @@ export function resolveDefinition(
               prop.config,
               side,
               resolveOwnerBindingSide(ndb, ownerId, prop.id),
+              allowAmbiguous,
             )
           : linkPropertyDirectionFromDisplayName(ndb, prop.config, key)
         : null;
@@ -3756,6 +3847,7 @@ export function resolveDefinition(
           hit.prop.config,
           side,
           resolveOwnerBindingSide(ndb, ownerId, hit.prop.id),
+          allowAmbiguous,
         ),
       };
     }
@@ -5091,6 +5183,12 @@ export function addLinkPropertyValue(
  * Убрать одну цель из набора свойства-связи (операция `remove`, 0.8.1): помечает
  * ребро в корзину (комментарий не теряется). Отсутствующее ребро — no-op
  * (`link_id: null`).
+ *
+ * `side` (0.14.1, правка по верификации Z1) — необязательный адрес стороны:
+ * нужен только когда ОДНА И ТА ЖЕ цель соединена с владельцем рёбрами обеих
+ * сторон симметричного типа. Без `side` направление ищется по живому ребру к
+ * конкретной цели (owner→target однозначно задаёт направление) — до 0.14.1
+ * `properties.remove` работал именно так.
  */
 export function removeLinkPropertyValue(
   ndb: NetworkDb,
@@ -5099,6 +5197,7 @@ export function removeLinkPropertyValue(
   key: string,
   targetId: string,
   actorUserId: string,
+  side: LinkPropertySide | null = null,
 ): { link_id: string | null } {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
@@ -5107,22 +5206,52 @@ export function removeLinkPropertyValue(
     });
   }
   return ndb.transaction(() => {
-    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    // Симметричное имя при обеих живых сторонах не должно отказывать `remove`:
+    // конкретную сторону задаёт ребро к цели (или явный `side`).
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key, side, {
+      allowAmbiguousLink: true,
+    });
     if (!prop || prop.value_type !== 'link') {
-      throw new EtnError('NOT_FOUND', `property "${key}" does not exist or is not a link property`, {
+      if (prop === null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `свойства «${key}» нет в справочнике сети`,
+          { owner_type: ownerType, owner_id: ownerId, key },
+        );
+      }
+      throw new EtnError('VALIDATION_ERROR', `property "${key}" is not a link property`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
         key,
       });
     }
     // Короткий id цели → полный (ошибка 68802297): иначе живое ребро по
     // усечённому id не находится и `remove` молча ничего не делает.
     targetId = resolveTargetThoughtId(ndb, targetId);
+    const linkTypeId = linkPropertyLinkTypeId(prop.config);
+    let direction: LinkPropertyDirection | null = prop.direction;
+    if (direction === null) {
+      // Имя неоднозначно (обе стороны живы) и side не задан: направление
+      // задаёт ребро к КОНКРЕТНОЙ цели.
+      const outLive = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'out').has(targetId);
+      const inLive = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in').has(targetId);
+      if (outLive && inLive) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `цель соединена рёбрами обеих сторон свойства «${key}» — укажите side`,
+          { field: 'side', key, target: targetId, allowed: LINK_PROPERTY_SIDES },
+        );
+      }
+      if (!outLive && !inLive) return { link_id: null };
+      direction = outLive ? 'out' : 'in';
+    }
     const id = removeLinkPropertyTarget(
       ndb,
       ownerId,
       prop,
       targetId,
       actorUserId,
-      prop.direction,
+      direction,
     );
     if (id !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id };

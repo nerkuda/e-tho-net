@@ -21,7 +21,9 @@ import {
   createNetworkProperty,
   createTypeProperty,
   getLinkPropertyValues,
+  listEffectiveTypeProperties,
 } from '../src/domain/property-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 
@@ -34,6 +36,7 @@ import {
 } from './rest-helpers.js';
 import {
   buildMcpContext,
+  callOp,
   closeMcpContext,
   connectMcpClient,
   createThoughtViaWrite,
@@ -337,6 +340,60 @@ describe(
       }
     });
 
+    it('симметричное имя с двумя записями набора типа и без живых рёбер: PUT без side проходит', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Симметричный тип связи: привязка source у родительского типа и
+        // материализованное target-зеркало у дочернего дают ДВЕ записи
+        // эффективного набора с одним ключом ещё до появления рёбер.
+        const parent = createThoughtType(ctx.ndb, { name: 'Тема-родитель' }, USER);
+        const child = createThoughtType(
+          ctx.ndb,
+          { name: 'Тема-потомок', parent_id: parent.id },
+          USER,
+        );
+        const linkType = createLinkType(
+          ctx.ndb,
+          { name_forward: 'связано с', name_reverse: 'связано с' },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          parent.id,
+          {
+            key: 'связано с',
+            value_type: 'link',
+            side: 'source',
+            config: {
+              link_type_id: linkType.id,
+              allowed_target_type_ids: [child.id],
+            },
+          },
+          USER,
+        );
+
+        const effective = listEffectiveTypeProperties(ctx.ndb, 'thought_type', child.id).filter(
+          (d) => d.key === 'связано с',
+        );
+        assert.equal(effective.length, 2, 'две записи эффективного набора (source + target)');
+
+        const owner = await createThought(ctx, 'Потомок-владелец', child.id);
+        const peer = await createThought(ctx, 'Сосед', child.id);
+        // Живых рёбер нет — side не требуется, сторона выводится (config → out).
+        const put = await putProperty(ctx, owner, 'связано с', peer);
+        assert.equal(put.statusCode, 200, put.body);
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', owner, linkType.id, 'out').map(
+            (v) => v.target_id,
+          ),
+          [peer],
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('set-запись работает по живым рёбрам: цель в корзине не восстанавливается и не удаляется', async () => {
       const ctx = await buildRestContext();
       try {
@@ -560,6 +617,121 @@ describe(
           const ambiguous = await add('см. также', hall.id);
           assert.equal(ambiguous.isError, true, 'нужен side');
           assert.match(toolText(ambiguous), /side/);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.properties.remove: удаление цели симметричного свойства без side по живому ребру', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const sym = createNetworkProperty(
+          ndb,
+          {
+            name: 'см. также',
+            value_type: 'link',
+            name_forward: 'см. также',
+            name_reverse: 'см. также',
+          },
+          ctx.adminId,
+        );
+        const linkTypeId = sym.config?.link_type_id as string;
+
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Владелец remove',
+          });
+          const outTarget = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Цель out',
+          });
+          const inTarget = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Цель in',
+          });
+
+          const add = async (value: string, side: 'source' | 'target') =>
+            handle.client.callTool({
+              name: 'etn.properties.add',
+              arguments: {
+                network_id: ctx.networkId,
+                owner_type: 'thought',
+                owner_id: owner.id,
+                key: 'см. также',
+                value,
+                side,
+              },
+            });
+          // Обе стороны живут, но к РАЗНЫМ целям: name адресует обе стороны.
+          assert.notEqual((await add(outTarget.id, 'source')).isError, true);
+          assert.notEqual((await add(inTarget.id, 'target')).isError, true);
+
+          // Удаление цели без side: направление задаёт живое ребро к цели.
+          const removed = await callOp(handle.client, 'properties.remove', {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: owner.id,
+            key: 'см. также',
+            value: outTarget.id,
+          });
+          assert.notEqual(removed.isError, true, toolText(removed));
+          assert.deepEqual(
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, 'out'),
+            [],
+            'исходящее ребро к цели снято',
+          );
+          assert.deepEqual(
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, 'in').map(
+              (v) => v.target_id,
+            ),
+            [inTarget.id],
+            'входящее ребро другой стороны не тронуто',
+          );
+
+          // Одна и та же цель соединена рёбрами ОБЕИХ сторон: без side — 422,
+          // с side удаляется выбранная сторона.
+          const both = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Цель обеих сторон',
+          });
+          assert.notEqual((await add(both.id, 'source')).isError, true);
+          assert.notEqual((await add(both.id, 'target')).isError, true);
+
+          const ambiguous = await callOp(handle.client, 'properties.remove', {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: owner.id,
+            key: 'см. также',
+            value: both.id,
+          });
+          assert.equal(ambiguous.isError, true, 'обе стороны к одной цели — нужен side');
+          assert.match(toolText(ambiguous), /side/);
+
+          const withSide = await callOp(handle.client, 'properties.remove', {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: owner.id,
+            key: 'см. также',
+            value: both.id,
+            side: 'target',
+          });
+          assert.notEqual(withSide.isError, true, toolText(withSide));
+          assert.deepEqual(
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, 'in').map(
+              (v) => v.target_id,
+            ),
+            [inTarget.id],
+            'входящее ребро к выбранной цели снято',
+          );
+          assert.deepEqual(
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, 'out').map(
+              (v) => v.target_id,
+            ),
+            [both.id],
+            'исходящее ребро к той же цели осталось',
+          );
         } finally {
           await handle.close();
         }
