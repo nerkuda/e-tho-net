@@ -1,23 +1,25 @@
 /**
  * Сторож перечислений редактора отбора (ошибка 1f3f0df5 «На экране "События"
- * не отображаются значения для отбора "Тип действия"», ревизия 2026-10-19:
- * заказчик не принял первый фикс).
+ * не отображаются значения для отбора "Тип действия"», ревизия № 2 от
+ * 2026-10-19: заказчик не принял ни первый, ни второй фикс).
  *
- * Первый фикс `6030b5d9` лечил ШИРИНУ чип-листа `lib/ui/chip-list` (режим
- * `checklist`). Заказчик требует не ширину, а ДРУГОЙ КОМПОНЕНТ: тот же
- * стандартный редактор значения, что у «Типа места» и строковых свойств с
- * `config.options` + `multiple`, — `buildValueEditor` ветки `text`:
- * рамка `.st-f-chipfield`, поле `.value-chips-input` с живым поиском и
- * подсказкой «+ ещё одно значение», каретка «▾». Своего чип-листа, чеклиста и
- * кнопки «Выбрать значения…» у перечислений быть не должно.
+ * Образец — условие «Тип мысли»/«Тип связи», а не свободный чип-редактор
+ * значения и не собственный чип-лист: набор перечисления ЗАКРЫТЫЙ, поэтому
+ * ячейка строится стандартным `buildEntityChipField` (`lib/entity-picker.ts`):
+ * рамка `.entity-chip-field` > `.link-value-wrap` > `.st-f-chipfield`, чипы с
+ * крестиками, поле `.entity-chip-input` («Добавить значение…»), угловой «✕»
+ * очистки и выпадашка «Значения» с ЧЕКБОКСАМИ; список не закрывается при
+ * нескольких отметках, повторная отметка снимает значение.
  *
- * AST хранит КОДЫ (`created`/`thought`/`file`), редактор — ПОДПИСИ словаря.
- * Перевод — единый адаптер `filterValueEnumCodec`: сторож проверяет и выбор
- * (подпись → код в AST), и снятие (чип → удаление кода), и отбрасывание
- * неизвестного свободного текста.
+ * Значение в модели — КОДЫ словаря (`created`/`thought`/`file`), подписи — только
+ * отображение. Сторож проверяет: выбор чекбоксом пишет код, снятие чипа/повторная
+ * отметка/угловой крестик удаляют код, свободный текст и неизвестный код в AST
+ * не попадают; прежних компонентов (`.value-chips-input`, `.ui-chip-list`,
+ * «Выбрать значения…») нет; ячейка получает ширину колонки значения.
  *
- * Сторож краснеет на умышленном нарушении (самопроверка мутациями CSS), входит
- * в обычный прогон `npm -w @etn/client test`.
+ * DOM-пробы — на общем `tests/dom-shim.ts` (jsdom в проекте нет), мутации CSS
+ * доказывают, что правило ширины краснеет. Входит в обычный
+ * `npm -w @etn/client test`.
  */
 
 import assert from 'node:assert/strict';
@@ -36,6 +38,8 @@ const FILTER_VALUE_SRC = path.join(CLIENT_ROOT, 'src', 'renderer', 'lib', 'filte
 const ENUM_CELL_SELECTOR = '.ft-row__value .fv:has(> .fv-enum)';
 /** Селектор заполнения ширины обёрткой перечисления. */
 const ENUM_WRAP_SELECTOR = '.ft-row__value .fv-enum';
+/** Селектор снятия пола `.link-value-wrap` в узкой колонке значения. */
+const ENUM_WRAP_FIELD_SELECTOR = '.ft-row__value .fv-enum .link-value-wrap';
 
 // ---------------------------------------------------------------------------
 // CSS: ширина ячейки значения
@@ -84,6 +88,11 @@ function normalizeSelector(selector: string): string {
   return selector.replace(/\s+/g, ' ').trim();
 }
 
+/** Объявления последнего правила с точным селектором (слияние всех вхождений). */
+function declarationsOf(rules: readonly CssRule[], selector: string): Map<string, string> {
+  return mergedDeclarations(rules.filter((rule) => normalizeSelector(rule.selector) === selector));
+}
+
 /**
  * Нарушения правила ширины ячейки-перечисления. Пустой массив — правило
  * соблюдено.
@@ -109,8 +118,7 @@ export function collectEnumWidthViolations(css: string): string[] {
     }
   }
 
-  // 2. Обёртка перечисления заполняет растянутую ячейку целиком — чип-поле
-  //    получает ширину колонки и переносит чипы на узкой панели.
+  // 2. Обёртка перечисления заполняет растянутую ячейку целиком.
   const wrapRules = rules.filter(
     (rule) => normalizeSelector(rule.selector) === ENUM_WRAP_SELECTOR,
   );
@@ -126,11 +134,20 @@ export function collectEnumWidthViolations(css: string): string[] {
     }
   }
 
+  // 3. Пол `.link-value-wrap` (220px в `legacy.css`) снят в узкой колонке
+  //    значения: иначе стандартное чип-поле выходит за край панели.
+  const field = declarationsOf(rules, ENUM_WRAP_FIELD_SELECTOR);
+  if (field.size === 0) {
+    violations.push(`нет правила «${ENUM_WRAP_FIELD_SELECTOR}» — пол поля не снят`);
+  } else if (field.get('min-width') !== '0') {
+    violations.push(`у «${ENUM_WRAP_FIELD_SELECTOR}» нет min-width: 0`);
+  }
+
   return violations;
 }
 
 // ---------------------------------------------------------------------------
-// Исходник: перечисление строит общий редактор значения
+// Исходник: перечисление строит стандартное поле закрытого набора
 // ---------------------------------------------------------------------------
 
 /** Исходник без комментариев — проверяются только исполняемые строки. */
@@ -154,7 +171,7 @@ function functionBody(source: string, name: string): string {
 type FilterValueModule = typeof import('../src/renderer/lib/filter-value.js');
 type AnyRecord = Record<string, unknown>;
 
-/** Минимальный DOM/window-шим, которого требуют фасады и общий редактор. */
+/** Минимальный DOM/window-шим, которого требуют фасады и чип-поле. */
 function installShim(): void {
   (globalThis as AnyRecord)['document'] = {
     createElement: (tag: string) => new ShimElement(tag),
@@ -181,8 +198,7 @@ function installShim(): void {
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
   });
-  // `window.etn` — контракт preload: редактор читает его на этапе сборки поля.
-  // Разрешающая заглушка: любой вызов — пустой список (проверяется разметка).
+  // `window.etn` — контракт preload: чип-поле читает его на этапе сборки.
   win['etn'] = etnStub();
 }
 
@@ -202,6 +218,7 @@ function etnStub(): unknown {
 
 installShim();
 const mod: FilterValueModule = await import('../src/renderer/lib/filter-value.js');
+const { dispatchKeyEvent } = await import('../src/renderer/lib/keymap.js');
 
 /** Все потомки с точным классом. */
 function all(root: ShimElement, cls: string): ShimElement[] {
@@ -211,6 +228,29 @@ function all(root: ShimElement, cls: string): ShimElement[] {
 /** Первый потомок с точным классом. */
 function one(root: ShimElement, cls: string): ShimElement | null {
   return all(root, cls)[0] ?? null;
+}
+
+/** `<body>` шима — сюда общая выпадашка кладёт список. */
+function body(): ShimElement {
+  return ((globalThis as AnyRecord)['document'] as AnyRecord)['body'] as ShimElement;
+}
+
+/** Строки открытого списка `type-combo-item` (последний список в `<body>`). */
+function rows(): ShimElement[] {
+  const lists = body().children.filter((child) => child.classList.contains('type-combo-list'));
+  const list = lists.at(-1);
+  if (list === undefined) return [];
+  return list.children.filter((child) => child.classList.contains('type-combo-item'));
+}
+
+/** Подпись строки списка (шим не склеивает текст потомков — читаем `label`). */
+function rowLabel(row: ShimElement): string {
+  return (one(row, 'type-combo-label')?.textContent ?? '').trim();
+}
+
+/** Строка списка по подписи. */
+function rowByLabel(label: string): ShimElement | undefined {
+  return rows().find((row) => rowLabel(row) === label);
 }
 
 /** Лист модели: виды вложения (`kind`) — словарь самого модуля. */
@@ -227,38 +267,92 @@ function context(): AnyRecord {
   };
 }
 
-/** API слота: запоминает записанные значения и путь записи. */
-function slot(): { api: AnyRecord; writes: Array<{ via: string; value: unknown }> } {
-  const writes: Array<{ via: string; value: unknown }> = [];
+/** API слота: запоминает записанные значения. */
+function slot(): { api: AnyRecord; writes: unknown[] } {
+  const writes: unknown[] = [];
   return {
     api: {
-      setValue: (value: unknown) => writes.push({ via: 'setValue', value }),
-      setStructuralValue: (value: unknown) => writes.push({ via: 'structural', value }),
+      setValue: (value: unknown) => writes.push(value),
+      setStructuralValue: (value: unknown) => writes.push(value),
     },
     writes,
   };
 }
 
-/** Собрать ячейку перечисления. */
-function renderEnum(leafNode: unknown, api: unknown): ShimElement {
-  return mod.renderFilterValue(leafNode as never, api as never, context() as never) as unknown as ShimElement;
+/**
+ * Собрать ячейку перечисления. Запись значения в шиме «живая»: API слота
+ * обновляет лист модели, как настоящий `api.setValue` каркаса — чип-поле
+ * перерисовывает чипы из `getValues()` сразу после `onChange`.
+ */
+function renderEnum(leafNode: AnyRecord, api: AnyRecord): ShimElement {
+  const live: AnyRecord = { ...api };
+  const write = (value: unknown, via: 'setValue' | 'setStructuralValue'): void => {
+    leafNode['value'] = value;
+    const fn = api[via];
+    if (typeof fn === 'function') (fn as (value: unknown) => void)(value);
+  };
+  live['setValue'] = (value: unknown) => write(value, 'setValue');
+  if (typeof api['setStructuralValue'] === 'function') {
+    live['setStructuralValue'] = (value: unknown) => write(value, 'setStructuralValue');
+  }
+  return mod.renderFilterValue(leafNode as never, live as never, context() as never) as unknown as ShimElement;
 }
 
-/** Дать отработать промису сохранения (`save` вызывается через микротаску). */
+/** Дать отработать микротаскам выпадашки. */
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
-/** Добавить чип вводом текста и Enter (как пользователь). */
-async function typeAndEnter(root: ShimElement, text: string): Promise<void> {
-  const input = one(root, 'value-chips-input');
-  assert.ok(input !== null, 'поле добавления значения в чип-поле');
-  (input as unknown as { value: string }).value = text;
-  input.dispatch('keydown', {
-    key: 'Enter',
+/** Поле ввода чип-поля. */
+function inputOf(root: ShimElement): ShimElement {
+  const input = one(root, 'entity-chip-input');
+  assert.ok(input !== null, 'поле ввода `.entity-chip-input`');
+  return input;
+}
+
+/** Открыть выпадашку фокусом на поле (источник вариантов `always`). */
+async function openDropdown(root: ShimElement): Promise<void> {
+  // Списки прошлых ячеек живут в общем `<body>` шима — снимаем их, чтобы
+  // проба читала список ЭТОГО поля.
+  body().replaceChildren();
+  inputOf(root).emit('focus');
+  await flush();
+}
+
+/** Клик по строке списка (множественный выбор). */
+async function clickRow(label: string): Promise<void> {
+  const row = rowByLabel(label);
+  assert.ok(row !== undefined, `строка «${label}» в выпадашке`);
+  row.emit('click');
+  await flush();
+}
+
+/** Событие клавиатуры для диспетчера (DOM-шим события не даёт). */
+function keyEvent(init: { key: string; code: string }): AnyRecord {
+  return {
+    key: init.key,
+    code: init.code,
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
     defaultPrevented: false,
     preventDefault: () => undefined,
-  });
+    stopPropagation: () => undefined,
+  };
+}
+
+/** Зафиксировать свободный текст клавиатурной командой поля (Enter). */
+async function commitFreeText(root: ShimElement, text: string): Promise<void> {
+  const field = one(root, 'st-f-chipfield');
+  assert.ok(field !== null, 'рамка чип-поля');
+  inputOf(root).value = text;
+  field.emit('focusin', {});
+  try {
+    dispatchKeyEvent(keyEvent({ key: 'Enter', code: 'Enter' }) as never);
+  } finally {
+    field.emit('focusout', {});
+  }
   await flush();
 }
 
@@ -266,7 +360,7 @@ async function typeAndEnter(root: ShimElement, text: string): Promise<void> {
 // Проверки
 // ---------------------------------------------------------------------------
 
-describe('guard: перечисления редактора отбора — общий редактор значения (1f3f0df5)', () => {
+describe('guard: перечисления редактора отбора — стандартное поле закрытого набора (1f3f0df5)', () => {
   const css = fs.readFileSync(STYLESHEET, 'utf8');
   const source = withoutComments(fs.readFileSync(FILTER_VALUE_SRC, 'utf8'));
   const enumBody = functionBody(source, 'enumControl');
@@ -284,8 +378,8 @@ describe('guard: перечисления редактора отбора — о
 
     const withoutStretch = css.replace(
       /(\.ft-row__value \.fv:has\(> \.fv-enum\)[^{]*\{)([\s\S]*?)(\n\})/,
-      (_all, head: string, body: string, tail: string) =>
-        `${head}${body.replace(/\s*align-self:\s*stretch;/, '')}${tail}`,
+      (_all, head: string, bodyText: string, tail: string) =>
+        `${head}${bodyText.replace(/\s*align-self:\s*stretch;/, '')}${tail}`,
     );
     assert.notEqual(withoutStretch, css, 'мутация обязана менять CSS');
     assert.ok(
@@ -294,96 +388,141 @@ describe('guard: перечисления редактора отбора — о
     );
   });
 
-  it('правило краснеет, если обёртка перестала заполнять ширину', () => {
+  it('правило краснеет, если обёртка перестала заполнять ширину или вернулся пол 220px', () => {
     const withoutWrap = css.replace(ENUM_WRAP_SELECTOR, '.fv-enum-mutated');
     assert.ok(
       collectEnumWidthViolations(withoutWrap).some((v) => v.includes('не заполняет ширину')),
       'без width: 100% чип-поле не получает ширину колонки',
     );
+
+    const withoutFloor = css.replace(ENUM_WRAP_FIELD_SELECTOR, '.fv-enum-field-mutated');
+    assert.ok(
+      collectEnumWidthViolations(withoutFloor).some((v) => v.includes('пол поля не снят')),
+      'без снятия пола `.link-value-wrap` поле выходит за узкую колонку',
+    );
   });
 
-  it('enumControl строит общий редактор значения и не заводит своего чип-листа', () => {
-    assert.ok(enumBody.includes('buildValueEditor('), 'перечисление — общий редактор значения');
-    assert.ok(enumBody.includes('textListAsArray: true'), 'значения редактора — дискретный массив');
-    assert.ok(enumBody.includes("commitOn: 'change'"), 'запись значения — по изменению');
-    assert.ok(enumBody.includes('filterValueEnumCodec('), 'перевод код ↔ подпись — единый адаптер');
-    for (const forbidden of ['chipList', 'ui-chip-list', 'checklist', 'Выбрать значения…']) {
+  it('enumControl строит buildEntityChipField закрытого набора, без прежних компонентов', () => {
+    assert.ok(enumBody.includes('buildEntityChipField('), 'перечисление — чип-поле закрытого набора');
+    assert.ok(enumBody.includes("optionsHeader: 'Значения'"), 'выпадашка — группа «Значения»');
+    assert.ok(enumBody.includes('initialOptions'), 'каталог заполняет подписи чипов сразу');
+    assert.ok(enumBody.includes('loadOptions'), 'живой поиск по каталогу');
+    assert.ok(enumBody.includes('knownCodes.has'), 'в AST попадают только коды словаря');
+    for (const forbidden of [
+      'buildValueEditor',
+      'value-chips-input',
+      'ui-chip-list',
+      'chipList',
+      'Выбрать значения…',
+    ]) {
       assert.ok(
         !enumBody.includes(forbidden),
-        `в enumControl не должно быть «${forbidden}» — используется стандартное чип-поле`,
+        `в enumControl не должно быть «${forbidden}» — образец «Тип мысли/связи»`,
       );
     }
-    assert.ok(
-      !/from '\.\/ui\/chip-list\.js'/.test(source),
-      'модуль не импортирует собственный чип-лист',
-    );
   });
 
-  it('адаптер перечисления: подпись → код, снятие → удаление, чужой текст отброшен', () => {
-    const codec = mod.filterValueEnumCodec([
-      { value: 'file', label: 'Файл' },
-      { value: 'url', label: 'Ссылка' },
-    ]);
-    assert.deepEqual(codec.toLabels(['file', 'url']), ['Файл', 'Ссылка'], 'в редактор — подписи');
-    // Выбор подписи в редакторе даёт код в AST.
-    assert.deepEqual(codec.toCodes(['Файл', 'Ссылка']), { codes: ['file', 'url'], dropped: false });
-    // Снятие чипа: редактор отдаёт оставшиеся подписи — код снятого не остаётся.
-    assert.deepEqual(codec.toCodes(['Ссылка']), { codes: ['url'], dropped: false });
-    // Неизвестный свободный текст в AST не попадает.
-    assert.deepEqual(codec.toCodes(['Файл', 'Придуманный текст']), { codes: ['file'], dropped: true });
-    // Устаревший код вне словаря показывается как есть и переживает правку.
-    assert.deepEqual(codec.toLabels(['archived']), ['archived']);
-    assert.deepEqual(codec.toCodes(['archived'], ['archived']), {
-      codes: ['archived'],
-      dropped: false,
-    });
-  });
-
-  it('ячейка перечисления — стандартные классы общего редактора, без чеклиста', () => {
-    const box = renderEnum(leaf('in', { kind: 'list', items: ['file'] }), slot().api);
+  it('ячейка — разметка buildEntityChipField: поле, чипы, угловой крестик, без прежних', () => {
+    const box = renderEnum(leaf('in'), slot().api);
     assert.equal(box.dataset['editor'], 'enum');
     assert.ok(one(box, 'fv-enum') !== null, 'обёртка ячейки перечисления');
-    assert.ok(one(box, 'st-f-chipfield') !== null, 'стандартное чип-поле общего редактора');
-    assert.ok(one(box, 'value-chips-input') !== null, 'поле ввода с живым поиском');
-    // Каретка «▾» — полный список вариантов.
-    assert.ok(
-      box.findAll((node) => (node.textContent ?? '').trim() === '▾').length > 0,
-      'каретка «▾» открывает полный список',
-    );
-    // Чип стандартного редактора — облачко `profile: chip` (фабрика мысли).
-    assert.equal(all(box, 'prop-ref-cloud').length, 1, 'выбранное значение — чип с подписью');
-    assert.equal(one(box, 'prc-title')?.textContent, 'Файл', 'чип показывает подпись, а не код');
-    assert.equal(all(box, 'ui-chip-list').length, 0, 'своего чип-листа у перечисления нет');
+    assert.ok(one(box, 'entity-chip-field') !== null, 'чип-поле закрытого набора');
+    assert.ok(one(box, 'entity-chip-field-inner') !== null, 'рамка чип-поля');
+    assert.equal(inputOf(box).placeholder, 'Добавить значение…', 'приглашение поля');
+    assert.ok(one(box, 'link-value-corner') !== null, 'угол поля');
+    assert.ok(one(box, 'link-value-corner-btn') !== null, 'угловой крестик очистки');
+    assert.equal(all(box, 'ui-chip-list').length, 0, 'своего чип-листа нет');
+    assert.equal(all(box, 'value-chips-input').length, 0, 'свободного чип-редактора нет');
     assert.ok(!(box.textContent ?? '').includes('Выбрать значения…'), 'чеклист-кнопки нет');
   });
 
-  it('выбор значения пишет код в AST, снятие чипа убирает код', async () => {
-    // Выбор: пустая ячейка + ввод подписи → в AST код.
-    const fresh = slot();
-    const box = renderEnum(leaf('in'), fresh.api);
-    await typeAndEnter(box, 'Файл');
-    assert.deepEqual(fresh.writes, [{ via: 'setValue', value: { kind: 'list', items: ['file'] } }]);
-
-    // Снятие: чип «Ссылка» убирает только свой код.
-    const selected = slot();
-    const filled = renderEnum(leaf('in', { kind: 'list', items: ['file', 'url'] }), selected.api);
-    const removes = filled.findAll((node) => node.classList.contains('st-f-clear-inline'));
-    assert.equal(removes.length, 2, 'у каждого чипа есть крестик снятия');
-    removes[1]!.fire('click', { stopPropagation: () => undefined });
-    await flush();
-    assert.deepEqual(selected.writes, [
-      { via: 'setValue', value: { kind: 'list', items: ['file'] } },
-    ]);
+  it('фокус открывает выпадашку «Значения» с чекбоксами во всех строках', async () => {
+    const box = renderEnum(leaf('in'), slot().api);
+    await openDropdown(box);
+    const list = body().children.find((child) => child.classList.contains('type-combo-list'));
+    assert.ok(list !== undefined, 'список открыт');
+    const header = one(list!, 'type-combo-empty');
+    assert.equal(header?.textContent, 'Значения', 'заголовок группы вариантов');
+    const listRows = rows();
+    assert.deepEqual(
+      listRows.map(rowLabel),
+      ['Файл', 'Ссылка'],
+      'каталог вида вложения целиком',
+    );
+    for (const row of listRows) {
+      const check = one(row, 'type-combo-check');
+      assert.ok(check !== null, 'чекбокс в строке списка');
+      assert.equal((check as unknown as { type: string }).type, 'checkbox');
+      assert.equal((check as unknown as { checked: boolean }).checked, false);
+    }
   });
 
-  it('неизвестный свободный текст в AST не попадает и чип снимается пересборкой', async () => {
+  it('чекбокс добавляет код, повторная отметка снимает; список не закрывается', async () => {
     const { api, writes } = slot();
     const box = renderEnum(leaf('in'), api);
-    await typeAndEnter(box, 'Придуманный текст');
+    await openDropdown(box);
+
+    await clickRow('Файл');
+    assert.deepEqual(writes[0], { kind: 'list', items: ['file'] }, 'в AST — код, не подпись');
+    assert.equal(all(box, 'prop-ref-cloud').length, 1, 'чип появился');
+    assert.equal(one(box, 'prc-title')?.textContent, 'Файл', 'чип показывает подпись');
+    // Код перечисления — не мысль: дефолтного значка мысли в чипе нет.
+    assert.equal(one(box, 'mini-icon')?.textContent, '', 'значок чипа нейтральный (пустой)');
+    // Угловой крестик очистки появляется у заполненного поля.
+    assert.equal(
+      (one(box, 'link-value-corner-btn') as unknown as { hidden: boolean }).hidden,
+      false,
+      'угловой крестик доступен',
+    );
+    assert.ok(body().children.some((c) => c.classList.contains('type-combo-list')), 'список не закрылся');
+
+    await clickRow('Ссылка');
+    assert.deepEqual(writes[1], { kind: 'list', items: ['file', 'url'] }, 'второй код добавлен');
+    assert.equal(all(box, 'prop-ref-cloud').length, 2, 'два чипа');
+    assert.ok(body().children.some((c) => c.classList.contains('type-combo-list')), 'список всё ещё открыт');
+
+    // Повторная отметка отмеченной строки снимает значение.
+    await clickRow('Файл');
+    assert.deepEqual(writes[2], { kind: 'list', items: ['url'] }, 'повторная отметка — код снят');
+    assert.equal(all(box, 'prop-ref-cloud').length, 1);
+  });
+
+  it('крестик чипа и угловой крестик удаляют коды; свободный текст не попадает', async () => {
+    const { api, writes } = slot();
+    const box = renderEnum(leaf('in', { kind: 'list', items: ['file', 'url'] }), api);
+    assert.equal(all(box, 'prop-ref-cloud').length, 2, 'сохранённые коды — чипами');
     assert.deepEqual(
-      writes,
-      [{ via: 'structural', value: { kind: 'none' } }],
-      'чужой текст отброшен, строка пересобрана из модели',
+      all(box, 'prc-title').map((node) => node.textContent),
+      ['Файл', 'Ссылка'],
+      'подписи из словаря',
+    );
+
+    const chipRemove = one(all(box, 'prop-ref-cloud')[0]!, 'st-f-clear-inline');
+    assert.ok(chipRemove !== null, 'крестик чипа');
+    chipRemove!.emit('click', { stopPropagation: () => undefined });
+    await flush();
+    assert.deepEqual(writes[0], { kind: 'list', items: ['url'] }, 'крестик чипа снял код');
+
+    const clear = one(box, 'link-value-corner-btn');
+    assert.ok(clear !== null, 'угловой крестик');
+    clear!.emit('click');
+    await flush();
+    assert.deepEqual(writes[1], { kind: 'none' }, 'угловой крестик очистил набор');
+
+    // Свободный текст: клавиатурная команда поля пыталась бы добавить значение.
+    const free = renderEnum(leaf('in'), slot().api);
+    await commitFreeText(free, 'Придуманный текст');
+    assert.equal(all(free, 'prop-ref-cloud').length, 0, 'чип из свободного текста не появился');
+  });
+
+  it('свободный текст не пишется в AST, даже когда набор не пуст', async () => {
+    const { api, writes } = slot();
+    const box = renderEnum(leaf('in', { kind: 'list', items: ['file'] }), api);
+    await commitFreeText(box, 'ещё текст');
+    assert.deepEqual(writes.at(-1), { kind: 'list', items: ['file'] }, 'набор кодов не изменился');
+    assert.ok(
+      writes.every((value) => !JSON.stringify(value).includes('ещё текст')),
+      'свободный текст в модель не попал',
     );
   });
 });

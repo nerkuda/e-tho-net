@@ -1,6 +1,6 @@
 {
-  "name": "1f3f0df5-enum-standard-editor",
-  "description": "Регресс ошибки 1f3f0df5 (ревизия 2026-10-19): перечисления редактора отбора («Тип действия», «Вид сущности») строит стандартный редактор значения — рамка .st-f-chipfield, чипы-облачка с подписями, поле .value-chips-input с живым поиском, каретка «▾», полный список открывается кареткой; чеклист-кнопки «Выбрать значения…» и .ui-chip-list нет. На узкой колонке значения чипы переносятся, поле ввода доступно. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.1f3f0df5-enum-width.scenario.json",
+  "name": "1f3f0df5-enum-closed-set-chipfield",
+  "description": "Регресс ошибки 1f3f0df5 (ревизия № 2, 2026-10-19): перечисления редактора отбора («Тип действия», «Вид сущности») строит стандартное чип-поле ЗАКРЫТОГО набора buildEntityChipField, как «Тип мысли/связи»: .entity-chip-field > .link-value-wrap > .st-f-chipfield, чипы с крестиками, поле .entity-chip-input («Добавить значение…»), угловой «✕», выпадашка «Значения» с чекбоксами (список не закрывается при нескольких отметках, повторная отметка снимает). В AST уходят коды (проверка по «Применить» через activity_state вкладки); свободный текст не добавляется; прежних .value-chips-input/.ui-chip-list/«Выбрать значения…» нет; на узкой колонке чипы переносятся. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.1f3f0df5-enum-width.scenario.json",
   "timeout": 90000,
   "steps": [
     {
@@ -90,91 +90,224 @@
     },
     {
       "name": "action-field-ready",
-      "waitFor": "document.querySelector('.activity-filter .ft-row .fv-enum .st-f-chipfield') !== null && document.querySelector('.activity-filter .ft-row .fv-enum .value-chips-input') !== null"
+      "waitFor": "document.querySelector('.activity-filter .ft-row .fv-enum .entity-chip-field') !== null && document.querySelector('.activity-filter .ft-row .fv-enum .entity-chip-input') !== null"
     },
     {
       "name": "action-field-markup",
       "probe": {
         "name": "actionField",
-        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); return { field: field!==null, input: input!==null, placeholder: input===null?null:input.placeholder, caret: caret!==undefined, chipList: row.querySelector('.ui-chip-list')!==null, checklistBtn: [...row.querySelectorAll('.fv-enum button')].some((b)=>(b.textContent??'').includes('Выбрать значения')) }; })()"
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const box=row.querySelector('.fv-enum'); const field=row.querySelector('.fv-enum .entity-chip-field'); const inner=row.querySelector('.fv-enum .entity-chip-field-inner'); const input=row.querySelector('.fv-enum .entity-chip-input'); const corner=row.querySelector('.fv-enum .link-value-corner .link-value-corner-btn'); return { box: box!==null, field: field!==null, chipfield: inner!==null, input: input!==null, placeholder: input===null?null:input.placeholder, cornerClear: corner!==null, cornerHidden: corner===null?null:corner.hidden, valueChipsInput: row.querySelector('.value-chips-input')!==null, chipList: row.querySelector('.ui-chip-list')!==null, checklistBtn: [...row.querySelectorAll('.fv-enum button')].some((b)=>(b.textContent??'').includes('Выбрать значения')) }; })()"
       },
       "expect": {
+        "box": true,
         "field": true,
+        "chipfield": true,
         "input": true,
-        "placeholder": "+ ещё одно значение",
-        "caret": true,
+        "placeholder": "Добавить значение…",
+        "cornerClear": true,
+        "cornerHidden": true,
+        "valueChipsInput": false,
         "chipList": false,
         "checklistBtn": false
       }
     },
     {
       "name": "open-action-list",
-      "eval": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); if(!caret) return 'no-caret'; caret.click(); return 'ok'; })()"
+      "click": ".activity-filter .ft-row .fv-enum .entity-chip-input"
     },
     {
       "name": "action-list-open",
       "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null"
     },
     {
-      "name": "pick-created",
-      "eval": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=items.find((i)=>(i.textContent??'').includes('создал(а)')); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
-    },
-    {
-      "name": "action-chip-added",
-      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
-    },
-    {
-      "name": "action-chip-visible",
+      "name": "action-list-markup",
       "probe": {
-        "name": "actionChip",
-        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), labels: labels.map(w), texts: labels.map((l)=>l.textContent) }; })()"
+        "name": "actionList",
+        "expression": "(() => { const list=document.querySelector('.type-combo-list'); const rows=[...list.querySelectorAll('.type-combo-item')]; const header=list.querySelector('.type-combo-empty'); const checks=rows.map((r)=>r.querySelector('.type-combo-check')); return { header: header===null?null:header.textContent, rows: rows.length, labels: rows.map((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()), checks: checks.filter((c)=>c!==null).length, checkboxType: checks[0]===null?null:checks[0].type, checked: checks.filter((c)=>c!==null && c.checked).length }; })()"
+      },
+      "expect": {
+        "header": "Значения",
+        "rows": 5,
+        "labels": [
+          "создал(а)",
+          "изменил(а)",
+          "удалил(а)",
+          "пометил(а) на удаление",
+          "восстановил(а)"
+        ],
+        "checks": 5,
+        "checkboxType": "checkbox",
+        "checked": 0
       }
     },
     {
-      "name": "action-chip-nonzero",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return field.getBoundingClientRect().width>0 && input.getBoundingClientRect().width>0 && chips.length===1 && chips.every((c)=>c.getBoundingClientRect().width>0) && labels.length===1 && labels[0].getBoundingClientRect().width>0 && (labels[0].textContent??'').trim()==='создал(а)'; })()",
+      "name": "check-created",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=rows.find((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()==='создал(а)'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "created-chip-added",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
+    },
+    {
+      "name": "list-stays-open-after-first",
+      "probe": "(() => { const list=document.querySelector('.type-combo-list'); const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const created=rows.find((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()==='создал(а)'); return list!==null && created!==undefined && created.querySelector('.type-combo-check').checked === true; })()",
       "expect": true
     },
     {
-      "name": "focus-action-input",
-      "click": ".activity-filter .ft-row .fv-enum .value-chips-input"
+      "name": "check-updated",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=rows.find((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()==='изменил(а)'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
     },
     {
-      "name": "type-action-search",
-      "text": "измен"
-    },
-    {
-      "name": "action-search-suggests",
-      "timeout": 8000,
-      "waitFor": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; return items.some((i)=>(i.textContent??'').includes('изменил(а)')); })() === true"
-    },
-    {
-      "name": "pick-updated",
-      "eval": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=items.find((i)=>(i.textContent??'').includes('изменил(а)')); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
-    },
-    {
-      "name": "two-action-chips",
+      "name": "two-chips",
       "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 2"
     },
     {
-      "name": "action-chips-texts",
+      "name": "action-chip-metrics",
       "probe": {
-        "name": "actionChipTexts",
-        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); return [...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')].map((l)=>l.textContent); })()"
+        "name": "actionChipMetrics",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), labels: labels.map(w), texts: labels.map((l)=>l.textContent) }; })()"
+      }
+    },
+    {
+      "name": "list-stays-open-after-second",
+      "probe": {
+        "name": "afterSecond",
+        "expression": "(() => { const list=document.querySelector('.type-combo-list'); const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const checks=rows.map((r)=>r.querySelector('.type-combo-check')).filter((c)=>c!==null); const chipTitles=[...document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prc-title')].map((l)=>l.textContent); return { listOpen: list!==null, checked: checks.filter((c)=>c.checked).length, chips: chipTitles }; })()"
       },
-      "expect": [
-        "создал(а)",
-        "изменил(а)"
-      ]
+      "expect": {
+        "listOpen": true,
+        "checked": 2,
+        "chips": [
+          "создал(а)",
+          "изменил(а)"
+        ]
+      }
     },
     {
       "name": "narrow-value-cell",
-      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 120px'; cell.style.width='120px'; const field=cell.querySelector('.fv-enum .st-f-chipfield'); const input=cell.querySelector('.fv-enum .value-chips-input'); return JSON.stringify({field:Math.round(field.getBoundingClientRect().width),input:Math.round(input.getBoundingClientRect().width)}); })()"
+      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 120px'; cell.style.width='120px'; const field=cell.querySelector('.fv-enum .st-f-chipfield'); const input=cell.querySelector('.fv-enum .entity-chip-input'); return JSON.stringify({field:Math.round(field.getBoundingClientRect().width),input:Math.round(input.getBoundingClientRect().width)}); })()"
+    },
+    {
+      "name": "narrow-metrics",
+      "probe": {
+        "name": "narrowMetrics",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; const h=(e)=>Math.round(e.getBoundingClientRect().height*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), fieldHeight: h(field) }; })()"
+      }
     },
     {
       "name": "narrow-panel-wraps",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const fw=field.getBoundingClientRect().width; const fh=field.getBoundingClientRect().height; return fw>0 && fw<=130 && input.getBoundingClientRect().width>0 && chips.length===2 && chips.every((c)=>c.getBoundingClientRect().width>0 && c.getBoundingClientRect().width<=fw+0.5) && fh>40; })()",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const fw=field.getBoundingClientRect().width; const fh=field.getBoundingClientRect().height; return fw>0 && fw<=125 && input.getBoundingClientRect().width>0 && chips.length===2 && chips.every((c)=>c.getBoundingClientRect().width>0 && c.getBoundingClientRect().width<=fw+0.5) && fh>40; })()",
       "expect": true
+    },
+    {
+      "name": "widen-back",
+      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex=''; cell.style.width=''; return 'ok'; })()"
+    },
+    {
+      "name": "uncheck-created",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=rows.find((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()==='создал(а)'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "one-chip-after-uncheck",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
+    },
+    {
+      "name": "recheck-created",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=rows.find((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()==='создал(а)'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "two-chips-again",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 2"
+    },
+    {
+      "name": "close-action-list",
+      "key": "Escape"
+    },
+    {
+      "name": "action-list-closed",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.type-combo-list') === null"
+    },
+    {
+      "name": "apply-first",
+      "click": ".activity-filter .ff-apply"
+    },
+    {
+      "name": "ast-has-codes",
+      "timeout": 10000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((t)=>t.view_mode==='activity') ?? tabs[0]; const raw=tab?.activity_state ?? ''; return raw.includes('\"created\"') && raw.includes('\"updated\"'); })()"
+    },
+    {
+      "name": "ast-codes-probe",
+      "probe": {
+        "name": "astCodes",
+        "expression": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((t)=>t.view_mode==='activity') ?? tabs[0]; const raw=tab?.activity_state ?? ''; return { created: raw.includes('\"created\"'), updated: raw.includes('\"updated\"'), labelCreated: raw.includes('создал'), labelUpdated: raw.includes('изменил') }; })()"
+      },
+      "expect": {
+        "created": true,
+        "updated": true,
+        "labelCreated": false,
+        "labelUpdated": false
+      }
+    },
+    {
+      "name": "remove-updated-chip",
+      "eval": "(() => { const chips=[...document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud')]; const chip=chips.find((c)=>(c.querySelector('.prc-title')?.textContent??'').trim()==='изменил(а)'); if(!chip) return 'no-chip'; const remove=chip.querySelector('.st-f-clear-inline'); if(!remove) return 'no-remove'; remove.click(); return 'ok'; })()"
+    },
+    {
+      "name": "one-chip-left",
+      "waitFor": "document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
+    },
+    {
+      "name": "apply-second",
+      "click": ".activity-filter .ff-apply"
+    },
+    {
+      "name": "ast-after-remove",
+      "timeout": 10000,
+      "probe": {
+        "name": "astAfterRemove",
+        "expression": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((t)=>t.view_mode==='activity') ?? tabs[0]; const raw=tab?.activity_state ?? ''; return { created: raw.includes('\"created\"'), updated: raw.includes('\"updated\"') }; })()"
+      },
+      "expect": {
+        "created": true,
+        "updated": false
+      }
+    },
+    {
+      "name": "focus-action-input",
+      "click": ".activity-filter .ft-row .fv-enum .entity-chip-input"
+    },
+    {
+      "name": "type-free-text",
+      "text": "Придуманный текст"
+    },
+    {
+      "name": "commit-free-text",
+      "key": "Enter"
+    },
+    {
+      "name": "free-text-not-added",
+      "probe": "(() => { const chips=[...document.querySelectorAll('.activity-filter .ft-row .fv-enum .st-f-chipfield .prop-ref-cloud')]; return chips.length===1 && ![...document.querySelectorAll('.activity-filter .ft-row .fv-enum .prc-title')].some((l)=>(l.textContent??'').includes('Придуманный')); })()",
+      "expect": true
+    },
+    {
+      "name": "apply-third",
+      "click": ".activity-filter .ff-apply"
+    },
+    {
+      "name": "ast-free-text",
+      "timeout": 10000,
+      "probe": {
+        "name": "astFreeText",
+        "expression": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((t)=>t.view_mode==='activity') ?? tabs[0]; const raw=tab?.activity_state ?? ''; return { created: raw.includes('\"created\"'), updated: raw.includes('\"updated\"'), free: raw.includes('Придуманный'), label: raw.includes('создал') }; })()"
+      },
+      "expect": {
+        "created": true,
+        "updated": false,
+        "free": false,
+        "label": false
+      }
     },
     {
       "name": "add-entity-row",
@@ -214,51 +347,106 @@
     },
     {
       "name": "entity-field-ready",
-      "waitFor": "document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .st-f-chipfield') !== null && document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .value-chips-input') !== null"
+      "waitFor": "document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .entity-chip-field') !== null && document.querySelector('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .entity-chip-input') !== null"
     },
     {
       "name": "entity-field-markup",
       "probe": {
         "name": "entityField",
-        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); return { field: field!==null, input: input!==null, placeholder: input===null?null:input.placeholder, caret: caret!==undefined, chipList: row.querySelector('.ui-chip-list')!==null, checklistBtn: [...row.querySelectorAll('.fv-enum button')].some((b)=>(b.textContent??'').includes('Выбрать значения')) }; })()"
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const field=row.querySelector('.fv-enum .entity-chip-field'); const input=row.querySelector('.fv-enum .entity-chip-input'); return { field: field!==null, input: input!==null, placeholder: input===null?null:input.placeholder, valueChipsInput: row.querySelector('.value-chips-input')!==null, chipList: row.querySelector('.ui-chip-list')!==null, checklistBtn: [...row.querySelectorAll('.fv-enum button')].some((b)=>(b.textContent??'').includes('Выбрать значения')) }; })()"
       },
       "expect": {
         "field": true,
         "input": true,
-        "placeholder": "+ ещё одно значение",
-        "caret": true,
+        "placeholder": "Добавить значение…",
+        "valueChipsInput": false,
         "chipList": false,
         "checklistBtn": false
       }
     },
     {
       "name": "open-entity-list",
-      "eval": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const caret=[...row.querySelectorAll('.fv-enum button')].find((b)=>(b.textContent??'').trim()==='▾'); if(!caret) return 'no-caret'; caret.click(); return 'ok'; })()"
+      "click": ".activity-filter .ft-row[data-path=\"1\"] .fv-enum .entity-chip-input"
     },
     {
       "name": "entity-list-open",
       "waitFor": "document.querySelector('.type-combo-list .type-combo-item') !== null"
     },
     {
-      "name": "pick-thought-entity",
-      "eval": "(() => { const items=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=items.find((i)=>(i.textContent??'').trim()==='мысль'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
+      "name": "entity-list-markup",
+      "probe": {
+        "name": "entityList",
+        "expression": "(() => { const list=document.querySelector('.type-combo-list'); const rows=[...list.querySelectorAll('.type-combo-item')]; const header=list.querySelector('.type-combo-empty'); return { header: header===null?null:header.textContent, rows: rows.length, checks: rows.filter((r)=>r.querySelector('.type-combo-check')!==null).length, labels: rows.map((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()) }; })()"
+      },
+      "expect": {
+        "header": "Значения",
+        "rows": 8,
+        "checks": 8,
+        "labels": [
+          "мысль",
+          "связь",
+          "тип мысли",
+          "тип связи",
+          "свойство",
+          "комментарий",
+          "вложение",
+          "слой"
+        ]
+      }
+    },
+    {
+      "name": "check-thought",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=rows.find((r)=>(r.querySelector('.type-combo-label')?.textContent??'').trim()==='мысль'); if(!row) return 'no-row'; row.click(); return 'ok'; })()"
     },
     {
       "name": "entity-chip-added",
       "waitFor": "document.querySelectorAll('.activity-filter .ft-row[data-path=\"1\"] .fv-enum .st-f-chipfield .prop-ref-cloud').length === 1"
     },
     {
+      "name": "entity-chip-probe",
+      "probe": {
+        "name": "entityChip",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const list=document.querySelector('.type-combo-list'); return { chips: chips.length, widths: chips.map((c)=>Math.round(c.getBoundingClientRect().width)), labels: labels.map((l)=>l.textContent), labelWidths: labels.map((l)=>Math.round(l.getBoundingClientRect().width)), listOpen: list!==null }; })()"
+      }
+    },
+    {
       "name": "entity-chip-nonzero",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .value-chips-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return field.getBoundingClientRect().width>0 && input.getBoundingClientRect().width>0 && chips.length===1 && chips[0].getBoundingClientRect().width>0 && labels.length===1 && labels[0].getBoundingClientRect().width>0 && (labels[0].textContent??'').trim()==='мысль'; })()",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row[data-path=\"1\"]'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return chips.length===1 && chips[0].getBoundingClientRect().width>0 && labels.length===1 && labels[0].getBoundingClientRect().width>0 && (labels[0].textContent??'').trim()==='мысль'; })()",
       "expect": true
     },
     {
-      "name": "no-legacy-chip-list-anywhere",
-      "probe": "(() => { const panel=document.querySelector('.activity-filter'); return { chipLists: panel.querySelectorAll('.ui-chip-list').length, checklistButtons: [...panel.querySelectorAll('.fv-enum button')].filter((b)=>(b.textContent??'').includes('Выбрать значения')).length, standardFields: panel.querySelectorAll('.fv-enum .st-f-chipfield').length, inputs: panel.querySelectorAll('.fv-enum .value-chips-input').length }; })()",
+      "name": "close-entity-list",
+      "key": "Escape"
+    },
+    {
+      "name": "entity-list-closed",
+      "timeout": 8000,
+      "waitFor": "document.querySelector('.type-combo-list') === null"
+    },
+    {
+      "name": "apply-entity",
+      "click": ".activity-filter .ff-apply"
+    },
+    {
+      "name": "ast-entity",
+      "timeout": 10000,
+      "probe": {
+        "name": "astEntity",
+        "expression": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((t)=>t.view_mode==='activity') ?? tabs[0]; const raw=tab?.activity_state ?? ''; return { thought: raw.includes('\"thought\"'), label: raw.includes('\"мысль\"') }; })()"
+      },
+      "expect": {
+        "thought": true,
+        "label": false
+      }
+    },
+    {
+      "name": "no-legacy-components-anywhere",
+      "probe": "(() => { const panel=document.querySelector('.activity-filter'); return { chipLists: panel.querySelectorAll('.ui-chip-list').length, valueChipsInputs: panel.querySelectorAll('.value-chips-input').length, checklistButtons: [...panel.querySelectorAll('.fv-enum button')].filter((b)=>(b.textContent??'').includes('Выбрать значения')).length, chipFields: panel.querySelectorAll('.fv-enum .entity-chip-field').length, inputs: panel.querySelectorAll('.fv-enum .entity-chip-input').length }; })()",
       "expect": {
         "chipLists": 0,
+        "valueChipsInputs": 0,
         "checklistButtons": 0,
-        "standardFields": 2,
+        "chipFields": 2,
         "inputs": 2
       }
     }

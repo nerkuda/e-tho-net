@@ -1075,21 +1075,21 @@ describe('ячейка значения: сборка виджета и прав
     assert.deepEqual(writes[1], { kind: 'list', items: [3, 3] });
   });
 
-  it('перечисление: общий редактор значения — чип-поле с подписями и кареткой (1f3f0df5)', () => {
+  it('перечисление: чип-поле закрытого набора, как «Тип мысли» (1f3f0df5)', () => {
     const { api } = slot();
     const box = render(leaf({ kind: 'kind' }, 'in'), api);
     assert.equal(box.dataset['editor'], 'enum');
-    // Перечисление строит ТОТ ЖЕ редактор, что «Тип места» и строковые
-    // свойства с `config.options` + `multiple` (ревизия ошибки 1f3f0df5):
-    // рамка чип-поля, поле ввода с живым поиском и каретка «▾».
-    assert.ok(one(box, 'st-f-chipfield') !== null, 'стандартное чип-поле общего редактора');
-    assert.ok(one(box, 'value-chips-input') !== null, 'поле добавления значения');
-    assert.ok(
-      box.findAll((node) => (node.textContent ?? '').trim() === '▾').length > 0,
-      'каретка полного списка вариантов',
-    );
+    // Перечисление строит ТО ЖЕ поле, что условие «Тип мысли/связи»
+    // (ревизия № 2 ошибки 1f3f0df5): рамка чип-поля, поле «Добавить значение…»,
+    // угловой крестик и выпадашка «Значения» с чекбоксами.
+    assert.ok(one(box, 'entity-chip-field') !== null, 'стандартное чип-поле закрытого набора');
+    const input = one(box, 'entity-chip-input');
+    assert.ok(input !== null, 'поле добавления значения');
+    assert.equal(input?.placeholder, 'Добавить значение…');
+    assert.ok(one(box, 'link-value-corner-btn') !== null, 'угловой крестик очистки');
     assert.equal(one(box, 'ui-chip-list'), null, 'своего чип-листа у перечисления нет');
-    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы «простынёй» не рисуются');
+    assert.equal(one(box, 'value-chips-input'), null, 'свободного чип-редактора нет');
+    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы — в выпадашке, не «простынёй»');
   });
 
   it('«не имеет свойство» по «Типу мысли»: чип-поле строится, оператор не переписывается (п.5)', () => {

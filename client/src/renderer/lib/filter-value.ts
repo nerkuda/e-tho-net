@@ -26,10 +26,12 @@
  *   • триада «да / нет / не важно» у операторных предикатов.
  *
  * Перечисления (виды вложения, а также каталоги хоста — типы действий, виды
- * сущностей) строит ТОТ ЖЕ общий редактор значения: синтетическое текстовое
- * определение с `config.multiple` и подписями словаря в `config.options`;
- * единый адаптер {@link filterValueEnumCodec} переводит код AST ↔ подпись
- * (ошибка 1f3f0df5). Своего чип-листа у перечислений нет.
+ * сущностей) строит СТАНДАРТНОЕ чип-поле закрытого набора
+ * `buildEntityChipField` (`lib/entity-picker.ts`) — тот же компонент, что у
+ * условия «Тип мысли»/«Тип связи»: чипы с крестиками, поле «Добавить значение…»,
+ * выпадашка «Значения» с чекбоксами (список не закрывается при нескольких
+ * отметках). Значение в модели — КОДЫ словаря, подписи — только отображение
+ * (ошибка 1f3f0df5, ревизия № 2).
  *
  * Переиспользование обязательно (стандарт a2488f05, ADR «Основа lib/ui»):
  * значение свойства — `editor/value-editor.ts`; чип-поле и комбо —
@@ -992,77 +994,22 @@ function propertyOptionIcon(
 }
 
 /**
- * Адаптер КОД ↔ ПОДПИСЬ перечисления — один на все перечисления редактора
- * (типы действий журнала, виды сущностей, виды вложения; ошибка 1f3f0df5).
- * AST хранит коды (`created`, `thought`, `file`), а общий редактор значения
- * работает подписями из `config.options` («Создано», «Мысль», «Файл»).
- *
- * Прямое направление показывает подпись; код, которого в словаре уже нет
- * (устаревшее значение), показывается как есть — сохранённые данные не
- * теряются. Обратное направление принимает подпись словаря либо известный код
- * и сообщает, отброшен ли свободный текст: неизвестный ввод в AST не попадает.
- */
-export interface FilterValueEnumCodec {
-  /** Коды AST → подписи для редактора. */
-  toLabels(codes: readonly string[]): string[];
-  /**
-   * Подписи редактора → коды AST; `dropped` — был неизвестный текст.
-   * `keepCodes` — коды, уже показанные ячейкой как есть (устаревшее значение
-   * вне словаря): такой текст не свободный ввод, а сохранённый код, и обязан
-   * пережить правку.
-   */
-  toCodes(
-    labels: readonly string[],
-    keepCodes?: readonly string[],
-  ): { codes: string[]; dropped: boolean };
-}
-
-/** Собрать адаптер перечисления по словарю вариантов хоста/модуля. */
-export function filterValueEnumCodec(
-  options: readonly FilterValueEnumOption[],
-): FilterValueEnumCodec {
-  const labelByCode = new Map<string, string>();
-  const codeByLabel = new Map<string, string>();
-  for (const option of options) {
-    if (labelByCode.has(option.value)) continue;
-    labelByCode.set(option.value, option.label);
-    if (!codeByLabel.has(option.label)) codeByLabel.set(option.label, option.value);
-  }
-  return {
-    toLabels: (codes) => codes.map((code) => labelByCode.get(code) ?? code),
-    toCodes: (labels, keepCodes = []) => {
-      const kept = new Set(keepCodes);
-      const codes: string[] = [];
-      let dropped = false;
-      for (const label of labels) {
-        // Подпись словаря либо код, который ячейка уже показывает как есть
-        // (`toLabels` не нашёл подписи) — обратный путь обязан его сохранить.
-        const code = codeByLabel.get(label) ?? (kept.has(label) ? label : undefined);
-        if (code === undefined) {
-          dropped = true;
-          continue;
-        }
-        if (!codes.includes(code)) codes.push(code);
-      }
-      return { codes, dropped };
-    },
-  };
-}
-
-/**
  * Перечисление (коды действий журнала, виды сущностей, виды вложений) —
- * СТАНДАРТНЫЙ редактор значения (`editor/value-editor.ts`, ветка `text` +
- * `config.multiple`): рамка `.st-f-chipfield`, компактные чипы, поле
- * `.value-chips-input` с живым поиском по подписям и подсказкой «+ ещё одно
- * значение», каретка «▾» — тот же компонент, что у «Типа места» и строковых
- * свойств со списком (ревизия ошибки 1f3f0df5). Своего чип-листа, чеклиста и
- * кнопки «Выбрать значения…» здесь нет: компонент один на все перечисления.
+ * СТАНДАРТНОЕ чип-поле ЗАКРЫТОГО набора `buildEntityChipField`
+ * (`lib/entity-picker.ts`): тот же компонент, что у условия «Тип мысли»/
+ * «Тип связи» (ошибка 1f3f0df5, ревизия № 2). Разметка — `.entity-chip-field` >
+ * `.link-value-wrap` > `.st-f-chipfield` с чипами и полем `.entity-chip-input`
+ * («Добавить значение…»), угловым «✕» очистки и выпадашкой «Значения» с
+ * ЧЕКБОКСАМИ: список не закрывается при нескольких отметках, повторная отметка
+ * снимает значение.
  *
- * Код ↔ подпись переводит единый адаптер {@link filterValueEnumCodec}. Значение
- * редактора — массив ПОДПИСЕЙ (`textListAsArray: true`), в AST уходят КОДЫ.
- * Неизвестный свободный текст отбрасывается, а ячейка перерисовывается из
- * модели (`setStructuralValue`): редактор успел нарисовать свой чип, и без
- * пересборки «чужой» текст остался бы на экране.
+ * Значение в модели — КОДЫ словаря (`created`/`thought`/`file`), подписи — только
+ * отображение: `initialOptions` заполняет имена чипов, `titleOf` даёт подпись до
+ * загрузки каталога. `onChange` пропускает только известные коды: неизвестный
+ * код или свободный текст в AST не попадают. Чип рисуется облачком фабрики
+ * (`profile: chip`) без значка: у кода перечисления нет данных мысли, и значок
+ * по умолчанию («мысль») здесь лишний — передаём пустую иконку через `cloudOf`,
+ * не меняя сам компонент.
  */
 function enumControl(
   leaf: FilterTreeLeaf,
@@ -1071,40 +1018,34 @@ function enumControl(
 ): HTMLElement {
   const options = enumCatalogue(leaf, ctx);
   const box = div('fv-enum');
-  const codec = filterValueEnumCodec(options);
-  /** Коды, уже показанные ячейкой (устаревшие значения переживают правку). */
-  const shownCodes = currentList(leaf.value);
-  box.append(
-    buildValueEditor({
-      networkId: ctx.networkId,
-      // Синтетическое определение значения свойства: перечисление — это
-      // текстовое поле с закрытым списком и множественным выбором, поэтому
-      // редактор строит ровно тот же вид, что у свойства с `config.options`.
-      // Отдельного вида значения у общего редактора не заводим (стандарт S2).
-      definition: registryDefinition({
-        value_type: 'text',
-        config: { multiple: true, options: options.map((option) => option.label) },
-      }),
-      value: codec.toLabels(shownCodes),
-      commitOn: 'change',
-      textListAsArray: true,
-      save: (next) => {
-        const labels = Array.isArray(next)
-          ? next.filter((item): item is string => typeof item === 'string')
-          : [];
-        const { codes, dropped } = codec.toCodes(labels, shownCodes);
-        const value = valueFromList(codes);
-        if (dropped) {
-          // Неизвестный ввод в модель не попадает; пересборка строки убирает
-          // уже нарисованный редактором чип с этим текстом.
-          (api.setStructuralValue ?? api.setValue)(value);
-        } else {
-          api.setValue(value);
-        }
-        return true;
-      },
-    }),
-  );
+  const knownCodes = new Set(options.map((option) => option.value));
+  const labelOf = (code: string): string =>
+    options.find((option) => option.value === code)?.label ?? code;
+  /** Каталог вариантов для поля/выпадашки: id — код AST, title — подпись. */
+  const entries: EntityOption[] = options.map((option) => ({ id: option.value, title: option.label }));
+  const field = buildEntityChipField({
+    getValues: () => currentList(leaf.value),
+    onChange: (values) => {
+      // Набор ЗАКРЫТЫЙ: неизвестный код (легаси) и свободный текст в AST не
+      // попадают — принимаем только варианты словаря.
+      api.setValue(valueFromList(values.filter((value) => knownCodes.has(value))));
+    },
+    loadOptions: (query) => {
+      const needle = query.trim().toLowerCase();
+      return needle === ''
+        ? entries
+        : entries.filter((option) => option.title.toLowerCase().includes(needle));
+    },
+    initialOptions: entries,
+    optionsHeader: 'Значения',
+    titleOf: (id) => labelOf(id),
+    // Нейтральное облачко: код перечисления — не мысль, дефолтный значок мысли
+    // в чипе лишний (пустая иконка штатной фабрики облачка).
+    cloudOf: (value) => ({ id: value, title: labelOf(value), icon: '' }),
+    placeholder: 'Добавить значение…',
+    addPlaceholder: 'Добавить значение…',
+  });
+  box.append(field.root);
   return box;
 }
 
