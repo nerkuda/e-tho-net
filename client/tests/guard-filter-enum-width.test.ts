@@ -40,6 +40,14 @@ const ENUM_CELL_SELECTOR = '.ft-row__value .fv:has(> .fv-enum)';
 const ENUM_WRAP_SELECTOR = '.ft-row__value .fv-enum';
 /** Селектор снятия пола `.link-value-wrap` в узкой колонке значения. */
 const ENUM_WRAP_FIELD_SELECTOR = '.ft-row__value .fv-enum .link-value-wrap';
+/** Чип перечисления: компактные зазоры/паддинги. */
+const ENUM_CHIP_SELECTOR = '.fv-enum .prop-ref-cloud';
+/** Пустой слот значка чипа перечисления — не занимает места. */
+const ENUM_CHIP_ICON_SELECTOR = '.fv-enum .prop-ref-cloud .mini-icon:empty';
+/** Подпись чипа: ellipsis и сжатие до остатка ширины. */
+const ENUM_CHIP_TITLE_SELECTOR = '.fv-enum .prop-ref-cloud .prc-title';
+/** Чип-поле перечисления: запас справа под одну угловую кнопку. */
+const ENUM_CHIP_FIELD_SELECTOR = '.ft-row__value .fv-enum .link-value-field';
 
 // ---------------------------------------------------------------------------
 // CSS: ширина ячейки значения
@@ -141,6 +149,33 @@ export function collectEnumWidthViolations(css: string): string[] {
     violations.push(`нет правила «${ENUM_WRAP_FIELD_SELECTOR}» — пол поля не снят`);
   } else if (field.get('min-width') !== '0') {
     violations.push(`у «${ENUM_WRAP_FIELD_SELECTOR}» нет min-width: 0`);
+  }
+
+  // 4. Подпись чипа получает остаток ширины в узкой колонке (ревизия № 3):
+  //    пустой слот значка скрыт, чип компактнее, поле резервирует место под
+  //    ОДНУ угловую кнопку «✕», подпись сжимается с ellipsis.
+  const iconSlot = declarationsOf(rules, ENUM_CHIP_ICON_SELECTOR);
+  if (iconSlot.get('display') !== 'none') {
+    violations.push(
+      `«${ENUM_CHIP_ICON_SELECTOR}» не скрывает пустой слот — он съедает ширину подписи`,
+    );
+  }
+  const chip = declarationsOf(rules, ENUM_CHIP_SELECTOR);
+  if (chip.size === 0) {
+    violations.push(`нет правила «${ENUM_CHIP_SELECTOR}» — чип не приведён к компактному виду`);
+  } else if (chip.get('gap') === undefined) {
+    violations.push(`у «${ENUM_CHIP_SELECTOR}» не уменьшен зазор (gap)`);
+  }
+  const chipTitle = declarationsOf(rules, ENUM_CHIP_TITLE_SELECTOR);
+  if (chipTitle.get('min-width') !== '0') {
+    violations.push(`у «${ENUM_CHIP_TITLE_SELECTOR}» нет min-width: 0 — подпись не сжимается`);
+  }
+  const chipField = declarationsOf(rules, ENUM_CHIP_FIELD_SELECTOR);
+  const padRight = Number.parseFloat(chipField.get('padding-right') ?? '');
+  if (!Number.isFinite(padRight) || padRight >= 56) {
+    violations.push(
+      `у «${ENUM_CHIP_FIELD_SELECTOR}» не снят запас 56px под две угловые кнопки`,
+    );
   }
 
   return violations;
@@ -466,8 +501,11 @@ describe('guard: перечисления редактора отбора — с
     assert.deepEqual(writes[0], { kind: 'list', items: ['file'] }, 'в AST — код, не подпись');
     assert.equal(all(box, 'prop-ref-cloud').length, 1, 'чип появился');
     assert.equal(one(box, 'prc-title')?.textContent, 'Файл', 'чип показывает подпись');
-    // Код перечисления — не мысль: дефолтного значка мысли в чипе нет.
-    assert.equal(one(box, 'mini-icon')?.textContent, '', 'значок чипа нейтральный (пустой)');
+    // Код перечисления — не мысль: значок не рисуется, а пустой слот скрыт CSS
+    // (проверка правила — выше, в `collectEnumWidthViolations`). Видимым
+    // пустой значок НЕ закрепляем: в узкой колонке он съедал ширину подписи
+    // (ревизия № 3 ошибки 1f3f0df5).
+    assert.equal(one(box, 'mini-icon')?.children.length, 0, 'значок не нарисован (слот пуст)');
     // Угловой крестик очистки появляется у заполненного поля.
     assert.equal(
       (one(box, 'link-value-corner-btn') as unknown as { hidden: boolean }).hidden,
@@ -485,6 +523,38 @@ describe('guard: перечисления редактора отбора — с
     await clickRow('Файл');
     assert.deepEqual(writes[2], { kind: 'list', items: ['url'] }, 'повторная отметка — код снят');
     assert.equal(all(box, 'prop-ref-cloud').length, 1);
+  });
+
+  it('устаревший код вне словаря сохраняется при отметке и снятии (ревизия № 3)', async () => {
+    const { api, writes } = slot();
+    const box = renderEnum(leaf('in', { kind: 'list', items: ['archived', 'file'] }), api);
+    assert.deepEqual(
+      all(box, 'prc-title').map((node) => node.textContent),
+      ['archived', 'Файл'],
+      'код вне словаря виден подписью-кодом',
+    );
+
+    await openDropdown(box);
+    await clickRow('Ссылка');
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: ['archived', 'file', 'url'] },
+      'новый код добавлен, устаревший сохранён',
+    );
+
+    const legacy = all(box, 'prop-ref-cloud').find(
+      (chip) => one(chip, 'prc-title')?.textContent === 'archived',
+    );
+    assert.ok(legacy !== undefined, 'чип устаревшего кода на месте');
+    const remove = one(legacy!, 'st-f-clear-inline');
+    assert.ok(remove !== null, 'крестик чипа устаревшего кода');
+    remove!.emit('click', { stopPropagation: () => undefined });
+    await flush();
+    assert.deepEqual(
+      writes[1],
+      { kind: 'list', items: ['file', 'url'] },
+      'снятие чипа убирает только устаревший код',
+    );
   });
 
   it('крестик чипа и угловой крестик удаляют коды; свободный текст не попадает', async () => {

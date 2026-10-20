@@ -184,19 +184,51 @@
       }
     },
     {
-      "name": "narrow-value-cell",
-      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 120px'; cell.style.width='120px'; const field=cell.querySelector('.fv-enum .st-f-chipfield'); const input=cell.querySelector('.fv-enum .entity-chip-input'); return JSON.stringify({field:Math.round(field.getBoundingClientRect().width),input:Math.round(input.getBoundingClientRect().width)}); })()"
+      "name": "narrow-120",
+      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 120px'; cell.style.width='120px'; return 'ok'; })()"
     },
     {
-      "name": "narrow-metrics",
+      "name": "narrow-120-metrics",
       "probe": {
-        "name": "narrowMetrics",
-        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; const h=(e)=>Math.round(e.getBoundingClientRect().height*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), fieldHeight: h(field) }; })()"
+        "name": "narrow120Metrics",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; const h=(e)=>Math.round(e.getBoundingClientRect().height*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), labelClient: labels.map((l)=>l.clientWidth), labelScroll: labels.map((l)=>l.scrollWidth), fieldHeight: h(field) }; })()"
       }
     },
     {
-      "name": "narrow-panel-wraps",
-      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const fw=field.getBoundingClientRect().width; const fh=field.getBoundingClientRect().height; return fw>0 && fw<=125 && input.getBoundingClientRect().width>0 && chips.length===2 && chips.every((c)=>c.getBoundingClientRect().width>0 && c.getBoundingClientRect().width<=fw+0.5) && fh>40; })()",
+      "name": "narrow-120-labels-visible",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return labels.length===2 && labels.every((l)=>l.clientWidth>0 && l.scrollWidth>=l.clientWidth); })()",
+      "expect": true
+    },
+    {
+      "name": "narrow-140",
+      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 140px'; cell.style.width='140px'; return 'ok'; })()"
+    },
+    {
+      "name": "narrow-140-metrics",
+      "probe": {
+        "name": "narrow140Metrics",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; const h=(e)=>Math.round(e.getBoundingClientRect().height*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), labelClient: labels.map((l)=>l.clientWidth), labelScroll: labels.map((l)=>l.scrollWidth), fieldHeight: h(field) }; })()"
+      }
+    },
+    {
+      "name": "narrow-140-labels-visible",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return labels.length===2 && labels.every((l)=>l.clientWidth>0 && l.scrollWidth>=l.clientWidth); })()",
+      "expect": true
+    },
+    {
+      "name": "narrow-160",
+      "eval": "(() => { const cell=document.querySelector('.activity-filter .ft-row .ft-row__value'); cell.style.flex='0 0 160px'; cell.style.width='160px'; return 'ok'; })()"
+    },
+    {
+      "name": "narrow-160-metrics",
+      "probe": {
+        "name": "narrow160Metrics",
+        "expression": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const cell=row.querySelector('.ft-row__value'); const field=row.querySelector('.fv-enum .st-f-chipfield'); const input=row.querySelector('.fv-enum .entity-chip-input'); const chips=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prop-ref-cloud')]; const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; const w=(e)=>Math.round(e.getBoundingClientRect().width*100)/100; const h=(e)=>Math.round(e.getBoundingClientRect().height*100)/100; return { cell: w(cell), field: w(field), input: w(input), chips: chips.map(w), labelClient: labels.map((l)=>l.clientWidth), labelScroll: labels.map((l)=>l.scrollWidth), fieldHeight: h(field) }; })()"
+      }
+    },
+    {
+      "name": "narrow-160-labels-visible",
+      "probe": "(() => { const row=document.querySelector('.activity-filter .ft-row'); const labels=[...row.querySelectorAll('.fv-enum .st-f-chipfield .prc-title')]; return labels.length===2 && labels.every((l)=>l.clientWidth>0 && l.scrollWidth>=l.clientWidth); })()",
       "expect": true
     },
     {

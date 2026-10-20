@@ -1092,6 +1092,39 @@ describe('ячейка значения: сборка виджета и прав
     assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы — в выпадашке, не «простынёй»');
   });
 
+  it('перечисление: устаревший код вне словаря переживает правку (ревизия № 3 1f3f0df5)', async () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'kind' }, 'in', { kind: 'list', items: ['archived', 'file'] }),
+      api,
+    );
+    // Код вне словаря виден подписью-кодом, а не теряется.
+    assert.deepEqual(
+      all(box, 'prc-title').map((node) => node.textContent),
+      ['archived', 'Файл'],
+    );
+    const input = one(box, 'entity-chip-input');
+    assert.ok(input !== null, 'поле ввода чип-поля');
+    input!.emit('focus');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const body = (globalThis as any).document.body as ShimElement;
+    const list = body.children.filter((child) => child.classList.contains('type-combo-list')).at(-1);
+    assert.ok(list !== undefined, 'выпадашка «Значения» открыта');
+    const row = list!.children.find(
+      (child) =>
+        child.classList.contains('type-combo-item') &&
+        (one(child, 'type-combo-label')?.textContent ?? '').trim() === 'Ссылка',
+    );
+    assert.ok(row !== undefined, 'строка «Ссылка»');
+    row!.emit('click');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: ['archived', 'file', 'url'] },
+      'новый код добавлен, устаревший сохранён',
+    );
+  });
+
   it('«не имеет свойство» по «Типу мысли»: чип-поле строится, оператор не переписывается (п.5)', () => {
     const leafNode = leaf({ kind: 'type' }, 'not_has');
     const box = render(leafNode, slot().api);
