@@ -36,6 +36,7 @@ import {
   TYPE_OWNER_TYPES,
   typeNameKey,
   type EffectiveTypeProperty,
+  type Link,
   type LinkPropertyDirection,
   type LinkPropertySide,
   type LinkPropertyValueItem,
@@ -76,6 +77,11 @@ import { reorderOutsideTypeProperties } from './property-order.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
 import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
+import {
+  removeLinkTarget,
+  type LinkRemoval,
+  type LinkRemovalAction,
+} from './link-target-removal.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import {
   type CrossNetworkRefValue,
@@ -1147,18 +1153,31 @@ function insertLinkRow(
   return id;
 }
 
-/** Пометить ребро в корзину (не физическое удаление — комментарий сохраняется). */
-function markLinkForDeletion(ndb: NetworkDb, linkId: string, actorUserId: string): void {
-  const nowMs = Date.now();
-  const now = new Date(nowMs).toISOString();
-  materializeShadow(ndb, 'links', linkId);
-  ndb
-    .prepare(
-      `UPDATE links SET marked_for_deletion = 1, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
-                        updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
-        WHERE id = ? AND layer_id = ?`,
-    )
-    .run(now, actorUserId, now, actorUserId, nowMs, linkId, ndb.layerId);
+/**
+ * Удаления рёбер, выполненные set-записью свойства-связи. События публикуют
+ * фасады, поэтому результат несёт фактическое действие по каждому ребру.
+ * Символ не сериализуется в JSON — наружу (REST/MCP) поле не утекает.
+ */
+const LINK_REMOVALS = Symbol('etn.linkRemovals');
+
+interface PropertyValueWithRemovals extends PropertyValue {
+  [LINK_REMOVALS]?: LinkRemoval[];
+}
+
+/** Прикрепить к эху записи сведения об удалённых рёбрах (внутренний канал). */
+function attachLinkRemovals(value: PropertyValue, removals: readonly LinkRemoval[]): PropertyValue {
+  if (removals.length > 0) {
+    Object.defineProperty(value, LINK_REMOVALS, { value: [...removals], enumerable: false });
+  }
+  return value;
+}
+
+/**
+ * Рёбра, удалённые этой записью свойства-связи. Используется фасадами для
+ * публикации `link.deleted`/`link.updated`; в ответ клиенту не попадает.
+ */
+export function linkRemovalsOf(value: PropertyValue): LinkRemoval[] {
+  return (value as PropertyValueWithRemovals)[LINK_REMOVALS] ?? [];
 }
 
 /** Позиция нового ребра в списке детей источника (структурное: в конец). */
@@ -1185,7 +1204,7 @@ function setLinkPropertyTargets(
   targetIds: string[],
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): { targets: string[]; createdLinkIds: string[] } {
+): { targets: string[]; createdLinkIds: string[]; removals: LinkRemoval[] } {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1218,8 +1237,13 @@ function setLinkPropertyTargets(
 
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction);
   const wanted = new Set(targetIds);
+  const removals: LinkRemoval[] = [];
   for (const [targetId, link] of existing) {
-    if (!wanted.has(targetId)) markLinkForDeletion(ndb, link.id, actorUserId);
+    if (wanted.has(targetId)) continue;
+    // Умное удаление цели (0.14.1, ADR a967d865): основа — физически, слой —
+    // корзина для ребра из основы/предков и физически для свежесозданного.
+    const removal = removeLinkTarget(ndb, link.id, actorUserId);
+    if (removal !== null) removals.push(removal);
   }
 
   const result: string[] = [];
@@ -1253,7 +1277,7 @@ function setLinkPropertyTargets(
     createdLinkIds.push(insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId));
     result.push(targetId);
   });
-  return { targets: result, createdLinkIds };
+  return { targets: result, createdLinkIds, removals };
 }
 
 /**
@@ -1276,7 +1300,7 @@ export function setLinkPropertySourcesForTarget(
   prop: PropertyLike,
   sourceIds: string[],
   actorUserId: string,
-): { targets: string[]; createdLinkIds: string[] } {
+): { targets: string[]; createdLinkIds: string[]; removals: LinkRemoval[] } {
   return ndb.transaction(() => {
     const cfg = prop.config ?? {};
     const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1288,8 +1312,11 @@ export function setLinkPropertySourcesForTarget(
     // owner — цель: рёбра ищем направлением `in`, противоположный конец — источник.
     const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in');
     const wanted = new Set(resolvedSourceIds);
+    const removals: LinkRemoval[] = [];
     for (const [sourceId, link] of existing) {
-      if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
+      if (wanted.has(sourceId)) continue;
+      const removal = removeLinkTarget(ndb, link.id, actorUserId);
+      if (removal !== null) removals.push(removal);
     }
     const result: string[] = [];
     const createdLinkIds: string[] = [];
@@ -1302,7 +1329,7 @@ export function setLinkPropertySourcesForTarget(
       createdLinkIds.push(insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId));
       result.push(sourceId);
     }
-    return { targets: result, createdLinkIds };
+    return { targets: result, createdLinkIds, removals };
   });
 }
 
@@ -1390,8 +1417,9 @@ function addLinkPropertyTarget(
 }
 
 /**
- * Убрать одну цель из набора свойства-связи (операция `remove`): помечает ребро
- * в корзину (комментарий не теряется). Отсутствующее ребро — no-op.
+ * Убрать одну цель из набора свойства-связи (операция `remove`): применяет
+ * единое умное удаление (ADR a967d865 — основа физически, слой по
+ * происхождению ребра). Отсутствующее/уже помеченное ребро — no-op.
  */
 function removeLinkPropertyTarget(
   ndb: NetworkDb,
@@ -1400,7 +1428,7 @@ function removeLinkPropertyTarget(
   targetId: string,
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): string | null {
+): LinkRemoval | null {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
   // Направление — из display-имени (748b80fd), иначе сторона привязки
@@ -1410,8 +1438,7 @@ function removeLinkPropertyTarget(
     linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing === undefined) return null;
-  markLinkForDeletion(ndb, existing.id, actorUserId);
-  return existing.id;
+  return removeLinkTarget(ndb, existing.id, actorUserId);
 }
 
 // ===========================================================================
@@ -4466,8 +4493,9 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
       )
       .all(...params) as Array<{ id: string }>;
     for (const link of links) {
-      markLinkForDeletion(ndb, link.id, 'system');
-      cleared += 1;
+      // Единое умное удаление (ADR a967d865): основа — физически, слой —
+      // корзина для ребра из основы/предков.
+      if (removeLinkTarget(ndb, link.id, 'system') !== null) cleared += 1;
     }
   }
   return cleared;
@@ -4913,7 +4941,7 @@ function setPropertyValueForProperty(
         key: errKey.key,
       });
     }
-    const { targets: targetIds, createdLinkIds } = setLinkPropertyTargets(
+    const { targets: targetIds, createdLinkIds, removals } = setLinkPropertyTargets(
       ndb,
       ownerId,
       prop,
@@ -4923,7 +4951,7 @@ function setPropertyValueForProperty(
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     const nowMs = Date.now();
-    return {
+    const result: PropertyValue = {
       // Свойство-связь — проекция рёбер (ADR «свойство-связь — проекция ребра»):
       // строки `property_values` у неё нет, поэтому id честно `null`, а не
       // пустая строка-заглушка (ошибка 5a50f906 — `id: ""` в ответе читалось
@@ -4946,6 +4974,7 @@ function setPropertyValueForProperty(
       created_at_ms: nowMs,
       updated_at_ms: nowMs,
     };
+    return attachLinkRemovals(result, removals);
   }
 
   // Владелец-ребро: контракт `/links/{id}/properties` в 0.14.1 НЕ меняется —
@@ -5264,7 +5293,7 @@ export function removeLinkPropertyValue(
   targetId: string,
   actorUserId: string,
   side: LinkPropertySide | null = null,
-): { link_id: string | null } {
+): { link_id: string | null; action: LinkRemovalAction | null; link: Link | null } {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
       owner_type: ownerType,
@@ -5308,10 +5337,10 @@ export function removeLinkPropertyValue(
           { field: 'side', key, target: targetId, allowed: LINK_PROPERTY_SIDES },
         );
       }
-      if (!outLive && !inLive) return { link_id: null };
+      if (!outLive && !inLive) return { link_id: null, action: null, link: null };
       direction = outLive ? 'out' : 'in';
     }
-    const id = removeLinkPropertyTarget(
+    const removal = removeLinkPropertyTarget(
       ndb,
       ownerId,
       prop,
@@ -5319,8 +5348,12 @@ export function removeLinkPropertyValue(
       actorUserId,
       direction,
     );
-    if (id !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
-    return { link_id: id };
+    if (removal !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    return {
+      link_id: removal?.link_id ?? null,
+      action: removal?.action ?? null,
+      link: removal?.link ?? null,
+    };
   });
 }
 
@@ -5420,7 +5453,13 @@ export function deletePropertyValue(
   key: string,
   actorUserId: string,
   side: LinkPropertySide | null = null,
-): { property_id: string; deleted: boolean; link_ids?: string[] } {
+): {
+  property_id: string;
+  deleted: boolean;
+  link_ids?: string[];
+  /** Фактическое действие по каждому снятому ребру — для событий фасада. */
+  removals?: LinkRemoval[];
+} {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
       field: 'owner_type',
@@ -5497,10 +5536,21 @@ export function deletePropertyValue(
         // Ничего не снято — идемпотентный no-op (ошибка cefb4db0).
         return { property_id: prop.id, deleted: false };
       }
-      const linkIds = [...existing.values()].map((link) => link.id);
-      setLinkPropertyTargets(ndb, ownerId, prop, [], actorUserId, prop.direction);
+      const { removals } = setLinkPropertyTargets(
+        ndb,
+        ownerId,
+        prop,
+        [],
+        actorUserId,
+        prop.direction,
+      );
       touchOwner(ndb, ownerType, ownerId, actorUserId);
-      return { property_id: prop.id, deleted: true, link_ids: linkIds };
+      return {
+        property_id: prop.id,
+        deleted: removals.length > 0,
+        link_ids: removals.map((removal) => removal.link_id),
+        removals,
+      };
     }
     // S4: в слое значение скрывается надгробием (13-layers.md §5.2), в основе —
     // прежний физический DELETE.

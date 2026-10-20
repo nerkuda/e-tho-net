@@ -152,16 +152,16 @@ describe(
       }
     });
 
-    it('удаление из набора помечает ребро в корзину (значение не читается)', async () => {
+    it('удаление из набора в основе убирает ребро физически (значение не читается)', async () => {
       const ctx = await buildRestContext();
       try {
         const child = await createThought(ctx, 'Ребёнок для удаления');
         assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [child]), 200);
 
-        // Очистить набор — ребро в корзину.
+        // Очистить набор — умное удаление: в основе физически (0.14.1).
         assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', []), 200);
 
-        // В значениях свойства «Потомки» помеченного ребра нет.
+        // В значениях свойства удалённого ребра нет.
         const props = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/properties`,
@@ -184,8 +184,22 @@ describe(
         const gone = await createThought(ctx, 'Уйдёт совсем');
         assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [keep, gone]), 200);
 
-        // Оба ребра в корзину через набор свойства (модель 0.8.1).
-        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', []), 200);
+        // 0.14.1: пустой набор в основе удаляет рёбра физически (умное
+        // удаление, ADR a967d865). Корзину создаём явной пометкой PATCH links.
+        const linkRows = ctx.ndb
+          .prepare(
+            "SELECT id, target_id FROM links_v WHERE source_id = ? AND type_id IS NULL AND active = 1 AND marked_for_deletion = 0",
+          )
+          .all(ctx.homeId) as Array<{ id: string; target_id: string }>;
+        for (const row of linkRows) {
+          const marked = await ctx.app.inject({
+            method: 'PATCH',
+            url: `/api/v1/networks/${ctx.networkId}/links/${row.id}`,
+            headers: authHeaders(ctx),
+            payload: { marked_for_deletion: true },
+          });
+          assert.equal(marked.statusCode, 200, marked.body);
+        }
         const trash = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/trash`,

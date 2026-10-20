@@ -25,7 +25,7 @@ import {
   setPropertyValue,
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
-import { createLink, getLink } from '../src/domain/link-service.js';
+import { createLink, getLink, updateLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createThought } from '../src/domain/thought-service.js';
 
@@ -211,7 +211,7 @@ describe(
       }
     });
 
-    it('remove помечает ребро в корзину и не теряет комментарий', () => {
+    it('remove в основе удаляет ребро физически (умное удаление, 0.14.1)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'используется в' }, USER);
@@ -226,12 +226,12 @@ describe(
         const b = createThought(ndb, { title: 'Компонент R1', type_id: comp.id }, USER);
 
         const { link_id } = addLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, 'важно', USER);
-        removeLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, USER);
+        const removed = removeLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, USER);
 
-        // Ребро не видно в значениях, но физически в корзине с сохранённым комментарием.
+        // 0.14.1 (ADR a967d865): удаление в основе — физическое, без корзины.
+        assert.equal(removed.action, 'deleted');
         assert.equal(getLinkPropertyValues(ndb, 'thought', a.id, lt.id, 'out').length, 0);
-        const link = getLink(ndb, link_id);
-        assert.ok(link !== null && link.marked_for_deletion === true);
+        assert.equal(getLink(ndb, link_id), null);
       } finally {
         ndb.close();
       }
@@ -252,7 +252,9 @@ describe(
         const b = createThought(ndb, { title: 'Компонент Back1', type_id: comp.id }, USER);
 
         const { link_id } = addLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, 'важно', USER);
-        removeLinkPropertyValue(ndb, 'thought', a.id, 'зависит от', b.id, USER);
+        // Корзина создаётся явной командой корзины (PATCH/DELETE links), а не
+        // умным удалением цели: в основе то удаляет физически.
+        updateLink(ndb, link_id, { marked_for_deletion: true }, undefined, USER);
 
         // Постановка значения поверх корзинного ребра той же тройки: не сырая
         // ошибка UNIQUE (029) и не дубль, а восстановление того же ребра.
@@ -290,8 +292,13 @@ describe(
         const c = createThought(ndb, { title: 'Компонент BackSet2', type_id: comp.id }, USER);
 
         setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id, c.id], USER);
-        // c уходит в корзину.
-        setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id], USER);
+        // Корзина создаётся явной командой корзины: умное удаление в основе
+        // удаляет физически, поэтому Z1-инвариант проверяем над заведомо
+        // помеченным ребром.
+        const cLink = getLinkPropertyValues(ndb, 'thought', a.id, lt.id, 'out').find(
+          (valuesRow) => valuesRow.target_id === c.id,
+        );
+        updateLink(ndb, cLink!.link_id, { marked_for_deletion: true }, undefined, USER);
         // 0.14.1 (спека 906a29c9): set работает по ЖИВЫМ рёбрам — корзинная
         // цель набором не восстанавливается (её возвращает только links.restore)
         // и не удаляется; дубль не создаётся (уникальный индекс 029).
@@ -300,12 +307,14 @@ describe(
         const values = getLinkPropertyValues(ndb, 'thought', a.id, lt.id, 'out');
         assert.equal(values.length, 1);
         assert.equal(values[0]!.target_id, b.id);
+        const trashed = getLink(ndb, cLink!.link_id);
+        assert.ok(trashed !== null && trashed.marked_for_deletion === true, 'корзинное ребро не тронуто');
       } finally {
         ndb.close();
       }
     });
 
-    it('set — полная замена набора, лишние рёбра в корзину', () => {
+    it('set — полная замена набора, лишние рёбра удаляются по умному правилу', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'используется в' }, USER);
@@ -543,8 +552,11 @@ describe(
         assert.equal(removed2.link_id, second.link_id);
 
         assert.deepEqual(liveTypedEdges(ndb, linkTypeId), []);
-        assert.equal(getLink(ndb, first.link_id)?.marked_for_deletion, true);
-        assert.equal(getLink(ndb, second.link_id)?.marked_for_deletion, true);
+        // Умное удаление в основе физическое: рёбер нет ни в каком виде.
+        assert.equal(removed.action, 'deleted');
+        assert.equal(removed2.action, 'deleted');
+        assert.equal(getLink(ndb, first.link_id), null);
+        assert.equal(getLink(ndb, second.link_id), null);
       } finally {
         ndb.close();
       }
@@ -629,13 +641,15 @@ describe(
         // ровно то, что показывает запись «организации категории (связь)».
         const wrong = createLink(ndb, { source_id: o.id, target_id: c.id, type_id: linkTypeId }, USER);
 
-        const { link_id } = removeLinkPropertyValue(
+        const removed = removeLinkPropertyValue(
           ndb, 'thought', o.id, 'организации категории', c.id, USER,
         );
+        const { link_id } = removed;
 
         // Удалено именно исходящее ребро, типовое входящее осталось живым.
         assert.equal(link_id, wrong.id);
-        assert.equal(getLink(ndb, wrong.id)?.marked_for_deletion, true);
+        assert.equal(removed.action, 'deleted');
+        assert.equal(getLink(ndb, wrong.id), null);
         assert.deepEqual(liveTypedEdges(ndb, linkTypeId), [{ source_id: c.id, target_id: o.id }]);
       } finally {
         ndb.close();
@@ -652,11 +666,13 @@ describe(
 
         // У «Прочего» свойство не подключено: запись «категория организации» —
         // внетиповое входящее ребро, ключ — обратное display-имя.
-        const { link_id } = removeLinkPropertyValue(
+        const removed = removeLinkPropertyValue(
           ndb, 'thought', x.id, 'категория организации', c.id, USER,
         );
+        const { link_id } = removed;
         assert.equal(link_id, edge.id);
-        assert.equal(getLink(ndb, edge.id)?.marked_for_deletion, true);
+        assert.equal(removed.action, 'deleted');
+        assert.equal(getLink(ndb, edge.id), null);
         assert.deepEqual(liveTypedEdges(ndb, linkTypeId), []);
       } finally {
         ndb.close();

@@ -539,8 +539,19 @@ describe(
         const c = await createThought(ctx, 'Компонент C');
 
         assert.equal((await putProperty(ctx, owner, 'зависит от', [b, c])).statusCode, 200);
-        // c уходит в корзину.
-        assert.equal((await putProperty(ctx, owner, 'зависит от', [b])).statusCode, 200);
+        // Корзина создаётся явной командой корзины: умное удаление цели в
+        // основе физическое (0.14.1, ADR a967d865).
+        const cLink = getLinkPropertyValues(ctx.ndb, 'thought', owner, linkTypeId, 'out').find(
+          (value) => value.target_id === c,
+        );
+        assert.ok(cLink !== undefined);
+        const trashed = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/links/${cLink.link_id}`,
+          headers: authHeaders(ctx),
+          payload: { marked_for_deletion: true },
+        });
+        assert.equal(trashed.statusCode, 200, trashed.body);
         // Возврат c набором: корзинная цель не восстанавливается и не удаляется.
         const again = await putProperty(ctx, owner, 'зависит от', [b, c]);
         assert.equal(again.statusCode, 200);
@@ -548,6 +559,10 @@ describe(
           getLinkPropertyValues(ctx.ndb, 'thought', owner, linkTypeId, 'out').length,
           1,
           'живой набор — только b',
+        );
+        assert.equal(
+          getLinkPropertyValues(ctx.ndb, 'thought', owner, linkTypeId, 'out')[0]?.target_id,
+          b,
         );
       } finally {
         await closeRestContext(ctx);

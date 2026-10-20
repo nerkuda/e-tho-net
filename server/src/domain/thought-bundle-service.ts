@@ -34,8 +34,10 @@ import { createLink } from './link-service.js';
 import {
   computeThoughtCardWarnings,
   getPropertyValues,
+  linkRemovalsOf,
   setPropertyValue,
 } from './property-service.js';
+import type { LinkRemoval } from './link-target-removal.js';
 import { findBlockingDuplicate, findDuplicates } from './search-service.js';
 import type { DuplicateHit } from './search-service.js';
 import { projectThoughtRows } from './response-projection.js';
@@ -228,8 +230,12 @@ export function upsertThoughtBundle(
   input: ThoughtBundleInput,
   actorUserId: string,
   crossNetworkAccess?: CrossNetworkAccessContext,
-): ThoughtBundleResult {
+): ThoughtBundleResult & { link_removals?: LinkRemoval[] } {
   return ndb.transaction(() => {
+    // Коллектор рёбер, удалённых set-записью свойств-связей этого бандла:
+    // фасад публикует по ним `link.deleted`/`link.updated` (0.14.1, задача
+    // 58b598d5). Поле внутреннее — в MCP-ответ не проецируется.
+    const linkRemovals: LinkRemoval[] = [];
     // Коллектор рёбер, созданных link-дефолтами типа при создании мысли —
     // возвращаются в результате, чтобы фасад опубликовал `link.created`
     // (ошибка 8655842b).
@@ -289,7 +295,7 @@ export function upsertThoughtBundle(
         // `crossNetworkAccess` пробрасывается в том числе ради значений вида
         // `cross_network_ref`: без него запись такого значения отвергается
         // (задача 7849008a, требование aa89940c).
-        properties[key] = setPropertyValue(
+        const pv = setPropertyValue(
           ndb,
           'thought',
           thought.id,
@@ -298,6 +304,8 @@ export function upsertThoughtBundle(
           actorUserId,
           crossNetworkAccess,
         );
+        linkRemovals.push(...linkRemovalsOf(pv));
+        properties[key] = pv;
       }
     }
 
@@ -394,6 +402,7 @@ export function upsertThoughtBundle(
       ...(defaultLinkIds.length > 0 ? { default_link_ids: defaultLinkIds } : {}),
       attachments,
       warnings,
-    } satisfies ThoughtBundleResult;
+      ...(linkRemovals.length > 0 ? { link_removals: linkRemovals } : {}),
+    } satisfies ThoughtBundleResult & { link_removals?: LinkRemoval[] };
   });
 }

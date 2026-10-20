@@ -1705,6 +1705,25 @@ const HANDLERS: Record<string, OpHandler> = {
           a.side ?? null,
         );
         const marked = result.link_id !== null ? getLink(ndb, result.link_id) : null;
+        const audit = {
+          action: 'etn.properties.remove',
+          targetType: a.owner_type,
+          targetId: a.owner_id,
+          details: { key: a.key, value: a.value },
+        };
+        // Умное удаление (0.14.1, ADR a967d865): основа/свежее ребро слоя —
+        // физически (`link.deleted`); ребро из основы в слое — корзина
+        // (`link.updated`). Уже помеченное — no-op без события.
+        if (result.action === 'deleted' && result.link_id !== null) {
+          return {
+            result,
+            events: [{ type: 'link.deleted' as const, data: { id: result.link_id } }],
+            ...(result.link === null
+              ? {}
+              : { activity: [{ kind: 'link' as const, action: 'deleted' as const, link: result.link }] }),
+            audit,
+          };
+        }
         return {
           result,
           ...(marked === null
@@ -1722,12 +1741,7 @@ const HANDLERS: Record<string, OpHandler> = {
                 ],
                 activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
               }),
-          audit: {
-            action: 'etn.properties.remove',
-            targetType: a.owner_type,
-            targetId: a.owner_id,
-            details: { key: a.key, value: a.value },
-          },
+          audit,
         };
       });
       return { link_id: res.link_id, request_id: String(extra.requestId) };

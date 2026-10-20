@@ -38,9 +38,11 @@ import {
   crossResolvePropertyValue,
   deletePropertyValue,
   getPropertyValuesWithLinks,
+  linkRemovalsOf,
   setPropertyValue,
 } from '../domain/property-service.js';
 import { setThoughtPropertyOrder } from '../domain/property-order-service.js';
+import type { AnyWriteEvent } from '../domain/write-wrapper.js';
 import type { CrossNetworkAccessContext } from '../domain/cross-network-ref-service.js';
 import { getAccessibleNetworkIdsForUser } from './helpers.js';
 import { getThought } from '../domain/thought-service.js';
@@ -141,6 +143,26 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
                     ? []
                     : [{ type: 'link.created' as const, data: { link } }];
                 }),
+                // Умное удаление целей set-записью (0.14.1, ADR a967d865):
+                // физическое удаление — `link.deleted`, корзина — `link.updated`.
+                ...linkRemovalsOf(set).flatMap<AnyWriteEvent>((removal) => {
+                  if (removal.action === 'deleted') {
+                    return [{ type: 'link.deleted' as const, data: { id: removal.link_id } }];
+                  }
+                  const link = getLink(ndb, removal.link_id);
+                  return link === null
+                    ? []
+                    : [
+                        {
+                          type: 'link.updated' as const,
+                          data: {
+                            id: link.id,
+                            changes: { marked_for_deletion: true },
+                            version: link.version,
+                          },
+                        },
+                      ];
+                }),
               ],
               ...(ownerEntity === null
                 ? {}
@@ -190,10 +212,13 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
                     property_id: removed.property_id,
                   },
                 },
-                // Свойство-связь: снятие значения пометило рёбра корзиной —
-                // подписчики должны увидеть новое состояние связей.
-                ...(removed.link_ids ?? []).flatMap((linkId) => {
-                  const link = getLink(ndb, linkId);
+                // Свойство-связь: умное удаление (0.14.1, ADR a967d865) —
+                // физическое удаление `link.deleted`, корзина `link.updated`.
+                ...(removed.removals ?? []).flatMap<AnyWriteEvent>((removal) => {
+                  if (removal.action === 'deleted') {
+                    return [{ type: 'link.deleted' as const, data: { id: removal.link_id } }];
+                  }
+                  const link = getLink(ndb, removal.link_id);
                   return link === null
                     ? []
                     : [

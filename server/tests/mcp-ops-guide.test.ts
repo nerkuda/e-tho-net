@@ -28,7 +28,8 @@ import { formatCrossNetworkAddress } from '@etn/shared';
 import { GUIDE_TOPIC_NAMES, OPS_ACTION_NAMES } from '../src/mcp/tools/ops-catalog.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { createLogger } from '../src/logger.js';
-import { closeNetworkDb } from '../src/db/network-db.js';
+import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
+import { updateLink } from '../src/domain/link-service.js';
 import {
   callOp,
   buildMcpContext,
@@ -502,13 +503,15 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
             },
           }),
         ).link_id;
-        await callOp(c, 'properties.remove', {
-          network_id: net,
-          owner_type: 'thought',
-          owner_id: source.id,
-          key: 'Потомки',
-          value: target.id,
-        });
+        // 0.14.1: корзину создаём явной командой корзины — умное удаление
+        // цели в основе физическое (ADR a967d865).
+        updateLink(
+          openNetworkDb(ctx.dataDir, net),
+          linkId,
+          { marked_for_deletion: true },
+          undefined,
+          ctx.adminId,
+        );
         assert.equal(
           (await callOp(c, 'links.restore', { network_id: net, link_id: linkId })).isError,
           undefined,
