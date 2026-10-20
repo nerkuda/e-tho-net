@@ -1228,7 +1228,7 @@ describe('типовая строка связи и значение чужой 
 
   it('элемент набора порядка: у связи сторона строки, у скаляра — без side', async () => {
     const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
-    const toOrderItem = propertiesInternals.toOrderItem as (
+    const toOrderItem = propertiesInternals.toOrderItem as unknown as (
       v: unknown,
       position: number,
     ) => Record<string, unknown>;
@@ -1242,6 +1242,25 @@ describe('типовая строка связи и значение чужой 
     assert.deepEqual(
       toOrderItem({ property_id: 'p-text', value_type: 'text', value: 'x' }, 0),
       { property_id: 'p-text', position: 0 },
+    );
+  });
+
+  it('черновик и легаси-ребро не входят в набор порядка и не сдвигают слоты', async () => {
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const slots = propertiesInternals.reorderableOutsideSlots as unknown as (
+      rows: readonly { pending: unknown; value: Record<string, unknown> | null }[],
+    ) => number[];
+    // Серверная A, черновик, легаси-ребро без реестрового id, серверная B.
+    const rows = [
+      { pending: null, value: { property_id: 'p-a', value_type: 'text', value: '1' } },
+      { pending: { property_id: 'p-draft', property_name: 'Черновик' }, value: null },
+      { pending: null, value: { property_id: '', value_type: 'link', values: [] } },
+      { pending: null, value: { property_id: 'p-b', value_type: 'text', value: '2' } },
+    ];
+    assert.deepEqual(
+      slots(rows),
+      [0, 3],
+      'в набор порядка входят только серверные строки с реестровым свойством',
     );
   });
 });

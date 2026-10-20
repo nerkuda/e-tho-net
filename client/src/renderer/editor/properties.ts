@@ -1076,7 +1076,7 @@ function buildOutsidePropertiesBody(
 
   /** Строки, которые адресует операция порядка: есть реестровое свойство. */
   const reorderableRows = (): OutsideRow[] =>
-    shownRows.filter((row) => row.pending === null && isReorderableOutsideValue(row.value!));
+    reorderableOutsideSlots(shownRows).map((index) => shownRows[index]!);
 
   /** Перечитать карту узлов после `reconcileKeyed` (ключ — `data-key` строки). */
   const collectRowNodes = (): void => {
@@ -1120,10 +1120,7 @@ function buildOutsidePropertiesBody(
    */
   const applyReorderableOrder = (ordered: OutsideRow[]): void => {
     if (ordered.length === 0) return;
-    const slots: number[] = [];
-    shownRows.forEach((row, index) => {
-      if (row.pending === null && isReorderableOutsideValue(row.value!)) slots.push(index);
-    });
+    const slots = reorderableOutsideSlots(shownRows);
     const next = [...shownRows];
     slots.forEach((slot, index) => {
       const row = ordered[index];
@@ -1478,6 +1475,25 @@ const PROPERTY_ROW_CURRENT_CLASS = 'prop-row-current';
 /** Внетиповая строка участвует в порядке: у неё есть реестровое свойство. */
 function isReorderableOutsideValue(value: PropertyValue | LinkPropertyValues): boolean {
   return value.property_id !== '';
+}
+
+/**
+ * Слоты набора порядка во внетиповой группе (0.14.1, задача 2e87285b):
+ * индексы видимых строк, которые адресует `PUT .../properties/order`.
+ * Черновик (`pending`) и легаси-ребро (`property_id: ''`) в набор не входят
+ * и слотов переупорядочиваемых строк не сдвигают — порядок черновиков и
+ * легаси сохраняется оптимистичным применением.
+ */
+export function reorderableOutsideSlots(
+  rows: readonly { pending: unknown; value: PropertyValue | LinkPropertyValues | null }[],
+): number[] {
+  const slots: number[] = [];
+  rows.forEach((row, index) => {
+    if (row.pending === null && row.value !== null && isReorderableOutsideValue(row.value)) {
+      slots.push(index);
+    }
+  });
+  return slots;
 }
 
 /** Ключ строки порядка из события: `property_id` + сторона (у скаляра — null). */
@@ -2468,6 +2484,7 @@ export const propertiesInternals = {
   outsideRowKey,
   definitionValueKey,
   toOrderItem,
+  reorderableOutsideSlots,
   presentPropertyRowIds,
 };
 
