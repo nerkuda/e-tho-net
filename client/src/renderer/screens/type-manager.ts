@@ -31,7 +31,9 @@
  *  - «Свойства типа» — the type's own BINDINGS to the network property
  *    registry, staged in a local draft (`type-property-draft.ts`): the
  *    editor attaches existing registry properties or creates new ones, and
- *    on existing bindings it toggles `required` and reorders ▲/▼. All edits
+ *    on existing bindings it toggles `required` and reorders rows with the
+ *    shared row-reorder component (DnD over the whole row, Alt+↑/↓, context
+ *    menu). All edits
  *    are local until the editor's «Применить и закрыть» reconciles them
  *    with the server (unbinds first, then attaches/creates, then `set-role`
  *    patches, one trailing reorder). The property's NATURE (name, value
@@ -72,7 +74,7 @@ import type {
   TypeOwnerType,
 } from '@etn/shared';
 import { t } from '../lib/i18n.js';
-import { menuAction, type MenuItem } from '../lib/menu.js';
+import { menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { buildLinkValueEditor, buildValueEditor, linkAllowedTypeIds } from '../editor/value-editor.js';
 import { typeNameKey, EtnError, UI_STATE_KEY } from '@etn/shared';
 
@@ -108,6 +110,8 @@ import {
   subtreeHeight,
 } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
+import { createListNav, type ListNavHandle } from '../lib/ui/list.js';
+import { createRowReorder, rowReorderMenuItems, type RowReorderHandle } from '../lib/row-reorder.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { uiSplitter } from '../lib/ui/splitter.js';
 import {
@@ -130,10 +134,10 @@ import {
   cacheAttachedRegistryRow,
   canReorderBinding,
   draftPropertiesFrom,
-  moveDraftRow,
   nextDraftPropertyId,
   opToAttachInput,
   planPropertyDiff,
+  reorderDraftRows,
   type DraftProperty,
 } from '../lib/type-property-draft.js';
 import {
@@ -185,6 +189,9 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   // Ссылка на публикацию (0.11.1, задача f37b468d).
   publication: 'публикация',
 };
+
+/** CSS-класс текущей (выделенной с клавиатуры) строки таблицы привязок. */
+const BINDING_ROW_CURRENT_CLASS = 'prop-row-current';
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
 async function refreshThoughtTypes(): Promise<void> {
@@ -820,7 +827,7 @@ export interface TypeEditorExtras {
  * Самое широкое содержимое — таблица «Свойства типа» на вкладке «Свойства»:
  * шесть колонок, где «По умолчанию» держит редактор значения (у
  * свойства-связи — `.link-value-wrap` с полом 220px), а последняя — кнопки
- * ▲/▼/✎/✕ с `nowrap`. Таблица на auto-раскладке, её ширина упирается в
+ * ✎/✕ с `nowrap`. Таблица на auto-раскладке, её ширина упирается в
  * min-content строки: замер зондом на Chromium (реальный `styles.css`, самый
  * длинный набор свойств сети ETN) даёт 688px; 900px роли L оставляют запас.
  */
@@ -1538,6 +1545,7 @@ export function showThoughtTypeEditor(
       },
       onClose: () => {
         unbindLock();
+        props.dispose();
         viewsTab.dispose();
         void releaseHeld(editLock);
         editLock = null;
@@ -1579,6 +1587,8 @@ interface StagedPropertySection {
    * (через общий `reload()` из `applyChanges` и перерисовку вкладки).
    * Присутствует только когда `typeId === null`; иначе — `undefined`. */
   onSave?: () => void;
+  /** Снять слушатели row-reorder/навигации при закрытии диалога. */
+  dispose(): void;
 }
 
 /**
@@ -1589,7 +1599,7 @@ interface StagedPropertySection {
  * adds bindings via «Добавить свойство» — a dialog over the network
  * property registry (search, pick an existing one OR create a brand-new one
  * and attach in the same server-side transaction). The role of an existing
- * binding is edited locally: `required` toggle and ▲/▼ reorder. The
+ * binding is edited locally: `required` toggle and row-reorder. The
  * property's NATURE (name, value type, config, description) is not editable
  * here — the table's «✎» button opens the property manager dialog with a
  * banner that flags the network-wide impact. «✕» unbinds with a
@@ -1964,16 +1974,166 @@ function buildStagedPropertySection(opts: {
     }
   }
 
-  /** Moves a draft row one slot up/down (the order is applied on save).
-   *  Порядок общий для всего типа — двигаются строки обеих сторон привязки
-   *  (задача b044237d). */
-  function move(rowId: string, delta: -1 | 1): void {
-    const next = moveDraftRow(ownDraft, rowId, delta);
-    if (next === ownDraft) return;
-    ownDraft = [...next];
+  /**
+   * Узлы строк собственной таблицы (ключ — id привязки). Пересобираются в
+   * {@link render}: навигация и переупорядочивание работают по живым `tr`.
+   */
+  const ownRowNodes = new Map<
+    string,
+    { tr: HTMLElement; nameCell: HTMLElement; defaultCell: HTMLElement }
+  >();
+  let ownNav: ListNavHandle<DraftProperty> | null = null;
+  let ownReorder: RowReorderHandle | null = null;
+
+  /** Строки набора порядка: обе стороны привязки и скаляры (canReorderBinding). */
+  const reorderableOwnRows = (): DraftProperty[] =>
+    ownDraft.filter((row) => canReorderBinding(row));
+
+  /**
+   * Единый колбэк перестановки строк привязок: DnD, Alt+↑/↓ и пункты меню
+   * (0.14.1, задача 1425457f). Порядок применяется к ЧЕРНОВИКУ и уезжает на
+   * сервер только на «Применить и закрыть» — как и раньше (planPropertyDiff
+   * даёт один trailing reorder).
+   */
+  function moveOwnRow(from: number, to: number): void {
+    const ordered = reorderableOwnRows();
+    const next = reorderDraftRows(ordered, from, to);
+    if (next === ordered) return;
+    // Нереордерируемые строки (сегодня таких нет — правило canReorderBinding
+    // истинно для всех видов привязок) остаются на своих слотах.
+    const slots: number[] = [];
+    ownDraft.forEach((row, index) => {
+      if (canReorderBinding(row)) slots.push(index);
+    });
+    const merged = [...ownDraft];
+    slots.forEach((slot, index) => {
+      const row = next[index];
+      if (row !== undefined) merged[slot] = row;
+    });
+    ownDraft = merged;
     draftTouched = true;
     render();
   }
+
+  /** Позиция строки для пунктов «Переместить выше/ниже» (null — не двигается). */
+  function reorderSlotOf(
+    rowId: string,
+  ): { index: number; count: number; onMove: (from: number, to: number) => void } | null {
+    const rows = reorderableOwnRows();
+    const index = rows.findIndex((row) => row.id === rowId);
+    if (index < 0) return null;
+    return { index, count: rows.length, onMove: moveOwnRow };
+  }
+
+  /** Строка таблицы по узлу (клик/фокус): поднимаемся до `tr[data-row-id]`. */
+  function ownRowOfNode(start: HTMLElement | null): DraftProperty | null {
+    let node: HTMLElement | null = start;
+    while (node !== null && node !== ownScroll) {
+      if ((node.tagName ?? '').toLowerCase() === 'tr') {
+        const id = node.getAttribute('data-row-id');
+        if (id !== null) return ownDraft.find((row) => row.id === id) ?? null;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /** Первый редактор колонки «По умолчанию» — цель Enter-активации строки. */
+  function focusOwnDefault(cell: HTMLElement): boolean {
+    const editor = cell.querySelector(
+      'input, textarea, select, [contenteditable="true"]',
+    ) as HTMLElement | null;
+    if (editor === null) return false;
+    editor.focus?.();
+    return true;
+  }
+
+  /**
+   * Меню строки привязки: пункты порядка из общего словаря (`rowReorderMenuItems`).
+   * Позиция вычисляется в момент ОТКРЫТИЯ — после DnD/Alt она уже другая.
+   */
+  function wireOwnRowMenu(tr: HTMLElement, nameCell: HTMLElement, rowId: string): void {
+    const open = (x: number, y: number): void => {
+      const slot = reorderSlotOf(rowId);
+      if (slot === null) return;
+      const row = ownDraft.find((candidate) => candidate.id === rowId) ?? null;
+      if (row !== null) ownNav?.setCurrent(row);
+      showMenuAt(
+        x,
+        y,
+        rowReorderMenuItems({ index: slot.index, count: slot.count, onMove: slot.onMove }),
+      );
+    };
+    tr.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      open(event.clientX, event.clientY);
+    });
+    // Ячейка имени — таб-стоп: клик по строке даёт фокус внутрь навигации
+    // (стрелки/Alt+↑/↓), не отбирая его у редакторов и кнопок.
+    nameCell.tabIndex = 0;
+  }
+
+  /** Перепривязать навигацию и порядок к пересобранным строкам таблицы. */
+  function refreshOwnRows(): void {
+    ownNav?.refresh();
+    ownReorder?.refresh();
+  }
+
+  /** Снять узлы строк (заглушка несохранённого типа) и обновить выделение. */
+  function resetOwnRows(): void {
+    ownRowNodes.clear();
+    refreshOwnRows();
+  }
+
+  // Навигация ↑/↓ и Enter — общий компонент списка над ядром nav-core
+  // (стандарт b6b2821d). Root — прокручиваемый контейнер таблицы.
+  ownNav = createListNav<DraftProperty>(ownScroll, {
+    entries: () => ownDraft,
+    tokenOf: (row) => row.id,
+    elementOf: (row) => ownRowNodes.get(row.id)?.tr ?? null,
+    applyHighlight: (row) => {
+      const id = row === null ? null : row.id;
+      for (const [rowId, node] of ownRowNodes) {
+        node.tr.classList.toggle(BINDING_ROW_CURRENT_CLASS, rowId === id);
+      }
+    },
+    focus: (row) => ownRowNodes.get(row.id)?.nameCell.focus?.(),
+    onClick: (target) => {
+      const row = ownRowOfNode(target);
+      if (row === null) return;
+      ownNav?.setCurrent(row);
+      // Клик по редактору/кнопке не отбирает у него фокус — иначе ломаются
+      // ввод дефолта и нажатия ✎/✕.
+      const interactive = target.closest(
+        'input, textarea, select, button, a, [contenteditable="true"]',
+      );
+      if (interactive === null) ownRowNodes.get(row.id)?.nameCell.focus?.();
+    },
+    onActivate: (row) => {
+      const node = ownRowNodes.get(row.id);
+      if (node === undefined) return;
+      if (!focusOwnDefault(node.defaultCell)) node.nameCell.focus?.();
+    },
+  });
+
+  // Переупорядочивание — общая компонента row-reorder: захват ВСЕЙ строки
+  // (captureOf не сужаем), Alt+↑/↓ через nav-core, Esc и авто-прокрутка — в
+  // drag-фасаде. Порядок — черновик, запись на «Применить и закрыть».
+  ownReorder = createRowReorder<DraftProperty>(
+    ownScroll,
+    {
+      rows: () =>
+        reorderableOwnRows().flatMap((row) => {
+          const node = ownRowNodes.get(row.id);
+          return node === undefined ? [] : [{ entry: row, key: row.id, element: node.tr }];
+        }),
+      onMove: moveOwnRow,
+    },
+    {
+      currentKey: () => ownNav?.token() ?? null,
+      scrollHost: () => ownScroll,
+    },
+  );
 
   /** Toggles the `required` flag of a draft row (applied on «Применить и
    *  закрыть» — the table does not write the server mid-edit). */
@@ -2055,6 +2215,7 @@ function buildStagedPropertySection(opts: {
       inheritedScroll.append(
         el('p', 'muted', 'Свойства появятся после сохранения типа.'),
       );
+      resetOwnRows();
       return;
     }
 
@@ -2160,8 +2321,12 @@ function buildStagedPropertySection(opts: {
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
+    // Узлы строк для навигации/порядка собираются в этом же проходе: строки
+    // пересобираются при каждом render, карта — тоже.
+    ownRowNodes.clear();
     for (const row of ownDraft) {
       const tr = el('tr');
+      tr.setAttribute('data-row-id', row.id);
       // Имя: для свойств-связей выводится имя соответствующей стороны
       // (`name_forward` для источника, `name_reverse` для назначения);
       // унаследованные привязки и бывшие зеркальные — также под обратным
@@ -2200,27 +2365,10 @@ function buildStagedPropertySection(opts: {
       tr.append(dvCell);
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
-      // Порядок (▲/▼) — у всех строк таблицы, включая привязки стороны
-      // «назначение» (задача b044237d): порядок принадлежит типу, а не
-      // стороне свойства-связи.
-      if (canReorderBinding(row)) {
-        actions.append(
-          uiButton({
-            label: '▲',
-            role: 'secondary',
-            size: 's',
-            title: 'Выше',
-            onClick: () => move(row.id, -1),
-          }),
-          uiButton({
-            label: '▼',
-            role: 'secondary',
-            size: 's',
-            title: 'Ниже',
-            onClick: () => move(row.id, 1),
-          }),
-        );
-      }
+      // Кнопок порядка ▲/▼ больше нет (0.14.1, задача 1425457f): порядок —
+      // row-reorder (перетаскивание всей строки, Alt+↑/↓, пункты меню).
+      // Порядок общий для всего типа, включая привязки стороны «назначение»
+      // (задача b044237d).
       actions.append(
         uiButton({
           label: '✎',
@@ -2238,13 +2386,18 @@ function buildStagedPropertySection(opts: {
         }),
       );
       tr.append(actions);
+      wireOwnRowMenu(tr, nameCell, row.id);
       tbody.append(tr);
+      ownRowNodes.set(row.id, { tr, nameCell, defaultCell: dvCell });
     }
     table.append(tbody);
     ownScroll.append(table);
     if (ownDraft.length === 0) {
       ownScroll.append(el('p', 'muted', 'У типа нет собственных свойств.'));
     }
+    // После пересборки строк перепривязываем навигацию и row-reorder к новым
+    // узлам (набор строк читается из `ownDraft` динамически).
+    refreshOwnRows();
   }
 
   /** Имя свойства в строке таблицы: для свойств-связей — имя стороны
@@ -2435,6 +2588,12 @@ function buildStagedPropertySection(opts: {
       return false;
     },
     onSave,
+    dispose: (): void => {
+      ownReorder?.destroy();
+      ownReorder = null;
+      ownNav?.destroy();
+      ownNav = null;
+    },
   };
 }
 

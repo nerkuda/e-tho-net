@@ -259,6 +259,36 @@ describe('drag-list: перетаскивание указателем (d13fd645
     assert.deepEqual(calls, [{ group: 'g', keys: ['B', 'A', 'C'] }]);
   });
 
+  it('pointerdown на контрол внутри строки-грипа не начинает жест и не гасит click', () => {
+    // Потребитель с захватом ВСЕЙ строки (таблица привязок редактора типа,
+    // задача 1425457f): чекбокс/кнопка внутри строки обязаны оставаться
+    // кликабельными — `preventDefault` на pointerdown погасил бы их click.
+    const a = makeItem('a');
+    const button = new ShimElement('button');
+    a.element.append(button);
+    a.item.handle = a.element as unknown as HTMLElement;
+    const b = makeItem('b');
+    a.element.getBoundingClientRect = () => rect(0, 20);
+    b.element.getBoundingClientRect = () => rect(20, 40);
+    const { calls } = setup([a, b], null);
+    let prevented = false;
+    a.element.emit('pointerdown', {
+      button: 0,
+      clientY: 5,
+      clientX: 0,
+      pointerId: 1,
+      target: button,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    a.element.emit('pointermove', { clientY: 45, clientX: 0, pointerId: 1 });
+    a.element.emit('pointerup', { pointerId: 1 });
+    assert.equal(prevented, false, 'click контрола не отменяется');
+    assert.deepEqual(calls, [], 'перетаскивание не началось');
+    assert.equal(a.element.classList.contains(DRAG_ACTIVE_CLASS), false);
+  });
+
   it('идентичность строки и node_key разведены (повтор вхождения)', () => {
     const first = makeItem('k1', 'g', 'n');
     const second = makeItem('k2', 'g', 'n');

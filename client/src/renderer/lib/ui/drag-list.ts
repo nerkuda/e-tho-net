@@ -58,6 +58,40 @@ export const DRAG_GHOST_CLASS = 'ui-drag-ghost';
 /** Глиф грипа по умолчанию (шесть точек). */
 export const DRAG_HANDLE_GLYPH = '⠿';
 
+/**
+ * Интерактивные элементы: pointerdown на них — работа контрола, а не жест
+ * перетаскивания. Нужно потребителям с захватом ВСЕЙ строки (таблица привязок
+ * редактора типа, 0.14.1): чекбокс и кнопки строки обязаны оставаться
+ * кликабельными, иначе `preventDefault` гасит их click.
+ */
+const INTERACTIVE_TAGS = new Set(['input', 'textarea', 'select', 'button', 'a', 'label']);
+
+/** Узел — интерактивный контрол (не зона захвата строки). */
+function isInteractiveNode(node: HTMLElement): boolean {
+  const tag = (node.tagName ?? '').toLowerCase();
+  if (INTERACTIVE_TAGS.has(tag)) return true;
+  if ((node as unknown as { isContentEditable?: boolean }).isContentEditable === true) {
+    return true;
+  }
+  const editable = node.getAttribute?.('contenteditable');
+  if (editable !== null && editable !== undefined) return true;
+  return node.getAttribute?.('role') === 'button';
+}
+
+/** Ближайший интерактивный предок цели pointerdown (`null` — не интерактив). */
+function interactiveAncestor(target: EventTarget | null): Element | null {
+  let node = target as unknown as HTMLElement | null;
+  while (node !== null && node !== undefined) {
+    if (isInteractiveNode(node)) return node as unknown as Element;
+    // DOM — `parentElement`; шим тестов отдаёт `parent`.
+    node =
+      (node.parentElement as HTMLElement | null | undefined) ??
+      (node as unknown as { parent?: HTMLElement | null }).parent ??
+      null;
+  }
+  return null;
+}
+
 /** Сущность, доступная перетаскиванию: узел, его грип и группа соседей. */
 export interface DragListItem<E> {
   /** Сущность модели (та же, что видит навигация). */
@@ -346,6 +380,16 @@ export function createDragList<E>(
     bound.add(item.handle);
     item.handle.addEventListener('pointerdown', (event: PointerEvent) => {
       if (event.button !== 0) return;
+      // Контрол внутри строки-грипа (чекбокс, кнопка, поле) забирает жест
+      // себе: перетаскивание не начинается и click не гасится.
+      const interactive = interactiveAncestor(event.target ?? null);
+      if (
+        interactive !== null &&
+        interactive !== (item.handle as unknown as Element) &&
+        item.element.contains?.(interactive as unknown as Node) === true
+      ) {
+        return;
+      }
       event.preventDefault?.();
       const startY = event.clientY;
       const pointerId = event.pointerId;
