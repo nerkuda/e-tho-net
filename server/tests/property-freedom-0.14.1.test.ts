@@ -23,7 +23,7 @@ import {
   getLinkPropertyValues,
   listEffectiveTypeProperties,
 } from '../src/domain/property-service.js';
-import { createLinkType } from '../src/domain/link-type-service.js';
+import { createLinkType, updateLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 
@@ -389,6 +389,132 @@ describe(
           ),
           [peer],
         );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('read-time зеркало (allowed_target_type_ids включает сам тип) не требует side без живых рёбер', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Явная привязка source + СИНТЕТИЧЕСКОЕ read-time зеркало (target,
+        // config.direction: 'in') — две записи одного свойства с одним ключом.
+        // Без живых рёбер 422 быть не должно: направление задаёт ЯВНАЯ запись.
+        const typeId = createThoughtType(ctx.ndb, { name: 'Тип-самозеркало' }, USER).id;
+        const linkType = createLinkType(
+          ctx.ndb,
+          { name_forward: 'связано с', name_reverse: 'связано с' },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          typeId,
+          {
+            key: 'связано с',
+            value_type: 'link',
+            side: 'source',
+            config: {
+              link_type_id: linkType.id,
+              allowed_target_type_ids: [typeId],
+            },
+          },
+          USER,
+        );
+
+        const effective = listEffectiveTypeProperties(ctx.ndb, 'thought_type', typeId).filter(
+          (d) => d.key === 'связано с',
+        );
+        assert.equal(effective.length, 2, 'явная привязка + read-time зеркало');
+        assert.equal(effective.filter((d) => d.mirrored === true).length, 1, 'зеркало синтетическое');
+
+        const owner = await createThought(ctx, 'Владелец-зеркало', typeId);
+        const peer = await createThought(ctx, 'Сосед-зеркало', typeId);
+        const put = await putProperty(ctx, owner, 'связано с', peer);
+        assert.equal(put.statusCode, 200, put.body);
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', owner, linkType.id, 'out').map(
+            (v) => v.target_id,
+          ),
+          [peer],
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('коллизия имён разных свойств: без side 422, с side выбирается свойство', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const typeId = createThoughtType(ctx.ndb, { name: 'Тип-коллизия' }, USER).id;
+        // Два разных свойства с разными реестровыми именами. После переименования
+        // типов связи их DISPLAY-имена сходятся в 'rel': LT1 — прямое имя
+        // (source-привязка), LT2 — обратное (target-привязка).
+        const rp1 = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'rel-prop-1',
+            value_type: 'link',
+            name_forward: 'rel-one-fwd',
+            name_reverse: 'rel-one-rev',
+          },
+          USER,
+        );
+        const rp2 = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'rel-prop-2',
+            value_type: 'link',
+            name_forward: 'rel-two-fwd',
+            name_reverse: 'rel-two-rev',
+          },
+          USER,
+        );
+        const lt1Id = rp1.config?.link_type_id as string;
+        const lt2Id = rp2.config?.link_type_id as string;
+        const p1 = createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          typeId,
+          { key: 'rel-one-fwd', value_type: 'link', side: 'source' },
+          USER,
+        );
+        const p2 = createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          typeId,
+          { key: 'rel-two-fwd', value_type: 'link', side: 'target' },
+          USER,
+        );
+        updateLinkType(ctx.ndb, lt1Id, { name_forward: 'rel' }, undefined, USER);
+        updateLinkType(ctx.ndb, lt2Id, { name_reverse: 'rel' }, undefined, USER);
+
+        const effective = listEffectiveTypeProperties(ctx.ndb, 'thought_type', typeId).filter(
+          (d) => d.key === 'rel',
+        );
+        assert.equal(effective.length, 2, 'две записи разных свойств с одним ключом');
+
+        const owner = await createThought(ctx, 'Владелец-коллизия', typeId);
+        const peer = await createThought(ctx, 'Сосед-коллизия', typeId);
+
+        // Без side — честный 422: авто-вывод запрещён для разных свойств.
+        const ambiguous = await putProperty(ctx, owner, 'rel', peer);
+        assert.equal(ambiguous.statusCode, 422, ambiguous.body);
+        assert.equal(
+          (ambiguous.json() as { error: { code: string; details?: { field?: string } } }).error
+            .details?.field,
+          'side',
+        );
+
+        // side=target выбирает P2 (target-привязка).
+        const bySide = await putProperty(ctx, owner, 'rel', peer, 'target');
+        assert.equal(bySide.statusCode, 200, bySide.body);
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', owner, lt2Id, 'in').map((v) => v.target_id),
+          [peer],
+        );
+        assert.equal(getLinkPropertyValues(ctx.ndb, 'thought', owner, lt1Id, 'out').length, 0);
+        assert.notEqual(p1.property_id, p2.property_id);
       } finally {
         await closeRestContext(ctx);
       }

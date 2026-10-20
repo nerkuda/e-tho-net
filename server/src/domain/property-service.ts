@@ -3608,13 +3608,15 @@ function resolveLinkDirectionForWrite(
 
 /**
  * Направление для случая «одно имя — несколько записей эффективного набора»
- * (0.14.1, правка по верификации Z1): привязка source + target-зеркало дают
- * ДВЕ записи с одним симметричным ключом ещё до появления рёбер. `422` тут
- * допустим только когда обе стороны ЖИВЫ (спека 906a29c9); иначе сторона
- * выводится из живых рёбер, а при их отсутствии — из канонического
- * направления определений (`config.direction`), если они согласованы.
+ * ОДНОГО свойства (0.14.1, правка по верификации Z1): явная привязка и
+ * синтетическое read-time зеркало (`mirrored: true`, `config.direction`
+ * построен как ПРОТИВОПОЛОЖНЫЙ) дают две записи с одним симметричным ключом
+ * ещё до появления рёбер. `422` допустим только когда обе стороны ЖИВЫ
+ * (спека 906a29c9); иначе сторона выводится из живых рёбер, а при их
+ * отсутствии — от ЯВНОЙ записи (её привязки), без оглядки на
+ * `config.direction` синтетического зеркала.
  */
-function resolveAmbiguousTypedLinkDirection(
+function resolveSamePropertyLinkDirection(
   ndb: NetworkDb,
   ownerId: string,
   key: string,
@@ -3622,11 +3624,9 @@ function resolveAmbiguousTypedLinkDirection(
   allowAmbiguous: boolean,
 ): LinkPropertyDirection | null {
   const linkTypeIds = new Set<string>();
-  const defaultDirections = new Set<LinkPropertyDirection>();
   for (const match of matches) {
     const linkTypeId = linkPropertyLinkTypeId(match.config);
     if (linkTypeId !== null) linkTypeIds.add(linkTypeId);
-    defaultDirections.add(linkPropertyDirection(match.config));
   }
   const live: LinkPropertyDirection[] = [];
   for (const direction of ['out', 'in'] as const) {
@@ -3647,15 +3647,17 @@ function resolveAmbiguousTypedLinkDirection(
     );
   }
   if (live.length === 1) return live[0]!;
-  // Живых рёбер нет: каноническое направление определений. Расходятся —
-  // имя действительно неоднозначно.
-  if (defaultDirections.size === 1) return [...defaultDirections][0]!;
-  if (allowAmbiguous) return null;
-  throw new EtnError(
-    'VALIDATION_ERROR',
-    `имя свойства «${key}» адресует обе стороны связи — укажите side`,
-    { field: 'side', key, allowed: LINK_PROPERTY_SIDES },
+  // Живых рёбер нет. Направление задаёт ЯВНАЯ запись (привязка); у
+  // синтетического зеркала config.direction противоположен по построению.
+  // При нескольких явных записях (материализованные привязки обеих сторон)
+  // конфиг у них один и тот же (свойство одно) — берём его каноническое
+  // направление. Для sameProperty 422 здесь недостижим.
+  const explicit = matches.filter((match) => match.mirrored !== true);
+  const explicitDirections = new Set(
+    explicit.map((match) => linkPropertyDirection(match.config, match.side ?? null)),
   );
+  if (explicitDirections.size === 1) return [...explicitDirections][0]!;
+  return linkPropertyDirection((explicit[0] ?? matches[0]!).config);
 }
 
 /**
@@ -3746,16 +3748,49 @@ export function resolveDefinition(
         };
       }
       if (matches.length > 1) {
-        // Обе стороны одного типа связи у владельца (привязка source +
-        // target-зеркало) или коллизия имён. Сторону выводим по ФАКТИЧЕСКИМ
-        // живым рёбрам (0.14.1): 422 — только когда обе стороны живы.
+        // Либо один и тот же ключ у НЕСКОЛЬКИХ свойств (коллизия имён), либо
+        // одна и та же пара «звёзд» (свойство + его read-time зеркало).
         const allLink = matches.every((m) => m.value_type === 'link');
         if (allLink) {
           const sameProperty = new Set(matches.map((m) => m.property_id)).size === 1;
+          // Коллизия имён РАЗНЫХ свойств: авто-вывод запрещён — сторону
+          // задаёт только side, и после фильтра должна остаться одна запись
+          // (0.14.1, правка по верификации Z1).
+          if (!sameProperty) {
+            if (side !== null) {
+              const sideDir = directionFromSide(side);
+              const filtered = matches.filter(
+                (m) => linkPropertyDirection(m.config, m.side ?? null) === sideDir,
+              );
+              if (filtered.length === 1) {
+                const def = filtered[0]!;
+                return {
+                  id: def.property_id,
+                  name: def.key,
+                  value_type: def.value_type,
+                  config: def.config,
+                  direction: sideDir,
+                };
+              }
+            }
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              side === null
+                ? `имя свойства «${key}» принадлежит нескольким свойствам сети — укажите side`
+                : `property name "${key}" is ambiguous`,
+              {
+                field: side === null ? 'side' : 'property',
+                name: key,
+                ...(side === null ? { allowed: LINK_PROPERTY_SIDES } : {}),
+                candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
+              },
+            );
+          }
+          // Одно свойство: направление выводим по живым рёбрам/явной записи.
           const wanted =
             side !== null
               ? directionFromSide(side)
-              : resolveAmbiguousTypedLinkDirection(ndb, ownerId, key, matches, allowAmbiguous);
+              : resolveSamePropertyLinkDirection(ndb, ownerId, key, matches, allowAmbiguous);
           if (wanted !== null) {
             const filtered = matches.filter(
               (m) => linkPropertyDirection(m.config, m.side ?? null) === wanted,
@@ -3770,10 +3805,10 @@ export function resolveDefinition(
                 direction: wanted,
               };
             }
-          } else if (sameProperty) {
+          } else if (allowAmbiguous) {
             // Неоднозначность разрешена вызывающему: возвращаем определение
             // без направления — конкретное ребро он выберет по цели.
-            const def = matches[0]!;
+            const def = matches.find((m) => m.mirrored !== true) ?? matches[0]!;
             return {
               id: def.property_id,
               name: def.key,
