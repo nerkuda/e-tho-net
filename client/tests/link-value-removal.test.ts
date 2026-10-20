@@ -108,10 +108,12 @@ function linkEntry(
   propertyId: string,
   propertyName: string,
   edges: Array<[string, string]>,
+  side?: 'source' | 'target',
 ): unknown {
   return {
     property_id: propertyId,
     property_name: propertyName,
+    ...(side !== undefined ? { side } : {}),
     count: edges.length,
     values: edges.map(([target_id, link_id]) => ({ target_id, link_id })),
   };
@@ -173,6 +175,27 @@ describe('pickRemovedLinkIds (96d27fc0)', () => {
   it('не трогает цели, которых нет в списке снятия', () => {
     const values = [linkEntry('p', 'A', [['t1', 'l1'], ['t5', 'l5']])];
     assert.deepEqual(pickRemovedLinkIds(values, { propertyKey: 'A', propertyId: 'p' }, ['t1']), ['l1']);
+  });
+
+  it('двухстороннее свойство: снятие target берёт рёбра target, а не source (45248206)', () => {
+    const values = [
+      linkEntry('p', 'Содержит', [['t1', 'l-src']], 'source'),
+      linkEntry('p', 'Содержится в', [['t1', 'l-tgt']], 'target'),
+    ];
+    assert.deepEqual(
+      pickRemovedLinkIds(
+        values,
+        { propertyKey: 'Содержится в', propertyId: 'p', side: 'target' },
+        ['t1'],
+      ),
+      ['l-tgt'],
+      'id общий у сторон — сторону различает side',
+    );
+    assert.deepEqual(
+      pickRemovedLinkIds(values, { propertyKey: 'Содержит', propertyId: 'p', side: 'source' }, ['t1']),
+      ['l-src'],
+      'обратная сторона снимает своё ребро',
+    );
   });
 });
 

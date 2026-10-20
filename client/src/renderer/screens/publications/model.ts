@@ -11,7 +11,6 @@
 import {
   PUBLICATION_ACTIVE_FILTERS,
   PUBLICATION_SORTS,
-  type LinkPropertySide,
   type Publication,
   type PublicationActiveFilter,
   type PublicationAssembly,
@@ -868,34 +867,11 @@ export function tocSignature(line: TocLine): string {
 // предикаты вынесены сюда: их проверяют юнит-тесты без DOM.
 // ---------------------------------------------------------------------------
 
-/**
- * Совпадает ли запись значения-связи с выбранным свойством-строкой.
- *
- * У свойства-связи две стороны (`source`/`target`) с разными display-именами,
- * но ОДНИМ реестровым `property_id` (ошибка 45248206): сверять только id
- * нельзя — запись чужой стороны подменит набор. Поэтому при наличии стороны
- * и у записи, и у выбора id-совпадение уточняется стороной. Без стороны
- * (легаси-запись, вызов без строки списка) — прежнее поведение.
- *
- * Имя стороны (`property_name`) остаётся запасным ключом для легаси-рёбер,
- * у которых реестрового свойства нет (`property_id: ''`, ошибка e5cfacb9):
- * по одному id такое значение не находится (блокеры 2/3 верификации ea1b5f14),
- * а имя — это же `key` записи `properties.set`.
- */
-export function linkEntryMatchesPick(
-  entry: {
-    property_id: string;
-    property_name: string;
-    side?: LinkPropertySide | null;
-  },
-  pick: { propertyId: string; key: string; side?: LinkPropertySide | null },
-): boolean {
-  if (entry.property_id !== '' && entry.property_id === pick.propertyId) {
-    if (pick.side != null && entry.side != null) return entry.side === pick.side;
-    return true;
-  }
-  return entry.property_name === pick.key;
-}
+// Сопоставление значения-связи со строкой свойства (id + сторона, ошибка
+// 45248206) живёт в общем `lib/link-entry-match.ts`: его делят публикации,
+// запись значения с карты/дропа и снятие рёбер. Реэкспорт сохраняет прежний
+// путь импорта для тестов модели.
+export { linkEntryMatchesPick } from '../../lib/link-entry-match.js';
 
 /**
  * Поддерево id: сам корень и все его потомки по `parentId` (замыкание).

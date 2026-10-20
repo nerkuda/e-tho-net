@@ -1794,6 +1794,7 @@ export function buildLinkValueEditor(opts: {
         ownerId,
         propertyKey: definition.key ?? '',
         propertyId: definition.property_id,
+        side: definition.side ?? null,
         removedTargetIds: removedIds,
         mode,
         commit: () => persist(next),
