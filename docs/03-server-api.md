@@ -322,23 +322,24 @@ PUT /api/v1/networks/{nid}/pins   { ordered_ids: [ "<uuid>", … ] }
 
 <a id="pub-0ce1cf64"></a>
 
-## /saved-filters — именованные отборы «Структур» и «Хроники»
+## /saved-filters — именованные отборы «Структур», «Хроники» и «Событий»
 
-Именованные наборы критериев и сортировки для двух видов: «Структуры мыслей» и «Дневник» (идентификатор вида — `chronicle`).
+Именованные наборы критериев и сортировки для трёх видов: «Структуры мыслей» (`structures`), «Дневник» (`chronicle`) и «События» (`events`).
 
 ```
-GET    /api/v1/networks/{nid}/saved-filters?view=structures|chronicle
+GET    /api/v1/networks/{nid}/saved-filters?view=structures|chronicle|events
        → 200 { data: [ { id, view, name, definition, created_at, updated_at } ] }
 POST   /api/v1/networks/{nid}/saved-filters       { view?, name, definition }
-PATCH  /api/v1/networks/{nid}/saved-filters/{fid} { view?, name?, definition? }
+PATCH  /api/v1/networks/{nid}/saved-filters/{fid} { name?, definition? }
 DELETE /api/v1/networks/{nid}/saved-filters/{fid}
 ```
 
 - хранятся **per-user** в базе сети и синхронизируются между клиентами пользователя событиями `saved-filter.*` (`audience = user`);
-- пользователь видит и меняет **только свои** отборы; публикация другим — вне MVP;
-- `view` по умолчанию `structures` (обратная совместимость) и **не меняется** при правке;
+- пользователь видит и меняет **только свои** отборы; публикация другим — вне MVP; уникальность `name` — в пределах пары (пользователь, вид), поэтому одинаковые имена в разных местах разрешены;
+- `view` по умолчанию `structures` (обратная совместимость) и **не меняется** при правке. На `PATCH` вид определения берётся из **сохранённой строки**, а не из тела: присланный `view` не выбирает парсер и не переписывает вид (0.13.3, задача c0c7b834);
 - `name` — 1..200 символов, уникально в пределах пары (пользователь, вид); повтор — `409 DUPLICATE`;
-- `definition` валидируется; для дневника это поля его запроса без `limit`/`offset`.
+- `definition` валидируется **по виду строки**: `structures` — AST (`{ version, filter, sort? }`) либо легаси `definition v1`; `chronicle` — `{ ast, order }`; `events` — только AST профиля `events` **без сортировки** (присланный `sort` снимается — порядок ленты задаёт сервер, `occurred_at_ms DESC`). Форма чужого вида и операнд/оператор вне профиля `events` — `422 VALIDATION_ERROR`;
+- миграций нет: `saved_filters.view` не имеет CHECK, новое значение вида пишется строкой.
 
 **Дополнительные материалы**
 - относится к подсистемам: REST API
