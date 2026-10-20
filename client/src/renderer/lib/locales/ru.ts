@@ -1135,6 +1135,21 @@ export const ru = {
   // Пункты меню общего переупорядочивания строк (0.14.1, задача 223f7d50).
   'rowReorder.moveUp': 'Переместить выше',
   'rowReorder.moveDown': 'Переместить ниже',
+  // Демо-стенд компоненты row-reorder (временный, только по хэшу).
+  'rowReorderDemo.title': 'row-reorder — прототип компоненты',
+  'rowReorderDemo.hint':
+    'Перетащите строку за имя, используйте Alt+↑/↓ или контекстное меню имени. Esc отменяет перетаскивание.',
+  'rowReorderDemo.statusInitial': 'Порядок: исходный.',
+  'rowReorderDemo.status': 'Порядок: %1.',
+  'rowReorderDemo.foot':
+    'Демо-стенд: порядок хранится только на странице, сервер не вызывается.',
+  'rowReorderDemo.value': 'значение %1',
+  'rowReorderDemo.name.1': 'Альфа',
+  'rowReorderDemo.name.2': 'Бета',
+  'rowReorderDemo.name.3': 'Гамма',
+  'rowReorderDemo.name.4': 'Дельта',
+  'rowReorderDemo.name.5': 'Эпсилон',
+  'rowReorderDemo.name.6': 'Дзета',
   'publications.block.moveToSection': 'Переместить в раздел…',
   // Раздельные команды добавления раздела (задача 7cfaba7c, п.4): родитель
   // подставляется по команде — родитель блока либо сам блок.

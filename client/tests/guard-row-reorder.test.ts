@@ -73,15 +73,37 @@ const DND_ALLOW = new Set([
   'canvas/add-dialog.ts',
   'editor/attachments.ts',
   'editor/markdown-field.ts',
+  // Канва: перетаскивание узлов/облака и удержание фокуса (не строки списка).
+  'canvas/canvas.ts',
+  'canvas/drag-cloud.ts',
+  'canvas/kbd-nav.ts',
+  // Кнопки/каретки/чипы: mousedown гасит перевод фокуса, не drag строк.
+  'editor/comment-collapse.ts',
+  'editor/comment-commands.ts',
+  'editor/mini-graph.ts',
+  'editor/transclusion.ts',
+  'lib/period-editor.ts',
+  'lib/suggest-dropdown.ts',
+  // Предпросмотр/зум и календарь — движение мыши другого назначения.
+  'lib/hover-preview.ts',
+  'lib/image-zoom.ts',
+  'lib/month-calendar.ts',
+  // Закрытие меню кликом вне.
+  'lib/menu.ts',
+  // Фокус таблицы/дерева при клике мышью (навигация, не перестановка строк).
+  'lib/ui/table.ts',
+  'lib/ui/tree.ts',
+  // Перетаскивание вкладок — отдельный канал другого назначения.
+  'screens/tabs/tab-dnd.ts',
   // Общие фасады `lib/ui` с pointer-жестами другого назначения:
   // закрытие поповера кликом вне и ресайзер-сплиттер.
   'lib/ui/popover.ts',
   'lib/ui/splitter.ts',
 ]);
 
-/** Нативный HTML5 DnD и pointer-драг. */
+/** Нативный HTML5 DnD, pointer- и mouse-драг. */
 const DND_SIGNAL =
-  /\bdraggable\s*=|['"](?:dragstart|dragenter|dragover|dragleave|dragend|drop)['"]|addEventListener\??\.?\(\s*['"](?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture)['"]|(?:\.|\b)on(?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture|dragstart|dragenter|dragover|dragleave|dragend|drop)\s*=/;
+  /\bdraggable\s*=|['"](?:dragstart|dragenter|dragover|dragleave|dragend|drop)['"]|addEventListener\??\.?\(\s*['"](?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture|mousedown|mousemove|mouseup)['"]|(?:\.|\b)on(?:pointerdown|pointermove|pointerup|pointercancel|lostpointercapture|mousedown|mousemove|mouseup|dragstart|dragenter|dragover|dragleave|dragend|drop)\s*=/;
 
 /**
  * Собственный разбор Alt+↑/↓ или использование действий перестановки вне
@@ -178,6 +200,16 @@ describe('guard: единственный канал row-reorder (223f7d50)', ()
         {
           rel: 'editor/new-properties.ts',
           source: "node.addEventListener('pointerdown', startDrag);\n",
+          rule: 'no-local-row-dnd',
+        },
+        {
+          rel: 'editor/new-properties.ts',
+          source: "node.addEventListener('mousedown', startDrag);\n",
+          rule: 'no-local-row-dnd',
+        },
+        {
+          rel: 'editor/new-properties.ts',
+          source: 'node.onmousedown = startDrag;\n',
           rule: 'no-local-row-dnd',
         },
         {

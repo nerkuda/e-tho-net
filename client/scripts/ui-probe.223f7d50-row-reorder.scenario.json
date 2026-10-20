@@ -21,6 +21,21 @@
       "expect": ["Альфа", "Бета", "Гамма", "Дельта", "Эпсилон", "Дзета"]
     },
     {
+      "name": "drag-second-onto-lower-half-first-noop",
+      "drag": {
+        "from": ".row-reorder-demo-row:nth-child(2) .row-reorder-demo-name",
+        "to": { "selector": ".row-reorder-demo-row:nth-child(1)", "at": [40, 24] },
+        "expect": ".row-reorder-demo-row:nth-child(1)",
+        "steps": 8,
+        "duration": 160
+      }
+    },
+    {
+      "name": "order-after-adjacent-drop",
+      "probe": "[...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)",
+      "expect": ["Альфа", "Бета", "Гамма", "Дельта", "Эпсилон", "Дзета"]
+    },
+    {
       "name": "drag-third-above-first",
       "drag": {
         "from": ".row-reorder-demo-row:nth-child(3) .row-reorder-demo-name",

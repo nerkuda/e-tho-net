@@ -331,7 +331,13 @@ export function createDragList<E>(
     );
     if (!chosen.after) return orderKeyOf(chosen.item);
     const chosenIndex = keys.indexOf(orderKeyOf(chosen.item));
-    return keys[chosenIndex + 1] ?? null;
+    // Нижняя половина НЕПОСРЕДСТВЕННО предыдущей строки даёт `chosenIndex + 1`,
+    // равный ключу самой перетаскиваемой строки. После её удаления
+    // `indexOf(before) = -1`, и вставка уходила в конец списка. Пропускаем
+    // собственную строку: позиция не меняется (идемпотентный no-op).
+    let nextIndex = chosenIndex + 1;
+    if (keys[nextIndex] === orderKeyOf(item)) nextIndex += 1;
+    return keys[nextIndex] ?? null;
   };
 
   const bindHandle = (item: DragListItem<E>): void => {

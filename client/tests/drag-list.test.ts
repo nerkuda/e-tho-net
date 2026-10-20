@@ -175,6 +175,54 @@ describe('drag-list: перетаскивание указателем (d13fd645
     assert.deepEqual(calls, [{ group: 'g', keys: ['a', 'c', 'b'] }]);
   });
 
+  it('нижняя половина непосредственно предыдущей строки — no-op, не конец списка', () => {
+    // Регресс общего фасада (задача 223f7d50): `before` совпадал с ключом
+    // самой перетаскиваемой строки, и она уезжала в конец.
+    const a = makeItem('a');
+    const b = makeItem('b');
+    const c = makeItem('c');
+    a.element.getBoundingClientRect = () => rect(0, 20);
+    b.element.getBoundingClientRect = () => rect(20, 40);
+    c.element.getBoundingClientRect = () => rect(40, 60);
+    const { calls } = setup([a, b, c], null);
+    drag(b.handle, 25, [15]);
+    assert.deepEqual(calls, [], 'порядок не меняется');
+  });
+
+  it('верхняя половина непосредственно следующей строки — no-op', () => {
+    const a = makeItem('a');
+    const b = makeItem('b');
+    const c = makeItem('c');
+    a.element.getBoundingClientRect = () => rect(0, 20);
+    b.element.getBoundingClientRect = () => rect(20, 40);
+    c.element.getBoundingClientRect = () => rect(40, 60);
+    const { calls } = setup([a, b, c], null);
+    drag(b.handle, 25, [45]);
+    assert.deepEqual(calls, [], 'порядок не меняется');
+  });
+
+  it('жесты через строку по-прежнему переставляют (вниз и вверх)', () => {
+    const makeThree = (): ShimItem[] => {
+      const a = makeItem('a');
+      const b = makeItem('b');
+      const c = makeItem('c');
+      a.element.getBoundingClientRect = () => rect(0, 20);
+      b.element.getBoundingClientRect = () => rect(20, 40);
+      c.element.getBoundingClientRect = () => rect(40, 60);
+      return [a, b, c];
+    };
+
+    const down = makeThree();
+    const downSetup = setup(down, null);
+    drag(down[0]!.handle, 5, [35]);
+    assert.deepEqual(downSetup.calls, [{ group: 'g', keys: ['b', 'a', 'c'] }]);
+
+    const up = makeThree();
+    const upSetup = setup(up, null);
+    drag(up[2]!.handle, 55, [5]);
+    assert.deepEqual(upSetup.calls, [{ group: 'g', keys: ['c', 'a', 'b'] }]);
+  });
+
   it('до порога перетаскивание не начинается (клик не меняет порядок)', () => {
     const a = makeItem('a');
     const b = makeItem('b');

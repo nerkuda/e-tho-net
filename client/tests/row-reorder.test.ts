@@ -186,6 +186,36 @@ describe('row-reorder: перетаскивание указателем', () =>
     assert.deepEqual(scoped.moves, [[0, 1]], 'имя — зона захвата');
   });
 
+  it('дроп на нижнюю половину предыдущей строки — no-op (не конец списка)', () => {
+    const a = makeRow('a', 0, 20);
+    const b = makeRow('b', 20, 40);
+    const c = makeRow('c', 40, 60);
+    const { moves } = setup([a, b, c]);
+    drag(b.element, 25, [15]);
+    assert.deepEqual(moves, [], 'порядок не изменился');
+  });
+
+  it('дроп на верхнюю половину следующей строки — no-op', () => {
+    const a = makeRow('a', 0, 20);
+    const b = makeRow('b', 20, 40);
+    const c = makeRow('c', 40, 60);
+    const { moves } = setup([a, b, c]);
+    drag(b.element, 25, [45]);
+    assert.deepEqual(moves, [], 'порядок не изменился');
+  });
+
+  it('жесты через строку переставляют по-прежнему', () => {
+    const downRows = [makeRow('a', 0, 20), makeRow('b', 20, 40), makeRow('c', 40, 60)];
+    const down = setup(downRows);
+    drag(downRows[0]!.element, 5, [35]);
+    assert.deepEqual(down.moves, [[0, 1]]);
+
+    const upRows = [makeRow('a', 0, 20), makeRow('b', 20, 40), makeRow('c', 40, 60)];
+    const up = setup(upRows);
+    drag(upRows[2]!.element, 55, [5]);
+    assert.deepEqual(up.moves, [[2, 0]]);
+  });
+
   it('маркер вставки появляется на соседе во время жеста и снимается на дропе', () => {
     const a = makeRow('a', 0, 20);
     const b = makeRow('b', 20, 40);

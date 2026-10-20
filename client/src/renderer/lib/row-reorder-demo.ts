@@ -14,6 +14,7 @@
  */
 
 import { div, el, span } from './dom.js';
+import { t, type MessageKey } from './i18n.js';
 import { showMenuAt } from './menu.js';
 import { createRowReorder, rowReorderMenuItems } from './row-reorder.js';
 import { createListNav, type ListNavHandle } from './ui/list.js';
@@ -46,56 +47,58 @@ function demoStyles(): string {
   inset: 0;
   z-index: 10000;
   box-sizing: border-box;
-  padding: var(--space-6, 12px);
+  padding: var(--space-6);
   overflow: auto;
-  background: var(--bg, #fff);
-  color: var(--text, #1b1b1b);
-  font: var(--font-size-m, 13px) var(--user-font-ui, system-ui, sans-serif);
+  background: var(--bg);
+  color: var(--text);
+  font: var(--font-size-m) var(--user-font-ui);
 }
-.${DEMO_CLASS} h1 { margin: 0 0 var(--space-2, 4px); font-size: var(--font-size-l, 16px); }
-.${DEMO_CLASS} p { margin: 0 0 var(--space-4, 8px); color: var(--text-dim, #666); }
+.${DEMO_CLASS} h1 { margin: 0 0 var(--space-2); font-size: var(--font-size-l); }
+.${DEMO_CLASS} p { margin: 0 0 var(--space-4); color: var(--text-dim); }
 .${DEMO_CLASS}-list {
   max-width: 42rem;
   max-height: 60vh;
   overflow: auto;
-  border: 1px solid var(--border, #ccc);
-  border-radius: var(--radius-m, 6px);
-  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
 }
 .${ROW_CLASS} {
   display: grid;
   grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1.4fr);
-  gap: var(--space-3, 6px);
+  gap: var(--space-3);
   align-items: center;
-  padding: var(--space-2, 4px) var(--space-3, 6px);
-  border-bottom: 1px solid var(--border-weak, #e5e5e5);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
   outline: none;
-  background: var(--surface, #fff);
+  background: var(--surface);
 }
 .${ROW_CLASS}:last-child { border-bottom: none; }
 .${ROW_CLASS}.${CURRENT_CLASS} {
-  box-shadow: inset 0 0 0 2px var(--focus, #3b82f6);
-  background: var(--surface-hover, #f5f7ff);
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--accent);
+  background: var(--bg-active);
 }
-.${NAME_CLASS} { cursor: grab; font-weight: var(--font-weight-medium, 500); }
+.${NAME_CLASS} { cursor: grab; font-weight: var(--font-weight-medium); }
 .${NAME_CLASS}:active { cursor: grabbing; }
-.${VALUE_CLASS} { color: var(--text-dim, #666); }
-.${DEMO_CLASS}-status { margin-top: var(--space-4, 8px); color: var(--text-dim, #666); }
-.${DEMO_CLASS}-foot { margin-top: var(--space-3, 6px); color: var(--text-dim, #666); }
+.${VALUE_CLASS} { color: var(--text-dim); }
+.${DEMO_CLASS}-status { margin-top: var(--space-4); color: var(--text-dim); }
+.${DEMO_CLASS}-foot { margin-top: var(--space-3); color: var(--text-dim); }
 `;
 }
 
 /** Порядок строк демо — только память страницы. */
 function buildRows(): DemoRow[] {
-  const seeds: Array<[string, string]> = [
-    ['Альфа', 'значение 1'],
-    ['Бета', 'значение 2'],
-    ['Гамма', 'значение 3'],
-    ['Дельта', 'значение 4'],
-    ['Эпсилон', 'значение 5'],
-    ['Дзета', 'значение 6'],
+  const seeds: MessageKey[] = [
+    'rowReorderDemo.name.1',
+    'rowReorderDemo.name.2',
+    'rowReorderDemo.name.3',
+    'rowReorderDemo.name.4',
+    'rowReorderDemo.name.5',
+    'rowReorderDemo.name.6',
   ];
-  return seeds.map(([title, value], index) => {
+  return seeds.map((nameKey, index) => {
+    const title = t(nameKey);
+    const value = t('rowReorderDemo.value', index + 1);
     const element = div(ROW_CLASS);
     element.tabIndex = 0;
     const nameElement = span(title, NAME_CLASS);
@@ -113,22 +116,14 @@ function mountDemo(): void {
 
   const screen = div(DEMO_CLASS);
   screen.append(
-    el('h1', '', 'row-reorder — прототип компоненты'),
-    el(
-      'p',
-      '',
-      'Перетащите строку за имя, используйте Alt+↑/↓ или контекстное меню имени. Esc отменяет перетаскивание.',
-    ),
+    el('h1', '', t('rowReorderDemo.title')),
+    el('p', '', t('rowReorderDemo.hint')),
   );
 
   const list = div(`${DEMO_CLASS}-list`);
   list.tabIndex = 0;
-  const status = el('div', `${DEMO_CLASS}-status`, 'Порядок: исходный.');
-  const foot = el(
-    'div',
-    `${DEMO_CLASS}-foot`,
-    'Демо-стенд: порядок хранится только на странице, сервер не вызывается.',
-  );
+  const status = el('div', `${DEMO_CLASS}-status`, t('rowReorderDemo.statusInitial'));
+  const foot = el('div', `${DEMO_CLASS}-foot`, t('rowReorderDemo.foot'));
   screen.append(list, status, foot);
   document.body.append(screen);
 
@@ -136,7 +131,7 @@ function mountDemo(): void {
   let nav: ListNavHandle<DemoRow> | null = null;
 
   const describeOrder = (): string =>
-    `Порядок: ${rows.map((row) => row.title).join(' · ')}.`;
+    t('rowReorderDemo.status', rows.map((row) => row.title).join(' · '));
 
   /** Единый колбэк перестановки — тот же, что у потребителей компоненты. */
   const moveRow = (from: number, to: number): void => {
