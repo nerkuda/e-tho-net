@@ -37,7 +37,6 @@ function state(overrides: Partial<PropertyRowMenuState> = {}): PropertyRowMenuSt
   return {
     structural: false,
     typed: false,
-    isLink: false,
     hasType: true,
     hasRegistryProperty: true,
     sources: [],
@@ -64,7 +63,7 @@ describe('меню строки свойства: состав по состоя
 
   it('типовая связь: подпись исключения перечисляет все привязки цепочки', () => {
     const items = propertyRowMenuItems(
-      state({ typed: true, isLink: true, sources: ['недвижимость', 'квартира'] }),
+      state({ typed: true, sources: ['недвижимость', 'квартира'] }),
       actions(),
     );
     assert.equal(
@@ -100,7 +99,7 @@ describe('меню строки свойства: состав по состоя
 
   it('легаси-ребро без реестрового свойства: только очистить и удалить', () => {
     const items = propertyRowMenuItems(
-      state({ typed: false, isLink: true, hasRegistryProperty: false }),
+      state({ typed: false, hasRegistryProperty: false }),
       actions(),
     );
     assert.deepEqual(

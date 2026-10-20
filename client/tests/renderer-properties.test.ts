@@ -1018,6 +1018,212 @@ describe('внетиповые строки: сторона и исключен�
   });
 });
 
+describe('типовая строка связи и значение чужой стороны (45248206, повтор Z6)', () => {
+  /**
+   * Состояние из репро верификатора: у одного симметричного свойства
+   * привязана типовая сторона (`source`), а значение ДРУГОЙ стороны
+   * (`target`) лежит внетиповым. До правки обе записи несли один непустой
+   * `property_id`, и типовая строка получала последнюю запись из `values` —
+   * обычно внетиповую: показывала чужие цели, а «×» на видимом чипе трогал
+   * невидимое пользователю значение.
+   */
+  const edge = (linkId: string, targetId: string, title: string): Record<string, unknown> => ({
+    link_id: linkId,
+    target_id: targetId,
+    target_title: title,
+    target_type_id: null,
+    comment: null,
+  });
+
+  const definitions = [
+    {
+      id: 'lk1',
+      property_id: 'p-sym',
+      owner_type: 'thought_type',
+      owner_id: 'ty1',
+      key: 'Содержит A',
+      value_type: 'link',
+      config: { link_type_id: 'lt1', direction: 'out' },
+      required: false,
+      position: 0,
+      side: 'source',
+    },
+  ];
+  const values = [
+    {
+      property_id: 'p-sym',
+      property_name: 'Содержит A',
+      value_type: 'link',
+      outside_type: false,
+      direction: 'out',
+      side: 'source',
+      link_type_id: 'lt1',
+      structural: false,
+      count: 2,
+      values: [edge('l-typed-1', 'typed-1', 'Цель SOURCE'), edge('l-typed-2', 'typed-2', 'Цель SOURCE 2')],
+    },
+    {
+      property_id: 'p-sym',
+      property_name: 'Содержится в B',
+      value_type: 'link',
+      outside_type: true,
+      direction: 'in',
+      side: 'target',
+      link_type_id: 'lt1',
+      structural: false,
+      count: 2,
+      values: [edge('l-out-1', 'outside-1', 'Цель TARGET'), edge('l-out-2', 'outside-2', 'Цель TARGET 2')],
+    },
+  ];
+
+  interface MixedSideFixture {
+    typedRow: ShimElement;
+    outsideRow: ShimElement;
+    saves: unknown[][];
+  }
+
+  async function buildMixedSides(): Promise<MixedSideFixture> {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const saves: unknown[][] = [];
+    etnApi['types'] = { listTypeProperties: async () => definitions };
+    etnApi['properties'] = {
+      get: async () => values,
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+    };
+    etnApi['thoughts'] = {
+      findDuplicates: async () => [],
+      resolve: async (_n: string, ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          title: id,
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        })),
+    };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const typedTbody = box.children[0]!.children[0]!.children[0]!.children[0]!;
+    const typedRow = typedTbody.children[0]!;
+    const outsideRoot = propertiesInternals.buildOutsideTypeTable(
+      (values as any[]).filter((v) => v.outside_type === true),
+      'n1',
+      'thought',
+      't1',
+      () => undefined,
+    ) as unknown as ShimElement;
+    const outsideRow = outsideRoot.children[0]!.children[0]!.children[0]!;
+    return { typedRow, outsideRow, saves };
+  }
+
+  function chipIds(row: ShimElement): string[] {
+    return row
+      .findAll((e) => e.dataset['id'] !== undefined && e.className.includes('cloud-profile-chip'))
+      .map((e) => e.dataset['id']!);
+  }
+
+  it('типовая строка показывает чипы своей стороны, внетиповая — своей', async () => {
+    const { typedRow, outsideRow } = await buildMixedSides();
+    assert.deepEqual(chipIds(typedRow).sort(), ['typed-1', 'typed-2'], 'типовая — свои цели');
+    assert.deepEqual(chipIds(outsideRow).sort(), ['outside-1', 'outside-2'], 'внетиповая — свои цели');
+  });
+
+  it('«×» на типовой строке снимает только типовое значение', async () => {
+    const { typedRow, saves } = await buildMixedSides();
+    const chip = typedRow.findAll((e) => e.dataset['id'] === 'typed-1')[0];
+    assert.ok(chip !== undefined, 'виден чип типовой цели');
+    const btn = chip!.findAll((e) => e.className.includes('st-f-clear-inline'))[0];
+    assert.ok(btn !== undefined, 'у чипа есть «×»');
+    btn!.fire('click', {
+      shiftKey: true,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Содержит A', ['typed-2'], 'source']],
+      'записана типовая сторона без снятой типовой цели',
+    );
+  });
+
+  it('«×» на внетиповой строке снимает только внетиповое значение', async () => {
+    const { outsideRow, saves } = await buildMixedSides();
+    const chip = outsideRow.findAll((e) => e.dataset['id'] === 'outside-1')[0];
+    assert.ok(chip !== undefined, 'виден чип внетиповой цели');
+    const btn = chip!.findAll((e) => e.className.includes('st-f-clear-inline'))[0];
+    assert.ok(btn !== undefined, 'у чипа есть «×»');
+    btn!.fire('click', {
+      shiftKey: true,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Содержится в B', ['outside-2'], 'target']],
+      'записана внетиповая сторона без снятой внетиповой цели',
+    );
+  });
+
+  it('definitionValueKey: property_id + сторона у связи, property_id у скаляра', async () => {
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const key = propertiesInternals.definitionValueKey as unknown as (
+      d: Record<string, unknown>,
+    ) => string;
+    assert.equal(key({ property_id: 'p-sym', value_type: 'link', side: 'target' }), 'p-sym:target');
+    assert.equal(key({ property_id: 'p-sym', value_type: 'link', side: 'source' }), 'p-sym:source');
+    assert.equal(key({ property_id: 'p-text', value_type: 'text' }), 'p-text');
+  });
+});
+
 describe('property value helpers (pure)', () => {
   /** Imports the modules (once) with the DOM shims installed. */
   async function loadPropsModule(): Promise<any> {

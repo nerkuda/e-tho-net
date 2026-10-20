@@ -465,7 +465,6 @@ function wireOutsideRowMenu(
     {
       structural: false,
       typed: false,
-      isLink: ref.isLink,
       hasType: target.typeId !== null,
       hasRegistryProperty: ref.propertyId !== '',
       sources: [],
@@ -1220,6 +1219,21 @@ function outsideRowKey(value: PropertyValue | LinkPropertyValues): string {
   return value.property_id;
 }
 
+/**
+ * Ключ значения для сопоставления с определением типовой строки. Та же схема,
+ * что у `outsideRowKey`: у связи — `property_id` ПЛЮС сторона, у скаляра —
+ * `property_id` (ошибка 45248206). После неё обе стороны симметричного
+ * свойства и внетиповое значение несут один непустой `property_id`: без
+ * стороны типовая строка получала последнюю запись из `values` — обычно
+ * внетиповую строку ЧУЖОЙ стороны, и «×» на видимом чипе трогал значение,
+ * которого пользователь не видел.
+ */
+function definitionValueKey(definition: EffectiveTypeProperty): string {
+  return definition.value_type === 'link'
+    ? `${definition.property_id}:${linkSideOf(definition)}`
+    : definition.property_id;
+}
+
 /** Ставит курсор в редактор значения строки-черновика (после отрисовки). */
 function focusOutsideValueEditor(tbody: HTMLElement, key: string): void {
   const focus = (): boolean => {
@@ -1708,7 +1722,6 @@ function buildTypePropertiesBody(
       {
         structural: definition.config?.structural === true,
         typed: true,
-        isLink,
         hasType: true,
         hasRegistryProperty: definition.property_id !== '',
         sources: definitionSources(definition, shownDefinitions),
@@ -1867,7 +1880,10 @@ function buildTypePropertiesBody(
     }
     // Same guard after the values fetch — the slowest leg of the pair.
     if (requestOwnerId !== target.ownerId) return;
-    const valueByProp = new Map(values.map((v) => [v.property_id, v]));
+    // Ключ — свойство + сторона связи (ошибка 45248206): один `property_id`
+    // на обе стороны; сопоставление только по id отдавало типовой строке
+    // значение чужой стороны.
+    const valueByKey = new Map(values.map((v) => [outsideRowKey(v), v]));
     if (!tableAttached) {
       tableWrap.replaceChildren(table);
       tableAttached = true;
@@ -1875,7 +1891,7 @@ function buildTypePropertiesBody(
     const rows: PropertyRow[] = definitions.map((definition) => ({
       ownerId: requestOwnerId,
       definition,
-      value: valueByProp.get(definition.property_id),
+      value: valueByKey.get(definitionValueKey(definition)),
     }));
     reconcileKeyed(tbody, rows, rowSpec);
     logUiEvent('ui.editor.props.loaded', {
@@ -2081,6 +2097,7 @@ export const propertiesInternals = {
   buildOutsidePropertiesBody,
   outsideLinkDefinition,
   outsideRowKey,
+  definitionValueKey,
   presentPropertyRowIds,
 };
 

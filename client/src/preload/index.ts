@@ -267,10 +267,14 @@ function buildApi(): EtnBridgeApi {
     properties: {
       get: (networkId, ownerType, ownerId) =>
         invoke('properties.get', networkId, ownerType, ownerId),
-      set: (networkId, ownerType, ownerId, key, value) =>
-        invoke('properties.set', networkId, ownerType, ownerId, key, value),
-      remove: (networkId, ownerType, ownerId, key) =>
-        invoke('properties.remove', networkId, ownerType, ownerId, key),
+      // `side` — адрес стороны свойства-связи (0.14.1, требование 87039bc8).
+      // Без его проброса main получал 5 аргументов, REST уходил без стороны,
+      // и запись/удаление адресовали сторону по живым рёбрам/привязке —
+      // у симметричного имени это чужая сторона (ошибка 45248206).
+      set: (networkId, ownerType, ownerId, key, value, side) =>
+        invoke('properties.set', networkId, ownerType, ownerId, key, value, side),
+      remove: (networkId, ownerType, ownerId, key, side) =>
+        invoke('properties.remove', networkId, ownerType, ownerId, key, side),
       // Кросс-сетевой резолв (задача 7849008a): см. EtnApi.properties.crossResolve.
       crossResolve: (networkId, ownerId, key) =>
         invoke('properties.crossResolve', networkId, ownerId, key),

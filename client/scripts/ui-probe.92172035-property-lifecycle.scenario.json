@@ -418,6 +418,10 @@
       "expect": "ok"
     },
     {
+      "name": "server-link-restored-wait",
+      "waitFor": "(async () => { const vals=await window.etn.properties.get('{{networkId}}','thought','{{thoughtId}}'); const e=vals.find((v)=>v.property_name==='связано с'); return e !== undefined && (e.values ?? []).length === 1; })()"
+    },
+    {
       "name": "server-link-restored",
       "api": {
         "name": "server-link-restored",
@@ -426,6 +430,80 @@
         "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='связано с'); return v === undefined ? 'none' : (v.values ?? []).length; })()"
       },
       "expect": 1
+    },
+    {
+      "name": "seed-mixed-sides",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const vals=await window.etn.properties.get(nid,'thought',tid); const entry=vals.find((v)=>v.property_name==='связано с' && v.side==='source'); if(entry === undefined || !('values' in entry) || entry.values.length === 0) return 'no-source'; const a=entry.values[0].target_id; const other=await window.etn.thoughts.create(nid,{ title:'Сосед-обратный' }); await window.etn.properties.set(nid,'thought',tid,'связано с', other.id, 'target'); window.__z6={ a, b: other.id }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "refresh-after-mixed-seed",
+      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const own=tabs.find((b)=>b.textContent.includes('Свойства')); if(own) own.click(); return 'ok'; })()"
+    },
+    {
+      "name": "mixed-rows-visible",
+      "waitFor": "(() => { const typed=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('связано с')); const outside=(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('связано с'); return typed && outside; })()"
+    },
+    {
+      "name": "mixed-sides-chips",
+      "probe": "(() => { const typedRow=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); const outsideRow=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(typedRow === undefined || outsideRow === undefined) return 'no-row'; const labels=(row)=>[...row.querySelectorAll('.cloud-profile-chip')].map((c)=>c.getAttribute('aria-label')); return { typed: labels(typedRow), outside: labels(outsideRow) }; })()",
+      "expect": {
+        "typed": [
+          "Сосед-связь"
+        ],
+        "outside": [
+          "Сосед-обратный"
+        ]
+      }
+    },
+    {
+      "name": "outside-side-chip-clear",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const chip=[...row.querySelectorAll('.cloud-profile-chip')].find((c)=>c.getAttribute('aria-label')==='Сосед-обратный'); if(chip === undefined) return 'no-chip'; const btn=chip.querySelector('.st-f-clear-inline'); if(btn === null) return 'no-btn'; btn.dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "server-after-outside-side-clear",
+      "api": {
+        "name": "server-after-outside-side-clear",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; const side=(s)=>arr.filter((x)=>x.property_name==='связано с' && x.value_type==='link' && x.side===s).reduce((n,x)=>n+((x.values ?? []).length),0); return { source: side('source'), target: side('target') }; })()"
+      },
+      "expect": {
+        "source": 1,
+        "target": 0
+      }
+    },
+    {
+      "name": "typed-side-only-left",
+      "waitFor": "(() => { const typedRow=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(typedRow === undefined) return false; const labels=[...typedRow.querySelectorAll('.cloud-profile-chip')].map((c)=>c.getAttribute('aria-label')); return labels.length === 1 && labels[0] === 'Сосед-связь' && !(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('связано с'); })()"
+    },
+    {
+      "name": "typed-side-chip-clear",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const chip=[...row.querySelectorAll('.cloud-profile-chip')].find((c)=>c.getAttribute('aria-label')==='Сосед-связь'); if(chip === undefined) return 'no-chip'; const btn=chip.querySelector('.st-f-clear-inline'); if(btn === null) return 'no-btn'; btn.dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "server-after-typed-side-clear",
+      "api": {
+        "name": "server-after-typed-side-clear",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; const side=(s)=>arr.filter((x)=>x.property_name==='связано с' && x.value_type==='link' && x.side===s).reduce((n,x)=>n+((x.values ?? []).length),0); return { source: side('source'), target: side('target') }; })()"
+      },
+      "expect": {
+        "source": 0,
+        "target": 0
+      }
+    },
+    {
+      "name": "restore-typed-side",
+      "probe": "(async () => { await window.etn.properties.set('{{networkId}}','thought','{{thoughtId}}','связано с', window.__z6.a, 'source'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-row-restored-again",
+      "waitFor": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return false; const labels=[...row.querySelectorAll('.cloud-profile-chip')].map((c)=>c.getAttribute('aria-label')); return labels.length === 1 && labels[0] === 'Сосед-связь'; })()"
     },
     {
       "name": "detach-link-binding",
