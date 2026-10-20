@@ -1132,6 +1132,9 @@ export const ru = {
   'publications.block.menu': 'В публикации',
   'publications.block.moveUp': 'Сдвинуть вверх',
   'publications.block.moveDown': 'Сдвинуть вниз',
+  // Пункты меню общего переупорядочивания строк (0.14.1, задача 223f7d50).
+  'rowReorder.moveUp': 'Переместить выше',
+  'rowReorder.moveDown': 'Переместить ниже',
   'publications.block.moveToSection': 'Переместить в раздел…',
   // Раздельные команды добавления раздела (задача 7cfaba7c, п.4): родитель
   // подставляется по команде — родитель блока либо сам блок.

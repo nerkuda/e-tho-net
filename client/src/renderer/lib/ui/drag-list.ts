@@ -19,7 +19,8 @@
  * **Клавиатура.** `Alt+↑/↓` сдвигает ТЕКУЩУЮ сущность навигации
  * ({@link ListNavHandle}) на одного соседа в её группе. Разбор клавиши — в ядре
  * (`nav-core.ts`, действия `moveUp`/`moveDown`), поэтому обычные стрелки без Alt
- * продолжают двигать курсор.
+ * продолжают двигать курсор. С `cancelOnEscape` активный жест отменяется
+ * `Escape` (строка возвращается на место) — тоже через общий диспетчер клавиш.
  *
  * **Разметку делает потребитель** (keyed-сверка): фасад лишь навешивает
  * поведение на готовые узлы. Ключ группы и элементы перечитываются на каждом
@@ -81,8 +82,12 @@ export interface DragListItem<E> {
 export interface DragListAdapter<E> {
   /** Сортируемые сущности в порядке отображения (по группам). */
   items(): readonly DragListItem<E>[];
-  /** Дроп/клавиатура: новый полный порядок ключей ОДНОЙ группы. */
-  onReorder(groupKey: string, orderedKeys: readonly string[]): void;
+  /**
+   * Дроп/клавиатура: новый полный порядок ключей ОДНОЙ группы. `movedKey` —
+   * ключ строки, которую переставили: по нему потребитель считает `from`/`to`
+   * без неоднозначного сравнения последовательностей.
+   */
+  onReorder(groupKey: string, orderedKeys: readonly string[], movedKey: string): void;
 }
 
 /**
@@ -105,6 +110,13 @@ export interface DragListOptions {
   autoScrollStep?: number;
   /** Полоса у края, с которой начинается авто-скролл, px. */
   autoScrollEdge?: number;
+  /**
+   * `Escape` во время перетаскивания отменяет жест: строка возвращается на
+   * прежнее место (0.14.1, задача 223f7d50 — требование row-reorder).
+   * Отмена идёт через общий диспетчер клавиш (`lib/keymap`), второго
+   * обработчика `keydown` нет.
+   */
+  cancelOnEscape?: boolean;
 }
 
 /** Публичный дескриптор сортируемого списка. */
@@ -188,6 +200,9 @@ export function createDragList<E>(
   const threshold = options.threshold ?? DRAG_THRESHOLD;
   const scrollStep = options.autoScrollStep ?? AUTO_SCROLL_STEP;
   const scrollEdge = options.autoScrollEdge ?? AUTO_SCROLL_EDGE;
+  const cancelOnEscape = options.cancelOnEscape === true;
+  /** Отменяет активный жест (Escape); `null` — жеста нет. */
+  let cancelActiveDrag: (() => void) | null = null;
   /** Грипы, которым уже навешен pointerdown (переживают refresh). */
   const bound = new WeakSet<HTMLElement>();
   let ghost: HTMLElement | null = null;
@@ -210,7 +225,7 @@ export function createDragList<E>(
     const keys = groupOrder(items(), item.groupKey);
     const next = reorderKeys(keys, orderKeyOf(item), before);
     if (next.join('\u0000') === keys.join('\u0000')) return false;
-    adapter.onReorder(item.groupKey, next);
+    adapter.onReorder(item.groupKey, next, orderKeyOf(item));
     return true;
   };
 
@@ -336,7 +351,10 @@ export function createDragList<E>(
         /* нет захвата — не критично */
       }
       let dragging = false;
+      let cancelled = false;
       let before: string | null = null;
+      /** Контекст Escape взводится вместе с жестом и снимается на финише. */
+      let releaseCancel: (() => void) | null = null;
 
       const onMove = (moveEvent: PointerEvent): void => {
         if (!dragging) {
@@ -344,15 +362,29 @@ export function createDragList<E>(
           dragging = true;
           item.element.classList?.add?.(DRAG_ACTIVE_CLASS);
           makeGhost(item);
+          if (cancelOnEscape) {
+            cancelActiveDrag = () => {
+              cancelled = true;
+            };
+            releaseCancel = pushKeyContext(cancelContextId);
+          }
         }
         moveGhost(moveEvent.clientX, moveEvent.clientY);
         autoScroll(moveEvent.clientY);
         before = resolveDrop(item, moveEvent.clientY);
       };
+      /** `pointercancel` — жест прерван: порядок не меняется. */
+      const onCancel = (): void => {
+        cancelled = true;
+        onUp();
+      };
       const onUp = (): void => {
         item.handle.removeEventListener?.('pointermove', onMove as EventListener);
         item.handle.removeEventListener?.('pointerup', onUp as EventListener);
-        item.handle.removeEventListener?.('pointercancel', onUp as EventListener);
+        item.handle.removeEventListener?.('pointercancel', onCancel as EventListener);
+        releaseCancel?.();
+        releaseCancel = null;
+        cancelActiveDrag = null;
         try {
           (item.handle as unknown as { releasePointerCapture?: (id: number) => void }).releasePointerCapture?.(
             pointerId,
@@ -363,12 +395,13 @@ export function createDragList<E>(
         item.element.classList?.remove?.(DRAG_ACTIVE_CLASS);
         clearDropMarks();
         removeGhost();
-        if (dragging) applyMove(item, before);
+        if (dragging && !cancelled) applyMove(item, before);
         dragging = false;
+        cancelled = false;
       };
       item.handle.addEventListener('pointermove', onMove as EventListener);
       item.handle.addEventListener('pointerup', onUp as EventListener);
-      item.handle.addEventListener('pointercancel', onUp as EventListener);
+      item.handle.addEventListener('pointercancel', onCancel as EventListener);
     });
   };
 
@@ -376,6 +409,11 @@ export function createDragList<E>(
   // пока фокус внутри списка, его контекст на вершине стека (ADR b420b08c,
   // задача fd3d84f4). Корень не фокусируем сам — ловим всплытие focusin.
   const contextId = `ui-drag-list-${(dragListContextSeq += 1)}`;
+  /**
+   * Контекст отмены жеста (`Escape`) — отдельный и взводится только на время
+   * перетаскивания, чтобы Escape нижележащих слоёв не глотался постоянно.
+   */
+  const cancelContextId = `${contextId}-cancel`;
   defineKeyContext({
     id: contextId,
     bindings: [
@@ -383,6 +421,21 @@ export function createDragList<E>(
       { command: 'dragList.moveDown', chord: 'Alt+ArrowDown', run: handleKeydown },
     ],
   });
+  if (cancelOnEscape) {
+    defineKeyContext({
+      id: cancelContextId,
+      bindings: [
+        {
+          command: 'dragList.cancel',
+          chord: 'Escape',
+          run: () => {
+            cancelActiveDrag?.();
+            return true;
+          },
+        },
+      ],
+    });
+  }
   let releaseContext: (() => void) | null = null;
   const onFocusIn = (): void => {
     releaseContext ??= pushKeyContext(contextId);
@@ -406,9 +459,12 @@ export function createDragList<E>(
       releaseContext = null;
       clearDropMarks();
       removeGhost();
+      cancelActiveDrag?.();
+      cancelActiveDrag = null;
       // Объявление контекста живёт вместе с фасадом: без снятия реестр
       // `lib/keymap` накапливает записи при каждом создании/уничтожении списка.
       undefineKeyContext(contextId);
+      if (cancelOnEscape) undefineKeyContext(cancelContextId);
     },
   };
 }

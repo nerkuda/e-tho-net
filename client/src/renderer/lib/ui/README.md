@@ -62,6 +62,11 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
     `guard-list-nav`, ADR `fadf99e0`). Адаптеры ленты «Дневника»
     (`screens/chronicle/feed-nav.ts`) и библиотеки «Публикаций»
     (`screens/publications/library-nav.ts`) отдают ядру лишь разметку и реакции.
+12. **Переупорядочивание строк — только `lib/row-reorder.ts`.** Компонента
+    собирает DnD (поверх `drag-list.ts`), `Alt+↑/↓` (действия ядра) и пункты
+    меню «Переместить выше/ниже» в один колбэк `onMove(from, to)`. Локальные
+    DnD-обработчики и собственные Alt-обработчики перестановки запрещены
+    (сторож `guard-row-reorder`, ADR `cce0ce7c`).
 
 ## Каталог компонентов
 
@@ -86,7 +91,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `state.ts` | `select`, `selectMany`, `deepEqual` | Реактивные селекторы поверх store (основа списков) | задача `60fcc702`, требование `628d33ee` |
 | `nav-core.ts` | `NAV_KEY_ACTIONS`, `resolveNavAction`, `nextNavIndex`, `listTargetIndex`, `isEditingTarget` | **Общее ядро клавиатурной навигации** таблиц и списков: клавиши, границы, Home/End, PgUp/PgDn, отсутствие выделения, отсечка полей ввода | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
 | `list.ts` | `createListNav` | **Общий компонент списка**: навигация списков (лента «Дневника», библиотека «Публикаций») через ядро; разметку caller рисует keyed-сверкой | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
-| `drag-list.ts` / `drag-list.css` | `createDragList`, `dragHandle`, классы `DRAG_*` | **Общий drag-фасад ручного порядка**: сортируемый список поверх `createListNav` — pointer-драг с порогом, клон-призрак, линии вставки, авто-скролл и клавиатурный сдвиг `Alt+↑/↓` (действия ядра `moveUp`/`moveDown`). Группа — «соседи одного родителя»; drag-логика только здесь | задача `d13fd645`, ADR `fadf99e0` |
+| `drag-list.ts` / `drag-list.css` | `createDragList`, `dragHandle`, классы `DRAG_*` | **Общий drag-фасад ручного порядка**: сортируемый список поверх `createListNav` — pointer-драг с порогом, клон-призрак, линии вставки, авто-скролл, отмена `Escape` (`cancelOnEscape`) и клавиатурный сдвиг `Alt+↑/↓` (действия ядра `moveUp`/`moveDown`). Группа — «соседи одного родителя»; drag-логика только здесь | задача `d13fd645`, ADR `fadf99e0`, задача `223f7d50` |
 | `drag-tree.ts` / `drag-tree.css` | `createDragTree`, `resolveDragTreeRowTarget`, `DRAG_TREE_OVER_EMPTY_CLASS`, интерфейсы `DragTree*` | **Общий drag-фасад кросс-группового переноса узлов дерева**: pointer-жест с порогом, клон-призрак, авто-скролл, подсветка цели (`before`/`after`/`empty`), `Shift`-признак копирования, отмена `Escape` через `lib/keymap`; цель броска (`groupId`, `index`) резолвит адаптер вызывающего. Нужен там, где контракт `drag-list` («порядок одной группы») недостаточен; цели пересчитываются по точке `pointerup` | задача `31b228f0`, ADR `442e7ff5`, ADR `e538090f` |
 | `keyed-list.ts` | `reconcileKeyed`, `DEFAULT_KEY_ATTR` | Инкрементальная сверка списка по ключу (identity неизменных узлов) | задача `6952c619`, ADR keyed-обновления |
 | `scroll-anchor.ts` | `preserveScroll` | Возврат позиции прокрутки при легитимной полной пересборке | задача `3bfef1f7` |
