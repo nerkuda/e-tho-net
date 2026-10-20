@@ -26,10 +26,37 @@
 
 .usage-title {
   flex: 1;
+  /* min-width: 0 — заголовок усекается, а иконочные действия шапки не
+     выдавливаются за границу при минимальной ширине дока (f7623077). */
+  min-width: 0;
   font-weight: var(--font-weight-bold, 700);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Действия шапки — иконочные кнопки с подсказками: фиксированный размер,
+   не сжимаются. */
+.usage-header > .ui-btn {
+  flex: 0 0 auto;
+}
+
+/* «Удалить совсем» — разрушающее действие: красный значок. */
+.usage-action-danger {
+  color: var(--danger);
+}
+
+.usage-action-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+/* Док-панель корзины: ширина — локальная переменная экземпляра (сессия),
+   а не экранная `--usage-w` (спека f7623077, задача d23279f6). */
+.usage-panel.usage-panel--dock {
+  flex: 0 0 var(--usage-dock-w, 260px);
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
 }
 
 .usage-target {
@@ -40,6 +67,19 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Сообщение об ошибке действия из панели (restore: 404/412/409) — панель
+ * остаётся открытой, строка объясняет причину (задача d23279f6). */
+.usage-status {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--danger);
+  font-size: var(--font-size-s);
+}
+
+.usage-status[hidden] {
+  display: none;
 }
 
 .usage-body {
@@ -97,6 +137,27 @@
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-s);
+}
+
+/* Строка слоя: имя + действие в одну строку (имя усекается). */
+.usage-layer-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* «Основа» без действия объясняет причину: в рабочем слое доступна только
+   пометка, «Удалить совсем» — в основе (критерий 8 задачи d23279f6). */
+.usage-layer-row--base {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.usage-layer-hint {
+  color: var(--text-dim);
+  font-size: var(--font-size-s);
+  line-height: 1.35;
 }
 
 .usage-layer-row:hover {

@@ -62,6 +62,8 @@ const RUNTIME_TOKENS = new Set([
   // screens/usage-panel.ts (ширина) + screens/workspace.ts (шов панели)
   '--usage-w',
   '--usage-seam',
+  // trash.ts — ширина док-панели использования в корзине (сессия, d23279f6)
+  '--usage-dock-w',
   // screens/structures/structures.ts
   '--st-indent',
   // screens/publications/workspace.ts

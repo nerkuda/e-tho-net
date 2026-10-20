@@ -41,6 +41,7 @@
 import {
   EtnError,
   FILTER_AST_VERSION,
+  FILTER_LINK_EDGE_STATES,
   HIERARCHY_SUBTREE_MAX_NODES,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
@@ -59,6 +60,7 @@ import {
   type FilterAstSortKey,
   type FilterAstSubqueryValue,
   type FilterAstValue,
+  type FilterLinkEdgeState,
   type FilterProfileId,
   type LinkPropertyDirection,
   type LinkTypeFilterInput,
@@ -2409,6 +2411,12 @@ function filterAstLeafClause(
       }
       return structuralLeafClause(entity.kind, leaf, `${path}.value`, requestId);
 
+    case 'incoming_links':
+    case 'outgoing_links':
+      // Путь листа, а не сущности: defensive-ошибки `value`/`operator` должны
+      // адресовать `filter.value`/`filter.operator` (как у прочих операндов).
+      return linkPresenceLeafClause(entity, leaf, path, requestId);
+
     case 'attachments':
       return collectionLeafClause(
         'attachments',
@@ -2578,6 +2586,90 @@ function propertyLeafClause(
     return astNegate(inner);
   }
   return delegate();
+}
+
+/**
+ * Лист «Есть входящие связи»/«Есть исходящие связи» (требование 60db9614,
+ * сущность 489c394f).
+ *
+ * Учитываются ЛЮБЫЕ рёбра, включая структурные (`type_id IS NULL`): направление
+ * задаётся колонкой самой мысли (`target_id` — входящие, `source_id` —
+ * исходящие). Состояния относятся ТОЛЬКО к ребру (`active`,
+ * `marked_for_deletion`); актуальность/корзина мысли на другом конце не
+ * проверяются. `states` отсутствует/пуст — все состояния; пустая пара не
+ * ограничивает (см. {@link linkEdgeStateClauses}).
+ *
+ * Не переиспользует {@link structuralLeafClause}: тот жёстко требует живое
+ * нетипизированное ребро (`active = 1`, без корзины, `type_id IS NULL`).
+ */
+function linkPresenceLeafClause(
+  entity: { kind: 'incoming_links' | 'outgoing_links'; states?: FilterLinkEdgeState[] },
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
+  if (leaf.value !== undefined) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Операнд «${entity.kind}» не принимает значение.`,
+      { field: `${path}.value` },
+      requestId,
+    );
+  }
+  if (leaf.operator !== 'is_empty' && leaf.operator !== 'not_empty') {
+    astUnsupported(`Оператор «${leaf.operator}» для операнда «${entity.kind}»`, `${path}.operator`, requestId);
+  }
+  const ownColumn = entity.kind === 'incoming_links' ? 'target_id' : 'source_id';
+  const conditions = [`l.${ownColumn} = t.id`, ...linkEdgeStateClauses(entity.states, path, requestId)];
+  const exists = `EXISTS (SELECT 1 FROM links_v l WHERE ${conditions.join(' AND ')})`;
+  return leaf.operator === 'not_empty'
+    ? { sql: exists, params: [] }
+    : { sql: `NOT (${exists})`, params: [] };
+}
+
+/**
+ * SQL-условия на состояние РЕБРА для `linkPresenceLeafClause`.
+ *
+ * Состояния — две независимые пары, комбинируемые по И:
+ * (`active` | `inactive`) И (`trashed` | `not_trashed`). Если в паре выбраны оба
+ * значения или ни одного — пара не ограничивает (эквивалент `IN (0,1)` у
+ * NOT NULL-флага); пустой/отсутствующий `states` означает «все состояния».
+ *
+ * Пара всегда выражается явным предикатом (даже когда она не ограничивает) —
+ * это прямая запись семантики, а не доказанная оптимизация: выигрыш плана
+ * зависит от фикстуры. На равномерной фикстуре (1500 мыслей) явный предикат
+ * даёт 4,14 мс против 2,41 мс без него, и планировщик выбирает другой план;
+ * на перекошенных данных (высокостепенный узел) поведение иное. Новый индекс
+ * не добавлялся: предикат оставлен ради однозначности SQL и независимости от
+ * неявного `NOT NULL`.
+ */
+function linkEdgeStateClauses(
+  states: readonly FilterLinkEdgeState[] | undefined,
+  path: string,
+  requestId?: string,
+): string[] {
+  const selected = states ?? [];
+  const unknown = selected.filter((state) => !FILTER_LINK_EDGE_STATES.includes(state));
+  if (unknown.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Неизвестное состояние ребра: ${unknown.join(', ')}.`,
+      { field: `${path}.states`, allowed: FILTER_LINK_EDGE_STATES },
+      requestId,
+    );
+  }
+  const has = (state: FilterLinkEdgeState): boolean => selected.includes(state);
+  /** Предикат пары: оба/ни одного — без ограничения, один — точное значение. */
+  const pair = (column: string, positive: FilterLinkEdgeState, negative: FilterLinkEdgeState): string => {
+    const yes = has(positive);
+    const no = has(negative);
+    if (yes === no) return `${column} IN (0,1)`;
+    return `${column} = ${yes ? 1 : 0}`;
+  };
+  return [
+    pair('l.active', 'active', 'inactive'),
+    pair('l.marked_for_deletion', 'trashed', 'not_trashed'),
+  ];
 }
 
 /**

@@ -50,3 +50,47 @@ export function usageLayers(
   }
   return out;
 }
+
+/**
+ * Видимость действий шапки панели по свежим данным (спека f7623077, задача
+ * d23279f6): «Вернуть из корзины» — только у помеченной цели; «Удалить
+ * совсем» — только у помеченной И незаблокированной (`deletion-check.blocked`
+ * перечитывается перед отрисовкой и перед действием). Чистая модель —
+ * проверяется юнит-тестом без DOM.
+ */
+export interface UsageActionVisibility {
+  restore: boolean;
+  purge: boolean;
+}
+
+export function usageActionVisibility(
+  marked: boolean,
+  blocked: boolean,
+): UsageActionVisibility {
+  return { restore: marked, purge: marked && !blocked };
+}
+
+/**
+ * Решение перед физическим удалением по СВЕЖИМ данным (задача d23279f6,
+ * замечание верификатора): между отрисовкой панели и подтверждением другой
+ * клиент мог восстановить сущность из корзины. Тогда удалять нельзя — иначе
+ * восстановленная сущность исчезнет. Приоритет — сначала «уже восстановлена»,
+ * затем «заблокирована», иначе удаление.
+ */
+export type PurgePrecheck = 'purge' | 'already-restored' | 'blocked';
+
+export function purgePrecheck(marked: boolean, blocked: boolean): PurgePrecheck {
+  if (!marked) return 'already-restored';
+  if (blocked) return 'blocked';
+  return 'purge';
+}
+
+/**
+ * Коды отказа действия «Вернуть из корзины», при которых панель остаётся
+ * открытой и показывает сообщение (задача d23279f6): сущность уже удалена
+ * (`NOT_FOUND`), пометку успел снять/изменить кто-то другой
+ * (`VERSION_CONFLICT`) или сущность захвачена (`LOCKED`).
+ */
+export function isRestorePanelError(code: string): boolean {
+  return code === 'NOT_FOUND' || code === 'VERSION_CONFLICT' || code === 'LOCKED';
+}

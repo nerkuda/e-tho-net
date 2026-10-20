@@ -58,6 +58,8 @@ import {
   type FilterTreeLeaf,
 } from './filter-builder.js';
 import {
+  FILTER_LINK_EDGE_STATE_LABELS,
+  FILTER_LINK_EDGE_STATES,
   STRUCTURE_KEYWORD_SCOPES,
   type FilterAstEntityKind,
   type FilterAstGroupOp,
@@ -468,6 +470,19 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
   else phrase = `${operand} ${operator} ${value}`;
   // Режим обхода «по всем связям» — отличие от структурного (по умолчанию).
   if (leaf.mode === 'all_links') phrase += ' (по всем связям)';
+  // Состояния РЕБРА у «Есть входящие/исходящие связи» (требование 60db9614):
+  // полный набор (в т.ч. отсутствие `states`) — суффикса нет; иначе — список
+  // выбранных состояний в порядке общего словаря. Формат закреплён тестом.
+  if (leaf.entity.kind === 'incoming_links' || leaf.entity.kind === 'outgoing_links') {
+    const states = leaf.entity.states ?? [];
+    const isFull = FILTER_LINK_EDGE_STATES.every((state) => states.includes(state));
+    if (!isFull && states.length > 0) {
+      const labels = FILTER_LINK_EDGE_STATES
+        .filter((state) => states.includes(state))
+        .map((state) => FILTER_LINK_EDGE_STATE_LABELS[state]);
+      phrase += ` (связи: ${labels.join(', ')})`;
+    }
+  }
   // «Найти слова»: чем ограничен поиск — видно во фразе (требование 0882f8d5).
   if (leaf.entity.kind === 'keywords') {
     phrase += ` (${filterPhraseKeywordScopes(leaf.entity.scope)})`;

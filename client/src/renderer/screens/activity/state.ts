@@ -76,6 +76,12 @@ export interface PersistedActivityState {
   offset: number;
   /** Ширина панели отборов (px), заданная сплиттером. */
   panelWidth: number | null;
+  /**
+   * id применённого личного сохранённого отбора «Событий» (0.13.3, задача
+   * c0c7b834); `null` — отбор не сохранён. При инициализации по id
+   * восстанавливаются имя и baseline, отсутствующий отбор снимает идентичность.
+   */
+  savedFilterId: string | null;
 }
 
 const ENTITY_TYPE_VALUES: ReadonlySet<string> = new Set(ENTITY_TYPE_OPTIONS.map((o) => o.value));
@@ -114,11 +120,18 @@ export function parseActivityState(raw: string): PersistedActivityState {
     filter: unknown;
     offset: number;
     panelWidth: number;
+    savedFilterId: string | null;
   }>;
   try {
     parsed = JSON.parse(raw) as typeof parsed;
   } catch {
-    return { filter: createDefaultActivityFilter(), dropped: [], offset: 0, panelWidth: null };
+    return {
+      filter: createDefaultActivityFilter(),
+      dropped: [],
+      offset: 0,
+      panelWidth: null,
+      savedFilterId: null,
+    };
   }
   const detailed = parseActivityCriteriaTreeDetailed(cleanLegacyDictionaries(parsed.filter ?? {}));
   return {
@@ -131,6 +144,10 @@ export function parseActivityState(raw: string): PersistedActivityState {
     panelWidth:
       typeof parsed.panelWidth === 'number' && Number.isFinite(parsed.panelWidth) && parsed.panelWidth > 0
         ? Math.floor(parsed.panelWidth)
+        : null,
+    savedFilterId:
+      typeof parsed.savedFilterId === 'string' && parsed.savedFilterId !== ''
+        ? parsed.savedFilterId
         : null,
   };
 }

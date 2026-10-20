@@ -1,0 +1,476 @@
+{
+  "name": "60db9614-link-presence",
+  "description": "Сценарий be9d37af: условия «Есть входящие связи»/«Есть исходящие связи» в AST и редакторе. Стенд засевает A (входящие в трёх состояниях + живое исходящее), I (только неактуальное входящее), T (только входящее в корзине), B (только структурные рёбра), C (без рёбер), D (живое входящее от E, E в корзине). GUI: выбор операнда, ячейка «да/нет», четыре чекбокса состояний, применение и проверка набора по данным стендовой БД; переключение состояний, смена операнда без сброса флагов; сохранение и перечитывание; доступность в карте и публикациях; паритет с MCP-отбором (тот же AST + условия видимости). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.60db9614-link-presence.scenario.json --out .tmp/etn-60db9614/out",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "seed-fixture",
+      "eval": "(async () => { const nid='{{networkId}}'; const api=window.etn; const mk=(title,link)=>api.thoughts.create(nid, Object.assign({ title }, link ? { create_link: link } : {})); const A=await mk('A-состояния'); const sLive=await mk('A-источник-живой',{direction:'child',target_thought_id:A.id}); const sInactive=await mk('A-источник-неактуальный',{direction:'child',target_thought_id:A.id}); const sTrash=await mk('A-источник-в-корзине',{direction:'child',target_thought_id:A.id}); await mk('A-цель-живая',{direction:'parent',target_thought_id:A.id}); const I=await mk('I-только-неактуальное'); const sI=await mk('I-источник',{direction:'child',target_thought_id:I.id}); const T=await mk('T-только-корзина'); const sT=await mk('T-источник',{direction:'child',target_thought_id:T.id}); const parentB=await mk('B-родитель'); const B=await mk('B-структурная',{direction:'parent',target_thought_id:parentB.id}); await mk('B-потомок',{direction:'parent',target_thought_id:B.id}); const C=await mk('C-без-рёбер'); const D=await mk('D-сосед-в-корзине'); const E=await mk('E-в-корзине',{direction:'child',target_thought_id:D.id}); const eg=await api.thoughts.get(nid,E.id); await api.thoughts.update(nid,E.id,{ marked_for_deletion:true },eg.version); const edgeOf=async (otherId)=>{ const g=await api.links.listByThought(nid,A.id,true); const all=[...g.untyped_parents,...g.untyped_children,...g.by_type.flatMap((x)=>x.items)].map((x)=>x.link); return all.find((l)=>l.source_id===otherId||l.target_id===otherId); }; const lIn=await edgeOf(sInactive.id); await api.links.update(nid,lIn.id,{ active:false },lIn.version); const lTr=await edgeOf(sTrash.id); await api.links.update(nid,lTr.id,{ marked_for_deletion:true },lTr.version); const gi=await api.links.listByThought(nid,I.id,true); const lI=[...gi.untyped_parents,...gi.untyped_children,...gi.by_type.flatMap((x)=>x.items)].map((x)=>x.link).find((l)=>l.source_id===sI.id); await api.links.update(nid,lI.id,{ active:false },lI.version); const gt=await api.links.listByThought(nid,T.id,true); const lT=[...gt.untyped_parents,...gt.untyped_children,...gt.by_type.flatMap((x)=>x.items)].map((x)=>x.link).find((l)=>l.source_id===sT.id); await api.links.update(nid,lT.id,{ marked_for_deletion:true },lT.version); window.__fx={ A:A.id, I:I.id, T:T.id, B:B.id, C:C.id, D:D.id, E:E.id }; return 'ok'; })()"
+    },
+    {
+      "name": "open-structures",
+      "click": "button.view-tab[title=\"Структуры мыслей\"]"
+    },
+    {
+      "name": "structures-editor",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    {
+      "name": "add-condition",
+      "click": ".st-filter .ft-add-condition"
+    },
+    {
+      "name": "condition-row",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-row') !== null"
+    },
+    {
+      "name": "open-what",
+      "click": ".st-filter .ft-row .ft-row__what"
+    },
+    {
+      "name": "choice-open",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"incoming_links\"]') !== null"
+    },
+    {
+      "name": "choice-offers-both",
+      "probe": "document.querySelector('.ft-choice__item[data-key=\"incoming_links\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"outgoing_links\"]') !== null",
+      "expect": true
+    },
+    {
+      "name": "pick-incoming",
+      "click": ".ft-choice__item[data-key=\"incoming_links\"]"
+    },
+    {
+      "name": "operand-incoming",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-row__what')?.textContent?.includes('Есть входящие связи') === true"
+    },
+    {
+      "name": "value-is-yes",
+      "waitFor": "document.querySelector('.st-filter .ft-row__value .fv-predicate [aria-pressed=\"true\"]')?.textContent?.trim() === 'да'"
+    },
+    {
+      "name": "states-default",
+      "probe": "JSON.stringify([...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].map((r)=>({ label:r.textContent.trim(), checked:r.querySelector('input').checked })))",
+      "expect": "[{\"label\":\"актуальные\",\"checked\":true},{\"label\":\"не актуальные\",\"checked\":true},{\"label\":\"в корзине\",\"checked\":false},{\"label\":\"не в корзине\",\"checked\":true}]"
+    },
+    {
+      "name": "states-row-is-second-line",
+      "probe": "(() => { const row=document.querySelector('.st-filter .ft-row'); const s=row?.querySelector('.ft-link-states'); if(!row||!s) return false; const rr=row.getBoundingClientRect(); const sr=s.getBoundingClientRect(); return sr.width>0 && sr.height>0 && sr.top>=rr.top; })()",
+      "expect": true
+    },
+    {
+      "name": "apply-default",
+      "click": ".st-filter .ff-apply"
+    },
+    {
+      "name": "default-result",
+      "timeout": 20000,
+      "waitFor": "(() => { const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; const f=window.__fx; return has(f.A)&&has(f.B)&&has(f.D)&&has(f.I)&&!has(f.C)&&!has(f.T); })()"
+    },
+    {
+      "name": "uncheck-inactive",
+      "eval": "(() => { const r=[...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].find((x)=>x.textContent.trim()==='не актуальные'); if(!r) return 'no-row'; r.click(); return 'ok'; })()"
+    },
+    {
+      "name": "apply-active-only",
+      "click": ".st-filter .ff-apply"
+    },
+    {
+      "name": "active-only-result",
+      "timeout": 20000,
+      "waitFor": "(() => { const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; const f=window.__fx; return has(f.A)&&has(f.B)&&has(f.D)&&!has(f.I)&&!has(f.T)&&!has(f.C); })()"
+    },
+    {
+      "name": "phrase-active-only",
+      "probe": "document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''",
+      "expect": "Есть входящие связи заполнено (связи: актуальные, не в корзине)"
+    },
+    {
+      "name": "trash-only",
+      "eval": "(async () => { const click=async (label)=>{ const r=[...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].find((x)=>x.textContent.trim()===label); if(!r) return false; r.click(); await new Promise((res)=>setTimeout(res,80)); return true; }; await click('не в корзине'); await click('в корзине'); return 'ok'; })()"
+    },
+    {
+      "name": "apply-trash-only",
+      "click": ".st-filter .ff-apply"
+    },
+    {
+      "name": "trash-only-result",
+      "timeout": 20000,
+      "waitFor": "(() => { const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; const f=window.__fx; return has(f.A)&&has(f.T)&&!has(f.B)&&!has(f.D)&&!has(f.I)&&!has(f.C); })()"
+    },
+    {
+      "name": "both-trash-pair",
+      "eval": "(() => { const r=[...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].find((x)=>x.textContent.trim()==='не в корзине'); if(!r) return 'no-row'; r.click(); return 'ok'; })()"
+    },
+    {
+      "name": "apply-trash-pair",
+      "click": ".st-filter .ff-apply"
+    },
+    {
+      "name": "trash-pair-result",
+      "timeout": 20000,
+      "waitFor": "(() => { const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; const f=window.__fx; return has(f.A)&&has(f.B)&&has(f.D)&&has(f.T)&&!has(f.I)&&!has(f.C); })()"
+    },
+    {
+      "name": "uncheck-all",
+      "eval": "(async () => { for (let i=0;i<4;i+=1){ const r=[...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].find((x)=>x.querySelector('input')?.checked); if(!r) break; r.click(); await new Promise((res)=>setTimeout(res,80)); } return 'ok'; })()"
+    },
+    {
+      "name": "apply-all-states",
+      "click": ".st-filter .ff-apply"
+    },
+    {
+      "name": "all-states-result",
+      "timeout": 20000,
+      "waitFor": "(() => { const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; const f=window.__fx; return has(f.A)&&has(f.B)&&has(f.D)&&has(f.I)&&has(f.T)&&!has(f.C); })()"
+    },
+    {
+      "name": "switch-to-outgoing",
+      "click": ".st-filter .ft-row__what"
+    },
+    {
+      "name": "outgoing-choice",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"outgoing_links\"]') !== null"
+    },
+    {
+      "name": "pick-outgoing",
+      "click": ".ft-choice__item[data-key=\"outgoing_links\"]"
+    },
+    {
+      "name": "operand-outgoing",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-row__what')?.textContent?.includes('Есть исходящие связи') === true"
+    },
+    {
+      "name": "states-preserved",
+      "probe": "JSON.stringify([...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].map((r)=>r.querySelector('input').checked))",
+      "expect": "[false,false,false,false]"
+    },
+    {
+      "name": "pick-no",
+      "eval": "(() => { const b=[...document.querySelectorAll('.st-filter .ft-row__value .fv-predicate .ui-btn')].find((x)=>x.textContent.trim()==='нет'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "value-is-no",
+      "waitFor": "document.querySelector('.st-filter .ft-row__value .fv-predicate [aria-pressed=\"true\"]')?.textContent?.trim() === 'нет'"
+    },
+    {
+      "name": "apply-outgoing-empty",
+      "click": ".st-filter .ff-apply"
+    },
+    {
+      "name": "outgoing-empty-result",
+      "timeout": 20000,
+      "waitFor": "(() => { const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; const f=window.__fx; return has(f.C)&&has(f.D)&&has(f.I)&&has(f.T)&&!has(f.A)&&!has(f.B); })()"
+    },
+    {
+      "name": "save-name",
+      "click": ".st-filter .ff-name__input"
+    },
+    {
+      "name": "save-name-typed",
+      "text": "60db9614 связи"
+    },
+    {
+      "name": "save-filter",
+      "click": ".st-filter .ff-save"
+    },
+    {
+      "name": "saved-in-db",
+      "timeout": 15000,
+      "api": {
+        "name": "savedInDb",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters",
+        "expression": "(() => { const list=Array.isArray(data)?data:(data.items||[]); const f=list.find((x)=>x.name==='60db9614 связи'); if(!f) return null; const d=typeof f.definition==='string'?JSON.parse(f.definition):f.definition; const leaf=d.filter && d.filter.entity ? d.filter : (d.filter.children||[]).find((c)=>c.entity); if(!leaf) return null; const out={ entity:leaf.entity.kind, operator:leaf.operator }; if(leaf.entity.states!==undefined) out.states=leaf.entity.states; return out; })()"
+      },
+      "expect": {
+        "entity": "outgoing_links",
+        "operator": "is_empty"
+      }
+    },
+    {
+      "name": "switch-map",
+      "click": "button.view-tab[title=\"Карта мыслей\"]"
+    },
+    {
+      "name": "map-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.canvas-filter-strip') !== null || document.querySelector('[data-id]') !== null"
+    },
+    {
+      "name": "switch-structures-again",
+      "click": "button.view-tab[title=\"Структуры мыслей\"]"
+    },
+    {
+      "name": "structures-again",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    {
+      "name": "open-saved",
+      "click": ".st-filter .ff-extra--saved"
+    },
+    {
+      "name": "saved-dialog",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.sfd') !== null"
+    },
+    {
+      "name": "saved-search",
+      "click": ".sfd-search"
+    },
+    {
+      "name": "saved-typed",
+      "text": "60db9614"
+    },
+    {
+      "name": "saved-select",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "saved-confirm",
+      "key": "Enter"
+    },
+    {
+      "name": "saved-dialog-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.sfd') === null"
+    },
+    {
+      "name": "restored-operand",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.st-filter .ft-row__what')?.textContent?.includes('Есть исходящие связи') === true"
+    },
+    {
+      "name": "restored-value",
+      "waitFor": "document.querySelector('.st-filter .ft-row__value .fv-predicate [aria-pressed=\"true\"]')?.textContent?.trim() === 'нет'"
+    },
+    {
+      "name": "restored-states-all-checked",
+      "probe": "JSON.stringify([...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].map((r)=>r.querySelector('input').checked))",
+      "expect": "[true,true,true,true]"
+    },
+    {
+      "name": "restored-phrase",
+      "probe": "document.querySelector('.st-filter .ff-preview__text')?.textContent ?? ''",
+      "expect": "Есть исходящие связи не заполнено"
+    },
+    {
+      "name": "switch-back-to-incoming",
+      "click": ".st-filter .ft-row__what"
+    },
+    {
+      "name": "incoming-choice-again",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"incoming_links\"]') !== null"
+    },
+    {
+      "name": "pick-incoming-again",
+      "click": ".ft-choice__item[data-key=\"incoming_links\"]"
+    },
+    {
+      "name": "operand-incoming-again",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.st-filter .ft-row__what')?.textContent?.includes('Есть входящие связи') === true"
+    },
+    {
+      "name": "states-kept-on-operand-switch",
+      "probe": "JSON.stringify([...document.querySelectorAll('.st-filter .ft-link-states .ui-choice-row')].map((r)=>r.querySelector('input').checked))",
+      "expect": "[true,true,true,true]"
+    },
+    {
+      "name": "switch-map-for-editor",
+      "click": "button.view-tab[title=\"Карта мыслей\"]"
+    },
+    {
+      "name": "map-ready-2",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.search-input') !== null"
+    },
+    {
+      "name": "open-search-panel",
+      "eval": "(() => { const i=document.querySelector('.search-input'); if(!i) return 'no-input'; i.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "search-panel-open",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.search-panel') !== null && !document.querySelector('.search-panel').classList.contains('hidden')"
+    },
+    {
+      "name": "open-search-settings",
+      "click": ".search-settings-toggle"
+    },
+    {
+      "name": "map-editor",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.search-settings .fe .ft-group') !== null"
+    },
+    {
+      "name": "map-add-condition",
+      "click": ".search-settings .ft-add-condition"
+    },
+    {
+      "name": "map-row",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.search-settings .ft-row') !== null"
+    },
+    {
+      "name": "map-open-what",
+      "eval": "(() => { const rows=[...document.querySelectorAll('.search-settings .ft-row')]; const r=rows[rows.length-1]; const b=r.querySelector('.ft-row__what'); if(!b) return 'no-what'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "map-choice",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"incoming_links\"]') !== null"
+    },
+    {
+      "name": "map-offers-both",
+      "probe": "document.querySelector('.ft-choice__item[data-key=\"incoming_links\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"outgoing_links\"]') !== null",
+      "expect": true
+    },
+    {
+      "name": "map-pick-incoming",
+      "click": ".ft-choice__item[data-key=\"incoming_links\"]"
+    },
+    {
+      "name": "map-states-row",
+      "timeout": 10000,
+      "waitFor": "document.querySelectorAll('.search-settings .ft-link-states .ui-choice-row').length === 4"
+    },
+    {
+      "name": "switch-publications",
+      "click": "button.view-tab[title=\"Публикации\"]"
+    },
+    {
+      "name": "seed-publication",
+      "eval": "(async () => { const p=await window.etn.publications.create('{{networkId}}',{ title:'РЕЦЕПТ-60db9614', title_recipe:{ version:1, filter:{ entity:{ kind:'incoming_links', states:['active','not_trashed'] }, operator:'not_empty' } } }); window.__pub=p.id; return 'ok'; })()"
+    },
+    {
+      "name": "publications-ready",
+      "timeout": 20000,
+      "waitFor": "[...document.querySelectorAll('.pub-entry, .pub-card')].some((e)=>e.textContent.includes('РЕЦЕПТ-60db9614'))"
+    },
+    {
+      "name": "open-publication",
+      "eval": "(() => { const el=[...document.querySelectorAll('.pub-entry, .pub-card')].find((e)=>e.textContent.includes('РЕЦЕПТ-60db9614')); if(!el) return 'no-card'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "publication-opened",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('#pub-card-title')?.value === 'РЕЦЕПТ-60db9614'"
+    },
+    {
+      "name": "open-recipe-tab",
+      "eval": "(() => { const tb=[...document.querySelectorAll('.ui-tab')].find((e)=>e.textContent.trim()==='Рецепт'); if(!tb) return 'no-tab'; tb.click(); return 'ok'; })()"
+    },
+    {
+      "name": "recipe-editor",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.pub-card-recipe .fe') !== null"
+    },
+    {
+      "name": "publication-offers-operand",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.pub-card-recipe .ft-row__what')?.textContent?.includes('Есть входящие связи') === true"
+    },
+    {
+      "name": "publication-states-row",
+      "probe": "document.querySelectorAll('.pub-card-recipe .ft-link-states .ui-choice-row').length",
+      "expect": 4
+    },
+    {
+      "name": "mcp-parity",
+      "eval": "(async () => { const nid='{{networkId}}'; const list=await window.etn.savedFilters.list(nid); const saved=(Array.isArray(list)?list:(list.items||[])).find((x)=>x.name==='60db9614 связи'); const def=typeof saved.definition==='string'?JSON.parse(saved.definition):saved.definition; const ast={ version:def.version, filter:{ op:'and', children:[ def.filter, { entity:{kind:'active'}, operator:'eq', value:true }, { entity:{kind:'trashed'}, operator:'eq', value:false } ] } }; const res=await window.etn.structures.query(nid,{ ast, limit:100, offset:0, count:true }); const items=res.items||[]; const ids=new Set(items.map((i)=>i.id)); const f=window.__fx; window.__mcpParity={ A:ids.has(f.A), B:ids.has(f.B), C:ids.has(f.C), D:ids.has(f.D), I:ids.has(f.I), T:ids.has(f.T) }; window.__mcpDebug={ n:items.length, first:items[0]||null, ast }; return 'ok'; })()"
+    },
+    {
+      "name": "rest-parity",
+      "api": {
+        "name": "restParityDebug",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/query",
+        "body": {
+          "ast": {
+            "version": 1,
+            "filter": {
+              "op": "and",
+              "children": [
+                {
+                  "entity": {
+                    "kind": "outgoing_links"
+                  },
+                  "operator": "is_empty"
+                },
+                {
+                  "entity": {
+                    "kind": "active"
+                  },
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "entity": {
+                    "kind": "trashed"
+                  },
+                  "operator": "eq",
+                  "value": false
+                }
+              ]
+            }
+          },
+          "limit": 100,
+          "offset": 0,
+          "count": true
+        },
+        "expression": "({ n: (data.items || data).length, titles: (data.items || data).map((i) => i.title) })"
+      }
+    },
+    {
+      "name": "mcp-parity-result",
+      "probe": "JSON.stringify(window.__mcpParity)",
+      "expect": "{\"A\":false,\"B\":false,\"C\":true,\"D\":true,\"I\":true,\"T\":true}"
+    }
+  ]
+}

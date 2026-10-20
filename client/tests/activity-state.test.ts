@@ -199,6 +199,17 @@ describe('parseActivityState', () => {
     assert.equal(parsed.panelWidth, null);
   });
 
+  it('сохраняет и восстанавливает savedFilterId вкладки (0.13.3, задача c0c7b834)', () => {
+    const parsed = parseActivityState(JSON.stringify({ filter: {}, savedFilterId: 'f-1' }));
+    assert.equal(parsed.savedFilterId, 'f-1', 'идентичность применённого отбора восстановлена');
+    const absent = parseActivityState(JSON.stringify({ filter: {} }));
+    assert.equal(absent.savedFilterId, null, 'без поля — идентичности нет');
+    const empty = parseActivityState(JSON.stringify({ filter: {}, savedFilterId: '' }));
+    assert.equal(empty.savedFilterId, null, 'пустая строка — идентичности нет');
+    const garbage = parseActivityState('not-json');
+    assert.equal(garbage.savedFilterId, null, 'битый снимок — идентичности нет');
+  });
+
   it('restores panelWidth from L4 (замечание пользователя — сплиттер панели)', () => {
     const parsed = parseActivityState(JSON.stringify({ filter: {}, panelWidth: 360 }));
     assert.equal(parsed.panelWidth, 360);

@@ -250,6 +250,28 @@ describe('guard: списки операторов темы гайда = рее�
   it('attachments.search: операнды профиля «вложения» документированы ровно по реестру', () => {
     assertEffectsMatchRegistry('attachments', 'attachments.search');
   });
+
+  it('thoughts.query: состояния рёбер документированы вне секции операндов (60db9614)', async () => {
+    const shared = await import('@etn/shared');
+    const topic = GUIDE_TOPICS_BY_NAME.get('thoughts.query');
+    assert.ok(topic !== undefined);
+    // Буллеты `states` не должны попадать в секцию операндов: иначе сторож
+    // паритета прочтёт их как операнды вне профиля.
+    const section = operandSection(topic.body_md, 'Операнды (`entity.kind`)');
+    assert.ok(!/^-\s+`states`/m.test(section), '`states` описан вне секции операндов');
+    for (const state of shared.FILTER_LINK_EDGE_STATES) {
+      assert.ok(
+        topic.body_md.includes(`\`${state}\``),
+        `справка обязана называть состояние ребра ${state}`,
+      );
+    }
+    for (const label of Object.values(shared.FILTER_LINK_EDGE_STATE_LABELS)) {
+      assert.ok(topic.body_md.includes(label), `справка обязана называть подпись «${label}»`);
+    }
+    for (const kind of ['incoming_links', 'outgoing_links'] as const) {
+      assert.ok(topic.body_md.includes(`\`${kind}\``), `справка обязана описывать ${kind}`);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

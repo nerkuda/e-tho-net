@@ -1075,13 +1075,54 @@ describe('ячейка значения: сборка виджета и прав
     assert.deepEqual(writes[1], { kind: 'list', items: [3, 3] });
   });
 
-  it('перечисление: чип-поле выбранных значений, без «простыни» чекбоксов (п. C2/C3)', () => {
+  it('перечисление: чип-поле закрытого набора, как «Тип мысли» (1f3f0df5)', () => {
     const { api } = slot();
     const box = render(leaf({ kind: 'kind' }, 'in'), api);
     assert.equal(box.dataset['editor'], 'enum');
-    assert.ok(one(box, 'ui-chip-list') !== null, 'перечисление — чип-поле множественных значений');
-    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы ушли в выпадающий список, а не «простынёй»');
-    assert.ok(one(box, 'ui-chip-list-add') !== null, 'поле добавления значений');
+    // Перечисление строит ТО ЖЕ поле, что условие «Тип мысли/связи»
+    // (ревизия № 2 ошибки 1f3f0df5): рамка чип-поля, поле «Добавить значение…»,
+    // угловой крестик и выпадашка «Значения» с чекбоксами.
+    assert.ok(one(box, 'entity-chip-field') !== null, 'стандартное чип-поле закрытого набора');
+    const input = one(box, 'entity-chip-input');
+    assert.ok(input !== null, 'поле добавления значения');
+    assert.equal(input?.placeholder, 'Добавить значение…');
+    assert.ok(one(box, 'link-value-corner-btn') !== null, 'угловой крестик очистки');
+    assert.equal(one(box, 'ui-chip-list'), null, 'своего чип-листа у перечисления нет');
+    assert.equal(one(box, 'value-chips-input'), null, 'свободного чип-редактора нет');
+    assert.equal(all(box, 'ui-choice-row').length, 0, 'чекбоксы — в выпадашке, не «простынёй»');
+  });
+
+  it('перечисление: устаревший код вне словаря переживает правку (ревизия № 3 1f3f0df5)', async () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf({ kind: 'kind' }, 'in', { kind: 'list', items: ['archived', 'file'] }),
+      api,
+    );
+    // Код вне словаря виден подписью-кодом, а не теряется.
+    assert.deepEqual(
+      all(box, 'prc-title').map((node) => node.textContent),
+      ['archived', 'Файл'],
+    );
+    const input = one(box, 'entity-chip-input');
+    assert.ok(input !== null, 'поле ввода чип-поля');
+    input!.emit('focus');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const body = (globalThis as any).document.body as ShimElement;
+    const list = body.children.filter((child) => child.classList.contains('type-combo-list')).at(-1);
+    assert.ok(list !== undefined, 'выпадашка «Значения» открыта');
+    const row = list!.children.find(
+      (child) =>
+        child.classList.contains('type-combo-item') &&
+        (one(child, 'type-combo-label')?.textContent ?? '').trim() === 'Ссылка',
+    );
+    assert.ok(row !== undefined, 'строка «Ссылка»');
+    row!.emit('click');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      writes[0],
+      { kind: 'list', items: ['archived', 'file', 'url'] },
+      'новый код добавлен, устаревший сохранён',
+    );
   });
 
   it('«не имеет свойство» по «Типу мысли»: чип-поле строится, оператор не переписывается (п.5)', () => {

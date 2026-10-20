@@ -31,8 +31,10 @@ import {
   SORT_ORDERS,
   isLinkTypeFilterActive,
   parseLinkTypeFilterValue,
+  type ActivitySavedFilter,
   type ChronicleFilterDefinition,
   type ChronicleSavedFilter,
+  type FilterAst,
   type SavedFilter,
   type SavedFilterCriteria,
   type SavedFilterView,
@@ -53,6 +55,7 @@ import { directionsOf, REF_COLUMNS } from './query-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
 import { parseFilterAst } from './filter-ast.js';
+import { assertFilterAstInProfile } from './filter-profile-validation.js';
 
 // ---------------------------------------------------------------------------
 // Filter parsing / validation
@@ -395,6 +398,29 @@ export function parseSavedFilterDefinition(
   return { ...filter, sort: sortRaw as StructureSort, order: orderRaw as SortOrder };
 }
 
+/**
+ * Read the definition of a saved filter of the «События» view (0.13.3,
+ * задача c0c7b834): AST профиля `events` БЕЗ сортировки.
+ *
+ * Принимается ТОЛЬКО AST-форма (`{ version, filter }`) — легаси-плоское
+ * определение «Структур» и определение «Хроники» (`{ ast, order }`) отвергаются
+ * `VALIDATION_ERROR` доменным `parseFilterAst`. Операнды и операторы проверяются
+ * профилем `events` (`assertFilterAstInProfile`): условие, невидимое в ленте,
+ * не сохранится и не «выпадет молча» при применении. Поле `sort` профилю ленты
+ * не принадлежит — порядок строк задаёт сервер (`occurred_at_ms DESC`), поэтому
+ * присланная сортировка снимается и в `saved_filters.definition` не попадает.
+ */
+export function parseActivitySavedFilterDefinition(
+  body: Record<string, unknown>,
+  requestId?: string,
+): FilterAst {
+  const ast = parseFilterAst(body, requestId);
+  assertFilterAstInProfile(ast, 'events', requestId);
+  if (ast.sort === undefined) return ast;
+  const { sort: _sort, ...rest } = ast;
+  return rest;
+}
+
 /** True when the filter carries no criteria at all (empty filter → HOME + orphans). */
 export function isFilterEmpty(filter: StructureFilter): boolean {
   return (
@@ -574,11 +600,18 @@ interface SavedFilterRow {
 const SAVED_FILTER_COLUMNS =
   'id, user_id, view, name, definition, created_at, updated_at FROM saved_filters';
 
+/** Saved filter of any view — union of the three per-view DTOs. */
+export type AnySavedFilter = SavedFilter | ChronicleSavedFilter | ActivitySavedFilter;
+
+/** Definition payload of any view (validated by the route of that view). */
+export type AnySavedFilterDefinition =
+  | SavedFilterCriteria
+  | ChronicleFilterDefinition
+  | FilterAst;
+
 /** Convert a raw row into a saved filter of its view (definition JSON is trusted). */
-function rowToSavedFilterView(row: SavedFilterRow): SavedFilter | ChronicleSavedFilter {
-  const definition = JSON.parse(row.definition) as
-    | SavedFilterCriteria
-    | ChronicleFilterDefinition;
+function rowToSavedFilterView(row: SavedFilterRow): AnySavedFilter {
+  const definition = JSON.parse(row.definition) as AnySavedFilterDefinition;
   const base = {
     id: row.id,
     name: row.name,
@@ -588,6 +621,10 @@ function rowToSavedFilterView(row: SavedFilterRow): SavedFilter | ChronicleSaved
   if (row.view === 'chronicle') {
     return { ...base, view: 'chronicle', definition: definition as ChronicleFilterDefinition };
   }
+  if (row.view === 'events') {
+    // Определение «Событий» — AST профиля `events` без сортировки (0.13.3).
+    return { ...base, view: 'events', definition: definition as FilterAst };
+  }
   return { ...base, view: 'structures', definition: definition as SavedFilterCriteria };
 }
 
@@ -596,7 +633,7 @@ export function listSavedFilters(
   ndb: NetworkDb,
   userId: string,
   view: SavedFilterView = 'structures',
-): Array<SavedFilter | ChronicleSavedFilter> {
+): AnySavedFilter[] {
   const rows = ndb
     .prepare(
       `SELECT ${SAVED_FILTER_COLUMNS}
@@ -611,7 +648,7 @@ function getSavedFilterOrThrow(
   ndb: NetworkDb,
   userId: string,
   filterId: string,
-): SavedFilter | ChronicleSavedFilter {
+): AnySavedFilter {
   const row = ndb
     .prepare(`SELECT ${SAVED_FILTER_COLUMNS} WHERE id = ? AND user_id = ? LIMIT 1`)
     .get(filterId, userId) as SavedFilterRow | undefined;
@@ -619,6 +656,19 @@ function getSavedFilterOrThrow(
     throw new EtnError('NOT_FOUND', 'Отбор не найден.', { entity: 'saved_filter', id: filterId });
   }
   return rowToSavedFilterView(row);
+}
+
+/**
+ * Read one saved filter of the user (foreign ids → `NOT_FOUND`). Нужен роуту
+ * PATCH: вид определения берётся из СОХРАНЁННОЙ строки, а не из тела запроса
+ * (0.13.3, задача c0c7b834).
+ */
+export function getSavedFilter(
+  ndb: NetworkDb,
+  userId: string,
+  filterId: string,
+): AnySavedFilter {
+  return getSavedFilterOrThrow(ndb, userId, filterId);
 }
 
 /** Case-insensitive duplicate-name guard within one view (SQLite NOCASE is ASCII-only). */
@@ -649,8 +699,8 @@ export function createSavedFilter(
   userId: string,
   view: SavedFilterView,
   name: string,
-  definition: SavedFilterCriteria | ChronicleFilterDefinition,
-): SavedFilter | ChronicleSavedFilter {
+  definition: AnySavedFilterDefinition,
+): AnySavedFilter {
   const trimmed = validateFilterName(name);
   assertNameAvailable(ndb, userId, view, trimmed);
   const id = randomUUID();
@@ -667,8 +717,8 @@ export function updateSavedFilter(
   ndb: NetworkDb,
   userId: string,
   filterId: string,
-  patch: { name?: string; definition?: SavedFilterCriteria | ChronicleFilterDefinition },
-): SavedFilter | ChronicleSavedFilter {
+  patch: { name?: string; definition?: AnySavedFilterDefinition },
+): AnySavedFilter {
   const existing = getSavedFilterOrThrow(ndb, userId, filterId);
   const name = patch.name !== undefined ? validateFilterName(patch.name) : existing.name;
   if (name !== existing.name) {

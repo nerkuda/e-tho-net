@@ -155,6 +155,13 @@ function buildApi(): EtnBridgeApi {
         invoke('chronicleFilters.update', networkId, filterId, input),
       remove: (networkId, filterId) => invoke('chronicleFilters.remove', networkId, filterId),
     },
+    activityFilters: {
+      list: (networkId) => invoke('activityFilters.list', networkId),
+      create: (networkId, input) => invoke('activityFilters.create', networkId, input),
+      update: (networkId, filterId, input) =>
+        invoke('activityFilters.update', networkId, filterId, input),
+      remove: (networkId, filterId) => invoke('activityFilters.remove', networkId, filterId),
+    },
     pins: {
       list: (networkId) => invoke('pins.list', networkId),
       set: (networkId, orderedIds) => invoke('pins.set', networkId, orderedIds),

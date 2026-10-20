@@ -209,8 +209,12 @@ export type PropertyOwnerType = (typeof PROPERTY_OWNER_TYPES)[number];
 export const COMMENT_OWNER_TYPES = ['thought', 'link'] as const;
 export type CommentOwnerType = (typeof COMMENT_OWNER_TYPES)[number];
 
-/** Which workspace view a named saved filter belongs to (03-server-api.md §18). */
-export const SAVED_FILTER_VIEWS = ['structures', 'chronicle'] as const;
+/**
+ * Which workspace view a named saved filter belongs to (03-server-api.md §18).
+ * `events` (0.13.3, задача c0c7b834) — личные отборы ленты «События»:
+ * определение — AST профиля `events` без сортировки.
+ */
+export const SAVED_FILTER_VIEWS = ['structures', 'chronicle', 'events'] as const;
 export type SavedFilterView = (typeof SAVED_FILTER_VIEWS)[number];
 
 /**

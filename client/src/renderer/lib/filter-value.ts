@@ -23,9 +23,15 @@
  *     списком и сдвиг со знаком, человекочитаемая композиция (27b2a011);
  *   • «Найти слова» — инпут + инлайн-чекбоксы областей (9ecf405b);
  *   • «количество» — числовой инпут с подписью единицы (af7bdee2);
- *   • триада «да / нет / не важно» у операторных предикатов;
- *   • перечисления, которых нет у общего редактора (виды вложения, свойства, а
- *     также каталоги хоста — типы действий, виды сущностей).
+ *   • триада «да / нет / не важно» у операторных предикатов.
+ *
+ * Перечисления (виды вложения, а также каталоги хоста — типы действий, виды
+ * сущностей) строит СТАНДАРТНОЕ чип-поле закрытого набора
+ * `buildEntityChipField` (`lib/entity-picker.ts`) — тот же компонент, что у
+ * условия «Тип мысли»/«Тип связи»: чипы с крестиками, поле «Добавить значение…»,
+ * выпадашка «Значения» с чекбоксами (список не закрывается при нескольких
+ * отметках). Значение в модели — КОДЫ словаря, подписи — только отображение
+ * (ошибка 1f3f0df5, ревизия № 2).
  *
  * Переиспользование обязательно (стандарт a2488f05, ADR «Основа lib/ui»):
  * значение свойства — `editor/value-editor.ts`; чип-поле и комбо —
@@ -101,7 +107,6 @@ import { notice } from './notice.js';
 import { registerThoughtDropField } from './thought-drop.js';
 import type { ThoughtDropPayload } from './thought-drop-pure.js';
 import { uiButton } from './ui/button.js';
-import { chipList } from './ui/chip-list.js';
 import type { IconName } from './ui/icon.js';
 import { choiceRow } from './ui/choice-row.js';
 import { fieldInput } from './ui/field.js';
@@ -989,12 +994,25 @@ function propertyOptionIcon(
 }
 
 /**
- * Перечисление: ЧИП-ПОЛЕ множественных значений (ошибка 50d9bf4e п. C2) —
- * выбранные варианты облачками с крестиками, очистка крестиком в поле, добавление
- * из выпадающего списка чекбоксов в 2 колонки с кнопкой «Выбрать все» (п. C3).
- * Раньше варианты рисовались «простынёй» чекбоксов прямо в ячейке. Компонент —
- * общий чип-лист `lib/ui/chip-list.ts` (режим `checklist`), своей разметки поле
- * не заводит (стандарт S2, ADR «Основа lib/ui»).
+ * Перечисление (коды действий журнала, виды сущностей, виды вложений) —
+ * СТАНДАРТНОЕ чип-поле ЗАКРЫТОГО набора `buildEntityChipField`
+ * (`lib/entity-picker.ts`): тот же компонент, что у условия «Тип мысли»/
+ * «Тип связи» (ошибка 1f3f0df5, ревизия № 2). Разметка — `.entity-chip-field` >
+ * `.link-value-wrap` > `.st-f-chipfield` с чипами и полем `.entity-chip-input`
+ * («Добавить значение…»), угловым «✕» очистки и выпадашкой «Значения» с
+ * ЧЕКБОКСАМИ: список не закрывается при нескольких отметках, повторная отметка
+ * снимает значение.
+ *
+ * Значение в модели — КОДЫ словаря (`created`/`thought`/`file`), подписи — только
+ * отображение: `initialOptions` заполняет имена чипов, `titleOf` даёт подпись до
+ * загрузки каталога. `onChange` сохраняет УЖЕ сохранённые коды (в т.ч. вне
+ * словаря — устаревшее значение) и пропускает только известные НОВЫЕ: свободный
+ * текст и чужие коды в AST не попадают. Чип рисуется облачком фабрики
+ * (`profile: chip`) БЕЗ значка: у кода перечисления нет данных мысли, и значок
+ * по умолчанию («мысль») здесь лишний. Пустую иконку передаём через `cloudOf`,
+ * а пустой слот скрывает CSS (`.fv-enum .prop-ref-cloud .mini-icon:empty`):
+ * в узкой колонке 18px слота + зазор + крестик съедали подпись (ревизия № 3
+ * ошибки 1f3f0df5). Сам компонент не меняется.
  */
 function enumControl(
   leaf: FilterTreeLeaf,
@@ -1003,30 +1021,39 @@ function enumControl(
 ): HTMLElement {
   const options = enumCatalogue(leaf, ctx);
   const box = div('fv-enum');
-  const labelOf = (value: string): string => options.find((o) => o.value === value)?.label ?? value;
-  const list = chipList({
+  const knownCodes = new Set(options.map((option) => option.value));
+  const labelOf = (code: string): string =>
+    options.find((option) => option.value === code)?.label ?? code;
+  /** Каталог вариантов для поля/выпадашки: id — код AST, title — подпись. */
+  const entries: EntityOption[] = options.map((option) => ({ id: option.value, title: option.label }));
+  const field = buildEntityChipField({
     getValues: () => currentList(leaf.value),
-    labelOf,
-    onRemove: (value) => {
-      api.setValue(valueFromList(currentList(leaf.value).filter((v) => v !== value)));
+    onChange: (values) => {
+      // Сохраняем коды, которые УЖЕ есть в модели (в т.ч. вне словаря —
+      // устаревшее значение показывается подписью-кодом), и отбрасываем только
+      // НОВЫЕ неизвестные значения: свободный текст и чужие коды в AST не
+      // попадают (ревизия № 3 ошибки 1f3f0df5).
+      const kept = new Set(currentList(leaf.value));
+      api.setValue(
+        valueFromList(values.filter((value) => knownCodes.has(value) || kept.has(value))),
+      );
     },
-    getOptions: () => options.map((o) => ({ value: o.value, label: o.label })),
-    onAdd: (value) => {
-      const current = currentList(leaf.value);
-      if (!current.includes(value)) api.setValue(valueFromList([...current, value]));
+    loadOptions: (query) => {
+      const needle = query.trim().toLowerCase();
+      return needle === ''
+        ? entries
+        : entries.filter((option) => option.title.toLowerCase().includes(needle));
     },
-    addMode: 'checklist',
-    checklistColumns: 2,
-    addLabel: 'Выбрать значения…',
-    selectAllLabel: 'Выбрать все',
-    clearTitle: 'Очистить поле',
-    removeTitle: 'Убрать значение',
-    // Адрес слота дерева — ключ перепривязки панели-чеклиста: правка значения
-    // перерисовывает дерево ЦЕЛИКОМ, панель обязана переехать к новому узлу
-    // поля, а не остаться на координатах удалённого (п. C2/C3 ошибки 50d9bf4e).
-    ...(api.slotKey !== undefined ? { anchorKey: api.slotKey } : {}),
+    initialOptions: entries,
+    optionsHeader: 'Значения',
+    titleOf: (id) => labelOf(id),
+    // Нейтральное облачко: код перечисления — не мысль, дефолтный значок мысли
+    // в чипе лишний (пустая иконка штатной фабрики облачка).
+    cloudOf: (value) => ({ id: value, title: labelOf(value), icon: '' }),
+    placeholder: 'Добавить значение…',
+    addPlaceholder: 'Добавить значение…',
   });
-  box.append(list.root);
+  box.append(field.root);
   return box;
 }
 

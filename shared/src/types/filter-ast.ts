@@ -85,6 +85,39 @@ export type FilterAstOperator = (typeof FILTER_AST_OPERATORS)[number];
 export const FILTER_AST_HIERARCHY_MODES = ['structural', 'all_links'] as const;
 export type FilterAstHierarchyMode = (typeof FILTER_AST_HIERARCHY_MODES)[number];
 
+/**
+ * Состояния РЕБРА для операндов «Есть входящие связи»/«Есть исходящие связи»
+ * (требование 60db9614, сущность 489c394f). Единый словарь клиента, сервера и
+ * справки `etn.guide`; паритет стережётся тестом.
+ *
+ * Состояния образуют две независимые пары, комбинируемые по И:
+ * (`active` | `inactive`) И (`trashed` | `not_trashed`). Пустая пара не
+ * ограничивает. Отсутствие поля/пустой массив — ВСЕ состояния (wire-дефолт);
+ * редактор пишет свой набор ЯВНО.
+ */
+export const FILTER_LINK_EDGE_STATES = ['active', 'inactive', 'trashed', 'not_trashed'] as const;
+/** Состояние ребра (элемент {@link FILTER_LINK_EDGE_STATES}). */
+export type FilterLinkEdgeState = (typeof FILTER_LINK_EDGE_STATES)[number];
+
+/** Подписи состояний ребра — единый словарь редактора, фразы-превью и справки. */
+export const FILTER_LINK_EDGE_STATE_LABELS: Readonly<Record<FilterLinkEdgeState, string>> = {
+  active: 'актуальные',
+  inactive: 'не актуальные',
+  trashed: 'в корзине',
+  not_trashed: 'не в корзине',
+};
+
+/**
+ * UI-дефолт состояний ребра: отмечены «актуальные», «не актуальные»,
+ * «не в корзине» (корзина не учитывается). Редактор записывает этот набор в
+ * `states` ЯВНО — wire-дефолт (нет поля) означает ВСЕ состояния.
+ */
+export const FILTER_LINK_EDGE_STATE_UI_DEFAULT: readonly FilterLinkEdgeState[] = [
+  'active',
+  'inactive',
+  'not_trashed',
+];
+
 /** Скалярное значение-литерал. */
 export type FilterAstScalar = string | number | boolean;
 
@@ -152,6 +185,8 @@ export const FILTER_AST_ENTITY_KINDS = [
   'link_type',
   'parents',
   'children',
+  'incoming_links',
+  'outgoing_links',
   'attachments',
   'chronology',
   'comment',
@@ -213,6 +248,16 @@ export type FilterAstEntity =
   | { kind: 'parents' }
   /** Структурные «Потомки». */
   | { kind: 'children' }
+  /**
+   * «Есть входящие связи»: у мысли есть хотя бы одно ребро, где она `target`.
+   * Учитываются ЛЮБЫЕ рёбра, включая структурные (`type_id IS NULL`).
+   * `states` ограничивает состояние самого ребра; отсутствие/пустой массив —
+   * все состояния (wire-дефолт). Операторы — `is_empty`/`not_empty`,
+   * `value` не требуется (переданный `value` — ошибка валидации).
+   */
+  | { kind: 'incoming_links'; states?: FilterLinkEdgeState[] }
+  /** «Есть исходящие связи»: рёбра, где мысль `source` (см. `incoming_links`). */
+  | { kind: 'outgoing_links'; states?: FilterLinkEdgeState[] }
   /** «Вложения» мысли. */
   | { kind: 'attachments' }
   /** «Дневниковые записи» (хронологические комментарии) мысли. */

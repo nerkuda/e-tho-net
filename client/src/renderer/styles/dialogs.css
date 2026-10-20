@@ -551,6 +551,41 @@
   --tr-head-h: 30px;
 }
 
+/* Док-панель использования внутри корзины (задача d23279f6): flex-row
+ * «панель | шов | содержимое списка». `min-width: 0` на всех уровнях —
+ * иначе min-content однострочных подписей распирает строку (грабли f2a047ee).
+ * При закрытой панели (`.hidden`) список занимает всю ширину. */
+.trash-main {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Правая колонка: поиск → тулбар → список (правила 1–2 требования 11ddd910). */
+.trash-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Шов док-панели — стандартный `lib/ui/splitter`; раскладку задаёт владелец. */
+.usage-dock-splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+}
+
+.usage-dock-splitter:hover,
+.usage-dock-splitter.dragging {
+  background: var(--accent);
+}
+
 /* Оболочка таблицы «что в корзине | ссылок | действия»: высоту задаёт
  * вызывающий инлайном (фасад `lib/ui/table.ts` — владелец прокрутки), здесь
  * только рамка. Прежние `.trash-row*`/`.trash-head*` удалены вместе с

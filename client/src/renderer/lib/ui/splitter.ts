@@ -95,14 +95,35 @@ export interface SplitterDragOptions {
   plan: () => SplitterPlan | null;
   /** Запрошенная метрика по позиции указателя (по умолчанию старт + знак × смещение). */
   resolve?: (event: PointerEvent, plan: SplitterPlan) => number;
-  /** Живое применение метрики (указателем или клавиатурой). */
-  apply: (value: number, plan: SplitterPlan, event: PointerEvent | KeyboardEvent) => void;
+  /**
+   * Живое применение метрики (указателем или клавиатурой). `null` — отмена
+   * клавиатурной сессии извне ({@link SplitterHandle.cancelKeyboard}): событие
+   * синтетическое, обработчику оно не нужно.
+   */
+  apply: (value: number, plan: SplitterPlan, event: PointerEvent | KeyboardEvent | null) => void;
   /** Отпускание указателя; `moved` — был ли сдвиг. */
   commit?: (value: number, plan: SplitterPlan, moved: boolean) => void;
   /** Дополнительный класс на время драга (например, курсор на всё тело). */
   stateClass?: string;
   /** Элемент, получающий `stateClass` на время драга. */
   stateHost?: HTMLElement | (() => HTMLElement | null);
+}
+
+/**
+ * Дескриптор живого разделителя. Нужен владельцу, у которого Esc обрабатывает
+ * ВНЕШНИЙ слой (каркас диалога, задача d23279f6): capture-обработчик каркаса
+ * видит Escape раньше диспетчера сочетаний и обязан уметь отменить активную
+ * клавиатурную сессию, не закрывая при этом контейнер.
+ */
+export interface SplitterHandle {
+  /** Идёт ли сейчас клавиатурная сессия (стрелка/Home/End без Enter/Esc). */
+  isKeyboardSessionActive(): boolean;
+  /**
+   * Отменяет клавиатурную сессию: метрика возвращается к стартовой, `commit`
+   * получает `moved=false` (владелец не сохраняет отменённый размер).
+   * Возвращает `true`, если сессия была; `false` — отменять нечего.
+   */
+  cancelKeyboard(): boolean;
 }
 
 /** Опции {@link uiSplitter}: драг плюс вид создаваемого элемента. */
@@ -169,7 +190,7 @@ export function splitterElement(extraClass?: string): HTMLElement {
  * `apply` на каждом тике и `commit` на отпускании. Повторный вызов на том же
  * элементе не защищён — каждый монтаж даёт один обработчик.
  */
-export function wireSplitter(element: HTMLElement, options: SplitterDragOptions): void {
+export function wireSplitter(element: HTMLElement, options: SplitterDragOptions): SplitterHandle {
   element.classList.add(SPLITTER_CLASS);
   if (options.title !== undefined) element.title = options.title;
   if (options.ariaLabel !== undefined) element.setAttribute('aria-label', options.ariaLabel);
@@ -348,6 +369,18 @@ export function wireSplitter(element: HTMLElement, options: SplitterDragOptions)
     element.addEventListener('pointerup', onUp);
     element.addEventListener('pointercancel', onUp);
   });
+
+  return {
+    isKeyboardSessionActive: () => keyboard !== null,
+    cancelKeyboard: (): boolean => {
+      if (keyboard === null) return false;
+      const session = keyboard;
+      keyboard = null;
+      options.apply(session.plan.start, session.plan, null);
+      options.commit?.(session.plan.start, session.plan, false);
+      return true;
+    },
+  };
 }
 
 /**

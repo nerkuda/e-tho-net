@@ -21,6 +21,28 @@
 import type { FilterAst } from './filter-ast.js';
 
 /**
+ * A named saved filter of the «События» view (0.13.3, задача c0c7b834, L3,
+ * per-user). Отдельный тип, а не `SavedFilter` «Структур»: определение — AST
+ * профиля `events` БЕЗ сортировки (порядок ленты задаёт сервер), поэтому поле
+ * `definition` типизировано строже плоской/легаси-формы «Структур».
+ */
+export interface ActivitySavedFilter {
+  id: string;
+  /** Всегда `'events'` — вид отбора «Событий». */
+  view: 'events';
+  name: string;
+  /**
+   * AST профиля `events` (`{ version, filter }`); поле `sort` не сохраняется
+   * и не применяется — порядок строк фиксирован (`occurred_at_ms DESC`).
+   */
+  definition: FilterAst;
+  /** ISO-8601 UTC. */
+  created_at: string;
+  /** ISO-8601 UTC. */
+  updated_at: string;
+}
+
+/**
  * Действия, оставляющие запись в `activity_log` (требование b0c7a57c).
  * Состав растёт вместе с доменом — текстовое поле без CHECK, чтобы новые
  * действия не требовали миграции.

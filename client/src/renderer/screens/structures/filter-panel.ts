@@ -42,7 +42,6 @@ import {
 } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
-import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { clear } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
@@ -73,14 +72,16 @@ import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
-import { notice } from '../../lib/notice.js';
 import {
   predefinedFilterIds,
   predefinedFiltersToCreate,
   type PredefinedFilter,
 } from '../../lib/predefined-filters.js';
-import { duplicateFilterName } from '../../lib/pure.js';
-import { openSavedFilterDialog } from '../../lib/saved-filter-bar.js';
+import {
+  createSavedFilterController,
+  type SavedFilterController,
+  type SavedFilterRow,
+} from '../../lib/saved-filter-controller.js';
 import { registerThoughtDropField } from '../../lib/thought-drop.js';
 import { store } from '../../state.js';
 
@@ -776,17 +777,8 @@ function clearAllCriteria(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Saved filters (§15.3) — общий диалог `lib/saved-filter-bar.ts`
+// Saved filters (§15.3) — общий контроллер `lib/saved-filter-controller.ts`
 // ---------------------------------------------------------------------------
-
-/** REST-хранилище отборов вида «Структуры» (`/saved-filters?view=structures`). */
-interface SavedRow {
-  id: string;
-  name: string;
-  definition: unknown;
-  /** Условия строки совпали с предопределённым набором (метка в списке). */
-  predefined?: boolean;
-}
 
 // ---------------------------------------------------------------------------
 // Предопределённые наборы (задача 347b307e)
@@ -853,20 +845,72 @@ export function canonicalDefinition(def: unknown): string {
   return canonicalFilterTree(readFilterDefinition(def).tree);
 }
 
-/** Список сохранённых отборов панели (кэш диалога выбора). */
-let savedRows: SavedRow[] = [];
+/**
+ * Общий контроллер личных отборов «Структур» (0.13.3, задача c0c7b834):
+ * перечитывание списка, сохранение, диалог выбора и realtime — одна
+ * реализация на три места (`lib/saved-filter-controller.ts`).
+ */
+let savedFilters: SavedFilterController | null = null;
 
-/** Перечитать список отборов вида «Структуры» (`?view=structures`). */
-async function reloadSavedRows(): Promise<void> {
-  try {
-    savedRows = (await etn.savedFilters.list(requireNetworkId())).map((f) => ({
-      id: f.id,
-      name: f.name,
-      definition: f.definition,
-    }));
-  } catch {
-    savedRows = [];
-  }
+function savedFilterStore(): {
+  list: () => Promise<SavedFilterRow[]>;
+  create: (name: string, definition: unknown) => Promise<SavedFilterRow>;
+  update: (id: string, patch: { name?: string; definition?: unknown }) => Promise<SavedFilterRow>;
+  remove: (id: string) => Promise<void>;
+} {
+  return {
+    list: async () => etn.savedFilters.list(requireNetworkId()),
+    create: (name, definition) =>
+      etn.savedFilters.create(requireNetworkId(), {
+        name,
+        definition: definition as SavedFilterCriteria,
+      }),
+    update: (id, patch) =>
+      etn.savedFilters.update(requireNetworkId(), id, {
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.definition !== undefined
+          ? { definition: patch.definition as SavedFilterCriteria }
+          : {}),
+      }),
+    remove: (id) => etn.savedFilters.remove(requireNetworkId(), id),
+  };
+}
+
+/** Создать контроллер один раз на панель (переиспользуется перерисовками). */
+function ensureSavedFilters(): SavedFilterController {
+  savedFilters ??= createSavedFilterController({
+    store: savedFilterStore(),
+    getName: () => filterName,
+    setName: (name) => {
+      filterName = name;
+    },
+    buildDefinition: () => buildSavedDefinition(),
+    applyEntry: (entry) => applySavedFilter(entry),
+    getSelectedId: () => state.savedFilterId,
+    setSelectedId: (id) => {
+      state.savedFilterId = id;
+    },
+    onSaved: ({ name, definition }) => {
+      filterName = name;
+      savedFilterName = name;
+      savedDefinition = definition;
+    },
+    onRenamed: (id, name) => {
+      if (state.savedFilterId === id) {
+        filterName = name;
+        savedFilterName = name;
+      }
+    },
+    onUnselected: () => {
+      savedFilterName = null;
+      savedDefinition = null;
+    },
+    onPersist: () => callbacks?.onStatePersist(),
+    onRefresh: () => editor?.refresh(),
+    beforePicker: seedPredefinedFilters,
+    afterReload: markPredefinedRows,
+  });
+  return savedFilters;
 }
 
 /**
@@ -878,156 +922,50 @@ async function reloadSavedRows(): Promise<void> {
  * он досоздастся при следующем открытии.
  */
 async function seedPredefinedFilters(): Promise<void> {
-  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
-  if (toCreate.length === 0) {
-    markPredefinedRows();
-    return;
-  }
-  for (const item of toCreate) {
-    try {
-      await etn.savedFilters.create(requireNetworkId(), {
-        name: item.name,
-        definition: item.definition as SavedFilterCriteria,
-      });
-    } catch {
-      // набор досоздастся при следующем открытии списка
+  const controller = ensureSavedFilters();
+  const rows = controller.rows();
+  const toCreate = predefinedFiltersToCreate(PREDEFINED_FILTERS, rows, canonicalDefinition);
+  if (toCreate.length > 0) {
+    for (const item of toCreate) {
+      try {
+        await etn.savedFilters.create(requireNetworkId(), {
+          name: item.name,
+          definition: item.definition as SavedFilterCriteria,
+        });
+      } catch {
+        // набор досоздастся при следующем открытии списка
+      }
     }
   }
-  await reloadSavedRows();
-  markPredefinedRows();
+  await controller.reload();
 }
 
 /** Пометить строки, условия которых совпали с предопределённым набором. */
-function markPredefinedRows(): void {
-  const ids = predefinedFilterIds(PREDEFINED_FILTERS, savedRows, canonicalDefinition);
-  for (const row of savedRows) row.predefined = ids.has(row.id);
+function markPredefinedRows(rows: SavedFilterRow[]): void {
+  const ids = predefinedFilterIds(PREDEFINED_FILTERS, rows, canonicalDefinition);
+  for (const row of rows) row.predefined = ids.has(row.id);
 }
 
-/** Слой (G6): `saved-filter.*` роутер гасит ключ — панель перечитывает список сама
- *  (прежнее поведение строки сохранённых отборов; диалог читает кэш при отрисовке). */
+/** Слой (G6): `saved-filter.*` роутер гасит ключ — панель перечитывает список сама. */
 let savedFiltersWired = false;
 function wireSavedFiltersToLayer(): void {
   if (savedFiltersWired) return;
   savedFiltersWired = true;
   onQueryInvalidated((prefix) => {
-    if (matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) void reloadSavedRows();
+    if (matchesKeyPrefix(prefix, queryKeys.savedFiltersAll())) void ensureSavedFilters().syncRealtime();
   });
 }
 
-/**
- * Записать текущий отбор (кнопка «Сохранить» футера). Имя изменено относительно
- * сохранённого — записываем КОПИЮ (элемент ca905fbc); имя совпало с существующим
- * отбором — обновляем его.
- */
-async function saveFilter(request: { name: string; asCopy: boolean }): Promise<void> {
-  const name = request.name.trim();
-  if (name === '') {
-    notice('Введите имя отбора');
-    return;
-  }
-  const definition = buildSavedDefinition();
-  try {
-    await reloadSavedRows();
-    const existing = savedRows.find((row) => row.name.toLowerCase() === name.toLowerCase());
-    const target = request.asCopy ? undefined : existing;
-    if (target !== undefined) {
-      await etn.savedFilters.update(requireNetworkId(), target.id, {
-        name,
-        definition,
-      });
-      state.savedFilterId = target.id;
-    } else {
-      const created = await etn.savedFilters.create(requireNetworkId(), {
-        name,
-        definition,
-      });
-      state.savedFilterId = created.id;
-    }
-  } catch (err) {
-    errorDialog('Сохранить отбор', err);
-    return;
-  }
-  filterName = name;
-  savedFilterName = name;
-  savedDefinition = definition;
-  callbacks?.onStatePersist();
-  editor?.refresh();
-  notice(`Отбор «${name}» сохранён`);
+/** Записать текущий отбор (кнопка «Сохранить» футера). */
+function saveFilter(request: { name: string; asCopy: boolean }): void {
+  void ensureSavedFilters().save(request);
 }
 
 /** Открыть общий диалог выбора сохранённого отбора (кнопка «Отборы…»). */
-async function openSavedPicker(): Promise<void> {
-  await reloadSavedRows();
-  await seedPredefinedFilters();
-  // Перечитывание списка в ходе диалога: предопределённые наборы ВНУТРИ сессии
-  // не досоздаются (посев — только при открытии); метка пересчитывается.
-  const reload = async (): Promise<void> => {
-    await reloadSavedRows();
-    markPredefinedRows();
-  };
-  openSavedFilterDialog({
-    entries: () => savedRows,
-    selectedId: () => state.savedFilterId,
-    onPick: (entry) => applySavedFilter(entry),
-    onRename: async (entry) => {
-      const name = (await promptDialog('Переименовать отбор', 'Имя', entry.name) ?? '').trim();
-      if (name === '' || name === entry.name) return null;
-      try {
-        await etn.savedFilters.update(requireNetworkId(), entry.id, { name });
-      } catch (err) {
-        errorDialog('Переименовать отбор', err);
-        return null;
-      }
-      await reload();
-      if (state.savedFilterId === entry.id) {
-        filterName = name;
-        savedFilterName = name;
-        editor?.refresh();
-      }
-      return name;
-    },
-    onCopy: async (entry) => {
-      const copyName = duplicateFilterName(
-        entry.name,
-        savedRows.map((row) => row.name),
-      );
-      try {
-        const created = await etn.savedFilters.create(requireNetworkId(), {
-          name: copyName,
-          definition: entry.definition as SavedFilterCriteria,
-        });
-        await reload();
-        return created.id;
-      } catch (err) {
-        errorDialog('Скопировать отбор', err);
-        return null;
-      }
-    },
-    onDelete: async (entry) => {
-      const confirmed = await confirmDialog(
-        'Удалить отбор',
-        `Удалить сохранённый отбор «${entry.name}»?`,
-        true,
-      );
-      if (!confirmed) return;
-      try {
-        await etn.savedFilters.remove(requireNetworkId(), entry.id);
-      } catch (err) {
-        errorDialog('Удалить отбор', err);
-        return;
-      }
-      if (state.savedFilterId === entry.id) {
-        state.savedFilterId = null;
-        savedFilterName = null;
-      }
-      await reload();
-      callbacks?.onStatePersist();
-    },
-    onRefresh: reload,
-  });
+function openSavedPicker(): void {
+  void ensureSavedFilters().openPicker();
 }
 
-/** Показать пользователю только отборы, подходящие под запрос поиска (диалог сам фильтрует). */
 /**
  * Применить сохранённый отбор к панели и выполнить запрос. Определение читает
  * ЕДИНЫЙ конвертер (`parseFilterDefinitionTree`) — прежний плоский отбор

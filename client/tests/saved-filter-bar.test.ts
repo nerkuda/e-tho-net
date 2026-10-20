@@ -229,20 +229,30 @@ describe('диалог выбора сохранённого отбора (за�
   });
 });
 
-describe('однообразие: «Хроника» работает с отборами как «Структуры» (задача 2ebe4206)', () => {
-  it('обе панели работают с отборами общими модулями, каждая со своим видом хранилища', () => {
+describe('однообразие: три места работают с отборами общими модулями (0.13.3)', () => {
+  it('«Структуры», «Дневник» и «События» используют общий контроллер, каждый со своим видом', () => {
     const structures = readText(STRUCTURES_PANEL);
     const chronicle = readText(CHRONICLE_PANEL);
-    // Обе панели (задачи 213bd2d2 и 608ecb79) перешли на единый редактор: имя и
-    // запись отбора — в общем футере (`lib/filter-editor.ts` → `filter-footer.ts`),
-    // выбор — общий диалог-список того же модуля сохранённых отборов. Своего
-    // списка у панелей по-прежнему нет (см. следующий тест).
-    assert.match(structures, /openSavedFilterDialog\(\{/, '«Структуры» используют общий диалог отборов');
-    assert.match(chronicle, /openSavedFilterDialog\(\{/, '«Хроника» использует тот же диалог');
+    const activity = readText(ACTIVITY_TS);
+    // Все три места перешли на единый редактор: имя и запись отбора — в общем
+    // футере (`lib/filter-editor.ts` → `filter-footer.ts`), а перечитывание
+    // списка, сохранение и диалог выбора — в ОДНОМ контроллере
+    // (`lib/saved-filter-controller.ts`). Третьей копии блока нет.
+    for (const [name, source] of [
+      ['structures', structures],
+      ['chronicle', chronicle],
+      ['events', activity],
+    ] as const) {
+      assert.match(
+        source,
+        /createSavedFilterController\(/,
+        `${name}: общий контроллер сохранённых отборов`,
+      );
+      assert.match(source, /buildFilterEditor\(\{/, `${name}: общий редактор с футером`);
+    }
     assert.match(structures, /etn\.savedFilters\./, 'хранилище «Структур» — view=structures');
-    assert.match(chronicle, /etn\.chronicleFilters\./, 'хранилище «Хроники» — view=chronicle');
-    assert.match(structures, /buildFilterEditor\(\{/, 'редактор «Структур» — общая фабрика с футером');
-    assert.match(chronicle, /buildFilterEditor\(\{/, 'редактор «Хроники» — общая фабрика с футером');
+    assert.match(chronicle, /etn\.chronicleFilters\./, 'хранилище «Дневника» — view=chronicle');
+    assert.match(activity, /etn\.activityFilters\./, 'хранилище «Событий» — view=events');
   });
 
   it('своего списка сохранённых отборов у экранов больше нет', () => {
@@ -253,12 +263,34 @@ describe('однообразие: «Хроника» работает с отб�
     }
   });
 
-  it('«События» строку сохранённых отборов не показывают осознанно', () => {
-    // Решение: у «Событий» нет сохранённых отборов ни в спеке, ни на сервере
-    // (`SAVED_FILTER_VIEWS = ['structures','chronicle']`). Экран подключает
-    // только общий каркас (скрываемость/положение/размер), но не строку.
+  it('«События»: стандартный футер с секцией имени и сохранёнными отборами', () => {
+    // 0.13.3, задача c0c7b834: у «Событий» появились личные сохранённые отборы
+    // (`view=events`). Экран подключает СТАНДАРТНЫЙ набор футера и секцию имени,
+    // свои `apply`/`clear` убраны.
     const activity = readText(ACTIVITY_TS);
-    assert.ok(!activity.includes('buildSavedFilterBar'), 'строка сохранённых отборов «Событиям» не подключена');
-    assert.match(activity, /mountFilterPanelFrame\(\{/, 'но общий каркас панели «События» используют');
+    assert.match(activity, /createSavedFilterController\(/, 'общий контроллер отборов');
+    assert.match(activity, /etn\.activityFilters\./, 'хранилище вида events');
+    assert.match(activity, /getName: \(\) => filterName/, 'секция имени футера подключена');
+    assert.match(activity, /savedName: \(\) => savedFilterName/, 'имя сохранённого отбора');
+    assert.match(activity, /baseline: \(\) => savedDefinition/, 'снимок для маркера ●');
+    assert.match(
+      activity,
+      /place: 'name'/,
+      'кнопка «Отборы…» — в нижнем ряду, рядом с именем',
+    );
+    // Saving/current — без сортировки: иначе ● горит всегда.
+    assert.match(
+      activity,
+      /current: \(\) => buildFilterAst\(filter, \{ profile: 'events', sort: false \}\)/,
+      'current строится с sort: false',
+    );
+    assert.match(
+      activity,
+      /buildDefinition: \(\) => buildFilterAst\(filter, \{ profile: 'events', sort: false \}\)/,
+      'сохраняемое определение — с sort: false',
+    );
+    assert.ok(!activity.includes("id: 'apply'"), 'своя кнопка «Применить» убрана — стандартный набор');
+    assert.ok(!activity.includes("id: 'clear'"), 'своя кнопка «Очистить» убрана — стандартный набор');
+    assert.match(activity, /mountFilterPanelFrame\(\{/, 'общий каркас панели сохранён');
   });
 });

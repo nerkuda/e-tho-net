@@ -46,6 +46,9 @@
 
 import {
   AST_OPERATOR_DESCRIPTIONS,
+  FILTER_LINK_EDGE_STATE_LABELS,
+  FILTER_LINK_EDGE_STATE_UI_DEFAULT,
+  FILTER_LINK_EDGE_STATES,
   getFilterProfile,
   typeNameKey,
   type FilterAstEntity,
@@ -78,6 +81,7 @@ import {
   FILTER_COLLECTION_PREDICATE_KINDS,
   filterLeafDefaultValue,
   filterLeafImplicitOperator,
+  filterOperandDefaultOperator,
   filterOperandLabel,
   filterProfileOperands,
   filterProfileOperators,
@@ -108,6 +112,7 @@ import { confirmFilterSubqueryReset } from './filter-subquery.js';
 // и не грузится в юнит-тестах и на клиентском DOM-шиме. Правила `lib/ui`
 // (без голого вендора, единый вид) соблюдены — используются только фасады.
 import { uiButton, iconButton } from './ui/button.js';
+import { checkboxRow, choiceGroup } from './ui/choice-row.js';
 import { fieldInput, wrapClearable } from './ui/field.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
@@ -352,10 +357,16 @@ export function filterTreeCloneNode(node: FilterTreeNode): FilterTreeNode {
   return clone;
 }
 
-/** Клон операнда листа (массивы `scope` — новые). */
+/** Клон операнда листа (массивы `scope`/`states` — новые). */
 function cloneFilterTreeOperand(entity: FilterTreeOperand): FilterTreeOperand {
   if (entity.kind === 'keywords' && entity.scope !== undefined) {
     return { ...entity, scope: [...entity.scope] };
+  }
+  if (
+    (entity.kind === 'incoming_links' || entity.kind === 'outgoing_links') &&
+    entity.states !== undefined
+  ) {
+    return { ...entity, states: [...entity.states] };
   }
   return { ...entity };
 }
@@ -862,6 +873,10 @@ const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
   // выше; требование заказчика 2026-10-14, ошибка 4258e694, п.1).
   parents: 'arrow-down',
   children: 'arrow-up',
+  // Наличие рёбер любого типа (требование 60db9614): входящие — «приходит в
+  // мысль» (вниз), исходящие — «уходит из мысли» (вверх).
+  incoming_links: 'arrow-down',
+  outgoing_links: 'arrow-up',
   attachments: 'copy-text',
   chronology: 'quote',
   comment: 'html-comment',
@@ -1011,6 +1026,12 @@ function defaultEntityForKind(kind: FilterAstEntityKind): FilterAstEntity {
       const scope: ('title' | 'synonyms' | 'comment')[] = ['title', 'synonyms', 'comment'];
       return { kind, scope } as FilterAstEntity;
     }
+    case 'incoming_links':
+    case 'outgoing_links':
+      // UI-дефолт пишется в `states` ЯВНО: wire-дефолт (нет поля) — ВСЕ
+      // состояния, а редактор по умолчанию корзину не учитывает (требование
+      // 60db9614).
+      return { kind, states: [...FILTER_LINK_EDGE_STATE_UI_DEFAULT] };
     default:
       return { kind } as FilterAstEntity;
   }
@@ -1623,6 +1644,37 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     return leaf;
   };
 
+  /**
+   * Полоса чекбоксов состояний РЕБРА под строкой условия «Есть входящие
+   * связи»/«Есть исходящие связи» (требование 60db9614). Подписи и порядок —
+   * общий словарь `@etn/shared`; контролы — фасады `lib/ui`
+   * (`choiceGroup`/`checkboxRow`), своих чекбоксов нет. Снятие всех флагов —
+   * пустой `states`: по контракту это «все состояния»; после перечитывания
+   * пустой набор нормализуется во все отмеченные.
+   */
+  const renderEdgeStatesRow = (leaf: FilterTreeLeaf): HTMLElement => {
+    const entity = leaf.entity;
+    const group = choiceGroup('ft-link-states');
+    if (entity.kind !== 'incoming_links' && entity.kind !== 'outgoing_links') return group;
+    const selected = new Set(entity.states ?? []);
+    for (const state of FILTER_LINK_EDGE_STATES) {
+      const row = checkboxRow({
+        label: FILTER_LINK_EDGE_STATE_LABELS[state],
+        checked: selected.has(state),
+        onChange: (checked) => {
+          const current = new Set(entity.states ?? []);
+          if (checked) current.add(state);
+          else current.delete(state);
+          entity.states = FILTER_LINK_EDGE_STATES.filter((value) => current.has(value));
+          touch();
+        },
+      });
+      row.input.classList.add('ft-link-states__check');
+      group.append(row.row);
+    }
+    return group;
+  };
+
   const model = (): FilterTreeGroup => ensureTree();
 
   // -----------------------------------------------------------------------
@@ -2232,12 +2284,26 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
               const entry = entries.find((item) => item.key === key);
               if (entry === undefined) return;
               const apply = (): void => {
-                leaf.entity = entry.entity;
+                const previous = leaf.entity;
+                // Копия, а не объект каталога: строка вправе менять `states`, не
+                // задевая заготовки списка «Что».
+                leaf.entity = { ...entry.entity };
+                // Оба операнда наличия рёбер делят один набор состояний:
+                // переключение «входящие ↔ исходящие» флаги НЕ сбрасывает
+                // (требование 60db9614).
+                if (
+                  (previous.kind === 'incoming_links' || previous.kind === 'outgoing_links') &&
+                  (leaf.entity.kind === 'incoming_links' || leaf.entity.kind === 'outgoing_links')
+                ) {
+                  leaf.entity.states = previous.states === undefined ? undefined : [...previous.states];
+                }
                 // Смена операнда сбрасывает значение: прежнее к новому операнду
                 // не относится (то же правило, что у плоской панели).
                 leaf.value = { kind: 'none' };
                 const ops = filterProfileOperators(ctx.profile, entry.entity.kind, entry.valueType);
-                if (ops.length > 0 && !ops.includes(leaf.operator)) leaf.operator = ops[0]!;
+                if (ops.length > 0 && !ops.includes(leaf.operator)) {
+                  leaf.operator = filterOperandDefaultOperator(entry.entity.kind, ops) ?? ops[0]!;
+                }
                 // Неявное значение предиката («Актуальность» «= да») — в модель,
                 // иначе подпись «условие без значения» останется висеть (п.3).
                 normalizeLeafValue(leaf);
@@ -2350,6 +2416,12 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       valueBox.querySelector(`.${FILTER_VALUE_MODE_HOOK}`)?.remove();
     }
     row.append(valueBox);
+
+    // Состояния РЕБРА — второй полосой под условием (требование 60db9614):
+    // флаги относятся только к ребру, не к мысли на другом конце.
+    if (leaf.entity.kind === 'incoming_links' || leaf.entity.kind === 'outgoing_links') {
+      row.append(renderEdgeStatesRow(leaf));
+    }
 
     // Приёмник перетаскиваемого значения на ВСЕЙ строке условия (этап 3 задачи
     // 31b228f0): ближайший зарегистрированный предок побеждает приёмник панели

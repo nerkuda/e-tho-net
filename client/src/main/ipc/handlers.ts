@@ -631,6 +631,41 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- «События»: личные сохранённые отборы (0.13.3, задача c0c7b834) ------
+  handlers.set(
+    'activityFilters.list',
+    bind((networkId: string) => requireRest(deps).listActivityFilters(networkId)),
+  );
+  handlers.set(
+    'activityFilters.create',
+    bind((networkId: string, input: Parameters<RestClient['createActivityFilter']>[1]) =>
+      requireRest(deps).createActivityFilter(networkId, input, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+  handlers.set(
+    'activityFilters.update',
+    bind(
+      (
+        networkId: string,
+        filterId: string,
+        input: Parameters<RestClient['updateActivityFilter']>[2],
+      ) =>
+        requireRest(deps).updateActivityFilter(networkId, filterId, input, {
+          clientRequestId: randomUUID(),
+        }),
+    ),
+  );
+  handlers.set(
+    'activityFilters.remove',
+    bind((networkId: string, filterId: string) =>
+      requireRest(deps).deleteActivityFilter(networkId, filterId, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+
   // --- pinned thoughts (L18) ------------------------------------------------
   handlers.set(
     'pins.list',
