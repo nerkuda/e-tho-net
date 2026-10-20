@@ -912,6 +912,27 @@ describe('внетиповые строки: сторона и исключен�
     assert.notEqual(source, target, 'стороны одного property_id не схлопываются');
   });
 
+  it('определение внетиповой двухсторонней строки несёт сторону из значения (45248206)', async () => {
+    const { outsideLinkDefinition } = await internals();
+    // Именно этот объект `buildOutsideLinkCell` передаёт в `buildEditorCell`
+    // → `buildValueEditor`; снятие рёбер читает `definition.side`. Тест не
+    // передаёт сторону мимо пути построения — только серверную проекцию.
+    const target = outsideLinkDefinition(
+      linkValue('p-sym', 'target', 'in', 'Содержится в B'),
+      'thought',
+    );
+    assert.equal(target.side, 'target', 'сторона строки попала в определение');
+    assert.equal(target.key, 'Содержится в B');
+    assert.deepEqual(target.config, { link_type_id: 'lt1', direction: 'in' });
+
+    const source = outsideLinkDefinition(
+      linkValue('p-sym', 'source', 'out', 'Содержит A'),
+      'thought',
+    );
+    assert.equal(source.side, 'source');
+    assert.deepEqual(source.config, { link_type_id: 'lt1', direction: 'out' });
+  });
+
   it('уникальность по стороне сохраняется и у рёбер без реестрового свойства', async () => {
     const { outsideRowKey } = await internals();
     assert.equal(

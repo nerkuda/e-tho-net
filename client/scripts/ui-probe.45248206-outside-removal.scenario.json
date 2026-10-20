@@ -1,0 +1,104 @@
+{
+  "name": "45248206-outside-removal",
+  "description": "Регресс ошибки 45248206 (0.14.1): серверная внетиповая двухсторонняя строка свойства-связи. У мысли две живые связи одного реестрового свойства — исходящая (source) и входящая (target) на одну и ту же вторую мысль. «×» на target-строке обязан снять только target-ребро: source-строка и её ребро остаются. До фикса определение строки не несло side, и auto-снятие удаляло рёбра ОБЕИХ сторон.",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "seed-link-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "Содержит A",
+          "value_type": "link",
+          "name_forward": "Содержит A",
+          "name_reverse": "Содержится в B"
+        }
+      }
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-two-sided-links",
+      "probe": "(async () => { const other = await window.etn.thoughts.create('{{networkId}}', { title: 'Сосед' }); await window.etn.properties.set('{{networkId}}', 'thought', '{{thoughtId}}', 'Содержит A', other.id, 'source'); await window.etn.properties.set('{{networkId}}', 'thought', '{{thoughtId}}', 'Содержится в B', other.id, 'target'); return 'ok:' + other.id.length; })()",
+      "expect": "ok:36"
+    },
+    {
+      "name": "seeded-cloud-visible-after",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "editor-tabs-visible",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0"
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-rows-visible",
+      "waitFor": "(() => { const text=document.querySelector('.properties-outside-body')?.textContent ?? ''; return text.includes('Содержит A') && text.includes('Содержится в B'); })()"
+    },
+    {
+      "name": "rows-before",
+      "probe": "(() => { const text=[...document.querySelectorAll('.properties-outside-body tr')].map((r) => r.textContent); return { source: text.some((t) => t.includes('Содержит A')), target: text.some((t) => t.includes('Содержится в B')) }; })()",
+      "expect": { "source": true, "target": true }
+    },
+    {
+      "name": "server-before",
+      "api": {
+        "name": "server-before",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(Array.isArray(data) ? data : data.items).filter((v) => v.value_type === 'link' && v.outside_type === true).map((v) => v.side + ':' + (v.values ?? []).length).sort()"
+      },
+      "expect": ["source:1", "target:1"]
+    },
+    {
+      "name": "click-target-clear",
+      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const row=rows.find((r)=>r.textContent.includes('Содержится в B')); if(row === undefined) return 'no-row'; const btn=[...row.querySelectorAll('.link-value-corner-btn')].find((b)=>b.title==='Очистить значение'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "target-row-gone",
+      "waitFor": "(() => { const text=document.querySelector('.properties-outside-body')?.textContent ?? ''; return !text.includes('Содержится в B'); })()"
+    },
+    {
+      "name": "source-row-kept",
+      "probe": "(() => { const text=[...document.querySelectorAll('.properties-outside-body tr')].map((r) => r.textContent); return { source: text.some((t) => t.includes('Содержит A')), target: text.some((t) => t.includes('Содержится в B')) }; })()",
+      "expect": { "source": true, "target": false }
+    },
+    {
+      "name": "server-after",
+      "api": {
+        "name": "server-after",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(Array.isArray(data) ? data : data.items).filter((v) => v.value_type === 'link' && v.outside_type === true).map((v) => v.side + ':' + (v.values ?? []).length).sort()"
+      },
+      "expect": ["source:1"]
+    }
+  ]
+}

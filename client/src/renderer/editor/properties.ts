@@ -1108,6 +1108,42 @@ function fillPendingOutsideRow(
 }
 
 /**
+ * Определение внетипового свойства-связи из серверной проекции значения.
+ * Сторона переносится из самой строки: у двухстороннего свойства обе стороны
+ * несут один `property_id` (ошибка 45248206), и без `side` снятие рёбер
+ * совпадает с обеими сторонами. Ограничения типов у внетипового значения нет
+ * (`allowed_opposite_type_ids` не задан) — внетиповое значение возникает как
+ * раз тогда, когда привязок к типу владельца нет (модель dde92461).
+ */
+function outsideLinkDefinition(
+  value: LinkPropertyValues,
+  ownerType: 'thought' | 'link',
+): EffectiveTypeProperty {
+  const side = linkSideOf(value);
+  return {
+    id: value.property_id,
+    property_id: value.property_id,
+    owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
+    owner_id: '',
+    key: value.property_name,
+    value_type: 'link',
+    config: value.link_type_id !== null
+      ? { link_type_id: value.link_type_id, direction: sideDirection(side) }
+      : { direction: sideDirection(side), structural: true },
+    required: false,
+    position: 0,
+    description: value.description ?? null,
+    inherited: false,
+    defined_on: '',
+    defined_on_name: '',
+    default_value: null,
+    overridden_here: false,
+    description_overridden: false,
+    side,
+  };
+}
+
+/**
  * Ячейка внетипового свойства-связи. Свойство есть в реестре (не подключено
  * к типу владельца) — полноценный редактор значения через общий
  * `buildValueEditor`, тот же, что в основной таблице: запись значения
@@ -1124,33 +1160,11 @@ function buildOutsideLinkCell(
   onRemove: () => void,
 ): HTMLElement {
   if (value.property_id !== '') {
-    // Внетиповое свойство-связь: определение собирается на лету по ребру,
-    // ограничения типов у него нет (`allowed_opposite_type_ids` не задан) —
-    // внетиповое значение возникает как раз тогда, когда привязок к типу
-    // владельца нет, значит фильтровать кандидатов нечем (модель dde92461).
-    // Сторона передаётся в запись/удаление: у симметричного типа связи имена
-    // обеих сторон одинаковы (аудит цикл 2 требования 87039bc8).
+    // Сторона входит в определение и уходит в редактор значения: и запись,
+    // и снятие рёбер адресуют сторону строки (аудит цикл 2 требования
+    // 87039bc8, ошибка 45248206).
     const side = linkSideOf(value);
-    const definition: EffectiveTypeProperty = {
-      id: value.property_id,
-      property_id: value.property_id,
-      owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
-      owner_id: '',
-      key: value.property_name,
-      value_type: 'link',
-      config: value.link_type_id !== null
-        ? { link_type_id: value.link_type_id, direction: sideDirection(side) }
-        : { direction: sideDirection(side), structural: true },
-      required: false,
-      position: 0,
-      description: value.description ?? null,
-      inherited: false,
-      defined_on: '',
-      defined_on_name: '',
-      default_value: null,
-      overridden_here: false,
-      description_overridden: false,
-    };
+    const definition = outsideLinkDefinition(value, ownerType);
     const cell = buildEditorCell({
       networkId,
       ownerType,
@@ -1701,6 +1715,7 @@ export const propertiesInternals = {
   buildPropertiesBody,
   buildOutsideTypeTable,
   buildOutsidePropertiesBody,
+  outsideLinkDefinition,
   outsideRowKey,
   presentPropertyRowIds,
 };
