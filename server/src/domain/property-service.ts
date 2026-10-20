@@ -72,6 +72,7 @@ export type { PropertyUsageBinding, PropertyUsageReport, RegistryPropertyCounter
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
+import { reorderOutsideTypeProperties } from './property-order.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
 import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
@@ -3269,6 +3270,8 @@ interface PropertyValueRow {
   value_number: number | null;
   value_bool: number | null;
   value_thought_ref: string | null;
+  /** Время появления значения у владельца (0.14.1, миграция 051). */
+  created_at: string;
   updated_at: string;
   created_by: string;
   updated_by: string;
@@ -3412,8 +3415,13 @@ function ownerTable(ownerType: PropertyOwnerType): 'thoughts_v' | 'links_v' {
  * thoughts: it only feeds the `outside_type` flag and the unchanged link-owner
  * contract (`/links/{id}/properties` still requires an attached property). An
  * untyped owner sees the root type's bindings (docs/08-ui-spec.md §8.1).
+ *
+ * Экспортируется для пер-мысленного порядка внетиповых (0.14.1, задача
+ * 3948af62): типовое скалярное свойство упорядочивать нельзя — его место
+ * задаёт привязка. Зеркала `allowed_target_type_ids` сюда не входят: для
+ * свойств-связей порядок проверяет эффективный набор (listThoughtLinkProperties).
  */
-function attachedPropertyIds(
+export function attachedPropertyIds(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
@@ -4049,6 +4057,9 @@ export function getPropertyValuesWithLinks(
         values: getLinkPropertyValues(ndb, ownerType, ownerId, lp.link_type_id, lp.direction),
       });
     }
+    // 0.14.1 (контракт 27ed2b39): эффективный порядок внетиповых — явные
+    // позиции, хвост по времени появления свойства у мысли.
+    reorderOutsideTypeProperties(ndb, ownerId, out);
   }
   return out;
 }
@@ -4179,6 +4190,9 @@ export function getPropertyValuesResolved(
     for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
       out.push(lp);
     }
+    // 0.14.1 (контракт 27ed2b39): карточка MCP отдаёт внетиповые свойства в
+    // эффективном порядке.
+    reorderOutsideTypeProperties(ndb, ownerId, out);
   }
   return out;
 }
@@ -4955,6 +4969,7 @@ function setPropertyValueForProperty(
   // ОДИН id, поэтому представления `*_v`, дедуплицирующие по id, видят одну
   // строку на natural key, а не «призрака» с чужим значением.
   const id = propertyValueId(ownerType, ownerId, prop.id);
+  const createdAt = now;
   // S5 (13-layers.md §5.1): the visible row for this natural key is shadowed
   // FIRST — writing into this layer while an ancestor row stays live would
   // break the «one value per (owner, property)» invariant of §3.5. Resolved
@@ -4974,8 +4989,8 @@ function setPropertyValueForProperty(
   ndb
     .prepare(
       `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at,
-                                   created_by, updated_by, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   created_at, created_by, updated_by, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
          deleted = 0,
          value_text = NULL,
@@ -4988,7 +5003,23 @@ function setPropertyValueForProperty(
          updated_by = excluded.updated_by,
          updated_at_ms = excluded.updated_at_ms`,
     )
-    .run(id, ndb.layerId, ownerType, ownerId, prop.id, raw, now, actorUserId, actorUserId, nowMs, nowMs);
+    .run(
+      id,
+      ndb.layerId,
+      ownerType,
+      ownerId,
+      prop.id,
+      raw,
+      now,
+      // `created_at` — время ПОЯВЛЕНИЯ значения и при правке не меняется
+      // (0.14.1, задача 3948af62): upsert его не трогает, при конфликте
+      // остаётся значение первого INSERT.
+      createdAt,
+      actorUserId,
+      actorUserId,
+      nowMs,
+      nowMs,
+    );
 
   // Кросс-сетевая ссылка (задача 7849008a): запись значения идёт с одним
   // живым резолвом в чужую сеть (требование aa89940c). Снапшот имени

@@ -2321,6 +2321,37 @@ export const RestPropertyDelete = defineContract(
 );
 
 /**
+ * PUT …/thoughts/{id}/properties/order — полный набор порядка внетиповых
+ * свойств (0.14.1, задача 3948af62; контракт 27ed2b39). Тело
+ * `{ items: [{ property_id, side?, position }] }`; отсутствующие строки
+ * удаляются, позиции нормализуются в `0..n-1`. `side` обязателен только когда
+ * у владельца живы обе стороны одного типа связи; сервер выводит и сверяет
+ * сторону из живых рёбер.
+ */
+export const RestThoughtPropertiesOrder = defineContract(
+  'rest:thoughts.properties.order',
+  z.object({
+    network_id: NetworkId,
+    owner_id: z.string().min(1),
+    items: z
+      .array(
+        z
+          .object({
+            property_id: z.string().min(1),
+            side: z.enum(LINK_PROPERTY_SIDES).optional(),
+            position: z.number().min(0),
+          })
+          .strict(),
+      ),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    owner_id: { from: { kind: 'param', name: 'id' } },
+    items: { from: { kind: 'body' } },
+  },
+);
+
+/**
  * POST …/properties/:key/cross-resolve — явный резолв значений вида
  * «кросс-сетевая ссылка» (задача 7849008a, требование 95511443,
  * спека операции 737ed900). Тело пустое; ответ — массив обновлённых

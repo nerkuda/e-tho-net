@@ -2,6 +2,7 @@
  * Property-value routes (task D4, 03-server-api.md §9).
  *
  *   GET    /networks/:networkId/thoughts/:id/properties                            — list values
+ *   PUT    /networks/:networkId/thoughts/:id/properties/order                      — full order set
  *   PUT    /networks/:networkId/thoughts/:id/properties/:key                       — upsert by key
  *   DELETE /networks/:networkId/thoughts/:id/properties/:key                       — remove by key
  *   POST   /networks/:networkId/thoughts/:id/properties/:key/cross-resolve        — cross-network resolve
@@ -39,6 +40,7 @@ import {
   getPropertyValuesWithLinks,
   setPropertyValue,
 } from '../domain/property-service.js';
+import { setThoughtPropertyOrder } from '../domain/property-order-service.js';
 import type { CrossNetworkAccessContext } from '../domain/cross-network-ref-service.js';
 import { getAccessibleNetworkIdsForUser } from './helpers.js';
 import { getThought } from '../domain/thought-service.js';
@@ -49,6 +51,7 @@ import {
   RestPropertyDelete,
   RestPropertyList,
   RestPropertyPut,
+  RestThoughtPropertiesOrder,
 } from '../contracts.js';
 
 /** `/api/v1/networks*` property-value routes plugin factory. */
@@ -255,6 +258,35 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         },
       );
     };
+
+    // PUT …/thoughts/:id/properties/order — полный набор пер-мысленного
+    // порядка внетиповых свойств (0.14.1, задача 3948af62, контракт 27ed2b39).
+    // Статический сегмент `order` приоритетнее `:key` в роутере Fastify; тем
+    // не менее регистрируем явно ДО общего набора — адрес не должен зависеть
+    // от порядка регистрации.
+    app.put(
+      '/networks/:networkId/thoughts/:id/properties/order',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestThoughtPropertiesOrder, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const ordered = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
+          const items = setThoughtPropertyOrder(ndb, input.owner_id, input.items);
+          return {
+            result: items,
+            // Полный набор — ОДНО событие с вычисленными сервером сторонами
+            // (каталог d819137a, задача 3948af62).
+            events: [
+              {
+                type: 'thought.properties.reordered' as const,
+                data: { thought_id: input.owner_id, items },
+              },
+            ],
+          };
+        });
+        sendSuccess(reply, { items: ordered });
+      },
+    );
 
     registerOwnerRoutes('/networks/:networkId/thoughts/:id', 'thought');
     registerOwnerRoutes('/networks/:networkId/links/:id', 'link');

@@ -56,6 +56,7 @@ const EXPECTED_TABLES = [
   'publication_exclusions',
   'shelves',
   'shelf_items',
+  'thought_property_order',
   'user_preferences',
   'thought_views',
   'user_focus_preferences',

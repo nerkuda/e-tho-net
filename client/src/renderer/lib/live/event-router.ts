@@ -671,6 +671,10 @@ export const IGNORED_REALTIME_EVENT_TYPES: readonly RealtimeEventType[] = [
   'edit.released',
   'edit.cleared',
   'thought-type-view.run',
+  // 0.14.1 (задача 3948af62): событие серверной части порядка внетиповых
+  // свойств. Клиентский обработчик — отдельная задача Z7; до неё тип обязан
+  // быть перечислен явно, иначе сторож reactive-layer молча пропустит его.
+  'thought.properties.reordered',
 ];
 
 /** Быстрый поиск по {@link IGNORED_REALTIME_EVENT_TYPES}. */

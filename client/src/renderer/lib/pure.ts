@@ -918,6 +918,7 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'thought.updated': 'изменена мысль',
   'thought.deleted': 'удалена мысль',
   'thought.reordered': 'изменён порядок мыслей',
+  'thought.properties.reordered': 'изменён порядок свойств',
   'link.created': 'создана связь',
   'link.updated': 'изменена связь',
   'link.deleted': 'удалена связь',

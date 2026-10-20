@@ -12,6 +12,7 @@ import type {
   CommentOwnerType,
   AttachmentOwnerType,
   FocusDir,
+  LinkPropertySide,
   NetworkRole,
   PropertyOwnerType,
   RealtimeAudience,
@@ -70,6 +71,8 @@ export const REALTIME_EVENT_TYPES = [
   'thought.updated',
   'thought.deleted',
   'thought.reordered',
+  // порядок внетиповых свойств мысли (0.14.1, задача 3948af62)
+  'thought.properties.reordered',
   // links (§4.2)
   'link.created',
   'link.updated',
@@ -314,6 +317,23 @@ export interface PropertyValueDeletedData {
   property_id: string;
 }
 
+/**
+ * Один элемент нормализованного набора порядка внетиповых свойств мысли
+ * (0.14.1, задача 3948af62; контракт 27ed2b39). `side` в событии ВСЕГДА
+ * присутствует: сервер вычислил сторону из живых рёбер; у скаляра — `null`.
+ */
+export interface ThoughtPropertiesReorderedItem {
+  property_id: string;
+  side: LinkPropertySide | null;
+  position: number;
+}
+
+/** `thought.properties.reordered` — полный набор порядка свойств мысли. */
+export interface ThoughtPropertiesReorderedData {
+  thought_id: string;
+  items: ThoughtPropertiesReorderedItem[];
+}
+
 // network & membership
 export interface NetworkUpdatedData {
   display_name?: string;
@@ -536,6 +556,7 @@ export interface RealtimeEventMap {
   'thought.updated': ThoughtUpdatedData;
   'thought.deleted': ThoughtDeletedData;
   'thought.reordered': ThoughtReorderedData;
+  'thought.properties.reordered': ThoughtPropertiesReorderedData;
   'link.created': LinkCreatedData;
   'link.updated': LinkUpdatedData;
   'link.deleted': LinkDeletedData;
@@ -641,6 +662,7 @@ export const REALTIME_EVENT_AUDIENCE = {
   'thought.updated': 'network',
   'thought.deleted': 'network',
   'thought.reordered': 'user',
+  'thought.properties.reordered': 'network',
   'link.created': 'network',
   'link.updated': 'network',
   'link.deleted': 'network',

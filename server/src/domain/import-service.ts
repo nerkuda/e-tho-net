@@ -1023,13 +1023,20 @@ function insertPropertyValue(
   const column = columnFor(value);
   const raw = coerce(value);
   const id = propertyValueId(pv.owner_type, resolvedOwnerId, pv.property_id);
+  // 0.14.1 (задача 3948af62): `created_at` — время появления значения.
+  // Архив несёт `created_at_ms`, если запись его знала; иначе (старые архивы)
+  // единственная доступная отметка — `updated_at`.
+  const createdAt =
+    typeof pv.created_at_ms === 'number' && pv.created_at_ms > 0
+      ? new Date(pv.created_at_ms).toISOString()
+      : pv.updated_at;
   ndb
     .prepare(
       `INSERT INTO property_values (
          id, owner_type, owner_id, property_id,
          value_text, value_date, value_number, value_bool,
-         updated_at
-       ) VALUES (?, ?, ?, ?, ${colInit(column)}, ?)
+         updated_at, created_at
+       ) VALUES (?, ?, ?, ?, ${colInit(column)}, ?, ?)
        ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
          value_text = NULL,
          value_date = NULL,
@@ -1045,6 +1052,7 @@ function insertPropertyValue(
       pv.property_id,
       ...colArgs(column, raw),
       pv.updated_at,
+      createdAt,
     );
 }
 

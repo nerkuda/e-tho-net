@@ -556,6 +556,12 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
         ref(ownerTableOf(r.owner_type), r.owner_id),
         ref('properties', r.property_id), // 0.6.5: значение ссылается на справочник, не на привязку
       ]);
+    // Порядок внетиповых свойств (0.14.1, задача 3948af62): строка без живой
+    // мысли-владельца бессмысленна. `property_id` намеренно НЕ замыкается:
+    // по ADR 75a79109 позиции переживают перенос свойства в типы/из типов, а
+    // исчезнувшее свойство оставляет безвредный хвост.
+    case 'thought_property_order':
+      return compact([ref('thoughts', r.thought_id)]);
     case 'comments':
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
     case 'comment_targets':

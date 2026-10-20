@@ -110,6 +110,9 @@ export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string
   // owns the cleanup.
   ndb.prepare('DELETE FROM links WHERE source_id = ? OR target_id = ?').run(thoughtId, thoughtId);
   ndb.prepare('DELETE FROM thought_synonyms WHERE thought_id = ?').run(thoughtId);
+  // Пер-мысленный порядок внетиповых свойств (0.14.1, задача 3948af62):
+  // строки — содержательное знание мысли и живут ровно столько же, сколько она.
+  ndb.prepare('DELETE FROM thought_property_order WHERE thought_id = ?').run(thoughtId);
   ndb.prepare('DELETE FROM thought_views WHERE thought_id = ?').run(thoughtId);
   ndb.prepare('DELETE FROM user_focus_preferences WHERE focus_thought_id = ?').run(thoughtId);
   ndb
@@ -209,6 +212,15 @@ function tombstoneChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]
         .all(...ownerIds) as { id: string }[]
     ).map((r) => r.id);
     for (const synonymId of synonymIds) materializeTombstone(ndb, 'thought_synonyms', synonymId);
+
+    // Порядок внетиповых свойств (0.14.1, задача 3948af62): надгробие ставится
+    // видимым в этом слое строкам — ровно как значениям и синонимам.
+    const orderIds = (
+      ndb
+        .prepare(`SELECT id FROM thought_property_order_v WHERE thought_id IN (${owners})`)
+        .all(...ownerIds) as { id: string }[]
+    ).map((r) => r.id);
+    for (const orderId of orderIds) materializeTombstone(ndb, 'thought_property_order', orderId);
   }
 }
 
