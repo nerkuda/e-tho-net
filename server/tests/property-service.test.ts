@@ -183,14 +183,14 @@ describe(
       }
     });
 
-    it('returns NOT_FOUND when the property is not defined on the type', () => {
+    it('rejects a key absent from the registry with VALIDATION_ERROR (0.14.1)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'Plain' }, USER);
         const thought = seedTypedThought(ndb, tt.id);
         assert.throws(
           () => setPropertyValue(ndb, 'thought', thought, 'missing', 'x', USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
       } finally {
         ndb.close();
@@ -278,9 +278,10 @@ describe(
         updateTypeProperty(ndb, prop.id, { key: 'new' }, USER);
         // The value is addressed by the new key and still there.
         assert.equal(getPropertyValues(ndb, 'thought', thought)[0]!.value, 'kept');
+        // Старое имя исчезло из справочника — запись по нему 422 (0.14.1).
         assert.throws(
           () => setPropertyValue(ndb, 'thought', thought, 'old', 'x', USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
       } finally {
         ndb.close();
@@ -1350,7 +1351,7 @@ describe(
       }
     });
 
-    it('type change keeps the value visible or flags it outside_type; writes follow the attachment', () => {
+    it('type change keeps the value visible or flags it outside_type; outside-type writes are allowed (0.14.1)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const withProp = createThoughtType(ndb, { name: 'Свойственный' }, USER);
@@ -1376,12 +1377,14 @@ describe(
           values.map((v) => [v.value, v.outside_type, v.property_name, v.value_type]),
           [[5, true, 'оценка', 'number']],
         );
-        // Writing it is rejected with 422; deleting it works (the only action
-        // available for an outside-type value).
-        assert.throws(
-          () => setPropertyValue(ndb, 'thought', th, 'оценка', 6, USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        // 0.14.1 (ADR cb95fb4e): правка внетипового значения разрешена.
+        const edited = setPropertyValue(ndb, 'thought', th, 'оценка', 6, USER);
+        assert.equal(edited.outside_type, true, 'запись честно помечена outside_type');
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', th).map((v) => [v.value, v.outside_type]),
+          [[6, true]],
         );
+        // И удаление работает для любого значения, включая вне типа.
         deletePropertyValue(ndb, 'thought', th, 'оценка', USER);
         assert.equal(getPropertyValues(ndb, 'thought', th).length, 0);
       } finally {

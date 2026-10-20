@@ -946,14 +946,14 @@ describe(
         });
         assert.equal(againRes.statusCode, 204);
 
-        // An UNKNOWN property key still 404s — that is an addressing error,
-        // not the idempotent no-op.
+        // An UNKNOWN property key is an addressing error — 422 (0.14.1: только
+        // отсутствие свойства в справочнике отвергается), не idempotent no-op.
         const unknownRes = await ctx.app.inject({
           method: 'DELETE',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}/properties/нет-такого-свойства`,
           headers: h,
         });
-        assert.equal(unknownRes.statusCode, 404);
+        assert.equal(unknownRes.statusCode, 422);
       } finally {
         await closeRestContext(ctx);
       }

@@ -274,7 +274,7 @@ describe(
       }
     });
 
-    it('set возвращает в набор значение, чьё ребро в корзине, без сырой ошибки UNIQUE', () => {
+    it('set работает по живым рёбрам: цель в корзине не восстанавливается (0.14.1)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const lt = createLinkType(ndb, { name_forward: 'зависит от', name_reverse: 'используется в' }, USER);
@@ -292,10 +292,14 @@ describe(
         setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id, c.id], USER);
         // c уходит в корзину.
         setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id], USER);
-        // c возвращается в набор — ребро восстанавливается, а не падает.
-        setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id, c.id], USER);
+        // 0.14.1 (спека 906a29c9): set работает по ЖИВЫМ рёбрам — корзинная
+        // цель набором не восстанавливается (её возвращает только links.restore)
+        // и не удаляется; дубль не создаётся (уникальный индекс 029).
+        const echoed = setPropertyValue(ndb, 'thought', a.id, 'зависит от', [b.id, c.id], USER);
+        assert.deepEqual([echoed.value], [b.id], 'эхо — фактический живой набор');
         const values = getLinkPropertyValues(ndb, 'thought', a.id, lt.id, 'out');
-        assert.equal(values.length, 2);
+        assert.equal(values.length, 1);
+        assert.equal(values[0]!.target_id, b.id);
       } finally {
         ndb.close();
       }

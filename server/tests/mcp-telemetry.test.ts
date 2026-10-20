@@ -688,9 +688,14 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.13.1 (задача 8eaeba9a): см. блок выше — `first_day_of_week` в
         // описании `etn.networks.structure` дал +129 Б; D+I 40 232 → 40 361 Б.
         // Планка: 40 300 → 40 400.
+        // 0.14.1 (задача bd349082/Z1): `side` в контракте `etn.properties.add`
+        // (адрес стороны свойства-связи, спека 906a29c9) — прирост только
+        // `inputSchema` (+15 Б), проза инструментов намеренно не менялась
+        // (актуализация описаний — Z9). D+I 40 361 → 40 376 Б.
+        // Планка: 40 400 → 40 450 (малый запас).
         assert.ok(
-          descriptionsPlusInputSchema <= 40_400,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40400`,
+          descriptionsPlusInputSchema <= 40_450,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 40450`,
         );
       } finally {
         await handle.close();

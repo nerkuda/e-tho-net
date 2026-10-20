@@ -51,6 +51,7 @@ import {
   LAYER_DIFF_MAX_LIMIT,
   LAYER_DIFF_SECTIONS,
   LAYER_THOUGHT_MERGE_MODES,
+  LINK_PROPERTY_SIDES,
   LINK_STYLES,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
@@ -1332,6 +1333,12 @@ export const PropertiesAdd = defineContract(
     key: z.string().min(1),
     value: z.string().min(1),
     comment: z.string().min(1).optional(),
+    /**
+     * Адрес стороны свойства-связи (0.14.1, спека 906a29c9): нужен, когда имя
+     * адресует обе стороны симметричного типа связи и/или требуется создать
+     * отсутствующую у мысли сторону. Совпадает с `side` REST PUT.
+     */
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
   }),
   {},
 );
@@ -2266,7 +2273,13 @@ export const RestPropertyList = defineContract(
 /** PUT …/properties/:key — upsert значения (REST-сообщения прежние). */
 export const RestPropertyPut = defineContract(
   'rest:properties.put',
-  z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
+  z.object({
+    network_id: NetworkId,
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+    /** Адрес стороны свойства-связи (0.14.1, спека 906a29c9). */
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     owner_id: { from: { kind: 'param', name: 'id' } },
@@ -2280,17 +2293,24 @@ export const RestPropertyPut = defineContract(
       req: true,
       msg: 'Поле value обязательно.',
     },
+    side: { from: { kind: 'body' } },
   },
 );
 
-/** DELETE …/properties/:key — удаление значения. */
+/** DELETE …/properties/:key — удаление значения; `?side=` адресует сторону связи. */
 export const RestPropertyDelete = defineContract(
   'rest:properties.delete',
-  z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
+  z.object({
+    network_id: NetworkId,
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     owner_id: { from: { kind: 'param', name: 'id' } },
     key: { from: { kind: 'param' } },
+    side: { from: { kind: 'query' } },
   },
 );
 

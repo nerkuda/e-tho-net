@@ -58,6 +58,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
             args.value,
             args.comment ?? null,
             rt.deps.auth.userId,
+            args.side ?? null,
           );
           const createdLink = result.created ? getLink(ndb, result.link_id) : null;
           return {

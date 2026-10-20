@@ -8,9 +8,12 @@
  *   … and the same four under /networks/:networkId/links/:id/properties
  *
  * `PUT` is an upsert; the value is validated against the property definition
- * of the owner's type by the property service (unknown property → 404,
- * wrong-typed value → 422). The property key is addressed by path segment, so
- * an empty key cannot match the route; the service double-checks anyway.
+ * from the network registry and may target ANY registry property of a thought
+ * (0.14.1, ADR cb95fb4e: привязка к типу владельца не проверяется). An unknown
+ * property for a thought is `422 VALIDATION_ERROR`. `side` (0.14.1, спека
+ * 906a29c9) адресует сторону свойства-связи. The property key is addressed by
+ * path segment, so an empty key cannot match the route; the service
+ * double-checks anyway.
  *
  * `cross-resolve` (задача 7849008a, спека 737ed900) — служебная операция
  * явного резолва значений `cross_network_ref`: открывает целевые сети и
@@ -106,6 +109,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
               input.value as PropertyValueValue,
               req.auth!.user.id,
               crossCtx,
+              input.side ?? null,
             );
             // В журнал пишем обновление самой сущности-владельца (требование
             // b0c7a57c): смена значения свойства — это её операция.
@@ -161,6 +165,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
               input.owner_id,
               input.key,
               req.auth!.user.id,
+              input.side ?? null,
             );
             // Idempotent DELETE (error cefb4db0): nothing stored → no event or
             // owner-activity record — the call had no effect.

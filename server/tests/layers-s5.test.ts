@@ -388,12 +388,11 @@ describe(
           ],
         );
         assert.ok(layerValues.every((v) => v.property_name.length > 0));
-        // Writing it again is rejected with 422: the property exists in the
-        // registry but the layer's chain does not attach it.
-        assert.throws(
-          () => setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'слой', USER),
-          failsWith('VALIDATION_ERROR'),
-        );
+        // 0.14.1 (ADR cb95fb4e, требование ab06aa20): запись значения для
+        // свойства, отвязанного в слое, разрешена — значение становится
+        // штатным внетиповым (правка существующего тоже).
+        const rewritten = setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'слой', USER);
+        assert.equal(rewritten.outside_type, true, 'запись вне типа помечена outside_type');
 
         // Rename in the layer: values address the registry property id, so the
         // stored base value follows — new name in the layer.
@@ -404,7 +403,7 @@ describe(
         assert.deepEqual(
           getPropertyValues(ndb, 'thought', th.id).map((v) => [v.property_id, v.value]),
           [
-            [goneDef.property_id, 'основа-значение'],
+            [goneDef.property_id, 'слой'],
             [renamedDef.property_id, 'слоя-имя'],
           ],
         );
