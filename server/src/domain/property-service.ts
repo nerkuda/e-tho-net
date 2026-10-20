@@ -736,7 +736,10 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   }
 
   // 2. Зеркала: свойство-связь с allowed_target_type_ids, покрывающим тип мысли.
-  for (const prop of listNetworkProperties(ndb)) {
+  const registryLinkProperties = listNetworkProperties(ndb).filter(
+    (prop) => prop.value_type === 'link' && !isStructuralLinkProperty(prop.config ?? {}),
+  );
+  for (const prop of registryLinkProperties) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
     if (isStructuralLinkProperty(cfg)) continue;
@@ -764,6 +767,31 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
 
   const counts = linkEdgeCounts(ndb, thoughtId);
 
+  /**
+   * Реестровый id внетиповой проекции (ошибка 45248206): спека 906a29c9 требует
+   * `property_id` у каждого значения, включая вне типа. Ребро могло быть создано
+   * свойством из реестра, не привязанным к типу мысли (или обратной стороной
+   * симметричного типа) — id резолвится по типу связи, направлению и display-имени.
+   * `''` остаётся только для легаси-рёбер, у типа связи которых свойства в
+   * реестре действительно нет (ошибка e5cfacb9).
+   */
+  const resolveRegistryPropertyId = (
+    linkTypeId: string,
+    direction: LinkPropertyDirection,
+    displayName: string,
+  ): string => {
+    const sameType = registryLinkProperties.filter(
+      (prop) => linkPropertyLinkTypeId(prop.config) === linkTypeId,
+    );
+    const byDirection = sameType.find(
+      (prop) => linkPropertyDirection(prop.config) === direction,
+    );
+    if (byDirection !== undefined) return byDirection.id;
+    const byName = sameType.find((prop) => prop.name === displayName);
+    if (byName !== undefined) return byName.id;
+    return sameType.length === 1 ? sameType[0]!.id : '';
+  };
+
   // 3. Внетиповые: рёбра, чья пара (тип связи + направление) не покрыта
   //    явным/зеркальным свойством. Принадлежность типа связи реестру не
   //    проверяется: проекция «ребро → свойство» полная, и живое ребро обязано
@@ -771,8 +799,10 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   //    реестре (легаси-рёбра; ошибка e5cfacb9). Три источника внетиповых
   //    записей: обратная сторона свойства-связи без ограничения (dde92461),
   //    свойство-связь не из типа мысли (dfaacb05) и рёбра типов связей без
-  //    реестрового свойства — у всех property_id пуст, запись через ключ
-  //    реестра недоступна, только чтение и удаление самих рёбер.
+  //    реестрового свойства. `property_id` резолвится из реестра, когда тип
+  //    связи имеет свойство (ошибка 45248206); пустым остаётся только у
+  //    легаси-рёбер без реестрового свойства — запись через ключ там недоступна,
+  //    возможны чтение и удаление самих рёбер.
   for (const [pair, count] of counts) {
     if (count === 0) continue;
     const [linkTypeId, direction] = pair.split('|') as [string, LinkPropertyDirection];
@@ -781,12 +811,13 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       e.count = count;
       continue;
     }
+    const propertyName = linkPropertyDisplayName(ndb, linkTypeId, direction);
     putEntry({
-      property_id: '',
+      property_id: resolveRegistryPropertyId(linkTypeId, direction, propertyName),
       link_type_id: linkTypeId,
       direction,
       structural: false,
-      property_name: linkPropertyDisplayName(ndb, linkTypeId, direction),
+      property_name: propertyName,
       outside_type: true,
       description: null,
       required: false,
