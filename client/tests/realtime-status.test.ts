@@ -49,13 +49,18 @@ describe('renderer realtime status (de34b35b)', () => {
     });
   });
 
-  it('getRtStatus follows the active network and falls back to rtStatus', () => {
+  it('getRtStatus follows the active network and never borrows another network status', () => {
     store.update({
       rtStatusByNetwork: { [NET1]: 'connected', [NET2]: 'offline' },
+      rtStatus: 'offline',
     });
     assert.equal(getRtStatus(store.state), 'connected');
     store.update({ networkId: NET2 });
     assert.equal(getRtStatus(store.state), 'offline');
+    // No entry for the active network yet (tab just opened): neutral
+    // `connecting`, never the flat status of another network (verify remark 3).
+    store.update({ networkId: '33333333-4444-5555-6666-777777777777' });
+    assert.equal(getRtStatus(store.state), 'connecting');
     store.update({ networkId: null, rtStatus: 'idle' });
     assert.equal(getRtStatus(store.state), 'idle');
   });

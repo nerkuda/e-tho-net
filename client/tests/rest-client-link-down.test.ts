@@ -17,13 +17,14 @@ import { RestClient, networkIdFromApiPath } from '../src/main/net/rest-client.js
 
 const NET = '123e4567-e89b-12d3-a456-426614174000';
 
-function makeClient(fetchImpl: typeof fetch): RestClient {
+function makeClient(fetchImpl: typeof fetch, isServerDown?: () => boolean): RestClient {
   return new RestClient({
     baseUrl: 'http://localhost:3000',
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
     fetchImpl,
     random: () => 0,
+    ...(isServerDown === undefined ? {} : { isServerDown }),
   });
 }
 
@@ -134,5 +135,36 @@ describe('RestClient — link down (de34b35b)', () => {
       return true;
     });
     assert.equal(counter.calls, 1, 'caller abort не ретраится');
+  });
+
+  it('global gate: me.update / me.settings / networks.create send 0 fetch when the server is down', async () => {
+    const counter = { calls: 0 };
+    let serverDown = true;
+    const client = makeClient(hangingFetch(counter), () => serverDown);
+
+    for (const call of [
+      () => client.updateMe('name'),
+      () => client.setMySetting('theme', 'dark'),
+      () => client.createNetwork({ display_name: 'Net' }),
+    ]) {
+      await assert.rejects(call(), (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal(err.code, 'INTERNAL');
+        assert.deepEqual(err.details, { kind: 'connection-lost' });
+        return true;
+      });
+    }
+    assert.equal(counter.calls, 0, 'ни один изменяющий запрос не должен уйти в сеть');
+
+    // Healthy server: the same mutating call goes through.
+    serverDown = false;
+    const okFetch = (async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ data: { id: 'u1' } }),
+    })) as unknown as typeof fetch;
+    const healthy = makeClient(okFetch, () => serverDown);
+    const me = await healthy.updateMe('name');
+    assert.deepEqual(me, { id: 'u1' });
   });
 });

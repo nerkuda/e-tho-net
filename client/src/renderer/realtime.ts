@@ -75,6 +75,43 @@ export function setRealtimeEffects(next: Partial<RealtimeEffects>): void {
   Object.assign(effects, next);
 }
 
+/**
+ * Pulls the per-network status snapshot and merges it into the store
+ * (defect de34b35b). Called at init, again after the profile is connected
+ * (the pool appears only then, so the cold-start snapshot is empty) and after
+ * a network is opened. Missing `getStatuses` (partial test bridges) is a no-op.
+ */
+export async function refreshRealtimeStatuses(): Promise<void> {
+  const getStatuses = etn.realtime.getStatuses;
+  if (typeof getStatuses !== 'function') return;
+  try {
+    const snapshot = await getStatuses.call(etn.realtime);
+    const valid: RtStatus[] = [
+      'idle',
+      'connecting',
+      'connected',
+      'reconnecting',
+      'offline',
+      'suspect',
+    ];
+    const map = { ...store.state.rtStatusByNetwork };
+    const details = { ...store.state.rtStatusDetailByNetwork };
+    for (const entry of snapshot) {
+      if (!valid.includes(entry.status as RtStatus)) continue;
+      map[entry.networkId] = entry.status as RtStatus;
+      if (entry.detail === 'server-restart') details[entry.networkId] = 'server-restart';
+      else delete details[entry.networkId];
+    }
+    store.update({
+      rtStatusByNetwork: map,
+      rtStatusDetailByNetwork: details,
+      rtStatus: getRtStatus({ ...store.state, rtStatusByNetwork: map }),
+    });
+  } catch {
+    // Snapshot is best-effort: broadcast statuses still fill the map.
+  }
+}
+
 /** Connects the realtime bridge. Called once at boot. */
 export function initRealtime(): void {
   if (initialized) return;
@@ -117,40 +154,10 @@ export function initRealtime(): void {
     });
   });
 
-  /**
-   * Pull the initial per-network snapshot (defect de34b35b): without it the
-   * indicator starts from the status of whichever network reports first and a
-   * tab switch can show the wrong dot («зелёный не там»).
-   */
-  const getStatuses = etn.realtime.getStatuses;
-  if (typeof getStatuses === 'function') {
-    void getStatuses
-      .call(etn.realtime)
-      .then((snapshot) => {
-        const valid: RtStatus[] = [
-          'idle',
-          'connecting',
-          'connected',
-          'reconnecting',
-          'offline',
-          'suspect',
-        ];
-        const map = { ...store.state.rtStatusByNetwork };
-        const details = { ...store.state.rtStatusDetailByNetwork };
-        for (const entry of snapshot) {
-          if (!valid.includes(entry.status as RtStatus)) continue;
-          map[entry.networkId] = entry.status as RtStatus;
-          if (entry.detail === 'server-restart') details[entry.networkId] = 'server-restart';
-          else delete details[entry.networkId];
-        }
-        store.update({
-          rtStatusByNetwork: map,
-          rtStatusDetailByNetwork: details,
-          rtStatus: getRtStatus({ ...store.state, rtStatusByNetwork: map }),
-        });
-      })
-      .catch(() => undefined);
-  }
+  // Initial pull (the snapshot is empty at cold start because the pool is
+  // created later, after `etn.server.connect`; `refreshRealtimeStatuses()` is
+  // called again right after connecting / opening a network).
+  void refreshRealtimeStatuses();
 
   // Tab switch → recompute the active status from the per-network map. The
   // guard against rewriting the same network makes the subscription

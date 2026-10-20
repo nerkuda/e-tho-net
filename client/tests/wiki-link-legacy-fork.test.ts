@@ -173,7 +173,12 @@ describe('ветка «создать»: просмотр не отказыва�
           ui: { setState: async () => undefined },
         },
       };
-      store.update({ networkId: 'n1', rtStatus: 'connected' });
+      store.update({
+        networkId: 'n1',
+        rtStatus: 'connected',
+        // Per-network status is the source of truth (de34b35b, verify remark 3).
+        rtStatusByNetwork: { n1: 'connected' },
+      });
 
       const mod = (await import('../src/renderer/editor/wiki-link-create.js')) as {
         tryCreateThoughtFromLegacyLink: (

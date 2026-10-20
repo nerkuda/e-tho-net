@@ -499,22 +499,33 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
-/* Visible status caption (defect de34b35b). The width is reserved for the
-   longest caption («Сервер перезапускается…») so the history strip next to it
-   does not jump when the status changes (bug de07e690). */
+/* Visible status caption (defect de34b35b). The caption box has a FIXED width
+   covering the longest label («Сервер перезапускается…», measured 143.64 px
+   at 12 px; 13.5em = 162 px with margin) so the history strip never shifts
+   when the status changes (bug de07e690, verify run7). */
 .sb-status-text {
   flex: none;
-  min-inline-size: 11.5em;
+  inline-size: 13.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-dim);
 }
 
-/* Minimal read-only marker for yellow/red connection states (de34b35b). */
+/* Minimal read-only marker for yellow/red connection states (de34b35b).
+   `visibility:hidden` (NOT `display:none`) keeps the badge's width and the
+   status-bar gap reserved in every state, so `.history-bar.left` is identical
+   for connected/suspect/reconnecting/offline (verify run7). */
 .sb-readonly {
   flex: none;
   padding: 0 6px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   color: var(--text-dim);
+}
+
+.sb-readonly.is-hidden {
+  visibility: hidden;
 }
 
 /* Inline SVG chrome icons (L13, lib/icons.ts): colour follows the host text

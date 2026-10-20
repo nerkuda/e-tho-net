@@ -14,6 +14,7 @@
 
 import { errText } from './lib/dom.js';
 import { etn } from './lib/etn.js';
+import { t } from './lib/i18n.js';
 import { notice } from './lib/notice.js';
 import { isConnected } from './realtime.js';
 import { getRtStatus, store, type RtStatus } from './state.js';
@@ -45,13 +46,13 @@ let prevByNetwork: Record<string, RtStatus> = {};
 function linkLossMessage(status: RtStatus): string {
   switch (status) {
     case 'suspect':
-      return 'Проверяем связь с сервером — изменения не отправляются, правка сохраняется как черновик.';
+      return t('realtime.link.lostSuspect');
     case 'reconnecting':
-      return 'Переподключение к серверу — изменения не отправляются, правка сохраняется как черновик.';
+      return t('realtime.link.lostReconnecting');
     case 'offline':
-      return 'Соединение потеряно — правки сохраняются как черновики.';
+      return t('realtime.link.lostOffline');
     default:
-      return 'Нет соединения — правка сохранена как черновик и отправится после восстановления связи.';
+      return t('realtime.link.lost');
   }
 }
 
@@ -78,7 +79,7 @@ export function initDrafts(): void {
       // Recovery notice only after a real loss: the very first connect must
       // not claim «Соединение восстановлено» (de34b35b).
       if (hadConnection) {
-        notice('Соединение восстановлено.', 'success');
+        notice(t('realtime.link.recovered'), 'success');
         void retryPendingDrafts();
       }
       hadConnection = true;
@@ -294,18 +295,15 @@ export async function clearSourceDrafts(
 /** Blocks a save while offline: notifies and keeps the draft. */
 export function offlineNotice(): void {
   const status = getRtStatus(store.state);
-  const prefix =
+  const key =
     status === 'suspect'
-      ? 'Проверяем связь… '
+      ? 'drafts.offline.suspect'
       : status === 'reconnecting'
-        ? 'Идёт переподключение… '
+        ? 'drafts.offline.reconnecting'
         : status === 'offline'
-          ? 'Нет связи с сервером. '
-          : '';
-  notice(
-    `${prefix}Правка сохранена как черновик и отправится после восстановления связи.`,
-    'warning',
-  );
+          ? 'drafts.offline.offline'
+          : 'drafts.offline.default';
+  notice(t(key), 'warning');
 }
 
 /**
@@ -327,7 +325,7 @@ export async function retryPendingDrafts(networkId?: string): Promise<void> {
     try {
       await sendDraft(draft);
     } catch (err) {
-      notice(`Черновик не отправлен: ${errText(err)}`, 'error');
+      notice(t('drafts.retry.failed', errText(err)), 'error');
     }
   }
 }
@@ -378,7 +376,7 @@ async function sendDraft(draft: DraftRecord): Promise<void> {
       // Неизвестный тип черновика: не игнорировать молча — неизвестная строка
       // не отправлена, и это должно быть видно (явная ветка `transclusion`
       // выше обязана существовать: её нейтрализация уводит сюда и краснит тест).
-      throw new Error(`Неизвестный тип черновика: ${String(draft.entityType)}`);
+      throw new Error(t('drafts.unknownType', String(draft.entityType)));
   }
 }
 

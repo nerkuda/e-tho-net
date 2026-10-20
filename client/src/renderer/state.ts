@@ -356,8 +356,9 @@ export const store = new Store();
 export function getRtStatus(state: AppState): RtStatus {
   const networkId = state.networkId;
   if (networkId !== null) {
-    const perNetwork = state.rtStatusByNetwork[networkId];
-    if (perNetwork !== undefined) return perNetwork;
+    // No per-network entry yet (tab just opened / snapshot not pulled) — show
+    // a neutral «Подключение…», never the flat status of another network.
+    return state.rtStatusByNetwork[networkId] ?? 'connecting';
   }
   return state.rtStatus;
 }

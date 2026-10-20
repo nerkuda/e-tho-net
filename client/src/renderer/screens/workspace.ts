@@ -157,20 +157,20 @@ export function getWorkspace(): WorkspaceHandles | null {
 export function statusGlyph(status: RtStatus, detail?: RtStatusDetail | null): { cls: string; text: string } {
   switch (status) {
     case 'connected':
-      return { cls: 'ok', text: 'Подключено' };
+      return { cls: 'ok', text: t('realtime.status.connected') };
     case 'connecting':
-      return { cls: 'warn', text: 'Подключение…' };
+      return { cls: 'warn', text: t('realtime.status.connecting') };
     case 'suspect':
-      return { cls: 'warn', text: 'Проверяем связь…' };
+      return { cls: 'warn', text: t('realtime.status.suspect') };
     case 'reconnecting':
       return detail === 'server-restart'
-        ? { cls: 'warn', text: 'Сервер перезапускается…' }
-        : { cls: 'warn', text: 'Переподключение…' };
+        ? { cls: 'warn', text: t('realtime.status.serverRestart') }
+        : { cls: 'warn', text: t('realtime.status.reconnecting') };
     case 'offline':
-      return { cls: 'bad', text: 'Нет связи' };
+      return { cls: 'bad', text: t('realtime.status.offline') };
     default:
       // `idle` — no open network is a neutral state, not a failure.
-      return { cls: '', text: 'Нет открытой сети' };
+      return { cls: '', text: t('realtime.status.idle') };
   }
 }
 
@@ -196,10 +196,10 @@ export function buildWorkspace(): HTMLElement {
   // ПРАВОМУ краю строки меню мыслесети (полоса закреплённых мыслей растягивается
   // и оттесняет его вправо). Метка фиксирована («Мыслесеть») — имя открытой
   // мыслесети показывает активная вкладка.
-  const netMenuButton = uiButton({ role: 'ghost', title: 'Меню мыслесети' });
+  const netMenuButton = uiButton({ role: 'ghost', title: t('workspace.netMenu.title') });
   netMenuButton.append(
     svgIcon('network'),
-    span('Мыслесеть', 'tb-label'),
+    span(t('workspace.networkLabel'), 'tb-label'),
     svgIcon('chevron-down', 12),
   );
 
@@ -226,7 +226,7 @@ export function buildWorkspace(): HTMLElement {
   // а не в воздухе.
   const mapViewButton = iconButton({
     icon: svgIcon('mindmap'),
-    title: 'Карта мыслей',
+    title: t('workspace.view.map'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('map'),
@@ -234,7 +234,7 @@ export function buildWorkspace(): HTMLElement {
 
   const structuresViewButton = iconButton({
     icon: svgIcon('tree'),
-    title: 'Структуры мыслей',
+    title: t('workspace.view.structures'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('structures'),
@@ -242,7 +242,7 @@ export function buildWorkspace(): HTMLElement {
 
   const chronicleViewButton = iconButton({
     icon: svgIcon('calendar-month'),
-    title: 'Дневник',
+    title: t('workspace.view.chronicle'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('chronicle'),
@@ -252,7 +252,7 @@ export function buildWorkspace(): HTMLElement {
   // showing the network's `activity_log` (lenta from `GET /activity`).
   const activityViewButton = iconButton({
     icon: svgIcon('activity'),
-    title: 'События',
+    title: t('workspace.view.activity'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('activity'),
@@ -263,7 +263,7 @@ export function buildWorkspace(): HTMLElement {
   // (`value-publication`, lucide book-open) — тот же смысл «публикации/документ».
   const publicationsViewButton = iconButton({
     icon: svgIcon('value-publication'),
-    title: 'Публикации',
+    title: t('workspace.view.publications'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('publications'),
@@ -285,14 +285,14 @@ export function buildWorkspace(): HTMLElement {
   // Глобальный поиск вызывается по Ctrl+Shift+F (0.12.1, задача 045f98db,
   // требование 778e13f4): Ctrl+F закреплён за поиском внутри текстового поля.
   searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+Shift+F');
-  setTooltip(searchInput, 'Поиск по сети');
+  setTooltip(searchInput, t('workspace.searchPlaceholder'));
 
   // The drop-panel settings gear used to sit here (задача a3247f84, 0.8.2);
   // it moved into the panel as the funnel toggle in its top corner.
   const searchRow = div('search-row');
   searchRow.append(searchInput);
 
-  const userMenuButton = uiButton({ role: 'ghost', title: 'Меню пользователя' });
+  const userMenuButton = uiButton({ role: 'ghost', title: t('workspace.userMenu.title') });
   const userMenuLabel = span('—', 'tb-label');
   userMenuButton.append(svgIcon('user'), userMenuLabel, svgIcon('chevron-down', 12));
 
@@ -390,7 +390,7 @@ export function buildWorkspace(): HTMLElement {
   const statusText = span('', 'sb-status-text');
   // Read-only affordance for yellow/red states (defect de34b35b): a minimal
   // visible marker — controls stay enabled, the main-process gate blocks writes.
-  const readOnlyBadge = span('Только чтение', 'sb-readonly hidden');
+  const readOnlyBadge = span(t('realtime.readOnly'), 'sb-readonly is-hidden');
   // Zoom indicator (08-ui-spec §11): sits to the LEFT of the history strip,
   // immediately after the connection dot — the old position next to the
   // event area invited the layout to repaint the history chips every time
@@ -404,7 +404,7 @@ export function buildWorkspace(): HTMLElement {
   // status bar. Cursor is set by `.event-area-resizer` so the affordance is
   // visible without JS on every render.
   const eventAreaResizer = splitterElement('event-area-resizer');
-  setTooltip(eventAreaResizer, 'Изменить ширину области событий');
+  setTooltip(eventAreaResizer, t('workspace.eventArea.resize'));
   // Fixed-width region of the status bar. The history strip and the
   // status-light live OUTSIDE this container so they no longer repaint when
   // a realtime event arrives and the event text reflows.
@@ -413,9 +413,9 @@ export function buildWorkspace(): HTMLElement {
   const eventLabel = span('', 'sb-item sb-event');
   eventArea.append(countsLabel, eventLabel);
   const conflictHost = div('sb-conflict hidden');
-  const conflictText = span('изменено другим пользователем');
+  const conflictText = span(t('workspace.conflict.changed'));
   conflictHost.append(svgIcon('alert', 14), conflictText);
-  const showConflictButton = el('button', 'link-btn', 'показать');
+  const showConflictButton = el('button', 'link-btn', t('workspace.conflict.show'));
   showConflictButton.type = 'button';
   conflictHost.append(showConflictButton);
 
@@ -503,7 +503,7 @@ export function buildWorkspace(): HTMLElement {
     statusLeft.className = `status-light ${glyph.cls}`.trimEnd();
     setTooltip(statusLeft, glyph.text);
     statusText.textContent = glyph.text;
-    readOnlyBadge.classList.toggle('hidden', !isReadOnlyStatus(rtStatus));
+    readOnlyBadge.classList.toggle('is-hidden', !isReadOnlyStatus(rtStatus));
     applyEditorPosition(body, st.editorPosition);
     const editorHidden = st.editorPosition === 'hidden';
     editorHost.classList.toggle('hidden', editorHidden);
@@ -571,7 +571,7 @@ export function buildWorkspace(): HTMLElement {
  * whenever the active tab becomes inaccessible (Q5, 08-ui-spec.md §1.1).
  */
 function mountInaccessiblePlaceholder(host: HTMLElement): void {
-  const closeBtn = uiButton({ label: 'Закрыть таб', role: 'primary' });
+  const closeBtn = uiButton({ label: t('workspace.tab.close'), role: 'primary' });
   closeBtn.addEventListener('click', () => {
     const id = store.state.activeTabId;
     if (id === null) return;
@@ -580,11 +580,10 @@ function mountInaccessiblePlaceholder(host: HTMLElement): void {
   });
   const text = document.createElement('div');
   text.className = 'placeholder-text';
-  text.textContent = 'Нет доступа к сети';
+  text.textContent = t('workspace.tab.noAccess');
   const hint = document.createElement('div');
   hint.className = 'placeholder-hint';
-  hint.textContent =
-    'Сеть, открытая в этом табе, больше не доступна (вы исключены из участников или сеть удалена).';
+  hint.textContent = t('workspace.tab.inaccessible');
   host.append(text, hint, closeBtn);
 
   const update = (): void => {
@@ -596,8 +595,8 @@ function mountInaccessiblePlaceholder(host: HTMLElement): void {
       const tab = store.state.tabs.find((t) => t.tab_id === id);
       text.textContent =
         tab !== undefined
-          ? `Нет доступа к сети ${shortNetworkId(tab.network_id)}`
-          : 'Нет доступа к сети';
+          ? t('workspace.tab.noAccessWithId', shortNetworkId(tab.network_id))
+          : t('workspace.tab.noAccess');
     }
   };
 

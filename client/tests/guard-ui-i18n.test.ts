@@ -44,6 +44,10 @@ const TRANSLATED_FILES = (rel: string): boolean =>
   // ссылка «Открыть использование…» из диалога удаления — строки только из
   // словаря (требование 0e5ff1c6). Возврат литерала в диалог должен краснить.
   rel === 'screens/usage-panel.ts' ||
+  // Статус-бар и черновики (de34b35b): новые строки статусов, подписей и
+  // уведомлений — только из словаря; возврат литерала обязан краснить.
+  rel === 'screens/workspace.ts' ||
+  rel === 'drafts.ts' ||
   rel === 'lib/delete-dialog.ts' ||
   rel === 'lib/dialog.ts' ||
   rel === 'lib/i18n.ts' ||

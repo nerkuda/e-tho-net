@@ -60,6 +60,11 @@ describe('guard: статусы realtime-соединения', () => {
         // Прямое чтение именно плоского поля (не ByNetwork/DetailByNetwork).
         if (/\.rtStatus(?!ByNetwork|DetailByNetwork)\b/.test(line)) {
           violations.push(`  • ${rel}:${i + 1} — ${line.trim()}`);
+          return;
+        }
+        // Деструктуризация обходит точечную проверку: `const { rtStatus } = state`.
+        if (/\{[^}]*\brtStatus\b[^}]*\}\s*=\s*[^;]*\bstate\b/.test(line)) {
+          violations.push(`  • ${rel}:${i + 1} — ${line.trim()}`);
         }
       });
     }

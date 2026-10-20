@@ -64,7 +64,7 @@ import {
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
-import { initRealtime, setRealtimeEffects } from './realtime.js';
+import { initRealtime, refreshRealtimeStatuses, setRealtimeEffects } from './realtime.js';
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
@@ -136,6 +136,10 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // слушатель писал бы фокус закрытой сети в store.
   deactivateFocusQuery();
   const network = await etn.networks.open(networkId);
+  // The pool was created lazily by `networks.open`; refresh the per-network
+  // status snapshot so the indicator does not wait for the next broadcast
+  // (defect de34b35b, verify remark 4).
+  void refreshRealtimeStatuses();
   const prefs = await etn.networks.getPreferences(networkId);
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
   const showInactive =
@@ -744,6 +748,9 @@ export async function boot(): Promise<void> {
     try {
       const me = await etn.server.connect(active.id);
       store.update({ profileId: active.id, me });
+      // The realtime pool now exists: pull the per-network status snapshot
+      // (defect de34b35b, verify remark 4).
+      void refreshRealtimeStatuses();
       // Q-bugfix: restore the previous session — saved tabs go straight to
       // the most recently active one, no forced re-pick from the network list.
       await restoreSession();

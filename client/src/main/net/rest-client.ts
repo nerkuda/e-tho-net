@@ -101,8 +101,14 @@ interface ConnectionLostReason {
 }
 
 /** Error thrown instead of sending/retrying while the network is unreachable. */
-function connectionLostError(networkId: string, message: string): EtnError {
-  return new EtnError('INTERNAL', message, { kind: 'connection-lost', networkId });
+function connectionLostError(networkId: string | null, message: string): EtnError {
+  return new EtnError(
+    'INTERNAL',
+    message,
+    networkId === null
+      ? { kind: 'connection-lost' }
+      : { kind: 'connection-lost', networkId },
+  );
 }
 
 /** `true` when `reason` is OUR link-down abort for `networkId`. */
@@ -186,6 +192,13 @@ export interface RestClientOptions {
   fetchImpl?: typeof fetch;
   /** Optional override of a random jitter function (for deterministic tests). */
   random?: () => number;
+  /**
+   * Returns `true` when the server is considered unreachable for requests that
+   * carry no `/networks/<uuid>/` context (`me.*`, `networks.create`, …)
+   * (defect de34b35b, verify remark 1). The pool-wide rule lives in
+   * `register.ts`: at least one known network and none `connected`.
+   */
+  isServerDown?: () => boolean;
 }
 
 /** Extra per-call options accepted by mutating endpoints. */
@@ -234,6 +247,7 @@ export class RestClient {
   private readonly getClientId: () => string;
   private readonly fetchImpl: typeof fetch;
   private readonly random: () => number;
+  private readonly isServerDown: () => boolean;
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
@@ -282,6 +296,7 @@ export class RestClient {
     this.getClientId = opts.getClientId;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.random = opts.random ?? Math.random;
+    this.isServerDown = opts.isServerDown ?? (() => false);
   }
 
   /**
@@ -450,7 +465,12 @@ export class RestClient {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // Link gate (de34b35b): a mutating request for an unreachable network is
       // never sent — not even as a retry after the link dropped mid-flight.
-      if (mutating && networkId !== null && this.downNetworks.has(networkId)) {
+      // Requests without a network context (`me.*`, `networks.create`, …) are
+      // gated by the pool-wide health callback: at least one known network and
+      // none `connected` (verify remark 1).
+      const linkDown =
+        networkId !== null ? this.downNetworks.has(networkId) : this.isServerDown();
+      if (mutating && linkDown) {
         throw connectionLostError(
           networkId,
           'Нет связи с сервером — действие не отправлено. Повторите после восстановления связи.',
@@ -513,17 +533,19 @@ export class RestClient {
         });
         // Caller abort keeps its original error (and is never retried).
         if (ro.signal?.aborted) throw err;
-        // Link-down abort (de34b35b): the network is unreachable — do NOT run
-        // the 3 × 30 s retry cycle, surface a typed connection-lost error.
-        if (
-          networkId !== null &&
-          (this.downNetworks.has(networkId) ||
-            isConnectionLostReason(controller.signal.reason, networkId))
-        ) {
+        // Link-down abort (de34b35b): the network (or the whole server for a
+        // network-less route) is unreachable — do NOT run the 3 × 30 s retry
+        // cycle, surface a typed connection-lost error.
+        const linkDown =
+          networkId !== null
+            ? this.downNetworks.has(networkId) ||
+              isConnectionLostReason(controller.signal.reason, networkId)
+            : this.isServerDown();
+        if (linkDown) {
           getClientLog()?.warn('rest', 'request aborted: network link down', {
             method,
             path,
-            networkId,
+            networkId: networkId ?? '',
             attempt,
           });
           throw connectionLostError(networkId, 'Нет связи с сервером — запрос отменён');

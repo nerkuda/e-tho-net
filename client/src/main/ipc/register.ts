@@ -103,6 +103,16 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       baseUrl: p.base_url,
       getApiKey: keyResolver(p),
       getClientId: () => opts.clientId,
+      // Pool-wide health for network-less mutating routes (`me.*`,
+      // `networks.create`, …), verify remark 1 (de34b35b): the server counts
+      // as down when the pool knows at least one network and NONE is
+      // `connected`. An empty pool (startup / no open tabs) never blocks.
+      isServerDown: () => {
+        const p2 = pool;
+        if (p2 === null) return false;
+        const ids = p2.activeNetworkIds();
+        return ids.length > 0 && ids.every((id) => p2.getStatus(id) !== 'connected');
+      },
     });
     // key check before anything else; only a successful check persists the
     // profile as active (defect «клиент не запоминает сервер»: previously

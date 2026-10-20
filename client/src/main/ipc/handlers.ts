@@ -2535,7 +2535,9 @@ export function actionProbeNetwork(
   args: unknown[],
   currentNetworkId: string | null,
 ): string | null {
-  if (method.startsWith('server.') || method.startsWith('admin.') || method.startsWith('me.')) {
+  // `me.*` is intentionally NOT excluded (verify remark 1): a hung `PATCH /me`
+  // must probe the open network too — otherwise the user waits ~91 s.
+  if (method.startsWith('server.') || method.startsWith('admin.')) {
     return null;
   }
   const first = args[0];
