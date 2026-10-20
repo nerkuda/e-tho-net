@@ -43,6 +43,8 @@ import type {
   CrossNetworkDuplicateResponse,
   CrossNetworkStructureQueryResponse,
   PropertyCrossResolveResult,
+  ThoughtPropertiesReorderedItem,
+  ThoughtPropertyOrderInput,
   DuplicateHit,
   DuplicateMatchKind,
   EtnErrorCode,
@@ -996,6 +998,17 @@ export interface EtnApi {
       /** Сторона свойства-связи — см. {@link set}. */
       side?: 'source' | 'target' | null,
     ): Promise<void>;
+    /**
+     * `PUT /thoughts/{id}/properties/order` — полный набор пер-мысленного
+     * порядка внетиповых свойств (0.14.1, контракт 27ed2b39). Запрос приводит
+     * таблицу к переданному массиву; ответ — нормализованный набор с
+     * вычисленными сервером сторонами.
+     */
+    reorder(
+      networkId: string,
+      thoughtId: string,
+      items: ThoughtPropertyOrderInput[],
+    ): Promise<ThoughtPropertiesReorderedItem[]>;
     /**
      * Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a).
      * REST `POST …/thoughts|links/{id}/properties/{key}/cross-resolve`.

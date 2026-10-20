@@ -26,6 +26,8 @@ import type {
   LinkPropertySide,
   LinkPropertyValues,
   PropertyValue,
+  ThoughtPropertiesReorderedItem,
+  ThoughtPropertyOrderInput,
   ThoughtRef,
 } from '@etn/shared';
 
@@ -69,6 +71,9 @@ import { rowSplitter } from './splitter.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { reconcileKeyed, type KeyedRenderSpec } from '../lib/ui/keyed-list.js';
+import { createListNav, type ListNavHandle } from '../lib/ui/list.js';
+import { isEditingTarget } from '../lib/ui/nav-core.js';
+import { createRowReorder, type RowReorderHandle } from '../lib/row-reorder.js';
 import { deepEqual } from '../lib/ui/state.js';
 import {
   buildLinkEndIcon,
@@ -410,15 +415,23 @@ function definitionSources(
   return names;
 }
 
-/** Вешает меню строки на ячейку имени: ПКМ и Shift+F10. */
+/**
+ * Вешает меню строки на ячейку имени: ПКМ и Shift+F10. Состояние — значение
+ * или функция: у внетиповой строки позиция порядка меняется без перерисовки
+ * (DnD/Alt/меню), поэтому она вычисляется в момент ОТКРЫТИЯ меню.
+ */
 function wirePropertyRowMenu(
   cell: HTMLElement,
-  state: PropertyRowMenuState,
+  state: PropertyRowMenuState | (() => PropertyRowMenuState),
   actions: PropertyRowMenuActions,
 ): void {
-  if (state.structural) return;
+  const stateOf = (): PropertyRowMenuState =>
+    typeof state === 'function' ? state() : state;
+  if (stateOf().structural) return;
   const open = (x: number, y: number): void => {
-    const items = propertyRowMenuItems(state, actions);
+    const current = stateOf();
+    if (current.structural) return;
+    const items = propertyRowMenuItems(current, actions);
     if (items.length > 0) showMenuAt(x, y, items);
   };
   cell.addEventListener('contextmenu', (event) => {
@@ -448,6 +461,17 @@ function dropPendingOutside(target: PropertiesTarget, key: string): void {
 }
 
 /**
+ * Позиция внетиповой строки в порядке группы — вход пунктов «Переместить
+ * выше/ниже» (0.14.1, задача 2e87285b). `onMove` — та же операция, что DnD и
+ * Alt+↑/↓ у `createRowReorder`.
+ */
+interface OutsideReorderSlot {
+  index: number;
+  count: number;
+  onMove: (from: number, to: number) => void;
+}
+
+/**
  * Меню внетиповой строки. У черновика (`pendingKey`) «Очистить»/«Удалить»
  * убирают только локальную строку, «Перенести» после успешной привязки тоже
  * снимает черновик (значения на сервере ещё нет).
@@ -456,18 +480,23 @@ function wireOutsideRowMenu(
   nameCell: HTMLElement,
   target: PropertiesTarget,
   ref: RowPropertyRef & { propertyId: string; pendingKey?: string },
+  reorder?: (() => OutsideReorderSlot | null) | null,
 ): void {
   const dropDraft = (): void => {
     if (ref.pendingKey !== undefined) dropPendingOutside(target, ref.pendingKey);
   };
   wirePropertyRowMenu(
     nameCell,
-    {
-      structural: false,
-      typed: false,
-      hasType: target.typeId !== null,
-      hasRegistryProperty: ref.propertyId !== '',
-      sources: [],
+    () => {
+      const slot = reorder?.() ?? null;
+      return {
+        structural: false,
+        typed: false,
+        hasType: target.typeId !== null,
+        hasRegistryProperty: ref.propertyId !== '',
+        sources: [],
+        ...(slot === null ? {} : { reorder: { index: slot.index, count: slot.count } }),
+      };
     },
     {
       edit: () => void openPropertyEditorById(ref.propertyId),
@@ -492,6 +521,7 @@ function wireOutsideRowMenu(
         if (ref.pendingKey !== undefined) dropDraft();
         else void removeOutsideRowValue(ref);
       },
+      move: (from, to) => reorder?.()?.onMove(from, to),
     },
   );
 }
@@ -1030,9 +1060,192 @@ function buildOutsidePropertiesBody(
     }
   }
 
-  const rowSpec = outsideRowSpec(networkId, target, () => void reload(), (propertyId) =>
-    registryById.get(propertyId),
+  /**
+   * Видимые строки группы в порядке отображения (серверные значения +
+   * локальные черновики). Единый источник навигации ↑/↓ и переупорядочивания
+   * (0.14.1, задача 2e87285b).
+   */
+  let shownRows: OutsideRow[] = [];
+  /** Узлы строк после keyed-сверки: ключ строки → `tr` и ячейка имени. */
+  const rowNodes = new Map<string, { tr: HTMLElement; nameCell: HTMLElement }>();
+  let nav: ListNavHandle<OutsideRow> | null = null;
+  let reorder: RowReorderHandle | null = null;
+
+  const rowKeyOf = (row: OutsideRow): string =>
+    row.pending !== null ? pendingOutsideKey(row.pending) : outsideRowKey(row.value!);
+
+  /** Строки, которые адресует операция порядка: есть реестровое свойство. */
+  const reorderableRows = (): OutsideRow[] =>
+    shownRows.filter((row) => row.pending === null && isReorderableOutsideValue(row.value!));
+
+  /** Перечитать карту узлов после `reconcileKeyed` (ключ — `data-key` строки). */
+  const collectRowNodes = (): void => {
+    rowNodes.clear();
+    for (const child of Array.from(tbody.children) as HTMLElement[]) {
+      const key = child.getAttribute('data-key');
+      if (key === null) continue;
+      const nameCell = child.querySelector('.prop-name-cell') as HTMLElement | null;
+      if (nameCell !== null) rowNodes.set(key, { tr: child, nameCell });
+    }
+  };
+
+  const nodeOf = (row: OutsideRow): { tr: HTMLElement; nameCell: HTMLElement } | null =>
+    rowNodes.get(rowKeyOf(row)) ?? null;
+
+  /** Строка, содержащая узел (клик/фокус): поднимаемся до `tr` с `data-key`. */
+  const rowOfNode = (start: HTMLElement | null): OutsideRow | null => {
+    let node: HTMLElement | null = start;
+    while (node !== null && node !== box) {
+      if ((node.tagName ?? '').toLowerCase() === 'tr') {
+        const key = node.getAttribute('data-key');
+        if (key !== null) return shownRows.find((row) => rowKeyOf(row) === key) ?? null;
+      }
+      node = parentNodeOf(node);
+    }
+    return null;
+  };
+
+  /** Переприменить выделение и привязку порядка после изменения строк. */
+  const afterRowsChanged = (): void => {
+    collectRowNodes();
+    nav?.refresh();
+    reorder?.refresh();
+  };
+
+  /**
+   * Разложить переупорядочиваемые строки по их слотам, сохранив позиции
+   * черновиков и легаси-рёбер (у них нет реестрового id — их порядок не
+   * адресуется операцией). Строки НЕ пересобираются: `reconcileKeyed` только
+   * перемещает узлы, редакторы значений и ввод пользователя остаются живыми.
+   */
+  const applyReorderableOrder = (ordered: OutsideRow[]): void => {
+    if (ordered.length === 0) return;
+    const slots: number[] = [];
+    shownRows.forEach((row, index) => {
+      if (row.pending === null && isReorderableOutsideValue(row.value!)) slots.push(index);
+    });
+    const next = [...shownRows];
+    slots.forEach((slot, index) => {
+      const row = ordered[index];
+      if (row !== undefined) next[slot] = row;
+    });
+    shownRows = next;
+    reconcileKeyed(tbody, shownRows, rowSpec);
+    afterRowsChanged();
+  };
+
+  /** Единый колбэк перестановки: DnD, Alt+↑/↓ и пункты контекстного меню. */
+  const moveOutsideRow = (from: number, to: number): void => {
+    const rows = reorderableRows();
+    if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return;
+    const next = [...rows];
+    const [moved] = next.splice(from, 1);
+    if (moved === undefined) return;
+    next.splice(to, 0, moved);
+    applyReorderableOrder(next);
+    // Полный набор текущих вне-типовых строк; у связи сторона — из строки
+    // (`linkSideOf`), у скаляра не передаётся (контракт 27ed2b39).
+    const requestOwnerId = target.ownerId;
+    const items = next.map((row, index) => toOrderItem(row.value!, index));
+    void (async () => {
+      try {
+        await etn.properties.reorder(networkId, requestOwnerId, items);
+      } catch (err) {
+        if (requestOwnerId !== target.ownerId) return;
+        notice(`Не удалось сохранить порядок свойств: ${errText(err)}`, 'error');
+        await reload(true);
+      }
+    })();
+  };
+
+  /** Позиция строки для пунктов «Переместить выше/ниже» (null — не двигается). */
+  const reorderSlotOf = (key: string): OutsideReorderSlot | null => {
+    const rows = reorderableRows();
+    const index = rows.findIndex((row) => rowKeyOf(row) === key);
+    if (index < 0) return null;
+    return { index, count: rows.length, onMove: moveOutsideRow };
+  };
+
+  /**
+   * Порядок пришёл событием от другого участника (0.14.1, задача 2e87285b):
+   * ранги по `property_id` + стороне применяются к показанным строкам БЕЗ
+   * перечитывания вкладки. Строку, в которой сейчас идёт ввод, не трогаем —
+   * порядок применит следующее чтение.
+   */
+  const applyRemoteOrder = (
+    thoughtId: string,
+    items: readonly ThoughtPropertiesReorderedItem[],
+  ): void => {
+    if (thoughtId !== target.ownerId) return;
+    const active = (globalThis as { document?: Document }).document?.activeElement ?? null;
+    if (active !== null && box.contains(active as never) && isEditingTarget(active)) return;
+    const ranks = new Map<string, number>();
+    for (const item of items) ranks.set(orderItemKey(item.property_id, item.side), item.position);
+    const ordered = [...reorderableRows()].sort((a, b) => {
+      const ra = ranks.get(outsideRowKey(a.value!)) ?? Number.MAX_SAFE_INTEGER;
+      const rb = ranks.get(outsideRowKey(b.value!)) ?? Number.MAX_SAFE_INTEGER;
+      return ra - rb;
+    });
+    applyReorderableOrder(ordered);
+  };
+
+  const rowSpec = outsideRowSpec(
+    networkId,
+    target,
+    () => void reload(),
+    (propertyId) => registryById.get(propertyId),
+    reorderSlotOf,
   );
+
+  // Навигация ↑/↓ и Enter — общий компонент списка над ядром nav-core.
+  nav = createListNav<OutsideRow>(box, {
+    entries: () => shownRows,
+    tokenOf: rowKeyOf,
+    elementOf: (row) => nodeOf(row)?.tr ?? null,
+    applyHighlight: (row) => {
+      const key = row === null ? null : rowKeyOf(row);
+      for (const [candidate, node] of rowNodes) {
+        node.tr.classList.toggle(PROPERTY_ROW_CURRENT_CLASS, candidate === key);
+      }
+    },
+    // Строка-`tr` не таб-стоп: фокус наводим на ячейку имени (она уже
+    // фокусируема — Shift+F10 меню строки), это и держит контекст клавиш.
+    focus: (row) => nodeOf(row)?.nameCell.focus?.(),
+    reveal: (row) => nodeOf(row)?.tr.scrollIntoView?.({ block: 'nearest' }),
+    onClick: (target) => {
+      const row = rowOfNode(target);
+      if (row !== null) nav?.setCurrent(row);
+    },
+    onActivate: (row) => {
+      const node = nodeOf(row);
+      if (node !== null && !focusRowValue(node.tr)) node.nameCell.focus?.();
+    },
+  });
+
+  // Переупорядочивание — общая компонента (задача 223f7d50): захват за имя
+  // свойства, Alt+↑/↓ через nav-core, Esc и авто-прокрутка — в drag-фасаде.
+  reorder = createRowReorder<OutsideRow>(
+    tbody,
+    {
+      rows: () =>
+        reorderableRows().flatMap((row) => {
+          const node = nodeOf(row);
+          return node === null ? [] : [{ entry: row, key: rowKeyOf(row), element: node.tr }];
+        }),
+      onMove: moveOutsideRow,
+    },
+    {
+      captureOf: (row) => nodeOf(row.entry)?.nameCell ?? null,
+      currentKey: () => nav?.token() ?? null,
+      scrollHost: () => wrap,
+    },
+  );
+  lifecycle?.onDispose(() => {
+    reorder?.destroy();
+    reorder = null;
+    nav?.destroy();
+    nav = null;
+  });
 
   async function reload(force = false): Promise<void> {
     // Owner token of this reload (same guard as the in-type table): a slow
@@ -1091,6 +1304,10 @@ function buildOutsidePropertiesBody(
     setPendingOutside(target.ownerType, requestOwnerId, pending);
     if (outside.length === 0 && pending.length === 0) {
       tableAttached = false;
+      shownRows = [];
+      rowNodes.clear();
+      nav?.refresh();
+      reorder?.refresh();
       wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
     }
@@ -1098,7 +1315,9 @@ function buildOutsidePropertiesBody(
       wrap.replaceChildren(table);
       tableAttached = true;
     }
-    reconcileKeyed(tbody, outsideRows(outside, requestOwnerId, pending), rowSpec);
+    shownRows = outsideRows(outside, requestOwnerId, pending);
+    reconcileKeyed(tbody, shownRows, rowSpec);
+    afterRowsChanged();
     // Курсор в редактор значения свежевыбранной строки (сценарии 9aea535d,
     // e77c6e52): фокус ставится после того, как таблица уже в документе.
     const focusItem = pending.find((item) => item.focus);
@@ -1117,6 +1336,25 @@ function buildOutsidePropertiesBody(
     if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
     const evt = asRealtimeCause(cause);
     if (evt === null) return;
+    // Порядок, назначенный другим участником: применяем к показанным строкам
+    // без перечитывания вкладки (строка с активным вводом не трогается).
+    if (evt.type === 'thought.properties.reordered') {
+      const data = evt.data as {
+        thought_id?: unknown;
+        items?: unknown;
+      };
+      if (
+        box.isConnected &&
+        typeof data.thought_id === 'string' &&
+        Array.isArray(data.items)
+      ) {
+        applyRemoteOrder(
+          data.thought_id,
+          data.items as ThoughtPropertiesReorderedItem[],
+        );
+      }
+      return;
+    }
     if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
       if (box.isConnected) void reload();
     }
@@ -1234,6 +1472,63 @@ function definitionValueKey(definition: EffectiveTypeProperty): string {
     : definition.property_id;
 }
 
+/** CSS-класс выделенной (текущей) строки таблицы свойств (навигация ↑/↓). */
+const PROPERTY_ROW_CURRENT_CLASS = 'prop-row-current';
+
+/** Внетиповая строка участвует в порядке: у неё есть реестровое свойство. */
+function isReorderableOutsideValue(value: PropertyValue | LinkPropertyValues): boolean {
+  return value.property_id !== '';
+}
+
+/** Ключ строки порядка из события: `property_id` + сторона (у скаляра — null). */
+function orderItemKey(propertyId: string, side: LinkPropertySide | null): string {
+  return side === null ? propertyId : `${propertyId}:${side}`;
+}
+
+/** Элемент набора порядка для внетиповой строки (сторона — только у связи). */
+function toOrderItem(
+  value: PropertyValue | LinkPropertyValues,
+  position: number,
+): ThoughtPropertyOrderInput {
+  return isLinkPropertyValues(value)
+    ? { property_id: value.property_id, side: linkSideOf(value), position }
+    : { property_id: value.property_id, position };
+}
+
+/**
+ * Первый редактор значения строки: поле ввода, контент-редактируемое поле,
+ * затем первый чип. Enter активирует строку — ставит курсор в него.
+ */
+function focusRowValue(root: HTMLElement | null): boolean {
+  if (root === null) return false;
+  for (const selector of [
+    'input',
+    'textarea',
+    'select',
+    '[contenteditable="true"]',
+    '.cloud-profile-chip',
+  ]) {
+    const found = root.querySelector(selector) as HTMLElement | null;
+    if (found !== null) {
+      found.focus?.();
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Ближайший предок-узел (включая сам узел): у браузерного DOM — `parentElement`,
+ * у DOM-шима — `parent`. Навигация/меню ищут по нему строку.
+ */
+function parentNodeOf(node: HTMLElement): HTMLElement | null {
+  const withParent = node as unknown as {
+    parentElement?: HTMLElement | null;
+    parent?: HTMLElement | null;
+  };
+  return withParent.parentElement ?? withParent.parent ?? null;
+}
+
 /** Ставит курсор в редактор значения строки-черновика (после отрисовки). */
 function focusOutsideValueEditor(tbody: HTMLElement, key: string): void {
   const focus = (): boolean => {
@@ -1263,6 +1558,7 @@ function outsideRowSpec(
   target: PropertiesTarget,
   onRemove: () => void,
   registryLookup?: (propertyId: string) => PropertyRegistryRow | undefined,
+  reorderOf?: (key: string) => OutsideReorderSlot | null,
 ): KeyedRenderSpec<OutsideRow> {
   const fill = (
     row: HTMLElement,
@@ -1286,15 +1582,20 @@ function outsideRowSpec(
           ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
           : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
       );
-      wireOutsideRowMenu(nameCell, target, {
-        ownerType: target.ownerType,
-        ownerId: target.ownerId,
-        key: current.property_name,
-        isLink: true,
-        side: linkSideOf(current),
-        linkTypeId: current.link_type_id ?? null,
-        propertyId: current.property_id,
-      });
+      wireOutsideRowMenu(
+        nameCell,
+        target,
+        {
+          ownerType: target.ownerType,
+          ownerId: target.ownerId,
+          key: current.property_name,
+          isLink: true,
+          side: linkSideOf(current),
+          linkTypeId: current.link_type_id ?? null,
+          propertyId: current.property_id,
+        },
+        () => reorderOf?.(outsideRowKey(current)) ?? null,
+      );
       row.append(nameCell);
       row.append(buildOutsideLinkCell(current, networkId, target.ownerType, target.ownerId, onRemove));
       return;
@@ -1308,15 +1609,20 @@ function outsideRowSpec(
       nameCell,
       'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
     );
-    wireOutsideRowMenu(nameCell, target, {
-      ownerType: target.ownerType,
-      ownerId: target.ownerId,
-      key: current.property_name,
-      isLink: false,
-      side: null,
-      linkTypeId: null,
-      propertyId: current.property_id,
-    });
+    wireOutsideRowMenu(
+      nameCell,
+      target,
+      {
+        ownerType: target.ownerType,
+        ownerId: target.ownerId,
+        key: current.property_name,
+        isLink: false,
+        side: null,
+        linkTypeId: null,
+        propertyId: current.property_id,
+      },
+      () => reorderOf?.(outsideRowKey(current)) ?? null,
+    );
     row.append(nameCell);
     row.append(
       buildEditorCell({
@@ -1796,6 +2102,63 @@ function buildTypePropertiesBody(
       deepEqual(a.value, b.value),
   };
 
+  /**
+   * Видимые строки «Свойства типа» — источник клавиатурной навигации (0.14.1,
+   * задача 2e87285b). Порядок типовых строк задан привязками и не меняется.
+   */
+  let shownRows: PropertyRow[] = [];
+  const rowNodes = new Map<string, { tr: HTMLElement; nameCell: HTMLElement }>();
+  const rowKeyOf = (row: PropertyRow): string =>
+    row.definition.id !== '' ? row.definition.id : row.definition.property_id;
+  const collectRowNodes = (): void => {
+    rowNodes.clear();
+    for (const child of Array.from(tbody.children) as HTMLElement[]) {
+      const key = child.getAttribute('data-key');
+      if (key === null) continue;
+      const nameCell = child.querySelector('.prop-name-cell') as HTMLElement | null;
+      if (nameCell !== null) rowNodes.set(key, { tr: child, nameCell });
+    }
+  };
+  const rowOfNode = (start: HTMLElement | null): PropertyRow | null => {
+    let node: HTMLElement | null = start;
+    while (node !== null && node !== box) {
+      if ((node.tagName ?? '').toLowerCase() === 'tr') {
+        const key = node.getAttribute('data-key');
+        if (key !== null) return shownRows.find((row) => rowKeyOf(row) === key) ?? null;
+      }
+      node = parentNodeOf(node);
+    }
+    return null;
+  };
+  /** Навигация ↑/↓/Enter — общий компонент списка над ядром nav-core. */
+  let nav: ListNavHandle<PropertyRow> | null = null;
+  nav = createListNav<PropertyRow>(box, {
+    entries: () => shownRows,
+    tokenOf: rowKeyOf,
+    elementOf: (row) => rowNodes.get(rowKeyOf(row))?.tr ?? null,
+    applyHighlight: (row) => {
+      const key = row === null ? null : rowKeyOf(row);
+      for (const [candidate, node] of rowNodes) {
+        node.tr.classList.toggle(PROPERTY_ROW_CURRENT_CLASS, candidate === key);
+      }
+    },
+    focus: (row) => rowNodes.get(rowKeyOf(row))?.nameCell.focus?.(),
+    reveal: (row) => rowNodes.get(rowKeyOf(row))?.tr.scrollIntoView?.({ block: 'nearest' }),
+    onClick: (target) => {
+      const row = rowOfNode(target);
+      if (row !== null) nav?.setCurrent(row);
+    },
+    onActivate: (row) => {
+      const node = rowNodes.get(rowKeyOf(row));
+      if (node === undefined) return;
+      if (!focusRowValue(node.tr)) node.nameCell.focus?.();
+    },
+  });
+  lifecycle?.onDispose(() => {
+    nav?.destroy();
+    nav = null;
+  });
+
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
   let disposed = false;
@@ -1868,6 +2231,9 @@ function buildTypePropertiesBody(
     // владельца для гейта берут из того, что реально отрисовано сейчас.
     rememberShownDefinitions(definitions);
     if (definitions.length === 0) {
+      shownRows = [];
+      rowNodes.clear();
+      nav?.refresh();
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
       tableAttached = false;
       return;
@@ -1893,7 +2259,10 @@ function buildTypePropertiesBody(
       definition,
       value: valueByKey.get(definitionValueKey(definition)),
     }));
+    shownRows = rows;
     reconcileKeyed(tbody, rows, rowSpec);
+    collectRowNodes();
+    nav?.refresh();
     logUiEvent('ui.editor.props.loaded', {
       id: requestOwnerId,
       ms: Date.now() - startedAt,
@@ -2098,6 +2467,7 @@ export const propertiesInternals = {
   outsideLinkDefinition,
   outsideRowKey,
   definitionValueKey,
+  toOrderItem,
   presentPropertyRowIds,
 };
 

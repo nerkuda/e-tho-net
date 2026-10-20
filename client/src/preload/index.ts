@@ -275,6 +275,10 @@ function buildApi(): EtnBridgeApi {
         invoke('properties.set', networkId, ownerType, ownerId, key, value, side),
       remove: (networkId, ownerType, ownerId, key, side) =>
         invoke('properties.remove', networkId, ownerType, ownerId, key, side),
+      // Полный набор пер-мысленного порядка внетиповых свойств (0.14.1,
+      // контракт 27ed2b39): адресуется только мысль-владелец.
+      reorder: (networkId, thoughtId, items) =>
+        invoke('properties.reorder', networkId, thoughtId, items),
       // Кросс-сетевой резолв (задача 7849008a): см. EtnApi.properties.crossResolve.
       crossResolve: (networkId, ownerId, key) =>
         invoke('properties.crossResolve', networkId, ownerId, key),

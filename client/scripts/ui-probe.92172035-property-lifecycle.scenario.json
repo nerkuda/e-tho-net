@@ -74,6 +74,8 @@
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
         "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
         "Очистить",
         "Перенести в типовые свойства",
         "Удалить"
@@ -284,6 +286,8 @@
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
         "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
         "Очистить",
         "Перенести в типовые свойства",
         "Удалить"
@@ -312,6 +316,8 @@
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
         "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
         "Очистить",
         "Перенести в типовые свойства",
         "Удалить"
@@ -350,6 +356,8 @@
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
         "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
         "Очистить",
         "Перенести в типовые свойства",
         "Удалить"
@@ -519,6 +527,8 @@
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
         "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
         "Очистить",
         "Перенести в типовые свойства",
         "Удалить"

@@ -1734,6 +1734,23 @@ export class RestClient {
     );
   }
 
+  /**
+   * `PUT /networks/{nid}/thoughts/{id}/properties/order` — полный набор
+   * пер-мысленного порядка внетиповых свойств (0.14.1, контракт 27ed2b39).
+   */
+  public async reorderThoughtProperties(
+    networkId: string,
+    thoughtId: string,
+    items: import('@etn/shared').ThoughtPropertyOrderInput[],
+  ): Promise<import('@etn/shared').ThoughtPropertiesReorderedItem[]> {
+    const res = (await this.request(
+      'PUT',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/order`,
+      { body: { items } },
+    )) as { items?: import('@etn/shared').ThoughtPropertiesReorderedItem[] };
+    return res.items ?? [];
+  }
+
   /** `PUT /networks/{nid}/thoughts/{id}/properties/{key}`. */
   public async setThoughtProperty(
     networkId: string,

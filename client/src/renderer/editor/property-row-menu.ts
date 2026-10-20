@@ -18,6 +18,7 @@
  */
 
 import { menuAction, type MenuItem } from '../lib/menu.js';
+import { rowReorderMenuItems } from '../lib/row-reorder.js';
 
 /** Состояние строки, от которого зависит состав меню. */
 export interface PropertyRowMenuState {
@@ -31,6 +32,12 @@ export interface PropertyRowMenuState {
   hasRegistryProperty: boolean;
   /** Источники привязки для подписи «Исключить» (имена типов). */
   sources: readonly string[];
+  /**
+   * Позиция строки среди переупорядочиваемых внетиповых строк (0.14.1,
+   * задача 2e87285b). Задана только у строки, которую можно двигать;
+   * пункты «Переместить выше/ниже» собирает `rowReorderMenuItems`.
+   */
+  reorder?: { index: number; count: number };
 }
 
 /** Действия меню. Вызывающие оборачивают async-операции сами. */
@@ -40,6 +47,8 @@ export interface PropertyRowMenuActions {
   promote: () => void;
   exclude: () => void;
   remove: () => void;
+  /** Единый колбэк перестановки строки (тот же, что у `createRowReorder`). */
+  move?: (from: number, to: number) => void;
 }
 
 /** Подписи пунктов — единый источник для меню и тестов. */
@@ -70,6 +79,17 @@ export function propertyRowMenuItems(
   const items: MenuItem[] = [];
   if (state.hasRegistryProperty) {
     items.push(menuAction(PROPERTY_ROW_MENU_LABELS.edit, actions.edit));
+  }
+  // Порядок строки — та же операция, что DnD и Alt+↑/↓ (компонента
+  // row-reorder): «выше/ниже» с `disabled` на краях.
+  if (!state.typed && state.reorder !== undefined && actions.move !== undefined) {
+    items.push(
+      ...rowReorderMenuItems({
+        index: state.reorder.index,
+        count: state.reorder.count,
+        onMove: actions.move,
+      }),
+    );
   }
   items.push(menuAction(PROPERTY_ROW_MENU_LABELS.clear, actions.clear));
   if (!state.typed && state.hasType && state.hasRegistryProperty) {

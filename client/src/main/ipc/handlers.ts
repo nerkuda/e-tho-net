@@ -1366,6 +1366,19 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       },
     ),
   );
+  // Полный набор пер-мысленного порядка внетиповых свойств (0.14.1,
+  // контракт 27ed2b39): запись одной транзакцией, сервер эмитит
+  // `thought.properties.reordered`.
+  handlers.set(
+    'properties.reorder',
+    bind(
+      (
+        networkId: string,
+        thoughtId: string,
+        items: import('@etn/shared').ThoughtPropertyOrderInput[],
+      ) => requireRest(deps).reorderThoughtProperties(networkId, thoughtId, items),
+    ),
+  );
   // Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a,
   // REST `POST …/properties/{key}/cross-resolve`). Пока реализован для
   // `thought` (спека операции 737ed900) — клиентский UX и link-вариант

@@ -119,4 +119,49 @@ describe('меню строки свойства: состав по состоя
   it('подпись исключения без источников — базовая', () => {
     assert.equal(excludeRowLabel([]), PROPERTY_ROW_MENU_LABELS.exclude);
   });
+
+  it('внетиповая строка с порядком: «выше/ниже» после «Изменить»', () => {
+    const log: string[] = [];
+    const items = propertyRowMenuItems(state({ typed: false, reorder: { index: 1, count: 3 } }), {
+      ...actions(),
+      move: (from, to) => log.push(`${from}->${to}`),
+    });
+    assert.deepEqual(
+      items.map((item) => item.label),
+      [
+        PROPERTY_ROW_MENU_LABELS.edit,
+        'Переместить выше',
+        'Переместить ниже',
+        PROPERTY_ROW_MENU_LABELS.clear,
+        PROPERTY_ROW_MENU_LABELS.promote,
+        PROPERTY_ROW_MENU_LABELS.remove,
+      ],
+    );
+    items[1]?.onClick?.();
+    items[2]?.onClick?.();
+    assert.deepEqual(log, ['1->0', '1->2'], 'оба пункта зовут единый onMove');
+  });
+
+  it('края порядка: «выше» недоступно на первой, «ниже» — на последней', () => {
+    const first = propertyRowMenuItems(state({ typed: false, reorder: { index: 0, count: 2 } }), {
+      ...actions(),
+      move: () => undefined,
+    });
+    const last = propertyRowMenuItems(state({ typed: false, reorder: { index: 1, count: 2 } }), {
+      ...actions(),
+      move: () => undefined,
+    });
+    assert.equal(first[1]?.disabled, true, 'первая: выше disabled');
+    assert.equal(first[2]?.disabled, false);
+    assert.equal(last[1]?.disabled, false);
+    assert.equal(last[2]?.disabled, true, 'последняя: ниже disabled');
+  });
+
+  it('типовая строка порядок не показывает (порядок задают привязки)', () => {
+    const items = propertyRowMenuItems(state({ typed: true, reorder: { index: 0, count: 2 } }), {
+      ...actions(),
+      move: () => undefined,
+    });
+    assert.ok(!items.some((item) => item.label.startsWith('Переместить')), 'пунктов порядка нет');
+  });
 });

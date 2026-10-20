@@ -20,6 +20,8 @@ import {
   type LinkPropertySide,
   type LinkPropertyDirection,
   type NetworkProperty,
+  type ThoughtPropertyOrderInput as SharedPropertyOrderInput,
+  type ThoughtPropertiesReorderedItem as SharedPropertyOrderItem,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
@@ -34,19 +36,18 @@ import {
   listThoughtLinkProperties,
 } from './property-service.js';
 
-/** Один элемент входа операции (позиция ещё не нормализована). */
-export interface ThoughtPropertyOrderInput {
-  property_id: string;
-  side?: LinkPropertySide;
-  position: number;
-}
+/**
+ * Один элемент входа операции (позиция ещё не нормализована). Форма — общий
+ * контракт `@etn/shared` (PUT …/properties/order, 27ed2b39).
+ */
+export type ThoughtPropertyOrderInput = SharedPropertyOrderInput;
 
-/** Нормализованная строка порядка: сторона вычислена сервером. */
-export interface ThoughtPropertyOrderItem {
-  property_id: string;
-  side: LinkPropertySide | null;
-  position: number;
-}
+/**
+ * Нормализованная строка порядка: сторона вычислена сервером. Форма — общий
+ * контракт `@etn/shared` (payload события d819137a), чтобы клиент и сервер
+ * читали один тип (стандарт 01268f2d, задача 2e87285b).
+ */
+export type ThoughtPropertyOrderItem = SharedPropertyOrderItem;
 
 /** Направление стороны у владельца: источник → `out`, цель → `in`. */
 function directionOfSide(side: LinkPropertySide): LinkPropertyDirection {

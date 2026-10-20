@@ -14,6 +14,9 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
+import { invalidateQueries } from '../src/renderer/lib/live/query-registry.js';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /** Memoized properties module for the pure-helper tests. */
@@ -1221,6 +1224,375 @@ describe('типовая строка связи и значение чужой 
     assert.equal(key({ property_id: 'p-sym', value_type: 'link', side: 'target' }), 'p-sym:target');
     assert.equal(key({ property_id: 'p-sym', value_type: 'link', side: 'source' }), 'p-sym:source');
     assert.equal(key({ property_id: 'p-text', value_type: 'text' }), 'p-text');
+  });
+
+  it('элемент набора порядка: у связи сторона строки, у скаляра — без side', async () => {
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const toOrderItem = propertiesInternals.toOrderItem as (
+      v: unknown,
+      position: number,
+    ) => Record<string, unknown>;
+    assert.deepEqual(
+      toOrderItem(
+        { property_id: 'p-sym', value_type: 'link', side: 'target', direction: 'in', count: 1, values: [] },
+        2,
+      ),
+      { property_id: 'p-sym', side: 'target', position: 2 },
+    );
+    assert.deepEqual(
+      toOrderItem({ property_id: 'p-text', value_type: 'text', value: 'x' }, 0),
+      { property_id: 'p-text', position: 0 },
+    );
+  });
+});
+
+describe('порядок и клавиатурная навигация таблицы свойств (2e87285b)', () => {
+  function outsideValue(
+    propertyId: string,
+    name: string,
+    value: string,
+  ): Record<string, unknown> {
+    return {
+      id: `v-${propertyId}`,
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: propertyId,
+      outside_type: true,
+      property_name: name,
+      value_type: 'text',
+      value,
+      updated_at: '2026',
+    };
+  }
+
+  /** Шимы + `window.etn`; `reorderCalls` собирает аргументы операции порядка. */
+  function setUpEtn(
+    values: unknown[],
+    reorderCalls: unknown[][],
+    definitions: unknown[] = [],
+  ): { getCount: () => number } {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    let reads = 0;
+    etnApi['types'] = { listTypeProperties: async () => definitions };
+    etnApi['properties'] = {
+      get: async () => {
+        reads += 1;
+        return values;
+      },
+      set: async () => undefined,
+      remove: async () => undefined,
+      reorder: async (...args: unknown[]) => {
+        reorderCalls.push(args);
+        return [];
+      },
+    };
+    etnApi['propertyRegistry'] = { list: async () => [] };
+    etnApi['thoughts'] = {
+      findDuplicates: async () => [],
+      resolve: async (_n: string, ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          title: id,
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        })),
+    };
+    etnApi['system'] = { openExternal: async () => '' };
+    return { getCount: () => reads };
+  }
+
+  async function buildOutside(
+    values: unknown[],
+    calls: unknown[][],
+  ): Promise<{ box: ShimElement; getCount: () => number }> {
+    const counter = setUpEtn(values, calls);
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildOutsidePropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      typeId: 'ty1',
+    }) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, getCount: counter.getCount };
+  }
+
+  function outsideTbody(box: ShimElement): ShimElement {
+    return box.children[0]!.children[0]!.children[0]!;
+  }
+
+  function rowNames(tbody: ShimElement): string[] {
+    return tbody.children.map(
+      (row) => row.querySelector('.prop-name-cell')?.textContent ?? '',
+    );
+  }
+
+  function menuItem(text: string): ShimElement | undefined {
+    const body = (globalThis as any).document.body as ShimElement;
+    return body
+      .findAll((e) => e.className.includes('menu-item'))
+      .find((row) =>
+        row
+          .findAll((e) => e.className.includes('menu-item-label'))
+          .some((label) => label.textContent === text),
+      );
+  }
+
+  function reorderedCause(
+    thoughtId: string,
+    items: Array<{ property_id: string; side: null; position: number }>,
+  ): unknown {
+    return {
+      type: 'thought.properties.reordered',
+      network_id: 'n1',
+      seq: 1,
+      data: { thought_id: thoughtId, items },
+    };
+  }
+
+  it('меню: «Переместить ниже» сразу меняет порядок и шлёт полный набор', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box } = await buildOutside(
+      [
+        outsideValue('p-a', 'Альфа', '1'),
+        outsideValue('p-b', 'Бета', '2'),
+        outsideValue('p-c', 'Гамма', '3'),
+      ],
+      calls,
+    );
+    const tbody = outsideTbody(box);
+    assert.deepEqual(rowNames(tbody), [
+      'Альфа (строка)',
+      'Бета (строка)',
+      'Гамма (строка)',
+    ]);
+
+    const nameCell = tbody.children[0]!.querySelector('.prop-name-cell')!;
+    nameCell.fire('contextmenu', {
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+      clientX: 10,
+      clientY: 10,
+    });
+    const up = menuItem('Переместить выше');
+    const down = menuItem('Переместить ниже');
+    assert.ok(up !== undefined && down !== undefined, 'пункты порядка в меню строки');
+    assert.equal(up!.className.includes('menu-item-disabled'), true, 'первая — выше disabled');
+
+    down!.fire('click', { stopPropagation: () => undefined });
+    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)', 'Гамма (строка)']);
+
+    // Позиция в меню вычисляется при ОТКРЫТИИ: после перестановки та же
+    // строка стала второй, и «ниже» обязано двигать её дальше, а не молчать
+    // из-за устаревшего индекса (задача 2e87285b).
+    const movedCell = tbody.children[1]!.querySelector('.prop-name-cell')!;
+    movedCell.fire('contextmenu', {
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+      clientX: 10,
+      clientY: 10,
+    });
+    menuItem('Переместить ниже')!.fire('click', { stopPropagation: () => undefined });
+    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Гамма (строка)', 'Альфа (строка)']);
+
+    assert.deepEqual(calls, [
+      [
+        'n1',
+        't1',
+        [
+          { property_id: 'p-b', position: 0 },
+          { property_id: 'p-a', position: 1 },
+          { property_id: 'p-c', position: 2 },
+        ],
+      ],
+      [
+        'n1',
+        't1',
+        [
+          { property_id: 'p-b', position: 0 },
+          { property_id: 'p-c', position: 1 },
+          { property_id: 'p-a', position: 2 },
+        ],
+      ],
+    ], 'полный набор позиций, сторона у скаляра не передаётся');
+  });
+
+  it('Alt+↓ двигает текущую строку через общий drag-фасад', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box } = await buildOutside(
+      [outsideValue('p-a', 'Альфа', '1'), outsideValue('p-b', 'Бета', '2')],
+      calls,
+    );
+    const tbody = outsideTbody(box);
+    const nameCell = tbody.children[0]!.querySelector('.prop-name-cell')!;
+    // Текущая строка — клик; затем фокус внутри списка взводит контексты
+    // навигации и drag-фасада (в реальном DOM focusin всплывает).
+    box.emit('click', { target: nameCell });
+    tbody.emit('focusin', {});
+    box.emit('focusin', {});
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      altKey: true,
+      target: tbody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+
+    assert.equal(calls.length, 1, 'та же операция порядка, что DnD и меню');
+    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)']);
+    // Граница: последняя строка дальше вниз не двигается.
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      altKey: true,
+      target: tbody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    assert.equal(calls.length, 1, 'у нижнего края операции нет');
+  });
+
+  it('событие reordered применяет порядок без перечитывания и не трогает ввод', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box, getCount } = await buildOutside(
+      [outsideValue('p-a', 'Альфа', '1'), outsideValue('p-b', 'Бета', '2')],
+      calls,
+    );
+    const tbody = outsideTbody(box);
+    const readsBefore = getCount();
+
+    invalidateQueries(
+      'focus:@t1',
+      reorderedCause('t1', [
+        { property_id: 'p-b', side: null, position: 0 },
+        { property_id: 'p-a', side: null, position: 1 },
+      ]) as never,
+    );
+    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)']);
+    assert.equal(getCount(), readsBefore, 'вкладка не перечитывается — порядок применён к строкам');
+
+    // Строка, в которой идёт ввод пользователя, не двигается.
+    const input = tbody.children[0]!.querySelector('input')!;
+    (globalThis as any).document.activeElement = input;
+    invalidateQueries(
+      'focus:@t1',
+      reorderedCause('t1', [
+        { property_id: 'p-a', side: null, position: 0 },
+        { property_id: 'p-b', side: null, position: 1 },
+      ]) as never,
+    );
+    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)'], 'ввод не потревожен');
+    (globalThis as any).document.activeElement = null;
+  });
+
+  it('↑/↓ выделяют строку типовой таблицы, Enter ставит курсор в редактор', async () => {
+    keymap.keymapInternals.reset();
+    setUpEtn(
+      [
+        {
+          id: 'v1',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'p1',
+          outside_type: false,
+          property_name: 'Первый',
+          value_type: 'text',
+          value: 'один',
+          updated_at: '2026',
+        },
+        {
+          id: 'v2',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'p2',
+          outside_type: false,
+          property_name: 'Второй',
+          value_type: 'text',
+          value: 'два',
+          updated_at: '2026',
+        },
+      ],
+      [],
+      [
+        {
+          id: 'b1',
+          property_id: 'p1',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Первый',
+          value_type: 'text',
+          config: null,
+          required: false,
+          position: 0,
+        },
+        {
+          id: 'b2',
+          property_id: 'p2',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Второй',
+          value_type: 'text',
+          config: null,
+          required: false,
+          position: 1,
+        },
+      ],
+    );
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildPropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      thought: { id: 't1', type_id: 'ty1' },
+    } as never) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const tbody = box.children[0]!.children[0]!.children[0]!.children[0]!;
+    assert.equal(tbody.children.length, 2);
+    const typeBody = box.children[0]!;
+
+    typeBody.emit('focusin', {});
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      target: typeBody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    assert.equal(
+      tbody.children[0]!.className.includes('prop-row-current'),
+      true,
+      'первая строка выделена',
+    );
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      target: typeBody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    assert.equal(tbody.children[1]!.className.includes('prop-row-current'), true);
+    assert.equal(tbody.children[0]!.className.includes('prop-row-current'), false);
+
+    keymap.dispatchKeyEvent({
+      key: 'Enter',
+      target: typeBody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    const field = tbody.children[1]!.querySelector('input') as ShimElement | null;
+    assert.equal(field?.focused, true, 'Enter активирует строку — курсор в редакторе значения');
   });
 });
 
