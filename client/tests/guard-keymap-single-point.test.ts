@@ -81,6 +81,13 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
     reason: 'Навигация облачка связей вкладки — задача исключает editor/**.',
   },
   {
+    file: 'editor/properties.ts',
+    count: 1,
+    category: 'element',
+    reason:
+      'Shift+F10 на фокусируемой ячейке имени строки свойства открывает контекстное меню строки (требование 53701739): клавиатурный контракт WAI-ARIA самого элемента, событие приходит на ячейку с фокусом.',
+  },
+  {
     file: 'editor/comment-hotkeys-dialog.ts',
     count: 1,
     category: 'boundary',

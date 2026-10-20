@@ -51,6 +51,7 @@ import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
 import { PROPERTY_VALUES_REFRESHED_EVENT } from '../lib/property-values-refresh.js';
+import { showMenuAt } from '../lib/menu.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
@@ -58,6 +59,11 @@ import { onReconnected, store } from '../state.js';
 import { registerTabContent, registerTabRetarget, type EditorContext, type TabPaneLifecycle } from './editor.js';
 import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
+import {
+  propertyRowMenuItems,
+  type PropertyRowMenuActions,
+  type PropertyRowMenuState,
+} from './property-row-menu.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
@@ -201,6 +207,294 @@ function buildRowLinkMark(
   const visual =
     linkTypeId === null ? null : resolveLinkTypeVisual(store.state.linkTypes, linkTypeId);
   return buildLinkEndIcon(linkEndIconSpec(side, visual));
+}
+
+/** Перечитывает обе группы вкладки «Свойства» (после действия меню строки). */
+function refreshPropertiesPanels(): void {
+  currentReload?.();
+  outsideReload?.();
+  outsideRefreshCount?.();
+}
+
+/** Открывает единый диалог редактирования свойства по реестровому id. */
+async function openPropertyEditorById(propertyId: string): Promise<void> {
+  try {
+    const networkId = requireNetworkId();
+    const registry = await etn.propertyRegistry.list(networkId);
+    const row = registry.find((candidate) => candidate.id === propertyId);
+    if (row === undefined) {
+      notice('Свойство не найдено в справочнике сети.', 'error');
+      return;
+    }
+    openPropertyManagerEditor(row, refreshPropertiesPanels);
+  } catch (err) {
+    errorDialog('Изменить свойство', err);
+  }
+}
+
+/** Параметры действий меню строки: владелец, ключ и сторона значения. */
+interface RowPropertyRef {
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+  key: string;
+  isLink: boolean;
+  side: LinkPropertySide | null;
+  linkTypeId: string | null;
+}
+
+/**
+ * «Очистить» (требование 53701739): скаляр — удаление значения; связь —
+ * снятие пометки корзины с ПОМЕЧЕННЫХ рёбер этого свойства у владельца
+ * (`PATCH /links/{id} { marked_for_deletion: false }`). Живые рёбра не
+ * трогаются — их снимает «Удалить».
+ */
+async function clearRowValue(ref: RowPropertyRef): Promise<void> {
+  try {
+    const networkId = requireNetworkId();
+    if (!ref.isLink) {
+      await etn.properties.remove(networkId, ref.ownerType, ref.ownerId, ref.key);
+      refreshPropertiesPanels();
+      return;
+    }
+    const trash = await etn.trash.list(networkId);
+    const marked = trash.links.filter((link) => {
+      if (link.type_id !== ref.linkTypeId) return false;
+      return ref.side === 'target'
+        ? link.target_id === ref.ownerId
+        : link.source_id === ref.ownerId;
+    });
+    for (const link of marked) {
+      await etn.links.update(
+        networkId,
+        link.id,
+        { marked_for_deletion: false },
+        link.version,
+      );
+    }
+    if (marked.length === 0) {
+      notice('Помеченных связей этого свойства нет.', 'info');
+    } else {
+      notice(marked.length > 1 ? `Восстановлено связей: ${marked.length}.` : 'Связь восстановлена.');
+    }
+    refreshPropertiesPanels();
+  } catch (err) {
+    errorDialog('Очистить', err);
+  }
+}
+
+/** «Удалить» внетипового значения: скаляр — DELETE значения; связь — умное
+ *  удаление живых рёбер сервером (с ключом стороны для симметричных имён). */
+async function removeOutsideRowValue(ref: RowPropertyRef): Promise<void> {
+  try {
+    const networkId = requireNetworkId();
+    await etn.properties.remove(
+      networkId,
+      ref.ownerType,
+      ref.ownerId,
+      ref.key,
+      ref.isLink ? ref.side : null,
+    );
+    refreshPropertiesPanels();
+  } catch (err) {
+    errorDialog('Удалить', err);
+  }
+}
+
+/**
+ * «Перенести в типовые свойства»: привязка к типу владельца. Скаляр — обычная;
+ * связь — со стороной строки (она вычислена по живым рёбрам владельца).
+ */
+async function promoteRowProperty(opts: {
+  ownerType: 'thought' | 'link';
+  typeId: string;
+  propertyId: string;
+  isLink: boolean;
+  side: LinkPropertySide | null;
+}): Promise<boolean> {
+  const typeOwner = opts.ownerType === 'thought' ? 'thought_type' : 'link_type';
+  try {
+    const networkId = requireNetworkId();
+    await etn.types.createTypeProperty(networkId, typeOwner, opts.typeId, {
+      mode: 'attach',
+      property_id: opts.propertyId,
+      required: false,
+      ...(opts.isLink && opts.side !== null ? { side: opts.side } : {}),
+    });
+    notice('Свойство перенесено в типовые.');
+    refreshPropertiesPanels();
+    return true;
+  } catch (err) {
+    errorDialog('Перенести в типовые свойства', err);
+    return false;
+  }
+}
+
+/**
+ * «Исключить из типовых свойств»: снимает привязки СТОРОНЫ строки по всей
+ * цепочке типов владельца (включая унаследованные), без подтверждающих
+ * диалогов. `defined_on` — тип, на котором живёт привязка, `id` — её id.
+ */
+async function excludeTypedProperty(opts: {
+  ownerType: 'thought' | 'link';
+  typeId: string;
+  propertyId: string;
+  side: LinkPropertySide | null;
+}): Promise<void> {
+  const typeOwner = opts.ownerType === 'thought' ? 'thought_type' : 'link_type';
+  try {
+    const networkId = requireNetworkId();
+    const definitions = await etn.types.listTypeProperties(networkId, typeOwner, opts.typeId);
+    const matches = definitions.filter(
+      (definition) =>
+        !definition.id.startsWith('mirror:') &&
+        definition.property_id === opts.propertyId &&
+        (definition.value_type === 'link' ? linkSideOf(definition) : null) === opts.side,
+    );
+    if (matches.length === 0) {
+      // Зеркальная строка (`id: mirror:<property>`) — привязка живёт на другом
+      // типе (стороне-источнике), в цепочке владельца снимать нечего.
+      const mirrored = definitions.some(
+        (definition) =>
+          definition.id.startsWith('mirror:') &&
+          definition.property_id === opts.propertyId &&
+          (definition.value_type === 'link' ? linkSideOf(definition) : null) === opts.side,
+      );
+      notice(
+        mirrored
+          ? 'Строка зеркальная: привязка свойства живёт на другом типе — исключите её там.'
+          : 'Привязка свойства не найдена.',
+        mirrored ? 'info' : 'error',
+      );
+      return;
+    }
+    for (const definition of matches) {
+      await etn.types.removeTypeProperty(
+        networkId,
+        typeOwner,
+        definition.defined_on,
+        definition.id,
+      );
+    }
+    notice(
+      matches.length > 1
+        ? `Свойство исключено из типов: ${matches.length}.`
+        : 'Свойство исключено из типовых.',
+    );
+    refreshPropertiesPanels();
+  } catch (err) {
+    errorDialog('Исключить из типовых свойств', err);
+  }
+}
+
+/** Имена типов-источников привязки этой строки (корень → лист). */
+function definitionSources(
+  definition: EffectiveTypeProperty,
+  definitions: readonly EffectiveTypeProperty[],
+): string[] {
+  const side = definition.value_type === 'link' ? linkSideOf(definition) : null;
+  const names: string[] = [];
+  for (const candidate of definitions) {
+    // Зеркальная строка — не привязка цепочки: источник в подписи не врём.
+    if (candidate.id.startsWith('mirror:')) continue;
+    if (candidate.property_id !== definition.property_id) continue;
+    if (
+      definition.value_type === 'link' &&
+      side !== null &&
+      linkSideOf(candidate) !== side
+    ) {
+      continue;
+    }
+    const name = candidate.defined_on_name;
+    if (name !== '' && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/** Вешает меню строки на ячейку имени: ПКМ и Shift+F10. */
+function wirePropertyRowMenu(
+  cell: HTMLElement,
+  state: PropertyRowMenuState,
+  actions: PropertyRowMenuActions,
+): void {
+  if (state.structural) return;
+  const open = (x: number, y: number): void => {
+    const items = propertyRowMenuItems(state, actions);
+    if (items.length > 0) showMenuAt(x, y, items);
+  };
+  cell.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    open(event.clientX, event.clientY);
+  });
+  cell.addEventListener('keydown', (event) => {
+    if (event.key !== 'F10' || !event.shiftKey) return;
+    event.preventDefault();
+    const rect = cell.getBoundingClientRect();
+    open(rect.left, rect.bottom);
+  });
+  cell.tabIndex = 0;
+}
+
+/** Убирает строку-черновик из локального набора (значения на сервере нет). */
+function dropPendingOutside(target: PropertiesTarget, key: string): void {
+  setPendingOutside(
+    target.ownerType,
+    target.ownerId,
+    pendingOutsideFor(target.ownerType, target.ownerId).filter(
+      (item) => pendingOutsideKey(item) !== key,
+    ),
+  );
+  refreshPropertiesPanels();
+}
+
+/**
+ * Меню внетиповой строки. У черновика (`pendingKey`) «Очистить»/«Удалить»
+ * убирают только локальную строку, «Перенести» после успешной привязки тоже
+ * снимает черновик (значения на сервере ещё нет).
+ */
+function wireOutsideRowMenu(
+  nameCell: HTMLElement,
+  target: PropertiesTarget,
+  ref: RowPropertyRef & { propertyId: string; pendingKey?: string },
+): void {
+  const dropDraft = (): void => {
+    if (ref.pendingKey !== undefined) dropPendingOutside(target, ref.pendingKey);
+  };
+  wirePropertyRowMenu(
+    nameCell,
+    {
+      structural: false,
+      typed: false,
+      isLink: ref.isLink,
+      hasType: target.typeId !== null,
+      hasRegistryProperty: ref.propertyId !== '',
+      sources: [],
+    },
+    {
+      edit: () => void openPropertyEditorById(ref.propertyId),
+      clear: () => {
+        if (ref.pendingKey !== undefined) dropDraft();
+        else void clearRowValue(ref);
+      },
+      promote: () => {
+        if (target.typeId === null) return;
+        void promoteRowProperty({
+          ownerType: target.ownerType,
+          typeId: target.typeId,
+          propertyId: ref.propertyId,
+          isLink: ref.isLink,
+          side: ref.side,
+        }).then((ok) => {
+          if (ok) dropDraft();
+        });
+      },
+      exclude: () => undefined,
+      remove: () => {
+        if (ref.pendingKey !== undefined) dropDraft();
+        else void removeOutsideRowValue(ref);
+      },
+    },
+  );
 }
 
 /** Определение свойства для строки-черновика (валидация — по реестру). */
@@ -978,6 +1272,15 @@ function outsideRowSpec(
           ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
           : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
       );
+      wireOutsideRowMenu(nameCell, target, {
+        ownerType: target.ownerType,
+        ownerId: target.ownerId,
+        key: current.property_name,
+        isLink: true,
+        side: linkSideOf(current),
+        linkTypeId: current.link_type_id ?? null,
+        propertyId: current.property_id,
+      });
       row.append(nameCell);
       row.append(buildOutsideLinkCell(current, networkId, target.ownerType, target.ownerId, onRemove));
       return;
@@ -991,6 +1294,15 @@ function outsideRowSpec(
       nameCell,
       'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
     );
+    wireOutsideRowMenu(nameCell, target, {
+      ownerType: target.ownerType,
+      ownerId: target.ownerId,
+      key: current.property_name,
+      isLink: false,
+      side: null,
+      linkTypeId: null,
+      propertyId: current.property_id,
+    });
     row.append(nameCell);
     row.append(
       buildEditorCell({
@@ -1093,6 +1405,16 @@ function fillPendingOutsideRow(
       'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
     );
   }
+  wireOutsideRowMenu(nameCell, target, {
+    ownerType: target.ownerType,
+    ownerId: target.ownerId,
+    key: pending.name,
+    isLink,
+    side: pending.side,
+    linkTypeId: pending.linkTypeId,
+    propertyId: pending.propertyId,
+    pendingKey: pendingOutsideKey(pending),
+  });
   row.append(nameCell);
   row.append(
     buildEditorCell({
@@ -1324,6 +1646,8 @@ function buildTypePropertiesBody(
    * ячейки держат замыкание со старым ownerId.
    */
   let shownOwnerId: string | null = null;
+  /** Эффективные определения, показанные сейчас: источники привязки для меню. */
+  let shownDefinitions: EffectiveTypeProperty[] = [];
   // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
   // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
   const table = el('table', 'table-list prop-table prop-grid');
@@ -1372,6 +1696,45 @@ function buildTypePropertiesBody(
       setTooltip(info, hint);
       nameCell.append(info);
     }
+    // Контекстное меню имени строки (0.14.1, задача 92172035, требование
+    // 53701739): состав по состоянию строки, действия — серверные операции.
+    const isLink = definition.value_type === 'link';
+    const side = isLink ? linkSideOf(definition) : null;
+    const linkTypeIdRaw = definition.config?.link_type_id;
+    const linkTypeId =
+      typeof linkTypeIdRaw === 'string' && linkTypeIdRaw !== '' ? linkTypeIdRaw : null;
+    wirePropertyRowMenu(
+      nameCell,
+      {
+        structural: definition.config?.structural === true,
+        typed: true,
+        isLink,
+        hasType: true,
+        hasRegistryProperty: definition.property_id !== '',
+        sources: definitionSources(definition, shownDefinitions),
+      },
+      {
+        edit: () => void openPropertyEditorById(definition.property_id),
+        clear: () =>
+          void clearRowValue({
+            ownerType: target.ownerType,
+            ownerId: target.ownerId,
+            key: definition.key,
+            isLink,
+            side,
+            linkTypeId,
+          }),
+        promote: () => undefined,
+        exclude: () =>
+          void excludeTypedProperty({
+            ownerType: target.ownerType,
+            typeId: typedId,
+            propertyId: definition.property_id,
+            side,
+          }),
+        remove: () => undefined,
+      },
+    );
     row.append(nameCell);
     row.append(
       buildEditorCell({
@@ -1486,6 +1849,7 @@ function buildTypePropertiesBody(
     // From here the table is considered bound to this owner (even the empty-set
     // branch below) — the detached-pane guard keys off it.
     shownOwnerId = requestOwnerId;
+    shownDefinitions = definitions;
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
     // владельца для гейта берут из того, что реально отрисовано сейчас.
