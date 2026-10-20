@@ -200,6 +200,17 @@ export interface IpcErrorEnvelope {
 }
 
 /**
+ * Per-network realtime status as delivered by `realtime.getStatuses`
+ * (defect de34b35b). `status` is one of `RtStatus`; `detail` qualifies it
+ * (`server-restart` → «Сервер перезапускается…»).
+ */
+export interface RealtimeStatusSnapshotDto {
+  networkId: string;
+  status: string;
+  detail?: string;
+}
+
+/**
  * Упаковать брошенную main-обработчиком ошибку в {@link IpcErrorEnvelope}.
  * Поля `code`/`details`/`requestId` берутся у `EtnError`; для прочих ошибок
  * остаются только `name` и `message`.
@@ -1223,10 +1234,19 @@ export interface EtnApi {
   realtime: {
     onEvent(cb: (event: unknown) => void): () => void;
     /**
-     * Per-network status change (Q2). Payload: `{networkId, status}` where
-     * `status` is one of `'idle'|'connecting'|'connected'|'reconnecting'|'offline'`.
+     * Per-network status change (Q2, de34b35b). Payload:
+     * `{networkId, status, detail?}` where `status` is one of
+     * `'idle'|'connecting'|'connected'|'reconnecting'|'offline'|'suspect'`.
      */
-    onStatusChange(cb: (payload: { networkId: string; status: string }) => void): () => void;
+    onStatusChange(
+      cb: (payload: { networkId: string; status: string; detail?: string }) => void,
+    ): () => void;
+    /**
+     * Snapshot of every pooled network's status (defect de34b35b). The
+     * renderer pulls it once at boot so tab switches show the right indicator
+     * instead of the status of whichever network reported last.
+     */
+    getStatuses(): Promise<RealtimeStatusSnapshotDto[]>;
     /**
      * `resume.stale` per network (Q2). Payload: `{networkId, lastSeq}` — the
      * UI must fully re-focus the network whose event-log window was exceeded.

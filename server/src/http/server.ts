@@ -191,6 +191,17 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(corsPlugin, {
     origin: true, // reflect request origin; credentials not used (bearer keys)
   });
+  // Realtime gateway instance is created after the WS plugin (it needs the
+  // plugin's routes context); the hook closure reads it lazily.
+  let realtimeGatewayForClose: RealtimeGateway | null = null;
+  // Planned-shutdown close frame (defect de34b35b): `@fastify/websocket` adds
+  // its own `preClose` on registration and runs FIRST when it was registered
+  // earlier — it would drop sockets with 1005, hiding the reason from the
+  // client. Registering our hook BEFORE the plugin makes it run first and send
+  // 1001 `server shutdown`, waiting briefly for the close handshake.
+  app.addHook('preClose', async () => {
+    await realtimeGatewayForClose?.closeAllGracefully();
+  });
   // WebSocket plugin: registered now so phase E can attach routes; no routes yet.
   await app.register(websocketPlugin);
 
@@ -223,6 +234,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     fileLog,
   });
   gateway.register(app);
+  realtimeGatewayForClose = gateway;
   // Task S9 (13-layers.md §12): routes/layers.ts pushes forced-resync control
   // frames after a session's layer changes server-side.
   app.decorate('realtimeGateway', gateway);

@@ -10,6 +10,7 @@
  * in-memory so the tests do not depend on the better-sqlite3 native build.
  */
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { afterEach, describe, it } from 'node:test';
 
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -56,7 +57,18 @@ function makeClient(
   serverUrl: string,
   db: LocalDb,
   networkId: string | null = 'net1',
-  opts: { random?: () => number; idleTimeoutMs?: number } = {},
+  opts: {
+    random?: () => number;
+    idleTimeoutMs?: number;
+    silenceThresholdMs?: number;
+    probeDeadlineMs?: number;
+    handshakeTimeoutMs?: number;
+    offlineAfterMs?: number;
+    fastReconnectWindowMs?: number;
+    now?: () => number;
+    setTimeoutFn?: typeof setTimeout;
+    clearTimeoutFn?: typeof clearTimeout;
+  } = {},
 ): RealtimeClient {
   const client = new RealtimeClient({
     baseUrl: serverUrl,
@@ -66,6 +78,14 @@ function makeClient(
     localDb: db,
     random: opts.random ?? (() => 0),
     idleTimeoutMs: opts.idleTimeoutMs,
+    silenceThresholdMs: opts.silenceThresholdMs,
+    probeDeadlineMs: opts.probeDeadlineMs,
+    handshakeTimeoutMs: opts.handshakeTimeoutMs,
+    offlineAfterMs: opts.offlineAfterMs,
+    fastReconnectWindowMs: opts.fastReconnectWindowMs,
+    now: opts.now,
+    setTimeout: opts.setTimeoutFn,
+    clearTimeout: opts.clearTimeoutFn,
   });
   teardowns.push(async () => {
     // Defensive: never throw out of a teardown — would mask the real failure.
@@ -369,7 +389,7 @@ describe('RealtimeClient — close codes & reconnect', () => {
 
     // Force a non-terminal close. Client must reconnect and resend resume(33).
     connections[0]!.close(1001, 'server restart');
-    await wait(80);
+    await until(() => connections.length >= 2);
 
     assert.ok(resumes.includes(33), `expected resume with last_seq=33, got ${resumes.join(',')}`);
     assert.ok(
@@ -551,5 +571,266 @@ describe('normaliseWsUrl', () => {
     assert.equal(normaliseWsUrl('https://etn.example.com/'), 'wss://etn.example.com');
     assert.equal(normaliseWsUrl('ws://h:1///'), 'ws://h:1');
     assert.equal(normaliseWsUrl('wss://h'), 'wss://h');
+  });
+});
+
+
+describe('RealtimeClient — liveness probe & suspect (defect de34b35b)', () => {
+  it('sends exactly one ping after the silence threshold and returns to connected on any frame', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const client = makeClient(url, db, 'net1', {
+      silenceThresholdMs: 60,
+      probeDeadlineMs: 400,
+      idleTimeoutMs: 5_000,
+      random: () => 0,
+    });
+
+    const statuses: string[] = [];
+    client.onTyped('status', (s) => statuses.push(s));
+
+    const conn = nextConnection(server);
+    client.connect();
+    const ws = await conn;
+    await waitForResume(ws);
+
+    // No ping before the threshold.
+    assert.equal(ws.messages.filter((m) => m.includes('"type":"ping"')).length, 0);
+
+    await until(() => ws.messages.some((m) => m.includes('"type":"ping"')), 2_000);
+    assert.equal(client.getStatus(), 'suspect');
+    assert.ok(statuses.includes('suspect'), statuses.join(','));
+
+    // Still exactly one application ping while the probe awaits its deadline.
+    await wait(80);
+    assert.equal(ws.messages.filter((m) => m.includes('"type":"ping"')).length, 1);
+
+    // Any inbound frame (here: a pong) proves liveness — no reconnect.
+    ws.send(JSON.stringify({ type: 'pong' }));
+    await until(() => client.getStatus() === 'connected');
+    assert.equal(server.clients.size, 1);
+    client.disconnect();
+  });
+
+  it('no frame within the probe deadline → suspect → reconnecting → resume with the same last_seq', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({ last_seq: JSON.stringify({ net1: 77 }) });
+    const client = makeClient(url, db, 'net1', {
+      silenceThresholdMs: 50,
+      probeDeadlineMs: 80,
+      idleTimeoutMs: 5_000,
+      random: () => 0,
+    });
+
+    const statuses: string[] = [];
+    client.onTyped('status', (s) => statuses.push(s));
+
+    const connections = trackSockets(server);
+    const conn1 = nextConnection(server);
+    const conn2 = nextConnection(server);
+    client.connect();
+    await conn1;
+
+    await until(() => connections.length >= 2, 3_000);
+    const ws2 = await conn2;
+    await until(() => ws2.messages.some((m) => m.includes('"resume"')), 2_000);
+    const resumes = ws2.messages.map((m) => JSON.parse(m) as { type: string; last_seq?: number });
+    assert.ok(resumes.some((m) => m.type === 'resume' && m.last_seq === 77));
+    assert.ok(statuses.includes('suspect'), statuses.join(','));
+    assert.ok(statuses.includes('reconnecting'), statuses.join(','));
+    client.disconnect();
+  });
+
+  it('honours handshakeTimeout when the peer never completes the upgrade', async () => {
+    // Raw TCP server that accepts and then stays silent: the upgrade never
+    // completes, so only handshakeTimeout can end the attempt.
+    const accepted = new Set<net.Socket>();
+    const raw = net.createServer((socket) => {
+      accepted.add(socket);
+    });
+    await new Promise<void>((resolve) => raw.listen(0, '127.0.0.1', resolve));
+    teardowns.push(async () => {
+      // The accepted socket never finishes the upgrade; destroy it explicitly,
+      // otherwise `raw.close()` waits for it and the teardown hangs.
+      for (const socket of accepted) socket.destroy();
+      raw.close();
+    });
+    const address = raw.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    const db = makeFakeDb({});
+    const client = makeClient(`ws://127.0.0.1:${port}`, db, 'net1', {
+      handshakeTimeoutMs: 80,
+      random: () => 0,
+      fastReconnectWindowMs: 100,
+    });
+    const errors: Error[] = [];
+    client.onTyped('error', (e) => errors.push(e));
+
+    client.connect();
+    await until(() => errors.length > 0, 3_000);
+    assert.match(errors[0]!.message, /handshake|timeout|closed/i);
+    client.disconnect();
+  });
+
+  it('1001 server shutdown raises detail server-restart and reconnects immediately', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const delays: number[] = [];
+    const recordingSet = ((fn: () => void, ms: number) => {
+      delays.push(ms);
+      return setTimeout(fn, ms);
+    }) as unknown as typeof setTimeout;
+    const client = makeClient(url, db, 'net1', {
+      random: () => 0,
+      setTimeoutFn: recordingSet,
+    });
+    const transitions: Array<[string, string | undefined]> = [];
+    client.onTyped('status', (s, d) => transitions.push([s, d]));
+
+    const conn = nextConnection(server);
+    client.connect();
+    const ws = await conn;
+    await waitForResume(ws);
+
+    ws.close(1001, 'server shutdown');
+    await until(() => client.getStatusDetail() === 'server-restart', 2_000);
+    assert.equal(client.getStatus(), 'reconnecting');
+    assert.ok(transitions.some(([s, d]) => s === 'reconnecting' && d === 'server-restart'));
+    assert.ok(delays.includes(0), `нет немедленного реконнекта: ${delays.join(',')}`);
+    client.disconnect();
+  });
+
+  it('1001 pong timeout reconnects without the server-restart detail', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const client = makeClient(url, db, 'net1', { random: () => 0 });
+    const transitions: Array<[string, string | undefined]> = [];
+    client.onTyped('status', (s, d) => transitions.push([s, d]));
+
+    const conn = nextConnection(server);
+    client.connect();
+    const ws = await conn;
+    await waitForResume(ws);
+
+    ws.close(1001, 'pong timeout');
+    await until(() => client.getStatus() === 'reconnecting', 2_000);
+    assert.equal(client.getStatusDetail(), null);
+    assert.ok(transitions.every(([, d]) => d !== 'server-restart'));
+    client.disconnect();
+  });
+
+  it('disconnect() cancels every scheduled timer and never reconnects', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const scheduled: number[] = [];
+    let cleared = 0;
+    const fakeSet = ((_fn: () => void, ms: number) => {
+      scheduled.push(ms);
+      // Never fire: the test checks that disconnect() clears what was armed.
+      return { unref: () => undefined } as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setTimeout;
+    const fakeClear = (() => {
+      cleared += 1;
+    }) as unknown as typeof clearTimeout;
+    const client = makeClient(url, db, 'net1', {
+      setTimeoutFn: fakeSet,
+      clearTimeoutFn: fakeClear,
+      random: () => 0,
+    });
+
+    const connections = trackSockets(server);
+    const conn = nextConnection(server);
+    client.connect();
+    const ws = await conn;
+    await waitForResume(ws);
+    await until(() => scheduled.length > 0, 2_000); // silence + idle watchdog
+
+    client.disconnect();
+    assert.equal(client.getStatus(), 'idle');
+    assert.equal(cleared, scheduled.length, 'все таймеры должны быть погашены');
+    await wait(50);
+    assert.equal(connections.length, 1);
+  });
+
+  it('probeLiveness is a no-op after a terminal 4401 close', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const client = makeClient(url, db, 'net1', { random: () => 0 });
+
+    const conn = nextConnection(server);
+    client.connect();
+    const ws = await conn;
+    await waitForResume(ws);
+    ws.close(4401, 'membership lost');
+    await until(() => client.getStatus() === 'offline', 2_000);
+
+    client.probeLiveness('action');
+    assert.equal(client.getStatus(), 'offline');
+    assert.equal(client.getStatusDetail(), null);
+    client.disconnect();
+  });
+
+  it('reconnect ladder: fast window 0.5–1 s, then 2/4/8/15 s; offline after 60 s keeps retrying', async () => {
+    // Nothing listens on port 1: every attempt fails fast.
+    let clock = 0;
+    const pending: Array<{ fn: () => void; ms: number }> = [];
+    const fakeSet = ((fn: () => void, ms: number) => {
+      pending.push({ fn, ms });
+      return { unref: () => undefined } as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setTimeout;
+    const fakeClear = (() => undefined) as unknown as typeof clearTimeout;
+    const db = makeFakeDb({});
+    const client = makeClient('ws://127.0.0.1:1', db, 'net1', {
+      random: () => 0,
+      now: () => clock,
+      offlineAfterMs: 60_000,
+      fastReconnectWindowMs: 10_000,
+      silenceThresholdMs: 1_000_000,
+      idleTimeoutMs: 1_000_000,
+      setTimeoutFn: fakeSet,
+      clearTimeoutFn: fakeClear,
+    });
+
+    client.connect();
+    await until(() => pending.length > 0, 3_000);
+    const first = pending.shift()!;
+    assert.ok(first.ms >= 500 && first.ms <= 1_000, `fast delay ${first.ms}`);
+
+    // Leave the fast window; the ladder starts at ~2 s (50 % jitter with
+    // random()=0) and doubles up to 15 s.
+    clock = 10_000;
+    first.fn();
+    await until(() => pending.length > 0, 3_000);
+    const second = pending.shift()!;
+    assert.equal(second.ms, 1_000, `ladder step 1: ${second.ms}`);
+
+    second.fn();
+    await until(() => pending.length > 0, 3_000);
+    const third = pending.shift()!;
+    assert.equal(third.ms, 2_000, `ladder step 2: ${third.ms}`);
+
+    third.fn();
+    await until(() => pending.length > 0, 3_000);
+    const fourth = pending.shift()!;
+    assert.equal(fourth.ms, 4_000, `ladder step 3: ${fourth.ms}`);
+
+    fourth.fn();
+    await until(() => pending.length > 0, 3_000);
+    const fifth = pending.shift()!;
+    assert.equal(fifth.ms, 7_500, `ladder step 4: ${fifth.ms}`);
+
+    // Past 60 s the status turns red, but attempts keep going (no cap).
+    clock = 61_000;
+    fifth.fn();
+    await until(() => pending.length > 0, 3_000);
+    assert.equal(client.getStatus(), 'offline');
+    assert.equal(pending.length, 1, 'попытки продолжаются после offline');
+    client.disconnect();
   });
 });

@@ -20,13 +20,27 @@ import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
 import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
-import { createHandlers, selfMutationNetwork } from './handlers.js';
+import {
+  actionProbeNetwork,
+  blockedMutationNetwork,
+  connectionLostIpcError,
+  createHandlers,
+  selfMutationNetwork,
+} from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
 import { toIpcErrorEnvelope } from './contract.js';
 import type { IpcCallContext, IpcInvokePayload } from './contract.js';
 
 /** IPC calls slower than this are journaled as WARN instead of INFO (f051bf95 §3). */
 const IPC_SLOW_MS = 500;
+
+/**
+ * A user action that has not settled within this window triggers an on-demand
+ * liveness probe of its network (defect de34b35b): a live connection returns
+ * to `connected` on the first frame, a dead one is force-reconnected instead
+ * of hanging for the REST retry cycle.
+ */
+const ACTION_PROBE_DELAY_MS = 3_000;
 
 /** Options for {@link registerIpc}. */
 export interface RegisterIpcOptions {
@@ -128,6 +142,25 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
       },
       broadcast,
+      // Link-down tracking per network (defect de34b35b): while the socket is
+      // not `connected`, mutating REST calls for that network are rejected
+      // before they leave main, and in-flight requests are aborted without
+      // retries. `idle` (no tab) and `connecting` (first attempt) are not
+      // outages.
+      onStatus: (networkId, status) => {
+        if (status === 'connected') {
+          restClient.setLinkDown(networkId, false);
+        } else if (status === 'suspect') {
+          // Probe in flight: new mutations are blocked, but the hung request
+          // that triggered the check must keep running — if the pong arrives
+          // the action continues (de34b35b).
+          restClient.setLinkDown(networkId, true, false);
+        } else if (status === 'reconnecting' || status === 'offline') {
+          // The probe failed / the link is down: cancel in-flight requests so
+          // the user does not wait for the 30 s × 3 REST retry cycle.
+          restClient.setLinkDown(networkId, true);
+        }
+      },
     });
 
     rest = restClient;
@@ -248,6 +281,26 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       getClientLog()?.error('ipc', 'unknown method', { method: payload.method });
       throw new Error(`Unknown IPC method: ${payload.method}`);
     }
+    const args = payload.args ?? [];
+    // Centralised mutation gate (defect de34b35b): while the call's network is
+    // not `connected`, mutating channels are rejected HERE, before the handler
+    // reaches REST. Reads, `server.*` and `ui.*` are never blocked.
+    const blockedNetwork =
+      pool === null
+        ? null
+        : blockedMutationNetwork(
+            payload.method,
+            args,
+            (networkId) => pool?.has(networkId) ?? false,
+            (networkId) => pool?.getStatus(networkId) ?? 'idle',
+          );
+    if (blockedNetwork !== null) {
+      getClientLog()?.warn('ipc', 'mutation blocked: network link down', {
+        method: payload.method,
+        networkId: blockedNetwork,
+      });
+      return toIpcErrorEnvelope(connectionLostIpcError(blockedNetwork));
+    }
     // Journal instrumentation (task f051bf95 §3): method + duration per call,
     // slow calls (>IPC_SLOW_MS) as WARN, failures as ERROR (always written).
     const startedAt = Date.now();
@@ -259,9 +312,21 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     const controller = new AbortController();
     if (requestId !== null) inflight.set(requestId, controller);
     const callCtx: IpcCallContext = { signal: controller.signal };
+    // Liveness probe on a hung action (defect de34b35b): 3 s without a result
+    // asks the pool to check the connection instead of letting the user wait
+    // for the REST timeout. Cleared as soon as the call settles.
+    const probeNetwork = actionProbeNetwork(payload.method, args, currentNetworkId);
+    let probeTimer: NodeJS.Timeout | null = null;
+    if (probeNetwork !== null && pool !== null) {
+      probeTimer = setTimeout(() => {
+        probeTimer = null;
+        pool?.probeLiveness(probeNetwork);
+      }, ACTION_PROBE_DELAY_MS);
+      probeTimer.unref?.();
+    }
     let result: unknown;
     try {
-      result = await handler(payload.args ?? [], callCtx);
+      result = await handler(args, callCtx);
     } catch (err) {
       getClientLog()?.error('ipc', 'ipc call failed', {
         method: payload.method,
@@ -275,6 +340,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // `VERSION_CONFLICT`), восстанавливают `EtnError` в renderer из конверта.
       return toIpcErrorEnvelope(err);
     } finally {
+      if (probeTimer !== null) clearTimeout(probeTimer);
       if (requestId !== null) inflight.delete(requestId);
     }
     const durationMs = Date.now() - startedAt;

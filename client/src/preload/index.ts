@@ -359,10 +359,11 @@ function buildApi(): EtnBridgeApi {
       },
       onStatusChange(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
-          cb(payload as { networkId: string; status: string });
+          cb(payload as { networkId: string; status: string; detail?: string });
         ipcRenderer.on('realtime:status', listener);
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
+      getStatuses: () => invoke('realtime.getStatuses'),
       onStale(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
           cb(payload as { networkId: string; lastSeq: number });

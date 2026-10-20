@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
+import { CLIENT_META_KEY, EtnError, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
@@ -169,6 +169,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       // network's status for legacy callers.
       return poolStatusFor(pool, networkId);
     }),
+  );
+
+  // Per-network status snapshot (defect de34b35b): the renderer pulls it once
+  // at boot so switching tabs shows the right indicator immediately.
+  handlers.set(
+    'realtime.getStatuses',
+    bind(() => deps.getRealtimePool()?.statusSnapshot() ?? []),
   );
 
   // --- networks -------------------------------------------------------------
@@ -2482,4 +2489,56 @@ export function selfMutationNetwork(method: string, args: unknown[]): string | n
   if (!SELF_MUTATING_IPC_METHODS.has(method)) return null;
   const networkId = args[0];
   return typeof networkId === 'string' && networkId.length > 0 ? networkId : null;
+}
+
+/** Canonical UUID shape (used to recognise a network id among IPC args). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Typed rejection of a mutating call while its network is unreachable
+ * (defect de34b35b). Same message/shape the REST client uses, so the renderer
+ * shows one consistent text regardless of where the gate fired.
+ */
+export function connectionLostIpcError(networkId: string): EtnError {
+  return new EtnError(
+    'INTERNAL',
+    'Нет связи с сервером — действие не отправлено. Повторите после восстановления связи.',
+    { kind: 'connection-lost', networkId },
+  );
+}
+
+/**
+ * Centralised mutation gate (defect de34b35b): returns the network id when the
+ * call is a network mutation AND that network is known to the pool but not
+ * `connected`. Reads, `server.*`, `ui.*` and networks not held by the pool are
+ * never blocked.
+ */
+export function blockedMutationNetwork(
+  method: string,
+  args: unknown[],
+  hasNetwork: (networkId: string) => boolean,
+  statusOf: (networkId: string) => import('../net/ws-client.js').RealtimeStatus,
+): string | null {
+  const networkId = selfMutationNetwork(method, args);
+  if (networkId === null) return null;
+  if (!hasNetwork(networkId)) return null;
+  return statusOf(networkId) === 'connected' ? null : networkId;
+}
+
+/**
+ * Network whose liveness should be probed when an IPC call hangs for 3 s
+ * (defect de34b35b): the first positional UUID, otherwise the currently open
+ * network. `null` when the call has no network at all.
+ */
+export function actionProbeNetwork(
+  method: string,
+  args: unknown[],
+  currentNetworkId: string | null,
+): string | null {
+  if (method.startsWith('server.') || method.startsWith('admin.') || method.startsWith('me.')) {
+    return null;
+  }
+  const first = args[0];
+  if (typeof first === 'string' && UUID_RE.test(first)) return first;
+  return currentNetworkId;
 }

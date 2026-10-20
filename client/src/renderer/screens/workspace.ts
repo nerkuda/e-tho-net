@@ -27,7 +27,7 @@ import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/ui/icon.js';
-import { store, type RtStatus } from '../state.js';
+import { store, getRtStatus, getRtStatusDetail, type RtStatus, type RtStatusDetail } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
@@ -149,18 +149,34 @@ export function getWorkspace(): WorkspaceHandles | null {
   return current;
 }
 
-/** Status indicator colour class + tooltip per realtime status (§11, L13). */
-export function statusGlyph(status: RtStatus): { cls: string; text: string } {
+/**
+ * Status indicator colour class + visible text per realtime status (§11, L13,
+ * defect de34b35b). `detail === 'server-restart'` qualifies the yellow
+ * `reconnecting` state with «Сервер перезапускается…».
+ */
+export function statusGlyph(status: RtStatus, detail?: RtStatusDetail | null): { cls: string; text: string } {
   switch (status) {
     case 'connected':
       return { cls: 'ok', text: 'Подключено' };
     case 'connecting':
       return { cls: 'warn', text: 'Подключение…' };
+    case 'suspect':
+      return { cls: 'warn', text: 'Проверяем связь…' };
     case 'reconnecting':
-      return { cls: 'warn', text: 'Переподключение…' };
+      return detail === 'server-restart'
+        ? { cls: 'warn', text: 'Сервер перезапускается…' }
+        : { cls: 'warn', text: 'Переподключение…' };
+    case 'offline':
+      return { cls: 'bad', text: 'Нет связи' };
     default:
-      return { cls: 'bad', text: 'Нет соединения' };
+      // `idle` — no open network is a neutral state, not a failure.
+      return { cls: '', text: 'Нет открытой сети' };
   }
+}
+
+/** `true` for states where changing actions are blocked (yellow/red). */
+export function isReadOnlyStatus(status: RtStatus): boolean {
+  return status === 'connecting' || status === 'suspect' || status === 'reconnecting' || status === 'offline';
 }
 
 /** Applies `editor_position` (left/right/top/bottom/hidden) to the body. */
@@ -367,6 +383,14 @@ export function buildWorkspace(): HTMLElement {
   const statusbar = div('statusbar');
 
   const statusLeft = span('', 'status-light');
+  // Visible status caption (defect de34b35b): the dot alone was not enough —
+  // the user must see «Проверяем связь…» / «Сервер перезапускается…» / «Нет
+  // связи». Width is reserved in CSS so the history strip does not jitter
+  // when the text changes (bug de07e690).
+  const statusText = span('', 'sb-status-text');
+  // Read-only affordance for yellow/red states (defect de34b35b): a minimal
+  // visible marker — controls stay enabled, the main-process gate blocks writes.
+  const readOnlyBadge = span('Только чтение', 'sb-readonly hidden');
   // Zoom indicator (08-ui-spec §11): sits to the LEFT of the history strip,
   // immediately after the connection dot — the old position next to the
   // event area invited the layout to repaint the history chips every time
@@ -397,6 +421,8 @@ export function buildWorkspace(): HTMLElement {
 
   statusbar.append(
     statusLeft,
+    statusText,
+    readOnlyBadge,
     zoomLabel,
     historyHost,
     eventAreaResizer,
@@ -472,9 +498,12 @@ export function buildWorkspace(): HTMLElement {
     // carries the full layer name (even when the label is not truncated).
     layerMenuLabel.textContent = truncateLayerMenuLabel(st.currentLayer?.title);
     setTooltip(layerMenuButton, layerMenuTooltip(st.currentLayer?.title));
-    const glyph = statusGlyph(st.rtStatus);
-    statusLeft.className = `status-light ${glyph.cls}`;
+    const rtStatus = getRtStatus(st);
+    const glyph = statusGlyph(rtStatus, getRtStatusDetail(st));
+    statusLeft.className = `status-light ${glyph.cls}`.trimEnd();
     setTooltip(statusLeft, glyph.text);
+    statusText.textContent = glyph.text;
+    readOnlyBadge.classList.toggle('hidden', !isReadOnlyStatus(rtStatus));
     applyEditorPosition(body, st.editorPosition);
     const editorHidden = st.editorPosition === 'hidden';
     editorHost.classList.toggle('hidden', editorHidden);

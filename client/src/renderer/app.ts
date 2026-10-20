@@ -710,7 +710,12 @@ export async function boot(): Promise<void> {
   initTransclusionSourceCache();
   initRealtime();
   setRealtimeEffects({
-    onStale: () => scheduleRefresh(REALTIME_CONTROL_CAUSE),
+    // Full visible resync, not just a focus refresh (defect de34b35b):
+    // `resume.stale` means the event window was exceeded — the editor and the
+    // structures/chronicle snapshots are just as stale as the focus.
+    onStale: () => {
+      void resyncAfterLayerSwitch();
+    },
     onFocusLost: () => {
       // Another user deleted our focused thought — same recovery as the
       // local delete: previous from the history, else HOME.

@@ -56,8 +56,11 @@ export type EditorTarget =
   | { kind: 'link'; id: string; link: Link }
   | { kind: 'publication'; id: string; publication?: Publication };
 
-/** Realtime connection status as reported by the main process. */
-export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
+/** Realtime connection status as reported by the main process (de34b35b). */
+export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspect';
+
+/** Visual qualifier of a realtime status (`server-restart` → «Сервер перезапускается…»). */
+export type RtStatusDetail = 'server-restart';
 
 /** UI theme (L5 `client_meta.theme`, L10). */
 export type Theme = 'light' | 'dark';
@@ -138,6 +141,9 @@ export interface AppState {
    *  `networkId` открытой сети. Активный статус берётся по
    *  {@link AppState.networkId}; fallback — {@link AppState.rtStatus}. */
   rtStatusByNetwork: Record<string, RtStatus>;
+  /** Visual qualifiers per network (de34b35b): e.g. `server-restart` while a
+   *  planned restart is in progress. Absent key = plain status. */
+  rtStatusDetailByNetwork: Record<string, RtStatusDetail>;
   /** UI theme applied to the document root (L5 `client_meta.theme`, L10). */
   theme: Theme;
   /** Last realtime event description for the status bar (auto-hides). */
@@ -239,6 +245,7 @@ const initial: AppState = {
   thoughtTypes: [],
   rtStatus: 'idle',
   rtStatusByNetwork: {},
+  rtStatusDetailByNetwork: {},
   theme: 'light',
   lastEvent: null,
   editorTarget: null,
@@ -329,12 +336,38 @@ class Store {
       layerOverrides: { thought_ids: [], link_ids: [] },
       lockCache: {},
       lockCacheTick: 0,
+      // Connection state belongs to the networks that were open; dropping it
+      // prevents a stale green/red dot after reconnecting (de34b35b).
+      rtStatus: 'idle',
+      rtStatusByNetwork: {},
+      rtStatusDetailByNetwork: {},
     });
   }
 }
 
 /** The single renderer store instance. */
 export const store = new Store();
+
+/**
+ * Effective realtime status of the ACTIVE network (defect de34b35b). Statuses
+ * are per network; switching a tab must show that network's status, not the
+ * last event's. Falls back to the flat `rtStatus` for network-less states.
+ */
+export function getRtStatus(state: AppState): RtStatus {
+  const networkId = state.networkId;
+  if (networkId !== null) {
+    const perNetwork = state.rtStatusByNetwork[networkId];
+    if (perNetwork !== undefined) return perNetwork;
+  }
+  return state.rtStatus;
+}
+
+/** Effective visual qualifier of the ACTIVE network's status, or `null`. */
+export function getRtStatusDetail(state: AppState): RtStatusDetail | null {
+  const networkId = state.networkId;
+  if (networkId === null) return null;
+  return state.rtStatusDetailByNetwork[networkId] ?? null;
+}
 
 /**
  * Applies an updated link to the focus edges so the canvas repaints the line

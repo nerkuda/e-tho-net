@@ -671,6 +671,42 @@ export class RealtimeGateway {
     }
   }
 
+  /**
+   * Planned-shutdown close (defect de34b35b): sends `1001 server shutdown` to
+   * every live socket and waits up to 200 ms for the close handshake so the
+   * frame actually reaches the client. Called from the ROOT `preClose` hook,
+   * which is registered before the WS plugin (otherwise
+   * `@fastify/websocket` drops sockets with 1005 and the client cannot tell a
+   * planned restart from a network failure).
+   */
+  public async closeAllGracefully(timeoutMs = 200): Promise<void> {
+    const conns = [...this.connections];
+    if (conns.length === 0) return;
+    const waits = conns.map(
+      (conn) =>
+        new Promise<void>((resolve) => {
+          const socket = conn.socket;
+          if (socket.readyState === WebSocket.CLOSED) {
+            resolve();
+            return;
+          }
+          let settled = false;
+          const finish = (): void => {
+            if (settled) return;
+            settled = true;
+            socket.off('close', finish);
+            resolve();
+          };
+          socket.once('close', finish);
+          this.closeSocket(socket, 1001, 'server shutdown');
+          // The close handshake may never answer (peer gone); the deadline
+          // keeps shutdown bounded.
+          setTimeout(finish, timeoutMs).unref?.();
+        }),
+    );
+    await Promise.allSettled(waits);
+  }
+
   private closeSocket(socket: WebSocket, code: number, reason: string): void {
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
       socket.close(code, reason);

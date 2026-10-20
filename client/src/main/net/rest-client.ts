@@ -82,6 +82,37 @@ const RETRY_MAX_DELAY_MS = 5_000;
 const RESPONSE_TIMEOUT_MS = 30_000;
 
 /**
+ * Network id embedded in an API path (`/networks/<uuid>/...`). Link-down
+ * tracking is per network (defect de34b35b): one network can be unreachable
+ * while another still answers.
+ */
+const NETWORK_PATH_RE =
+  /\/networks\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i;
+
+/** Extracts the network id from an API path, or `null` for network-less routes. */
+export function networkIdFromApiPath(path: string): string | null {
+  return NETWORK_PATH_RE.exec(path)?.[1]?.toLowerCase() ?? null;
+}
+
+/** Abort reason used when a network is marked as unreachable (de34b35b). */
+interface ConnectionLostReason {
+  kind: 'connection-lost';
+  networkId: string;
+}
+
+/** Error thrown instead of sending/retrying while the network is unreachable. */
+function connectionLostError(networkId: string, message: string): EtnError {
+  return new EtnError('INTERNAL', message, { kind: 'connection-lost', networkId });
+}
+
+/** `true` when `reason` is OUR link-down abort for `networkId`. */
+function isConnectionLostReason(reason: unknown, networkId: string): boolean {
+  if (typeof reason !== 'object' || reason === null) return false;
+  const r = reason as Partial<ConnectionLostReason>;
+  return r.kind === 'connection-lost' && r.networkId === networkId;
+}
+
+/**
  * Префикс курсора-заглушки для сервера старше этапа 4 (нет `count`/`cursor` в
  * строгом контракте запроса, ошибка da2c68a7). Такой сервер листает список
  * только через `offset`, поэтому деградация кодирует продолжение в тот же
@@ -232,12 +263,74 @@ export class RestClient {
    */
   private legacyStructureQuery = false;
 
+  /**
+   * Networks currently marked unreachable by the realtime layer (de34b35b).
+   * While a network is down, mutating requests for it are not sent and
+   * in-flight requests are aborted without the usual 3 retries.
+   */
+  private readonly downNetworks = new Set<string>();
+
+  /**
+   * In-flight abort controllers per network id: `abortInflight(networkId)`
+   * cancels exactly the requests of the network whose link dropped.
+   */
+  private readonly activeControllers = new Map<string, Set<AbortController>>();
+
   public constructor(opts: RestClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
     this.getApiKey = opts.getApiKey;
     this.getClientId = opts.getClientId;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.random = opts.random ?? Math.random;
+  }
+
+  /**
+   * Marks `networkId` as unreachable (`down: true`) or reachable again
+   * (de34b35b). Going down aborts every in-flight request of that network
+   * unless `abortInflight` is `false`; those aborts are recognised as
+   * connection-loss and never retried.
+   *
+   * `suspect` marks the network down with `abortInflight: false`: new
+   * mutations are already blocked, but a hung user action must survive the 3 s
+   * probe window and continue if the pong proves the connection alive.
+   */
+  public setLinkDown(networkId: string, down: boolean, abortInflight = true): void {
+    if (down) {
+      this.downNetworks.add(networkId);
+      if (abortInflight) this.abortInflight(networkId);
+      return;
+    }
+    this.downNetworks.delete(networkId);
+  }
+
+  /** Aborts every in-flight request of `networkId` (de34b35b). */
+  public abortInflight(networkId: string): void {
+    const controllers = this.activeControllers.get(networkId);
+    if (controllers === undefined) return;
+    const reason: ConnectionLostReason = { kind: 'connection-lost', networkId };
+    for (const controller of controllers) {
+      try {
+        controller.abort(reason);
+      } catch {
+        // Already aborted / settled — nothing to do.
+      }
+    }
+    this.activeControllers.delete(networkId);
+  }
+
+  /** Registers an attempt's controller under its network. */
+  private trackController(networkId: string, controller: AbortController): void {
+    const set = this.activeControllers.get(networkId) ?? new Set<AbortController>();
+    set.add(controller);
+    this.activeControllers.set(networkId, set);
+  }
+
+  /** Drops a settled attempt's controller. */
+  private untrackController(networkId: string, controller: AbortController): void {
+    const set = this.activeControllers.get(networkId);
+    if (set === undefined) return;
+    set.delete(controller);
+    if (set.size === 0) this.activeControllers.delete(networkId);
   }
 
   // -------------------------------------------------------------------------
@@ -350,9 +443,19 @@ export class RestClient {
   ): Promise<ResponseEnvelope<T>> {
     const url = this.buildUrl(path, opts.query);
     const ro = opts.requestOptions ?? {};
+    const networkId = networkIdFromApiPath(path);
+    const mutating = method !== 'GET' && method !== 'HEAD';
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Link gate (de34b35b): a mutating request for an unreachable network is
+      // never sent — not even as a retry after the link dropped mid-flight.
+      if (mutating && networkId !== null && this.downNetworks.has(networkId)) {
+        throw connectionLostError(
+          networkId,
+          'Нет связи с сервером — действие не отправлено. Повторите после восстановления связи.',
+        );
+      }
       // Compose headers per attempt: the API-key is resolved lazily so a key
       // rotation mid-session is picked up without rebuilding the client.
       const headers: Record<string, string> = {
@@ -373,6 +476,7 @@ export class RestClient {
       // Compose the abort signal: internal response timeout, merged with any
       // caller-supplied signal. AbortController that triggers on whichever fires.
       const controller = new AbortController();
+      if (networkId !== null) this.trackController(networkId, controller);
       const timeout = setTimeout(
         () => controller.abort(new Error('ETN response timeout')),
         RESPONSE_TIMEOUT_MS,
@@ -399,6 +503,7 @@ export class RestClient {
         });
       } catch (err: unknown) {
         clearTimeout(timeout);
+        if (networkId !== null) this.untrackController(networkId, controller);
         getClientLog()?.info('rest', 'request attempt failed', {
           method,
           path,
@@ -406,9 +511,25 @@ export class RestClient {
           duration_ms: Date.now() - attemptStarted,
           error: errTextShort(err),
         });
+        // Caller abort keeps its original error (and is never retried).
+        if (ro.signal?.aborted) throw err;
+        // Link-down abort (de34b35b): the network is unreachable — do NOT run
+        // the 3 × 30 s retry cycle, surface a typed connection-lost error.
+        if (
+          networkId !== null &&
+          (this.downNetworks.has(networkId) ||
+            isConnectionLostReason(controller.signal.reason, networkId))
+        ) {
+          getClientLog()?.warn('rest', 'request aborted: network link down', {
+            method,
+            path,
+            networkId,
+            attempt,
+          });
+          throw connectionLostError(networkId, 'Нет связи с сервером — запрос отменён');
+        }
         // Network-level failure (DNS, connection refused, timeout abort, etc.).
         // Retryable unless the caller aborted the request themselves.
-        if (ro.signal?.aborted) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
         if (attempt < MAX_ATTEMPTS) {
           await this.backoff(method, path, attempt, classifyRetryReason(lastError));
@@ -425,6 +546,7 @@ export class RestClient {
         throw new EtnError('INTERNAL', message);
       }
       clearTimeout(timeout);
+      if (networkId !== null) this.untrackController(networkId, controller);
 
       // Retry transient server errors (5xx) once more.
       if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {

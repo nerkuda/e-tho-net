@@ -16,7 +16,7 @@ import { errText } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { notice } from './lib/notice.js';
 import { isConnected } from './realtime.js';
-import { store } from './state.js';
+import { getRtStatus, store, type RtStatus } from './state.js';
 
 /** Draft entity types supported by the retry loop. */
 export type DraftKind = 'comment' | 'comment-new' | 'thought' | 'transclusion';
@@ -36,20 +36,59 @@ export interface DraftRecord {
 
 let lastConnected = false;
 let initialized = false;
+/** `true` once the active network was connected at least once this session. */
+let hadConnection = false;
+/** Previous per-network statuses (draft retries are per network, de34b35b). */
+let prevByNetwork: Record<string, RtStatus> = {};
+
+/** Status-specific warning shown when the active connection drops (de34b35b). */
+function linkLossMessage(status: RtStatus): string {
+  switch (status) {
+    case 'suspect':
+      return 'Проверяем связь с сервером — изменения не отправляются, правка сохраняется как черновик.';
+    case 'reconnecting':
+      return 'Переподключение к серверу — изменения не отправляются, правка сохраняется как черновик.';
+    case 'offline':
+      return 'Соединение потеряно — правки сохраняются как черновики.';
+    default:
+      return 'Нет соединения — правка сохранена как черновик и отправится после восстановления связи.';
+  }
+}
 
 /** Initializes the offline detection + retry loop. Called once at boot. */
 export function initDrafts(): void {
   if (initialized) return;
   initialized = true;
   lastConnected = isConnected();
+  hadConnection = lastConnected;
+  prevByNetwork = { ...store.state.rtStatusByNetwork };
   store.subscribe(() => {
+    // Per-network recovery (de34b35b): drafts of EVERY network are re-sent,
+    // not just the active one.
+    const map = store.state.rtStatusByNetwork;
+    for (const [nid, status] of Object.entries(map)) {
+      if (status === 'connected' && prevByNetwork[nid] !== undefined && prevByNetwork[nid] !== 'connected') {
+        if (nid !== store.state.networkId) void retryPendingDrafts(nid);
+      }
+    }
+    prevByNetwork = { ...map };
+
     const connected = isConnected();
     if (connected && !lastConnected) {
-      notice('Соединение восстановлено.', 'success');
-      void retryPendingDrafts();
-    } else if (!connected && lastConnected && store.state.rtStatus === 'offline') {
-      notice('Соединение потеряно — правки сохраняются как черновики.', 'warning');
+      // Recovery notice only after a real loss: the very first connect must
+      // not claim «Соединение восстановлено» (de34b35b).
+      if (hadConnection) {
+        notice('Соединение восстановлено.', 'success');
+        void retryPendingDrafts();
+      }
+      hadConnection = true;
+    } else if (!connected && lastConnected) {
+      // One notice per connected → not-connected transition; the status text
+      // follows the CURRENT state, so suspect→reconnecting→offline does not
+      // spam the user.
+      notice(linkLossMessage(getRtStatus(store.state)), 'warning');
     }
+    if (connected) hadConnection = true;
     lastConnected = connected;
   });
 }
@@ -254,19 +293,32 @@ export async function clearSourceDrafts(
 
 /** Blocks a save while offline: notifies and keeps the draft. */
 export function offlineNotice(): void {
+  const status = getRtStatus(store.state);
+  const prefix =
+    status === 'suspect'
+      ? 'Проверяем связь… '
+      : status === 'reconnecting'
+        ? 'Идёт переподключение… '
+        : status === 'offline'
+          ? 'Нет связи с сервером. '
+          : '';
   notice(
-    'Нет соединения — правка сохранена как черновик и отправится после восстановления связи.',
+    `${prefix}Правка сохранена как черновик и отправится после восстановления связи.`,
     'warning',
   );
 }
 
-/** Re-sends every pending draft of the open network. */
-export async function retryPendingDrafts(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+/**
+ * Re-sends pending drafts of `networkId` (default: the active network) after a
+ * connection recovery (de34b35b). Per-network: a background tab that came back
+ * online must flush its own drafts, not only the visible one.
+ */
+export async function retryPendingDrafts(networkId?: string): Promise<void> {
+  const target = networkId ?? store.state.networkId;
+  if (target === null) return;
   let drafts: DraftRecord[];
   try {
-    drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
+    drafts = (await etn.ui.draftList(target)) as DraftRecord[];
   } catch {
     return;
   }
