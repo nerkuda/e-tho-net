@@ -3,7 +3,7 @@
  * требование 53701739). Матрица по состоянию строки:
  *
  *  - системные («Родители»/«Потомки») — меню нет;
- *  - типовая — «Изменить», «Очистить», «Исключить» с источниками привязки;
+ *  - типовая — «Изменить», «Очистить», «Исключить» (без хвоста-подписи);
  *  - внетиповая — «Изменить», «Очистить», «Перенести» (у мысли с типом),
  *    «Удалить»;
  *  - легаси-ребро без реестрового свойства — «Очистить», «Удалить».
@@ -16,7 +16,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  excludeRowLabel,
   PROPERTY_ROW_MENU_LABELS,
   propertyRowMenuItems,
   type PropertyRowMenuActions,
@@ -39,37 +38,27 @@ function state(overrides: Partial<PropertyRowMenuState> = {}): PropertyRowMenuSt
     typed: false,
     hasType: true,
     hasRegistryProperty: true,
-    sources: [],
     ...overrides,
   };
 }
 
 describe('меню строки свойства: состав по состоянию (92172035)', () => {
-  it('типовая скалярная строка: изменить, очистить, исключить с источником', () => {
-    const items = propertyRowMenuItems(
-      state({ typed: true, sources: ['квартира'] }),
-      actions(),
-    );
+  it('типовая скалярная строка: изменить, очистить, исключить (без хвоста)', () => {
+    const items = propertyRowMenuItems(state({ typed: true }), actions());
     assert.deepEqual(
       items.map((item) => item.label),
       [
         PROPERTY_ROW_MENU_LABELS.edit,
         PROPERTY_ROW_MENU_LABELS.clear,
-        'Исключить из типовых свойств — привязано в „квартира“',
+        PROPERTY_ROW_MENU_LABELS.exclude,
       ],
     );
     assert.ok(!items.some((item) => item.danger === true), 'у типовой нет удаления');
   });
 
-  it('типовая связь: подпись исключения перечисляет все привязки цепочки', () => {
-    const items = propertyRowMenuItems(
-      state({ typed: true, sources: ['недвижимость', 'квартира'] }),
-      actions(),
-    );
-    assert.equal(
-      items.at(-1)?.label,
-      'Исключить из типовых свойств — привязано в „недвижимость“, „квартира“',
-    );
+  it('типовая связь: подпись исключения — без источников привязки', () => {
+    const items = propertyRowMenuItems(state({ typed: true }), actions());
+    assert.equal(items.at(-1)?.label, PROPERTY_ROW_MENU_LABELS.exclude);
   });
 
   it('внетиповая строка у мысли с типом: есть перенос и удаление', () => {
@@ -114,10 +103,6 @@ describe('меню строки свойства: состав по состоя
       item.onClick?.();
     }
     assert.deepEqual(log, ['edit', 'clear', 'promote', 'remove']);
-  });
-
-  it('подпись исключения без источников — базовая', () => {
-    assert.equal(excludeRowLabel([]), PROPERTY_ROW_MENU_LABELS.exclude);
   });
 
   it('внетиповая строка с порядком: «выше/ниже» после «Изменить»', () => {

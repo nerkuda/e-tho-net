@@ -421,30 +421,6 @@ async function excludeTypedProperty(opts: {
   }
 }
 
-/** Имена типов-источников привязки этой строки (корень → лист). */
-function definitionSources(
-  definition: EffectiveTypeProperty,
-  definitions: readonly EffectiveTypeProperty[],
-): string[] {
-  const side = definition.value_type === 'link' ? linkSideOf(definition) : null;
-  const names: string[] = [];
-  for (const candidate of definitions) {
-    // Зеркальная строка — не привязка цепочки: источник в подписи не врём.
-    if (candidate.id.startsWith('mirror:')) continue;
-    if (candidate.property_id !== definition.property_id) continue;
-    if (
-      definition.value_type === 'link' &&
-      side !== null &&
-      linkSideOf(candidate) !== side
-    ) {
-      continue;
-    }
-    const name = candidate.defined_on_name;
-    if (name !== '' && !names.includes(name)) names.push(name);
-  }
-  return names;
-}
-
 /**
  * Вешает меню строки на ячейку имени: ПКМ и Shift+F10. Состояние — значение
  * или функция: у внетиповой строки позиция порядка меняется без перерисовки
@@ -524,7 +500,6 @@ function wireOutsideRowMenu(
         typed: false,
         hasType: target.hasOwnType,
         hasRegistryProperty: ref.propertyId !== '',
-        sources: [],
         ...(slot === null ? {} : { reorder: { index: slot.index, count: slot.count } }),
       };
     },
@@ -2044,8 +2019,6 @@ function buildTypePropertiesBody(
    * ячейки держат замыкание со старым ownerId.
    */
   let shownOwnerId: string | null = null;
-  /** Эффективные определения, показанные сейчас: источники привязки для меню. */
-  let shownDefinitions: EffectiveTypeProperty[] = [];
   // `prop-grid` — фиксированная раскладка двух колонок «имя → значение»
   // (ошибка 2012f46b): чип не диктует таблице min-content своего nowrap-имени.
   const table = el('table', 'table-list prop-table prop-grid');
@@ -2097,7 +2070,6 @@ function buildTypePropertiesBody(
         typed: true,
         hasType: true,
         hasRegistryProperty: definition.property_id !== '',
-        sources: definitionSources(definition, shownDefinitions),
       },
       {
         edit: () => void openPropertyEditorById(definition.property_id),
@@ -2292,7 +2264,6 @@ function buildTypePropertiesBody(
     // From here the table is considered bound to this owner (even the empty-set
     // branch below) — the detached-pane guard keys off it.
     shownOwnerId = requestOwnerId;
-    shownDefinitions = definitions;
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
     // владельца для гейта берут из того, что реально отрисовано сейчас.

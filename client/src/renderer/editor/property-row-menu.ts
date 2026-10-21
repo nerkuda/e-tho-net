@@ -6,8 +6,7 @@
  *
  * Состав зависит от состояния строки:
  *  - системная («Родители»/«Потомки») — меню нет;
- *  - типовая — «Изменить», «Очистить», «Исключить из типовых свойств»
- *    (подпись перечисляет источники привязки);
+ *  - типовая — «Изменить», «Очистить», «Исключить из типовых свойств»;
  *  - внетиповая — «Изменить», «Очистить», «Перенести в типовые свойства»
  *    (только у мысли с типом), «Удалить»;
  *  - легаси-ребро без реестрового свойства (property_id пуст) — «Изменить» и
@@ -30,8 +29,6 @@ export interface PropertyRowMenuState {
   hasType: boolean;
   /** У свойства есть реестровая запись (легаси-ребро — нет). */
   hasRegistryProperty: boolean;
-  /** Источники привязки для подписи «Исключить» (имена типов). */
-  sources: readonly string[];
   /**
    * Позиция строки среди переупорядочиваемых внетиповых строк (0.14.1,
    * задача 2e87285b). Задана только у строки, которую можно двигать;
@@ -60,16 +57,6 @@ export const PROPERTY_ROW_MENU_LABELS = {
   remove: 'Удалить',
 } as const;
 
-/**
- * Подпись «Исключить…» с источниками привязки: «привязано в „недвижимости“»
- * или перечислением. Без источников — базовая подпись.
- */
-export function excludeRowLabel(sources: readonly string[]): string {
-  if (sources.length === 0) return PROPERTY_ROW_MENU_LABELS.exclude;
-  const list = sources.map((source) => `„${source}“`).join(', ');
-  return `${PROPERTY_ROW_MENU_LABELS.exclude} — привязано в ${list}`;
-}
-
 /** Собирает пункты меню строки свойства по её состоянию. */
 export function propertyRowMenuItems(
   state: PropertyRowMenuState,
@@ -96,7 +83,7 @@ export function propertyRowMenuItems(
     items.push(menuAction(PROPERTY_ROW_MENU_LABELS.promote, actions.promote));
   }
   if (state.typed) {
-    items.push(menuAction(excludeRowLabel(state.sources), actions.exclude));
+    items.push(menuAction(PROPERTY_ROW_MENU_LABELS.exclude, actions.exclude));
   }
   if (!state.typed) {
     items.push(menuAction(PROPERTY_ROW_MENU_LABELS.remove, actions.remove, { danger: true }));
