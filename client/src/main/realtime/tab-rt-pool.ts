@@ -88,13 +88,24 @@ export interface TabRealtimePoolOptions {
 /** One pooled network entry. */
 interface PoolEntry {
   client: RealtimeClient;
+  /**
+   * Число владельцев сети. Сеть — единица владения сокетом: табы одной сети
+   * делят ОДИН сокет, повторное `acquire` (открытие сети, второй таб,
+   * восстановление профиля) не добавляет ссылку. Поле остаётся для
+   * диагностики и инварианта «0 или 1» (ошибка 3cd3f995).
+   */
   refCount: number;
 }
 
 /**
- * Reference-counted pool of `RealtimeClient`s. Construct on profile connect
- * (one pool per active server profile) and call {@link shutdown} when the
- * profile disconnects.
+ * Pool of `RealtimeClient`s, ONE socket per network. Construct on profile
+ * connect (one pool per active server profile) and call {@link shutdown} when
+ * the profile disconnects.
+ *
+ * Владение — сетью, не табом (ошибка 3cd3f995): `acquire` идемпотентен, потому
+ * что `tabs.open` (ровно один вызов на таб) и `networks.open` (ровно один на
+ * открытие сети) описывают ОДНО соединение. `release` зовётся, когда закрыт
+ * последний таб сети, и закрывает сокет.
  */
 export class TabRealtimePool {
   private readonly entries = new Map<string, PoolEntry>();
@@ -105,14 +116,17 @@ export class TabRealtimePool {
   }
 
   /**
-   * Acquires a socket for `networkId`, opening it lazily on first call. Each
-   * subsequent call for the same id increments the refcount and returns the
-   * same client. Safe to call when the socket is already connecting.
+   * Ensures a socket for `networkId`, opening it lazily on first call.
+   * Idempotent: repeated calls for the same network (another tab, network
+   * re-open, profile restore) return the same client and keep ONE reference.
+   * Safe to call when the socket is already connecting.
    */
   public acquire(networkId: string): RealtimeClient {
     const existing = this.entries.get(networkId);
     if (existing !== undefined) {
-      existing.refCount += 1;
+      // Инвариант «сеть = одна ссылка»: повторное открытие не копит владельцев,
+      // иначе `tabs.close` последнего таба не опускает счётчик до нуля.
+      existing.refCount = 1;
       // Re-acquire (tab restored/activated) pushes the CURRENT status to the
       // renderer: without it the indicator keeps the status of whichever
       // network reported last (defect de34b35b, «зелёный не там»).
@@ -135,17 +149,21 @@ export class TabRealtimePool {
   }
 
   /**
-   * Releases a reference for `networkId`. When the refcount drops to zero the
-   * socket is closed and removed from the pool. No-op if `networkId` is not
-   * tracked.
+   * Releases the network's single reference (last tab closed): drops the count
+   * to zero, closes the socket and removes it from the pool. No-op if
+   * `networkId` is not tracked.
    */
   public release(networkId: string): void {
     const entry = this.entries.get(networkId);
     if (entry === undefined) return;
-    entry.refCount -= 1;
-    if (entry.refCount > 0) return;
+    entry.refCount = 0;
     entry.client.disconnect();
     this.entries.delete(networkId);
+  }
+
+  /** Reference count of `networkId` (0 или 1) — диагностика и регресс-тесты. */
+  public refCount(networkId: string): number {
+    return this.entries.get(networkId)?.refCount ?? 0;
   }
 
   /** Returns `true` when the pool currently holds a socket for `networkId`. */

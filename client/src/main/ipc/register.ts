@@ -6,8 +6,9 @@
  * map from `handlers.ts`. All state lives here — `handlers.ts` stays pure.
  *
  * С фазой Q один `RealtimeClient` заменён пулом (`TabRealtimePool`) — по сокету
- * на каждую открытую сеть; refcount растёт при `etn.tabs.open`/снижается при
- * `etn.tabs.close`.
+ * на каждую открытую сеть. Владение — сетью: `etn.networks.open` и
+ * `etn.tabs.open` делят одну ссылку (повторный acquire её не копит), а
+ * `etn.tabs.close` последнего таба сети опускает счётчик до нуля.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -263,9 +264,9 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     if (profile) {
       opts.localDb.setUiState(profile.id, networkId, UI_STATE_KEY.CURRENT_NETWORK_ID, networkId);
     }
-    // Q2: explicit acquire via pool. The picker creates its own tab via
-    // `etn.tabs.open` (which also acquires, refcount-style); the legacy
-    // `etn.networks.open` path stays idempotent for tab state.
+    // Сеть — единица владения сокетом: `tabs.open` (на каждый таб) и этот
+    // acquire делят ОДНУ ссылку, повторный вызов её не копит (ошибка
+    // 3cd3f995). Сокет закрывается на `tabs.close` последнего таба сети.
     pool?.acquire(networkId);
     return network;
   };
