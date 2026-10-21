@@ -26,6 +26,7 @@ import type {
   LinkPropertySide,
   LinkPropertyValues,
   PropertyValue,
+  PropertyValueType,
   ThoughtPropertiesReorderedItem,
   ThoughtPropertyOrderInput,
   ThoughtRef,
@@ -76,12 +77,10 @@ import { isEditingTarget } from '../lib/ui/nav-core.js';
 import { createRowReorder, type RowReorderHandle } from '../lib/row-reorder.js';
 import { deepEqual } from '../lib/ui/state.js';
 import {
-  buildLinkEndIcon,
   buildPropertyList,
   buildPropertyListRows,
   buildPropertyValueMark,
   ensurePropertyLinkTypes,
-  linkEndIconSpec,
   type PropertyListRow,
   type PropertyRegistryRow,
 } from '../lib/property-list.js';
@@ -91,7 +90,6 @@ import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
   splitMultiValue,
-  valueTypeName,
 } from './value-editor.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
@@ -213,14 +211,37 @@ function linkSideOf(value: {
   return direction === 'in' ? 'target' : 'source';
 }
 
-/** Значок конца связи для строки таблицы карточки (симметричные имена различаются). */
-function buildRowLinkMark(
-  linkTypeId: string | null,
-  side: LinkPropertySide | null,
-): SVGSVGElement {
+/**
+ * Ячейка имени строки свойства — ОДИН компонент для типовых и внетиповых
+ * строк (ошибка 9717157f, требование заказчика: «использовать отлаженный
+ * компонент, списки сделать одинаковыми»): значок вида значения/стороны связи,
+ * имя без подписи типа, необязательный ⓘ с описанием. Внетиповые строки
+ * раньше собирали имя текстом «имя (тип)» — второй компонент в той же таблице.
+ */
+function buildPropertyNameCell(opts: {
+  name: string;
+  valueType: PropertyValueType;
+  linkTypeId?: string | null;
+  side?: LinkPropertySide | null;
+  hint?: string | null;
+}): { cell: HTMLTableCellElement; nameText: HTMLElement } {
+  const cell = el('td', 'prop-name-cell');
+  const linkTypeId = opts.linkTypeId ?? null;
   const visual =
     linkTypeId === null ? null : resolveLinkTypeVisual(store.state.linkTypes, linkTypeId);
-  return buildLinkEndIcon(linkEndIconSpec(side, visual));
+  const mark = buildPropertyValueMark(opts.valueType, {
+    side: opts.side ?? null,
+    visual,
+  });
+  if (mark !== null) cell.append(mark);
+  const nameText = span(opts.name);
+  cell.append(nameText);
+  if (opts.hint !== undefined && opts.hint !== null && opts.hint !== '') {
+    const info = span('ⓘ', 'muted prop-hint');
+    setTooltip(info, opts.hint);
+    cell.append(info);
+  }
+  return { cell, nameText };
 }
 
 /** Перечитывает обе группы вкладки «Свойства» (после действия меню строки). */
@@ -1628,9 +1649,12 @@ function outsideRowSpec(
     }
     const current = value!;
     if (isLinkPropertyValues(current)) {
-      const nameCell = el('td', 'prop-name-cell', `${current.property_name} (связь)`);
-      const linkTypeId = current.link_type_id ?? null;
-      nameCell.prepend(buildRowLinkMark(linkTypeId, linkSideOf(current)));
+      const { cell: nameCell } = buildPropertyNameCell({
+        name: current.property_name,
+        valueType: 'link',
+        linkTypeId: current.link_type_id ?? null,
+        side: linkSideOf(current),
+      });
       setTooltip(
         nameCell,
         current.property_id !== ''
@@ -1655,17 +1679,10 @@ function outsideRowSpec(
       row.append(buildOutsideLinkCell(current, networkId, target.ownerType, target.ownerId, onRemove));
       return;
     }
-    const nameCell = el(
-      'td',
-      'prop-name-cell',
-      `${current.property_name} (${valueTypeName(current.value_type)})`,
-    );
-    // Значок вида значения у скаляра — тот же, что в типовой строке и пикере
-    // (8d78fada): таблицы обеих групп не должны отличаться оформлением.
-    {
-      const mark = buildPropertyValueMark(current.value_type);
-      if (mark !== null) nameCell.prepend(mark);
-    }
+    const { cell: nameCell } = buildPropertyNameCell({
+      name: current.property_name,
+      valueType: current.value_type,
+    });
     setTooltip(
       nameCell,
       'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
@@ -1769,21 +1786,18 @@ function fillPendingOutsideRow(
   const definition = pendingOutsideDefinition(pending, target.ownerType);
   const isLink = definition.value_type === 'link';
   row.setAttribute('data-outside-key', pendingOutsideKey(pending));
-  const nameCell = el(
-    'td',
-    'prop-name-cell',
-    `${pending.name} (${isLink ? 'связь' : valueTypeName(definition.value_type)})`,
-  );
+  const { cell: nameCell } = buildPropertyNameCell({
+    name: pending.name,
+    valueType: definition.value_type,
+    linkTypeId: pending.linkTypeId,
+    side: pending.side,
+  });
   if (isLink) {
-    nameCell.prepend(buildRowLinkMark(pending.linkTypeId, pending.side));
     setTooltip(
       nameCell,
       'Свойство-связь не подключено к типу владельца — введите значения здесь; подключение свойства к типу вернёт их в основную таблицу.',
     );
   } else {
-    // Скаляр-черновик: знак вида значения, как у серверной строки и типовой.
-    const mark = buildPropertyValueMark(definition.value_type);
-    if (mark !== null) nameCell.prepend(mark);
     setTooltip(
       nameCell,
       'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
@@ -2060,38 +2074,22 @@ function buildTypePropertiesBody(
     // счётчик обновляется локально после своей записи значения-связи (ошибка
     // 9ee8e608) без пересборки строки, а ⓘ остаётся на месте.
     const count = valueCountOf(definition, value);
-    const nameCell = el('td', 'prop-name-cell');
-    // Симметричный тип связи: обе привязки несут одно имя — строки различаются
-    // значком направления конца связи (аудит цикл 2 требования 87039bc8).
-    // Скаляры (8d78fada) несут значок вида значения — тот же, что в эталонном
-    // списке свойств: таблица не должна отличаться от пикера оформлением строки.
-    if (definition.value_type === 'link') {
-      const ltId = definition.config?.link_type_id;
-      nameCell.append(
-        buildRowLinkMark(
-          typeof ltId === 'string' && ltId !== '' ? ltId : null,
-          linkSideOf(definition),
-        ),
-      );
-    } else {
-      const mark = buildPropertyValueMark(definition.value_type);
-      if (mark !== null) nameCell.append(mark);
-    }
-    const nameText = span(propertyNameLabel(definition, count));
-    nameCell.append(nameText);
-    const hint = propertyHint(definition);
-    if (hint !== null) {
-      const info = span('ⓘ', 'muted prop-hint');
-      setTooltip(info, hint);
-      nameCell.append(info);
-    }
-    // Контекстное меню имени строки (0.14.1, задача 92172035, требование
-    // 53701739): состав по состоянию строки, действия — серверные операции.
     const isLink = definition.value_type === 'link';
     const side = isLink ? linkSideOf(definition) : null;
     const linkTypeIdRaw = definition.config?.link_type_id;
     const linkTypeId =
       typeof linkTypeIdRaw === 'string' && linkTypeIdRaw !== '' ? linkTypeIdRaw : null;
+    // Один компонент ячейки имени с внетиповыми строками (9717157f): значок
+    // вида значения/стороны связи, имя, ⓘ описания — без второй разметки.
+    const { cell: nameCell, nameText } = buildPropertyNameCell({
+      name: propertyNameLabel(definition, count),
+      valueType: definition.value_type,
+      linkTypeId,
+      side,
+      hint: propertyHint(definition),
+    });
+    // Контекстное меню имени строки (0.14.1, задача 92172035, требование
+    // 53701739): состав по состоянию строки, действия — серверные операции.
     wirePropertyRowMenu(
       nameCell,
       {

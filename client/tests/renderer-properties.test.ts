@@ -722,7 +722,8 @@ describe('editor properties — внетиповые свойства-связи
     const json = JSON.stringify(table);
     // Обе строки таблицы: скаляр вне типа и свойство-связь вне типа.
     assert.ok(json.includes('Отвалившееся'), 'scalar outside-type row is rendered');
-    assert.ok(json.includes('Сотрудники (связь)'), 'outside-type link row is rendered');
+    assert.ok(json.includes('Сотрудники'), 'outside-type link row is rendered');
+    assert.ok(!json.includes('Сотрудники (связь)'), 'подписи типа в скобках у имени нет (9717157f)');
     assert.ok(json.includes('Иванов'), 'edge target chip #1');
     assert.ok(json.includes('Петров'), 'edge target chip #2');
     // Read-only для рёбер без ключа реестра: нет маркеров редактора-поля
@@ -1380,7 +1381,7 @@ describe('порядок и клавиатурная навигация табл
 
   function rowNames(tbody: ShimElement): string[] {
     return tbody.children.map(
-      (row) => row.querySelector('.prop-name-cell')?.textContent ?? '',
+      (row) => row.querySelector('.prop-name-cell')?.flatText() ?? '',
     );
   }
 
@@ -1420,9 +1421,9 @@ describe('порядок и клавиатурная навигация табл
     );
     const tbody = outsideTbody(box);
     assert.deepEqual(rowNames(tbody), [
-      'Альфа (строка)',
-      'Бета (строка)',
-      'Гамма (строка)',
+      'Альфа',
+      'Бета',
+      'Гамма',
     ]);
 
     const nameCell = tbody.children[0]!.querySelector('.prop-name-cell')!;
@@ -1438,7 +1439,7 @@ describe('порядок и клавиатурная навигация табл
     assert.equal(up!.className.includes('menu-item-disabled'), true, 'первая — выше disabled');
 
     down!.fire('click', { stopPropagation: () => undefined });
-    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)', 'Гамма (строка)']);
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа', 'Гамма']);
 
     // Позиция в меню вычисляется при ОТКРЫТИИ: после перестановки та же
     // строка стала второй, и «ниже» обязано двигать её дальше, а не молчать
@@ -1451,7 +1452,7 @@ describe('порядок и клавиатурная навигация табл
       clientY: 10,
     });
     menuItem('Переместить ниже')!.fire('click', { stopPropagation: () => undefined });
-    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Гамма (строка)', 'Альфа (строка)']);
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Гамма', 'Альфа']);
 
     assert.deepEqual(calls, [
       [
@@ -1497,7 +1498,7 @@ describe('порядок и клавиатурная навигация табл
     } as unknown as KeyboardEvent);
 
     assert.equal(calls.length, 1, 'та же операция порядка, что DnD и меню');
-    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)']);
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа']);
     // Граница: последняя строка дальше вниз не двигается.
     keymap.dispatchKeyEvent({
       key: 'ArrowDown',
@@ -1525,7 +1526,7 @@ describe('порядок и клавиатурная навигация табл
         { property_id: 'p-a', side: null, position: 1 },
       ]) as never,
     );
-    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)']);
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа']);
     assert.equal(getCount(), readsBefore, 'вкладка не перечитывается — порядок применён к строкам');
 
     // Строка, в которой идёт ввод пользователя, не двигается.
@@ -1538,7 +1539,7 @@ describe('порядок и клавиатурная навигация табл
         { property_id: 'p-b', side: null, position: 1 },
       ]) as never,
     );
-    assert.deepEqual(rowNames(tbody), ['Бета (строка)', 'Альфа (строка)'], 'ввод не потревожен');
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа'], 'ввод не потревожен');
     (globalThis as any).document.activeElement = null;
   });
 
