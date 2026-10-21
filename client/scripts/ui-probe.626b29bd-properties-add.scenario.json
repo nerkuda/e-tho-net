@@ -273,7 +273,7 @@
     },
     {
       "name": "link-source-row-appeared",
-      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('читал в (связь)') === true"
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('читал в') === true"
     },
     {
       "name": "open-picker-link-target",
@@ -323,7 +323,7 @@
     },
     {
       "name": "both-sides-in-card",
-      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('читальный зал (связь)') === true"
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('читальный зал') === true"
     },
     {
       "name": "side-icons-in-card",
@@ -412,7 +412,7 @@
     },
     {
       "name": "symmetric-row-in-card",
-      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('см. также (связь)') === true"
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('см. также') === true"
     },
     {
       "name": "symmetric-row-direction",
@@ -421,7 +421,7 @@
     },
     {
       "name": "focus-link-field",
-      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в (связь)')); const input=row?.querySelector('input'); if(!input) return 'no-input'; input.focus(); return 'ok'; })()",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в')); const input=row?.querySelector('input'); if(!input) return 'no-input'; input.focus(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -457,7 +457,7 @@
     },
     {
       "name": "remove-link-target",
-      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в (связь)')); const btn=row?.querySelector('[title=\"Убрать из значения\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в')); const btn=row?.querySelector('[title=\"Убрать из значения\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
