@@ -38,6 +38,7 @@
 import { setFocus } from '../app.js';
 import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { commitEntity, getEntity } from '../lib/live/index.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -282,17 +283,32 @@ function buildMoreButton(count: number, onClick: () => void): HTMLElement {
   return more;
 }
 
-/** Resolves metadata for history ids (single batched call). */
+/**
+ * Resolves metadata for history ids: сначала нормализованный кэш слоя, затем
+ * сервер. При офлайне серверный резолв падает, но заголовок/значок уже
+ * открытой мысли берётся из кэша — облачко не подменяется id (ошибка 90a92c82,
+ * тот же приём, что у панели закреплённых). Сырой id — только последний запас,
+ * когда мысль ещё ни разу не попадала в кэш.
+ */
 async function resolveRefs(
   networkId: string,
   ids: string[],
 ): Promise<Map<string, import('@etn/shared').ThoughtRef>> {
-  try {
-    const resolved = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
-    return new Map(resolved.map((ref) => [ref.id, ref]));
-  } catch {
-    return new Map();
+  const missing = ids.filter((id) => getEntity<import('@etn/shared').ThoughtRef>('thought', id) === undefined);
+  if (missing.length > 0) {
+    try {
+      const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, 100));
+      for (const ref of resolved) commitEntity('thought', ref.id, ref);
+    } catch {
+      // Офлайн/ошибка резолва: отдаём то, что уже лежит в кэше.
+    }
   }
+  const out = new Map<string, import('@etn/shared').ThoughtRef>();
+  for (const id of ids) {
+    const ref = getEntity<import('@etn/shared').ThoughtRef>('thought', id);
+    if (ref !== undefined && ref !== null) out.set(id, ref);
+  }
+  return out;
 }
 
 /** Builds a history mini-cloud chip (icon + title, thought styles, menus). */
