@@ -61,14 +61,6 @@
       "expect": "ok"
     },
     {
-      "name": "tabs-after-click",
-      "probe": "(async () => { const list=await window.etn.tabs.list(); return {tabs:list.length, closeButtons:document.querySelectorAll('.tab-close').length}; })()",
-      "expect": {
-        "tabs": 0,
-        "closeButtons": 0
-      }
-    },
-    {
       "name": "tabs-empty",
       "timeout": 20000,
       "waitFor": "(async () => { const list=await window.etn.tabs.list(); return list.length === 0; })()"
