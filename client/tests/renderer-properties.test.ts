@@ -1360,8 +1360,10 @@ describe('порядок и клавиатурная навигация табл
   async function buildOutside(
     values: unknown[],
     calls: unknown[][],
+    registryRows: unknown[] = [],
   ): Promise<{ box: ShimElement; getCount: () => number }> {
     const counter = setUpEtn(values, calls);
+    (globalThis as any).window.etn.propertyRegistry.list = async () => registryRows;
     const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
     const { store } = await import('../src/renderer/state.js');
     store.update({ networkId: 'n1' } as any);
@@ -1511,6 +1513,40 @@ describe('порядок и клавиатурная навигация табл
       preventDefault: () => undefined,
     } as unknown as KeyboardEvent);
     assert.equal(calls.length, 1, 'у нижнего края операции нет');
+  });
+
+  it('внетиповая строка с описанием свойства несёт ⓘ (9717157f)', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box } = await buildOutside(
+      [outsideValue('p-a', 'Альфа', '1'), outsideValue('p-b', 'Бета', '2')],
+      calls,
+      [
+        {
+          id: 'p-a',
+          name: 'Альфа',
+          value_type: 'text',
+          description: 'Что означает Альфа',
+        },
+        {
+          id: 'p-b',
+          name: 'Бета',
+          value_type: 'text',
+          description: '  ',
+        },
+      ],
+    );
+    const tbody = outsideTbody(box);
+    const first = tbody.children[0]!.querySelector('.prop-name-cell')!;
+    const second = tbody.children[1]!.querySelector('.prop-name-cell')!;
+    const hint = first.findAll((node) => node.className.includes('prop-hint'))[0];
+    assert.ok(hint !== undefined, 'у строки с описанием есть ⓘ');
+    assert.equal(hint!.title, 'Что означает Альфа', 'ⓘ несёт описание из справочника');
+    assert.equal(
+      second.findAll((node) => node.className.includes('prop-hint')).length,
+      0,
+      'пустое/пробельное описание ⓘ не создаёт',
+    );
   });
 
   it('событие reordered применяет порядок без перечитывания и не трогает ввод', async () => {

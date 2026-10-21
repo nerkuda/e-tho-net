@@ -236,9 +236,10 @@ function buildPropertyNameCell(opts: {
   if (mark !== null) cell.append(mark);
   const nameText = span(opts.name);
   cell.append(nameText);
-  if (opts.hint !== undefined && opts.hint !== null && opts.hint !== '') {
+  const hint = opts.hint?.trim() ?? '';
+  if (hint !== '') {
     const info = span('ⓘ', 'muted prop-hint');
-    setTooltip(info, opts.hint);
+    setTooltip(info, hint);
     cell.append(info);
   }
   return { cell, nameText };
@@ -1627,7 +1628,14 @@ function outsideRowSpec(
     row.replaceChildren();
     row.removeAttribute('data-outside-key');
     if (pending !== null) {
-      fillPendingOutsideRow(row, pending, networkId, target, onRemove);
+      fillPendingOutsideRow(
+        row,
+        pending,
+        networkId,
+        target,
+        onRemove,
+        pending.property.description ?? null,
+      );
       return;
     }
     const current = value!;
@@ -1637,6 +1645,9 @@ function outsideRowSpec(
         valueType: 'link',
         linkTypeId: current.link_type_id ?? null,
         side: linkSideOf(current),
+        // ⓘ — описание свойства из справочника, как у типовой строки
+        // (ревизия d9f1dd6f, верификация 9717157f).
+        hint: registryLookup?.(current.property_id)?.description ?? current.description ?? null,
       });
       setTooltip(
         nameCell,
@@ -1665,6 +1676,7 @@ function outsideRowSpec(
     const { cell: nameCell } = buildPropertyNameCell({
       name: current.property_name,
       valueType: current.value_type,
+      hint: registryLookup?.(current.property_id)?.description ?? null,
     });
     setTooltip(
       nameCell,
@@ -1765,6 +1777,7 @@ function fillPendingOutsideRow(
   networkId: string,
   target: PropertiesTarget,
   onChanged: () => void,
+  hint: string | null = null,
 ): void {
   const definition = pendingOutsideDefinition(pending, target.ownerType);
   const isLink = definition.value_type === 'link';
@@ -1774,6 +1787,7 @@ function fillPendingOutsideRow(
     valueType: definition.value_type,
     linkTypeId: pending.linkTypeId,
     side: pending.side,
+    hint,
   });
   if (isLink) {
     setTooltip(

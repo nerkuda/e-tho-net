@@ -1,0 +1,30 @@
+{
+  "name": "diag-9717157f-outside-hint",
+  "description": "Диагностика: внетиповая строка с описанием свойства несёт ⓘ с этим описанием.",
+  "timeout": 60000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "open-network-again", "probe": "(() => { const item=document.querySelector('.networks-list .network-item'); if(item !== null) item.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null" },
+    {
+      "name": "seed-described-property",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const p=await window.etn.propertyRegistry.create(nid,{ name:'С описанием', value_type:'text', description:'Описание для подсказки' }); await window.etn.properties.set(nid,'thought',tid,'С описанием','значение'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'" },
+    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    {
+      "name": "outside-row-with-hint",
+      "timeout": 20000,
+      "waitFor": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('С описанием')); if(!row) return false; const info=row.querySelector('.prop-name-cell .prop-hint'); return info !== null && info.title === 'Описание для подсказки'; })()"
+    }
+  ]
+}
