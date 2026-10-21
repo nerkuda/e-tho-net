@@ -1380,6 +1380,14 @@ describe('entity-picker: комбо свойства-связи как поле 
       { propertyId: 'p1', side: 'source', key: LP_FORWARD },
     );
     assert.deepEqual(ids, ['p1:source']);
+    // 83ca2841: облачко ВЫБРАННОГО значения несёт значок свойства, а не глиф
+    // мысли по умолчанию (в списке значок был, при выборе терялся).
+    const valueChip = findByClass(combo.root as unknown as ShimElement, 'prop-ref-cloud');
+    assert.ok(valueChip !== undefined, 'выбранное значение — облачко');
+    assert.ok(
+      findByClass(valueChip!, 'property-list-link-icon') !== undefined,
+      'у облачка выбранного свойства — значок конца связи, как в списке',
+    );
     assert.equal(pick.focused, true, 'фокус удержан на живом узле поля');
 
     const remove = findByClass(combo.root as unknown as ShimElement, 'st-f-clear-inline');
@@ -1417,6 +1425,12 @@ describe('entity-picker: комбо свойства-связи как поле 
       { propertyId: 'p1', side: 'target', key: LP_REVERSE },
     );
     assert.equal(combo.value(), 'p1:target');
+    const pickedChip = findByClass(combo.root as unknown as ShimElement, 'prop-ref-cloud');
+    assert.ok(pickedChip !== undefined, 'выбранное в диалоге значение — облачко');
+    assert.ok(
+      findByClass(pickedChip!, 'property-list-link-icon') !== undefined,
+      'после выбора в диалоге облачко сохраняет значок свойства (83ca2841)',
+    );
   });
 });
 

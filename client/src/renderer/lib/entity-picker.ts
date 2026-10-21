@@ -1208,6 +1208,21 @@ export interface EntityChipField {
   setDisabled(value: boolean): void;
 }
 
+/**
+ * Знак варианта-свойства-связи — значок конца связи, как в строках
+ * выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
+ * значка светился глиф мысли по умолчанию (ошибки 382e3478, 83ca2841).
+ * Условие не зависит от облачка-подписи: вызывающий вправе задать `cloudOf`
+ * ради КАНОНИЧЕСКОГО имени свойства, но знак свойства обязан прийти из
+ * реестра (`linkEnd`). Облачко-мысль (`cloud`) — иной случай: там значок
+ * принадлежит типу/мысли и подмене не подлежит.
+ */
+function applyLinkPropertyMark(chip: HTMLElement, opt: EntityOption | undefined): void {
+  if (opt?.cloud !== undefined || opt?.linkEnd == null) return;
+  const iconBox = chip.querySelector('.mini-icon');
+  if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(opt.linkEnd));
+}
+
 /** Строка выпадашки по варианту сущности: облачко, отступ дерева, свотч линии. */
 function entityEntry(opt: EntityOption): SuggestEntry {
   const entry: SuggestEntry = { value: opt.id, label: opt.title };
@@ -1527,17 +1542,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       // регистрируется картой, обработчик берёт узел из фокуса.
       if (openMenu !== undefined) chipMenuByNode.set(chip, () => openMenu(chip));
       // Знак варианта-свойства-связи — значок конца связи, как в строках
-      // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
-      // значка светился глиф мысли по умолчанию. Условие не зависит от
-      // `explicitCloud`: вызывающий вправе задать `cloudOf` ради КАНОНИЧЕСКОГО
-      // имени свойства (рецепт публикации, `propertyChipTitles`), но знак
-      // свойства обязан прийти из реестра (`linkEnd`), а не из облачка-подписи
-      // (ошибка 382e3478). Облачко-мысль (`known.cloud`) — иной случай: там
-      // значок принадлежит типу/мысли и подмене не подлежит.
-      if (known?.cloud === undefined && known?.linkEnd != null) {
-        const iconBox = chip.querySelector('.mini-icon');
-        if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(known.linkEnd));
-      }
+      // выпадашки (общая поправка, ошибки 382e3478/83ca2841).
+      applyLinkPropertyMark(chip, known);
       if (opts.reorderable === true && !disabled) {
         wireChipReorder(chip, value);
       }
@@ -2007,6 +2013,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
             }),
       },
     });
+    // Знак свойства-связи в облачке ВЫБРАННОГО значения — тот же, что в
+    // строке списка (ошибка 83ca2841: здесь его не было, и облачко показывало
+    // глиф мысли по умолчанию).
+    applyLinkPropertyMark(chip, opt);
     // Клавиатурный путь меню — привязки контекста комбо: держим чип и его
     // открытие для обработчика, который берёт узел из фокуса.
     comboChipNode = chip;
