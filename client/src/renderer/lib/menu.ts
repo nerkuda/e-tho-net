@@ -265,7 +265,14 @@ export function showMenuAt(x: number, y: number, items: MenuItem[]): HTMLElement
   root.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 4))}px`;
 
   const onKey = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') closeMenu();
+    if (event.key === 'Escape') {
+      // Esc принадлежит меню: поглощаем событие, чтобы оно не закрыло форму
+      // (диалог редактора типа) под ним (ошибка 50d57b19). Диалоги с развилкой
+      // Escape сами пропускают нажатие при открытом меню (`lib/dialog.ts`).
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeMenu();
+    }
   };
   const onDown = (event: MouseEvent): void => {
     if (!root.contains(event.target as Node)) closeMenu();
@@ -273,10 +280,15 @@ export function showMenuAt(x: number, y: number, items: MenuItem[]): HTMLElement
   const onResize = (): void => closeMenu();
   window.addEventListener('keydown', onKey, true);
   window.addEventListener('mousedown', onDown, true);
+  // Клик по строке списка начинается с `pointerdown`; фасад перетаскивания
+  // гасит его (`preventDefault`), и совместимый `mousedown` Chromium уже не
+  // шлёт — без этого «клик вне» не закрывал меню строки свойства (50d57b19).
+  window.addEventListener('pointerdown', onDown as EventListener, true);
   window.addEventListener('resize', onResize);
   dismissers.push(() => {
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('mousedown', onDown, true);
+    window.removeEventListener('pointerdown', onDown as EventListener, true);
     window.removeEventListener('resize', onResize);
   });
   return root;

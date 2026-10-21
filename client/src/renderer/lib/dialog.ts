@@ -29,6 +29,7 @@ import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
 import { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './ui/focus-anchor.js';
+import { isMenuOpen } from './menu.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -761,6 +762,9 @@ export function showDialog(opts: DialogOptions): () => void {
     // Lower dialogs ignore Escape even though they see the event too —
     // same-target capture listeners run in registration order.
     if (event.key === 'Escape' && !event.repeat && stack[stack.length - 1] === backdrop) {
+      // Открытое контекстное меню выше диалога само поглощает Escape
+      // (lib/menu.ts): форма под ним остаётся открытой (ошибка 50d57b19).
+      if (isMenuOpen()) return;
       // preventDefault marks the press as consumed: the global Escape handler
       // (app.initKeyboard, bubble phase) must not close the dialog *below*
       // the one just closed here (L21 fix — Escape over a stacked dialog
