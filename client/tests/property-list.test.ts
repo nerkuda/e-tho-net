@@ -248,7 +248,18 @@ describe('якоря рендера и режимов (требования 3–
   });
 
   it('значок конца связи — единый вертикальный SVG в эффективном оформлении связи', () => {
-    assert.match(src, /buildLinkEndIcon\(linkEndIconSpec\(row\.side, row\.visual\)\)/, 'один значок из спецификации');
+    // Значок собирает общий помощник (8d78fada): эталонный список и таблицы
+    // вкладки «Свойства» берут знак из одного места.
+    assert.match(
+      src,
+      /buildPropertyValueMark\(row\.valueType, \{ side: row\.side, visual: row\.visual \}\)/,
+      'строка берёт знак из общего помощника',
+    );
+    assert.match(
+      src,
+      /buildLinkEndIcon\(linkEndIconSpec\(link\.side, link\.visual\)\)/,
+      'один значок из спецификации',
+    );
     assert.match(src, /side === 'target' \? 'up' : 'down'/, 'направление: вниз — источник, вверх — цель');
     // Направление — координатами вертикальной линии и шеврона, без зеркалирования.
     assert.match(src, /'data-direction': spec\.direction/, 'направление видно в разметке значка');

@@ -652,6 +652,17 @@ describe('editor properties — «Свойства вне типа» group (0.6.
       'no outside-type root when there are no outside-type values',
     );
   });
+
+  it('типовой скаляр несёт значок вида значения, как в эталонном списке (8d78fada)', async () => {
+    const box = await renderWithOutsideType([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const nameCells = box.findAll((node) => node.className.includes('prop-name-cell'));
+    assert.ok(nameCells.length > 0, 'типовая таблица построена');
+    const icon = nameCells[0]!.findAll((node) =>
+      node.className.includes('property-list-icon'),
+    )[0];
+    assert.ok(icon !== undefined, 'у имени типового скаляра есть значок вида значения');
+  });
 });
 
 describe('editor properties — внетиповые свойства-связи в «Свойства вне типа» (e5cfacb9)', () => {
@@ -784,6 +795,16 @@ describe('editor properties — внетиповые свойства-связи
     assert.equal(tbody.children.length, 2, 'обе строки вне типа построены');
     const row1 = tbody.children.find((r) => r.getAttribute('data-key') === 'po1')!;
     const row2 = tbody.children.find((r) => r.getAttribute('data-key') === 'po2')!;
+    // 8d78fada: у скаляров в группе «Свойства вне типа» есть значок вида
+    // значения — как в типовой строке и эталонном списке свойств.
+    for (const row of [row1, row2]) {
+      const nameCell = row.children[0]!;
+      assert.equal(
+        nameCell.findAll((node) => node.className.includes('property-list-icon')).length,
+        1,
+        `у строки «${nameCell.flatText()}» ровно один значок вида значения`,
+      );
+    }
     const row2Name = row2.children[0];
 
     // Realtime property-value.set: меняется значение po1, соседняя строка po2

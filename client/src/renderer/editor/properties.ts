@@ -79,6 +79,7 @@ import {
   buildLinkEndIcon,
   buildPropertyList,
   buildPropertyListRows,
+  buildPropertyValueMark,
   ensurePropertyLinkTypes,
   linkEndIconSpec,
   type PropertyListRow,
@@ -1659,6 +1660,12 @@ function outsideRowSpec(
       'prop-name-cell',
       `${current.property_name} (${valueTypeName(current.value_type)})`,
     );
+    // Значок вида значения у скаляра — тот же, что в типовой строке и пикере
+    // (8d78fada): таблицы обеих групп не должны отличаться оформлением.
+    {
+      const mark = buildPropertyValueMark(current.value_type);
+      if (mark !== null) nameCell.prepend(mark);
+    }
     setTooltip(
       nameCell,
       'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
@@ -1774,6 +1781,9 @@ function fillPendingOutsideRow(
       'Свойство-связь не подключено к типу владельца — введите значения здесь; подключение свойства к типу вернёт их в основную таблицу.',
     );
   } else {
+    // Скаляр-черновик: знак вида значения, как у серверной строки и типовой.
+    const mark = buildPropertyValueMark(definition.value_type);
+    if (mark !== null) nameCell.prepend(mark);
     setTooltip(
       nameCell,
       'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
@@ -2053,6 +2063,8 @@ function buildTypePropertiesBody(
     const nameCell = el('td', 'prop-name-cell');
     // Симметричный тип связи: обе привязки несут одно имя — строки различаются
     // значком направления конца связи (аудит цикл 2 требования 87039bc8).
+    // Скаляры (8d78fada) несут значок вида значения — тот же, что в эталонном
+    // списке свойств: таблица не должна отличаться от пикера оформлением строки.
     if (definition.value_type === 'link') {
       const ltId = definition.config?.link_type_id;
       nameCell.append(
@@ -2061,6 +2073,9 @@ function buildTypePropertiesBody(
           linkSideOf(definition),
         ),
       );
+    } else {
+      const mark = buildPropertyValueMark(definition.value_type);
+      if (mark !== null) nameCell.append(mark);
     }
     const nameText = span(propertyNameLabel(definition, count));
     nameCell.append(nameText);

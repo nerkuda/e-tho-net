@@ -433,6 +433,27 @@ export function valueTypeIconName(valueType: PropertyValueType): IconName | null
   return VALUE_TYPE_ICONS[valueType] ?? null;
 }
 
+/**
+ * Знак перед именем свойства: значок вида значения у скаляра либо единый
+ * значок конца связи (требование 4). Один способ для эталонного списка
+ * свойств, таблиц вкладки «Свойства» и строк-черновиков (ошибки 9717157f,
+ * 8d78fada): второй разметки значка в клиенте не заводить.
+ */
+export function buildPropertyValueMark(
+  valueType: PropertyValueType,
+  link: { side: LinkPropertySide | null; visual: ResolvedLinkVisual | null } = {
+    side: null,
+    visual: null,
+  },
+): Element | null {
+  if (valueType === 'link') return buildLinkEndIcon(linkEndIconSpec(link.side, link.visual));
+  const iconName = valueTypeIconName(valueType);
+  if (iconName === null) return null;
+  const icon = svgIcon(iconName, 14);
+  icon.classList.add('property-list-icon');
+  return icon;
+}
+
 /** Описание свойства для ⓘ: непустой обрезанный текст, иначе `null` (тогда
  *  символа нет — требование 5). Чистая — юнит-тест. */
 export function propertyDescriptionHint(row: PropertyListRow): string | null {
@@ -684,14 +705,7 @@ export function buildPropertyList(opts: {
    *  (требование 4). */
   function buildNameMark(row: PropertyListRow): Element | null {
     if (row.structural) return null;
-    if (row.valueType === 'link') {
-      return buildLinkEndIcon(linkEndIconSpec(row.side, row.visual));
-    }
-    const iconName = valueTypeIconName(row.valueType);
-    if (iconName === null) return null;
-    const icon = svgIcon(iconName, 14);
-    icon.classList.add('property-list-icon');
-    return icon;
+    return buildPropertyValueMark(row.valueType, { side: row.side, visual: row.visual });
   }
 
   /** Ячейка «Имя»: знак + имя, у структурных/заблокированных — пометка и
