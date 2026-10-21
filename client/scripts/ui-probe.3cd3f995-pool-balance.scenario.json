@@ -56,6 +56,21 @@
       "expect": true
     },
     {
+      "name": "close-first-tab",
+      "probe": "(() => { const b=document.querySelector('.tab-close'); if(!b) return 'no-button'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "one-tab-left",
+      "timeout": 20000,
+      "waitFor": "(async () => { const list=await window.etn.tabs.list(); return list.length === 1; })()"
+    },
+    {
+      "name": "pool-alive-while-tab-open",
+      "probe": "(async () => { const s=await window.etn.realtime.getStatuses(); return s.some((x)=>x.networkId==='{{networkId}}'); })()",
+      "expect": true
+    },
+    {
       "name": "close-last-tab",
       "probe": "(() => { const b=document.querySelector('.tab-close'); if(!b) return 'no-button'; b.click(); return 'ok'; })()",
       "expect": "ok"
