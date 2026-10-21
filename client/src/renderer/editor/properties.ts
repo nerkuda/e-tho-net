@@ -1241,6 +1241,14 @@ function buildOutsidePropertiesBody(
     onClick: (target) => {
       const row = rowOfNode(target);
       if (row !== null) nav?.setCurrent(row);
+      // Мышиное выделение обязано взводить навигационный контекст: он
+      // поднимается на `focusin` списка, и без фокуса Alt+↑/↓ молчит (ошибка
+      // 21f4465f). Клик по редактору/кнопке фокус не отбирает — как в
+      // редакторе типа (задача 1425457f).
+      const interactive = target.closest(
+        'input, textarea, select, button, a, [contenteditable="true"]',
+      );
+      if (row !== null && interactive === null) nodeOf(row)?.nameCell.focus?.();
     },
     onActivate: (row) => {
       const node = nodeOf(row);
