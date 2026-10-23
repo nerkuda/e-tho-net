@@ -9,7 +9,9 @@
  *     rename на имя с надгробием; materializeShadow-коллизия — 409;
  *   * эффективный набор: перекрытие типового внетиповым, порядок, дефолт,
  *     `scope`/`defined_on`/`inherited`, межслойное схлопывание по `name_key`,
- *     не-дефолтный внетиповой снимает типовой дефолт, type-only путь без
+ *     семантика дефолта (внетиповой с пометкой перекрывает типовой;
+ *     не-одноимённый не-дефолтный типовой не трогает; одноимённый
+ *     не-дефолтный убирает дефолт — «Потомки»), type-only путь без
  *     `scope` (инвариант редактора типа);
  *   * REST-run по имени и id (+run-событие, `meta.scope`/`defined_on`,
  *     отсутствие `type_id` у внетипового); типовой run не изменился;
@@ -499,7 +501,7 @@ describe(
       }
     });
 
-    it('не-дефолтный внетиповой снимает типовой дефолт; порядок типовые→внетиповые', () => {
+    it('порядок: сначала типовые (корень→тип), затем внетиповые по position,name', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'task' }, USER);
@@ -523,9 +525,168 @@ describe(
           USER,
         );
         const set = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
-        assert.deepEqual(set.map((v) => v.name), ['Типовой', 'Ранний', 'Поздний']);
-        assert.equal(set[0]!.is_default, false, 'внетиповой без дефолта снял типовой');
+        assert.deepEqual(
+          set.map((v) => [v.name, v.scope]),
+          [
+            ['Типовой', 'type'],
+            ['Ранний', 'thought'],
+            ['Поздний', 'thought'],
+          ],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('семантика дефолта: внетиповой с пометкой перекрывает типовой дефолт', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'task' }, USER);
+        createThoughtTypeView(
+          ndb,
+          type.id,
+          { name: 'Типовой', definition: DEFINITION, position: 0, is_default: true },
+          USER,
+        );
+        const thoughtId = seedThought(ndb, 'Мысль', type.id);
+        createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'Мой', definition: DEFINITION, position: 5, is_default: true },
+          USER,
+        );
+        const set = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
+        assert.deepEqual(
+          set.map((v) => [v.name, v.is_default]),
+          [
+            ['Типовой', false],
+            ['Мой', true],
+          ],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('семантика дефолта: не-одноимённый не-дефолтный внетиповой типовой дефолт не трогает', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'task' }, USER);
+        createThoughtTypeView(
+          ndb,
+          type.id,
+          { name: 'Типовой', definition: DEFINITION, position: 0, is_default: true },
+          USER,
+        );
+        const thoughtId = seedThought(ndb, 'Мысль', type.id);
+        createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'Свой', definition: DEFINITION, position: 0 },
+          USER,
+        );
+        const set = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
+        assert.deepEqual(
+          set.map((v) => [v.name, v.is_default]),
+          [
+            ['Типовой', true],
+            ['Свой', false],
+          ],
+        );
+        assert.equal(set.filter((v) => v.is_default).length, 1, 'дефолт ровно один — типовой');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('семантика дефолта: одноимённый не-дефолтный внетиповой убирает типовой дефолт — «Потомки»', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'task' }, USER);
+        createThoughtTypeView(
+          ndb,
+          type.id,
+          { name: 'Типовой', definition: DEFINITION, position: 0, is_default: true },
+          USER,
+        );
+        createThoughtTypeView(
+          ndb,
+          type.id,
+          { name: 'Второй', definition: DEFINITION, position: 1 },
+          USER,
+        );
+        const thoughtId = seedThought(ndb, 'Мысль', type.id);
+        createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'типовой', definition: DEFINITION, position: 0 },
+          USER,
+        );
+        const set = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
+        // Типовой «Типовой» перекрыт одноимённым внетиповым и из набора ушёл
+        // вместе с дефолтом; других дефолтов нет — при фокусе «Потомки».
+        assert.deepEqual(
+          set.map((v) => [v.name, v.is_default]),
+          [
+            ['Второй', false],
+            ['типовой', false],
+          ],
+        );
         assert.equal(set.some((v) => v.is_default), false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('удаление/переименование внетипового возвращает типовой отбор (с его дефолтом)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const type = createThoughtType(ndb, { name: 'task' }, USER);
+        createThoughtTypeView(
+          ndb,
+          type.id,
+          { name: 'Общий', definition: DEFINITION, position: 0, is_default: true },
+          USER,
+        );
+        const thoughtId = seedThought(ndb, 'Мысль', type.id);
+        const custom = createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'общий', definition: DEFINITION, position: 0 },
+          USER,
+        );
+
+        // Перекрытие: типовой ушёл, дефолта в наборе нет.
+        const overlapped = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
+        assert.deepEqual(
+          overlapped.map((v) => [v.name, v.scope, v.is_default]),
+          [['общий', 'thought', false]],
+        );
+
+        // Удаление внетипового возвращает типовой вместе с пометкой дефолта.
+        deleteThoughtCustomView(ndb, custom.id);
+        const afterDelete = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
+        assert.deepEqual(
+          afterDelete.map((v) => [v.name, v.scope, v.is_default]),
+          [['Общий', 'type', true]],
+        );
+
+        // Переименование внетипового — то же: имя типового освободилось.
+        const renamedTarget = createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'общий', definition: DEFINITION, position: 0 },
+          USER,
+        );
+        updateThoughtCustomView(ndb, renamedTarget.id, { name: 'Другой' }, undefined);
+        const afterRename = getEffectiveViewsForThought(ndb, { id: thoughtId, type_id: type.id });
+        assert.deepEqual(
+          afterRename.map((v) => [v.name, v.scope, v.is_default]),
+          [
+            ['Общий', 'type', true],
+            ['Другой', 'thought', false],
+          ],
+        );
       } finally {
         ndb.close();
       }
@@ -761,6 +922,65 @@ describe(
             ['Первый', true],
             ['Второй', false],
           ],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('коллизия тени предкового дефолта — DUPLICATE, не сырой constraint (Б1)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const thoughtId = seedThought(ndb, 'Мысль');
+        const layerId = seedLayer(ndb);
+        // Слой живёт своей жизнью: имя «A» занято его живой строкой.
+        ndb.useLayer(layerId);
+        const layerView = createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'A', definition: DEFINITION, position: 0 },
+          USER,
+        );
+        // В основе поверх появляется одноимённый ДЕФОЛТ (слой его не видел).
+        ndb.useLayer(BASE_LAYER_ID);
+        createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'A', definition: DEFINITION, position: 0, is_default: true },
+          USER,
+        );
+        // Установка дефолта «B» в слое требует снять дефолт предка «A» —
+        // материализация его тени упирается в живое имя слоя.
+        ndb.useLayer(layerId);
+        assert.throws(
+          () =>
+            createThoughtCustomView(
+              ndb,
+              thoughtId,
+              { name: 'B', definition: DEFINITION, position: 1, is_default: true },
+              USER,
+            ),
+          (err: unknown) => {
+            assert.ok(err instanceof EtnError, 'домен отдаёт EtnError, не SqliteError');
+            assert.equal(err.code, 'DUPLICATE');
+            assert.equal(
+              (err.details as { existing_id?: string }).existing_id,
+              layerView.id,
+            );
+            return true;
+          },
+        );
+        // Транзакция откатилась: «B» не создан ни в одном слое.
+        assert.equal(
+          rowCount(
+            ndb,
+            'thought_custom_views',
+            'thought_id = ? AND name_key = ? AND deleted = 0',
+            thoughtId,
+            'b',
+          ),
+          0,
+          '«B» не создан — транзакция откатилась',
         );
       } finally {
         ndb.close();
@@ -1036,6 +1256,58 @@ describe(
       }
     });
 
+    it('корзина мысли (marked_for_deletion) не трогает её отборы', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const typeId = await createType(ctx, 'task');
+        await createTypeView(ctx, typeId, { name: 'Типовой', is_default: true });
+        const thoughtId = await createThought(ctx, 'Мысль', typeId);
+        const custom = await createCustomView(ctx, thoughtId, { name: 'Мой' });
+        assert.equal(custom.statusCode, 201, custom.body);
+
+        const trashed = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}`,
+          headers: h,
+          payload: { marked_for_deletion: true },
+        });
+        assert.equal(trashed.statusCode, 200, trashed.body?.toString());
+
+        // Отборы остаются живыми: корзина мысли — не удаление зависимостей.
+        const list = await ctx.app.inject({
+          method: 'GET',
+          url: customViewsUrl(ctx, thoughtId),
+          headers: h,
+        });
+        assert.equal(list.statusCode, 200);
+        assert.deepEqual(
+          (list.json().data as Array<{ id: string; name: string }>).map((v) => [v.id, v.name]),
+          [[custom.id, 'Мой']],
+        );
+
+        const effective = await ctx.app.inject({
+          method: 'GET',
+          url: `${customViewsUrl(ctx, thoughtId)}?include_effective=true`,
+          headers: h,
+        });
+        assert.equal(effective.statusCode, 200);
+        assert.deepEqual(
+          (
+            effective.json().meta as {
+              effective: Array<{ name: string; scope: string; is_default: boolean }>;
+            }
+          ).effective.map((v) => [v.name, v.scope, v.is_default]),
+          [
+            ['Типовой', 'type', true],
+            ['Мой', 'thought', false],
+          ],
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('идемпотентность: повтор POST с Client-Request-Id отдаёт тот же отбор', async () => {
       const ctx = await buildRestContext();
       try {
@@ -1117,6 +1389,55 @@ describe(
         assert.equal(
           ((patchBase.json().error.details as { existing_id: string })).existing_id,
           layerView.id,
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('репро проверки раунда 1: POST дефолта в слое при живой одноимённой строке основы — 409, не 500', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const thoughtId = await createThought(ctx, 'Мысль');
+
+        // (2) слой L, сессия A переключена в L.
+        const layerId = await createLayerViaRest(ctx, 'Слой дефолта');
+        const layerHeaders = { ...h, 'client-id': 'default-shadow-layer' };
+        await selectLayer(ctx, layerId, 'default-shadow-layer');
+
+        // (3) POST {name:'A'} в L → 201.
+        const layerView = await createCustomView(ctx, thoughtId, { name: 'A' }, layerHeaders);
+        assert.equal(layerView.statusCode, 201, layerView.body);
+
+        // (4) сессия основы POST {name:'A', is_default:true} → 201 (слой не видит).
+        const baseDefault = await createCustomView(ctx, thoughtId, {
+          name: 'A',
+          is_default: true,
+        });
+        assert.equal(baseDefault.statusCode, 201, baseDefault.body);
+
+        // (5) сессия L POST {name:'B', is_default:true}: снятие дефолта предка
+        // материализует его тень в слой и упирается в живое имя «A».
+        const res = await createCustomView(
+          ctx,
+          thoughtId,
+          { name: 'B', is_default: true },
+          layerHeaders,
+        );
+        assert.equal(res.statusCode, 409, res.body);
+        assert.equal(res.json().error!.code, 'DUPLICATE');
+        assert.equal(res.json().error!.details!.existing_id, layerView.id);
+
+        // Откат: «B» не создан, у слоя по-прежнему один живой отбор «A».
+        const list = await ctx.app.inject({
+          method: 'GET',
+          url: customViewsUrl(ctx, thoughtId),
+          headers: layerHeaders,
+        });
+        assert.deepEqual(
+          (list.json().data as Array<{ name: string }>).map((v) => v.name),
+          ['A'],
         );
       } finally {
         await closeRestContext(ctx);
@@ -1308,13 +1629,44 @@ describe(
 
           const deletedEvent = received.find((e) => e.type === 'thought-custom-view.deleted');
           assert.ok(deletedEvent);
-          assert.deepEqual(
-            {
-              thought_id: (deletedEvent!.data as { thought_id: string }).thought_id,
-              view_id: (deletedEvent!.data as { view_id: string }).view_id,
-            },
-            { thought_id: thoughtId, view_id: created.id },
-          );
+          const deletedData = deletedEvent!.data as {
+            thought_id: string;
+            view_id: string;
+            view: {
+              id: string;
+              name: string;
+              name_key: string;
+              description: string | null;
+              definition: string;
+              position: number;
+              is_default: boolean;
+              version: number;
+              created_at: string;
+              updated_at: string;
+              created_by: string;
+              scope: string;
+              defined_on: string;
+              inherited: boolean;
+            };
+          };
+          // Полная карточка удалённого отбора, как у created/updated (5d447380):
+          // состояние на момент удаления — после PATCH (версия 2, новое описание).
+          assert.equal(deletedData.thought_id, thoughtId);
+          assert.equal(deletedData.view_id, created.id);
+          assert.equal(deletedData.view.id, created.id);
+          assert.equal(deletedData.view.name, 'Событие');
+          assert.equal(deletedData.view.name_key, 'событие');
+          assert.equal(deletedData.view.description, 'новое');
+          assert.equal(deletedData.view.definition, EMPTY_DEFINITION);
+          assert.equal(deletedData.view.position, 0);
+          assert.equal(deletedData.view.is_default, false);
+          assert.equal(deletedData.view.version, 2);
+          assert.equal(deletedData.view.scope, 'thought');
+          assert.equal(deletedData.view.defined_on, thoughtId);
+          assert.equal(deletedData.view.inherited, false);
+          assert.equal(typeof deletedData.view.created_at, 'string');
+          assert.equal(typeof deletedData.view.updated_at, 'string');
+          assert.equal(deletedData.view.created_by, ctx.adminId);
         } finally {
           unsubscribe();
         }

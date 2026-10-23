@@ -15,7 +15,9 @@
  *
  * Коллизия натурального ключа при материализации тени в слое (правится строка
  * предка, а в слое уже есть живое имя) перехватывается и отдаётся как
- * `409 DUPLICATE`, а не сырой `SQLITE_CONSTRAINT` (контракт 5e55b7bb).
+ * `409 DUPLICATE`, а не сырой `SQLITE_CONSTRAINT` (контракт 5e55b7bb). То же —
+ * для тени предкового ДЕФОЛТА, которую материализует `clearDefaultForThought`
+ * перед установкой новой пометки (проверка раунда 1, Б1).
  */
 
 import {
@@ -42,6 +44,7 @@ import {
   getThoughtCustomView as repoGet,
   insertThoughtCustomView as repoInsert,
   listThoughtCustomViewsByThought as repoList,
+  ThoughtCustomViewNameCollisionError,
   updateThoughtCustomView as repoUpdate,
   type ThoughtCustomViewRow,
 } from './thought-custom-views-repo.js';
@@ -114,6 +117,25 @@ function getOwnerThoughtOrThrow(
   return { id: thought.id, type_id: thought.type_id };
 }
 
+/** `DUPLICATE` «имя занято живой строкой» — единая форма `details`. */
+function duplicateNameError(
+  existingId: string,
+  existingName: string,
+  requestId?: string,
+): EtnError {
+  return new EtnError(
+    'DUPLICATE',
+    `Отбор с именем "${existingName}" уже есть у этой мысли.`,
+    {
+      entity: 'thought_custom_view',
+      field: 'name',
+      existing_id: existingId,
+      existing_name: existingName,
+    },
+    requestId,
+  );
+}
+
 /**
  * Убедиться, что живого отбора с тем же `name_key` в мысли нет (исключая
  * редактируемый). `DUPLICATE` несёт `existing_id`/`existing_name` — клиенту
@@ -127,19 +149,7 @@ function assertNameAvailable(
   requestId?: string,
 ): void {
   const clash = findThoughtCustomViewByThoughtAndNameKey(ndb, thoughtId, nameKey, exceptId);
-  if (clash) {
-    throw new EtnError(
-      'DUPLICATE',
-      `Отбор с именем "${clash.name}" уже есть у этой мысли.`,
-      {
-        entity: 'thought_custom_view',
-        field: 'name',
-        existing_id: clash.id,
-        existing_name: clash.name,
-      },
-      requestId,
-    );
-  }
+  if (clash) throw duplicateNameError(clash.id, clash.name, requestId);
 }
 
 /** Нарушение натурального ключа имени (UNIQUE-индекс `..._name_live`). */
@@ -152,6 +162,9 @@ function isNameKeyConstraint(err: unknown): boolean {
 /**
  * Перехватить коллизию натурального ключа при материализации тени/вставке и
  * отдать `409 DUPLICATE` с осмысленными `details`; прочие ошибки — пробросить.
+ * Коллизию, найденную репозиторием ДО материализации (тень предкового дефолта
+ * против живой одноимённой строки слоя), приходит {@link
+ * ThoughtCustomViewNameCollisionError} — её карточка уже содержит нужный id.
  */
 function rethrowNameConstraint(
   ndb: NetworkDb,
@@ -161,21 +174,12 @@ function rethrowNameConstraint(
   err: unknown,
   exceptId?: string,
 ): never {
+  if (err instanceof ThoughtCustomViewNameCollisionError) {
+    throw duplicateNameError(err.existingId, err.existingName, requestId);
+  }
   if (!isNameKeyConstraint(err)) throw err;
   const clash = findThoughtCustomViewByThoughtAndNameKey(ndb, thoughtId, nameKey, exceptId);
-  if (clash) {
-    throw new EtnError(
-      'DUPLICATE',
-      `Отбор с именем "${clash.name}" уже есть у этой мысли.`,
-      {
-        entity: 'thought_custom_view',
-        field: 'name',
-        existing_id: clash.id,
-        existing_name: clash.name,
-      },
-      requestId,
-    );
-  }
+  if (clash) throw duplicateNameError(clash.id, clash.name, requestId);
   throw err;
 }
 

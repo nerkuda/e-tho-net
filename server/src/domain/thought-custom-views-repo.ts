@@ -297,25 +297,73 @@ export function findThoughtCustomViewByThoughtAndNameKey(
 }
 
 /**
+ * Коллизия натурального ключа при материализации тени в текущем слое: строка
+ * предка несёт имя, которое в слое уже занято живой строкой с другим `id`
+ * (слои разошлись). `materializeShadow` упал бы сырым
+ * `SQLITE_CONSTRAINT_UNIQUE` уже из-под сервиса; репозиторий сообщает о
+ * коллизии типизированно, а домен отдаёт `409 DUPLICATE` (контракт 5e55b7bb,
+ * проверка раунда 1 — Б1).
+ */
+export class ThoughtCustomViewNameCollisionError extends Error {
+  constructor(
+    readonly thoughtId: string,
+    readonly nameKey: string,
+    readonly existingId: string,
+    readonly existingName: string,
+  ) {
+    super(
+      `thought_custom_view ${existingId} уже занимает имя "${existingName}" в текущем слое`,
+    );
+    this.name = 'ThoughtCustomViewNameCollisionError';
+  }
+}
+
+/**
  * Снять пометку «по умолчанию» со всех живых отборов мысли в текущем слое,
  * кроме `exceptId`. У мысли не более одного дефолтного внетипового отбора
  * (требование 045f539a); снятие идёт в одной транзакции с установкой новой
  * пометки. В слое — `materializeShadow` для видимых строк, иначе UPDATE не
  * зацепит строку предка.
+ *
+ * Перед материализацией проверяется натуральный ключ: живая одноимённая строка
+ * слоя с другим `id` — {@link ThoughtCustomViewNameCollisionError} (а не сырой
+ * constraint из `materializeShadow`).
  */
 export function clearDefaultForThought(ndb: NetworkDb, thoughtId: string, exceptId?: string): number {
   const rows = ndb
     .prepare(
-      `SELECT id FROM thought_custom_views_v
+      `SELECT id, name, name_key FROM thought_custom_views_v
         WHERE thought_id = ? AND is_default = 1
           ${exceptId ? 'AND id <> ?' : ''}`,
     )
-    .all(...(exceptId ? [thoughtId, exceptId] : [thoughtId])) as Array<{ id: string }>;
+    .all(...(exceptId ? [thoughtId, exceptId] : [thoughtId])) as Array<{
+    id: string;
+    name: string;
+    name_key: string;
+  }>;
 
   if (rows.length === 0) return 0;
 
   ndb.transaction(() => {
     for (const row of rows) {
+      const clash = ndb
+        .prepare(
+          `SELECT id, name FROM thought_custom_views
+            WHERE layer_id = ? AND thought_id = ? AND name_key = ?
+              AND deleted = 0 AND id <> ?
+            LIMIT 1`,
+        )
+        .get(ndb.layerId, thoughtId, row.name_key, row.id) as
+        | { id: string; name: string }
+        | undefined;
+      if (clash) {
+        throw new ThoughtCustomViewNameCollisionError(
+          thoughtId,
+          row.name_key,
+          clash.id,
+          clash.name,
+        );
+      }
       materializeShadow(ndb, 'thought_custom_views' as ThoughtCustomViewsTable, row.id);
     }
     ndb

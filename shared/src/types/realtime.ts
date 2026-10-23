@@ -522,6 +522,13 @@ export interface ThoughtCustomViewUpdatedData {
 export interface ThoughtCustomViewDeletedData {
   thought_id: string;
   view_id: string;
+  /**
+   * Полная карточка удалённого отбора (контракт 5d447380: как у `created`
+   * и `updated`) — клиенту не нужен GET, чтобы показать имя/позицию/дефолт
+   * снятого чипа и пересчитать соседей. `view_id` оставлен для адресации
+   * ветвимой строки в слоевой видимости (`layer-visibility.ts`).
+   */
+  view: EffectiveThoughtCustomView;
 }
 /**
  * `thought-custom-view.run` — исполнение внетипового отбора через REST.

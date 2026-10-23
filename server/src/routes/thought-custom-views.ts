@@ -295,7 +295,13 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
             events: [
               {
                 type: 'thought-custom-view.deleted',
-                data: { thought_id: id, view_id: viewId },
+                // Полная карточка — как у created/updated (контракт 5d447380):
+                // карточка уже прочитана в `before`, лишнего GET не нужно.
+                data: {
+                  thought_id: before.thought_id,
+                  view_id: viewId,
+                  view: customViewCard(before),
+                },
               },
             ],
           };
