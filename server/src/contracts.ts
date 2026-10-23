@@ -1848,6 +1848,77 @@ export const ViewsRun = defineContract(
   {},
 );
 
+/**
+ * `etn.custom_views.write` (0.14.1, задача 769fde88; операция 97d1a0d3, ADR
+ * 2a758041): батч-запись ВНЕТИПОВЫХ отборов одной мысли. Владелец — мысль,
+ * поэтому инструмент отдельный от `etn.ontology.write` (реестр сети) и
+ * `etn.thoughts.write` (единицы знания).
+ *
+ * Элемент — явный дискриминатор `action`:
+ *   * `create` — `ref?` (локальная ссылка батча), `name`, `description?`,
+ *     `definition` (JSON-строка, как в REST), `position?`, `is_default?`,
+ *     `on_duplicate?` (`fail|reuse|update`);
+ *   * `update` — `id` (полный id живого отбора ЭТОЙ мысли) XOR `ref`,
+ *     `expected_version?`, частичный патч (`name?`/`description?`/
+ *     `definition?`/`position?`/`is_default?`);
+ *   * `delete` — `id` XOR `ref`, БЕЗ `expected_version` (осознанная асимметрия
+ *     с REST If-Match, спека операции).
+ *
+ * XOR `id`/`ref` и непустота патча проверяются доменом (в zod-схеме это
+ * `superRefine` на элементе, а `discriminatedUnion` принимает только объекты);
+ * неизвестный ключ элемента отвергает `.strict()` и каноническая валидация
+ * MCP с `VALIDATION_ERROR`.
+ */
+const CustomViewsWriteCreateFields = z
+  .object({
+    action: z.literal('create'),
+    ref: z.string().min(1).optional(),
+    name: z.string().min(1),
+    description: z.string().nullable().optional(),
+    definition: z.string().min(1),
+    position: z.number().int().min(0).optional(),
+    is_default: z.boolean().optional(),
+    on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
+  })
+  .strict();
+const CustomViewsWriteUpdateFields = z
+  .object({
+    action: z.literal('update'),
+    id: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
+    expected_version: z.number().int().min(1).optional(),
+    name: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+    definition: z.string().min(1).optional(),
+    position: z.number().int().min(0).optional(),
+    is_default: z.boolean().optional(),
+  })
+  .strict();
+const CustomViewsWriteDeleteFields = z
+  .object({
+    action: z.literal('delete'),
+    id: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
+  })
+  .strict();
+const CustomViewsWriteItemFields = z.discriminatedUnion('action', [
+  CustomViewsWriteCreateFields,
+  CustomViewsWriteUpdateFields,
+  CustomViewsWriteDeleteFields,
+]);
+export const CustomViewsWrite = defineContract(
+  'etn.custom_views.write',
+  z
+    .object({
+      network_id: NetworkId,
+      // Единственный владелец вызова: все элементы адресуют отборы этой мысли.
+      thought_id: ThoughtId,
+      views: z.array(CustomViewsWriteItemFields).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+    })
+    .strict(),
+  {},
+);
+
 export const ActivityList = defineContract(
   'etn.activity.list',
   z.object({

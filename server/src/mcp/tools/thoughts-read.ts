@@ -499,8 +499,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`meta.deletion_blocks` — блокировки удаления. ' +
         '`meta.permanent` — полный текст постоянного комментария (полностью — `etn.comments.get`). ' +
         '`meta.link_stats` — счётчики активных связей по `(link_type_id, direction)` с именами типа. ' +
-        '`meta.views` — эффективные отборы мысли (имя, описание); исполняются через ' +
-        '`etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
+        '`meta.views` — эффективный набор отборов мысли: типовые (`scope: "type"`) и внетиповые ' +
+        '(`scope: "thought"`), `defined_on` — владелец, порядок — типовые, затем внетиповые; ' +
+        'исполняются через `etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -571,7 +572,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'свойства (без структурных «Родители»/«Потомки» — их числа в `meta`), `meta.link_stats` ' +
         '(счётчики с именами типов связей), ' +
         'полнотекстовый `comment_preview` и `meta.views` — ' +
-        'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
+        'эффективный набор отборов для каждой мысли (типовые + внетиповые со `scope`). ' +
         'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
         '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
         'Лимит — 100 id за вызов.',
@@ -807,7 +808,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
         '`link_marked_for_deletion` — ребро помечено на удаление (корзина). ' +
-        '`meta.views` для seed-узлов — эффективный набор отборов, ' +
+        '`meta.views` для seed-узлов — эффективный набор отборов (типовые и внетиповые со `scope`), ' +
         'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',

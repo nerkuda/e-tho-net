@@ -521,10 +521,15 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // состоянию 0.8.3 (задача d379e091): 25 инструментов, аннотированы 23
         // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
         // исторически без аннотации): 17 readOnly, 0 destructive, 4 idempotent.
-        assert.equal(annotated, 23);
+        // 0.14.1 (задача 769fde88): `etn.custom_views.write` — батч внетиповых
+        // отборов мысли (ADR 2a758041), `destructiveHint: false` +
+        // `idempotentHint: true` (прецедент `etn.ontology.write` с его
+        // `type_views[].action: delete`): 26 инструментов, аннотированы 24,
+        // 17 readOnly, 0 destructive, 5 idempotent.
+        assert.equal(annotated, 24);
         assert.equal(hintReadOnly, 17);
         assert.equal(hintDestructive, 0);
-        assert.equal(hintIdempotent, 4);
+        assert.equal(hintIdempotent, 5);
       } finally {
         await handle.close();
       }

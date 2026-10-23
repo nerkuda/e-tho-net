@@ -32,16 +32,18 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.views.run',
     {
-      title: 'Исполнить отбор типа относительно мысли',
+      title: 'Исполнить отбор относительно мысли',
       description:
-        'Run a thought-type view for one thought. `view_name` — имя отбора из `meta.views` ' +
-        'карточки мысли (нормализованное сравнение, регистр не важен) или его `id`; либо ' +
-        'готовое `ast`-тело (грамматика — `etn.guide { topic: "thoughts.query" }`) — ровно одно ' +
-        'из двух. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
-        'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен; при `ast` — ' +
-        '`meta.ast: true`) и `meta.unresolved` (не пусто, если встретился неразрешимый на ' +
-        'момент исполнения токен — тогда `data` пустая). Удалённая сущность условия — ' +
-        '`VALIDATION_ERROR` (`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
+        'Run a view for one thought — типовой или внетиповой из `meta.views` карточки ' +
+        '(дискриминатор `scope: "type" | "thought"`, `defined_on` — владелец). `view_name` — имя ' +
+        '(нормализованное сравнение) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
+        '`etn.guide { topic: "thoughts.query" }`) — ровно одно из двух. `limit`/`offset` — страница, ' +
+        '`order` — направление сортировки. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
+        'Возвращает страницу мыслей + `view` (id, имя, `scope`, `defined_on`, `inherited`) + `meta.view` ' +
+        '(при `ast` — `meta.ast: true`) и `meta.unresolved` (не пусто, если встретился неразрешимый ' +
+        'токен — тогда `data` пустая). Отбор не найден — `NOT_FOUND` с `details.available_views` ' +
+        '(id, имя, `scope`, `defined_on`). Удалённая сущность условия — `VALIDATION_ERROR` ' +
+        '(`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
     },
@@ -146,6 +148,8 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
                 name: v.name,
                 name_key: v.name_key,
                 is_default: v.is_default,
+                scope: v.scope,
+                defined_on: v.defined_on,
               })),
             },
           );

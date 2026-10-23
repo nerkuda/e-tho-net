@@ -355,3 +355,303 @@ export function deleteThoughtCustomView(
   getViewOrThrow(ndb, viewId, requestId);
   repoDelete(ndb, viewId);
 }
+
+// ===========================================================================
+// Батч-запись отборов одной мысли (0.14.1, задача 769fde88; операция
+// 97d1a0d3, ADR 2a758041) — доменная половина `etn.custom_views.write`.
+//
+// Семантика — REST CRUD тех же отборов, собранная в один батч:
+//   * дискриминатор `action: create|update|delete`;
+//   * `create.ref` — локальный псевдоним батча, резолвится вторым проходом
+//     (допустим ref вперёд и create+delete в одном батче) по образцу
+//     `type_views` онтологии;
+//   * `update`/`delete` адресуют отбор `id` (полный id живого отбора ЭТОЙ
+//     мысли; чужой — `NOT_FOUND`) XOR локальным `ref`;
+//   * `on_duplicate` действует на `create` при совпадении `name_key` в
+//     пределах мысли: `fail` (по умолчанию) — `DUPLICATE` с `existing_id`,
+//     `reuse` — существующая карточка без события, `update` — правка
+//     существующего (`updated`);
+//   * пустой патч update и два create одного имени в батче —
+//     `VALIDATION_ERROR`.
+//
+// Транзакцию, события и аудит оркестрирует фасад (`runWrite` MCP): сервис
+// возвращает только результат и список фактических изменений — payload
+// событий собирается из карточки, вернувшейся из домена (требование 7f526da1).
+// ===========================================================================
+
+/** Один элемент батча `etn.custom_views.write` (после валидации схемой). */
+export interface ThoughtCustomViewWriteItem {
+  action: 'create' | 'update' | 'delete';
+  ref?: string;
+  id?: string;
+  name?: string;
+  description?: string | null;
+  definition?: string;
+  position?: number;
+  is_default?: boolean;
+  expected_version?: number;
+  on_duplicate?: 'fail' | 'reuse' | 'update';
+}
+
+/** Карточка create/update/reuse — полная строка отбора (как у REST CRUD). */
+export type ThoughtCustomViewWriteResultItem =
+  | ThoughtCustomView
+  | { action: 'deleted'; id: string };
+
+/** Фактическое изменение — фасад превращает его в real-time-событие. */
+export type ThoughtCustomViewChange =
+  | { action: 'created'; view: ThoughtCustomView }
+  | { action: 'updated'; view: ThoughtCustomView; changes: ThoughtCustomViewUpdateInput }
+  | { action: 'deleted'; view: ThoughtCustomView };
+
+/** Итог батча: `items` по порядку входа + изменения для событий. */
+export interface ThoughtCustomViewsWriteOutcome {
+  items: ThoughtCustomViewWriteResultItem[];
+  changed: ThoughtCustomViewChange[];
+}
+
+/** `VALIDATION_ERROR` с адресом элемента батча (`views[i].<field>`). */
+function invalidViewItem(
+  index: number,
+  message: string,
+  details: Record<string, unknown>,
+  requestId?: string,
+): never {
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    message,
+    { entity: 'thought_custom_view', field: `views[${index}]`, ...details },
+    requestId,
+  );
+}
+
+/** Адрес отбора: полный `id` живого отбора этой мысли. */
+function requireOwnedView(
+  ndb: NetworkDb,
+  thoughtId: string,
+  viewId: string,
+  index: number,
+  requestId?: string,
+): ThoughtCustomView {
+  const view = getThoughtCustomView(ndb, viewId);
+  if (view === null || view.thought_id !== thoughtId) {
+    throw new EtnError(
+      'NOT_FOUND',
+      `У мысли ${thoughtId} нет отбора ${viewId}.`,
+      {
+        entity: 'thought_custom_view',
+        id: viewId,
+        thought_id: thoughtId,
+        field: `views[${index}].id`,
+      },
+      requestId,
+    );
+  }
+  return view;
+}
+
+/**
+ * Применить батч отборов одной мысли. Вызывается внутри транзакции фасада:
+ * любое исключение откатывает весь батч («всё или ничего»).
+ */
+export function writeThoughtCustomViews(
+  ndb: NetworkDb,
+  thoughtId: string,
+  items: readonly ThoughtCustomViewWriteItem[],
+  actorUserId: string,
+  requestId?: string,
+): ThoughtCustomViewsWriteOutcome {
+  const owner = getOwnerThoughtOrThrow(ndb, thoughtId, requestId);
+
+  // ---- Предпроверка батча (до записи) ---------------------------------
+  const declaredRefs = new Set<string>();
+  const createByKey = new Map<string, number>();
+  for (const [index, item] of items.entries()) {
+    if (item.action === 'create' && item.ref !== undefined) {
+      if (declaredRefs.has(item.ref)) {
+        invalidViewItem(index, `ref "${item.ref}" объявлен в батче дважды.`, {
+          field: `views[${index}].ref`,
+          ref: item.ref,
+        }, requestId);
+      }
+      declaredRefs.add(item.ref);
+    }
+    if (item.action === 'create') {
+      if (item.name === undefined) {
+        invalidViewItem(index, 'create требует name.', { field: `views[${index}].name` }, requestId);
+      }
+      if (item.definition === undefined) {
+        invalidViewItem(
+          index,
+          'create требует definition (JSON-строку).',
+          { field: `views[${index}].definition` },
+          requestId,
+        );
+      }
+      // Два create одного имени в батче — неоднозначный порядок и скрытый
+      // DUPLICATE; отвергаем явно (спека операции).
+      const nameKey = viewNameKey(validateViewName(item.name, requestId));
+      const first = createByKey.get(nameKey);
+      if (first !== undefined) {
+        invalidViewItem(
+          index,
+          `Два create одного имени «${item.name}» в батче (первый — views[${first}]).`,
+          { field: `views[${index}].name`, first_index: first },
+          requestId,
+        );
+      }
+      createByKey.set(nameKey, index);
+      continue;
+    }
+    // update/delete адресуются ровно одним способом.
+    const hasId = item.id !== undefined && item.id !== '';
+    const hasRef = item.ref !== undefined && item.ref !== '';
+    if (hasId === hasRef) {
+      invalidViewItem(
+        index,
+        `${item.action} требует ровно одно из id или ref.`,
+        { field: `views[${index}]`, id: item.id ?? null, ref: item.ref ?? null },
+        requestId,
+      );
+    }
+    if (item.action === 'update') {
+      const hasPatch =
+        item.name !== undefined ||
+        item.description !== undefined ||
+        item.definition !== undefined ||
+        item.position !== undefined ||
+        item.is_default !== undefined;
+      if (!hasPatch) {
+        invalidViewItem(
+          index,
+          'update требует хотя бы одно поле патча (name/description/definition/position/is_default).',
+          { field: `views[${index}]` },
+          requestId,
+        );
+      }
+    }
+  }
+
+  // ---- Применение ------------------------------------------------------
+  const results: Array<ThoughtCustomViewWriteResultItem | undefined> = new Array(
+    items.length,
+  ).fill(undefined);
+  const changed: ThoughtCustomViewChange[] = [];
+  const idByRef = new Map<string, string>();
+
+  const applyUpdate = (
+    index: number,
+    item: ThoughtCustomViewWriteItem,
+    viewId: string,
+  ): void => {
+    const patch: ThoughtCustomViewUpdateInput = {};
+    if (item.name !== undefined) patch.name = item.name;
+    if (item.description !== undefined) patch.description = item.description;
+    if (item.definition !== undefined) patch.definition = item.definition;
+    if (item.position !== undefined) patch.position = item.position;
+    if (item.is_default !== undefined) patch.is_default = item.is_default;
+    const updated = updateThoughtCustomView(
+      ndb,
+      viewId,
+      patch,
+      item.expected_version,
+      requestId,
+    );
+    results[index] = updated;
+    changed.push({ action: 'updated', view: updated, changes: patch });
+  };
+
+  const applyDelete = (index: number, viewId: string): void => {
+    const before = requireOwnedView(ndb, owner.id, viewId, index, requestId);
+    deleteThoughtCustomView(ndb, viewId, requestId);
+    results[index] = { action: 'deleted', id: viewId };
+    changed.push({ action: 'deleted', view: before });
+  };
+
+  for (const [index, item] of items.entries()) {
+    if (item.action === 'create') {
+      const name = item.name as string;
+      const definition = item.definition as string;
+      const nameKey = viewNameKey(validateViewName(name, requestId));
+      const existing = findThoughtCustomViewByThoughtAndNameKey(ndb, owner.id, nameKey);
+      if (existing !== null) {
+        const mode = item.on_duplicate ?? 'fail';
+        if (mode === 'fail') {
+          throw duplicateNameError(existing.id, existing.name, requestId);
+        }
+        if (mode === 'reuse') {
+          // Существующий отбор не меняется и событие не порождает.
+          results[index] = rowToView(existing);
+          if (item.ref !== undefined) idByRef.set(item.ref, existing.id);
+          continue;
+        }
+        // `update`: create-тело применяется как патч существующего отбора.
+        const patch: ThoughtCustomViewUpdateInput = {
+          name,
+          description: item.description ?? null,
+          definition,
+          ...(item.position !== undefined ? { position: item.position } : {}),
+          ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
+        };
+        const updated = updateThoughtCustomView(ndb, existing.id, patch, undefined, requestId);
+        results[index] = updated;
+        changed.push({ action: 'updated', view: updated, changes: patch });
+        if (item.ref !== undefined) idByRef.set(item.ref, updated.id);
+        continue;
+      }
+      const created = createThoughtCustomView(
+        ndb,
+        owner.id,
+        {
+          name,
+          definition,
+          ...(item.description !== undefined ? { description: item.description } : {}),
+          ...(item.position !== undefined ? { position: item.position } : {}),
+          ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
+        },
+        actorUserId,
+        requestId,
+      );
+      results[index] = created;
+      changed.push({ action: 'created', view: created });
+      if (item.ref !== undefined) idByRef.set(item.ref, created.id);
+      continue;
+    }
+    if (item.action === 'update') {
+      if (item.id !== undefined) {
+        requireOwnedView(ndb, owner.id, item.id, index, requestId);
+        applyUpdate(index, item, item.id);
+      }
+      // Адрес по ref резолвится вторым проходом.
+      continue;
+    }
+    // delete
+    if (item.id !== undefined) applyDelete(index, item.id);
+  }
+
+  // ---- Второй проход: update/delete по локальному ref -----------------
+  for (const [index, item] of items.entries()) {
+    if (item.action === 'create' || item.id !== undefined) continue;
+    const ref = item.ref as string;
+    const viewId = idByRef.get(ref);
+    if (viewId === undefined) {
+      invalidViewItem(
+        index,
+        `ref "${ref}" не удалось разрешить в этом батче.`,
+        { field: `views[${index}].ref`, ref, known_refs: [...idByRef.keys()] },
+        requestId,
+      );
+    }
+    if (item.action === 'update') applyUpdate(index, item, viewId);
+    else applyDelete(index, viewId);
+  }
+
+  return {
+    items: results.map((item) => {
+      /* c8 ignore next */
+      if (item === undefined) throw new Error('custom views batch left an unresolved item');
+      return item;
+    }),
+    changed,
+  };
+}

@@ -611,11 +611,18 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // проза описаний: 45 126 → 45 979 Б (+853). Умное удаление
         // `properties.remove` описано в `etn.guide`/`etn.ops`, на `tools/list`
         // не влияет. Планка поднята ровно под прирост: 45 200 → 46 100.
+        // 0.14.1 (задача 769fde88, `etn.custom_views.write`): новый инструмент
+        // батч-записи внетиповых отборов мысли (ADR 2a758041) — 3 070 Б
+        // (`description` + `inputSchema`, контракт вызова не режется) плюс
+        // актуализация описаний `etn.views.run`/`etn.thoughts.get`/`resolve`/
+        // `subgraph` (внетиповые отборы, `scope`/`defined_on`, `available_views`)
+        // — +492 Б прозы. Замер: 46 089 → 49 651 Б. Планка поднята ровно под
+        // прирост с малым запасом: 46 100 → 49 900.
         assert.ok(
-          bytes <= 46_100,
-          `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 46100`,
+          bytes <= 49_900,
+          `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 49900`,
         );
-        // Потолок числа инструментов: фактическое 25 + запас 5 = 30 (нижняя
+        // Потолок числа инструментов: фактическое 26 + запас 4 = 30 (нижняя
         // граница ориентира техпроекта 22e34ba5). Превышение — только
         // осознанным пересмотром стандарта/ADR, не молча.
         assert.ok(
@@ -705,9 +712,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `etn.thoughts.write`, эффективный порядок значений в
         // `etn.thoughts.get`. Прирост только прозы: D+I 40 376 → 41 214 Б
         // (+838). Планка: 40 450 → 41 400 (малый запас).
+        // 0.14.1 (задача 769fde88): `etn.custom_views.write` — 2 826 Б
+        // (`description` + `inputSchema` батча), плюс актуализация четырёх
+        // описаний (+500 Б). D+I 41 324 → 44 650 Б (+3 326). Планка:
+        // 41 400 → 44 900 (малый запас).
         assert.ok(
-          descriptionsPlusInputSchema <= 41_400,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 41400`,
+          descriptionsPlusInputSchema <= 44_900,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 44900`,
         );
       } finally {
         await handle.close();
