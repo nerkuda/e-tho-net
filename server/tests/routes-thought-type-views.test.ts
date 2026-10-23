@@ -323,6 +323,109 @@ describe(
         }
       });
 
+      // Ошибка 1cd2b6db: PATCH/DELETE (и GET one) не сверяли владельца —
+      // отбор чужого типа правился/удалялся по прямому id, а событие несло
+      // `thought_type_id` из пути вместо фактического владельца.
+      it('чужой :viewId в GET/PATCH/DELETE — 404 с defined_on; событие несёт фактического владельца', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeA = await createThoughtType(ctx, 'owner-a');
+          const typeB = await createThoughtType(ctx, 'owner-b');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+
+          const created = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views`,
+            headers: h,
+            payload: { name: 'Отбор A', definition },
+          });
+          assert.equal(created.statusCode, 201, created.body?.toString());
+          const viewId = (created.json().data as ViewDto).id;
+
+          const foreignBase =
+            `/api/v1/networks/${ctx.networkId}/thought-types/${typeB}/views/${viewId}`;
+
+          // GET one чужого типа — 404 и фактический владелец в details.
+          const foreignGet = await ctx.app.inject({
+            method: 'GET',
+            url: foreignBase,
+            headers: h,
+          });
+          assert.equal(foreignGet.statusCode, 404, foreignGet.body?.toString());
+          assert.equal(foreignGet.json().error.code, 'NOT_FOUND');
+          assert.equal(
+            (foreignGet.json().error.details as { defined_on?: string }).defined_on,
+            typeA,
+            'details.defined_on — фактический владелец отбора',
+          );
+
+          // PATCH чужого типа — 404, строка не изменилась.
+          const foreignPatch = await ctx.app.inject({
+            method: 'PATCH',
+            url: foreignBase,
+            headers: { ...h, 'if-match': '1' },
+            payload: { name: 'Захвачено' },
+          });
+          assert.equal(foreignPatch.statusCode, 404, foreignPatch.body?.toString());
+
+          const afterPatch = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views/${viewId}`,
+            headers: h,
+          });
+          assert.equal(afterPatch.statusCode, 200);
+          assert.equal((afterPatch.json().data as ViewDto).name, 'Отбор A');
+          assert.equal((afterPatch.json().data as ViewDto).version, 1);
+
+          // DELETE чужого типа — 404, строка жива.
+          const foreignDelete = await ctx.app.inject({
+            method: 'DELETE',
+            url: foreignBase,
+            headers: { ...h, 'if-match': '1' },
+          });
+          assert.equal(foreignDelete.statusCode, 404, foreignDelete.body?.toString());
+          assert.equal(
+            (
+              await ctx.app.inject({
+                method: 'GET',
+                url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views/${viewId}`,
+                headers: h,
+              })
+            ).statusCode,
+            200,
+          );
+
+          // Событие правки СВОЕГО отбора несёт фактического владельца (typeA):
+          // путь теперь обязан совпадать с ним.
+          const pubsub = ctx.app.pubsub;
+          const received: AnyRealtimeEvent[] = [];
+          const unsubscribe = pubsub.subscribe(
+            ctx.networkId,
+            (event: AnyRealtimeEvent) => received.push(event),
+          );
+          try {
+            const ownPatch = await ctx.app.inject({
+              method: 'PATCH',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views/${viewId}`,
+              headers: { ...h, 'if-match': '1' },
+              payload: { description: 'своя правка' },
+            });
+            assert.equal(ownPatch.statusCode, 200, ownPatch.body?.toString());
+            await new Promise((r) => setImmediate(r));
+            const updatedEvent = received.find((e) => e.type === 'thought-type-view.updated');
+            assert.ok(updatedEvent, 'событие updated должно быть доставлено');
+            const data = updatedEvent!.data as { thought_type_id: string; view_id: string };
+            assert.equal(data.thought_type_id, typeA);
+            assert.equal(data.view_id, viewId);
+          } finally {
+            unsubscribe();
+          }
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
       it('создание без position нумерует отборы в конец списка (0,1,2…)', async () => {
         // Регрессия a62190d1: дефолт position=0 у всех отборов типа, заведённых
         // без явной позиции (так создаёт отборы клиент), делал перестановку

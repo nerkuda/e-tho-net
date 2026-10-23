@@ -34,6 +34,7 @@ import {
   type EffectiveThoughtView,
   type StructureSort,
   type SortOrder,
+  type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
 } from '@etn/shared';
@@ -137,6 +138,38 @@ function effectiveViewsForType(
   thoughtTypeId: string,
 ): EffectiveThoughtTypeView[] {
   return getEffectiveViewsForThought(ndb, { type_id: thoughtTypeId });
+}
+
+/**
+ * Отбор обязан принадлежать типу из пути (`:id`): чужой `:viewId` — 404, не
+ * 403 (ошибка 1cd2b6db; образец — `requireOwnedView` внетиповых отборов).
+ *
+ * Для унаследованного отбора фактический владелец — `thought_type_id` строки
+ * (он же `defined_on`); клиент передаёт в `:id` именно его, а не тип фокуса.
+ * Поэтому сверка идёт с `:id`, а `details.defined_on` сообщает фактического
+ * владельца при промахе.
+ */
+function requireOwnedView(
+  ndb: import('../db/network-db.js').NetworkDb,
+  thoughtTypeId: string,
+  viewId: string,
+  requestId: string,
+): ThoughtTypeView {
+  const view = getThoughtTypeView(ndb, viewId);
+  if (view === null || view.thought_type_id !== thoughtTypeId) {
+    throw new EtnError(
+      'NOT_FOUND',
+      `У типа мысли ${thoughtTypeId} нет отбора ${viewId}.`,
+      {
+        entity: 'thought_type_view',
+        id: viewId,
+        type_id: thoughtTypeId,
+        defined_on: view?.thought_type_id ?? null,
+      },
+      requestId,
+    );
+  }
+  return view;
 }
 
 /**
@@ -274,17 +307,11 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       '/networks/:networkId/thought-types/:id/views/:viewId',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, viewId } = req.params as ViewIdParams;
+        const { networkId, id, viewId } = req.params as ViewIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const view = getThoughtTypeView(ndb, viewId);
-        if (view === null) {
-          throw new EtnError(
-            'NOT_FOUND',
-            `Отбор ${viewId} не найден.`,
-            { entity: 'thought_type_view', id: viewId },
-            req.id,
-          );
-        }
+        // Владелец сверяется с `:id` (ошибка 1cd2b6db): отбор чужого типа
+        // не читается по прямому id.
+        const view = requireOwnedView(ndb, id, viewId, req.id);
         sendSuccess(reply, view, {
           version: view.version,
           updated_at: view.updated_at,
@@ -303,6 +330,8 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const changes = parseViewUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Чужой `:viewId` — 404 до записи (ошибка 1cd2b6db).
+        requireOwnedView(ndb, id, viewId, req.id);
         const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThoughtTypeView(
             ndb,
@@ -315,10 +344,13 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           // Эффективный набор — после UPDATE, чтобы клиент видел новый `inherited`/
           // `defined_on` отбора (вдруг он переехал по `name_key` на одноимённый
           // отбор предка, или наоборот — был унаследованным, стал собственным).
-          const effective = effectiveViewsForType(ndb, id);
+          // Владелец для события и набора — фактический `thought_type_id`
+          // строки, а не `:id` из пути (ошибка 1cd2b6db).
+          const ownerTypeId = updated.thought_type_id;
+          const effective = effectiveViewsForType(ndb, ownerTypeId);
           const matched = effective.find((v) => v.id === updated.id) ?? {
             ...updated,
-            defined_on: id,
+            defined_on: ownerTypeId,
             inherited: false,
           };
           return {
@@ -327,7 +359,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
               {
                 type: 'thought-type-view.updated',
                 data: {
-                  thought_type_id: id,
+                  thought_type_id: ownerTypeId,
                   view_id: viewId,
                   changes,
                   version: updated.version,
@@ -354,15 +386,8 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         const { networkId, id, viewId } = req.params as ViewIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const before = getThoughtTypeView(ndb, viewId);
-        if (before === null) {
-          throw new EtnError(
-            'NOT_FOUND',
-            `Отбор ${viewId} не найден.`,
-            { entity: 'thought_type_view', id: viewId },
-            req.id,
-          );
-        }
+        // Чужой `:viewId` — 404 (ошибка 1cd2b6db).
+        const before = requireOwnedView(ndb, id, viewId, req.id);
         // Сравниваем версию здесь, а не в сервисе — `deleteThoughtTypeView`
         // оптимистическую блокировку не делает (только `update`/`create`),
         // см. thought-type-views-service.ts.
@@ -384,7 +409,11 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           return {
             result: undefined,
             events: [
-              { type: 'thought-type-view.deleted', data: { thought_type_id: id, view_id: viewId } },
+              {
+                type: 'thought-type-view.deleted',
+                // Фактический владелец строки, не `:id` из пути (1cd2b6db).
+                data: { thought_type_id: before.thought_type_id, view_id: viewId },
+              },
             ],
           };
         });
