@@ -489,7 +489,7 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
 export const draftsInternals = { sendDraft };
 
 /* ------------------------------------------------------------------ *
- * Debounce-зеркало правки поля (ошибка 5726744b)
+ * Debounce-зеркало правки поля (ошибки 5726744b, 1b5446af)
  *
  * Раньше каждый редактор держал свой `setTimeout` и `draftId`. Таймер не
  * отменял уже начавшуюся асинхронную запись, поэтому строка, пришедшая ПОСЛЕ
@@ -497,7 +497,9 @@ export const draftsInternals = { sendDraft };
  * `baseVersion` — источник цикла `comment version mismatch`. Здесь:
  * `settle()` увеличивает поколение, и запись, начатая до него, удаляет свою
  * строку по возвращении id; `dispose()` досылает несохранённый текст, а не
- * теряет его.
+ * теряет его; `flush()` пишет финальный текст (перед «Единой записью» или
+ * офлайн-уходом) строго после начатых записей — опоздавшая запись не может
+ * лечь поверх более новой.
  * ------------------------------------------------------------------ */
 
 /** Поле правки, которое зеркалится в черновики. */
@@ -515,6 +517,12 @@ export interface DraftMirrorOptions {
   target: () => DraftMirrorTarget | null;
   /** Кодирование текста поля в значение черновика (`comment-new` — JSON). */
   encode?: (raw: string) => string;
+  /**
+   * Текст читается В МОМЕНТ записи, а не в `schedule`: потоку, который
+   * сигналит «поле изменилось» без текста (блоки трансклюзий), нужен последний
+   * текст документа, набранный после сигнала.
+   */
+  read?: () => string | null;
   /** Задержка зеркалирования, мс (по умолчанию 800). */
   delayMs?: number;
   /** Идентификатор записанной строки (для адресной очистки после отправки). */
@@ -523,15 +531,43 @@ export interface DraftMirrorOptions {
 
 /** Рукоятка зеркала правки поля. */
 export interface DraftMirror {
-  /** Отложить запись текста (очередная правка перепланирует таймер). */
-  schedule(raw: string): void;
+  /**
+   * Отложить запись текста (очередная правка перепланирует таймер). Текст
+   * обязателен, если у зеркала нет `read`.
+   */
+  schedule(raw?: string): void;
   /**
    * Правка подтверждена (сохранена) или отменена: отложенная запись гасится,
    * уже начавшаяся — удалит свою строку по возвращении id.
    */
   settle(): void;
+  /**
+   * Записать текст немедленно и дождаться записи. Финальный текст (перед
+   * «Единой записью»/офлайн-уходом) встаёт в очередь ПОСЛЕ начатых записей,
+   * поэтому опоздавшая запись не перетрёт его. Без аргумента берётся `read`
+   * (или отложенный текст).
+   */
+  flush(raw?: string): Promise<void>;
   /** Редактор выгружается: отложенный текст дописывается, а не теряется. */
   dispose(): void;
+}
+
+/**
+ * Удаляет опоздавшую строку черновика, только если она всё ещё хранит ЗНАЧЕНИЕ
+ * этой записи. Upsert идёт по ключу поля и НЕ меняет id строки, поэтому слепое
+ * удаление по id снесло бы более новое значение, записанное после (замечание
+ * верификатора к ошибке 1b5446af).
+ */
+async function dropDraftIfOwn(networkId: string, id: string, value: string): Promise<void> {
+  let rows: DraftRecord[];
+  try {
+    rows = await listDrafts(networkId, 'all');
+  } catch {
+    return;
+  }
+  const row = rows.find((d) => d.id === id);
+  if (row === undefined || row.value !== value) return;
+  await clearDraft(id);
 }
 
 /** Создаёт debounce-зеркало текста поля в таблицу черновиков. */
@@ -539,37 +575,57 @@ export function createDraftMirror(opts: DraftMirrorOptions): DraftMirror {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let pending: string | null = null;
   let generation = 0;
+  // Записи одного зеркала идут строго по очереди: опоздавшая запись не может
+  // лечь поверх более новой (flush) — она завершится до её старта.
+  let chain: Promise<void> = Promise.resolve();
+  const run = (task: () => Promise<void>): Promise<void> => {
+    const next = chain.then(task, task);
+    chain = next.catch(() => undefined);
+    return next;
+  };
 
-  const write = async (generationAtSchedule: number, raw: string): Promise<void> => {
+  /** Текущий текст: явно переданный либо прочитанный из источника в момент вызова. */
+  const currentText = (raw: string | undefined): string | null =>
+    raw ?? (opts.read === undefined ? pending : opts.read());
+
+  const write = async (generationAtSchedule: number | null, raw: string): Promise<void> => {
     const target = opts.target();
     if (target === null) return;
+    let value: string;
+    let id: string;
     try {
-      const id = await saveDraft({
-        ...target,
-        value: opts.encode === undefined ? raw : opts.encode(raw),
-      });
-      if (generationAtSchedule !== generation) {
-        // Правка уже сохранена/отменена — строка опоздала, это мусор
-        // с устаревшей baseVersion (источник вечного конфликта).
-        await clearDraft(id);
-        return;
-      }
-      opts.onWritten?.(id);
+      value = opts.encode === undefined ? raw : opts.encode(raw);
+      id = await saveDraft({ ...target, value });
     } catch {
       // Локальное хранилище недоступно — правка не должна ломать поле.
+      return;
     }
+    if (generationAtSchedule !== null && generationAtSchedule !== generation) {
+      // Правка уже сохранена/отменена — строка опоздала, это мусор с
+      // устаревшей baseVersion (источник вечного конфликта). Удаляем только
+      // свою строку: более новое значение того же ключа остаётся.
+      await dropDraftIfOwn(target.networkId, id, value);
+      return;
+    }
+    opts.onWritten?.(id);
   };
 
   return {
-    schedule(raw: string): void {
-      pending = raw;
+    schedule(raw?: string): void {
+      if (opts.read === undefined) {
+        if (raw === undefined) return;
+        pending = raw;
+      }
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
-        const value = pending;
+        const value = opts.read === undefined ? pending : opts.read();
         pending = null;
         if (value === null) return;
-        void write(generation, value);
+        // Поколение фиксируется В МОМЕНТ срабатывания: задача пойдёт в очередь
+        // и может стартовать уже после `settle`/`flush`.
+        const generationAtFire = generation;
+        void run(() => write(generationAtFire, value));
       }, opts.delayMs ?? 800);
     },
     settle(): void {
@@ -578,15 +634,68 @@ export function createDraftMirror(opts: DraftMirrorOptions): DraftMirror {
       timer = null;
       pending = null;
     },
+    async flush(raw?: string): Promise<void> {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      const value = currentText(raw);
+      pending = null;
+      // Начатые записи стали неактуальны: они удалят свои строки, а финальный
+      // текст встанет в очередь после них и не будет перетёрт.
+      generation += 1;
+      if (value === null) {
+        await chain;
+        return;
+      }
+      await run(() => write(null, value));
+    },
     dispose(): void {
       if (timer === null) return;
       clearTimeout(timer);
       timer = null;
-      const value = pending;
+      const value = currentText(undefined);
       pending = null;
-      if (value !== null) void write(generation, value);
+      if (value !== null) {
+        const generationAtDispose = generation;
+        void run(() => write(generationAtDispose, value));
+      }
     },
   };
+}
+
+/**
+ * Зеркало черновика текста источника трансклюзии (задача `6a085e01`, ошибка
+ * `1b5446af`). Одно место, где строится ключ черновика: `entityType` =
+ * `'transclusion'`, `entityId` = владелец-сущность поля (без id комментария,
+ * ошибка `6d4d60ef`), `field` = `sourceId#section`.
+ *
+ * `read` читает последний текст блока в момент записи (сигнал «блок грязный»
+ * приходит без текста); `flush` — финальный текст перед «Единой записью» или
+ * офлайн-уходом.
+ */
+export function createSourceDraftMirror(opts: {
+  networkId: string;
+  /** Владелец-сущность поля; `undefined` — ключа нет, зеркало не пишет. */
+  ownerKey: () => string | undefined;
+  sourceId: string;
+  section: string | null;
+  read: () => string | null;
+  delayMs?: number;
+}): DraftMirror {
+  return createDraftMirror({
+    target: () => {
+      const ownerKey = opts.ownerKey();
+      if (ownerKey === undefined) return null;
+      return {
+        networkId: opts.networkId,
+        entityType: 'transclusion',
+        entityId: ownerKey,
+        field: sourceDraftField(opts.sourceId, opts.section),
+        baseVersion: null,
+      };
+    },
+    read: opts.read,
+    delayMs: opts.delayMs,
+  });
 }
 
 /** Convenience import for tests without DOM usage. */

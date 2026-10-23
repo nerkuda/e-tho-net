@@ -34,6 +34,7 @@ import {
 import { blockEditorKey, dirtyBlockSaves } from '../src/renderer/editor/transclusion.js';
 import {
   clearSourceDrafts,
+  createSourceDraftMirror,
   draftsInternals,
   findSourceDraft,
   listSourceDrafts,
@@ -449,6 +450,146 @@ test('sendDraft: ветка «transclusion» — черновик не отпр�
 });
 
 // ---------------------------------------------------------------------------
+// Ошибка 1b5446af: гонка debounce-записи с записью/отменой источника.
+//
+// Сценарий: таймер сработал, IPC-запись черновика уже ушла, ответ задержался;
+// пользователь нажал Esc (или «Единую запись»). Раньше `cancelSourceDraftTimers`
+// гасил только ещё не сработавшие таймеры, и строка ложилась ПОСЛЕ очистки —
+// при следующем входе в правку восстанавливался старый текст. Теперь зеркало
+// (`createDraftMirror`) на поколении: опоздавшая запись удаляет СВОЮ строку, а
+// если по ключу уже лежит более новое значение — не трогает его.
+// ---------------------------------------------------------------------------
+
+/** Тип входа записи черновика (без id, который выдаёт хранилище). */
+type DraftSaveInput = Omit<StoredDraft, 'id'>;
+
+/** Даёт отработать таймерам зеркала и async-цепочкам черновиков. */
+async function settleAsync(): Promise<void> {
+  for (let i = 0; i < 3; i += 1) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Задерживает ОТВЕТ первой записи черновика: строка уже записана (так ведёт
+ * себя IPC-обработчик в main), а обещание разрешается позже — модель «запись в
+ * полёте» из описания ошибки.
+ */
+function holdFirstDraftSave(): { release: () => void; held: () => boolean } {
+  const ui = (globalThis as unknown as { etn: { ui: Record<string, unknown> } }).etn.ui;
+  const original = ui['draftSave'] as (input: DraftSaveInput) => Promise<string>;
+  const gate: { release: (() => void) | null } = { release: null };
+  let used = false;
+  ui['draftSave'] = async (input: DraftSaveInput) => {
+    const id = await original(input);
+    if (!used) {
+      used = true;
+      await new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+    }
+    return id;
+  };
+  return {
+    release: () => gate.release?.(),
+    held: () => gate.release !== null,
+  };
+}
+
+test('гонка: опоздавшая debounce-запись источника не воскрешает черновик после отмены', async () => {
+  const stub = stubDraftStore();
+  const hold = holdFirstDraftSave();
+  const mirror = createSourceDraftMirror({
+    networkId: NET,
+    ownerKey: () => OWNER,
+    sourceId: ID_A,
+    section: null,
+    read: () => 'ЧЕРНОВИК БЛОКА',
+    delayMs: 0,
+  });
+
+  mirror.schedule();
+  await settleAsync();
+  assert.ok(hold.held(), 'запись начата, ответ задержан');
+  assert.equal(stub.rows().length, 1, 'строка уже записана (IPC дошёл до хранилища)');
+
+  // Esc: поколение гасится, поле чистит все черновики владельца.
+  mirror.settle();
+  await clearSourceDrafts(NET, OWNER);
+  hold.release();
+  await settleAsync();
+
+  assert.deepEqual(
+    stub.rows(),
+    [],
+    'опоздавшая запись удалила себя — блок не «воскресает» грязным при следующем входе',
+  );
+});
+
+test('гонка: опоздавшая запись не удаляет более свежий черновик того же блока', async () => {
+  const stub = stubDraftStore();
+  const hold = holdFirstDraftSave();
+  const mirror = createSourceDraftMirror({
+    networkId: NET,
+    ownerKey: () => OWNER,
+    sourceId: ID_A,
+    section: null,
+    read: () => 'СТАРЫЙ ТЕКСТ',
+    delayMs: 0,
+  });
+
+  mirror.schedule();
+  await settleAsync();
+  assert.ok(hold.held(), 'первая запись в полёте');
+  const id = stub.rows()[0]!.id;
+
+  // Пока ответ в полёте, тот же блок успел записать новый текст. Upsert по
+  // ключу поля НЕ меняет id строки — слепое удаление по id снесло бы новое.
+  await saveSourceDraft({
+    networkId: NET,
+    ownerKey: OWNER,
+    sourceId: ID_A,
+    section: null,
+    value: 'НОВЫЙ ТЕКСТ',
+  });
+  mirror.settle();
+  hold.release();
+  await settleAsync();
+
+  assert.equal(stub.rows().length, 1, 'более свежая строка сохранена');
+  assert.equal(stub.rows()[0]!.id, id, 'id строки тот же (upsert по ключу)');
+  assert.equal(stub.rows()[0]!.value, 'НОВЫЙ ТЕКСТ', 'более новое значение не удалено');
+});
+
+test('flush: финальный текст не перетирается опоздавшей debounce-записью', async () => {
+  const stub = stubDraftStore();
+  const hold = holdFirstDraftSave();
+  const mirror = createSourceDraftMirror({
+    networkId: NET,
+    ownerKey: () => OWNER,
+    sourceId: ID_A,
+    section: null,
+    read: () => 'ЧЕРНОВИК',
+    delayMs: 0,
+  });
+
+  mirror.schedule();
+  await settleAsync();
+  assert.ok(hold.held(), 'запись в полёте');
+
+  // «Единая запись»/офлайн-уход: финальный текст встаёт в очередь ПОСЛЕ
+  // начатой записи и не может быть перетёрт ею.
+  const flushed = mirror.flush('ФИНАЛ');
+  hold.release();
+  await flushed;
+  await settleAsync();
+
+  assert.equal(stub.rows().length, 1, 'строка одна');
+  assert.equal(stub.rows()[0]!.value, 'ФИНАЛ', 'финальный текст победил');
+
+  await clearSourceDrafts(NET, OWNER);
+  assert.deepEqual(stub.rows(), [], 'успешная запись чистит черновики источников');
+});
+
+// ---------------------------------------------------------------------------
 // Сторож проводки поля: реальный EditorView headless не поднимается
 // ---------------------------------------------------------------------------
 
@@ -471,7 +612,28 @@ test('markdown-field: проводка черновиков источников
   const checks: Array<[boolean, string]> = [
     [/onBlockDirty: \(key\) => scheduleSourceDraft\(key\)/.test(src), '«грязный» блок зеркалится в черновик'],
     [/getBlockDraft:/.test(src) && /findSourceDraft\(/.test(src), 'монтаж блока читает черновик'],
-    [/saveSourceDraft\(/.test(src), 'черновик источника пишется через saveSourceDraft'],
+    // Ошибка 1b5446af: черновик источника — тем же зеркалом, что комментарий и
+    // заголовок (`createDraftMirror`), а не собственным таймером на `window`.
+    [
+      /createSourceDraftMirror\(/.test(src),
+      'черновик источника пишется общим зеркалом (createDraftMirror)',
+    ],
+    [
+      /read: \(\) => nestedStore\?\.text\(key\) \?\? null/.test(src),
+      'текст блока читается в момент записи (сигнал «грязный» приходит без текста)',
+    ],
+    [
+      /sourceDraftMirror\(save\.key\)\.flush\(save\.text\)/.test(src),
+      'финальный текст блока пишется через flush (после начатых записей)',
+    ],
+    [
+      /settleSourceDraftMirrors\(\)/.test(src),
+      'запись/отмена гасят поколение зеркал черновиков источников',
+    ],
+    [
+      !/sourceDraftTimers|cancelSourceDraftTimers/.test(src),
+      'собственных таймеров черновиков источников не осталось',
+    ],
     [
       /clearSourceDrafts\(networkId, draftOwnerKey\)/.test(src),
       'Esc чистит все черновики источников поля',
@@ -481,7 +643,6 @@ test('markdown-field: проводка черновиков источников
       'успешная запись чистит черновики записанных источников',
     ],
     [/!canSave\(\)/.test(src) && /offlineNotice\(\)/.test(src), 'офлайн-уход сохраняет черновики'],
-    [/cancelSourceDraftTimers\(\)/.test(src), 'запись/отмена гасят отложенную запись черновиков'],
     // Ошибка 6d4d60ef: ключ черновиков источников — по владельцу-СУЩНОСТИ, без
     // id комментария (иначе при создании комментария `thought:<id>` →
     // `comment:<id>` черновики сиротеют). Проверяется ТЕЛО инициализатора

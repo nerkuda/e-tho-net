@@ -30,7 +30,14 @@ import {
 } from '@etn/markdown';
 
 import { requireNetworkId } from '../app.js';
-import { canSave, clearSourceDrafts, findSourceDraft, offlineNotice, saveSourceDraft } from '../drafts.js';
+import {
+  canSave,
+  clearSourceDrafts,
+  createSourceDraftMirror,
+  findSourceDraft,
+  offlineNotice,
+  type DraftMirror,
+} from '../drafts.js';
 import { invalidateQueries, onRoutedRealtimeEvent, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
@@ -1262,49 +1269,44 @@ export function createMarkdownField(opts: {
   };
 
   /**
-   * Отложенная (debounce) запись черновиков правок источников трансклюзий
-   * (задача `6a085e01`): «грязный» блок зеркалится в локальное хранилище
-   * черновиков тем же механизмом, что и правка окружения (`drafts.ts`), и
-   * переживает перезапуск. Ключ — владелец поля + источник + раздел.
+   * Debounce-запись черновиков правок источников трансклюзий (задача
+   * `6a085e01`, ошибка `1b5446af`): «грязный» блок зеркалится в локальное
+   * хранилище черновиков тем же механизмом, что и правка комментария/заголовка
+   * (`createDraftMirror`, `drafts.ts`), и переживает перезапуск. Ключ — владелец
+   * поля + источник + раздел. Зеркало на блок: `settle` гасит поколение
+   * (опоздавшая запись удалит себя, а не воскреснет после записи/отмены),
+   * `flush` пишет финальный текст после начатых записей.
    */
-  const sourceDraftTimers = new Map<string, number>();
-  const scheduleSourceDraft = (key: string): void => {
-    if (draftOwnerKey === undefined) return;
-    const ownerKey = draftOwnerKey;
-    const pending = sourceDraftTimers.get(key);
-    if (pending !== undefined) window.clearTimeout(pending);
-    sourceDraftTimers.set(
-      key,
-      window.setTimeout(() => {
-        sourceDraftTimers.delete(key);
-        const text = nestedStore?.text(key);
-        if (text === null || text === undefined) return;
-        const { sourceId, section } = parseBlockEditorKey(key);
-        // Лучшее усилие: сбой локального хранилища не должен ломать правку.
-        void saveSourceDraft({ networkId, ownerKey, sourceId, section, value: text }).catch(
-          () => undefined,
-        );
-      }, 800),
-    );
+  const sourceDraftMirrors = new Map<string, DraftMirror>();
+  const sourceDraftMirror = (key: string): DraftMirror => {
+    const existing = sourceDraftMirrors.get(key);
+    if (existing !== undefined) return existing;
+    const { sourceId, section } = parseBlockEditorKey(key);
+    const mirror = createSourceDraftMirror({
+      networkId,
+      ownerKey: () => draftOwnerKey,
+      sourceId,
+      section,
+      // Текст читается в момент записи: сигнал «блок грязный» приходит без
+      // текста, а до срабатывания debounce пользователь мог напечатать ещё.
+      read: () => nestedStore?.text(key) ?? null,
+    });
+    sourceDraftMirrors.set(key, mirror);
+    return mirror;
   };
-  /** Снимает отложенные записи черновиков (запись/отмена гасят debounce). */
-  const cancelSourceDraftTimers = (): void => {
-    for (const timer of sourceDraftTimers.values()) window.clearTimeout(timer);
-    sourceDraftTimers.clear();
+  const scheduleSourceDraft = (key: string): void => {
+    sourceDraftMirror(key).schedule();
+  };
+  /**
+   * Гасит отложенные записи черновиков (запись/отмена). Уже начавшиеся записи
+   * сами удалят свою строку по возвращении id — черновик не воскреснет.
+   */
+  const settleSourceDraftMirrors = (): void => {
+    for (const mirror of sourceDraftMirrors.values()) mirror.settle();
   };
   /** Немедленно сохраняет черновики переданных «грязных» блоков (офлайн-уход). */
   const flushSourceDrafts = (saves: readonly TransclusionBlockSave[]): void => {
-    if (draftOwnerKey === undefined) return;
-    const ownerKey = draftOwnerKey;
-    for (const save of saves) {
-      void saveSourceDraft({
-        networkId,
-        ownerKey,
-        sourceId: save.sourceId,
-        section: save.section,
-        value: save.text,
-      }).catch(() => undefined);
-    }
+    for (const save of saves) void sourceDraftMirror(save.key).flush(save.text);
   };
 
   const commitOrRevert = (): void => {
@@ -1325,8 +1327,9 @@ export function createMarkdownField(opts: {
       // `comment version mismatch` после Esc).
       editor.setValue(currentMd, true);
       // Отменённая правка не должна воскреснуть из черновиков источников
-      // (задача `6a085e01`): debounce гасится, строки владельца удаляются.
-      cancelSourceDraftTimers();
+      // (задачи `6a085e01`, ошибка `1b5446af`): debounce гасится поколением,
+      // строки владельца удаляются, опоздавшая запись удалит себя сама.
+      settleSourceDraftMirrors();
       if (draftOwnerKey !== undefined) void clearSourceDrafts(networkId, draftOwnerKey);
       showView();
       return;
@@ -1350,7 +1353,7 @@ export function createMarkdownField(opts: {
     // немедленно) и восстановятся при следующем входе в правку.
     if (saves.length > 0 && !canSave()) {
       offlineNotice();
-      cancelSourceDraftTimers();
+      settleSourceDraftMirrors();
       flushSourceDrafts(saves);
       showView();
       return;
@@ -1365,7 +1368,7 @@ export function createMarkdownField(opts: {
     // Флаг ставится СИНХРОННО: пока запись не разрешилась, `editing` ещё true,
     // и повторный коммит (см. `commitPending`) надо отсечь.
     commitPending = true;
-    cancelSourceDraftTimers();
+    settleSourceDraftMirrors();
     const writeEnv = envChanged && onSave !== undefined ? () => onSave(md) : null;
     // Гарантируем, что все «грязные» блоки уже в черновиках (debounce мог не
     // сработать), и только затем пишем: успех чистит черновики уже после их
@@ -1373,17 +1376,9 @@ export function createMarkdownField(opts: {
     const flush =
       draftOwnerKey === undefined || saves.length === 0
         ? Promise.resolve()
-        : Promise.all(
-            saves.map((save) =>
-              saveSourceDraft({
-                networkId,
-                ownerKey: draftOwnerKey,
-                sourceId: save.sourceId,
-                section: save.section,
-                value: save.text,
-              }).catch(() => undefined),
-            ),
-          ).then(() => undefined);
+        : Promise.all(saves.map((save) => sourceDraftMirror(save.key).flush(save.text))).then(
+            () => undefined,
+          );
     void flush
       .then(() => commitTransclusionEdit({ networkId, saves, writeEnv }))
       .then((result) => {
@@ -1433,8 +1428,9 @@ export function createMarkdownField(opts: {
     // предыдущей сборке поля.
     nestedStore?.dispose();
     nestedStore = new NestedEditorStore();
-    // Отложенные записи черновиков источников прошлой сборки неактуальны.
-    cancelSourceDraftTimers();
+    // Отложенные записи черновиков источников прошлой сборки неактуальны
+    // (поколение гасит их; опоздавшие удалят себя сами, ошибка `1b5446af`).
+    settleSourceDraftMirrors();
     const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
