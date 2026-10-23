@@ -808,8 +808,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
         '`link_marked_for_deletion` — ребро помечено на удаление (корзина). ' +
-        '`meta.views` для seed-узлов — эффективный набор отборов (типовые и внетиповые со `scope`), ' +
-        'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
+        '`nodes[].views` — эффективный набор отборов у seed-узлов (типовые и внетиповые со `scope`; ' +
+        'у остальных узлов поле отсутствует), исполняется через `etn.views.run { view_name }`. ' +
+        '`link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',
       inputSchema: ThoughtsSubgraph.schema,
@@ -829,7 +830,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
         // subgraphs cannot leak inline `data:` icon URLs either.
         const nodes = result.nodes.map((id) => withSanitizedIcon(getThoughtOrThrow(ndb, id)));
-        // `meta.views` (задача c1fa71d4) — эффективный набор отборов только
+        // `nodes[].views` (задача c1fa71d4) — эффективный набор отборов только
         // для seed-узлов: для остальных узлов агент может прочитать карточку
         // через `etn.thoughts.get` отдельно.
         const seedViews = new Map<string, EffectiveThoughtView[]>();
@@ -896,7 +897,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // would only hide that fact behind a softer reason. Surface the
         // `max_nodes` reason verbatim in that case and skip budget trimming.
         const thoughtTypes = thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id));
-        // `meta.views` (задача c1fa71d4) — отборы для seed-узлов. Для
+        // `nodes[].views` (задача c1fa71d4) — отборы для seed-узлов. Для
         // остальных узлов поле пустое (агент может прочитать их карточку
         // отдельно через `etn.thoughts.get`).
         const nodesWithViews = nodes.map((n) => {

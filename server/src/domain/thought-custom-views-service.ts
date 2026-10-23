@@ -586,10 +586,13 @@ export function writeThoughtCustomViews(
           continue;
         }
         // `update`: create-тело применяется как патч существующего отбора.
+        // Патч симметричен (решение проверки V3, 2026-10-23): опущенное поле
+        // сохраняет прежнее значение — в том числе `description`; явно
+        // переданный `null` по-прежнему очищает описание.
         const patch: ThoughtCustomViewUpdateInput = {
           name,
-          description: item.description ?? null,
           definition,
+          ...(item.description !== undefined ? { description: item.description } : {}),
           ...(item.position !== undefined ? { position: item.position } : {}),
           ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
         };

@@ -312,6 +312,71 @@ describe('etn.custom_views.write (0.14.1, 769fde88)', { skip: !nativeAvailable()
     }
   });
 
+  it('on_duplicate update без description сохраняет прежнее описание (симметричный патч)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = insertThought(ndb, 'Мысль-описание', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = cardOf(
+          (
+            await writeViews(handle.client, ctx.networkId, thoughtId, [
+              {
+                action: 'create',
+                name: 'Сливаемый отбор',
+                description: 'исходное описание',
+                definition: DEFINITION,
+              },
+            ])
+          ).items[0]!,
+        );
+        assert.equal(created.description, 'исходное описание');
+
+        // Опущенный description не стирается: значение заменяют только
+        // переданные поля (решение проверки V3).
+        const preserved = cardOf(
+          (
+            await writeViews(handle.client, ctx.networkId, thoughtId, [
+              {
+                action: 'create',
+                name: 'Сливаемый отбор',
+                definition: JSON.stringify({ filters: [{ field: 'active', op: 'eq', value: true }] }),
+                on_duplicate: 'update',
+              },
+            ])
+          ).items[0]!,
+        );
+        assert.equal(preserved.id, created.id);
+        assert.equal(preserved.version, created.version + 1);
+        assert.equal(preserved.description, 'исходное описание');
+        assert.notEqual(preserved.definition, created.definition);
+
+        // Явно переданный null — осознанная очистка описания.
+        const cleared = cardOf(
+          (
+            await writeViews(handle.client, ctx.networkId, thoughtId, [
+              {
+                action: 'create',
+                name: 'Сливаемый отбор',
+                description: null,
+                definition: DEFINITION,
+                on_duplicate: 'update',
+              },
+            ])
+          ).items[0]!,
+        );
+        assert.equal(cleared.description, null);
+        assert.equal(cleared.version, preserved.version + 1);
+        assert.equal(liveViewCount(ctx, thoughtId), 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('update: expected_version, частичный патч, конфликт версий и ref вперёд', async () => {
     const ctx = await buildMcpContext();
     try {

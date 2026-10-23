@@ -39,8 +39,9 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         '(нормализованное сравнение) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
         '`etn.guide { topic: "thoughts.query" }`) — ровно одно из двух. `limit`/`offset` — страница, ' +
         '`order` — направление сортировки. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
-        'Возвращает страницу мыслей + `view` (id, имя, `scope`, `defined_on`, `inherited`) + `meta.view` ' +
-        '(при `ast` — `meta.ast: true`) и `meta.unresolved` (не пусто, если встретился неразрешимый ' +
+        'Возвращает страницу мыслей; при `view_name` — карточку исполненного отбора в top-level `view` ' +
+        '(id, имя, `scope`, `defined_on`, `inherited`), при `ast` поля `view` нет — ветка помечена ' +
+        '`meta.ast: true`; `meta.unresolved` (не пусто, если встретился неразрешимый ' +
         'токен — тогда `data` пустая). Отбор не найден — `NOT_FOUND` с `details.available_views` ' +
         '(id, имя, `scope`, `defined_on`). Удалённая сущность условия — `VALIDATION_ERROR` ' +
         '(`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
