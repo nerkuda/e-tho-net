@@ -776,6 +776,84 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     assert.equal(state.typeUpdate.calls.length, 0);
   });
 
+  it('меню «по умолчанию» читает собственную пометку (own_default), а не эффективную — d056d106', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    // У типа собственный дефолт «Работы типа», у мысли — внетиповой дефолт
+    // «В гараже»: эффективная пометка типовой строки занулена перекрытием,
+    // собственная пометка владельца осталась. Действие адресует владельца,
+    // значит и подпись/доступность обязаны читать `own_default`.
+    const harness = await mountWith([
+      row('t-1', 'Работы типа', { isDefault: false, ownDefault: true, version: 5 }),
+      row('c-1', 'В гараже', {
+        scope: 'thought',
+        definedOn: FOCUS_ID,
+        isDefault: true,
+        ownDefault: true,
+        position: 1,
+      }),
+    ]);
+    harness.findViewButton('t-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    assert.equal(
+      findMenuItemByLabel(menu, 'Сделать отбор по умолчанию'),
+      undefined,
+      'эффективная false не должна давать пункт «Сделать»',
+    );
+    const item = findMenuItemByLabel(menu, 'Снять «по умолчанию»');
+    assert.ok(
+      item !== undefined,
+      `ожидался пункт «Снять «по умолчанию»»: ${JSON.stringify(menuLabels(menu))}`,
+    );
+    assert.equal(
+      item!.classList.contains('menu-item-disabled'),
+      false,
+      'пометку владельца можно снять с полосы при перекрытии внетиповым дефолтом',
+    );
+    item!.click();
+    await settle();
+    assert.equal(state.typeUpdate.calls.length, 1);
+    assert.deepEqual(state.typeUpdate.calls[0].slice(0, 5), [
+      NETWORK_ID,
+      TYPE_ID,
+      't-1',
+      { is_default: false },
+      5,
+    ]);
+  });
+
+  it('унаследованный отбор с собственной пометкой: пункт «Снять» доступен (d056d106)', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    const harness = await mountWith([
+      row('t-inh', 'Работы версии', {
+        definedOn: ROOT_TYPE_ID,
+        inherited: true,
+        isDefault: false,
+        ownDefault: true,
+        version: 4,
+      }),
+    ]);
+    harness.findViewButton('t-inh')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    const item = findMenuItemByLabel(menu, 'Снять «по умолчанию»');
+    assert.ok(item !== undefined, `ожидался пункт «Снять»: ${JSON.stringify(menuLabels(menu))}`);
+    assert.equal(item!.classList.contains('menu-item-disabled'), false);
+    item!.click();
+    await settle();
+    assert.deepEqual(state.typeUpdate.calls[0].slice(0, 5), [
+      NETWORK_ID,
+      ROOT_TYPE_ID,
+      't-inh',
+      { is_default: false },
+      4,
+    ]);
+  });
+
   it('подтверждение удаления внетипового называет владельца-мысль, DELETE идёт в маршрут мысли', async () => {
     installWindow();
     clearBody();

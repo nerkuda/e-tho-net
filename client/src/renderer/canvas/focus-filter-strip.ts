@@ -154,7 +154,10 @@ interface EffectiveViewRow {
   /** Position within the owner level (for the dropdown overflow list). */
   position: number;
   version: number;
-  /** `true` — этот отбор открывается по умолчанию (эффективный дефолт). */
+  /** `true` — этот отбор открывается по умолчанию (эффективный дефолт).
+   *  Годится только для выбора открываемого отбора; владельческие действия
+   *  (меню «по умолчанию», начальное значение редактора) читают
+   *  {@link own_default} — ошибки d056d106/29f93e71. */
   is_default: boolean;
   /**
    * Собственная пометка «по умолчанию» строки владельца — без учёта
@@ -713,14 +716,20 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
       openViewEditorForExisting(networkId, view);
     }),
     menuAction(
-      view.is_default ? t('strip.menuClearDefault') : t('strip.menuMakeDefault'),
+      // Подпись и переключение — по СОБСТВЕННОЙ пометке строки, а не по
+      // эффективной: при внетиповом дефолте мысли эффективный `is_default`
+      // типовой строки занулён, а действие адресует отбор владельца
+      // (`defined_on`) — иначе «Сделать» повторяло бы no-op, а снять пометку
+      // с полосы было бы нельзя (ошибка d056d106).
+      view.own_default ? t('strip.menuClearDefault') : t('strip.menuMakeDefault'),
       () => {
         if (!guard(t('strip.editBaseLayerOnly'))) return;
-        void setDefault(networkId, view, !view.is_default);
+        void setDefault(networkId, view, !view.own_default);
       },
       // Пометку «по умолчанию» у унаследованного типового отбора ставит его
-      // собственный тип; снять уже стоящую можно и здесь (как раньше).
-      { disabled: view.scope === 'type' && view.inherited && !view.is_default },
+      // собственный тип; снять уже стоящую (собственную у владельца) можно и
+      // здесь — как раньше.
+      { disabled: view.scope === 'type' && view.inherited && !view.own_default },
     ),
     MENU_SEPARATOR,
     view.scope === 'thought'
