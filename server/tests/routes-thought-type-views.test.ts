@@ -426,6 +426,163 @@ describe(
         }
       });
 
+      // Ошибка 2dc32e85: снятие прежнего дефолта материализует тень предковой
+      // строки, а её имя уже занято живой строкой слоя → сырой SQLITE_CONSTRAINT
+      // (500) вместо доменного 409.
+      it('репро 2dc32e85: дефолт в слое при живой одноимённой строке слоя — 409, не 500', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'shadow-default');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+
+          const layerRes = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers`,
+            headers: h,
+            payload: { title: 'Слой коллизии дефолта' },
+          });
+          assert.equal(layerRes.statusCode, 201, layerRes.body?.toString());
+          const layerId = (layerRes.json().data as { id: string }).id;
+          const layerHeaders = { ...h, 'client-id': 'type-default-collision' };
+          const select = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
+            headers: layerHeaders,
+            payload: {},
+          });
+          assert.equal(select.statusCode, 200, select.body?.toString());
+
+          // (3) В слое L создаём «A».
+          const layerView = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+            payload: { name: 'A', definition },
+          });
+          assert.equal(layerView.statusCode, 201, layerView.body?.toString());
+          const layerViewId = (layerView.json().data as ViewDto).id;
+
+          // (4) В основе независимо создаём «A» с is_default (слой её не видит).
+          const baseDefault = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: h,
+            payload: { name: 'A', definition, is_default: true },
+          });
+          assert.equal(baseDefault.statusCode, 201, baseDefault.body?.toString());
+
+          // (5) В слое создаём «B» с is_default: снятие дефолта основы
+          // материализует её тень в слой и упирается в живое имя «A».
+          const collision = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+            payload: { name: 'B', definition, is_default: true },
+          });
+          assert.equal(collision.statusCode, 409, collision.body?.toString());
+          assert.equal(collision.json().error.code, 'DUPLICATE');
+          assert.equal(
+            (collision.json().error.details as { existing_id?: string }).existing_id,
+            layerViewId,
+            'details.existing_id — строка слоя, занявшая имя',
+          );
+
+          // Транзакция откатилась: «B» не создан, в слое по-прежнему только «A».
+          const list = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+          });
+          assert.deepEqual(
+            (list.json().data as ViewDto[]).map((v) => v.name),
+            ['A'],
+          );
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      // Ошибка 2dc32e85, вторая половина: UNIQUE 037 не имеет `WHERE deleted=0`,
+      // поэтому надгробие слоя (удалённый или перенесённый отбор) занимает имя
+      // до слияния. CREATE/PATCH по такому имени обязан давать 409 с
+      // диагностикой, а не 500.
+      it('надгробие отбора типа в слое занимает имя до слияния — 409, не 500', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'tombstone-name');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+
+          const layerRes = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers`,
+            headers: h,
+            payload: { title: 'Слой надгробия' },
+          });
+          assert.equal(layerRes.statusCode, 201);
+          const layerId = (layerRes.json().data as { id: string }).id;
+          const layerHeaders = { ...h, 'client-id': 'type-tombstone-name' };
+          await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
+            headers: layerHeaders,
+            payload: {},
+          });
+
+          const createInLayer = async (name: string): Promise<{ id: string }> => {
+            const res = await ctx.app.inject({
+              method: 'POST',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+              headers: layerHeaders,
+              payload: { name, definition },
+            });
+            assert.equal(res.statusCode, 201, res.body?.toString());
+            return res.json().data as { id: string };
+          };
+
+          const doomed = await createInLayer('Занято');
+          const other = await createInLayer('Другой');
+
+          const del = await ctx.app.inject({
+            method: 'DELETE',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views/${doomed.id}`,
+            headers: { ...layerHeaders, 'if-match': '1' },
+          });
+          assert.equal(del.statusCode, 204, del.body?.toString());
+
+          // CREATE того же имени: `*_v` надгробие не видит, физический слой — видит.
+          const recreate = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+            payload: { name: 'Занято', definition },
+          });
+          assert.equal(recreate.statusCode, 409, recreate.body?.toString());
+          assert.equal(recreate.json().error.code, 'DUPLICATE');
+          assert.equal(
+            (recreate.json().error.details as { existing_id?: string }).existing_id,
+            doomed.id,
+          );
+
+          // PATCH на имя надгробия — тот же 409.
+          const rename = await ctx.app.inject({
+            method: 'PATCH',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views/${other.id}`,
+            headers: { ...layerHeaders, 'if-match': '1' },
+            payload: { name: 'занято' },
+          });
+          assert.equal(rename.statusCode, 409, rename.body?.toString());
+          assert.equal(rename.json().error.code, 'DUPLICATE');
+          assert.equal(
+            (rename.json().error.details as { existing_id?: string }).existing_id,
+            doomed.id,
+          );
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
       it('создание без position нумерует отборы в конец списка (0,1,2…)', async () => {
         // Регрессия a62190d1: дефолт position=0 у всех отборов типа, заведённых
         // без явной позиции (так создаёт отборы клиент), делал перестановку

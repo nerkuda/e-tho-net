@@ -95,9 +95,11 @@ import {
   clearDefaultForThoughtType,
   deleteThoughtTypeView as repoDelete,
   findThoughtTypeViewByTypeAndNameKey,
+  findThoughtTypeViewNameOccupancy,
   getThoughtTypeView as repoGet,
   insertThoughtTypeView as repoInsert,
   listThoughtTypeViewsByType as repoListByType,
+  ThoughtTypeViewNameCollisionError,
   updateThoughtTypeView as repoUpdate,
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
@@ -150,11 +152,37 @@ function getViewOrThrow(ndb: NetworkDb, viewId: string, requestId?: string): Tho
   return rowToView(row);
 }
 
+/** `DUPLICATE` «имя занято» — единая форма `details` (в т.ч. надгробие слоя). */
+function duplicateNameError(
+  existingId: string,
+  existingName: string,
+  requestId?: string,
+): EtnError {
+  return new EtnError(
+    'DUPLICATE',
+    `Отбор с именем "${existingName}" уже есть в этом типе мысли.`,
+    {
+      entity: 'thought_type_view',
+      field: 'name',
+      existing_id: existingId,
+      existing_name: existingName,
+    },
+    requestId,
+  );
+}
+
 /**
  * Убедиться, что отбора с тем же `name_key` в этом типе нет (исключая
  * сам редактируемый отбор, если указан). Бросает `DUPLICATE` (409) с
  * `details.existing_id` / `details.existing_name` — нужно клиенту, чтобы
  * показать «такой отбор уже есть» рядом с полем имени.
+ *
+ * Проверяются два источника:
+ *   1. видимые живые строки (`*_v`) — семантика имени в типе;
+ *   2. физические строки ТЕКУЩЕГО слоя, включая надгробия — UNIQUE 037 не
+ *      имеет `WHERE deleted = 0`, поэтому надгробие занимает имя до слияния
+ *      (после move-to-thought в слое); иначе INSERT падал бы сырым
+ *      `SQLITE_CONSTRAINT_UNIQUE` (ошибка 2dc32e85).
  */
 function assertNameAvailable(
   ndb: NetworkDb,
@@ -169,19 +197,42 @@ function assertNameAvailable(
     nameKey,
     exceptId,
   );
-  if (clash) {
-    throw new EtnError(
-      'DUPLICATE',
-      `Отбор с именем "${clash.name}" уже есть в этом типе мысли.`,
-      {
-        entity: 'thought_type_view',
-        field: 'name',
-        existing_id: clash.id,
-        existing_name: clash.name,
-      },
-      requestId,
-    );
+  if (clash) throw duplicateNameError(clash.id, clash.name, requestId);
+  const occupied = findThoughtTypeViewNameOccupancy(ndb, thoughtTypeId, nameKey, exceptId);
+  if (occupied) throw duplicateNameError(occupied.id, occupied.name, requestId);
+}
+
+/** Нарушение натурального ключа имени (UNIQUE `(type, name_key, layer_id)`). */
+function isNameKeyConstraint(err: unknown): boolean {
+  const code = (err as { code?: unknown }).code;
+  if (typeof code !== 'string' || !code.startsWith('SQLITE_CONSTRAINT')) return false;
+  return (err as Error).message.includes('thought_type_views');
+}
+
+/**
+ * Перехватить коллизию натурального ключа при материализации тени/вставке и
+ * отдать `409 DUPLICATE` с осмысленными `details`; прочие ошибки — пробросить.
+ * Коллизию, найденную репозиторием ДО материализации (тень предкового дефолта
+ * против живой одноимённой строки слоя), приходит
+ * {@link ThoughtTypeViewNameCollisionError} — её карточка уже содержит id.
+ */
+function rethrowNameConstraint(
+  ndb: NetworkDb,
+  thoughtTypeId: string,
+  nameKey: string,
+  requestId: string | undefined,
+  err: unknown,
+  exceptId?: string,
+): never {
+  if (err instanceof ThoughtTypeViewNameCollisionError) {
+    throw duplicateNameError(err.existingId, err.existingName, requestId);
   }
+  if (!isNameKeyConstraint(err)) throw err;
+  const clash =
+    findThoughtTypeViewByTypeAndNameKey(ndb, thoughtTypeId, nameKey, exceptId) ??
+    findThoughtTypeViewNameOccupancy(ndb, thoughtTypeId, nameKey, exceptId);
+  if (clash) throw duplicateNameError(clash.id, clash.name, requestId);
+  throw err;
 }
 
 /**
@@ -255,26 +306,32 @@ export function createThoughtTypeView(
   const nameKey = viewNameKey(name);
   assertNameAvailable(ndb, thoughtTypeId, nameKey, undefined, requestId);
 
-  return ndb.transaction(() => {
-    if (input.is_default === true) {
-      // Снимаем прежнюю пометку тем же id (исключаем — пусто, потому что
-      // нового отбора ещё нет, и дублей тут быть не может: `exceptId = undefined`).
-      clearDefaultForThoughtType(ndb, thoughtTypeId);
-    }
-    const created = repoInsert(
-      ndb,
-      {
-        thought_type_id: thoughtTypeId,
-        name,
-        description,
-        definition,
-        ...(position !== undefined ? { position } : {}),
-        ...(input.is_default !== undefined ? { is_default: input.is_default } : {}),
-      },
-      actorUserId,
-    );
-    return rowToView(created);
-  });
+  try {
+    return ndb.transaction(() => {
+      if (input.is_default === true) {
+        // Снимаем прежнюю пометку тем же id (исключаем — пусто, потому что
+        // нового отбора ещё нет, и дублей тут быть не может: `exceptId = undefined`).
+        clearDefaultForThoughtType(ndb, thoughtTypeId);
+      }
+      const created = repoInsert(
+        ndb,
+        {
+          thought_type_id: thoughtTypeId,
+          name,
+          description,
+          definition,
+          ...(position !== undefined ? { position } : {}),
+          ...(input.is_default !== undefined ? { is_default: input.is_default } : {}),
+        },
+        actorUserId,
+      );
+      return rowToView(created);
+    });
+  } catch (err) {
+    // Остаточная гонка/материализация тени предкового дефолта: сырой
+    // constraint → доменный 409 (ошибка 2dc32e85).
+    rethrowNameConstraint(ndb, thoughtTypeId, nameKey, requestId, err);
+  }
 }
 
 /**
@@ -322,51 +379,66 @@ export function updateThoughtTypeView(
   if (position !== undefined) validated.position = position;
   if (changes.is_default !== undefined) validated.is_default = changes.is_default;
 
-  return ndb.transaction(() => {
-    const current = getViewOrThrow(ndb, viewId, requestId);
-    if (expectedVersion !== undefined && current.version !== expectedVersion) {
-      throw new EtnError(
-        'VERSION_CONFLICT',
-        'Версия отбора изменилась с момента чтения.',
-        {
-          entity: 'thought_type_view',
-          id: viewId,
-          expected: expectedVersion,
-          current: current.version,
-        },
-        requestId,
-      );
-    }
+  let ownerTypeId: string | undefined;
+  let nameKeyForDiag: string | undefined;
 
-    if (validated.definition !== undefined) {
-      // Полная валидация с ЯКОРЕМ типа отбора (требование 44d61c8a): вне
-      // транзакции якорь неизвестен, поэтому красная диагностика AST
-      // повторяется здесь. До UPDATE — иначе можно сохранить невалидное
-      // определение.
-      validated.definition = validateViewDefinitionInput(
-        ndb,
-        validated.definition,
-        current.thought_type_id,
-        requestId,
-      ).definition;
-    }
-
-    if (validated.name !== undefined) {
-      const newKey = viewNameKey(validated.name);
-      if (newKey !== current.name_key) {
-        assertNameAvailable(ndb, current.thought_type_id, newKey, viewId, requestId);
+  try {
+    return ndb.transaction(() => {
+      const current = getViewOrThrow(ndb, viewId, requestId);
+      ownerTypeId = current.thought_type_id;
+      // Имя не менялось — для диагностики constraint всё равно нужно текущее:
+      // materializeShadow/clearDefault могут столкнуться с занятым именем слоя.
+      nameKeyForDiag = current.name_key;
+      if (expectedVersion !== undefined && current.version !== expectedVersion) {
+        throw new EtnError(
+          'VERSION_CONFLICT',
+          'Версия отбора изменилась с момента чтения.',
+          {
+            entity: 'thought_type_view',
+            id: viewId,
+            expected: expectedVersion,
+            current: current.version,
+          },
+          requestId,
+        );
       }
-    }
 
-    if (validated.is_default === true) {
-      // Снимаем пометку с других отборов того же типа, исключая текущий —
-      // иначе UPDATE ниже мог бы снять её сам с себя.
-      clearDefaultForThoughtType(ndb, current.thought_type_id, viewId);
-    }
+      if (validated.definition !== undefined) {
+        // Полная валидация с ЯКОРЕМ типа отбора (требование 44d61c8a): вне
+        // транзакции якорь неизвестен, поэтому красная диагностика AST
+        // повторяется здесь. До UPDATE — иначе можно сохранить невалидное
+        // определение.
+        validated.definition = validateViewDefinitionInput(
+          ndb,
+          validated.definition,
+          current.thought_type_id,
+          requestId,
+        ).definition;
+      }
 
-    const updated = repoUpdate(ndb, viewId, validated, actorUserId);
-    return rowToView(updated);
-  });
+      if (validated.name !== undefined) {
+        const newKey = viewNameKey(validated.name);
+        nameKeyForDiag = newKey;
+        if (newKey !== current.name_key) {
+          assertNameAvailable(ndb, current.thought_type_id, newKey, viewId, requestId);
+        }
+      }
+
+      if (validated.is_default === true) {
+        // Снимаем пометку с других отборов того же типа, исключая текущий —
+        // иначе UPDATE ниже мог бы снять её сам с себя.
+        clearDefaultForThoughtType(ndb, current.thought_type_id, viewId);
+      }
+
+      const updated = repoUpdate(ndb, viewId, validated, actorUserId);
+      return rowToView(updated);
+    });
+  } catch (err) {
+    if (ownerTypeId !== undefined && nameKeyForDiag !== undefined) {
+      rethrowNameConstraint(ndb, ownerTypeId, nameKeyForDiag, requestId, err, viewId);
+    }
+    throw err;
+  }
 }
 
 /**
