@@ -31,6 +31,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
+  type CustomViewMoveToTypeResult,
   type ThoughtCustomView,
 } from '@etn/shared';
 
@@ -336,7 +337,7 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
             ],
           };
         });
-        sendSuccess(reply, moved, {
+        sendSuccess(reply, moved satisfies CustomViewMoveToTypeResult, {
           version: moved.version,
           updated_at: moved.updated_at,
           request_id: req.id,

@@ -23,10 +23,12 @@ import type { ActivityRow } from './activity.js';
 import type { AuditLogEntry } from './api.js';
 import type { ApiKeyWithSecret, User } from './user.js';
 import type {
+  EffectiveThoughtCustomView,
   EffectiveThoughtTypeView,
   EffectiveThoughtView,
   ThoughtCustomView,
   ThoughtTypeView,
+  ThoughtViewScope,
 } from './thought-type-view.js';
 import type { NetworkProperty } from './thought-type.js';
 import type { ThoughtRef } from './thought.js';
@@ -114,7 +116,19 @@ export interface RunThoughtTypeViewMeta {
   limit: number;
   offset: number;
   directions: Record<string, ViewDirectionFlags>;
-  view: { id: string; name: string; type_id: string };
+  /**
+   * Владелец исполненного отбора. `scope` различает типовой отбор и
+   * внетиповой отбор самой мысли (требование 045f539a, 0.14.1); `defined_on`
+   * называет владельца (тип или мысль). `type_id` заполняется ТОЛЬКО для
+   * типового отбора — у внетипового владелец мысль, подменять её типом нельзя.
+   */
+  view: {
+    id: string;
+    name: string;
+    scope: ThoughtViewScope;
+    defined_on: string;
+    type_id?: string;
+  };
   sort?: string;
   order?: string;
   unresolved?: ViewUnresolvedToken[];
@@ -125,6 +139,22 @@ export interface RunThoughtTypeViewMeta {
    */
   warnings?: FilterDiagnostic[];
 }
+
+/**
+ * Ответ `POST /thought-types/{id}/views/{viewId}/move-to-thought`
+ * (операция 85414fbd, 0.14.1): карточка отбора у НОВОГО владельца-мысли.
+ * Именованный тип-алиас фиксирует форму ответа в общем контракте (прецедент
+ * c83f0215): сервер связывает payload через `satisfies`, клиент читает этот же
+ * тип и не заводит inline-форму.
+ */
+export type TypeViewMoveToThoughtResult = EffectiveThoughtCustomView;
+
+/**
+ * Ответ `POST /thoughts/{id}/views/{viewId}/move-to-type` (операция 85414fbd,
+ * 0.14.1): карточка отбора у НОВОГО владельца-типа. `version` начинается
+ * заново, `position` — в конец получателя (домен `thought-view-transfer.ts`).
+ */
+export type CustomViewMoveToTypeResult = ThoughtTypeView;
 
 /** Результат прогона отбора: страница мыслей + мета (в success-конверте `meta`). */
 export interface RunThoughtTypeViewResult {

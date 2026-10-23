@@ -32,11 +32,13 @@ import {
   EtnError,
   type EffectiveThoughtTypeView,
   type EffectiveThoughtView,
+  type RunThoughtTypeViewMeta,
   type StructureSort,
   type SortOrder,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
+  type TypeViewMoveToThoughtResult,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
@@ -196,13 +198,7 @@ function findViewInEffective(
  * `type_id` заполняется ТОЛЬКО для типового отбора — у внетипового владелец
  * мысль, подменять её типом нельзя (операция 5e55b7bb).
  */
-function runViewMeta(view: EffectiveThoughtView): {
-  id: string;
-  name: string;
-  scope: EffectiveThoughtView['scope'];
-  defined_on: string;
-  type_id?: string;
-} {
+function runViewMeta(view: EffectiveThoughtView): RunThoughtTypeViewMeta['view'] {
   return {
     id: view.id,
     name: view.name,
@@ -471,7 +467,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             ],
           };
         });
-        sendSuccess(reply, moved, {
+        sendSuccess(reply, moved satisfies TypeViewMoveToThoughtResult, {
           version: moved.version,
           updated_at: moved.updated_at,
           request_id: req.id,
