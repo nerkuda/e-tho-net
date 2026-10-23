@@ -115,7 +115,10 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         // Резолв отбора по эффективному набору мысли. Схема гарантирует ровно
         // одно из `view_name`/`ast`, поэтому здесь `view_name` задан.
         const viewName = args.view_name as string;
-        const effective = getEffectiveViewsForThought(ndb, thought);
+        const effective = getEffectiveViewsForThought(ndb, {
+          id: thought.id,
+          type_id: thought.type_id,
+        });
         // Сравнение по `name_key` (trim+lowercase) — соответствует правилу
         // сравнения дублей в `findThoughtTypeViewByTypeAndNameKey`. Если
         // в `view_name` пришёл uuid отбора (id), тоже сматчим — иначе
@@ -194,6 +197,7 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             name_key: matched.name_key,
             description: matched.description,
             defined_on: matched.defined_on,
+            scope: matched.scope,
             inherited: matched.inherited,
           },
           data: pageItems,

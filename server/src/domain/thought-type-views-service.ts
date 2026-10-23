@@ -39,25 +39,31 @@ import {
   EtnError,
   SORT_ORDERS,
   STRUCTURE_SORTS,
-  THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
-  THOUGHT_TYPE_VIEW_NAME_MAX,
   type EffectiveThoughtTypeView,
+  type EffectiveThoughtView,
   type FilterDiagnostic,
   type FilterProfileId,
   type SortOrder,
   type StructureSort,
+  type ThoughtCustomView,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
+  type ThoughtViewScope,
   type ThoughtRef,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { getPropertyValues } from './property-service.js';
 import { parseStructureFilter } from './structure-service.js';
 import { parseFilterAst } from './filter-ast.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
-import { assertFilterDefinitionInProfile } from './filter-profile-validation.js';
+import {
+  validateViewDefinitionInput,
+  validateViewDescription,
+  validateViewName,
+  validateViewPosition,
+  viewNameKey,
+} from './thought-view-validation.js';
 import {
   structureRequestToQuery,
   type AstTokenContext,
@@ -77,7 +83,6 @@ import {
   resolveThoughtTokensInAst,
   resolveTokensInDefinition as resolveTokensDefinition,
   validateDefinitionForTokens,
-  type PropertyMeta,
   type ResolveContext,
   type ThoughtPropertyValue,
   type TokenIssue,
@@ -96,15 +101,14 @@ import {
   updateThoughtTypeView as repoUpdate,
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
+import { listThoughtCustomViewsByThought as repoListCustom } from './thought-custom-views-repo.js';
 import { getThought } from './thought-service.js';
 import {
   getNetworkPropertyByName,
+  getPropertyValues,
   getLinkPropertyValues,
-  linkPropertySideFromConfig,
   listEffectiveTypeProperties,
-  listNetworkProperties,
   listThoughtLinkProperties,
-  oppositeLinkPropertyDisplayName,
 } from './property-service.js';
 
 /**
@@ -127,177 +131,6 @@ function rowToView(row: ThoughtTypeViewRow): ThoughtTypeView {
     updated_at: row.updated_at,
     created_by: row.created_by,
   };
-}
-
-/**
- * Вычислить `name_key` — нормализованную форму имени (trim + lowercase),
- * использующуюся для сравнения дублей и перекрытий (требования 141c2576
- * и eaca1253). Локальная копия логики репозитория: иначе правило
- * нормализации пришлось бы экспортировать только ради сервиса, что
- * размывает границу ответственности (репозиторий — хранение, сервис —
- * правила).
- */
-function viewNameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-/**
- * Метаданные свойств РЕЕСТРА СЕТИ для валидатора токенов
- * (`thought-type-view-tokens`): имена, `multiple`, `value_type`.
- *
- * **Свойство резолвится по реестру сети независимо от привязки к типу отбора**
- * (ошибка 50d9bf4e, пункт A6): токен `$thought.[Имя]` принимается, если такое
- * свойство определено в сети, — даже если оно не подключено к типу этого отбора
- * (при исполнении отсутствие значения у мысли даёт пустое значение по семантике
- * отбора). Поэтому валидатору отдаётся ПОЛНЫЙ список свойств сети, а не
- * свойства цепочки типа.
- *
- * Свойство-связь адресуется обеими сторонами: к метаданным добавляется имя
- * противоположной стороны, чтобы токен `$thought.[<обратное имя>]` был принят
- * (единая точка интерпретации направления — `oppositeLinkPropertyDisplayName`).
- */
-function getNetworkPropertyMeta(ndb: NetworkDb): PropertyMeta[] {
-  const out: PropertyMeta[] = [];
-  for (const p of listNetworkProperties(ndb)) {
-    out.push({
-      key: p.name,
-      multiple: p.config?.multiple === true,
-      value_type: p.value_type,
-    });
-    if (p.value_type !== 'link') continue;
-    const side = linkPropertySideFromConfig(p.value_type, p.config ?? null);
-    const opposite = oppositeLinkPropertyDisplayName(ndb, p.config ?? null, side);
-    if (opposite === null || opposite === p.name) continue;
-    out.push({ key: opposite, multiple: p.config?.multiple === true, value_type: p.value_type });
-  }
-  return out;
-}
-
-/**
- * Валидация имени отбора: непустая строка, до {@link THOUGHT_TYPE_VIEW_NAME_MAX}
- * символов (после `trim`). Требование 141c2576.
- *
- * `requestId` пробрасывается в `EtnError` (REST/MCP его подставляют).
- */
-function validateName(name: unknown, requestId?: string): string {
-  if (typeof name !== 'string' || name.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Имя отбора должно быть непустой строкой.',
-      { field: 'name' },
-      requestId,
-    );
-  }
-  const trimmed = name.trim();
-  if ([...trimmed].length > THOUGHT_TYPE_VIEW_NAME_MAX) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Имя отбора должно быть не длиннее ${THOUGHT_TYPE_VIEW_NAME_MAX} символов.`,
-      { field: 'name', limit: THOUGHT_TYPE_VIEW_NAME_MAX },
-      requestId,
-    );
-  }
-  return trimmed;
-}
-
-/**
- * Валидация описания: необязательная строка, до
- * {@link THOUGHT_TYPE_VIEW_DESCRIPTION_MAX} символов. Пустая строка и `null`
- * нормализуются в `null` — описание либо есть осмысленное, либо отсутствует.
- */
-function validateDescription(
-  description: unknown,
-  requestId?: string,
-): string | null {
-  if (description === undefined || description === null) return null;
-  if (typeof description !== 'string') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Описание отбора должно быть строкой или null.',
-      { field: 'description' },
-      requestId,
-    );
-  }
-  if (description.length > THOUGHT_TYPE_VIEW_DESCRIPTION_MAX) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `Описание отбора должно быть не длиннее ${THOUGHT_TYPE_VIEW_DESCRIPTION_MAX} символов.`,
-      { field: 'description', limit: THOUGHT_TYPE_VIEW_DESCRIPTION_MAX },
-      requestId,
-    );
-  }
-  return description === '' ? null : description;
-}
-
-/**
- * Валидация `definition`: непустая строка, синтаксически валидный
- * JSON-объект. Токены и полная семантика отбора — отдельный этап 20b2fca0;
- * здесь только защита от мусора и подтверждение, что хранить будем
- * валидный JSON.
- */
-function validateDefinition(definition: unknown, requestId?: string): string {
-  if (typeof definition !== 'string' || definition.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'definition должен быть непустой JSON-строкой.',
-      { field: 'definition' },
-      requestId,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(definition);
-  } catch (err) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `definition не является валидным JSON: ${(err as Error).message}`,
-      { field: 'definition' },
-      requestId,
-    );
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'definition должен быть JSON-объектом (не массивом и не null).',
-      { field: 'definition' },
-      requestId,
-    );
-  }
-  return definition;
-}
-
-/**
- * Красная диагностика на сохранении (требование 44d61c8a): AST-форма
- * определения, ссылающаяся на удалённую сущность (свойство реестра, тип/тип
- * связи, значение-мысль), не сохраняется — `VALIDATION_ERROR` со
- * структурированными `details.diagnostics`. Определения старой плоской формы
- * (`definition v1`, без поля `version`) пропускаются: их миграция в AST —
- * отдельная задача 4be62d42.
- */
-function assertAstDefinitionEntitiesResolvable(
-  ndb: NetworkDb,
-  parsedDefinition: Record<string, unknown>,
-  thoughtTypeId: string,
-  requestId?: string,
-): void {
-  if (parsedDefinition['version'] === undefined) return;
-  const ast = parseFilterAst(parsedDefinition, requestId);
-  const diag = diagnoseFilterAst(ndb, ast, { thoughtTypeId, requestId });
-  if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors, requestId);
-}
-
-/** Валидация `position`: целое число ≥ 0, опционально. */
-function validatePosition(position: unknown, requestId?: string): number | undefined {
-  if (position === undefined) return undefined;
-  if (typeof position !== 'number' || !Number.isInteger(position) || position < 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'position должен быть неотрицательным целым числом.',
-      { field: 'position' },
-      requestId,
-    );
-  }
-  return position;
 }
 
 /**
@@ -376,28 +209,18 @@ export function createThoughtTypeView(
 ): ThoughtTypeView {
   // Валидация payload — до открытия транзакции, чтобы провалы валидации
   // не задерживали write-lock.
-  const name = validateName(input.name, requestId);
-  const description = validateDescription(input.description, requestId);
-  const definition = validateDefinition(input.definition, requestId);
-  const position = validatePosition(input.position, requestId);
-  // Полная валидация токенов (задача 20b2fca0): запускается после синтаксиса
-  // JSON. Свойства сверяются с РЕЕСТРОМ СЕТИ (A6), а не с цепочкой типа:
-  // `$thought.[Имя]` принимается для любого свойства сети, а `multiple`
-  // распознаётся по его конфигурации.
-  // Повторный JSON.parse дёшев — definition это пара KB; альтернатива
-  // (возвращать из `validateDefinition` ещё и parsed-объект) рвёт границу
-  // ответственности функции (валидация → парсинг).
-  const parsedDefinition = JSON.parse(definition) as Record<string, unknown>;
-  validateDefinitionForTokens(
-    parsedDefinition,
-    { properties: getNetworkPropertyMeta(ndb) },
+  const name = validateViewName(input.name, requestId);
+  const description = validateViewDescription(input.description, requestId);
+  // Определение: синтаксис JSON + токены по реестру сети + красная диагностика
+  // AST + профиль точки применения (общая точка с внетиповыми отборами).
+  const validatedDefinition = validateViewDefinitionInput(
+    ndb,
+    input.definition,
+    thoughtTypeId,
     requestId,
   );
-  // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
-  assertAstDefinitionEntitiesResolvable(ndb, parsedDefinition, thoughtTypeId, requestId);
-  // Профиль точки применения: операнд, невидимый в отборе мыслей, не сохраняется
-  // (требование 0095daad, ADR 0c02ab4f).
-  assertFilterDefinitionInProfile(parsedDefinition, 'thoughts', requestId);
+  const definition = validatedDefinition.definition;
+  const position = validateViewPosition(input.position, requestId);
 
   // Проверка типа — корневой тип нельзя «заселять отборами с холста».
   const root = getRootThoughtType(ndb);
@@ -480,14 +303,22 @@ export function updateThoughtTypeView(
   // Валидация payload — вне транзакции, чтобы провалы валидации не
   // задерживали write-lock.
   const validated: ThoughtTypeViewUpdateInput = {};
-  if (changes.name !== undefined) validated.name = validateName(changes.name, requestId);
+  if (changes.name !== undefined) validated.name = validateViewName(changes.name, requestId);
   if (changes.description !== undefined) {
-    validated.description = validateDescription(changes.description, requestId);
+    validated.description = validateViewDescription(changes.description, requestId);
   }
   if (changes.definition !== undefined) {
-    validated.definition = validateDefinition(changes.definition, requestId);
+    validated.definition = validateViewDefinitionInput(
+      ndb,
+      changes.definition,
+      // Якорь диагностики — тип отбора; он неизвестен до чтения строки, поэтому
+      // полная проверка AST повторяется в транзакции ниже. Здесь — синтаксис,
+      // токены и профиль (от типа не зависят).
+      undefined,
+      requestId,
+    ).definition;
   }
-  const position = validatePosition(changes.position, requestId);
+  const position = validateViewPosition(changes.position, requestId);
   if (position !== undefined) validated.position = position;
   if (changes.is_default !== undefined) validated.is_default = changes.is_default;
 
@@ -508,24 +339,16 @@ export function updateThoughtTypeView(
     }
 
     if (validated.definition !== undefined) {
-      // Полная валидация токенов (задача 20b2fca0): свойства сверяются с
-      // реестром СЕТИ (A6). До UPDATE — иначе можно было бы сохранить
-      // невалидное определение.
-      const parsedDefinition = JSON.parse(validated.definition) as Record<string, unknown>;
-      validateDefinitionForTokens(
-        parsedDefinition,
-        { properties: getNetworkPropertyMeta(ndb) },
-        requestId,
-      );
-      // Красная диагностика: AST, ссылающийся на удалённую сущность, не сохраняется.
-      assertAstDefinitionEntitiesResolvable(
+      // Полная валидация с ЯКОРЕМ типа отбора (требование 44d61c8a): вне
+      // транзакции якорь неизвестен, поэтому красная диагностика AST
+      // повторяется здесь. До UPDATE — иначе можно сохранить невалидное
+      // определение.
+      validated.definition = validateViewDefinitionInput(
         ndb,
-        parsedDefinition,
+        validated.definition,
         current.thought_type_id,
         requestId,
-      );
-      // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
-      assertFilterDefinitionInProfile(parsedDefinition, 'thoughts', requestId);
+      ).definition;
     }
 
     if (validated.name !== undefined) {
@@ -597,7 +420,15 @@ export interface ThoughtForEffectiveViews {
 }
 
 /**
- * Эффективный набор отборов для мысли (требование eaca1253).
+ * Форма мысли для СМЕШАННОГО эффективного набора (0.14.1, требование
+ * 045f539a): нужен `id`, чтобы добавить внетиповые отборы самой мысли.
+ */
+export interface ThoughtWithIdForEffectiveViews extends ThoughtForEffectiveViews {
+  id: string;
+}
+
+/**
+ * Эффективный набор ТИПОВЫХ отборов для мысли (требование eaca1253).
  *
  * Алгоритм — двухпроходный:
  *
@@ -625,20 +456,21 @@ export interface ThoughtForEffectiveViews {
  *      состоит из одного корневого типа.
  *
  * Возвращает отборы в порядке «от корня к типу мысли», внутри уровня — по
- * `position`.
+ * `position`. Форма намеренно БЕЗ `scope`: type-only путь (редактор типа и
+ * `GET /thought-types/{id}/views*`) не меняется (0.14.1).
  */
-export function getEffectiveViewsForThought(
+function computeEffectiveTypeViews(
   ndb: NetworkDb,
-  thought: ThoughtForEffectiveViews,
+  thoughtTypeId: string | null,
 ): EffectiveThoughtTypeView[] {
   const root = getRootThoughtType(ndb);
   if (!root) return [];
 
   // Цепочка ОТ ТИПА МЫСЛИ К КОРНЮ (ближайший уровень — первый).
   const fromTypeToRoot: string[] =
-    thought.type_id === null
+    thoughtTypeId === null
       ? [root.id]
-      : thoughtTypeChain(ndb, thought.type_id);
+      : thoughtTypeChain(ndb, thoughtTypeId);
 
   // Проход 1: ближайший к мысли `winner` для каждого `name_key`.
   const winnerByKey = new Map<
@@ -672,7 +504,7 @@ export function getEffectiveViewsForThought(
 
   // Проход 2: от корня к типу мысли — собираем выход в порядке UI.
   const fromRootToType = fromTypeToRoot.slice().reverse();
-  const thoughtTypeId = thought.type_id ?? root.id;
+  const ownTypeId = thoughtTypeId ?? root.id;
   const out: EffectiveThoughtTypeView[] = [];
   for (const typeId of fromRootToType) {
     for (const row of repoListByType(ndb, typeId)) {
@@ -682,13 +514,117 @@ export function getEffectiveViewsForThought(
       out.push({
         ...base,
         defined_on: winner.defined_on,
-        inherited: winner.defined_on !== thoughtTypeId,
+        inherited: winner.defined_on !== ownTypeId,
         is_default: winner.row.name_key === effectiveDefaultKey,
       });
     }
   }
 
   return out;
+}
+
+/**
+ * Смешанный эффективный набор мысли (требование 045f539a): типовые отборы
+ * (по цепочке) + внетиповые отборы самой мысли.
+ *
+ * Правила:
+ *   * одноимённый (по `name_key`) внетиповой перекрывает типовой ЦЕЛИКОМ —
+ *     типовой не попадает в набор (ни определение, ни дефолт);
+ *   * межслойные одноимённые живые внетиповые схлопываются по `name_key`
+ *     детерминированно: действует первый по `position, name` (одна кнопка,
+ *     run по имени однозначен);
+ *   * порядок: сначала типовые (от корня к типу, внутри уровня по `position`),
+ *     затем внетиповые по `position, name`;
+ *   * «по умолчанию»: у мысли не более одного дефолта; внетиповой дефолт
+ *     перекрывает типовой, а если после слияния слоёв дефолтов несколько —
+ *     действует первый по `position, name`;
+ *   * каждый элемент несёт `scope`/`defined_on`; у внетипового
+ *     `inherited: false` и нет `thought_type_id`.
+ */
+function mergeEffectiveCustomViews(
+  ndb: NetworkDb,
+  thoughtId: string,
+  typeViews: EffectiveThoughtTypeView[],
+): EffectiveThoughtView[] {
+  // `_v` уже свёрнут по слоям и упорядочен `position, name`. Одноимённые из
+  // РАЗНЫХ слоёв (разные id) схлопываются: первый по порядку побеждает.
+  const customByKey = new Map<string, ReturnType<typeof repoListCustom>[number]>();
+  for (const row of repoListCustom(ndb, thoughtId)) {
+    if (!customByKey.has(row.name_key)) customByKey.set(row.name_key, row);
+  }
+  const customs = [...customByKey.values()];
+
+  // Эффективный внетиповой дефолт — первый по `position, name` (порядок
+  // `customs` сохраняет сортировку репозитория).
+  let customDefaultId: string | null = null;
+  for (const row of customs) {
+    if (row.is_default === 1) {
+      customDefaultId = row.id;
+      break;
+    }
+  }
+
+  const out: EffectiveThoughtView[] = [];
+  for (const view of typeViews) {
+    // Перекрытие внетиповым — типовой исчезает целиком, вместе с дефолтом.
+    if (customByKey.has(view.name_key)) continue;
+    out.push({
+      ...view,
+      scope: 'type',
+      // Любой внетиповой отбор мысли снимает типовой дефолт: перекрытия
+      // считаются ДО дефолта типа (045f539a). Дефолт остаётся только у
+      // внетипового, если он помечен.
+      is_default: customs.length === 0 ? view.is_default : false,
+    });
+  }
+  for (const row of customs) {
+    out.push({
+      id: row.id,
+      name: row.name,
+      name_key: row.name_key,
+      description: row.description,
+      definition: row.definition,
+      position: row.position,
+      is_default: row.id === customDefaultId,
+      version: row.version,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      created_by: row.created_by,
+      scope: 'thought',
+      defined_on: thoughtId,
+      inherited: false,
+    });
+  }
+  return out;
+}
+
+/**
+ * Эффективный набор отборов для мысли.
+ *
+ * Две формы входа (требование 045f539a):
+ *   * `{ type_id }` — прежний TYPE-ONLY путь: набор типовых отборов по цепочке
+ *     без `scope` (редактор типа, `GET /thought-types/{id}/views*`);
+ *   * `{ id, type_id }` — СМЕШАННЫЙ набор: типовые + внетиповые мысли, каждый
+ *     со `scope`/`defined_on` (карточки MCP, исполнение, полоса отборов).
+ */
+export function getEffectiveViewsForThought(
+  ndb: NetworkDb,
+  thought: ThoughtWithIdForEffectiveViews,
+): EffectiveThoughtView[];
+export function getEffectiveViewsForThought(
+  ndb: NetworkDb,
+  thought: ThoughtForEffectiveViews,
+): EffectiveThoughtTypeView[];
+export function getEffectiveViewsForThought(
+  ndb: NetworkDb,
+  thought: ThoughtForEffectiveViews | ThoughtWithIdForEffectiveViews,
+): EffectiveThoughtTypeView[] | EffectiveThoughtView[] {
+  const typeViews = computeEffectiveTypeViews(ndb, thought.type_id);
+  if (!('id' in thought) || typeof thought.id !== 'string') {
+    // Type-only путь: форма ответа не меняется (инвариант редактора типа).
+    return typeViews;
+  }
+  return mergeEffectiveCustomViews(ndb, thought.id, typeViews);
 }
 
 // ---------------------------------------------------------------------------
@@ -922,19 +858,40 @@ const STRUCTURE_SORT_TO_AST_KEY: Partial<Record<StructureSort, string>> = {
   updated: 'updated_at',
 };
 
+/**
+ * Определение, которое можно исполнить относительно мысли: отбор типа,
+ * внетиповой отбор мысли или запись смешанного эффективного набора
+ * (0.14.1). Сохранённый отбор типа по-прежнему узнаётся по наличию
+ * `thought_type_id` (нет `scope`).
+ */
+export type RunnableView = ThoughtTypeView | ThoughtCustomView | EffectiveThoughtView;
+
+/** Владелец отбора: у записи набора — `scope`, у собственной строки — по виду. */
+function viewScopeOf(view: RunnableView): ThoughtViewScope {
+  if ('scope' in view) return view.scope;
+  return 'thought_id' in view ? 'thought' : 'type';
+}
+
 export async function runViewForThought(
   ndb: NetworkDb,
-  view: ThoughtTypeView,
+  view: RunnableView,
   thoughtId: string,
   userId: string,
   requestId?: string,
   options?: RunViewQueryOptions,
 ): Promise<RunViewResult> {
   // Тонкая обёртка над единой доменной точкой (задача 0e7e89f5): от сохранённого
-  // отбора зависят лишь `view.definition` и `view.thought_type_id`.
+  // отбора зависят лишь `view.definition` и якорь диагностики. У внетипового
+  // отбора владелец — мысль, поэтому якорь жёлтой диагностики — тип
+  // КОНТЕКСТНОЙ мысли (не подменять владельца, операция 5e55b7bb).
+  const scope = viewScopeOf(view);
+  const thoughtTypeId: string | null =
+    scope === 'thought'
+      ? (getThought(ndb, thoughtId)?.type_id ?? null)
+      : ('thought_type_id' in view ? view.thought_type_id : null);
   return executeViewDefinitionForThought(ndb, {
     definition: JSON.parse(view.definition) as Record<string, unknown>,
-    thoughtTypeId: view.thought_type_id,
+    thoughtTypeId,
     thoughtId,
     userId,
     ...(requestId !== undefined ? { requestId } : {}),

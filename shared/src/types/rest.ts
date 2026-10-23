@@ -22,7 +22,12 @@ import type { CrossNetworkTruncationReason } from './search.js';
 import type { ActivityRow } from './activity.js';
 import type { AuditLogEntry } from './api.js';
 import type { ApiKeyWithSecret, User } from './user.js';
-import type { EffectiveThoughtTypeView, ThoughtTypeView } from './thought-type-view.js';
+import type {
+  EffectiveThoughtTypeView,
+  EffectiveThoughtView,
+  ThoughtCustomView,
+  ThoughtTypeView,
+} from './thought-type-view.js';
 import type { NetworkProperty } from './thought-type.js';
 import type { ThoughtRef } from './thought.js';
 import type { FocusNeighbor } from './thought.js';
@@ -77,6 +82,17 @@ export interface NeighborPage {
 export interface ThoughtTypeViewsResult {
   data: ThoughtTypeView[];
   meta: { effective: EffectiveThoughtTypeView[] };
+}
+
+/**
+ * `GET /networks/{nid}/thoughts/{id}/views` — собственные внетиповые отборы
+ * мысли (`data`) плюс полный эффективный набор с `?include_effective=true`
+ * (`meta.effective`: типовые по цепочке + внетиповые, со `scope`/`defined_on`
+ * и перекрытием, требование 045f539a).
+ */
+export interface ThoughtViewsResult {
+  data: ThoughtCustomView[];
+  meta: { effective?: EffectiveThoughtView[] };
 }
 
 /** Направления рёбер вершины отбора (мета прогона, `focus-filter-strip`). */

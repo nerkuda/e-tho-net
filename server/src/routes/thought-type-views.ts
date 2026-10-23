@@ -31,6 +31,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import {
   EtnError,
   type EffectiveThoughtTypeView,
+  type EffectiveThoughtView,
   type StructureSort,
   type SortOrder,
   type ThoughtTypeViewInput,
@@ -95,7 +96,10 @@ interface ThoughtIdParams {
 }
 
 /** Допустимые ключи тела `POST /thought-types/{id}/views`. */
-function parseCreateBody(body: Record<string, unknown>, requestId: string): ThoughtTypeViewInput {
+export function parseViewCreateBody(
+  body: Record<string, unknown>,
+  requestId: string,
+): ThoughtTypeViewInput {
   const out = parseBody(RestViewCreateBody, body, requestId);
   return {
     name: out.name as string,
@@ -106,7 +110,7 @@ function parseCreateBody(body: Record<string, unknown>, requestId: string): Thou
   } as unknown as ThoughtTypeViewInput;
 }
 
-function parseUpdateBody(
+export function parseViewUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtTypeViewUpdateInput {
@@ -141,14 +145,55 @@ function effectiveViewsForType(
  * `run`-маршрутом; CRUD-маршруты адресуются по `:viewId` напрямую.
  */
 function findViewInEffective(
-  effective: EffectiveThoughtTypeView[],
+  effective: EffectiveThoughtView[],
   viewKey: string,
-): EffectiveThoughtTypeView | null {
+): EffectiveThoughtView | null {
   const byId = effective.find((v) => v.id === viewKey);
   if (byId !== undefined) return byId;
   const wantedKey = viewKey.trim().toLowerCase();
   const byName = effective.find((v) => v.name_key === wantedKey);
   return byName ?? null;
+}
+
+/**
+ * `meta.view` прогона: владелец отбора виден по `scope`/`defined_on`.
+ * `type_id` заполняется ТОЛЬКО для типового отбора — у внетипового владелец
+ * мысль, подменять её типом нельзя (операция 5e55b7bb).
+ */
+function runViewMeta(view: EffectiveThoughtView): {
+  id: string;
+  name: string;
+  scope: EffectiveThoughtView['scope'];
+  defined_on: string;
+  type_id?: string;
+} {
+  return {
+    id: view.id,
+    name: view.name,
+    scope: view.scope,
+    defined_on: view.defined_on,
+    ...(view.scope === 'type' ? { type_id: view.defined_on } : {}),
+  };
+}
+
+/**
+ * Событие исполнения — по владельцу отбора (контракт 5d447380): типовой —
+ * `thought-type-view.run`, внетиповой — `thought-custom-view.run`. Payload
+ * одинаковый; клиент оба события игнорирует, MCP `etn.views.run` их не пишет.
+ */
+function runEventFor(
+  view: EffectiveThoughtView,
+  data: {
+    thought_id: string;
+    view_id: string;
+    view_name: string;
+    result_count: number;
+    unresolved: Array<{ token: string; reason: string; message: string }>;
+  },
+): { type: 'thought-type-view.run' | 'thought-custom-view.run'; data: typeof data } {
+  return view.scope === 'thought'
+    ? { type: 'thought-custom-view.run', data }
+    : { type: 'thought-type-view.run', data };
 }
 
 /**
@@ -196,7 +241,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as TypeIdParams;
-        const input = parseCreateBody(requestBody(req), req.id);
+        const input = parseViewCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const created = createThoughtTypeView(ndb, id, input, req.auth!.user.id, req.id);
@@ -256,7 +301,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       async (req: FastifyRequest, reply) => {
         const { networkId, id, viewId } = req.params as ViewIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
-        const changes = parseUpdateBody(requestBody(req), req.id);
+        const changes = parseViewUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThoughtTypeView(
@@ -370,10 +415,14 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           );
         }
 
-        // 2. Эффективный набор — относительно типа мысли (`thought.type_id`).
-        //    Если у мысли тип снят — работают отборы корневого типа
-        //    (требование 23e0f78e).
-        const effective = getEffectiveViewsForThought(ndb, { type_id: thought.type_id });
+        // 2. Смешанный эффективный набор — относительно мысли (id + type_id):
+        //    именованный запуск разрешает и внетиповые отборы (0.14.1,
+        //    операция 5e55b7bb). Если у мысли тип снят — работают отборы
+        //    корневого типа (требование 23e0f78e).
+        const effective = getEffectiveViewsForThought(ndb, {
+          id: thought.id,
+          type_id: thought.type_id,
+        });
         const matched = findViewInEffective(effective, view);
         if (matched === null) {
           throw new EtnError(
@@ -423,16 +472,13 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
             result: undefined,
             events: [
-              {
-                type: 'thought-type-view.run',
-                data: {
-                  thought_id: thoughtId,
-                  view_id: matched.id,
-                  view_name: matched.name,
-                  result_count: 0,
-                  unresolved: result.unresolved,
-                },
-              },
+              runEventFor(matched, {
+                thought_id: thoughtId,
+                view_id: matched.id,
+                view_name: matched.name,
+                result_count: 0,
+                unresolved: result.unresolved,
+              }),
             ],
           }));
           reply.code(200).send({
@@ -442,7 +488,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
               limit: limit ?? result.items.length,
               offset,
               directions: {},
-              view: { id: matched.id, name: matched.name, type_id: matched.defined_on },
+              view: runViewMeta(matched),
               unresolved: result.unresolved,
             },
           });
@@ -456,16 +502,13 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
           result: undefined,
           events: [
-            {
-              type: 'thought-type-view.run',
-              data: {
-                thought_id: thoughtId,
-                view_id: matched.id,
-                view_name: matched.name,
-                result_count: total,
-                unresolved: [],
-              },
-            },
+            runEventFor(matched, {
+              thought_id: thoughtId,
+              view_id: matched.id,
+              view_name: matched.name,
+              result_count: total,
+              unresolved: [],
+            }),
           ],
         }));
         reply.code(200).send({
@@ -475,7 +518,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             limit: limit ?? result.items.length,
             offset,
             directions: result.directions,
-            view: { id: matched.id, name: matched.name, type_id: matched.defined_on },
+            view: runViewMeta(matched),
             sort: result.sort,
             order: result.order,
             // Жёлтая диагностика (требование 325efc13): свойство отвязано от

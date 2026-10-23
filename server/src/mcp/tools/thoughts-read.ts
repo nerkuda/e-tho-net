@@ -13,7 +13,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
-import type { McpViewMode } from '@etn/shared';
+import type { EffectiveThoughtView, McpViewMode } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
@@ -831,13 +831,13 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // `meta.views` (задача c1fa71d4) — эффективный набор отборов только
         // для seed-узлов: для остальных узлов агент может прочитать карточку
         // через `etn.thoughts.get` отдельно.
-        const seedViews = new Map<string, ReturnType<typeof getEffectiveViewsForThought>>();
+        const seedViews = new Map<string, EffectiveThoughtView[]>();
         for (const seedId of args.seed_ids) {
           const seed = nodes.find((n) => n.id === seedId);
           if (seed === undefined) continue;
           seedViews.set(
             seedId,
-            getEffectiveViewsForThought(ndb, { type_id: seed.type_id }),
+            getEffectiveViewsForThought(ndb, { id: seed.id, type_id: seed.type_id }),
           );
         }
         // MCP-выдача подграфа отдаёт превью с развёрнутыми трансклюзиями
@@ -911,6 +911,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               name_key: v.name_key,
               description: v.description,
               defined_on: v.defined_on,
+              scope: v.scope,
               inherited: v.inherited,
               is_default: v.is_default,
             })),

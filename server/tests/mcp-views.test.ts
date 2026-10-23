@@ -31,6 +31,7 @@ import { describe, it } from 'node:test';
 
 
 import { openNetworkDb } from '../src/db/network-db.js';
+import { createThoughtCustomView } from '../src/domain/thought-custom-views-service.js';
 
 import {
   callOp,
@@ -52,6 +53,7 @@ interface ThoughtMetaView {
   name_key: string;
   description: string | null;
   defined_on: string;
+  scope?: 'type' | 'thought';
   inherited: boolean;
   is_default: boolean;
 }
@@ -99,6 +101,7 @@ interface ViewsRunResponse {
     name_key: string;
     description: string | null;
     defined_on: string;
+    scope?: 'type' | 'thought';
     inherited: boolean;
   };
   data: Array<{ id: string; title: string; type_id: string | null }>;
@@ -1009,6 +1012,90 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         assert.equal(data.items.length, 1);
         assert.equal(data.items[0]!.meta.views.length, 1);
         assert.equal(data.items[0]!.meta.views[0]!.name, 'Работы версии');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('внетиповой отбор (0.14.1): meta.views и etn.views.run видят scope thought', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+      const thoughtId = makeThought(ndb, '0.14.1', { typeId }, ctx.adminId);
+      const custom = createThoughtCustomView(
+        ndb,
+        thoughtId,
+        { name: 'Мой отбор', definition: JSON.stringify({}) },
+        ctx.adminId,
+      );
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Карточка: внетиповой в meta.views со scope/defined_on.
+        const getRes = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        assert.equal(getRes.isError, undefined, toolText(getRes));
+        const card = toolJson<ThoughtGetResponse>(getRes);
+        assert.equal(card.meta.views.length, 1);
+        assert.equal(card.meta.views[0]!.scope, 'thought');
+        assert.equal(card.meta.views[0]!.defined_on, thoughtId);
+        assert.equal(card.meta.views[0]!.inherited, false);
+
+        // Исполнение по имени и по id — один и тот же набор.
+        for (const viewName of ['Мой отбор', custom.id]) {
+          const runRes = await handle.client.callTool({
+            name: 'etn.views.run',
+            arguments: { network_id: ctx.networkId, thought_id: thoughtId, view_name: viewName },
+          });
+          assert.equal(runRes.isError, undefined, toolText(runRes));
+          const run = toolJson<ViewsRunResponse>(runRes);
+          assert.equal(run.view.id, custom.id);
+          assert.equal(run.view.scope, 'thought');
+          assert.equal(run.view.defined_on, thoughtId);
+        }
+
+        // Subgraph seed-узла и resolve — тот же scope.
+        const subRes = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: {
+            network_id: ctx.networkId,
+            seed_ids: [thoughtId],
+            radius: 0,
+          },
+        });
+        assert.equal(subRes.isError, undefined, toolText(subRes));
+        const sub = toolJson<{ nodes: Array<{ id: string; views: ThoughtMetaView[] }> }>(subRes);
+        const seed = sub.nodes.find((n) => n.id === thoughtId)!;
+        assert.equal(seed.views[0]!.scope, 'thought');
+
+        const resolveRes = await handle.client.callTool({
+          name: 'etn.thoughts.resolve',
+          arguments: { network_id: ctx.networkId, thought_ids: [thoughtId] },
+        });
+        assert.equal(resolveRes.isError, undefined, toolText(resolveRes));
+        const resolved = toolJson<{
+          items: Array<{ id: string; meta: { views: ThoughtMetaView[] } }>;
+        }>(resolveRes);
+        assert.equal(resolved.items[0]!.meta.views[0]!.scope, 'thought');
+
+        // Инвариант редактора типа: в views[] типов внетиповых нет.
+        const typesRes = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, scope: 'thoughts' },
+        });
+        assert.equal(typesRes.isError, undefined, toolText(typesRes));
+        const types = toolJson<TypesListResponse>(typesRes);
+        const typeEntry = types.thought_types?.find((t) => t.id === typeId);
+        assert.ok(typeEntry);
+        // Проекция MCP опускает пустые контейнеры: пустой набор views не
+        // сериализуется вовсе.
+        assert.equal((typeEntry!.views ?? []).length, 0);
       } finally {
         await handle.close();
       }

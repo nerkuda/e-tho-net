@@ -41,6 +41,7 @@ const EXPECTED_TABLES = [
   'thought_synonyms',
   'thought_types',
   'thought_type_views',
+  'thought_custom_views',
   'link_types',
   'properties',
   'type_properties',

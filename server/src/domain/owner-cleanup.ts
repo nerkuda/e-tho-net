@@ -113,6 +113,9 @@ export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string
   // Пер-мысленный порядок внетиповых свойств (0.14.1, задача 3948af62):
   // строки — содержательное знание мысли и живут ровно столько же, сколько она.
   ndb.prepare('DELETE FROM thought_property_order WHERE thought_id = ?').run(thoughtId);
+  // Внетиповые отборы мысли (0.14.1, задача a28d444b): собственные отборы
+  // мысли исчезают вместе с ней (в отличие от thought_views — меток ниже).
+  ndb.prepare('DELETE FROM thought_custom_views WHERE thought_id = ?').run(thoughtId);
   ndb.prepare('DELETE FROM thought_views WHERE thought_id = ?').run(thoughtId);
   ndb.prepare('DELETE FROM user_focus_preferences WHERE focus_thought_id = ?').run(thoughtId);
   ndb
@@ -221,6 +224,15 @@ function tombstoneChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]
         .all(...ownerIds) as { id: string }[]
     ).map((r) => r.id);
     for (const orderId of orderIds) materializeTombstone(ndb, 'thought_property_order', orderId);
+
+    // Внетиповые отборы мысли (0.14.1, задача a28d444b): надгробие видимым в
+    // слое строкам — по образцу порядка свойств. Строки других слоёв не трогаем.
+    const customViewIds = (
+      ndb
+        .prepare(`SELECT id FROM thought_custom_views_v WHERE thought_id IN (${owners})`)
+        .all(...ownerIds) as { id: string }[]
+    ).map((r) => r.id);
+    for (const viewId of customViewIds) materializeTombstone(ndb, 'thought_custom_views', viewId);
   }
 }
 

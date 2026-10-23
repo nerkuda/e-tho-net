@@ -45,6 +45,7 @@ import { createChronicleRoutes } from '../routes/chronicle.js';
 import { createPinsRoutes } from '../routes/pins.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createThoughtTypeViewsRoutes } from '../routes/thought-type-views.js';
+import { createThoughtCustomViewsRoutes } from '../routes/thought-custom-views.js';
 import { createPropertiesRoutes } from '../routes/properties.js';
 import { createPropertiesRegistryRoutes } from '../routes/properties-registry.js';
 import { createCommentsRoutes } from '../routes/comments.js';
@@ -331,6 +332,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // POST /thoughts/{id}/views/{view}/run + события thought-type-view.*
   // (03-server-api.md §8a, контракт c643fd7b).
   await app.register(createThoughtTypeViewsRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Thought-custom views (0.14.1, задача a28d444b): CRUD внетиповых отборов
+  // мысли + события thought-custom-view.* (операции 5e55b7bb/5d447380).
+  await app.register(createThoughtCustomViewsRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Property-value routes (task D4): per-thought/per-link values by key (03-server-api.md §9).
   await app.register(createPropertiesRoutes(routeDeps), { prefix: '/api/v1' });
