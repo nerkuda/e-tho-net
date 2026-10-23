@@ -1157,6 +1157,15 @@ export function collectThoughtLayerRows(
     'property_values',
     layerIds(ndb, 'property_values', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
   );
+  // Пер-мысленный порядок внетиповых свойств (0.14.1, задача 3948af62;
+  // ошибка a0e2b2df): строки порядка принадлежат мысли так же, как её значения,
+  // и обязаны уезжать из слоя и отбрасываться вместе с ней. Раньше таблица
+  // отсутствовала в наборе — слияние одной мысли теряло перестановку, а
+  // «отказаться от изменений» оставляло строки в слое.
+  push(
+    'thought_property_order',
+    layerIds(ndb, 'thought_property_order', layerId, 'thought_id = ?', thoughtId),
+  );
   // Вложения мысли — ОБА источника, переходный период (ADR 9f90b010; снимется
   // задачей домена 7678876a): строки владений `attachment_owners` (целевая
   // модель) и вложения по owner-колонкам `attachments` (пока домен пишет их —

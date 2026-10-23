@@ -43,7 +43,7 @@ import {
 } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { deleteThought } from '../src/domain/thought-service.js';
-import { mergeLayer } from '../src/domain/merge-service.js';
+import { mergeLayer, mergeLayerThought, discardLayerThought } from '../src/domain/merge-service.js';
 
 import {
   authHeaders,
@@ -548,6 +548,64 @@ describe(
             [a.id, 0],
             [b.id, 1],
           ],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('слияние/отказ одной мысли переносит и отбрасывает строки порядка (a0e2b2df)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = createNetworkProperty(ndb, { name: 'a', value_type: 'text' }, USER);
+        const b = createNetworkProperty(ndb, { name: 'b', value_type: 'text' }, USER);
+        const thoughtId = seedThought(ndb, 'Мысль с порядком');
+        seedValue(ndb, thoughtId, a.id, '2026-01-01T00:00:00.000Z');
+        seedValue(ndb, thoughtId, b.id, '2026-01-02T00:00:00.000Z');
+        setThoughtPropertyOrder(ndb, thoughtId, [
+          { property_id: b.id, position: 0 },
+          { property_id: a.id, position: 1 },
+        ]);
+
+        // Слой: обратная перестановка. Слияние одной мысли обязано увезти
+        // строки порядка — раньше таблица отсутствовала в наборе.
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+        setThoughtPropertyOrder(ndb, thoughtId, [
+          { property_id: a.id, position: 0 },
+          { property_id: b.id, position: 1 },
+        ]);
+        const outcome = mergeLayerThought(ndb, layerId, thoughtId, 'overwrite', 'u');
+        assert.equal(outcome.applied.thought_property_order, 2);
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.deepEqual(
+          loadThoughtPropertyOrder(ndb, thoughtId).map((r) => [r.property_id, r.position]),
+          [
+            [a.id, 0],
+            [b.id, 1],
+          ],
+        );
+
+        // «Отказаться от изменений»: строки порядка слоя удаляются, мысль
+        // возвращается к порядку основы.
+        const layer2 = seedLayer(ndb);
+        ndb.useLayer(layer2);
+        setThoughtPropertyOrder(ndb, thoughtId, [
+          { property_id: b.id, position: 0 },
+          { property_id: a.id, position: 1 },
+        ]);
+        assert.equal(orderRow(ndb, a.id, layer2) !== undefined, true);
+        const discarded = discardLayerThought(ndb, layer2, thoughtId);
+        assert.equal(discarded.discarded.thought_property_order, 2);
+        assert.equal(orderRow(ndb, a.id, layer2), undefined);
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.deepEqual(
+          loadThoughtPropertyOrder(ndb, thoughtId).map((r) => [r.property_id, r.position]),
+          [
+            [a.id, 0],
+            [b.id, 1],
+          ],
+          'основа не тронута отказом',
         );
       } finally {
         ndb.close();
