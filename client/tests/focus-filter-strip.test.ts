@@ -4,9 +4,10 @@
  *
  * Covered behaviours:
  *   * renderStrip(null) hides the strip and clears the focus bookkeeping;
- *   * единственный источник набора — `GET /thoughts/{id}/views?include_effective=true`
- *     (`thoughtCustomViews.list`): `thoughts.get` и `thoughtTypeViews.list`
- *     полосой больше НЕ вызываются;
+ *   * единственный источник набора для рендера — `GET /thoughts/{id}/views?include_effective=true`
+ *     (`thoughtCustomViews.list`): `thoughts.get` полосой не вызывается, а
+ *     `thoughtTypeViews.list` — только при открытии подтверждения переноса в
+ *     тип (без `include_effective`, источник истины о собственном дефолте);
  *   * the strip paints «Потомки», then the effective views in server order
  *     (types by chain → custom), then «⋯», then «+», then the link filter;
  *   * inherited type views carry `.inherited` (dimmed, no italic class), custom
@@ -174,8 +175,13 @@ interface FakeState {
   };
   /** `thoughts.get` — не должен вызываться (двухшаговый fallback убран). */
   thoughtsGetCalls: { nid: string; id: string }[];
-  /** `thoughtTypeViews.list` — не должен вызываться полосой. */
-  typeListCalls: { nid: string; tid: string }[];
+  /** `thoughtTypeViews.list` — только для собственных отборов типа при
+   *  открытии подтверждения move-to-type (без `include_effective`). */
+  typeOwn: {
+    calls: { nid: string; tid: string; opts?: unknown }[];
+    data: ThoughtTypeView[];
+    error: Error | null;
+  };
   propertyRegistry: { calls: number };
   customCreate: { calls: any[] };
   customUpdate: { calls: any[] };
@@ -195,7 +201,7 @@ function installFakeApi(): any {
   state = {
     effectiveList: { calls: [], effective: [] },
     thoughtsGetCalls: [],
-    typeListCalls: [],
+    typeOwn: { calls: [], data: [], error: null },
     propertyRegistry: { calls: 0 },
     customCreate: { calls: [] },
     customUpdate: { calls: [] },
@@ -222,9 +228,10 @@ function installFakeApi(): any {
       },
     },
     thoughtTypeViews: {
-      list: async (nid: string, tid: string) => {
-        state.typeListCalls.push({ nid, tid });
-        return { data: [], meta: { effective: [] } };
+      list: async (nid: string, tid: string, opts?: unknown) => {
+        state.typeOwn.calls.push({ nid, tid, opts });
+        if (state.typeOwn.error !== null) throw state.typeOwn.error;
+        return { data: state.typeOwn.data, meta: { effective: [] } };
       },
       run: async (nid: string, tid: string, name: string, opts?: unknown) => {
         state.viewRun.calls.push({ nid, tid, name, opts });
@@ -505,7 +512,7 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     assert.equal(state.effectiveList.calls[0]?.tid, FOCUS_ID);
     assert.deepEqual(state.effectiveList.calls[0]?.opts, { includeEffective: true });
     assert.equal(state.thoughtsGetCalls.length, 0, 'thoughts.get не вызывается');
-    assert.equal(state.typeListCalls.length, 0, 'второй list отборов типа не нужен');
+    assert.equal(state.typeOwn.calls.length, 0, 'на рендере список отборов типа не нужен');
   });
 
   it('paints «Потомки», then views in server order, then «⋯», «+», filter', async () => {
@@ -805,6 +812,7 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     const menu = lastMenu();
     assert.ok(menu !== undefined);
     findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    await settle();
     const dialog = lastDialog();
     assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
     const text = dialogText(dialog);
@@ -812,23 +820,32 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
       text.includes('его увидят все мысли этого типа'),
       `подтверждение обязано называть эффект на все мысли типа: ${text}`,
     );
+    // Дефолт получателя — из источника истины (собственные отборы типа), а не
+    // из эффективного набора мысли (дельта раунда 3).
+    assert.equal(state.typeOwn.calls.length, 1, 'один запрос собственных отборов типа');
+    assert.deepEqual(state.typeOwn.calls[0], {
+      nid: NETWORK_ID,
+      tid: TYPE_ID,
+      opts: { includeEffective: false },
+    });
     dialogButton(dialog, 'Подтвердить')!.click();
     await settle();
     assert.equal(state.customMoveToType.calls.length, 1);
     assert.deepEqual(state.customMoveToType.calls[0], [NETWORK_ID, FOCUS_ID, 'c-1']);
   });
 
-  it('перенос в тип: третий элемент по СОБСТВЕННОМУ дефолту типа при перекрытии внетиповым (репро x6)', async () => {
+  it('перенос в тип: overlay-репро w6 — собственный дефолт типа скрыт одноимённым внетиповым, элемент есть', async () => {
     installWindow();
     clearBody();
     store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
-    // Репро блокера проверки раунда 1: у типа «МЛИ-инструмент» есть СВОЙ
-    // дефолт «Работы типа», но у мысли — внетиповой дефолт «В гараже». Сервер
-    // зануляет эффективный `is_default` типовой строки, а пометку при переносе
-    // снимает по собственной. Предупреждение обязано строиться по
-    // `own_default` (три элемента подтверждения).
+    // Блокер проверки раунда 2: у типа «МЛИ-инструмент» есть СВОЙ дефолт
+    // «Работы типа», но у мысли есть одноимённый внетиповой «Работы типа» —
+    // типовая строка исчезает из эффективного набора ЦЕЛИКОМ, `own_default`
+    // скрытого дефолта недоступен. Клиент обязан спросить собственные отборы
+    // типа и предупредить (третий элемент подтверждения).
+    state.typeOwn.data = [fullTypeView('t-1', 'Работы типа', true)];
     const harness = await mountWith([
-      row('t-1', 'Работы типа', { isDefault: false, ownDefault: true }),
+      row('c-overlay', 'Работы типа', { scope: 'thought', definedOn: FOCUS_ID, position: 0 }),
       row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID, position: 1 }),
       row('c-2', 'В гараже', {
         scope: 'thought',
@@ -842,6 +859,7 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     const menu = lastMenu();
     assert.ok(menu !== undefined);
     findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    await settle();
     const dialog = lastDialog();
     assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
     const text = dialogText(dialog);
@@ -857,47 +875,69 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
       text.includes(
         'У получателя уже есть отбор по умолчанию — перенесённый отбор останется без этой пометки.',
       ),
-      `элемент 3 — занятый собственный дефолт типа, даже когда эффективный занулён: ${text}`,
+      `элемент 3 — собственный дефолт типа, скрытый из эффективного набора: ${text}`,
     );
   });
 
-  it('перенос в тип: третий элемент есть при собственном дефолте типа без перекрытия (положительный y)', async () => {
+  it('перенос ДЕФОЛТНОГО отбора в тип: предупреждение и вызов с дефолтным отбором', async () => {
     installWindow();
     clearBody();
     store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    // Замечание проверки: раньше тесты переносили только НЕ-дефолтный отбор,
+    // поэтому фактический эффект «останется без пометки» не покрывался.
+    state.typeOwn.data = [fullTypeView('t-1', 'Работы типа', true)];
     const harness = await mountWith([
-      row('t-1', 'Работы типа', { isDefault: true, ownDefault: true }),
-      row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID, position: 1 }),
+      row('c-2', 'В гараже', {
+        scope: 'thought',
+        definedOn: FOCUS_ID,
+        isDefault: true,
+        ownDefault: true,
+        position: 1,
+      }),
     ]);
-    harness.findViewButton('c-1')!.dispatchContextMenu();
+    harness.findViewButton('c-2')!.dispatchContextMenu();
     const menu = lastMenu();
     assert.ok(menu !== undefined);
     findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    await settle();
     const dialog = lastDialog();
     assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
     const text = dialogText(dialog);
     assert.ok(
-      text.includes('его увидят все мысли этого типа'),
-      `элемент 2 — эффект на все мысли типа: ${text}`,
+      text.includes('Отбор «В гараже» станет общим для типа'),
+      `элемент 1 — имя дефолтного отбора: ${text}`,
     );
     assert.ok(
       text.includes('перенесённый отбор останется без этой пометки'),
-      `элемент 3 — собственный дефолт типа: ${text}`,
+      `элемент 3 — переносимый дефолт потеряет пометку: ${text}`,
     );
+    dialogButton(dialog, 'Подтвердить')!.click();
+    await settle();
+    assert.equal(state.customMoveToType.calls.length, 1);
+    assert.deepEqual(state.customMoveToType.calls[0], [NETWORK_ID, FOCUS_ID, 'c-2']);
   });
 
-  it('перенос в тип: без собственного дефолта получателя третьего элемента нет', async () => {
+  it('перенос в тип: у получателя НЕТ своего дефолта — третьего элемента нет, пометка сохранится', async () => {
     installWindow();
     clearBody();
     store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    // Положительный контроль: собственные отборы типа без is_default —
+    // переносимый дефолт сохранит пометку, предупреждать не о чем.
+    state.typeOwn.data = [fullTypeView('t-1', 'Работы типа', false)];
     const harness = await mountWith([
-      row('t-1', 'Работы типа'),
-      row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID, position: 1 }),
+      row('c-2', 'В гараже', {
+        scope: 'thought',
+        definedOn: FOCUS_ID,
+        isDefault: true,
+        ownDefault: true,
+        position: 1,
+      }),
     ]);
-    harness.findViewButton('c-1')!.dispatchContextMenu();
+    harness.findViewButton('c-2')!.dispatchContextMenu();
     const menu = lastMenu();
     assert.ok(menu !== undefined);
     findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    await settle();
     const dialog = lastDialog();
     assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
     const text = dialogText(dialog);
@@ -905,6 +945,41 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
       !text.includes('останется без этой пометки'),
       `без занятого дефолта предупреждение не добавляется: ${text}`,
     );
+    dialogButton(dialog, 'Подтвердить')!.click();
+    await settle();
+    assert.equal(state.customMoveToType.calls.length, 1, 'перенос не заблокирован');
+  });
+
+  it('перенос в тип: ошибка запроса собственных отборов — подтверждение без третьего элемента', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    // Деградация: недоступность подсказки не блокирует штатную операцию —
+    // сервер сам снимает пометку, если дефолт получателя занят.
+    state.typeOwn.error = new Error('list failed');
+    const harness = await mountWith([
+      row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID }),
+    ]);
+    harness.findViewButton('c-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    await settle();
+    const dialog = lastDialog();
+    assert.ok(dialog !== undefined, 'подтверждение открылось несмотря на ошибку');
+    const text = dialogText(dialog);
+    assert.ok(
+      text.includes('его увидят все мысли этого типа'),
+      `базовые элементы на месте: ${text}`,
+    );
+    assert.ok(
+      !text.includes('останется без этой пометки'),
+      `при ошибке третьего элемента нет: ${text}`,
+    );
+    dialogButton(dialog, 'Подтвердить')!.click();
+    await settle();
+    assert.equal(state.customMoveToType.calls.length, 1, 'перенос не заблокирован ошибкой');
+    assert.equal(state.typeOwn.calls.length, 1);
   });
 
   it('перенос «тип → вне» унаследованного: подтверждение про типы-потомки, адрес — defined_on', async () => {

@@ -158,10 +158,12 @@ interface EffectiveViewRow {
   is_default: boolean;
   /**
    * Собственная пометка «по умолчанию» строки владельца — без учёта
-   * наследования и перекрытия внетиповым дефолтом мысли. Единственный
-   * правильный источник для предупреждения о переносе: сервер снимает
-   * пометку по собственной, а эффективный `is_default` бывает занулён
-   * перекрытием (0.14.1, дельта раунда 2).
+   * наследования и перекрытия внетиповым дефолтом мысли (0.14.1).
+   * Для внетиповой строки — достоверный источник предупреждения
+   * move-to-thought (внетиповые не скрываются). Для типовой строки
+   * ненадёжен: при перекрытии одноимённым внетиповым строки в наборе нет
+   * вовсе, поэтому дефолт типа-получателя при move-to-type спрашивается
+   * отдельным запросом собственных отборов типа (раунд 3).
    */
   own_default: boolean;
 }
@@ -847,30 +849,58 @@ async function setDefault(
 }
 
 /**
- * Есть ли у получателя собственный отбор по умолчанию (пометка не переедет).
- * Считается по `own_default` — собственной пометке строки, а НЕ по
- * эффективному `is_default`: сервер снимает пометку при переносе по
- * собственной, а эффективную зануляет внетиповой дефолт мысли (дельта
- * раунда 2, репро проверки x6).
+ * Есть ли у мысли-получателя собственный внетиповой отбор по умолчанию
+ * (пометка не переедет). Считается по `own_default` — собственной пометке
+ * строки, а НЕ по эффективному `is_default`: эффективный флаг зануляется,
+ * когда у мысли есть внетиповой дефолт. Внетиповые строки в эффективном
+ * наборе не перекрываются, поэтому `own_default` у них достоверен.
  */
-function hasOwnDefault(views: EffectiveViewRow[], scope: ThoughtViewScope): boolean {
-  return views.some(
-    (row) => row.scope === scope && !row.inherited && row.own_default,
-  );
+function hasOwnThoughtDefault(views: EffectiveViewRow[]): boolean {
+  return views.some((row) => row.scope === 'thought' && row.own_default);
+}
+
+/**
+ * Есть ли у типа-получателя СВОЙ отбор по умолчанию — спрашиваем источник
+ * истины отдельным запросом, а не выводим из эффективного набора мысли.
+ *
+ * Эффективный набор для этого не годится: одноимённый внетиповой отбор мысли
+ * перекрывает типовой ЦЕЛИКОМ — строки нет в наборе, и `own_default` скрытого
+ * дефолта недоступен (проверка раунда 2, overlay-репро w6: клиент молчал, а
+ * сервер пометку снимал). `list` без `include_effective` отдаёт в `data`
+ * только собственные отборы типа, где `is_default` — собственная пометка.
+ *
+ * Ошибка запроса перенос НЕ блокирует: сервер — гарант снятия пометки,
+ * подтверждение просто открывается без третьего элемента (недоступность
+ * подсказки не должна запрещать штатную операцию).
+ */
+async function typeRecipientHasOwnDefault(
+  networkId: string,
+  typeId: string,
+): Promise<boolean> {
+  try {
+    const result = await etn.thoughtTypeViews.list(networkId, typeId, {
+      includeEffective: false,
+    });
+    return result.data.some((row) => row.is_default);
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Перенос «вне типа → тип» (операция 85414fbd). Подтверждение называет
  * эффект на все мысли типа и снятие пометки «по умолчанию» при занятом
- * собственном дефолте получателя (спека df84de22).
+ * собственном дефолте получателя (спека df84de22). Дефолт получателя
+ * читается из собственных отборов типа ({@link typeRecipientHasOwnDefault}).
  */
 async function moveViewToType(networkId: string, view: EffectiveViewRow): Promise<void> {
   const focusId = currentFocusId;
   const typeId = currentFocusTypeId;
   if (focusId === null || typeId === null) return;
+  const recipientHasDefault = await typeRecipientHasOwnDefault(networkId, typeId);
   const message =
     t('strip.transferToTypeConfirm', [view.name || view.name_key, typeNameOf(typeId)]) +
-    (hasOwnDefault(effectiveViews, 'type') ? ` ${t('strip.transferDefaultNote')}` : '');
+    (recipientHasDefault ? ` ${t('strip.transferDefaultNote')}` : '');
   const ok = await confirmDialog(t('strip.transferToTypeTitle'), message, false);
   if (!ok) return;
   try {
@@ -916,7 +946,7 @@ async function moveViewToThought(networkId: string, view: EffectiveViewRow): Pro
   if (view.inherited) {
     message += ` ${t('strip.transferInheritedNote', ownerTypeName)}`;
   }
-  if (hasOwnDefault(effectiveViews, 'thought')) {
+  if (hasOwnThoughtDefault(effectiveViews)) {
     message += ` ${t('strip.transferDefaultNote')}`;
   }
   const ok = await confirmDialog(t('strip.transferToThoughtTitle'), message, false);

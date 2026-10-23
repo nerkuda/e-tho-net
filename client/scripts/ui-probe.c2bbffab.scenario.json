@@ -1,6 +1,6 @@
 {
   "name": "c2bbffab-custom-views-strip",
-  "description": "GUI-сценарий задачи c2bbffab «Внетиповые отборы на полосе и в диалоге — клиент» (0.14.1): С1 (МЛИ-инструменты: порядок/курсив/дефолт/сохранённый выбор/результат), подтверждения С2 (перекрытие имени — одна курсивная кнопка) и П2 (переносы: тексты подтверждений; x6 — третий элемент о занятом собственном дефолте получателя при внетиповом дефолте мысли, перекрывающем типовой), П1 (безтиповая мысль: «+» сразу редактор), П3 (назначение типа сохраняет внетиповые), realtime-переименование и перенос активного чипа. Данные заводятся через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c2bbffab.scenario.json --out .tmp/etn-c2bbffab/out",
+  "description": "GUI-сценарий задачи c2bbffab «Внетиповые отборы на полосе и в диалоге — клиент» (0.14.1): С1 (МЛИ-инструменты: порядок/курсив/дефолт/сохранённый выбор/результат), подтверждения С2 (перекрытие имени — одна курсивная кнопка) и П2 (переносы: тексты подтверждений; x6 — третий элемент о занятом собственном дефолте получателя при внетиповом дефолте мысли, перекрывающем типовой), П1 (безтиповая мысль: «+» сразу редактор), П3 (назначение типа сохраняет внетиповые), realtime-переименование и перенос активного чипа. Раунд 3: overlay-репро w6 (собственный дефолт типа скрыт одноимённым внетиповым — третий элемент есть, после переноса дефолтного отбора пометка снята). Данные заводятся через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c2bbffab.scenario.json --out .tmp/etn-c2bbffab/out",
   "timeout": 300000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -13,7 +13,7 @@
 
     {
       "name": "seed-custom-views",
-      "eval": "(async () => { const nid='{{networkId}}', home='{{homeId}}'; const def=(v)=>JSON.stringify({version:1, filter:{entity:{kind:'id'}, operator:'eq', value:v}}); const TP=await window.etn.types.createThoughtType(nid,{name:'Инструмент-предок'}); const TPv=await window.etn.thoughtTypeViews.create(nid,TP.id,{name:'Наследуемый', definition:def(home)}); const T1=await window.etn.types.createThoughtType(nid,{name:'МЛИ-инструмент', parent_id:TP.id}); const T2=await window.etn.types.createThoughtType(nid,{name:'Каталог-дубль'}); const tv=await window.etn.thoughtTypeViews.create(nid,T1.id,{name:'Работы типа', definition:def(home), is_default:true}); const tv2=await window.etn.thoughtTypeViews.create(nid,T2.id,{name:'Кому одолжил', definition:def(home)}); const A=await window.etn.thoughts.create(nid,{title:'МЛИ-инструменты', type_id:T1.id, create_link:{direction:'parent',target_thought_id:home}}); const c1=await window.etn.thoughtCustomViews.create(nid,A.id,{name:'Кому одолжил', definition:def(home)}); const c2=await window.etn.thoughtCustomViews.create(nid,A.id,{name:'В гараже', definition:def(home), is_default:true}); const B=await window.etn.thoughts.create(nid,{title:'Каталог Б дубль', type_id:T2.id, create_link:{direction:'parent',target_thought_id:A.id}}); const cb=await window.etn.thoughtCustomViews.create(nid,B.id,{name:'Кому одолжил', definition:def(home)}); const C=await window.etn.thoughts.create(nid,{title:'Развлечения без типа', create_link:{direction:'parent',target_thought_id:A.id}}); const cc=await window.etn.thoughtCustomViews.create(nid,C.id,{name:'Для всей семьи', definition:def(home)}); const D=await window.etn.thoughts.create(nid,{title:'Каталог В того же типа', type_id:T1.id, create_link:{direction:'parent',target_thought_id:A.id}}); window.__v4={ ids:{A:A.id,TP:TP.id,T1:T1.id,T2:T2.id,TPv:TPv.id,tv:tv.id,tv2:tv2.id,c1:c1.id,c1Version:c1.version,c2:c2.id,B:B.id,cb:cb.id,C:C.id,cc:cc.id,D:D.id} }; return JSON.stringify(window.__v4.ids); })()"
+      "eval": "(async () => { const nid='{{networkId}}', home='{{homeId}}'; const def=(v)=>JSON.stringify({version:1, filter:{entity:{kind:'id'}, operator:'eq', value:v}}); const TP=await window.etn.types.createThoughtType(nid,{name:'Инструмент-предок'}); const TPv=await window.etn.thoughtTypeViews.create(nid,TP.id,{name:'Наследуемый', definition:def(home)}); const T1=await window.etn.types.createThoughtType(nid,{name:'МЛИ-инструмент', parent_id:TP.id}); const T2=await window.etn.types.createThoughtType(nid,{name:'Каталог-дубль'}); const tv=await window.etn.thoughtTypeViews.create(nid,T1.id,{name:'Работы типа', definition:def(home), is_default:true}); const tv2=await window.etn.thoughtTypeViews.create(nid,T2.id,{name:'Кому одолжил', definition:def(home)}); const A=await window.etn.thoughts.create(nid,{title:'МЛИ-инструменты', type_id:T1.id, create_link:{direction:'parent',target_thought_id:home}}); const c1=await window.etn.thoughtCustomViews.create(nid,A.id,{name:'Кому одолжил', definition:def(home)}); const c2=await window.etn.thoughtCustomViews.create(nid,A.id,{name:'В гараже', definition:def(home), is_default:true}); const B=await window.etn.thoughts.create(nid,{title:'Каталог Б дубль', type_id:T2.id, create_link:{direction:'parent',target_thought_id:A.id}}); const cb=await window.etn.thoughtCustomViews.create(nid,B.id,{name:'Кому одолжил', definition:def(home)}); const C=await window.etn.thoughts.create(nid,{title:'Развлечения без типа', create_link:{direction:'parent',target_thought_id:A.id}}); const cc=await window.etn.thoughtCustomViews.create(nid,C.id,{name:'Для всей семьи', definition:def(home)}); const D=await window.etn.thoughts.create(nid,{title:'Каталог В того же типа', type_id:T1.id, create_link:{direction:'parent',target_thought_id:A.id}}); const E=await window.etn.thoughts.create(nid,{title:'МЛИ-оверлей', type_id:T1.id, create_link:{direction:'parent',target_thought_id:A.id}}); const eOverlay=await window.etn.thoughtCustomViews.create(nid,E.id,{name:'Работы типа', definition:def(home)}); const eDefault=await window.etn.thoughtCustomViews.create(nid,E.id,{name:'В гараже', definition:def(home), is_default:true}); window.__v4={ ids:{A:A.id,TP:TP.id,T1:T1.id,T2:T2.id,TPv:TPv.id,tv:tv.id,tv2:tv2.id,c1:c1.id,c1Version:c1.version,c2:c2.id,B:B.id,cb:cb.id,C:C.id,cc:cc.id,D:D.id,E:E.id,eOverlay:eOverlay.id,eDefault:eDefault.id} }; return JSON.stringify(window.__v4.ids); })()"
     },
     {
       "name": "install-helpers",
@@ -326,6 +326,63 @@
       "name": "rt-moved-chip-normal-and-active",
       "timeout": 30000,
       "waitFor": "(() => { const b=window.__v4.chip('Кому одолжил (новое)'); if(!b) return false; return b.dataset.viewScope === 'type' && getComputedStyle(b).fontStyle === 'normal' && b.classList.contains('active'); })()"
+    },
+
+    {
+      "name": "w6-overlay-back-to-children",
+      "probe": "(async () => { const b=[...document.querySelectorAll('.canvas-filter-strip-btn')].find((e)=>(e.textContent||'').trim()==='Потомки'); if(!b) return { error:'no-children' }; b.click(); await new Promise((r)=>setTimeout(r,600)); const a=window.__v4.active(); return { mode:a?.mode ?? null, text:a?.text ?? null }; })()",
+      "expect": { "mode": "children", "text": "Потомки" }
+    },
+    {
+      "name": "w6-overlay-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"'+window.__v4.ids.E+'\"]') !== null"
+    },
+    {
+      "name": "w6-overlay-focus-E",
+      "probe": "window.__v4.focus(window.__v4.ids.E)",
+      "expect": "ok"
+    },
+    {
+      "name": "w6-overlay-strip-ready",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().some((x)=>x.text==='В гараже' && x.active) && window.__v4.chips().some((x)=>x.text==='Работы типа' && x.scope==='thought' && x.fontStyle==='italic')"
+    },
+    {
+      "name": "w6-overlay-before",
+      "probe": "(async () => { const eff=await window.etn.thoughtCustomViews.list('{{networkId}}', window.__v4.ids.E, {includeEffective:true}); const rows=(eff.meta&&eff.meta.effective)||[]; const typeRow=rows.find((v)=>v.name==='Работы типа'&&v.scope==='type')||null; const overlay=rows.find((v)=>v.name==='Работы типа'&&v.scope==='thought')||null; const moved=rows.find((v)=>v.name==='В гараже')||null; return { typeRowInEffective: typeRow, overlay: overlay?{scope:overlay.scope,is_default:overlay.is_default}:null, movedBefore: moved?{scope:moved.scope,is_default:moved.is_default,own_default:moved.own_default}:null }; })()",
+      "expect": {
+        "typeRowInEffective": null,
+        "overlay": { "scope": "thought", "is_default": false },
+        "movedBefore": { "scope": "thought", "is_default": true, "own_default": true }
+      }
+    },
+    { "name": "w6-overlay-menu", "eval": "window.__v4.menuChip('В гараже')" },
+    { "name": "w6-overlay-click-transfer", "eval": "window.__v4.clickMenu('Перенести отбор в отборы типа')" },
+    {
+      "name": "w6-overlay-dialog",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('его увидят все мысли этого типа')"
+    },
+    {
+      "name": "w6-overlay-dialog-note",
+      "probe": "window.__v4.dialogText().includes('У получателя уже есть отбор по умолчанию — перенесённый отбор останется без этой пометки.')",
+      "expect": true
+    },
+    { "name": "w6-overlay-confirm", "eval": "window.__v4.clickDialog('Подтвердить')" },
+    {
+      "name": "w6-overlay-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() === null"
+    },
+    {
+      "name": "w6-overlay-after",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); const own=await window.etn.thoughtTypeViews.list('{{networkId}}', window.__v4.ids.T1, {includeEffective:false}); const list=own.data||[]; const moved=list.find((v)=>v.name==='В гараже')||null; const typeDefault=list.find((v)=>v.name==='Работы типа')||null; const eff=await window.etn.thoughtCustomViews.list('{{networkId}}', window.__v4.ids.E, {includeEffective:true}); const rows=(eff.meta&&eff.meta.effective)||[]; const movedEff=rows.find((v)=>v.name==='В гараже')||null; return { movedType: moved?{is_default:moved.is_default}:null, typeDefault: typeDefault?{is_default:typeDefault.is_default}:null, movedEffective: movedEff?{scope:movedEff.scope,is_default:movedEff.is_default,own_default:movedEff.own_default}:null }; })()",
+      "expect": {
+        "movedType": { "is_default": false },
+        "typeDefault": { "is_default": true },
+        "movedEffective": { "scope": "type", "is_default": false, "own_default": false }
+      }
     }
   ]
 }
