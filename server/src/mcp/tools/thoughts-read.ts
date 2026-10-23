@@ -808,8 +808,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
         '`link_marked_for_deletion` — ребро помечено на удаление (корзина). ' +
-        '`nodes[].views` — эффективный набор отборов у seed-узлов (типовые и внетиповые со `scope`; ' +
-        'у остальных узлов поле отсутствует), исполняется через `etn.views.run { view_name }`. ' +
+        '`nodes[].views` — эффективный набор отборов только у seed-узлов (типовые и внетиповые со ' +
+        '`scope`); у прочих `views: []` (в `compact` поле снимается проекцией), исполняется через ' +
+        '`etn.views.run { view_name }`. ' +
         '`link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',
