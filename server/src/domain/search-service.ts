@@ -95,6 +95,7 @@ import {
   type SearchResponseMeta,
   type SearchScope,
   type SearchTextHit,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 // Формы дублей переехали в общий модуль (задача 120385ba): одна форма ответа
@@ -114,7 +115,7 @@ import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
-import { filterAstClause, type AstTokenContext } from './query-service.js';
+import { buildKeywordWordClause, filterAstClause, type AstTokenContext } from './query-service.js';
 import {
   resolveThoughtTokensInAst,
   scanStringForTokens,
@@ -671,6 +672,9 @@ function buildShortWordNameClause(word: string, negate: boolean): Clause {
   return { sql: negate ? `NOT ${sql}` : sql, params: [pattern, pattern] };
 }
 
+/** Области per-word предиката `by_names`: заголовок и синонимы (D5). */
+const NAME_KEYWORD_SCOPE = new Set<StructureKeywordScope>(['title', 'synonyms']);
+
 /**
  * Точный предикат ОДНОГО include- или исключающего слова по группе `by_names`
  * (задача f0b06700, требование 35218826, сценарий «поиск», D1/D3/D5):
@@ -678,20 +682,13 @@ function buildShortWordNameClause(word: string, negate: boolean): Clause {
  * и совпадение со СЛОВОМ `*`-синонима по границам слова
  * (`synonym_word_pattern_match`, D4: слово запроса с `*` — только литерально).
  *
- * Заголовок расширению не подлежит (D5) — матчер применяется только к
- * синонимам. Форма литеральной части повторяет {@link buildShortWordNameClause}
- * (NFC-слова приходят из {@link buildTrigramQuery}).
+ * Заголовок расширению не подлежит (D5) — матчер применяется только к синонимам.
+ * Предикат — ОБЩИЙ с `keywords` отбора мыслей (`buildKeywordWordClause`,
+ * правило аналогов): своего SQL здесь нет, чтобы маршруты не разъехались.
  */
 function buildNameWordClause(word: string, negate: boolean): Clause {
-  const norm = word.normalize('NFC').toLowerCase();
-  const pattern = buildLikePattern(norm);
-  const wildcard = norm.includes('*') ? '' : ' OR synonym_word_pattern_match(?, ts.synonym_norm)';
-  const sql =
-    "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
-    ` WHERE ts.thought_id = t.id AND (ts.synonym_norm LIKE ? ESCAPE '\\'${wildcard})))`;
-  const params: unknown[] = [pattern, pattern];
-  if (wildcard !== '') params.push(norm);
-  return { sql: negate ? `NOT (${sql})` : sql, params };
+  const clause = buildKeywordWordClause(NAME_KEYWORD_SCOPE, word);
+  return { sql: negate ? `NOT ${clause.sql}` : clause.sql, params: clause.params };
 }
 
 /**
@@ -752,9 +749,15 @@ function searchNames(
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
   ];
-  // Короткие слова без триграммного представления — LIKE-фолбэк (Tier 1).
+  // Короткие include-слова БЕЗ триграммного представления: точный предикат с
+  // pattern-веткой (D8) — литеральная подстрока ИЛИ слово `*`-синонима. Только
+  // литеральная клауза здесь теряла мысль при комбинации «длинное слово даёт
+  // FTS-якорь + короткое совпадает лишь словом-паттерном»: строка была
+  // FTS-кандидатом и в tier 2 уже не попадала (NOT IN кандидатов).
+  // Короткие ИСКЛЮЧЕНИЯ остаются литеральными: pattern-исключение добавляется
+  // отдельно для КАЖДОГО слова запроса (`patternExcludeClauses` ниже).
   const shortClauses: Array<Clause | null> = [
-    ...trigram.nameShortInclude.map((w) => buildShortWordNameClause(w, false)),
+    ...trigram.nameShortInclude.map((w) => buildNameWordClause(w, false)),
     ...trigram.nameShortExclude.map((w) => buildShortWordNameClause(w, true)),
   ];
   // Точный предикат каждого слова: литерал ИЛИ слово-паттерн `*`-синонима.

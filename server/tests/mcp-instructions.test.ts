@@ -552,6 +552,49 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Задача f0b06700 (требование 35218826, сценарий «поиск»): фильтр `keywords`
+  // витрины инструкций — тот же мини-язык, что `keywords` отбора мыслей:
+  // слово запроса без `*` совпадает и со словом хранимого `*`-синонима.
+  it('by keywords раскрывает слово-паттерн `*`-синонима', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const instructionsTypeId = makeThoughtType(ndb, 'Инструкция', ctx.adminId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const target = makeThought(ndb, 'Выполнить задачу', { typeId: instructionsTypeId }, ctx.adminId);
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, target, '...');
+        // Синоним-паттерн: «задачи» литерально НЕ входит в «задач*», но
+        // совпадает с ним как слово-паттерн.
+        ndb
+          .prepare('INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)')
+          .run(target, 'задач*', 'задач*');
+        const other = makeThought(ndb, 'Справочник', { typeId: instructionsTypeId }, ctx.adminId);
+        await upsertPermanentViaWrite(handle.client, ctx.networkId, other, '...');
+
+        setTypeRoles(ctx, { instructions: instructionsTypeId });
+
+        const result = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: { network_id: ctx.networkId, keywords: 'задачи' },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<InstructionsList>(result);
+        assert.deepEqual(
+          data.instructions.map((i) => i.title),
+          ['Выполнить задачу'],
+          'слово «задачи» матчится словом-паттерном «задач*»',
+        );
+        assert.equal(data.meta.matched, 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   // Ошибка fa7df2c3: корневая = нет входящих НЕТИПИЗИРОВАННЫХ рёбер от
   // инструкций. Типизированная связь («см. также») иерархии не образует и не
   // должна прятать корневую инструкцию; структурное ребро — прячет.

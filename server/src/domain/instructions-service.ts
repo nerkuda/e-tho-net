@@ -25,11 +25,17 @@
  * Читается из переданного `ndb` — фасад решает, какой контекст слоя открыть.
  */
 
-import { EtnError, INSTRUCTIONS_PREVIEW_CHARS, buildLikePattern, parseFilterKeywords } from '@etn/shared';
+import {
+  EtnError,
+  INSTRUCTIONS_PREVIEW_CHARS,
+  parseFilterKeywords,
+  type StructureKeywordScope,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
 import type { BodyExpander } from './transclusion-service.js';
+import { buildKeywordWordClause } from './query-service.js';
 import { projectThoughtRows } from './response-projection.js';
 import { resolveThoughtId } from './thought-id.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
@@ -114,7 +120,16 @@ export interface NetworkInstructionsQuery {
   previewChars?: number;
 }
 
-/** Ключевое слово: название или синоним, регистронезависимо, LIKE-паттерном. */
+/** Области фильтра `keywords` витрины: название и синонимы (как в §6.10). */
+const INSTRUCTIONS_KEYWORD_SCOPE = new Set<StructureKeywordScope>(['title', 'synonyms']);
+
+/**
+ * Ключевое слово: название или синоним — мини-синтаксом §6.10 (include — AND,
+ * `-word` — исключение). Предикат ОБЩИЙ с `keywords` отбора мыслей и
+ * `by_names` (`buildKeywordWordClause`, задача f0b06700): слово запроса без `*`
+ * совпадает литерально ИЛИ с одним словом хранимого `*`-синонима по границам
+ * слова, поэтому инструкция с синонимом «задач*» находится по «задачи».
+ */
 function keywordClauseFor(keywords: string | undefined): {
   sql: string;
   params: unknown[];
@@ -127,20 +142,14 @@ function keywordClauseFor(keywords: string | undefined): {
   const params: unknown[] = [];
   // AND всех include-слов; `-word` исключения отрицают.
   for (const word of parsed.include) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    clauses.push(
-      "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
-        " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))",
-    );
-    params.push(pattern, pattern);
+    const clause = buildKeywordWordClause(INSTRUCTIONS_KEYWORD_SCOPE, word);
+    clauses.push(clause.sql);
+    params.push(...clause.params);
   }
   for (const word of parsed.exclude) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    clauses.push(
-      "NOT (t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
-        " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))",
-    );
-    params.push(pattern, pattern);
+    const clause = buildKeywordWordClause(INSTRUCTIONS_KEYWORD_SCOPE, word);
+    clauses.push(`NOT ${clause.sql}`);
+    params.push(...clause.params);
   }
   return { sql: clauses.length > 0 ? ` AND ${clauses.join(' AND ')}` : '', params };
 }

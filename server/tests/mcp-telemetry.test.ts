@@ -626,7 +626,9 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // вызова (D10 постановки; детали — спека, тема `etn.guide { topic:
         // "thoughts.query" }`). Прирост — только проза: замер 49 651 → 50 494 Б
         // (+843). Планка поднята ровно под прирост с малым запасом:
-        // 49 900 → 50 800.
+        // 49 900 → 50 800. Дельта-правка (блокер верификатора): семантика
+        // `*`-синонимов добавлена и в описание `etn.instructions` (+111 Б) —
+        // итоговый замер задачи 50 605 Б, планка не менялась.
         assert.ok(
           bytes <= 50_800,
           `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 50800`,
@@ -727,7 +729,8 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 41 400 → 44 900 (малый запас).
         // 0.14.1 (задача f0b06700): см. блок выше — семантика `*`-синонимов в
         // двух описаниях дала +843 Б прозы; D+I 44 650 → 45 493 Б. Планка:
-        // 44 900 → 45 800 (малый запас).
+        // 44 900 → 45 800 (малый запас). Дельта-правка добавила +111 Б
+        // (`etn.instructions`) — итог задачи 45 604 Б, планка не менялась.
         assert.ok(
           descriptionsPlusInputSchema <= 45_800,
           `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 45800`,

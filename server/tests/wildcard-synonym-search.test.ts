@@ -297,6 +297,32 @@ describe(
       }
     });
 
+    it('D8: короткое include-слово с pattern-веткой не теряется на FTS-якоре', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Блокер верификатора: длинное слово даёт FTS-якорь, короткое (2 символа)
+        // совпадает ТОЛЬКО словом-паттерном — мысль обязана попасть в tier 1.
+        const target = seedThought(ndb, 'Функциональность системы');
+        seedSynonym(ndb, target, 'щ*к');
+
+        assert.deepEqual(
+          search(ndb, { q: 'функциональность щк', scope: 'names' }).by_names.map((h) => h.thought_id),
+          [target],
+          'короткое слово с pattern-веткой не отсекается FTS-якорем',
+        );
+        // Паритет маршрутов: keywords тот же запрос находит.
+        assert.deepEqual(ids(ndb, kw('функциональность щк')), [target]);
+        // Без FTS-якоря (fallback-путь) поведение прежнее.
+        assert.deepEqual(
+          search(ndb, { q: 'щк', scope: 'names' }).by_names.map((h) => h.thought_id),
+          [target],
+          'pattern-ветка для слова <3 символов работает и без FTS-якоря',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('AST-путь «Найти слова» (D9) раскрывает `*`-синонимы так же', () => {
       const ndb = createInMemoryNetworkDb();
       try {

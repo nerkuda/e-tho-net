@@ -49,7 +49,8 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
         'Read the network\'s instructions. `instruction_id` accepts a full UUID or an unambiguous hex ' +
         'prefix (≥ 4 chars), as in `etn.thoughts.get`. Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` ' +
         '→ cards (title, synonyms, preview ≤ 300) in request order, unresolved in `missing`; `{ keywords }` ' +
-        '→ filter by title+synonyms (whitespace-AND, `-word`); `{ network_id }` → active, default ROOT only ' +
+        '→ filter by title+synonyms (whitespace-AND, `-word`; a word without `*` also matches a ' +
+        'word of a stored `*`-synonym — `задач*` is found by «задачи»); `{ network_id }` → active, default ROOT only ' +
         '(no untyped parent link), `scope: "all"` adds sub-instructions. No role → ' +
         '`{ has_instructions: false, instructions: [] }`.',
       inputSchema: Instructions.schema,
