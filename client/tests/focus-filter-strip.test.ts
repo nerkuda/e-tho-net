@@ -854,6 +854,44 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     ]);
   });
 
+  it('редактор с полосы инициализирует «по умолчанию» собственной пометкой — 29f93e71', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    // Репро ошибки: эффективный `is_default` типовой строки занулён внетиповым
+    // дефолтом мысли. Правка несвязанного поля через полосу не должна снимать
+    // пометку владельца — чекбокс обязан стартовать с `own_default`.
+    const harness = await mountWith([
+      row('t-1', 'Работы типа', {
+        isDefault: false,
+        ownDefault: true,
+        version: 6,
+        definition: '{"keywords":"alpha"}',
+      }),
+    ]);
+    harness.findViewButton('t-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    findMenuItemByLabel(menu, 'Изменить отбор')!.click();
+    await settle();
+    const dialog = lastDialog();
+    assert.ok(dialog !== undefined, 'редактор открыт');
+    const defaultRow = dialog!
+      .querySelectorAll('.ui-choice-row')
+      .find((rowEl) => textOf(rowEl).includes('Открывать по умолчанию'));
+    assert.ok(defaultRow !== undefined, 'чекбокс «Открывать по умолчанию» на месте');
+    const checkbox = defaultRow!.children[0] as unknown as { checked: boolean };
+    assert.equal(checkbox.checked, true, 'чекбокс берёт собственную пометку владельца');
+    dialogButton(dialog!, 'Применить')!.click();
+    await settle();
+    assert.equal(state.typeUpdate.calls.length, 1);
+    assert.equal(
+      (state.typeUpdate.calls[0][3] as { is_default: boolean }).is_default,
+      true,
+      'правка поля не снимает пометку владельца',
+    );
+  });
+
   it('подтверждение удаления внетипового называет владельца-мысль, DELETE идёт в маршрут мысли', async () => {
     installWindow();
     clearBody();

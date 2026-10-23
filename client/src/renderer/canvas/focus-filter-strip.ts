@@ -772,6 +772,11 @@ function typeNameOf(typeId: string): string {
 /**
  * Opens the editor dialog for an existing view. Строка эффективного набора уже
  * несёт `definition`/`version` — второй list-запрос не нужен (спека df84de22).
+ *
+ * «По умолчанию» передаётся СОБСТВЕННОЙ пометкой владельца (`own_default`), а
+ * не эффективной: диалог сохраняет чекбокс тем же PUT/PATCH, поэтому
+ * инициализация эффективным флагом снимала бы пометку владельца при правке
+ * даже не связанного с дефолтом поля (ошибка 29f93e71).
  */
 function openViewEditorForExisting(networkId: string, row: EffectiveViewRow): void {
   const view = {
@@ -779,7 +784,7 @@ function openViewEditorForExisting(networkId: string, row: EffectiveViewRow): vo
     name: row.name,
     description: row.description,
     definition: row.definition,
-    is_default: row.is_default,
+    is_default: row.own_default,
     version: row.version,
   };
   // Детерминированное обновление того же клиента (ошибка 04da7519):
