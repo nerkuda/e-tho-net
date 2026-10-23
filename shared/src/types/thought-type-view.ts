@@ -135,6 +135,13 @@ export interface EffectiveThoughtCustomView extends Omit<ThoughtCustomView, 'tho
   /** Id мысли-владельца: отбор действует только на ней. */
   defined_on: string;
   inherited: false;
+  /**
+   * Собственная пометка «по умолчанию» строки мысли — без учёта схлопывания
+   * нескольких внетиповых дефолтов после слияния слоёв (в отличие от
+   * эффективного {@link ThoughtCustomView.is_default}). Нужна переносам:
+   * сервер снимает пометку по собственной, а не по эффективной (0.14.1).
+   */
+  own_default: boolean;
 }
 
 /** Типовой отбор в форме, пригодной для смешанного эффективного набора. */
@@ -174,4 +181,13 @@ export interface EffectiveThoughtTypeView extends ThoughtTypeView {
    * от типа-предка. Симметрия с {@link EffectiveTypeProperty.inherited}.
    */
   inherited: boolean;
+  /**
+   * Собственная пометка «по умолчанию» строки — без учёта наследования и
+   * перекрытия внетиповым дефолтом мысли. В отличие от эффективного
+   * {@link ThoughtTypeView.is_default}, который зануляется, пока у мысли есть
+   * внетиповой дефолт. Сервер снимает пометку при переносе именно по
+   * собственной, поэтому клиент строит предупреждение о дефолте получателя
+   * по `own_default`, а не по `is_default` (0.14.1, дельта раунда 2).
+   */
+  own_default: boolean;
 }

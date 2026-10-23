@@ -916,6 +916,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               scope: v.scope,
               inherited: v.inherited,
               is_default: v.is_default,
+              own_default: v.own_default,
             })),
           };
         });

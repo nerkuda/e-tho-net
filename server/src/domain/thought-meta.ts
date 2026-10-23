@@ -185,6 +185,7 @@ export function getThoughtMeta(
         scope: v.scope,
         inherited: v.inherited,
         is_default: v.is_default,
+        own_default: v.own_default,
       }));
   return { ...counters, permanent, link_stats, views };
 }

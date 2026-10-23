@@ -316,6 +316,7 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
             ...result.view,
             defined_on: result.type_id,
             inherited: false,
+            own_default: result.view.is_default,
           };
           return {
             result: result.view,

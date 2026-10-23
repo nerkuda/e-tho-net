@@ -594,6 +594,11 @@ function computeEffectiveTypeViews(
         defined_on: winner.defined_on,
         inherited: winner.defined_on !== ownTypeId,
         is_default: winner.row.name_key === effectiveDefaultKey,
+        // Собственная пометка строки — без наследования и перекрытия
+        // внетиповым дефолтом мысли (0.14.1, дельта раунда 2). Сервер снимает
+        // пометку при переносе по собственной, поэтому клиенту нужен именно
+        // этот сигнал.
+        own_default: winner.row.is_default === 1,
       });
     }
   }
@@ -659,6 +664,9 @@ function mergeEffectiveCustomViews(
       // уходит из набора целиком (continue выше), и в наборе дефолта нет —
       // при фокусе открывается «Потомки».
       is_default: customDefaultId === null ? view.is_default : false,
+      // Собственная пометка типа — уже посчитана в type-only наборе и
+      // перекрытием мысли НЕ зануляется.
+      own_default: view.own_default,
     });
   }
   for (const row of customs) {
@@ -670,6 +678,10 @@ function mergeEffectiveCustomViews(
       definition: row.definition,
       position: row.position,
       is_default: row.id === customDefaultId,
+      // Собственная пометка строки мысли: при нескольких дефолтах после
+      // слияния слоёв эффективным считается первый, но сервер при переносе
+      // смотрит на собственную.
+      own_default: row.is_default === 1,
       version: row.version,
       created_at: row.created_at,
       updated_at: row.updated_at,

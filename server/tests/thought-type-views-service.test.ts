@@ -982,6 +982,39 @@ describe(
         }
       });
 
+      it('own_default: собственная пометка строки видна отдельно от наследования и эффективного дефолта', () => {
+        const { ndb, taskId, projectId } = setupChain();
+        try {
+          seedThought(ndb, { title: 'P', type_id: projectId });
+          createThoughtTypeView(
+            ndb,
+            taskId,
+            { name: 'ИзПредка', definition: DEFINITION, is_default: true },
+            USER,
+          );
+          createThoughtTypeView(
+            ndb,
+            projectId,
+            { name: 'ИзПотомка', definition: DEFINITION },
+            USER,
+          );
+          const eff = getEffectiveViewsForThought(ndb, { type_id: projectId });
+          const inherited = eff.find((v) => v.name === 'ИзПредка');
+          assert.ok(inherited !== undefined);
+          // Эффективный дефолт наследуется, собственная пометка — у строки
+          // предка (0.14.1, дельта раунда 2).
+          assert.equal(inherited!.is_default, true);
+          assert.equal(inherited!.own_default, true);
+          const own = eff.find((v) => v.name === 'ИзПотомка');
+          assert.ok(own !== undefined);
+          assert.equal(own!.inherited, false);
+          assert.equal(own!.is_default, false);
+          assert.equal(own!.own_default, false);
+        } finally {
+          ndb.close();
+        }
+      });
+
       it('мысль без типа: набор корневого типа (требование 23e0f78e)', () => {
         const { ndb, rootId } = setupChain();
         try {

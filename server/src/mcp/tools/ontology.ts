@@ -171,6 +171,7 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
                     ...viewRow,
                     defined_on: viewRow.thought_type_id,
                     inherited: false,
+                    own_default: viewRow.is_default,
                   },
                 },
               });
@@ -188,6 +189,7 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
                     ...viewRow,
                     defined_on: viewRow.thought_type_id,
                     inherited: false,
+                    own_default: viewRow.is_default,
                   },
                 },
               });

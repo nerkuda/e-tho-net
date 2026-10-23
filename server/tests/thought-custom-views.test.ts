@@ -1499,6 +1499,63 @@ describe(
       }
     });
 
+    it('own_default: собственная пометка не зануляется внетиповым дефолтом (репро x6)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        // У типа есть СОБСТВЕННЫЙ дефолт, у мысли — внетиповой дефолт. Сервер
+        // снимает пометку при переносе по собственной, поэтому эффективная
+        // строка типа обязана нести `own_default: true` даже при
+        // `is_default: false` (дельта раунда 2 проверки c2bbffab).
+        const typeId = await createType(ctx, 'тип-с-дефолтом');
+        await createTypeView(ctx, typeId, { name: 'Работы типа', is_default: true });
+        const thoughtId = await createThought(ctx, 'Мысль', typeId);
+        const customDefault = await createCustomView(ctx, thoughtId, {
+          name: 'В гараже',
+          is_default: true,
+        });
+        assert.equal(customDefault.statusCode, 201, customDefault.body);
+        const customPlain = await createCustomView(ctx, thoughtId, { name: 'Кому одолжил' });
+        assert.equal(customPlain.statusCode, 201, customPlain.body);
+
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: `${customViewsUrl(ctx, thoughtId)}?include_effective=true`,
+          headers: h,
+        });
+        assert.equal(res.statusCode, 200);
+        const effective = (res.json().meta as {
+          effective: Array<{
+            name: string;
+            scope: string;
+            is_default: boolean;
+            own_default: boolean;
+          }>;
+        }).effective;
+        const byName = new Map(effective.map((v) => [v.name, v]));
+
+        const typeRow = byName.get('Работы типа');
+        assert.ok(typeRow !== undefined, 'типовой отбор в наборе');
+        assert.equal(typeRow.scope, 'type');
+        assert.equal(typeRow.is_default, false, 'эффективный дефолт занулён внетиповым');
+        assert.equal(typeRow.own_default, true, 'собственная пометка типа сохраняется');
+
+        const customDefaultRow = byName.get('В гараже');
+        assert.ok(customDefaultRow !== undefined);
+        assert.equal(customDefaultRow.scope, 'thought');
+        assert.equal(customDefaultRow.is_default, true);
+        assert.equal(customDefaultRow.own_default, true);
+
+        const customPlainRow = byName.get('Кому одолжил');
+        assert.ok(customPlainRow !== undefined);
+        assert.equal(customPlainRow.scope, 'thought');
+        assert.equal(customPlainRow.is_default, false);
+        assert.equal(customPlainRow.own_default, false);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('run внетипового по имени и id: meta.scope/defined_on без type_id, событие run', async () => {
       const ctx = await buildRestContext();
       try {

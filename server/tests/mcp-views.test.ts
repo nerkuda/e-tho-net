@@ -56,6 +56,8 @@ interface ThoughtMetaView {
   scope?: 'type' | 'thought';
   inherited: boolean;
   is_default: boolean;
+  /** Собственная пометка строки (0.14.1, дельта раунда 2). */
+  own_default: boolean;
 }
 
 interface ThoughtGetResponse {
@@ -256,6 +258,9 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         assert.equal(view.name_key, 'работы версии');
         assert.equal(view.is_default, true);
         assert.equal(view.inherited, false);
+        // 0.14.1, дельта раунда 2: собственная пометка строки отдаётся рядом с
+        // эффективной — агент видит, что произойдёт при переносе.
+        assert.equal(view.own_default, true);
 
         // Шаг 2: исполняем отбор по имени — получаем пустую страницу
         // (фильтр по `type:eq=задача` отберёт задачи, но в этом тесте

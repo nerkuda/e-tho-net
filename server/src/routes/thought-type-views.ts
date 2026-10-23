@@ -284,6 +284,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             ...created,
             defined_on: id,
             inherited: false,
+            own_default: created.is_default,
           };
           return {
             result: created,
@@ -351,6 +352,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             ...updated,
             defined_on: ownerTypeId,
             inherited: false,
+            own_default: updated.is_default,
           };
           return {
             result: updated,

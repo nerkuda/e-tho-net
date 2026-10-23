@@ -86,6 +86,9 @@ export function toEffectiveCustomView(
     definition: view.definition,
     position: view.position,
     is_default: view.is_default,
+    // Одна строка мысли и есть собственный дефолт — эффективный и
+    // собственный совпадают (0.14.1).
+    own_default: view.is_default,
     version: view.version,
     created_at: view.created_at,
     updated_at: view.updated_at,
