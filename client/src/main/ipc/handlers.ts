@@ -1839,29 +1839,39 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'ui.draftList',
-    bind((networkId: string) => {
+    bind((networkId: string, filter?: 'pending' | 'conflict' | 'all') => {
       const profile = deps.getProfile();
       if (!profile) return [] as DraftRow[];
-      return deps.localDb
-        .listDrafts(profile.id, networkId)
-        .map((row) => ({
-          id: row.id,
-          networkId: row.network_id,
-          entityType: row.entity_type,
-          entityId: row.entity_id,
-          field: row.field,
-          value: row.value,
-          baseVersion: row.base_version,
-          status: row.status,
-          createdAt: row.created_at,
-        }))
-        .filter((row) => row.status === 'pending');
+      // Default is the auto-retry queue; `all` is needed after a successful
+      // save — a conflict draft of the same field is superseded too
+      // (ошибка 5726744b).
+      const rows =
+        filter === 'all'
+          ? deps.localDb.listDrafts(profile.id, networkId)
+          : deps.localDb.listDrafts(profile.id, networkId, filter ?? 'pending');
+      return rows.map((row) => ({
+        id: row.id,
+        networkId: row.network_id,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        field: row.field,
+        value: row.value,
+        baseVersion: row.base_version,
+        status: row.status,
+        createdAt: row.created_at,
+      }));
     }),
   );
   handlers.set(
     'ui.draftDelete',
     bind((id: string) => {
       deps.localDb.deleteDraft(id);
+    }),
+  );
+  handlers.set(
+    'ui.draftSetStatus',
+    bind((id: string, status: 'pending' | 'conflict' | 'sent' | 'failed') => {
+      deps.localDb.updateDraftStatus(id, status);
     }),
   );
   handlers.set(

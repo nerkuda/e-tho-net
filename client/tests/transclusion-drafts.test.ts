@@ -436,7 +436,7 @@ test('sendDraft: ветка «transclusion» — черновик не отпр�
     field: sourceDraftField(ID_A, 'Раздел A'),
     value: 'ЧЕРНОВИК ИСТОЧНИКА',
     baseVersion: null,
-    status: 'pending',
+    status: 'pending' as const,
     createdAt: '2026-10-08T00:00:00.000Z',
   };
   await assert.doesNotReject(

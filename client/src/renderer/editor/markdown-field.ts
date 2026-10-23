@@ -1319,7 +1319,11 @@ export function createMarkdownField(opts: {
       // `showView`). Esc-отмена едина для всего поля (задача `e9dfc2df`).
       if (md !== currentMd) opts.onCancel?.();
       store?.rollbackAll();
-      editor.setValue(currentMd);
+      // Откат к сохранённому тексту — не набор пользователя: `silent`, иначе
+      // `onInput` запускает debounce и пишет «мёртвый» черновик уже
+      // сохранённого текста (ошибка 5726744b — источник вечного
+      // `comment version mismatch` после Esc).
+      editor.setValue(currentMd, true);
       // Отменённая правка не должна воскреснуть из черновиков источников
       // (задача `6a085e01`): debounce гасится, строки владельца удаляются.
       cancelSourceDraftTimers();
@@ -1354,7 +1358,7 @@ export function createMarkdownField(opts: {
     const onSave = opts.onSave;
     if (envChanged && onSave === undefined) {
       // No autosave: without a client renderer we cannot preview unsaved md.
-      editor.setValue(currentMd);
+      editor.setValue(currentMd, true);
       showView();
       return;
     }
@@ -1779,7 +1783,8 @@ export function createMarkdownField(opts: {
       currentHtml = html;
       renderView();
       if (editor !== null && !area.classList.contains('hidden')) {
-        editor.setValue(md);
+        // Внешнее (серверное) обновление текста — не правка пользователя.
+        editor.setValue(md, true);
       }
       search.refresh();
     },

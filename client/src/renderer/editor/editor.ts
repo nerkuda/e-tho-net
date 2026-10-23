@@ -69,9 +69,9 @@ import {
   canSave,
   clearDraft,
   clearDraftsFor,
+  createDraftMirror,
   findDraft,
   offlineNotice,
-  saveDraft,
 } from '../drafts.js';
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
@@ -2311,23 +2311,24 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
 
   // Draft mirroring (H19): the in-progress title is saved locally and cleared
   // after a successful send; an existing draft restores the unsaved value.
+  // The mirror invalidates late writes after a commit: a row that lands after
+  // the blur save used to survive with a stale base version (ошибка 5726744b).
   let titleDraftId: string | null = null;
-  let titleDraftTimer: number | null = null;
+  const titleDraftMirror = createDraftMirror({
+    target: () => ({
+      networkId,
+      entityType: 'thought',
+      entityId: thought.id,
+      field: 'title',
+      baseVersion: thought.version,
+    }),
+    onWritten: (id) => {
+      titleDraftId = id;
+    },
+  });
   titleArea.addEventListener('input', () => {
     resizeTitle();
-    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
-    titleDraftTimer = window.setTimeout(() => {
-      void saveDraft({
-        networkId,
-        entityType: 'thought',
-        entityId: thought.id,
-        field: 'title',
-        value: titleArea.value,
-        baseVersion: thought.version,
-      }).then((id) => {
-        titleDraftId = id;
-      });
-    }, 800);
+    titleDraftMirror.schedule(titleArea.value);
   });
   void findDraft(networkId, 'thought', thought.id).then((hit) => {
     // The header may have been retargeted to another thought while the draft
@@ -2359,14 +2360,17 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   });
 
   const commitTitle = (): void => {
-    // The blur save settles the edit — the pending debounce must not mirror
-    // it into a stale draft afterwards.
-    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
-    titleDraftTimer = null;
+    // The commit settles the edit — the pending debounce must not mirror it
+    // into a stale draft afterwards, and an in-flight write must drop its row
+    // when it returns (ошибка 5726744b).
+    titleDraftMirror.settle();
     const value = titleArea.value.trim();
     if (value === '' || value === thought.title) {
       titleArea.value = thought.title;
       resizeTitle();
+      // Nothing to send: the mirrored text of this edit is dead.
+      void clearDraft(titleDraftId);
+      titleDraftId = null;
       return;
     }
     if (!canSave()) {
@@ -2376,8 +2380,8 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     void saveThought({ title: value }).then((ok) => {
       if (!ok) return;
       void clearDraft(titleDraftId);
-      // Sweep by key: a debounce whose id arrived late (or never) would
-      // otherwise leave a stale row behind.
+      // Sweep by key (all statuses): a debounce whose id arrived late (or
+      // never) and a conflict draft of the field are superseded by this save.
       void clearDraftsFor(networkId, 'thought', thought.id);
     });
   };
@@ -2509,8 +2513,10 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
    */
   const applyThought = (next: Thought): void => {
     thought = next;
-    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
-    titleDraftTimer = null;
+    // The previous entity's pending title mirror is settled (its debounce is
+    // cancelled): the text belongs to another thought and must not be written
+    // under the new target's key. A late in-flight write deletes its own row.
+    titleDraftMirror.settle();
     titleDraftId = null;
     applyThoughtIcon(iconBox, next);
     titleArea.value = next.title;

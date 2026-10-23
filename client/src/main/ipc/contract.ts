@@ -393,6 +393,9 @@ export interface DraftRecord {
   createdAt: string;
 }
 
+/** Which stored drafts {@link EtnApi.ui.draftList} returns (default `pending`). */
+export type DraftListFilter = 'pending' | 'conflict' | 'all';
+
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
 export interface EtnApi {
   server: {
@@ -1323,10 +1326,22 @@ export interface EtnApi {
     setState(networkId: string, key: string, value: string, tabId?: string | null): Promise<void>;
     /** Saves an edit draft in the local DB; returns the draft id (H19). */
     draftSave(input: DraftSaveInput): Promise<string>;
-    /** Lists drafts of the active profile for a network (H19 retry). */
-    draftList(networkId: string): Promise<DraftRecord[]>;
+    /**
+     * Lists drafts of the active profile for a network (H19 retry).
+     *
+     * `filter` defaults to `pending` — the auto-retry queue. `conflict` returns
+     * drafts excluded from retries (version mismatch, kept intact), `all` —
+     * every stored row of the network (ошибка 5726744b).
+     */
+    draftList(networkId: string, filter?: DraftListFilter): Promise<DraftRecord[]>;
     /** Deletes a draft (H19 — on successful send). */
     draftDelete(id: string): Promise<void>;
+    /**
+     * Changes the lifecycle status of a draft. Used to mark a draft
+     * `conflict` after the first `VERSION_CONFLICT` so it stops being retried
+     * on every connect (ошибка 5726744b).
+     */
+    draftSetStatus(id: string, status: DraftStatus): Promise<void>;
   };
   meta: {
     /**

@@ -420,8 +420,9 @@ function buildApi(): EtnBridgeApi {
       getState: (networkId, key) => invoke('ui.getState', networkId, key),
       setState: (networkId, key, value) => invoke('ui.setState', networkId, key, value),
       draftSave: (input) => invoke('ui.draftSave', input),
-      draftList: (networkId) => invoke('ui.draftList', networkId),
+      draftList: (networkId, filter) => invoke('ui.draftList', networkId, filter),
       draftDelete: (id) => invoke('ui.draftDelete', id),
+      draftSetStatus: (id, status) => invoke('ui.draftSetStatus', id, status),
     },
     deepLink: {
       /**

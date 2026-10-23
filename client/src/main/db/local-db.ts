@@ -33,7 +33,16 @@ export interface LocalDbOptions {
 }
 
 /** Lifecycle status of a draft (07-client-electron.md §3.3). */
-export type DraftStatus = 'pending' | 'sent' | 'failed';
+/**
+ * Lifecycle of a stored draft (ошибка 5726744b).
+ *
+ * - `pending` — ждёт отправки (в том числе с прошлой сессии);
+ * - `conflict` — первая отправка получила `VERSION_CONFLICT`: текст сохранён,
+ *   из авто-досылки исключён до следующей правки этой сущности;
+ * - `sent` / `failed` — исторические статусы; текущий код строки в них не
+ *   переводит, но старые БД могут их содержать.
+ */
+export type DraftStatus = 'pending' | 'conflict' | 'sent' | 'failed';
 
 /** Row of `server_profiles` (07-client-electron.md §3.1). `is_active` is 0/1. */
 export interface ServerProfileRow {
