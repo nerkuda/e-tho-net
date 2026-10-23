@@ -16,7 +16,8 @@
  * сохранением `base_version`) + `deleteRowLayered` источника. `id`,
  * определение, описание, автор и дата создания сохраняются; `version`
  * начинается заново (1); `position` — в конец получателя; `is_default`
- * переносится, только если у получателя нет собственного дефолта.
+ * переносится, только если у получателя нет **видимого собственного** дефолта
+ * (`*_v`, включая Основу; унаследованный от типа-предка не в счёт).
  *
  * Владелец `viewId` сверяется с адресом из пути: чужой отбор — 404 с
  * фактическим владельцем в `details.defined_on`. Для унаследованного отбора
@@ -40,11 +41,8 @@ import {
   transferThoughtCustomViewRow,
 } from './thought-custom-views-repo.js';
 import { getThoughtCustomView } from './thought-custom-views-service.js';
-import {
-  findThoughtTypeViewNameOccupancy,
-  transferThoughtTypeViewRow,
-} from './thought-type-views-repo.js';
-import { getThoughtTypeView } from './thought-type-views-service.js';
+import { transferThoughtTypeViewRow } from './thought-type-views-repo.js';
+import { assertNameAvailable, getThoughtTypeView } from './thought-type-views-service.js';
 
 /** Результат переноса «вне типа → тип»: источник (для `.deleted`) + новая карточка. */
 export interface CustomViewMovedToType {
@@ -100,25 +98,6 @@ function thoughtUnavailable(thoughtId: string, requestId?: string): EtnError {
   );
 }
 
-/** `409 DUPLICATE` имени у получателя-типа — единая форма `details`. */
-function duplicateTypeViewName(
-  existingId: string,
-  existingName: string,
-  requestId?: string,
-): EtnError {
-  return new EtnError(
-    'DUPLICATE',
-    `Отбор с именем "${existingName}" уже есть в этом типе мысли.`,
-    {
-      entity: 'thought_type_view',
-      field: 'name',
-      existing_id: existingId,
-      existing_name: existingName,
-    },
-    requestId,
-  );
-}
-
 /** `409 DUPLICATE` имени у получателя-мысли — единая форма `details`. */
 function duplicateCustomViewName(
   existingId: string,
@@ -146,9 +125,10 @@ function duplicateCustomViewName(
  *   404 — `viewId` не принадлежит мысли (`details.defined_on` — фактический
  *         владелец);
  *   422 — у мысли нет типа (`details.code: 'THOUGHT_HAS_NO_TYPE'`);
- *   409 — имя занято **собственным** отбором целевого типа в этом слое, в том
- *         числе надгробием `thought_type_views` до слияния; унаследованное
- *         имя — законное переопределение и конфликтом не является.
+ *   409 — имя занято **видимым собственным** отбором целевого типа (`*_v`,
+ *         включая строку из Основы) либо надгробием `thought_type_views`
+ *         этого слоя до слияния; унаследованное от предка имя — законное
+ *         переопределение и конфликтом не является.
  *
  * @returns карточка нового владельца, исходная карточка и id типа.
  */
@@ -188,11 +168,13 @@ export function moveThoughtCustomViewToType(
   const typeId = thought.type_id;
 
   ndb.transaction(() => {
-    // Конфликт — только с СОБСТВЕННЫМИ строками типа в этом слое (живыми и
-    // надгробиями: UNIQUE 037 не имеет `WHERE deleted = 0`, ошибка 2dc32e85).
+    // Конфликт — с ВИДИМЫМИ живыми строками (`*_v`, включая собственные
+    // отборы типа из Основы) и с физическими строками этого слоя (надгробие
+    // занимает имя до слияния: UNIQUE 037 без `WHERE deleted = 0`).
     // Одноимённый отбор предка типа — законное переопределение.
-    const clash = findThoughtTypeViewNameOccupancy(ndb, typeId, source.name_key, viewId);
-    if (clash !== null) throw duplicateTypeViewName(clash.id, clash.name, requestId);
+    // Единая точка с CREATE/UPDATE — `assertNameAvailable` (проверка раунда 2,
+    // S18: раньше проверялся только физический слой и перенос давал 200).
+    assertNameAvailable(ndb, typeId, source.name_key, viewId, requestId);
 
     const outcome = transferThoughtTypeViewRow(ndb, {
       id: source.id,

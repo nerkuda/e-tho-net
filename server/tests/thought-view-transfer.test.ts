@@ -37,6 +37,7 @@ import {
   createThoughtTypeView,
   getEffectiveViewsForThought,
   getThoughtTypeView,
+  listThoughtTypeViewsByType,
 } from '../src/domain/thought-type-views-service.js';
 import {
   createThoughtCustomView,
@@ -628,6 +629,189 @@ describe(
         );
         const moved = moveThoughtTypeViewToThought(ndb, typeId, source.id, target);
         assert.equal(moved.view.is_default, false, 'собственный дефолт получателя сильнее');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // --- Дельта раунда 2 (проверка 4e455999, репро S16/S17/S18) -----------
+    // Переносы в рабочем слое обязаны видеть не только физические строки
+    // слоя, но и видимые `*_v` (включая Основу): имена — как эталон
+    // `assertNameAvailable`, дефолты — по видимым собственным строкам.
+
+    it('S18: вне→тип в слое — имя занято видимым из Основы собственным отбором типа: 409, слияние без 422', () => {
+      const { ndb, typeId, thoughtId } = setup();
+      try {
+        // Основа: собственный отбор типа «Живое имя».
+        const baseView = createThoughtTypeView(
+          ndb,
+          typeId,
+          { name: 'Живое имя', definition: DEFINITION },
+          USER,
+        );
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+        const custom = createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'живое имя', definition: DEFINITION },
+          USER,
+        );
+
+        // Видимый из Основы собственный отбор типа — конфликт (409), как у
+        // эталонной проверки имён CREATE, а не 200 с последующим UNIQUE.
+        assert.throws(
+          () => moveThoughtCustomViewToType(ndb, thoughtId, custom.id),
+          (err: unknown) => {
+            assert.ok(err instanceof EtnError);
+            assert.equal(err.code, 'DUPLICATE');
+            assert.equal(
+              (err.details as { existing_id?: string }).existing_id,
+              baseView.id,
+              'диагностика указывает отбор типа из Основы',
+            );
+            return true;
+          },
+        );
+        assert.equal(
+          getThoughtCustomView(ndb, custom.id)!.name,
+          'живое имя',
+          'источник не тронут',
+        );
+
+        // Слияние после отказа — без 422: строки-получателя в слое не появилось.
+        const report = mergeLayer(ndb, layerId, undefined, USER);
+        assert.equal(report.applied.thought_type_views ?? 0, 0);
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.deepEqual(
+          listThoughtTypeViewsByType(ndb, typeId).map((v) => v.name),
+          ['Живое имя'],
+          'в основе по-прежнему один отбор типа',
+        );
+        assert.equal(
+          getThoughtCustomView(ndb, custom.id)!.name,
+          'живое имя',
+          'внетиповой уехал в основу при merge',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('S16: вне→тип в слое — видимый из Основы дефолт получателя снимает пометку; после merge один дефолт', () => {
+      const { ndb, typeId, thoughtId } = setup();
+      try {
+        const baseDefault = createThoughtTypeView(
+          ndb,
+          typeId,
+          { name: 'Базовый дефолт', definition: DEFINITION, is_default: true },
+          USER,
+        );
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+        const custom = createThoughtCustomView(
+          ndb,
+          thoughtId,
+          { name: 'Переносимый дефолт', definition: DEFINITION, is_default: true },
+          USER,
+        );
+
+        const moved = moveThoughtCustomViewToType(ndb, thoughtId, custom.id);
+        assert.equal(
+          moved.view.is_default,
+          false,
+          'видимый из Основы собственный дефолт получателя сильнее',
+        );
+
+        mergeLayer(ndb, layerId, undefined, USER);
+        ndb.useLayer(BASE_LAYER_ID);
+        const defaults = listThoughtTypeViewsByType(ndb, typeId).filter(
+          (v) => v.is_default,
+        );
+        assert.deepEqual(
+          defaults.map((v) => v.id),
+          [baseDefault.id],
+          'после слияния у типа ровно один дефолт — базовый',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('S17: тип→вне в слое — видимый из Основы дефолт цели снимает пометку; после merge один дефолт', () => {
+      const { ndb, typeId } = setup();
+      try {
+        const target = seedThought(ndb, 'Цель с базовым дефолтом');
+        const baseDefault = createThoughtCustomView(
+          ndb,
+          target,
+          { name: 'Дефолт цели', definition: DEFINITION, is_default: true },
+          USER,
+        );
+        const source = createThoughtTypeView(
+          ndb,
+          typeId,
+          { name: 'Переносимый дефолт', definition: DEFINITION, is_default: true },
+          USER,
+        );
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+
+        const moved = moveThoughtTypeViewToThought(ndb, typeId, source.id, target);
+        assert.equal(
+          moved.view.is_default,
+          false,
+          'видимый из Основы собственный дефолт цели сильнее',
+        );
+
+        mergeLayer(ndb, layerId, undefined, USER);
+        ndb.useLayer(BASE_LAYER_ID);
+        const defaults = listThoughtCustomViews(ndb, target).filter(
+          (v) => v.is_default,
+        );
+        assert.deepEqual(
+          defaults.map((v) => v.id),
+          [baseDefault.id],
+          'после слияния у мысли ровно один дефолт — базовый',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('тип→вне в слое: видимый из Основы одноимённый внетиповой цели — 409', () => {
+      const { ndb, typeId } = setup();
+      try {
+        const target = seedThought(ndb, 'Цель с отбором');
+        const baseCustom = createThoughtCustomView(
+          ndb,
+          target,
+          { name: 'Кому одолжил', definition: DEFINITION },
+          USER,
+        );
+        const source = createThoughtTypeView(
+          ndb,
+          typeId,
+          { name: 'кому одолжил', definition: DEFINITION },
+          USER,
+        );
+        const layerId = seedLayer(ndb);
+        ndb.useLayer(layerId);
+
+        assert.throws(
+          () => moveThoughtTypeViewToThought(ndb, typeId, source.id, target),
+          (err: unknown) => {
+            assert.ok(err instanceof EtnError);
+            assert.equal(err.code, 'DUPLICATE');
+            assert.equal(
+              (err.details as { existing_id?: string }).existing_id,
+              baseCustom.id,
+              'диагностика указывает внетиповой отбор цели из Основы',
+            );
+            return true;
+          },
+        );
+        assert.equal(getThoughtTypeView(ndb, source.id)!.name, 'кому одолжил');
       } finally {
         ndb.close();
       }

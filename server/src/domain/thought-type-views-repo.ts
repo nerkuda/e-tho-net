@@ -366,9 +366,11 @@ export interface TransferThoughtTypeViewInput {
  *     ветка практически недостижима — пара переноса замыкается).
  *
  * `position` — в конец получателя (MAX+1 среди видимых отборов типа).
- * `is_default` переносится, только если у получателя нет **собственного**
- * дефолта (унаследованный от предка типа помехой не является, требование
- * 6a7d2292). `definition` не перевалидируется — копируется дословно.
+ * `is_default` переносится, только если у получателя нет **видимого
+ * собственного** дефолта: читаем `thought_type_views_v` — он видит и строки
+ * Основы (проверка раунда 2, S16: физический фильтр `layer_id` их пропускал),
+ * но не унаследованные от типа-предка (фильтр по `thought_type_id`).
+ * `definition` не перевалидируется — копируется дословно.
  */
 export function transferThoughtTypeViewRow(
   ndb: NetworkDb,
@@ -391,14 +393,17 @@ export function transferThoughtTypeViewRow(
       )
       .get(input.thought_type_id) as { p: number }
   ).p;
+  // Видимый собственный дефолт получателя (`*_v` — включая Основу; строки
+  // предка типа отсекает `thought_type_id`). Физический слой видел только
+  // свои строки и пропускал дефолт из Основы → после слияния два is_default
+  // (проверка раунда 2, S16, требование 7263e565).
   const ownDefault = ndb
     .prepare(
-      `SELECT 1 FROM thought_type_views
-        WHERE layer_id = ? AND thought_type_id = ? AND deleted = 0
-          AND is_default = 1 AND id <> ?
+      `SELECT 1 FROM thought_type_views_v
+        WHERE thought_type_id = ? AND is_default = 1 AND id <> ?
         LIMIT 1`,
     )
-    .get(ndb.layerId, input.thought_type_id, input.id) !== undefined;
+    .get(input.thought_type_id, input.id) !== undefined;
   const isDefault = input.is_default && !ownDefault;
   const now = new Date().toISOString();
 

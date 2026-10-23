@@ -303,8 +303,10 @@ export interface TransferThoughtCustomViewInput {
  *   * живая строка с этим id — `'occupied'` (домен отдаёт 409 DUPLICATE).
  *
  * `position` — в конец получателя (MAX+1 среди видимых отборов мысли).
- * `is_default` переносится, только если у мысли-получателя нет собственного
- * дефолта (у внетиповых наследования нет — любой живой дефолт собственный).
+ * `is_default` переносится, только если у мысли-получателя нет **видимого
+ * собственного** дефолта: читаем `thought_custom_views_v` — он видит и строки
+ * Основы (проверка раунда 2, S17: физический фильтр `layer_id` их пропускал).
+ * У внетиповых наследования нет — любой видимый живой дефолт собственный.
  */
 export function transferThoughtCustomViewRow(
   ndb: NetworkDb,
@@ -327,14 +329,17 @@ export function transferThoughtCustomViewRow(
       )
       .get(input.thought_id) as { p: number }
   ).p;
+  // Видимый собственный дефолт получателя (`*_v` — включая Основу).
+  // Физический слой видел только свои строки и пропускал дефолт из Основы →
+  // после слияния два is_default (проверка раунда 2, S17, требование 045f539a:
+  // переносимый принимается без пометки).
   const ownDefault = ndb
     .prepare(
-      `SELECT 1 FROM thought_custom_views
-        WHERE layer_id = ? AND thought_id = ? AND deleted = 0
-          AND is_default = 1 AND id <> ?
+      `SELECT 1 FROM thought_custom_views_v
+        WHERE thought_id = ? AND is_default = 1 AND id <> ?
         LIMIT 1`,
     )
-    .get(ndb.layerId, input.thought_id, input.id) !== undefined;
+    .get(input.thought_id, input.id) !== undefined;
   const isDefault = input.is_default && !ownDefault;
   const now = new Date().toISOString();
 
