@@ -263,6 +263,20 @@ function buildApi(): EtnBridgeApi {
         invoke('thoughtTypeViews.remove', networkId, thoughtTypeId, viewId, expectedVersion),
       run: (networkId, thoughtId, viewName, opts) =>
         invoke('thoughtTypeViews.run', networkId, thoughtId, viewName, opts),
+      moveToThought: (networkId, thoughtTypeId, viewId, targetThoughtId) =>
+        invoke('thoughtTypeViews.moveToThought', networkId, thoughtTypeId, viewId, targetThoughtId),
+    },
+    thoughtCustomViews: {
+      list: (networkId, thoughtId, opts) =>
+        invoke('thoughtCustomViews.list', networkId, thoughtId, opts),
+      create: (networkId, thoughtId, input) =>
+        invoke('thoughtCustomViews.create', networkId, thoughtId, input),
+      update: (networkId, thoughtId, viewId, input, expectedVersion) =>
+        invoke('thoughtCustomViews.update', networkId, thoughtId, viewId, input, expectedVersion),
+      remove: (networkId, thoughtId, viewId, expectedVersion) =>
+        invoke('thoughtCustomViews.remove', networkId, thoughtId, viewId, expectedVersion),
+      moveToType: (networkId, thoughtId, viewId) =>
+        invoke('thoughtCustomViews.moveToType', networkId, thoughtId, viewId),
     },
     properties: {
       get: (networkId, ownerType, ownerId) =>

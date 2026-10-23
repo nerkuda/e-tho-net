@@ -1320,6 +1320,62 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       ) => requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, opts),
     ),
   );
+  handlers.set(
+    'thoughtTypeViews.moveToThought',
+    bind(
+      (networkId: string, thoughtTypeId: string, viewId: string, targetThoughtId: string) =>
+        requireRest(deps).moveThoughtTypeViewToThought(
+          networkId,
+          thoughtTypeId,
+          viewId,
+          targetThoughtId,
+        ),
+    ),
+  );
+
+  // --- thought-custom views (внетиповые отборы мысли, 0.14.1, 5e55b7bb) ---
+  handlers.set(
+    'thoughtCustomViews.list',
+    bind(
+      (networkId: string, thoughtId: string, opts?: { includeEffective?: boolean }) =>
+        requireRest(deps).listThoughtCustomViews(networkId, thoughtId, opts),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.create',
+    bind((networkId: string, thoughtId: string, input: unknown) =>
+      requireRest(deps).createThoughtCustomView(
+        networkId,
+        thoughtId,
+        input as Parameters<RestClient['createThoughtCustomView']>[2],
+      ),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.update',
+    bind(
+      (networkId: string, thoughtId: string, viewId: string, input: unknown, expectedVersion: number) =>
+        requireRest(deps).updateThoughtCustomView(
+          networkId,
+          thoughtId,
+          viewId,
+          input as Parameters<RestClient['updateThoughtCustomView']>[3],
+          expectedVersion,
+        ),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.remove',
+    bind((networkId: string, thoughtId: string, viewId: string, expectedVersion: number) =>
+      requireRest(deps).deleteThoughtCustomView(networkId, thoughtId, viewId, expectedVersion),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.moveToType',
+    bind((networkId: string, thoughtId: string, viewId: string) =>
+      requireRest(deps).moveThoughtCustomViewToType(networkId, thoughtId, viewId),
+    ),
+  );
 
   // --- properties -----------------------------------------------------------
   handlers.set(

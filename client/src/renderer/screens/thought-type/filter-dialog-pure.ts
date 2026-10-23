@@ -112,7 +112,7 @@ export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
  * Returns the default state when the JSON is malformed.
  */
 export function parseViewDefinition(
-  view: ThoughtTypeView | null,
+  view: Pick<ThoughtTypeView, 'definition'> | null,
   registry?: ReadonlyMap<string, NetworkProperty>,
 ): FilterCriteriaState {
   const state =

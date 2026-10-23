@@ -97,19 +97,6 @@ function focusResponse(): FocusResponse {
   };
 }
 
-/** Строка `meta.views` (то, что отдаёт `thoughts.get` для полосы отборов). */
-function metaViewRow(id: string, name: string, isDefault: boolean): Record<string, unknown> {
-  return {
-    id,
-    name,
-    name_key: id,
-    description: null,
-    defined_on: TYPE_ID,
-    inherited: false,
-    is_default: isDefault,
-  };
-}
-
 /** Полная запись отбора (`thoughtTypeViews.list` → `data`). */
 function fullView(id: string, name: string, isDefault: boolean): Record<string, unknown> {
   return {
@@ -128,6 +115,16 @@ function fullView(id: string, name: string, isDefault: boolean): Record<string, 
   };
 }
 
+/** Строка эффективного набора (`GET …/views?include_effective=true`). */
+function effectiveRow(id: string, name: string, isDefault: boolean): Record<string, unknown> {
+  return {
+    ...fullView(id, name, isDefault),
+    scope: 'type',
+    defined_on: TYPE_ID,
+    inherited: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fake `etn` + DOM/global harness
 // ---------------------------------------------------------------------------
@@ -142,7 +139,7 @@ function installFakeApi(): unknown {
     thoughts: {
       get: async () => ({
         meta: {
-          views: [metaViewRow('v1', 'Отбор 1', true), metaViewRow('v2', 'Отбор 2', false)],
+          views: [effectiveRow('v1', 'Отбор 1', true), effectiveRow('v2', 'Отбор 2', false)],
         },
       }),
       resolve: async () => [],
@@ -151,7 +148,9 @@ function installFakeApi(): unknown {
     thoughtTypeViews: {
       list: async () => ({
         data: [fullView('v1', 'Отбор 1', true), fullView('v2', 'Отбор 2', false)],
-        meta: { effective: [] },
+        meta: {
+          effective: [effectiveRow('v1', 'Отбор 1', true), effectiveRow('v2', 'Отбор 2', false)],
+        },
       }),
       run: async (_nid: string, _fid: string, name: string) => {
         runCalls.push(name);
@@ -162,11 +161,21 @@ function installFakeApi(): unknown {
             limit: 50,
             offset: 0,
             directions: {},
-            view: { id: name, name, type_id: TYPE_ID },
+            view: { id: name, name, scope: 'type', defined_on: TYPE_ID },
             unresolved: [],
           },
         };
       },
+    },
+    // Единственный источник набора полосы (0.14.1) — effective-строки с
+    // `definition`, `scope` и `defined_on`.
+    thoughtCustomViews: {
+      list: async () => ({
+        data: [],
+        meta: {
+          effective: [effectiveRow('v1', 'Отбор 1', true), effectiveRow('v2', 'Отбор 2', false)],
+        },
+      }),
     },
     comments: { list: async () => [] },
     attachments: { list: async () => [] },

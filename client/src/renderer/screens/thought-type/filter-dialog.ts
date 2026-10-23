@@ -32,13 +32,16 @@ import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
   type NetworkProperty,
+  type ThoughtCustomView,
+  type ThoughtCustomViewInput,
+  type ThoughtCustomViewUpdateInput,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
 } from '@etn/shared';
 import { t } from '../../lib/i18n.js';
 
-import { div, errText } from '../../lib/dom.js';
+import { div, el, errText } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
@@ -52,9 +55,10 @@ import {
 } from '../../lib/filter-diagnostics.js';
 import { type FilterCriteriaState } from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
+import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
 import { formDirty } from '../../lib/pure.js';
-import { fieldRow, fieldTextarea } from '../../lib/ui/field.js';
+import { FIELD_HINT_CLASS, fieldRow, fieldTextarea } from '../../lib/ui/field.js';
 import { checkboxRow } from '../../lib/ui/choice-row.js';
 import { store } from '../../state.js';
 
@@ -72,17 +76,61 @@ import {
 /** What the dialog was opened for: a new view or an existing one. */
 export interface OpenViewEditorOptions {
   networkId: string;
-  /** Type the new view belongs to. */
-  thoughtTypeId: string;
-  /** Type display name (used in the dialog title). */
-  typeName: string;
+  /** Владелец-тип: отбор типа мысли. Взаимоисключим с `ownerThoughtId`. */
+  thoughtTypeId?: string;
+  /** Имя типа-владельца (для заголовка и предупреждения). */
+  typeName?: string;
+  /** Владелец-мысль: внетиповой отбор (0.14.1, спека e0257ca5). */
+  ownerThoughtId?: string;
+  /** Имя мысли-владельца (для заголовка и предупреждения). */
+  thoughtName?: string;
   /** `null` — create; otherwise the existing view to edit. */
-  view: ThoughtTypeView | null;
+  view: ViewEditorView | null;
   /**
    * Called after a successful save. Receives the saved view (newly created or
    * freshly updated). Errors are surfaced in-place; no callback on cancel.
    */
-  onSaved?: (view: ThoughtTypeView) => void;
+  onSaved?: (view: ThoughtTypeView | ThoughtCustomView) => void;
+}
+
+/**
+ * Поля существующего отбора, которые нужны диалогу. Общая структурная форма
+ * для типового (`ThoughtTypeView`) и внетипового (`ThoughtCustomView`) отбора:
+ * владельца задаёт `OpenViewEditorOptions`, а не сама карточка.
+ */
+export interface ViewEditorView {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: string;
+  is_default: boolean;
+  version: number;
+}
+
+/** Владелец отбора, разобранный из опций диалога (ровно один). */
+type ViewOwner =
+  | { kind: 'type'; typeId: string; typeName: string }
+  | { kind: 'thought'; thoughtId: string; thoughtName: string };
+
+/** Ровно один владелец: тип XOR мысль (спека e0257ca5). */
+function resolveOwner(opts: OpenViewEditorOptions): ViewOwner {
+  const typed = opts.thoughtTypeId !== undefined;
+  const owned = opts.ownerThoughtId !== undefined;
+  if (typed === owned) {
+    throw new Error('OpenViewEditorOptions: exactly one owner — thoughtTypeId or ownerThoughtId.');
+  }
+  if (typed) {
+    return {
+      kind: 'type',
+      typeId: opts.thoughtTypeId as string,
+      typeName: opts.typeName ?? '',
+    };
+  }
+  return {
+    kind: 'thought',
+    thoughtId: opts.ownerThoughtId as string,
+    thoughtName: opts.thoughtName ?? '',
+  };
 }
 
 /**
@@ -97,7 +145,7 @@ export function openViewEditorDialog(opts: OpenViewEditorOptions): void {
   // The body is built lazily after the type chain is loaded (we need the
   // ancestor types' effective properties to feed the context-token source).
   void buildAndShow(opts).catch((err: unknown) => {
-    notice(`Не удалось открыть диалог отбора: ${errText(err)}`, 'error');
+    notice(t('filterEditor.openFailed', errText(err)), 'error');
   });
 }
 
@@ -110,7 +158,8 @@ function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
 }
 
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
-  const { networkId, typeName } = opts;
+  const { networkId } = opts;
+  const owner = resolveOwner(opts);
   // Property registry (registry-level metadata, e.g. name and multiple flag for
   // each property). Обратные стороны свойств-связей добавляют сами модули
   // редактора (дерево/сортировка) — реестр передаётся как есть. Токены
@@ -127,11 +176,17 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // 2. Initialise the form state from the existing view (or defaults). Старая
   //    плоская `definition v1` компилируется в дерево здесь же (на входе).
   const isEdit = opts.view !== null;
-  // Заголовок диалога (ошибка 23c7d3e9 п. C1): правка существующего отбора —
-  // «Отбор для «<тип>»», создание нового — «Создать отбор для «<тип>»».
-  const title = isEdit
-    ? t('filterEditor.dialogTitleEdit', typeName)
-    : t('filterEditor.dialogTitleCreate', typeName);
+  // Заголовок явно называет вид владельца (спека e0257ca5, решение
+  // пользователя 2026-10-23): «Создать/Отбор типа «X»» и
+  // «Создать/Отбор мысли «Y»».
+  const ownerName = owner.kind === 'type' ? owner.typeName : owner.thoughtName;
+  const title = owner.kind === 'type'
+    ? (isEdit
+        ? t('filterEditor.dialogTitleEdit', ownerName)
+        : t('filterEditor.dialogTitleCreate', ownerName))
+    : (isEdit
+        ? t('filterEditor.dialogTitleEditThought', ownerName)
+        : t('filterEditor.dialogTitleCreateThought', ownerName));
   const state = parseViewDefinition(opts.view, registry);
   const initialName = opts.view?.name ?? '';
   const initialDescription = opts.view?.description ?? '';
@@ -145,16 +200,30 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // ошибки диалога, требование 397c5a56).
   const errorLine = footerErrorLine();
 
+  // Предупреждение об общности отбора — по владельцу (спека e0257ca5):
+  // типовой действует на все мысли типа, внетиповой виден всем, но действует
+  // только у этой мысли.
+  const warning = el(
+    'p',
+    FIELD_HINT_CLASS,
+    owner.kind === 'type'
+      ? t('filterEditor.typeViewWarning')
+      : t('filterEditor.thoughtViewWarning'),
+  );
+
   // Description — optional, ≤1000.
   const descInput = fieldTextarea() as HTMLTextAreaElement;
   descInput.rows = 3;
   descInput.maxLength = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
   descInput.value = initialDescription;
-  descInput.placeholder = 'Описание (его читают и человек, и агент)';
-  const descField = fieldRow({ label: 'Описание', control: descInput });
+  descInput.placeholder = t('filterEditor.descriptionPlaceholder');
+  const descField = fieldRow({ label: t('filterEditor.descriptionLabel'), control: descInput });
 
   // «Open by default» checkbox.
-  const defaultRow = checkboxRow({ label: 'Открывать по умолчанию', checked: initialIsDefault });
+  const defaultRow = checkboxRow({
+    label: t('filterEditor.openByDefault'),
+    checked: initialIsDefault,
+  });
   const defaultCheckbox = defaultRow.input;
   const defaultField = defaultRow.row;
 
@@ -225,7 +294,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   });
   editorRef = editor;
 
-  body.append(descField, defaultField, editor.root);
+  body.append(warning, descField, defaultField, editor.root);
   // Имя отбора — ПЕРВЫМ полем диалога (ошибка 50d9bf4e п. A1). Строку имени
   // строит футер редактора (одна реализация), но здесь она переносится в начало
   // разметки диалога: у модального места имя — главный идентификатор отбора, и
@@ -242,6 +311,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     close,
     saveBtn,
     opts,
+    owner,
     state,
     getName: () => name,
     getDescription: () => descInput.value,
@@ -312,6 +382,8 @@ interface SaveCtx {
   close: () => void;
   saveBtn: HTMLButtonElement | null;
   opts: OpenViewEditorOptions;
+  /** Владелец отбора (разрешён при открытии диалога). */
+  owner: ViewOwner;
   /** Единая модель отбора (дерево условий + сортировка). */
   state: FilterCriteriaState;
   getName: () => string;
@@ -329,15 +401,22 @@ interface SaveCtx {
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
+  // Только Основа (спека e0257ca5): все правки отборов — в Основе. Гейт стоит
+  // ДО записи; диалог, открытый в Основе, после переключения слоя сохранить не
+  // может — иначе правка молча уехала бы в рабочий слой.
+  if (!isInBaseLayer()) {
+    notice(t('filterEditor.baseLayerGuard'), 'info');
+    return;
+  }
   const trimmedName = ctx.getName().trim();
   if (trimmedName === '') {
-    showNameError(ctx, 'Укажите имя отбора.');
+    showNameError(ctx, t('filterEditor.nameRequired'));
     return;
   }
   if (trimmedName.length > THOUGHT_TYPE_VIEW_NAME_MAX) {
     showNameError(
       ctx,
-      `Имя не должно превышать ${THOUGHT_TYPE_VIEW_NAME_MAX} символов (сейчас ${trimmedName.length}).`,
+      t('filterEditor.nameTooLong', [THOUGHT_TYPE_VIEW_NAME_MAX, trimmedName.length]),
     );
     return;
   }
@@ -345,20 +424,23 @@ async function onSave(ctx: SaveCtx): Promise<void> {
   if (trimmedDesc.length > THOUGHT_TYPE_VIEW_DESCRIPTION_MAX) {
     showFieldError(
       ctx,
-      `Описание не должно превышать ${THOUGHT_TYPE_VIEW_DESCRIPTION_MAX} символов (сейчас ${trimmedDesc.length}).`,
+      t('filterEditor.descriptionTooLong', [
+        THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
+        trimmedDesc.length,
+      ]),
     );
     return;
   }
   // Запрет пустого отбора (ошибка e8365d29): без условий отбор бессмыслен.
   if (!hasAnyCriteria(ctx.state)) {
-    showFieldError(ctx, 'Укажите хотя бы одно условие отбора.');
+    showFieldError(ctx, t('filterEditor.noCriteria'));
     return;
   }
   // Красная диагностика (конструктор + записи ядра) запрещает сохранение
   // (требование 44d61c8a): отбор с ошибкой на хранение не пишется.
   const issues = mergeFilterIssues(constructorFilterIssues(ctx.state.tree ?? null));
   if (hasBlockingIssues(issues)) {
-    showFieldError(ctx, 'В отборе есть ошибки — исправьте их перед сохранением.');
+    showFieldError(ctx, t('filterEditor.blockingIssues'));
     ctx.refreshEditor();
     return;
   }
@@ -374,31 +456,46 @@ async function onSave(ctx: SaveCtx): Promise<void> {
   if (ctx.saveBtn !== null) ctx.saveBtn.disabled = true;
   ctx.errorLine.clear();
 
-  const { networkId, thoughtTypeId, view } = ctx.opts;
+  const { networkId, view } = ctx.opts;
+  const input: ThoughtTypeViewInput = {
+    name: trimmedName,
+    description: trimmedDesc === '' ? null : trimmedDesc,
+    definition: definitionJson,
+    is_default: ctx.getIsDefault(),
+  };
   try {
-    let saved: ThoughtTypeView;
-    if (view === null) {
-      const input: ThoughtTypeViewInput = {
-        name: trimmedName,
-        description: trimmedDesc === '' ? null : trimmedDesc,
-        definition: definitionJson,
-        is_default: ctx.getIsDefault(),
-      };
-      saved = await etn.thoughtTypeViews.create(networkId, thoughtTypeId, input);
+    let saved: ThoughtTypeView | ThoughtCustomView;
+    if (ctx.owner.kind === 'type') {
+      if (view === null) {
+        saved = await etn.thoughtTypeViews.create(networkId, ctx.owner.typeId, input);
+      } else {
+        const patch: ThoughtTypeViewUpdateInput = input;
+        saved = await etn.thoughtTypeViews.update(
+          networkId,
+          ctx.owner.typeId,
+          view.id,
+          patch,
+          ctx.version,
+        );
+      }
     } else {
-      const patch: ThoughtTypeViewUpdateInput = {
-        name: trimmedName,
-        description: trimmedDesc === '' ? null : trimmedDesc,
-        definition: definitionJson,
-        is_default: ctx.getIsDefault(),
-      };
-      saved = await etn.thoughtTypeViews.update(
-        networkId,
-        view.thought_type_id,
-        view.id,
-        patch,
-        ctx.version,
-      );
+      const customInput: ThoughtCustomViewInput = input;
+      if (view === null) {
+        saved = await etn.thoughtCustomViews.create(
+          networkId,
+          ctx.owner.thoughtId,
+          customInput,
+        );
+      } else {
+        const patch: ThoughtCustomViewUpdateInput = customInput;
+        saved = await etn.thoughtCustomViews.update(
+          networkId,
+          ctx.owner.thoughtId,
+          view.id,
+          patch,
+          ctx.version,
+        );
+      }
     }
     ctx.opts.onSaved?.(saved);
     ctx.close();

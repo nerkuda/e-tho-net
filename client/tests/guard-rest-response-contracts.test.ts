@@ -59,6 +59,10 @@ const RAW_TRANSPORT_METHODS = new Set(['getAttachmentRaw', 'downloadJob', 'downl
 const CLIENT_COMPOSED_RESULTS = new Set([
   'AuditListResult',
   'ThoughtTypeViewsResult',
+  // Внетиповые отборы мысли (0.14.1, операция 5e55b7bb): сервер отдаёт
+  // `sendList` (`data` + `meta.effective`), клиент сводит их в одну форму —
+  // единого серверного объекта с таким именем нет (прецедент `NeighborPage`).
+  'ThoughtViewsResult',
   'RunThoughtTypeViewResult',
   // Форма порции соседей (задача c8fa74ba): сервер отдаёт страницу через
   // `sendList` (`data` + `meta{total,limit,offset}`), клиент сводит их в одну

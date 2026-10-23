@@ -1607,7 +1607,8 @@ export class RestClient {
       limit?: number;
       offset?: number;
       directions?: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
-      view?: { id: string; name: string; type_id: string };
+      /** Владелец прогона: `scope`/`defined_on` (0.14.1), `type_id` — только типовой. */
+      view?: import('@etn/shared').RunThoughtTypeViewMeta['view'];
       sort?: string;
       order?: string;
       unresolved?: Array<{ token: string; reason: string; message: string }>;
@@ -1619,12 +1620,121 @@ export class RestClient {
         limit: meta?.limit ?? data.length,
         offset: meta?.offset ?? 0,
         directions: meta?.directions ?? {},
-        view: meta?.view ?? { id: '', name: viewName, type_id: '' },
+        view: meta?.view ?? { id: '', name: viewName, scope: 'type', defined_on: '' },
         ...(meta?.sort !== undefined ? { sort: meta.sort } : {}),
         ...(meta?.order !== undefined ? { order: meta.order } : {}),
         ...(meta?.unresolved !== undefined ? { unresolved: meta.unresolved } : {}),
       },
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // §8c Thought-custom views (внетиповые отборы мысли, 0.14.1, операция
+  // 5e55b7bb; перенос владельца — операция 85414fbd)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/views` — собственные внетиповые отборы
+   * мысли (`data`). `includeEffective: true` (по умолчанию) добавляет полный
+   * эффективный набор мысли (`meta.effective`: типовые по цепочке + внетиповые,
+   * со `scope`/`defined_on` и перекрытием) — ЕДИНСТВЕННЫЙ источник полосы
+   * отборов (требование 045f539a). Обе части берутся из ОДНОГО конверта
+   * (`requestEnvelope`), как у `listThoughtTypeViews` (ошибка 90811979).
+   */
+  public async listThoughtCustomViews(
+    networkId: string,
+    thoughtId: string,
+    opts?: { includeEffective?: boolean },
+  ): Promise<import('@etn/shared').ThoughtViewsResult> {
+    const includeEffective = opts?.includeEffective !== false;
+    const { data, meta } = await this.requestEnvelope<import('@etn/shared').ThoughtCustomView[]>(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views`,
+      { query: includeEffective ? { include_effective: 'true' } : undefined },
+    );
+    const effective = meta as
+      | { effective?: import('@etn/shared').EffectiveThoughtView[] }
+      | undefined;
+    return { data, meta: { effective: effective?.effective ?? [] } };
+  }
+
+  /** `POST /networks/{nid}/thoughts/{id}/views` — create a custom view. */
+  public async createThoughtCustomView(
+    networkId: string,
+    thoughtId: string,
+    input: import('@etn/shared').ThoughtCustomViewInput,
+  ): Promise<import('@etn/shared').ThoughtCustomView> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views`,
+      { body: input },
+    );
+  }
+
+  /** `PATCH /networks/{nid}/thoughts/{id}/views/{viewId}` — partial update
+   *  with `If-Match: <expectedVersion>`. */
+  public async updateThoughtCustomView(
+    networkId: string,
+    thoughtId: string,
+    viewId: string,
+    input: import('@etn/shared').ThoughtCustomViewUpdateInput,
+    expectedVersion: number,
+  ): Promise<import('@etn/shared').ThoughtCustomView> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewId)}`,
+      { body: input, requestOptions: { expectedVersion } },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/thoughts/{id}/views/{viewId}` — optimistic
+   *  concurrency required. */
+  public async deleteThoughtCustomView(
+    networkId: string,
+    thoughtId: string,
+    viewId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewId)}`,
+      { requestOptions: { expectedVersion } },
+    );
+  }
+
+  /**
+   * `POST /networks/{nid}/thoughts/{id}/views/{viewId}/move-to-type` —
+   * перенос владельца «вне типа → тип» (0.14.1, операция 85414fbd). Ответ —
+   * карточка у нового владельца-типа (id сохраняется, `version` — заново).
+   */
+  public async moveThoughtCustomViewToType(
+    networkId: string,
+    thoughtId: string,
+    viewId: string,
+  ): Promise<import('@etn/shared').CustomViewMoveToTypeResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewId)}/move-to-type`,
+    );
+  }
+
+  /**
+   * `POST /networks/{nid}/thought-types/{id}/views/{viewId}/move-to-thought` —
+   * перенос владельца «тип → вне» (0.14.1, операция 85414fbd). `typeId` —
+   * `defined_on` отбора (для унаследованного — тип-владелец, не тип фокуса).
+   * Ответ — внетиповая карточка у мысли-получателя.
+   */
+  public async moveThoughtTypeViewToThought(
+    networkId: string,
+    typeId: string,
+    viewId: string,
+    targetThoughtId: string,
+  ): Promise<import('@etn/shared').TypeViewMoveToThoughtResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(typeId)}/views/${encodeURIComponent(viewId)}/move-to-thought`,
+      { body: { target_thought_id: targetThoughtId } },
+    );
   }
 
   // -------------------------------------------------------------------------

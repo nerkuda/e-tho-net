@@ -1,20 +1,30 @@
 /**
- * Focus filter strip (task 02ba2ae7, spec 9984aa98 «Полоса отборов под мыслью
- * в фокусе», 0.7.3).
+ * Focus filter strip (task 02ba2ae7, spec df84de22 «Полоса отборов под
+ * фокусом», 0.14.1).
  *
  * A horizontal row of buttons that lives between the focus cloud and the
  * children zone. Left-to-right:
  *   1. «Потомки» (always first; the canvas's native children-zone mode).
- *   2. The effective set of views for the focused thought's type, in the
- *      server-supplied order (root → type, then `position` inside each level
- *      — requirement eaca1253).
+ *   2. The effective set of views for the focused thought, in the
+ *      server-supplied order (root → type → custom; `position` inside each
+ *      level — requirement eaca1253 and 045f539a). Type views are painted
+ *      straight, inherited ones are dimmed; custom (out-of-type) views of the
+ *      thought are painted italic AFTER all type views.
  *   3. «⋯» dropdown for buttons that don't fit the available width.
- *   4. «+» to add a new view (opens the editor dialog — stage 8).
+ *   4. «+» to add a new view: a menu «Новый отбор типа мысли» /
+ *      «Новый отбор вне типа» for typed thoughts, the custom editor straight
+ *      away for type-less ones (spec df84de22).
  *
- * Exactly one button is active. On focus switch the active mode is reset
- * to the focus's default view (or «Потомки» when no default is set); the
- * per-focus selection persists across focus changes inside the same tab
- * (L4 `focus_filter_strip` JSON).
+ * Exactly one button is active. A persisted per-focus choice wins over the
+ * focus's default view; the default opens only when no choice is stored
+ * (spec df84de22, «Сохранённый выбор пользователя переживает смену фокуса и
+ * перезагрузку»). The per-focus selection persists across focus changes
+ * inside the same tab (L4 `focus_filter_strip` JSON).
+ *
+ * The only source of the effective set is `GET /thoughts/{id}/views?
+ * include_effective=true` (requirement 045f539a): rows carry `scope`,
+ * `defined_on`, `inherited`, `is_default` and the `definition`, so the strip
+ * needs neither a second list call nor `thoughts.get.meta.views`.
  *
  * The lower zone renders the result of the selected mode: children of the
  * focus (the canvas default) or the result of running the picked view
@@ -25,7 +35,7 @@
  */
 
 import { UI_STATE_KEY } from '@etn/shared';
-import type { FocusResponse, ThoughtRef } from '@etn/shared';
+import type { FocusResponse, ThoughtRef, ThoughtViewScope } from '@etn/shared';
 
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
 import { openCanvasLinkFilterDialog } from './link-filter-dialog.js';
@@ -34,15 +44,25 @@ import { etn } from '../lib/etn.js';
 import { div } from '../lib/dom.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
-import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
-import { onQueryInvalidated } from '../lib/live/index.js';
+import { showMenuAt, menuAction, menuChoice, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
 import { notice } from '../lib/notice.js';
+import { t } from '../lib/i18n.js';
 import { store } from '../state.js';
 
 /** Mode of the lower zone: children of the focus or a specific view's run. */
 export type StripMode =
   | { kind: 'children' }
-  | { kind: 'view'; viewId: string; viewName: string; viewTypeId: string };
+  | {
+      kind: 'view';
+      viewId: string;
+      /** `name_key` — по нему сервер находит отбор в эффективном наборе. */
+      viewName: string;
+      /** Владелец отбора: тип мысли или сама мысль (требование 045f539a). */
+      scope: ThoughtViewScope;
+      /** Id владельца: тип (`scope: 'type'`) или мысль (`scope: 'thought'`). */
+      definedOn: string;
+    };
 
 /** Result of the most recent view run, kept in memory for the canvas to
  *  paint into the children zone. Cleared on focus change or when the user
@@ -50,7 +70,10 @@ export type StripMode =
 export interface ViewResult {
   viewId: string;
   viewName: string;
-  viewTypeId: string;
+  /** Владелец отбора (0.14.1): тип или мысль. */
+  scope: ThoughtViewScope;
+  /** Id владельца отбора — тип для типового, мысль для внетипового. */
+  definedOn: string;
   /** Context thought id the view was run for. */
   focusId: string;
   items: ThoughtRef[];
@@ -97,36 +120,42 @@ let currentMode: StripMode = { kind: 'children' };
 let lastResult: ViewResult | null = null;
 /** Currently focused thought id (used as the map key in L4). */
 let currentFocusId: string | null = null;
-/** Currently focused thought type id (cached for the «+» button enable rule). */
-let currentFocusTypeId: string | null | undefined = undefined;
+/** Currently focused thought title (used in menu labels/confirmations). */
+let currentFocusTitle = '';
+/** Currently focused thought type id (`null` — безтиповая мысль). */
+let currentFocusTypeId: string | null = null;
 
 /** Per-focus mode persistence. Loaded once per tab from L4 and patched on
  *  every click. Unknown entries (`viewId` not in the current effective set)
- *  fall back to children when restoring. */
+ *  fall back to the default view or children when restoring. */
 let persisted: PersistedStrip = {};
 
-/** Latest effective-views list for the focus's type, kept so a view button
- *  can resolve to the same `name_key`/`id` even if `meta.views` is stale. */
+/** Latest effective-views list for the focus (types + custom, server order),
+ *  kept so a view button can resolve the same row and its `definition`. */
 let effectiveViews: EffectiveViewRow[] = [];
 
-/** Per-button paint data — the order is server-supplied (root → type,
- *  then `position`). `inherited` carries visual hints («унаследован»). */
+/** Per-button paint data — the order is server-supplied (types by chain then
+ *  custom, `position` inside each level). `inherited` carries the dimmed hint
+ *  of a type view declared on an ancestor; `scope === 'thought'` is the
+ *  italic out-of-type view of the focused thought. */
 interface EffectiveViewRow {
   id: string;
   name: string;
   name_key: string;
   description: string | null;
-  /** `true` — defined on a type ancestor (greyed tooltip). */
-  inherited: boolean;
-  /** Id of the type this view is defined on (relevant for delete-owner UX). */
+  /** JSON-строка определения — второй list-запрос больше не нужен. */
+  definition: string;
+  /** Владелец отбора: тип мысли или сама мысль (требование 045f539a). */
+  scope: ThoughtViewScope;
+  /** Id владельца: тип (для `scope: 'type'`) или мысль. */
   defined_on: string;
-  /** Position within the type level (for the dropdown overflow list). */
+  /** `true` — типовой отбор определён на типе-предке (приглушённый). */
+  inherited: boolean;
+  /** Position within the owner level (for the dropdown overflow list). */
   position: number;
   version: number;
-  /** `true` — this is the focus's default view. */
+  /** `true` — этот отбор открывается по умолчанию (эффективный дефолт). */
   is_default: boolean;
-  /** `true` — defined on the focus's own type (vs. inherited). */
-  isOwn: boolean;
 }
 
 /** Subscribers notified on every mode change. The canvas listens so it can
@@ -230,8 +259,9 @@ export async function loadPersistedStrip(): Promise<void> {
   }
 }
 
-/** Parses one persisted entry; tolerates older shapes that lack
- *  `viewTypeId` (the editor dialog re-resolves it on the next render). */
+/** Parses one persisted entry. `scope`/`definedOn` are re-resolved against the
+ *  effective set on every render, so an older shape (flat `viewTypeId`, no
+ *  scope) is accepted and never trusted for display/route decisions. */
 function parsePersistedMode(value: unknown): StripMode | null {
   if (value === null || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
@@ -239,13 +269,18 @@ function parsePersistedMode(value: unknown): StripMode | null {
   if (obj['kind'] === 'view') {
     const viewId = obj['viewId'];
     const viewName = obj['viewName'];
-    const viewTypeId = obj['viewTypeId'];
     if (typeof viewId !== 'string' || typeof viewName !== 'string') return null;
+    // Старый persisted хранил только `viewTypeId` (типовой отбор). Эти поля
+    // перерезолвятся по эффективному набору при рендере; храним их лишь как
+    // толерантный разбор, а не как источник истины.
+    const definedOn = obj['definedOn'] ?? obj['viewTypeId'];
+    const scope = obj['scope'];
     return {
       kind: 'view',
       viewId,
       viewName,
-      viewTypeId: typeof viewTypeId === 'string' ? viewTypeId : '',
+      scope: scope === 'thought' ? 'thought' : 'type',
+      definedOn: typeof definedOn === 'string' ? definedOn : '',
     };
   }
   return null;
@@ -272,7 +307,7 @@ export function mountFilterStrip(canvasHost: HTMLElement): void {
   host = canvasHost;
   stripEl = div('canvas-filter-strip');
   stripEl.setAttribute('role', 'toolbar');
-  stripEl.setAttribute('aria-label', 'Полоса отборов');
+  stripEl.setAttribute('aria-label', t('strip.ariaLabel'));
   buttonsEl = div('canvas-filter-strip-buttons');
   stripEl.append(buttonsEl);
   stripEl.classList.add('hidden');
@@ -292,30 +327,30 @@ export function mountFilterStrip(canvasHost: HTMLElement): void {
 }
 
 /**
- * Repaints the strip for the current focus. Pass `null` when the canvas
- * has no focus (the strip hides itself). The effective views list is
- * computed from the focus's `meta.views` (server-supplied) plus a fallback
- * to a direct `thoughtTypeViews.list` when the focus is typed but `meta`
- * is missing the views block (the canonical list lives in MCP `meta.views`,
- * but the focus REST endpoint does not currently carry it — see below).
+ * Repaints the strip for the current focus. Pass `null` when the canvas has
+ * no focus (the strip hides itself).
  *
- * Note: the focus REST endpoint returns parents/children/siblings only;
- * `meta.views` lives on `etn.thoughts.get`. Until the focus endpoint ships
- * it, the strip fetches the focused thought once per focus change to
- * learn the effective set. The fallback keeps the strip correct today and
- * disappears automatically when the focus response carries the block.
+ * `opts.resetActiveIfDeleted` — realtime-перестройка после удаления отбора:
+ * если активным был удалённый отбор, полоса уходит на «Потомки», а не на
+ * дефолт (спека df84de22). Перенос (`reason: 'moved'`) этим флагом НЕ
+ * помечается: id жив, чип остаётся активным и лишь перерезолвит владельца.
  */
-export async function renderStrip(focus: FocusResponse | null): Promise<void> {
+export async function renderStrip(
+  focus: FocusResponse | null,
+  opts?: { resetActiveIfDeleted?: boolean },
+): Promise<void> {
   if (stripEl === null || buttonsEl === null || host === null) return;
   if (focus === null) {
     stripEl.classList.add('hidden');
     currentFocusId = null;
-    currentFocusTypeId = undefined;
+    currentFocusTitle = '';
+    currentFocusTypeId = null;
     effectiveViews = [];
     return;
   }
   const focusChanged = focus.focused.id !== currentFocusId;
   currentFocusId = focus.focused.id;
+  currentFocusTitle = focus.focused.title;
   currentFocusTypeId = focus.focused.type_id ?? null;
   // Per-focus bookkeeping resets ONLY on a real focus change. `renderStrip`
   // runs on EVERY canvas render (a store notification, the zone pager, a
@@ -327,30 +362,44 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
     lastResult = null;
     invalidateViewDefinitionCache();
   }
-  // Resolve the effective chain. The focus endpoint doesn't ship
-  // `meta.views` yet, so the strip reads the focus via `thoughts.get` and
-  // falls back to a `thoughtTypeViews.list` direct call for typed thoughts
-  // (the root-type path is the same: `thoughtTypeViews.list` accepts the
-  // root id; requirement 23e0f78e).
+  // Единственный источник набора — `GET /thoughts/{id}/views?include_effective=true`
+  // (требование 045f539a): и типовые по цепочке, и внетиповые, со `scope`,
+  // `defined_on`, `inherited`, `is_default` и `definition`. Двухшаговый
+  // fallback (`thoughts.get.meta.views` + list) убран.
   const views = await loadEffectiveViews(focus);
   effectiveViews = views;
-  // Pick the mode: persisted > default view > «Потомки».
+  // Pick the mode: persisted > default view > «Потомки». Персист переживает
+  // смену фокуса и перезагрузку; дефолт открывается только без сохранённого
+  // выбора (спека df84de22).
+  const prevMode = currentMode;
   const persistedMode = persisted[focus.focused.id];
+  const persistedRow = persistedMode?.kind === 'view'
+    ? views.find((v) => v.id === persistedMode.viewId)
+    : undefined;
   const isValidPersisted =
     persistedMode !== undefined &&
-    (persistedMode.kind === 'children' ||
-      views.some((v) => v.id === persistedMode.viewId));
+    (persistedMode.kind === 'children' || persistedRow !== undefined);
   const defaultView = views.find((v) => v.is_default);
+  const activeDeletedByRealtime =
+    opts?.resetActiveIfDeleted === true &&
+    prevMode.kind === 'view' &&
+    !views.some((v) => v.id === prevMode.viewId);
   let mode: StripMode;
-  if (isValidPersisted && persistedMode !== undefined) {
-    mode = persistedMode;
+  if (activeDeletedByRealtime) {
+    // Правило «удалённый активный → Потомки» (спека df84de22), не меняя
+    // общее правило «фокус → дефолт».
+    mode = { kind: 'children' };
+  } else if (persistedMode !== undefined && isValidPersisted && persistedMode.kind === 'children') {
+    // Сохранённый выбор «Потомки» обязан пережить ЛЮБУЮ перерисовку полосы
+    // (store-нотификация, pager, realtime), а не только смену фокуса: иначе
+    // дефолтный отбор возвращается сам через тик после клика по «Потомки».
+    mode = { kind: 'children' };
+  } else if (persistedMode !== undefined && isValidPersisted && persistedRow !== undefined) {
+    // Имя/владельца берём из ЭФФЕКТИВНОГО набора, а не из persisted: realtime-
+    // переименование и перенос владельца не должны ломать run и курсив.
+    mode = viewModeFromRow(persistedRow);
   } else if (defaultView !== undefined) {
-    mode = {
-      kind: 'view',
-      viewId: defaultView.id,
-      viewName: defaultView.name_key,
-      viewTypeId: defaultView.defined_on,
-    };
+    mode = viewModeFromRow(defaultView);
   } else {
     mode = { kind: 'children' };
   }
@@ -370,115 +419,70 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
   layoutStrip(views);
 }
 
+/** Режим отбора по строке эффективного набора (владелец — из строки). */
+function viewModeFromRow(row: EffectiveViewRow): StripMode {
+  return {
+    kind: 'view',
+    viewId: row.id,
+    viewName: row.name_key,
+    scope: row.scope,
+    definedOn: row.defined_on,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Effective-view resolution
 // ---------------------------------------------------------------------------
 
 /**
- * Loads the effective set of views for the focused thought. Order is
- * server-supplied (`root → type`, then `position` inside each level); we
- * re-fetch on every focus change because the focus endpoint doesn't carry
- * `meta.views` yet (the list endpoint accepts the type id, not the focus).
+ * Loads the effective set of views for the focused thought from the single
+ * source `GET /thoughts/{id}/views?include_effective=true` (типовые по
+ * цепочке + внетиповые). Order is server-supplied (types by chain, then
+ * custom; `position` inside each level) — НЕ пересортировываем (ошибка
+ * 9792d55a). Работает и для безтиповой мысли: сервер подставляет корневой
+ * тип, и внетиповые отборы мысли приходят тем же набором (требование
+ * 23e0f78e).
  */
-  async function loadEffectiveViews(focus: FocusResponse): Promise<EffectiveViewRow[]> {
+async function loadEffectiveViews(focus: FocusResponse): Promise<EffectiveViewRow[]> {
   const networkId = store.state.networkId;
   if (networkId === null) return [];
-
-  // 1. Try `meta.views` on the focused thought (zero-cost when the server
-  //    eventually ships it on the focus response too).
-  type RawView = {
-    id: string;
-    name: string;
-    name_key: string;
-    description: string | null;
-    defined_on: string;
-    inherited: boolean;
-    is_default: boolean;
-    position?: number;
-    version?: number;
-  };
-  const views: RawView[] = [];
+  let rows: readonly unknown[] = [];
   try {
-    const thought = await etn.thoughts.get(networkId, focus.focused.id);
-    const metaViews = (thought as unknown as { meta?: { views?: unknown[] } }).meta?.views;
-    if (Array.isArray(metaViews)) {
-      for (const v of metaViews) {
-        if (v === null || typeof v !== 'object') continue;
-        const row = v as Record<string, unknown>;
-        if (
-          typeof row['id'] === 'string' &&
-          typeof row['name'] === 'string' &&
-          typeof row['name_key'] === 'string' &&
-          typeof row['defined_on'] === 'string'
-        ) {
-          views.push({
-            id: row['id'],
-            name: row['name'],
-            name_key: row['name_key'],
-            description: typeof row['description'] === 'string' ? row['description'] : null,
-            defined_on: row['defined_on'],
-            inherited: row['inherited'] === true,
-            is_default: row['is_default'] === true,
-          });
-        }
-      }
-    }
+    const resp = await etn.thoughtCustomViews.list(networkId, focus.focused.id, {
+      includeEffective: true,
+    });
+    rows = Array.isArray(resp.meta.effective) ? resp.meta.effective : [];
   } catch {
-    // Ignore — fall back to a direct list.
+    // Сеть/мысль исчезла или сервер недоступен — полоса без отборов.
+    return [];
   }
-
-  // 2. Fallback: ask the type's views list directly. The list endpoint
-  //    returns both own (`data`) and effective (`meta.effective`) views;
-  //    we re-read the effective chain so the strip sees inherited views
-  //    even when `meta.views` is missing on `thoughts.get`.
-  if (views.length === 0) {
-    const typeId = focus.focused.type_id;
-    if (typeId !== null && typeId !== undefined) {
-      try {
-        const resp = await etn.thoughtTypeViews.list(networkId, typeId, { includeEffective: true });
-        if (Array.isArray(resp.meta.effective)) {
-          for (const v of resp.meta.effective) {
-            views.push({
-              id: v.id,
-              name: v.name,
-              name_key: v.name_key,
-              description: v.description,
-              defined_on: v.thought_type_id,
-              inherited: v.thought_type_id !== typeId,
-              is_default: v.is_default === true,
-              position: v.position,
-              version: v.version,
-            });
-          }
-        }
-      } catch {
-        // Type may have been deleted; render the strip without views.
-      }
-    } else {
-      // Type-less thought: requirement 23e0f78e — root-type views apply,
-      // but the list endpoint requires a real type id. The effective chain
-      // still arrives on `thoughts.get.meta.views` (the server uses the
-      // root id under the hood); if step 1 produced nothing, render empty.
+  const out: EffectiveViewRow[] = [];
+  for (const [idx, value] of rows.entries()) {
+    if (value === null || typeof value !== 'object') continue;
+    const row = value as Record<string, unknown>;
+    if (
+      typeof row['id'] !== 'string' ||
+      typeof row['name'] !== 'string' ||
+      typeof row['name_key'] !== 'string'
+    ) {
+      continue;
     }
+    const scope: ThoughtViewScope = row['scope'] === 'thought' ? 'thought' : 'type';
+    out.push({
+      id: row['id'],
+      name: row['name'],
+      name_key: row['name_key'],
+      description: typeof row['description'] === 'string' ? row['description'] : null,
+      definition: typeof row['definition'] === 'string' ? row['definition'] : '',
+      scope,
+      defined_on: typeof row['defined_on'] === 'string' ? row['defined_on'] : '',
+      inherited: scope === 'type' && row['inherited'] === true,
+      position: typeof row['position'] === 'number' ? row['position'] : idx,
+      version: typeof row['version'] === 'number' ? row['version'] : 0,
+      is_default: row['is_default'] === true,
+    });
   }
-
-  // Сохраняем порядок сервера как есть: эффективный набор уже собран как
-  // «корень → тип, внутри уровня по position» (getEffectiveViewsForThought,
-  // требование eaca1253). Пересортировка здесь по глобальному `position`
-  // переплетает уровни для унаследованных отборов (каждый уровень типов
-  // нумерует свои `position` с 0) — ошибка 9792d55a, поэтому НЕ сортируем.
-  return views.map((v, idx): EffectiveViewRow => ({
-    id: v.id,
-    name: v.name,
-    name_key: v.name_key,
-    description: v.description,
-    inherited: v.inherited,
-    defined_on: v.defined_on,
-    position: v.position ?? idx,
-    version: v.version ?? 0,
-    is_default: v.is_default,
-    isOwn: !v.inherited,
-  }));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -490,7 +494,7 @@ function buildChildrenButton(mode: StripMode): HTMLButtonElement {
   btn.type = 'button';
   btn.className = 'canvas-filter-strip-btn';
   btn.dataset['mode'] = 'children';
-  btn.textContent = 'Потомки';
+  btn.textContent = t('strip.children');
   if (mode.kind === 'children') btn.classList.add('active');
   btn.addEventListener('click', () => {
     if (currentMode.kind === 'children') return;
@@ -508,13 +512,19 @@ function buildViewButton(view: EffectiveViewRow, mode: StripMode): HTMLButtonEle
   btn.type = 'button';
   btn.className = 'canvas-filter-strip-btn';
   btn.dataset['viewId'] = view.id;
+  // Владелец — в data-атрибуте: по нему пробы стенда проверяют курсив
+  // внетипового и приглушение унаследованного (спека df84de22).
+  btn.dataset['viewScope'] = view.scope;
   // Баг 3: обрезаем отображаемое имя после 30-го символа; полное имя — в
   // тултипе (с описанием, если оно есть), чтобы его можно было прочитать.
   btn.textContent = view.name.length > 30 ? `${view.name.slice(0, 30)}…` : view.name;
   btn.title = view.description !== null && view.description !== ''
     ? `${view.name}\n${view.description}`
     : view.name;
+  // Унаследованный типовой отбор — приглушённый БЕЗ курсива; внетиповой
+  // отбор самой мысли — курсив (спека df84de22, DoD стилей).
   if (view.inherited) btn.classList.add('inherited');
+  if (view.scope === 'thought') btn.classList.add('out-of-type');
   if (mode.kind === 'view' && mode.viewId === view.id) btn.classList.add('active');
   btn.addEventListener('click', () => {
     if (
@@ -523,15 +533,7 @@ function buildViewButton(view: EffectiveViewRow, mode: StripMode): HTMLButtonEle
     ) {
       return;
     }
-    setMode(
-      {
-        kind: 'view',
-        viewId: view.id,
-        viewName: view.name_key,
-        viewTypeId: view.defined_on,
-      },
-      true,
-    );
+    setMode(viewModeFromRow(view), true);
     persistForCurrentFocus();
     notifyModeChange();
   });
@@ -543,32 +545,33 @@ function buildViewButton(view: EffectiveViewRow, mode: StripMode): HTMLButtonEle
   return btn;
 }
 
+/** Подпись отбора в меню `⋯`: внетиповые помечены «вне типа» (спека
+ *  df84de22), унаследованные типовые — «унаследован». */
+function overflowLabel(view: EffectiveViewRow): string {
+  if (view.scope === 'thought') return `${view.name} ${t('strip.outOfTypeMark')}`;
+  return view.name + (view.inherited ? ` ${t('strip.inheritedMark')}` : '');
+}
+
 function buildOverflowButton(views: EffectiveViewRow[], mode: StripMode): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'canvas-filter-strip-btn canvas-filter-strip-overflow';
   btn.textContent = '⋯';
-  btn.title = 'Не поместившиеся отборы';
+  btn.title = t('strip.overflowTitle');
   btn.addEventListener('click', (event) => {
-    const items: MenuItem[] = views.map((view) => ({
-      label: view.name + (view.inherited ? ' (унаследован)' : ''),
-      checked: mode.kind === 'view' && mode.viewId === view.id,
-      onClick: () => {
-        setMode(
-          {
-            kind: 'view',
-            viewId: view.id,
-            viewName: view.name_key,
-            viewTypeId: view.defined_on,
-          },
-          true,
-        );
-        persistForCurrentFocus();
-        notifyModeChange();
-      },
-    }));
+    const items: MenuItem[] = views.map((view) =>
+      menuChoice(
+        overflowLabel(view),
+        mode.kind === 'view' && mode.viewId === view.id,
+        () => {
+          setMode(viewModeFromRow(view), true);
+          persistForCurrentFocus();
+          notifyModeChange();
+        },
+      ),
+    );
     if (items.length === 0) {
-      items.push({ label: 'Нет отборов', disabled: true });
+      items.push(menuAction(t('strip.noViews'), undefined, { disabled: true }));
     }
     const rect = btn.getBoundingClientRect();
     showMenuAt(rect.left, rect.bottom, items);
@@ -582,52 +585,81 @@ function buildAddButton(): HTMLButtonElement {
   btn.type = 'button';
   btn.className = 'canvas-filter-strip-btn canvas-filter-strip-add';
   btn.textContent = '+';
-  btn.title = 'Добавить отбор';
-  // Requirement 23e0f78e: type-less thoughts have no type to attach the
-  // view to — disable the button. The root type isn't a real type and the
-  // user cannot add views to it from the canvas; the editor dialog owns
-  // that path.
-  const typed = currentFocusTypeId !== null && currentFocusTypeId !== undefined;
-  btn.disabled = !typed;
-  if (!typed) btn.title = 'Добавление отбора недоступно у мысли без типа';
+  btn.title = t('strip.addView');
+  // «+» доступна у любой мысли (требование 23e0f78e снято в 0.14.1): у
+  // типизированной — меню двух пунктов, у безтиповой — сразу редактор
+  // внетипового отбора (спека df84de22).
   btn.addEventListener('click', () => {
-    if (btn.disabled) return;
     // Отборы — сервисный инструмент общего пользования; правка в слоях
     // изменений запрещена (задача d9b66617). Кнопку оставляем видимой, чтобы
     // пользователь видел, что функция существует, но сейчас недоступна.
+    // Гейт стоит ДО меню/диалога (спека df84de22).
     if (!isInBaseLayer()) {
-      notice('Для добавления отборов переключитесь в Основу.', 'info');
+      notice(t('strip.addBaseLayerOnly'), 'info');
       return;
     }
     const networkId = store.state.networkId;
+    if (networkId === null) return;
     const typeId = currentFocusTypeId;
-    if (networkId === null || typeId === null || typeId === undefined) return;
-    const typeName = store.state.thoughtTypes.find((t) => t.id === typeId)?.name ?? '';
-    openViewEditorDialog({
-      networkId,
-      thoughtTypeId: typeId,
-      typeName,
-      view: null,
-      // Детерминированное переключение на новый отбор (ошибка 04da7519):
-      // после сохранения новый отбор сразу становится активным, выбор
-      // персистится, а канвасный render исполняет его через
-      // `runActiveViewIfNeeded`. Кнопку/имя дорисует realtime-событие
-      // `thought-type-view.created`.
-      onSaved: (savedView) => {
-        setMode(
-          {
-            kind: 'view',
-            viewId: savedView.id,
-            viewName: savedView.name_key,
-            viewTypeId: savedView.thought_type_id,
-          },
-          true,
-        );
-        persistForCurrentFocus();
-        notifyModeChange();
-      },
-    });
+    if (typeId === null) {
+      // Безтиповая мысль — добавлять можно только внетиповой отбор.
+      openCreateDialog('thought');
+      return;
+    }
+    const rect = btn.getBoundingClientRect();
+    showMenuAt(rect.left, rect.bottom, [
+      menuAction(t('strip.addTypeView'), () => openCreateDialog('type')),
+      menuAction(t('strip.addThoughtView'), () => openCreateDialog('thought')),
+    ]);
   });
+
+  /** Открыть редактор нового отбора выбранного владельца. */
+  function openCreateDialog(owner: ThoughtViewScope): void {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    const focusId = currentFocusId;
+    if (focusId === null) return;
+    const typeId = currentFocusTypeId;
+    const typeName = typeId === null
+      ? ''
+      : store.state.thoughtTypes.find((row) => row.id === typeId)?.name ?? '';
+    // Детерминированное переключение на новый отбор (ошибка 04da7519):
+    // после сохранения новый отбор сразу становится активным, выбор
+    // персистится, а канвасный render исполняет его через
+    // `runActiveViewIfNeeded`. Кнопку/имя дорисует realtime-событие
+    // `thought-type-view.created` / `thought-custom-view.created`.
+    const onSaved = (savedView: { id: string; name_key: string }): void => {
+      setMode(
+        {
+          kind: 'view',
+          viewId: savedView.id,
+          viewName: savedView.name_key,
+          scope: owner,
+          definedOn: owner === 'type' ? typeId ?? '' : focusId,
+        },
+        true,
+      );
+      persistForCurrentFocus();
+      notifyModeChange();
+    };
+    if (owner === 'type' && typeId !== null) {
+      openViewEditorDialog({
+        networkId,
+        thoughtTypeId: typeId,
+        typeName,
+        view: null,
+        onSaved,
+      });
+    } else {
+      openViewEditorDialog({
+        networkId,
+        ownerThoughtId: focusId,
+        thoughtName: currentFocusTitle,
+        view: null,
+        onSaved,
+      });
+    }
+  }
   return btn;
 }
 
@@ -640,7 +672,7 @@ function buildFilterButton(): HTMLButtonElement {
   btn.type = 'button';
   btn.className = 'canvas-filter-strip-btn canvas-filter-strip-filter';
   btn.append(svgIcon('filter', 14));
-  btn.title = 'Фильтр типов связей на карте';
+  btn.title = t('strip.linkFilter');
   btn.addEventListener('click', () => {
     const networkId = store.state.networkId;
     if (networkId === null) return;
@@ -656,103 +688,119 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   // В слоях изменений правка отборов запрещена (задача d9b66617) — пункты
-  // меню остаются видимыми, но клик показывает понятное сообщение.
+  // меню остаются видимыми, но клик показывает понятное сообщение. Гейт
+  // стоит ДО подтверждений и записи (спека df84de22).
   const inBase = isInBaseLayer();
+  const guard = (message: string): boolean => {
+    if (inBase) return true;
+    notice(message, 'info');
+    return false;
+  };
   const items: MenuItem[] = [
-    {
-      label: 'Изменить отбор',
-      onClick: () => {
-        if (!inBase) {
-          notice('Для изменения отбора переключитесь в Основу.', 'info');
-          return;
-        }
-        openViewEditorForExisting(networkId, view);
-      },
-    },
-    {
-      label: view.is_default ? 'Снять «по умолчанию»' : 'Сделать отбор по умолчанию',
-      // You can only flip `is_default` on views of the focus's own type —
-      // inherited defaults are governed by their declaring type (spec).
-      disabled: !view.isOwn && !view.is_default,
-      onClick: () => {
-        if (!inBase) {
-          notice('Для изменения отбора переключитесь в Основу.', 'info');
-          return;
-        }
+    menuAction(t('strip.menuEdit'), () => {
+      if (!guard(t('strip.editBaseLayerOnly'))) return;
+      openViewEditorForExisting(networkId, view);
+    }),
+    menuAction(
+      view.is_default ? t('strip.menuClearDefault') : t('strip.menuMakeDefault'),
+      () => {
+        if (!guard(t('strip.editBaseLayerOnly'))) return;
         void setDefault(networkId, view, !view.is_default);
       },
-    },
+      // Пометку «по умолчанию» у унаследованного типового отбора ставит его
+      // собственный тип; снять уже стоящую можно и здесь (как раньше).
+      { disabled: view.scope === 'type' && view.inherited && !view.is_default },
+    ),
     MENU_SEPARATOR,
-    {
-      label: 'Удалить отбор',
-      danger: true,
-      // Deleting an inherited view from the focus's canvas would mislead:
-      // the operation would target a different type. Disable; users delete
-      // inherited views from the editor of their declaring type.
-      disabled: view.inherited,
-      onClick: () => {
-        if (!inBase) {
-          notice('Для удаления отбора переключитесь в Основу.', 'info');
-          return;
-        }
+    view.scope === 'thought'
+      ? menuAction(
+          t('strip.menuMoveToType'),
+          () => {
+            if (!guard(t('strip.editBaseLayerOnly'))) return;
+            void moveViewToType(networkId, view);
+          },
+          // У безтиповой мысли переносить некуда (спека df84de22).
+          { disabled: currentFocusTypeId === null },
+        )
+      : menuAction(t('strip.menuMoveToThought'), () => {
+          if (!guard(t('strip.editBaseLayerOnly'))) return;
+          void moveViewToThought(networkId, view);
+        }),
+    MENU_SEPARATOR,
+    menuAction(
+      t('strip.menuDelete'),
+      () => {
+        if (!guard(t('strip.deleteBaseLayerOnly'))) return;
         void deleteView(networkId, view);
       },
-    },
+      {
+        danger: true,
+        // Унаследованный отбор удаляется из редактора его собственного типа:
+        // адрес пути — тип-владелец, а не фокус.
+        disabled: view.inherited,
+      },
+    ),
   ];
   showMenuAt(x, y, items);
 }
 
+/** Имя типа по id (для заголовков/подтверждений); `''` — тип не в каталоге. */
+function typeNameOf(typeId: string): string {
+  return store.state.thoughtTypes.find((row) => row.id === typeId)?.name ?? '';
+}
+
 /**
- * Opens the editor dialog for an existing view. The strip only carries the
- * view's `EffectiveViewRow` (no `definition`); we resolve the full
- * `ThoughtTypeView` via the IPC list before opening the dialog (a single
- * round-trip keeps the dialog self-contained).
+ * Opens the editor dialog for an existing view. Строка эффективного набора уже
+ * несёт `definition`/`version` — второй list-запрос не нужен (спека df84de22).
  */
-async function openViewEditorForExisting(
-  networkId: string,
-  row: EffectiveViewRow,
-): Promise<void> {
-  try {
-    const resp = await etn.thoughtTypeViews.list(networkId, row.defined_on, { includeEffective: false });
-    const full = resp.data.find((v) => v.id === row.id);
-    if (full === undefined) {
-      notice('Не удалось открыть отбор для правки.', 'error');
-      return;
-    }
-    const typeName =
-      store.state.thoughtTypes.find((t) => t.id === row.defined_on)?.name ?? '';
+function openViewEditorForExisting(networkId: string, row: EffectiveViewRow): void {
+  const view = {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    definition: row.definition,
+    is_default: row.is_default,
+    version: row.version,
+  };
+  // Детерминированное обновление того же клиента (ошибка 04da7519):
+  // realtime-событие тоже перестраивает полосу, но два пути гоняют между
+  // собой, и протухший ответ `runActiveViewIfNeeded` возвращает null —
+  // нижняя зона красится пустым/старым. Поэтому при правке активного отбора
+  // переисполняем результат немедленно, не дожидаясь realtime.
+  const onSaved = (savedView: { id: string; name_key: string }): void => {
+    void (async () => {
+      if (currentMode.kind === 'view' && currentMode.viewId === savedView.id) {
+        // Отбор могли переименовать — обновляем кэшированное имя перед
+        // перезапуском, чтобы run выполнился по актуальному определению.
+        currentMode.viewName = savedView.name_key;
+        // Определение могло поменяться (условия/sort/limit и т.п.) —
+        // сбрасываем кеш признака `keywords`, чтобы новый run прочитал
+        // свежую `definition`.
+        invalidateViewDefinitionCache();
+        const focus = store.state.focus;
+        if (focus !== null) {
+          await runActiveViewIfNeeded(focus.focused.id);
+          notifyModeChange();
+        }
+      }
+    })();
+  };
+  if (row.scope === 'type') {
     openViewEditorDialog({
       networkId,
       thoughtTypeId: row.defined_on,
-      typeName,
-      view: full,
-      // Детерминированное обновление того же клиента (ошибка 04da7519):
-      // realtime-событие `thought-type-view.updated` тоже перестраивает
-      // полосу, но два пути гоняют между собой, и протухший ответ
-      // `runActiveViewIfNeeded` возвращает null — нижняя зона красится
-      // пустым/старым. Поэтому при правке активного отбора переисполняем
-      // результат немедленно, не дожидаясь realtime.
-      onSaved: (savedView) => {
-        void (async () => {
-          if (currentMode.kind === 'view' && currentMode.viewId === savedView.id) {
-            // Отбор могли переименовать — обновляем кэшированное имя перед
-            // перезапуском, чтобы run выполнился по актуальному определению.
-            currentMode.viewName = savedView.name_key;
-            // Определение могло поменяться (условия/sort/limit и т.п.) —
-            // сбрасываем кеш признака `keywords`, чтобы новый run прочитал
-            // свежую `definition`.
-            invalidateViewDefinitionCache();
-            const focus = store.state.focus;
-            if (focus !== null) {
-              await runActiveViewIfNeeded(focus.focused.id);
-              notifyModeChange();
-            }
-          }
-        })();
-      },
+      typeName: typeNameOf(row.defined_on),
+      view,
+      onSaved,
     });
-  } catch (err) {
-    notice(formatStripError(err, 'Не удалось открыть отбор для правки.'), 'error');
+  } else {
+    openViewEditorDialog({
+      networkId,
+      ownerThoughtId: row.defined_on,
+      thoughtName: currentFocusTitle,
+      view,
+      onSaved,
+    });
   }
 }
 
@@ -762,18 +810,126 @@ async function setDefault(
   nextDefault: boolean,
 ): Promise<void> {
   try {
-    await etn.thoughtTypeViews.update(
+    if (view.scope === 'type') {
+      await etn.thoughtTypeViews.update(
+        networkId,
+        view.defined_on,
+        view.id,
+        { is_default: nextDefault },
+        view.version,
+      );
+    } else {
+      await etn.thoughtCustomViews.update(
+        networkId,
+        view.defined_on,
+        view.id,
+        { is_default: nextDefault },
+        view.version,
+      );
+    }
+    notice(
+      nextDefault ? t('strip.defaultSet') : t('strip.defaultCleared'),
+      'info',
+    );
+    // Realtime-событие `*.updated` перерисует полосу.
+  } catch (err) {
+    notice(formatStripError(err, t('strip.defaultFailed')), 'error');
+  }
+}
+
+/** Есть ли у получателя собственный отбор по умолчанию (пометка не переедет). */
+function hasOwnDefault(views: EffectiveViewRow[], scope: ThoughtViewScope): boolean {
+  return views.some(
+    (row) => row.scope === scope && !row.inherited && row.is_default,
+  );
+}
+
+/**
+ * Перенос «вне типа → тип» (операция 85414fbd). Подтверждение называет
+ * эффект на все мысли типа и снятие пометки «по умолчанию» при занятом
+ * собственном дефолте получателя (спека df84de22).
+ */
+async function moveViewToType(networkId: string, view: EffectiveViewRow): Promise<void> {
+  const focusId = currentFocusId;
+  const typeId = currentFocusTypeId;
+  if (focusId === null || typeId === null) return;
+  const message =
+    t('strip.transferToTypeConfirm', [view.name || view.name_key, typeNameOf(typeId)]) +
+    (hasOwnDefault(effectiveViews, 'type') ? ` ${t('strip.transferDefaultNote')}` : '');
+  const ok = await confirmDialog(t('strip.transferToTypeTitle'), message, false);
+  if (!ok) return;
+  try {
+    const moved = await etn.thoughtCustomViews.moveToType(networkId, view.defined_on, view.id);
+    notice(t('strip.transferDone'), 'info');
+    if (currentMode.kind === 'view' && currentMode.viewId === view.id) {
+      // id при переносе сохраняется — активный чип остаётся, меняется лишь
+      // владелец (курсив → обычный).
+      setMode(
+        {
+          kind: 'view',
+          viewId: moved.id,
+          viewName: moved.name_key,
+          scope: 'type',
+          definedOn: typeId,
+        },
+        true,
+      );
+      persistForCurrentFocus();
+      notifyModeChange();
+    }
+  } catch (err) {
+    notice(formatStripError(err, t('strip.transferFailed')), 'error');
+  }
+}
+
+/**
+ * Перенос «тип → вне» (операция 85414fbd) на мысль в фокусе. Для
+ * унаследованного отбора подтверждение называет ещё и типы-потомки
+ * типа-владельца; при занятом собственном дефолте получателя — снятие
+ * пометки (спека df84de22).
+ */
+async function moveViewToThought(networkId: string, view: EffectiveViewRow): Promise<void> {
+  const focusId = currentFocusId;
+  if (focusId === null) return;
+  // Адрес пути — `defined_on` (для унаследованного это тип-владелец).
+  const ownerTypeName = typeNameOf(view.defined_on);
+  let message = t('strip.transferToThoughtConfirm', [
+    view.name || view.name_key,
+    ownerTypeName,
+    currentFocusTitle,
+  ]);
+  if (view.inherited) {
+    message += ` ${t('strip.transferInheritedNote', ownerTypeName)}`;
+  }
+  if (hasOwnDefault(effectiveViews, 'thought')) {
+    message += ` ${t('strip.transferDefaultNote')}`;
+  }
+  const ok = await confirmDialog(t('strip.transferToThoughtTitle'), message, false);
+  if (!ok) return;
+  try {
+    const moved = await etn.thoughtTypeViews.moveToThought(
       networkId,
       view.defined_on,
       view.id,
-      { is_default: nextDefault },
-      view.version,
+      focusId,
     );
-    notice(nextDefault ? 'Отбор помечен «по умолчанию».' : 'Пометка «по умолчанию» снята.', 'info');
-    // The realtime `thought-type-view.updated` event will repaint the strip;
-    // nothing more to do here.
+    notice(t('strip.transferDone'), 'info');
+    if (currentMode.kind === 'view' && currentMode.viewId === view.id) {
+      setMode(
+        {
+          kind: 'view',
+          viewId: moved.id,
+          viewName: moved.name_key,
+          scope: 'thought',
+          definedOn: focusId,
+        },
+        true,
+      );
+      persistForCurrentFocus();
+      notifyModeChange();
+    }
   } catch (err) {
-    notice(formatStripError(err, 'Не удалось изменить пометку.'), 'error');
+    notice(formatStripError(err, t('strip.transferFailed')), 'error');
   }
 }
 
@@ -784,16 +940,20 @@ async function deleteView(networkId: string, view: EffectiveViewRow): Promise<vo
   if (view.inherited) return;
   // Симметрия с `onDelete` во вкладке «Отборы» редактора типа
   // (regression a62190d1): без подтверждения клик по «Удалить отбор» молча
-  // стирал отбор — действие необратимое.
-  const ok = await confirmDialog(
-    'Удалить отбор',
-    `Удалить отбор «${view.name || view.name_key}»? Это действие необратимо.`,
-    true,
-  );
+  // стирал отбор — действие необратимое. Текст называет владельца
+  // (спека df84de22, DoD).
+  const message = view.scope === 'type'
+    ? t('strip.deleteTypeConfirm', [view.name || view.name_key, typeNameOf(view.defined_on)])
+    : t('strip.deleteThoughtConfirm', [view.name || view.name_key, currentFocusTitle]);
+  const ok = await confirmDialog(t('strip.deleteTitle'), message, true);
   if (!ok) return;
   try {
-    await etn.thoughtTypeViews.remove(networkId, view.defined_on, view.id, view.version);
-    notice('Отбор удалён.', 'info');
+    if (view.scope === 'type') {
+      await etn.thoughtTypeViews.remove(networkId, view.defined_on, view.id, view.version);
+    } else {
+      await etn.thoughtCustomViews.remove(networkId, view.defined_on, view.id, view.version);
+    }
+    notice(t('strip.deleted'), 'info');
     // If the deleted view was active, switch to «Потомки» immediately. The
     // realtime event will arrive shortly; preempt it so the strip does not
     // briefly flash the deleted button.
@@ -805,7 +965,7 @@ async function deleteView(networkId: string, view: EffectiveViewRow): Promise<vo
       notifyModeChange();
     }
   } catch (err) {
-    notice(formatStripError(err, 'Не удалось удалить отбор.'), 'error');
+    notice(formatStripError(err, t('strip.deleteFailed')), 'error');
   }
 }
 
@@ -907,36 +1067,27 @@ function invalidateViewDefinitionCache(): void {
 }
 
 /**
- * Прочитать определение отбора один раз на `viewId` и закешировать признак
- * использования `keywords`. Сортировку полоса здесь НЕ разбирает и НЕ
- * кеширует: её исполняет сервер по определению отбора (ADR 23fab347).
+ * Взять определение отбора из уже загруженного эффективного набора и
+ * закешировать признак использования `keywords`. Второй list-запрос больше не
+ * нужен: строка эффективного набора несёт `definition` (спека df84de22).
+ * Сортировку полоса здесь НЕ разбирает и НЕ кеширует: её исполняет сервер по
+ * определению отбора (ADR 23fab347).
  */
-async function prefetchViewDefinition(
-  networkId: string,
-  viewTypeId: string,
-  viewId: string,
-): Promise<void> {
+function prefetchViewDefinition(viewId: string): void {
   if (viewKeywordsCache.has(viewId)) return;
+  const row = effectiveViews.find((v) => v.id === viewId);
+  if (row === undefined || row.definition === '') {
+    viewKeywordsCache.set(viewId, false);
+    return;
+  }
+  let parsed: unknown;
   try {
-    const resp = await etn.thoughtTypeViews.list(networkId, viewTypeId, {
-      includeEffective: false,
-    });
-    const full = resp.data.find((v) => v.id === viewId);
-    if (full === undefined) {
-      viewKeywordsCache.set(viewId, false);
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(full.definition) as unknown;
-    } catch {
-      viewKeywordsCache.set(viewId, false);
-      return;
-    }
-    viewKeywordsCache.set(viewId, definitionUsesKeywords(parsed));
+    parsed = JSON.parse(row.definition) as unknown;
   } catch {
     viewKeywordsCache.set(viewId, false);
+    return;
   }
+  viewKeywordsCache.set(viewId, definitionUsesKeywords(parsed));
 }
 
 export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult | null> {
@@ -949,7 +1100,7 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
     // Сортировку не передаём: исполнитель читает её из определения отбора сам
     // (`readSavedSort` для плоской пары, `ast.sort` для многоуровневой), поэтому
     // ни отбраковать, ни подменить её полоса не может (ADR 23fab347).
-    await prefetchViewDefinition(networkId, currentMode.viewTypeId, currentMode.viewId);
+    prefetchViewDefinition(currentMode.viewId);
     const resp = await etn.thoughtTypeViews.run(
       networkId,
       focusId,
@@ -973,7 +1124,10 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
     lastResult = {
       viewId: currentMode.viewId,
       viewName: resp.meta.view.name,
-      viewTypeId: resp.meta.view.type_id,
+      // Владелец — из ответа сервера; fallback на активный режим для
+      // совместимости (старый сервер не присылал scope/defined_on).
+      scope: resp.meta.view.scope ?? currentMode.scope,
+      definedOn: resp.meta.view.defined_on ?? currentMode.definedOn,
       focusId,
       items,
       directions: resp.meta.directions ?? {},
@@ -985,7 +1139,7 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
     };
     return lastResult;
   } catch (err) {
-    notice(formatStripError(err, 'Не удалось исполнить отбор.'), 'error');
+    notice(formatStripError(err, t('strip.runFailed')), 'error');
     lastResult = null;
     return null;
   }
@@ -1059,24 +1213,40 @@ export async function loadMoreViewResult(focusId: string): Promise<ViewResult | 
 // Realtime hooks
 // ---------------------------------------------------------------------------
 
-/** Called by the realtime UI bridge when any thought-type-view event
- *  arrives (created/updated/deleted). The strip rebuilds itself when the
- *  event touches the focused thought's type. */
-export function onThoughtTypeViewRealtime(
-  payload: { thought_type_id?: string; view_id?: string; type?: string },
-): void {
-  if (currentFocusTypeId === undefined || currentFocusTypeId === null) return;
-  // Same own-type view or an inherited view on a parent type — both
-  // affect the effective chain visible in the strip.
-  // We always rebuild: the event data doesn't carry the type chain, but
-  // the cost is small (one `thoughts.get` plus one list call at most).
-  void refreshStripFromRealtime(payload);
+/**
+ * Payload, который полоса читает из realtime-событий отборов. Типовые события
+ * несут `thought_type_id`, внетиповые — `thought_id`; `reason: 'moved'`
+ * отличает перенос владельца от удаления (операция 85414fbd).
+ */
+export interface ViewRealtimePayload {
+  thought_type_id?: string;
+  thought_id?: string;
+  view_id?: string;
+  type?: string;
+  reason?: 'moved';
+}
+
+/** Called by the realtime UI bridge (и подпиской на инвалидации ниже), когда
+ *  приходит событие `thought-type-view.*` или `thought-custom-view.*`. Полоса
+ *  перестраивается всегда — и для безтиповой мысли тоже (отборы корневого типа
+ *  и внетиповые; спека df84de22). */
+export function onThoughtTypeViewRealtime(payload: ViewRealtimePayload): void {
+  // Удалённый активный отбор → «Потомки». Перенос (`reason: 'moved'`) — НЕ
+  // удаление: id жив, чип остаётся активным и лишь перерезолвит владельца.
+  const isPlainDelete =
+    payload.type !== undefined &&
+    payload.type.endsWith('.deleted') &&
+    payload.reason !== 'moved';
+  const resetActiveIfDeleted =
+    isPlainDelete &&
+    payload.view_id !== undefined &&
+    currentMode.kind === 'view' &&
+    currentMode.viewId === payload.view_id;
+  void refreshStripFromRealtime(resetActiveIfDeleted);
 }
 
 let realtimeRebuildSeq = 0;
-async function refreshStripFromRealtime(
-  _payload: { thought_type_id?: string; view_id?: string; type?: string },
-): Promise<void> {
+async function refreshStripFromRealtime(resetActiveIfDeleted: boolean): Promise<void> {
   const focus = store.state.focus;
   if (focus === null) return;
   const seq = ++realtimeRebuildSeq;
@@ -1084,7 +1254,10 @@ async function refreshStripFromRealtime(
   // be stale, while the focus itself did not change (so `renderStrip` no longer
   // drops the cache on its own).
   invalidateViewDefinitionCache();
-  await renderStrip(focus);
+  await renderStrip(
+    focus,
+    resetActiveIfDeleted ? { resetActiveIfDeleted: true } : undefined,
+  );
   if (seq !== realtimeRebuildSeq) return;
   // The mode may have shifted to a default view after the rebuild; the
   // canvas needs to know so it can re-render the lower zone.
@@ -1097,11 +1270,32 @@ async function refreshStripFromRealtime(
   }
 }
 
-// Слой (G6): `thought-type-view.*` роутер гасит ключ `views:@<typeId>` — полоса
-// перестраивается из подписки на инвалидацию, без прямого realtime-хука.
-onQueryInvalidated((prefix) => {
-  if (!prefix.startsWith('views:@')) return;
-  onThoughtTypeViewRealtime({ thought_type_id: prefix.slice('views:@'.length) });
+// Слой (G6): `thought-type-view.*` гасит ключ `views:@<typeId>`,
+// `thought-custom-view.*` — `thought-views:@<thoughtId>`. Полоса
+// перестраивается из подписки на инвалидацию (прямой realtime-хук не нужен),
+// но payload события нужен: по нему отличаются перенос и удаление
+// (`asRealtimeCause`).
+onQueryInvalidated((prefix, _keys, cause) => {
+  const realtime = asRealtimeCause(cause);
+  const data = (realtime?.data ?? {}) as ViewRealtimePayload;
+  if (prefix.startsWith('thought-views:@')) {
+    const thoughtId = prefix.slice('thought-views:@'.length);
+    // Внетиповые отборы чужой мысли эффективный набор фокуса не меняют.
+    if (thoughtId !== currentFocusId) return;
+    onThoughtTypeViewRealtime({
+      ...data,
+      thought_id: thoughtId,
+      ...(realtime !== null ? { type: realtime.type } : {}),
+    });
+    return;
+  }
+  if (prefix.startsWith('views:@')) {
+    onThoughtTypeViewRealtime({
+      ...data,
+      thought_type_id: prefix.slice('views:@'.length),
+      ...(realtime !== null ? { type: realtime.type } : {}),
+    });
+  }
 });
 
 /** Re-renders the strip when the focused thought changes. The canvas
@@ -1187,26 +1381,16 @@ function rebuildOverflowMenu(
       const btn = viewButtons[i];
       if (view === undefined || btn === undefined || !btn.classList.contains('hidden')) continue;
       const captured = view;
-      items.push({
-        label: captured.name + (captured.inherited ? ' (унаследован)' : ''),
-        checked: currentMode.kind === 'view' && currentMode.viewId === captured.id,
-        onClick: () => {
-          setMode(
-            {
-              kind: 'view',
-              viewId: captured.id,
-              viewName: captured.name_key,
-              viewTypeId: captured.defined_on,
-            },
-            true,
-          );
+      items.push(
+        menuChoice(overflowLabel(captured), currentMode.kind === 'view' && currentMode.viewId === captured.id, () => {
+          setMode(viewModeFromRow(captured), true);
           persistForCurrentFocus();
           notifyModeChange();
-        },
-      });
+        }),
+      );
     }
     if (items.length === 0) {
-      items.push({ label: 'Нет отборов', disabled: true });
+      items.push(menuAction(t('strip.noViews'), undefined, { disabled: true }));
     }
     const rect = newBtn.getBoundingClientRect();
     showMenuAt(rect.left, rect.bottom, items);

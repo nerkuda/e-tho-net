@@ -102,18 +102,6 @@ function focusResponse(): FocusResponse {
   };
 }
 
-function metaViewRow(id: string, name: string, isDefault: boolean): Record<string, unknown> {
-  return {
-    id,
-    name,
-    name_key: id,
-    description: null,
-    defined_on: TYPE_ID,
-    inherited: false,
-    is_default: isDefault,
-  };
-}
-
 /** Определение активного отбора — тест подменяет его (в т.ч. на keywords). */
 let viewDefinition = JSON.stringify({ criteria: [] });
 
@@ -131,6 +119,16 @@ function fullView(id: string, name: string, isDefault: boolean): Record<string, 
     created_at: '2026-09-29T00:00:00.000Z',
     updated_at: '2026-09-29T00:00:00.000Z',
     created_by: '00000000-0000-4000-8000-000000000000',
+  };
+}
+
+/** Строка эффективного набора (`GET …/views?include_effective=true` → `meta.effective`). */
+function effectiveRow(id: string, name: string, isDefault: boolean): Record<string, unknown> {
+  return {
+    ...fullView(id, name, isDefault),
+    scope: 'type',
+    defined_on: TYPE_ID,
+    inherited: false,
   };
 }
 
@@ -163,7 +161,7 @@ function installFakeApi(): unknown {
       // Ответ фокуса НЕ меняется — окрестность статична (связь отфильтрована).
       focus: async () => focusResponse(),
       get: async () => ({
-        meta: { views: [metaViewRow('v1', 'Актуальные работы', true)] },
+        meta: { views: [effectiveRow('v1', 'Актуальные работы', true)] },
       }),
       resolve: async () => [],
       neighborsPage: async () => ({ total: 0, items: [] }),
@@ -171,7 +169,7 @@ function installFakeApi(): unknown {
     thoughtTypeViews: {
       list: async () => ({
         data: [fullView('v1', 'Актуальные работы', true)],
-        meta: { effective: [] },
+        meta: { effective: [effectiveRow('v1', 'Актуальные работы', true)] },
       }),
       run: async () => {
         viewRunCount++;
@@ -182,11 +180,25 @@ function installFakeApi(): unknown {
             limit: 50,
             offset: 0,
             directions: {},
-            view: { id: 'v1', name: 'Актуальные работы', type_id: TYPE_ID },
+            view: {
+              id: 'v1',
+              name: 'Актуальные работы',
+              scope: 'type',
+              defined_on: TYPE_ID,
+            },
             unresolved: [],
           },
         };
       },
+    },
+    // Единственный источник набора полосы — effective-список внетиповых
+    // отборов мысли (0.14.1): типовые приходят в `meta.effective` вместе с
+    // `definition`, поэтому второй list не нужен.
+    thoughtCustomViews: {
+      list: async () => ({
+        data: [],
+        meta: { effective: [effectiveRow('v1', 'Актуальные работы', true)] },
+      }),
     },
     comments: { list: async () => [] },
     attachments: { list: async () => [] },

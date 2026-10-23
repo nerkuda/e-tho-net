@@ -967,6 +967,67 @@ export interface EtnApi {
       viewName: string,
       opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
     ): Promise<RunThoughtTypeViewResult>;
+    /**
+     * `POST /thought-types/{id}/views/{viewId}/move-to-thought` — перенос
+     * владельца «тип → вне» (0.14.1, операция 85414fbd): отбор становится
+     * внетиповым у указанной мысли и исчезает у прочих мыслей типа.
+     * `thoughtTypeId` — `defined_on` отбора (для унаследованного — тип-владелец).
+     */
+    moveToThought(
+      networkId: string,
+      thoughtTypeId: string,
+      viewId: string,
+      targetThoughtId: string,
+    ): Promise<import('@etn/shared').TypeViewMoveToThoughtResult>;
+  };
+  /**
+   * Внетиповые отборы мысли (0.14.1, операция 5e55b7bb): CRUD + перенос
+   * владельца «вне типа → тип» (операция 85414fbd).
+   */
+  thoughtCustomViews: {
+    /**
+     * `GET /thoughts/{id}/views` — собственные внетиповые отборы мысли.
+     * `includeEffective: true` (по умолчанию) добавляет полный эффективный
+     * набор (`meta.effective`: типовые по цепочке + внетиповые) — источник
+     * полосы отборов (требование 045f539a).
+     */
+    list(
+      networkId: string,
+      thoughtId: string,
+      opts?: { includeEffective?: boolean },
+    ): Promise<import('@etn/shared').ThoughtViewsResult>;
+    /** `POST /thoughts/{id}/views` — create a custom view of the thought. */
+    create(
+      networkId: string,
+      thoughtId: string,
+      input: import('@etn/shared').ThoughtCustomViewInput,
+    ): Promise<import('@etn/shared').ThoughtCustomView>;
+    /** `PATCH /thoughts/{id}/views/{viewId}` — partial update with
+     *  optimistic concurrency (`expectedVersion` → `If-Match`). */
+    update(
+      networkId: string,
+      thoughtId: string,
+      viewId: string,
+      input: import('@etn/shared').ThoughtCustomViewUpdateInput,
+      expectedVersion: number,
+    ): Promise<import('@etn/shared').ThoughtCustomView>;
+    /** `DELETE /thoughts/{id}/views/{viewId}` — optimistic concurrency. */
+    remove(
+      networkId: string,
+      thoughtId: string,
+      viewId: string,
+      expectedVersion: number,
+    ): Promise<void>;
+    /**
+     * `POST /thoughts/{id}/views/{viewId}/move-to-type` — перенос владельца
+     * «вне типа → тип» (0.14.1, операция 85414fbd). Ответ — карточка отбора у
+     * нового владельца-типа.
+     */
+    moveToType(
+      networkId: string,
+      thoughtId: string,
+      viewId: string,
+    ): Promise<import('@etn/shared').CustomViewMoveToTypeResult>;
   };
   properties: {
     /**
