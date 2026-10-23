@@ -156,6 +156,14 @@ interface EffectiveViewRow {
   version: number;
   /** `true` — этот отбор открывается по умолчанию (эффективный дефолт). */
   is_default: boolean;
+  /**
+   * Собственная пометка «по умолчанию» строки владельца — без учёта
+   * наследования и перекрытия внетиповым дефолтом мысли. Единственный
+   * правильный источник для предупреждения о переносе: сервер снимает
+   * пометку по собственной, а эффективный `is_default` бывает занулён
+   * перекрытием (0.14.1, дельта раунда 2).
+   */
+  own_default: boolean;
 }
 
 /** Subscribers notified on every mode change. The canvas listens so it can
@@ -480,6 +488,7 @@ async function loadEffectiveViews(focus: FocusResponse): Promise<EffectiveViewRo
       position: typeof row['position'] === 'number' ? row['position'] : idx,
       version: typeof row['version'] === 'number' ? row['version'] : 0,
       is_default: row['is_default'] === true,
+      own_default: row['own_default'] === true,
     });
   }
   return out;
@@ -837,10 +846,16 @@ async function setDefault(
   }
 }
 
-/** Есть ли у получателя собственный отбор по умолчанию (пометка не переедет). */
+/**
+ * Есть ли у получателя собственный отбор по умолчанию (пометка не переедет).
+ * Считается по `own_default` — собственной пометке строки, а НЕ по
+ * эффективному `is_default`: сервер снимает пометку при переносе по
+ * собственной, а эффективную зануляет внетиповой дефолт мысли (дельта
+ * раунда 2, репро проверки x6).
+ */
 function hasOwnDefault(views: EffectiveViewRow[], scope: ThoughtViewScope): boolean {
   return views.some(
-    (row) => row.scope === scope && !row.inherited && row.is_default,
+    (row) => row.scope === scope && !row.inherited && row.own_default,
   );
 }
 

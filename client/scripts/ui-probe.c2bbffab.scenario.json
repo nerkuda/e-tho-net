@@ -1,6 +1,6 @@
 {
   "name": "c2bbffab-custom-views-strip",
-  "description": "GUI-сценарий задачи c2bbffab «Внетиповые отборы на полосе и в диалоге — клиент» (0.14.1): С1 (МЛИ-инструменты: порядок/курсив/дефолт/сохранённый выбор/результат), подтверждения С2 (перекрытие имени — одна курсивная кнопка) и П2 (переносы: тексты подтверждений), П1 (безтиповая мысль: «+» сразу редактор), П3 (назначение типа сохраняет внетиповые), realtime-переименование и перенос активного чипа. Данные заводятся через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c2bbffab.scenario.json --out .tmp/etn-c2bbffab/out",
+  "description": "GUI-сценарий задачи c2bbffab «Внетиповые отборы на полосе и в диалоге — клиент» (0.14.1): С1 (МЛИ-инструменты: порядок/курсив/дефолт/сохранённый выбор/результат), подтверждения С2 (перекрытие имени — одна курсивная кнопка) и П2 (переносы: тексты подтверждений; x6 — третий элемент о занятом собственном дефолте получателя при внетиповом дефолте мысли, перекрывающем типовой), П1 (безтиповая мысль: «+» сразу редактор), П3 (назначение типа сохраняет внетиповые), realtime-переименование и перенос активного чипа. Данные заводятся через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c2bbffab.scenario.json --out .tmp/etn-c2bbffab/out",
   "timeout": 300000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -168,6 +168,11 @@
       "name": "p2-transfer-to-type-dialog",
       "timeout": 15000,
       "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('его увидят все мысли этого типа')"
+    },
+    {
+      "name": "x6-transfer-default-note",
+      "probe": "window.__v4.dialogText().includes('У получателя уже есть отбор по умолчанию — перенесённый отбор останется без этой пометки.')",
+      "expect": true
     },
     {
       "name": "p2-transfer-to-type-title",

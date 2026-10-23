@@ -115,6 +115,13 @@ function row(
     definedOn?: string;
     inherited?: boolean;
     isDefault?: boolean;
+    /**
+     * Собственная пометка строки (0.14.1, дельта раунда 2). По умолчанию
+     * совпадает с `isDefault`: обычные фикстуры не моделируют перекрытие
+     * внетиповым дефолтом мысли. Репро x6 передаёт `isDefault:false,
+     * ownDefault:true` — эффективная пометка типа занулена перекрытием.
+     */
+    ownDefault?: boolean;
     position?: number;
     version?: number;
     definition?: string;
@@ -129,6 +136,7 @@ function row(
     definition: options.definition ?? JSON.stringify({ criteria: [] }),
     position: options.position ?? 0,
     is_default: options.isDefault ?? false,
+    own_default: options.ownDefault ?? options.isDefault ?? false,
     version: options.version ?? 1,
     scope,
     defined_on: options.definedOn ?? TYPE_ID,
@@ -810,6 +818,95 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     assert.deepEqual(state.customMoveToType.calls[0], [NETWORK_ID, FOCUS_ID, 'c-1']);
   });
 
+  it('перенос в тип: третий элемент по СОБСТВЕННОМУ дефолту типа при перекрытии внетиповым (репро x6)', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    // Репро блокера проверки раунда 1: у типа «МЛИ-инструмент» есть СВОЙ
+    // дефолт «Работы типа», но у мысли — внетиповой дефолт «В гараже». Сервер
+    // зануляет эффективный `is_default` типовой строки, а пометку при переносе
+    // снимает по собственной. Предупреждение обязано строиться по
+    // `own_default` (три элемента подтверждения).
+    const harness = await mountWith([
+      row('t-1', 'Работы типа', { isDefault: false, ownDefault: true }),
+      row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID, position: 1 }),
+      row('c-2', 'В гараже', {
+        scope: 'thought',
+        definedOn: FOCUS_ID,
+        isDefault: true,
+        ownDefault: true,
+        position: 2,
+      }),
+    ]);
+    harness.findViewButton('c-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    const dialog = lastDialog();
+    assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
+    const text = dialogText(dialog);
+    assert.ok(
+      text.includes('Отбор «Кому одолжил» станет общим для типа'),
+      `элемент 1 — имя отбора и тип-получатель: ${text}`,
+    );
+    assert.ok(
+      text.includes('его увидят все мысли этого типа'),
+      `элемент 2 — эффект на все мысли типа: ${text}`,
+    );
+    assert.ok(
+      text.includes(
+        'У получателя уже есть отбор по умолчанию — перенесённый отбор останется без этой пометки.',
+      ),
+      `элемент 3 — занятый собственный дефолт типа, даже когда эффективный занулён: ${text}`,
+    );
+  });
+
+  it('перенос в тип: третий элемент есть при собственном дефолте типа без перекрытия (положительный y)', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    const harness = await mountWith([
+      row('t-1', 'Работы типа', { isDefault: true, ownDefault: true }),
+      row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID, position: 1 }),
+    ]);
+    harness.findViewButton('c-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    const dialog = lastDialog();
+    assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
+    const text = dialogText(dialog);
+    assert.ok(
+      text.includes('его увидят все мысли этого типа'),
+      `элемент 2 — эффект на все мысли типа: ${text}`,
+    );
+    assert.ok(
+      text.includes('перенесённый отбор останется без этой пометки'),
+      `элемент 3 — собственный дефолт типа: ${text}`,
+    );
+  });
+
+  it('перенос в тип: без собственного дефолта получателя третьего элемента нет', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    const harness = await mountWith([
+      row('t-1', 'Работы типа'),
+      row('c-1', 'Кому одолжил', { scope: 'thought', definedOn: FOCUS_ID, position: 1 }),
+    ]);
+    harness.findViewButton('c-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    findMenuItemByLabel(menu, 'Перенести отбор в отборы типа')!.click();
+    const dialog = lastDialog();
+    assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
+    const text = dialogText(dialog);
+    assert.ok(
+      !text.includes('останется без этой пометки'),
+      `без занятого дефолта предупреждение не добавляется: ${text}`,
+    );
+  });
+
   it('перенос «тип → вне» унаследованного: подтверждение про типы-потомки, адрес — defined_on', async () => {
     installWindow();
     clearBody();
@@ -859,6 +956,37 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
       't-inh',
       FOCUS_ID,
     ]);
+  });
+
+  it('перенос «тип → вне»: третий элемент по собственному дефолту мысли-получателя', async () => {
+    installWindow();
+    clearBody();
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    const harness = await mountWith([
+      row('t-1', 'Работы типа', { isDefault: true, ownDefault: true }),
+      row('c-1', 'В гараже', {
+        scope: 'thought',
+        definedOn: FOCUS_ID,
+        isDefault: true,
+        ownDefault: true,
+        position: 1,
+      }),
+    ]);
+    harness.findViewButton('t-1')!.dispatchContextMenu();
+    const menu = lastMenu();
+    assert.ok(menu !== undefined);
+    findMenuItemByLabel(menu, 'Исключить отбор из отборов типа')!.click();
+    const dialog = lastDialog();
+    assert.ok(dialog !== undefined, 'подтверждение переноса открыто');
+    const text = dialogText(dialog);
+    assert.ok(
+      text.includes('станет внетиповым у мысли'),
+      `элемент 1 — эффект на мысль-получателя: ${text}`,
+    );
+    assert.ok(
+      text.includes('перенесённый отбор останется без этой пометки'),
+      `элемент 2 — собственный дефолт мысли-получателя: ${text}`,
+    );
   });
 
   it('в рабочем слое перенос/удаление не уходят в API — notice «Основы»', async () => {
