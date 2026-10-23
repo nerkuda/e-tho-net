@@ -974,6 +974,11 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'thought-type-view.updated': 'изменён отбор типа',
   'thought-type-view.deleted': 'удалён отбор типа',
   'thought-type-view.run': 'исполнен отбор',
+  // Внетиповые отборы мысли (0.14.1, задача a28d444b) — те же правила.
+  'thought-custom-view.created': 'добавлен отбор мысли',
+  'thought-custom-view.updated': 'изменён отбор мысли',
+  'thought-custom-view.deleted': 'удалён отбор мысли',
+  'thought-custom-view.run': 'исполнен отбор',
   // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
   'publication.updated': 'изменена публикация',
   'publication.order.reordered': 'изменён порядок публикации',

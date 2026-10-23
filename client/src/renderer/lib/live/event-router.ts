@@ -489,6 +489,7 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.focusAll(),
         queryKeys.structuresPageAll(),
         queryKeys.chronicleFeedAll(),
+        queryKeys.thoughtViewsAll(),
       ],
     }),
   ],
@@ -577,6 +578,21 @@ export const realtimeRoutes: RouteTable = {
   'thought-type-view.deleted': [
     ruleFor<'thought-type-view.deleted'>({
       invalidate: (evt) => [queryKeys.views(evt.data.thought_type_id)],
+    }),
+  ],
+  'thought-custom-view.created': [
+    ruleFor<'thought-custom-view.created'>({
+      invalidate: (evt) => [queryKeys.thoughtViews(evt.data.thought_id)],
+    }),
+  ],
+  'thought-custom-view.updated': [
+    ruleFor<'thought-custom-view.updated'>({
+      invalidate: (evt) => [queryKeys.thoughtViews(evt.data.thought_id)],
+    }),
+  ],
+  'thought-custom-view.deleted': [
+    ruleFor<'thought-custom-view.deleted'>({
+      invalidate: (evt) => [queryKeys.thoughtViews(evt.data.thought_id)],
     }),
   ],
   'publication.updated': [
@@ -670,7 +686,8 @@ export const realtimeRoutes: RouteTable = {
  *  - `thought-view.updated` — журнал «просмотрено», не данные экранов;
  *  - `edit.*` — мягкие захваты объекта, живут в `lib/lock-cache.ts`;
  *  - `thought-type-view.run` — аудит исполнения отбора, клиент переисполняет
- *    отборы сам при смене режима.
+ *    отборы сам при смене режима; `thought-custom-view.run` — то же для
+ *    внетиповых отборов мысли.
  */
 export const IGNORED_REALTIME_EVENT_TYPES: readonly RealtimeEventType[] = [
   'network.deleted',
@@ -685,6 +702,7 @@ export const IGNORED_REALTIME_EVENT_TYPES: readonly RealtimeEventType[] = [
   'edit.released',
   'edit.cleared',
   'thought-type-view.run',
+  'thought-custom-view.run',
 ];
 
 /** Быстрый поиск по {@link IGNORED_REALTIME_EVENT_TYPES}. */
