@@ -143,6 +143,8 @@ export function getThoughtTypeView(ndb: NetworkDb, id: string): ThoughtTypeViewR
  *     подтягивания отборов предков-слоёв. Это контракт REST
  *     `GET /thought-types/{id}/views` (контракт b90bb6e6: «GET отдаёт
  *     собственные отборы типа»); унаследованные показывает `meta.effective`.
+ *     `deleted = 0` обязателен (ошибка eb26f491): надгробие слоя — это
+ *     удалённый/перенесённый отбор, а не живой собственный.
  */
 export function listThoughtTypeViewsByType(
   ndb: NetworkDb,
@@ -153,7 +155,7 @@ export function listThoughtTypeViewsByType(
     return ndb
       .prepare(
         `SELECT ${COLUMNS} FROM thought_type_views
-          WHERE layer_id = ? AND thought_type_id = ?
+          WHERE layer_id = ? AND thought_type_id = ? AND deleted = 0
           ORDER BY position, name`,
       )
       .all(ndb.layerId, thoughtTypeId) as ThoughtTypeViewRow[];

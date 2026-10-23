@@ -279,6 +279,56 @@ describe(
       }
     });
 
+    // Ошибка eb26f491 (0.14.1): physical-layer ветка списка не фильтровала
+    // `deleted = 0`, поэтому надгробие слоя (удалённый/перенесённый отбор)
+    // отдавалось как живой отбор в `GET /thought-types/{id}/views`.
+    it('currentLayerOnly не отдаёт надгробия слоя как живые отборы', () => {
+      const { ndb, typeId } = setup();
+      try {
+        insertThoughtTypeView(
+          ndb,
+          { thought_type_id: typeId, name: 'Живой', definition: DEFINITION },
+          USER,
+        );
+        const doomed = insertThoughtTypeView(
+          ndb,
+          { thought_type_id: typeId, name: 'Удалённый', definition: DEFINITION },
+          USER,
+        );
+
+        ndb.exec(
+          `INSERT INTO layers (id, parent_id, title, depth, created_by, created_at, last_activity_at)
+             VALUES ('33333333-3333-4333-8333-333333333333',
+                     '${BASE_LAYER_ID}', 'L3', 1, '${USER}', '2024-01-01', '2024-01-01')`,
+        );
+        ndb.useLayer('33333333-3333-4333-8333-333333333333');
+
+        // В слое удаляем один из базовых отборов — материализуется надгробие.
+        assert.equal(deleteThoughtTypeView(ndb, doomed.id), true);
+
+        const own = listThoughtTypeViewsByType(ndb, typeId, { currentLayerOnly: true });
+        assert.deepEqual(
+          own.map((v) => v.name),
+          [],
+          'в слое собственных живых отборов нет: надгробие не должно попадать в список',
+        );
+        // Чтение через `*_v` по-прежнему отдаёт только живые (второй скрыт).
+        assert.deepEqual(
+          listThoughtTypeViewsByType(ndb, typeId).map((v) => v.name),
+          ['Живой'],
+        );
+
+        // В основе оба живы: надгробие — свойство слоя.
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.deepEqual(
+          listThoughtTypeViewsByType(ndb, typeId, { currentLayerOnly: true }).map((v) => v.name),
+          ['Живой', 'Удалённый'],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('update в слое НЕ затрагивает базовую строку (материализация тени)', () => {
       const { ndb, typeId } = setup();
       try {
