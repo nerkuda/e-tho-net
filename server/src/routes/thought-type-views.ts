@@ -53,6 +53,7 @@ import {
   parseRest,
   RestIfMatch,
   RestViewCreateBody,
+  RestViewMoveToThoughtBody,
   RestViewRunAstBody,
   RestViewRunBody,
   RestViewUpdateBody,
@@ -68,6 +69,8 @@ import {
   updateThoughtTypeView,
 } from '../domain/thought-type-views-service.js';
 import { getThought } from '../domain/thought-service.js';
+import { toEffectiveCustomView } from '../domain/thought-custom-views-service.js';
+import { moveThoughtTypeViewToThought } from '../domain/thought-view-transfer.js';
 import { logFilterStats } from '../log/filter-stats.js';
 
 /** Route params для `:networkId` + `:id` (id типа мысли). */
@@ -418,6 +421,61 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           };
         });
         reply.code(204).send();
+      },
+    );
+
+    // --- POST /thought-types/{id}/views/{viewId}/move-to-thought ------------
+    //
+    // Перенос владельца «тип → вне» (0.14.1, операция 85414fbd): отбор типа
+    // становится внетиповым у указанной мысли и исчезает у всех прочих (для
+    // унаследованного — у всех потомков предка-владельца). Одна транзакция:
+    // upsert в `thought_custom_views` + надгробие/удаление источника. Ответ
+    // 200 — внетиповая карточка (`scope:'thought'`, `defined_on`).
+    //
+    // `:id` для унаследованного отбора — `defined_on` (тип-владелец), не тип
+    // фокуса; чужой `:viewId`/`:id` — 404 с `details.defined_on`.
+    app.post(
+      '/networks/:networkId/thought-types/:id/views/:viewId/move-to-thought',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id, viewId } = req.params as ViewIdParams;
+        const input = parseRest(RestViewMoveToThoughtBody, req);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const moved = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const result = moveThoughtTypeViewToThought(
+            ndb,
+            id,
+            viewId,
+            input.target_thought_id,
+            req.id,
+          );
+          const card = toEffectiveCustomView(result.view);
+          return {
+            result: card,
+            events: [
+              {
+                type: 'thought-type-view.deleted',
+                data: {
+                  // Фактический владелец строки (для унаследованного — тип, на
+                  // котором отбор определён), не тип фокуса.
+                  thought_type_id: result.source.thought_type_id,
+                  view_id: viewId,
+                  reason: 'moved',
+                  moved_to: result.thought_id,
+                },
+              },
+              {
+                type: 'thought-custom-view.created',
+                data: { thought_id: result.thought_id, view: card },
+              },
+            ],
+          };
+        });
+        sendSuccess(reply, moved, {
+          version: moved.version,
+          updated_at: moved.updated_at,
+          request_id: req.id,
+        });
       },
     );
 

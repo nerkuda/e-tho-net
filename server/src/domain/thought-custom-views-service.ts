@@ -22,6 +22,7 @@
 
 import {
   EtnError,
+  type EffectiveThoughtCustomView,
   type ThoughtCustomView,
   type ThoughtCustomViewInput,
   type ThoughtCustomViewUpdateInput,
@@ -64,6 +65,34 @@ function rowToView(row: ThoughtCustomViewRow): ThoughtCustomView {
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
+  };
+}
+
+/**
+ * Карточка внетипового отбора в форме события/эффективного набора: владелец —
+ * мысль, `scope: 'thought'`, `defined_on` = id мысли, `inherited: false`,
+ * `thought_type_id` отсутствует (не подменять владельца). Единая точка для
+ * REST-маршрутов CRUD и переноса (операция 85414fbd) — вторая копия маппинга
+ * разошлась бы с первой.
+ */
+export function toEffectiveCustomView(
+  view: ThoughtCustomView,
+): EffectiveThoughtCustomView {
+  return {
+    id: view.id,
+    name: view.name,
+    name_key: view.name_key,
+    description: view.description,
+    definition: view.definition,
+    position: view.position,
+    is_default: view.is_default,
+    version: view.version,
+    created_at: view.created_at,
+    updated_at: view.updated_at,
+    created_by: view.created_by,
+    scope: 'thought',
+    defined_on: view.thought_id,
+    inherited: false,
   };
 }
 

@@ -488,6 +488,14 @@ export interface ThoughtTypeViewUpdatedData {
 export interface ThoughtTypeViewDeletedData {
   thought_type_id: string;
   view_id: string;
+  /**
+   * Причина удаления: `'moved'` — отбор перенесён новому владельцу
+   * (операция 85414fbd, `move-to-thought`). Клиент отличает перенос от
+   * удаления и не сбрасывает активный чип зря.
+   */
+  reason?: 'moved';
+  /** Id нового владельца (для `reason: 'moved'` — мысль-получатель). */
+  moved_to?: string;
 }
 /**
  * `thought-type-view.run` — успешное исполнение отбора относительно мысли
@@ -529,6 +537,14 @@ export interface ThoughtCustomViewDeletedData {
    * ветвимой строки в слоевой видимости (`layer-visibility.ts`).
    */
   view: EffectiveThoughtCustomView;
+  /**
+   * Причина удаления: `'moved'` — отбор перенесён новому владельцу
+   * (операция 85414fbd, `move-to-type`). Клиент отличает перенос от удаления
+   * и не сбрасывает активный чип зря.
+   */
+  reason?: 'moved';
+  /** Id нового владельца (для `reason: 'moved'` — тип-получатель). */
+  moved_to?: string;
 }
 /**
  * `thought-custom-view.run` — исполнение внетипового отбора через REST.

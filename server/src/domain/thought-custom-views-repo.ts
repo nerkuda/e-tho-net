@@ -29,6 +29,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
   materializeShadow,
+  touchLayerActivity,
   type BranchableTable,
 } from '../db/layer-write.js';
 
@@ -271,6 +272,124 @@ export function deleteThoughtCustomView(ndb: NetworkDb, id: string): boolean {
     deleteRowLayered(ndb, 'thought_custom_views' as ThoughtCustomViewsTable, id);
   });
   return true;
+}
+
+/** Итог переноса строки в таблицу внетиповых отборов (операция 85414fbd). */
+export type ThoughtCustomViewTransferOutcome = 'inserted' | 'revived' | 'occupied';
+
+/** Данные переносимой строки: поля источника, дословно (ADR 6021918b). */
+export interface TransferThoughtCustomViewInput {
+  id: string;
+  thought_id: string;
+  name: string;
+  name_key: string;
+  description: string | null;
+  definition: string;
+  is_default: boolean;
+  created_at: string;
+  created_by: string;
+}
+
+/**
+ * Принять переносимую строку в `thought_custom_views` (новый владелец-мысль):
+ * upsert по `(id, layer_id)` — операции 85414fbd.
+ *
+ *   * строки нет — INSERT с явным id, `layer_id`, `base_version = 0`,
+ *     `version = 1`;
+ *   * надгробие (`deleted = 1`) — оживление: владелец/имя/definition/
+ *     description/created_at/created_by из источника, `updated_at` — сейчас,
+ *     `version = 1`, **`base_version` сохраняется** (сброс дал бы ложный
+ *     конфликт слияния);
+ *   * живая строка с этим id — `'occupied'` (домен отдаёт 409 DUPLICATE).
+ *
+ * `position` — в конец получателя (MAX+1 среди видимых отборов мысли).
+ * `is_default` переносится, только если у мысли-получателя нет собственного
+ * дефолта (у внетиповых наследования нет — любой живой дефолт собственный).
+ */
+export function transferThoughtCustomViewRow(
+  ndb: NetworkDb,
+  input: TransferThoughtCustomViewInput,
+): ThoughtCustomViewTransferOutcome {
+  // layers:physical-read — upsert адресован собственной строке слоя.
+  const own = ndb
+    .prepare(
+      'SELECT deleted FROM thought_custom_views WHERE id = ? AND layer_id = ? LIMIT 1',
+    )
+    .get(input.id, ndb.layerId) as { deleted: number } | undefined;
+  if (own && own.deleted === 0) {
+    return 'occupied';
+  }
+
+  const position = (
+    ndb
+      .prepare(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM thought_custom_views_v WHERE thought_id = ?',
+      )
+      .get(input.thought_id) as { p: number }
+  ).p;
+  const ownDefault = ndb
+    .prepare(
+      `SELECT 1 FROM thought_custom_views
+        WHERE layer_id = ? AND thought_id = ? AND deleted = 0
+          AND is_default = 1 AND id <> ?
+        LIMIT 1`,
+    )
+    .get(ndb.layerId, input.thought_id, input.id) !== undefined;
+  const isDefault = input.is_default && !ownDefault;
+  const now = new Date().toISOString();
+
+  if (own) {
+    // Оживление надгробия: base_version НЕ трогаем (сохраняем версию предка).
+    ndb
+      .prepare(
+        `UPDATE thought_custom_views
+            SET deleted = 0, thought_id = ?, name = ?, name_key = ?,
+                description = ?, definition = ?, position = ?, is_default = ?,
+                version = 1, updated_at = ?, created_at = ?, created_by = ?
+          WHERE id = ? AND layer_id = ?`,
+      )
+      .run(
+        input.thought_id,
+        input.name,
+        input.name_key,
+        input.description,
+        input.definition,
+        position,
+        isDefault ? 1 : 0,
+        now,
+        input.created_at,
+        input.created_by,
+        input.id,
+        ndb.layerId,
+      );
+    touchLayerActivity(ndb);
+    return 'revived';
+  }
+
+  ndb
+    .prepare(
+      `INSERT INTO thought_custom_views
+         (id, layer_id, deleted, base_version, thought_id, name, name_key,
+          description, definition, position, is_default, version,
+          created_at, updated_at, created_by)
+       VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    )
+    .run(
+      input.id,
+      ndb.layerId,
+      input.thought_id,
+      input.name,
+      input.name_key,
+      input.description,
+      input.definition,
+      position,
+      isDefault ? 1 : 0,
+      input.created_at,
+      now,
+      input.created_by,
+    );
+  touchLayerActivity(ndb);
+  return 'inserted';
 }
 
 /**

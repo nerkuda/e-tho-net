@@ -7,6 +7,8 @@
  *   GET    /api/v1/networks/{nid}/thoughts/{id}/views/{viewId}
  *   PATCH  /api/v1/networks/{nid}/thoughts/{id}/views/{viewId}
  *   DELETE /api/v1/networks/{nid}/thoughts/{id}/views/{viewId}
+ *   POST   /api/v1/networks/{nid}/thoughts/{id}/views/{viewId}/move-to-type
+ *          (перенос владельца «вне типа → тип», операция 85414fbd)
  *
  * GET без параметров отдаёт СОБСТВЕННЫЕ внетиповые отборы мысли в текущем
  * слое (контракт зеркален `GET /thought-types/{id}/views`). `?include_effective=true`
@@ -29,7 +31,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  type EffectiveThoughtCustomView,
   type ThoughtCustomView,
 } from '@etn/shared';
 
@@ -53,9 +54,11 @@ import {
   deleteThoughtCustomView,
   getThoughtCustomView,
   listThoughtCustomViews,
+  toEffectiveCustomView,
   updateThoughtCustomView,
 } from '../domain/thought-custom-views-service.js';
 import { getEffectiveViewsForThought } from '../domain/thought-type-views-service.js';
+import { moveThoughtCustomViewToType } from '../domain/thought-view-transfer.js';
 import { parseViewCreateBody, parseViewUpdateBody } from './thought-type-views.js';
 
 /** Route params для `:networkId` + `:id` (id мысли-владельца). */
@@ -69,30 +72,6 @@ interface ViewIdParams {
   networkId: string;
   id: string;
   viewId: string;
-}
-
-/**
- * Карточка внетипового отбора в форме события/эффективного набора: владелец —
- * мысль, `scope: 'thought'`, `defined_on` = id мысли, `inherited: false`,
- * `thought_type_id` отсутствует (не подменять владельца).
- */
-function customViewCard(view: ThoughtCustomView): EffectiveThoughtCustomView {
-  return {
-    id: view.id,
-    name: view.name,
-    name_key: view.name_key,
-    description: view.description,
-    definition: view.definition,
-    position: view.position,
-    is_default: view.is_default,
-    version: view.version,
-    created_at: view.created_at,
-    updated_at: view.updated_at,
-    created_by: view.created_by,
-    scope: 'thought',
-    defined_on: view.thought_id,
-    inherited: false,
-  };
 }
 
 /** Мысль-владелец должна существовать и быть видимой в слое сессии (404). */
@@ -190,7 +169,7 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
             events: [
               {
                 type: 'thought-custom-view.created',
-                data: { thought_id: created.thought_id, view: customViewCard(created) },
+                data: { thought_id: created.thought_id, view: toEffectiveCustomView(created) },
               },
             ],
           };
@@ -249,7 +228,7 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
                   view_id: viewId,
                   changes,
                   version: updated.version,
-                  view: customViewCard(updated),
+                  view: toEffectiveCustomView(updated),
                 },
               },
             ],
@@ -300,13 +279,68 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
                 data: {
                   thought_id: before.thought_id,
                   view_id: viewId,
-                  view: customViewCard(before),
+                  view: toEffectiveCustomView(before),
                 },
               },
             ],
           };
         });
         reply.code(204).send();
+      },
+    );
+
+    // --- POST /thoughts/{id}/views/{viewId}/move-to-type --------------------
+    //
+    // Перенос владельца «вне типа → тип» (0.14.1, операция 85414fbd): отбор
+    // становится отбором типа мысли-владельца и появляется у всех мыслей
+    // типа. Одна транзакция: upsert в `thought_type_views` + надгробие/удаление
+    // источника. Ответ 200 — карточка у НОВОГО владельца (version=1,
+    // updated_at, position) + `meta.layer` из общего эха.
+    //
+    // События пары: `thought-custom-view.deleted` (полная карточка источника,
+    // `reason:'moved'` + `moved_to` = id типа) и `thought-type-view.created`
+    // (`EffectiveThoughtTypeView`, чтобы клиент не делал лишний GET).
+    app.post(
+      '/networks/:networkId/thoughts/:id/views/:viewId/move-to-type',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id, viewId } = req.params as ViewIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const moved = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const result = moveThoughtCustomViewToType(ndb, id, viewId, req.id);
+          // Эффективная карточка — после переноса: отбор уже собственный у типа
+          // (`defined_on` = тип, `inherited: false`).
+          const effective = getEffectiveViewsForThought(ndb, { type_id: result.type_id });
+          const created = effective.find((v) => v.id === result.view.id) ?? {
+            ...result.view,
+            defined_on: result.type_id,
+            inherited: false,
+          };
+          return {
+            result: result.view,
+            events: [
+              {
+                type: 'thought-custom-view.deleted',
+                data: {
+                  thought_id: result.source.thought_id,
+                  view_id: viewId,
+                  view: toEffectiveCustomView(result.source),
+                  reason: 'moved',
+                  moved_to: result.type_id,
+                },
+              },
+              {
+                type: 'thought-type-view.created',
+                data: { thought_type_id: result.type_id, view: created },
+              },
+            ],
+          };
+        });
+        sendSuccess(reply, moved, {
+          version: moved.version,
+          updated_at: moved.updated_at,
+          request_id: req.id,
+        });
       },
     );
   };

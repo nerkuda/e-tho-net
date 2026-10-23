@@ -3969,6 +3969,26 @@ export const RestViewUpdateBody = defineContract(
 );
 
 /**
+ * Тело POST /thought-types/{id}/views/{viewId}/move-to-thought — адрес мысли,
+ * которой достанется отбор (0.14.1, операция 85414fbd). Полный id или
+ * однозначный префикс (как всюду в REST); резолвит домен через `getThought`.
+ */
+export const RestViewMoveToThoughtBody = defineContract(
+  'rest:views.move-to-thought-body',
+  z
+    .object({
+      target_thought_id: z.string().min(1),
+    })
+    .strict(),
+  {
+    target_thought_id: {
+      from: { kind: 'body' },
+      msg: 'target_thought_id обязателен — id мысли-получателя.',
+    },
+  },
+);
+
+/**
  * Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки.
  * `.strict()` (задача 0e7e89f5): прежде схема не была строгой и ошибочно
  * присланное `ast` молча срезалось zod-ом — вызов «успешно» исполнял
