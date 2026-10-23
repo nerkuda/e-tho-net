@@ -631,10 +631,10 @@ function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<St
   return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
 }
 
-/** Клауза совпадения «Найти слова»: SQL-предикат и число LIKE-параметров в нём. */
-interface KeywordMatchClause {
+/** Клауза совпадения «Найти слова» для одного слова: SQL-предикат и его параметры. */
+export interface KeywordWordClause {
   sql: string;
-  paramCount: number;
+  params: unknown[];
 }
 
 /**
@@ -643,13 +643,14 @@ interface KeywordMatchClause {
  * тело И заголовок — ровно так, как путь «текст самой записи» компилирует
  * хроника (`record_body`/`record_title`, задача 608ecb79).
  *
- * Одна точка правды: этот же предикат использует плоский компилятор хроники
- * (`chronicle-service.thoughtKeywordCond`), иначе AST-лист и `keyword_scope`
- * разъехались бы (тот же класс дефекта, что fc97548d).
+ * Одна точка правды: этот же предикат входит в per-word клаузу
+ * {@link buildKeywordWordClause}, которую использует и AST-лист, и плоский
+ * компилятор хроники (`chronicle-service.selectThoughts`), иначе AST-лист и
+ * `keyword_scope` разъехались бы (тот же класс дефекта, что fc97548d).
  *
  * @param alias алиас `thoughts_v` в объемлющем SQL (у обоих вызывающих — `t`).
  */
-export function diaryKeywordClause(alias = 't'): KeywordMatchClause {
+export function diaryKeywordClause(alias = 't'): { sql: string; paramCount: number } {
   return {
     sql:
       `EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = ${alias}.id` +
@@ -661,58 +662,85 @@ export function diaryKeywordClause(alias = 't'): KeywordMatchClause {
 }
 
 /**
- * Одна клауза совпадения по словам для эффективного набора областей: `title`,
+ * Одна клауза совпадения по слову для эффективного набора областей: `title`,
  * `synonyms`, `comment` (постоянный комментарий мысли) и/или `diary`
  * (хронологические записи мысли) — OR между выбранными источниками. LIKE-образец
  * строит {@link buildLikePattern} (экранирование `%`/`_`/`\`, `*` → `%`),
- * поэтому совпадение инфиксное и регистронезависимое.
+ * поэтому литеральное совпадение инфиксное и регистронезависимое.
+ *
+ * **`*`-синонимы (задача f0b06700, требование 35218826, сценарий «поиск», D1).**
+ * В источнике `synonyms` к литеральной подстроке добавлена ветка «слово запроса
+ * совпало со СЛОВОМ `*`-синонима по границам слова» — `synonym_word_pattern_match`
+ * (общий матчер `@etn/shared`, та же семантика `*`, что у дублей и упоминаний,
+ * но без фразового правила: каждое слово запроса матчится независимо). Ветка
+ * добавляется только для слова БЕЗ `*` (D4): слово запроса с `*` остаётся
+ * литеральным, как и раньше. Заголовок расширению не подлежит (D5).
  *
  * `opts.commentIncludesLinkComments` (требование ce111b0d, ошибка fc97548d) —
  * контекст ФАЗЫ 1 ОТБОРА ХРОНИКИ: область `comment` ищет и комментарии
  * инцидентных связей мысли с обеих сторон. Опцию ставит только исполнитель
  * хроники (`chronicle-service.targetsLeafClause`); семантика отбора мыслей
  * (требование b363cad1 — только постоянный комментарий самой мысли) не меняется.
+ *
+ * Плоский компилятор хроники (`chronicle-service.selectThoughts`) использует эту
+ * же клаузу — иначе плоский и AST-пути разъехались бы (правило аналогов,
+ * класс расхождения fc97548d).
  */
-function buildKeywordClause(
+export function buildKeywordWordClause(
   scope: Set<StructureKeywordScope>,
+  word: string,
   opts?: { commentIncludesLinkComments?: boolean },
-): KeywordMatchClause {
-  const parts: KeywordMatchClause[] = [];
-  if (scope.has('title')) parts.push({ sql: "t.title_norm LIKE ? ESCAPE '\\'", paramCount: 1 });
+): KeywordWordClause {
+  // Нормализация обеих сторон сравнения (D6): колонки `*_norm` хранят
+  // NFC+lowercase, слово запроса приводится к той же форме — и для LIKE, и для
+  // матчера `*`-слов (иначе NFD-ввод не совпадёт с NFC-колонкой, 6898ef75).
+  const norm = word.normalize('NFC').toLowerCase();
+  const like = buildLikePattern(norm);
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  if (scope.has('title')) {
+    parts.push("t.title_norm LIKE ? ESCAPE '\\'");
+    params.push(like);
+  }
   if (scope.has('synonyms')) {
-    parts.push({
-      sql:
-        'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
-        " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\')",
-      paramCount: 1,
-    });
+    // D4: слово запроса с `*` — только литеральная ветка.
+    const patternBranch = norm.includes('*')
+      ? ''
+      : ' OR synonym_word_pattern_match(?, ts.synonym_norm)';
+    parts.push(
+      'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+        " WHERE ts.thought_id = t.id AND (ts.synonym_norm LIKE ? ESCAPE '\\'" +
+        `${patternBranch}))`,
+    );
+    params.push(like);
+    if (patternBranch !== '') params.push(norm);
   }
   if (scope.has('comment')) {
-    parts.push({
-      sql:
-        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
+    parts.push(
+      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
         " AND c.kind = 'permanent' AND unicode_lower(c.body_md) LIKE ? ESCAPE '\\')",
-      paramCount: 1,
-    });
+    );
+    params.push(like);
     if (opts?.commentIncludesLinkComments === true) {
       // Комментарии инцидентных связей с обеих сторон — как в плоском
       // `thoughtKeywordCond` (тип комментария не сужается: и постоянные, и
       // записи дневника связи), требование ce111b0d.
-      parts.push({
-        sql:
-          'EXISTS (SELECT 1 FROM comments_v c2' +
+      parts.push(
+        'EXISTS (SELECT 1 FROM comments_v c2' +
           " JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'" +
           ' JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)' +
           " WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\')",
-        paramCount: 1,
-      });
+      );
+      params.push(like);
     }
   }
-  if (scope.has('diary')) parts.push(diaryKeywordClause('t'));
-  return {
-    sql: `(${parts.map((p) => p.sql).join(' OR ')})`,
-    paramCount: parts.reduce((sum, p) => sum + p.paramCount, 0),
-  };
+  if (scope.has('diary')) {
+    const diary = diaryKeywordClause('t');
+    parts.push(diary.sql);
+    // diaryKeywordClause возвращает параметризованную клаузу — параметры общие.
+    for (let i = 0; i < diary.paramCount; i += 1) params.push(like);
+  }
+  return { sql: `(${parts.join(' OR ')})`, params };
 }
 
 /**
@@ -742,10 +770,26 @@ function buildKeywordFtsJoin(
   if (include.length === 0 || scope.has('comment') || scope.has('diary')) return null;
   const match = nameTrigramMatch(include);
   if (match === null) return null;
-  return {
-    sql: `JOIN (SELECT rowid FROM fts_thought_names WHERE fts_thought_names MATCH ?) __kw ON __kw.rowid = t.rowid`,
-    params: [match],
-  };
+  // D7: сужатель обязан оставаться НАДМНОЖЕСТВОМ точного предиката. При области
+  // `synonyms` к FTS-кандидатам добавляются мысли, у которых слово запроса
+  // совпало со словом `*`-синонима: триграммы такого совпадения не видят
+  // («проектирование» vs «проектиров*»), и без OR-ветки живой случай из DoD
+  // отсекался бы ещё до точной клаузы.
+  const patternWords = scope.has('synonyms')
+    ? include.map((word) => word.normalize('NFC').toLowerCase()).filter((word) => !word.includes('*'))
+    : [];
+  let sql = `JOIN (SELECT rowid FROM fts_thought_names WHERE fts_thought_names MATCH ?`;
+  const params: unknown[] = [match];
+  if (patternWords.length > 0) {
+    sql +=
+      ' UNION SELECT tv.rowid FROM thoughts_v tv WHERE EXISTS (' +
+      'SELECT 1 FROM thought_synonyms_v ts2 WHERE ts2.thought_id = tv.id AND (' +
+      `${patternWords.map(() => 'synonym_word_pattern_match(?, ts2.synonym_norm)').join(' OR ')})` +
+      ')';
+    params.push(...patternWords);
+  }
+  sql += ') __kw ON __kw.rowid = t.rowid';
+  return { sql, params };
 }
 
 /** Результат обхода поддерева: depth каждого узла (включая/исключая корни по
@@ -2802,20 +2846,21 @@ function keywordsLeafClause(
   const text = typeof leaf.value === 'string' ? leaf.value : '';
   const { include, exclude } = parseFilterKeywords(text);
   if (include.length === 0 && exclude.length === 0) return AST_TRUE;
-  const clause = buildKeywordClause(scope, {
-    ...(astOpts?.keywordCommentIncludesLinkComments === true
+  const opts =
+    astOpts?.keywordCommentIncludesLinkComments === true
       ? { commentIncludesLinkComments: true }
-      : {}),
-  });
+      : undefined;
   const parts: string[] = [];
   const params: unknown[] = [];
   for (const word of include) {
+    const clause = buildKeywordWordClause(scope, word, opts);
     parts.push(clause.sql);
-    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+    params.push(...clause.params);
   }
   for (const word of exclude) {
+    const clause = buildKeywordWordClause(scope, word, opts);
     parts.push(`NOT ${clause.sql}`);
-    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+    params.push(...clause.params);
   }
   return { sql: `(${parts.join(' AND ')})`, params };
 }

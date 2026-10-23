@@ -618,9 +618,18 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // `subgraph` (внетиповые отборы, `scope`/`defined_on`, `available_views`)
         // — +492 Б прозы. Замер: 46 089 → 49 651 Б. Планка поднята ровно под
         // прирост с малым запасом: 46 100 → 49 900.
+        // 0.14.1 (задача f0b06700, «Раскрытие `*`-синонимов в поиске мыслей»):
+        // в описания `etn.thoughts.search` и `etn.thoughts.query` добавлена
+        // семантика слово-паттерна хранимого `*`-синонима (слово запроса без
+        // `*` совпадает и с целым словом синонима по границам слова; слова
+        // запроса независимы) — агент обязан знать её из `tools/list` ещё до
+        // вызова (D10 постановки; детали — спека, тема `etn.guide { topic:
+        // "thoughts.query" }`). Прирост — только проза: замер 49 651 → 50 494 Б
+        // (+843). Планка поднята ровно под прирост с малым запасом:
+        // 49 900 → 50 800.
         assert.ok(
-          bytes <= 49_900,
-          `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 49900`,
+          bytes <= 50_800,
+          `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 50800`,
         );
         // Потолок числа инструментов: фактическое 26 + запас 4 = 30 (нижняя
         // граница ориентира техпроекта 22e34ba5). Превышение — только
@@ -716,9 +725,12 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // (`description` + `inputSchema` батча), плюс актуализация четырёх
         // описаний (+500 Б). D+I 41 324 → 44 650 Б (+3 326). Планка:
         // 41 400 → 44 900 (малый запас).
+        // 0.14.1 (задача f0b06700): см. блок выше — семантика `*`-синонимов в
+        // двух описаниях дала +843 Б прозы; D+I 44 650 → 45 493 Б. Планка:
+        // 44 900 → 45 800 (малый запас).
         assert.ok(
-          descriptionsPlusInputSchema <= 44_900,
-          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 44900`,
+          descriptionsPlusInputSchema <= 45_800,
+          `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 45800`,
         );
       } finally {
         await handle.close();

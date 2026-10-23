@@ -268,6 +268,10 @@ interface TrigramQuery {
    * regardless of its own length.
    */
   nameShortExclude: string[];
+  /** ALL NFC-normalised include words — the exact per-word `by_names` predicate. */
+  nameInclude: string[];
+  /** ALL NFC-normalised exclude words — the exact per-word `by_names` predicate. */
+  nameExclude: string[];
 }
 
 /**
@@ -296,7 +300,7 @@ function buildTrigramQuery(text: string): TrigramQuery {
   if (include.length === 0) {
     // No include words at all (empty query, or pure exclusions like `-dog`)
     // — nothing to anchor a match or even a LIKE fallback to.
-    return { match: '', nameShortInclude: [], nameShortExclude: [] };
+    return { match: '', nameShortInclude: [], nameShortExclude: [], nameInclude: [], nameExclude: [] };
   }
 
   const positives: string[] = [];
@@ -312,7 +316,13 @@ function buildTrigramQuery(text: string): TrigramQuery {
     // falls back to a pure LIKE pass (no FTS anchor at all), so every
     // exclude word — long or short — must go through the same LIKE-based
     // NOT for names; the other three groups stay unfiltered (Tier 1).
-    return { match: '', nameShortInclude, nameShortExclude: exclude };
+    return {
+      match: '',
+      nameShortInclude,
+      nameShortExclude: exclude,
+      nameInclude: include,
+      nameExclude: exclude,
+    };
   }
 
   let match = positives.join(' AND ');
@@ -322,7 +332,7 @@ function buildTrigramQuery(text: string): TrigramQuery {
     if (phrase === null) nameShortExclude.push(word);
     else match += ` NOT ${phrase}`;
   }
-  return { match, nameShortInclude, nameShortExclude };
+  return { match, nameShortInclude, nameShortExclude, nameInclude: include, nameExclude: exclude };
 }
 
 /** HTML-escape the five significant characters of a text node. */
@@ -662,12 +672,72 @@ function buildShortWordNameClause(word: string, negate: boolean): Clause {
 }
 
 /**
+ * Точный предикат ОДНОГО include- или исключающего слова по группе `by_names`
+ * (задача f0b06700, требование 35218826, сценарий «поиск», D1/D3/D5):
+ * литеральная подстрока в заголовке ИЛИ в синониме, а для слова БЕЗ `*` — ещё
+ * и совпадение со СЛОВОМ `*`-синонима по границам слова
+ * (`synonym_word_pattern_match`, D4: слово запроса с `*` — только литерально).
+ *
+ * Заголовок расширению не подлежит (D5) — матчер применяется только к
+ * синонимам. Форма литеральной части повторяет {@link buildShortWordNameClause}
+ * (NFC-слова приходят из {@link buildTrigramQuery}).
+ */
+function buildNameWordClause(word: string, negate: boolean): Clause {
+  const norm = word.normalize('NFC').toLowerCase();
+  const pattern = buildLikePattern(norm);
+  const wildcard = norm.includes('*') ? '' : ' OR synonym_word_pattern_match(?, ts.synonym_norm)';
+  const sql =
+    "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
+    ` WHERE ts.thought_id = t.id AND (ts.synonym_norm LIKE ? ESCAPE '\\'${wildcard})))`;
+  const params: unknown[] = [pattern, pattern];
+  if (wildcard !== '') params.push(norm);
+  return { sql: negate ? `NOT (${sql})` : sql, params };
+}
+
+/**
+ * Только pattern-ветка исключения для FTS-тира: литеральную часть уже учёл
+ * `fts_thought_names MATCH` (в т.ч. короткие слова — своей LIKE-клаузой), а
+ * слово-паттерн синонима туда не попадает. `null` — слово запроса содержит `*`
+ * (D4) или совпадение невозможно.
+ */
+function buildNamePatternExcludeClause(word: string): Clause | null {
+  const norm = word.normalize('NFC').toLowerCase();
+  if (norm.includes('*')) return null;
+  return {
+    sql:
+      'NOT EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+      ' WHERE ts.thought_id = t.id AND synonym_word_pattern_match(?, ts.synonym_norm))',
+    params: [norm],
+  };
+}
+
+/** Колонки хита `by_names` (визуальный стиль и `active` — из строки-победителя). */
+const NAME_HIT_COLUMNS = `t.id AS thought_id, t.title AS title, t.icon AS icon,
+              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
+              t.icon_color AS icon_color,
+              t.fg_color AS fg_color, t.bg_color AS bg_color,
+              t.font_bold AS font_bold, t.font_italic AS font_italic,
+              t.font_underline AS font_underline, t.font_strike AS font_strike,
+              t.font_manual AS font_manual,
+              t.type_id AS type_id, t.active AS active`;
+
+/**
  * Query the thought-names group. `trigram.match === ''` means no include
  * word cleared the trigram floor — the FTS5 join/MATCH is skipped entirely
- * (querying `MATCH ''` is invalid) and the result rests solely on
- * {@link buildShortWordNameClause} fallbacks; the caller only reaches this
- * state when {@link TrigramQuery.nameShortInclude} is non-empty (otherwise
- * `search()` already returned the empty response for the whole request).
+ * (querying `MATCH ''` is invalid) and the result rests solely on the
+ * per-word LIKE fallbacks; the caller only reaches this state when
+ * {@link TrigramQuery.nameShortInclude} is non-empty (otherwise `search()`
+ * already returned the empty response for the whole request).
+ *
+ * **`*`-синонимы (задача f0b06700, требование 35218826, сценарий «поиск»).**
+ * FTS-кандидаты остаются первым тиром с прежним поведением и прежним
+ * ранжированием (`rank`, затем `title_norm`/`id` как детерминированный добор).
+ * Второй тир — мысли, которых FTS не видит, но чьё слово запроса совпало со
+ * СЛОВОМ `*`-синонима: он идёт ПОСЛЕ FTS-ранжированных хитов (D11) и
+ * проверяется точным предикатом каждого слова (D1/D3). Мысль попадает ровно в
+ * один тир (`NOT IN` кандидатов), поэтому `LIMIT`/`OFFSET`/`COUNT` считаются
+ * по объединению и пагинация не теряет и не дублирует строки (D7). Сеть без
+ * `*`-синонимов второй тир не даёт — прежнее поведение (D2).
  */
 function searchNames(
   ndb: NetworkDb,
@@ -675,20 +745,26 @@ function searchNames(
   f: SearchFilters,
 ): { hits: SearchNameHit[]; total: number } {
   const useFts = trigram.match !== '';
-  const join = useFts ? 'JOIN fts_thought_names fnames ON fnames.rowid = t.rowid' : '';
-  const orderBy = useFts ? 'ORDER BY rank' : 'ORDER BY t.title_norm';
-  const { where, params } = joinClauses([
-    useFts ? { sql: 'fts_thought_names MATCH ?', params: [trigram.match] } : null,
-    // Мыслевые настройки (актуальность/корзина/тип/подкорень) — единой
-    // конъюнкцией из AST-движка (требование b91336e7, ADR 7581ac14).
-    // `ORDER BY rank` и сниппеты сохраняются: AST-клауза — обычный предикат
-    // поверх ранжированной FTS-выборки, множество id не материализуется.
+  // Мыслевые настройки (актуальность/корзина/тип/подкорень) — единой
+  // конъюнкцией из AST-движка (требование b91336e7, ADR 7581ac14).
+  const baseClauses: Array<Clause | null> = [
     f.thoughtClause,
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
+  ];
+  // Короткие слова без триграммного представления — LIKE-фолбэк (Tier 1).
+  const shortClauses: Array<Clause | null> = [
     ...trigram.nameShortInclude.map((w) => buildShortWordNameClause(w, false)),
     ...trigram.nameShortExclude.map((w) => buildShortWordNameClause(w, true)),
-  ]);
+  ];
+  // Точный предикат каждого слова: литерал ИЛИ слово-паттерн `*`-синонима.
+  const exactIncludeClauses = trigram.nameInclude.map((w) => buildNameWordClause(w, false));
+  const exactExcludeClauses = trigram.nameExclude.map((w) => buildNameWordClause(w, true));
+  const baseFilters = joinClauses(baseClauses);
+  const shortFilters = joinClauses(shortClauses);
+  const exactInclude = joinClauses(exactIncludeClauses);
+  const exactExclude = joinClauses(exactExcludeClauses);
+
   // S6 (13-layers.md §9): when the FTS5 join is used, the names index carries
   // one row per PHYSICAL thought row (rowid = thoughts.pk), so an overridden
   // thought has rows for every layer of the chain. The join is by rowid with
@@ -696,33 +772,58 @@ function searchNames(
   // winner's text matches: stale ancestor revisions, other layers' rows and
   // tombstones (no view row) never reach the result. Dedup by logical id
   // comes free: one FTS row joins per visible thought (`UNIQUE (id,
-  // layer_id)`). FTS5 ranks first, the layer visibility filter runs on top —
-  // `LIMIT`/`OFFSET` and the total are computed after the filtering/dedup,
-  // never pushed into the FTS scan. The LIKE-only fallback path (no join)
-  // already starts from `thoughts_v`, so it inherits the same layer-winner
-  // guarantee without needing the FTS rowid join at all.
+  // layer_id)`) and the second tier excludes every FTS candidate. COUNT and
+  // the page are computed over the same union, never inside the FTS scan.
+  let body: string;
+  let params: unknown[];
+  let pageOrder: string;
+  if (useFts) {
+    const patternExcludeClauses = trigram.nameExclude.map((w) => buildNamePatternExcludeClause(w));
+    const patternExcludes = joinClauses(patternExcludeClauses);
+    const tier1Where = joinClauses([...baseClauses, ...shortClauses, ...patternExcludeClauses]);
+    const tier2Where = joinClauses([
+      { sql: 't.rowid NOT IN (SELECT rowid FROM fts_candidates)', params: [] },
+      ...baseClauses,
+      ...exactIncludeClauses,
+      ...exactExcludeClauses,
+    ]);
+    const tier1 = `SELECT ${NAME_HIT_COLUMNS}, 0 AS kw_tier, f.fts_rank AS kw_rank,
+              t.title_norm AS title_norm, t.id AS sort_id
+       FROM thoughts_v t
+       JOIN fts_candidates f ON f.rowid = t.rowid
+       WHERE ${tier1Where.where}`;
+    const tier2 = `SELECT ${NAME_HIT_COLUMNS}, 1 AS kw_tier, NULL AS kw_rank,
+              t.title_norm AS title_norm, t.id AS sort_id
+       FROM thoughts_v t
+       WHERE ${tier2Where.where}`;
+    body =
+      `WITH fts_candidates(rowid, fts_rank) AS (` +
+      `SELECT rowid, rank FROM fts_thought_names WHERE fts_thought_names MATCH ?` +
+      `) ${tier1} UNION ALL ${tier2}`;
+    params = [
+      trigram.match,
+      ...baseFilters.params,
+      ...shortFilters.params,
+      ...patternExcludes.params,
+      ...baseFilters.params,
+      ...exactInclude.params,
+      ...exactExclude.params,
+    ];
+    pageOrder = 'ORDER BY kw_tier ASC, kw_rank ASC, title_norm ASC, sort_id ASC';
+  } else {
+    const where = joinClauses([...baseClauses, ...exactIncludeClauses, ...exactExcludeClauses]);
+    body = `SELECT ${NAME_HIT_COLUMNS}, t.title_norm AS title_norm, t.id AS sort_id
+       FROM thoughts_v t
+       WHERE ${where.where}`;
+    params = [...baseFilters.params, ...exactInclude.params, ...exactExclude.params];
+    pageOrder = 'ORDER BY title_norm ASC, sort_id ASC';
+  }
+
   const total = (
-    ndb
-      .prepare(`SELECT COUNT(*) AS c FROM thoughts_v t ${join} WHERE ${where}`)
-      .get(...params) as { c: number }
+    ndb.prepare(`SELECT COUNT(*) AS c FROM (${body})`).get(...params) as { c: number }
   ).c;
-  // Visual style and `active` are joined from the winner row so the client can
-  // render the hit row like a cloud on the canvas (08-ui-spec.md §2.2).
   const rows = ndb
-    .prepare(
-      `SELECT t.id AS thought_id, t.title AS title, t.icon AS icon,
-              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
-              t.icon_color AS icon_color,
-              t.fg_color AS fg_color, t.bg_color AS bg_color,
-              t.font_bold AS font_bold, t.font_italic AS font_italic,
-              t.font_underline AS font_underline, t.font_strike AS font_strike,
-              t.font_manual AS font_manual,
-              t.type_id AS type_id, t.active AS active
-       FROM thoughts_v t ${join}
-       WHERE ${where}
-       ${orderBy}
-       LIMIT ? OFFSET ?`,
-    )
+    .prepare(`${body} ${pageOrder} LIMIT ? OFFSET ?`)
     .all(...params, f.limit, f.offset) as Array<{
     thought_id: string;
     title: string;

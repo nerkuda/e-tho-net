@@ -91,6 +91,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
         'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
+        '`query` — мини-синтаксис §6.10: слова через AND, `*` — подстановка, `-слово` — исключение; ' +
+        'в группе `by_names` слово запроса без `*` совпадает и со СЛОВОМ хранимого `*`-синонима ' +
+        'по границам слова (`проектиров*` находит «проектирование»), слова запроса независимы. ' +
         'Принимает и `ast` — мыслевые настройки отбора (профиль `thoughts`: подкорень, типы мыслей, ' +
         '«показывать неактуальные», «корзина»); валидируется профилем, `VALIDATION_ERROR` вне профиля; ' +
         '`ast` XOR плоские мыслевые параметры. `focus_thought_id` — мысль-фокус карты: ' +
@@ -242,7 +245,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       description:
         'Структурная выборка мыслей без текстового запроса; фильтры комбинируются по AND: ' +
         '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
-        '`keywords` (мини-синтаксис по названию и синонимам), `properties[]` (операторы ' +
+        '`keywords` (мини-синтаксис по названию и синонимам; слово без `*` совпадает и с целым ' +
+        'словом `*`-синонима — `проектиров*` находит «проектирование»), `properties[]` (операторы ' +
         'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
         '`author_id`/`editor_id`, `link_filter` (совместим с `ast` — пред-сужение ' +
         'поверх дерева). Принимает и `ast` — дерево условий ' +

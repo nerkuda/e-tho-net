@@ -247,3 +247,119 @@ export function splitCompoundTitle(title: string, maxParts = 4): string[] {
   parts.push(buffer.trim());
   return parts.filter((p) => p !== '');
 }
+
+// ---------------------------------------------------------------------------
+// Search scenario of the `*`-substitution (requirement 35218826, third
+// scenario: keywords + full-text `by_names`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Regex SOURCE of ONE word of a stored synonym pattern, or `null` when the
+ * word has no `*` (a literal word adds nothing: the plain substring branch
+ * already covers it).
+ *
+ * Semantics (requirement 35218826, scenario «поиск»): `*` inside a word
+ * matches any run of non-whitespace characters — it never crosses a word
+ * boundary — and the whole pattern word is anchored to ONE word of the query
+ * (`^(?:…)$`). Unlike the phrase rules of duplicates/mentions (pattern words
+ * adjacent and ordered), the search scenario matches every query word
+ * independently against the synonym's words.
+ *
+ * The query word is expected lower-cased and NFC-normalized by the caller
+ * ({@link synonymWordPatternMatch} does both itself).
+ */
+export function synonymWordPatternSource(patternWord: string): string | null {
+  if (!patternWord.includes('*')) return null;
+  const body = patternWord
+    .split('*')
+    .map((part) => (part === '' ? '' : regexEscape(part)))
+    .join('\\S*');
+  return `^(?:${body})$`;
+}
+
+/** Compiled `*`-word matcher of a synonym plus its cheap literal prefilter. */
+interface SynonymWordMatcher {
+  regex: RegExp;
+  /** Folded literal chunks; each MUST occur in the folded query word (D6). */
+  chunks: string[];
+}
+
+/** Prepared (normalized + folded) query word reused across synonym checks. */
+interface PreparedQueryWord {
+  /** NFC + lower-case form the regexes compare against. */
+  norm: string;
+  /** {@link foldCase} of `norm` — the prefilter key (simple-folding parity). */
+  folded: string;
+}
+
+const SYNONYM_WORD_MATCHER_CACHE_MAX = 4096;
+const synonymWordMatcherCache = new Map<string, SynonymWordMatcher[]>();
+const preparedQueryWordCache = new Map<string, PreparedQueryWord>();
+const PREPARED_QUERY_WORD_CACHE_MAX = 1024;
+
+/**
+ * Compiled matchers of every `*`-word of one synonym, cached per synonym
+ * string (the patterns are stable between edits — same reasoning as the
+ * `findDuplicates` anchored cache, bug 5e35eb7b). Wholesale clear when full:
+ * recompilation is cheap and an LRU would cost more than it saves.
+ */
+function synonymWordMatchers(synonym: string): SynonymWordMatcher[] {
+  const cached = synonymWordMatcherCache.get(synonym);
+  if (cached !== undefined) return cached;
+  const matchers: SynonymWordMatcher[] = [];
+  for (const word of synonym.normalize('NFC').toLowerCase().split(/\s+/)) {
+    if (word === '') continue;
+    const source = synonymWordPatternSource(word);
+    if (source === null) continue;
+    matchers.push({
+      regex: new RegExp(source, 'u'),
+      chunks: word
+        .split('*')
+        .filter((chunk) => chunk !== '')
+        .map((chunk) => foldCase(chunk)),
+    });
+  }
+  if (synonymWordMatcherCache.size >= SYNONYM_WORD_MATCHER_CACHE_MAX) synonymWordMatcherCache.clear();
+  synonymWordMatcherCache.set(synonym, matchers);
+  return matchers;
+}
+
+/** Normalize + fold a query word once per distinct spelling (hot path, D12). */
+function prepareQueryWord(word: string): PreparedQueryWord {
+  const cached = preparedQueryWordCache.get(word);
+  if (cached !== undefined) return cached;
+  const norm = word.normalize('NFC').toLowerCase();
+  const prepared: PreparedQueryWord = { norm, folded: foldCase(norm) };
+  if (preparedQueryWordCache.size >= PREPARED_QUERY_WORD_CACHE_MAX) preparedQueryWordCache.clear();
+  preparedQueryWordCache.set(word, prepared);
+  return prepared;
+}
+
+/**
+ * True when one query word matches any WORD of a stored synonym pattern
+ * (requirement 35218826, scenario «поиск»). Both sides are NFC+lower-cased
+ * (D6); literal chunks are pre-filtered with {@link foldCase} before the
+ * regex runs (pitfalls 6898ef75, 6bba224b), so a regex executes only for
+ * synonyms that can possibly match.
+ *
+ * A synonym without `*` never matches here — its literal form is the plain
+ * substring branch of the caller. Words shorter than three characters are
+ * matched normally: the pattern branch does not depend on the trigram floor
+ * (D8).
+ */
+export function synonymWordPatternMatch(word: string, synonym: string): boolean {
+  if (word === '' || synonym === '' || !synonym.includes('*')) return false;
+  const { norm, folded } = prepareQueryWord(word);
+  for (const matcher of synonymWordMatchers(synonym)) {
+    let passes = true;
+    for (const chunk of matcher.chunks) {
+      if (!folded.includes(chunk)) {
+        passes = false;
+        break;
+      }
+    }
+    if (passes && matcher.regex.test(norm)) return true;
+  }
+  return false;
+}
+
