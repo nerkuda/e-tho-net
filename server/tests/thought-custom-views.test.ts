@@ -1444,6 +1444,62 @@ describe(
       }
     });
 
+    it('репро замечания проверки V1: UPDATE-путь коллизии тени дефолта — PATCH is_default в слое → 409, не 500', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const thoughtId = await createThought(ctx, 'Мысль');
+
+        // Слой L видит свою живую строку «A»; в основе поверх неё появляется
+        // одноимённый ДЕФОЛТ (слой его не видел).
+        const layerId = await createLayerViaRest(ctx, 'Слой update-дефолта');
+        const layerHeaders = { ...h, 'client-id': 'default-shadow-update' };
+        await selectLayer(ctx, layerId, 'default-shadow-update');
+        const layerA = await createCustomView(ctx, thoughtId, { name: 'A' }, layerHeaders);
+        assert.equal(layerA.statusCode, 201, layerA.body);
+        const baseA = await createCustomView(ctx, thoughtId, {
+          name: 'A',
+          is_default: true,
+        });
+        assert.equal(baseA.statusCode, 201, baseA.body);
+
+        // В слое живёт не-дефолтный «B».
+        const layerB = await createCustomView(ctx, thoughtId, { name: 'B' }, layerHeaders);
+        assert.equal(layerB.statusCode, 201, layerB.body);
+
+        // PATCH is_default:true на «B» обязан снять дефолт предка «A» — его
+        // материализация в слой упирается в живое имя «A» слоя. Замечание
+        // проверки V1: UPDATE-путь не был покрыт отдельным тестом (POST — да).
+        const patched = await ctx.app.inject({
+          method: 'PATCH',
+          url: customViewsUrl(ctx, thoughtId, layerB.id!),
+          headers: { ...layerHeaders, 'if-match': '1' },
+          payload: { is_default: true },
+        });
+        assert.equal(patched.statusCode, 409, patched.body?.toString());
+        assert.equal(patched.json().error.code, 'DUPLICATE');
+        assert.equal(patched.json().error.details.existing_id, layerA.id);
+
+        // Транзакция откатилась: «B» без пометки и с прежней версией.
+        const after = await ctx.app.inject({
+          method: 'GET',
+          url: customViewsUrl(ctx, thoughtId, layerB.id!),
+          headers: layerHeaders,
+        });
+        assert.equal(after.statusCode, 200);
+        const row = after.json().data as {
+          name: string;
+          is_default: boolean;
+          version: number;
+        };
+        assert.equal(row.name, 'B');
+        assert.equal(row.is_default, false, 'пометка не поставлена — откат');
+        assert.equal(row.version, 1, 'версия не сдвинулась — откат');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('include_effective отдаёт смешанный набор; type-views не содержит scope thought', async () => {
       const ctx = await buildRestContext();
       try {
