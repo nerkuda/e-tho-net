@@ -31,8 +31,10 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import {
   createThoughtType,
   getRootThoughtType,
+  getThoughtType,
 } from '../src/domain/thought-type-service.js';
 import { createNetworkProperty, createTypeProperty } from '../src/domain/property-service.js';
+import { deleteThoughtTypeWithViews } from '../src/domain/thought-type-delete-service.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
@@ -1035,6 +1037,52 @@ describe(
           assert.equal(eff[0]!.name, 'ОтКорня');
           assert.equal(eff[0]!.defined_on, rootId);
           assert.equal(eff[0]!.is_default, true);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('каскадное удаление типа (0.14.1, ошибка 1242f78d)', () => {
+      it('удаляет отборы вместе с типом и возвращает их снапшоты ДО удаления', () => {
+        const { ndb, typeId } = setup();
+        try {
+          const first = createThoughtTypeView(
+            ndb,
+            typeId,
+            { name: 'Первый', definition: DEFINITION },
+            USER,
+          );
+          const second = createThoughtTypeView(
+            ndb,
+            typeId,
+            { name: 'Второй', definition: DEFINITION, is_default: true },
+            USER,
+          );
+
+          const deleted = deleteThoughtTypeWithViews(ndb, typeId, undefined, {
+            actorUserId: USER,
+          });
+
+          // Карточка типа — снапшот до удаления; отборы — оба, полными
+          // карточками эффективного набора.
+          assert.equal(deleted.type?.id, typeId);
+          assert.deepEqual(
+            deleted.views.map((v) => v.id).sort(),
+            [first.id, second.id].sort(),
+          );
+          for (const view of deleted.views) {
+            assert.equal(view.thought_type_id, typeId);
+            assert.equal(view.defined_on, typeId);
+            assert.equal(view.inherited, false);
+            assert.equal(typeof view.name, 'string');
+            assert.equal(view.version, 1);
+          }
+          assert.equal(deleted.views.find((v) => v.id === second.id)?.own_default, true);
+
+          // Тип и его отборы в БД больше не видны — сирот не осталось.
+          assert.equal(getThoughtType(ndb, typeId), null);
+          assert.deepEqual(listThoughtTypeViewsByType(ndb, typeId), []);
         } finally {
           ndb.close();
         }

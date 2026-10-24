@@ -57,11 +57,11 @@ import {
 import { listLinkTypeCounts, listLinkTypes, updateLinkType } from '../domain/link-type-service.js';
 import {
   createThoughtType,
-  deleteThoughtType,
   listThoughtTypeCounts,
   listThoughtTypes,
   updateThoughtType,
 } from '../domain/thought-type-service.js';
+import { deleteThoughtTypeWithViews } from '../domain/thought-type-delete-service.js';
 import {
   createTypeProperty,
   deleteTypeProperty,
@@ -471,16 +471,36 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const existing = getThoughtType(ndb, id);
-          deleteThoughtType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
+          // Единая точка удаления типа (0.14.1, ошибка 1242f78d): каскад
+          // отборов + снапшоты ДО удаления — общая с MCP `ontology.delete`.
+          const deleted = deleteThoughtTypeWithViews(ndb, id, expectedVersion, {
+            force,
+            actorUserId: req.auth!.user.id,
+          });
           return {
             result: undefined,
-            events: [{ type: 'thought-type.deleted', data: { id } }],
-            ...(existing === null
+            events: [
+              { type: 'thought-type.deleted', data: { id } },
+              // По событию на каждый каскадно удалённый отбор — с полной
+              // карточкой (ошибка 69aa355c) и корректным типом-владельцем.
+              ...deleted.views.map((view) => ({
+                type: 'thought-type-view.deleted' as const,
+                data: {
+                  thought_type_id: view.thought_type_id,
+                  view_id: view.id,
+                  view,
+                },
+              })),
+            ],
+            ...(deleted.type === null
               ? {}
               : {
                   activity: [
-                    { kind: 'thought-type' as const, action: 'deleted' as const, type: existing },
+                    {
+                      kind: 'thought-type' as const,
+                      action: 'deleted' as const,
+                      type: deleted.type,
+                    },
                   ],
                 }),
           };

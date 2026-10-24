@@ -29,6 +29,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtCustomView } from '../src/domain/thought-custom-views-service.js';
@@ -798,7 +799,6 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
-      void versionTypeId;
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -827,22 +827,46 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         const viewId = created.type_views[0]!.id;
         assert.ok(viewId);
 
-        // Удаляем по id.
-        const delRes = await callOp(
-          handle.client,
-          'ontology.delete',
-          {
-            network_id: ctx.networkId,
-            kind: 'type_view',
-            id: viewId,
-          },
-          true,
+        const received: AnyRealtimeEvent[] = [];
+        const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event: AnyRealtimeEvent) =>
+          received.push(event),
         );
-        assert.equal(delRes.isError, undefined, toolText(delRes));
-        const delData = toolJson<{ deleted: true; affected_counts: Record<string, number> }>(
-          delRes,
-        );
-        assert.equal(delData.deleted, true);
+        try {
+          // Удаляем по id.
+          const delRes = await callOp(
+            handle.client,
+            'ontology.delete',
+            {
+              network_id: ctx.networkId,
+              kind: 'type_view',
+              id: viewId,
+            },
+            true,
+          );
+          assert.equal(delRes.isError, undefined, toolText(delRes));
+          const delData = toolJson<{ deleted: true; affected_counts: Record<string, number> }>(
+            delRes,
+          );
+          assert.equal(delData.deleted, true);
+
+          // 0.14.1, ошибка 1242f78d (в): событие несёт реальный тип-владелец и
+          // полную карточку, а не `thought_type_id: ''`.
+          await new Promise((r) => setImmediate(r));
+          const deleted = received.find((e) => e.type === 'thought-type-view.deleted');
+          assert.ok(deleted, 'thought-type-view.deleted должен уйти');
+          const data = deleted!.data as {
+            thought_type_id: string;
+            view_id: string;
+            view: { id: string; name: string; defined_on: string };
+          };
+          assert.equal(data.thought_type_id, versionTypeId);
+          assert.equal(data.view_id, viewId);
+          assert.equal(data.view.id, viewId);
+          assert.equal(data.view.name, 'Работы версии');
+          assert.equal(data.view.defined_on, versionTypeId);
+        } finally {
+          unsubscribe();
+        }
 
         // После удаления каталог типов уже не содержит отбор.
         const listRes = await handle.client.callTool({
@@ -866,11 +890,10 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
-      void versionTypeId;
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        await handle.client.callTool({
+        const writeRes = await handle.client.callTool({
           name: 'etn.ontology.write',
           arguments: {
             network_id: ctx.networkId,
@@ -888,23 +911,52 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
             ],
           },
         });
+        const created = toolJson<{ type_views: Array<{ id: string }> }>(writeRes);
+        const viewId = created.type_views[0]!.id;
 
-        const delRes = await callOp(
-          handle.client,
-          'ontology.delete',
-          {
-            network_id: ctx.networkId,
-            kind: 'thought_type',
-            id: versionTypeId,
-            force: true,
-          },
-          true,
+        const received: AnyRealtimeEvent[] = [];
+        const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event: AnyRealtimeEvent) =>
+          received.push(event),
         );
-        assert.equal(delRes.isError, undefined, toolText(delRes));
-        const delData = toolJson<{
-          affected_counts: { type_views_count?: number };
-        }>(delRes);
-        assert.equal(delData.affected_counts.type_views_count, 1);
+        try {
+          const delRes = await callOp(
+            handle.client,
+            'ontology.delete',
+            {
+              network_id: ctx.networkId,
+              kind: 'thought_type',
+              id: versionTypeId,
+              force: true,
+            },
+            true,
+          );
+          assert.equal(delRes.isError, undefined, toolText(delRes));
+          const delData = toolJson<{
+            affected_counts: { type_views_count?: number };
+          }>(delRes);
+          assert.equal(delData.affected_counts.type_views_count, 1);
+
+          // 0.14.1, ошибка 1242f78d (б): каскадное событие реально уходит —
+          // список отборов снимается ДО удаления типа, а не после.
+          await new Promise((r) => setImmediate(r));
+          const cascaded = received.filter(
+            (e) => e.type === 'thought-type-view.deleted',
+          );
+          assert.equal(cascaded.length, 1, 'ровно одно событие на отбор');
+          const data = cascaded[0]!.data as {
+            thought_type_id: string;
+            view_id: string;
+            view: { id: string; name: string; defined_on: string; inherited: boolean };
+          };
+          assert.equal(data.thought_type_id, versionTypeId);
+          assert.equal(data.view_id, viewId);
+          assert.equal(data.view.id, viewId);
+          assert.equal(data.view.name, 'Работы версии');
+          assert.equal(data.view.defined_on, versionTypeId);
+          assert.equal(data.view.inherited, false);
+        } finally {
+          unsubscribe();
+        }
       } finally {
         await handle.close();
       }

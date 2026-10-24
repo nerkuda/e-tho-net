@@ -1361,6 +1361,86 @@ describe(
           await closeRestContext(ctx);
         }
       });
+
+      it('DELETE /thought-types/{id} каскадно удаляет отборы и эмитит deleted с карточкой (0.14.1, 1242f78d)', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'task');
+          const definition = JSON.stringify({ sort: 'alpha', order: 'asc' });
+          const createView = async (name: string): Promise<string> => {
+            const res = await ctx.app.inject({
+              method: 'POST',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+              headers: h,
+              payload: { name, definition },
+            });
+            assert.equal(res.statusCode, 201, res.body?.toString());
+            return (res.json().data as ViewDto).id;
+          };
+          const first = await createView('Первый');
+          const second = await createView('Второй');
+
+          const received: AnyRealtimeEvent[] = [];
+          const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (event: AnyRealtimeEvent) =>
+            received.push(event),
+          );
+          try {
+            const del = await ctx.app.inject({
+              method: 'DELETE',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}`,
+              headers: h,
+            });
+            assert.equal(del.statusCode, 204, del.body?.toString());
+            await new Promise((r) => setImmediate(r));
+
+            const deletedViews = received.filter(
+              (e) => e.type === 'thought-type-view.deleted',
+            );
+            assert.deepEqual(
+              deletedViews.map((e) => (e.data as { view_id: string }).view_id).sort(),
+              [first, second].sort(),
+            );
+            for (const event of deletedViews) {
+              const data = event.data as {
+                thought_type_id: string;
+                view_id: string;
+                view: {
+                  id: string;
+                  thought_type_id: string;
+                  defined_on: string;
+                  inherited: boolean;
+                };
+              };
+              assert.equal(data.thought_type_id, typeId, 'корректный тип-владелец');
+              assert.equal(data.view.id, data.view_id);
+              assert.equal(data.view.thought_type_id, typeId);
+              assert.equal(data.view.defined_on, typeId);
+              assert.equal(data.view.inherited, false);
+            }
+            assert.ok(
+              received.some((e) => e.type === 'thought-type.deleted'),
+              'событие удаления типа тоже уходит',
+            );
+
+            // Сирот в БД нет, тип удалён.
+            const orphanRows = ctx.ndb
+              .prepare(
+                'SELECT id FROM thought_type_views WHERE thought_type_id = ? -- layers:physical-read',
+              )
+              .all(typeId);
+            assert.deepEqual(orphanRows, []);
+            assert.equal(
+              ctx.ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(typeId),
+              undefined,
+            );
+          } finally {
+            unsubscribe();
+          }
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
     });
 
     describe('Ветвимость и слои', () => {
