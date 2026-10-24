@@ -71,4 +71,17 @@ describe('guard: MCP — описания несут контрактные фо
       '`*`-синонима',
     ]);
   });
+
+  it('etn.instructions: ROOT only — нет ДРУГОЙ инструкции среди родителей (feb520de)', async () => {
+    const all = await toolDescriptions();
+    const description = descriptionOf(all, 'etn.instructions');
+    assertMentions(description, 'etn.instructions', [
+      'INSTRUCTION among structural parents',
+      'sections/catalogues',
+    ]);
+    assert.ok(
+      !description.includes('no untyped parent link'),
+      `etn.instructions: вернулась вводящая в заблуждение формулировка «no untyped parent link»\n---\n${description}`,
+    );
+  });
 });
