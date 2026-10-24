@@ -170,6 +170,35 @@ export async function buildMcpContext(overrides: McpContextOverrides = {}): Prom
   };
 }
 
+/**
+ * Вторая сеть В ТОМ ЖЕ мире: тот же `dataDir` и `systemDb`, что у `ctx`.
+ *
+ * Production-сервер держит все сети в одном каталоге данных и одном реестре,
+ * поэтому инструменты, работающие с ДВУМЯ сетями (`copy_subtree`,
+ * `import.subgraph`/`export.subgraph`), обязаны видеть сеть-источник в
+ * `systemDb` и открывать её по тому же `dataDir`. Два независимых
+ * {@link buildMcpContext} создают разные реестры — при проверке доступа к
+ * источнику (ошибка 6613839f) пара src→dst из разных миров получала бы
+ * `NOT_FOUND` на существующей сети. Сеть-получатель возвращается как
+ * самостоятельный контекст (свой `networkId`/`homeId`), но владеет
+ * `sys`/`dataDir` базовый контекст — закрывать их дважды нельзя.
+ */
+export async function createSecondNetwork(
+  ctx: McpTestContext,
+  displayName = 'Test Net 2',
+): Promise<McpTestContext> {
+  const network = await new NetworkServiceImpl(
+    ctx.sys,
+    ctx.dataDir,
+    createLogger('silent'),
+  ).createNetwork(ctx.adminId, displayName);
+  const ndb = openNetworkDb(ctx.dataDir, network.id);
+  const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as {
+    id: string;
+  };
+  return { ...ctx, networkId: network.id, homeId: home.id };
+}
+
 /** Tear down: close the network DB first, then the system DB, then the dir.
  *  When the context was built with `systemDb` / `dataDir` overrides (REST
  *  fixture shared with the MCP layer), the system DB and data directory

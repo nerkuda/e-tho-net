@@ -136,6 +136,7 @@ import { projectLinkRow, projectThoughtRows } from '../../domain/response-projec
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
 import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import {
+  assertNetworkAccess,
   auditAgentCall,
   etnErrorText,
   mcpLayerClientId,
@@ -981,6 +982,11 @@ const HANDLERS: Record<string, OpHandler> = {
     return runWriteTool(rt, a.target_network_id, () => {
       requireWritable(rt);
       requireWriteBudget(rt);
+      // Сеть-ИСТОЧНИК проверяется до открытия: `openNetworkDb` создаёт
+      // каталог и `data.db`, поэтому неизвестный/недоступный id оставлял в
+      // каталоге данных фантомную сеть (ошибка 6613839f). Тот же guard, что у
+      // сети-получателя (`openMemberNetwork`) и корневой проверки 2c3a42cd.
+      assertNetworkAccess(rt, a.source_network_id);
       const sourceNdb = openNetworkDb(rt.deps.dataDir, a.source_network_id);
       const targetNdb = openMemberNetwork(rt, a.target_network_id);
       const fx = mcpWriteFx(rt, a.target_network_id, extra.requestId);

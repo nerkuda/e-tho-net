@@ -22,6 +22,7 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createSecondNetwork,
   nativeAvailable,
   toolJson,
   toolText,
@@ -55,8 +56,12 @@ interface Worlds {
 }
 
 async function buildPair(): Promise<Worlds> {
+  // Один мир на пару: сеть-источник и сеть-получатель живут в ОДНОМ
+  // `systemDb`/`dataDir` (production-модель). Разные миры давали бы
+  // `NOT_FOUND` на существующей сети-источнике теперь, когда `copy_subtree`
+  // проверяет доступ к ней (ошибка 6613839f).
   const src = await buildMcpContext();
-  const dst = await buildMcpContext();
+  const dst = await createSecondNetwork(src);
   const handle = await connectMcpClient(dst, dst.adminKey);
   const srcHandle = await connectMcpClient(src, src.adminKey);
   return {
@@ -67,7 +72,9 @@ async function buildPair(): Promise<Worlds> {
     async closeAll() {
       await srcHandle.close();
       await handle.close();
-      await closeMcpContext(dst);
+      // `dst` делит `sys`/`dataDir` с `src` — закрываем только его соединение,
+      // очистку мира делает `closeMcpContext(src)`.
+      await closeMcpContext(dst, { systemDb: src.sys, dataDir: src.dataDir });
       await closeMcpContext(src);
     },
   };
@@ -156,6 +163,31 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
       }
       assert.equal(countThoughts(w.dst), 3);
       assert.equal(countLinks(w.dst), 2);
+    } finally {
+      await w.closeAll();
+    }
+  });
+
+  it('неизвестная сеть-источник — NOT_FOUND, БД фантомной сети не создаётся (6613839f)', async () => {
+    const w = await buildPair();
+    try {
+      const phantom = randomUUID();
+      const phantomDir = path.join(w.dst.dataDir, 'networks', phantom);
+      assert.equal(existsSync(phantomDir), false, 'до вызова каталога нет');
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: phantom,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [w.dst.homeId],
+        duplicate_policy: 'create_always',
+      });
+      assert.ok(result.isError, 'вызов обязан отвергнуться');
+      assert.ok(toolText(result).includes('NOT_FOUND'), toolText(result));
+      assert.equal(
+        existsSync(phantomDir),
+        false,
+        'каталог и data.db несуществующей сети не создаются',
+      );
+      assert.equal(countThoughts(w.dst), 0, 'в получателе ничего не создано');
     } finally {
       await w.closeAll();
     }
