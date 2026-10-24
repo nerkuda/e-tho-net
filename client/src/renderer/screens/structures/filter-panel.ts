@@ -83,7 +83,7 @@ import {
   type SavedFilterRow,
 } from '../../lib/saved-filter-controller.js';
 import { registerThoughtDropField } from '../../lib/thought-drop.js';
-import { store } from '../../state.js';
+import { getRtStatus, store } from '../../state.js';
 
 /** Filter-panel width limits, px (the splitter drag clamps to this range). */
 export const FILTER_W_MIN = 230;
@@ -567,10 +567,20 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
       firstDayOfWeekSeen = firstDayOfWeek;
       renderPanel();
     }
-    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}`;
+    // Статус соединения — вход чтения реестра свойств: после обрыва каталог
+    // свойств ОБЯЗАН перечитаться, иначе конструктор условий живёт с пустым
+    // реестром до перезапуска (ошибка 76282fbc — класс «подпись рендера, снятая
+    // до чтения, без rt-статуса»).
+    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}|${getRtStatus(store.state)}`;
     if (signature !== catalogueSignature) {
       catalogueSignature = signature;
-      void loadPropertyDefs().then(() => renderPanel());
+      void loadPropertyDefs().then((ok) => {
+        // Отказ чтения — подпись не считается отработанной: следующий тик store
+        // (в первую очередь переход в `connected`) повторит чтение. Чужую,
+        // более новую подпись не трогаем.
+        if (!ok && catalogueSignature === signature) catalogueSignature = '';
+        renderPanel();
+      });
     }
   });
   void loadPropertyDefs().then(() => renderPanel());
@@ -639,17 +649,22 @@ function isHierarchyRootsLeaf(node: FilterTreeNode): boolean {
 
 /**
  * Loads the property registry of the network (0.6.5 — task 171a438e): one
- * REST call replaces the per-type walk the panel used to do.
+ * REST call replaces the per-type walk the panel used to use.
+ * Returns `false` when the server read failed — the caller must not treat the
+ * panel's catalogue signature as worked out then (76282fbc).
  */
-async function loadPropertyDefs(): Promise<void> {
+async function loadPropertyDefs(): Promise<boolean> {
   const networkId = store.state.networkId;
-  if (networkId === null) return;
+  if (networkId === null) return true;
   propertyDefs.clear();
   try {
     const rows = await etn.propertyRegistry.list(networkId);
     for (const row of rows) propertyDefs.set(row.id, row);
+    return true;
   } catch {
-    // Network read failed — the panel falls back to the empty registry.
+    // Network read failed — the panel falls back to the empty registry; the
+    // caller resets its signature so the next store tick retries.
+    return false;
   }
 }
 

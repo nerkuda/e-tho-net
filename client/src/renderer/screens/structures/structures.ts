@@ -64,7 +64,7 @@ import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { deepEqual } from '../../lib/ui/state.js';
 import { errText } from '../../lib/dom.js';
-import { store } from '../../state.js';
+import { getRtStatus, store } from '../../state.js';
 import {
   branchThoughtIds,
   flattenStructuresTree,
@@ -133,6 +133,8 @@ const directions = new Map<string, { has_incoming: boolean; has_outgoing: boolea
 const edges = new Map<string, FocusEdge>();
 /** Signature of the visible-id set the edges cache was fetched for. */
 let edgesSignature = '';
+/** Sequence of the latest edges read — an older response must not win. */
+let edgesSeq = 0;
 /** Which nodes have parents/children expanded. */
 let expansion: ExpansionMap = new Map();
 
@@ -675,8 +677,19 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     },
   });
 
+  // Статус, на котором вид смонтирован: переход в `connected` — сигнал
+  // повторить серверные чтения, оборванные на старте/в обрыве (76282fbc).
+  let lastRtStatus = getRtStatus(store.state);
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Статус соединения — не срез данных/визуалки, поэтому `reactToStore` на
+    // него не реагирует. Восстановление связи отслеживаем здесь: снимок рёбер и
+    // реестр свойств читаются с сервера, и обрыв в момент чтения обязан
+    // повториться сам (ошибка 76282fbc — класс «подпись до чтения без
+    // rt-статуса»).
+    const rtStatus = getRtStatus(store.state);
+    const reconnected = rtStatus === 'connected' && rtStatus !== lastRtStatus;
+    lastRtStatus = rtStatus;
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
     if (
@@ -696,6 +709,10 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     }
     if (store.state.activeView !== 'structures') return;
     reactToStore();
+    // Повтор снимка рёбер после восстановления связи: `reactToStore` мог его
+    // не заказать (видимый набор не менялся), а недогруженные линии сами не
+    // вернутся. Дедуп держит подпись в `refreshEdges`.
+    if (reconnected) void refreshEdges();
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
@@ -1360,9 +1377,14 @@ async function refreshEdges(): Promise<void> {
   // перечитывания линий (ошибка a617b4c6 — снимок обязан уважать фильтр,
   // как раскрытие ветвей в fetchHierarchy).
   const linkFilter = appliedQuery?.filter.link_filter;
-  const signature = `${store.state.showInactive ? 1 : 0}|${JSON.stringify(linkFilter ?? null)}|${ids.slice().sort().join(',')}`;
+  // Статус соединения — вход этого чтения: снимок рёбер читается с сервера, и
+  // после обрыва он ОБЯЗАН перечитаться, иначе линии остаются недогруженными
+  // до следующей смены видимого набора (ошибка 76282fbc — класс «подпись
+  // рендера, снятая до чтения, без rt-статуса»).
+  const signature = `${getRtStatus(store.state)}|${store.state.showInactive ? 1 : 0}|${JSON.stringify(linkFilter ?? null)}|${ids.slice().sort().join(',')}`;
   if (signature === edgesSignature) return;
   edgesSignature = signature;
+  const seq = ++edgesSeq;
   if (ids.length === 0) {
     // §6.12 requires a non-empty ids list; an empty tree just drops the lines.
     edges.clear();
@@ -1376,11 +1398,17 @@ async function refreshEdges(): Promise<void> {
       store.state.showInactive,
       linkFilter,
     );
+    // Новее чтение уже в полёте (сменился видимый набор/фильтр/статус) — его
+    // снимок и должен победить.
+    if (seq !== edgesSeq) return;
     edges.clear();
     for (const edge of list) edges.set(edge.id, edge);
     drawLinks();
   } catch {
-    // The tree stays usable without the lines.
+    // The tree stays usable without the lines. Сброс подписи — чтобы следующая
+    // отрисовка (в первую очередь тик восстановления связи) повторила чтение,
+    // а не сочла снимок уже отработанным (76282fbc).
+    if (seq === edgesSeq) edgesSignature = '';
   }
 }
 
