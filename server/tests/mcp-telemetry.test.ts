@@ -629,6 +629,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 49 900 → 50 800. Дельта-правка (блокер верификатора): семантика
         // `*`-синонимов добавлена и в описание `etn.instructions` (+111 Б) —
         // итоговый замер задачи 50 605 Б, планка не менялась.
+        // 0.14.1 (ошибки d47e5ba3, feb520de, 1eaf36df, 6ff9749f, 8a87586d —
+        // аудит MCP-описаний): контрактные формулировки добавлены в пять
+        // описаний (chronicle keywords/*-синонимы, instructions ROOT,
+        // find_duplicates wild-тир, query NOT_FOUND/id-only ast, views.run якорь
+        // вне выдачи). Проза `etn.thoughts.get`/`query`/`views.run` и соседних
+        // строк сжата без потери контракта. Суммарный замер 50 605 → 50 714 Б
+        // (+109); планка НЕ менялась — прирост уложен в запас ADR b2eebf8b.
         assert.ok(
           bytes <= 50_800,
           `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 50800`,

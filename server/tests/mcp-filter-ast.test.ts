@@ -859,3 +859,87 @@ describe('MCP etn.thoughts.query: AST наличия связей (60db9614)', {
     }
   });
 });
+
+// ===========================================================================
+// link_filter: присутствующий пустой фильтр — VALIDATION_ERROR, как в REST
+// (ошибка 35c8f16e). До правки MCP-хендлеры передавали args.link_filter в
+// домен сырым, а `linkFilterToAst` для пустого набора возвращал `undefined` —
+// фильтр молча игнорировался и агент получал все рёбра.
+// ===========================================================================
+
+describe('MCP: пустой link_filter отвергается как в REST (35c8f16e)', { skip }, () => {
+  it('neighbors/query/subgraph и etn.ops thoughts.path дают VALIDATION_ERROR', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const parent = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'LF-Parent',
+        });
+        const child = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'LF-Child',
+          link: { direction: 'parent', target_thought_id: parent.id },
+        });
+        // Тело из симптома: присутствующий фильтр без единого источника.
+        const empty = { type_ids: [], include_structural: false };
+        const cases: Array<{ name: string; args: Record<string, unknown> }> = [
+          {
+            name: 'etn.thoughts.neighbors',
+            args: { network_id: ctx.networkId, thought_id: parent.id, dir: 'both', link_filter: empty },
+          },
+          {
+            name: 'etn.thoughts.neighbors',
+            args: { network_id: ctx.networkId, thought_id: parent.id, dir: 'parents', link_filter: {} },
+          },
+          {
+            name: 'etn.thoughts.query',
+            args: { network_id: ctx.networkId, link_filter: empty },
+          },
+          {
+            name: 'etn.thoughts.subgraph',
+            args: { network_id: ctx.networkId, seed_ids: [parent.id], radius: 1, link_filter: empty },
+          },
+          {
+            name: 'etn.ops',
+            args: {
+              action: 'thoughts.path',
+              params: {
+                network_id: ctx.networkId,
+                from_id: parent.id,
+                to_id: child.id,
+                link_filter: empty,
+              },
+            },
+          },
+        ];
+        for (const { name, args } of cases) {
+          const res = await handle.client.callTool({ name, arguments: args });
+          const text = toolText(res);
+          assert.equal(
+            res.isError,
+            true,
+            `${name} ${JSON.stringify(args)}: пустой link_filter обязан быть VALIDATION_ERROR, а не «без фильтра»`,
+          );
+          assert.match(text, /VALIDATION_ERROR/);
+          assert.match(text, /link_filter/);
+        }
+
+        // Непустой фильтр по-прежнему принимается: правка сужает только пустой.
+        const ok = await handle.client.callTool({
+          name: 'etn.thoughts.neighbors',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_id: parent.id,
+            dir: 'children',
+            link_filter: { include_structural: true },
+          },
+        });
+        assert.equal(ok.isError, undefined, toolText(ok));
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});

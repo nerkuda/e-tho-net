@@ -23,7 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, validateTypeRoles } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, parseLinkTypeFilterValue, validateTypeRoles } from '@etn/shared';
 import type { ExportFormat, LayerMergeReport, McpChangeEntry, McpMutationResult, Network, OntologyDeleteParams, OntologyDeleteResult } from '@etn/shared';
 
 import { closeNetworkDb, openNetworkDb } from '../../db/network-db.js';
@@ -905,7 +905,11 @@ const HANDLERS: Record<string, OpHandler> = {
     const a = p as unknown as z.infer<typeof ThoughtsPath.schema>;
     return runTool(async () => {
       const ndb = openMemberNetwork(rt, a.network_id);
-      const path = findPath(ndb, a.from_id, a.to_id, a.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, a.link_filter);
+      // 0.14.1 (ошибка 35c8f16e, правило аналогов): MCP-путь тоже валидирует
+      // `link_filter` строго — присутствующий пустой фильтр не означает «без
+      // фильтра» (`parseLinkTypeFilterValue`, паритет с neighbors/query/subgraph).
+      const linkFilter = parseLinkTypeFilterValue(a.link_filter);
+      const path = findPath(ndb, a.from_id, a.to_id, a.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, linkFilter);
       const thoughts =
         path === null
           ? undefined

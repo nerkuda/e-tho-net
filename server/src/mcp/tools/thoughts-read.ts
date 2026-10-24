@@ -12,7 +12,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, parseLinkTypeFilterValue } from '@etn/shared';
 import type { EffectiveThoughtView, McpViewMode } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
@@ -269,6 +269,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // поля любого уровня, версия формы и согласованность оператора листа с
         // под-выборкой → `VALIDATION_ERROR` (не молчаливый игнор).
         const ast = args.ast === undefined ? undefined : parseFilterAst(args.ast);
+        // 0.14.1 (ошибка 35c8f16e): строгая валидация `link_filter` тем же
+        // парсером, что REST (`parseLinkTypeFilterValue`): присутствующий, но
+        // пустой фильтр — `VALIDATION_ERROR`, а не «без фильтра». До правки
+        // `linkFilterToAst` превращал пустой набор в `undefined` и обход молча
+        // расширялся до всех рёбер.
+        const linkFilter = parseLinkTypeFilterValue(args.link_filter);
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         if (args.network_ids !== undefined) {
           const access = buildCrossNetworkAccess(rt, args.network_ids);
@@ -347,6 +353,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 // Разобранное AST-тело (сырое `...args.ast` перекрыто
                 // типизированным) — веер тоже принимает `ast`, паритет с REST.
                 ast,
+                // Валидированный фильтр (ошибка 35c8f16e) — сырое поле `...args`
+                // перекрыто нормализованным.
+                link_filter: linkFilter,
                 type_id: args.type_id ?? resolvedTypeIds,
                 type: undefined,
                 properties: domainProperties,
@@ -449,6 +458,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               ...args,
               // Разобранное AST-тело (сырое `...args.ast` перекрыто типизированным).
               ast,
+              // Валидированный фильтр (ошибка 35c8f16e).
+              link_filter: linkFilter,
               // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
               // XOR-схема соблюдена и обе формы не приходят одновременно).
               type_id:
@@ -660,11 +671,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const ndb = openMemberNetwork(rt, args.network_id);
         const depth = args.depth ?? 1;
         const view: McpViewMode = args.view ?? 'compact';
+        // 0.14.1 (ошибка 35c8f16e): та же строгая валидация, что в REST —
+        // присутствующий пустой `link_filter` не означает «без фильтра».
+        const linkFilter = parseLinkTypeFilterValue(args.link_filter);
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
           const neighborOpts = {
             userId: rt.deps.auth.userId,
-            linkFilter: args.link_filter,
+            linkFilter,
             showInactive: args.show_inactive,
           };
           // `dir: "both"` (0.7.2) — both directions in one call. The domain
@@ -780,7 +794,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const walk = await traverseAsync(ndb, [args.thought_id], direction, {
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
-          linkFilter: args.link_filter,
+          linkFilter,
           showInactive: args.show_inactive,
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
@@ -835,7 +849,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         );
         const result = await subgraphAsync(ndb, args.seed_ids, args.radius, {
           maxNodes: effectiveMax,
-          linkFilter: args.link_filter,
+          // 0.14.1 (ошибка 35c8f16e): присутствующий пустой `link_filter` —
+          // `VALIDATION_ERROR`, как в REST (парсер `parseLinkTypeFilterValue`).
+          linkFilter: parseLinkTypeFilterValue(args.link_filter),
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
         // subgraphs cannot leak inline `data:` icon URLs either.
