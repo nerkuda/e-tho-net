@@ -32,6 +32,7 @@ import {
   defaultFilterTreeGroup,
   hasAnyFilterCriteria,
   isFilterAstWire,
+  isTrashedDefaultLeaf,
   parseFilterDefinitionTree,
   type FilterCriteriaState,
   type FilterTreeLeaf,
@@ -71,26 +72,6 @@ function trashedDefaultLeaf(): FilterTreeLeaf {
   };
 }
 
-/**
- * Лист ровно служебного дефолта «Помечено на удаление = нет», дописанный
- * КОМПИЛЯТОРОМ плоской формы (без метки `service`): такая форма читается только
- * с плоского определения v1 и снимается с корня. Помеченный AST-лист сюда не
- * попадает — его снимает общий читатель (`stripServiceLeavesAtRoot`), а
- * непомеченный AST-лист — условие пользователя и не снимается (ошибка
- * 9ddc488e).
- */
-function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
-  return (
-    node.kind === 'leaf' &&
-    node.entity.kind === 'trashed' &&
-    node.operator === 'eq' &&
-    node.value.kind === 'scalar' &&
-    node.value.value === false &&
-    node.mode === undefined &&
-    node.service === undefined
-  );
-}
-
 /** Есть ли в дереве ЛЮБОЙ лист «Помечено на удаление» (пользователь сам решил про удалённые). */
 function treeHasTrashedLeaf(node: FilterTreeNode): boolean {
   if (node.kind === 'group') return node.children.some(treeHasTrashedLeaf);
@@ -103,10 +84,15 @@ function treeHasTrashedLeaf(node: FilterTreeNode): boolean {
  * показывается строкой-условием. Помеченные листья AST снимает общий читатель
  * (`stripServiceLeavesAtRoot`), поэтому здесь их трогать не нужно. Лист,
  * вложенный в группу, не трогаем — он осмысленно собран пользователем.
+ * Предикат — единый `isTrashedDefaultLeaf` конструктора; режим `unmarked: true`
+ * и есть область этого места (twin-функция удалена, задача d3a30c3e).
  */
 export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
   if (tree.kind !== 'group') return tree;
-  return { ...tree, children: tree.children.filter((child) => !isTrashedDefaultLeaf(child)) };
+  return {
+    ...tree,
+    children: tree.children.filter((child) => !isTrashedDefaultLeaf(child, { unmarked: true })),
+  };
 }
 
 /**

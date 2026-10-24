@@ -1838,16 +1838,28 @@ export function normalizeFilterTreeRoot(node: FilterTreeNode): FilterTreeGroup {
  * такой лист лишь с КОРНЯ одиночным — лист рядом с настоящими условиями в группе
  * остаётся, иначе определение расширилось бы молча: в AST неявных дефолтов нет —
  * `query-service`, поле `ast`).
+ *
+ * `options.unmarked` — требовать ОТСУТСТВИЕ метки `service: true`: такую форму
+ * дописывает компилятор плоской формы, и её снимает плоский путь чтения
+ * (`stripViewDefaults`, отбор типа мысли). Помеченный лист AST снимает общий
+ * читатель (`stripServiceLeavesAtRoot`), непомеченный AST-лист — условие
+ * пользователя (ошибка 9ddc488e). Один предикат на оба случая — близнецы
+ * `isServiceTrashedDefaultLeaf`/`isTrashedDefaultLeaf` с разным поведением
+ * удалены как ловушка переиспользования (задача d3a30c3e).
  */
-export function isServiceTrashedDefaultLeaf(node: FilterTreeNode): boolean {
-  return (
+export function isTrashedDefaultLeaf(
+  node: FilterTreeNode,
+  options: { unmarked?: boolean } = {},
+): boolean {
+  const shape =
     node.kind === 'leaf' &&
     node.entity.kind === 'trashed' &&
     node.operator === 'eq' &&
     node.value.kind === 'scalar' &&
     node.value.value === false &&
-    node.mode === undefined
-  );
+    node.mode === undefined;
+  if (!shape) return false;
+  return options.unmarked !== true || node.service === undefined;
 }
 
 /**
@@ -1860,8 +1872,8 @@ export function isServiceTrashedDefaultLeaf(node: FilterTreeNode): boolean {
  * показывает. Лист, вложенный в группу, не трогаем: пользователь собрал его
  * осознанно, а метку туда никто не ставит. Метка — единственный признак:
  * непомеченный лист «Помечено на удаление = нет» остаётся условием пользователя
- * ({@link isServiceTrashedDefaultLeaf} описывает только ФОРМУ и применяется
- * исключительно к плоскому пути чтения).
+ * ({@link isTrashedDefaultLeaf} с `unmarked: true` описывает такую ФОРМУ и
+ * применяется исключительно к плоскому пути чтения).
  */
 export function stripServiceLeavesAtRoot(tree: FilterTreeNode): FilterTreeNode {
   if (tree.kind !== 'group') return tree;
@@ -2769,12 +2781,12 @@ export function readFilterDefinitionDetailed(
   const ast = compileFlatCriteriaToAst(state, registry, opts);
   // Служебный дефолт места («Помечено на удаление = нет»), добавленный компилятором
   // плоской формы на КОРНЕВОЙ уровень, — не условие пользователя: снимаем его,
-  // как это делает место «Отбор типа мысли» ({@link isServiceTrashedDefaultLeaf},
+  // как это делает место «Отбор типа мысли» ({@link isTrashedDefaultLeaf},
   // ADR 30ff83bb). Иначе определение без критериев (пара `sort`/`order` и
   // видимость) читалось бы «с условием» и панель «Структур» ушла бы с контракта
   // «нет критериев → HOME + сироты» (§15.3) на ветку `ast` (ошибка ca864656).
   const compiled = ast === undefined ? null : filterAstToTree(ast.filter);
-  const tree = compiled !== null && isServiceTrashedDefaultLeaf(compiled) ? null : compiled;
+  const tree = compiled !== null && isTrashedDefaultLeaf(compiled) ? null : compiled;
   state.tree = tree === null ? defaultFilterTreeGroup('and') : normalizeFilterTreeRoot(tree);
   if (tree !== null) applyLegacyHierarchyTraversal(tree);
   if (ast?.sort !== undefined && (state.sortKeys ?? []).length === 0) {

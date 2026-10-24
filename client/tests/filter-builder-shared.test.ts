@@ -40,6 +40,7 @@ import {
   defaultFilterCriteriaState,
   defaultSearchCriteriaState,
   filterTreeIdsByKind,
+  isTrashedDefaultLeaf,
   parseActivityCriteria,
   parseChronicleCriteria,
   parseFilterDefinition,
@@ -47,6 +48,8 @@ import {
   parseSearchCriteria,
   searchCriteriaToStored,
   type FilterCriteriaState,
+  type FilterTreeLeaf,
+  type FilterTreeNode,
   type SearchCriteriaState,
 } from '../src/renderer/lib/filter-builder.js';
 
@@ -592,5 +595,45 @@ describe('идентификаторы листьев дерева отбора 
     };
     assert.deepEqual(filterTreeIdsByKind(tree, 'parents'), [PARENT_ID]);
     assert.deepEqual(filterTreeIdsByKind(null, 'parents'), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Единый предикат служебного дефолта «Помечено на удаление = нет» (d3a30c3e)
+// ---------------------------------------------------------------------------
+
+describe('предикат служебного дефолта «Помечено на удаление = нет» (d3a30c3e)', () => {
+  /** Лист формы `trashed eq false`; `service` задаётся только при передаче. */
+  function trashedLeaf(service?: true): FilterTreeLeaf {
+    return {
+      kind: 'leaf',
+      entity: { kind: 'trashed' },
+      operator: 'eq',
+      value: { kind: 'scalar', value: false },
+      ...(service === true ? { service: true } : {}),
+    };
+  }
+
+  it('базовый режим — только ФОРМА: метка service не влияет', () => {
+    assert.equal(isTrashedDefaultLeaf(trashedLeaf()), true);
+    assert.equal(isTrashedDefaultLeaf(trashedLeaf(true)), true);
+  });
+
+  it('unmarked: метку service требуется отсутствовать (плоский путь чтения)', () => {
+    assert.equal(isTrashedDefaultLeaf(trashedLeaf(), { unmarked: true }), true);
+    assert.equal(isTrashedDefaultLeaf(trashedLeaf(true), { unmarked: true }), false);
+  });
+
+  it('другая форма листа дефолтом не считается ни в одном режиме', () => {
+    const notDefault: FilterTreeNode[] = [
+      { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: true } },
+      { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'ne', value: { kind: 'scalar', value: false } },
+      { kind: 'leaf', entity: { kind: 'active' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+      { kind: 'group', op: 'and', children: [] },
+    ];
+    for (const node of notDefault) {
+      assert.equal(isTrashedDefaultLeaf(node), false, JSON.stringify(node));
+      assert.equal(isTrashedDefaultLeaf(node, { unmarked: true }), false, JSON.stringify(node));
+    }
   });
 });
