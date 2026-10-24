@@ -1043,11 +1043,16 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
     'etn.thoughts.find_duplicates',
     {
       title: 'Поиск дубликатов',
+      // 0.14.1 (ошибка 1eaf36df): четвёртый тир — stored `*`-синоним матчит
+      // входной термин ЦЕЛИКОМ (anchored regex, границы слов, порядок слов
+      // значим; `wildSynRows` + `anchoredWildcardFor`/`mentionPrefilterPass`,
+      // search-service.ts). Виден через `matched_on: "synonym"`/`matched_synonym`.
       description:
-        'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, partial). ' +
-        'A partial match requires the typed fragments to occur inside CONSECUTIVE words of the title or of ' +
-        'one synonym, in the typed order («исправ ошиб» finds «Исправленные ошибки», but not «исправить ' +
-        'старую ошибку»); `-word` excludes. Always call before creating a thought (`etn.thoughts.write`).',
+        'Find existing thoughts matching a proposed title/synonyms: exact title/synonym, partial ' +
+        '(typed fragments inside CONSECUTIVE words of title or one synonym, in typed order — «исправ ' +
+        'ошиб» finds «Исправленные ошибки», not «исправить старую ошибку»; `-word` excludes), and a ' +
+        'stored `*`-synonym matched against the WHOLE term (word boundaries, order matters; ' +
+        '`matched_on: "synonym"`/`matched_synonym`). Always call before `etn.thoughts.write`.',
       inputSchema: ThoughtsFindDuplicates.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },

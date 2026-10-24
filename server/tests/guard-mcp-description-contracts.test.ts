@@ -84,4 +84,16 @@ describe('guard: MCP — описания несут контрактные фо
       `etn.instructions: вернулась вводящая в заблуждение формулировка «no untyped parent link»\n---\n${description}`,
     );
   });
+
+  it('etn.thoughts.find_duplicates перечисляет четвёртый тир — stored *-синоним (1eaf36df)', async () => {
+    const all = await toolDescriptions();
+    const description = descriptionOf(all, 'etn.thoughts.find_duplicates');
+    assertMentions(description, 'etn.thoughts.find_duplicates', [
+      'stored `*`-synonym',
+      'WHOLE term',
+      'word boundaries',
+      '`matched_on: "synonym"`',
+      '`matched_synonym`',
+    ]);
+  });
 });
