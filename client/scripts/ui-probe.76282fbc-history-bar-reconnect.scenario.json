@@ -1,0 +1,177 @@
+{
+  "name": "history-bar-reconnect-76282fbc",
+  "description": "Ключевой пользовательский сценарий ошибки 76282fbc: при запуске клиента соединение с сервером сначала НЕ устанавливается (первая попытка подключения уходит на закрытый порт — «проблема с установкой соединения»), затем быстро разрешается повторным подключением к рабочему серверу стенда. После восстановления связи полоса истории посещений в статус-баре обязана показать историю вкладки: посещаем две мысли, ждём облачка, проверяем текст и растровым ассертом непустую область полосы. Самодостаточно: третью мысль для истории сценарий засеивает сам шагом api; подстановки {{…}} даёт стенд (node client/scripts/ui-probe-stand.mjs --scenario <этот файл>).",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "seed-history-thought",
+      "api": {
+        "name": "seed-history-thought",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "История стенда",
+          "create_link": {
+            "direction": "parent",
+            "target_thought_id": "{{homeId}}"
+          }
+        },
+        "expression": "data.title"
+      },
+      "expect": "История стенда"
+    },
+    {
+      "name": "fill-dead-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "inject-dead-url",
+      "text": "http://127.0.0.1:9"
+    },
+    {
+      "name": "fill-first-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "first-api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect-to-dead-server",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "startup-connection-failed",
+      "waitFor": "document.querySelector('.onboarding-card .error-text')?.textContent?.trim().length > 0",
+      "timeout": 30000
+    },
+    {
+      "name": "startup-failure-text",
+      "probe": "document.querySelector('.onboarding-card .error-text')?.textContent?.trim() ?? null"
+    },
+    {
+      "name": "replace-with-real-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "select-url",
+      "key": "a",
+      "modifiers": [
+        "ctrl"
+      ]
+    },
+    {
+      "name": "real-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "url-value",
+      "probe": "document.querySelector(\"input[placeholder^='http']\")?.value ?? null",
+      "expect": "{{serverUrl}}"
+    },
+    {
+      "name": "replace-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "select-key",
+      "key": "a",
+      "modifiers": [
+        "ctrl"
+      ]
+    },
+    {
+      "name": "real-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect-after-recovery",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0",
+      "timeout": 30000
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace",
+      "waitFor": "document.querySelector('.history-bar') !== null"
+    },
+    {
+      "name": "clouds-ready",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null && document.querySelectorAll('.cloud[data-id]').length >= 3",
+      "timeout": 30000
+    },
+    {
+      "name": "open-seeded-thought",
+      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "seeded-thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'",
+      "timeout": 30000
+    },
+    {
+      "name": "open-home",
+      "click": ".cloud[data-id=\"{{homeId}}\"]"
+    },
+    {
+      "name": "home-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'",
+      "timeout": 30000
+    },
+    {
+      "name": "open-history-thought",
+      "eval": "(() => { const cloud = Array.from(document.querySelectorAll(\".cloud\")).find((node) => node.textContent?.includes(\"История стенда\")); if (cloud === undefined) throw new Error(\"облачко «История стенда» не найдено\"); cloud.click(); return true; })()"
+    },
+    {
+      "name": "history-thought-opened",
+      "waitFor": "document.querySelector(\".editor-title-input\")?.value === \"История стенда\"",
+      "timeout": 30000
+    },
+    {
+      "name": "history-chips-appear",
+      "waitFor": "document.querySelectorAll('.history-bar .history-cloud').length >= 2",
+      "timeout": 30000
+    },
+    {
+      "name": "history-chips",
+      "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
+    },
+    {
+      "name": "history-bar-text",
+      "probe": "document.querySelector('.history-bar')?.textContent ?? null"
+    },
+    {
+      "name": "seed-title-in-bar",
+      "probe": "document.querySelector(\".history-bar\")?.textContent?.includes(\"{{seedTitle}}\") === true",
+      "expect": true
+    },
+    {
+      "name": "history-bar-painted",
+      "assert": {
+        "name": "history-bar-painted",
+        "region": ".history-bar",
+        "checks": [
+          {
+            "kind": "notBlank",
+            "minRatio": 0.02
+          },
+          {
+            "kind": "distinct",
+            "minColors": 3
+          }
+        ],
+        "evidence": false
+      }
+    }
+  ]
+}

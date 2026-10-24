@@ -17,6 +17,11 @@
  *   (profile `chip`): icon, colours, font, dim state and trash mark, ellipsis
  *   by the row width;
  * - empty history hides the area entirely;
+ * - the re-render signature covers EVERY input of the read, including the
+ *   active tab (`history.list` is per-tab) and the connection status, and it
+ *   is kept only after a successful read: a read that failed while the link
+ *   was down is retried on the next store tick (the `connected` transition),
+ *   never leaving an empty strip until the client restarts (ошибка 76282fbc);
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, inactive
  *   thoughts are hidden while `show_inactive` is off, and marked-for-deletion
@@ -43,7 +48,7 @@ import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
-import { store } from '../state.js';
+import { getRtStatus, store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
 // Мини-облачка истории и строки её дропдауна собирает общая фабрика:
 // значок, цвета, начертание, бледность и метка корзины приходят из одного
@@ -60,6 +65,12 @@ const HISTORY_LIMIT = 50;
 let host: HTMLElement | null = null;
 /** Signature of the inputs the bar depends on — avoids redundant re-renders. */
 let lastSignature = '';
+/**
+ * Sequence of the latest render. A render awaits the history read and the ref
+ * resolution; an older one must not paint over a newer one (the list is
+ * per-tab, so a tab switch while a read is in flight is a real race).
+ */
+let renderSeq = 0;
 /** Coalesces `ResizeObserver` ticks into one render per animation frame. */
 let resizePending = false;
 /** Cached `ResizeObserver` so we don't re-create it on every render. */
@@ -140,27 +151,52 @@ async function render(): Promise<void> {
   const profileId = store.state.profileId;
   const networkId = store.state.networkId;
   const view = store.state.activeView;
-  // The width is part of the signature: the visible chip set depends on it.
-  // The view is part of it too: chips route the click per the active screen.
-  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${host.clientWidth}`;
+  // Every input of the read and of the paint is part of the signature:
+  // - the width, because the visible chip set depends on it;
+  // - the view, because chips route the click per the active screen;
+  // - the active tab, because `history.list` is keyed by (profile, network,
+  //   tab) — without it a tab switch that keeps the same focus served the
+  //   previous tab's list;
+  // - the connection status: after an outage the bar MUST re-read (titles
+  //   resolve again, a read that failed while the link was down is retried).
+  //   The status change is the store tick that guarantees that retry instead
+  //   of an empty strip until the client restarts (ошибка 76282fbc).
+  const signature = `${profileId ?? ''}|${networkId ?? ''}|${store.state.activeTabId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${getRtStatus(store.state)}|${host.clientWidth}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
+  const seq = ++renderSeq;
 
   if (profileId === null || networkId === null) {
     clear(host);
     return;
   }
 
-  const entries = await etn.history.list(
-    profileId,
-    networkId,
-    store.state.activeTabId,
-    HISTORY_LIMIT,
-  );
+  let entries: import('../../main/ipc/contract.js').FocusHistoryEntry[];
+  try {
+    entries = await etn.history.list(
+      profileId,
+      networkId,
+      store.state.activeTabId,
+      HISTORY_LIMIT,
+    );
+  } catch {
+    // The read failed (local DB / IPC hiccup). Do NOT keep the signature: the
+    // next store tick — first of all the `connected` transition after an
+    // outage — retries, instead of the strip staying empty until a restart
+    // (ошибка 76282fbc). A newer render must not lose its own signature.
+    if (seq === renderSeq) lastSignature = '';
+    return;
+  }
+  // A newer render (another tab/focus/status) already owns the strip.
+  if (seq !== renderSeq) return;
   if (host === null || !host.isConnected) return;
   const ids = entries.map((entry) => entry.thoughtId);
 
   const refs = ids.length > 0 ? await resolveRefs(networkId, ids) : new Map();
+  // The ref resolution is a server round-trip: it may finish after a tab
+  // switch or a reconnect started a newer render.
+  if (seq !== renderSeq) return;
+  if (host === null || !host.isConnected) return;
   const activeId = currentId();
   const visible = ids.filter((id) => {
     // The current thought is not a "recent" — it enters the list only after
