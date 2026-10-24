@@ -110,4 +110,13 @@ describe('guard: MCP — описания несут контрактные фо
       `etn.thoughts.query: «пустая страница и unresolved» — семантика etn.views.run, в query её быть не должно\n---\n${description}`,
     );
   });
+
+  it('etn.views.run: якорная мысль исключается из выдачи и total (8a87586d)', async () => {
+    const all = await toolDescriptions();
+    const description = descriptionOf(all, 'etn.views.run');
+    assertMentions(description, 'etn.views.run', [
+      '`thought_id` исключается из выдачи и `total`',
+      '`etn.thoughts.get`',
+    ]);
+  });
 });

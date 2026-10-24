@@ -33,18 +33,22 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
     'etn.views.run',
     {
       title: 'Исполнить отбор относительно мысли',
+      // 0.14.1 (ошибка 8a87586d): отбор относительно мысли показывает
+      // СОСЕДЕЙ, а не саму мысль — `thought-type-views-service.ts` отбрасывает
+      // якорь (`items.filter(i => i.id !== thoughtId)`) и корректирует `total`.
+      // Поведение осознанное, но описание о нём молчало.
       description:
-        'Run a view for one thought — типовой или внетиповой из `meta.views` карточки ' +
-        '(дискриминатор `scope: "type" | "thought"`, `defined_on` — владелец). `view_name` — имя ' +
-        '(нормализованное сравнение) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
+        'Run a view for one thought — типовой/внетиповой из `meta.views` ' +
+        '(`scope: "type" | "thought"`, `defined_on` — владелец). `view_name` — имя ' +
+        '(нормализовано) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
         '`etn.guide { topic: "thoughts.query" }`) — ровно одно из двух. `limit`/`offset` — страница, ' +
-        '`order` — направление сортировки. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
+        '`order` — направление сортировки. Якорная мысль `thought_id` исключается из выдачи и `total` ' +
+        '(сама мысль — `etn.thoughts.get`). Read-only: не тратит бюджет записи и `audit_log`. ' +
         'Возвращает страницу мыслей; при `view_name` — карточку исполненного отбора в top-level `view` ' +
-        '(id, имя, `scope`, `defined_on`, `inherited`), при `ast` поля `view` нет — ветка помечена ' +
-        '`meta.ast: true`; `meta.unresolved` (не пусто, если встретился неразрешимый ' +
-        'токен — тогда `data` пустая). Отбор не найден — `NOT_FOUND` с `details.available_views` ' +
-        '(id, имя, `scope`, `defined_on`). Удалённая сущность условия — `VALIDATION_ERROR` ' +
-        '(`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
+        '(id, имя, `scope`, `defined_on`, `inherited`), при `ast` поля `view` нет — `meta.ast: true`; ' +
+        '`meta.unresolved` (неразрешённый токен — `data` пустая). Не найден — `NOT_FOUND` ' +
+        'с `details.available_views` (id, имя, `scope`, `defined_on`). Удалённая сущность условия — ' +
+        '`VALIDATION_ERROR` (`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
     },
