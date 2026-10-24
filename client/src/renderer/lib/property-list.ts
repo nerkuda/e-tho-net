@@ -66,12 +66,17 @@ import { createTable } from './ui/table.js';
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
  *  (`types_source_count` / `types_target_count`) — их и показывает колонка
- *  «Кол-во типов» у соответствующего конца. */
+ *  «Кол-во типов» у соответствующего конца. `binding_source_type_ids` /
+ *  `binding_target_type_ids` — те же привязки по сторонам в виде id типов:
+ *  из них строится ограничение значения внетиповой строки и массового
+ *  диалога (ошибка f8f8fa49). */
 export interface PropertyRegistryRow extends NetworkProperty {
   types_count: number;
   values_count: number;
   types_source_count?: number;
   types_target_count?: number;
+  binding_source_type_ids?: string[];
+  binding_target_type_ids?: string[];
 }
 
 /** Человекочитаемые подписи видов значения. */

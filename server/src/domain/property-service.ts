@@ -2337,13 +2337,16 @@ function attachAllowedOppositeTypeIds(ndb: NetworkDb, out: EffectiveTypeProperty
  * — карта `property_id → { source, target }`. Одна подготовленная выборка на
  * набор свойств: зеркальные записи физических привязок не имеют и не влияют
  * (их `property_id` — это же свойство реестра, а сторона зеркала вычисляется
- * вызывающим).
+ * вызывающим). Единая точка для `allowed_opposite_type_ids` эффективных
+ * определений, серверной валидации значения и производных полей справочника
+ * (`binding_source_type_ids`/`binding_target_type_ids`, ошибка f8f8fa49).
  */
-function loadBindingTypesBySide(
+export function loadBindingTypesBySide(
   ndb: NetworkDb,
   propertyIds: readonly string[],
 ): Map<string, { source: string[]; target: string[] }> {
   const map = new Map<string, { source: string[]; target: string[] }>();
+  if (propertyIds.length === 0) return map;
   const rows = ndb
     .prepare(
       `SELECT DISTINCT property_id, side, owner_id
@@ -5801,6 +5804,13 @@ export function getPropertyRegistryCounters(
     ).c;
     result.types_source_count = sourceCount;
     result.types_target_count = targetCount;
+    // Типы привязок по сторонам — производные данных того же реестра:
+    // внетиповые строки и массовый диалог применяют их как ограничение
+    // значения (то же `allowed_opposite_type_ids`, что у эффективного
+    // определения, ошибка f8f8fa49).
+    const bindings = loadBindingTypesBySide(ndb, [propertyId]).get(propertyId);
+    result.binding_source_type_ids = [...(bindings?.source ?? [])];
+    result.binding_target_type_ids = [...(bindings?.target ?? [])];
   }
   return result;
 }

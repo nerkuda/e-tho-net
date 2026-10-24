@@ -3,11 +3,13 @@
  * (ошибка a6513df0 — переделка фикса cfbf3855, 0.8.2).
  *
  * Источник ограничения — привязки ПРОТИВОПОЛОЖНОЙ стороны свойства в реестре
- * `type_properties`, а не ключи `config` (их модель 0.8.1 не предусматривает:
- * у реального свойства они всегда пусты). Сервер считает набор по реестру и
- * отдаёт его в `EffectiveTypeProperty.allowed_opposite_type_ids`; редактор
- * значения расширяет список до поддеревьев типов (L21) и применяет его и к
- * живому поиску поля, и к диалогу «выбрать». Пусто — фильтра нет (любые мысли).
+ * `type_properties`, а не ключи `config` (их модель 0.8.2 не предусматривает:
+ * редактор значения их не читает). Сервер считает набор по реестру и отдаёт
+ * его в `EffectiveTypeProperty.allowed_opposite_type_ids` (типовая строка)
+ * либо в производных полях реестра `binding_*_type_ids` (внетиповая строка и
+ * массовый диалог, ошибка f8f8fa49); редактор значения расширяет список до
+ * поддеревьев типов (L21) и применяет его и к живому поиску поля, и к диалогу
+ * «выбрать». Пусто — фильтра нет (любые мысли).
  *
  * Харнесс повторяет editor-link-value-chip.test.ts: DOM-shim без dispatch
  * асинхронной отрисовки выпадашки. Мы НЕ фокусируем поле — тогда `render`
@@ -148,42 +150,46 @@ describe('linkAllowedTypeIds — нормализация допустимых �
     assert.deepEqual(linkAllowedTypeIds(null), []);
   });
 
-  it('config-ключи allowed_*_type_ids — fallback, когда реестр привязок пуст (f8f8fa49)', async () => {
+  it('legacy config.allowed_*_type_ids редактором значения не читаются (f8f8fa49)', async () => {
     installShim();
-    const { effectiveLinkAllowedTypeIds } = await import(
-      '../src/renderer/editor/value-editor.js'
-    );
-    assert.deepEqual(
-      effectiveLinkAllowedTypeIds({
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
+    // Определение без привязок (например, конструктор условий отбора) даже с
+    // заполненными legacy-ключами не сужает поиск: единственный источник —
+    // привязки (спека «properties», модель 0.8.2).
+    const editor = buildLinkValueEditor({
+      networkId: 'n1',
+      definition: {
+        ...linkDefinition(undefined, 'source'),
         config: { link_type_id: 'lt-1', allowed_target_type_ids: ['tt-org'] },
-        side: 'source',
-        allowed_opposite_type_ids: [],
-      }),
-      ['tt-org'],
-      'привязки пусты — ограничение берётся из config свойства',
-    );
+      } as any,
+      values: [],
+      save: async () => true,
+    }) as unknown as ShimElement;
+
+    await typeAndSettle(addInputOf(editor), 'организация');
     assert.deepEqual(
-      effectiveLinkAllowedTypeIds({
-        config: { link_type_id: 'lt-1', allowed_target_type_ids: ['tt-org'] },
-        side: 'source',
-        allowed_opposite_type_ids: ['tt-ver'],
-      }),
-      ['tt-ver'],
-      'реестр привязок приоритетнее config',
-    );
-    assert.deepEqual(
-      effectiveLinkAllowedTypeIds({
-        config: { allowed_source_type_ids: ['tt-work'], allowed_target_type_ids: ['tt-org'] },
-        side: 'target',
-        allowed_opposite_type_ids: [],
-      }),
-      ['tt-work'],
-      'у строки обратной стороны — зеркальный ключ источников',
-    );
-    assert.deepEqual(
-      effectiveLinkAllowedTypeIds({ config: null, side: null, allowed_opposite_type_ids: [] }),
+      searchCalls[0]!.typeIds,
       [],
-      'пусто везде — ограничения нет',
+      'config-ключи не являются источником отбора',
+    );
+  });
+
+  it('реестр привязок реестрового свойства: source → цели, target → источники (f8f8fa49)', async () => {
+    const { registryAllowedOppositeTypeIds } = await import(
+      '../src/renderer/lib/link-binding-types.js'
+    );
+    const row = {
+      binding_source_type_ids: ['tt-person'],
+      binding_target_type_ids: ['tt-org', 'tt-firm'],
+    };
+    assert.deepEqual(registryAllowedOppositeTypeIds(row, 'source'), ['tt-org', 'tt-firm']);
+    assert.deepEqual(registryAllowedOppositeTypeIds(row, 'target'), ['tt-person']);
+    assert.deepEqual(registryAllowedOppositeTypeIds(row, null), []);
+    assert.deepEqual(registryAllowedOppositeTypeIds(undefined, 'source'), []);
+    assert.deepEqual(
+      registryAllowedOppositeTypeIds({ binding_target_type_ids: [''] }, 'source'),
+      [],
+      'пустые id отбрасываются; пустая противоположная сторона — без ограничения',
     );
   });
 });
@@ -223,27 +229,6 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
       searchCalls[0]!.typeIds,
       ['tt-work', 'tt-task'],
       'у привязки со стороны назначения ограничены источники',
-    );
-  });
-
-  it('живой поиск ограничен config.allowed_target_type_ids, когда привязок нет (f8f8fa49)', async () => {
-    installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
-    const editor = buildLinkValueEditor({
-      networkId: 'n1',
-      definition: {
-        ...linkDefinition([], 'source'),
-        config: { link_type_id: 'lt-1', allowed_target_type_ids: ['tt-org'] },
-      } as any,
-      values: [],
-      save: async () => true,
-    }) as unknown as ShimElement;
-
-    await typeAndSettle(addInputOf(editor), 'организация');
-    assert.deepEqual(
-      searchCalls[0]!.typeIds,
-      ['tt-org'],
-      'внетиповая/массовая строка фильтрует цели по ограничению свойства',
     );
   });
 
@@ -325,8 +310,8 @@ describe('buildLinkValueEditor — диалог «выбрать» получа�
       'диалог выбора получает отбор по тем же допустимым типам',
     );
     assert.ok(
-      /effectiveLinkAllowedTypeIds\(definition\)/.test(src),
-      'filterIds вычисляются единым правилом: привязки типа, иначе config свойства',
+      /linkAllowedTypeIds\(definition\.allowed_opposite_type_ids\)/.test(src),
+      'filterIds вычисляются единым правилом: только allowed_opposite_type_ids (без config)',
     );
     assert.ok(
       /linkSearchSource\(networkId,\s*filterIds\)/.test(src),

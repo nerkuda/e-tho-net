@@ -958,37 +958,71 @@ describe('внетиповые строки: сторона и исключен�
     assert.deepEqual(source.config, { link_type_id: 'lt1', direction: 'out' });
   });
 
-  it('ограничение типов цели из config реестра доходит до внетипового редактора (f8f8fa49)', async () => {
-    const { outsideLinkDefinition } = await internals();
-    const definition = outsideLinkDefinition(
+  it('ограничение типов значения внетиповой строки — из привязок реестра по стороне (f8f8fa49)', async () => {
+    const { outsideLinkDefinition, pendingOutsideDefinition } = await internals();
+    // Конфиг реестра намеренно содержит запрещённый legacy-ключ: редактор
+    // значения его не читает, ограничение — только по привязкам.
+    const registry = {
+      id: 'p-org',
+      name: 'Место работы',
+      value_type: 'link',
+      config: {
+        link_type_id: 'lt1',
+        allowed_target_type_ids: ['tt-forbidden'],
+        show_on_map: true,
+      },
+      description: null,
+      binding_source_type_ids: ['tt-person'],
+      binding_target_type_ids: ['tt-org'],
+    };
+    const source = outsideLinkDefinition(
       linkValue('p-org', 'source', 'out', 'Место работы'),
       'thought',
-      {
-        id: 'p-org',
-        name: 'Место работы',
-        value_type: 'link',
-        config: {
-          link_type_id: 'lt1',
-          allowed_target_type_ids: ['tt-org'],
-          show_on_map: true,
-        },
-        description: null,
-      },
-    );
-    assert.deepEqual(definition.config, {
-      link_type_id: 'lt1',
-      allowed_target_type_ids: ['tt-org'],
-      show_on_map: true,
-      direction: 'out',
-    });
-    const { effectiveLinkAllowedTypeIds } = await import(
-      '../src/renderer/editor/value-editor.js'
+      registry,
     );
     assert.deepEqual(
-      effectiveLinkAllowedTypeIds(definition),
-      ['tt-org'],
-      'пикер внетиповой строки фильтрует цели по ограничению свойства',
+      source.config,
+      { link_type_id: 'lt1', direction: 'out' },
+      'config реестра целиком в определение не переносится',
     );
+    assert.deepEqual(
+      source.allowed_opposite_type_ids,
+      ['tt-org'],
+      'прямое имя: допустимые цели — типы привязок стороны назначения',
+    );
+
+    const target = outsideLinkDefinition(
+      linkValue('p-org', 'target', 'in', 'Сотрудники'),
+      'thought',
+      registry,
+    );
+    assert.deepEqual(
+      target.allowed_opposite_type_ids,
+      ['tt-person'],
+      'обратное имя: допустимые источники — типы привязок стороны источника',
+    );
+
+    const noRegistry = outsideLinkDefinition(
+      linkValue('p-out', 'source', 'out', 'Без реестра'),
+      'thought',
+    );
+    assert.deepEqual(noRegistry.allowed_opposite_type_ids, [], 'нет реестра — нет ограничения');
+
+    // Строка-черновик «+ свойство»: определение собирается из того же снимка
+    // реестра и несёт тот же набор (сторона — выбранный конец связи).
+    const pending = pendingOutsideDefinition(
+      {
+        propertyId: 'p-org',
+        property: registry,
+        name: 'Сотрудники',
+        side: 'target',
+        linkTypeId: 'lt1',
+        focus: false,
+      },
+      'thought',
+    );
+    assert.deepEqual(pending.allowed_opposite_type_ids, ['tt-person']);
+    assert.equal('allowed_target_type_ids' in (pending.config ?? {}), false);
   });
 
   it('уникальность по стороне сохраняется и у рёбер без реестрового свойства', async () => {

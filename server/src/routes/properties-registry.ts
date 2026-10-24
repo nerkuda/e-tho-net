@@ -41,6 +41,7 @@ import {
   getPropertyCounterMaps,
   getPropertyRegistryCounters,
   getPropertyUsage,
+  loadBindingTypesBySide,
   listNetworkProperties,
   updateNetworkProperty,
   type RegistryPropertyCounters,
@@ -167,9 +168,15 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const properties = listNetworkProperties(ndb);
         // Счётчики считает домен (ADR 8c93f03a): четыре агрегата — за четыре
-        // запроса, затем O(1)-склейка по каждому свойству.
+        // запроса, затем O(1)-склейка по каждому свойству. Типы привязок по
+        // сторонам — та же выборка реестра привязок, что у
+        // `allowed_opposite_type_ids` эффективного определения (f8f8fa49).
         const { typesByProp, valuesByProp, linkSourceByProp, linkTargetByProp } =
           getPropertyCounterMaps(ndb);
+        const linkBindingTypes = loadBindingTypesBySide(
+          ndb,
+          properties.filter((p) => p.value_type === 'link').map((p) => p.id),
+        );
         type Entry = NetworkProperty & RegistryPropertyCounters;
         const data: Entry[] = properties.map((p) => {
           const entry: Entry = {
@@ -180,6 +187,9 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           if (p.value_type === 'link') {
             entry.types_source_count = linkSourceByProp.get(p.id) ?? 0;
             entry.types_target_count = linkTargetByProp.get(p.id) ?? 0;
+            const bindings = linkBindingTypes.get(p.id);
+            entry.binding_source_type_ids = [...(bindings?.source ?? [])];
+            entry.binding_target_type_ids = [...(bindings?.target ?? [])];
           }
           return entry;
         });

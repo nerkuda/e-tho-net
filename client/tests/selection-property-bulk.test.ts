@@ -64,6 +64,8 @@ const REGISTRY: BulkRegistryProperty[] = [
     name: 'Прикреплено',
     value_type: 'link',
     config: { link_type_id: 'lt-attach' },
+    binding_source_type_ids: ['tt-person'],
+    binding_target_type_ids: ['tt-org'],
   }),
   registry({
     id: 'p-sym',
@@ -229,6 +231,16 @@ describe('строки таблицы: union по (свойство, сторо�
       rows.map((row) => row.name),
       ['Прикреплено', 'Прикреплено к', 'Статус'],
       'у связи имя стороны — из каталога типов связей; сортировка по имени свойства',
+    );
+    assert.deepEqual(
+      rows.find((row) => row.key === 'p-attach:source')!.definition.allowed_opposite_type_ids,
+      ['tt-org'],
+      'source-строка: допустимые цели — типы привязок стороны назначения',
+    );
+    assert.deepEqual(
+      rows.find((row) => row.key === 'p-attach:target')!.definition.allowed_opposite_type_ids,
+      ['tt-person'],
+      'target-строка: допустимые источники — типы привязок стороны источника',
     );
   });
 
@@ -428,6 +440,21 @@ describe('общее значение и счётчик присутствия',
     assert.equal(common.uniform, true);
     assert.equal(common.value, false);
     assert.equal(commonBulkValue('bool', null, [false, true]).uniform, false);
+  });
+
+  it('строка (+), добавленная из справочника: связь несёт ограничение по привязкам (f8f8fa49)', () => {
+    const row = bulkRowFromRegistry(
+      REGISTRY.find((property) => property.id === 'p-attach')!,
+      'source',
+      LINK_TYPES,
+      3,
+    );
+    assert.deepEqual(row.definition.allowed_opposite_type_ids, ['tt-org']);
+    assert.equal(
+      'allowed_target_type_ids' in (row.definition.config ?? {}),
+      false,
+      'legacy-ключи config к определению не примешиваются',
+    );
   });
 
   it('строка, добавленная через (+), пустая и с нулевым присутствием', () => {

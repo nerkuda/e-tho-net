@@ -1,33 +1,59 @@
 {
   "name": "f8f8fa49-link-target-type-restriction",
-  "description": "Ключевой GUI-сценарий ошибки f8f8fa49: пикер целей свойства-связи обязан ограничивать кандидатов типами из config.allowed_target_type_ids в трёх местах — массовый диалог свойств выделения, типовая строка карточки мысли и внетиповая строка карточки. Самодостаточно: онтология (типы Т1/Т2/Т3, свойство-связь «Прикреплено» с allowed_target_type_ids=[Т2]) и мысли «Цель A» (Т1), «Цель B» (Т2), «Цель C» (без типа), «Цель D» (Т3) заводятся шагом probe через window.etn до открытия сети. Проверка — живой поиск по слову «Цель»: в выдаче обязан быть «Цель B» и не должно быть «Цель D» (Т3 вне ограничения); при внетиповой строке C ограничение приходит из config реестра (внетиповая проекция не теряет config). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f8f8fa49-link-target-type-restriction.scenario.json --out .tmp/etn-f8f8fa49/out",
-  "timeout": 180000,
+  "description": "Ключевой GUI-сценарий ошибки f8f8fa49: пикер целей свойства-связи ограничен типами ПРОТИВОПОЛОЖНОГО КОНЦА привязок (не config.allowed_*). Пример заказчика: свойство «Место работы» с привязкой source к типу «Персона» и target к типу «Организация». В массовом диалоге, типовых и внетиповых строках карточки прямое имя предлагает организации, обратное имя «Сотрудники» — персоны; «Кандидат без типа» не предлагается при любом ограничении. Самодостаточно: онтология и мысли заводятся probe-шагом через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f8f8fa49-link-target-type-restriction.scenario.json --out .tmp/etn-f8f8fa49/out",
+  "timeout": 60000,
   "steps": [
-    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
-    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
-    { "name": "server-url-typed", "text": "{{serverUrl}}" },
-    { "name": "fill-api-key", "click": "input[type=password]" },
-    { "name": "api-key-typed", "text": "{{apiKey}}" },
-    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
-    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
-
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0",
+      "timeout": 20000
+    },
     {
       "name": "seed-ontology-and-thoughts",
-      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const t2=await et.types.createThoughtType(N,{name:'Т2'}); const t3=await et.types.createThoughtType(N,{name:'Т3'}); const p=await et.propertyRegistry.create(N,{name:'Прикреплено',value_type:'link',name_forward:'Прикреплено',name_reverse:'Прикреплено в',config:{allowed_target_type_ids:[t2.id]}}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:p.id,required:false,position:0,side:'source'}); const mk=async(title,type)=>{ const r=await et.thoughts.create(N,{title,type_id:type,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const A=await mk('Цель A',t1.id); const B=await mk('Цель B',t2.id); const C=await mk('Цель C',null); const D=await mk('Цель D',t3.id); await et.properties.set(N,'thought',A,'Прикреплено',[B],'source'); await et.properties.set(N,'thought',C,'Прикреплено',[B],'source'); window.__lx={t1:t1.id,t2:t2.id,t3:t3.id,p:p.id,A,B,C,D}; return 'ok'; })(); })()",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const person=await et.types.createThoughtType(N,{name:'Персона'}); const org=await et.types.createThoughtType(N,{name:'Организация'}); const prop=await et.propertyRegistry.create(N,{name:'Место работы',value_type:'link',name_forward:'Место работы',name_reverse:'Сотрудники'}); await et.types.createTypeProperty(N,'thought_type',person.id,{mode:'attach',property_id:prop.id,required:false,position:0,side:'source'}); await et.types.createTypeProperty(N,'thought_type',org.id,{mode:'attach',property_id:prop.id,required:false,position:0,side:'target'}); const mk=async(title,type)=>{ const r=await et.thoughts.create(N,{title,type_id:type,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const P1=await mk('Персона Иванов',person.id); const O1=await mk('Организация Ромашка',org.id); const U1=await mk('Внетиповая персона',null); const U2=await mk('Внетиповой сотрудник',null); const C1=await mk('Кандидат персона',person.id); const C2=await mk('Кандидат организация',org.id); const C3=await mk('Кандидат без типа',null); await et.properties.set(N,'thought',P1,'Место работы',[O1],'source'); await et.properties.set(N,'thought',O1,'Сотрудники',[P1],'target'); await et.properties.set(N,'thought',U1,'Место работы',[O1],'source'); await et.properties.set(N,'thought',U2,'Сотрудники',[P1],'target'); window.__lx={person:person.id,org:org.id,prop:prop.id,P1,O1,U1,U2,C1,C2,C3}; return 'ok'; })(); })()",
       "expect": "ok"
     },
-
-    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
     {
       "name": "seeded-clouds",
-      "waitFor": "(() => { const b=window.__lx; return b !== undefined && [b.A,b.B,b.C,b.D].every((id)=>document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null); })()",
+      "waitFor": "(() => { const b=window.__lx; return b !== undefined && [b.P1,b.O1,b.U1,b.U2].every((id)=>document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null); })()",
       "timeout": 30000
     },
-
     {
-      "name": "select-a-and-c",
-      "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__lx; return { A:click(b.A), C:click(b.C) }; })()",
-      "expect": { "A": true, "C": true }
+      "name": "select-p1-and-o1",
+      "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__lx; return { P1:click(b.P1), O1:click(b.O1) }; })()",
+      "expect": {
+        "P1": true,
+        "O1": true
+      }
     },
     {
       "name": "selection-panel-visible",
@@ -39,121 +65,354 @@
       "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
-    { "name": "selection-properties-menu", "waitFor": "document.querySelector('.menu .menu-item') !== null", "timeout": 20000 },
+    {
+      "name": "selection-properties-menu",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
     {
       "name": "open-property-values-dialog",
       "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
-    { "name": "bulk-dialog", "waitFor": "document.querySelector('.prop-bulk-table') !== null", "timeout": 30000 },
-    { "name": "bulk-link-row", "waitFor": "document.querySelector('tr:has(input[aria-label=\"Прикреплено\"])') !== null", "timeout": 20000 },
-    { "name": "bulk-check-link-row", "click": "input[type=checkbox][aria-label=\"Прикреплено\"]" },
     {
-      "name": "bulk-link-row-active",
-      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Прикреплено\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false"
+      "name": "bulk-dialog",
+      "waitFor": "document.querySelector('.prop-bulk-table') !== null",
+      "timeout": 30000
     },
-    { "name": "bulk-focus-search", "click": "tr:has(input[aria-label=\"Прикреплено\"]) .link-value-add" },
-    { "name": "bulk-type-query", "text": "Цель" },
-    { "name": "bulk-suggestions", "waitFor": "document.querySelectorAll('.type-combo-item').length > 0", "timeout": 20000 },
     {
-      "name": "bulk-suggestion-titles",
+      "name": "bulk-source-row",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Место работы\"])') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-source-check",
+      "click": "input[type=checkbox][aria-label=\"Место работы\"]"
+    },
+    {
+      "name": "bulk-source-row-active",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Место работы\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-source-focus",
+      "click": "tr:has(input[aria-label=\"Место работы\"]) .link-value-add"
+    },
+    {
+      "name": "bulk-source-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "bulk-source-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-source-titles",
       "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
     },
     {
-      "name": "bulk-has-allowed-target",
-      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель B'))()",
+      "name": "bulk-source-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
       "expect": true
     },
     {
-      "name": "bulk-no-forbidden-target",
-      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель D'))()",
+      "name": "bulk-source-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
       "expect": false
+    },
+    {
+      "name": "bulk-source-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-source-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); const rows=[...document.querySelectorAll('.link-value-add')]; for(const r of rows) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-source-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-target-row",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Сотрудники\"])') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-target-check",
+      "click": "input[type=checkbox][aria-label=\"Сотрудники\"]"
+    },
+    {
+      "name": "bulk-target-row-active",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Сотрудники\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-target-focus",
+      "click": "tr:has(input[aria-label=\"Сотрудники\"]) .link-value-add"
+    },
+    {
+      "name": "bulk-target-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "bulk-target-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-target-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "bulk-target-has-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": true
+    },
+    {
+      "name": "bulk-target-no-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-target-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-target-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); const rows=[...document.querySelectorAll('.link-value-add')]; for(const r of rows) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-target-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
     },
     {
       "name": "bulk-close-dialog",
       "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
-    { "name": "bulk-dialog-closed", "waitFor": "document.querySelector('.prop-bulk-table') === null", "timeout": 10000 },
-
     {
-      "name": "open-typed-thought",
-      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+window.__lx.A+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
-    },
-    { "name": "typed-thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Цель A'", "timeout": 30000 },
-    { "name": "typed-tabs", "waitFor": "document.querySelectorAll('.editor-tab').length > 0" },
-    {
-      "name": "typed-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "name": "bulk-dialog-closed",
+      "waitFor": "document.querySelector('.prop-bulk-table') === null",
+      "timeout": 10000
     },
     {
-      "name": "typed-link-row",
-      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('Прикреплено')))()",
+      "name": "open-typed-source-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.P1)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-source-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона Иванов'",
+      "timeout": 30000
+    },
+    {
+      "name": "typed-source-tabs",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0",
       "timeout": 20000
     },
     {
-      "name": "typed-focus-search",
-      "eval": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('Прикреплено')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+      "name": "typed-source-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
-    { "name": "typed-type-query", "text": "Цель" },
-    { "name": "typed-suggestions", "waitFor": "document.querySelectorAll('.type-combo-item').length > 0", "timeout": 20000 },
     {
-      "name": "typed-suggestion-titles",
+      "name": "typed-source-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('Место работы')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-source-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-source-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "typed-source-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-source-titles",
       "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
     },
     {
-      "name": "typed-has-allowed-target",
-      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель B'))()",
+      "name": "typed-source-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
       "expect": true
     },
     {
-      "name": "typed-no-forbidden-target",
-      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель D'))()",
+      "name": "typed-source-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
       "expect": false
     },
-
     {
-      "name": "open-outside-thought",
-      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+window.__lx.C+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+      "name": "typed-source-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
     },
-    { "name": "outside-thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Цель C'", "timeout": 30000 },
-    { "name": "outside-tabs", "waitFor": "document.querySelectorAll('.editor-tab').length > 0" },
     {
-      "name": "outside-properties-tab",
+      "name": "open-typed-target-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.O1)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-target-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Организация Ромашка'",
+      "timeout": 30000
+    },
+    {
+      "name": "typed-target-properties-tab",
       "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
-      "name": "outside-link-row",
-      "waitFor": "(() => [...document.querySelectorAll('.properties-outside-body tr')].some((r)=>(r.textContent ?? '').includes('Прикреплено')))()",
+      "name": "typed-target-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('Сотрудники')))()",
       "timeout": 20000
     },
     {
-      "name": "outside-settle",
+      "name": "typed-target-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('Сотрудники')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-target-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "typed-target-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-target-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "typed-target-has-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": true
+    },
+    {
+      "name": "typed-target-no-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": false
+    },
+    {
+      "name": "typed-target-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "open-outside-source-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.U1)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-source-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Внетиповая персона'",
+      "timeout": 30000
+    },
+    {
+      "name": "outside-source-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-source-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-outside-body tr')].some((r)=>(r.textContent ?? '').includes('Место работы')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-source-settle",
       "probe": "(async () => { await new Promise((r)=>setTimeout(r,800)); return 'ok'; })()",
       "expect": "ok"
     },
     {
-      "name": "outside-focus-search",
-      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Прикреплено')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+      "name": "outside-source-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
     },
-    { "name": "outside-type-query", "text": "Цель" },
     {
-      "name": "outside-input-state",
-      "probe": "(() => { const inp=document.querySelector('.properties-outside-body .link-value-add'); return { exists: inp!==null, value: inp?.value ?? null, focused: document.activeElement===inp, active: document.activeElement?.className ?? null, lists: document.querySelectorAll('.type-combo-list').length }; })()"
+      "name": "outside-source-query",
+      "text": "Кандидат"
     },
-    { "name": "outside-suggestions", "waitFor": "document.querySelectorAll('.type-combo-item').length > 0", "timeout": 20000 },
     {
-      "name": "outside-suggestion-titles",
+      "name": "outside-source-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-source-titles",
       "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
     },
     {
-      "name": "outside-has-allowed-target",
-      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель B'))()",
+      "name": "outside-source-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
       "expect": true
     },
     {
-      "name": "outside-no-forbidden-target",
-      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель D'))()",
+      "name": "outside-source-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "outside-source-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "open-outside-target-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.U2)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-target-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Внетиповой сотрудник'",
+      "timeout": 30000
+    },
+    {
+      "name": "outside-target-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-target-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-outside-body tr')].some((r)=>(r.textContent ?? '').includes('Сотрудники')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-target-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,800)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-target-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Сотрудники')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-target-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "outside-target-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-target-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "outside-target-has-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": true
+    },
+    {
+      "name": "outside-target-no-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": false
+    },
+    {
+      "name": "outside-target-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
       "expect": false
     }
   ]

@@ -36,12 +36,18 @@ import type {
   PropertyValueType,
 } from '@etn/shared';
 import { formatCrossNetworkAddress } from '@etn/shared';
+import {
+  registryAllowedOppositeTypeIds,
+  type RegistryLinkBindingTypeIds,
+} from '../lib/link-binding-types.js';
 
-/** Реестровое свойство в объёме, нужном построению строк (срез `NetworkProperty`). */
+/** Реестровое свойство в объёме, нужном построению строк (срез
+ *  `NetworkProperty` + производные типы привязок по сторонам). */
 export type BulkRegistryProperty = Pick<
   NetworkProperty,
   'id' | 'name' | 'value_type' | 'config' | 'description'
->;
+> &
+  RegistryLinkBindingTypeIds;
 
 /** Мысль выделения: id и подпись (для причин отказа и подсказок). */
 export interface BulkThought {
@@ -61,6 +67,9 @@ export interface BulkValueDefinition {
   side: LinkPropertySide | null;
   key: string;
   property_id: string;
+  /** Допустимые типы противоположной стороны — из привязок реестра
+   *  (`binding_*_type_ids`, ошибка f8f8fa49). */
+  allowed_opposite_type_ids?: string[];
 }
 
 /** Одна строка таблицы — (свойство, сторона). */
@@ -408,6 +417,11 @@ export function buildBulkPropertyRows(args: {
         side,
         key: property.name,
         property_id: property.id,
+        ...(property.value_type === 'link'
+          ? {
+              allowed_opposite_type_ids: registryAllowedOppositeTypeIds(property, side),
+            }
+          : {}),
       },
     });
   }
@@ -448,6 +462,11 @@ export function bulkRowFromRegistry(
       side,
       key: property.name,
       property_id: property.id,
+      ...(property.value_type === 'link'
+        ? {
+            allowed_opposite_type_ids: registryAllowedOppositeTypeIds(property, side),
+          }
+        : {}),
     },
   };
 }

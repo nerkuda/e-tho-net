@@ -87,6 +87,7 @@ import {
 } from '../lib/property-list.js';
 import { openPropertyManagerEditor } from '../screens/property-manager.js';
 import { resolveLinkTypeVisual } from '../lib/type-tree.js';
+import { registryAllowedOppositeTypeIds } from '../lib/link-binding-types.js';
 import {
   buildOutsideReadonlyEdgeChip,
   buildValueEditor,
@@ -536,7 +537,10 @@ function wireOutsideRowMenu(
   );
 }
 
-/** Определение свойства для строки-черновика (валидация — по реестру). */
+/** Определение свойства для строки-черновика (валидация — по реестру).
+ *  Ограничение типов значения — из привязок реестра по стороне строки
+ *  (`binding_*_type_ids`), той же семантикой, что у типовой строки
+ *  (ошибка f8f8fa49). */
 function pendingOutsideDefinition(
   item: PendingOutsideProperty,
   ownerType: 'thought' | 'link',
@@ -551,9 +555,6 @@ function pendingOutsideDefinition(
     value_type: item.property.value_type,
     config: isLink
       ? {
-          // Конфиг реестра — целиком: ограничение типов цели (`allowed_*_type_ids`)
-          // и прочие ключи обязаны дожить до редактора значения (ошибка f8f8fa49).
-          ...(item.property.config ?? {}),
           ...(item.linkTypeId !== null ? { link_type_id: item.linkTypeId } : {}),
           direction: sideDirection(item.side),
         }
@@ -567,6 +568,14 @@ function pendingOutsideDefinition(
     default_value: null,
     overridden_here: false,
     description_overridden: false,
+    ...(isLink
+      ? {
+          allowed_opposite_type_ids: registryAllowedOppositeTypeIds(
+            item.property,
+            item.side,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -1841,10 +1850,10 @@ function fillPendingOutsideRow(
  * Определение внетипового свойства-связи из серверной проекции значения.
  * Сторона переносится из самой строки: у двухстороннего свойства обе стороны
  * несут один `property_id` (ошибка 45248206), и без `side` снятие рёбер
- * совпадает с обеими сторонами. `allowed_opposite_type_ids` у внетипового
- * значения не задан (проекция рёбер его не несёт), поэтому ограничение типов
- * цели берётся из `config` реестрового свойства — как на сервере при записи
- * значения (ошибка f8f8fa49).
+ * совпадает с обеими сторонами. Ограничение типов значения — из привязок
+ * реестра по стороне строки (`binding_*_type_ids`): та же семантика
+ * противоположного конца, что у типовой строки (ошибка f8f8fa49). Legacy-ключи
+ * `config.allowed_*_type_ids` редактор значения не читает.
  */
 function outsideLinkDefinition(
   value: LinkPropertyValues,
@@ -1852,12 +1861,9 @@ function outsideLinkDefinition(
   registry?: PropertyRegistryRow,
 ): EffectiveTypeProperty {
   const side = linkSideOf(value);
-  // Конфиг реестра переносится целиком (ограничения типов, любимые ключи
-  // MCP-онтологии); адресация строки — фактическая сторона ребра.
-  const config: PropertyConfig = { ...(registry?.config ?? {}) };
+  const config: PropertyConfig = {};
   if (value.link_type_id !== null) {
     config['link_type_id'] = value.link_type_id;
-    delete config['structural'];
   } else {
     config['structural'] = true;
   }
@@ -1880,6 +1886,7 @@ function outsideLinkDefinition(
     overridden_here: false,
     description_overridden: false,
     side,
+    allowed_opposite_type_ids: registryAllowedOppositeTypeIds(registry, side),
   };
 }
 
@@ -1898,8 +1905,9 @@ function buildOutsideLinkCell(
   ownerType: 'thought' | 'link',
   ownerId: string,
   onRemove: () => void,
-  /** Реестровая строка свойства — носитель `config` (ограничение типов цели,
-   *  ошибка f8f8fa49); недоступна — определение без ограничения. */
+  /** Реестровая строка свойства — носитель производных типов привязок по
+   *  сторонам (`binding_*_type_ids`, ошибка f8f8fa49); недоступна —
+   *  определение без ограничения. */
   registry?: PropertyRegistryRow,
 ): HTMLElement {
   if (value.property_id !== '') {
@@ -2551,6 +2559,7 @@ export const propertiesInternals = {
   buildOutsideTypeTable,
   buildOutsidePropertiesBody,
   outsideLinkDefinition,
+  pendingOutsideDefinition,
   outsideRowKey,
   definitionValueKey,
   toOrderItem,
