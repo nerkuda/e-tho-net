@@ -1,0 +1,160 @@
+{
+  "name": "f8f8fa49-link-target-type-restriction",
+  "description": "Ключевой GUI-сценарий ошибки f8f8fa49: пикер целей свойства-связи обязан ограничивать кандидатов типами из config.allowed_target_type_ids в трёх местах — массовый диалог свойств выделения, типовая строка карточки мысли и внетиповая строка карточки. Самодостаточно: онтология (типы Т1/Т2/Т3, свойство-связь «Прикреплено» с allowed_target_type_ids=[Т2]) и мысли «Цель A» (Т1), «Цель B» (Т2), «Цель C» (без типа), «Цель D» (Т3) заводятся шагом probe через window.etn до открытия сети. Проверка — живой поиск по слову «Цель»: в выдаче обязан быть «Цель B» и не должно быть «Цель D» (Т3 вне ограничения); при внетиповой строке C ограничение приходит из config реестра (внетиповая проекция не теряет config). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f8f8fa49-link-target-type-restriction.scenario.json --out .tmp/etn-f8f8fa49/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-ontology-and-thoughts",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const t2=await et.types.createThoughtType(N,{name:'Т2'}); const t3=await et.types.createThoughtType(N,{name:'Т3'}); const p=await et.propertyRegistry.create(N,{name:'Прикреплено',value_type:'link',name_forward:'Прикреплено',name_reverse:'Прикреплено в',config:{allowed_target_type_ids:[t2.id]}}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:p.id,required:false,position:0,side:'source'}); const mk=async(title,type)=>{ const r=await et.thoughts.create(N,{title,type_id:type,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const A=await mk('Цель A',t1.id); const B=await mk('Цель B',t2.id); const C=await mk('Цель C',null); const D=await mk('Цель D',t3.id); await et.properties.set(N,'thought',A,'Прикреплено',[B],'source'); await et.properties.set(N,'thought',C,'Прикреплено',[B],'source'); window.__lx={t1:t1.id,t2:t2.id,t3:t3.id,p:p.id,A,B,C,D}; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-clouds",
+      "waitFor": "(() => { const b=window.__lx; return b !== undefined && [b.A,b.B,b.C,b.D].every((id)=>document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null); })()",
+      "timeout": 30000
+    },
+
+    {
+      "name": "select-a-and-c",
+      "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__lx; return { A:click(b.A), C:click(b.C) }; })()",
+      "expect": { "A": true, "C": true }
+    },
+    {
+      "name": "selection-panel-visible",
+      "waitFor": "(() => { const panel=document.querySelector('.selection-panel'); return panel !== null && !panel.classList.contains('hidden') && panel.querySelectorAll('.selection-item').length === 2; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-selection-properties",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    { "name": "selection-properties-menu", "waitFor": "document.querySelector('.menu .menu-item') !== null", "timeout": 20000 },
+    {
+      "name": "open-property-values-dialog",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    { "name": "bulk-dialog", "waitFor": "document.querySelector('.prop-bulk-table') !== null", "timeout": 30000 },
+    { "name": "bulk-link-row", "waitFor": "document.querySelector('tr:has(input[aria-label=\"Прикреплено\"])') !== null", "timeout": 20000 },
+    { "name": "bulk-check-link-row", "click": "input[type=checkbox][aria-label=\"Прикреплено\"]" },
+    {
+      "name": "bulk-link-row-active",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Прикреплено\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false"
+    },
+    { "name": "bulk-focus-search", "click": "tr:has(input[aria-label=\"Прикреплено\"]) .link-value-add" },
+    { "name": "bulk-type-query", "text": "Цель" },
+    { "name": "bulk-suggestions", "waitFor": "document.querySelectorAll('.type-combo-item').length > 0", "timeout": 20000 },
+    {
+      "name": "bulk-suggestion-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "bulk-has-allowed-target",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель B'))()",
+      "expect": true
+    },
+    {
+      "name": "bulk-no-forbidden-target",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель D'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-close-dialog",
+      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    { "name": "bulk-dialog-closed", "waitFor": "document.querySelector('.prop-bulk-table') === null", "timeout": 10000 },
+
+    {
+      "name": "open-typed-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+window.__lx.A+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    { "name": "typed-thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Цель A'", "timeout": 30000 },
+    { "name": "typed-tabs", "waitFor": "document.querySelectorAll('.editor-tab').length > 0" },
+    {
+      "name": "typed-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('Прикреплено')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-focus-search",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('Прикреплено')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    { "name": "typed-type-query", "text": "Цель" },
+    { "name": "typed-suggestions", "waitFor": "document.querySelectorAll('.type-combo-item').length > 0", "timeout": 20000 },
+    {
+      "name": "typed-suggestion-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "typed-has-allowed-target",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель B'))()",
+      "expect": true
+    },
+    {
+      "name": "typed-no-forbidden-target",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель D'))()",
+      "expect": false
+    },
+
+    {
+      "name": "open-outside-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+window.__lx.C+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    { "name": "outside-thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Цель C'", "timeout": 30000 },
+    { "name": "outside-tabs", "waitFor": "document.querySelectorAll('.editor-tab').length > 0" },
+    {
+      "name": "outside-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-outside-body tr')].some((r)=>(r.textContent ?? '').includes('Прикреплено')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,800)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-focus-search",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Прикреплено')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    { "name": "outside-type-query", "text": "Цель" },
+    {
+      "name": "outside-input-state",
+      "probe": "(() => { const inp=document.querySelector('.properties-outside-body .link-value-add'); return { exists: inp!==null, value: inp?.value ?? null, focused: document.activeElement===inp, active: document.activeElement?.className ?? null, lists: document.querySelectorAll('.type-combo-list').length }; })()"
+    },
+    { "name": "outside-suggestions", "waitFor": "document.querySelectorAll('.type-combo-item').length > 0", "timeout": 20000 },
+    {
+      "name": "outside-suggestion-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "outside-has-allowed-target",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель B'))()",
+      "expect": true
+    },
+    {
+      "name": "outside-no-forbidden-target",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Цель D'))()",
+      "expect": false
+    }
+  ]
+}

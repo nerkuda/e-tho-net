@@ -25,6 +25,7 @@ import type {
   EffectiveTypeProperty,
   LinkPropertySide,
   LinkPropertyValues,
+  PropertyConfig,
   PropertyValue,
   PropertyValueType,
   ThoughtPropertiesReorderedItem,
@@ -550,6 +551,9 @@ function pendingOutsideDefinition(
     value_type: item.property.value_type,
     config: isLink
       ? {
+          // Конфиг реестра — целиком: ограничение типов цели (`allowed_*_type_ids`)
+          // и прочие ключи обязаны дожить до редактора значения (ошибка f8f8fa49).
+          ...(item.property.config ?? {}),
           ...(item.linkTypeId !== null ? { link_type_id: item.linkTypeId } : {}),
           direction: sideDirection(item.side),
         }
@@ -1670,7 +1674,16 @@ function outsideRowSpec(
         () => reorderOf?.(outsideRowKey(current)) ?? null,
       );
       row.append(nameCell);
-      row.append(buildOutsideLinkCell(current, networkId, target.ownerType, target.ownerId, onRemove));
+      row.append(
+        buildOutsideLinkCell(
+          current,
+          networkId,
+          target.ownerType,
+          target.ownerId,
+          onRemove,
+          registryLookup?.(current.property_id),
+        ),
+      );
       return;
     }
     const { cell: nameCell } = buildPropertyNameCell({
@@ -1828,15 +1841,27 @@ function fillPendingOutsideRow(
  * Определение внетипового свойства-связи из серверной проекции значения.
  * Сторона переносится из самой строки: у двухстороннего свойства обе стороны
  * несут один `property_id` (ошибка 45248206), и без `side` снятие рёбер
- * совпадает с обеими сторонами. Ограничения типов у внетипового значения нет
- * (`allowed_opposite_type_ids` не задан) — внетиповое значение возникает как
- * раз тогда, когда привязок к типу владельца нет (модель dde92461).
+ * совпадает с обеими сторонами. `allowed_opposite_type_ids` у внетипового
+ * значения не задан (проекция рёбер его не несёт), поэтому ограничение типов
+ * цели берётся из `config` реестрового свойства — как на сервере при записи
+ * значения (ошибка f8f8fa49).
  */
 function outsideLinkDefinition(
   value: LinkPropertyValues,
   ownerType: 'thought' | 'link',
+  registry?: PropertyRegistryRow,
 ): EffectiveTypeProperty {
   const side = linkSideOf(value);
+  // Конфиг реестра переносится целиком (ограничения типов, любимые ключи
+  // MCP-онтологии); адресация строки — фактическая сторона ребра.
+  const config: PropertyConfig = { ...(registry?.config ?? {}) };
+  if (value.link_type_id !== null) {
+    config['link_type_id'] = value.link_type_id;
+    delete config['structural'];
+  } else {
+    config['structural'] = true;
+  }
+  config['direction'] = sideDirection(side);
   return {
     id: value.property_id,
     property_id: value.property_id,
@@ -1844,9 +1869,7 @@ function outsideLinkDefinition(
     owner_id: '',
     key: value.property_name,
     value_type: 'link',
-    config: value.link_type_id !== null
-      ? { link_type_id: value.link_type_id, direction: sideDirection(side) }
-      : { direction: sideDirection(side), structural: true },
+    config,
     required: false,
     position: 0,
     description: value.description ?? null,
@@ -1875,13 +1898,16 @@ function buildOutsideLinkCell(
   ownerType: 'thought' | 'link',
   ownerId: string,
   onRemove: () => void,
+  /** Реестровая строка свойства — носитель `config` (ограничение типов цели,
+   *  ошибка f8f8fa49); недоступна — определение без ограничения. */
+  registry?: PropertyRegistryRow,
 ): HTMLElement {
   if (value.property_id !== '') {
     // Сторона входит в определение и уходит в редактор значения: и запись,
     // и снятие рёбер адресуют сторону строки (аудит цикл 2 требования
     // 87039bc8, ошибка 45248206).
     const side = linkSideOf(value);
-    const definition = outsideLinkDefinition(value, ownerType);
+    const definition = outsideLinkDefinition(value, ownerType, registry);
     const cell = buildEditorCell({
       networkId,
       ownerType,

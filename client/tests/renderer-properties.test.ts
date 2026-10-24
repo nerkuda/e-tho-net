@@ -958,6 +958,39 @@ describe('внетиповые строки: сторона и исключен�
     assert.deepEqual(source.config, { link_type_id: 'lt1', direction: 'out' });
   });
 
+  it('ограничение типов цели из config реестра доходит до внетипового редактора (f8f8fa49)', async () => {
+    const { outsideLinkDefinition } = await internals();
+    const definition = outsideLinkDefinition(
+      linkValue('p-org', 'source', 'out', 'Место работы'),
+      'thought',
+      {
+        id: 'p-org',
+        name: 'Место работы',
+        value_type: 'link',
+        config: {
+          link_type_id: 'lt1',
+          allowed_target_type_ids: ['tt-org'],
+          show_on_map: true,
+        },
+        description: null,
+      },
+    );
+    assert.deepEqual(definition.config, {
+      link_type_id: 'lt1',
+      allowed_target_type_ids: ['tt-org'],
+      show_on_map: true,
+      direction: 'out',
+    });
+    const { effectiveLinkAllowedTypeIds } = await import(
+      '../src/renderer/editor/value-editor.js'
+    );
+    assert.deepEqual(
+      effectiveLinkAllowedTypeIds(definition),
+      ['tt-org'],
+      'пикер внетиповой строки фильтрует цели по ограничению свойства',
+    );
+  });
+
   it('уникальность по стороне сохраняется и у рёбер без реестрового свойства', async () => {
     const { outsideRowKey } = await internals();
     assert.equal(

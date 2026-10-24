@@ -47,6 +47,7 @@
 import type {
   CrossNetworkRefValue,
   EffectiveTypeProperty,
+  LinkPropertySide,
   LinkPropertyValueItem,
   SearchNameHit,
   ThoughtRef,
@@ -1689,6 +1690,50 @@ export function linkAllowedTypeIds(
 }
 
 /**
+ * Legacy-носитель ограничения типов цели — ключи `config` реестрового свойства
+ * (`allowed_target_type_ids`, зеркальный `allowed_source_type_ids`). Модель
+ * 0.8.1 перенесла истину в реестр привязок, но значения по этим ключам
+ * по-прежнему принимаются сервером: `validateLinkTargetType` при записи
+ * значения свойства-связи падает на `config.allowed_target_type_ids`, когда
+ * реестр привязок ограничения не даёт. У строки обратной стороны ограничены
+ * источники — там сначала зеркальный ключ.
+ */
+function configAllowedTypeIds(
+  config: EffectiveTypeProperty['config'],
+  side: LinkPropertySide | null | undefined,
+): string[] {
+  const cfg = (config ?? {}) as Record<string, unknown>;
+  const idsOf = (key: string): string[] => {
+    const value = cfg[key];
+    return Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === 'string' && id !== '')
+      : [];
+  };
+  const targets = idsOf('allowed_target_type_ids');
+  if (side !== 'target') return targets;
+  const sources = idsOf('allowed_source_type_ids');
+  return sources.length > 0 ? sources : targets;
+}
+
+/**
+ * Эффективный отбор целей свойства-связи для всех пикеров клиента: реестр
+ * привязок (`allowed_opposite_type_ids`, его считает сервер) — главный
+ * источник; при пустоте — legacy-ключи `config` того же свойства. Второй
+ * источник обязателен там, где определение собирается по реестру свойств, а не
+ * по привязкам типа: диалог массовых свойств выделенных, внетиповые строки
+ * редактора мысли, конструктор условий отбора (ошибка f8f8fa49). Пусто —
+ * ограничения нет. Иерархию типов раскрывает вызывающий (L21).
+ */
+export function effectiveLinkAllowedTypeIds(
+  definition: Pick<EffectiveTypeProperty, 'config' | 'side' | 'allowed_opposite_type_ids'>,
+): string[] {
+  const fromBindings = linkAllowedTypeIds(definition.allowed_opposite_type_ids);
+  return fromBindings.length > 0
+    ? fromBindings
+    : configAllowedTypeIds(definition.config, definition.side);
+}
+
+/**
  * Чип-поле набора целей свойства-связи (задача 8ab775d9, паттерн a47947c8;
  * правки — инструкция «Использовать унифицированные поля выбора ссылок»).
  *
@@ -1699,8 +1744,9 @@ export function linkAllowedTypeIds(
  * ошибка 880c3add, живой поиск при вводе) + кнопка «выбрать»
  * (`pickThoughtsDialog` в режиме «несколько», предзаполнен; можно создавать
  * мысли). Отбор кандидатов по типам противоположной стороны привязки —
- * {@link linkAllowedTypeIds} + поддеревья (L21), применяется и к живому
- * поиску поля, и к диалогу «выбрать» (ошибка cfbf3855).
+ * {@link effectiveLinkAllowedTypeIds} + поддеревья (L21), применяется и к
+ * живому поиску поля, и к диалогу «выбрать» (ошибка cfbf3855; fallback на
+ * `config.allowed_*_type_ids` — ошибка f8f8fa49).
  *
  * `ownerType`/`ownerId` заданы — чип получает контекстное меню операций над
  * ребром владельца; без владельца (дефолт свойства в редакторе типа/реестре,
@@ -1730,10 +1776,13 @@ export function buildLinkValueEditor(opts: {
   // Отбор по типам — input aid из реестра привязок свойства-связи:
   // допустимые типы противоположной стороны посчитал сервер
   // (`allowed_opposite_type_ids`), здесь список расширяется до поддеревьев
-  // типов (L21); сохранённые значения фильтром не трогаются.
+  // типов (L21); сохранённые значения фильтром не трогаются. Пусто у
+  // определения, собранного по реестру свойств (массовый диалог, внетиповые
+  // строки), — отбор берётся из `config` того же свойства
+  // (`effectiveLinkAllowedTypeIds`, ошибка f8f8fa49).
   const filterIds = expandTypeIdsToSubtree(
     store.state.thoughtTypes,
-    linkAllowedTypeIds(definition.allowed_opposite_type_ids),
+    effectiveLinkAllowedTypeIds(definition),
   );
 
   // Кеш метаданных целей: подписи есть в рёбрах, значок/цвета/флаги —

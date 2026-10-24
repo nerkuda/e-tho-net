@@ -148,15 +148,42 @@ describe('linkAllowedTypeIds — нормализация допустимых �
     assert.deepEqual(linkAllowedTypeIds(null), []);
   });
 
-  it('config-ключи allowed_*_type_ids в UI-логике не участвуют', () => {
-    const src = readFileSync(
-      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
-      'utf8',
+  it('config-ключи allowed_*_type_ids — fallback, когда реестр привязок пуст (f8f8fa49)', async () => {
+    installShim();
+    const { effectiveLinkAllowedTypeIds } = await import(
+      '../src/renderer/editor/value-editor.js'
     );
-    assert.equal(
-      /allowed_(target|source)_type_ids/.test(src),
-      false,
-      'редактор значения больше не читает config-ключи ограничения типов',
+    assert.deepEqual(
+      effectiveLinkAllowedTypeIds({
+        config: { link_type_id: 'lt-1', allowed_target_type_ids: ['tt-org'] },
+        side: 'source',
+        allowed_opposite_type_ids: [],
+      }),
+      ['tt-org'],
+      'привязки пусты — ограничение берётся из config свойства',
+    );
+    assert.deepEqual(
+      effectiveLinkAllowedTypeIds({
+        config: { link_type_id: 'lt-1', allowed_target_type_ids: ['tt-org'] },
+        side: 'source',
+        allowed_opposite_type_ids: ['tt-ver'],
+      }),
+      ['tt-ver'],
+      'реестр привязок приоритетнее config',
+    );
+    assert.deepEqual(
+      effectiveLinkAllowedTypeIds({
+        config: { allowed_source_type_ids: ['tt-work'], allowed_target_type_ids: ['tt-org'] },
+        side: 'target',
+        allowed_opposite_type_ids: [],
+      }),
+      ['tt-work'],
+      'у строки обратной стороны — зеркальный ключ источников',
+    );
+    assert.deepEqual(
+      effectiveLinkAllowedTypeIds({ config: null, side: null, allowed_opposite_type_ids: [] }),
+      [],
+      'пусто везде — ограничения нет',
     );
   });
 });
@@ -196,6 +223,27 @@ describe('buildLinkValueEditor — живой поиск фильтруется 
       searchCalls[0]!.typeIds,
       ['tt-work', 'tt-task'],
       'у привязки со стороны назначения ограничены источники',
+    );
+  });
+
+  it('живой поиск ограничен config.allowed_target_type_ids, когда привязок нет (f8f8fa49)', async () => {
+    installShim();
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
+    const editor = buildLinkValueEditor({
+      networkId: 'n1',
+      definition: {
+        ...linkDefinition([], 'source'),
+        config: { link_type_id: 'lt-1', allowed_target_type_ids: ['tt-org'] },
+      } as any,
+      values: [],
+      save: async () => true,
+    }) as unknown as ShimElement;
+
+    await typeAndSettle(addInputOf(editor), 'организация');
+    assert.deepEqual(
+      searchCalls[0]!.typeIds,
+      ['tt-org'],
+      'внетиповая/массовая строка фильтрует цели по ограничению свойства',
     );
   });
 
@@ -277,8 +325,8 @@ describe('buildLinkValueEditor — диалог «выбрать» получа�
       'диалог выбора получает отбор по тем же допустимым типам',
     );
     assert.ok(
-      /linkAllowedTypeIds\(definition\.allowed_opposite_type_ids\)/.test(src),
-      'filterIds вычисляются из серверного набора допустимых типов (одно правило на поле и диалог)',
+      /effectiveLinkAllowedTypeIds\(definition\)/.test(src),
+      'filterIds вычисляются единым правилом: привязки типа, иначе config свойства',
     );
     assert.ok(
       /linkSearchSource\(networkId,\s*filterIds\)/.test(src),
