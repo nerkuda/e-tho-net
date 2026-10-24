@@ -39,23 +39,51 @@ export function createRuntime(deps: McpDeps): McpRuntime {
 }
 
 /**
- * Whether the authenticated principal may access this network: an explicit
- * `network_members` row, or a global system administrator, who holds
- * owner-equivalent access to every network regardless of membership
- * (06-auth.md §4.1, task 0.4.2 bug-fix). Single source of truth for every
- * network-scoped MCP tool/resource — mirrors the REST `requireNetworkMember`
- * guard in `auth/access-control.ts`.
+ * Доступ к сети для MCP-инструмента (0.14.1, ошибка 2c3a42cd): сеть обязана
+ * СУЩЕСТВОВАТЬ в реестре, а пользователь — быть её участником либо глобальным
+ * администратором. До фикса администратор получал `true` для любого id, и
+ * `openMemberNetwork` открывал (и создавал!) БД несуществующей сети.
  */
-export function hasNetworkAccess(rt: McpRuntime, networkId: string): boolean {
-  if (rt.deps.auth.isAdmin) {
-    return true;
+function resolveNetworkAccess(
+  rt: McpRuntime,
+  networkId: string,
+): 'allowed' | 'forbidden' | 'missing' {
+  if (rt.deps.systemDb.getNetworkById(networkId) === null) {
+    return 'missing';
   }
-  return rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId) !== null;
+  if (rt.deps.auth.isAdmin) {
+    return 'allowed';
+  }
+  return rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId) !== null
+    ? 'allowed'
+    : 'forbidden';
 }
 
-/** Throw `FORBIDDEN` unless {@link hasNetworkAccess} holds for this network. */
+/**
+ * Whether the authenticated principal may access this network: the network
+ * exists in the registry AND the principal is an explicit `network_members`
+ * row or a global system administrator, who holds owner-equivalent access to
+ * every network regardless of membership (06-auth.md §4.1, task 0.4.2
+ * bug-fix). Single source of truth for every network-scoped MCP
+ * tool/resource — mirrors the REST `requireNetworkMember` guard in
+ * `auth/access-control.ts`.
+ */
+export function hasNetworkAccess(rt: McpRuntime, networkId: string): boolean {
+  return resolveNetworkAccess(rt, networkId) === 'allowed';
+}
+
+/** Throw unless {@link hasNetworkAccess} holds for this network. */
 export function assertNetworkAccess(rt: McpRuntime, networkId: string): void {
-  if (!hasNetworkAccess(rt, networkId)) {
+  const access = resolveNetworkAccess(rt, networkId);
+  if (access === 'missing') {
+    // Неизвестный id — ошибка, а не «пустая сеть»: до фикса (ошибка 2c3a42cd)
+    // любой администратор получал пустую страницу и фантомную `data.db`.
+    throw new EtnError('NOT_FOUND', `Network ${networkId} not found.`, {
+      entity: 'network',
+      id: networkId,
+    });
+  }
+  if (access === 'forbidden') {
     throw new EtnError(
       'FORBIDDEN',
       `You are not a member of network ${networkId}; this API key cannot access it.`,
