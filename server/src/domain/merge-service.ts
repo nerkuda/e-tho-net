@@ -568,6 +568,13 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
       return compact([ref('link_types', r.type_id)]);
     case 'thought_types':
       return compact([ref('thought_types', r.parent_id)]);
+    // Отбор типа (0.14.1, ошибка d66c45a2): строка без живого типа-владельца
+    // бессмысленна — в основу она уехала бы висячей ссылкой. Замыкание тянет
+    // тип в набор частичного слияния — как `thought_property_order` → `thoughts`.
+    // Пару переноса (`thought_custom_views` с тем же id) сюда НЕ ставим:
+    // отсутствие пары — норма, мягкое замыкание делает collectMergedRows.
+    case 'thought_type_views':
+      return compact([ref('thought_types', r.thought_type_id)]);
     case 'link_types':
       return compact([ref('link_types', r.parent_id)]);
     case 'type_properties':
