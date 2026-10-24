@@ -74,6 +74,14 @@ const REGISTRY: BulkRegistryProperty[] = [
   registry({ id: 'p-urls', name: 'Ссылки', value_type: 'url', config: { multiple: true } }),
   registry({ id: 'p-tags', name: 'Теги', value_type: 'text', config: { multiple: true } }),
   registry({ id: 'p-flag', name: 'Флаг', value_type: 'bool' }),
+  // Структурное свойство-связь есть в реестре: строку отсекает признак
+  // `entry.structural` чтения, а не промах «свойства нет в реестре».
+  registry({
+    id: 'p-structural',
+    name: 'Родители',
+    value_type: 'link',
+    config: { structural: true },
+  }),
 ];
 
 /** Скалярное значение свойства. */
@@ -225,6 +233,12 @@ describe('строки таблицы: union по (свойство, сторо�
   });
 
   it('исключает структурные «Родители»/«Потомки» и рёбра без реестрового свойства', () => {
+    assert.ok(
+      REGISTRY.some(
+        (property) => property.id === 'p-structural' && property.config?.structural === true,
+      ),
+      'фикстура: p-structural есть в реестре — строку отсекает entry.structural, а не отсутствие свойства',
+    );
     const snapshot = valueMap({
       't-a': [
         linkValues({

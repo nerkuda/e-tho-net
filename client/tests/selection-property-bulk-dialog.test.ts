@@ -137,6 +137,7 @@ const REGISTRY: RegistryRow[] = [
   registryRow({ id: 'p-status', name: 'Статус' }),
   registryRow({ id: 'p-owner', name: 'Ответственный' }),
   registryRow({ id: 'p-priority', name: 'Приоритет' }),
+  registryRow({ id: 'p-flag', name: 'Флаг', value_type: 'bool' }),
   registryRow({
     id: 'p-attach',
     name: 'Прикреплено',
@@ -442,13 +443,30 @@ describe('диалог значений свойств выделения: та�
     assert.equal(textInputOf(status).value, 'в работе', 'наличные одинаковы — значение в поле');
   });
 
-  it('разные значения — поле пустое с подписью; ссылка на не-текстовое поле — подписью', async () => {
+  it('разные значения — поле пустое с подписью; не-текстовое поле — подписью в ячейке', async () => {
     prepare();
     server.values.set('t-c', [scalar('t-c', 'p-owner', 'Ответственный', 'Сидор')]);
+    server.values.set('t-a', [
+      ...(server.values.get('t-a') ?? []),
+      scalar('t-a', 'p-flag', 'Флаг', true, 'bool'),
+    ]);
+    server.values.set('t-b', [
+      ...(server.values.get('t-b') ?? []),
+      scalar('t-b', 'p-flag', 'Флаг', false, 'bool'),
+    ]);
     const body = await open(['t-a', 't-b', 't-c']);
+
     const owner = rowByKey(body, 'p-owner');
     assert.equal(textInputOf(owner).value, '', 'разные значения — поле пустое');
-    assert.equal(textInputOf(owner).placeholder, 'разные значения', 'подсказка в поле');
+    assert.equal(textInputOf(owner).placeholder, 'разные значения', 'у текстового поля — placeholder');
+
+    // Не-текстовое поле (bool): подпись «разные значения» — внешняя, в ячейке;
+    // общий редактор значения не расширяется (решение предполёта 2026-10-23).
+    const flag = rowByKey(body, 'p-flag');
+    assert.ok(hintsOf(flag).includes('разные значения'), 'bool: подпись «разные значения» в ячейке');
+    const flagEditor = editorBoxOf(flag);
+    assert.ok(findTag(flagEditor, 'select') !== null, 'bool — трёхзначный селект');
+    assert.equal(findTag(flagEditor, 'input'), null, 'текстового поля с placeholder у bool нет');
   });
 
   it('без галочки поле приглушено и не редактируется, «Применить» недоступна', async () => {
