@@ -1729,6 +1729,15 @@ export interface FilterTreeLeaf {
   labels?: FilterAstLabels;
   /** Режим обхода «в иерархии» (`structural` по умолчанию). */
   mode?: FilterAstHierarchyMode;
+  /**
+   * Служебный лист МЕСТА применения (wire `FilterAstLeaf.service`): впечён
+   * редактором при сохранении, а не набран пользователем (дефолт «Помечено на
+   * удаление = нет» у отбора типа мысли). Читатель AST снимает помеченные
+   * листья с КОРНЯ — в редакторе они не показываются условиями и не
+   * удовлетворяют запрету пустого отбора (ошибка 9ddc488e). Исполнение отбора
+   * учитывает лист как обычное условие.
+   */
+  service?: true;
 }
 
 /** Группа дерева: `И`/`ИЛИ` (один и более детей) / `НЕ` (ровно один ребёнок). */
@@ -1839,6 +1848,28 @@ export function isServiceTrashedDefaultLeaf(node: FilterTreeNode): boolean {
     node.value.value === false &&
     node.mode === undefined
   );
+}
+
+/**
+ * Снять с КОРНЕВОГО уровня дерева листья, помеченные местом применения как
+ * служебные (`service: true`, wire `FilterAstLeaf.service`): это дефолт МЕСТА,
+ * а не условие пользователя — в редакторе он строкой не показывается и не
+ * должен удовлетворять запрету пустого отбора (ошибка 9ddc488e). Метку ставит
+ * место применения при СОХРАНЕНИИ (у отбора типа мысли — `withViewDefaults`),
+ * поэтому порядок «впечь → сохранить → переоткрыть» служебную строку не
+ * показывает. Лист, вложенный в группу, не трогаем: пользователь собрал его
+ * осознанно, а метку туда никто не ставит. Метка — единственный признак:
+ * непомеченный лист «Помечено на удаление = нет» остаётся условием пользователя
+ * ({@link isServiceTrashedDefaultLeaf} описывает только ФОРМУ и применяется
+ * исключительно к плоскому пути чтения).
+ */
+export function stripServiceLeavesAtRoot(tree: FilterTreeNode): FilterTreeNode {
+  if (tree.kind !== 'group') return tree;
+  const children = tree.children.filter(
+    (child) => !(child.kind === 'leaf' && child.service === true),
+  );
+  if (children.length === tree.children.length) return tree;
+  return { ...tree, children };
 }
 
 /**
@@ -2228,6 +2259,7 @@ export function filterTreeToAst(node: FilterTreeNode): FilterAstNode {
   if (value !== undefined) leaf.value = value;
   if (node.labels !== undefined) leaf.labels = node.labels;
   if (node.mode !== undefined) leaf.mode = node.mode;
+  if (node.service === true) leaf.service = true;
   return leaf;
 }
 
@@ -2271,6 +2303,10 @@ export function filterAstToTree(node: unknown): FilterTreeNode | null {
   const labels = parseFilterAstLabels(rec['labels']);
   if (labels !== undefined) leaf.labels = labels;
   if (isFilterAstHierarchyMode(rec['mode'])) leaf.mode = rec['mode'];
+  // Метка служебного листа читается строго как `true`: любое другое значение
+  // меткой не является (сервер такую форму отвергает, читатель сохранённого
+  // определения не должен на ней падать).
+  if (rec['service'] === true) leaf.service = true;
   return leaf;
 }
 
@@ -2716,7 +2752,13 @@ export function readFilterDefinitionDetailed(
   if (isFilterAstWire(def)) {
     const readTree = state.tree;
     if (readTree !== null && readTree !== undefined) {
-      state.tree = normalizeFilterTreeRoot(readTree);
+      // Служебные листья места применения (`service: true`), впечённые при
+      // сохранении, — не условия пользователя: снимаем их с корня, иначе
+      // служебный дефолт показывался бы строкой и удовлетворял запрету пустого
+      // отбора (ошибка 9ddc488e). Непомеченный лист «Помечено на удаление = нет»
+      // остаётся условием пользователя — именно его сохранение чинил коммит
+      // 46befcd4 (roundtrip условия).
+      state.tree = stripServiceLeavesAtRoot(normalizeFilterTreeRoot(readTree));
       return { state, lost: [] };
     }
     state.tree = defaultFilterTreeGroup('and');

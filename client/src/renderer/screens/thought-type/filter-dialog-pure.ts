@@ -55,14 +55,30 @@ export const defaultDialogCriteriaState = defaultFilterCriteriaState;
  * `definition v1` он выражался ОТСУТСТВИЕМ поля `trashed` и разворачивался
  * сервером при чтении; в AST-определении неявных дефолтов нет — поэтому лист
  * «Помечено на удаление = нет» впекается в определение ЯВНО при сохранении (иначе отбор
- * типа начал бы показывать помеченные на удаление). См. {@link stripViewDefaults}
- * и {@link withViewDefaults}.
+ * типа начал бы показывать помеченные на удаление). Метка `service: true`
+ * отличает впечённый лист от условия пользователя: общий читатель AST снимает
+ * помеченные листья с корня, поэтому при переоткрытии дефолт не показывается
+ * строкой и не удовлетворяет запрету пустого отбора (ошибка 9ddc488e).
+ * См. {@link stripViewDefaults} и {@link withViewDefaults}.
  */
 function trashedDefaultLeaf(): FilterTreeLeaf {
-  return { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } };
+  return {
+    kind: 'leaf',
+    entity: { kind: 'trashed' },
+    operator: 'eq',
+    value: { kind: 'scalar', value: false },
+    service: true,
+  };
 }
 
-/** Лист ровно служебного дефолта «Помечено на удаление = нет» ({@link trashedDefaultLeaf}). */
+/**
+ * Лист ровно служебного дефолта «Помечено на удаление = нет», дописанный
+ * КОМПИЛЯТОРОМ плоской формы (без метки `service`): такая форма читается только
+ * с плоского определения v1 и снимается с корня. Помеченный AST-лист сюда не
+ * попадает — его снимает общий читатель (`stripServiceLeavesAtRoot`), а
+ * непомеченный AST-лист — условие пользователя и не снимается (ошибка
+ * 9ddc488e).
+ */
 function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
   return (
     node.kind === 'leaf' &&
@@ -70,7 +86,8 @@ function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
     node.operator === 'eq' &&
     node.value.kind === 'scalar' &&
     node.value.value === false &&
-    node.mode === undefined
+    node.mode === undefined &&
+    node.service === undefined
   );
 }
 
@@ -81,9 +98,11 @@ function treeHasTrashedLeaf(node: FilterTreeNode): boolean {
 }
 
 /**
- * Снять с КОРНЕВОГО уровня служебный дефолт «Помечено на удаление = нет»: в редакторе он
- * не показывается строкой-условием (это дефолт МЕСТА, а не условие пользователя).
- * Лист, вложенный в группу, не трогаем — он осмысленно собран пользователем.
+ * Снять с КОРНЕВОГО уровня НЕпомеченный служебный дефолт «Помечено на удаление =
+ * нет»: такую форму дописывает компилятор плоской формы, и в редакторе она не
+ * показывается строкой-условием. Помеченные листья AST снимает общий читатель
+ * (`stripServiceLeavesAtRoot`), поэтому здесь их трогать не нужно. Лист,
+ * вложенный в группу, не трогаем — он осмысленно собран пользователем.
  */
 export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
   if (tree.kind !== 'group') return tree;
@@ -108,9 +127,11 @@ export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
  * `definition v1` единый конструктор компилирует в дерево на входе
  * (`parseFilterDefinitionTree` → `compileFlatCriteriaToAst`, задача cfbe8c74;
  * ADR fc23f9c1 запрещает вторую точку чтения сохранённого отбора). Служебный
- * дефолт места («Помечено на удаление = нет») снимается только с ПЛОСКОГО
- * определения: в AST он записан явно и является условием пользователя —
- * скрывать его при переоткрытии нельзя (ошибка 9ddc488e).
+ * дефолт места («Помечено на удаление = нет») в AST распознаётся по метке
+ * `service: true` и снимается общим читателем (`stripServiceLeavesAtRoot`);
+ * непомеченный лист «Помечено на удаление» — условие ПОЛЬЗОВАТЕЛЯ, его скрывать
+ * нельзя (ошибка 9ddc488e). У плоского `definition v1` дефолт выражен
+ * отсутствием поля и снимается здесь ({@link stripViewDefaults}).
  * Returns the default state when the JSON is malformed.
  */
 export function parseViewDefinition(
@@ -132,11 +153,12 @@ export function parseViewDefinition(
     activeMode: 'view',
     ...(registry !== undefined ? { registry } : {}),
   });
-  // Неявных дефолтов в AST нет: лист «Помечено на удаление», записанный в
-  // определении, — условие ПОЛЬЗОВАТЕЛЯ (его видно строкой и он обязан
-  // пережить переоткрытие — ошибка 9ddc488e). Снимаем служебный дефолт
-  // только с плоского определения v1: там его дописал компилятор, и он
-  // остаётся неявным до сохранения в AST (`readFilterDefinitionDetailed`).
+  // Помеченные служебные листья AST (`service: true`) снял общий читатель —
+  // строкой условия они не показываются и запрет пустого отбора не
+  // удовлетворяют. НЕпомеченный лист «Помечено на удаление» — условие
+  // ПОЛЬЗОВАТЕЛЯ: он виден строкой и обязан пережить переоткрытие (ошибка
+  // 9ddc488e). Плоское определение v1 снимаем здесь: дефолт в нём выражен
+  // отсутствием поля и дописан компилятором (`stripViewDefaults`).
   if (!isFilterAstWire(parsed)) {
     state.tree = stripViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
   }

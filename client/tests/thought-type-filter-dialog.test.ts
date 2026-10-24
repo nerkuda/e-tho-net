@@ -534,6 +534,76 @@ describe('диалог отбора типа мысли — чтение и за
     assert.deepEqual(mod.buildViewAstDefinition(reopened), first);
   });
 
+  it('служебный лист помечен в AST и не показывается при переоткрытии (9ddc488e)', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'keywords', scope: ['title', 'synonyms'] }, operator: 'matches', value: { kind: 'scalar', value: 'смета' } },
+      ],
+    };
+    const first = mod.buildViewAstDefinition(state);
+    const service = collectLeaves(first.filter).filter((leaf) => leaf.service === true);
+    assert.equal(service.length, 1, 'впечённый дефолт помечен в AST ровно один');
+    assert.equal(service[0]!.entity.kind, 'trashed', 'метка стоит на дефолте «Помечено на удаление»');
+
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    assert.equal(
+      collectTreeLeaves(reopened.tree!).some((leaf) => leaf.entity.kind === 'trashed'),
+      false,
+      'служебный лист не показан строкой условия пользователя',
+    );
+    assert.equal(mod.hasAnyCriteria(reopened), true, 'пользовательское условие осталось');
+  });
+
+  it('после удаления единственного условия отбор снова пуст (запрет пустого отбора, 9ddc488e)', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'keywords', scope: ['title', 'synonyms'] }, operator: 'matches', value: { kind: 'scalar', value: 'смета' } },
+      ],
+    };
+    const reopened = mod.parseViewDefinition(viewOf(mod.buildViewAstDefinition(state)), REGISTRY_MAP);
+    const tree = reopened.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
+    // Удаляем ровно СТРОКУ ПОЛЬЗОВАТЕЛЯ — как кнопка «Удалить условие» в строке:
+    // служебный лист, если он просочился в модель (регрессия), остался бы и
+    // удовлетворил проверке «есть критерии».
+    const only = tree.children.findIndex(
+      (child) => child.kind === 'leaf' && child.entity.kind === 'keywords',
+    );
+    assert.ok(only >= 0, 'пользовательское условие показано при переоткрытии');
+    tree.children.splice(only, 1);
+    assert.equal(
+      mod.hasAnyCriteria(reopened),
+      false,
+      'впечённый служебный дефолт не считается условием и не обходит запрет пустого отбора',
+    );
+  });
+
+  it('легаси AST без метки: непомеченный «Помечено на удаление = нет» остаётся условием (9ddc488e)', () => {
+    // Определение, сохранённое до появления метки `service`: впечённый лист
+    // неотличим от условия пользователя, поэтому читается как условие
+    // (обратная совместимость; удалить его пользователь может строкой).
+    const legacy = {
+      version: 1,
+      filter: {
+        op: 'and',
+        children: [{ entity: { kind: 'trashed' }, operator: 'eq', value: false }],
+      },
+    };
+    const state = mod.parseViewDefinition(viewOf(legacy), REGISTRY_MAP);
+    assert.equal(
+      collectTreeLeaves(state.tree!).some((leaf) => leaf.entity.kind === 'trashed'),
+      true,
+      'непомеченный лист читается условием пользователя',
+    );
+    assert.equal(mod.hasAnyCriteria(state), true);
+  });
+
   it('профиль «мысли»: недопустимый операнд отвергается при сборке (strict)', () => {
     const state = mod.parseViewDefinition(null, REGISTRY_MAP);
     state.tree = {

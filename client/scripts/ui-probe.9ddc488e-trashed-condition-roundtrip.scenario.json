@@ -1,6 +1,6 @@
 {
   "name": "9ddc488e-trashed-condition-roundtrip",
-  "description": "Ключевой GUI-сценарий ошибки 9ddc488e: условие «Помечено на удаление = нет» в редакторе отбора мысли не теряется при сохранении и переоткрытии. Путь пользователя: полоса отборов на карте → «+» → редактор внетипового отбора (мысль без типа) → добавить условие «Помечено на удаление» = «нет» → Сохранить → открыть редактор снова по пункту «Изменить отбор» — условие на месте; повторное сохранение его не теряет. Самодостаточно: мысли «Живая проба» и «Корзина пробы» (помечена на удаление) заводятся шагом probe через window.etn; отбор исполняется по имени через шаг api — «= нет» не возвращает помеченную, контекстная мысль исключена. Все шаги редактора ограничены ВЕРХНИМ диалогом (в DOM живут скрытые деревья других вкладок — берём только видимый). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.9ddc488e-trashed-condition-roundtrip.scenario.json --out .tmp/etn-9ddc488e/out",
+  "description": "Ключевой GUI-сценарий ошибки 9ddc488e: условие «Помечено на удаление = нет» в редакторе отбора мысли не теряется при сохранении и переоткрытии. Путь пользователя: полоса отборов на карте → «+» → редактор внетипового отбора (мысль без типа) → добавить условие «Помечено на удаление» = «нет» → Сохранить → открыть редактор снова по пункту «Изменить отбор» — условие на месте; повторное сохранение его не теряет. Вторая половина — регресс запрета пустого отбора (e8365d29): отбор с обычным условием «Актуальность = да» при переоткрытии не показывает служебный лист «Помечено на удаление», удаление единственного условия блокирует сохранение ошибкой «Укажите хотя бы одно условие отбора», диалог остаётся открыт; сохранённое определение несёт метку service: true, а исполнение отбора по-прежнему скрывает помеченные на удаление. Самодостаточно: мысли «Живая проба» и «Корзина пробы» (помечена на удаление) заводятся шагом probe через window.etn; отборы исполняются по имени через шаг api. Все шаги редактора ограничены ВЕРХНИМ диалогом (в DOM живут скрытые деревья других вкладок — берём только видимый). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.9ddc488e-trashed-condition-roundtrip.scenario.json --out .tmp/etn-9ddc488e/out",
   "timeout": 180000,
   "steps": [
     {
@@ -258,6 +258,157 @@
           "value": false
         }
       ]
+    },
+    {
+      "name": "close-third-editor",
+      "eval": "(() => { const b=[...(window.__dlg()?.querySelectorAll('.dialog-footer .ui-btn') ?? [])].find((x)=>x.textContent.trim()==='Отмена'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "third-editor-closed",
+      "waitFor": "window.__dlg() === null",
+      "timeout": 20000
+    },
+    {
+      "name": "click-add-service-view",
+      "click": ".canvas-filter-strip-add"
+    },
+    {
+      "name": "service-view-editor-opened",
+      "waitFor": "(() => { const d=window.__dlg(); return d !== null && d.querySelector('.ff-name__input') !== null; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "add-service-condition",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "service-condition-row-visible",
+      "waitFor": "(() => (window.__dlg()?.querySelectorAll('.ft-row').length ?? 0) > 0)()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-service-operand-picker",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.ft-row .ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "service-operand-menu",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"active\"]') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "pick-active-operand",
+      "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"active\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "active-row-label",
+      "waitFor": "(() => (window.__dlg()?.querySelector('.ft-row__what')?.textContent ?? '').includes('Актуальность'))()",
+      "timeout": 20000
+    },
+    {
+      "name": "set-active-yes",
+      "probe": "(() => { const row=window.__dlg()?.querySelector('.ft-row'); const btn=[...(row?.querySelectorAll('.fv-triad .ui-btn') ?? [])].find((b)=>b.textContent.trim()==='да'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "fill-service-view-name",
+      "eval": "(() => { const inp=window.__dlg()?.querySelector('.ff-name__input'); if(!inp) return 'no-input'; inp.value=''; inp.dispatchEvent(new Event('input',{bubbles:true})); inp.click(); inp.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "service-view-name-typed",
+      "text": "service-guard"
+    },
+    {
+      "name": "save-service-view",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.dialog-footer .ui-btn--primary'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "service-view-editor-closed",
+      "waitFor": "window.__dlg() === null",
+      "timeout": 20000
+    },
+    {
+      "name": "service-view-on-strip",
+      "waitFor": "(() => [...document.querySelectorAll('.canvas-filter-strip-btn[data-view-id]')].some((b)=>b.textContent.trim()==='service-guard'))()",
+      "timeout": 30000
+    },
+    {
+      "name": "service-view-stored-with-marker",
+      "api": {
+        "name": "service-view-stored-with-marker",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/views",
+        "expression": "(() => { const rows=(Array.isArray(data)?data:data.items); const v=rows.find((x)=>x.name==='service-guard'); if(!v) return 'no-view'; const def=typeof v.definition==='string'?JSON.parse(v.definition):v.definition; const leaves=[]; const walk=(node)=>{ if(!node||typeof node!=='object') return; if(node.entity) leaves.push({kind:node.entity.kind, service:node.service===true}); if(Array.isArray(node.children)) node.children.forEach(walk); if(node.filter) walk(node.filter); }; walk(def); return leaves; })()"
+      },
+      "expect": [
+        {
+          "kind": "active",
+          "service": false
+        },
+        {
+          "kind": "trashed",
+          "service": true
+        }
+      ]
+    },
+    {
+      "name": "reopen-service-view",
+      "eval": "(() => { const b=[...document.querySelectorAll('.canvas-filter-strip-btn[data-view-id]')].find((x)=>x.textContent.trim()==='service-guard'); if(!b) return 'no-button'; b.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:240,clientY:240})); return 'ok'; })()"
+    },
+    {
+      "name": "service-view-menu",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "click-edit-service-view",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Изменить отбор')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "service-editor-reopened",
+      "waitFor": "(() => { const d=window.__dlg(); return d !== null && d.querySelector('.ff-name__input') !== null; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "service-row-not-shown-as-user-condition",
+      "probe": "(() => { const rows=[...(window.__dlg()?.querySelectorAll('.ft-row') ?? [])]; return { count: rows.length, hasActive: rows.some((r)=>(r.textContent ?? '').includes('Актуальность')), hasService: rows.some((r)=>(r.textContent ?? '').includes('Помечено на удаление')) }; })()",
+      "expect": {
+        "count": 1,
+        "hasActive": true,
+        "hasService": false
+      }
+    },
+    {
+      "name": "remove-only-condition",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.ft-row .ft-row__remove'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "no-condition-rows-left",
+      "waitFor": "(() => (window.__dlg()?.querySelectorAll('.ft-row').length ?? 0) === 0)()",
+      "timeout": 20000
+    },
+    {
+      "name": "save-without-conditions",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.dialog-footer .ui-btn--primary'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "empty-view-rejected-dialog-open",
+      "waitFor": "(() => { const d=window.__dlg(); if(d===null) return false; const err=(d.querySelector('.dialog-footer-error')?.textContent ?? '').trim(); return err.includes('Укажите хотя бы одно условие отбора'); })()",
+      "timeout": 20000
+    },
+    {
+      "name": "service-view-still-hides-trashed",
+      "api": {
+        "name": "service-view-still-hides-trashed",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/views/service-guard/run",
+        "body": {},
+        "expression": "({ live: data.some((t)=>t.title==='Живая проба'), trashed: data.some((t)=>t.title==='Корзина пробы') })"
+      },
+      "expect": {
+        "live": true,
+        "trashed": false
+      }
     }
   ]
 }
