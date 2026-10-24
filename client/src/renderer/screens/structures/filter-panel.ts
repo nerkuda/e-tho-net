@@ -159,6 +159,18 @@ let serverIssues: readonly FilterIssue[] = [];
 const propertyDefs = new Map<string, NetworkProperty>();
 /** Signature of the catalogues the panel depends on (rebuild on change). */
 let catalogueSignature = '';
+
+/**
+ * Подпись входа чтения реестра свойств: сеть, каталоги типов, видимость и
+ * rt-статус. Одна функция на оба места чтения — подписку и начальную загрузку
+ * монтирования: у начальной загрузки тоже есть «неотработанный» вход, и
+ * разошедшиеся формулы дали бы тихое расхождение подписей (ошибка 76282fbc).
+ * Статус соединения — вход: после обрыва каталог свойств ОБЯЗАН перечитаться,
+ * иначе конструктор условий живёт с пустым реестром до перезапуска.
+ */
+function catalogueSignatureNow(): string {
+  return `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}|${getRtStatus(store.state)}`;
+}
 /** Последний увиденный первый день недели сети (пересборка на смене). */
 let firstDayOfWeekSeen = 1;
 /** Отписка store-подписки панели (teardown вида, ошибка b5278f9a). */
@@ -571,7 +583,7 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
     // свойств ОБЯЗАН перечитаться, иначе конструктор условий живёт с пустым
     // реестром до перезапуска (ошибка 76282fbc — класс «подпись рендера, снятая
     // до чтения, без rt-статуса»).
-    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}|${getRtStatus(store.state)}`;
+    const signature = catalogueSignatureNow();
     if (signature !== catalogueSignature) {
       catalogueSignature = signature;
       void loadPropertyDefs().then((ok) => {
@@ -583,7 +595,16 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
       });
     }
   });
-  void loadPropertyDefs().then(() => renderPanel());
+  // Начальная загрузка реестра — такой же вход чтения: её отказ обязан
+  // оставить подпись «неотработанной» (`''`), иначе устаревшая подпись от
+  // прошлого монтирования совпадёт с текущей и следующий тик store не повторит
+  // чтение (ошибка 76282fbc, замечание верификатора 2026-10-24). Успех
+  // фиксирует подпись — тот же вход подписка повторно не перечитывает.
+  const initialSignature = catalogueSignatureNow();
+  void loadPropertyDefs().then((ok) => {
+    catalogueSignature = ok ? initialSignature : '';
+    renderPanel();
+  });
 }
 
 /**
@@ -599,6 +620,10 @@ export function unmountFilterPanel(): void {
   unsubscribeStore = null;
   host = null;
   callbacks = null;
+  // Подпись принадлежит смонтированной панели: после unmount она
+  // недействительна, и близкое монтирование обязано прочитать реестр заново
+  // (ошибка 76282fbc: иначе отказ чтения при совпавшей подписи не повторился бы).
+  catalogueSignature = '';
 }
 
 /**
