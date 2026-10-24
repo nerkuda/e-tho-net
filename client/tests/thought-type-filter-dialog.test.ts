@@ -493,6 +493,47 @@ describe('диалог отбора типа мысли — чтение и за
     assert.deepEqual(second, first, 'повторное открытие и пересохранение дают то же определение');
   });
 
+  it('условие «Помечено на удаление» переживает переоткрытие AST-отбора (9ddc488e)', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } },
+        { kind: 'leaf', entity: { kind: 'keywords', scope: ['title', 'synonyms'] }, operator: 'matches', value: { kind: 'scalar', value: 'смета' } },
+      ],
+    };
+    const first = mod.buildViewAstDefinition(state);
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    const leaves = collectTreeLeaves(reopened.tree!);
+    assert.ok(
+      leaves.some((l) => l.entity.kind === 'trashed' && l.value.kind === 'scalar' && l.value.value === false),
+      'явное условие пользователя показано при переоткрытии',
+    );
+    const second = mod.buildViewAstDefinition(reopened);
+    assert.deepEqual(second, first, 'условие не потеряно при пересохранении');
+  });
+
+  it('явное условие «Помечено на удаление ≠ нет» тоже переживает переоткрытие (9ddc488e)', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'ne', value: { kind: 'scalar', value: false } },
+        { kind: 'leaf', entity: { kind: 'keywords', scope: ['title', 'synonyms'] }, operator: 'matches', value: { kind: 'scalar', value: 'смета' } },
+      ],
+    };
+    const first = mod.buildViewAstDefinition(state);
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    const leaves = collectTreeLeaves(reopened.tree!);
+    assert.ok(
+      leaves.some((l) => l.entity.kind === 'trashed' && l.operator === 'ne'),
+      'условие «включать помеченные» не превратилось в служебный дефолт',
+    );
+    assert.deepEqual(mod.buildViewAstDefinition(reopened), first);
+  });
+
   it('профиль «мысли»: недопустимый операнд отвергается при сборке (strict)', () => {
     const state = mod.parseViewDefinition(null, REGISTRY_MAP);
     state.tree = {

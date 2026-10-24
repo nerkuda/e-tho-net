@@ -31,6 +31,7 @@ import {
   defaultFilterCriteriaState,
   defaultFilterTreeGroup,
   hasAnyFilterCriteria,
+  isFilterAstWire,
   parseFilterDefinitionTree,
   type FilterCriteriaState,
   type FilterTreeLeaf,
@@ -107,36 +108,39 @@ export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
  * `definition v1` единый конструктор компилирует в дерево на входе
  * (`parseFilterDefinitionTree` → `compileFlatCriteriaToAst`, задача cfbe8c74;
  * ADR fc23f9c1 запрещает вторую точку чтения сохранённого отбора). Служебный
- * дефолт места («Помечено на удаление = нет») с корневого уровня снимается
- * ({@link stripViewDefaults}) — он не показывается условием пользователя.
+ * дефолт места («Помечено на удаление = нет») снимается только с ПЛОСКОГО
+ * определения: в AST он записан явно и является условием пользователя —
+ * скрывать его при переоткрытии нельзя (ошибка 9ddc488e).
  * Returns the default state when the JSON is malformed.
  */
 export function parseViewDefinition(
   view: Pick<ThoughtTypeView, 'definition'> | null,
   registry?: ReadonlyMap<string, NetworkProperty>,
 ): FilterCriteriaState {
-  const state =
-    view === null
-      ? defaultFilterCriteriaState()
-      : parseViewDefinitionJson(view.definition, registry);
-  state.tree = stripViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
-  return state;
-}
-
-function parseViewDefinitionJson(
-  definition: string,
-  registry?: ReadonlyMap<string, NetworkProperty>,
-): FilterCriteriaState {
+  if (view === null) {
+    const fresh = defaultFilterCriteriaState();
+    fresh.tree = stripViewDefaults(fresh.tree ?? defaultFilterTreeGroup('and'));
+    return fresh;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(definition) as unknown;
+    parsed = JSON.parse(view.definition) as unknown;
   } catch {
     return defaultFilterCriteriaState();
   }
-  return parseFilterDefinitionTree(parsed, {
+  const state = parseFilterDefinitionTree(parsed, {
     activeMode: 'view',
     ...(registry !== undefined ? { registry } : {}),
   });
+  // Неявных дефолтов в AST нет: лист «Помечено на удаление», записанный в
+  // определении, — условие ПОЛЬЗОВАТЕЛЯ (его видно строкой и он обязан
+  // пережить переоткрытие — ошибка 9ddc488e). Снимаем служебный дефолт
+  // только с плоского определения v1: там его дописал компилятор, и он
+  // остаётся неявным до сохранения в AST (`readFilterDefinitionDetailed`).
+  if (!isFilterAstWire(parsed)) {
+    state.tree = stripViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
+  }
+  return state;
 }
 
 /**

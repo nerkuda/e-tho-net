@@ -31,7 +31,12 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { BASE_LAYER_ID, EtnError, type AnyRealtimeEvent } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  EtnError,
+  FILTER_AST_VERSION,
+  type AnyRealtimeEvent,
+} from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import {
@@ -52,7 +57,7 @@ import {
   mergeLayer,
   mergeLayerThought,
 } from '../src/domain/merge-service.js';
-import { deleteThought } from '../src/domain/thought-service.js';
+import { deleteThought, updateThought } from '../src/domain/thought-service.js';
 import { isEventVisibleInLayer } from '../src/realtime/layer-visibility.js';
 
 import {
@@ -1660,6 +1665,72 @@ describe(
         } finally {
           unsubscribe();
         }
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('условие «Помечено на удаление» сохраняется в определении и фильтрует выдачу (9ddc488e)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const typeId = await createType(ctx, 'trash-view-type');
+        const ownerId = await createThought(ctx, 'владелец отбора', typeId);
+        const liveId = await createThought(ctx, 'живая мысль', typeId);
+        const trashedId = await createThought(ctx, 'мысль в корзине', typeId);
+        updateThought(ctx.ndb, trashedId, { marked_for_deletion: true }, undefined, USER);
+
+        // Определение ровно в той форме, которую печатает клиент: AST с явным
+        // листом «Помечено на удаление = нет» (ошибка 9ddc488e).
+        const notTrashed = JSON.stringify({
+          version: FILTER_AST_VERSION,
+          filter: { entity: { kind: 'trashed' }, operator: 'eq', value: false },
+        });
+        const created = await createCustomView(ctx, ownerId, {
+          name: 'Только живые',
+          definition: notTrashed,
+        });
+        assert.equal(created.statusCode, 201, created.body);
+
+        // Хранение: определение возвращается байт в байт — валидация сервера
+        // не срезает условие корзины.
+        const stored = await ctx.app.inject({
+          method: 'GET',
+          url: customViewsUrl(ctx, ownerId, created.id!),
+          headers: h,
+        });
+        assert.equal(stored.statusCode, 200, stored.body?.toString());
+        assert.equal((stored.json().data as { definition: string }).definition, notTrashed);
+
+        const run = async (viewId: string): Promise<string[]> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/${ownerId}/views/${viewId}/run`,
+            headers: h,
+            payload: {},
+          });
+          assert.equal(res.statusCode, 200, res.body?.toString());
+          return (res.json().data as Array<{ id: string }>).map((t) => t.id);
+        };
+
+        const liveOnly = await run(created.id!);
+        assert.ok(liveOnly.includes(liveId), 'живая мысль в выдаче');
+        assert.ok(!liveOnly.includes(trashedId), '«= нет» не возвращает помеченную на удаление');
+
+        // Симметрично: явное «= да» возвращает ровно корзину — условие
+        // реально участвует в исполнении, а не игнорируется движком.
+        const trashedDefinition = JSON.stringify({
+          version: FILTER_AST_VERSION,
+          filter: { entity: { kind: 'trashed' }, operator: 'eq', value: true },
+        });
+        const onlyTrashed = await createCustomView(ctx, ownerId, {
+          name: 'Только корзина',
+          definition: trashedDefinition,
+        });
+        assert.equal(onlyTrashed.statusCode, 201, onlyTrashed.body);
+        const trashOnly = await run(onlyTrashed.id!);
+        assert.ok(trashOnly.includes(trashedId), '«= да» возвращает помеченную');
+        assert.ok(!trashOnly.includes(liveId), '«= да» не возвращает живую');
       } finally {
         await closeRestContext(ctx);
       }
