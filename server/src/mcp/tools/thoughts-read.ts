@@ -497,14 +497,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       description:
         'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
         'значения свойств: вне-типовые — в эффективном пер-мысленном порядке, типовые — в порядке ' +
-        'выборки (порядок типовых строк карточки задают привязки типа, см. ' +
+        'выборки (порядок задают привязки типа, см. ' +
         '`GET …/types/{id}/properties`); `outside_type: true` — свойство не на цепочке типа ' +
         'владельца, карточка не пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
         '`meta.deletion_blocks` — блокировки удаления. ' +
         '`meta.permanent` — полный текст постоянного комментария (полностью — `etn.comments.get`). ' +
         '`meta.link_stats` — счётчики активных связей по `(link_type_id, direction)` с именами типа. ' +
-        '`meta.views` — эффективный набор отборов мысли: типовые (`scope: "type"`) и внетиповые ' +
-        '(`scope: "thought"`), `defined_on` — владелец, порядок — типовые, затем внетиповые; ' +
+        '`meta.views` — эффективные отборы мысли: типовые (`scope: "type"`), затем внетиповые ' +
+        '(`scope: "thought"`), `defined_on` — владелец; ' +
         'исполняются через `etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],

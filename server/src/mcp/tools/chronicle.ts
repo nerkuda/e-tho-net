@@ -20,9 +20,13 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
     'etn.chronicle.query',
     {
       title: 'Запрос хроники',
+      // 0.14.1 (ошибка d47e5ba3): keywords/keyword_scope и раскрытие
+      // `*`-синонимов в scope title/synonyms — та же формулировка, что у
+      // `etn.thoughts.search`/`query` (общий предикат, коммит 4037a997).
       description:
-        'Запрос хроники (паритет `POST /chronicle/query`): хроно-комментарии по ' +
-        'фильтру мыслей; `targets` — критерии целей; `ast` — тело профиля «хроника» ' +
+        'Запрос хроники: хроно-комментарии по фильтру мыслей; `targets` — критерии целей; ' +
+        '`keywords`/`keyword_scope` — мини-синтаксис §6.10 (AND, `*`, `-слово`); в `title`/`synonyms` ' +
+        'слово без `*` совпадает и с целым словом `*`-синонима; `ast` — тело профиля «хроника» ' +
         '(грамматика — etn.guide { topic: "thoughts.query" }), XOR с плоскими критериями.',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
