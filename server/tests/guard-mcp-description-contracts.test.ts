@@ -78,6 +78,9 @@ describe('guard: MCP — описания несут контрактные фо
     assertMentions(description, 'etn.instructions', [
       'INSTRUCTION among structural parents',
       'sections/catalogues',
+      // 0.14.1 (задача 54573522): keywords-режим корневой фильтр не применяет —
+      // под-инструкции находятся keywords или scope:"all" (instructions-service.ts).
+      'of ALL instructions incl. sub-instructions',
     ]);
     assert.ok(
       !description.includes('no untyped parent link'),
@@ -97,17 +100,31 @@ describe('guard: MCP — описания несут контрактные фо
     ]);
   });
 
-  it('etn.thoughts.query: NOT_FOUND для плоских имён и только id в ast-листьях (6ff9749f)', async () => {
+  it('etn.thoughts.query: NOT_FOUND для плоских имён, только id в ast-листьях, unresolved — только ast-токены (6ff9749f, 54573522)', async () => {
     const all = await toolDescriptions();
     const description = descriptionOf(all, 'etn.thoughts.query');
     assertMentions(description, 'etn.thoughts.query', [
       'неизвестное имя в плоских полях — `NOT_FOUND`',
       'значения `ast`-листьев — только id',
       'не резолвятся и молча не совпадают',
+      '`ast`-токен → пустая страница и `unresolved`',
     ]);
-    assert.ok(
-      !description.includes('страница и `unresolved`'),
-      `etn.thoughts.query: «пустая страница и unresolved» — семантика etn.views.run, в query её быть не должно\n---\n${description}`,
+    // «Пустая страница и `unresolved`» — корректная семантика ТОЛЬКО для
+    // ast-токенов (проба: `$thought.id` → hits: [], unresolved: […]): для
+    // плоских имён ответ — `NOT_FOUND`, поля `unresolved` нет. Сторож запрещает
+    // вернуть формулировку БЕЗ привязки к ast-токенам, но не блокирует
+    // корректную клаузу (задача 54573522); семантика `views.run` — свой сторож
+    // ниже, её проверка не расширяется.
+    const phrase = 'пустая страница и `unresolved`';
+    const scopedPhrase = '`ast`-токен → пустая страница и `unresolved`';
+    const occurrences = description.split(phrase).length - 1;
+    const scopedOccurrences = description.split(scopedPhrase).length - 1;
+    assert.equal(
+      occurrences,
+      scopedOccurrences,
+      `etn.thoughts.query: «${phrase}» допустимо только с привязкой к ast-токенам ` +
+        `(плоские имена дают NOT_FOUND) — найдено ${occurrences} упоминаний, ` +
+        `из них в корректной форме ${scopedOccurrences}\n---\n${description}`,
     );
   });
 
@@ -117,6 +134,9 @@ describe('guard: MCP — описания несут контрактные фо
     assertMentions(description, 'etn.views.run', [
       '`thought_id` исключается из выдачи и `total`',
       '`etn.thoughts.get`',
+      // 0.14.1 (задача 54573522): `total` корректируется только когда якорь
+      // попал на страницу (REST-спека c989a4e2) — оговорка обязательна.
+      '`total` уменьшается, только если якорь попал на страницу',
     ]);
   });
 });

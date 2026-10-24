@@ -37,17 +37,21 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
       // СОСЕДЕЙ, а не саму мысль — `thought-type-views-service.ts` отбрасывает
       // якорь (`items.filter(i => i.id !== thoughtId)`) и корректирует `total`.
       // Поведение осознанное, но описание о нём молчало.
+      // 0.14.1 (задача 54573522): `total` корректируется ТОЛЬКО когда якорь
+      // попал на страницу (`result.items.length > items.length`) — оговорка
+      // выровнена с REST-спекой c989a4e2; проза сжата под бюджет tools/list.
       description:
-        'Run a view for one thought — типовой/внетиповой из `meta.views` ' +
+        'Run a view for one thought from `meta.views` ' +
         '(`scope: "type" | "thought"`, `defined_on` — владелец). `view_name` — имя ' +
         '(нормализовано) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
         '`etn.guide { topic: "thoughts.query" }`) — ровно одно из двух. `limit`/`offset` — страница, ' +
         '`order` — направление сортировки. Якорная мысль `thought_id` исключается из выдачи и `total` ' +
-        '(сама мысль — `etn.thoughts.get`). Read-only: не тратит бюджет записи и `audit_log`. ' +
-        'Возвращает страницу мыслей; при `view_name` — карточку исполненного отбора в top-level `view` ' +
+        '— но `total` уменьшается, только если якорь попал на страницу ' +
+        '(сама мысль — `etn.thoughts.get`). Read-only: без бюджета записи и `audit_log`. ' +
+        'Возвращает страницу; при `view_name` — карточку отбора в top-level `view` ' +
         '(id, имя, `scope`, `defined_on`, `inherited`), при `ast` поля `view` нет — `meta.ast: true`; ' +
         '`meta.unresolved` (неразрешённый токен — `data` пустая). Не найден — `NOT_FOUND` ' +
-        'с `details.available_views` (id, имя, `scope`, `defined_on`). Удалённая сущность условия — ' +
+        'с `details.available_views`. Удалённая сущность условия — ' +
         '`VALIDATION_ERROR` (`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],

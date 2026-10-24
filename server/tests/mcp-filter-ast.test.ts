@@ -34,6 +34,7 @@ import {
 } from './mcp-helpers.js';
 import { authHeaders, buildRestContext, closeRestContext, type RestTestContext } from './rest-helpers.js';
 import type { NetworkDb } from '../src/db/network-db.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
 
 const skip = !nativeAvailable();
 
@@ -592,20 +593,20 @@ function seedSqlThought(ndb: NetworkDb, title: string, author: string): string {
   return id;
 }
 
-/** Вставить структурное ребро напрямую в сетевую БД. */
+/** Вставить структурное (или типизированное) ребро напрямую в сетевую БД. */
 function seedSqlLink(
   ndb: NetworkDb,
   sourceId: string,
   targetId: string,
-  opts: { active?: number; marked?: number } = {},
+  opts: { active?: number; marked?: number; typeId?: string } = {},
 ): void {
   ndb
     .prepare(
       `INSERT INTO links (id, source_id, target_id, type_id, active, marked_for_deletion,
                           version, created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, NULL, ?, ?, 1, '2024', '2024', 'u', 'u')`,
+       VALUES (?, ?, ?, ?, ?, ?, 1, '2024', '2024', 'u', 'u')`,
     )
-    .run(randomUUID(), sourceId, targetId, opts.active ?? 1, opts.marked ?? 0);
+    .run(randomUUID(), sourceId, targetId, opts.typeId ?? null, opts.active ?? 1, opts.marked ?? 0);
 }
 
 describe('MCP etn.thoughts.query: ast + link_filter (паритет с REST, c5381a2d)', { skip }, () => {
@@ -940,6 +941,137 @@ describe('MCP: пустой link_filter отвергается как в REST (3
       }
     } finally {
       await closeMcpContext(ctx);
+    }
+  });
+});
+
+// ===========================================================================
+// link_filter: BFS-ветка neighbors (depth>1) и веер query по network_ids
+// (задача 54573522). До правки эти две ветки не покрывались: мутация строки
+// `link_filter` в веере оставалась зелёной, а BFS-обход (`traverse`) не был
+// проверен на сужение по типам связей — фильтр мог молча расширить обход до
+// всех рёбер.
+// ===========================================================================
+
+describe('MCP: link_filter в BFS-ветке neighbors и в веере query (54573522)', { skip }, () => {
+  it('neighbors depth>1: link_filter ограничивает рёбра BFS-обхода', async () => {
+    const w = await pairedWorld();
+    try {
+      const root = seedSqlThought(w.rest.ndb, 'LF-BFS-root', w.rest.adminId);
+      const structuralChild = seedSqlThought(w.rest.ndb, 'LF-BFS-структурный', w.rest.adminId);
+      const typedChild = seedSqlThought(w.rest.ndb, 'LF-BFS-типизированный', w.rest.adminId);
+      seedSqlLink(w.rest.ndb, root, structuralChild);
+      const typedLink = createLinkType(
+        w.rest.ndb,
+        { name_forward: 'ведёт к', name_reverse: 'ведом от' },
+        w.rest.adminId,
+      );
+      seedSqlLink(w.rest.ndb, root, typedChild, { typeId: typedLink.id });
+
+      const walk = async (
+        depth: number,
+        linkFilter?: Record<string, unknown>,
+      ): Promise<string[]> => {
+        const res = await w.handle.client.callTool({
+          name: 'etn.thoughts.neighbors',
+          arguments: {
+            network_id: w.rest.networkId,
+            thought_id: root,
+            dir: 'children',
+            depth,
+            ...(linkFilter !== undefined ? { link_filter: linkFilter } : {}),
+          },
+        });
+        assert.equal(res.isError, undefined, toolText(res));
+        const parsed = JSON.parse(toolText(res)) as {
+          ids?: string[];
+          neighbors?: Array<{ id: string }>;
+        };
+        const ids = parsed.ids ?? (parsed.neighbors ?? []).map((n) => n.id);
+        return ids.filter((id) => id !== root).sort();
+      };
+
+      // Без фильтра обход идёт по всем рёбрам; `include_structural` — это
+      // именно «разрешить НЕТИПИЗИРОВАННЫЕ рёбра» (не «все»), `type_ids` —
+      // сужение по типам связей (с потомками L21).
+      assert.deepEqual(
+        await walk(2),
+        [structuralChild, typedChild].sort(),
+        'BFS без фильтра — обход по обоим рёбрам',
+      );
+      assert.deepEqual(
+        await walk(2, { include_structural: true }),
+        [structuralChild],
+        'BFS: include_structural оставляет только нетипизированное ребро',
+      );
+      assert.deepEqual(
+        await walk(2, { type_ids: [typedLink.id] }),
+        [typedChild],
+        'BFS: type_ids отсекает структурное ребро',
+      );
+      assert.deepEqual(
+        await walk(2, { type_ids: [typedLink.id], include_structural: true }),
+        [structuralChild, typedChild].sort(),
+        'BFS: include_structural добавляет нетипизированное ребро к типизированному',
+      );
+      // Ветка depth=1 читает тот же фильтр — паритет ветвей.
+      assert.deepEqual(
+        await walk(1, { type_ids: [typedLink.id] }),
+        [typedChild],
+        'depth=1: тот же фильтр по типу связи',
+      );
+    } finally {
+      await closePairedWorld(w);
+    }
+  });
+
+  it('веер query по network_ids: link_filter сужает обход поддерева', async () => {
+    const w = await pairedWorld();
+    try {
+      const root = seedSqlThought(w.rest.ndb, 'LF-FAN-root', w.rest.adminId);
+      const structuralChild = seedSqlThought(w.rest.ndb, 'LF-FAN-структурный', w.rest.adminId);
+      const typedChild = seedSqlThought(w.rest.ndb, 'LF-FAN-типизированный', w.rest.adminId);
+      seedSqlLink(w.rest.ndb, root, structuralChild);
+      const typedLink = createLinkType(
+        w.rest.ndb,
+        { name_forward: 'включает', name_reverse: 'входит в' },
+        w.rest.adminId,
+      );
+      seedSqlLink(w.rest.ndb, root, typedChild, { typeId: typedLink.id });
+
+      const fanOut = async (linkFilter?: Record<string, unknown>): Promise<string[]> => {
+        const res = await w.handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: {
+            network_ids: [w.rest.networkId],
+            in_subtree_of: root,
+            max_depth: 2,
+            limit: 50,
+            ...(linkFilter !== undefined ? { link_filter: linkFilter } : {}),
+          },
+        });
+        assert.equal(res.isError, undefined, toolText(res));
+        const parsed = JSON.parse(toolText(res)) as { hits: Array<{ id: string }> };
+        return parsed.hits.map((hit) => hit.id).sort();
+      };
+
+      assert.deepEqual(
+        await fanOut(),
+        [root, structuralChild, typedChild].sort(),
+        'веер без фильтра — корень и оба ребёнка',
+      );
+      assert.deepEqual(
+        await fanOut({ type_ids: [typedLink.id] }),
+        [root, typedChild].sort(),
+        'веер: link_filter доезжает до обхода поддерева — структурное ребро отсечено',
+      );
+      assert.deepEqual(
+        await fanOut({ include_structural: true }),
+        [root, structuralChild].sort(),
+        'веер: include_structural оставляет только нетипизированное ребро',
+      );
+    } finally {
+      await closePairedWorld(w);
     }
   });
 });
