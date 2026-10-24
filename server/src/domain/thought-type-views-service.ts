@@ -489,6 +489,33 @@ export function listThoughtTypeViewsByType(
 }
 
 /**
+ * Карточка СОБСТВЕННОГО отбора типа в форме эффективного набора (0.14.1,
+ * ошибка 69aa355c): `defined_on` — тип-владелец, `inherited: false`,
+ * `own_default` — собственная пометка строки. Единая форма payload'а событий
+ * `thought-type-view.{created,updated,deleted}` и каскадного удаления.
+ */
+export function toEffectiveTypeView(view: ThoughtTypeView): EffectiveThoughtTypeView {
+  return {
+    ...view,
+    defined_on: view.thought_type_id,
+    inherited: false,
+    own_default: view.is_default,
+  };
+}
+
+/**
+ * Снапшот собственных отборов типа в форме карточек событий — снимается ДО
+ * удаления (ошибка 69aa355c: `thought-type-view.deleted` несёт полную карточку;
+ * ошибка 1242f78d: каскад удаления типа эмитит событие на каждый отбор).
+ */
+export function listOwnEffectiveTypeViews(
+  ndb: NetworkDb,
+  thoughtTypeId: string,
+): EffectiveThoughtTypeView[] {
+  return listThoughtTypeViewsByType(ndb, thoughtTypeId).map(toEffectiveTypeView);
+}
+
+/**
  * Описание входа «мысль» для эффективного набора: хватает `type_id` (или
  * `null`). Сделано узким интерфейсом, чтобы сервис не зависел от всего
  * DTO `Thought` — вызывающий код передаёт то, что есть.

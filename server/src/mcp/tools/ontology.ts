@@ -19,6 +19,7 @@ import { getLinkType } from '../../domain/link-type-service.js';
 import { writeOntology } from '../../domain/ontology-write-service.js';
 import {
   getThoughtTypeView,
+  toEffectiveTypeView,
 } from '../../domain/thought-type-views-service.js';
 import {
   mcpWriteFx,
@@ -65,6 +66,19 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
           ...(args.type_views !== undefined ? { type_views: args.type_views } : {}),
         };
         const result = runWrite(ndb, fx, () => {
+          // Снапшоты отборов, удаляемых батчем по явному `id` (0.14.1, ошибка
+          // 69aa355c): после `writeOntology` строк уже нет. Для удаления через
+          // `ref_for_update` карточки ДО удаления нет — событие уйдёт без
+          // `view` (поле необязательное; клиент перечитает по `view_id`).
+          const deletedViewSnapshots = new Map<
+            string,
+            ReturnType<typeof toEffectiveTypeView>
+          >();
+          for (const item of args.type_views ?? []) {
+            if (item.action !== 'delete' || item.id === undefined) continue;
+            const view = getThoughtTypeView(ndb, item.id);
+            if (view !== null) deletedViewSnapshots.set(item.id, toEffectiveTypeView(view));
+          }
           const written = writeOntology(ndb, writeInput, rt.deps.auth.userId);
 
           // Real-time + activity log: по одной записи на изменённую сущность.
@@ -195,9 +209,14 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
               });
             } else {
               // deleted
+              const snapshot = deletedViewSnapshots.get(item.id);
               events.push({
                 type: 'thought-type-view.deleted',
-                data: { thought_type_id: item.thought_type_id, view_id: item.id },
+                data: {
+                  thought_type_id: item.thought_type_id,
+                  view_id: item.id,
+                  ...(snapshot !== undefined ? { view: snapshot } : {}),
+                },
               });
             }
           }

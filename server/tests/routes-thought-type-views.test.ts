@@ -1327,6 +1327,33 @@ describe(
             assert.ok(types.includes('thought-type-view.updated'), types.join(','));
             assert.ok(types.includes('thought-type-view.run'), types.join(','));
             assert.ok(types.includes('thought-type-view.deleted'), types.join(','));
+
+            // 0.14.1, ошибка 69aa355c: deleted несёт полную карточку —
+            // снапшот ДО удаления, как `thought-custom-view.deleted`
+            // (контракт c643fd7b). `view_id` остаётся для слоевой видимости.
+            const deleted = received.find((e) => e.type === 'thought-type-view.deleted');
+            const deletedData = deleted!.data as {
+              thought_type_id: string;
+              view_id: string;
+              view: {
+                id: string;
+                name: string;
+                thought_type_id: string;
+                defined_on: string;
+                inherited: boolean;
+                position: number;
+                is_default: boolean;
+                version: number;
+              };
+            };
+            assert.equal(deletedData.thought_type_id, typeId);
+            assert.equal(deletedData.view_id, viewId);
+            assert.equal(deletedData.view.id, viewId);
+            assert.equal(deletedData.view.name, 'Полный цикл 2');
+            assert.equal(deletedData.view.thought_type_id, typeId);
+            assert.equal(deletedData.view.defined_on, typeId);
+            assert.equal(deletedData.view.inherited, false);
+            assert.equal(deletedData.view.version, 2);
           } finally {
             unsubscribe();
           }

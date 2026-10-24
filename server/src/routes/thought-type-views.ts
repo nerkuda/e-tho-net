@@ -68,6 +68,7 @@ import {
   getThoughtTypeView,
   listThoughtTypeViewsByType,
   runViewForThought,
+  toEffectiveTypeView,
   updateThoughtTypeView,
 } from '../domain/thought-type-views-service.js';
 import { getThought } from '../domain/thought-service.js';
@@ -413,7 +414,14 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
               {
                 type: 'thought-type-view.deleted',
                 // Фактический владелец строки, не `:id` из пути (1cd2b6db).
-                data: { thought_type_id: before.thought_type_id, view_id: viewId },
+                // Полная карточка — снапшот ДО удаления (ошибка 69aa355c,
+                // контракт c643fd7b, симметрия с `thought-custom-view.deleted`);
+                // `view_id` оставлен для слоевой видимости.
+                data: {
+                  thought_type_id: before.thought_type_id,
+                  view_id: viewId,
+                  view: toEffectiveTypeView(before),
+                },
               },
             ],
           };
@@ -458,6 +466,9 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
                   // котором отбор определён), не тип фокуса.
                   thought_type_id: result.source.thought_type_id,
                   view_id: viewId,
+                  // Снапшот ДО переноса (ошибка 69aa355c): клиент пересчитает
+                  // чипы без GET, как и для обычного удаления.
+                  view: toEffectiveTypeView(result.source),
                   reason: 'moved',
                   moved_to: result.thought_id,
                 },
