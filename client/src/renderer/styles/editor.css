@@ -2246,6 +2246,77 @@
   width: 100%;
 }
 
+/* --- Массовое изменение значений свойств выделения (0.14.1, 6ebcd8d6) ------ */
+
+/* Таблица — форма-грид (редакторы в ячейках), не список данных: колонки
+ * «флажок | свойство (+счётчик) | значение». Ширина значения забирает остаток,
+ * чтобы чипы свойства-связи не раздували таблицу. */
+.prop-bulk-table .prop-bulk-check-cell {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.prop-bulk-table .prop-bulk-name-cell {
+  vertical-align: top;
+}
+
+.prop-bulk-table .prop-bulk-value-cell {
+  width: 100%;
+  vertical-align: top;
+}
+
+.prop-bulk-count {
+  margin-left: var(--space-2);
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+/* Поле без галочки приглушено и не принимает ввод (не `disabled`: введённое
+ * значение сохраняется и включается обратно вместе с галочкой). */
+.prop-bulk-value-off {
+  pointer-events: none;
+  opacity: var(--state-disabled-opacity);
+}
+
+.prop-bulk-hints {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.prop-bulk-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-faint);
+}
+
+.prop-bulk-hint-warn {
+  color: var(--danger);
+}
+
+.prop-bulk-toolbar {
+  justify-content: flex-start;
+}
+
+/* Итог операций в футере (виден при прокрутке таблицы) и причины отказа
+ * списком над таблицей (спека 2fc9d85c: итог остаётся в диалоге). */
+.dialog-footer-with-error > .prop-bulk-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: var(--space-3);
+  text-align: left;
+}
+
+.prop-bulk-summary-error {
+  color: var(--danger);
+}
+
+.prop-bulk-report-list {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--font-size-xs);
+}
+
 /* Текущая (выделенная с клавиатуры) строка таблицы свойств — общая для обеих
  * групп вкладки (0.14.1, задача 2e87285b; стандарт b6b2821d). */
 .prop-table tr.prop-row-current,

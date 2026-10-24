@@ -510,8 +510,9 @@ export interface PropertyListCallbacks {
   /** Активация строки (Enter или двойной клик): менеджер — редактор свойства,
    *  пикер — выбор строки. Заблокированные и структурные строки не активируются. */
   onActivate: (row: PropertyListRow) => void;
-  /** Контекстное меню «Изменить» — редактор свойства. */
-  onEdit: (row: PropertyListRow) => void;
+  /** Контекстное меню «Изменить» — редактор свойства. Не задан — пункта меню
+   *  нет (пикеру массового изменения свойств править определение незачем). */
+  onEdit?: (row: PropertyListRow) => void;
   /** Контекстное меню «Удалить» (только режим менеджера) — подтверждение и
    *  запрос живут у потребителя, список лишь передаёт строку. */
   onDelete?: (row: PropertyListRow) => void;
@@ -601,7 +602,7 @@ export function buildPropertyList(opts: {
         disabled: true,
         onClick: () => {
           const row = selected();
-          if (row !== null && !row.structural) callbacks.onEdit(row);
+          if (row !== null && !row.structural) callbacks.onEdit?.(row);
         },
       })),
       (deleteBtn = uiButton({
@@ -685,13 +686,16 @@ export function buildPropertyList(opts: {
    *  менеджеру (правило 8 требования 11ddd910). */
   function rowMenu(row: PropertyListRow): MenuItem[] {
     if (row.structural) return [];
-    const items: MenuItem[] = [
-      menuAction(t('propertyList.menu.edit'), () => callbacks.onEdit(row)),
+    const items: MenuItem[] = [];
+    if (callbacks.onEdit !== undefined) {
+      items.push(menuAction(t('propertyList.menu.edit'), () => callbacks.onEdit?.(row)));
+    }
+    items.push(
       menuAction(t('listActions.copy'), () => {
         table.setCurrent(row.id);
         copyCurrent();
       }),
-    ];
+    );
     if (mode === 'manager' && callbacks.onDelete !== undefined) {
       items.push(
         menuAction(t('actions.delete'), () => callbacks.onDelete?.(row), { danger: true }),

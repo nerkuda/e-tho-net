@@ -54,6 +54,9 @@ const TRANSLATED_FILES = (rel: string): boolean =>
   // меню, подтверждения и предупреждения — из словаря; литерал обязан краснить.
   rel === 'canvas/focus-filter-strip.ts' ||
   rel === 'screens/thought-type/filter-dialog.ts' ||
+  // Диалоги панели выделения (0.14.1, задача 6ebcd8d6): строки массового
+  // изменения значений — только из словаря; литерал обязан краснить.
+  rel === 'selection/dialogs.ts' ||
   rel === 'lib/i18n.ts' ||
   rel === 'lib/lang.ts';
 
