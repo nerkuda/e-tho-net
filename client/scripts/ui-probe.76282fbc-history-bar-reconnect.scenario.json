@@ -1,28 +1,11 @@
 {
   "name": "history-bar-reconnect-76282fbc",
-  "description": "Ключевой пользовательский сценарий ошибки 76282fbc: при запуске клиента соединение с сервером сначала НЕ устанавливается (первая попытка подключения уходит на закрытый порт — «проблема с установкой соединения»), затем быстро разрешается повторным подключением к рабочему серверу стенда. После восстановления связи полоса истории посещений в статус-баре обязана показать историю вкладки: посещаем две мысли, ждём облачка, проверяем текст и растровым ассертом непустую область полосы. Самодостаточно: третью мысль для истории сценарий засеивает сам шагом api; подстановки {{…}} даёт стенд (node client/scripts/ui-probe-stand.mjs --scenario <этот файл>).",
+  "description": "Ключевой пользовательский сценарий ошибки 76282fbc: при запуске клиента соединение сначала НЕ устанавливается (первая попытка уходит на закрытый порт — «проблема с установкой соединения»), затем разрешается подключением к рабочему серверу стенда. Полоса истории при этом остаётся пустой; уже ПОСЛЕ открытия сети сценарий воспроизводит саму механику дефекта: связь обрывается, в локальную историю вкладки попадает мысль, которой на полосе ещё не было (кэш-холодный id), а затем связь восстанавливается. На дофиксовом коде полоса не перечитывает историю после обрыва (подпись входов без rt-статуса снята до чтения) и продолжает оставаться без этой мысли; исправленная полоса после восстановления связи показывает её заголовок — без перезапуска клиента. Шаги «before» фиксируют, что до восстановления связи заголовка на полосе нет; шаг «history-bar-recovers» ждёт его появления. Самодостаточно: подстановки {{…}} даёт стенд (node client/scripts/ui-probe-stand.mjs --scenario <этот файл>).",
   "timeout": 120000,
   "steps": [
     {
       "name": "onboarding-visible",
       "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
-    },
-    {
-      "name": "seed-history-thought",
-      "api": {
-        "name": "seed-history-thought",
-        "method": "POST",
-        "path": "/networks/{{networkId}}/thoughts",
-        "body": {
-          "title": "История стенда",
-          "create_link": {
-            "direction": "parent",
-            "target_thought_id": "{{homeId}}"
-          }
-        },
-        "expression": "data.title"
-      },
-      "expect": "История стенда"
     },
     {
       "name": "fill-dead-server-url",
@@ -107,47 +90,61 @@
     },
     {
       "name": "clouds-ready",
-      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null && document.querySelectorAll('.cloud[data-id]').length >= 3",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null",
       "timeout": 30000
     },
     {
-      "name": "open-seeded-thought",
-      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+      "name": "history-bar-before-text",
+      "probe": "document.querySelector('.history-bar')?.textContent ?? null"
     },
     {
-      "name": "seeded-thought-opened",
-      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'",
-      "timeout": 30000
-    },
-    {
-      "name": "open-home",
-      "click": ".cloud[data-id=\"{{homeId}}\"]"
-    },
-    {
-      "name": "home-opened",
-      "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'",
-      "timeout": 30000
-    },
-    {
-      "name": "open-history-thought",
-      "eval": "(() => { const cloud = Array.from(document.querySelectorAll(\".cloud\")).find((node) => node.textContent?.includes(\"История стенда\")); if (cloud === undefined) throw new Error(\"облачко «История стенда» не найдено\"); cloud.click(); return true; })()"
-    },
-    {
-      "name": "history-thought-opened",
-      "waitFor": "document.querySelector(\".editor-title-input\")?.value === \"История стенда\"",
-      "timeout": 30000
-    },
-    {
-      "name": "history-chips-appear",
-      "waitFor": "document.querySelectorAll('.history-bar .history-cloud').length >= 2",
-      "timeout": 30000
-    },
-    {
-      "name": "history-chips",
+      "name": "history-chips-before-outage",
       "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
     },
     {
-      "name": "history-bar-text",
+      "name": "break-connection-and-seed-history",
+      "timeout": 30000,
+      "eval": "(async () => { const profiles = await window.etn.server.listProfiles(); const profile = profiles.find((item) => item.isActive) ?? profiles[0]; if (profile === undefined) throw new Error('нет сохранённого профиля сервера'); const tab = document.querySelector('.tab.tab-active[data-tab-id]') ?? document.querySelector('.tab[data-tab-id]'); const tabId = tab?.dataset?.tabId ?? null; if (tabId === null) throw new Error('нет активной вкладки'); await window.etn.server.disconnect(); await window.etn.history.push(profile.id, '{{networkId}}', tabId, '{{thoughtId}}'); document.body.dataset['coldThoughtId'] = '{{thoughtId}}'; return true; })()"
+    },
+    {
+      "name": "connection-is-down",
+      "waitFor": "window.etn.server.getStatus().then((status) => status !== 'connected')",
+      "timeout": 30000
+    },
+    {
+      "name": "history-bar-no-seed-title-before-reconnect",
+      "probe": "document.querySelector('.history-bar')?.textContent?.includes('{{seedTitle}}') === true",
+      "expect": false
+    },
+    {
+      "name": "history-bar-before-reconnect-text",
+      "probe": "document.querySelector('.history-bar')?.textContent ?? null"
+    },
+    {
+      "name": "history-chips-before-reconnect",
+      "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
+    },
+    {
+      "name": "restore-connection",
+      "timeout": 30000,
+      "eval": "(async () => { const profiles = await window.etn.server.listProfiles(); const profile = profiles.find((item) => item.isActive) ?? profiles[0]; if (profile === undefined) throw new Error('нет сохранённого профиля сервера'); await window.etn.server.connect(profile.id); await window.etn.networks.open('{{networkId}}'); return true; })()"
+    },
+    {
+      "name": "connection-restored",
+      "waitFor": "window.etn.server.getStatus().then((status) => status === 'connected')",
+      "timeout": 30000
+    },
+    {
+      "name": "history-bar-recovers",
+      "waitFor": "document.querySelector('.history-bar')?.textContent?.includes('{{seedTitle}}') === true",
+      "timeout": 30000
+    },
+    {
+      "name": "history-chips-after-reconnect",
+      "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
+    },
+    {
+      "name": "history-bar-after-reconnect-text",
       "probe": "document.querySelector('.history-bar')?.textContent ?? null"
     },
     {
