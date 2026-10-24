@@ -71,6 +71,7 @@ import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
+import { initLockReconnect } from './lib/lock-guard.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
@@ -707,6 +708,10 @@ export async function boot(): Promise<void> {
   // its colours or the theme change.
   initLayerTheme();
   initLockCache();
+  // Захваты живут только вместе с realtime-сессией: после переподключения
+  // кэш перечитывается с сервера, а захваты открытых редакторов берутся
+  // заново (ошибка 0702efb6).
+  initLockReconnect();
   // Центральная инвалидация кэша источников трансклюзий по событиям `comment.*`
   // (задача a4f4113d): правка постоянного комментария-источника любой веткой —
   // своя или чужая — сбрасывает закэшированное тело, чтобы отрисовка блока не

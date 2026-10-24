@@ -214,14 +214,24 @@ function handleAcquired(data: EditAcquiredData): void {
   });
 }
 
-/** Handle `edit.released` — drop the row by its lock_id (if still present). */
-function handleReleased(data: EditReleasedData): void {
+/**
+ * Drop the row whose `lock_id` matches. Used by `edit.released` and by
+ * `releaseHeld` after a confirmed release: the server has already dropped the
+ * row, and waiting for the broadcast would leave a phantom 🔒 on a dead lock
+ * (ошибка 0702efb6).
+ */
+export function dropLockById(lockId: string): void {
   for (const [key, row] of cache.entries()) {
-    if (row.id === data.lock_id) {
+    if (row.id === lockId) {
       dropByKey(key);
       return;
     }
   }
+}
+
+/** Handle `edit.released` — drop the row by its lock_id (if still present). */
+function handleReleased(data: EditReleasedData): void {
+  dropLockById(data.lock_id);
 }
 
 /** Handle `edit.cleared` — drop the row; expose the reason for the editor toast. */
@@ -275,20 +285,25 @@ export function initLockCache(): void {
 }
 
 /**
- * Cold-start fetch: pulls `GET /locks` once for the open network and seeds the
- * cache. Best-effort — silently ignores errors (network down, no rights). The
- * realtime stream will fill in whatever arrives after this call.
+ * Cold-start fetch and post-reconnect resync: pulls `GET /locks` once for the
+ * open network and replaces the cache with the server's truth. Best-effort —
+ * never throws. Returns `true` when the snapshot was applied and `false` when
+ * the call failed (network down, no rights): callers that act on the cache
+ * (restoring held locks after a reconnect, ошибка 0702efb6) must not treat a
+ * failed refresh as «захватов нет».
  */
-export async function refresh(): Promise<void> {
-  const networkId = requireNetworkId();
+export async function refresh(): Promise<boolean> {
   try {
+    const networkId = requireNetworkId();
     const rows = await etn.locks.list(networkId);
     // Replace the cache wholesale — the server is the source of truth.
     cache.clear();
     for (const row of rows) cache.set(lockKey(row.entity_type, row.entity_id), row);
     notify();
+    return true;
   } catch {
     // Non-fatal: live events will fill the cache as they arrive.
+    return false;
   }
 }
 
