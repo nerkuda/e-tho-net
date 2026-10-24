@@ -242,18 +242,23 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     'etn.thoughts.query',
     {
       title: 'Структурная выборка мыслей',
+      // 0.14.1 (ошибка 6ff9749f): «пустая страница и unresolved» — семантика
+      // СОХРАНЁННЫХ отборов (`etn.views.run`), не этого инструмента. Для плоских
+      // полей неизвестное имя типа/свойства — `NOT_FOUND`; значения `ast`-листьев
+      // — только id: имена не резолвятся и молча не совпадают (решение
+      // оркестратора: документировать поведение как есть, резолв не добавлять).
       description:
-        'Структурная выборка мыслей без текстового запроса; фильтры комбинируются по AND: ' +
+        'Структурная выборка без текстового запроса; фильтры по AND: ' +
         '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
         '`keywords` (мини-синтаксис по названию и синонимам; слово без `*` совпадает и с целым ' +
         'словом `*`-синонима — `проектиров*` находит «проектирование»), `properties[]` (операторы ' +
         'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
         '`author_id`/`editor_id`, `link_filter` (совместим с `ast` — пред-сужение ' +
         'поверх дерева). Принимает и `ast` — дерево условий ' +
-        '(грамматика — `etn.guide { topic: "thoughts.query" }`), несовместимое со старыми ' +
-        'критериями. Ответ несёт справочник `thought_types` и эхо ' +
-        '`resolved_types`/`resolved_properties` для входов по имени; неразрешимый токен — пустая ' +
-        'страница и `unresolved`, удалённая сущность условия — `VALIDATION_ERROR` ' +
+        '(грамматика — `etn.guide { topic: "thoughts.query" }`), XOR с плоскими критериями. ' +
+        'Ответ: `thought_types` + эхо `resolved_types`/`resolved_properties` (для имён); ' +
+        'неизвестное имя в плоских полях — `NOT_FOUND`; значения `ast`-листьев — только id (имена ' +
+        'не резолвятся и молча не совпадают); удалённая сущность условия — `VALIDATION_ERROR` ' +
         '(`details.diagnostics`).',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],

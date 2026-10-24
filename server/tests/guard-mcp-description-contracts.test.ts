@@ -96,4 +96,18 @@ describe('guard: MCP — описания несут контрактные фо
       '`matched_synonym`',
     ]);
   });
+
+  it('etn.thoughts.query: NOT_FOUND для плоских имён и только id в ast-листьях (6ff9749f)', async () => {
+    const all = await toolDescriptions();
+    const description = descriptionOf(all, 'etn.thoughts.query');
+    assertMentions(description, 'etn.thoughts.query', [
+      'неизвестное имя в плоских полях — `NOT_FOUND`',
+      'значения `ast`-листьев — только id',
+      'не резолвятся и молча не совпадают',
+    ]);
+    assert.ok(
+      !description.includes('страница и `unresolved`'),
+      `etn.thoughts.query: «пустая страница и unresolved» — семантика etn.views.run, в query её быть не должно\n---\n${description}`,
+    );
+  });
 });
