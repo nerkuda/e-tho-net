@@ -232,9 +232,19 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     size: 'm',
     // Грязная форма — от ИСХОДНОГО снимка (галочка/значение отличаются):
     // Esc и крестик требуют подтверждения, «Закрыть» — явная отмена молча.
+    // Метки свои: семантика диалога — «применить», а не «сохранить»
+    // (ошибка ed299fa0); «Применить» подтверждения идёт тем же путём, что
+    // кнопка футера.
     dirty: {
       isDirty: () => isBulkFormDirty(rows, currentSelection()),
       save: (close) => void applyAll(true, close),
+      labels: {
+        title: t('selection.properties.dirtyTitle'),
+        message: t('selection.properties.dirtyMessage'),
+        save: t('actions.apply'),
+        discard: t('selection.properties.dirtyDiscard'),
+        stay: t('dialog.unsaved.stay'),
+      },
     },
     footerError: summaryEl,
     buttons: [

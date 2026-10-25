@@ -1022,6 +1022,12 @@ export const ru = {
   'selection.properties.failureLine': '%1, свойство «%2»: %3',
   /** Хвост списка причин (ещё N строк). */
   'selection.properties.failureMore': '…и ещё %1',
+  /** Заголовок подтверждения закрытия формы с неприменёнными правками. */
+  'selection.properties.dirtyTitle': 'Неприменённые изменения',
+  /** Вопрос подтверждения закрытия: семантика диалога — «применить», не «сохранить». */
+  'selection.properties.dirtyMessage': 'Применить изменения?',
+  /** Кнопка «Не применять»: закрыть форму, отбросив правки. */
+  'selection.properties.dirtyDiscard': 'Не применять',
 
   // -- Меню команд отбора (screens/structures/commands.ts) -----------------
   'structures.cmd.addSelected': 'Добавить к выделенным',
