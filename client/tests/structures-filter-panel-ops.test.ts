@@ -21,8 +21,21 @@ import { describe, it } from 'node:test';
 import { OPS_BY_TYPE } from '../src/renderer/lib/filter-builder.js';
 
 describe('OPS_BY_TYPE (общий конструктор условий отбора)', () => {
-  /** Every value type except `bool` must carry the presence-test ops. */
-  const presentTypes = ['text', 'url', 'date', 'number', 'thought_ref'] as const;
+  /**
+   * Every value type except `bool` must carry the presence-test ops. `link`,
+   * `cross_network_ref` и `publication` — тоже ссылочные необязательные
+   * значения: наличие у них выражается той же парой (ошибка 0e976df4).
+   */
+  const presentTypes = [
+    'text',
+    'url',
+    'date',
+    'number',
+    'link',
+    'thought_ref',
+    'cross_network_ref',
+    'publication',
+  ] as const;
 
   for (const valueType of presentTypes) {
     it(`offers «заполнено»/«не заполнено» for ${valueType}`, () => {

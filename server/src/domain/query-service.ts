@@ -585,12 +585,15 @@ export const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryP
   // наличие хоть какого-то id, наборы — по элементам массива.
   thought_ref: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of', 'none_of'],
   // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81): отбор по
-  // адресу. eq/ne — точное совпадение; any_of/all_of/none_of — для набора.
-  // is_empty/not_empty не нужны (адрес либо точно совпал, либо нет).
-  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  // адресу. eq/ne — точное совпадение; any_of/all_of/none_of — для набора;
+  // is_empty/not_empty — «значение не задано / задано» (ошибка 0e976df4):
+  // адрес — необязательная ссылка, а NULL не «не равно» (a6866689), поэтому
+  // без пары заполненности мысль с пустой ссылкой иначе не найти.
+  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
   // Ссылка на публикацию сети (0.7.1… 0.11.1, задача f37b468d, требование
-  // 9ce84a2b): та же матрица, что у cross_network_ref — отбор по id.
-  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  // 9ce84a2b): та же матрица, что у cross_network_ref — отбор по id и наличие
+  // значения (ошибка 0e976df4).
+  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
