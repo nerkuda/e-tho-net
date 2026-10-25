@@ -1,18 +1,21 @@
 /**
  * `Escape` при верхнем слое над модальным диалогом (ошибка 9ff6b606).
  *
- * Контракт: `Escape` закрывает ТОЛЬКО верхний слой — меню, поповер или
- * выпадающий список над диалогом. Диалог под слоем то же нажатие не
- * обрабатывает: ни несохранённые изменения не подтверждает, ни сам не
- * закрывается. Следующее нажатие `Escape` достаётся диалогу.
+ * Контракт: `Escape` закрывает ТОЛЬКО верхний слой — меню, поповер, выпадающий
+ * список, панель поиска — и разрешает приоритет общеклиентский диспетчер
+ * (`lib/keymap.ts`, реестр `pushKeyOverlay`; ADR `b420b08c`). Диалог под слоем
+ * то же нажатие не обрабатывает: ни несохранённые изменения не подтверждает,
+ * ни сам не закрывается. Следующее нажатие `Escape` достаётся следующему слою,
+ * затем диалогу.
  *
  * Дом моделирует фазы события честно: window-capture слушатели (каркас
- * диалога, меню, выпадашка) в порядке регистрации, затем window-bubble
- * (диспетчер `lib/keymap.ts`); `stopImmediatePropagation` обрывает цепочку, а
+ * диалога) в порядке регистрации, затем window-bubble (диспетчер
+ * `lib/keymap.ts`); `stopImmediatePropagation` обрывает цепочку, а
  * `defaultPrevented` гасит диспетчер — как в браузере.
  *
- * Регрессия до фикса: поповер над «грязным» диалогом — первое нажатие звало
- * подтверждение несохранённых изменений, а панель оставалась открытой.
+ * Регрессии до фикса: поповер/панель над «грязным» диалогом — первое нажатие
+ * звало подтверждение несохранённых изменений, а слой оставался открытым;
+ * поповер над меню — Escape закрывал меню, а панель оставалась.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -57,6 +60,8 @@ function installShim(): void {
   (globalThis as any).window = {
     innerWidth: 1200,
     innerHeight: 800,
+    setTimeout,
+    clearTimeout,
     addEventListener: (type: string, listener: (event: any) => void, capture?: boolean) => {
       windowListeners.push({ type, listener, capture: capture === true });
     },
@@ -75,7 +80,7 @@ const { showMenuAt, closeMenu, isMenuOpen, menuSubmenu } = await import(
   '../src/renderer/lib/menu.js'
 );
 const { openPopover } = await import('../src/renderer/lib/ui/popover.js');
-const { escapeLayerInternals } = await import('../src/renderer/lib/escape-layers.js');
+const { createCommentSearch } = await import('../src/renderer/editor/comment-search.js');
 const {
   GLOBAL_CONTEXT_ID,
   defineKeyContext,
@@ -92,7 +97,6 @@ let uninstallKeymap: (() => void) | null = null;
 
 beforeEach(() => {
   installShim();
-  escapeLayerInternals.reset();
   keymapInternals.reset();
   defineKeyContext({ id: GLOBAL_CONTEXT_ID, bindings: [] });
   uninstallKeymap = installKeymap();
@@ -103,7 +107,7 @@ afterEach(() => {
   for (let i = 0; i < 20; i += 1) closeDialog();
   uninstallKeymap?.();
   uninstallKeymap = null;
-  escapeLayerInternals.reset();
+  keymapInternals.reset();
 });
 
 function bodyEl(): ShimElement {
@@ -256,6 +260,23 @@ describe('Escape: верхний слой над диалогом (ошибка 
     assert.equal(backdrops().length, 0, 'второй Escape закрыл диалог');
   });
 
+  it('поповер над меню: первый Escape закрывает поповер, меню остаётся (блокер приёмки)', () => {
+    openEditor(true);
+    openMenuOverDialog();
+    const popover = openPopoverOverDialog();
+
+    pressEscape();
+    assert.equal(popover.element.parent !== null, false, 'закрыт верхний слой — поповер');
+    assert.equal(isMenuOpen(), true, 'меню под ним осталось открытым');
+    assert.equal(backdrops().length, 1, 'диалог не тронут');
+
+    pressEscape();
+    assert.equal(isMenuOpen(), false, 'второй Escape закрыл меню');
+
+    pressEscape();
+    assert.equal(backdrops().length, 2, 'третий Escape зовёт подтверждение');
+  });
+
   it('панель с closeOnEsc: false не отнимает Escape у диалога', () => {
     openEditor(true);
     const anchor = new ShimElement('button');
@@ -325,6 +346,31 @@ describe('Escape: верхний слой над диалогом (ошибка 
     } finally {
       handle.dispose();
     }
+  });
+
+  it('панель поиска в «грязном» диалоге: первый Escape закрывает панель, второй — подтверждение (блокер приёмки)', () => {
+    openEditor(true);
+    const root = div('md-field');
+    const view = div('md-view');
+    const search = createCommentSearch({
+      root: root as unknown as HTMLElement,
+      view: view as unknown as HTMLElement,
+      getEditor: () => null,
+      isEditing: () => false,
+      restoreFocus: () => undefined,
+    });
+    root.append(search.element);
+    search.open('find');
+    assert.equal(search.isOpen(), true, 'панель поиска открыта поверх диалога');
+    assert.equal(backdrops().length, 1, 'диалог один');
+
+    pressEscape();
+    assert.equal(search.isOpen(), false, 'первый Escape закрыл панель поиска');
+    assert.equal(backdrops().length, 1, 'подтверждение не открылось — диалог цел');
+
+    pressEscape();
+    assert.equal(backdrops().length, 2, 'второй Escape зовёт подтверждение');
+    search.destroy();
   });
 });
 

@@ -1,7 +1,7 @@
 {
-  "name": "escape-over-dirty-dialog",
-  "description": "Escape при верхнем слое над «грязным» модальным диалогом (ошибка 9ff6b606). Сценарий открывает редактор типа мысли (диалог с несохранёнными изменениями) и выпадашку подсказок выбора родителя над ним. Первое нажатие Escape обязано закрыть ТОЛЬКО выпадашку: диалог-редактор остаётся один, подтверждение несохранённых изменений не появляется. Второе нажатие Escape — уже подтверждение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.escape-layers.scenario.json. Гейт «красное до фикса» держат юнит-тесты того же контракта: client/tests/dialog-escape-layers.test.ts (поповер и выпадашка над диалогом падали на до-фиксном коде).",
-  "timeout": 90000,
+  "name": "md-edit-escape-in-dialog",
+  "description": "Режим правки markdown-поля внутри «грязного» диалога (ошибка 9ff6b606, замечание приёмки): Esc принадлежит правке и отменяет её — диалог под полем уступает нажатие и подтверждение несохранённых изменений не открывает. Проверка: редактор типа мысли правится в поле шаблона, первое Esc закрывает правку (поле возвращается в просмотр), диалог остаётся один и по-прежнему «грязный»; второе Esc зовёт подтверждение уже у диалога. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.md-edit-escape.scenario.json.",
+  "timeout": 60000,
   "steps": [
     {
       "name": "onboarding-visible",
@@ -26,7 +26,6 @@
       "name": "thought-opened",
       "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
     },
-
     { "name": "open-type-combo", "click": ".editor-header-row .entity-combo-input" },
     { "name": "type-unique-name", "text": "Zz9EscapeProbe" },
     {
@@ -47,7 +46,6 @@
       "probe": "document.querySelector('.dialog-box .editor-top-row input')?.value ?? null",
       "expect": "Zz9EscapeProbe"
     },
-
     {
       "name": "make-dirty",
       "eval": "(() => { const i = document.querySelector('.dialog-box .editor-top-row input'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); })()"
@@ -62,25 +60,25 @@
       "probe": "document.querySelector('.dialog-box .editor-top-row input')?.value.endsWith('X') ?? false",
       "expect": true
     },
-
-    { "name": "open-parent-picker", "click": ".dialog-header-extra .entity-combo-input" },
     {
-      "name": "parent-dropdown-open",
-      "waitFor": "document.querySelector('.type-combo-list') !== null"
+      "name": "expand-template-group",
+      "eval": "(() => { const h=[...document.querySelectorAll('.dialog-box .group-header')].find(x=>x.textContent.trim().startsWith('Шаблон')); if (h) h.click(); return h !== undefined; })()"
     },
     {
-      "name": "dropdown-before-escape",
-      "probe": "document.querySelectorAll('.type-combo-list').length",
-      "expect": 1
+      "name": "enter-edit",
+      "click": ".dialog-box .type-editor-template-field .md-field-actions [data-action=edit]"
     },
-
+    {
+      "name": "editor-visible",
+      "waitFor": "document.querySelector('.dialog-box .type-editor-template-field .cm-content') !== null"
+    },
     { "name": "escape-first", "key": "Escape" },
     {
-      "name": "dropdown-closed",
-      "waitFor": "document.querySelector('.type-combo-list') === null"
+      "name": "edit-cancelled",
+      "waitFor": "!document.querySelector('.dialog-box .type-editor-template-field').classList.contains('md-field--editing')"
     },
     {
-      "name": "only-editor-dialog",
+      "name": "only-one-dialog",
       "probe": "document.querySelectorAll('.dialog-box').length",
       "expect": 1
     },
@@ -89,16 +87,10 @@
       "probe": "document.body.textContent.includes('Данные изменены. Сохранить изменения?')",
       "expect": false
     },
-
     { "name": "escape-second", "key": "Escape" },
     {
       "name": "confirmation-open",
       "waitFor": "document.querySelectorAll('.dialog-box').length === 2 && document.body.textContent.includes('Данные изменены. Сохранить изменения?')"
-    },
-    {
-      "name": "editor-still-open",
-      "probe": "document.querySelectorAll('.dialog-backdrop').length",
-      "expect": 2
     }
   ]
 }

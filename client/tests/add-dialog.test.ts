@@ -56,8 +56,8 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
       this.defaultPrevented = true;
     },
     stopPropagation(): void {},
-    // Общая выпадашка подсказок гасит Esc через `stopImmediatePropagation`;
-    // шим считает это no-op — диалог всё равно получает Esc и закрывается.
+    // Esc выпадашки разрешает реестр слоёв диспетчера (`lib/keymap.ts`):
+    // нажатие достаётся списку, диалог под ним уступает (ошибка 9ff6b606).
     stopImmediatePropagation(): void {},
   };
 }
@@ -969,6 +969,9 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       propertyCombo(formStack).querySelector('.entity-combo-pick') !== null,
       'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка a7abe50e)',
     );
+    // Список подсказок открыт: первый Esc закрывает его (слой диспетчера),
+    // второй — диалог (ошибка 9ff6b606).
+    pressEscape();
     pressEscape();
     await done;
   });
@@ -1000,6 +1003,8 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       'список свойства связи — та же ширина 560px',
     );
 
+    // Список открыт: первый Esc закрывает его, второй — диалог.
+    pressEscape();
     pressEscape();
     await done;
   });

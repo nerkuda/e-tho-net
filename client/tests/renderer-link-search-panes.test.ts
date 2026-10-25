@@ -373,7 +373,9 @@ describe('wireSuggest: отключение поля снимает только
     // Панель вкладки отключена от DOM.
     host.replaceChildren();
     assert.equal(input.isConnected, false, 'поле отключено от документа');
-    dispatchWindow('keydown', { key: 'a', repeat: false });
+    // Отключение замечает оставшийся оконный слушатель — `mousedown`; своего
+    // keydown-перехвата у выпадашки нет (Esc — через реестр слоёв диспетчера).
+    dispatchWindow('mousedown', {});
     assert.equal(winDownCount(), 0, 'оконный слушатель снят (защита от утечки)');
     assert.ok(
       (input.listeners['focus']?.length ?? 0) > 0,

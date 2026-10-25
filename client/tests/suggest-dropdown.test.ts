@@ -9,15 +9,16 @@
  * `always`, несколько источников сразу, гонки асинхронной загрузки и dispose.
  *
  * Модуль гоняется под Node с минимальным DOM-шимом (тот же подход, что у
- * recent-values.test.ts). Окно шима хранит настоящие capture-слушатели в
- * порядке регистрации — это важно: защита диалога от Esc держится именно на
- * том, что слушатель выпадашки зарегистрирован раньше диалогового, поэтому
- * «диалог» в тестах — фальшивый слушатель, добавленный после подключения.
+ * recent-values.test.ts). «Диалог» в тестах — не слушатель, а диспетчер: Esc
+ * выпадашки разрешается реестром всплывающих слоёв `lib/keymap.ts`
+ * (`pushKeyOverlay`), поэтому проверяется `dispatchKeyEvent`, а не порядок
+ * capture-слушателей (ошибка 9ff6b606).
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import {
   historySuggestSource,
   isInsideSuggestDropdown,
@@ -31,6 +32,9 @@ import {
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** Слои/контексты диспетчера между тестами чисты: выпадашка регистрирует слой. */
+beforeEach(() => keymap.keymapInternals.reset());
 
 // ---------------------------------------------------------------------------
 // DOM-шим
@@ -188,20 +192,11 @@ async function openBy(fn: () => void): Promise<void> {
   await flush();
 }
 
-/** Esc через window-capture с фальшивым диалогом, слушающим то же нажатие. */
-function dialogEsc(win: ShimWindow): { closed: () => number; press: (mods?: Record<string, boolean>) => any } {
-  let closed = 0;
-  win.addEventListener('keydown', () => {
-    closed += 1;
-  }, true);
-  return {
-    closed: () => closed,
-    press: (mods) => {
-      const evt = key('Escape', mods);
-      win.dispatchCapture('keydown', evt);
-      return evt;
-    },
-  };
+/** Esc по окну: capture-слушатель слоя спрашивает диспетчер о приоритете. */
+function pressEsc(w: { win: ShimWindow }): any {
+  const evt = key('Escape');
+  w.win.dispatchCapture('keydown', evt);
+  return evt;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,28 +283,27 @@ describe('suggest-dropdown: история последних значений (
     assert.equal(openList(w.body), undefined);
   });
 
-  it('Esc: закрывает список, гасит нажатие до диалога, ничего не выбирает', async () => {
+  it('Esc: закрывает список через реестр слоёв диспетчера, ничего не выбирает', async () => {
     const w = wire(source());
     await openBy(() => w.input.emit('focus'));
-    // «Диалог» вешает свой capture-слушатель ПОСЛЕ подключения выпадашки —
-    // как showDialog, который регистрирует Esc в конце своего показа.
-    const dialog = dialogEsc(w.win);
 
-    const esc = dialog.press();
-    assert.ok(esc.immediateStopped, 'Esc погашен — до слушателя диалога не дошёл');
-    assert.ok(esc.defaultPrevented);
-    assert.equal(dialog.closed(), 0, 'диалог не закрылся');
+    const esc = pressEsc(w);
+    assert.ok(esc.defaultPrevented, 'нажатие разрешено диспетчером — слой принял Esc');
+    assert.ok(esc.immediateStopped, 'событие погашено до редактора/диалога под списком');
     assert.equal(openList(w.body), undefined, 'список закрылся');
     assert.deepEqual(w.picked, [], 'выбора не было');
     assert.equal(w.input.value, '', 'поле не тронуто');
 
-    // Список закрыт — Esc снова принадлежит диалогу (событие не погашено).
-    dialog.press();
-    assert.equal(dialog.closed(), 1, 'закрытый список не держит Esc');
+    // Список закрыт — слой снят, Esc больше не принадлежит выпадашке.
+    const second = pressEsc(w);
+    assert.equal(second.defaultPrevented, false, 'закрытый список не держит Esc');
+    assert.equal(second.immediateStopped, false);
 
-    // Зажатый Esc не должен закрыть список и тут же диалог: повторы гасятся.
-    dialog.press({ repeat: true });
-    assert.equal(dialog.closed(), 1, 'повтор Esc погашен и без открытого списка');
+    // Зажатый Esc не должен закрыть список и тут же диалог: автоповтор не раздаётся.
+    const repeat = key('Escape', { repeat: true });
+    w.win.dispatchCapture('keydown', repeat);
+    assert.equal(repeat.defaultPrevented, false);
+    assert.equal(keymap.keymapInternals.overlayIds().length, 0);
   });
 
   it('Tab при открытом списке закрывает его и не гасится — фокус идёт дальше (797d0485)', async () => {
@@ -483,10 +477,8 @@ describe('suggest-dropdown: результаты живого поиска (when
     w.input.value = 'м';
     await openBy(() => w.input.emit('focus'));
 
-    const dialog = dialogEsc(w.win);
-    const esc = dialog.press();
-    assert.ok(esc.immediateStopped);
-    assert.equal(dialog.closed(), 0, 'диалог не закрылся');
+    const esc = pressEsc(w);
+    assert.ok(esc.defaultPrevented, 'Esc разрешён диспетчером — список закрыт');
     assert.equal(openList(w.body), undefined);
     assert.deepEqual(w.picked, []);
 
@@ -560,10 +552,8 @@ describe('suggest-dropdown: закрытый список config.options', () =>
     await openBy(() => w.handle.open()); // на пустом поле — полный список
     assert.deepEqual(rowLabels(w.body), ['Питер', 'Москва', 'Тверь'], 'ручное открытие — весь каталог');
 
-    const dialog = dialogEsc(w.win);
-    const esc = dialog.press();
-    assert.ok(esc.immediateStopped);
-    assert.equal(dialog.closed(), 0, 'диалог не закрылся');
+    const esc = pressEsc(w);
+    assert.ok(esc.defaultPrevented, 'Esc разрешён диспетчером — список закрыт');
     assert.equal(openList(w.body), undefined);
 
     await openBy(() => w.handle.open());
@@ -691,13 +681,14 @@ describe('suggest-dropdown: общие контракты', () => {
     const w = wire(historySuggestSource({ load: () => [{ value: 'a', label: 'А' }] }));
     await openBy(() => w.input.emit('focus'));
     assert.equal(rowLabels(w.body).length, 1);
-    assert.equal(w.win.captureCount('keydown'), 1);
+    assert.equal(w.win.captureCount('keydown'), 1, 'capture-Escape слоя поставлен');
     assert.equal(w.win.captureCount('mousedown'), 1);
 
     w.handle.dispose();
     assert.equal(openList(w.body), undefined, 'список закрыт');
     assert.equal(w.win.captureCount('keydown'), 0, 'capture-слушатель снят');
     assert.equal(w.win.captureCount('mousedown'), 0, 'capture-слушатель снят');
+    assert.deepEqual(keymap.keymapInternals.overlayIds(), [], 'слой Escape снят');
 
     await openBy(() => w.input.emit('focus'));
     assert.equal(openList(w.body), undefined, 'после dispose выпадашка молчит');
