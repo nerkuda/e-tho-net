@@ -50,10 +50,14 @@ import {
   constructorFilterIssues,
   filterIssuesFromError,
   hasBlockingIssues,
+  lostConditionIssues,
   mergeFilterIssues,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
-import { type FilterCriteriaState } from '../../lib/filter-builder.js';
+import {
+  readFilterDefinitionDetailed,
+  type FilterCriteriaState,
+} from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
 import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
@@ -157,6 +161,16 @@ function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
   return buildAndShowImpl(opts);
 }
 
+/** Разобранный объект сохранённого определения (`undefined` — нет/битый JSON). */
+function parseSavedDefinition(view: ViewEditorView | null): unknown {
+  if (view === null) return undefined;
+  try {
+    return JSON.parse(view.definition) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const { networkId } = opts;
   const owner = resolveOwner(opts);
@@ -165,13 +179,57 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // редактора (дерево/сортировка) — реестр передаётся как есть. Токены
   // `$thought.[…]` предлагаются по ВСЕМУ реестру сети (ошибка 50d9bf4e п. A6),
   // поэтому цепочка типов для подсказок больше не грузится.
+  //
+  // Отказ чтения реестра — «неотработанный вход» (ошибка db42100b, механика
+  // 77f18626): прежняя плоская `definition v1` без реестра теряет условия по
+  // свойствам, поэтому отказ отличается от успешного чтения, а диалог
+  // повторяет чтение на тике store и переразбирает определение до правки
+  // пользователя. Молчаливая перезапись потерянного определения запрещена.
   const registry = new Map<string, NetworkProperty>();
+  let registryOk = false;
   try {
     const list = await etn.propertyRegistry.list(networkId);
     for (const row of list) registry.set(row.id, row);
+    registryOk = true;
   } catch {
-    /* empty registry — the operand list just shows characteristics only */
+    /* реестр пуст до повтора; ниже — ожидание чтения (db42100b) */
   }
+  /** Определение сохранённого отбора (объект JSON) — вход диагностики потерь. */
+  const savedDefinition = parseSavedDefinition(opts.view);
+  /**
+   * Потери, которые даёт разбор С пустым реестром: если реестр не прочитан, это
+   * условия по свойствам, которые ещё могут вернуться повтором (не «свойства
+   * больше нет в сети» — та формулировка была бы ложной, ошибка 3bf62fd7).
+   */
+  const lossesWithoutRegistry =
+    !registryOk && savedDefinition !== undefined
+      ? readFilterDefinitionDetailed(savedDefinition, {
+          activeMode: 'view',
+          registry: new Map(),
+        }).lost
+      : [];
+  /** Отказ реестра мог стоить условий по свойствам — сохранение блокируется. */
+  let registryLossRisk = lossesWithoutRegistry.length > 0;
+  /** Жёлтая диагностика отбора: потеря из-за отказа реестра либо настоящая. */
+  let lossIssues: readonly FilterIssue[] =
+    lossesWithoutRegistry.length > 0
+      ? [
+          {
+            severity: 'warning',
+            source: 'constructor',
+            code: 'build_warning',
+            path: '',
+            message: t('filterEditor.registryPending'),
+          },
+        ]
+      : registryOk && savedDefinition !== undefined
+        ? lostConditionIssues(
+            readFilterDefinitionDetailed(savedDefinition, {
+              activeMode: 'view',
+              registry,
+            }).lost,
+          )
+        : [];
 
   // 2. Initialise the form state from the existing view (or defaults). Старая
   //    плоская `definition v1` компилируется в дерево здесь же (на входе).
@@ -289,7 +347,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       savedName: () => (isEdit ? initialName : null),
       baseline: () => criteriaBase,
       current: () => buildViewAst(state),
-      issues: () => serverIssues,
+      // Диагностика потерь при чтении определения — рядом с записями ядра:
+      // потеря из-за отказа реестра видна строкой, а не молчит (db42100b).
+      issues: () => mergeFilterIssues(lossIssues, serverIssues),
     },
   });
   editorRef = editor;
@@ -305,6 +365,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   //    failure; we close only when the IPC call resolves.
   let saveBtn: HTMLButtonElement | null = null;
   let closeDialog: (() => void) | null = null;
+  /** Диалог показан: повтору чтения реестра есть куда применить результат. */
+  let dialogOpen = false;
+  /** Отписка от тиков store — повтор чтения реестра свойств (ошибка db42100b). */
+  let unsubscribeRegistry: (() => void) | null = null;
+  /** Сторож гонки: тики store чаще, чем чтение реестра. */
+  let registryRetryInFlight = false;
   /** Контекст сохранения — общий для кнопки «Применить» и подтверждения
    *  «Сохранить» при закрытии «грязного» редактора (требование b58f6aad). */
   const saveCtx = (close: () => void): SaveCtx => ({
@@ -328,6 +394,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       editor.refresh();
     },
     refreshEditor: () => editor.refresh(),
+    lossRisk: () => registryLossRisk,
   });
   showDialog({
     title,
@@ -341,7 +408,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     onMount: (_close, box) => box.classList.add('view-editor-dialog'),
     // Диалог закрыт любой кнопкой/Esc/крестиком — редактор размонтируем:
     // его дерево снимает клавиатурные контексты из реестра `lib/keymap`.
-    onClose: () => editor.destroy(),
+    onClose: () => {
+      dialogOpen = false;
+      unsubscribeRegistry?.();
+      unsubscribeRegistry = null;
+      editor.destroy();
+    },
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,
@@ -372,6 +444,53 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       },
     ],
   });
+  dialogOpen = true;
+
+  // Отказ чтения реестра — «неотработанный вход»: следующий тик store (в т.ч.
+  // восстановление связи) повторяет чтение, а определение ПЕРЕРАЗБИРАЕТСЯ —
+  // условия по свойствам возвращаются в дерево до сохранения (db42100b,
+  // механика 77f18626). Правку пользователя переразбор не перетирает.
+  if (!registryOk) {
+    const retryRegistry = (): void => {
+      if (registryOk || registryRetryInFlight || !dialogOpen) return;
+      registryRetryInFlight = true;
+      void etn.propertyRegistry
+        .list(networkId)
+        .then((list) => {
+          if (!dialogOpen) return;
+          registryOk = true;
+          registry.clear();
+          for (const row of list) registry.set(row.id, row);
+          const nextLosses =
+            savedDefinition === undefined
+              ? []
+              : readFilterDefinitionDetailed(savedDefinition, {
+                  activeMode: 'view',
+                  registry,
+                }).lost;
+          // Отказ реестра больше не причина потери: остаются только настоящие
+          // потери (свойства действительно нет) — их показывает общий каркас.
+          lossIssues = lostConditionIssues(nextLosses);
+          if (!formDirty(criteriaBase, buildViewAst(state))) {
+            Object.assign(state, parseViewDefinition(opts.view, registry));
+            registryLossRisk = false;
+          } else {
+            // Пользователь правил отбор без реестра: переразбор перетёр бы его
+            // правку. Если реестр вернул условия, которых в состоянии нет, —
+            // сохранять нельзя: перезапись потеряет их молча.
+            registryLossRisk = nextLosses.length < lossesWithoutRegistry.length;
+          }
+          editor.refresh();
+        })
+        .catch(() => {
+          // Отказ — ожидание остаётся до следующего тика store.
+        })
+        .finally(() => {
+          registryRetryInFlight = false;
+        });
+    };
+    unsubscribeRegistry = store.subscribe(retryRegistry);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +517,8 @@ interface SaveCtx {
   setServerIssues: (issues: readonly FilterIssue[]) => void;
   /** Перерисовать редактор из модели (подсветка строк, футер). */
   refreshEditor: () => void;
+  /** Реестр не прочитан и мог стоить условий по свойствам — сохранять нельзя. */
+  lossRisk: () => boolean;
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
@@ -431,6 +552,14 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     );
     return;
   }
+  // Реестр свойств не прочитан, а определение могло нести условия по свойствам:
+  // запись перезаписала бы их молча — ждём повтора чтения/переоткрытия
+  // (ошибка db42100b). Стоит ДО запрета пустого отбора: без реестра дерево
+  // выглядит пустым именно из-за потери, и сообщение обязано называть причину.
+  if (ctx.lossRisk()) {
+    showFieldError(ctx, t('filterEditor.registryPendingSave'));
+    return;
+  }
   // Запрет пустого отбора (ошибка e8365d29): без условий отбор бессмыслен.
   if (!hasAnyCriteria(ctx.state)) {
     showFieldError(ctx, t('filterEditor.noCriteria'));
@@ -444,7 +573,6 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     ctx.refreshEditor();
     return;
   }
-
   let definitionJson: string;
   try {
     definitionJson = JSON.stringify(buildViewAstDefinition(ctx.state));
