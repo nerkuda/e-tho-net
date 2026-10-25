@@ -298,6 +298,16 @@ test('совместимость: renderPublicationFragment без опций п
   assert.equal(renderPublicationFragment(source).html, renderMarkdown(source));
 });
 
+test('совместимость: заголовок с sourceMap после рендера публикации не падает (49ebba76)', () => {
+  // Публикационный плагин ставит свой `heading_open`-рендерер на ОБЩИЙ
+  // экземпляр рендерера; карта позиций кладёт в `meta` заголовка только
+  // `mdRange`, без `pubHeading`. Разбор `meta.pubHeading.decapitated` без
+  // проверки самого `pubHeading` ронял рендер заголовка с `sourceMap`.
+  renderPublicationFragment('# Раз\n\nтекст');
+  const html = renderMarkdown('# Заголовок &amp; хвост', { sourceMap: true });
+  assert.match(html, /<h1[^>]*data-md-shift/);
+});
+
 // ---------------------------------------------------------------------------
 // Чистота и лимиты
 // ---------------------------------------------------------------------------
