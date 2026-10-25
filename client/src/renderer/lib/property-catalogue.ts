@@ -95,16 +95,33 @@ function isRegistryEvent(type: string): boolean {
 /**
  * Нужно ли перечитывать каталог типов связей после события реестра.
  *
- * Пара имён обратной стороны живёт в типе связи, поэтому создания свойства-
- * СВЯЗИ, любые правки (в т.ч. переименование стороны) и удаления (удаление
- * свойства-связи уносит связанный тип) требуют свежего каталога. Создание
- * скалярного свойства тип связи не трогает — лишний перезапрос и пересборку
+ * Пара имён обратной стороны живёт в типе связи, поэтому ЛЮБОЕ событие
+ * свойства-СВЯЗИ требует свежего каталога: создание (появился тип связи),
+ * правка (могла смениться пара имён стороны или допустимые типы), удаление
+ * (удаление свойства-связи уносит связанный тип). Скалярное свойство тип связи
+ * не трогает — лишний перезапрос `thought-types`/`link-types` и пересборку
  * открытых панелей не делаем.
+ *
+ * Вид значения берём из тела события (создание несёт `property`), из правки
+ * (`changes.value_type`), иначе — из уже прочитанной строки справочника: на
+ * момент события она ещё прежняя, а `value_type` свойства неизменяем. Строки
+ * нет (справочник не читали) — вид неизвестен, перечитываем каталог.
  */
-function registryEventNeedsTypes(type: string, data: Record<string, unknown>): boolean {
-  if (type !== 'property-registry.created') return true;
-  const property = data['property'] as { value_type?: unknown } | undefined;
-  return property?.value_type === 'link';
+function registryEventNeedsTypes(
+  networkId: string,
+  type: string,
+  data: Record<string, unknown>,
+): boolean {
+  if (type === 'property-registry.created') {
+    const property = data['property'] as { value_type?: unknown } | undefined;
+    return property?.value_type === 'link';
+  }
+  const changes = data['changes'] as { value_type?: unknown } | undefined;
+  if (typeof changes?.value_type === 'string') return changes.value_type === 'link';
+  const id = data['id'];
+  if (typeof id !== 'string') return true;
+  const row = entries.get(networkId)?.rows.get(id);
+  return row === undefined ? true : row.value_type === 'link';
 }
 
 /** Создать/получить состояние справочника сети (пустое, пока не прочитано). */
@@ -170,7 +187,7 @@ function ensureWired(): void {
       // пару имён стороны. Каталог типов перечитывается дедуплицированно
       // (`lib/type-catalogues.ts`), затем тик store пересоберёт обратные стороны.
       // Скалярное создание тип связи не трогает, а чужая вкладка — не наш каталог.
-      if (networkId === store.state.networkId && registryEventNeedsTypes(evt.type, evt.data)) {
+      if (networkId === store.state.networkId && registryEventNeedsTypes(networkId, evt.type, evt.data)) {
         void reloadTypeCatalogues();
       }
     }),
@@ -265,19 +282,37 @@ export function reloadPropertyCatalogue(
 /**
  * Принять уже прочитанные строки реестра (место читало их своим запросом, как
  * карточка публикации): справочник обновляется без второго сетевого вызова.
- * В полёте могло быть чтение — его ответ устарел и будет отброшен.
+ *
+ * `sinceRevision` — {@link propertyCatalogueRevision} на момент СТАРТА чтения
+ * места. Если справочник с тех пор обновился (realtime-событие, повтор), строки
+ * устарели и ОТБРАСЫВАЮТСЯ: поздний ответ карточки не затирает более свежие
+ * данные. Без ревизии возраст строк неизвестен — принимаем их только в ещё ни
+ * разу не обновлявшийся справочник (терять нечего), иначе отказ.
+ *
+ * Принятие подменяет токен: ответ чтения, летевшего в полёте, устарел и будет
+ * отброшен. Признак «в полёте» снимается сразу — иначе последующие вызовы без
+ * `fresh` присоединялись бы к отброшенному промису и в сеть не ходили: открытая
+ * панель перестала бы реагировать на события реестра (блокер верификатора).
+ *
+ * Возвращает `true`, если строки приняты.
  */
 export function putPropertyCatalogueRows(
   networkId: string,
   rows: readonly NetworkProperty[],
-): void {
+  sinceRevision?: number,
+): boolean {
   ensureWired();
   const entry = ensureEntry(networkId);
+  const accepted =
+    sinceRevision === undefined ? entry.revision === 0 : sinceRevision === entry.revision;
+  if (!accepted) return false;
   entry.token += 1;
+  entry.loading = null;
   entry.rows.clear();
   for (const row of rows) entry.rows.set(row.id, row);
   entry.loaded = true;
   rebuildSides(networkId, entry);
+  return true;
 }
 
 /**

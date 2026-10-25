@@ -90,6 +90,7 @@ import {
   type RecipeBuilder,
 } from '../screens/publications/recipe.js';
 import {
+  propertyCatalogueRevision,
   propertyCatalogueWithSides,
   putPropertyCatalogueRows,
 } from '../lib/property-catalogue.js';
@@ -806,6 +807,10 @@ function buildRecipePane(): HTMLElement {
   const loadRegistry = (): void => {
     if (networkId === null || disposed || registryLoadInFlight) return;
     registryLoadInFlight = true;
+    // Ревизия справочника на момент СТАРТА своего чтения: если за время запроса
+    // справочник успеет обновиться (realtime-событие реестра), пришедшие строки
+    // устарели и не должны затирать более свежие данные (ошибка 6d25c224).
+    const sinceRevision = propertyCatalogueRevision(networkId);
     void loadPropertyRows(networkId).then((rows) => {
       registryLoadInFlight = false;
       if (disposed) return;
@@ -820,8 +825,9 @@ function buildRecipePane(): HTMLElement {
       // Справочник свойств — ОБЩИЙ живой срез (ошибка 6d25c224): рецепт держит
       // его карту, поэтому создание/переименование/удаление свойства видно в уже
       // открытом рецепте без пересборки карточки. Своё чтение (строки для
-      // чип-полей) передаём справочнику, второго сетевого вызова нет.
-      putPropertyCatalogueRows(networkId, rows);
+      // чип-полей) передаём справочнику, второго сетевого вызова нет; устаревший
+      // ответ (`false`) отброшен — карта уже свежее.
+      putPropertyCatalogueRows(networkId, rows, sinceRevision);
       applyRegistry(rows, propertyCatalogueWithSides(networkId));
     });
   };
