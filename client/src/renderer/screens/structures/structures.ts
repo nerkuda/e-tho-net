@@ -254,6 +254,10 @@ export async function ensureStructuresInitialised(): Promise<void> {
   appliedQuery = null;
   resultPager.reset();
   resetStructuresCursor();
+  // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
+  // снимается вместе с остальным состоянием (ошибка cdeb62f1).
+  pendingFilterSnapshot = null;
+  pendingFilterSnapshotSignature = null;
 
   // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
   // the active tab has no entry (migration / fresh tab).
@@ -269,8 +273,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
     if (raw !== null && raw !== '') {
       // Реестр свойств сети нужен конвертеру определения: прежний плоский
       // снимок несёт условия по свойствам, и без реестра они бы выпали.
-      await preloadFilterRegistry();
-      setFilterState(parseFilterState(raw));
+      await loadFilterSnapshot(raw);
     }
     // Миграционное значение прежней ширины панели (`structures_state`) —
     // каркас читает его геттером, поэтому переприменяем состояние после
@@ -280,6 +283,87 @@ export async function ensureStructuresInitialised(): Promise<void> {
     // Fall back to the empty filter (HOME).
   }
   await applyQuery(true);
+}
+
+// ---------------------------------------------------------------------------
+// Разбор снимка отбора с реестром свойств (ошибка cdeb62f1)
+// ---------------------------------------------------------------------------
+//
+// Вторая (после `preloadFilterRegistry`) точка класса «чтение реестра без учёта
+// отказа»: конвертер определения выбрасывает условия по свойствам, которых нет
+// в реестре (`buildConditionsWire`), а перечитывание реестра само по себе уже
+// разобранное дерево не пересобирает. Поэтому отказ чтения при разборе снимка
+// оставляет снимок в ожидании, а штатный тик store (в т.ч. переход в
+// `connected` после обрыва связи) повторяет чтение и ПЕРЕРАЗБИРАЕТ снимок.
+
+/** Снимок отбора, не разобранный из-за отказа чтения реестра свойств. */
+let pendingFilterSnapshot: string | null = null;
+/**
+ * Подпись состояния панели, разобранного БЕЗ реестра: если пользователь успел
+ * поправить отбор, переразбор снимка перетёр бы его правку — ожидание снимается.
+ */
+let pendingFilterSnapshotSignature: string | null = null;
+/** Сторож гонки: повтор уже идёт (тики store чаще, чем чтение реестра). */
+let filterSnapshotRetryInFlight = false;
+
+/** Подпись состояния панели для решения «снимок ещё не перетёрт пользователем». */
+function filterStateSignature(): string {
+  return signatureOfFilterState(getFilterState());
+}
+
+/** Подпись критериев панели (дерево + ключи сортировки) — без учёта прочего. */
+function signatureOfFilterState(state: Pick<FilterState, 'tree' | 'sortKeys'>): string {
+  return `${JSON.stringify(state.tree ?? null)}|${JSON.stringify(state.sortKeys ?? [])}`;
+}
+
+/**
+ * Разобрать снимок отбора с реестром свойств. Отказ чтения реестра — состояние
+ * собирается из того, что есть (видимый набор не теряется целиком), а снимок
+ * остаётся в ожидании переразбора на следующем тике store.
+ */
+async function loadFilterSnapshot(raw: string): Promise<void> {
+  pendingFilterSnapshot = null;
+  pendingFilterSnapshotSignature = null;
+  const ok = await preloadFilterRegistry();
+  setFilterState(parseFilterState(raw));
+  if (ok) return;
+  pendingFilterSnapshot = raw;
+  pendingFilterSnapshotSignature = filterStateSignature();
+}
+
+/**
+ * Повтор разбора отложенного снимка отбора: снова читает реестр свойств и при
+ * успехе ПЕРЕРАЗБИРАЕТ снимок — дерево условий получает свойства, применение
+ * отбора перезапрашивает снимок страницы. Отказ оставляет ожидание до
+ * следующего тика store (подпись каталога панели при отказе тоже сброшена).
+ */
+async function retryPendingFilterSnapshot(): Promise<void> {
+  const raw = pendingFilterSnapshot;
+  if (raw === null || filterSnapshotRetryInFlight) return;
+  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
+  if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+    pendingFilterSnapshot = null;
+    pendingFilterSnapshotSignature = null;
+    return;
+  }
+  filterSnapshotRetryInFlight = true;
+  try {
+    const ok = await preloadFilterRegistry();
+    // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
+    // чтения (сеть/вкладка) — переразбирать нечего.
+    if (!ok || pendingFilterSnapshot !== raw) return;
+    pendingFilterSnapshot = null;
+    pendingFilterSnapshotSignature = null;
+    const before = filterStateSignature();
+    const next = parseFilterState(raw);
+    // Переразбор без изменений (снимок новой модели реестра не требует) —
+    // лишний сетевой перезапрос страницы не гоним.
+    if (signatureOfFilterState(next) === before) return;
+    setFilterState(next);
+    await applyQuery(true);
+  } finally {
+    filterSnapshotRetryInFlight = false;
+  }
 }
 
 /** Persists the current filter state to the L4 `structures_state` key. */
@@ -699,6 +783,12 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     ) {
       void ensureStructuresInitialised();
       return;
+    }
+    // Снимок отбора разобран без реестра свойств и ждёт переразбора: тик store —
+    // штатный повтор чтения реестра (ошибка cdeb62f1), в том числе переход в
+    // `connected` после обрыва связи.
+    if (pendingFilterSnapshot !== null && store.state.activeView === 'structures') {
+      void retryPendingFilterSnapshot();
     }
     if (store.state.activeView === 'structures' && fullRefreshPending) {
       // Вид снова показан, а на скрытом виде накопился отложенный полный путь:

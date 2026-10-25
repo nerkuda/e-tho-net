@@ -419,9 +419,21 @@ function applyLegacyTraversalMode(node: FilterTreeNode): void {
   for (const child of node.children) applyLegacyTraversalMode(child);
 }
 
-/** Загрузить реестр свойств сети ДО разбора снимка/сохранённого отбора. */
-export async function preloadFilterRegistry(): Promise<void> {
-  await loadPropertyDefs();
+/**
+ * Загрузить реестр свойств сети ДО разбора снимка/сохранённого отбора.
+ *
+ * `false` — чтение не удалось: вход НЕ отработан. Подпись каталога сбрасывается
+ * тем же правилом, что и у чтения по подписке (76282fbc), поэтому следующий тик
+ * store повторит чтение. Результат возвращается вызывающему: разбор снимка без
+ * реестра теряет условия по свойствам, и он обязан отложить переразбор
+ * (ошибка cdeb62f1 — прежде отказ здесь глотался).
+ */
+export async function preloadFilterRegistry(): Promise<boolean> {
+  const signature = catalogueSignatureNow();
+  const ok = await loadPropertyDefs();
+  // Чужую, более новую подпись не трогаем — тот же сторож, что у подписки.
+  if (!ok && catalogueSignature === signature) catalogueSignature = '';
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
