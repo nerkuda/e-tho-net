@@ -174,6 +174,14 @@ describe('облачка привязок несохранённой запис�
     assert.match(fn, /chips: chips\.box/, 'контейнер вставлен в строку полей');
     assert.match(fn, /row\.targets = next\.targets;/, 'свежие привязки попадают в строку карточки');
     assert.match(fn, /chips\.sync\(row\)/, 'облачка перерисовываются на месте');
+    // Порядок обязателен: `chips.sync` читает `row.targets`, поэтому строка
+    // модели обновляется ДО перерисовки (иначе облачка показывают старый набор).
+    const targetsAt = fn.indexOf('row.targets = next.targets;');
+    const syncAt = fn.indexOf('chips.sync(row)');
+    assert.ok(
+      targetsAt >= 0 && syncAt > targetsAt,
+      'привязки обновлены до перерисовки облачков',
+    );
     assert.match(fn, /head\.setDayLabel\(recordDateLabel\(row\)\)/, 'дата/период синхронизируются');
   });
 
