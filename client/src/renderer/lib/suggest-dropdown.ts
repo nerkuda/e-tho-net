@@ -737,9 +737,10 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       // обработает диалог, зарегистрированный позже, — двойное действие
       // (ошибка 9ff6b606). `handleEscape` делает это, когда выпадашка ещё
       // верхний слой; если над ней уже диалог, снимаем мёртвый слой и гасим
-      // событие явно.
-      if (event.key === 'Escape' && !event.repeat) {
-        if (escapeOverlay?.handleEscape(event) !== true) {
+      // событие явно. Открытого списка нет (`escapeOverlay === null`) — нажатие
+      // не наше: не поглощаем, оно достанется диалогу или меню.
+      if (event.key === 'Escape' && !event.repeat && escapeOverlay !== null) {
+        if (escapeOverlay.handleEscape(event) !== true) {
           event.preventDefault();
           event.stopImmediatePropagation();
         }

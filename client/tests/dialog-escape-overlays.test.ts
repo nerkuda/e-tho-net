@@ -457,6 +457,35 @@ describe('Escape: верхний слой над диалогом (ошибка 
     }
   });
 
+  it('поле выпало из DOM БЕЗ открытого списка: Escape не поглощается — диалог и меню получают нажатие', () => {
+    const host = div('form-stack');
+    const input = (globalThis as any).document.createElement('input') as ShimElement;
+    input.value = '';
+    host.append(input as unknown as Node);
+    bodyEl().append(host as unknown as ShimElement);
+    const handle = wireSuggest(input as unknown as HTMLInputElement, {
+      sources: [{ when: 'typed', load: () => [{ value: 'x', label: 'X' }] }],
+      onPick: () => undefined,
+    });
+    try {
+      // Поле выпало из документа, список при этом НЕ открывался — слоя нет.
+      host.replaceChildren();
+      input.isConnected = false;
+      assert.equal(input.isConnected, false, 'поле отключено от документа');
+
+      openEditor(true);
+      pressEscape();
+      assert.equal(backdrops().length, 2, 'Escape дошёл до диалога — подтверждение открылось');
+      for (let i = 0; i < 20; i += 1) closeDialog();
+
+      showMenuAt(10, 10, [{ label: 'Перейти к мысли' }]);
+      pressEscape();
+      assert.equal(isMenuOpen(), false, 'Escape дошёл до меню и закрыл его');
+    } finally {
+      handle.dispose();
+    }
+  });
+
   it('панель поиска в «грязном» диалоге: первый Escape закрывает панель, второй — подтверждение (блокер приёмки)', () => {
     openEditor(true);
     const root = div('md-field');
