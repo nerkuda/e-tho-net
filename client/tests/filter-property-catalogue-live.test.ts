@@ -24,7 +24,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import type { NetworkProperty } from '@etn/shared';
 
@@ -115,6 +115,7 @@ const panelMod = await import('../src/renderer/screens/structures/filter-panel.j
 const builderMod = await import('../src/renderer/lib/filter-builder.js');
 const routerMod = await import('../src/renderer/lib/live/event-router.js');
 const liveMod = await import('../src/renderer/lib/live/index.js');
+const catalogueMod = await import('../src/renderer/lib/property-catalogue.js');
 
 /** Дождаться асинхронных чтений реестра и их продолжений. */
 async function flush(): Promise<void> {
@@ -265,5 +266,105 @@ describe('панель «Структур»: живой справочник с�
     assert.equal(JSON.stringify(panelMod.getFilterState().tree), treeBefore);
     const rowsAfter = host.querySelectorAll('.ft-row').length;
     assert.equal(rowsAfter, 1, `строка условия осталась на месте (панель не упала), строк: ${rowsAfter}`);
+  });
+});
+
+/**
+ * Инварианты приёма готовых строк (`putPropertyCatalogueRows`), блокер
+ * верификатора: карточка публикации читает реестр своим запросом и отдаёт
+ * строки справочнику. Поздний ответ не должен затирать более свежие данные, а
+ * принятие при чтении в полёте — навсегда занимать признак «в полёте» (иначе
+ * не-fresh перечитывания по realtime-событиям не ходят в сеть, и исходный
+ * дефект возвращается). Проба верификатора: probe-loading.test.mts.
+ */
+describe('общий справочник: приём готовых строк (put) и порядок ответов (6d25c224)', () => {
+  /** Управляемое чтение: каждый вызов ставит в очередь резолвер. */
+  let pendingReads: Array<(value: NetworkProperty[]) => void>;
+  /** Сколько раз справочник сходил в сеть. */
+  let listCalls: number;
+  /** Прежняя заглушка чтения — возвращается после каждого кейса. */
+  const originalList = (globalThis as any).window.etn.propertyRegistry.list as () => Promise<
+    NetworkProperty[]
+  >;
+
+  beforeEach(() => {
+    liveMod.resetQueryRegistry();
+    routerMod.resetEventRouter();
+    catalogueMod.resetPropertyCatalogue();
+    stateMod.store.update({ networkId: NET, network: null, thoughtTypes: [], linkTypes: [] });
+    listCalls = 0;
+    pendingReads = [];
+    (globalThis as any).window.etn.propertyRegistry.list = () => {
+      listCalls += 1;
+      return new Promise<NetworkProperty[]>((resolve) => {
+        pendingReads.push(resolve);
+      });
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as any).window.etn.propertyRegistry.list = originalList;
+  });
+
+  it('поздний ответ карточки не затирает справочник, обновлённый после старта её чтения', async () => {
+    // Карточка начала своё чтение при пустом справочнике.
+    const cardSince = catalogueMod.propertyCatalogueRevision(NET);
+
+    // Тем временем realtime-событие обновило справочник: новое имя свойства.
+    const fresh = catalogueMod.reloadPropertyCatalogue(NET, { fresh: true });
+    assert.equal(pendingReads.length, 1, 'чтение события стартовало');
+    pendingReads.shift()!([propertyRow(PROP_A, 'Новое имя')]);
+    assert.equal(await fresh, true);
+    assert.equal(catalogueMod.propertyCatalogueRows(NET).get(PROP_A)?.name, 'Новое имя');
+
+    // Пришёл ответ карточки, прочитанный РАНЬШЕ правки, — он устарел.
+    const accepted = catalogueMod.putPropertyCatalogueRows(
+      NET,
+      [propertyRow(PROP_A, 'Старое имя')],
+      cardSince,
+    );
+    assert.equal(accepted, false, 'устаревшие строки не принимаются');
+    assert.equal(
+      catalogueMod.propertyCatalogueRows(NET).get(PROP_A)?.name,
+      'Новое имя',
+      'свежие данные справочника не затёрты',
+    );
+
+    // Без ревизии возраст строк неизвестен: в обновлённый справочник не пускаем.
+    assert.equal(
+      catalogueMod.putPropertyCatalogueRows(NET, [propertyRow(PROP_A, 'Старое имя')]),
+      false,
+      'строки неизвестного возраста не затирают обновлённый справочник',
+    );
+  });
+
+  it('put при чтении в полёте снимает признак «в полёте» и не блокирует перечитывание', async () => {
+    // Чтение A стартовало и «зависло в сети».
+    const a = catalogueMod.reloadPropertyCatalogue(NET, { fresh: true });
+    assert.equal(listCalls, 1, 'чтение A стартовало');
+
+    // Карточка приняла свои строки, пока A летит (справочник ещё не обновлялся).
+    const accepted = catalogueMod.putPropertyCatalogueRows(
+      NET,
+      [propertyRow(PROP_A, 'Свойство 1')],
+      catalogueMod.propertyCatalogueRevision(NET),
+    );
+    assert.equal(accepted, true, 'первые строки принимаются — терять нечего');
+
+    // Ответ A устарел и отбрасывается, но чтение не считается отказом.
+    pendingReads.shift()!([propertyRow('p0', 'Старое')]);
+    assert.equal(await a, true, 'устаревший ответ не отказ');
+    assert.deepEqual([...catalogueMod.propertyCatalogueRows(NET).keys()], [PROP_A], 'строки карточки на месте');
+
+    // Событие реестра: обычный путь — БЕЗ fresh. Чтение обязано сходить в сеть.
+    const b = catalogueMod.reloadPropertyCatalogue(NET);
+    assert.equal(listCalls, 2, 'перечитывание по событию сходило в сеть, а не к отброшенному промису');
+    pendingReads.shift()!([propertyRow(PROP_A, 'Свойство 1'), propertyRow(PROP_B, 'Свойство 2')]);
+    assert.equal(await b, true);
+    assert.deepEqual(
+      [...catalogueMod.propertyCatalogueRows(NET).keys()],
+      [PROP_A, PROP_B],
+      'новое свойство появилось в справочнике',
+    );
   });
 });

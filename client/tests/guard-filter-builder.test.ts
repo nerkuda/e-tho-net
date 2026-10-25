@@ -120,6 +120,21 @@ const isEditorPlace = (rel: string): boolean =>
 /** Тонкие обёртки-делегаты диалога отбора типа мысли (логики в них нет). */
 const DELEGATING_WRAPPERS = new Set(['screens/thought-type/filter-dialog-pure.ts']);
 
+/**
+ * Места монтажа редактора, профиль которых НЕ отбирает по свойствам: живой
+ * справочник свойств им не нужен, допустима пустая карта.
+ */
+const EMPTY_REGISTRY_PLACES: ReadonlyMap<string, string> = new Map([
+  ['screens/activity/activity.ts', 'профиль «события» не отбирает по свойствам'],
+  ['search/search.ts', 'строка поиска не отбирает по свойствам'],
+]);
+
+/**
+ * Место получает справочник параметром (`opts.registry`) — живой источник
+ * проверяется у его владельца, карточки публикации.
+ */
+const REGISTRY_FROM_OPTIONS = 'screens/publications/recipe.ts';
+
 /** Признак собственной модели критериев отбора. */
 const OWN_MODEL_NAMES =
   /^(?:export\s+)?interface\s+(?:ChronicleFilterState|ActivityFilterState|SearchOptions|DialogCriteriaState|FilterCriteriaState|FilterState)\s*(?:extends\b|\{)/;
@@ -442,6 +457,56 @@ describe('guard: условия отбора строятся только об�
       `авто-обнаружение мест разошлось с известным набором: ` +
         `найдено [${discovered.join(', ')}], ожидалось [${expected.join(', ')}]`,
     );
+  });
+
+  it('места монтажа редактора читают живой справочник свойств (6d25c224)', () => {
+    // Источник `data.registry` у каждого места обязан быть ЖИВЫМ справочником
+    // (`lib/property-catalogue.ts`), а не собственным снимком реестра: иначе
+    // создание/переименование/удаление свойства сети не видно в уже открытой
+    // панели до перезапуска клиента (ошибка 6d25c224). Пустая карта допустима
+    // только там, где профиль места не отбирает по свойствам; новое место
+    // обязано либо читать общий справочник, либо быть вписано с обоснованием.
+    const violations: string[] = [];
+    for (const rel of [...DISCOVERED_PLACES].sort()) {
+      const src = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
+      if (EMPTY_REGISTRY_PLACES.has(rel)) {
+        if (!/registry:\s*new Map\(\)/.test(src)) {
+          violations.push(`${rel}: ожидался явный пустой реестр (место без операндов-свойств)`);
+        }
+        continue;
+      }
+      if (rel === REGISTRY_FROM_OPTIONS) {
+        if (!/registry:\s*opts\.registry/.test(src)) {
+          violations.push(`${rel}: справочник обязан приходить параметром opts.registry`);
+        }
+        continue;
+      }
+      if (!/propertyCatalogue(?:Rows|WithSides)\s*\(/.test(src)) {
+        violations.push(`${rel}: data.registry не из общего живого справочника lib/property-catalogue.ts`);
+      }
+      if (/etn\.propertyRegistry\.list\s*\(/.test(src)) {
+        violations.push(`${rel}: собственное чтение реестра свойств — снимок вместо живого справочника`);
+      }
+    }
+    // Живой источник справочника для рецепта публикации — карточка публикации:
+    // она же передаёт прочитанные строки общему справочнику.
+    const card = fs.readFileSync(path.join(RENDERER_ROOT, 'editor/publication-card.ts'), 'utf8');
+    if (!/propertyCatalogueWithSides\s*\(/.test(card)) {
+      violations.push('editor/publication-card.ts: рецепт не получает живой справочник');
+    }
+    if (!/putPropertyCatalogueRows\s*\(/.test(card)) {
+      violations.push('editor/publication-card.ts: строки реестра не передаются общему справочнику');
+    }
+    // Конструктор обязан подписываться на изменение живой карты — иначе
+    // обновления справочника невидимы в уже смонтированных условиях.
+    const editor = readLib('filter-editor.ts');
+    if (!/isLivePropertyCatalogue\(data\.registry\)/.test(editor)) {
+      violations.push('lib/filter-editor.ts: нет проверки живого справочника у data.registry');
+    }
+    if (!/subscribePropertyCatalogue\(opts\.networkId/.test(editor)) {
+      violations.push('lib/filter-editor.ts: нет подписки на изменения общего справочника');
+    }
+    assert.deepEqual(violations, [], violations.join('\n'));
   });
 
   it('каркас редактора собирает дерево, сортировку, футер и диагностику из общих модулей', () => {
