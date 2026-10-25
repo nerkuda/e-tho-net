@@ -277,14 +277,17 @@ describe('диалог отбора типа мысли — AST-определе
     assert.deepEqual(leaf!.value, [FOCUS_TYPE_ID], 'значение — переданные корни без заморозки подтипов');
   });
 
-  it('компилятор: связь — «Тип связи в списке», родители — группа ИЛИ(id в корни, родители в иерархии)', () => {
+  it('компилятор: связь — «Тип связи в иерархии», родители — группа ИЛИ(id в корни, родители в иерархии)', () => {
     const ast = compileFlatCriteriaToAst(
       flatState(mod, { linkTypeIds: ['lt-1'], parentIds: ['root-1'] }),
       REGISTRY_MAP,
       { activeMode: 'view' },
     );
     assert.ok(ast);
-    assert.deepEqual(findLeaf(ast!, 'link_type', 'in')?.value, ['lt-1']);
+    // Плоский `link_type_ids` — наследие выборки «тип + подтипы»: поддерево
+    // раскрывает только иерархический оператор, наборные сравнивают точно
+    // (ADR 9a356460, ошибка aa98f3f9).
+    assert.deepEqual(findLeaf(ast!, 'link_type', 'in_hierarchy')?.value, ['lt-1']);
     // Прежний фасадный обход включал КОРНИ — их добавляет лист «id в корни»,
     // потомков даёт «Родители в иерархии» (ADR fc23f9c1; итерация 2 cfbe8c74).
     const or = collectGroups(ast!.filter).find((g) => g.op === 'or');

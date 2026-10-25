@@ -2395,12 +2395,18 @@ function filterAstLeafClause(
         astUnsupported(`Оператор «${operator}» для операнда «Тип»`, opPath, requestId);
       }
       const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
-      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', list);
+      // Ссылочные операторы (`eq`/`ne`/`in`/`not_in`/`any_of`/`none_of`)
+      // сравнивают тип ТОЧНО по id: поддерево типов раскрывает ТОЛЬКО
+      // «в иерархии»/«не в иерархии» (`hierarchyTypeLeafClause`), иначе
+      // «тип = группа» молча захватывал бы подчинённые типы (ADR 9779dd21,
+      // ошибка aa98f3f9). Неявное раскрытие `type_ids` помимо компиляции в
+      // «в иерархии» запрещено (ADR 9a356460).
+      const matched = list;
       const positive = operator === 'in' || operator === 'eq' || operator === 'any_of';
-      if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
+      if (matched.length === 0) return positive ? AST_FALSE : AST_TRUE;
       const match: Clause = {
-        sql: `t.type_id IN (${expanded.map(() => '?').join(',')})`,
-        params: [...expanded],
+        sql: `t.type_id IN (${matched.map(() => '?').join(',')})`,
+        params: [...matched],
       };
       return positive ? match : { sql: `NOT (${match.sql})`, params: match.params };
     }
@@ -2408,10 +2414,11 @@ function filterAstLeafClause(
     case 'link_type': {
       // Единый операнд «Тип связи» (задача f7da04d6, требование 8c131cff) в
       // контексте МЫСЛИ: «у мысли есть инцидентная связь указанного типа».
-      // `in`/`in_hierarchy` (и `eq`) раскрывают тип вместе с потомками
-      // `link_types` (L21) — общий AST-лист фильтра типов связей; `is_empty`/
-      // `not_empty` — «нет/есть ТИПИЗИРОВАННЫХ инцидентных связей» (семантика
-      // подтверждена оркестратором для контекста мысли, задача f7da04d6).
+      // `in_hierarchy`/`not_in_hierarchy` раскрывают тип вместе с потомками
+      // `link_types` (L21); `eq`/`ne`/`in`/`not_in` — точное совпадение по id
+      // (ADR 9779dd21, ошибка aa98f3f9). `is_empty`/`not_empty` — «нет/есть
+      // ТИПИЗИРОВАННЫХ инцидентных связей» (семантика подтверждена
+      // оркестратором для контекста мысли, задача f7da04d6).
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       if (operator === 'is_empty' || operator === 'not_empty') {
         const typed: Clause = {
@@ -2434,7 +2441,11 @@ function filterAstLeafClause(
       }
       const list =
         operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
-      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'link_types', list);
+      // Поддерево `link_types` — только у иерархических операторов; наборные
+      // сравнивают тип связи точно (ADR 9779dd21, ошибка aa98f3f9).
+      const hierarchy = operator === 'in_hierarchy' || operator === 'not_in_hierarchy';
+      const expanded =
+        hierarchy && list.length > 0 ? expandTypeIdsToSubtree(ndb, 'link_types', list) : list;
       const positive = operator === 'in' || operator === 'eq' || operator === 'in_hierarchy';
       if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
       const match: Clause = {

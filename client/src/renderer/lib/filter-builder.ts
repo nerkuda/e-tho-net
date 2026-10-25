@@ -2627,12 +2627,12 @@ export function compileFlatCriteriaToAst(
   if (keywords !== null) children.push(keywords);
 
   if (state.typeIds.length > 0) children.push(flatAstLeaf({ kind: 'type' }, 'in_hierarchy', flatAstList(state.typeIds)));
-  // Тип связи: серверный компилятор плоской формы раскрывает `link_type_ids` в
-  // поддерево типов связей и отдаёт `link_type in [раскрытые]`; движок AST для
-  // этого операнда раскрывает поддерево САМ и для `in`, и для `in_hierarchy`
-  // (`expandTypeIdsToSubtree`, query-service) — поэтому `in` с исходными корнями
-  // даёт тот же набор, что и серверная форма (раскрытие на момент запроса).
-  if (state.linkTypeIds.length > 0) children.push(flatAstLeaf({ kind: 'link_type' }, 'in', flatAstList(state.linkTypeIds)));
+  // Тип связи плоской формы — наследие выборки «тип + подтипы»: поддерево
+  // `link_types` раскрывает ТОЛЬКО иерархический оператор (ADR 9a356460,
+  // ошибка aa98f3f9). Наборные `in`/`not_in` сравнивают тип точно, поэтому
+  // плоский `link_type_ids` компилируется в `in_hierarchy` — как у серверного
+  // компилятора плоской формы и `link_filter` (`linkFilterToAst`).
+  if (state.linkTypeIds.length > 0) children.push(flatAstLeaf({ kind: 'link_type' }, 'in_hierarchy', flatAstList(state.linkTypeIds)));
   // Прежние «родительские мысли» — фасадный обход поддерева с `include_roots`
   // (корни ВХОДЯТ в результат). Лист «Родители в иерархии» матчит только
   // ПОТОМКОВ, поэтому фасад переводится честно: `ИЛИ(id в [корни], родители в
