@@ -1,0 +1,104 @@
+{
+  "name": "escape-over-dirty-dialog",
+  "description": "Escape при верхнем слое над «грязным» модальным диалогом (ошибка 9ff6b606). Сценарий открывает редактор типа мысли (диалог с несохранёнными изменениями) и выпадашку подсказок выбора родителя над ним. Первое нажатие Escape обязано закрыть ТОЛЬКО выпадашку: диалог-редактор остаётся один, подтверждение несохранённых изменений не появляется. Второе нажатие Escape — уже подтверждение. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.escape-layers.scenario.json. Гейт «красное до фикса» держат юнит-тесты того же контракта: client/tests/dialog-escape-layers.test.ts (поповер и выпадашка над диалогом падали на до-фиксном коде).",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+
+    { "name": "open-type-combo", "click": ".editor-header-row .entity-combo-input" },
+    { "name": "type-unique-name", "text": "Zz9EscapeProbe" },
+    {
+      "name": "type-combo-input-event",
+      "eval": "document.querySelector('.editor-header-row .entity-combo-input').dispatchEvent(new Event('input', { bubbles: true }))"
+    },
+    {
+      "name": "create-row-visible",
+      "waitFor": "document.querySelector('.type-combo-item.type-combo-create') !== null"
+    },
+    { "name": "create-new-type", "click": ".type-combo-item.type-combo-create" },
+    {
+      "name": "type-editor-open",
+      "waitFor": "document.querySelector('.dialog-box .editor-top-row input') !== null && document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "type-editor-name",
+      "probe": "document.querySelector('.dialog-box .editor-top-row input')?.value ?? null",
+      "expect": "Zz9EscapeProbe"
+    },
+
+    {
+      "name": "make-dirty",
+      "eval": "(() => { const i = document.querySelector('.dialog-box .editor-top-row input'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); })()"
+    },
+    { "name": "type-suffix", "text": "X" },
+    {
+      "name": "name-input-event",
+      "eval": "document.querySelector('.dialog-box .editor-top-row input').dispatchEvent(new Event('input', { bubbles: true }))"
+    },
+    {
+      "name": "dirty-name",
+      "probe": "document.querySelector('.dialog-box .editor-top-row input')?.value.endsWith('X') ?? false",
+      "expect": true
+    },
+
+    { "name": "open-parent-picker", "click": ".dialog-header-extra .entity-combo-input" },
+    {
+      "name": "parent-dropdown-open",
+      "waitFor": "document.querySelector('.type-combo-list') !== null"
+    },
+    {
+      "name": "dropdown-before-escape",
+      "probe": "document.querySelectorAll('.type-combo-list').length",
+      "expect": 1
+    },
+
+    { "name": "escape-first", "key": "Escape" },
+    {
+      "name": "dropdown-closed",
+      "waitFor": "document.querySelector('.type-combo-list') === null"
+    },
+    {
+      "name": "only-editor-dialog",
+      "probe": "document.querySelectorAll('.dialog-box').length",
+      "expect": 1
+    },
+    {
+      "name": "no-confirmation",
+      "probe": "document.body.textContent.includes('Данные изменены. Сохранить изменения?')",
+      "expect": false
+    },
+
+    { "name": "escape-second", "key": "Escape" },
+    {
+      "name": "confirmation-open",
+      "waitFor": "document.querySelectorAll('.dialog-box').length === 2 && document.body.textContent.includes('Данные изменены. Сохранить изменения?')"
+    },
+    {
+      "name": "editor-still-open",
+      "probe": "document.querySelectorAll('.dialog-backdrop').length",
+      "expect": 2
+    }
+  ]
+}
