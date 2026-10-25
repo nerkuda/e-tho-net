@@ -2,26 +2,32 @@
  * Сторож: агентские тексты MCP ссылаются только на существующие инструменты
  * (ошибка 60f085b4-60dc-4d4b-a788-d45f9006a0bd).
  *
- * Класс дефекта: `description` инструмента, промпт или тема `etn.guide`
- * отправляет агента к инструменту, которого нет в `tools/list` — инструмент
- * снят (поглощён `etn.thoughts.write` или перенесён в `etn.ops`). Агент
- * строит план по такому указанию и упирается в `NOT_FOUND`/неизвестное имя.
- * Исходный случай: `etn.thoughts.find_duplicates` требовал «Always call before
- * `etn.thoughts.create`» (снят в 0.8.2). Рецидив: промпт
+ * Класс дефекта: `description` инструмента, промпта, темы `etn.guide` или
+ * MCP-ресурса отправляет агента к инструменту, которого нет в `tools/list` —
+ * инструмент снят (поглощён `etn.thoughts.write` или перенесён в `etn.ops`).
+ * Агент строит план по такому указанию и упирается в `NOT_FOUND`/неизвестное
+ * имя. Исходный случай: `etn.thoughts.find_duplicates` требовал «Always call
+ * before `etn.thoughts.create`» (снят в 0.8.2). Рецидивы: промпт
  * `etn.how_to_merge_partial` вёл в `etn.layers.merge`/`etn.layers.diff` —
- * эти операции живут только как `etn.ops { action: "layers.*" }`.
+ * эти операции живут только как `etn.ops { action: "layers.*" }`; описание
+ * ресурса `etn.trash` ссылалось на снятый `etn.trash.list` (возврат
+ * верификатора, круг 1).
  *
  * Проверяются все агентские поверхности, которые видит модель:
  *   - `tools/list` (имена и `description`);
  *   - `prompts/list` (имена и `description`) и тело каждого промпта;
+ *   - `resources/list` и `resources/templates/list` (имена, title,
+ *     description, `uriTemplate` шаблонов);
  *   - `etn.guide` без темы (реестр) и каждая тема (`etn.guide { topic }`).
  *
- * Разрешены ссылки только на живой набор: `MCP_TOOL_NAMES`, `MCP_PROMPT_NAMES`
- * и темы справочника. Историческая справка допустима, если ссылка явно
- * помечена как снятая: строка (или абзац после строки-маркера) содержит
- * «миграция», «заменён», «снят», «удалён» или «поглощён». Такой маркер —
- * единственный способ упомянуть несуществующий инструмент; голая инструкция
- * «вызови `etn.layers.merge`» краснеет.
+ * Разрешены ссылки только на живой набор: `MCP_TOOL_NAMES`,
+ * `MCP_PROMPT_NAMES`, имена MCP-ресурсов и темы справочника. Историческая
+ * справка допустима, только если ссылка явно помечена формулировкой снятия:
+ * «миграция», «заменён(ы)», «поглощён» или «снят из постоянного набора»
+ * (строка-маркер распространяется на абзац до пустой строки — так живёт
+ * таблица миграции в `etn.how_to_write_batch`). Голые «удалён»/«снят»/
+ * «удаление»/«снятие» маркером НЕ считаются: рядом с бытовым словом ссылка
+ * на несуществующий инструмент обязана краснеть.
  *
  * Сторож поднимает реальную MCP-сессию (`buildMcpContext` +
  * `connectMcpClient`) поверх production-фабрики, поэтому видит ровно то, что
@@ -47,11 +53,15 @@ import {
 /** Ссылка на инструмент в полной форме `etn.<группа>.<имя>`. */
 const TOOL_REF = /etn\.[a-z_]+(?:\.[a-z_]+)+/g;
 
-/** Маркеры исторической справки: такой абзац вправе называть снятый инструмент. */
+/**
+ * Маркеры исторической справки — только явная формулировка снятия инструмента.
+ * Бытовая лексика («удаление», «снятие», «помеченные на удаление») маркером не
+ * является: иначе висячая ссылка в такой фразе остаётся незамеченной.
+ */
 const REMOVAL_MARKERS =
-  /миграц|заменен|заменён|поглощ|(?<![\p{L}])снят[\p{L}]{0,4}(?![\p{L}])|удален|удалён/iu;
+  /миграц|заменен|заменён|поглощ|снят[а-яё]*\s+из\s+постоянного\s+набора/iu;
 
-/** Живые имена, на которые агентские тексты вправе ссылаться. */
+/** Живые имена инструментов и промптов, на которые вправе ссылаться тексты. */
 const LIVE_REFS: ReadonlySet<string> = new Set<string>([
   ...MCP_TOOL_NAMES,
   ...MCP_PROMPT_NAMES,
@@ -67,9 +77,10 @@ interface AgentText {
 /**
  * Ссылки на несуществующие инструменты. Строка-ссылка легальна, если несёт
  * маркер снятия сама либо идёт внутри абзаца, начатого таким маркером
- * (абзац разделяется пустой строкой).
+ * (абзац разделяется пустой строкой). `live` — живой набор имён: инструменты,
+ * промпты, темы справочника и имена MCP-ресурсов.
  */
-function danglingRefs({ source, text }: AgentText): string[] {
+function danglingRefs({ source, text }: AgentText, live: ReadonlySet<string> = LIVE_REFS): string[] {
   const bad: string[] = [];
   let historical = false;
   for (const line of text.split('\n')) {
@@ -81,7 +92,7 @@ function danglingRefs({ source, text }: AgentText): string[] {
     if (marker) historical = true;
     for (const match of line.matchAll(TOOL_REF)) {
       const ref = match[0];
-      if (LIVE_REFS.has(ref)) continue;
+      if (live.has(ref)) continue;
       if (marker || historical) continue;
       bad.push(`${source}: ${ref} — «${line.trim()}»`);
     }
@@ -130,12 +141,13 @@ function capturedPrompts(networkId: string, thoughtId: string): AgentText[] {
 }
 
 describe('guard: агентские тексты MCP не ссылаются на снятые инструменты (60f085b4)', { skip: !nativeAvailable() }, () => {
-  it('tools/list, промпты и etn.guide называют только живые инструменты', async () => {
+  it('tools/list, промпты, ресурсы и etn.guide называют только живые инструменты', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const texts: AgentText[] = [];
+        const resourceNames: string[] = [];
 
         const { tools } = await handle.client.listTools();
         for (const tool of tools) {
@@ -146,6 +158,32 @@ describe('guard: агентские тексты MCP не ссылаются н�
 
         texts.push(...capturedPrompts(ctx.networkId, ctx.homeId));
 
+        // MCP-ресурсы — такая же агентская поверхность, как tools/list:
+        // описание шаблона уходит агенту в resources/templates/list.
+        const { resources } = await handle.client.listResources();
+        for (const resource of resources) {
+          resourceNames.push(resource.name);
+          const title = (resource as { title?: string }).title;
+          texts.push({ source: `resources/list ${resource.name}.description`, text: resource.description ?? '' });
+          if (title !== undefined) texts.push({ source: `resources/list ${resource.name}.title`, text: title });
+        }
+        const { resourceTemplates } = await handle.client.listResourceTemplates();
+        for (const template of resourceTemplates) {
+          resourceNames.push(template.name);
+          const title = (template as { title?: string }).title;
+          texts.push({
+            source: `resources/templates/list ${template.name}.description`,
+            text: template.description ?? '',
+          });
+          if (title !== undefined) {
+            texts.push({ source: `resources/templates/list ${template.name}.title`, text: title });
+          }
+          texts.push({
+            source: `resources/templates/list ${template.name}.uriTemplate`,
+            text: template.uriTemplate,
+          });
+        }
+
         const registry = await handle.client.callTool({ name: 'etn.guide', arguments: {} });
         texts.push({ source: 'etn.guide registry', text: toolText(registry) });
         for (const topic of [...OPS_ACTION_NAMES, ...GUIDE_TOPIC_NAMES]) {
@@ -153,7 +191,9 @@ describe('guard: агентские тексты MCP не ссылаются н�
           texts.push({ source: `etn.guide topic ${topic}`, text: toolText(result) });
         }
 
-        const bad = texts.flatMap(danglingRefs);
+        // Ссылка на другой MCP-ресурс (например `etn.thought.neighbors`) — живая ссылка.
+        const live = new Set<string>([...LIVE_REFS, ...resourceNames]);
+        const bad = texts.flatMap((text) => danglingRefs(text, live));
         assert.deepEqual(
           bad,
           [],
@@ -165,6 +205,56 @@ describe('guard: агентские тексты MCP не ссылаются н�
     } finally {
       await closeMcpContext(ctx);
     }
+  });
+
+  it('мутационная самопроверка: висячая ссылка в тексте ресурса и бытовое «удаление» краснеют', () => {
+    // Вставка несуществующего инструмента в описание ресурса — сторож обязан
+    // покраснеть именно на этой поверхности (возврат верификатора, круг 1).
+    const resourceProbe = danglingRefs({
+      source: 'resources/templates/list etn.trash.description',
+      text: 'Помеченные на удаление мысли и связи сети, см. `etn.trash.list`.',
+    });
+    assert.equal(resourceProbe.length, 1);
+    assert.match(resourceProbe[0] ?? '', /etn\.trash\.list/);
+
+    // Бытовая лексика «удаление»/«снятие» — не маркер снятия инструмента.
+    assert.equal(
+      danglingRefs({
+        source: 'tools/list etn.layers.list.description',
+        text: 'Помеченные на удаление слои показываются вместе с `etn.layers.ghost_probe`.',
+      }).length,
+      1,
+    );
+    assert.equal(
+      danglingRefs({
+        source: 'probe',
+        text: 'Снятие пометки не затрагивает `etn.layers.ghost_probe`.',
+      }).length,
+      1,
+    );
+
+    // Явные формулировки снятия — легальная историческая справка.
+    assert.deepEqual(
+      danglingRefs({
+        source: 'probe',
+        text: 'Снят из постоянного набора: `etn.layers.merge`.',
+      }),
+      [],
+    );
+    assert.deepEqual(
+      danglingRefs({
+        source: 'probe',
+        text: ['9. Миграция со старых инструментов:', '- `etn.thoughts.create` → `thought`.', ''].join('\n'),
+      }),
+      [],
+    );
+    assert.deepEqual(
+      danglingRefs({
+        source: 'probe',
+        text: 'Эти операции заменены батчем: `etn.thoughts.create`, `etn.links.create`.',
+      }),
+      [],
+    );
   });
 
   it('etn.thoughts.find_duplicates отправляет к живому etn.thoughts.write (исходный дефект)', async () => {

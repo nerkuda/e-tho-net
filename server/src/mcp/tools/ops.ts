@@ -1942,7 +1942,7 @@ function renderTopic(entry: OpEntry): string {
     '',
     entry.when,
     '',
-    `Группа: ${entry.group}. Снятый инструмент: \`${entry.tool}\`.`,
+    `Группа: ${entry.group}. Снят из постоянного набора: \`${entry.tool}\`.`,
     `Вызов — только через \`etn.ops { action: "${entry.action}" }\`.`,
     `Деструктивна: ${entry.destructive ? 'да — требуется `confirm: true` на верхнем уровне `etn.ops`' : 'нет'}.`,
     `Read-only: ${entry.readOnly ? 'да' : 'нет'}.`,

@@ -259,7 +259,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Комментарии, в body_md которых есть явная ID-ссылка [[#<id>]] или ' +
         '[[n:<net>#<id>]] на эту мысль (фаза R). Семантически отличается от ' +
-        'etn.thought.mentions (FTS5 по title/synonyms) — здесь явный UUID. ' +
+        'упоминаний по имени/синониму (`etn.ops { action: "thoughts.mentions" }`, ' +
+        'FTS по title/synonyms) — здесь явный UUID. ' +
         'Возвращает массив MentionHit (один элемент на (owner_type, owner_id)).',
       mimeType: JSON_MIME,
     },
@@ -379,7 +380,7 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       title: 'Корзина сети',
       description:
         'Помеченные на удаление мысли и связи сети, каждая — с предрасчитанной блокировкой ' +
-        '(S13, см. `etn.trash.list`).',
+        '(S13; вызов — `etn.ops { action: "trash.list" }`).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
