@@ -16,7 +16,7 @@
  * 3. автозакрытие по таймеру (4 с) не задето.
  */
 
-import { test } from 'node:test';
+import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ShimElement } from './dom-shim.js';
@@ -51,8 +51,7 @@ win['removeEventListener'] = () => undefined;
 import { notice } from '../src/renderer/lib/notice.js';
 
 /** Тост-корень по индексу в стеке `document.body`. */
-function toastAt(index: number): ShimElement {
-  const box = body.children[index];
+function toastAt(index: number): ShimElement {  const box = body.children[index];
   assert.ok(box !== undefined, `тост #${index} отсутствует в стеке`);
   return box;
 }
@@ -72,6 +71,14 @@ function textOf(box: ShimElement): string {
 // ---------------------------------------------------------------------------
 // 1. Нажатие на крестик закрывает тост
 // ---------------------------------------------------------------------------
+
+// `body` и `timers` — общие на файл; остатки прошлого теста искажали бы
+// счётчики стека и число TTL, поэтому каждый тест начинает с чистого листа
+// (замечание верификатора к 90ef5cfa).
+beforeEach(() => {
+  body.replaceChildren();
+  timers.length = 0;
+});
 
 test('pointerdown на крестике закрывает тост (click может уйти мимо)', () => {
   notice('Ошибка сохранения', 'error');
