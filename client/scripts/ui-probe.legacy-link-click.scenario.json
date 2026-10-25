@@ -67,7 +67,7 @@
 
     { "name": "reopen-wild", "eval": "window.__st.focus('{{thoughtId}}')" },
     { "name": "reopen-wild-ok", "waitFor": "window.__st.link('Стенд-Вилдкард') !== null" },
-    { "name": "wildcard-matched-on-synonym", "probe": "(async () => { const hits = await window.etn.thoughts.findDuplicates('{{networkId}}', 'Стенд-Вилдкард'); const h = hits.find((x) => x.title === 'Стенд-Вильд-Мысль'); return h ? { matched_on: h.matched_on, titleIsName: h.title === 'Стенд-Вилдкард' } : null; })()", "expect": { "matched_on": "synonym", "titleIsName": false } },
+    { "name": "wildcard-matched-on-synonym", "probe": "(async () => { const hits = await window.etn.thoughts.findDuplicates('{{networkId}}', 'Стенд-Вилдкард', [], [], 'search'); const h = hits.find((x) => x.title === 'Стенд-Вильд-Мысль'); return h ? { matched_on: h.matched_on, titleIsName: h.title === 'Стенд-Вилдкард' } : null; })()", "expect": { "matched_on": "synonym", "titleIsName": false } },
     { "name": "view-wildcard-click", "eval": "window.__st.clickView('Стенд-Вилдкард')" },
     { "name": "view-wildcard-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Стенд-Вильд-Мысль'" },
     { "name": "view-wildcard-no-convert", "probe": "(async () => (await window.__st.body()).includes('[[Стенд-Вилдкард]]'))()", "expect": true },
