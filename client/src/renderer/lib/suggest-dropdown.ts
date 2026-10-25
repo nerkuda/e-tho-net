@@ -48,6 +48,7 @@
 import type { LinkStyle } from '@etn/shared';
 
 import { div, el, positionBodyDropdown, span } from './dom.js';
+import { pushEscapeLayer } from './escape-layers.js';
 import { choiceControl } from './ui/choice-row.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
@@ -402,6 +403,12 @@ export function buildSuggestRow(entry: SuggestEntry, options: SuggestRowOptions 
  */
 export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): SuggestHandle {
   let list: HTMLDivElement | null = null;
+  /**
+   * Слой `Escape` открытой выпадашки (ошибка 9ff6b606): каркас диалога, внутри
+   * которого живёт поле, уступает `Escape` списку — иначе одно нажатие закрывало
+   * бы список и звало подтверждение несохранённых изменений диалога.
+   */
+  let releaseEscapeLayer: (() => void) | null = null;
   /** Строки в порядке отображения (заголовки групп не считаются). */
   let rows: HTMLElement[] = [];
   /** Вариант каждой строки — параллельно {@link rows}. */
@@ -468,6 +475,8 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       list.remove();
       list = null;
     }
+    releaseEscapeLayer?.();
+    releaseEscapeLayer = null;
     rows = [];
     rowEntries = [];
     cursor = null;
@@ -594,6 +603,7 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       openLists.add(box);
       document.body.append(box);
       positionBodyDropdown(box, input, 320, opts.minWidth ?? 0);
+      releaseEscapeLayer ??= pushEscapeLayer();
     } else {
       box.scrollTop = prevScroll;
     }

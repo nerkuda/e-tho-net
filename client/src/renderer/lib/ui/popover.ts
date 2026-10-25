@@ -28,6 +28,7 @@
 
 import { div, el } from '../dom.js';
 import { defineKeyContext, keyContextStack, pushKeyContext, removeKeyContext } from '../keymap.js';
+import { pushEscapeLayer } from '../escape-layers.js';
 
 /** Класс панели. Объявлен только здесь — прямой разметкой панели занимается компонент. */
 export const POPOVER_CLASS = 'ui-popover';
@@ -390,11 +391,19 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
     onClose: options.onClose,
     close: () => undefined,
   };
+  /**
+   * Слой `Escape` для диалогов под панелью (ошибка 9ff6b606): пока панель
+   * открыта, каркас диалога уступает ей нажатие. Регистрируется только у
+   * панелей, которые действительно закрываются по `Escape` (`closeOnEsc`):
+   * иначе диалог уступил бы нажатие панели, которая его проигнорирует.
+   */
+  const releaseEscapeLayer = record.closeOnEsc ? pushEscapeLayer() : null;
   record.close = (): void => {
     const index = active.indexOf(record);
     if (index === -1) return; // уже закрыта
     active.splice(index, 1);
     element.remove();
+    releaseEscapeLayer?.();
     syncPopoverContext();
     record.onClose?.();
   };

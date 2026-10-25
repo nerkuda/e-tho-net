@@ -30,6 +30,7 @@ import { etn } from './etn.js';
 import { el } from './dom.js';
 import { createDelayedOpen } from './preview-open-delay.js';
 import { placeAtCursor, watchOutsideTap } from './ui/popover.js';
+import { pushEscapeLayer } from './escape-layers.js';
 import { store } from '../state.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
@@ -158,6 +159,12 @@ export function initImageZoom(): void {
   document.body.append(popup);
 
   let current: ZoomAnchor | null = null;
+  /**
+   * Слой `Escape` открытой лупы (ошибка 9ff6b606): каркас диалога под лупой
+   * уступает `Escape` — лупа закрывается своим document-слушателем, диалог
+   * остаётся открытым.
+   */
+  let releaseEscapeLayer: (() => void) | null = null;
   let mouseX = 0;
   let mouseY = 0;
   /**
@@ -171,6 +178,8 @@ export function initImageZoom(): void {
     generation++;
     current = null;
     popup.classList.add('hidden');
+    releaseEscapeLayer?.();
+    releaseEscapeLayer = null;
   };
 
   /** Places the popup beside the cursor, keeping it inside the window — the
@@ -200,6 +209,7 @@ export function initImageZoom(): void {
     popup.src = src;
     popup.classList.remove('hidden');
     place();
+    releaseEscapeLayer ??= pushEscapeLayer();
     if (zoom === null) return;
     void resolveIconAttachment(zoom.thought, zoom.attachment).then((filePath) => {
       if (current !== anchor || filePath === null || filePath === '') return;
