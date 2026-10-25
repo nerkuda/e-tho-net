@@ -1,6 +1,6 @@
 {
   "name": "settings-first-day-of-week",
-  "description": "Задача b5278f9a: первый день недели меняется в разделе «Мыслесеть» диалога «Все настройки», уходит одним PATCH /networks/{id}, сохраняется на сервере и сразу перестраивает календарь «Дневника» (подписи столбцов и границы недели $weekStart/$weekEnd). Блокер независимой проверки: календарь диалога «Точная дата» уже смонтированной панели отбора тоже обязан строиться по новому значению — проверяются «Дневник» и «События». Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.settings-first-day-of-week.scenario.json --out .tmp/etn-b5278f9a/run1",
+  "description": "Задача b5278f9a: первый день недели меняется в разделе «Мыслесеть» диалога «Все настройки», уходит одним PATCH /networks/{id}, сохраняется на сервере и сразу перестраивает календарь «Дневника» (подписи столбцов и границы недели $weekStart/$weekEnd). Блокер независимой проверки: календарь диалога «Точная дата» уже смонтированной панели отбора тоже обязан строиться по новому значению — проверяются «Дневник» и «События». Неделя для проверки НЕ зашита: её начало, дни и заголовок вычисляются от текущего дня прогона (ошибка 42b7c183). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.settings-first-day-of-week.scenario.json --out .tmp/etn-b5278f9a/run1",
   "timeout": 180000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -19,6 +19,12 @@
     { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
     { "name": "open-diary", "click": "button.view-tab[title=\"Дневник\"]" },
     { "name": "diary-panel", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.chron-cal .cal-wd') !== null" },
+    {
+      "name": "prepare-week",
+      "eval": "(() => { const pad = (n) => String(n).padStart(2, '0'); const now = new Date(); const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; const utc = (day) => new Date(day + 'T00:00:00Z'); const add = (day, n) => new Date(utc(day).getTime() + n * 86400000).toISOString().slice(0, 10); const mondayIdx = (day) => (utc(day).getUTCDay() + 6) % 7; const fdw = 7; const weekStart = add(today, -((utc(today).getUTCDay() - (fdw % 7) + 7) % 7)); const weekDays = Array.from({ length: 7 }, (_, i) => add(weekStart, i)); const isoWeek = (day) => { const thursday = add(day, -mondayIdx(day) + 3); const jan4 = `${thursday.slice(0, 4)}-01-04`; const week1 = add(jan4, -mondayIdx(jan4) + 3); return Math.round((utc(thursday).getTime() - utc(week1).getTime()) / (7 * 86400000)) + 1; }; const weekTitle = `Неделя ${isoWeek(add(weekStart, 3))}: ${weekStart} — ${add(weekStart, 6)}`; window.__weekDates = { weekStart, weekDays, weekTitle }; return { today, weekStart, weekTitle }; })()"
+    },
+    { "name": "expected-week-title", "probe": "window.__weekDates.weekTitle" },
+    { "name": "expected-week-state", "probe": "({ from: '$weekStart', to: '$weekEnd', selectedDays: window.__weekDates.weekDays })" },
     {
       "name": "calendar-labels-before",
       "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-wd')).map((e) => e.textContent)",
@@ -79,12 +85,12 @@
     },
     {
       "name": "week-row-title-after",
-      "probe": "(() => { const row = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes('2026-10-11')); return row ? row.getAttribute('title') : null; })()",
-      "expect": "Неделя 42: 2026-10-11 — 2026-10-17"
+      "probe": "(() => { const row = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes(window.__weekDates.weekStart)); return row ? row.getAttribute('title') : null; })()",
+      "expectFrom": "expected-week-title"
     },
     {
       "name": "click-week-row",
-      "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes('2026-10-11')); if (!b) throw new Error('нет строки недели 2026-10-11'); b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); b.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()"
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-week')).find((e) => (e.getAttribute('title') || '').includes(window.__weekDates.weekStart)); if (!b) throw new Error('нет строки недели ' + window.__weekDates.weekStart); b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); b.dispatchEvent(new MouseEvent('click', { bubbles: true })); return true; })()"
     },
     {
       "name": "week-tokens-applied",
@@ -94,7 +100,7 @@
     {
       "name": "week-period-state",
       "probe": "({ from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null, selectedDays: Array.from(document.querySelectorAll('.cal-day.is-selected')).map((e) => e.getAttribute('title')) })",
-      "expect": { "from": "$weekStart", "to": "$weekEnd", "selectedDays": ["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"] }
+      "expectFrom": "expected-week-state"
     },
 
     { "name": "filter-add-date", "eval": "(() => { const b = document.querySelector('.chron-filter .ft-add-condition'); if (!b) throw new Error('нет «+ условие» в панели отбора'); b.click(); return true; })()" },
