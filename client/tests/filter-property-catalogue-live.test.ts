@@ -367,4 +367,30 @@ describe('общий справочник: приём готовых строк 
       'новое свойство появилось в справочнике',
     );
   });
+
+  it('тик каталога типов связей не отменяет приём строк карточки (круг 2)', () => {
+    // Справочник заведён местом, но ещё не прочитан: строк нет.
+    catalogueMod.propertyCatalogueRows(NET);
+    const since = catalogueMod.propertyCatalogueRevision(NET);
+    assert.equal(since, 0, 'ревизия вида — 0, строк нет');
+
+    // Пока карточка читает реестр, приходит тик каталога типов связей: карта
+    // пересобирается (обратные стороны), но СОСТАВ строк свойств не меняется.
+    stateMod.store.update({ linkTypes: [] });
+    assert.equal(
+      catalogueMod.propertyCatalogueRevision(NET),
+      since + 1,
+      'версия вида выросла от пересборки обратных сторон',
+    );
+
+    // Успешно прочитанные карточкой строки обязаны быть приняты: иначе рецепт
+    // строится с пустой картой и теряет условия по свойствам (механика 3bf62fd7).
+    const accepted = catalogueMod.putPropertyCatalogueRows(
+      NET,
+      [propertyRow(PROP_A, 'Свойство 1')],
+      since,
+    );
+    assert.equal(accepted, true, 'пересборка сторон не отменяет приём строк');
+    assert.deepEqual([...catalogueMod.propertyCatalogueRows(NET).keys()], [PROP_A]);
+  });
 });

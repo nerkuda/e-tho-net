@@ -26,6 +26,12 @@ import type { NetworkProperty, Publication, PublicationUpdateInput } from '@etn/
 
 import { ShimElement } from './dom-shim.js';
 import { store } from '../src/renderer/state.js';
+import {
+  propertyCatalogueRevision,
+  propertyCatalogueRows,
+  putPropertyCatalogueRows,
+  resetPropertyCatalogue,
+} from '../src/renderer/lib/property-catalogue.js';
 
 const NETWORK_ID = 'net-1';
 const PROPERTY_ID = '00000000-0000-4000-8000-0000000000bb';
@@ -201,6 +207,7 @@ function cardText(root: ShimElement): string {
 afterEach(() => {
   const mod = (globalThis as any).__pubCardMod as typeof import('../src/renderer/editor/publication-card.js') | undefined;
   mod?.disposePublicationCard();
+  resetPropertyCatalogue();
 });
 
 describe('рецепт публикации: отказ чтения реестра свойств (3bf62fd7)', () => {
@@ -255,6 +262,84 @@ describe('рецепт публикации: отказ чтения реест�
     assert.ok(
       !text.includes('свойства больше нет в сети'),
       'ложной диагностики удалённого свойства нет',
+    );
+  });
+});
+
+/** Строка реестра с другим именем — версия одного и того же свойства. */
+function propertyRowNamed(name: string): NetworkProperty {
+  return { ...PROPERTY_ROW, name };
+}
+
+/**
+ * Живой справочник свойств в карточке публикации (ошибка 6d25c224, круг 2):
+ * карточка снимает ревизию справочника на СТАРТЕ своего чтения и передаёт её
+ * в приём строк. Поздний ответ не затирает свежие данные; ответ, прочитанный
+ * при неизменном составе строк, принимается (в т.ч. когда справочник уже
+ * наполнен — без переданной ревизии он был бы отклонён).
+ */
+describe('рецепт публикации: живой справочник свойств (6d25c224)', () => {
+  /** Управляемое чтение: карточка ждёт, пока тест не отдаст строки. */
+  function pendingRegistry(): { release: (rows: NetworkProperty[]) => void } {
+    let release: (rows: NetworkProperty[]) => void = () => undefined;
+    registryImpl = () =>
+      new Promise<NetworkProperty[]>((resolve) => {
+        release = resolve;
+      });
+    return { release: (rows) => release(rows) };
+  }
+
+  it('поздний ответ карточки не затирает справочник, обновлённый во время чтения', async () => {
+    resetPropertyCatalogue();
+    const pending = pendingRegistry();
+    await openRecipeTab();
+    (globalThis as any).__pubCardMod = await import(
+      '../src/renderer/editor/publication-card.js'
+    );
+    assert.equal(registryCalls, 1, 'чтение карточки в полёте');
+
+    // Пока карточка читает, событие реестра обновляет справочник (новое имя).
+    assert.equal(
+      putPropertyCatalogueRows(
+        NETWORK_ID,
+        [propertyRowNamed('Версия (новое имя)')],
+        propertyCatalogueRevision(NETWORK_ID),
+      ),
+      true,
+      'справочник обновлён, пока карточка читает',
+    );
+
+    // Ответ карточки прочитан до правки — устарел и не должен затирать свежий.
+    pending.release([propertyRowNamed('Версия')]);
+    await flush();
+    assert.equal(
+      propertyCatalogueRows(NETWORK_ID).get(PROPERTY_ID)?.name,
+      'Версия (новое имя)',
+      'поздний ответ карточки не затёр свежие данные справочника',
+    );
+  });
+
+  it('ответ карточки принимается, когда состав строк не менялся (ревизия старта проброшена)', async () => {
+    resetPropertyCatalogue();
+    // Справочник уже наполнен другим местом: без переданной ревизии приём
+    // отклонил бы ответ карточки и оставил чужое (старое) имя.
+    assert.equal(
+      putPropertyCatalogueRows(NETWORK_ID, [propertyRowNamed('Версия (старое)')], 0),
+      true,
+      'исходное состояние справочника задано',
+    );
+    const pending = pendingRegistry();
+    await openRecipeTab();
+    (globalThis as any).__pubCardMod = await import(
+      '../src/renderer/editor/publication-card.js'
+    );
+
+    pending.release([propertyRowNamed('Версия (новая)')]);
+    await flush();
+    assert.equal(
+      propertyCatalogueRows(NETWORK_ID).get(PROPERTY_ID)?.name,
+      'Версия (новая)',
+      'карточка передала ревизию старта — строки приняты',
     );
   });
 });

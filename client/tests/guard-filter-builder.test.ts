@@ -135,6 +135,81 @@ const EMPTY_REGISTRY_PLACES: ReadonlyMap<string, string> = new Map([
  */
 const REGISTRY_FROM_OPTIONS = 'screens/publications/recipe.ts';
 
+/**
+ * Нарушения требования «места монтажа читают живой справочник свойств»
+ * (ошибка 6d25c224): источник `data.registry`, отсутствие собственного чтения
+ * реестра, живой источник у рецепта публикации (карточка) и подписка конструктора
+ * на изменение живой карты.
+ *
+ * `readLibFile` — чтение модуля `lib/` (в фикстуре самопроверки его может не
+ * быть: `null` — проверки модуля пропускаются).
+ */
+function liveCatalogueViolations(
+  root: string,
+  places: ReadonlySet<string>,
+  readLibFile: (file: string) => string | null,
+): string[] {
+  const violations: string[] = [];
+  for (const rel of [...places].sort()) {
+    const src = fs.readFileSync(path.join(root, rel), 'utf8');
+    if (EMPTY_REGISTRY_PLACES.has(rel)) {
+      if (!/registry:\s*new Map\(\)/.test(src)) {
+        violations.push(`${rel}: ожидался явный пустой реестр (место без операндов-свойств)`);
+      }
+      continue;
+    }
+    if (rel === REGISTRY_FROM_OPTIONS) {
+      if (!/registry:\s*opts\.registry/.test(src)) {
+        violations.push(`${rel}: справочник обязан приходить параметром opts.registry`);
+      }
+      continue;
+    }
+    if (!/propertyCatalogue(?:Rows|WithSides)\s*\(/.test(src)) {
+      violations.push(`${rel}: data.registry не из общего живого справочника lib/property-catalogue.ts`);
+    }
+    if (/etn\.propertyRegistry\.list\s*\(/.test(src)) {
+      violations.push(`${rel}: собственное чтение реестра свойств — снимок вместо живого справочника`);
+    }
+  }
+  // Живой источник справочника для рецепта публикации — карточка публикации:
+  // она же передаёт прочитанные строки общему справочнику, снимая РЕВИЗИЮ
+  // СТАРТА своего чтения (без неё поздний ответ затрёт свежие данные, а при
+  // наполненном справочнике приём будет отклонён — оговорка верификатора).
+  const cardPath = path.join(root, 'editor/publication-card.ts');
+  if (!fs.existsSync(cardPath)) {
+    violations.push('editor/publication-card.ts: карточка публикации не найдена');
+  } else {
+    const card = fs.readFileSync(cardPath, 'utf8');
+    if (!/propertyCatalogueWithSides\s*\(/.test(card)) {
+      violations.push('editor/publication-card.ts: рецепт не получает живой справочник');
+    }
+    if (!/propertyCatalogueRevision\s*\(\s*networkId\s*\)/.test(card)) {
+      violations.push(
+        'editor/publication-card.ts: ревизия справочника на старте чтения не снимается ' +
+          '(`propertyCatalogueRevision(networkId)`) — поздний ответ затрёт свежие данные',
+      );
+    }
+    if (!/putPropertyCatalogueRows\(\s*networkId\s*,\s*rows\s*,\s*sinceRevision\s*\)/.test(card)) {
+      violations.push(
+        'editor/publication-card.ts: putPropertyCatalogueRows обязан получать sinceRevision ' +
+          '(ревизию старта чтения)',
+      );
+    }
+  }
+  // Конструктор обязан подписываться на изменение живой карты — иначе
+  // обновления справочника невидимы в уже смонтированных условиях.
+  const editor = readLibFile('filter-editor.ts');
+  if (editor !== null) {
+    if (!/isLivePropertyCatalogue\(data\.registry\)/.test(editor)) {
+      violations.push('lib/filter-editor.ts: нет проверки живого справочника у data.registry');
+    }
+    if (!/subscribePropertyCatalogue\(opts\.networkId/.test(editor)) {
+      violations.push('lib/filter-editor.ts: нет подписки на изменения общего справочника');
+    }
+  }
+  return violations;
+}
+
 /** Признак собственной модели критериев отбора. */
 const OWN_MODEL_NAMES =
   /^(?:export\s+)?interface\s+(?:ChronicleFilterState|ActivityFilterState|SearchOptions|DialogCriteriaState|FilterCriteriaState|FilterState)\s*(?:extends\b|\{)/;
@@ -466,46 +541,11 @@ describe('guard: условия отбора строятся только об�
     // панели до перезапуска клиента (ошибка 6d25c224). Пустая карта допустима
     // только там, где профиль места не отбирает по свойствам; новое место
     // обязано либо читать общий справочник, либо быть вписано с обоснованием.
-    const violations: string[] = [];
-    for (const rel of [...DISCOVERED_PLACES].sort()) {
-      const src = fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
-      if (EMPTY_REGISTRY_PLACES.has(rel)) {
-        if (!/registry:\s*new Map\(\)/.test(src)) {
-          violations.push(`${rel}: ожидался явный пустой реестр (место без операндов-свойств)`);
-        }
-        continue;
-      }
-      if (rel === REGISTRY_FROM_OPTIONS) {
-        if (!/registry:\s*opts\.registry/.test(src)) {
-          violations.push(`${rel}: справочник обязан приходить параметром opts.registry`);
-        }
-        continue;
-      }
-      if (!/propertyCatalogue(?:Rows|WithSides)\s*\(/.test(src)) {
-        violations.push(`${rel}: data.registry не из общего живого справочника lib/property-catalogue.ts`);
-      }
-      if (/etn\.propertyRegistry\.list\s*\(/.test(src)) {
-        violations.push(`${rel}: собственное чтение реестра свойств — снимок вместо живого справочника`);
-      }
-    }
-    // Живой источник справочника для рецепта публикации — карточка публикации:
-    // она же передаёт прочитанные строки общему справочнику.
-    const card = fs.readFileSync(path.join(RENDERER_ROOT, 'editor/publication-card.ts'), 'utf8');
-    if (!/propertyCatalogueWithSides\s*\(/.test(card)) {
-      violations.push('editor/publication-card.ts: рецепт не получает живой справочник');
-    }
-    if (!/putPropertyCatalogueRows\s*\(/.test(card)) {
-      violations.push('editor/publication-card.ts: строки реестра не передаются общему справочнику');
-    }
-    // Конструктор обязан подписываться на изменение живой карты — иначе
-    // обновления справочника невидимы в уже смонтированных условиях.
-    const editor = readLib('filter-editor.ts');
-    if (!/isLivePropertyCatalogue\(data\.registry\)/.test(editor)) {
-      violations.push('lib/filter-editor.ts: нет проверки живого справочника у data.registry');
-    }
-    if (!/subscribePropertyCatalogue\(opts\.networkId/.test(editor)) {
-      violations.push('lib/filter-editor.ts: нет подписки на изменения общего справочника');
-    }
+    const violations = liveCatalogueViolations(
+      RENDERER_ROOT,
+      DISCOVERED_PLACES,
+      (file) => fs.readFileSync(path.join(RENDERER_ROOT, 'lib', file), 'utf8'),
+    );
     assert.deepEqual(violations, [], violations.join('\n'));
   });
 
@@ -682,6 +722,48 @@ describe('guard: условия отбора строятся только об�
           'return readSavedSort(value); // чтение сортировки у исполнителя',
         ].join('\n'),
         'utf8',
+      );
+      // Место со снимком реестра (без живого справочника) и карточка без
+      // ревизии старта чтения — правило 6d25c224 обязано их поймать.
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'snapshot-panel.ts'),
+        [
+          'const registry = await etn.propertyRegistry.list(networkId);',
+          'buildFilterEditor({ data: { registry } });',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(dir, 'editor'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'editor', 'publication-card.ts'),
+        [
+          'const rows = await loadPropertyRows(networkId);',
+          'putPropertyCatalogueRows(networkId, rows);',
+        ].join('\n'),
+        'utf8',
+      );
+      const registryViolations = liveCatalogueViolations(
+        dir,
+        new Set(['screens/fake/snapshot-panel.ts']),
+        () => null,
+      );
+      assert.ok(
+        registryViolations.some(
+          (v) => v.includes('snapshot-panel.ts') && v.includes('живого справочника'),
+        ),
+        'снимок реестра в месте монтажа обязан попадать в нарушение',
+      );
+      assert.ok(
+        registryViolations.some((v) => v.includes('собственное чтение реестра')),
+        'собственное чтение реестра местом обязано попадать в нарушение',
+      );
+      assert.ok(
+        registryViolations.some((v) => v.includes('ревизия справочника на старте')),
+        'карточка без ревизии старта чтения обязана попадать в нарушение',
+      );
+      assert.ok(
+        registryViolations.some((v) => v.includes('sinceRevision')),
+        'приём строк без ревизии старта чтения обязан попадать в нарушение',
       );
       const names = new Set(collectViolations(dir, rules).map((v) => v.rule));
       assert.ok(names.has('no-second-criteria-model'), 'своя модель обязана попадать в нарушение');
