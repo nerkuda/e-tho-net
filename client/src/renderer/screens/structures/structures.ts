@@ -352,13 +352,20 @@ async function retryPendingFilterSnapshot(): Promise<void> {
     // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
     // чтения (сеть/вкладка) — переразбирать нечего.
     if (!ok || pendingFilterSnapshot !== raw) return;
+    // Пользователь правил отбор, ПОКА шло чтение реестра: его правка приоритетна
+    // (ошибка f76a3ef9). Подпись сверена и на входе, но между ней и чтением
+    // прошёл IPC-запрос: без повторной сверки снимок перетёр бы правку.
+    if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+      pendingFilterSnapshot = null;
+      pendingFilterSnapshotSignature = null;
+      return;
+    }
     pendingFilterSnapshot = null;
     pendingFilterSnapshotSignature = null;
-    const before = filterStateSignature();
     const next = parseFilterState(raw);
     // Переразбор без изменений (снимок новой модели реестра не требует) —
     // лишний сетевой перезапрос страницы не гоним.
-    if (signatureOfFilterState(next) === before) return;
+    if (signatureOfFilterState(next) === filterStateSignature()) return;
     setFilterState(next);
     await applyQuery(true);
   } finally {

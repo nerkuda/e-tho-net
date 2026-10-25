@@ -296,4 +296,103 @@ describe('«Структуры»: реестр свойств при разбо�
       'применённый отбор снова несёт условие по свойству',
     );
   });
+
+  /**
+   * Ошибка f76a3ef9: остаточное окно перетирания правки пользователя. Подпись
+   * состояния сверялась только ДО `await preloadFilterRegistry()`; правка,
+   * сделанная пока идёт IPC-чтение, перетиралась разобранным снимком.
+   *
+   * Мутационная проба: убрать повторную сверку подписи после await — кейс
+   * краснеет (состояние станет снимком, уйдёт лишний перезапрос страницы).
+   */
+  it('3. правка во время повтора чтения реестра приоритетна — снимок её не перетирает (f76a3ef9)', async () => {
+    const snapshot = JSON.stringify({
+      properties: [{ propertyId: PROPERTY_ID, op: 'eq', values: ['2.0'] }],
+      sort: 'alpha',
+      order: 'asc',
+    });
+    registryCalls = 0;
+    queryFilters.length = 0;
+    let releaseRetry: ((rows: NetworkProperty[]) => void) | null = null;
+    // Монтаж: чтения панели и разбора снимка получают отказ (фаза «start»); на
+    // восстановлении связи первое чтение (панель) успешно, а чтение повтора
+    // разбора «висит» — окно для правки пользователя. Фаза вместо номера вызова:
+    // номера зависят от хвостов предыдущих кейсов.
+    let phase: 'start' | 'recovery' = 'start';
+    let recoveryReads = 0;
+    registryImpl = async () => {
+      if (phase === 'start') throw new Error('сеть недоступна');
+      recoveryReads += 1;
+      if (recoveryReads === 1) return [PROPERTY_ROW];
+      return await new Promise<NetworkProperty[]>((resolve) => {
+        releaseRetry = resolve;
+      });
+    };
+
+    stateMod.store.update({
+      networkId: NET,
+      network: null,
+      activeView: 'structures',
+      screen: 'workspace',
+      // Своя вкладка: `networkIdSeen` экрана переживает unmount, и повторный
+      // монтаж той же вкладки не переинициализировал бы снимок.
+      tabs: [
+        { tab_id: 'tab-B', network_id: NET, structures_state: snapshot },
+      ] as any,
+      activeTabId: 'tab-B',
+      rtStatusByNetwork: { [NET]: 'offline' },
+    } as any);
+
+    const host = new ShimElement('div');
+    mountedStructures = structuresMod.mountStructures(host as unknown as HTMLElement);
+    await flush();
+    assert.equal(propertyLeaves().length, 0, 'снимок разобран без реестра — воспроизведение');
+
+    // Восстановление связи запускает повтор разбора снимка.
+    phase = 'recovery';
+    stateMod.store.update({ rtStatusByNetwork: { [NET]: 'connected' } });
+    for (let i = 0; i < 60 && releaseRetry === null; i += 1) await flush();
+    assert.ok(releaseRetry !== null, 'повтор разбора ждёт чтения реестра');
+
+    // Пользователь правит отбор, ПОКА повтор читает реестр.
+    panelMod.setFilterState({
+      ...panelMod.getFilterState(),
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'keywords', scope: ['title', 'synonyms'] },
+            operator: 'matches',
+            value: { kind: 'scalar', value: 'правка пользователя' },
+          },
+        ],
+      },
+    } as any);
+    const queriesAfterEdit = queryFilters.length;
+
+    releaseRetry!([PROPERTY_ROW]);
+    await flush();
+
+    const after = leaves(panelMod.getFilterState().tree);
+    assert.equal(after.length, 1, 'в дереве ровно правка пользователя');
+    assert.equal(
+      (after[0]?.value as { value?: unknown } | undefined)?.value,
+      'правка пользователя',
+      'правка, сделанная во время чтения, уцелела',
+    );
+    assert.equal(propertyLeaves().length, 0, 'снимок не перетёр правку');
+    assert.equal(queryFilters.length, queriesAfterEdit, 'по снимку не перезапрашивали');
+
+    // Ожидание снято: следующий тик store не разбирает снимок заново.
+    stateMod.store.update({});
+    await flush();
+    assert.equal(queryFilters.length, queriesAfterEdit, 'повтор больше не запускается');
+    assert.equal(
+      (leaves(panelMod.getFilterState().tree)[0]?.value as { value?: unknown } | undefined)?.value,
+      'правка пользователя',
+      'правка остаётся после следующих тиков',
+    );
+  });
 });
