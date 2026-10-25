@@ -464,6 +464,18 @@ function treeUsesKind(node: FilterTreeNode | null | undefined, kind: FilterAstEn
  * настройка сети «Показывать неактуальные мысли и связи» снимает дефолт по
  * `active` — как снимал его плоский `show_inactive`. Так дерево из редактора
  * даёт тот же результат, что прежняя плоская панель, и не расширяется молча.
+ *
+ * Дефолты видимости ВСЕГДА СУЖАЮТ выдачу (ошибка 7f55e8ac; тот же класс, что
+ * a65d27d9 у отбора типа мысли), поэтому место впекания зависит от операции
+ * корня: группа «И» впитывает их, а корень «ИЛИ»/«НЕ» и одиночное условие
+ * оборачиваются — `(A ИЛИ B) И (active eq true) И (trashed eq false)`. Внутри
+ * «ИЛИ» дефолты расширили бы выдачу до всех живых мыслей, внутри «НЕ» сломали
+ * бы аричность (ровно один ребёнок).
+ *
+ * Здесь, в отличие от сохранённого определения отбора типа мысли, дефолты не
+ * персистятся: это политика МЕСТА на время запроса (видимость — настройка
+ * сети), поэтому метка `service` и разворачивание обёртки при чтении не нужны —
+ * дерево панели дефолтов не содержит.
  */
 export function withVisibilityDefaults(
   filter: FilterAstNode,
@@ -478,7 +490,9 @@ export function withVisibilityDefaults(
     extra.push({ entity: { kind: 'trashed' }, operator: 'eq', value: false });
   }
   if (extra.length === 0) return filter;
-  if ('children' in filter) return { ...filter, children: [...filter.children, ...extra] };
+  if ('children' in filter && filter.op === 'and') {
+    return { ...filter, children: [...filter.children, ...extra] };
+  }
   return { op: 'and', children: [filter, ...extra] };
 }
 
