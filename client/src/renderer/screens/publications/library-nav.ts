@@ -77,6 +77,13 @@ export interface LibraryNavHandle {
   current(): LibraryEntity | null;
   /** Сделать публикацию текущей и подвести её к видимой области (интеграция). */
   revealPublication(publicationId: string): void;
+  /**
+   * Обработать клавишу штатным обработчиком библиотеки — тем же, что получает
+   * нажатия при фокусе на ней. Нужен мосту поиска (`lib/ui/search-nav.ts`):
+   * ↑/↓/Enter из поля поиска ведут навигацию библиотеки, фокус остаётся в
+   * поле (ошибка be095da7, стандарт b6b2821d).
+   */
+  handleKey(key: string): boolean;
   /** Снять слушатели (размонтирование вида). */
   destroy(): void;
 }
@@ -294,6 +301,9 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
         visible.find((e) => e.kind === 'publication' && e.key === publicationId) ??
         ({ kind: 'publication', key: publicationId } as LibraryEntity);
       nav.setCurrent({ entity: entry, el: null }, { reveal: true, focus: true });
+    },
+    handleKey(key: string): boolean {
+      return nav.handleKey(key);
     },
     destroy(): void {
       nav.destroy();

@@ -187,6 +187,21 @@ describe('навигация библиотеки: видимая последо
     assert.deepEqual(currentKeys(root), ['p1']);
     nav.destroy();
   });
+
+  it('handleKey: навигация исполняется из моста поиска, без фокуса на библиотеке', () => {
+    // Мост `lib/ui/search-nav` передаёт ↑/↓/Enter библиотеке, пока фокус стоит
+    // в поле поиска (ошибка be095da7): нажатие синтетическое, отсечка поля
+    // правки не должна глушить навигацию.
+    const { root, nav, spy } = mount([group('s1', ['p1'])]);
+    assert.equal(nav.handleKey('ArrowDown'), true, '↓ обработан');
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 's1' });
+    assert.equal(nav.handleKey('ArrowDown'), true);
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'p1' });
+    assert.deepEqual(currentKeys(root), ['p1'], 'выделение видно в разметке');
+    assert.equal(nav.handleKey('Enter'), true, 'Enter открывает текущую публикацию');
+    assert.deepEqual(spy.opened, ['p1']);
+    nav.destroy();
+  });
 });
 
 describe('навигация библиотеки: ←/→ и Enter (55ee3c85)', () => {

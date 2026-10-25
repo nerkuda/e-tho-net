@@ -154,6 +154,13 @@ export interface ListNavHandle<E> {
   setCurrent(entry: E | null, options?: ListNavSetOptions): void;
   /** Ключ текущей сущности или `null`. */
   token(): string | null;
+  /**
+   * Обработать клавишу штатным обработчиком списка — тем же, что получает
+   * нажатия при фокусе на списке (правила `nav-core`, Enter-активация).
+   * Нужен мостам от полей поиска (`./search-nav.ts`): клавиатура остаётся
+   * общей, второго разбора клавиш не появляется. `true` — клавиша обработана.
+   */
+  handleKey(key: string): boolean;
   /** Снять слушатели (размонтирование вида). */
   destroy(): void;
 }
@@ -522,6 +529,20 @@ export function createListNav<E>(
     },
     token(): string | null {
       return current === null ? null : adapter.tokenOf(current);
+    },
+    handleKey(key: string): boolean {
+      // Тот же обработчик, что и у настоящего нажатия: модификаторы не
+      // передаются — мосту поиска нужны только ↑/↓/Enter без Ctrl/Meta/Shift.
+      // `target: null` — нажатие передано мостом из поля поиска, а не набрано
+      // на самом списке, поэтому отсечка `isEditing` не применяется.
+      return handleKeyDown({
+        key,
+        target: null,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+      } as unknown as KeyboardEvent);
     },
     destroy(): void {
       root.removeEventListener('focusin', onFocusIn as EventListener);

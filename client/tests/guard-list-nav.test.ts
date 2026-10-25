@@ -87,6 +87,8 @@ const SEARCH_LIST_CONSUMERS = [
   'lib/property-list.ts',
   'lib/saved-filter-bar.ts',
   'lib/entity-picker.ts',
+  'screens/publications/publications.ts',
+  'editor/attachment-picker.ts',
   'trash.ts',
   'admin/admin.ts',
   'screens/type-manager.ts',
@@ -94,32 +96,23 @@ const SEARCH_LIST_CONSUMERS = [
 ] as const;
 
 /**
- * Долги класса «список с поиском без моста» — отдельные ошибки 0.14.1: их
- * списки живут на `lib/ui/list.ts`, которому нужен свой вход `handleKey`
- * (мост не переиспользуется как есть). Запись обязывает содержать признак
- * поля поиска; закрытие долга — удаление записи вместе с ошибкой.
- * Самодельный список результатов поиска вложений (`editor/attachments.ts`,
- * ошибка 6452ea94) этим признаком не ловится — там нет спискового фасада.
+ * Долги класса «список с поиском без моста». Введён под ошибку be095da7
+ * (`lib/ui/list.ts` не имел своего входа `handleKey`, мост не подключался к
+ * библиотеке «Публикаций» и пикеру вложений). Оба долга закрыты — карта пуста;
+ * механизм оставлен для будущих списков, которые нельзя перевести сразу
+ * (запись обязывает содержать признак поля поиска; закрытие долга — удаление
+ * записи вместе с ошибкой).
+ * Самодельный список результатов поиска вложений (`editor/attachments.ts`) этим
+ * признаком не ловится — там нет спискового фасада (ошибка 6452ea94).
  */
-const SEARCH_LIST_DEBT: ReadonlyMap<string, { error: string; reason: string }> = new Map([
-  [
-    'screens/publications/publications.ts',
-    {
-      error: 'be095da7',
-      reason: 'библиотека «Публикаций»: поиск здесь, список — library-nav.ts на `lib/ui/list.ts`; ждёт `handleKey` у компонента списка.',
-    },
-  ],
-  [
-    'editor/attachment-picker.ts',
-    {
-      error: 'be095da7',
-      reason: 'пикер вложений: поиск + `createListNav`; ждёт `handleKey` у компонента списка.',
-    },
-  ],
-]);
+const SEARCH_LIST_DEBT: ReadonlyMap<string, { error: string; reason: string }> = new Map();
 
-/** Признаки спискового компонента в исходнике. */
-const LIST_MARKERS = [/createTable</, /createTree</, /createListNav</];
+/**
+ * Признаки спискового компонента в исходнике. `attachLibraryNav` — адаптер
+ * библиотеки «Публикаций»: список живёт в `library-nav.ts`, экран подключает
+ * его дескриптором (ошибка be095da7), поэтому это тоже списковый фасад.
+ */
+const LIST_MARKERS = [/createTable</, /createTree</, /createListNav</, /attachLibraryNav\(/];
 
 /** Признак поля поиска: класс с `search` (`extraClass: 'x-search'`, `el('input', '…-search')`). */
 const SEARCH_FIELD_MARKER =

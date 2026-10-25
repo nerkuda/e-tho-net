@@ -36,6 +36,7 @@ import { fieldInput } from '../lib/ui/field.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import { createListNav } from '../lib/ui/list.js';
+import { bindSearchNav } from '../lib/ui/search-nav.js';
 import { uiSplitter } from '../lib/ui/splitter.js';
 import { store } from '../state.js';
 import { etnimgUrl } from './markdown-field.js';
@@ -367,6 +368,12 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
           if (found !== undefined) nav.setCurrent(found);
         },
       });
+
+      // Поиск — первая строка панели (правило 1 требования 11ddd910): ↑/↓/Enter
+      // из него исполняют штатную навигацию списка через общий мост, фокус
+      // остаётся в поле — набор запроса продолжается, выделение и прокрутка
+      // видны (ошибка be095da7, стандарт b6b2821d). Второго разбора клавиш нет.
+      bindSearchNav(search, { handleKey: (key) => nav.handleKey(key) });
 
       /** Ближайшая строка-вложение от узла клика. */
       function closestRow(target: HTMLElement): HTMLElement | null {

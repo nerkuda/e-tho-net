@@ -51,6 +51,7 @@ import { segmentedControl } from '../../lib/ui/segmented.js';
 import { badge, setBadgeText } from '../../lib/ui/badge.js';
 import { emptyState, errorState, loadingState } from '../../lib/ui/empty-state.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
+import { bindSearchNav } from '../../lib/ui/search-nav.js';
 import { store } from '../../state.js';
 import * as users from '../../lib/users.js';
 import {
@@ -214,6 +215,13 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     // Публикация, открытая в панели редактора, — сплошная рамка (ADR e6d48e09).
     openedKey: () => openedPublicationKey(),
   });
+  // Поиск — первая строка библиотеки (правило 1 требования 11ddd910): ↑/↓/Enter
+  // из него исполняют штатную навигацию списка через общий мост, фокус остаётся
+  // в поле — набор запроса продолжается, выделение и прокрутка видны (ошибка
+  // be095da7, стандарт b6b2821d). Второго разбора клавиш нет.
+  const unbindSearchNav = bindSearchNav(ui.search, {
+    handleKey: (key) => libraryNav?.handleKey(key) === true,
+  });
   wsHost = div('publications-host pub-ws-host hidden');
   hostEl.append(wsHost);
   workspace = mountPublicationWorkspace(wsHost, {
@@ -260,6 +268,7 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     reloadTimer = null;
     searchTimer = null;
+    unbindSearchNav();
     libraryNav?.destroy();
     libraryNav = null;
     workspace?.destroy();

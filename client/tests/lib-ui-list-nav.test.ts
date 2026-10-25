@@ -383,6 +383,22 @@ describe('lib/ui/list: навигация компонента списка', ()
     nav.destroy();
   });
 
+  it('handleKey: клавиша исполняется без фокуса на списке (мост поля поиска)', () => {
+    // Мост `lib/ui/search-nav` передаёт ↑/↓/Enter списку, пока фокус стоит в
+    // поле поиска: нажатие синтетическое (target — не поле правки), поэтому
+    // отсечка `isEditing` не должна глушить навигацию (ошибка be095da7).
+    const root = buildList([{ group: 'g1', items: ['a', 'b'] }]);
+    const { nav, spy } = mount(root);
+    assert.equal(nav.handleKey('ArrowDown'), true, '↓ обработан');
+    assert.deepEqual(nav.current(), { kind: 'group', key: 'g1' });
+    assert.equal(nav.handleKey('ArrowDown'), true);
+    assert.deepEqual(nav.current(), { kind: 'item', key: 'a' }, 'выделение дошло до первой строки');
+    assert.equal(nav.handleKey('Enter'), true, 'Enter активирует текущую сущность');
+    assert.deepEqual(spy.activations, ['item:a']);
+    assert.equal(nav.handleKey('Tab'), false, 'клавиши вне правил ядра списку не принадлежат');
+    nav.destroy();
+  });
+
   it('выделение переживает перерисовку; пропавшая сущность снимается', () => {
     const root = buildList([{ group: 'g1', items: ['a', 'b'] }]);
     const { nav } = mount(root);
