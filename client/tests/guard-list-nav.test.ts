@@ -89,6 +89,7 @@ const SEARCH_LIST_CONSUMERS = [
   'lib/entity-picker.ts',
   'screens/publications/publications.ts',
   'editor/attachment-picker.ts',
+  'editor/attachments.ts',
   'trash.ts',
   'admin/admin.ts',
   'screens/type-manager.ts',
@@ -255,6 +256,22 @@ describe('guard: поле поиска списка ведёт навигаци�
       const source = read(...rel.split('/'));
       assert.match(source, /search/i, `${rel}: долг ${debt.error} — файл без поля поиска?`);
     }
+  });
+
+  it('результаты «Найти существующее» — строки общего списка с навигацией (6452ea94)', () => {
+    const source = read('editor', 'attachments.ts');
+    assert.match(source, /createListNav</, 'результаты поиска — общий компонент списка');
+    assert.match(source, /searchRowEls\.set\(attachment\.id, item\)/, 'строка отдана навигации списка');
+    assert.match(
+      source,
+      /onActivate: \(attachment\) => void reuseAttachment\(attachment\)/,
+      'Enter выбирает текущее вложение',
+    );
+    assert.doesNotMatch(
+      source,
+      /item\.addEventListener\('click', \(\) => void reuseAttachment\(attachment\)\)/,
+      'самодельная строка без состояния текущей не вернулась',
+    );
   });
 
   it('правило краснеет на новом списке с поиском без моста', () => {

@@ -2063,6 +2063,12 @@
   background: var(--surface-2);
 }
 
+/* Текущая строка результатов поиска (клавиатура общего списка, 6452ea94). */
+.att-search-result-current,
+.att-search-result-current:hover {
+  background: var(--accent-soft);
+}
+
 /* Attachment rows open the context menu on right-click (08-ui-spec §6.5). */
 .attachment-item {
   cursor: context-menu;

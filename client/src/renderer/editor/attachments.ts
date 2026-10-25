@@ -55,6 +55,8 @@ import { rowSplitter } from './splitter.js';
 import { badge } from '../lib/ui/badge.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
+import { createListNav } from '../lib/ui/list.js';
+import { bindSearchNav } from '../lib/ui/search-nav.js';
 
 /** Registers the attachments tab content and its badge counter (L7). */
 export function registerAttachmentsTab(): void {
@@ -1072,6 +1074,35 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     searchResults.append(searchHint);
     const searchError = panelErrorLine();
 
+    /**
+     * Результаты поиска — строки общего списка `lib/ui/list` (ошибка 6452ea94):
+     * ↑/↓ двигают текущую строку с прокруткой, Enter выбирает вложение — теми
+     * же правилами ядра `nav-core`, что и прочие списки клиента (стандарт
+     * b6b2821d). Раньше здесь были самодельные кликабельные `div`: с клавиатуры
+     * по ним было не пройти.
+     */
+    let searchHits: Attachment[] = [];
+    const searchRowEls = new Map<string, HTMLElement>();
+    const searchNav = createListNav<Attachment>(searchResults, {
+      entries: () => searchHits,
+      tokenOf: (attachment) => attachment.id,
+      elementOf: (attachment) => searchRowEls.get(attachment.id) ?? null,
+      applyHighlight: (attachment) => {
+        for (const [id, row] of searchRowEls) {
+          row.classList.toggle(
+            'att-search-result-current',
+            attachment !== null && id === attachment.id,
+          );
+        }
+      },
+      onActivate: (attachment) => void reuseAttachment(attachment),
+    });
+    // Поиск — первая строка панели: ↑/↓/Enter из поля исполняют штатную
+    // навигацию списка общим мостом, фокус остаётся в поле (стандарт b6b2821d).
+    const unbindSearchNav = bindSearchNav(searchInput, {
+      handleKey: (key) => searchNav.handleKey(key),
+    });
+
     const searchPanel = div('att-tab-panel hidden');
     searchPanel.append(
       fieldRow({ label: 'Поиск', control: searchInput }),
@@ -1108,22 +1139,35 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       } catch (err) {
         if (seq !== searchSeq) return;
         searchError.textContent = errText(err);
+        searchHits = [];
+        searchRowEls.clear();
         searchResults.replaceChildren();
+        searchNav.refresh();
       }
     }
     function renderSearchResults(hits: Attachment[]): void {
       searchError.textContent = '';
+      searchHits = hits;
+      searchRowEls.clear();
       searchResults.replaceChildren();
       if (hits.length === 0) {
         searchResults.append(el('p', 'muted', 'Ничего не найдено.'));
+        searchNav.refresh();
         return;
       }
       for (const attachment of hits) {
         const item = buildAttachmentItem(attachment);
         item.classList.add('att-search-result');
-        item.addEventListener('click', () => void reuseAttachment(attachment));
+        // Клик делает строку текущей (выделение) и сразу переиспользует
+        // вложение — прежнее поведение; клавиатура идёт общим списком.
+        item.addEventListener('click', () => {
+          searchNav.setCurrent(attachment);
+          void reuseAttachment(attachment);
+        });
+        searchRowEls.set(attachment.id, item);
         searchResults.append(item);
       }
+      searchNav.refresh();
     }
     /**
      * Reuses the chosen attachment: creates a new row for the current owner
@@ -1214,6 +1258,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       title: 'Добавить вложение',
       body,
       size: 'm',
+      // Навигация результатов и мост поиска живут ровно столько, сколько
+      // открыт диалог: снимаем слушатели и клавиатурный контекст на закрытии.
+      onClose: () => {
+        unbindSearchNav();
+        searchNav.destroy();
+      },
       // Ошибка добавления — в панели кнопок, видимой на обеих вкладках
       // (ошибка add8d09d); на вкладке «Найти существующее» своя строка
       // `searchError` для ошибок поиска (локальная операция вкладки).
