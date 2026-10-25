@@ -164,7 +164,7 @@
     },
     {
       "name": "notice-count-before-close",
-      "probe": "document.querySelectorAll('.notice').length"
+      "probe": "(() => { const n = document.querySelectorAll('.notice').length; window.__noticeCount = n; return n; })()"
     },
     {
       "name": "press-close-one",
@@ -176,7 +176,8 @@
     },
     {
       "name": "notice-count-after-close",
-      "probe": "document.querySelectorAll('.notice').length"
+      "probe": "(() => document.querySelectorAll('.notice').length === window.__noticeCount - 1)()",
+      "expect": true
     },
     {
       "name": "no-duplicate-toast",
