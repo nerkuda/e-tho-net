@@ -52,8 +52,23 @@ interface CatalogueEntry {
   readonly rows: Map<string, NetworkProperty>;
   /** Тот же набор плюс обратные стороны свойств-связей (стабильная карта). */
   readonly withSides: Map<string, NetworkProperty>;
-  /** Версия содержимого: растёт на каждом успешном обновлении. */
+  /**
+   * Версия ВИДА карты (строки + обратные стороны): растёт на любое изменение,
+   * включая пересборку сторон по смене каталога типов связей (строки те же).
+   */
   revision: number;
+  /**
+   * Версия СОСТАВА строк: растёт только когда строки заменены успешным чтением
+   * или приёмом готовых строк. Пересборка обратных сторон её не двигает —
+   * состав строк свойств от неё не меняется.
+   */
+  rowsRevision: number;
+  /**
+   * Снимок `rowsRevision` по версиям вида (`revision → rowsRevision`): приём
+   * готовых строк сверяет состав строк с версией вида, снятой местом на старте
+   * своего чтения. Окно ограничено — места держат только версию своего старта.
+   */
+  readonly rowsByRevision: Map<number, number>;
   /** Реестр хотя бы раз успешно прочитан. */
   loaded: boolean;
   /** Чтение в полёте: параллельные вызовы делят один запрос. */
@@ -132,7 +147,17 @@ function ensureEntry(networkId: string): CatalogueEntry {
     const withSides = new Map<string, NetworkProperty>();
     liveMaps.add(rows);
     liveMaps.add(withSides);
-    entry = { rows, withSides, revision: 0, loaded: false, loading: null, token: 0 };
+    entry = {
+      rows,
+      withSides,
+      revision: 0,
+      rowsRevision: 0,
+      // Версия вида 0 соответствует состоянию «строк ещё нет».
+      rowsByRevision: new Map([[0, 0]]),
+      loaded: false,
+      loading: null,
+      token: 0,
+    };
     entries.set(networkId, entry);
   }
   return entry;
@@ -148,6 +173,11 @@ function notify(networkId: string, revision: number): void {
 /**
  * Пересобрать карту «с обратными сторонами» из прямых строк и текущего каталога
  * типов связей. Обе карты живут в одном экземпляре — обновление на месте.
+ *
+ * Версия вида растёт всегда (подписчики перерисовываются), а версия СОСТАВА
+ * строк — нет: смена каталога типов связей меняет только имена сторон. Снимок
+ * `revision → rowsRevision` даёт приёму готовых строк понять, менялись ли строки
+ * с версии, снятой местом на старте его чтения (оговорка верификатора, круг 2).
  */
 function rebuildSides(networkId: string, entry: CatalogueEntry): void {
   entry.withSides.clear();
@@ -155,6 +185,14 @@ function rebuildSides(networkId: string, entry: CatalogueEntry): void {
     entry.withSides.set(key, value);
   }
   entry.revision += 1;
+  entry.rowsByRevision.set(entry.revision, entry.rowsRevision);
+  // Держим окно истории: места держат только версию своего старта.
+  if (entry.rowsByRevision.size > 128) {
+    const cutoff = entry.revision - 128;
+    for (const key of entry.rowsByRevision.keys()) {
+      if (key < cutoff) entry.rowsByRevision.delete(key);
+    }
+  }
   notify(networkId, entry.revision);
 }
 
@@ -222,9 +260,20 @@ export function isLivePropertyCatalogue(map: ReadonlyMap<string, NetworkProperty
   return liveMaps.has(map);
 }
 
-/** Текущая версия содержимого справочника сети (0 — ещё не прочитан). */
+/**
+ * Текущая версия ВИДА справочника сети (0 — ещё не обновлялся): растёт и от
+ * замены строк, и от пересборки обратных сторон по смене каталога типов связей.
+ * Это версия, которую место снимает на старте своего чтения реестра и передаёт
+ * в {@link putPropertyCatalogueRows}: приём сверяет по ней СОСТАВ строк, а не
+ * вид карты (пересборка сторон строк не меняет).
+ */
 export function propertyCatalogueRevision(networkId: string): number {
   return entries.get(networkId)?.revision ?? 0;
+}
+
+/** Версия СОСТАВА строк справочника (пересборка сторон её не двигает). */
+export function propertyCatalogueRowsRevision(networkId: string): number {
+  return entries.get(networkId)?.rowsRevision ?? 0;
 }
 
 /**
@@ -261,6 +310,8 @@ export function reloadPropertyCatalogue(
       entry.rows.clear();
       for (const row of list) entry.rows.set(row.id, row);
       entry.loaded = true;
+      // Состав строк заменён — новая версия строк (пересборка вида ниже).
+      entry.rowsRevision += 1;
       rebuildSides(networkId, entry);
       return true;
     } catch {
@@ -284,10 +335,14 @@ export function reloadPropertyCatalogue(
  * карточка публикации): справочник обновляется без второго сетевого вызова.
  *
  * `sinceRevision` — {@link propertyCatalogueRevision} на момент СТАРТА чтения
- * места. Если справочник с тех пор обновился (realtime-событие, повтор), строки
- * устарели и ОТБРАСЫВАЮТСЯ: поздний ответ карточки не затирает более свежие
- * данные. Без ревизии возраст строк неизвестен — принимаем их только в ещё ни
- * разу не обновлявшийся справочник (терять нечего), иначе отказ.
+ * места. Приём сверяет СОСТАВ строк с той версией вида: если строки с тех пор
+ * заменялись (realtime-событие, повтор чтения), ответ места устарел и
+ * ОТБРАСЫВАЕТСЯ — поздний ответ карточки не затирает более свежие данные.
+ * Пересборка обратных сторон по смене каталога типов связей состав строк не
+ * меняет, поэтому такой тик приём НЕ отменяет (оговорка верификатора, круг 2:
+ * иначе успешное чтение карточки отклонялось и рецепт строился с пустой картой
+ * — механика 3bf62fd7). Без ревизии возраст строк неизвестен — принимаем их
+ * только в ещё ни разу не читавшийся справочник (терять нечего), иначе отказ.
  *
  * Принятие подменяет токен: ответ чтения, летевшего в полёте, устарел и будет
  * отброшен. Признак «в полёте» снимается сразу — иначе последующие вызовы без
@@ -303,14 +358,21 @@ export function putPropertyCatalogueRows(
 ): boolean {
   ensureWired();
   const entry = ensureEntry(networkId);
+  // Сверяем не версию вида, а СОСТАВ строк на момент версии старта: снимок
+  // пишется при каждой пересборке вида. Неизвестная версия (другой эпохи) —
+  // доказать свежесть нельзя, отказ.
+  const rowsAtStart = sinceRevision === undefined ? undefined : entry.rowsByRevision.get(sinceRevision);
   const accepted =
-    sinceRevision === undefined ? entry.revision === 0 : sinceRevision === entry.revision;
+    sinceRevision === undefined
+      ? entry.rowsRevision === 0
+      : rowsAtStart !== undefined && rowsAtStart === entry.rowsRevision;
   if (!accepted) return false;
   entry.token += 1;
   entry.loading = null;
   entry.rows.clear();
   for (const row of rows) entry.rows.set(row.id, row);
   entry.loaded = true;
+  entry.rowsRevision += 1;
   rebuildSides(networkId, entry);
   return true;
 }
