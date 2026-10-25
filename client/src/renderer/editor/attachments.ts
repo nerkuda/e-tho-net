@@ -17,7 +17,13 @@
  */
 
 import { EtnError } from '@etn/shared';
-import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } from '@etn/shared';
+import type {
+  Attachment,
+  AttachmentCreateInput,
+  AttachmentOwnerType,
+  Thought,
+  ThoughtUpdateInput,
+} from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import {
@@ -124,6 +130,27 @@ export async function assignDataIconToThought(
   const updated = await etn.thoughts.update(networkId, thought.id, patch, thought.version);
   reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   return updated;
+}
+
+/**
+ * Тело `POST …/{id}/attachments` при переиспользовании найденного вложения
+ * («Найти существующее», ошибка 1b4cc172). Необязательные поля со значением
+ * `null` НЕ отправляются: у URL-вложения `file_size === null`, а контракт
+ * `RestAttachmentCreate` (`server/src/contracts.ts`) принимает `file_size`
+ * только целым числом — `null` давал 422 «значение должно быть числом.».
+ * Остальные nullable-поля (`url`, `file_path`, `mime_type`, `title`,
+ * `description`) контракт допускает явно, поэтому передаются как есть.
+ */
+export function reuseAttachmentInput(a: Attachment): AttachmentCreateInput {
+  return {
+    kind: a.kind,
+    url: a.kind === 'url' ? a.url : null,
+    file_path: a.kind === 'file' ? a.file_path : null,
+    ...(a.file_size !== null ? { file_size: a.file_size } : {}),
+    mime_type: a.mime_type,
+    title: a.title,
+    description: a.description,
+  };
 }
 
 /**
@@ -1176,15 +1203,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
      */
     async function reuseAttachment(attachment: Attachment): Promise<void> {
       try {
-        await etn.attachments.add(networkId, ownerType, ownerId, {
-          kind: attachment.kind,
-          url: attachment.kind === 'url' ? attachment.url : null,
-          file_path: attachment.kind === 'file' ? attachment.file_path : null,
-          file_size: attachment.file_size,
-          mime_type: attachment.mime_type,
-          title: attachment.title,
-          description: attachment.description,
-        });
+        await etn.attachments.add(
+          networkId,
+          ownerType,
+          ownerId,
+          reuseAttachmentInput(attachment),
+        );
         invalidateQueries(queryKeys.indicators(ownerId));
         closeDialog();
         refreshAttachments();
