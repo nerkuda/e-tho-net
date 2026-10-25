@@ -52,7 +52,7 @@ export {
 } from './transclusion.js';
 export { parseSelectionUnits } from './selection.js';
 export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
-export { extractHeadings } from './headings.js';
+export { extractHeadings, formatHeading } from './headings.js';
 export type { MarkdownHeading } from './headings.js';
 export {
   TRANSCLUSION_BLOCK_CLASS,
