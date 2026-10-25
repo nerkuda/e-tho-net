@@ -313,4 +313,104 @@ describe('«Дневник»: чтение реестра свойств (ad063c
       'лента запрошена заново с восстановленным условием по свойству',
     );
   });
+
+  /**
+   * Ошибка b177ae40: остаточное окно перетирания правки пользователя в
+   * «Дневнике» (та же гонка, что f76a3ef9 в «Структурах»). Подпись состояния
+   * сверялась только ДО `await preloadFilterRegistry()`; правка, сделанная пока
+   * идёт IPC-чтение, перетиралась переразобранным снимком.
+   *
+   * Мутационная проба: убрать повторную сверку подписи после await — кейс
+   * краснеет (состояние станет снимком, уйдёт лишний перезапрос ленты).
+   */
+  it('3. правка во время повтора чтения реестра приоритетна — снимок её не перетирает (b177ae40)', async () => {
+    const snapshot = JSON.stringify({
+      filter: {
+        targets: { properties: [{ property_id: PROPERTY_ID, op: 'eq', value: '2.0' }] },
+        order: 'asc',
+      },
+      month: null,
+      savedFilterId: null,
+    });
+    let phase: 'start' | 'recovery' = 'start';
+    let recoveryReads = 0;
+    let releaseRetry: ((rows: NetworkProperty[]) => void) | null = null;
+    // Монтаж: чтения панели и разбора снимка получают отказ (фаза «start»); на
+    // восстановлении связи первое чтение (панель) успешно, а чтение повтора
+    // разбора «висит» — окно для правки пользователя. Фаза вместо номера вызова:
+    // номера зависят от хвостов предыдущих кейсов.
+    registryImpl = async () => {
+      if (phase === 'start') throw new Error('сеть недоступна');
+      recoveryReads += 1;
+      if (recoveryReads === 1) return [PROPERTY_ROW];
+      return await new Promise<NetworkProperty[]>((resolve) => {
+        releaseRetry = resolve;
+      });
+    };
+
+    stateMod.store.update({
+      networkId: NET,
+      network: null,
+      activeView: 'chronicle',
+      screen: 'workspace',
+      // Своя вкладка: `networkIdSeen` экрана переживает unmount, и повторный
+      // монтаж той же вкладки не переинициализировал бы снимок.
+      tabs: [
+        { tab_id: 'tab-B', network_id: NET, chronicle_state: snapshot },
+      ] as any,
+      activeTabId: 'tab-B',
+      rtStatusByNetwork: { [NET]: 'offline' },
+    } as any);
+
+    const host = new ShimElement('div');
+    mountedScreen = chronicleMod.mountChronicle(host as unknown as HTMLElement);
+    await chronicleMod.ensureChronicleInitialised();
+    await flush();
+    assert.equal(propertyLeaves().length, 0, 'снимок разобран без реестра — воспроизведение');
+
+    // Восстановление связи запускает повтор разбора снимка.
+    phase = 'recovery';
+    stateMod.store.update({ rtStatusByNetwork: { [NET]: 'connected' } });
+    for (let i = 0; i < 60 && releaseRetry === null; i += 1) await flush();
+    assert.ok(releaseRetry !== null, 'повтор разбора ждёт чтения реестра');
+
+    // Пользователь правит отбор, ПОКА повтор читает реестр.
+    panelMod.setFilterState({
+      ...panelMod.getFilterState(),
+      tree: {
+        kind: 'group',
+        op: 'and',
+        children: [
+          {
+            kind: 'leaf',
+            entity: { kind: 'keywords', scope: ['title', 'synonyms'] },
+            operator: 'matches',
+            value: { kind: 'scalar', value: 'правка пользователя' },
+          },
+        ],
+      },
+    } as any);
+    const queriesAfterEdit = queries.length;
+
+    releaseRetry!([PROPERTY_ROW]);
+    await flush();
+
+    assert.equal(
+      JSON.stringify(panelMod.getFilterState().tree).includes('правка пользователя'),
+      true,
+      'правка, сделанная во время чтения, уцелела',
+    );
+    assert.equal(propertyLeaves().length, 0, 'снимок не перетёр правку');
+    assert.equal(queries.length, queriesAfterEdit, 'по снимку ленту не перезапрашивали');
+
+    // Ожидание снято: следующий тик store не разбирает снимок заново.
+    stateMod.store.update({});
+    await flush();
+    assert.equal(queries.length, queriesAfterEdit, 'повтор больше не запускается');
+    assert.equal(
+      JSON.stringify(panelMod.getFilterState().tree).includes('правка пользователя'),
+      true,
+      'правка остаётся после следующих тиков',
+    );
+  });
 });
