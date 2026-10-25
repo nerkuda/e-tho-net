@@ -29,11 +29,7 @@ import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
 import { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './ui/focus-anchor.js';
-import {
-  hasKeyOverlayAbove,
-  keyOverlaySnapshot,
-  resolveEscapeOverlay,
-} from './keymap.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from './keymap.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -217,13 +213,14 @@ export interface DialogOptions {
     ctrlShiftEnter?: () => void;
   };
   /**
-   * Слои Escape (задача d23279f6): спрашивается capture-обработчиком ДО
-   * {@link requestClose}. `true` — нажатие обработано вызывающим, диалог
-   * остаётся открытым (корзина закрывает док-панель, а не себя); `false`/
-   * отсутствие — обычное закрытие. Вызывается только у верхнего диалога стека
-   * и только на неавтоповторный `Escape`. Так внешний обработчик видит Esc
-   * раньше диспетчера сочетаний (`lib/keymap.ts`, bubble-фаза) и может,
-   * например, отменить клавиатурную сессию сплиттера.
+   * Слои Escape (задача d23279f6): спрашивается слоем диалога в реестре
+   * диспетчера ДО {@link requestClose}. `true` — нажатие обработано
+   * вызывающим, диалог остаётся открытым (корзина закрывает док-панель, а не
+   * себя); `false`/отсутствие — обычное закрытие. Вызывается только когда
+   * диалог — верхний слой реестра и только на неавтоповторный `Escape`. Так
+   * внешний обработчик видит Esc раньше диспетчера сочетаний
+   * (`lib/keymap.ts`, bubble-фаза) и может, например, отменить клавиатурную
+   * сессию сплиттера.
    */
   onEscape?: () => boolean;
   /** Called after the dialog is mounted (focus management, etc.). */
@@ -615,14 +612,6 @@ export function showDialog(opts: DialogOptions): () => void {
   // (ошибка 28d69bc6, правило 10 требования 11ddd910).
   const previouslyFocused = document.activeElement as FocusableElement | null | undefined;
   const focusAnchor = resolveFocusAnchor(previouslyFocused);
-  /**
-   * Слои `Escape`, уже открытые к моменту показа диалога (ошибка 9ff6b606).
-   * Слой, открытый ПОЗЖЕ (меню, поповер, выпадашка, лупа, панель поиска), лежит
-   * выше диалога и получает `Escape` первым — диалог на это же нажатие не
-   * реагирует. Реестр — `lib/keymap.ts` (ADR b420b08c: второго механизма
-   * приоритетов нет).
-   */
-  const overlaysAtOpen = keyOverlaySnapshot();
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
   // Бокс принимает программный фокус (fallback, когда в диалоге нет ни поля, ни
@@ -726,6 +715,8 @@ export function showDialog(opts: DialogOptions): () => void {
     box.append(footer);
   }
 
+  /** Слой `Escape` этого диалога в реестре диспетчера (ошибка 9ff6b606). */
+  let escapeOverlay: KeyOverlayHandle | null = null;
   /**
    * Единственная точка закрытия диалога: снимает его со стопки, отписывает
    * слушатели, возвращает фокус и зовёт `onClose`, затем убирает подложку из
@@ -740,6 +731,10 @@ export function showDialog(opts: DialogOptions): () => void {
   const close = (): void => {
     if (teardowns.get(backdrop) === undefined) return;
     teardowns.delete(backdrop);
+    // Диалог — такой же слой, как меню/поповер: со снятием с реестра `Escape`
+    // переходит следующему открытому слою или диалогу под ним.
+    escapeOverlay?.release();
+    escapeOverlay = null;
     const index = stack.indexOf(backdrop);
     if (index >= 0) stack.splice(index, 1);
     dialogKeys.delete(backdrop);
@@ -800,32 +795,33 @@ export function showDialog(opts: DialogOptions): () => void {
     }
     close();
   };
-  const onKey = (event: KeyboardEvent): void => {
-    // Lower dialogs ignore Escape even though they see the event too —
-    // same-target capture listeners run in registration order.
-    if (event.key === 'Escape' && !event.repeat && stack[stack.length - 1] === backdrop) {
-      // Открытый ВЫШЕ диалога слой сам закрывается своим `Escape` (ошибка
-      // 9ff6b606): нажатие отдаём диспетчеру, диалог его не обрабатывает —
-      // иначе оно закрывает/подтверждает диалог под слоем. Дальше события не
-      // пускаем: `Escape` поглощён верхним слоем, а не диалогом.
-      if (hasKeyOverlayAbove(overlaysAtOpen)) {
-        resolveEscapeOverlay(event);
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        return;
-      }
-      // preventDefault marks the press as consumed: the global Escape handler
-      // (app.initKeyboard, bubble phase) must not close the dialog *below*
-      // the one just closed here (L21 fix — Escape over a stacked dialog
-      // closed the whole stack). Key auto-repeat is ignored for the same
-      // reason: a held Escape would otherwise walk the stack down.
-      event.preventDefault();
+  // Диалог входит в тот же реестр слоёв, что меню и поповер: порядок открытия
+  // однозначно задаёт приоритет `Escape` (ошибка 9ff6b606). Верхний диалог
+  // обрабатывает нажатие сам; если над ним открыт другой слой, `handleEscape`
+  // вернёт `false` — нажатие останется верхнему слою.
+  escapeOverlay = pushKeyOverlay({
+    id: 'dialog',
+    onEscape: () => {
       // Слои Escape (задача d23279f6): вызывающий может обработать нажатие
       // сам (закрыть док-панель, отменить клавиатурный драг сплиттера) и
       // оставить диалог открытым.
       if (opts.onEscape?.() === true) return;
       requestClose();
-    }
+    },
+  });
+  const onKey = (event: KeyboardEvent): void => {
+    // Lower dialogs ignore Escape even though they see the event too —
+    // same-target capture listeners run in registration order. The topmost
+    // dialog is not necessarily the last listener: menus opened in between
+    // register their layers too, so the registry decides whose press it is.
+    if (event.key !== 'Escape' || event.repeat) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    if (escapeOverlay?.handleEscape(event) !== true) return;
+    // preventDefault marks the press as consumed: the global Escape handler
+    // (app.initKeyboard, bubble phase) must not close the dialog *below*
+    // the one just closed here (L21 fix — Escape over a stacked dialog
+    // closed the whole stack). Key auto-repeat is ignored for the same
+    // reason: a held Escape would otherwise walk the stack down.
   };
   window.addEventListener('keydown', onKey, true);
   const onConfirm = (event: KeyboardEvent): void => {
