@@ -181,6 +181,19 @@ function propertyNodes(value: unknown, out: any[] = []): any[] {
   return out;
 }
 
+/** Служебные листья места применения (`service: true`) в произвольном дереве. */
+function serviceNodes(value: unknown, out: any[] = []): any[] {
+  if (value === null || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (const item of value) serviceNodes(item, out);
+    return out;
+  }
+  const rec = value as Record<string, unknown>;
+  if (rec['service'] === true) out.push(rec);
+  for (const child of Object.values(rec)) serviceNodes(child, out);
+  return out;
+}
+
 /** Условия по свойствам в дереве панели «Дневника». */
 function propertyLeaves(): any[] {
   return propertyNodes(panelMod.getFilterState().tree);
@@ -411,6 +424,105 @@ describe('«Дневник»: чтение реестра свойств (ad063c
       JSON.stringify(panelMod.getFilterState().tree).includes('правка пользователя'),
       true,
       'правка остаётся после следующих тиков',
+    );
+  });
+
+  /**
+   * L4-снимок ТЕКУЩЕЙ формы панели — `{ ast, order }` — при успешном чтении
+   * реестра. Прежде `parseChronicleState` гнал его через плоский конвертер
+   * (`parseChronicleCriteria` видит AST только на верхнем уровне), дерево
+   * терялось целиком, и следующий persist записывал пустой отбор (блокер
+   * верификатора, дефект с 0.13.1). Мутация «вернуть плоский разбор снимка»
+   * краснит кейс: условие по свойству пропадает из дерева и из запроса.
+   *
+   * Заодно проверяется служебный лист `service: true` во вложенном ast: он
+   * снимается тем же читателем, что в общем чтении определения (roundtrip
+   * a65d27d9/ff11075a не меняется).
+   */
+  it('4. L4: AST-снимок {ast, order} восстанавливается и не перезаписывается пустым (ad063c2f)', async () => {
+    const snapshot = JSON.stringify({
+      filter: {
+        order: 'desc',
+        ast: {
+          version: 1,
+          filter: {
+            op: 'and',
+            children: [
+              {
+                entity: { kind: 'targets' },
+                operator: 'in',
+                value: {
+                  query: {
+                    op: 'and',
+                    children: [
+                      {
+                        entity: { kind: 'property', property: PROPERTY_ID },
+                        operator: 'eq',
+                        value: '2.0',
+                      },
+                    ],
+                  },
+                  operator: 'in',
+                },
+              },
+              // Служебный дефолт места применения — не условие пользователя.
+              { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: true },
+            ],
+          },
+        },
+      },
+      month: null,
+      savedFilterId: null,
+    });
+    // Реестр читается успешно: потеря не связана с отказом (блокер L4).
+    registryImpl = async () => [PROPERTY_ROW];
+
+    stateMod.store.update({
+      networkId: NET,
+      network: null,
+      activeView: 'chronicle',
+      screen: 'workspace',
+      // Своя вкладка: `networkIdSeen` переживает unmount, повторный монтаж той
+      // же вкладки не переинициализировал бы снимок.
+      tabs: [
+        { tab_id: 'tab-C', network_id: NET, chronicle_state: snapshot },
+      ] as any,
+      activeTabId: 'tab-C',
+      rtStatusByNetwork: { [NET]: 'connected' },
+    } as any);
+
+    const host = new ShimElement('div');
+    mountedScreen = chronicleMod.mountChronicle(host as unknown as HTMLElement);
+    await chronicleMod.ensureChronicleInitialised();
+    await flush();
+
+    const restored = propertyLeaves();
+    assert.equal(restored.length, 1, 'условие по свойству из AST-снимка восстановлено в дереве');
+    // AST-читатель сохраняет wire-поле `property`, плоский конвертер — `property_id`.
+    assert.equal(
+      restored[0]?.entity.property_id ?? restored[0]?.entity.property,
+      PROPERTY_ID,
+    );
+    assert.equal(panelMod.getFilterState().order, 'desc', 'направление ленты сохранено');
+    assert.equal(
+      serviceNodes(panelMod.getFilterState().tree).length,
+      0,
+      'служебный лист service:true снят при чтении',
+    );
+    assert.ok(
+      queries.some((query) => queryPropertyLeaves(query).length === 1),
+      'лента запрошена с условием по свойству из AST-снимка',
+    );
+
+    // Следующий тик store не переразбирает снимок заново и не сбрасывает дерево:
+    // состояние, которое persistState запишет в L4, остаётся непустым.
+    stateMod.store.update({});
+    await flush();
+    assert.equal(propertyLeaves().length, 1, 'дерево не перетёрто пустым отбором');
+    assert.equal(
+      serviceNodes(panelMod.getFilterState().tree).length,
+      0,
+      'служебный лист не вернулся на тике store',
     );
   });
 });
