@@ -120,6 +120,18 @@ export function isConnectionLostError(err: unknown): boolean {
 }
 
 /**
+ * `true` when the server refused the write because the same object already
+ * exists (`DUPLICATE`): повторное создание постоянного комментария, связь
+ * той же тройки и т.п. Проверка структурная (как у
+ * {@link isConnectionLostError}): подходит и `EtnError`, и объект конверта IPC.
+ * Нужна восстановлению после обрыва связи (ошибка ecdb2e7a): «уже существует»
+ * — это не сбой, а повод усыновить существующую запись.
+ */
+export function isDuplicateError(err: unknown): boolean {
+  return asErrorLike(err)?.code === 'DUPLICATE';
+}
+
+/**
  * Raw transport failures that must never reach the user as-is (they name
  * `fetch`, sockets and abort codes). Matched against the message of an
  * `Error`.

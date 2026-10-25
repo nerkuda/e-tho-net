@@ -24,6 +24,7 @@ import {
 import { commentShell } from '../lib/ui/comment.js';
 import { isConnectionLostError } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { createOrAdoptPermanentComment } from '../lib/permanent-comment.js';
 import {
   asRealtimeCause,
   invalidateQueries,
@@ -42,7 +43,7 @@ import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { onReconnected, store } from '../state.js';
 import { registerMainSection, type EditorContext, type TabPaneLifecycle } from './editor.js';
-import { createMarkdownField, cancelMarkdownFieldEdit, setMarkdownField } from './markdown-field.js';
+import { createMarkdownField, cancelMarkdownFieldEdit, disposeMarkdownField, setMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
 
 /** Reference to the currently mounted permanent-comment field, if any. */
@@ -263,6 +264,10 @@ function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   lifecycle.onDispose(() => {
     disposed = true;
     stopRetryWatch();
+    // Поле уезжает из документа вместе с панелью: отпускаем его глобальные
+    // слушатели, иначе правка, оставшаяся открытой после сбоя записи,
+    // коммитила бы на каждое нажатие вне уже снятого поля (ошибка ecdb2e7a).
+    if (field !== null) disposeMarkdownField(field);
     // Text typed but not yet mirrored must survive pane eviction: flush the
     // pending debounce instead of dropping it (ошибка 5726744b).
     draftMirror.dispose();
@@ -362,10 +367,13 @@ function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
           if (md.trim() === '') {
             html = '';
           } else {
-            const created = await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
-              kind: 'permanent',
-              body_md: md,
-            });
+            // Создание с усыновлением (ошибка ecdb2e7a): комментарий мог быть
+            // создан за клиента досылом черновика после обрыва связи (H19) —
+            // повторный `create` давал DUPLICATE и вечный цикл ошибок.
+            const created = await createOrAdoptPermanentComment(
+              { networkId, ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+              md,
+            );
             permanent = created;
             draftKind = 'comment';
             html = created.body_html;

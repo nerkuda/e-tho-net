@@ -81,6 +81,10 @@ interface Harness {
   conflictOnce: boolean;
   /** Сколько раз `draftSetStatus` вызван. */
   statusCalls: number;
+  /** `comments.create` отвергает создание: постоянный комментарий уже есть. */
+  permanentExists: boolean;
+  /** Текст существующего постоянного комментария; `null` — чтение его не видит. */
+  permanentBody: string | null;
   setRow(input: {
     entityType: string;
     entityId: string;
@@ -99,6 +103,8 @@ function installHarness(): Harness {
     updateVersions: [],
     conflictOnce: false,
     statusCalls: 0,
+    permanentExists: false,
+    permanentBody: null,
     setRow(input) {
       const networkId = input.networkId ?? NET;
       const hit = harness.rows.find(
@@ -187,7 +193,24 @@ function installHarness(): Harness {
         }
         return { id: COMMENT_ID, version: expectedVersion + 1 };
       },
-      create: async () => ({ id: COMMENT_ID, version: 1 }),
+      create: async () => {
+        if (harness.permanentExists) {
+          throw new EtnError('DUPLICATE', 'a permanent comment already exists for this owner');
+        }
+        return { id: COMMENT_ID, version: 1 };
+      },
+      list: async () =>
+        harness.permanentBody === null
+          ? []
+          : [
+              {
+                id: COMMENT_ID,
+                kind: 'permanent',
+                body_md: harness.permanentBody,
+                body_html: '',
+                version: 9,
+              },
+            ],
     },
     thoughts: {
       update: async () => ({ id: 'thought-1', version: 2 }),
@@ -521,5 +544,95 @@ test('программная замена текста поля не уходи�
     ],
   ];
   for (const [ok, what] of checks) assert.ok(ok, what);
+});
+
+// ---------------------------------------------------------------------------
+// 9. Досылка создания постоянного комментария после обрыва связи
+//    (ошибка ecdb2e7a)
+//
+// Обрыв ПОСЛЕ того, как сервер создал комментарий, но ДО того, как клиент
+// получил ответ, оставляет pending-черновик `comment-new`. Повторный `create`
+// на восстановлении связи получает `DUPLICATE`; досылка обязана усыновить
+// существующий комментарий, а не повторять отказ на каждом переподключении.
+// ---------------------------------------------------------------------------
+
+/** Ряд черновика создания постоянного комментария (текст — JSON). */
+function commentNewDraft(h: Harness, bodyMd: string, ownerId = 'thought-1'): Row {
+  return h.setRow({
+    entityType: 'comment-new',
+    entityId: ownerId,
+    field: 'body_md',
+    value: JSON.stringify({ ownerType: 'thought', ownerId, bodyMd }),
+    baseVersion: null,
+  });
+}
+
+test('DUPLICATE при досылке comment-new: сервер хранит тот же текст — черновик выполнен', async () => {
+  const h = installHarness();
+  commentNewDraft(h, 'НАБРАННЫЙ ТЕКСТ');
+  // Сервер уже создал комментарий с ровно этим текстом — ответ потерялся.
+  h.permanentExists = true;
+  h.permanentBody = 'НАБРАННЫЙ ТЕКСТ';
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows.length, 0, 'черновик выполнен и удалён');
+  assert.equal(noticeCount() - before, 0, 'пользователю нечего сообщать');
+  assert.deepEqual(h.updateVersions, [], 'лишняя запись не понадобилась');
+});
+
+test('DUPLICATE при досылке comment-new: серверный текст другой — conflict, одно уведомление', async () => {
+  const h = installHarness();
+  commentNewDraft(h, 'МОЙ ТЕКСТ');
+  h.permanentExists = true;
+  h.permanentBody = 'ЧУЖОЙ ТЕКСТ';
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows.length, 1, 'текст пользователя не потерян');
+  assert.equal(h.rows[0]!.status, 'conflict', 'расхождение не затирается молча');
+  assert.equal(h.rows[0]!.value, JSON.stringify({ ownerType: 'thought', ownerId: 'thought-1', bodyMd: 'МОЙ ТЕКСТ' }));
+  assert.equal(noticeCount() - before, 1, 'одно внятное уведомление');
+
+  // Следующие connect'ы не повторяют ни попытку, ни уведомление.
+  await retryPendingDrafts(NET);
+  await retryPendingDrafts(NET);
+  assert.equal(noticeCount() - before, 1, 'уведомление не повторяется');
+});
+
+test('DUPLICATE при досылке comment-new: комментарий не читается — черновик ждёт связи', async () => {
+  const h = installHarness();
+  commentNewDraft(h, 'МОЙ ТЕКСТ');
+  h.permanentExists = true;
+  h.permanentBody = null; // list вернул пусто: слой/гонка — усыновлять нечего
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows.length, 1, 'черновик остался');
+  assert.equal(h.rows[0]!.status, 'pending', 'не помечен конфликтным — попытка повторится');
+  assert.equal(noticeCount() - before, 1, 'исходный отказ показан один раз');
+});
+
+test('обрыв связи в момент усыновления: черновик остаётся pending, цикл остановлен', async () => {
+  const h = installHarness();
+  commentNewDraft(h, 'МОЙ ТЕКСТ');
+  h.permanentExists = true;
+  h.permanentBody = 'ЧУЖОЙ ТЕКСТ';
+  // Второй (и последний) черновик не должен отправляться после обрыва.
+  commentNewDraft(h, 'ВТОРОЙ', 'thought-2');
+  const api = (globalThis as unknown as { window: { etn: { comments: { list: unknown } } } }).window
+    .etn.comments;
+  api.list = async () => {
+    throw new EtnError('INTERNAL', 'server unavailable', { kind: 'connection-lost' });
+  };
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows.length, 2, 'ни один черновик не потерян');
+  assert.equal(noticeCount() - before, 1, 'одно уведомление об обрыве');
 });
 

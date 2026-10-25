@@ -152,6 +152,14 @@ interface MarkdownFieldHandle {
    * поля.
    */
   insertMentionLink(thought: MentionsScanThought, matchedText: string): void;
+  /**
+   * Поле снимается с документа вместе с панелью/вкладкой: отпускает
+   * ГЛОБАЛЬНЫЕ слушатели поля (нажатие вне). Без этого правка, оставшаяся
+   * открытой после сбоя записи, коммитила бы на КАЖДОЕ нажатие по интерфейсу
+   * уже снятого поля — вечный цикл ошибки «a permanent comment already exists»
+   * (ошибка ecdb2e7a).
+   */
+  dispose(): void;
 }
 
 /**
@@ -1310,6 +1318,15 @@ export function createMarkdownField(opts: {
   };
 
   const commitOrRevert = (): void => {
+    // Поле уже снято с документа (панель пересобрана на другую сущность, а
+    // правка осталась открытой после сбоя записи): коммитить некуда — выходим,
+    // НЕ отпуская слушатель. Без этого «клик вне» зависшего поля пытался
+    // записать правку на КАЖДОЕ нажатие по интерфейсу, в том числе по другой
+    // мысли: каждое сохранение давало «a permanent comment already exists»
+    // (ошибка ecdb2e7a). Слушатель отпускает `dispose` при реальном демонтаже
+    // панели; пока поле лишь отсоединено (вкладка кэширована и не показана),
+    // оно вернётся в документ и продолжит работать как обычно.
+    if (root.isConnected === false) return;
     // Поле не в правке — коммитить нечего (идемпотентность: после выхода в
     // просмотр поздний `focusout`/повторный жест не запускают вторую запись).
     if (!editing || mounting || editor === null || commitPending) return;
@@ -1814,6 +1831,9 @@ export function createMarkdownField(opts: {
       editor.setCaret(0);
       editor.focus();
     },
+    dispose: () => {
+      detachOutsidePointer();
+    },
   });
 
   // Комментарийный контекст (карточка ETN 34ffbd75): владелец поля нужен флоу
@@ -1884,6 +1904,17 @@ export function focusMarkdownFieldStart(root: HTMLElement): void {
 /** Updates an already-built field's content (e.g. after an external change). */
 export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
   handles.get(root)?.set(md, html);
+}
+
+/**
+ * Освобождает поле перед снятием с документа (жизненный цикл вкладки/панели):
+ * отпускает глобальные слушатели поля — «нажатие вне». Иначе правка,
+ * оставшаяся открытой после сбоя записи, продолжала бы получать нажатия по
+ * интерфейсу уже снятого поля и повторять запись (ошибка ecdb2e7a).
+ * Идемпотентно; для узла, не являющегося полем, — no-op.
+ */
+export function disposeMarkdownField(root: HTMLElement): void {
+  handles.get(root)?.dispose();
 }
 
 /**

@@ -16,8 +16,9 @@
 
 import { EtnError } from '@etn/shared';
 
-import { errText, isConnectionLostError } from './lib/dom.js';
+import { errText, isConnectionLostError, isDuplicateError } from './lib/dom.js';
 import { etn } from './lib/etn.js';
+import { findPermanentComment } from './lib/permanent-comment.js';
 import { t } from './lib/i18n.js';
 import { notice } from './lib/notice.js';
 import { isConnected } from './realtime.js';
@@ -448,12 +449,38 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
         ownerId: string;
         bodyMd: string;
       };
-      return writeFile(() =>
-        etn.comments.create(networkId, parsed.ownerType, parsed.ownerId, {
-          kind: 'permanent',
-          body_md: parsed.bodyMd,
-        }),
-      );
+      try {
+        return await writeFile(() =>
+          etn.comments.create(networkId, parsed.ownerType, parsed.ownerId, {
+            kind: 'permanent',
+            body_md: parsed.bodyMd,
+          }),
+        );
+      } catch (err) {
+        if (!isDuplicateError(err)) throw err;
+        // Постоянный комментарий уже создан: первая попытка дошла до сервера,
+        // а её ответ потерялся в обрыве связи (или запись сделал другой клиент).
+        // Повторять create на каждом переподключении и уведомлять о сбое
+        // нельзя — сверяем текст (ошибка ecdb2e7a).
+        const existing = await findPermanentComment({
+          networkId,
+          ownerType: parsed.ownerType,
+          ownerId: parsed.ownerId,
+        });
+        // Отказ есть, а комментарий не читается (гонка со снятием, чужой
+        // слой): показываем исходную ошибку, текст черновика цел.
+        if (existing === null) throw err;
+        if (existing.body_md === parsed.bodyMd) {
+          // Сервер уже хранит ровно этот текст — черновик выполнен.
+          await etn.ui.draftDelete(draft.id);
+          return 'sent';
+        }
+        // Серверный текст другой: не затираем его молча — черновик остаётся
+        // конфликтным (как при VERSION_CONFLICT): пользователь получит одно
+        // уведомление и сам решит, чей текст нужен.
+        await markDraftConflict(draft.id);
+        return 'conflict';
+      }
     }
     case 'thought': {
       if (draft.field !== 'title') return 'skipped';
