@@ -47,6 +47,7 @@ import type {
   ThoughtPropertyOrderInput,
   DuplicateHit,
   DuplicateMatchKind,
+  DuplicateSearchMode,
   EtnErrorCode,
   ExportJob,
   ExportRequest,
@@ -542,6 +543,8 @@ export interface EtnApi {
       synonyms?: string[],
       /** Optional thought-type filter (link-property pickers). */
       typeIds?: string[],
+      /** `dedupe` (default, strict duplicates) vs `search` (live search, 0.4.5). */
+      mode?: DuplicateSearchMode,
     ): Promise<DuplicateHit[]>;
     /**
      * Кросс-сетевой поиск дублей (задача eb1a3f43): веером по списку сетей
@@ -556,6 +559,7 @@ export interface EtnApi {
       title: string,
       synonyms?: string[],
       typeIds?: string[],
+      mode?: DuplicateSearchMode,
     ): Promise<CrossNetworkDuplicateResponse>;
     /**
      * Кросс-сетевой поиск (задача eb1a3f43, требование c98d5d19). Возвращает

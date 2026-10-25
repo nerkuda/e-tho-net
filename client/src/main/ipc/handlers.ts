@@ -460,8 +460,21 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughts.findDuplicates',
-    bind((networkId: string, title: string, synonyms?: string[], typeIds?: string[]) =>
-      requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
+    bind(
+      (
+        networkId: string,
+        title: string,
+        synonyms?: string[],
+        typeIds?: string[],
+        mode?: 'dedupe' | 'search',
+      ) =>
+        requireRest(deps).findDuplicates(
+          networkId,
+          title,
+          synonyms ?? [],
+          typeIds ?? [],
+          mode,
+        ),
     ),
   );
   // Задача eb1a3f43: кросс-сетевая проверка дублей — для диалога выбора мысли
@@ -475,6 +488,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         title: string,
         synonyms?: string[],
         typeIds?: string[],
+        mode?: 'dedupe' | 'search',
       ) =>
         requireRest(deps).findDuplicatesAcrossNetworks(
           networkId,
@@ -482,6 +496,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
           title,
           synonyms ?? [],
           typeIds ?? [],
+          mode,
         ),
     ),
   );

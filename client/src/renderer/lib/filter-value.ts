@@ -2147,7 +2147,7 @@ async function thoughtsSearch(ctx: FilterValueContext, query: string): Promise<E
   const needle = query.trim();
   if (needle === '' || ctx.networkId === '') return [];
   try {
-    const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], []);
+    const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], [], 'search');
     return hits.map((hit) => ({ id: hit.id, title: hit.title, cloud: { ...hit } }));
   } catch {
     return [];

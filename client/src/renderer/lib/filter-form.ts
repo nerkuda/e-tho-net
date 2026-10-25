@@ -517,7 +517,7 @@ export function buildParentThoughtsSection(
       const needle = query.trim();
       if (needle === '') return [];
       try {
-        const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], []);
+        const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], [], 'search');
         return hits.map((hit): EntityOption => {
           clouds.set(hit.id, { ...hit });
           return thoughtEntityOption(hit);

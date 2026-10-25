@@ -379,7 +379,7 @@ async function loadThoughtHits(
       return [];
     }
   }
-  return etn.thoughts.findDuplicates(networkId, trimmed, [], typeIds).catch(() => []);
+  return etn.thoughts.findDuplicates(networkId, trimmed, [], typeIds, 'search').catch(() => []);
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +516,7 @@ export async function loadCrossNetworkCandidates(
       query,
       [],
       [...typeIds],
+      'search',
     );
     return response.hits;
   } catch {

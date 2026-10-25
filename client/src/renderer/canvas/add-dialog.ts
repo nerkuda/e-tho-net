@@ -618,6 +618,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                     parsed.title,
                     parsed.synonyms,
                     searchFilter,
+                    'search',
                   );
             acceptCandidates(
               hits.filter(

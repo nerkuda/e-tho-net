@@ -37,6 +37,7 @@ import {
   type ApiSuccess,
   type AuditListResult,
   type DuplicateHit,
+  type DuplicateSearchMode,
   type EtnErrorBody,
   type EtnErrorCode,
   type ExportJobStartResult,
@@ -2753,10 +2754,12 @@ export class RestClient {
     title: string,
     synonyms: string[] = [],
     typeIds: string[] = [],
+    mode?: DuplicateSearchMode,
   ): Promise<DuplicateHit[]> {
     const q: QueryRecord = { title };
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
+    if (mode !== undefined) q['mode'] = mode;
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
       query: q,
     });
@@ -2776,11 +2779,13 @@ export class RestClient {
     title: string,
     synonyms: string[] = [],
     typeIds: string[] = [],
+    mode?: DuplicateSearchMode,
   ): Promise<import('@etn/shared').CrossNetworkDuplicateResponse> {
     const q: QueryRecord = { title };
     if (networkIds.length > 0) q['network_ids'] = networkIds;
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
+    if (mode !== undefined) q['mode'] = mode;
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`,

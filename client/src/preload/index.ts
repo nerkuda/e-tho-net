@@ -101,10 +101,10 @@ function buildApi(): EtnBridgeApi {
       usage: (networkId, id) => invoke('thoughts.usage', networkId, id),
       deletionCheck: (networkId, ids) => invoke('thoughts.deletionCheck', networkId, ids),
       usageClear: (networkId, id) => invoke('thoughts.usageClear', networkId, id),
-      findDuplicates: (networkId, title, synonyms, typeIds) =>
-        invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
+      findDuplicates: (networkId, title, synonyms, typeIds, mode) =>
+        invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds, mode),
       // Задача eb1a3f43: кросс-сетевой охват диалога выбора мысли.
-      findDuplicatesAcrossNetworks: (networkId, networkIds, title, synonyms, typeIds) =>
+      findDuplicatesAcrossNetworks: (networkId, networkIds, title, synonyms, typeIds, mode) =>
         invoke(
           'thoughts.findDuplicatesAcrossNetworks',
           networkId,
@@ -112,6 +112,7 @@ function buildApi(): EtnBridgeApi {
           title,
           synonyms,
           typeIds,
+          mode,
         ),
       searchAcrossNetworks: (networkId, networkIds, request) =>
         invoke('thoughts.searchAcrossNetworks', networkId, networkIds, request),
