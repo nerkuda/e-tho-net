@@ -9,9 +9,9 @@
  * в отказе:
  *
  *  - транспортный сбой — структурированная причина `details.reason` ошибки
- *    (`ConnectFailureDetails`: main различает отказ в соединении, таймаут, DNS
- *    и недоступность сети и кладёт причину в `details`, не заставляя UI
- *    разбирать технический текст);
+ *    (`ConnectFailureDetails`: main различает отказ в соединении, таймаут, DNS,
+ *    недоступность сети и сброс соединения и кладёт причину в `details`, не
+ *    заставляя UI разбирать технический текст);
  *  - ответ сервера — его собственный код (`UNAUTHORIZED` → «отклонил API-key»,
  *    `RATE_LIMITED` и т.п.);
  *  - иначе — серверный текст через `errText`; локальные технические огрызки
@@ -40,6 +40,7 @@ const REASON_KEYS: Readonly<Record<ConnectFailureReason, MessageKey>> = {
   timeout: 'connect.reason.timeout',
   dns: 'connect.reason.dns',
   unreachable: 'connect.reason.unreachable',
+  reset: 'connect.reason.reset',
   other: 'connect.reason.other',
 };
 

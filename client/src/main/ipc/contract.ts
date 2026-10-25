@@ -211,10 +211,18 @@ export interface IpcErrorEnvelope {
  *  - `refused` — соединение отклонено (ECONNREFUSED): сервер не запущен/порт закрыт;
  *  - `timeout` — ответ не пришёл за отведённое время;
  *  - `dns` — адрес не разрешился (ENOTFOUND/EAI_AGAIN);
- *  - `unreachable` — сеть/хост недоступны (ENETUNREACH/EHOSTUNREACH/ECONNRESET);
+ *  - `unreachable` — сеть/хост недоступны (ENETUNREACH/EHOSTUNREACH);
+ *  - `reset` — установленное соединение сброшено другой стороной
+ *    (ECONNRESET, undici `UND_ERR_SOCKET` «other side closed»);
  *  - `other` — прочий сетевой сбой без различимой причины.
  */
-export type ConnectFailureReason = 'refused' | 'timeout' | 'dns' | 'unreachable' | 'other';
+export type ConnectFailureReason =
+  | 'refused'
+  | 'timeout'
+  | 'dns'
+  | 'unreachable'
+  | 'reset'
+  | 'other';
 
 /** `details` транспортного отказа запроса — контракт main → renderer. */
 export interface ConnectFailureDetails {
