@@ -30,6 +30,7 @@ import { before, describe, it } from 'node:test';
 import type {
   EffectiveTypeProperty,
   FilterAst,
+  FilterAstGroup,
   FilterAstLeaf,
   FilterAstNode,
   LinkType,
@@ -613,6 +614,153 @@ describe('диалог отбора типа мысли — чтение и за
       children: [{ kind: 'leaf', entity: { kind: 'occurred_at' }, operator: 'gt', value: { kind: 'scalar', value: 1 } }],
     };
     assert.throws(() => mod.buildViewAstDefinition(state), /профил/i);
+  });
+});
+
+/**
+ * Семантика служебного дефолта при корне «ИЛИ»/«НЕ» (ошибка a65d27d9):
+ * служебное условие «живые» ВСЕГДА сужает выдачу, поэтому в ИЛИ-группу оно не
+ * вливается, а оборачивает корень пользователя.
+ *
+ * Мутационная проба: вернуть в `withViewDefaults` старое впекание
+ * (`if (tree.kind === 'group') … children: [...tree.children, leaf]`) — тест
+ * «ИЛИ-корень» краснеет: корень станет `or` с тремя детьми, и выдача расширится.
+ */
+describe('служебный дефолт «живые» при корне не-«И» (a65d27d9)', () => {
+  let mod: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+
+  before(async () => {
+    mod = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+  });
+
+  function viewOf(definition: unknown): Parameters<typeof mod.parseViewDefinition>[0] {
+    return {
+      id: 'v-1',
+      thought_type_id: FOCUS_TYPE_ID,
+      name: 'Отбор',
+      description: null,
+      definition: JSON.stringify(definition),
+      is_default: false,
+      position: 0,
+      version: 1,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    } as unknown as Parameters<typeof mod.parseViewDefinition>[0];
+  }
+
+  function keywordsLeaf(text: string): FilterTreeNode {
+    return {
+      kind: 'leaf',
+      entity: { kind: 'keywords', scope: ['title', 'synonyms'] },
+      operator: 'matches',
+      value: { kind: 'scalar', value: text },
+    };
+  }
+
+  function orState(): FilterCriteriaState {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'or',
+      children: [keywordsLeaf('смета'), keywordsLeaf('акт')],
+    };
+    return state;
+  }
+
+  it('ИЛИ-корень: определение = ((A ИЛИ B) И (живые)), лист не влит в ИЛИ', () => {
+    const ast = mod.buildViewAstDefinition(orState());
+    const root = ast.filter as FilterAstGroup;
+    assert.equal(root.op, 'and', 'корень — обёртка «И»');
+    assert.equal(root.children.length, 2, 'обёртка: корень пользователя + служебный лист');
+    const user = root.children[0] as FilterAstGroup;
+    assert.equal(user.op, 'or', 'группа пользователя сохранена отдельным ребёнком');
+    assert.equal(user.children.length, 2, 'в ней ровно условия пользователя — дефолт не влит');
+    assert.equal(
+      user.children.some((c) => collectLeaves(c).some((l) => l.entity.kind === 'trashed')),
+      false,
+      'внутри «ИЛИ» служебного листа нет',
+    );
+    const service = root.children[1] as FilterAstLeaf;
+    assert.equal(service.entity.kind, 'trashed');
+    assert.equal(service.value, false);
+    assert.equal(service.service, true, 'лист помечен service: true');
+  });
+
+  it('И-корень: служебный лист по-прежнему вливается в корневую группу (без обёртки)', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [keywordsLeaf('смета'), keywordsLeaf('акт')],
+    };
+    const ast = mod.buildViewAstDefinition(state);
+    const root = ast.filter as FilterAstGroup;
+    assert.equal(root.op, 'and');
+    assert.equal(root.children.length, 3, 'два условия + служебный лист в одной группе');
+    const service = root.children[2] as FilterAstLeaf;
+    assert.equal(service.entity.kind, 'trashed');
+    assert.equal(service.service, true);
+  });
+
+  it('НЕ-корень: лист не ломает аричность — корень обёрнут, «НЕ» остаётся одним ребёнком', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'not',
+      children: [keywordsLeaf('смета')],
+    };
+    const ast = mod.buildViewAstDefinition(state);
+    const root = ast.filter as FilterAstGroup;
+    assert.equal(root.op, 'and');
+    const notGroup = root.children[0] as FilterAstGroup;
+    assert.equal(notGroup.op, 'not');
+    assert.equal(notGroup.children.length, 1, 'у «НЕ» ровно один ребёнок');
+    assert.equal((root.children[1] as FilterAstLeaf).service, true);
+  });
+
+  it('round-trip ИЛИ-корня: переоткрытие возвращает корень «ИЛИ» и все условия', () => {
+    const first = mod.buildViewAstDefinition(orState());
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    const tree = reopened.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
+    assert.equal(tree.op, 'or', 'обёртка снята — пользователь видит свой корень «ИЛИ»');
+    assert.equal(tree.children.length, 2, 'условия пользователя не потеряны');
+    assert.equal(
+      collectTreeLeaves(tree).some((leaf) => leaf.entity.kind === 'trashed'),
+      false,
+      'служебный лист не показан строкой условия',
+    );
+    assert.equal(mod.hasAnyCriteria(reopened), true);
+    assert.deepEqual(
+      mod.buildViewAstDefinition(reopened),
+      first,
+      'пересохранение даёт то же определение — roundtrip не регрессирует',
+    );
+  });
+
+  it('round-trip НЕ-корня: корень «НЕ» восстанавливается без лишнего уровня', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = { kind: 'group', op: 'not', children: [keywordsLeaf('смета')] };
+    const first = mod.buildViewAstDefinition(state);
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    const tree = reopened.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
+    assert.equal(tree.op, 'not');
+    assert.deepEqual(mod.buildViewAstDefinition(reopened), first);
+  });
+
+  it('пустой отбор с ИЛИ-корнем остаётся пустым: служебная обёртка не даёт критериев', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = { kind: 'group', op: 'or', children: [] };
+    assert.equal(mod.hasAnyCriteria(state), false, 'обёртка не обходит запрет пустого отбора');
+    const ast = mod.buildViewAstDefinition(state);
+    assert.equal((ast.filter as FilterAstGroup).op, 'and', 'минимальное условие «живые» есть');
+    const reopened = mod.parseViewDefinition(viewOf(ast), REGISTRY_MAP);
+    const tree = reopened.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
+    assert.equal(tree.op, 'or', 'пользовательский пустой корень «ИЛИ» восстановлен');
+    assert.equal(tree.children.length, 0);
+    assert.equal(mod.hasAnyCriteria(reopened), false, 'после переоткрытия отбор тоже пуст');
   });
 });
 

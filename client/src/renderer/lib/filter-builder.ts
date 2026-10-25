@@ -1874,6 +1874,11 @@ export function isTrashedDefaultLeaf(
  * непомеченный лист «Помечено на удаление = нет» остаётся условием пользователя
  * ({@link isTrashedDefaultLeaf} с `unmarked: true` описывает такую ФОРМУ и
  * применяется исключительно к плоскому пути чтения).
+ *
+ * Вместе с листом снимается и ОБЁРТКА места: при корне пользователя не-«И»
+ * `withViewDefaults` печатает `(корень) И живые`, и после снятия листа группа
+ * «И» с единственным ребёнком-группой разворачивается обратно — редактор
+ * показывает исходный корень «ИЛИ»/«НЕ», а не лишний уровень (ошибка a65d27d9).
  */
 export function stripServiceLeavesAtRoot(tree: FilterTreeNode): FilterTreeNode {
   if (tree.kind !== 'group') return tree;
@@ -1881,6 +1886,15 @@ export function stripServiceLeavesAtRoot(tree: FilterTreeNode): FilterTreeNode {
     (child) => !(child.kind === 'leaf' && child.service === true),
   );
   if (children.length === tree.children.length) return tree;
+  // Обёртка места применения: при корне не-«И» следствие служебного условия
+  // печатается как `(корень пользователя) И живые` (ошибка a65d27d9). Сняв
+  // лист «живые», возвращаем исходный корень — иначе редактор показал бы
+  // лишний уровень «И» вместо группы «ИЛИ»/«НЕ» пользователя. Одиночный
+  // РЕБЁНОК-группа разворачивается только в этой форме: группа «И» из одного
+  // листа-условия остаётся как есть.
+  if (tree.op === 'and' && children.length === 1 && children[0]!.kind === 'group') {
+    return children[0]!;
+  }
   return { ...tree, children };
 }
 

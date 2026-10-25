@@ -1736,6 +1736,83 @@ describe(
       }
     });
 
+    it('ИЛИ-корень определения: служебный лист «живые» обёртывает корень и сужает выдачу (a65d27d9)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const typeId = await createType(ctx, 'or-view-type');
+        const ownerId = await createThought(ctx, 'владелец ИЛИ-отбора', typeId);
+        const alphaId = await createThought(ctx, 'альфа проба', typeId);
+        const betaId = await createThought(ctx, 'бета проба', typeId);
+        const otherId = await createThought(ctx, 'гамма проба', typeId);
+        const trashedAlphaId = await createThought(ctx, 'альфа в корзине', typeId);
+        updateThought(ctx.ndb, trashedAlphaId, { marked_for_deletion: true }, undefined, USER);
+
+        // Определение ровно в той форме, которую печатает клиент после фикса:
+        // ((альфа ИЛИ бета) И живые). До фикса клиент вливал служебный лист в
+        // ИЛИ-корень — (альфа ИЛИ бета ИЛИ живые), и выдача расширялась до
+        // ВСЕХ живых мыслей.
+        const definition = JSON.stringify({
+          version: FILTER_AST_VERSION,
+          filter: {
+            op: 'and',
+            children: [
+              {
+                op: 'or',
+                children: [
+                  {
+                    entity: { kind: 'keywords', scope: ['title', 'synonyms'] },
+                    operator: 'matches',
+                    value: 'альфа',
+                  },
+                  {
+                    entity: { kind: 'keywords', scope: ['title', 'synonyms'] },
+                    operator: 'matches',
+                    value: 'бета',
+                  },
+                ],
+              },
+              { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: true },
+            ],
+          },
+        });
+        const created = await createCustomView(ctx, ownerId, {
+          name: 'ИЛИ-обёртка',
+          definition,
+        });
+        assert.equal(created.statusCode, 201, created.body);
+        const stored = await ctx.app.inject({
+          method: 'GET',
+          url: customViewsUrl(ctx, ownerId, created.id!),
+          headers: h,
+        });
+        assert.equal(stored.statusCode, 200, stored.body?.toString());
+        assert.equal(
+          (stored.json().data as { definition: string }).definition,
+          definition,
+          'определение хранится байт в байт — обёртка и метка service не срезаются',
+        );
+
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ownerId}/views/${created.id!}/run`,
+          headers: h,
+          payload: {},
+        });
+        assert.equal(res.statusCode, 200, res.body?.toString());
+        const ids = (res.json().data as Array<{ id: string }>).map((t) => t.id);
+        assert.ok(ids.includes(alphaId), 'условие пользователя «альфа» в выдаче');
+        assert.ok(ids.includes(betaId), 'условие пользователя «бета» в выдаче');
+        assert.ok(
+          !ids.includes(otherId),
+          'живая мысль вне условий пользователя НЕ попала в выдачу (ИЛИ не расширен)',
+        );
+        assert.ok(!ids.includes(trashedAlphaId), 'служебное «живые» сужает выдачу');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('run типового отбора не изменился: scope type, defined_on/type_id — тип', async () => {
       const ctx = await buildRestContext();
       try {
