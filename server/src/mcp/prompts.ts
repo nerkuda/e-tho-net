@@ -159,7 +159,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_merge_partial',
     {
-      title: 'Как делать частичное слияние слоя (etn.layers.merge с tables)',
+      title: 'Как делать частичное слияние слоя (etn.ops, action layers.merge)',
       description:
         'Пошаговая инструкция: замкнутость выборки tables, конфликты base_version, reserve-слой для отката.',
       argsSchema: {
@@ -171,12 +171,12 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       const layerRef = args.layer_id ?? '<layer_id>';
       return promptResult(
         [
-          `Как слить слой в родителя целиком или частично (etn.layers.merge, сеть ${args.network_id}).`,
+          `Как слить слой в родителя целиком или частично (\`etn.ops { action: "layers.merge" }\`, сеть ${args.network_id}).`,
           ``,
           `1. Осмотрись: \`etn.layers.list\` — возьми layer_id и убедись, что у слоя есть родитель (основу и служебные слои слить нельзя).`,
-          `2. Посмотри, что в слое: \`etn.layers.diff { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} }\` — структурная разница (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — физические строки слоя). Текстовую разницу даст \`etn.layers.diff_doc\` — используй обе.`,
-          `3. Полное слияние: \`etn.layers.merge { network_id, layer_id }\` — без tables переносятся все изменения слоя.`,
-          `4. Частичное слияние: добавь \`tables: { "<таблица>": ["<id строк>"] }\`. Таблицы ветвимы: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Ключи — ЛОГИЧЕСКИЕ id строк (те же, что в diff.override и в обычных инструментах).`,
+          `2. Посмотри, что в слое: \`etn.ops { action: "layers.diff", params: { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} } }\` — структурная разница (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — физические строки слоя). Текстовую разницу даст \`etn.ops { action: "layers.diff_doc", params: { network_id, layer_id } }\` — используй обе.`,
+          `3. Полное слияние: \`etn.ops { action: "layers.merge", params: { network_id, layer_id }, confirm: true }\` — без tables переносятся все изменения слоя.`,
+          `4. Частичное слияние: добавь в params \`tables: { "<таблица>": ["<id строк>"] }\`. Таблицы ветвимы: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Ключи — ЛОГИЧЕСКИЕ id строк (те же, что в diff.override и в обычных инструментах).`,
           ``,
           `Замкнутость (missing_closure): если выбранная строка ссылается на другую строку (связь — на мысль, комментарий — на владельца и т.п.), ссылка должна быть либо тоже выбрана, либо уже существовать в родителе. Ошибка перечисляет недостающие ссылки в details.missing_closure — добавь их в tables и повтори.`,
           ``,
@@ -184,7 +184,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           ``,
           `Reserve-слой: если слияние что-то перезаписывает или удаляет, сервер автоматически создаёт служебный резервный слой с состоянием до слияния (reserve_layer_id в ответе). Откат ручной: скопируй нужное из резерва, затем удали резерв. Вставки-only слияние резерва не создаёт.`,
           `Успешный ответ: { applied, skipped, reorder_collapsed, reserve_layer_id, purged }. skipped — связи, чей конец исчез физически (§6.4): слияние всё равно успешно.`,
-          `После слияния проверь остаток: повторный \`etn.layers.diff\` покажет, что ещё не слито; пустой слой можно удалить \`etn.layers.delete\`.`,
+          `После слияния проверь остаток: повторный \`etn.ops { action: "layers.diff" }\` покажет, что ещё не слито; пустой слой можно удалить \`etn.ops { action: "layers.delete", params: { network_id, layer_id }, confirm: true }\`.`,
         ].join('\n'),
       );
     },
@@ -193,7 +193,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_purge',
     {
-      title: 'Как удалять двухфазно (trash → deletion_check → purge)',
+      title: 'Как удалять двухфазно (trash → проверка блокировок → purge)',
       description:
         'Пошаговая инструкция двухфазного удаления: пометка в корзину, проверка блокировок, физическая чистка.',
       argsSchema: {
@@ -207,7 +207,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           ``,
           `Фаза 1 — пометка (обратима):`,
           `1. \`etn.ops { action: "thoughts.trash", params: { network_id, thought_id, trashed: true } }\` — мысль уходит в корзину, исчезая из обычных выборок, но физически остаётся. Вернуть: тот же action с \`trashed: false\`.`,
-          `2. Посмотри корзину целиком: \`etn.ops { action: "trash.list", params: { network_id } }\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельных вызовов deletion_check.`,
+          `2. Посмотри корзину целиком: \`etn.ops { action: "trash.list", params: { network_id } }\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельной проверки блокировок.`,
           ``,
           `Что блокирует физическое удаление:`,
           `- использование мысли как цели свойства-связи другой мысли (снять: \`etn.ops { action: "usage_clear", params: { network_id, thought_id } }\` или убрать связь у владельца);`,
