@@ -40,6 +40,7 @@ import type {
 
 import {
   compileFlatCriteriaToAst,
+  stripServiceLeavesAtRoot,
   withReverseLinkPropertySides,
   type FilterCriteriaState,
   type FilterTreeLeaf,
@@ -747,6 +748,90 @@ describe('служебный дефолт «живые» при корне не-
     assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
     assert.equal(tree.op, 'not');
     assert.deepEqual(mod.buildViewAstDefinition(reopened), first);
+  });
+
+  /**
+   * Ошибка ff11075a: корень «И» с ЕДИНСТВЕННОЙ подгруппой «ИЛИ» при
+   * переоткрытии показывался как «ИЛИ». Впечённый служебный лист делал такой
+   * корень неотличимым от обёртки места; теперь «И» с единственной подгруппой
+   * оборачивается (лист — отдельным ребёнком), а читатель разворачивает только
+   * форму ровно `[группа, служебный лист]`.
+   *
+   * Мутационные пробы: вернуть в `withViewDefaults` впекание в такой корень —
+   * краснеет кейс 1 (переоткрытие станет «ИЛИ»); снять в
+   * `stripServiceLeavesAtRoot` строгую форму обёртки — тоже краснеет кейс 1.
+   */
+  it('И-корень с единственной подгруппой «ИЛИ»: переоткрытие показывает «И» (ff11075a)', () => {
+    const state = mod.defaultDialogCriteriaState();
+    state.tree = {
+      kind: 'group',
+      op: 'and',
+      children: [
+        {
+          kind: 'group',
+          op: 'or',
+          children: [keywordsLeaf('смета'), keywordsLeaf('акт')],
+        },
+      ],
+    };
+    const first = mod.buildViewAstDefinition(state);
+    const root = first.filter as FilterAstGroup;
+    assert.equal(root.op, 'and', 'определение — обёртка «И»');
+    assert.equal(root.children.length, 2, 'обёртка: корень пользователя + служебный лист');
+    const userRoot = root.children[0] as FilterAstGroup;
+    assert.equal(userRoot.op, 'and', 'корень пользователя «И» сохранён отдельным ребёнком');
+    assert.equal((root.children[1] as FilterAstLeaf).service, true);
+
+    const reopened = mod.parseViewDefinition(viewOf(first), REGISTRY_MAP);
+    const tree = reopened.tree;
+    assert.ok(tree !== null && tree !== undefined && tree.kind === 'group');
+    assert.equal(tree.op, 'and', 'переоткрытие показывает корень пользователя «И», а не «ИЛИ»');
+    assert.equal(tree.children.length, 1, 'обёртка снята — лишнего уровня нет');
+    const inner = tree.children[0]!;
+    assert.equal(inner.kind, 'group', 'подгруппа пользователя сохранена');
+    assert.equal(inner.kind === 'group' ? inner.op : null, 'or');
+    assert.deepEqual(
+      mod.buildViewAstDefinition(reopened),
+      first,
+      'пересохранение идемпотентно: та же обёртка',
+    );
+  });
+
+  it('снятие служебных листьев не разворачивает «И» без листа вторым ребёнком (ff11075a)', () => {
+    const orGroup: FilterTreeNode = {
+      kind: 'group',
+      op: 'or',
+      children: [keywordsLeaf('смета'), keywordsLeaf('акт')],
+    };
+    // Пользовательское определение без обёртки места: служебных листьев нет —
+    // форма не меняется, корень «И» пользователя остаётся «И».
+    const userAnd: FilterTreeNode = { kind: 'group', op: 'and', children: [orGroup] };
+    const read = stripServiceLeavesAtRoot(userAnd);
+    assert.equal(read.kind, 'group');
+    assert.equal(read.kind === 'group' ? read.op : null, 'and', 'корень «И» пользователя сохранён');
+
+    // Служебный лист есть, но форма НЕ обёртки (лист не второй/их два): группа
+    // «И» не разворачивается — снимается только служебный лист.
+    const serviceLeaf: FilterTreeLeaf = {
+      kind: 'leaf',
+      entity: { kind: 'trashed' },
+      operator: 'eq',
+      value: { kind: 'scalar', value: false },
+      service: true,
+    };
+    const odd: FilterTreeNode = {
+      kind: 'group',
+      op: 'and',
+      children: [orGroup, serviceLeaf, { ...serviceLeaf }],
+    };
+    const oddRead = stripServiceLeavesAtRoot(odd);
+    assert.equal(oddRead.kind, 'group');
+    assert.equal(oddRead.kind === 'group' ? oddRead.op : null, 'and', 'не-обёртка не разворачивается');
+    assert.equal(
+      oddRead.kind === 'group' ? oddRead.children.length : 0,
+      1,
+      'служебные листья сняты, подгруппа пользователя осталась',
+    );
   });
 
   it('пустой отбор с ИЛИ-корнем остаётся пустым: служебная обёртка не даёт критериев', () => {

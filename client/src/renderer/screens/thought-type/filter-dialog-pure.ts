@@ -107,7 +107,12 @@ export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
  *   * корень «ИЛИ»/«НЕ» и одиночный лист лист НЕ впитывают: внутри «ИЛИ»
  *     дефолт расширил бы выдачу до ВСЕХ живых мыслей (`(A ИЛИ B) ИЛИ живые`), а
  *     внутри «НЕ» сломал бы аричность (ровно один ребёнок). Здесь корень
- *     ОБОРАЧИВАЕТСЯ: `(A ИЛИ B) И живые`.
+ *     ОБОРАЧИВАЕТСЯ: `(A ИЛИ B) И живые`;
+ *   * корень «И» с ЕДИНСТВЕННОЙ подгруппой тоже оборачивается: впечённый лист
+ *     сделал бы его неотличимым от обёртки, и читатель развернул бы корень до
+ *     подгруппы — пользователь увидел бы «ИЛИ» вместо своего «И» (ошибка
+ *     ff11075a). Обёрнутый вид `И[И[ИЛИ[A,B]], живые]` читатель возвращает к
+ *     `И[ИЛИ[A,B]]`.
  *
  * Обёртку снимает читатель определения вместе со служебным листом
  * (`stripServiceLeavesAtRoot` в `lib/filter-builder.ts`) — переоткрытие
@@ -116,7 +121,9 @@ export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
 export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
   if (treeHasTrashedLeaf(tree)) return tree;
   const leaf = trashedDefaultLeaf();
-  if (tree.kind === 'group' && tree.op === 'and') {
+  const singleGroupChild =
+    tree.kind === 'group' && tree.children.length === 1 && tree.children[0]!.kind === 'group';
+  if (tree.kind === 'group' && tree.op === 'and' && !singleGroupChild) {
     return { ...tree, children: [...tree.children, leaf] };
   }
   return { kind: 'group', op: 'and', children: [tree, leaf] };
