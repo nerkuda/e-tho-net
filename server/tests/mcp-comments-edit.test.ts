@@ -995,5 +995,136 @@ describe('etn.comments.edit replace_section — заголовок и вводн
       await closeMcpContext(ctx);
     }
   });
+
+  it('эхо заголовка с 1–3 ведущими пробелами снимается (круг 1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-indented-echo', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          ['## Заголовок A', 'Старое.', '', '## Заголовок B', 'Хвост.'].join('\n'),
+        );
+        // markdown-it считает заголовком строку с 1–3 ведущими пробелами —
+        // эхо обязано сниматься так же, как без отступа.
+        for (const spaces of [1, 2, 3]) {
+          const result = toolJson<EditResult>(
+            await handle.client.callTool({
+              name: 'etn.comments.edit',
+              arguments: {
+                network_id: ctx.networkId,
+                comment_id: upserted.id,
+                ops: [
+                  {
+                    op: 'replace_section',
+                    section: 'Заголовок A',
+                    text: `${' '.repeat(spaces)}## Заголовок A\nНовое ${spaces}.`,
+                  },
+                ],
+              },
+            }),
+          );
+          assert.deepEqual(result.sections, ['Заголовок A', 'Заголовок B']);
+          const body = readBody(ndb, upserted.id).body_md;
+          assert.equal(
+            body,
+            ['## Заголовок A', `Новое ${spaces}.`, '', '## Заголовок B', 'Хвост.'].join('\n'),
+          );
+          assert.equal(body.match(/^## Заголовок A$/gm)?.length, 1, body);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('4+ ведущих пробела — блок кода, а не заголовок: тело остаётся как есть', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-indented-code', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Заголовок A\nСтарое.');
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок A',
+                  text: '    ## Заголовок A\nНовое.',
+                },
+              ],
+            },
+          }),
+        );
+        // Строка с четырьмя пробелами рендерится как код, а не как второй h2:
+        // это тело секции, отступ не снимается.
+        assert.deepEqual(result.sections, ['Заголовок A']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Заголовок A', '    ## Заголовок A', 'Новое.'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('fenced-блок не даёт секций и не рвётся при правке (круг 1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-fence', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Внутри fence — заголовки (в том числе повторяющий адресованный и с
+        // отступами): секциями они не считаются, validateSections молчит.
+        const initial = [
+          '## Секция',
+          'Текст.',
+          '',
+          '```',
+          '## Секция',
+          '  ## поддельный',
+          '   # тоже',
+          '```',
+          '',
+          '## Хвост',
+          'Хвост.',
+        ].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Секция', 'Хвост']);
+        // Fence целиком сохранён — ни заголовков, ни пустых строк не добавилось.
+        assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
 

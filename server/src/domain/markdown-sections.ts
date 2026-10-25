@@ -32,8 +32,18 @@ import { EtnError } from '@etn/shared';
 /** Максимальная длина виртуального заголовка для текстов без `#`. */
 const VIRTUAL_HEADING_MAX_CHARS = 255;
 
-/** Регулярка заголовка уровня 1–6: `#` … `######`, потом пробел и текст. */
-const HEADING_RE = /^(#{1,6})\s+(.+?)\s*$/;
+/**
+ * Регулярка заголовка уровня 1–6: до трёх ведущих пробелов, `#` … `######`,
+ * потом пробел и текст. Столько же пробелов допускает markdown-it: четыре и
+ * больше — уже блок кода, а не заголовок (ошибка f15f389e, круг 1).
+ */
+const HEADING_RE = /^ {0,3}(#{1,6})\s+(.+?)\s*$/;
+
+/** Открывающий fence блока кода: до трёх пробелов, ` ``` ` или `~~~`. */
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/** Закрывающий fence: тот же символ, не короче открывающего, без info. */
+const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})\s*$/;
 
 /** Регулярка пустой строки (любые пробельные символы). */
 const BLANK_RE = /^\s*$/;
@@ -83,13 +93,38 @@ interface HeadingHit {
 
 /**
  * Пройтись по строкам и собрать все `#`-заголовки в порядке появления.
- * Используется и {@link parseSections}, и {@link validateSections}.
+ * Используется и {@link parseSections}, и {@link validateSections}, поэтому
+ * распознавание обязано совпадать с рендерером (markdown-it): до трёх
+ * ведущих пробелов — заголовок, четыре и больше — блок кода; строки внутри
+ * fenced-блоков (` ``` ` / `~~~`) заголовками не считаются (ошибка f15f389e,
+ * круг 1: иначе заголовок в примере кода разрывал бы fence при пересборке
+ * тела).
  */
 function collectHeadings(body: string): HeadingHit[] {
   const lines = body.split('\n');
   const out: HeadingHit[] = [];
+  /** Открытый fence: символ и длина последовательности. */
+  let fence: { char: string; len: number } | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
+    if (fence !== null) {
+      const close = FENCE_CLOSE_RE.exec(line);
+      const seq = close?.[1] ?? '';
+      if (seq !== '' && seq[0] === fence.char && seq.length >= fence.len) {
+        fence = null;
+      }
+      continue;
+    }
+    const open = FENCE_OPEN_RE.exec(line);
+    if (open !== null) {
+      const seq = open[1] ?? '';
+      // Info string backtick-фенса не может содержать обратных кавычек
+      // (CommonMark) — иначе это не fence, а обычная строка.
+      if (seq[0] === '~' || !(open[2] ?? '').includes('`')) {
+        fence = { char: seq[0] ?? '`', len: seq.length };
+        continue;
+      }
+    }
     const m = HEADING_RE.exec(line);
     if (!m) continue;
     const hashes = m[1] ?? '';
