@@ -20,6 +20,11 @@
       "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const mk=async(t)=>{ const r=await et.thoughts.create(N,{title:t,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; window.__visSeed={ alpha: await mk('альфа проба'), beta: await mk('бета проба'), other: await mk('гамма проба') }; return 'ok'; })(); })()",
       "expect": "ok"
     },
+    {
+      "name": "tabs-panel-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
     { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
     {
       "name": "structures-editor",
