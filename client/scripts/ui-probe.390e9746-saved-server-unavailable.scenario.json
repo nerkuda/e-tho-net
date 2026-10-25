@@ -23,7 +23,8 @@
       "probe": {
         "name": "formError",
         "expression": "document.querySelector('.form-row .error-text')?.textContent ?? null"
-      }
+      },
+      "expect": "Не удалось подключиться к серверу http://127.0.0.1:19778: соединение отклонено — сервер не запущен или порт закрыт"
     },
     { "name": "reload", "eval": "location.reload()" },
     {
@@ -36,7 +37,8 @@
       "probe": {
         "name": "bootError",
         "expression": "(() => { const el = document.querySelector('.onboarding-error'); return el !== null && el.hidden === false ? el.textContent : null; })()"
-      }
+      },
+      "expect": "Не удалось подключиться к серверу http://127.0.0.1:19778: соединение отклонено — сервер не запущен или порт закрыт"
     },
     {
       "name": "clear-boot-error",
