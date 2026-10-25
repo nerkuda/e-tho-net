@@ -91,9 +91,17 @@ describe('структура экрана: единая правка и неме
     assert.match(fn, /title\.endEdit\(false, false\)/, 'заголовок откатывается');
   });
 
-  it('карточка в правке не пересобирается (текст не теряется)', () => {
+  it('карточка в правке не пересобирается, но шапка догоняет модель (78d600c9)', () => {
     const fn = functionBody(CHRONICLE, 'function updateRecordCard(');
-    assert.match(fn, /cardEditors\.get\(card\)\?\.editing\(\) === true\) return;/);
+    const sync = fn.indexOf('editor.syncHead(row)');
+    const refill = fn.indexOf('fillRecordCard(card, row, day)');
+    assert.ok(sync >= 0, 'в правке шапка синхронизируется со свежей строкой');
+    assert.ok(refill > sync, 'пересборка карточки — только вне правки');
+    assert.doesNotMatch(
+      fn,
+      /editing\(\) === true\) return;/,
+      'правка больше не «замораживает» дату и привязки карточки',
+    );
   });
 
   it('«Добавить» сразу создаёт запись и вставляет её локально', () => {

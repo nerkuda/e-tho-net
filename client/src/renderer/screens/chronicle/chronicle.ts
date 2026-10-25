@@ -130,7 +130,6 @@ import {
   resolvePeriodDay,
   rowDays,
   todayLocal,
-  visibleChips,
   weekPeriod,
 } from './diary.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
@@ -168,7 +167,7 @@ import {
   type RecordGroupLabels,
 } from './record-groups.js';
 import { type RecordTitleHandle } from './record-title.js';
-import { buildRecordHead } from './record-head.js';
+import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
@@ -238,6 +237,13 @@ interface CardEditor {
   openTitle(): void;
   /** Войти в правку с фокусом в теле. */
   openBody(): void;
+  /**
+   * Синхронизировать ШАПКУ карточки со свежей строкой модели (дата/период и
+   * облачка привязок), не пересобирая карточку и не отсоединяя живой редактор.
+   * Привязки не входят в поля единой правки: добавленная к несохранённой записи
+   * мысль обязана появиться сразу (ошибка 78d600c9).
+   */
+  syncHead(next: ChronicleRow): void;
 }
 
 const cardEditors = new WeakMap<HTMLElement, CardEditor>();
@@ -1363,11 +1369,21 @@ function buildRecordCard(row: ChronicleRow, day: string): HTMLElement {
  * Обновление существующей карточки при keyed-сверке: перерисовывается ТОЛЬКО
  * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
  * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
- * Карточка В ЕДИНОЙ ПРАВКЕ не трогается: пересборка отсоединила бы живой
- * редактор и потеряла несохранённый текст — обновление ждёт выхода из правки.
+ * Карточка В ЕДИНОЙ ПРАВКЕ не пересобирается: пересборка отсоединила бы живой
+ * редактор и потеряла несохранённый текст. При этом шапка (дата/период и
+ * облачка привязок) — не поля правки, её обновляет `syncHead` (78d600c9).
  */
 function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
-  if (cardEditors.get(card)?.editing() === true) return;
+  const editor = cardEditors.get(card);
+  // Карточка в единой правке: живой редактор (заголовок/тело) не пересобираем —
+  // иначе отсоединится поле и потеряется набранный текст. Но дата/период и
+  // облачка привязок — НЕ поля правки, а часть модели записи: шапка
+  // синхронизируется сразу. Без этого добавленная к несохранённой записи мысль
+  // появлялась в шапке только после сохранения (ошибка 78d600c9).
+  if (editor !== undefined && editor.editing()) {
+    editor.syncHead(row);
+    return;
+  }
   fillRecordCard(card, row, day);
 }
 
@@ -1614,19 +1630,17 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     editing = false;
   };
 
-  const editor: CardEditor = {
-    row,
-    editing: () => editing,
-    // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
-    openTitle: () => title?.beginEdit(true),
-    openBody: () => void enterBodyEdit('body'),
-  };
+  // Облачка привязок — контейнер с перерисовкой НА МЕСТЕ: привязки не входят в
+  // единую правку, поэтому их состав догоняет модель сразу, даже пока карточка в
+  // правке (ошибка 78d600c9: мысль, добавленная к несохранённой записи, была
+  // видна только после её сохранения).
+  const chips = createRecordChips({ row, homeId: () => homeId, buildChip });
 
   const head = buildRecordHead({
     dayLabel: recordDateLabel(row),
     onDateClick: () => void editRecordDates(row),
     dateTitle: 'Период дневниковой записи',
-    chips: buildChipsRow(row),
+    chips: chips.box,
     onAddThought: () => void pickAndAttach(row.id),
     trailing: iconButton({
       icon: svgIcon('menu', 16),
@@ -1663,6 +1677,25 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     },
   });
   title = head.title;
+
+  const editor: CardEditor = {
+    row,
+    editing: () => editing,
+    // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
+    openTitle: () => title?.beginEdit(true),
+    openBody: () => void enterBodyEdit('body'),
+    // Шапка вне правки: свежая строка модели обновляет дату/период и облачка
+    // привязок НА МЕСТЕ (карточка не пересобирается — живой редактор цел).
+    syncHead: (next: ChronicleRow): void => {
+      row.targets = next.targets;
+      row.valid_from = next.valid_from;
+      row.valid_to = next.valid_to;
+      row.use_time = next.use_time;
+      chips.sync(row);
+      head.setDayLabel(recordDateLabel(row));
+    },
+  };
+
   // Производный заголовок записи может нести сырую ID-форму wiki-ссылки
   // (`[[#<id>]]`, ошибка 6b4e402a): синхронную подстановку из кеша уже сделал
   // `recordTitleLabel` (`derivedTitleLabel`), здесь дорезолвиваем имена мыслей
@@ -1848,18 +1881,11 @@ async function copyRecord(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // Chips (attachments)
 // ---------------------------------------------------------------------------
-
-function buildChipsRow(row: ChronicleRow): HTMLElement {
-  const box = div('diary-record-chips');
-  repaintChips(box, row);
-  return box;
-}
-
-function repaintChips(box: HTMLElement, row: ChronicleRow): void {
-  box.replaceChildren();
-  const chips = visibleChips(row.targets, homeId);
-  for (const target of chips) box.append(buildChip(target, row.id));
-}
+//
+// Контейнер облачков и его перерисовка НА МЕСТЕ живут в компоненте шапки
+// (`record-head.ts`: `createRecordChips`): состав привязок — модель записи, а не
+// поля единой правки, поэтому он обновляется и во время правки. Здесь остаётся
+// только доменное облачко привязки (мысль/связь) с её меню и командами записи.
 
 function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
   const chip = target.kind === 'thought' ? thoughtChip(target.thought) : linkChip(target.link);
