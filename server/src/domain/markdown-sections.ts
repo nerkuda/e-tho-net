@@ -14,6 +14,13 @@
  * попадал ни в одну секцию, был невидим в `sections[]` и недоступен
  * `replace_section`/`delete_section`.
  *
+ * `replace_section` меняет только тело адресованной секции, её заголовок
+ * сохраняется (ошибка f15f389e): заголовок в `text` допустим лишь как эхо
+ * того же текста (уровень игнорируется) либо как подраздел более низкого
+ * уровня; заголовок того же/более высокого уровня с другим текстом даёт
+ * `VALIDATION_ERROR` — иначе в теле оставался пустой старый заголовок и
+ * рядом появлялся второй.
+ *
  * Файл держит только парсер секций и применение ops к строкам; запись в БД
  * делает `comment-service.ts::editComment` поверх `updateComment` — так
  * версионирование, теневые строки и журнал активности остаются единой
@@ -193,39 +200,55 @@ export function validateSections(body: string): void {
 }
 
 /**
- * Развернуть переданный текст замены в полное тело секции. Если секция
- * реальная — заголовок уровня `level` добавляется автоматически, когда
- * `text` его не несёт; для виртуальной секции заголовок не вставляется,
- * текст замены остаётся дословным содержимым.
+ * Развернуть переданный текст замены в полное тело реальной секции.
+ *
+ * `replace_section` заменяет только ТЕЛО адресованной секции — её заголовок
+ * сохраняется. Поэтому заголовок в `text` необязателен и трактуется так
+ * (ошибка f15f389e — задвоение заголовка):
+ *   * эхо адресованного заголовка — тот же текст, уровень не важен (агент
+ *     скопировал заголовок из другого места или сменил уровень) — строка
+ *     отбрасывается, остаётся исходный заголовок;
+ *   * заголовок более низкого уровня (подраздел) — это содержимое, он
+ *     остаётся в теле;
+ *   * заголовок того же или более высокого уровня с другим текстом — попытка
+ *     переименовать/подменить секцию: `VALIDATION_ERROR`. Иначе в теле
+ *     оставался пустой старый заголовок и появлялся второй (грабля 0.8.3).
+ *
+ * Ведущие пустые строки снимаются до проверки, чтобы `\n## Заголовок` не
+ * прятал эхо от распознавания.
  */
-function buildReplacement(
-  level: number,
-  heading: string,
-  text: string,
-  virtual: boolean,
-): string {
-  if (virtual) {
-    // Виртуальная секция: исходного `#`-заголовка не было — вставлять его
-    // ради замены нельзя, иначе сломается «Сам текст при этом НЕ меняется»
-    // (спека 154df95d, раздел «Страховка для текстов без заголовков»).
-    return text;
-  }
+function buildReplacement(level: number, heading: string, text: string): string {
   const headLine = '#'.repeat(level) + ' ' + heading;
-  const firstLine = text.split('\n', 1)[0] ?? '';
+  const body = text.replace(/^\n+/, '');
+  const firstLine = body.split('\n', 1)[0] ?? '';
   const m = HEADING_RE.exec(firstLine);
   if (m !== null) {
-    const hashes = m[1] ?? '';
-    const headingText = (m[2] ?? '').trim();
-    if (hashes.length === level && headingText === heading.trim()) {
-      // Дублирующийся заголовок убираем — иначе после замены окажется, что
-      // одна и та же строка повторяется, и validateSections зарубит правку.
-      const rest = text.slice(firstLine.length).replace(/^\n/, '');
-      if (rest === '') return headLine;
-      return headLine + '\n' + rest;
+    const firstLevel = (m[1] ?? '').length;
+    const firstHeading = (m[2] ?? '').trim();
+    const rest = body.slice(firstLine.length).replace(/^\n+/, '');
+    if (firstHeading === heading.trim()) {
+      // Эхо адресованного заголовка: исходный заголовок уже будет в теле,
+      // строку из `text` не дублируем. Уровень игнорируется — заголовок
+      // секции остаётся прежним.
+      return rest === '' ? headLine : headLine + '\n' + rest;
     }
+    if (firstLevel <= level) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'replace_section text must not start with a heading of the same or higher level: ' +
+          'the section heading is preserved automatically — pass only the section body',
+        {
+          section: heading,
+          level,
+          text_heading: firstHeading,
+          text_level: firstLevel,
+        },
+      );
+    }
+    // Более низкий уровень — подраздел внутри тела; заголовок секции нужен.
   }
-  if (text === '') return headLine;
-  return headLine + '\n' + text;
+  if (body === '') return headLine;
+  return headLine + '\n' + body;
 }
 
 /**
@@ -302,7 +325,7 @@ function replaceSection(body: string, section: string, text: string): string {
     const next = sections.slice(0, idx).concat([replacement], sections.slice(idx + 1));
     return collapseBlankRuns(joinSections(next));
   }
-  const replacement = buildReplacement(found.level, found.heading, text, false);
+  const replacement = buildReplacement(found.level, found.heading, text);
   // Разбираем replacement обратно в секции, чтобы подтянуть вложенные
   // заголовки внутрь (если `text` сам содержит подразделы) — это сохраняет
   // иерархию и позволяет `replace_section` менять сразу несколько уровней.

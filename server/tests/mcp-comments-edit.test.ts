@@ -712,3 +712,288 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 });
+
+/**
+ * Ошибка f15f389e: `replace_section` по секции документа с вводным текстом
+ * до первого заголовка задваивал заголовок (исходный `##` + заголовок из
+ * replacement другого уровня) и дублировал имя секции в `sections[]`.
+ * Вводный блок при этом терялся (вторая часть уже закрыта ошибкой a39046d9 —
+ * вводный абзац адресуется как виртуальная секция).
+ *
+ * Принятое поведение: `replace_section` заменяет ТОЛЬКО тело адресованной
+ * секции. Заголовок в `text` — необязательная эхо-строка: если её текст
+ * совпадает с адресованным заголовком (уровень игнорируется), строка
+ * отбрасывается и сохраняется исходный заголовок. Заголовок того же или
+ * более высокого уровня с ДРУГИМ текстом (попытка переименования или
+ * подмены секции) — `VALIDATION_ERROR`: молча оставлять пустой старый
+ * заголовок (грабля 0.8.3) нельзя. Заголовок более низкого уровня — это
+ * подраздел внутри тела, он допустим.
+ */
+describe('etn.comments.edit replace_section — заголовок и вводный блок (f15f389e)', { skip: !nativeAvailable() }, () => {
+  /** Документ карточки: вводный абзац + две реальные секции. */
+  const CARD_BODY = [
+    'Вводный абзац до первого заголовка.',
+    'Вторая строка вводного абзаца.',
+    '',
+    '## Заголовок A',
+    'Старый контент A.',
+    '',
+    '## Заголовок B',
+    'Контент B.',
+  ].join('\n');
+
+  it('кейс карточки: заголовок из replacement не задваивается, вводный блок цел', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-card-case', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, CARD_BODY);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              // Реальный вызов из карточки: заголовок того же текста, но `###`.
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок A',
+                  text: '### Заголовок A\n\nНовый контент A.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.equal(result.version, 2);
+        // Имя секции не дублируется в ответе.
+        assert.deepEqual(result.sections, [
+          'Вводный абзац до первого заголовка.',
+          'Заголовок A',
+          'Заголовок B',
+        ]);
+        assert.equal(new Set(result.sections).size, result.sections.length);
+        const body = readBody(ndb, upserted.id).body_md;
+        assert.equal(
+          body,
+          [
+            'Вводный абзац до первого заголовка.',
+            'Вторая строка вводного абзаца.',
+            '',
+            '## Заголовок A',
+            'Новый контент A.',
+            '',
+            '## Заголовок B',
+            'Контент B.',
+          ].join('\n'),
+        );
+        // Исходный заголовок ровно один, заголовка из replacement нет.
+        assert.equal(body.match(/Заголовок A/g)?.length, 1, body);
+        assert.ok(!body.includes('### Заголовок A'), body);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('replace_section не первой секции: вводный блок и соседи не тронуты', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-middle-section', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, CARD_BODY);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок B',
+                  text: '### Заголовок B\n\nНовый контент B.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, [
+          'Вводный абзац до первого заголовка.',
+          'Заголовок A',
+          'Заголовок B',
+        ]);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          [
+            'Вводный абзац до первого заголовка.',
+            'Вторая строка вводного абзаца.',
+            '',
+            '## Заголовок A',
+            'Старый контент A.',
+            '',
+            '## Заголовок B',
+            'Новый контент B.',
+          ].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('документ без вводного текста: заголовок первой секции не задваивается', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-no-preamble', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          ['## Секция', 'Старое.', '', '## Хвост', 'Хвост.'].join('\n'),
+        );
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                { op: 'replace_section', section: 'Секция', text: '### Секция\n\nНовое.' },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Секция', 'Хвост']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Секция', 'Новое.', '', '## Хвост', 'Хвост.'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('документ только из вводного текста: замена виртуальной секции', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-only-preamble', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          'Только вводный текст без заголовков.',
+        );
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Только вводный текст без заголовков.',
+                  text: 'Совершенно новый текст.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Совершенно новый текст.']);
+        assert.equal(readBody(ndb, upserted.id).body_md, 'Совершенно новый текст.');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('заголовок другого текста того же уровня → VALIDATION_ERROR, тело не меняется', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-rename-rejected', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = ['## Старое имя', 'Старое тело.', '', '## Хвост', 'Хвост.'].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const err = await handle.client.callTool({
+          name: 'etn.comments.edit',
+          arguments: {
+            network_id: ctx.networkId,
+            comment_id: upserted.id,
+            ops: [
+              { op: 'replace_section', section: 'Старое имя', text: '## Новое имя\nНовое тело.' },
+            ],
+          },
+        });
+        assert.equal(err.isError, true);
+        const text = toolText(err);
+        assert.match(text, /VALIDATION_ERROR/);
+        // Сообщение объясняет правило, а не просто «нельзя».
+        assert.match(text, /heading/i);
+        assert.match(text, /body/i);
+        const after = readBody(ndb, upserted.id);
+        assert.equal(after.body_md, initial);
+        assert.equal(after.version, 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('заголовок более низкого уровня в начале text — допустимый подраздел', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-subsection', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Секция\nСтарое.');
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                { op: 'replace_section', section: 'Секция', text: '### Подраздел\nТекст подраздела.' },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Секция', 'Подраздел']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Секция', '', '### Подраздел', 'Текст подраздела.'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
