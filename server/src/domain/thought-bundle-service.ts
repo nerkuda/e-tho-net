@@ -125,7 +125,10 @@ function resolveThought(
   const typeId = spec.type_id ?? null;
   // All matches (title + synonyms) — reported as candidates when creation is
   // NOT blocked; also the `details.candidates` payload for `on_duplicate: fail`.
-  const hits = findDuplicates(ndb, spec.title, spec.synonyms ?? []);
+  // Dedupe mode (ошибка 11f14a81): строгая семантика кандидатов, тип новой
+  // мысли отсекает partial чужого типа — ложный кандидат не должен вводить в
+  // заблуждение (грабли fe29e2f5).
+  const hits = findDuplicates(ndb, spec.title, spec.synonyms ?? [], [], { typeId });
   // Only a same-type exact title/literal-synonym match blocks creation — a
   // cheap indexed lookup (ошибка 9f4c0793), NOT a second heavy `findDuplicates`.
   const blocking = findBlockingDuplicate(ndb, spec.title, typeId);

@@ -831,6 +831,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const typeIds = ((input.type_ids as string[] | undefined) ?? []).flatMap((value) =>
           value.split(','),
         );
+        // Семантика (ошибка 11f14a81): по умолчанию `dedupe`; живой поиск
+        // диалога/пикеров передаёт `mode=search` явно.
+        const mode = input.mode;
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         // Парсер repeatable кладёт `[]` при отсутствии параметра — поэтому
         // проверяем по длине, а не по наличию ключа.
@@ -868,6 +871,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             title,
             synonyms,
             typeIds,
+            mode,
           });
           sendSuccess(
             reply,
@@ -881,7 +885,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           return;
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const hits = await findDuplicatesAsync(ndb, title, synonyms, typeIds);
+        const hits = await findDuplicatesAsync(ndb, title, synonyms, typeIds, { mode });
         sendList(reply, hits, hits.length, 0, hits.length);
       },
     );

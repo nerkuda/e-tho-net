@@ -387,7 +387,10 @@ describe(
         const hits = findDuplicates(ndb, 'cats');
         const ids = hits.map((h) => h.id);
         assert.ok(ids.includes(a), 'exact title match');
-        assert.ok(ids.includes(b), 'partial match on "cat"');
+        assert.equal(ids.includes(b), false, 'a word from the middle is not a dedupe candidate');
+        // 0.14.1 (ошибка 11f14a81): infix/слово из середины остаётся в live-поиске.
+        const searchIds = findDuplicates(ndb, 'cats', [], [], { mode: 'search' }).map((h) => h.id);
+        assert.ok(searchIds.includes(b), 'partial match on "cat" in search mode');
         const aHit = hits.find((h) => h.id === a)!;
         assert.equal(aHit.matched_on, 'title');
         assert.ok(aHit.synonyms.includes('Felines'));
@@ -483,8 +486,9 @@ describe(
         seedThought(ndb, 'Cats again', { type_id: 'type-b' });
         const filtered = findDuplicates(ndb, 'cats', [], ['type-a']);
         assert.deepEqual(filtered.map((h) => h.id), [a]);
-        // Without the filter both candidates are returned.
-        assert.equal(findDuplicates(ndb, 'cats').length, 2);
+        // Without the filter both candidates are returned (search mode: в
+        // dedupe чужой тип слабого partial отсекается — ошибка 11f14a81).
+        assert.equal(findDuplicates(ndb, 'cats', [], [], { mode: 'search' }).length, 2);
         // An unknown type id filters everything out.
         assert.equal(findDuplicates(ndb, 'cats', [], ['type-zzz']).length, 0);
       } finally {
@@ -499,7 +503,8 @@ describe(
         seedSynonym(ndb, a, 'Петров* Игор*');
         seedSynonym(ndb, a, 'Игорян*');
         // Single-word pattern: `Игорян*` covers the whole input word.
-        const single = findDuplicates(ndb, 'Игорянский');
+        // Search mode: в dedupe `*` — короткое окончание (0.14.1, 11f14a81).
+        const single = findDuplicates(ndb, 'Игорянский', [], [], { mode: 'search' });
         const singleHit = single.find((h) => h.id === a);
         assert.ok(singleHit, 'wildcard synonym matches the input word');
         assert.equal(singleHit!.matched_on, 'synonym');
@@ -560,7 +565,7 @@ describe(
         const ways = seedThought(ndb, 'Пути');
         seedSynonym(ndb, ways, 'дороги');
         const other = seedThought(ndb, 'Работа над ошибками');
-        const hits = findDuplicates(ndb, 'дор');
+        const hits = findDuplicates(ndb, 'дор', [], [], { mode: 'search' });
         const ids = hits.map((h) => h.id);
         assert.ok(ids.includes(work), '«дор» → «Доработать!»');
         assert.ok(ids.includes(price), '«дор» → «Подорожание 2026 года»');
@@ -585,7 +590,7 @@ describe(
         const reversed = seedThought(ndb, 'Ошибки исправления');
         const syn = seedThought(ndb, 'Баги');
         seedSynonym(ndb, syn, 'исправленные ошибки');
-        const hits = findDuplicates(ndb, 'исправ ошиб');
+        const hits = findDuplicates(ndb, 'исправ ошиб', [], [], { mode: 'search' });
         const ids = hits.map((h) => h.id);
         assert.ok(ids.includes(fixed), '«исправ ошиб» → «Исправленные ошибки»');
         assert.ok(ids.includes(pg), '«исправ ошиб» → «Исправить ошибку № PG-2388»');
@@ -604,19 +609,19 @@ describe(
         // Fragments must follow the input order: «dog alpha» has no
         // consecutive-word sequence «dog»→«alpha» in «Alpha dog».
         assert.equal(
-          findDuplicates(ndb, 'dog alpha').some((h) => h.id === a),
+          findDuplicates(ndb, 'dog alpha', [], [], { mode: 'search' }).some((h) => h.id === a),
           false,
           'fragments must follow the input order',
         );
         // An infix occurrence matches without typing `*` (0.4.3 wrongly
         // required a whole word — the «Сломался поиск дублей» regression).
-        const infix = findDuplicates(ndb, 'lpha');
+        const infix = findDuplicates(ndb, 'lpha', [], [], { mode: 'search' });
         const infixHit = infix.find((h) => h.id === a);
         assert.ok(infixHit, 'an infix occurrence is a partial candidate');
         assert.equal(infixHit!.matched_on, 'partial');
         // An explicit `*` wildcard still works (absorbed by the implicit ones).
         assert.ok(
-          findDuplicates(ndb, 'lpha*').some((h) => h.id === a),
+          findDuplicates(ndb, 'lpha*', [], [], { mode: 'search' }).some((h) => h.id === a),
           '`*` keeps matching inside a word',
         );
       } finally {
@@ -633,17 +638,17 @@ describe(
         // infix search, but the hit must stay in the weak 'partial' tier —
         // the dialog never treats it as an exact duplicate (Enter creates a
         // new thought; the row is picked explicitly).
-        const hits = findDuplicates(ndb, 'Диана');
+        const hits = findDuplicates(ndb, 'Диана', [], [], { mode: 'search' });
         const hit = hits.find((h) => h.id === a);
         assert.ok(hit, '«Диана» finds «обсидиана» by the infix fragment');
         assert.equal(hit!.matched_on, 'partial');
         assert.equal(hit!.matched_synonym, undefined);
         // Whole words still match.
-        assert.ok(findDuplicates(ndb, 'миграция').some((h) => h.id === a));
-        assert.ok(findDuplicates(ndb, 'знание').some((h) => h.id === a));
+        assert.ok(findDuplicates(ndb, 'миграция', [], [], { mode: 'search' }).some((h) => h.id === a));
+        assert.ok(findDuplicates(ndb, 'знание', [], [], { mode: 'search' }).some((h) => h.id === a));
         // A `-word` exclusion is infix too: «-диана» drops the thought.
         assert.equal(
-          findDuplicates(ndb, 'знание -диана').some((h) => h.id === a),
+          findDuplicates(ndb, 'знание -диана', [], [], { mode: 'search' }).some((h) => h.id === a),
           false,
           'an exclusion binds to the infix occurrence',
         );
@@ -975,12 +980,14 @@ describe(
       try {
         const t = seedThought(ndb, 'Иван Новиков');
         assert.ok(
-          findDuplicates(ndb, 'Новиков').some((h) => h.id === t && h.matched_on === 'partial'),
+          findDuplicates(ndb, 'Новиков', [], [], { mode: 'search' }).some(
+            (h) => h.id === t && h.matched_on === 'partial',
+          ),
           'a capitalised word still yields the partial candidate',
         );
         assert.deepEqual(
-          findDuplicates(ndb, 'Новиков').map((h) => h.id),
-          findDuplicates(ndb, 'новиков').map((h) => h.id),
+          findDuplicates(ndb, 'Новиков', [], [], { mode: 'search' }).map((h) => h.id),
+          findDuplicates(ndb, 'новиков', [], [], { mode: 'search' }).map((h) => h.id),
           'case does not change the partial-candidate set',
         );
       } finally {
@@ -1043,7 +1050,7 @@ describe(
       try {
         const meter = seedThought(ndb, 'Счетчик электричества');
         seedThought(ndb, 'счета за воду');
-        const hits = findDuplicates(ndb, 'счет* -вод*');
+        const hits = findDuplicates(ndb, 'счет* -вод*', [], [], { mode: 'search' });
         assert.deepEqual(
           hits.map((h) => h.id),
           [meter],
@@ -1051,7 +1058,7 @@ describe(
         );
         assert.equal(hits[0]!.matched_on, 'partial');
         // A pure negative query has nothing to anchor to → no candidates.
-        assert.equal(findDuplicates(ndb, '-вод').length, 0);
+        assert.equal(findDuplicates(ndb, '-вод', [], [], { mode: 'search' }).length, 0);
       } finally {
         ndb.close();
       }
@@ -1872,7 +1879,10 @@ describe('findBlockingDuplicate — дешёвый гейт на индекси�
       const ndb = createInMemoryNetworkDb();
       try {
         seedSynonym(ndb, seedThought(ndb, 'Носитель'), synonym);
-        const found = findDuplicates(ndb, term).some((h) => h.matched_on === 'synonym');
+        // Паритет префильтра с regex — свойство live-поиска (0.4.5).
+        const found = findDuplicates(ndb, term, [], [], { mode: 'search' }).some(
+          (h) => h.matched_on === 'synonym',
+        );
         assert.equal(
           found,
           expected,

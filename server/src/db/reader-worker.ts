@@ -191,8 +191,11 @@ function execute(task: ReaderTask): ReaderTaskResponse {
       };
     }
     case 'thoughts.findDuplicates': {
-      const { title, synonyms, typeIds } = task.payload;
-      return { ok: true, result: findDuplicates(ndb, title, synonyms, typeIds) };
+      const { title, synonyms, typeIds, mode, typeId } = task.payload;
+      return {
+        ok: true,
+        result: findDuplicates(ndb, title, synonyms, typeIds, { mode, typeId }),
+      };
     }
     case 'comments.list':
       return {

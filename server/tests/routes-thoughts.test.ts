@@ -894,10 +894,20 @@ describe(
           'synonym',
         );
 
-        // 0.4.5: partial matches a whole word of the title…
-        const partial = await ctx.app.inject({
+        // 0.14.1 (ошибка 11f14a81): по умолчанию строгий dedupe — слово из
+        // середины названия кандидатом не считается.
+        const strict = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механика')}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(strict.statusCode, 200);
+        assert.deepEqual(strict.json().data, []);
+
+        // 0.4.5: partial matches a whole word of the title (live-поиск, mode=search)…
+        const partial = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механика')}&mode=search`,
           headers: authHeaders(ctx),
         });
         assert.equal(partial.statusCode, 200);
@@ -910,7 +920,7 @@ describe(
         // «Квантовая механика» as a weak partial candidate (never as a duplicate).
         const infix = await ctx.app.inject({
           method: 'GET',
-          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}`,
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}&mode=search`,
           headers: authHeaders(ctx),
         });
         assert.equal(infix.statusCode, 200);

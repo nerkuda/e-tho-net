@@ -47,7 +47,7 @@ import {
   type ThoughtQueryRequest,
   type ThoughtQueryResult,
 } from './query-service.js';
-import { findDuplicates, search } from './search-service.js';
+import { findDuplicates, search, type FindDuplicatesOptions } from './search-service.js';
 import {
   traverse,
   subgraph,
@@ -296,14 +296,17 @@ export async function findDuplicatesAsync(
   title: string,
   synonyms: string[] = [],
   typeIds: string[] = [],
+  options: FindDuplicatesOptions = {},
 ): Promise<DuplicateHit[]> {
   const pool = getReaderPool();
   const context = contextFor(ndb, pool);
-  if (pool === null || context === null) return findDuplicates(ndb, title, synonyms, typeIds);
+  if (pool === null || context === null) {
+    return findDuplicates(ndb, title, synonyms, typeIds, options);
+  }
   const task: ReaderTask = {
     context,
     op: 'thoughts.findDuplicates',
-    payload: { title, synonyms, typeIds },
+    payload: { title, synonyms, typeIds, ...options },
   };
   return (await pool.run(task)) as DuplicateHit[];
 }

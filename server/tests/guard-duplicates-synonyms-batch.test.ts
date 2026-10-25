@@ -121,8 +121,8 @@ describe(
         const corpus = seedCorpus(ndb);
         let hits = 0;
         const sql = capturePreparedSql(ndb, () => {
-          hits += findDuplicates(ndb, 'cats', ['felines']).length;
-          hits += findDuplicates(ndb, 'Игорянский').length;
+          hits += findDuplicates(ndb, 'cats', ['felines'], [], { mode: 'search' }).length;
+          hits += findDuplicates(ndb, 'Игорянский', [], [], { mode: 'search' }).length;
         });
         assert.ok(hits >= 4, `ожидались все кандидаты, получено ${hits}`);
         const singleId = sql.filter(isSingleIdSynonymQuery);
@@ -142,7 +142,7 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const corpus = seedCorpus(ndb);
-        const hits = findDuplicates(ndb, 'cats', ['felines']);
+        const hits = findDuplicates(ndb, 'cats', ['felines'], [], { mode: 'search' });
         assert.ok(hits.length >= 3);
         for (const hit of hits) {
           assert.deepEqual(

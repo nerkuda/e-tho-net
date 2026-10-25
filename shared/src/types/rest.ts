@@ -237,6 +237,18 @@ export interface NetworkPropertyUsage extends PropertyUsageReport {
   value_type: PropertyValueType;
 }
 
+/**
+ * Семантика `GET /thoughts/duplicates` (ошибка 11f14a81).
+ *
+ * - `dedupe` (по умолчанию) — строгий поиск ДУБЛЕЙ: точные совпадения,
+ *   wildcard-синоним как основа словоформы (короткое окончание), partial —
+ *   слова ввода начинают название/литеральный синоним. Подстрочные совпадения
+ *   и слова из середины чужого названия дублями не считаются.
+ * - `search` — прежнее поведение живого поиска (диалог добавления, пикеры
+ *   мыслей): подстрочные кандидаты с неявными `*`.
+ */
+export type DuplicateSearchMode = 'dedupe' | 'search';
+
 /** Кандидат дубля из `GET /thoughts/duplicates` (08-ui-spec.md §4.4). */
 export interface DuplicateHit {
   id: string;

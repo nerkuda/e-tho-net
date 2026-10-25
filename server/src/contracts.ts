@@ -70,6 +70,7 @@ import {
   TYPE_OWNER_TYPES,
   type EtnErrorCode,
   type CommentOwnerType,
+  type DuplicateSearchMode,
   type FocusDir,
   type FocusNeighbor,
   type LinkTypeFilterInput,
@@ -3329,6 +3330,9 @@ export const RestThoughtDuplicates = defineContract(
       // принимаются (роут склеивает).
       synonyms: z.array(z.string().min(1)).optional(),
       type_ids: z.array(z.string().min(1)).optional(),
+      // Семантика сопоставления (ошибка 11f14a81): `dedupe` по умолчанию,
+      // `search` — живой поиск диалога/пикеров.
+      mode: z.enum(['dedupe', 'search']).optional(),
     }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -3339,6 +3343,7 @@ export const RestThoughtDuplicates = defineContract(
     title: { from: { kind: 'query' }, req: true, msg: 'title обязателен.' },
     synonyms: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
     type_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
+    mode: { from: { kind: 'query' }, t: z.enum(['dedupe', 'search']).optional() },
   },
 );
 
@@ -4529,6 +4534,10 @@ export interface ReaderFindDuplicatesPayload {
   title: string;
   synonyms: string[];
   typeIds: string[];
+  /** Режим сопоставления (ошибка 11f14a81); по умолчанию `dedupe`. */
+  mode?: DuplicateSearchMode;
+  /** Тип предлагаемой мысли — отсекает partial чужого типа в `dedupe`. */
+  typeId?: string | null;
 }
 
 /** Payload `comments.list` — комментарии владельца. */

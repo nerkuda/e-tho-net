@@ -81,6 +81,7 @@ import {
   TRAVERSAL_DEFAULTS,
   type DuplicateHit,
   type DuplicateMatchKind,
+  type DuplicateSearchMode,
   type FilterAst,
   type FilterAstNode,
   type IconKind,
@@ -101,7 +102,7 @@ import {
 // Формы дублей переехали в общий модуль (задача 120385ba): одна форма ответа
 // `GET /thoughts/duplicates` на сервер и клиент. Реэкспорт — для существующих
 // импортов из домена.
-export type { DuplicateHit, DuplicateMatchKind };
+export type { DuplicateHit, DuplicateMatchKind, DuplicateSearchMode };
 
 import type { NetworkDb } from '../db/network-db.js';
 import {
@@ -1534,6 +1535,95 @@ function norm(value: string): string {
   return value.normalize('NFC').trim().toLowerCase();
 }
 
+/**
+ * Опции {@link findDuplicates}.
+ *
+ * Режим `dedupe` (по умолчанию) — строгая семантика поиска ДУБЛЕЙ (ошибка
+ * 11f14a81): совпадение подстроки слова или одного слова из середины чужого
+ * составного названия не делает мысль дублем; `*` в синониме — основа
+ * словоформы (короткое окончание), а не произвольная подстрока; частичный
+ * кандидат обязан начинать название/литеральный синоним последовательностью
+ * слов с начала. Режим `search` — прежнее поведение живого поиска (диалог
+ * добавления, пикеры мыслей, 0.4.5). Семантика одна для MCP и REST: REST по
+ * умолчанию — `dedupe`, живой поиск клиента передаёт `mode=search` явно.
+ * См. {@link DuplicateSearchMode}.
+ */
+export interface FindDuplicatesOptions {
+  /** Режим сопоставления; по умолчанию `dedupe`. */
+  mode?: DuplicateSearchMode;
+  /**
+   * Тип предлагаемой мысли (гейт записи знает его из `thought.type`).
+   * В режиме `dedupe` partial-кандидаты другого типа отбрасываются.
+   */
+  typeId?: string | null;
+}
+
+/**
+ * Максимум символов слова, которые в режиме `dedupe` поглощает `*`.
+ *
+ * Это НЕ стеммер: `*` — изменяемая часть слова (окончание), а не произвольная
+ * подстрока (карточка ошибки 11f14a81). Русское словоизменение укладывается в
+ * три буквы (`-ами`, `-ого`, `-ыми`, `-ешь`); производные слова (`Владимир` →
+ * `Владимирович`, `Игорян` → `Игорянский`) длиннее и матчем не считаются.
+ */
+const DEDUPE_WILDCARD_MAX_ENDING = 3;
+
+/** Один символ слова — та же граница, что у `synonymPatternSource`. */
+const WORD_CHAR_CLASS = '[\\p{L}\\p{N}_]';
+
+/** Word-tokenizer границы слова (буквы/цифры/подчёркивание). */
+const WORD_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+
+/**
+ * Regex-источник wildcard-синонима для режима `dedupe`: паттерн анкорится на
+ * ВЕСЬ термин, `*` поглощает 0…{@link DEDUPE_WILDCARD_MAX_ENDING} символов
+ * слова и не переходит границу слова (дефис, пробел, пунктуация).
+ */
+function dedupeWildcardSource(patternNorm: string): string {
+  const words = patternNorm.trim().split(/\s+/).filter((w) => w !== '');
+  if (words.length === 0) return '(?!)';
+  const wordBody = (word: string): string =>
+    word
+      .split('*')
+      .map((part) => (part === '' ? '' : regexEscape(part)))
+      .join(`${WORD_CHAR_CLASS}{0,${DEDUPE_WILDCARD_MAX_ENDING}}`);
+  return `^${words.map(wordBody).join('\\s+')}$`;
+}
+
+/** Кэш matcher-ов dedupe по `synonym_norm` (см. {@link anchoredWildcardCache}). */
+const dedupeWildcardCache = new Map<string, RegExp>();
+
+/** Anchored matcher режима `dedupe` для `synonymNorm`, компилируется один раз. */
+function dedupeWildcardFor(synonymNorm: string): RegExp {
+  let re = dedupeWildcardCache.get(synonymNorm);
+  if (re === undefined) {
+    if (dedupeWildcardCache.size >= ANCHORED_WILDCARD_CACHE_MAX) dedupeWildcardCache.clear();
+    re = new RegExp(dedupeWildcardSource(synonymNorm), 'iu');
+    dedupeWildcardCache.set(synonymNorm, re);
+  }
+  return re;
+}
+
+/** Слова терма: последовательность runs из букв/цифр/подчёркивания. */
+function wordTokens(value: string): string[] {
+  return norm(value).match(WORD_TOKEN_RE) ?? [];
+}
+
+/**
+ * Режим `dedupe`: слова ввода должны начинать терм кандидата как
+ * последовательность ЦЕЛЫХ слов (дефис/пунктуация — разделители слов).
+ * Слово из середины или конца чужого названия кандидатом не делает —
+ * «Владимир» не матчит «Беберашвили Владимир», а «Владимир город» матчит
+ * «Владимир (город)».
+ */
+function startsWithWordSequence(candidate: string[], input: readonly string[]): boolean {
+  if (input.length === 0 || input.length > candidate.length) return false;
+  for (let i = 0; i < input.length; i += 1) {
+    if (candidate[i] !== input[i]) return false;
+  }
+  return true;
+}
+
 /** Whole-term matcher of one stored `*`-synonym plus its cheap prefilter markers. */
 interface AnchoredWildcardPattern {
   regex: RegExp;
@@ -1692,28 +1782,48 @@ function chunkDuplicateIds(ids: readonly string[]): string[][] {
  * `find_duplicates`).
  *
  * Match priority (strongest wins per candidate): exact `title_norm`, exact
- * `synonym_norm`, then partial. Partial follows the synonym-pattern principle
- * (02-data-model.md §3.2) with an implicit `*` around every typed word, so
- * the user never types `*`: a single fragment matches inside a word of the
- * title or of one synonym («дор» → «Доработать!», «Подорожание 2026 года»,
- * «Дорога в лето»); several fragments must occur inside CONSECUTIVE words in
- * the typed order («исправ ошиб» → «Исправленные ошибки», but not «исправить
- * старую ошибку»). A `-word` exclusion (03-server-api.md §6.10) uses the same
- * infix semantics and drops a candidate whose title/synonyms contain the
- * fragment anywhere. An explicit `*` in a word is allowed and is absorbed by
- * the implicit wrappers. Results are ordered by match strength.
+ * `synonym_norm`, a stored `*`-synonym matching the WHOLE input term, then
+ * partial. `matched_on` keeps the same three values in every mode.
+ *
+ * Two modes (ошибка 11f14a81 — дедупликация строже живого поиска):
+ *
+ * - `dedupe` (default; MCP and REST) — the duplicate semantics:
+ *   * `*` in a stored synonym is the CHANGEABLE part of a wordform: it absorbs
+ *     0…3 word characters inside one word and never crosses a hyphen, space or
+ *     punctuation («Владимир*» matches «Владимире», not «Владимирович»;
+ *     «Газпромбанк*» does not match «Газпромбанк-Автолизинг»). Not a stemmer:
+ *     derived words do not match;
+ *   * a partial candidate's title/literal synonym must START with the input's
+ *     word sequence (whole words, in order; punctuation/hyphens are word
+ *     separators). A single word from the middle of a foreign title or of a
+ *     compound synonym is not a duplicate — «Владимир» does not match
+ *     «Беберашвили Владимир» or «Отель У Золотых Ворот». Stored `*`-synonyms
+ *     are name templates and never serve as partial haystack;
+ *   * partial candidates of a FOREIGN type are dropped when the type is already
+ *     fixed by a stronger hit (or by the explicit `typeId` of the write gate) —
+ *     a city «Владимир» and a person «Беберашвили Владимир» are not duplicates.
+ * - `search` — legacy live-search behaviour (add-thought dialog, thought
+ *   pickers, 0.4.5): implicit `*` around every typed word, infix candidates,
+ *   fragments inside consecutive words in the typed order («дор» →
+ *   «Доработать!», «исправ ошиб» → «Исправленные ошибки»). A `-word` exclusion
+ *   (03-server-api.md §6.10) keeps its infix semantics.
+ *
+ * Results are ordered by match strength in both modes.
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
  * @param typeIds - optional thought-type filter (link property pickers,
  *   pickers): only thoughts of these types are returned.
+ * @param options - `mode` (`dedupe` by default) и `typeId` предлагаемой мысли.
  */
 export function findDuplicates(
   ndb: NetworkDb,
   title: string,
   synonyms: string[] = [],
   typeIds: string[] = [],
+  options: FindDuplicatesOptions = {},
 ): DuplicateHit[] {
+  const mode: DuplicateSearchMode = options.mode ?? 'dedupe';
   const titleTerms = [title.trim(), ...synonyms.map((s) => s.trim())].filter((t) => t !== '');
   if (titleTerms.length === 0) return [];
 
@@ -1926,7 +2036,14 @@ export function findDuplicates(
     // the FTS table drives). `CROSS JOIN` pins the FTS scan first; the
     // following view lookup uses the rowid primary key, so the join stays an
     // inner join with the same rows.
-    const keywords = parseFilterKeywords(n);
+    // В `dedupe` мини-синтаксис не применяется: ввод — литеральное название,
+    // а не поисковый запрос. Кандидатов сужает тот же FTS/LIKE-префильтр
+    // (фрагмент слова — надмножество префикса терма), точную семантику
+    // «слова ввода начинают терм» проверяет JS-постфильтр ниже.
+    const keywords =
+      mode === 'search'
+        ? parseFilterKeywords(n)
+        : { include: wordTokens(n), exclude: [] as string[] };
     if (keywords.include.length > 0) {
       const filter = buildPartialCandidateFilter(keywords.include, keywords.exclude);
       const from =
@@ -1964,14 +2081,21 @@ export function findDuplicates(
         font_strike: number;
         font_manual: number;
       }>;
-      // The include fragments (each implicitly `*`-wrapped) must hit
-      // consecutive words of the title or of ONE synonym, in the typed
+      // Search mode: the include fragments (each implicitly `*`-wrapped) must
+      // hit consecutive words of the title or of ONE synonym, in the typed
       // order. synonymPatternToRegex already encodes the word-boundary and
       // adjacency rules; the `*` wrappers turn its exact-word matcher into
       // the infix one.
-      const includeRe = synonymPatternToRegex(
-        keywords.include.map((w) => `*${w}*`).join(' '),
-      );
+      //
+      // Dedupe mode: the input's WORD SEQUENCE must start the title or a
+      // LITERAL synonym (stored `*`-synonyms are templates, not text). This is
+      // what keeps «Владимир» away from «Беберашвили Владимир» and from a
+      // compound synonym «Золотые Ворота отель Владимир*».
+      const includeRe =
+        mode === 'search'
+          ? synonymPatternToRegex(keywords.include.map((w) => `*${w}*`).join(' '))
+          : null;
+      const inputTokens = mode === 'search' ? [] : keywords.include;
       if (partialRows.length > 0) {
         // Synonym norms of the candidates in one query, then the
         // consecutive-words check per candidate against its title and
@@ -1990,8 +2114,13 @@ export function findDuplicates(
           else synsByThought.set(s.thought_id, [s.synonym_norm]);
         }
         partialRows = partialRows.filter((r) => {
-          const hay = [norm(r.title), ...(synsByThought.get(r.id) ?? [])];
-          return hay.some((h) => includeRe.test(h));
+          const syns = synsByThought.get(r.id) ?? [];
+          if (includeRe !== null) {
+            return [norm(r.title), ...syns].some((h) => includeRe.test(h));
+          }
+          return [r.title, ...syns.filter((s) => !s.includes('*'))].some((h) =>
+            startsWithWordSequence(wordTokens(h), inputTokens),
+          );
         });
       }
       for (const r of partialRows) {
@@ -2006,6 +2135,10 @@ export function findDuplicates(
     // the whole phrase (08-ui-spec.md §4.4: «`*`-паттерн синонима совпал со
     // вводом»).
     //
+    // Dedupe mode uses the strict wordform matcher (ошибка 11f14a81): `*` is
+    // the changeable part of the word, absorbs at most a short ending and never
+    // crosses a word boundary; derived words do not match.
+    //
     // Performance (ошибка 5e35eb7b): matchers come from a compile cache, and
     // every pattern first passes a cheap conservative prefilter over the term —
     // the same «string sieves before regex» trick as the §21 mentions scan
@@ -2019,13 +2152,33 @@ export function findDuplicates(
       for (const r of wildSynRows) {
         const pat = anchoredWildcardFor(r.synonym_norm);
         if (!mentionPrefilterPass(pat.markers, foldedTerm, foldedWords)) continue;
-        if (!pat.regex.test(n)) continue;
+        const re = mode === 'search' ? pat.regex : dedupeWildcardFor(r.synonym_norm);
+        if (!re.test(n)) continue;
         const hit = ensure(r);
         if (hit.matched_on === 'partial') {
           hit.matched_on = 'synonym';
           hit.matched_synonym = r.synonym;
         }
       }
+    }
+  }
+
+  // Dedupe type rule (ошибка 11f14a81): once the type is fixed by a strong
+  // (title/synonym) candidate or by the explicit `typeId` of the write gate,
+  // a partial candidate of another type is noise, not a duplicate — the city
+  // «Владимир» and the person «Беберашвили Владимир» are different entities.
+  if (mode === 'dedupe') {
+    const strongTypes = new Set<string | null>();
+    for (const hit of byId.values()) {
+      if (hit.matched_on !== 'partial') strongTypes.add(hit.type_id);
+    }
+    for (const [id, hit] of byId) {
+      if (hit.matched_on !== 'partial') continue;
+      if (options.typeId !== undefined && hit.type_id !== options.typeId) {
+        byId.delete(id);
+        continue;
+      }
+      if (strongTypes.size > 0 && !strongTypes.has(hit.type_id)) byId.delete(id);
     }
   }
 

@@ -1072,12 +1072,15 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
       // входной термин ЦЕЛИКОМ (anchored regex, границы слов, порядок слов
       // значим; `wildSynRows` + `anchoredWildcardFor`/`mentionPrefilterPass`,
       // search-service.ts). Виден через `matched_on: "synonym"`/`matched_synonym`.
+      // Ошибка 11f14a81: строгий режим dedupe по умолчанию — `*` это короткое
+      // окончание словоформы, partial начинается с начала названия, чужой тип
+      // отсекается. Детали вынесены в тему гайда (бюджет tools/list).
       description:
-        'Find existing thoughts matching a proposed title/synonyms: exact title/synonym, partial ' +
-        '(typed fragments inside CONSECUTIVE words of title or one synonym, in typed order — «исправ ' +
-        'ошиб» finds «Исправленные ошибки», not «исправить старую ошибку»; `-word` excludes), and a ' +
-        'stored `*`-synonym matched against the WHOLE term (word boundaries, order matters; ' +
-        '`matched_on: "synonym"`/`matched_synonym`). Always call before `etn.thoughts.write`.',
+        'Find existing thoughts matching a proposed title/synonyms BEFORE `etn.thoughts.write`. Exact ' +
+        'title/synonym first; then a stored `*`-synonym matched against the WHOLE term (`*` = short ' +
+        'wordform ending, no hyphen/space crossing; word boundaries, order matters; `matched_on: ' +
+        '"synonym"`/`matched_synonym`); then a weak partial (input word sequence must START a ' +
+        'title/literal synonym; foreign type dropped). Details: etn.guide { topic: "find_duplicates" }.',
       inputSchema: ThoughtsFindDuplicates.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },
