@@ -50,6 +50,9 @@ const TRANSLATED_FILES = (rel: string): boolean =>
   rel === 'drafts.ts' ||
   rel === 'lib/delete-dialog.ts' ||
   rel === 'lib/dialog.ts' ||
+  // Текст отказа подключения к серверу (ошибка 390e9746): адрес, причины и
+  // формулировки — только из словаря; возврат литерала обязан краснить.
+  rel === 'lib/connect-failure.ts' ||
   // Полоса отборов и диалог отбора (0.14.1, задача c2bbffab): все подписи,
   // меню, подтверждения и предупреждения — из словаря; литерал обязан краснить.
   rel === 'canvas/focus-filter-strip.ts' ||

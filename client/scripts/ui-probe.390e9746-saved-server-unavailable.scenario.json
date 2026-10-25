@@ -1,0 +1,68 @@
+{
+  "name": "390e9746-saved-server-unavailable",
+  "description": "Заказчик на свежем клиенте: сервер погашен, в списке сохранённых выбирается недоступный сервер. Ожидание — сообщение о недоступности с адресом и причиной (соединение отклонено), а не валидационная подсказка «Введите адрес сервера…». Мёртвый порт 127.0.0.1:19778.",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "wait-onboarding",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.screen-onboarding .form-stack') !== null"
+    },
+    { "name": "fill-url", "click": ".form-stack .ui-field:nth-child(2) .ui-input" },
+    { "name": "type-url", "text": "http://127.0.0.1:19778" },
+    { "name": "fill-key", "click": ".form-stack .ui-field:nth-child(3) .ui-input" },
+    { "name": "type-key", "text": "etn_deadbeefdeadbeefdeadbeefdeadbeef" },
+    { "name": "submit", "click": ".form-row .ui-btn" },
+    {
+      "name": "wait-form-error",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.form-row .error-text')?.textContent?.length > 0"
+    },
+    {
+      "name": "form-error-text",
+      "probe": {
+        "name": "formError",
+        "expression": "document.querySelector('.form-row .error-text')?.textContent ?? null"
+      }
+    },
+    { "name": "reload", "eval": "location.reload()" },
+    {
+      "name": "wait-profiles",
+      "timeout": 45000,
+      "waitFor": "document.querySelectorAll('.profile-item').length > 0"
+    },
+    {
+      "name": "boot-error-text",
+      "probe": {
+        "name": "bootError",
+        "expression": "(() => { const el = document.querySelector('.onboarding-error'); return el !== null && el.hidden === false ? el.textContent : null; })()"
+      }
+    },
+    {
+      "name": "clear-boot-error",
+      "eval": "(() => { const el = document.querySelector('.onboarding-error'); if (el !== null) { el.textContent = ''; el.hidden = true; } })()"
+    },
+    { "name": "click-saved", "click": { "selector": ".profile-item", "at": [40, 8] } },
+    {
+      "name": "wait-connect-error",
+      "timeout": 40000,
+      "waitFor": "(() => { const el = document.querySelector('.onboarding-error'); return el !== null && el.hidden === false && el.textContent.length > 0; })()"
+    },
+    {
+      "name": "connect-error-text",
+      "probe": {
+        "name": "connectError",
+        "expression": "document.querySelector('.onboarding-error')?.textContent ?? null"
+      },
+      "expect": "Не удалось подключиться к серверу http://127.0.0.1:19778: соединение отклонено — сервер не запущен или порт закрыт"
+    },
+    {
+      "name": "no-validation-hint",
+      "probe": {
+        "name": "validationHintShown",
+        "expression": "/Введите адрес сервера/.test(document.querySelector('.onboarding-error')?.textContent ?? '')"
+      },
+      "expect": false
+    }
+  ]
+}

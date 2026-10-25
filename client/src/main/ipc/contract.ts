@@ -202,6 +202,27 @@ export interface IpcErrorEnvelope {
 }
 
 /**
+ * Фактическая причина сетевого отказа транспорта (ошибка 390e9746). Main
+ * кладёт её в `details` ошибки запроса из того, что реально видно в отказе
+ * (`fetch failed` + цепочка `cause`, коды ОС, наш таймаут); renderer
+ * переводит причину в человеческий текст. Причины не выдумываются: всё, что
+ * не распознано, — `other`.
+ *
+ *  - `refused` — соединение отклонено (ECONNREFUSED): сервер не запущен/порт закрыт;
+ *  - `timeout` — ответ не пришёл за отведённое время;
+ *  - `dns` — адрес не разрешился (ENOTFOUND/EAI_AGAIN);
+ *  - `unreachable` — сеть/хост недоступны (ENETUNREACH/EHOSTUNREACH/ECONNRESET);
+ *  - `other` — прочий сетевой сбой без различимой причины.
+ */
+export type ConnectFailureReason = 'refused' | 'timeout' | 'dns' | 'unreachable' | 'other';
+
+/** `details` транспортного отказа запроса — контракт main → renderer. */
+export interface ConnectFailureDetails {
+  kind: 'connect-failed';
+  reason: ConnectFailureReason;
+}
+
+/**
  * Per-network realtime status as delivered by `realtime.getStatuses`
  * (defect de34b35b). `status` is one of `RtStatus`; `detail` qualifies it
  * (`server-restart` → «Сервер перезапускается…»).

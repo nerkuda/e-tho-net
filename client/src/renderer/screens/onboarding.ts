@@ -11,10 +11,11 @@
  *  - understandable errors (bad key / unreachable server / version mismatch).
  */
 
-import { restoreSession } from '../app.js';
+import { restoreSession, takeBootConnectFailure } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el, span } from '../lib/dom.js';
+import { describeConnectFailure } from '../lib/connect-failure.js';
 import { errorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { serverLabelOf, store } from '../state.js';
@@ -84,6 +85,15 @@ export function buildOnboarding(): HTMLElement {
 
   root.append(card);
 
+  // Автоматическое подключение при запуске могло не удаться (ошибка 390e9746):
+  // показываем причину у списка сохранённых серверов — иначе экран молча
+  // предлагал повтор, не объясняя, что случилось с активным сервером.
+  const bootFailure = takeBootConnectFailure();
+  if (bootFailure !== null) {
+    connectError.textContent = bootFailure;
+    connectError.hidden = false;
+  }
+
   /** Connects a saved profile; on success restores the saved session (bug
    *  be430215): a previously used server reopens its last tab instead of
    *  offering a network re-pick. A first-time connect has no saved tabs and
@@ -103,7 +113,13 @@ export function buildOnboarding(): HTMLElement {
       store.update({ profileId: profile.id, serverLabel, me });
       await restoreSession();
     } catch (err) {
-      connectError.textContent = errText(err);
+      // Причина отказа, а не «затычка» (ошибка 390e9746): адрес сохранённого
+      // сервера + то, что реально известно об отказе (соединение отклонено,
+      // таймаут, отклонённый ключ…).
+      connectError.textContent = describeConnectFailure(err, {
+        label: profile.label,
+        baseUrl: profile.baseUrl,
+      });
       connectError.hidden = false;
     } finally {
       submit.disabled = false;
@@ -198,7 +214,13 @@ export function buildOnboarding(): HTMLElement {
       // list, same as before (H3 first-connect flow).
       await restoreSession();
     } catch (err) {
-      formError.textContent = errText(err);
+      // Форма уже прошла локальную валидацию (пустой/некорректный адрес сюда не
+      // доходит) — значит, отказ получен от сервера или транспорта: показываем
+      // адрес и фактическую причину (ошибка 390e9746).
+      formError.textContent = describeConnectFailure(err, {
+        label: labelInput.value.trim(),
+        baseUrl,
+      });
     } finally {
       submit.disabled = false;
     }

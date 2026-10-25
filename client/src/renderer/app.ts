@@ -15,6 +15,7 @@ import type { Thought } from '@etn/shared';
 
 import { closeDialog, errorDialog, hasOpenDialog } from './lib/dialog.js';
 import { errText, hasTextSelection } from './lib/dom.js';
+import { describeConnectFailure } from './lib/connect-failure.js';
 import { etn } from './lib/etn.js';
 import {
   activateFocusQuery,
@@ -691,6 +692,23 @@ async function pickFocusAfterDeletion(
 }
 
 /**
+ * Сообщение о неудаче автоподключения при запуске (ошибка 390e9746). Экран
+ * подключения забирает его один раз и показывает у списка сохранённых
+ * серверов: раньше отказ молча переключал на онбординг.
+ */
+let bootConnectFailure: string | null = null;
+
+/**
+ * Забрать (и погасить) сообщение об отказе автоподключения при запуске.
+ * `null` — отказа не было.
+ */
+export function takeBootConnectFailure(): string | null {
+  const message = bootConnectFailure;
+  bootConnectFailure = null;
+  return message;
+}
+
+/**
  * Boot: initialise realtime plumbing, then route to onboarding (no active
  * profile) or to the last-active tab (Q-bugfix) — when the user has
  * previously opened tabs, drop them straight into the workspace; otherwise
@@ -763,9 +781,14 @@ export async function boot(): Promise<void> {
       // the most recently active one, no forced re-pick from the network list.
       await restoreSession();
       return;
-    } catch {
-      // Connection failed (server down, key revoked) — onboarding offers a retry.
+    } catch (err) {
+      // Connection failed (server down, key revoked) — onboarding offers a retry
+      // and names the actual cause with the server address (ошибка 390e9746).
       store.update({ profileId: active.id, serverLabel, me: null });
+      bootConnectFailure = describeConnectFailure(err, {
+        label: active.label,
+        baseUrl: active.baseUrl,
+      });
       showScreen('onboarding');
       return;
     }

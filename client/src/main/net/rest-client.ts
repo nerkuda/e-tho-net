@@ -68,6 +68,7 @@ import {
 } from '@etn/shared';
 
 import { getClientLog } from '../log/client-log.js';
+import type { ConnectFailureDetails, ConnectFailureReason } from '../ipc/contract.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -561,6 +562,7 @@ export class RestClient {
           continue;
         }
         const message = `Сетевая ошибка: ${lastError.message}`;
+        const reason = classifyConnectFailure(lastError);
         getClientLog()?.error('rest', 'request failed', {
           method,
           path,
@@ -568,7 +570,13 @@ export class RestClient {
           reason: classifyRetryReason(lastError),
           error: message,
         });
-        throw new EtnError('INTERNAL', message);
+        // Причина отказа едет в `details` структурно (ошибка 390e9746):
+        // диалог подключения показывает её по-человечески и с адресом сервера,
+        // не разбирая технический текст исключения.
+        throw new EtnError('INTERNAL', message, {
+          kind: 'connect-failed',
+          reason,
+        } satisfies ConnectFailureDetails);
       }
       clearTimeout(timeout);
       if (networkId !== null) this.untrackController(networkId, controller);
@@ -600,7 +608,11 @@ export class RestClient {
       attempts: MAX_ATTEMPTS,
       ...(lastError === undefined ? {} : { error: lastError.message }),
     });
-    throw new EtnError('INTERNAL', message);
+    const details: ConnectFailureDetails | undefined =
+      lastError === undefined
+        ? undefined
+        : { kind: 'connect-failed', reason: classifyConnectFailure(lastError) };
+    throw new EtnError('INTERNAL', message, details);
   }
 
   /**
@@ -4035,4 +4047,45 @@ function errTextShort(err: unknown): string {
 /** Retry reason classification for the journal (timeout / network / 5xx). */
 function classifyRetryReason(err: Error): string {
   return /timeout/i.test(err.message) ? 'timeout' : 'network';
+}
+
+/**
+ * Коды ОС/undici, по которым причина сетевого отказа РАЗЛИЧИМА (ошибка
+ * 390e9746). Значение — причина для UI; всё остальное честно уходит в `other`.
+ */
+const CONNECT_FAILURE_CODES: Readonly<Record<string, ConnectFailureReason>> = {
+  ECONNREFUSED: 'refused',
+  ETIMEDOUT: 'timeout',
+  UND_ERR_CONNECT_TIMEOUT: 'timeout',
+  UND_ERR_HEADERS_TIMEOUT: 'timeout',
+  UND_ERR_BODY_TIMEOUT: 'timeout',
+  ENOTFOUND: 'dns',
+  EAI_AGAIN: 'dns',
+  ENETUNREACH: 'unreachable',
+  EHOSTUNREACH: 'unreachable',
+  ECONNRESET: 'unreachable',
+};
+
+/** Код ошибки из структуры (`code`), если это строка. */
+function errorCodeOf(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' && code !== '' ? code : null;
+}
+
+/**
+ * Причина сетевого отказа по цепочке `cause` (undici заворачивает системную
+ * ошибку в `TypeError: fetch failed`). Наш собственный таймаут приходит
+ * причиной отмены (`ETN response timeout`) без кода — ловим по тексту.
+ */
+export function classifyConnectFailure(err: unknown): ConnectFailureReason {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
+    const code = errorCodeOf(current);
+    const reason = code === null ? undefined : CONNECT_FAILURE_CODES[code];
+    if (reason !== undefined) return reason;
+    current = (current as { cause?: unknown }).cause;
+  }
+  const message = errTextShort(err);
+  return /timeout|timed out/i.test(message) ? 'timeout' : 'other';
 }
