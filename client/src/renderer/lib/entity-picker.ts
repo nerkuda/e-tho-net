@@ -90,6 +90,7 @@ import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
+import { bindSearchNav } from './ui/search-nav.js';
 import { createTree } from './ui/tree.js';
 
 // ---------------------------------------------------------------------------
@@ -965,6 +966,10 @@ export async function pickEntitiesModal(
     searchInput.addEventListener('input', () => {
       tree.setFilter(searchInput.value.trim().toLowerCase());
     });
+    // Поиск — первая строка пикера (правило 1 требования 11ddd910): ↑/↓/Enter
+    // из него исполняет штатную навигацию дерева общим мостом, фокус остаётся
+    // в поле (ошибка 58981cf5). Второго разбора клавиш нет.
+    bindSearchNav(searchInput, { handleKey: (key) => tree.handleKey(key) });
 
     let clearBtn: HTMLButtonElement | null = null;
     let applyBtn: HTMLButtonElement | null = null;

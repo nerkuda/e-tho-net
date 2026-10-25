@@ -258,6 +258,12 @@ export {
 } from './nav-core.js';
 export type { NavAction, NavKeyModifiers, NavIndexOptions } from './nav-core.js';
 
+// Мост «поле поиска → навигация списка» (ошибка 58981cf5, стандарт b6b2821d):
+// ↑/↓/Enter из первой строки поиска исполняет штатный обработчик списка.
+// Второго разбора клавиш не заводить — правила остаются в nav-core/фасадах.
+export { SEARCH_NAV_CONTEXT_ID, SEARCH_NAV_KEYS, bindSearchNav } from './search-nav.js';
+export type { SearchNavTarget } from './search-nav.js';
+
 // Диапазонный ползунок — единый фасад (задача ea1b5f14): владелец задаёт
 // границы/шаг/начальное значение и обработчики, фасад владеет разметкой, ARIA
 // и показом текущего значения. Своих `<input type="range">` в экранах нет —

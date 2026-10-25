@@ -266,6 +266,13 @@ export interface TreeHandle<T extends TreeItem> {
   expandAll(): void;
   /** Свернуть всё (кроме `keepExpanded`). */
   collapseAll(keepExpanded?: Iterable<string>): void;
+  /**
+   * Обработать клавишу штатным обработчиком дерева — тем же, что получает
+   * нажатия при фокусе на корне (правила `nav-core`, Enter-активация).
+   * Нужен мостам от полей поиска (`./search-nav.ts`): клавиатура остаётся
+   * общей, второго разбора клавиш не появляется. `true` — клавиша обработана.
+   */
+  handleKey(key: string): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,6 +1100,17 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     collapseAll(keepExpanded) {
       expanded = new Set(keepExpanded ?? []);
       render();
+    },
+    handleKey(key: string): boolean {
+      // Тот же обработчик, что и у настоящего нажатия: модификаторы не
+      // передаются — мосту поиска нужны только ↑/↓/Enter без Ctrl/Meta/Shift.
+      return handleTreeKey({
+        key,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+      } as KeyboardEvent);
     },
   };
 

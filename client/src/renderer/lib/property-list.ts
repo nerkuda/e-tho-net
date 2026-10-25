@@ -62,6 +62,7 @@ import { store } from '../state.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { createTable } from './ui/table.js';
+import { bindSearchNav } from './ui/search-nav.js';
 
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
@@ -835,6 +836,12 @@ export function buildPropertyList(opts: {
     query = searchInput.value;
     refresh();
   });
+
+  // Поиск — первая строка списка (правило 1 требования 11ddd910): ↓/↑/Enter из
+  // него исполняет штатную навигацию таблицы (ядро nav-core), оставаясь в поле —
+  // набор запроса продолжается, выделение и прокрутка списка видны. Второго
+  // разбора клавиш нет (ошибка 58981cf5, стандарт b6b2821d).
+  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
 
   return {
     root,

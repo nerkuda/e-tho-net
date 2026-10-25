@@ -1,0 +1,181 @@
+{
+ "name": "58981cf5 — клавиатура в пикере свойств (+ свойство)",
+ "description": "Пикер свойств массового диалога: поиск в поле не должен отбирать клавиатуру у списка — ↓ перемещает выделение, Enter выбирает. Красный на дофиксовой сборке (шаг picker-selected-after-arrow).",
+ "timeout": 180000,
+ "steps": [
+  {
+   "name": "onboarding-visible",
+   "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+  },
+  {
+   "name": "fill-server-url",
+   "click": "input[placeholder^='http']"
+  },
+  {
+   "name": "server-url-typed",
+   "text": "{{serverUrl}}"
+  },
+  {
+   "name": "fill-api-key",
+   "click": "input[type=password]"
+  },
+  {
+   "name": "api-key-typed",
+   "text": "{{apiKey}}"
+  },
+  {
+   "name": "connect",
+   "click": ".onboarding-card .ui-btn--primary"
+  },
+  {
+   "name": "networks-visible",
+   "waitFor": "document.querySelectorAll('.network-item').length > 0"
+  },
+  {
+   "name": "seed-ontology-and-thoughts",
+   "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const t2=await et.types.createThoughtType(N,{name:'Т2'}); const t3=await et.types.createThoughtType(N,{name:'Т3'}); const pStatus=await et.propertyRegistry.create(N,{name:'Статус',value_type:'text'}); const pOwner=await et.propertyRegistry.create(N,{name:'Ответственный',value_type:'text'}); const pPri=await et.propertyRegistry.create(N,{name:'Приоритет',value_type:'text'}); const pNote=await et.propertyRegistry.create(N,{name:'Заметка',value_type:'text'}); const pLink=await et.propertyRegistry.create(N,{name:'Прикреплено',value_type:'link',name_forward:'Прикреплено',name_reverse:'Прикреплено в'}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:pStatus.id,required:false,position:0}); await et.types.createTypeProperty(N,'thought_type',t2.id,{mode:'attach',property_id:pOwner.id,required:false,position:0}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:pLink.id,required:false,position:1,side:'source'}); await et.types.createTypeProperty(N,'thought_type',t2.id,{mode:'attach',property_id:pLink.id,required:false,position:1,side:'target'}); const mk=async(title,type)=>{ const r=await et.thoughts.create(N,{title,type_id:type,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const A=await mk('A',t1.id); const B=await mk('B',t2.id); const C=await mk('C',null); const D=await mk('D',t3.id); const M=await mk('M',t2.id); const X=await mk('N',t2.id); await et.properties.set(N,'thought',A,'Статус','в работе',null); await et.properties.set(N,'thought',B,'Статус','в работе',null); await et.properties.set(N,'thought',B,'Ответственный','Иван',null); await et.properties.set(N,'thought',C,'Ответственный','Пётр',null); await et.properties.set(N,'thought',A,'Прикреплено',[M],'source'); window.__bulk={note:pNote.id,t1:t1.id,t2:t2.id,t3:t3.id,status:pStatus.id,owner:pOwner.id,pri:pPri.id,link:pLink.id,A:A,B:B,C:C,D:D,M:M,N:X}; return 'ok'; })(); })()",
+   "expect": "ok"
+  },
+  {
+   "name": "open-network",
+   "click": ".networks-list .network-item"
+  },
+  {
+   "name": "home-cloud-visible",
+   "waitFor": "document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null",
+   "timeout": 20000
+  },
+  {
+   "name": "seeded-thoughts-on-canvas",
+   "waitFor": "(() => { const b=window.__bulk; return b !== undefined && [b.A,b.B,b.C,b.D,b.M,b.N].every((id)=>document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null); })()",
+   "timeout": 20000
+  },
+  {
+   "name": "select-a-b-c",
+   "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__bulk; return { A:click(b.A), B:click(b.B), C:click(b.C) }; })()",
+   "expect": {
+    "A": true,
+    "B": true,
+    "C": true
+   }
+  },
+  {
+   "name": "selection-panel-visible",
+   "waitFor": "(() => { const panel=document.querySelector('.selection-panel'); return panel !== null && !panel.classList.contains('hidden') && panel.querySelectorAll('.selection-item').length === 3; })()",
+   "timeout": 20000
+  },
+  {
+   "name": "step1-open-properties-menu",
+   "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+   "expect": "ok"
+  },
+  {
+   "name": "step1-open-property-values-dialog",
+   "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+   "expect": "ok"
+  },
+  {
+   "name": "dialog-loaded",
+   "waitFor": "document.querySelector('.prop-bulk-table') !== null",
+   "timeout": 20000
+  },
+  {
+   "name": "picker-open",
+   "click": ".prop-bulk-toolbar .ui-btn"
+  },
+  {
+   "name": "picker-visible",
+   "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+   "timeout": 20000
+  },
+  {
+   "name": "picker-rows-before",
+   "probe": "(() => [...document.querySelector('.property-list vaadin-grid').items].map((r)=>r.name))()",
+   "expect": [
+    "Заметка",
+    "Прикреплено в",
+    "Приоритет"
+   ]
+  },
+  {
+   "name": "picker-search-focus",
+   "click": ".property-list-search"
+  },
+  {
+   "name": "picker-search-type",
+   "text": "Приоритет"
+  },
+  {
+   "name": "picker-search-applied",
+   "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input',{bubbles:true})); return true; })()"
+  },
+  {
+   "name": "picker-search-one-row",
+   "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length===1 && items[0].name==='Приоритет'; })()"
+  },
+  {
+   "name": "picker-search-focus-stays",
+   "probe": "(() => { const a=document.activeElement; return { isSearch: !!(a && a.classList && a.classList.contains('property-list-search')) }; })()",
+   "expect": {
+    "isSearch": true
+   }
+  },
+  {
+   "name": "picker-arrow-selects-from-search",
+   "key": "ArrowDown"
+  },
+  {
+   "name": "picker-selected-after-arrow",
+   "probe": "(() => { const grid=document.querySelector('.property-list vaadin-grid'); return { activeName: grid && grid.activeItem ? grid.activeItem.name : null }; })()",
+   "expect": {
+    "activeName": "Приоритет"
+   }
+  },
+  {
+   "name": "picker-enter-chooses",
+   "key": "Enter"
+  },
+  {
+   "name": "picker-closed-and-row-checked",
+   "waitFor": "(() => { const cb=document.querySelector('input[type=checkbox][aria-label=\"Приоритет\"]'); return document.querySelector('.property-list vaadin-grid')===null && cb!==null && cb.checked===true; })()",
+   "timeout": 20000
+  },
+  {
+   "name": "picker-open-again",
+   "click": ".prop-bulk-toolbar .ui-btn"
+  },
+  {
+   "name": "picker-visible-again",
+   "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+   "timeout": 20000
+  },
+  {
+   "name": "picker-active-is-table",
+   "probe": "(() => { const a=document.activeElement; return { isTable: !!(a && a.classList && a.classList.contains('ui-table')) }; })()",
+   "expect": {
+    "isTable": true
+   }
+  },
+  {
+   "name": "picker-table-arrow",
+   "key": "ArrowDown"
+  },
+  {
+   "name": "picker-table-enter",
+   "key": "Enter"
+  },
+  {
+   "name": "picker-second-row-checked",
+   "waitFor": "(() => { const boxes=[...document.querySelectorAll('.prop-bulk-table input[type=checkbox]')]; return document.querySelector('.property-list vaadin-grid')===null && boxes.length===5 && boxes.some((b)=>b.checked); })()",
+   "timeout": 20000
+  },
+  {
+   "name": "picker-esc-closes",
+   "probe": "(() => { const open=[...document.querySelectorAll('.dialog-backdrop')].length; return { backdrops:open, bulkOpen: document.querySelector('.prop-bulk-table')!==null }; })()",
+   "expect": {
+    "backdrops": 1,
+    "bulkOpen": true
+   }
+  }
+ ]
+}

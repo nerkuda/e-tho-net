@@ -110,6 +110,7 @@ import {
   subtreeHeight,
 } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
+import { bindSearchNav } from '../lib/ui/search-nav.js';
 import { createListNav, type ListNavHandle } from '../lib/ui/list.js';
 import { createRowReorder, rowReorderMenuItems, type RowReorderHandle } from '../lib/row-reorder.js';
 import { collapsibleSection } from '../lib/ui/collapsible.js';
@@ -689,6 +690,10 @@ export function buildThoughtTypesPanel(): CataloguePanel {
     // Фильтр и автораскрытие ветвей — состояние общего компонента.
     tree.setFilter(searchQuery);
   });
+  // Поиск — первая строка диалога-списка (правило 1 требования 11ddd910):
+  // ↑/↓/Enter из него исполняет штатную навигацию дерева общим мостом, фокус
+  // остаётся в поле (ошибка 58981cf5, стандарт b6b2821d).
+  bindSearchNav(searchInput, { handleKey: (key) => tree.handleKey(key) });
 
   /** Deletes a thought type (forced: thoughts detached, values dropped). */
   async function removeRow(type: ThoughtType): Promise<void> {

@@ -350,6 +350,13 @@ export interface TableHandle<T> {
   refresh(): void;
   /** Переводит клавиатурный фокус на таблицу. */
   focus(): void;
+  /**
+   * Обработать клавишу штатным обработчиком фасада — тем же, что получает
+   * нажатия при фокусе на таблице (правила `nav-core`, Enter-активация).
+   * Нужен мостам от полей поиска (`./search-nav.ts`): клавиатура остаётся
+   * общей, второго разбора клавиш не появляется. `true` — клавиша обработана.
+   */
+  handleKey(key: string): boolean;
   /** Отписывается от селектора и удаляет узел. */
   destroy(): void;
 }
@@ -1003,6 +1010,18 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     },
     focus(): void {
       wrapper.focus();
+    },
+    handleKey(key: string): boolean {
+      // Тот же обработчик, что и у настоящего нажатия: модификаторы не
+      // передаются — мосту поиска нужны только ↑/↓/Enter без Ctrl/Meta/Shift.
+      return handleTableKey({
+        key,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        code: '',
+      } as KeyboardEvent);
     },
     destroy(): void {
       unsubscribe?.();

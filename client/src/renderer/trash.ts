@@ -55,6 +55,7 @@ import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHand
 import { uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
 import { fieldInput } from './lib/ui/field.js';
+import { bindSearchNav } from './lib/ui/search-nav.js';
 import { createTable } from './lib/ui/table.js';
 import { splitterElement, wireSplitter, type SplitterHandle } from './lib/ui/splitter.js';
 import { pluralRu } from './lib/plural.js';
@@ -1051,6 +1052,10 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     updateButtons();
   }
   searchInput.addEventListener('input', () => applyFilter());
+  // ↑/↓/Enter из поиска (первая строка диалога, правило 1 требования
+  // 11ddd910) исполняет штатную навигацию таблицы общим мостом; фокус
+  // остаётся в поле, набор запроса продолжается (ошибка 58981cf5).
+  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
 
   /** Полная физическая очистка корзины (массовое управление над списком). */
   async function purgeAll(): Promise<void> {

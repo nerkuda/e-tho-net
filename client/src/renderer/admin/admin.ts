@@ -22,7 +22,8 @@ import { checkboxRow } from '../lib/ui/choice-row.js';
 import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { operationError } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
-import { createTable } from '../lib/ui/table.js';
+import { bindSearchNav } from '../lib/ui/search-nav.js';
+import { createTable, type TableHandle } from '../lib/ui/table.js';
 
 /** Opens the admin panel modal. */
 export function openAdminPanel(): void {
@@ -245,6 +246,9 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     updateButtons();
   }
   searchInput.addEventListener('input', () => applyFilter());
+  // Поиск — первая строка списка (правило 1 требования 11ddd910): ↑/↓/Enter
+  // из него исполняет штатную навигацию таблицы общим мостом (ошибка 58981cf5).
+  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
 
   content.replaceChildren(searchRow, toolbar, wrap, addUserRow());
   applyFilter();
@@ -522,6 +526,8 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     updateButtons();
   }
   searchInput.addEventListener('input', () => applyFilter());
+  // ↑/↓/Enter из поиска — штатная навигация таблицы (ошибка 58981cf5).
+  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
 
   content.replaceChildren(searchRow, toolbar, wrap);
   applyFilter();
@@ -591,6 +597,8 @@ function renderAudit(content: HTMLElement): void {
 
   /** Загруженные записи журнала — источник клиентского фильтра поиска. */
   let loaded: AuditLogEntry[] = [];
+  /** Текущая таблица журнала: пересобирается в `paint`, мост ищет её через замыкание. */
+  let auditTable: TableHandle<AuditLogEntry> | null = null;
 
   /** Строка-кандидат поиска: все текстовые поля записи. */
   const auditHaystack = (entry: AuditLogEntry): string =>
@@ -672,8 +680,12 @@ function renderAudit(content: HTMLElement): void {
       table.element,
       el('p', 'faint', `Всего записей: ${loaded.length}`),
     );
+    auditTable = table;
   }
   searchInput.addEventListener('input', () => paint());
+  // ↑/↓/Enter из поиска — штатная навигация ТЕКУЩЕЙ таблицы журнала: paint
+  // пересобирает её, поэтому цель моста берётся из замыкания (ошибка 58981cf5).
+  bindSearchNav(searchInput, { handleKey: (key) => auditTable?.handleKey(key) === true });
 
   async function loadAudit(): Promise<void> {
     tableWrap.replaceChildren(loadingState());
