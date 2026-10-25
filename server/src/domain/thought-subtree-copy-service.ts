@@ -544,7 +544,15 @@ function resolveDuplicates(
   let skipped = 0;
 
   for (const t of thoughts) {
-    const dupes = findDuplicates(target, t.snapshot.title, t.snapshot.synonyms);
+    // Режим дедупликации задан явно (ошибка 11f14a81). `duplicate_policy` —
+    // защита от дублей при копировании, а не живой поиск: `search` подхватил
+    // бы подстрочные совпадения и слово из середины чужого названия, и
+    // `reuse`/`skip`/`fail` сработали бы на другой сущности. `typeId` мысли
+    // отсекает partial чужого типа (точные совпадения остаются конфликтом).
+    const dupes = findDuplicates(target, t.snapshot.title, t.snapshot.synonyms, [], {
+      mode: 'dedupe',
+      typeId: t.snapshot.type.id,
+    });
     if (dupes.length === 0) continue;
     const candidate = dupes[0]!.id;
 
