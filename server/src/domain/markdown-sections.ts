@@ -32,9 +32,15 @@
  * показывает как `<h1>`…`<h6>` верхнего уровня: fence внутри списка/цитаты,
  * indented-код, закрывающие решётки `## X ##` и setext-подчёркивания трактуются
  * одинаково при разборе и рендере (ошибка f15f389e, круги 1–2).
+ *
+ * При пересборке тела заголовок печатает {@link formatHeading}: ATX — в
+ * ATX-форме (закрывающие решётки снимаются), однострочный setext нормализуется
+ * в ATX, а многострочный setext сохраняется setext-блоком. Иначе `## Внимание`
+ * + абзац «Это важно» терял строки заголовка и правил чужую секцию (ошибка
+ * f15f389e, круг 3).
  */
 
-import { extractHeadings, type MarkdownHeading } from '@etn/markdown';
+import { extractHeadings, formatHeading, type MarkdownHeading } from '@etn/markdown';
 import { EtnError } from '@etn/shared';
 
 /** Максимальная длина виртуального заголовка для текстов без `#`. */
@@ -54,7 +60,8 @@ export type EditOp =
 interface Section {
   /** 1–6 для реальных заголовков; для текста без `#` — 1 (виртуальная). */
   level: number;
-  /** Текст заголовка без решёток (для виртуальной — первая строка). */
+  /** Текст заголовка без решёток (для виртуальной — первая строка). У
+   *  многострочного setext содержит `\n` — строки заголовка. */
   heading: string;
   /** Содержимое секции без заголовка (для текста без `#` — весь текст,
    *  чтобы сохранить содержимое дословно при обратной склейке). */
@@ -137,15 +144,17 @@ function parseSections(body: string): Section[] {
 }
 
 /**
- * Собрать секции обратно в тело. Реальные секции дают `## heading\ncontent`,
- * между секциями — `\n\n`. Виртуальная секция (нет `#`-заголовка) даёт
- * только `content` без префикса. Контент не трогаем (нормализацию выполнит
- * вызывающий), но схлопываем тройные `\n` в `\n\n` по всему телу.
+ * Собрать секции обратно в тело. Реальные секции дают заголовок (в форме,
+ * которую выберет {@link formatHeading}: ATX или setext для многострочного
+ * текста) и `\ncontent`, между секциями — `\n\n`. Виртуальная секция (нет
+ * `#`-заголовка) даёт только `content` без префикса. Контент не трогаем
+ * (нормализацию выполнит вызывающий), но схлопываем тройные `\n` в `\n\n` по
+ * всему телу.
  */
 function joinSections(sections: Section[]): string {
   const blocks = sections.map((s) => {
     if (s.virtual) return s.content;
-    const header = '#'.repeat(s.level) + ' ' + s.heading;
+    const header = formatHeading(s.level, s.heading);
     if (s.content === '') return header;
     return header + '\n' + s.content;
   });
@@ -195,52 +204,54 @@ export function validateSections(body: string): void {
  * `replace_section` заменяет только ТЕЛО адресованной секции — её заголовок
  * сохраняется. Поэтому заголовок в `text` необязателен и трактуется так
  * (ошибка f15f389e — задвоение заголовка):
- *   * эхо адресованного заголовка — тот же текст, уровень не важен (агент
- *     скопировал заголовок из другого места или сменил уровень) — строка
- *     отбрасывается, остаётся исходный заголовок;
+ *   * эхо адресованного заголовка — первый заголовок ВЕРХНЕГО уровня в `text`
+ *     с тем же текстом, уровень не важен (агент скопировал заголовок из
+ *     другого места или сменил уровень) — строки заголовка отбрасываются,
+ *     остаётся исходный заголовок; вводный текст перед эхом сохраняется
+ *     (ошибка f15f389e, круг 3);
  *   * заголовок более низкого уровня (подраздел) — это содержимое, он
  *     остаётся в теле;
- *   * заголовок того же или более высокого уровня с другим текстом — попытка
- *     переименовать/подменить секцию: `VALIDATION_ERROR`. Иначе в теле
- *     оставался пустой старый заголовок и появлялся второй (грабля 0.8.3).
+ *   * заголовок того же или более высокого уровня с другим текстом в самом
+ *     начале `text` — попытка переименовать/подменить секцию:
+ *     `VALIDATION_ERROR`. Иначе в теле оставался пустой старый заголовок и
+ *     появлялся второй (грабля 0.8.3).
  *
  * Ведущие пустые строки снимаются до проверки, чтобы `\n## Заголовок` не
  * прятал эхо от распознавания. Заголовком считается только блок ВЕРХНЕГО
- * уровня, начинающий `text`: `- ## X`, `> ## X` и код-блоки — это тело, а не
- * эхо (ошибка f15f389e, круг 2).
+ * уровня: `- ## X`, `> ## X` и код-блоки — это тело, а не эхо (ошибка
+ * f15f389e, круг 2).
  */
 function buildReplacement(level: number, heading: string, text: string): string {
-  const headLine = '#'.repeat(level) + ' ' + heading;
+  const headLine = formatHeading(level, heading);
   const body = text.replace(/^\n+/, '');
   if (body === '') return headLine;
-  const lead = extractHeadings(body)[0];
-  if (lead !== undefined && lead.line === 0 && lead.tokenLevel === 0) {
-    const rest = body
-      .split('\n')
-      .slice(lead.contentLine)
-      .join('\n')
-      .replace(/^\n+/, '');
-    if (lead.text === heading.trim()) {
-      // Эхо адресованного заголовка: исходный заголовок уже будет в теле,
-      // строку из `text` не дублируем. Уровень игнорируется — заголовок
-      // секции остаётся прежним.
-      return rest === '' ? headLine : headLine + '\n' + rest;
-    }
-    if (lead.level <= level) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'replace_section text must not start with a heading of the same or higher level: ' +
-          'the section heading is preserved automatically — pass only the section body',
-        {
-          section: heading,
-          level,
-          text_heading: lead.text,
-          text_level: lead.level,
-        },
-      );
-    }
-    // Более низкий уровень — подраздел внутри тела; заголовок секции нужен.
+  const lead = extractHeadings(body).find((h) => h.tokenLevel === 0);
+  if (lead !== undefined && lead.text === heading.trim()) {
+    // Эхо адресованного заголовка: исходный заголовок уже будет в теле,
+    // строки заголовочного блока из `text` не дублируем. Уровень игнорируется;
+    // текст до эха (вводный абзац) и после него сохраняется.
+    const lines = body.split('\n');
+    lines.splice(lead.line, lead.contentLine - lead.line);
+    const rest = collapseBlankRuns(lines.join('\n'))
+      .replace(/^\n+/, '')
+      .replace(/\n+$/, '');
+    return rest === '' ? headLine : headLine + '\n' + rest;
   }
+  if (lead !== undefined && lead.line === 0 && lead.level <= level) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'replace_section text must not start with a heading of the same or higher level: ' +
+        'the section heading is preserved automatically — pass only the section body',
+      {
+        section: heading,
+        level,
+        text_heading: lead.text,
+        text_level: lead.level,
+      },
+    );
+  }
+  // Более низкий уровень или вводный текст перед заголовком — это тело;
+  // заголовок секции нужен.
   return headLine + '\n' + body;
 }
 
