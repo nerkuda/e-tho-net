@@ -146,6 +146,10 @@ installShims({
 const stateMod = await import('../src/renderer/state.js');
 const panelMod = await import('../src/renderer/screens/chronicle/filter-panel.js');
 const chronicleMod = await import('../src/renderer/screens/chronicle/chronicle.js');
+// Живой справочник свойств — модульный кэш (ошибка 6d25c224): кейсы «холодного
+// старта» сбрасывают его, иначе успешное чтение предыдущего кейса переживает
+// монтаж и снимок разбирается с готовым реестром.
+const catalogueMod = await import('../src/renderer/lib/property-catalogue.js');
 
 /** Дождаться асинхронных чтений реестра/запроса и их продолжений. */
 async function flush(): Promise<void> {
@@ -213,6 +217,7 @@ afterEach(() => {
     mountedScreen = null;
   }
   panelMod.unmountChronicleFilterPanel();
+  catalogueMod.resetPropertyCatalogue();
 });
 
 beforeEach(() => {

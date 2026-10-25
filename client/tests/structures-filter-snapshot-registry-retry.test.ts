@@ -137,6 +137,10 @@ installShims({
 const stateMod = await import('../src/renderer/state.js');
 const panelMod = await import('../src/renderer/screens/structures/filter-panel.js');
 const structuresMod = await import('../src/renderer/screens/structures/structures.js');
+// Живой справочник свойств — модульный кэш (ошибка 6d25c224): кейсы «холодного
+// старта» сбрасывают его, иначе успешное чтение предыдущего кейса переживает
+// монтаж и снимок разбирается с готовым реестром.
+const catalogueMod = await import('../src/renderer/lib/property-catalogue.js');
 
 /** Дождаться асинхронных чтений реестра/запроса и их продолжений. */
 async function flush(): Promise<void> {
@@ -183,6 +187,7 @@ afterEach(() => {
     mountedStructures = null;
   }
   panelMod.unmountFilterPanel();
+  catalogueMod.resetPropertyCatalogue();
 });
 
 describe('«Структуры»: реестр свойств при разборе снимка (cdeb62f1)', () => {
