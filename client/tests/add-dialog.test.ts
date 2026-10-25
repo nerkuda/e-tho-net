@@ -63,7 +63,7 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
 }
 
 /** Duplicate-search calls received by the fake `window.etn`. */
-const dupQueries: Array<{ title: string; synonyms: string[] }> = [];
+const dupQueries: Array<{ title: string; synonyms: string[]; mode?: string }> = [];
 
 /** Кросс-сетевые поисковые вызовы (`findDuplicatesAcrossNetworks`). */
 const crossQueries: Array<{ title: string; networkIds: string[] }> = [];
@@ -115,8 +115,14 @@ function installShim(): void {
     },
     etn: {
       thoughts: {
-        findDuplicates: async (_networkId: string, title: string, synonyms: string[]) => {
-          dupQueries.push({ title, synonyms });
+        findDuplicates: async (
+          _networkId: string,
+          title: string,
+          synonyms: string[],
+          _typeIds?: string[],
+          mode?: string,
+        ) => {
+          dupQueries.push({ title, synonyms, mode });
           return [];
         },
         findDuplicatesAcrossNetworks: async (
@@ -424,6 +430,9 @@ describe('pickThoughtsDialog: охват поиска — только теку�
     await settle();
     assert.equal(dupQueries.length, 1, 'поиск ушёл в источник текущей сети');
     assert.equal(dupQueries[0]?.title, 'Кандидат', 'запрос ушёл в findDuplicates');
+    // Ошибка 11f14a81: диалог — живой поиск, режим передаётся ЯВНО. Без этого
+    // серверный дефолт `dedupe` отсекает инфиксные/wildcard-кандидаты 0.4.5.
+    assert.equal(dupQueries[0]?.mode, 'search', 'диалог запрашивает mode=search');
     assert.equal(crossQueries.length, 0, 'веерный кросс-источник не задействован');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);

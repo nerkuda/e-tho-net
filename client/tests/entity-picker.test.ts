@@ -377,6 +377,47 @@ function valueCloud(combo: { root: HTMLElement }): ShimElement | undefined {
 // Встроенное комбо: каталог, каретка, иерархия, создание
 // ---------------------------------------------------------------------------
 
+// Ошибка 11f14a81: пикеры мыслей — живой поиск. Режим обязан передаваться
+// явно (`search`), иначе серверный дефолт `dedupe` отсекает инфиксных
+// кандидатов и словоформы wildcard-синонимов.
+describe('entity-picker: живой поиск мыслей — mode=search (ошибка 11f14a81)', () => {
+  it('комбо мысли передаёт mode=search в findDuplicates', async () => {
+    installShim();
+    const modes: Array<string | undefined> = [];
+    (globalThis as any).window.etn = {
+      thoughts: {
+        findDuplicates: async (
+          _networkId: string,
+          _title: string,
+          _synonyms?: string[],
+          _typeIds?: string[],
+          mode?: string,
+        ) => {
+          modes.push(mode);
+          return [];
+        },
+        get: async () => {
+          throw new Error('id-lookup не ожидался: запрос текстовый');
+        },
+      },
+    };
+    const combo = buildEntityCombo({
+      networkId: 'n',
+      kind: 'thoughts',
+      value: null,
+      onChange: () => undefined,
+    });
+    const { input } = parts(combo);
+    input.emit('focus');
+    await flush();
+    input.value = 'Багфикс';
+    input.emit('input');
+    await flush();
+    assert.deepEqual(modes, ['search'], 'пикер запрашивает живой поиск');
+    combo.dispose();
+  });
+});
+
 describe('entity-picker: встроенное комбо', () => {
   it('setDisabled выключает ввод и выбор после сборки (ошибка 4f18d9f5)', () => {
     installShim();
