@@ -1,0 +1,210 @@
+{
+  "name": "markdown-shift-block-text (49ebba76)",
+  "description": "Ошибка 49ebba76: клик/каретка после escape или HTML-entity в обычном (блочном) тексте не должны смещаться. Сценарий сам заводит постоянный комментарий корневой мысли (api POST, {{homeId}}), поэтому --seed-comment не нужен. Проверяет: (1) в просмотре <p> и <th> несут карту сдвига data-md-shift; (2) программный двойной клик по слову после &amp; в абзаце входит в правку и ставит каретку/выделение в ТОЧНЫЕ смещения исходника; (3) то же для entity в ячейке th таблицы; (4) то же для escape \\* в ячейке td. Ожидания не зашиты: смещение считается по тексту самого редактора (__srcIndex), каретка читается из DOM-выделения CodeMirror (__cmSel), шаг probe сверяется expectFrom. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.49ebba76-markdown-shift.scenario.json --out .tmp/49ebba76.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "a &amp; b нажми хвост\n\n| c &amp; d | e |\n| --- | --- |\n| f \\* g | h |"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('нажми') === true",
+      "timeout": 15000
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { window.__dbl = (selector, word) => { const el = document.querySelector(selector); if (el === null) return 'no-el'; const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let node = walker.nextNode(); while (node !== null) { const text = node.textContent ?? ''; const at = text.indexOf(word); if (at >= 0) { const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window })); return 'ok'; } node = walker.nextNode(); } return 'no-text'; }; window.__cmLines = () => [...document.querySelectorAll('.md-field--editing .cm-line')].map((line) => line.textContent ?? ''); window.__srcIndex = (needle, delta) => { const text = window.__cmLines().join('\\n'); const at = text.indexOf(needle); return at < 0 ? null : at + delta; }; window.__cmSel = () => { const editor = document.querySelector('.md-field--editing .cm-content'); const selection = window.getSelection(); if (editor === null || selection === null || selection.rangeCount === 0) return null; const offsetOf = (node, offset) => { if (node === null || node.nodeType !== Node.TEXT_NODE) return null; const line = node.parentElement === null ? null : node.parentElement.closest('.cm-line'); if (line === null || !editor.contains(line)) return null; const lines = [...editor.querySelectorAll('.cm-line')]; const index = lines.indexOf(line); if (index < 0) return null; let before = 0; for (let i = 0; i < index; i += 1) before += (lines[i].textContent ?? '').length + 1; const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT); let within = 0; let textNode = walker.nextNode(); while (textNode !== null) { if (textNode === node) return before + within + offset; within += (textNode.textContent ?? '').length; textNode = walker.nextNode(); } return null; }; return { anchor: offsetOf(selection.anchorNode, selection.anchorOffset), head: offsetOf(selection.focusNode, selection.focusOffset) }; }; return true; })()"
+    },
+    {
+      "name": "view-paragraph-has-shift",
+      "probe": {
+        "name": "paragraphShift",
+        "expression": "document.querySelector('.ui-comment .md-field-view p')?.getAttribute('data-md-shift') ?? null"
+      },
+      "expect": "3:4"
+    },
+    {
+      "name": "view-cell-has-shift",
+      "probe": {
+        "name": "cellShift",
+        "expression": "(() => { const th = document.querySelector('.ui-comment .md-field-view th'); return th === null ? null : { hasRange: th.getAttribute('data-md-start') !== null, shift: th.getAttribute('data-md-shift') }; })()"
+      },
+      "expect": {
+        "hasRange": true,
+        "shift": "3:4"
+      }
+    },
+    {
+      "name": "dblclick-paragraph-word",
+      "expect": "ok",
+      "probe": {
+        "name": "dblclick-paragraph-word",
+        "expression": "window.__dbl('.ui-comment .md-field-view p', 'нажми')"
+      }
+    },
+    {
+      "name": "paragraph-edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "paragraph-start-expected",
+      "probe": {
+        "name": "paragraphStart",
+        "expression": "window.__srcIndex('нажми', 0)"
+      }
+    },
+    {
+      "name": "paragraph-end-expected",
+      "probe": {
+        "name": "paragraphEnd",
+        "expression": "window.__srcIndex('нажми', 'нажми'.length)"
+      }
+    },
+    {
+      "name": "paragraph-caret-anchor",
+      "probe": {
+        "name": "paragraphCaretAnchor",
+        "expression": "window.__cmSel()?.anchor ?? null"
+      },
+      "expectFrom": "paragraph-start-expected"
+    },
+    {
+      "name": "paragraph-caret-head",
+      "probe": {
+        "name": "paragraphCaretHead",
+        "expression": "window.__cmSel()?.head ?? null"
+      },
+      "expectFrom": "paragraph-end-expected"
+    },
+    {
+      "name": "escape-paragraph",
+      "key": "Escape"
+    },
+    {
+      "name": "view-mode-back",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') === null"
+    },
+    {
+      "name": "dblclick-th-word",
+      "expect": "ok",
+      "probe": {
+        "name": "dblclick-th-word",
+        "expression": "window.__dbl('.ui-comment .md-field-view th', 'd')"
+      }
+    },
+    {
+      "name": "cell-edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "cell-end-expected",
+      "probe": {
+        "name": "cellEnd",
+        "expression": "window.__srcIndex('c &amp; d', 'c &amp; d'.length)"
+      }
+    },
+    {
+      "name": "cell-caret-head",
+      "probe": {
+        "name": "cellCaretHead",
+        "expression": "window.__cmSel()?.head ?? null"
+      },
+      "expectFrom": "cell-end-expected"
+    },
+    {
+      "name": "escape-cell",
+      "key": "Escape"
+    },
+    {
+      "name": "view-mode-back-cell",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') === null"
+    },
+    {
+      "name": "dblclick-td-word",
+      "expect": "ok",
+      "probe": {
+        "name": "dblclick-td-word",
+        "expression": "window.__dbl('.ui-comment .md-field-view td', 'g')"
+      }
+    },
+    {
+      "name": "escape-cell-edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "escape-end-expected",
+      "probe": {
+        "name": "escapeEnd",
+        "expression": "window.__srcIndex('f ' + String.fromCharCode(92) + '* g', 6)"
+      }
+    },
+    {
+      "name": "escape-caret-head",
+      "probe": {
+        "name": "escapeCaretHead",
+        "expression": "window.__cmSel()?.head ?? null"
+      },
+      "expectFrom": "escape-end-expected"
+    },
+    {
+      "name": "escape-final",
+      "key": "Escape"
+    },
+    {
+      "name": "view-mode-final",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') === null"
+    }
+  ]
+}
