@@ -1,12 +1,13 @@
 /**
  * `Escape` при верхнем слое над модальным диалогом (ошибка 9ff6b606).
  *
- * Контракт: `Escape` закрывает ТОЛЬКО верхний слой — меню, поповер, выпадающий
- * список, панель поиска — и разрешает приоритет общеклиентский диспетчер
- * (`lib/keymap.ts`, реестр `pushKeyOverlay`; ADR `b420b08c`). Диалог под слоем
- * то же нажатие не обрабатывает: ни несохранённые изменения не подтверждает,
- * ни сам не закрывается. Следующее нажатие `Escape` достаётся следующему слою,
- * затем диалогу.
+ * Контракт: `Escape` закрывает ТОЛЬКО верхний слой — диалог, меню, поповер,
+ * выпадающий список, панель поиска — и разрешает приоритет общеклиентский
+ * диспетчер (`lib/keymap.ts`, реестр `pushKeyOverlay`; ADR `b420b08c`). Диалог
+ * регистрируется в том же реестре и стоит в стеке по порядку открытия: слой под
+ * ним то же нажатие не обрабатывает — ни несохранённые изменения не
+ * подтверждает, ни сам не закрывается. Следующее нажатие `Escape` достаётся
+ * следующему слою, затем диалогу.
  *
  * Дом моделирует фазы события честно: window-capture слушатели (каркас
  * диалога) в порядке регистрации, затем window-bubble (диспетчер
@@ -169,8 +170,8 @@ function openMenuOverDialog(items = [{ label: 'Переместить выше' 
   showMenuAt(10, 10, items);
 }
 
-/** Открывает панель (`openPopover`) над диалогом; возвращает её дескриптор. */
-function openPopoverOverDialog(): { close: () => void; element: ShimElement } {
+/** Открывает панель (`openPopover`) над текущим верхом; возвращает дескриптор. */
+function openPanel(): { close: () => void; element: ShimElement } {
   const anchor = new ShimElement('button');
   const handle = openPopover({
     anchor: { element: anchor as unknown as HTMLElement },
@@ -237,7 +238,7 @@ describe('Escape: верхний слой над диалогом (ошибка 
 
   it('поповер над «грязным» диалогом: первый Escape закрывает только панель', () => {
     openEditor(true);
-    const popover = openPopoverOverDialog();
+    const popover = openPanel();
     assert.equal(popover.element.parent !== null, true, 'панель в DOM');
 
     pressEscape();
@@ -250,7 +251,7 @@ describe('Escape: верхний слой над диалогом (ошибка 
 
   it('поповер над чистым диалогом: первый Escape закрывает панель, второй — диалог', () => {
     openEditor(false);
-    const popover = openPopoverOverDialog();
+    const popover = openPanel();
 
     pressEscape();
     assert.equal(popover.element.parent !== null, false, 'первый Escape закрыл панель');
@@ -263,7 +264,7 @@ describe('Escape: верхний слой над диалогом (ошибка 
   it('поповер над меню: первый Escape закрывает поповер, меню остаётся (блокер приёмки)', () => {
     openEditor(true);
     openMenuOverDialog();
-    const popover = openPopoverOverDialog();
+    const popover = openPanel();
 
     pressEscape();
     assert.equal(popover.element.parent !== null, false, 'закрыт верхний слой — поповер');
@@ -275,6 +276,71 @@ describe('Escape: верхний слой над диалогом (ошибка 
 
     pressEscape();
     assert.equal(backdrops().length, 2, 'третий Escape зовёт подтверждение');
+  });
+
+  it('поповер над меню БЕЗ диалога: Escape закрывает поповер, а меню не глотает нажатие', () => {
+    // Регрессия мутации menu.ts: безусловный `stopImmediatePropagation` в
+    // capture-слушателе меню закрывал бы попадание диспетчеру, и поповер
+    // оставался бы открытым. Диалог здесь не нужен — проверяется чистое LIFO
+    // двух всплывающих слоёв.
+    openMenuOverDialog();
+    const popover = openPanel();
+
+    pressEscape();
+    assert.equal(popover.element.parent !== null, false, 'верхний слой (поповер) закрыт');
+    assert.equal(isMenuOpen(), true, 'меню под поповером осталось открытым');
+
+    pressEscape();
+    assert.equal(isMenuOpen(), false, 'второй Escape закрыл меню');
+    assert.equal(backdrops().length, 0, 'диалогов не было');
+  });
+
+  it('кейс E: меню → «грязный» диалог 1 → чистый диалог 2 — Escape закрывает диалог 2, меню цело', () => {
+    openEditor(true);
+    openMenuOverDialog();
+    openEditor(false);
+    assert.equal(backdrops().length, 2, 'оба диалога открыты');
+
+    pressEscape();
+    assert.equal(backdrops().length, 1, 'закрыт верхний диалог 2 (открыт позже меню)');
+    assert.equal(isMenuOpen(), true, 'меню под диалогом 2 не тронуто');
+
+    pressEscape();
+    assert.equal(isMenuOpen(), false, 'следующий Escape закрыл меню');
+    assert.equal(backdrops().length, 1, '«грязный» диалог 1 цел');
+
+    pressEscape();
+    assert.equal(backdrops().length, 2, 'Escape диалога 1 зовёт подтверждение');
+  });
+
+  it('три уровня: меню до диалога → диалог → диалог закрываются строго сверху вниз', () => {
+    openMenuOverDialog();
+    openEditor(false);
+    openEditor(false);
+    assert.equal(backdrops().length, 2, 'два диалога поверх меню');
+
+    pressEscape();
+    assert.equal(backdrops().length, 1, 'первый Escape — верхний диалог');
+    assert.equal(isMenuOpen(), true, 'меню (открыто раньше диалогов) не тронуто');
+
+    pressEscape();
+    assert.equal(backdrops().length, 0, 'второй Escape — диалог под ним');
+    assert.equal(isMenuOpen(), true, 'меню всё ещё открыто');
+
+    pressEscape();
+    assert.equal(isMenuOpen(), false, 'третий Escape — меню');
+  });
+
+  it('закрытие диалога снимает его слой: следующий Escape достаётся диалогу под ним', () => {
+    openEditor(false);
+    openEditor(false);
+    assert.equal(backdrops().length, 2, 'два диалога');
+
+    closeDialog();
+    assert.equal(backdrops().length, 1, 'верхний диалог закрыт программно');
+
+    pressEscape();
+    assert.equal(backdrops().length, 0, 'Escape ушёл нижнему диалогу, а не в пустоту');
   });
 
   it('панель с closeOnEsc: false не отнимает Escape у диалога', () => {

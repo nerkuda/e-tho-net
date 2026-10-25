@@ -5,9 +5,9 @@
  * контекстов/приоритетов):
  *  - открываясь, слой регистрирует обработчик `Escape` ({@link pushKeyOverlay});
  *  - `Escape` получает ВЕРХНИЙ слой (LIFO), нижние не трогаются;
+ *  - диалог — такой же слой: регистрируется при показе и снимается при
+ *    закрытии, поэтому порядок открытия однозначен для всех участников;
  *  - снятый слой участвовать перестаёт, повторное снятие — no-op;
- *  - снимок реестра в момент показа диалога отделяет слои, открытые ПОЗЖЕ
- *    диалога, от слоёв под ним;
  *  - `dispatchKeyEvent` отдаёт `Escape` слою ДО разрешения контекстов, поэтому
  *    закрытие панели не достаётся контексту под ней.
  */
@@ -69,26 +69,34 @@ describe('реестр слоёв Escape (ошибка 9ff6b606)', () => {
     assert.deepEqual(keymap.keymapInternals.overlayIds(), []);
   });
 
-  it('снимок: слой, открытый ПОСЛЕ диалога, — выше диалога', () => {
-    const before = keymap.keymapInternals.overlayIds();
-    const snapshot = keymap.keyOverlaySnapshot();
-    const overlay = keymap.pushKeyOverlay({ id: 'menu', onEscape: () => undefined });
-    try {
-      assert.deepEqual(before, [], 'до диалога слоёв нет');
-      assert.equal(keymap.hasKeyOverlayAbove(snapshot), true, 'слой после снимка — верхний');
-    } finally {
-      overlay.release();
-    }
-    assert.equal(keymap.hasKeyOverlayAbove(snapshot), false, 'снятый слой на приоритет не влияет');
+  it('снятие среднего слоя не делает верхним нижний: порядок сохраняется', () => {
+    const calls: string[] = [];
+    keymap.pushKeyOverlay({ id: 'lower', onEscape: () => { calls.push('lower'); } });
+    const middle = keymap.pushKeyOverlay({ id: 'middle', onEscape: () => { calls.push('middle'); } });
+    const upper = keymap.pushKeyOverlay({ id: 'upper', onEscape: () => { calls.push('upper'); } });
+
+    middle.release();
+    assert.deepEqual(keymap.keymapInternals.overlayIds(), ['lower', 'upper']);
+    assert.equal(upper.isTop(), true, 'верхний слой остаётся верхним');
+    assert.equal(keymap.resolveEscapeOverlay(escapeEvent()), true);
+    assert.deepEqual(calls, ['upper'], 'средний слой снят, нижний не получил нажатие');
+    upper.release();
+    assert.equal(keymap.resolveEscapeOverlay(escapeEvent()), true);
+    assert.deepEqual(calls, ['upper', 'lower'], 'после снятия верхнего — следующий по стеку');
   });
 
-  it('снимок: слой, открытый ДО диалога, входит в снимок и не забирает Escape', () => {
-    const overlay = keymap.pushKeyOverlay({ id: 'old', onEscape: () => undefined });
+  it('слой, открытый раньше, никогда не выше открытого позже (строгий LIFO)', () => {
+    const calls: string[] = [];
+    const dialog = keymap.pushKeyOverlay({ id: 'dialog', onEscape: () => { calls.push('dialog'); } });
+    const menu = keymap.pushKeyOverlay({ id: 'menu', onEscape: () => { calls.push('menu'); } });
     try {
-      const snapshot = keymap.keyOverlaySnapshot();
-      assert.equal(keymap.hasKeyOverlayAbove(snapshot), false, 'слой под диалогом приоритет не меняет');
+      assert.equal(dialog.isTop(), false, 'меню открыто позже диалога — оно верхнее');
+      assert.equal(menu.isTop(), true);
+      keymap.resolveEscapeOverlay(escapeEvent());
+      assert.deepEqual(calls, ['menu'], 'диалог под меню не получает Escape');
     } finally {
-      overlay.release();
+      menu.release();
+      dialog.release();
     }
   });
 

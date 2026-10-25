@@ -263,12 +263,21 @@ describe('сторож: единственная точка перехвата k
 /**
  * Модули всплывающих слоёв, которые закрываются `Escape`. Открываясь, каждый
  * обязан зарегистрировать слой в общем реестре диспетчера (`pushKeyOverlay`):
- * иначе `Escape` забирает каркас диалога под слоем, а приоритет между слоями
- * (поповер над меню) не разрешается (ошибка 9ff6b606). Новый всплывающий слой
+ * иначе `Escape` забирает открытый раньше диалог, а приоритет между слоями
+ * (поповер над меню, диалог поверх меню) не разрешается (ошибка 9ff6b606).
+ * Диалог — такой же слой: он входит в реестр при показе и снимается при
+ * закрытии, поэтому порядок открытия однозначен. Новый всплывающий слой
  * добавляется сюда и в реестр — второго механизма приоритетов ADR `b420b08c`
  * не допускает.
+ *
+ * Ограничение: законная привязка `Escape` в контексте диспетчера
+ * (`defineKeyContext`/`pushKeyContext` — диалоговое поле, сплиттер) не
+ * считается всплывающим слоем, и сторож не отличает её от «слоя, забывшего
+ * регистрацию»: контекст — это команда в фокусе, а не стек открытых панелей.
+ * Для новых панелей/поповеров/меню действует правило выше.
  */
 const ESCAPE_OVERLAY_MODULES: readonly string[] = [
+  'lib/dialog.ts',
   'lib/menu.ts',
   'lib/ui/popover.ts',
   'lib/suggest-dropdown.ts',
@@ -293,16 +302,28 @@ describe('сторож: слои Escape — в общем диспетчере (
     assert.deepEqual(offenders, [], offenders.join('; '));
   });
 
-  it('каркас диалога уступает Escape верхнему слою, а не решает приоритет сам', () => {
+  it('диалог — слой реестра: закрывается через handleEscape, а не решает приоритет сам', () => {
     const dialog = SOURCES.get('lib/dialog.ts');
     assert.ok(dialog !== undefined, 'есть lib/dialog.ts');
     assert.ok(
-      dialog.includes('keyOverlaySnapshot') && dialog.includes('hasKeyOverlayAbove'),
-      'диалог снимает снимок реестра и спрашивает диспетчер о слое выше',
+      dialog.includes("id: 'dialog'") && dialog.includes('handleEscape'),
+      'диалог регистрируется в реестре и спрашивает, его ли нажатие',
     );
     assert.ok(
-      dialog.includes('resolveEscapeOverlay'),
-      'нажатие отдаётся верхнему слою через диспетчер',
+      !/keyOverlaySnapshot|hasKeyOverlayAbove/.test(dialog),
+      'снимок реестра в диалоге не используется — семантика одна (строгий LIFO)',
+    );
+  });
+
+  it('модули не назначают onkeydown в обход диспетчера', () => {
+    const offenders: string[] = [];
+    for (const [rel, source] of SOURCES) {
+      if (/(?:document|window)\s*\.\s*onkeydown\s*=/.test(source)) offenders.push(rel);
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `keydown ставится через диспетчер или объявленный инвентарь: ${offenders.join('; ')}`,
     );
   });
 
@@ -310,7 +331,11 @@ describe('сторож: слои Escape — в общем диспетчере (
     const offenders: string[] = [];
     for (const [rel, source] of SOURCES) {
       if (rel === KEYMAP_REL) continue;
-      if (/pushEscapeLayer|escapeLayerSnapshot|hasEscapeLayerAbove|escape-layers/.test(source)) {
+      if (
+        /pushEscapeLayer|escapeLayerSnapshot|hasEscapeLayerAbove|escape-layers|keyOverlaySnapshot|hasKeyOverlayAbove/.test(
+          source,
+        )
+      ) {
         offenders.push(rel);
       }
     }

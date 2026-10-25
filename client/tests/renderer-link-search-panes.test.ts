@@ -368,15 +368,23 @@ describe('wireSuggest: отключение поля снимает только
       onPick: () => undefined,
     });
     const winDownCount = (): number => windowListeners.get('mousedown')?.size ?? 0;
-    assert.equal(winDownCount(), 1, 'при подключении оконный слушатель поставлен');
+    const winKeyCount = (): number => windowListeners.get('keydown')?.size ?? 0;
+    assert.equal(winDownCount(), 1, 'при подключении оконный mousedown-слушатель поставлен');
+    assert.equal(winKeyCount(), 1, 'при подключении оконный keydown-слушатель (Escape) поставлен');
 
     // Панель вкладки отключена от DOM.
     host.replaceChildren();
     assert.equal(input.isConnected, false, 'поле отключено от документа');
-    // Отключение замечает оставшийся оконный слушатель — `mousedown`; своего
-    // keydown-перехвата у выпадашки нет (Esc — через реестр слоёв диспетчера).
-    dispatchWindow('mousedown', {});
-    assert.equal(winDownCount(), 0, 'оконный слушатель снят (защита от утечки)');
+    // Отключение замечает оставшийся оконный keydown-слушатель: capture-перехват
+    // Escape живёт на window и обязан сниматься вместе с виджетом.
+    dispatchWindow('keydown', {
+      key: 'a',
+      repeat: false,
+      stopImmediatePropagation: () => undefined,
+      preventDefault: () => undefined,
+    });
+    assert.equal(winDownCount(), 0, 'оконный mousedown-слушатель снят (защита от утечки)');
+    assert.equal(winKeyCount(), 0, 'оконный keydown-слушатель снят (защита от утечки)');
     assert.ok(
       (input.listeners['focus']?.length ?? 0) > 0,
       'слушатели самого поля сохранены — их вернуть некому',
@@ -385,9 +393,11 @@ describe('wireSuggest: отключение поля снимает только
     // Панель подключена обратно, пользователь фокусирует поле.
     host.append(input);
     input.focus();
-    assert.equal(winDownCount(), 1, 'фокус вернул оконный слушатель');
+    assert.equal(winDownCount(), 1, 'фокус вернул mousedown-слушатель');
+    assert.equal(winKeyCount(), 1, 'фокус вернул keydown-слушатель');
 
     handle.dispose();
-    assert.equal(winDownCount(), 0, 'явный dispose снимает всё');
+    assert.equal(winDownCount(), 0, 'явный dispose снимает mousedown');
+    assert.equal(winKeyCount(), 0, 'явный dispose снимает keydown');
   });
 });
