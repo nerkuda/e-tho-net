@@ -31,7 +31,6 @@ import {
   defaultFilterCriteriaState,
   defaultFilterTreeGroup,
   readFilterDefinitionDetailed,
-  withReverseLinkPropertySides,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
 import { lostConditionIssues, type FilterIssue } from '../../lib/filter-diagnostics.js';
@@ -79,21 +78,6 @@ export async function loadPropertyRows(
   }
   await ensurePropertyLinkTypes(networkId, registry).catch(() => undefined);
   return registry;
-}
-
-/**
- * Карта `id → строка реестра` с обратными сторонами связей — так же, как панель
- * «Структур» (общий конвертер ожидает именно эту форму). Чистая сборка из уже
- * прочитанных строк: второй сетевой запрос за тем же реестром не нужен
- * (ошибка 3bf62fd7 — карточка читает реестр ОДИН раз и различает отказ).
- */
-export function propertyRegistryFromRows(
-  rows: readonly PropertyRegistryRow[],
-): Map<string, NetworkProperty> {
-  const base = new Map<string, NetworkProperty>(
-    rows.map((row): [string, NetworkProperty] => [row.id, row]),
-  );
-  return withReverseLinkPropertySides(base, store.state.linkTypes);
 }
 
 /**

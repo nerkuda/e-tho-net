@@ -87,9 +87,12 @@ import {
   loadPropertyRows,
   propertyChipTitles,
   propertyEntityOptions,
-  propertyRegistryFromRows,
   type RecipeBuilder,
 } from '../screens/publications/recipe.js';
+import {
+  propertyCatalogueWithSides,
+  putPropertyCatalogueRows,
+} from '../lib/property-catalogue.js';
 
 /**
  * Тестовый шов: фабрика markdown-редактора, фабрика/запись поля резюме и
@@ -814,7 +817,12 @@ function buildRecipePane(): HTMLElement {
       registryUnsub?.();
       registryUnsub = null;
       registryPending.remove();
-      applyRegistry(rows, propertyRegistryFromRows(rows));
+      // Справочник свойств — ОБЩИЙ живой срез (ошибка 6d25c224): рецепт держит
+      // его карту, поэтому создание/переименование/удаление свойства видно в уже
+      // открытом рецепте без пересборки карточки. Своё чтение (строки для
+      // чип-полей) передаём справочнику, второго сетевого вызова нет.
+      putPropertyCatalogueRows(networkId, rows);
+      applyRegistry(rows, propertyCatalogueWithSides(networkId));
     });
   };
   loadRegistry();

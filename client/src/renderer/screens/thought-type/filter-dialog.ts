@@ -31,7 +31,6 @@
 import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
-  type NetworkProperty,
   type ThoughtCustomView,
   type ThoughtCustomViewInput,
   type ThoughtCustomViewUpdateInput,
@@ -46,6 +45,7 @@ import { showDialog } from '../../lib/dialog.js';
 import { footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
+import { propertyCatalogueRows, reloadPropertyCatalogue } from '../../lib/property-catalogue.js';
 import {
   constructorFilterIssues,
   filterIssuesFromError,
@@ -198,15 +198,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // свойствам, поэтому отказ отличается от успешного чтения, а диалог
   // повторяет чтение на тике store и переразбирает определение до правки
   // пользователя. Молчаливая перезапись потерянного определения запрещена.
-  const registry = new Map<string, NetworkProperty>();
-  let registryOk = false;
-  try {
-    const list = await etn.propertyRegistry.list(networkId);
-    for (const row of list) registry.set(row.id, row);
-    registryOk = true;
-  } catch {
-    /* реестр пуст до повтора; ниже — ожидание чтения (db42100b) */
-  }
+  //
+  // Источник реестра — ОБЩИЙ живой справочник свойств (`lib/property-catalogue.ts`,
+  // ошибка 6d25c224): карта обновляется на месте, поэтому открытый диалог видит
+  // созданное/переименованное/удалённое свойство без перезапуска клиента.
+  const registry = propertyCatalogueRows(networkId);
+  let registryOk = await reloadPropertyCatalogue(networkId, { fresh: true });
   /** Определение сохранённого отбора (объект JSON) — вход диагностики потерь. */
   const savedDefinition = parseSavedDefinition(opts.view);
   /**
@@ -472,13 +469,11 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     const retryRegistry = (): void => {
       if (registryOk || registryRetryInFlight || !dialogOpen) return;
       registryRetryInFlight = true;
-      void etn.propertyRegistry
-        .list(networkId)
-        .then((list) => {
-          if (!dialogOpen) return;
+      void reloadPropertyCatalogue(networkId, { fresh: true })
+        .then((ok) => {
+          // Отказ — ожидание остаётся до следующего тика store.
+          if (!ok || !dialogOpen) return;
           registryOk = true;
-          registry.clear();
-          for (const row of list) registry.set(row.id, row);
           const nextLosses =
             savedDefinition === undefined
               ? []

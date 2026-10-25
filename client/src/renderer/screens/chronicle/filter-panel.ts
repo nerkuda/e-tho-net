@@ -57,7 +57,6 @@ import {
   filterAstToTree,
   parseFilterAstState,
   parseFilterDefinition,
-  withReverseLinkPropertySides,
   type FilterCriteriaState,
   type FilterTreeGroup,
   type FilterTreeLeaf,
@@ -73,6 +72,7 @@ import { canonicalFilterTree } from '../../lib/filter-canonical.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
+import { propertyCatalogueWithSides, reloadPropertyCatalogue } from '../../lib/property-catalogue.js';
 import {
   predefinedFilterIds,
   predefinedFiltersToCreate,
@@ -139,8 +139,6 @@ let savedDefinition: unknown = null;
 let serverIssues: readonly FilterIssue[] = [];
 /** Узлы-заголовки панели (календарь) — переносятся при каждой перерисовке. */
 let headerNodes: readonly HTMLElement[] = [];
-/** Реестр свойств сети (условия под-выборки целей), один REST-вызов на открытие. */
-const propertyDefs = new Map<string, NetworkProperty>();
 /**
  * Подпись каталогов, от которых зависит реестр свойств: сеть, типы мыслей и
  * связей, видимость неактивных/корзины, rt-статус. Пустая подпись — вход чтения
@@ -839,7 +837,8 @@ function markPredefinedRows(rows: SavedFilterRow[]): void {
  * ad063c2f: без него условия свойств выпадали из снимка до разбора).
  */
 export function registryWithSides(): Map<string, NetworkProperty> {
-  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
+  const networkId = store.state.networkId;
+  return networkId === null ? new Map() : propertyCatalogueWithSides(networkId);
 }
 
 /**
@@ -847,20 +846,17 @@ export function registryWithSides(): Map<string, NetworkProperty> {
  * вызывающий обязан не считать подпись каталога отработанной, а разбор снимка
  * без реестра теряет условия по свойствам (ошибка ad063c2f — прежде отказ
  * глотался).
+ *
+ * Кэш и инвалидация — общий живой справочник (`lib/property-catalogue.ts`,
+ * ошибка 6d25c224): тот же срез читают все места монтажа конструктора условий,
+ * и правка реестра видна в уже открытой панели без перезапуска.
  */
 async function loadPropertyDefs(): Promise<boolean> {
   const networkId = store.state.networkId;
   if (networkId === null) return true;
-  propertyDefs.clear();
-  try {
-    const rows = await etn.propertyRegistry.list(networkId);
-    for (const row of rows) propertyDefs.set(row.id, row);
-    return true;
-  } catch {
-    // Сеть недоступна — реестр пуст, но подпись сброшена: следующий тик store
-    // повторит чтение (ошибка ad063c2f).
-    return false;
-  }
+  // `fresh` — путь «отказ не отработан»: следующий тик store повторяет чтение,
+  // не дожидаясь зависшего запроса (ошибка ad063c2f).
+  return reloadPropertyCatalogue(networkId, { fresh: true });
 }
 
 /**

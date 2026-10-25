@@ -53,7 +53,6 @@ import {
   filterTreeToAst,
   parseFilterAstState,
   parseFilterDefinitionTree,
-  withReverseLinkPropertySides,
   type FilterCriteriaState,
   type FilterTreeLeaf,
   type FilterTreeNode,
@@ -72,6 +71,7 @@ import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
+import { propertyCatalogueWithSides, reloadPropertyCatalogue } from '../../lib/property-catalogue.js';
 import {
   predefinedFilterIds,
   predefinedFiltersToCreate,
@@ -155,9 +155,7 @@ let savedFilterName: string | null = null;
 let savedDefinition: unknown = null;
 /** Записи диагностики от сервера (выборка/ошибка) — показываются в строках. */
 let serverIssues: readonly FilterIssue[] = [];
-/** Property registry: id → registry row (0.6.5: one property, one id). */
-const propertyDefs = new Map<string, NetworkProperty>();
-/** Signature of the catalogues the panel depends on (rebuild on change). */
+/** Подпись каталогов, от которых зависит чтение реестра свойств (повтор при смене). */
 let catalogueSignature = '';
 
 /**
@@ -703,29 +701,28 @@ function isHierarchyRootsLeaf(node: FilterTreeNode): boolean {
  * REST call replaces the per-type walk the panel used to use.
  * Returns `false` when the server read failed — the caller must not treat the
  * panel's catalogue signature as worked out then (76282fbc).
+ *
+ * Само чтение и кэш — общий живой справочник (`lib/property-catalogue.ts`,
+ * ошибка 6d25c224): его карту читают все места монтажа конструктора условий,
+ * поэтому изменение реестра видно и в уже открытой панели.
  */
 async function loadPropertyDefs(): Promise<boolean> {
   const networkId = store.state.networkId;
   if (networkId === null) return true;
-  propertyDefs.clear();
-  try {
-    const rows = await etn.propertyRegistry.list(networkId);
-    for (const row of rows) propertyDefs.set(row.id, row);
-    return true;
-  } catch {
-    // Network read failed — the panel falls back to the empty registry; the
-    // caller resets its signature so the next store tick retries.
-    return false;
-  }
+  // `fresh` — путь «отказ не отработан»: следующий тик store повторяет чтение,
+  // не дожидаясь зависшего запроса (ошибка 76282fbc).
+  return reloadPropertyCatalogue(networkId, { fresh: true });
 }
 
 /**
  * Реестр свойств для конструктора условий: к загруженному реестру добавлены
  * обратные стороны свойств-связей (задача df992826) — тот же хелпер, что и в
  * диалоге отбора типа мысли: оба места — применения одного конструктора (S4).
+ * Карта — ЖИВАЯ (общий справочник): редактор видит её обновления без пересборки.
  */
 function registryWithSides(): Map<string, NetworkProperty> {
-  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
+  const networkId = store.state.networkId;
+  return networkId === null ? new Map() : propertyCatalogueWithSides(networkId);
 }
 
 // ---------------------------------------------------------------------------

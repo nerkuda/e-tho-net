@@ -52,6 +52,10 @@ import {
 } from './filter-footer.js';
 import { filterPhraseThoughtIds, filterPhraseTokens, type FilterPhraseContext } from './filter-phrase.js';
 import {
+  isLivePropertyCatalogue,
+  subscribePropertyCatalogue,
+} from './property-catalogue.js';
+import {
   buildFilterSortSection,
   filterSortKeyOptions,
   type FilterSortSectionHandle,
@@ -520,6 +524,27 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   };
 
   /**
+   * Живой справочник свойств (ошибка 6d25c224): место монтажа передало ЖИВУЮ
+   * карту (`lib/property-catalogue.ts`) — значит, любое изменение реестра сети
+   * (создание/переименование/удаление свойства) обязано отразиться в уже
+   * открытых условиях. Карта обновляется на месте, поэтому достаточно
+   * перерисовать дерево из модели: условия не пересобираются, модель не
+   * трогается, новые свойства появляются в списке «Что», удалённые исчезают,
+   * переименованные показывают новое имя.
+   *
+   * Место монтажа со снимком реестра (строка поиска и «События» намеренно не
+   * отбирают по свойствам) не подписывается — обновлять там нечего.
+   *
+   * Начальное чтение справочника — забота места монтажа (оно решает, когда
+   * читать и как показывать отказ); редактор только перерисовывается, когда
+   * живая карта обновилась.
+   */
+  let unsubscribeCatalogue: (() => void) | null = null;
+  if (isLivePropertyCatalogue(data.registry)) {
+    unsubscribeCatalogue = subscribePropertyCatalogue(opts.networkId, () => refresh());
+  }
+
+  /**
    * Очистка условий места (кнопка «Очистить» зоны настроек строки поиска,
    * задача 4b1cc3d4): корневая группа модели становится пустой `И` — все
    * группы и условия основной группы сняты, сама группа остаётся. Далее
@@ -533,6 +558,8 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   };
 
   const destroy = (): void => {
+    unsubscribeCatalogue?.();
+    unsubscribeCatalogue = null;
     unsubscribePhraseRefresh?.();
     unsubscribePhraseRefresh = null;
     tree.destroy();
