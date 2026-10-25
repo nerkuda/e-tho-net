@@ -90,6 +90,9 @@ const DND_ALLOW = new Set([
   'lib/month-calendar.ts',
   // Закрытие меню кликом вне.
   'lib/menu.ts',
+  // Крестик тоста: закрытие по нажатию (pointerdown), не drag — `click`
+  // теряется, если над кнопкой успевает лечь новый тост (ошибка 90ef5cfa).
+  'lib/notice.ts',
   // Фокус таблицы/дерева при клике мышью (навигация, не перестановка строк).
   'lib/ui/table.ts',
   'lib/ui/tree.ts',

@@ -31,7 +31,16 @@ export function notice(text: string, kind: NoticeKind = 'info'): void {
   const extra = kind === 'info' ? '' : ` ${KIND_CLASS[kind]}`;
   const box = div(`notice${extra}`);
   box.append(span(text, 'notice-text'));
-  box.append(button('×', () => box.remove(), 'notice-close'));
+  const close = button('×', () => box.remove(), 'notice-close');
+  // Закрытие по НАЖАТИЮ, а не только по `click` (ошибка 90ef5cfa): `click`
+  // браузер шлёт общему предку целей mousedown и mouseup. Если над крестиком
+  // успевает лечь новый тост (повторяемое уведомление), mouseup попадает в
+  // него, `click` уходит мимо кнопки, и нажатый тост не закрывается — «крестик
+  // не закрывает, тень уплотняется». `pointerdown` срабатывает сразу и не
+  // зависит от того, что окажется под курсором к моменту отпускания; `click`
+  // оставлен для активации с клавиатуры (Enter/Space).
+  close.addEventListener('pointerdown', () => box.remove());
+  box.append(close);
   document.body.append(box);
   window.setTimeout(() => box.remove(), TTL_MS);
 }
