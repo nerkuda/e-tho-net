@@ -69,7 +69,7 @@ describe('describeConnectFailure: причина вместо «затычки»
       dns: 'адрес не найден — проверьте имя хоста',
       unreachable: 'сервер недоступен по сети — проверьте подключение',
       reset: 'соединение сброшено сервером',
-      other: 'Не удалось определить причину отказа',
+      other: 'не удалось определить причину отказа',
     };
     for (const [reason, phrase] of Object.entries(expected)) {
       const err = new EtnError('INTERNAL', 'Сетевая ошибка: fetch failed', {
@@ -124,7 +124,7 @@ describe('describeConnectFailure: причина вместо «затычки»
       message: 'x',
       details: { kind: 'connect-failed', reason: 'quasar' },
     };
-    assert.match(describeConnectFailure(unknown, { baseUrl: DEAD_URL }), /Не удалось определить причину отказа/);
+    assert.match(describeConnectFailure(unknown, { baseUrl: DEAD_URL }), /не удалось определить причину отказа/);
   });
 
   it('унаследованные ключи reason из серверных details не дают мусор (2edf8494)', () => {
@@ -140,7 +140,7 @@ describe('describeConnectFailure: причина вместо «затычки»
       const text = describeConnectFailure(err, { baseUrl: DEAD_URL });
       assert.equal(
         text,
-        `Не удалось подключиться к серверу ${DEAD_URL}: Не удалось определить причину отказа`,
+        `Не удалось подключиться к серверу ${DEAD_URL}: не удалось определить причину отказа`,
         `reason «${reason}» — нейтральная причина`,
       );
       assert.equal(garbage.test(text), false, `мусор в сообщении: «${text}»`);
@@ -162,7 +162,7 @@ describe('describeConnectFailure: причина вместо «затычки»
     });
     assert.equal(
       raw,
-      `Не удалось подключиться к серверу ${DEAD_URL}: Не удалось определить причину отказа`,
+      `Не удалось подключиться к серверу ${DEAD_URL}: не удалось определить причину отказа`,
     );
   });
 });
