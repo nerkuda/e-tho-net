@@ -314,7 +314,11 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
     fail(`${path}: операнд должен быть объектом.`, { field: path }, requestId);
   }
   const kind = input['kind'];
-  if (typeof kind !== 'string' || !(kind in ENTITY_KEYS)) {
+  // Только СОБСТВЕННЫЕ ключи справочника: `in` пропускал унаследованные от
+  // Object.prototype имена (`toString`, `constructor`, `__proto__`, …), после
+  // чего `ENTITY_KEYS[kind]` давал функцию вместо массива и валидация падала
+  // TypeError вместо VALIDATION_ERROR.
+  if (typeof kind !== 'string' || !Object.hasOwn(ENTITY_KEYS, kind)) {
     fail(`${path}.kind: неизвестный операнд.`, {
       field: `${path}.kind`,
       allowed: Object.keys(ENTITY_KEYS),

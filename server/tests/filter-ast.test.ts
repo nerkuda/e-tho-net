@@ -224,6 +224,21 @@ describe('AST validation (9c156b8c)', () => {
     }
   });
 
+  it('rejects Object.prototype keys as entity kind', () => {
+    // `kind` приходит из недоверенного тела: проверка `in ENTITY_KEYS` пропускала
+    // унаследованные имена (`toString`, `constructor`, `__proto__`, …), после
+    // чего справочник отдавал функцию вместо массива ключей и разбор падал
+    // TypeError — маршрут отвечал 500 вместо VALIDATION_ERROR.
+    for (const kind of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+      const input = { version: FILTER_AST_VERSION, filter: { entity: { kind }, operator: 'in', value: ['a'] } };
+      assert.throws(
+        () => parseFilterAst(input),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        `kind=${kind}: ожидается VALIDATION_ERROR`,
+      );
+    }
+  });
+
   it('accepts token and subquery value shapes', () => {
     const parsed = parseFilterAst({
       version: FILTER_AST_VERSION,
