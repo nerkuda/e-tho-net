@@ -1364,3 +1364,83 @@ describe('меню чипа-мысли в условии отбора (ошиб�
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Множественное значение условия — дискретные элементы (ошибка 0ef47f52)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ошибка 0ef47f52: в отборе типа «тех.проект» условие `not_in` хранило
+ * `["отменено, закрыто"]` — ОДНУ строку вместо двух значений, поэтому отбор
+ * не исключал ни «отменено», ни «закрыто».
+ *
+ * Данные созданы старым конструктором панелей (`filter-form`, ошибка
+ * b610729c — исправлена в 0.12.2); путь диалога отбора типа (единый редактор
+ * `lib/filter-value.ts` → `editor/value-editor.ts`) регресс-тестом покрыт не
+ * был. Тест фиксирует контракт этого пути: у одиночного text-свойства
+ * оператор «не в списке» включает чип-поле множества, и каждое значение
+ * уходит в модель ОТДЕЛЬНЫМ элементом массива, а не comma-joined строкой.
+ * Мутация — убрать `textListAsArray: multiple` из `valueEditorControl` —
+ * делает тест красным (значение склеится в «отменено, закрыто»).
+ */
+describe('множественное значение условия: дискретные элементы (ошибка 0ef47f52)', () => {
+  /** Одиночное text-свойство с закрытым списком — «Статус» из карточки ошибки. */
+  const STATUS_PROP = {
+    id: 'p-status',
+    network_id: 'n',
+    name: 'Статус',
+    value_type: 'text',
+    config: { options: ['отменено', 'закрыто', 'в работе'] },
+    description: null,
+    created_at: '',
+    updated_at: '',
+  } as unknown as NetworkProperty;
+  const statusCtx = (): any =>
+    ctx({
+      data: {
+        registry: new Map<string, NetworkProperty>([[STATUS_PROP.id, STATUS_PROP]]),
+        linkTypes: [],
+        thoughtTypes: [],
+      },
+    });
+
+  /** Дать осесть асинхронной цепочке коммита редактора (`Promise.then`). */
+  async function flush(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  it('добавление второго значения пишет два элемента массива, а не «отменено, закрыто»', async () => {
+    const { api, writes } = slot();
+    const box = render(
+      leaf(
+        { kind: 'property', property_id: 'p-status' },
+        'not_in',
+        { kind: 'list', items: ['отменено'] },
+      ),
+      api,
+      statusCtx(),
+    );
+    const input = one(box, 'value-chips-input');
+    assert.ok(
+      input !== null,
+      'одиночное text-свойство с оператором «не в списке» строит чип-поле множества',
+    );
+    input!.value = 'закрыто';
+    input!.emit('keydown', {
+      key: 'Enter',
+      defaultPrevented: false,
+      preventDefault: () => undefined,
+    });
+    await flush();
+
+    assert.deepEqual(
+      writes.at(-1),
+      { kind: 'list', items: ['отменено', 'закрыто'] },
+      'в модель условия уходят два дискретных значения',
+    );
+    assert.ok(
+      !JSON.stringify(writes).includes('отменено, закрыто'),
+      'склеенной строки нет ни в одной записи значения',
+    );
+  });
+});
