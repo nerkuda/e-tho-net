@@ -7,7 +7,7 @@
  * форма персиста этой вкладки, поверх общего отбора.
  */
 
-import type { ChronicleFilterDefinition } from '@etn/shared';
+import type { ChronicleFilterDefinition, NetworkProperty } from '@etn/shared';
 
 import {
   buildChronicleWire,
@@ -37,8 +37,18 @@ function parseMonth(value: unknown): { year: number; month: number } | null {
   return { year, month };
 }
 
-/** Parses the L4 `chronicle_state` JSON — never throws, falls back to empty. */
-export function parseChronicleState(raw: string): PersistedChronicleState {
+/**
+ * Parses the L4 `chronicle_state` JSON — never throws, falls back to empty.
+ *
+ * `registry` — реестр свойств сети (с обратными сторонами связей): нормализация
+ * wire-определения компилирует условия свойств под-выборки целей, и без реестра
+ * они выпадают из снимка ещё до разбора панелью (ошибка ad063c2f). Пустой
+ * реестр — прежнее поведение чистого разбора без сети.
+ */
+export function parseChronicleState(
+  raw: string,
+  registry: ReadonlyMap<string, NetworkProperty> = new Map(),
+): PersistedChronicleState {
   try {
     const parsed = JSON.parse(raw) as Partial<{
       filter: Record<string, unknown>;
@@ -46,7 +56,7 @@ export function parseChronicleState(raw: string): PersistedChronicleState {
       month: unknown;
     }>;
     return {
-      filter: buildChronicleWire(parseChronicleCriteria(parsed.filter ?? {})),
+      filter: buildChronicleWire(parseChronicleCriteria(parsed.filter ?? {}), registry),
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
       month: parseMonth(parsed.month),
     };

@@ -85,7 +85,7 @@ import {
 } from '../../lib/saved-filter-controller.js';
 import { segmentedControl } from '../../lib/ui/segmented.js';
 import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
-import { store } from '../../state.js';
+import { getRtStatus, store } from '../../state.js';
 import {
   SEARCH_DEBOUNCE_MS,
   resolvePeriodForQuery,
@@ -141,6 +141,19 @@ let serverIssues: readonly FilterIssue[] = [];
 let headerNodes: readonly HTMLElement[] = [];
 /** Реестр свойств сети (условия под-выборки целей), один REST-вызов на открытие. */
 const propertyDefs = new Map<string, NetworkProperty>();
+/**
+ * Подпись каталогов, от которых зависит реестр свойств: сеть, типы мыслей и
+ * связей, видимость неактивных/корзины, rt-статус. Пустая подпись — вход чтения
+ * НЕ отработан: следующий тик store повторит чтение (ошибка ad063c2f; механика
+ * 76282fbc/d3a30c3e). Статус соединения — вход: после обрыва связи реестр
+ * обязан перечитаться, иначе конструктор условий живёт с пустым реестром.
+ */
+let catalogueSignature = '';
+
+/** Подпись входа чтения реестра свойств — одна формула на все точки чтения. */
+function catalogueSignatureNow(): string {
+  return `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}|${getRtStatus(store.state)}`;
+}
 /** Общий контроллер личных отборов «Дневника» (0.13.3, задача c0c7b834). */
 let savedFilters: SavedFilterController | null = null;
 /** Слой (G6) подписан на инвалидации списка отборов — один раз. */
@@ -819,25 +832,50 @@ function markPredefinedRows(rows: SavedFilterRow[]): void {
 // Реестр свойств
 // ---------------------------------------------------------------------------
 
-function registryWithSides(): Map<string, NetworkProperty> {
+/**
+ * Реестр свойств сети с обратными сторонами связей — вход конвертеров
+ * определения (разбор снимка, под-выборка целей). Хосту нужен, чтобы
+ * нормализовать снимок с ТЕМ ЖЕ реестром, который читает панель (ошибка
+ * ad063c2f: без него условия свойств выпадали из снимка до разбора).
+ */
+export function registryWithSides(): Map<string, NetworkProperty> {
   return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
 }
 
-async function loadPropertyDefs(): Promise<void> {
+/**
+ * Читает реестр свойств сети. `false` — чтение не удалось: вход НЕ отработан,
+ * вызывающий обязан не считать подпись каталога отработанной, а разбор снимка
+ * без реестра теряет условия по свойствам (ошибка ad063c2f — прежде отказ
+ * глотался).
+ */
+async function loadPropertyDefs(): Promise<boolean> {
   const networkId = store.state.networkId;
-  if (networkId === null) return;
+  if (networkId === null) return true;
+  propertyDefs.clear();
   try {
     const rows = await etn.propertyRegistry.list(networkId);
-    propertyDefs.clear();
     for (const row of rows) propertyDefs.set(row.id, row);
+    return true;
   } catch {
-    // Сеть недоступна — панель работает с пустым реестром.
+    // Сеть недоступна — реестр пуст, но подпись сброшена: следующий тик store
+    // повторит чтение (ошибка ad063c2f).
+    return false;
   }
 }
 
-/** Реестр нужен конвертеру определения — хост зовёт перед разбором снимка. */
-export async function preloadFilterRegistry(): Promise<void> {
-  await loadPropertyDefs();
+/**
+ * Реестр нужен конвертеру определения — хост зовёт перед разбором снимка.
+ *
+ * `false` — чтение не удалось: подпись каталога сбрасывается (тем же правилом,
+ * что и у чтения по подписке), поэтому следующий тик store повторит чтение;
+ * вызывающий откладывает переразбор снимка (ошибка ad063c2f).
+ */
+export async function preloadFilterRegistry(): Promise<boolean> {
+  const signature = catalogueSignatureNow();
+  const ok = await loadPropertyDefs();
+  // Чужую, более новую подпись не трогаем — тот же сторож, что у подписки.
+  if (!ok && catalogueSignature === signature) catalogueSignature = '';
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -981,22 +1019,42 @@ export function mountChronicleFilterPanel(
     // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
     // `renderPanel()` зовёт `requireNetworkId()` и бросил бы, оборвав
     // `resetNetwork` до перехода на экран списка сетей (ошибка b5278f9a).
-    // Синхронизируем отслеживаемое значение — при следующем открытии сети
-    // подписка снова отработает штатно.
+    // Синхронизируем отслеживаемые значения — при следующем открытии сети
+    // подпись не совпадёт, панель перечитает реестр и перерисуется.
     if (store.state.networkId === null) {
       firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+      catalogueSignature = '';
       return;
     }
     const next = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
-    if (next === firstDayOfWeekSeen) return;
-    firstDayOfWeekSeen = next;
-    renderPanel();
+    if (next !== firstDayOfWeekSeen) {
+      firstDayOfWeekSeen = next;
+      renderPanel();
+    }
+    // Статус соединения и состав каталогов — вход чтения реестра свойств: после
+    // обрыва связи реестр ОБЯЗАН перечитаться, иначе конструктор условий живёт
+    // с пустым реестром до перезапуска (ошибка ad063c2f). Отказ чтения подпись
+    // не фиксирует — следующий тик store повторит чтение.
+    const signature = catalogueSignatureNow();
+    if (signature !== catalogueSignature) {
+      catalogueSignature = signature;
+      void loadPropertyDefs().then((ok) => {
+        if (!ok && catalogueSignature === signature) catalogueSignature = '';
+        renderPanel();
+      });
+    }
   });
   renderPanel();
   wireSavedFiltersToLayer();
   void reloadSavedFilters();
-  // Реестр свойств нужен конвертеру и под-выборке целей — перерисовка, когда он есть.
-  void loadPropertyDefs().then(() => renderPanel());
+  // Начальное чтение реестра — такой же вход: отказ оставляет подпись
+  // «неотработанной» (`''`), и следующий тик store повторит чтение (ошибка
+  // ad063c2f). Успех фиксирует подпись — тот же вход подписка не перечитывает.
+  const initialSignature = catalogueSignatureNow();
+  void loadPropertyDefs().then((ok) => {
+    catalogueSignature = ok ? initialSignature : '';
+    renderPanel();
+  });
   return panel;
 }
 
@@ -1012,6 +1070,10 @@ export function unmountChronicleFilterPanel(): void {
   unsubscribeFirstDayOfWeek = null;
   mounted = false;
   panel = null;
+  // Подпись принадлежит смонтированной панели: после unmount она
+  // недействительна, и близкое монтирование обязано прочитать реестр заново
+  // (ошибка ad063c2f — тот же сторож, что у «Структур», 76282fbc).
+  catalogueSignature = '';
 }
 
 /** Слой (G6): `saved-filter.*` гасит ключ — панель перечитывает список сама. */

@@ -141,6 +141,7 @@ import {
   chroniclePeriod,
   chronicleQueryDefinition,
   clearFilter,
+  type ChronicleFilterState,
   filterIssuesFromQueryError,
   filterIssuesFromQueryResult,
   getFilterState,
@@ -148,6 +149,7 @@ import {
   mountChronicleFilterPanel,
   preloadFilterRegistry,
   readFilterDefinition,
+  registryWithSides,
   setChroniclePeriod,
   setFilterServerIssues,
   setFilterState,
@@ -434,6 +436,95 @@ function setDayRecordsCollapsed(day: string, collapsed: boolean): void {
 // Mount / init
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Разбор снимка отбора с реестром свойств (ошибка ad063c2f)
+// ---------------------------------------------------------------------------
+//
+// Точка класса «чтение реестра/справочника без учёта отказа» (закрыт в
+// 77f18626 для «Структур», 6400d261 для панели): конвертер определения
+// выбрасывает условия по свойствам, которых нет в реестре, а перечитывание
+// реестра само по себе уже разобранное дерево не пересобирает. Отказ чтения
+// при разборе снимка оставляет снимок в ожидании, а штатный тик store (в т.ч.
+// переход в `connected` после обрыва связи) повторяет чтение и ПЕРЕРАЗБИРАЕТ
+// снимок.
+
+/** Сырой снимок отбора, не разобранный из-за отказа чтения реестра. */
+let pendingFilterSnapshot: string | null = null;
+/**
+ * Подпись состояния панели, разобранного БЕЗ реестра: если пользователь успел
+ * поправить отбор, переразбор снимка перетёр бы его правку — ожидание снимается.
+ */
+let pendingFilterSnapshotSignature: string | null = null;
+/** Сторож гонки: повтор уже идёт (тики store чаще, чем чтение реестра). */
+let filterSnapshotRetryInFlight = false;
+
+/** Подпись критериев панели (дерево, ключи сортировки, направление ленты). */
+function signatureOfFilterState(state: ChronicleFilterState): string {
+  return `${JSON.stringify(state.tree ?? null)}|${JSON.stringify(state.sortKeys ?? [])}|${state.order}`;
+}
+
+/** Подпись текущего состояния панели — для решения «снимок не перетёрт». */
+function filterStateSignature(): string {
+  return signatureOfFilterState(getFilterState());
+}
+
+/**
+ * Разобрать снимок отбора с реестром свойств. Отказ чтения реестра —
+ * состояние собирается из того, что есть (видимый набор не теряется целиком),
+ * а СЫРОЙ снимок остаётся в ожидании переразбора на следующем тике store:
+ * нормализация wire-определения тоже компилирует условия свойств под-выборки
+ * целей и без реестра их выбрасывает, поэтому повтор разбирает снимок заново.
+ */
+async function loadFilterSnapshot(raw: string): Promise<void> {
+  pendingFilterSnapshot = null;
+  pendingFilterSnapshotSignature = null;
+  const ok = await preloadFilterRegistry();
+  const parsed = parseChronicleState(raw, registryWithSides());
+  setFilterState(readFilterDefinition(parsed.filter));
+  setSavedFilterId(parsed.savedFilterId);
+  if (parsed.month !== null) month = parsed.month;
+  if (ok) return;
+  pendingFilterSnapshot = raw;
+  pendingFilterSnapshotSignature = filterStateSignature();
+}
+
+/**
+ * Повтор разбора отложенного снимка отбора: снова читает реестр свойств и при
+ * успехе ПЕРЕРАЗБИРАЕТ снимок — дерево условий получает свойства, а лента
+ * перезапрашивается с восстановленными условиями. Отказ оставляет ожидание до
+ * следующего тика store (подпись каталога панели при отказе тоже сброшена).
+ */
+async function retryPendingFilterSnapshot(): Promise<void> {
+  const raw = pendingFilterSnapshot;
+  if (raw === null || filterSnapshotRetryInFlight) return;
+  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
+  if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+    pendingFilterSnapshot = null;
+    pendingFilterSnapshotSignature = null;
+    return;
+  }
+  filterSnapshotRetryInFlight = true;
+  try {
+    const ok = await preloadFilterRegistry();
+    // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
+    // чтения (сеть/вкладка) — переразбирать нечего.
+    if (!ok || pendingFilterSnapshot !== raw) return;
+    pendingFilterSnapshot = null;
+    pendingFilterSnapshotSignature = null;
+    const before = filterStateSignature();
+    const next = readFilterDefinition(
+      parseChronicleState(raw, registryWithSides()).filter,
+    );
+    // Переразбор без изменений (снимок новой модели реестра не требует) —
+    // лишний сетевой перезапрос ленты не гоним.
+    if (signatureOfFilterState(next) === before) return;
+    setFilterState(next);
+    await reload();
+  } finally {
+    filterSnapshotRetryInFlight = false;
+  }
+}
+
 /** Switches to the diary view — lazily loads persisted state (L4). */
 export async function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
@@ -460,6 +551,10 @@ export async function ensureChronicleInitialised(): Promise<void> {
   homeId = null;
   homeNetworkId = null;
   homePromise = null;
+  // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
+  // снимается вместе с остальным состоянием (ошибка ad063c2f).
+  pendingFilterSnapshot = null;
+  pendingFilterSnapshotSignature = null;
 
   try {
     let raw: string | null = null;
@@ -471,13 +566,10 @@ export async function ensureChronicleInitialised(): Promise<void> {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
     }
     if (raw !== null && raw !== '') {
-      const parsed = parseChronicleState(raw);
       // Реестр свойств нужен конвертеру определения (условия под-выборки целей
       // и свойств) — прежний плоский снимок иначе терял бы часть условий.
-      await preloadFilterRegistry();
-      setFilterState(readFilterDefinition(parsed.filter));
-      setSavedFilterId(parsed.savedFilterId);
-      if (parsed.month !== null) month = parsed.month;
+      // Отказ чтения не теряется: снимок остаётся в ожидании переразбора.
+      await loadFilterSnapshot(raw);
     }
   } catch {
     // Fall back to the empty filter.
@@ -650,6 +742,16 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       store.state.activeView === 'chronicle'
     ) {
       void ensureChronicleInitialised();
+    }
+    // Снимок отбора разобран без реестра свойств и ждёт переразбора: тик store —
+    // штатный повтор чтения реестра (ошибка ad063c2f), в том числе переход в
+    // `connected` после обрыва связи.
+    if (
+      pendingFilterSnapshot !== null &&
+      networkId !== null &&
+      store.state.activeView === 'chronicle'
+    ) {
+      void retryPendingFilterSnapshot();
     }
     // Смена первого дня недели сети (настройки мыслесети, требование
     // 1b77decd) перестраивает раскладку календаря сразу и пересчитывает
