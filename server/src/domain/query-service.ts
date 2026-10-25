@@ -1514,14 +1514,22 @@ function subqueryStructuralClause(
   return subqueryEdgeQuantClause(base, [], otherCol, ids, quant);
 }
 
-/** Клауза под-выборки по одиночному операнду «Тип» (тип мысли против id-набора). */
+/**
+ * Клауза под-выборки по одиночному операнду «Тип» (тип мысли против id-набора).
+ *
+ * `not_in` — ЛИСТОВАЯ семантика отрицательного ссылочного оператора (ошибка
+ * a6866689): мысль проходит, только если у неё ЕСТЬ тип и он не входит в набор.
+ * Мысли без типа (`type_id IS NULL`) не проходят — «значения нет» выражает
+ * отдельное условие «Тип — не заполнено» (`is_empty`), а не отрицание
+ * равенства. Пустой набор — «нечего исключать»: проходит любая мысль (паритет
+ * с листовым `not_in`).
+ */
 function subqueryTypeClause(ids: readonly string[], quant: SubqueryQuantifier): Clause {
   if (ids.length === 0) return quant === 'in' ? AST_FALSE : AST_TRUE;
   const placeholders = ids.map(() => '?').join(',');
   if (quant === 'in') return { sql: `t.type_id IN (${placeholders})`, params: [...ids] };
-  // not_in: тип не задан либо не входит в набор (NULL не «входит»).
   return {
-    sql: `(t.type_id IS NULL OR t.type_id NOT IN (${placeholders}))`,
+    sql: `(t.type_id IS NOT NULL AND t.type_id NOT IN (${placeholders}))`,
     params: [...ids],
   };
 }
@@ -2379,6 +2387,16 @@ function filterAstLeafClause(
         };
         return operator === 'has' ? match : astNegate(match);
       }
+      // «Заполнено»/«не заполнено» для операнда «Тип» (ошибка a6866689):
+      // тип мысли — необязательная ссылка (`thoughts.type_id`, NULL у
+      // нетипизированных). `not_empty` — «мысль имеет ЛЮБОЙ тип»
+      // (`type_id IS NOT NULL`), `is_empty` — «мысли без типа»
+      // (`type_id IS NULL`). Значение не требуется — как у «Типа связи».
+      if (operator === 'is_empty' || operator === 'not_empty') {
+        return operator === 'not_empty'
+          ? { sql: 't.type_id IS NOT NULL', params: [] }
+          : { sql: 't.type_id IS NULL', params: [] };
+      }
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       // «Тип» — одиночный операнд: наборные `any_of`/`none_of` (значение —
       // список типов; так их строит конструктор UI, MULTIPLE_OPS) тождественны
@@ -2408,6 +2426,11 @@ function filterAstLeafClause(
         sql: `t.type_id IN (${matched.map(() => '?').join(',')})`,
         params: [...matched],
       };
+      // Отрицательные операторы (`ne`/`not_in`/`none_of`) — `NOT (type_id IN …)`:
+      // у мысли без типа сравнение даёт NULL и строка отсекается. Поведение
+      // ОСОЗНАННОЕ (решение заказчика 2026-10-25, ошибка a6866689): «нет
+      // значения» — это не «не равно», для него есть отдельное «не заполнено»
+      // (`is_empty`). Пустой набор — «нечего исключать», проходит любая мысль.
       return positive ? match : { sql: `NOT (${match.sql})`, params: match.params };
     }
 

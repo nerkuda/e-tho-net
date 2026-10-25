@@ -728,6 +728,18 @@ describe('дерево условий: сгруппированные списк
     const typeOps = type.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
     assert.ok(typeOps.includes('in_hierarchy') && typeOps.includes('has'));
     assert.ok(!typeOps.includes('all_of'), '«все в выборке» в списке UI отсутствует (п.7)');
+    // «Заполнено»/«не заполнено» по типу мысли (ошибка a6866689): секция
+    // «Состояние», подписи — словарь конструктора (не заполнено | заполнено).
+    const typeState = type.find((s: any) => s.key === 'state');
+    assert.ok(typeState !== undefined, 'тип: секция «Состояние» предложена');
+    assert.deepEqual(
+      typeState!.rows[0]!.cells.map((c: any) => [c.op, c.label]),
+      [
+        ['not_empty', 'заполнено'],
+        ['is_empty', 'не заполнено'],
+      ],
+      'тип: «заполнено»/«не заполнено» — пара «утверждение | отрицание»',
+    );
 
     // Профиль хроники — свои операнды и свой набор. У текстовых операндов
     // записи «Найти слова» из списка убран (ошибка 609deba0 п.5): условие строит

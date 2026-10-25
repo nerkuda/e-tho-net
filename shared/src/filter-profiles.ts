@@ -405,6 +405,12 @@ const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[
     'not_in',
     'in_hierarchy',
     'not_in_hierarchy',
+    // «Заполнено»/«не заполнено»: у мысли есть любой тип / мысли без типа
+    // (`thoughts.type_id IS NOT NULL` / `IS NULL`). Ошибка a6866689: до этого
+    // набора мысль без типа нельзя было найти условием, а отрицательные
+    // операторы молча её отсекали.
+    'is_empty',
+    'not_empty',
     // «Имеет свойство»/«не имеет» на операнде «Тип» (требование bd0348b3).
     'has',
     'not_has',
