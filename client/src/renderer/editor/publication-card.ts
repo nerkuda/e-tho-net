@@ -75,6 +75,7 @@ import {
   type EntityOption,
 } from '../lib/entity-picker.js';
 import { buildMetadataBlock } from '../lib/metadata.js';
+import type { PropertyRegistryRow } from '../lib/property-list.js';
 import { store } from '../state.js';
 import { buildCover } from '../screens/publications/cover.js';
 import {
@@ -83,10 +84,10 @@ import {
 } from '../screens/publications/model.js';
 import {
   buildRecipeBuilder,
-  loadPropertyRegistry,
   loadPropertyRows,
   propertyChipTitles,
   propertyEntityOptions,
+  propertyRegistryFromRows,
   type RecipeBuilder,
 } from '../screens/publications/recipe.js';
 
@@ -698,9 +699,21 @@ function buildRecipePane(): HTMLElement {
   pane.append(textsGroup.root, extrasGroup.root);
 
   let builder: RecipeBuilder | null = null;
+  /** Отказ чтения реестра свойств — причина видна, рецепт ждёт повтора. */
+  const registryPending = span(t('publication.recipe.registryPending'), 'muted');
+  registryPending.classList.add('pub-card-recipe-pending');
+  /** Смена цели/закрытие карточки: повтор чтения реестра больше не нужен. */
+  let disposed = false;
+  /** Подписка на тики store — повтор чтения реестра (ошибка 3bf62fd7). */
+  let registryUnsub: (() => void) | null = null;
+  /** Сторож гонки: тики store чаще, чем чтение реестра. */
+  let registryLoadInFlight = false;
   // Карточку закрывают удалением DOM (события remove в Chromium нет) —
   // размонтируем редактор отбора по явному сигналу смены цели.
   recipeHost.addEventListener('etn:recipe-dispose', () => {
+    disposed = true;
+    registryUnsub?.();
+    registryUnsub = null;
     builder?.destroy();
     builder = null;
   });
@@ -731,54 +744,80 @@ function buildRecipePane(): HTMLElement {
     extrasError.classList.toggle('hidden', !invalid);
   };
 
-  if (networkId !== null) {
-    void Promise.all([loadPropertyRows(networkId), loadPropertyRegistry(networkId)]).then(
-      ([rows, loadedRegistry]) => {
-        registry = loadedRegistry;
-        const choices: EntityOption[] = propertyEntityOptions(rows);
-        // Облачко чипа показывает КАНОНИЧЕСКОЕ (прямое) имя свойства, хотя в
-        // выпадашке каждая сторона — отдельная строка (задача 7cfaba7c, п.3).
-        const chipTitles = propertyChipTitles(choices);
-        const cloudOf = (value: string): ThoughtCloudInput => ({
-          id: value,
-          title: chipTitles.get(value) ?? value,
-        });
-        textsField = buildEntityChipField({
-          getValues: () => textSources,
-          onChange: (values) => {
-            textSources = values;
-            checkOverlap();
-            queueSave({ text_sources: textSources });
-          },
-          loadOptions: (query) => filterEntityOptions(choices, query),
-          initialOptions: choices,
-          cloudOf,
-          optionsHeader: t('publication.field.texts'),
-          placeholder: t('typeEditor.addProperty'),
-          addPlaceholder: t('typeEditor.addProperty'),
-          reorderable: true,
-        });
-        extrasField = buildEntityChipField({
-          getValues: () => extraProperties,
-          onChange: (values) => {
-            extraProperties = values;
-            checkOverlap();
-            queueSave({ extra_properties: extraProperties });
-          },
-          loadOptions: (query) => filterEntityOptions(choices, query),
-          initialOptions: choices,
-          cloudOf,
-          optionsHeader: t('publication.field.extras'),
-          placeholder: t('typeEditor.addProperty'),
-          addPlaceholder: t('typeEditor.addProperty'),
-          reorderable: true,
-        });
-        textsHost.append(textsField.root);
-        extrasHost.append(extrasField.root);
-        if (instance?.publication != null) apply(instance.publication);
+  /** Построить чип-поля и запомнить реестр (рецепт пересобирается тем же `apply`). */
+  const applyRegistry = (
+    rows: PropertyRegistryRow[],
+    loaded: Map<string, NetworkProperty>,
+  ): void => {
+    registry = loaded;
+    const choices: EntityOption[] = propertyEntityOptions(rows);
+    // Облачко чипа показывает КАНОНИЧЕСКОЕ (прямое) имя свойства, хотя в
+    // выпадашке каждая сторона — отдельная строка (задача 7cfaba7c, п.3).
+    const chipTitles = propertyChipTitles(choices);
+    const cloudOf = (value: string): ThoughtCloudInput => ({
+      id: value,
+      title: chipTitles.get(value) ?? value,
+    });
+    textsField = buildEntityChipField({
+      getValues: () => textSources,
+      onChange: (values) => {
+        textSources = values;
+        checkOverlap();
+        queueSave({ text_sources: textSources });
       },
-    );
-  }
+      loadOptions: (query) => filterEntityOptions(choices, query),
+      initialOptions: choices,
+      cloudOf,
+      optionsHeader: t('publication.field.texts'),
+      placeholder: t('typeEditor.addProperty'),
+      addPlaceholder: t('typeEditor.addProperty'),
+      reorderable: true,
+    });
+    extrasField = buildEntityChipField({
+      getValues: () => extraProperties,
+      onChange: (values) => {
+        extraProperties = values;
+        checkOverlap();
+        queueSave({ extra_properties: extraProperties });
+      },
+      loadOptions: (query) => filterEntityOptions(choices, query),
+      initialOptions: choices,
+      cloudOf,
+      optionsHeader: t('publication.field.extras'),
+      placeholder: t('typeEditor.addProperty'),
+      addPlaceholder: t('typeEditor.addProperty'),
+      reorderable: true,
+    });
+    textsHost.append(textsField.root);
+    extrasHost.append(extrasField.root);
+    if (instance?.publication != null) apply(instance.publication);
+  };
+
+  /**
+   * Чтение реестра свойств. Отказ — НЕ пустой реестр (ошибка 3bf62fd7):
+   * рецепт с пустым реестром теряет условия по свойствам и выдаёт их за
+   * «свойства больше нет в сети». Поэтому причина видна, билдер не строится, а
+   * следующий тик store (в т.ч. восстановление связи) повторяет чтение и
+   * пересобирает рецепт с настоящим реестром.
+   */
+  const loadRegistry = (): void => {
+    if (networkId === null || disposed || registryLoadInFlight) return;
+    registryLoadInFlight = true;
+    void loadPropertyRows(networkId).then((rows) => {
+      registryLoadInFlight = false;
+      if (disposed) return;
+      if (rows === null) {
+        if (!recipeHost.contains(registryPending)) recipeHost.append(registryPending);
+        registryUnsub ??= store.subscribe(loadRegistry);
+        return;
+      }
+      registryUnsub?.();
+      registryUnsub = null;
+      registryPending.remove();
+      applyRegistry(rows, propertyRegistryFromRows(rows));
+    });
+  };
+  loadRegistry();
 
   updaters.push((p) => {
     fromInput.value = p.numbering_from === null ? '' : String(p.numbering_from);

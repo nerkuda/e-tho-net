@@ -60,24 +60,38 @@ export interface RecipeBuilder {
   destroy: () => void;
 }
 
-/** Реестр свойств сети в виде строк общего списка (для пикера свойств). */
-export async function loadPropertyRows(networkId: string): Promise<PropertyRegistryRow[]> {
-  const registry = await etn.propertyRegistry.list(networkId).catch(() => []);
+/**
+ * Реестр свойств сети в виде строк общего списка (для пикера свойств).
+ *
+ * `null` — чтение не удалось: отказ ОТЛИЧАЕТСЯ от пустого реестра (ошибка
+ * 3bf62fd7). Рецепт, построенный с пустым реестром, теряет условия по
+ * свойствам и выдаёт их за удалённые — вызывающий обязан повторить чтение, а
+ * не подставлять `[]`.
+ */
+export async function loadPropertyRows(
+  networkId: string,
+): Promise<PropertyRegistryRow[] | null> {
+  let registry: PropertyRegistryRow[];
+  try {
+    registry = await etn.propertyRegistry.list(networkId);
+  } catch {
+    return null;
+  }
   await ensurePropertyLinkTypes(networkId, registry).catch(() => undefined);
   return registry;
 }
 
 /**
- * Загружает реестр свойств сети как карту `id → строка реестра` с обратными
- * сторонами связей — так же, как панель «Структур» (общий конвертер ожидает
- * именно эту форму).
+ * Карта `id → строка реестра` с обратными сторонами связей — так же, как панель
+ * «Структур» (общий конвертер ожидает именно эту форму). Чистая сборка из уже
+ * прочитанных строк: второй сетевой запрос за тем же реестром не нужен
+ * (ошибка 3bf62fd7 — карточка читает реестр ОДИН раз и различает отказ).
  */
-export async function loadPropertyRegistry(
-  networkId: string,
-): Promise<Map<string, NetworkProperty>> {
-  const list = await loadPropertyRows(networkId);
+export function propertyRegistryFromRows(
+  rows: readonly PropertyRegistryRow[],
+): Map<string, NetworkProperty> {
   const base = new Map<string, NetworkProperty>(
-    list.map((row): [string, NetworkProperty] => [row.id, row]),
+    rows.map((row): [string, NetworkProperty] => [row.id, row]),
   );
   return withReverseLinkPropertySides(base, store.state.linkTypes);
 }

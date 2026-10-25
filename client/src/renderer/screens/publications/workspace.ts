@@ -1703,6 +1703,9 @@ export function mountPublicationWorkspace(
     }
     try {
       const rows = await loadPropertyRows(networkId);
+      // Отказ чтения реестра — явная ошибка, а не молчаливо пустой список
+      // (ошибка 3bf62fd7): иначе перенос падал бы «не найдено свойство».
+      if (rows === null) throw new Error(t('publications.registryUnreadable'));
       const listRows = buildPropertyListRows(rows, store.state.linkTypes).filter(
         (row) => !row.structural && row.valueType === 'link' && sources.includes(row.propertyId),
       );
@@ -2460,6 +2463,12 @@ export function mountPublicationWorkspace(
         return;
       }
       const rows = await loadPropertyRows(networkId);
+      // Отказ чтения реестра не выдаём за «нет свойств-источников»
+      // (ошибка 3bf62fd7): причина видна, действие прерывается.
+      if (rows === null) {
+        notice(t('publications.registryUnreadable'), 'error');
+        return;
+      }
       const listRows = buildPropertyListRows(rows, store.state.linkTypes).filter(
         (row) => !row.structural && row.valueType === 'link' && sources.includes(row.propertyId),
       );
