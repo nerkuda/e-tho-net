@@ -2432,7 +2432,10 @@ function buildUsagePanel(
         size: 's',
         class: 'link-btn',
         title: 'Открыть тип',
-        onClick: () => openTypeEditorByUsage(b),
+        // Промис обработчика ожидается: отказ чтения реестра обрабатывается
+        // внутри (errorDialog), необработанного отказа в renderer нет
+        // (ошибка b55fedb6).
+        onClick: () => void openTypeEditorByUsage(b),
       });
       nameCell.append(link);
       const countCell = el('td', 'muted', String(b.values_in_type_count));
@@ -2452,19 +2455,26 @@ function buildUsagePanel(
    *  редактор типа связи упразднён, единственная точка редактирования —
    *  свойство-связь). */
   async function openTypeEditorByUsage(row: PropertyUsageRow): Promise<void> {
-    if (row.owner_type === 'thought_type') {
-      const t = store.state.thoughtTypes.find((tt) => tt.id === row.owner_id);
-      if (t !== undefined) {
-        const { showThoughtTypeEditor } = await import('./type-manager.js');
-        showThoughtTypeEditor(t, () => void reload());
+    try {
+      if (row.owner_type === 'thought_type') {
+        const t = store.state.thoughtTypes.find((tt) => tt.id === row.owner_id);
+        if (t !== undefined) {
+          const { showThoughtTypeEditor } = await import('./type-manager.js');
+          showThoughtTypeEditor(t, () => void reload());
+        }
+      } else {
+        // link_type: открываем свойство-связь.
+        const regRows = await etn.propertyRegistry.list(networkId);
+        const prop = regRows.find((p) => p.value_type === 'link' && p.config?.link_type_id === row.owner_id);
+        if (prop !== undefined) {
+          openPropertyManagerEditor(prop, onChanged);
+        }
       }
-    } else {
-      // link_type: открываем свойство-связь.
-      const regRows = await etn.propertyRegistry.list(networkId);
-      const prop = regRows.find((p) => p.value_type === 'link' && p.config?.link_type_id === row.owner_id);
-      if (prop !== undefined) {
-        openPropertyManagerEditor(prop, onChanged);
-      }
+    } catch (err) {
+      // Отказ чтения реестра (связь/сеть) — видимая ошибка, как у соседних
+      // действий менеджера; молчаливого «кнопка не работает» больше нет
+      // (ошибка b55fedb6).
+      errorDialog('Открыть тип', err);
     }
   }
 
