@@ -1056,3 +1056,131 @@ test('повтор слова: каретка во втором вхождени
   assert.notEqual(second, 0);
 });
 
+
+// ---------------------------------------------------------------------------
+// Ошибка 49ebba76: карта сдвига в обычном (блочном) тексте
+// ---------------------------------------------------------------------------
+
+/** Символ обратного слэша без литерала в исходнике теста. */
+const BACKSLASH = String.fromCharCode(92);
+
+/**
+ * Клик по первому символу `rendered` (видимый текст) должен дать начало
+ * `sourceTail` — дословного фрагмента исходника, с которого этот символ
+ * отрисован. Так ожидание не зависит от длины escape/entity перед ним.
+ */
+function assertBlockClick(src: string, rendered: string, char: string, sourceTail: string): void {
+  const at = src.indexOf(sourceTail);
+  assert.notEqual(at, -1, `фрагмент ${JSON.stringify(sourceTail)} не найден в ${JSON.stringify(src)}`);
+  assert.equal(clickOffset(src, rendered, char), at, src);
+}
+
+test('абзац: escape и HTML-entity в обычном тексте — клик точен (49ebba76)', () => {
+  // Точные кейсы карточки: `a &amp; b` клик по b = 8 (было 4), `` `a` &amp; b `` = 10 (было 6).
+  assertBlockClick('a &amp; b', 'b', 'b', 'b');
+  assertBlockClick('`a` &amp; b', '& b', 'b', 'b');
+  // Прочие escape-последовательности и entity.
+  assertBlockClick('a ' + BACKSLASH + '* b', 'a * b', 'b', 'b');
+  assertBlockClick('a ' + BACKSLASH + BACKSLASH + ' b', 'a ' + BACKSLASH + ' b', 'b', 'b');
+  assertBlockClick('a ' + BACKSLASH + '_ b', 'a _ b', 'b', 'b');
+  assertBlockClick('a ' + BACKSLASH + '# b', 'a # b', 'b', 'b');
+  assertBlockClick('a &lt; b', 'a < b', 'b', 'b');
+  assertBlockClick('a &gt; b', 'a > b', 'b', 'b');
+  assertBlockClick('a &quot; b', 'a " b', 'b', 'b');
+  assertBlockClick('a &#39; b', "a ' b", 'b', 'b');
+  assertBlockClick('a &#65; b', 'a A b', 'b', 'b');
+  // Несколько entity подряд, а также в начале и в конце блока.
+  assertBlockClick('a &amp;&amp; b', 'a && b', 'b', 'b');
+  assertBlockClick('&amp; начало', '& начало', 'н', 'начало');
+  assertBlockClick('конец &amp;', 'конец &', '&', '&');
+  assertBlockClick('a &amp; b &lt; c &gt; d', 'd', 'd', 'd');
+});
+
+test('абзац: карта сдвига выставляется на блочный элемент (49ebba76)', () => {
+  assert.match(renderMarkdown('a &amp; b', { sourceMap: true }), /<p[^>]*data-md-shift="3:4"/);
+  assert.match(
+    renderMarkdown('a ' + BACKSLASH + '* b', { sourceMap: true }),
+    /<p[^>]*data-md-shift="3:1"/,
+  );
+  // До укороченного прогона сдвиг не применяется (клик по `a`).
+  assertBlockClick('a &amp; b', 'a ', 'a', 'a');
+});
+
+test('список, цитата, заголовок: escape/entity в тексте — клик точен (49ebba76)', () => {
+  const cases: Array<[string, string, string]> = [
+    ['- a &amp; b', 'b', 'b'],
+    ['1. a &amp; b', 'b', 'b'],
+    ['> a &amp; b', 'b', 'b'],
+    ['> > a &amp; b', 'b', 'b'],
+    ['# a &amp; b', 'b', 'b'],
+    ['## a &amp; b ##', 'b', 'b'],
+    ['a &amp; b\n===', 'b', 'b'],
+    ['- a &amp; b\n- c &amp; d', 'd', 'd'],
+    ['- a &amp; b\n  - c &amp; d', 'd', 'd'],
+    ['> a &amp; b\n> c &amp; d', 'd', 'd'],
+    ['a &amp; b\nc &amp; d', 'd', 'd'],
+  ];
+  for (const [src, needle, char] of cases) {
+    assert.equal(clickOffset(src, needle, char), src.lastIndexOf(char), src);
+  }
+});
+
+test('блок: карта сдвига садится на <li>, <p> цитаты и заголовок (49ebba76)', () => {
+  assert.match(renderMarkdown('- a &amp; b', { sourceMap: true }), /<li[^>]*data-md-shift/);
+  assert.match(
+    renderMarkdown('> a &amp; b', { sourceMap: true }),
+    /<p[^>]*data-md-shift/,
+  );
+  assert.match(renderMarkdown('# a &amp; b', { sourceMap: true }), /<h1[^>]*data-md-shift/);
+});
+
+test('блок: сущности вне конструкции суммируются с её картой (49ebba76)', () => {
+  assertBlockClick('**a** &amp; b', '& b', 'b', 'b');
+  assertBlockClick('==a== &amp; b', '& b', 'b', 'b');
+  assertBlockClick('[l](http://e) &amp; b', '& b', 'b', 'b');
+  assertBlockClick('`a` &amp; b', '& b', 'b', 'b');
+});
+
+// ---------------------------------------------------------------------------
+// Ошибка 49ebba76: ячейки таблицы — тоже блочный текст
+// ---------------------------------------------------------------------------
+
+test('таблица: th/td получают свой диапазон и карту сдвига (49ebba76)', () => {
+  const src = '| a &amp; b | c |\n| --- | --- |\n| d &lt; e | f |';
+  const html = renderMarkdown(src, { sourceMap: true });
+  assert.match(html, /<th[^>]*data-md-start="2"[^>]*data-md-shift="3:4"/, html);
+  assert.match(html, /<td[^>]*data-md-start="\d+"[^>]*data-md-shift/, html);
+  assertBlockClick(src, 'a & b', 'b', 'b');
+  assertBlockClick(src, 'd < e', 'e', 'e');
+});
+
+test('таблица: escape в ячейке — клик точен (49ebba76)', () => {
+  const src = '| a ' + BACKSLASH + '* b | c |\n| --- | --- |';
+  assert.match(renderMarkdown(src, { sourceMap: true }), /<th[^>]*data-md-shift/);
+  assertBlockClick(src, 'a * b', 'b', 'b');
+});
+
+test('таблица: конструкция и entity в одной ячейке — клик после обоих точен (49ebba76)', () => {
+  const src = '| **x** &amp; y |\n| --- |';
+  assert.match(renderMarkdown(src, { sourceMap: true }), /<th[^>]*data-md-shift/);
+  assertBlockClick(src, 'y', 'y', 'y');
+});
+
+test('таблица: одинаковые конструкции в разных строках аннотируются по своим ячейкам (49ebba76)', () => {
+  const src = '| **x** |\n| --- |\n| **x** |';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const starts = [...html.matchAll(/<strong data-md-start="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(starts, [src.indexOf('**x**') + 2, src.lastIndexOf('**x**') + 2], html);
+});
+
+test('таблица: скрытый HTML-комментарий в ячейке — клик точен (49ebba76)', () => {
+  const src = '| a <!--c--> b |\n| --- |';
+  assertBlockClick(src, 'b', 'b', 'b');
+});
+
+test('таблица: без sourceMap вывод не меняется (49ebba76)', () => {
+  assert.equal(
+    renderMarkdown('| a &amp; b | c |\n| --- | --- |'),
+    '<table>\n<thead>\n<tr>\n<th>a &amp; b</th>\n<th>c</th>\n</tr>\n</thead>\n</table>\n',
+  );
+});

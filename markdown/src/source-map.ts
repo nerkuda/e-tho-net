@@ -81,6 +81,14 @@
  * `data-md-shift` for escaped/entity/comment runs in ordinary text outside any
  * construct, where it is the nearest annotated ancestor.
  *
+ * Table cells are block text too (ошибка `49ebba76`): `th_open`/`td_open` carry
+ * no line map, so the row's source line (from `tr_open`'s map) is split exactly
+ * like markdown-it's own table splitter, every cell gets its visible-text range,
+ * and its inline token is given the absolute content start (`mdInlineBase`) —
+ * the origin for construct ranges and the shift map inside the cell. A click in
+ * a cell is therefore mapped against the cell, not the whole row, and escapes /
+ * entities / embedded comments in a cell are compensated like in any block.
+ *
  * A shift entry is recorded ONLY for a run at the map owner's own text level:
  * the rendered cursor walks nested constructs too (to stay aligned with the
  * resolver), but a run inside a nested construct is left to that construct's
@@ -97,6 +105,10 @@
  *   The same holds for a bare URL with a scheme outside the allow-list
  *   (`ftp://…`): `linkify` matches it, the safety plugin drops the `<a>`, and
  *   the text stays unannotated.
+ * - In a table cell, an escaped pipe (`\|`) is shortened by markdown-it's table
+ *   splitter BEFORE the inline parser sees the cell content, so that one source
+ *   character per escaped pipe is not compensated by the cell's shift map
+ *   (ошибка `49ebba76`, see {@link tableRowCellRanges}).
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -150,6 +162,15 @@ interface RangeCarrier {
   mdRange?: SourceRange;
   /** Absolute after-anchor, resolved by the core rule. */
   mdAfter?: number;
+  /**
+   * Absolute source offset of `inline.content[0]` for an inline token that has
+   * no `map` of its own — a table cell (ошибка `49ebba76`). markdown-it builds
+   * a cell's inline token from the row line without giving it a line map, so
+   * relative positions inside the cell (construct ranges, the shift map) need
+   * this base as their origin; otherwise they would be located by a global
+   * `indexOf` of the cell text.
+   */
+  mdInlineBase?: number;
 }
 
 /**
@@ -492,6 +513,8 @@ function blockRange(
  * source. markdown-it builds the content by normalising newlines and stripping
  * the line-leading block markup of continuation lines (`> `, list indent), so a
  * plain `indexOf` of the whole content is wrong; the map is built line by line.
+ * A table cell's inline has no map and carries {@link RangeCarrier.mdInlineBase}
+ * instead (ошибка `49ebba76`).
  */
 interface InlineContentMap {
   /** Absolute source offset of an offset inside `token.content`. */
@@ -511,13 +534,19 @@ function inlineContentMap(
   const chunkStart: number[] = [];
   let acc = 0;
   const map = token.map;
+  // A table cell's inline has no map: its first chunk starts at the absolute
+  // cell-content offset recorded by the table pass (ошибка `49ebba76`).
+  const meta = token.meta as RangeCarrier | null;
+  const base = meta?.mdInlineBase;
   for (let j = 0; j < lines.length; j++) {
     const line = lines[j]!;
     chunkStart.push(acc);
     let abs: number;
     const lineIdx = map !== null ? map[0]! + j : -1;
     const lineStart = lineIdx >= 0 ? lineStarts[lineIdx] : undefined;
-    if (lineStart !== undefined) {
+    if (j === 0 && base !== undefined) {
+      abs = base;
+    } else if (lineStart !== undefined) {
       const lineEnd = lineContentEnd(src, lineStart);
       if (line === '') {
         abs = lineStart;
@@ -565,6 +594,120 @@ function setRangeAttrs(token: Token, range: SourceRange): void {
   token.attrSet(MD_SOURCE_END_ATTR, String(range.end));
 }
 
+// ---------------------------------------------------------------------------
+// Table cells: their own range and inline base (ошибка 49ebba76)
+// ---------------------------------------------------------------------------
+
+/**
+ * Skips the blockquote markers and indentation of a table row line — what
+ * markdown-it's block parser leaves before the row content (`bMarks + tShift`
+ * after the blockquote/list rules rewrote the line). Unlike
+ * {@link skipBlockPrefix} the leading `|` is NOT consumed: the row splitter
+ * treats it as an empty first segment, exactly like markdown-it does.
+ */
+function skipRowPrefix(src: string, from: number, lineEnd: number): number {
+  let i = from;
+  for (;;) {
+    const before = i;
+    i = skipSpaces(src, i, lineEnd);
+    if (src[i] === '>') {
+      i = skipSpaces(src, i + 1, lineEnd);
+      continue;
+    }
+    if (i === before) break;
+  }
+  return i;
+}
+
+/** Trims spaces/tabs of a row segment; `null` when nothing is left. */
+function trimCellRange(src: string, start: number, end: number): SourceRange | null {
+  let from = start;
+  let to = end;
+  while (from < to && (src[from] === ' ' || src[from] === '\t')) from++;
+  while (to > from && (src[to - 1] === ' ' || src[to - 1] === '\t')) to--;
+  return from < to ? { start: from, end: to } : null;
+}
+
+/**
+ * Source spans of one table row's cells in column order (`null` — empty cell).
+ *
+ * Mirrors markdown-it's own row splitter (`escapedSplit` in
+ * `rules_block/table.mjs`): the row is cut at every `|` not directly preceded by
+ * a backslash, the empty first/last segments produced by the outer bars are
+ * dropped, and each cell is trimmed. This is NOT a second markdown parse: the
+ * spans only locate the cell contents markdown-it has already produced on this
+ * very line, so the single-parser rule holds (ADR `01ec1467` — block
+ * segmentation belongs to `@etn/markdown`, where this lives).
+ *
+ * Honest limit: `escapedSplit` strips the backslash of an escaped pipe (`\|`)
+ * from the cell CONTENT before the inline parser sees it, so that one source
+ * character per escaped pipe is not compensated by the shift map of the cell.
+ * Everything else (escapes, HTML entities, embedded HTML comments) is.
+ */
+function tableRowCellRanges(
+  src: string,
+  lineStart: number,
+  lineEnd: number,
+): Array<SourceRange | null> {
+  const start = skipRowPrefix(src, lineStart, lineEnd);
+  let end = lineEnd;
+  while (end > start && (src[end - 1] === ' ' || src[end - 1] === '\t')) end--;
+  const raw: Array<{ start: number; end: number }> = [];
+  let segStart = start;
+  let isEscaped = false;
+  for (let i = start; i < end; i++) {
+    const ch = src[i]!;
+    if (ch === '|' && !isEscaped) {
+      raw.push({ start: segStart, end: i });
+      segStart = i + 1;
+    }
+    isEscaped = ch === '\\';
+  }
+  raw.push({ start: segStart, end });
+  if (raw.length > 0 && raw[0]!.start === raw[0]!.end) raw.shift();
+  if (raw.length > 0 && raw[raw.length - 1]!.start === raw[raw.length - 1]!.end) raw.pop();
+  return raw.map((segment) => trimCellRange(src, segment.start, segment.end));
+}
+
+/**
+ * Gives every table cell (`th`/`td`) its own source range and tells its inline
+ * token where its content begins (ошибка `49ebba76`). A cell is the nearest
+ * annotated ancestor of its own text, so without a range a click inside it was
+ * mapped against the whole row (`<tr>`), and the block shift map of escapes /
+ * entities / embedded HTML comments had nowhere to land (the row start is the
+ * first cell's content, not the clicked cell's).
+ *
+ * The row line comes from `tr_open`'s map; the cell spans are located on that
+ * same line (see {@link tableRowCellRanges}). `th_open`/`td_open` have no line
+ * map of their own, hence the explicit inline base.
+ */
+function stampTableCells(
+  src: string,
+  lineStarts: readonly number[],
+  tokens: readonly Token[],
+  trIndex: number,
+): void {
+  const tr = tokens[trIndex];
+  if (tr === undefined || tr.map === null) return;
+  const lineStart = lineStarts[tr.map[0]!];
+  if (lineStart === undefined) return;
+  const ranges = tableRowCellRanges(src, lineStart, lineContentEnd(src, lineStart));
+  let cellIndex = 0;
+  for (let i = trIndex + 1; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.level <= tr.level) break;
+    if (token.type !== 'th_open' && token.type !== 'td_open') continue;
+    const range = ranges[cellIndex];
+    cellIndex++;
+    const inline = tokens[i + 1];
+    if (range === null || range === undefined) continue;
+    if (inline === undefined || inline.type !== 'inline') continue;
+    setRangeAttrs(token, range);
+    const meta = (inline.meta ?? (inline.meta = {})) as RangeCarrier;
+    meta.mdInlineBase = range.start;
+  }
+}
+
 /**
  * markdown-it core rule: stamps block ranges and converts the relative inline
  * ranges (`mdRelative`, `mdRelativeAfter`) into absolute offsets, adding the
@@ -576,6 +719,10 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
   const lineStarts = computeLineStarts(src);
   for (let ti = 0; ti < state.tokens.length; ti++) {
     const token = state.tokens[ti]!;
+    // A row is stamped BEFORE its cells are visited: the cell ranges give both
+    // the nearest annotated ancestor for a click inside a cell and the inline
+    // base for the cell's own relative positions (ошибка `49ebba76`).
+    if (token.type === 'tr_open') stampTableCells(src, lineStarts, state.tokens, ti);
     if (RANGE_BLOCK_TYPES.has(token.type)) {
       const range = blockRange(src, lineStarts, token);
       if (range !== null) {
