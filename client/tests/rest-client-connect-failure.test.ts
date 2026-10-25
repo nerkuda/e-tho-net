@@ -47,6 +47,28 @@ describe('classifyConnectFailure: различимые причины (390e9746)
     assert.equal(classifyConnectFailure(fetchFailedWithCode('ETIMEDOUT')), 'timeout');
   });
 
+  it('сброс соединения undici (UND_ERR_SOCKET «other side closed») — unreachable', () => {
+    // Реальная форма отказа: fetch падает `TypeError: fetch failed`, причина —
+    // undici SocketError с кодом UND_ERR_SOCKET (ошибка 2edf8494).
+    const cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+    const err = Object.assign(new TypeError('fetch failed'), { cause });
+    assert.equal(classifyConnectFailure(err), 'unreachable');
+  });
+
+  it('прочие сокетные сбои UND_ERR_SOCKET — честный other, а не выдуманный обрыв', () => {
+    const cause = Object.assign(new Error('socket write failed'), { code: 'UND_ERR_SOCKET' });
+    const err = Object.assign(new TypeError('fetch failed'), { cause });
+    assert.equal(classifyConnectFailure(err), 'other');
+  });
+
+  it('унаследованные ключи карты причин не становятся причиной', () => {
+    // `code` приходит из чужих ошибок: `toString`/`__proto__` не должны
+    // подставлять функцию/объект вместо причины (класс ошибки 2edf8494).
+    assert.equal(classifyConnectFailure(fetchFailedWithCode('toString')), 'other');
+    assert.equal(classifyConnectFailure(fetchFailedWithCode('__proto__')), 'other');
+    assert.equal(classifyConnectFailure(fetchFailedWithCode('hasOwnProperty')), 'other');
+  });
+
   it('собственный таймаут (причина отмены без кода) — timeout', () => {
     assert.equal(classifyConnectFailure(new Error('ETN response timeout')), 'timeout');
   });

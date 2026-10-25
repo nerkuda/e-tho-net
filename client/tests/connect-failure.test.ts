@@ -113,6 +113,26 @@ describe('describeConnectFailure: причина вместо «затычки»
     assert.match(describeConnectFailure(unknown, { baseUrl: DEAD_URL }), /сервер недоступен/);
   });
 
+  it('унаследованные ключи reason из серверных details не дают мусор (2edf8494)', () => {
+    // `reason in REASON_KEYS` пропускал `toString`/`__proto__`: в UI попадал
+    // «function toString() { [native code] }» / «[object Object]». Теперь
+    // проверяются только СОБСТВЕННЫЕ ключи карты — честный `other`.
+    const garbage = /function|\[object Object\]/;
+    for (const reason of ['toString', '__proto__', 'constructor', 'hasOwnProperty']) {
+      const err = new EtnError('INTERNAL', 'Сетевая ошибка: fetch failed', {
+        kind: 'connect-failed',
+        reason,
+      });
+      const text = describeConnectFailure(err, { baseUrl: DEAD_URL });
+      assert.equal(
+        text,
+        `Не удалось подключиться к серверу ${DEAD_URL}: сервер недоступен, попробуйте позже`,
+        `reason «${reason}» — нейтральная причина`,
+      );
+      assert.equal(garbage.test(text), false, `мусор в сообщении: «${text}»`);
+    }
+  });
+
   it('серверный текст бизнес-ошибки сохраняется, технические огрызки — нет', () => {
     const business = describeConnectFailure(
       new EtnError('VALIDATION_ERROR', 'Версия сервера несовместима с клиентом.'),

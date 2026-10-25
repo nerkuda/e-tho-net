@@ -50,7 +50,10 @@ function connectFailureDetails(err: unknown): ConnectFailureDetails | null {
   if (typeof details !== 'object' || details === null) return null;
   const d = details as { kind?: unknown; reason?: unknown };
   if (d.kind !== 'connect-failed') return null;
-  const known = typeof d.reason === 'string' && d.reason in REASON_KEYS;
+  // Только СОБСТВЕННЫЕ ключи карты: унаследованные (`toString`, `__proto__`)
+  // из серверных details давали в UI мусор вида «function toString() {…}»
+  // (ошибка 2edf8494).
+  const known = typeof d.reason === 'string' && Object.hasOwn(REASON_KEYS, d.reason);
   return { kind: 'connect-failed', reason: known ? (d.reason as ConnectFailureReason) : 'other' };
 }
 

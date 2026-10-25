@@ -4052,6 +4052,10 @@ function classifyRetryReason(err: Error): string {
 /**
  * Коды ОС/undici, по которым причина сетевого отказа РАЗЛИЧИМА (ошибка
  * 390e9746). Значение — причина для UI; всё остальное честно уходит в `other`.
+ *
+ * `UND_ERR_SOCKET` здесь НАМЕРЕННО нет: undici бросает этот код не только при
+ * сбросе соединения, поэтому причину решает текст ошибки
+ * ({@link SOCKET_RESET_MESSAGE}), а не один код (ошибка 2edf8494).
  */
 const CONNECT_FAILURE_CODES: Readonly<Record<string, ConnectFailureReason>> = {
   ECONNREFUSED: 'refused',
@@ -4065,6 +4069,13 @@ const CONNECT_FAILURE_CODES: Readonly<Record<string, ConnectFailureReason>> = {
   EHOSTUNREACH: 'unreachable',
   ECONNRESET: 'unreachable',
 };
+
+/**
+ * Признак обрыва установленного соединения в сообщении `UND_ERR_SOCKET`:
+ * undici пишет «other side closed», Node — «socket hang up», ОС может отдать
+ * ECONNRESET. Остальные сокетные сбои этим кодом честно остаются `other`.
+ */
+const SOCKET_RESET_MESSAGE = /other side closed|socket hang up|ECONNRESET/i;
 
 /** Код ошибки из структуры (`code`), если это строка. */
 function errorCodeOf(value: unknown): string | null {
@@ -4082,8 +4093,20 @@ export function classifyConnectFailure(err: unknown): ConnectFailureReason {
   let current: unknown = err;
   for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
     const code = errorCodeOf(current);
-    const reason = code === null ? undefined : CONNECT_FAILURE_CODES[code];
+    // `Object.hasOwn` — только собственные ключи карты: `code` приходит из
+    // чужих ошибок, и унаследованный ключ (`toString` и т.п.) не должен
+    // превращаться в «причину» (тот же класс, что 2edf8494 в UI).
+    const reason =
+      code === null || !Object.hasOwn(CONNECT_FAILURE_CODES, code)
+        ? undefined
+        : CONNECT_FAILURE_CODES[code];
     if (reason !== undefined) return reason;
+    // UND_ERR_SOCKET — «сокет закрыт другой стороной»: для установленного
+    // соединения это обрыв (unreachable). Код не только про reset, поэтому
+    // решает текст причины (ошибка 2edf8494).
+    if (code === 'UND_ERR_SOCKET' && SOCKET_RESET_MESSAGE.test(errTextShort(current))) {
+      return 'unreachable';
+    }
     current = (current as { cause?: unknown }).cause;
   }
   const message = errTextShort(err);
