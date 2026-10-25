@@ -414,6 +414,248 @@
       "name": "outside-target-no-untyped",
       "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
       "expect": false
+    },
+    {
+      "name": "bulk-add-clear",
+      "probe": "(() => { const btn=document.querySelector('.selection-header .ui-btn'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-cleared",
+      "waitFor": "document.querySelectorAll('.selection-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-add-select-c1-c2",
+      "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__lx; return { C1:click(b.C1), C2:click(b.C2) }; })()",
+      "expect": {
+        "C1": true,
+        "C2": true
+      }
+    },
+    {
+      "name": "bulk-add-panel",
+      "waitFor": "(() => { const p=document.querySelector('.selection-panel'); return p !== null && !p.classList.contains('hidden') && p.querySelectorAll('.selection-item').length >= 2; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-open-menu",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-menu",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-open-dialog",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-table",
+      "waitFor": "document.querySelector('.prop-bulk-toolbar') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "bulk-add-click",
+      "eval": "(() => { const b=document.querySelector('.prop-bulk-toolbar .ui-btn'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-picker",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-filter-focus",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.focus(); i.click(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-filter-typed",
+      "text": "Место работы"
+    },
+    {
+      "name": "bulk-add-filter-input",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-two-sides",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].side === 'source' && items[0].name === 'Место работы'; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-focus-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "bulk-add-arrow",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "bulk-add-enter",
+      "key": "Enter"
+    },
+    {
+      "name": "bulk-add-row",
+      "waitFor": "(() => [...document.querySelectorAll('.prop-bulk-table tr')].some((r)=>(r.textContent ?? '').includes('Место работы')) && document.querySelector('.prop-bulk-table .link-value-add') !== null)()",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,500)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-value-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.prop-bulk-table tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-value-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "bulk-add-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "bulk-add-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-add-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-add-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); for(const r of document.querySelectorAll('.link-value-add')) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-add-close",
+      "eval": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-closed",
+      "waitFor": "document.querySelector('.prop-bulk-table') === null",
+      "timeout": 10000
+    },
+    {
+      "name": "draft-open-c3",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"' + (window.__lx.C3) + '\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Кандидат без типа'",
+      "timeout": 30000
+    },
+    {
+      "name": "draft-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-outside-visible",
+      "waitFor": "document.querySelector('.prop-outside-add') !== null && document.querySelector('.properties-outside-body') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-open-picker",
+      "eval": "(() => { const b=[...document.querySelectorAll('.prop-outside-add')].find((x)=>x.offsetParent!==null); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-filter-focus",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.focus(); i.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-filter-typed",
+      "text": "Место работы"
+    },
+    {
+      "name": "draft-filter-input",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()"
+    },
+    {
+      "name": "draft-two-sides",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].side === 'source' && items[0].name === 'Место работы'; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-focus-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "draft-select-source",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "draft-choose-source",
+      "key": "Enter"
+    },
+    {
+      "name": "draft-row",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('Место работы') === true",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "draft-value-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-value-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "draft-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "draft-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "draft-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "draft-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); for(const r of document.querySelectorAll('.link-value-add')) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
     }
   ]
 }
