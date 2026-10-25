@@ -11,13 +11,28 @@
  *   2. EXISTS-условие по структурному свойству «Родители» (id мысли);
  *   3. отбор по родителю: BFS-обход поддерева + COUNT + страница.
  *
- * Цели приёмки тех.проекта: ≤10 мс / ≤1 мс / ≤50 мс. Измеряется МЕДИАНА
- * нескольких итераций после прогрева, а сравнение идёт с потолком
- * `цель × PERF_CI_TOLERANCE`: производительность зависит от загрузки и железа
- * CI, жёсткие миллисекунды флапают. Множитель подобран так, чтобы стенд уверенно
- * ловил регресс катастрофического класса (план O(мысли × рёбра): до фикса
- * пустой фильтр ~340 мс, EXISTS ~630 мс — оба выходят за потолок на порядок), но
- * не краснел от разовой задержки планировщика ОС.
+ * Цели приёмки тех.проекта: ≤10 мс / ≤1 мс / ≤50 мс. После прогрева снимается
+ * `PERF_ITERATIONS` замеров и берётся ЛУЧШИЙ (минимум): `node --test` гоняет
+ * сотни файлов параллельно, и планировщик ОС только ДОБАВЛЯЕТ время к замеру.
+ * Минимум — оценка собственной стоимости запроса; медиана же сдвигается вместе
+ * с загрузкой машины (наблюдалось ×4–5 к чистому замеру) и флейкует у потолка
+ * (ошибка 5124f97f). Сравнение идёт с потолком `цель × PERF_CI_TOLERANCE`:
+ * производительность зависит от железа CI, жёсткие миллисекунды флапают.
+ * Множитель подобран так, чтобы стенд уверенно ловил регресс катастрофического
+ * класса (план O(мысли × рёбра): до фикса пустой фильтр ~340 мс, EXISTS ~630 мс —
+ * оба выходят за потолок на порядок), но не краснел от разовой задержки
+ * планировщика ОС.
+ *
+ * Замер «EXISTS со COUNT» (этап 4, требование 5adebf61) — не цель спеки, а
+ * сопоставимость с замерами этапа 1: тот же фильтр исполняется второй раз для
+ * COUNT. Его потолок ОТНОСИТЕЛЬНЫЙ — к EXISTS, замеренному в тех же раундах:
+ * оба числа делят загрузку машины, а структурная разница — один дополнительный
+ * SQL по тому же фильтру (на незагруженной машине ×1,5). Абсолютный потолок
+ * EXISTS-цели для этой пары был ошибкой: COUNT-вариант уходил за 5 мс, хотя
+ * EXISTS в том же прогоне оставался заметно ниже (ошибка 5124f97f). Приём
+ * «потолок относительно ориентира из того же прогона» — тот же, что в
+ * `ping-lag.ts` (абсолютное время под конкуренцией за CPU меряет загрузку
+ * планировщика, а не код).
  *
  * Дополнительно (требование 7da6de92, DoD «план BFS не хуже базового замера»)
  * проверяется, что BFS-запрос обхода идёт индексом, а не полным сканом связей.
@@ -51,12 +66,19 @@ function nativeAvailable(): boolean {
 
 /** Размер стенда: мыслей и (примерно) связей. */
 const STAND_THOUGHTS = 1500;
-/** Целевые миллисекунды тех.проекта (медианы). */
+/** Целевые миллисекунды тех.проекта (медианы на незагруженной машине). */
 const PERF_TARGET_MS = { empty: 10, exists: 1, parent: 50 } as const;
 /** Запас на разброс железа/загрузки CI (см. шапку файла). */
 const PERF_CI_TOLERANCE = 5;
-/** Число итераций замера (берётся медиана). */
+/** Число итераций замера (берётся лучший — минимум). */
 const PERF_ITERATIONS = 9;
+/**
+ * Потолок дополнительного COUNT-прогона относительно EXISTS из тех же раундов:
+ * COUNT — второй SQL по тому же фильтру; на чистой машине он стоит ×1,5, под
+ * нагрузкой отношение держится (обе величины делят загрузку), поэтому запас
+ * ×5 ловит регресс именно COUNT-пути, но не флейкует от планировщика.
+ */
+const PERF_COUNT_MAX_RATIO = 5;
 
 /**
  * Id структурного свойства «Родители» (направление `in`), созданного миграцией
@@ -66,13 +88,15 @@ const STRUCTURAL_PARENTS_PROPERTY_ID = '00000000-0000-4000-8000-0000000000c1';
 /** Тестовый пользователь (сортировка/виды мыслей на стенде не заводятся). */
 const STAND_USER = 'perf-user';
 
-/** Медиана массива чисел. */
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+/**
+ * Лучший из замеров: планировщик ОС и разовые задержки только добавляют время,
+ * поэтому минимум — наименее искажённая оценка стоимости самого запроса.
+ */
+function bestOf(values: number[]): number {
+  return values.length === 0 ? 0 : Math.min(...values);
 }
 
-/** Замер: прогрев, затем `PERF_ITERATIONS` прогонов, возвращается медиана (мс). */
+/** Замер: прогрев, затем `PERF_ITERATIONS` прогонов, возвращается лучший (мс). */
 function measure(run: () => void): number {
   run();
   const samples: number[] = [];
@@ -81,7 +105,32 @@ function measure(run: () => void): number {
     run();
     samples.push(performance.now() - started);
   }
-  return median(samples);
+  return bestOf(samples);
+}
+
+/**
+ * Парный замер двух вариантов в одних раундах: оба лучших замера сняты в одних
+ * и тех же условиях загрузки. Нужен там, где сравнение идёт ОТНОШЕНИЕМ:
+ * задержки планировщика ложатся в соседние замеры одного раунда и в отношении
+ * сокращаются.
+ */
+function measurePair(
+  first: () => void,
+  second: () => void,
+): { firstMs: number; secondMs: number } {
+  first();
+  second();
+  const firstSamples: number[] = [];
+  const secondSamples: number[] = [];
+  for (let i = 0; i < PERF_ITERATIONS; i += 1) {
+    let started = performance.now();
+    first();
+    firstSamples.push(performance.now() - started);
+    started = performance.now();
+    second();
+    secondSamples.push(performance.now() - started);
+  }
+  return { firstMs: bestOf(firstSamples), secondMs: bestOf(secondSamples) };
 }
 
 /** Детали `EXPLAIN QUERY PLAN` запроса как строки. */
@@ -204,30 +253,34 @@ describe(
         const emptyMs = measure(() => {
           queryThoughts(ndb, STAND_USER, emptyRequest, { emptyFilterMode: 'home_orphans' });
         });
-        const existsMs = measure(() => {
-          queryThoughts(ndb, STAND_USER, existsRequest, { emptyFilterMode: 'all' });
-        });
+        // Этап 4 (требование 5adebf61): тот же EXISTS-отбор с явным COUNT —
+        // ровно то, что стенд мерил до перехода на «COUNT по флагу». Оба числа
+        // снимаются в одних раундах: COUNT сравнивается с EXISTS отношением,
+        // поэтому разброс загрузки машины в нём сокращается (ошибка 5124f97f).
+        const { firstMs: existsMs, secondMs: existsCountedMs } = measurePair(
+          () => {
+            queryThoughts(ndb, STAND_USER, existsRequest, { emptyFilterMode: 'all' });
+          },
+          () => {
+            queryThoughts(ndb, STAND_USER, { ...existsRequest, count: true }, { emptyFilterMode: 'all' });
+          },
+        );
         const parentMs = measure(() => {
           queryThoughts(ndb, STAND_USER, parentRequest, { emptyFilterMode: 'all' });
         });
-        // Этап 4 (требование 5adebf61): тот же EXISTS-отбор с явным COUNT —
-        // ровно то, что стенд мерил до перехода на «COUNT по флагу». Числа
-        // «по умолчанию» и «со счётчиком» печатаются рядом, чтобы эффект этапа
-        // и сохранённая сопоставимость с замерами этапа 1 были видны.
-        const existsCountedMs = measure(() => {
-          queryThoughts(ndb, STAND_USER, { ...existsRequest, count: true }, { emptyFilterMode: 'all' });
-        });
 
-        // Диагностика в вывод теста: сырые медианы против целей тех.проекта.
+        // Диагностика в вывод теста: сырые лучшие замеры против целей тех.проекта.
+        const countRatio = existsCountedMs / Math.max(existsMs, 0.01);
+        const ceiling = (target: number): number => target * PERF_CI_TOLERANCE;
         console.log(
-          `[perf-stand] медианы мс: пустой=${emptyMs.toFixed(1)} (цель ${PERF_TARGET_MS.empty}), ` +
-            `EXISTS=${existsMs.toFixed(2)} (цель ${PERF_TARGET_MS.exists}), ` +
-            `родитель=${parentMs.toFixed(1)} (цель ${PERF_TARGET_MS.parent}); ` +
-            `EXISTS со COUNT=${existsCountedMs.toFixed(2)}; ` +
-            `потолок = цель × ${PERF_CI_TOLERANCE}`,
+          `[perf-stand] лучшие мс: пустой=${emptyMs.toFixed(1)} (цель ${PERF_TARGET_MS.empty}, ` +
+            `потолок ${ceiling(PERF_TARGET_MS.empty)}), ` +
+            `EXISTS=${existsMs.toFixed(2)} (цель ${PERF_TARGET_MS.exists}, потолок ${ceiling(PERF_TARGET_MS.exists)}), ` +
+            `родитель=${parentMs.toFixed(1)} (цель ${PERF_TARGET_MS.parent}, потолок ${ceiling(PERF_TARGET_MS.parent)}); ` +
+            `EXISTS со COUNT=${existsCountedMs.toFixed(2)} (×${countRatio.toFixed(1)} к EXISTS, ` +
+            `потолок ×${PERF_COUNT_MAX_RATIO})`,
         );
 
-        const ceiling = (target: number): number => target * PERF_CI_TOLERANCE;
         assert.ok(
           emptyMs <= ceiling(PERF_TARGET_MS.empty),
           `пустой фильтр ${emptyMs.toFixed(1)} мс > потолка ${ceiling(PERF_TARGET_MS.empty)} мс`,
@@ -236,9 +289,14 @@ describe(
           existsMs <= ceiling(PERF_TARGET_MS.exists),
           `EXISTS-условие ${existsMs.toFixed(2)} мс > потолка ${ceiling(PERF_TARGET_MS.exists)} мс`,
         );
+        // Потолок COUNT-прогона — относительный, с абсолютным полом EXISTS-цели:
+        // на незагруженной машине он не слабее прежнего (1 мс × 5), а под
+        // нагрузкой растёт вместе с EXISTS, сохраняя смысл проверки.
+        const countedCeiling = Math.max(existsMs, PERF_TARGET_MS.exists) * PERF_COUNT_MAX_RATIO;
         assert.ok(
-          existsCountedMs <= ceiling(PERF_TARGET_MS.exists),
-          `EXISTS-условие со COUNT ${existsCountedMs.toFixed(2)} мс > потолка ${ceiling(PERF_TARGET_MS.exists)} мс`,
+          existsCountedMs <= countedCeiling,
+          `EXISTS-условие со COUNT ${existsCountedMs.toFixed(2)} мс > потолка ${countedCeiling.toFixed(2)} мс ` +
+            `(EXISTS ${existsMs.toFixed(2)} мс × ${PERF_COUNT_MAX_RATIO})`,
         );
         assert.ok(
           parentMs <= ceiling(PERF_TARGET_MS.parent),
