@@ -18,7 +18,7 @@ import type {
   PropertyValue,
 } from '@etn/shared';
 import { THOUGHT_RESOLVE_MAX_IDS } from '@etn/shared';
-import { t } from '../lib/i18n.js';
+import { t, type MessageKey } from '../lib/i18n.js';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { signalPublicationCompositionChanged } from '../lib/live/index.js';
@@ -44,10 +44,12 @@ import {
   bulkLinkEditorValue,
   bulkRowFromRegistry,
   clearingThoughtCount,
+  emptyBulkPlanReason,
   isBulkFormDirty,
   planBulkApply,
   sortBulkRows,
   type BulkApplyOperation,
+  type BulkEmptyPlanReason,
   type BulkPropertyRow,
   type BulkRowSelection,
   type BulkThought,
@@ -188,10 +190,22 @@ type PropertyValueEntry = PropertyValue | LinkPropertyValues;
 const BULK_FAILURE_LINES = 20;
 
 /**
+ * Текст причины пустого плана применения — явное сообщение вместо молчания
+ * (ошибка eca9f6d5). Ключ словаря на каждую причину
+ * {@link BulkEmptyPlanReason}.
+ */
+const EMPTY_PLAN_MESSAGES: Record<BulkEmptyPlanReason, MessageKey> = {
+  'no-thoughts': 'selection.properties.nothingToApplyNoThoughts',
+  'no-rows': 'selection.properties.nothingToApplyNoRows',
+  'no-values': 'selection.properties.nothingToApplyEmpty',
+};
+
+/**
  * Открывает диалог массового изменения значений свойств для выделенных мыслей.
- * Диалог НЕ закрывается после «Применить»: значения перечитываются, галочки
- * сбрасываются, итог операций остаётся видимым (спека 2fc9d85c, решение
- * предполёта 2026-10-23).
+ * Успешное применение (все операции выполнены) ЗАКРЫВАЕТ диалог; при пустом
+ * плане диалог остаётся и явно говорит, почему применять нечего; при частичной
+ * неудаче — остаётся с итогом N/M и причинами (спека 2fc9d85c, ревизия по
+ * ошибке eca9f6d5).
  */
 export function showSelectionPropertiesDialog(ids: string[]): void {
   const networkId = requireNetworkId();
@@ -237,7 +251,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     // кнопка футера.
     dirty: {
       isDirty: () => isBulkFormDirty(rows, currentSelection()),
-      save: (close) => void applyAll(true, close),
+      save: (close) => void applyAll(close),
       labels: {
         title: t('selection.properties.dirtyTitle'),
         message: t('selection.properties.dirtyMessage'),
@@ -257,7 +271,8 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
           applyBtn = button;
           button.disabled = true;
         },
-        onClick: () => void applyAll(false, () => undefined),
+        // Успешное применение закрывает диалог само (applyAll зовёт `close`).
+        onClick: (close) => void applyAll(close),
       },
     ],
   });
@@ -483,15 +498,17 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   /**
    * Применяет отмеченные строки: по одной операции на пару (мысль, строка).
    * Частичная неудача не останавливает проход; итог N/M и причины остаются в
-   * диалоге. `closeAfter` — путь подтверждения закрытия «Сохранить».
+   * диалоге. Успешное применение закрывает диалог (`close` — каркасный);
+   * пустой план — явное сообщение с причиной и диалог остаётся (ошибка
+   * eca9f6d5: молчаливый «Применить» заказчик принял за неработающую кнопку).
    */
-  async function applyAll(closeAfter: boolean, close: () => void): Promise<void> {
+  async function applyAll(close: () => void): Promise<void> {
     if (applying) return;
     const selection = currentSelection();
     const thoughtIds = thoughts.map((thought) => thought.id);
     const operations = planBulkApply(rows, selection, thoughtIds);
     if (operations.length === 0) {
-      if (closeAfter) close();
+      showNothingToApply(emptyBulkPlanReason(selection, thoughtIds.length) ?? 'no-values');
       return;
     }
 
@@ -512,42 +529,61 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     let applied = 0;
     const failures: Array<{ operation: BulkApplyOperation; reason: string }> = [];
     const changedThoughts = new Set<string>();
-    for (let start = 0; start < operations.length; start += BULK_CONCURRENCY) {
-      const chunk = operations.slice(start, start + BULK_CONCURRENCY);
-      const results = await Promise.allSettled(chunk.map((operation) => runOperation(operation)));
-      results.forEach((result, index) => {
-        const operation = chunk[index]!;
-        if (result.status === 'fulfilled') {
-          applied += 1;
-          changedThoughts.add(operation.thoughtId);
-        } else {
-          failures.push({ operation, reason: errText(result.reason) });
-        }
-      });
+    try {
+      for (let start = 0; start < operations.length; start += BULK_CONCURRENCY) {
+        const chunk = operations.slice(start, start + BULK_CONCURRENCY);
+        const results = await Promise.allSettled(chunk.map((operation) => runOperation(operation)));
+        results.forEach((result, index) => {
+          const operation = chunk[index]!;
+          if (result.status === 'fulfilled') {
+            applied += 1;
+            changedThoughts.add(operation.thoughtId);
+          } else {
+            failures.push({ operation, reason: errText(result.reason) });
+          }
+        });
+      }
+
+      // Изменённые мысли — чтобы рабочая область публикации не зажгла stale от
+      // значения посторонней сборке мысли (ужесточение G4, задача 8a039ea3).
+      if (applied > 0) signalPublicationCompositionChanged([...changedThoughts]);
+      // Своя запись не поднимает версию мысли, собственное событие приходит
+      // асинхронно (B1): уведомляем таблицу значений открытой карточки и
+      // обновляем окрестность фокуса (ошибка 4ba1fccc).
+      if (applied > 0) {
+        notifyPropertyValuesRefreshed();
+        scheduleRefresh();
+      }
+    } finally {
+      // Перечитывание значений и сброс галочек — для остающегося открытым
+      // диалога (частичная неудача/пустой план). `finally` держит инвариант:
+      // сбой побочного сигнала не оставляет «Применить» навсегда заблокированной
+      // (внешне — та же «мёртвая кнопка», что в ошибке eca9f6d5).
+      await load();
+      showReport(applied, failures);
+      applying = false;
+      updateApplyState();
+      // Прокрутка живёт на теле каркаса (`.dialog-body`), а не на нашем стеке:
+      // после применения показываем шапку с причинами отказа.
+      const scroller = body.parentElement;
+      if (scroller != null) scroller.scrollTop = 0;
     }
 
-    // Изменённые мысли — чтобы рабочая область публикации не зажгла stale от
-    // значения посторонней сборке мысли (ужесточение G4, задача 8a039ea3).
-    if (applied > 0) signalPublicationCompositionChanged([...changedThoughts]);
-    // Своя запись не поднимает версию мысли, собственное событие приходит
-    // асинхронно (B1): уведомляем таблицу значений открытой карточки и
-    // обновляем окрестность фокуса (ошибка 4ba1fccc).
-    if (applied > 0) {
-      notifyPropertyValuesRefreshed();
-      scheduleRefresh();
-    }
+    // Успех (все операции выполнены) закрывает диалог — решение заказчика
+    // 2026-10-25 (ошибка eca9f6d5, ревизия спеки 2fc9d85c).
+    if (applied > 0 && failures.length === 0) close();
+  }
 
-    // Перечитывание значений и сброс галочек — диалог остаётся открытым.
-    await load();
-    showReport(applied, failures);
-    applying = false;
-    updateApplyState();
-    // Прокрутка живёт на теле каркаса (`.dialog-body`), а не на нашем стеке:
-    // после применения показываем шапку с причинами отказа.
-    const scroller = body.parentElement;
-    if (scroller != null) scroller.scrollTop = 0;
-
-    if (closeAfter && failures.length === 0) close();
+  /**
+   * Пустой план применения — явное сообщение с причиной в футере (ошибка
+   * eca9f6d5). Красная строка вместо молчания: без неё пользователь считает,
+   * что «Применить» не работает.
+   */
+  function showNothingToApply(reason: BulkEmptyPlanReason): void {
+    summaryEl.textContent = t(EMPTY_PLAN_MESSAGES[reason]);
+    summaryEl.classList.add('prop-bulk-summary-error');
+    reportEl.hidden = true;
+    reportEl.replaceChildren();
   }
 
   /** Одна операция плана: запись значения либо очистка у конкретной мысли. */

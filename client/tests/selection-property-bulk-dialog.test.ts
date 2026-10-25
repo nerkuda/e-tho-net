@@ -540,7 +540,7 @@ describe('диалог значений свойств выделения: та�
 });
 
 describe('диалог значений свойств выделения: применение', () => {
-  it('галочка + значение — запись всем, без подтверждения; диалог не закрывается, галочки сброшены, итог N', async () => {
+  it('галочка + значение — запись всем, без подтверждения; успешное применение закрывает диалог', async () => {
     prepare();
     const invalidations: string[] = [];
     const stop = onQueryInvalidated((prefix) => invalidations.push(prefix));
@@ -564,15 +564,16 @@ describe('диалог значений свойств выделения: пр�
       ['t-a', 't-b', 't-c'],
       'включая C, у которой свойства не было (станет внетиповым)',
     );
-    assert.equal(backdrops().length, 1, 'подтверждение очистки не спрашивалось');
-    assert.equal(backdrops().length, 1, 'диалог НЕ закрылся после применения');
+    assert.equal(backdrops().length, 0, 'успешное применение ЗАКРЫВАЕТ диалог (eca9f6d5)');
 
-    const after = currentBody();
-    assert.equal(checkboxOf(rowByKey(after, 'p-status')).checked, false, 'галочки сброшены');
-    assert.equal(textInputOf(rowByKey(after, 'p-status')).value, 'готово', 'значения перечитаны');
+    // Значения перечитаны: повторное открытие показывает их и счётчик 3 из 3.
+    const again = await open(['t-a', 't-b', 't-c']);
+    const reopened = rowByKey(again, 'p-status');
+    assert.equal(checkboxOf(reopened).checked, false, 'галочки сброшены');
+    assert.equal(textInputOf(reopened).value, 'готово', 'значения перечитаны');
     assert.ok(
-      findAllByClass(topBackdrop(), 'prop-bulk-summary')[0]!.flatText().includes('Применено операций: 3'),
-      'итог N в футере',
+      reopened.children[1]!.flatText().includes('есть у 3 из 3'),
+      'счётчик присутствия перечитан',
     );
     assert.ok(
       dispatched.some((event) => event.type === PROPERTY_VALUES_REFRESHED_EVENT),
@@ -636,13 +637,13 @@ describe('диалог значений свойств выделения: пр�
 
     assert.equal(server.removeCalls.length, 2, 'удалено ровно там, где было (B и C)');
     assert.deepEqual(server.removeCalls.map((call) => call.thoughtId).sort(), ['t-b', 't-c']);
-    const after = currentBody();
+    assert.equal(backdrops().length, 0, 'успешная очистка закрывает диалог');
+    const after = await open(['t-a', 't-b', 't-c']);
     assert.equal(
       rowsOf(after).some((row) => row.dataset['rowKey'] === 'p-owner'),
       false,
       'строка исчезла: значений не осталось ни у кого',
     );
-    assert.ok(topBackdrop().flatText().includes('Применено операций: 2'), 'итог очистки');
   });
 
   it('снятая галочка: введённое сохраняется, подпись «не будет применено», «Применить» недоступна', async () => {
@@ -662,7 +663,7 @@ describe('диалог значений свойств выделения: пр�
     assert.equal(footerButton('Применить').disabled, true, 'нет отмеченных — применять нечего');
   });
 
-  it('«Закрыть» при грязной форме закрывает молча, Esc — через подтверждение', async () => {
+  it('«Закрыть» при грязной форме закрывает молча; Esc спрашивает «Применить изменения?» (ed299fa0)', async () => {
     prepare();
     const body = await open(['t-a', 't-b', 't-c']);
     check(rowByKey(body, 'p-status'), true);
@@ -671,11 +672,118 @@ describe('диалог значений свойств выделения: пр�
     assert.equal(backdrops().length, 0, '«Закрыть» закрывает сразу');
 
     const again = await open(['t-a', 't-b', 't-c']);
-    check(rowByKey(again, 'p-status'), true);
+    const status = rowByKey(again, 'p-status');
+    check(status, true);
+    type(textInputOf(status), 'архив');
     pressEscape();
     await flush(2);
     assert.equal(backdrops().length, 2, 'Esc при изменениях спрашивает подтверждение');
-    assert.ok(currentBody().flatText().includes('Данные изменены'), 'подтверждение закрытия');
+    const confirm = topBackdrop();
+    assert.ok(confirm.flatText().includes('Применить изменения?'), 'вопрос «Применить изменения?»');
+    assert.ok(!confirm.flatText().includes('Сохранить'), 'слов «сохранить» в подтверждении нет');
+    assert.deepEqual(
+      findAllByClass(confirm, 'ui-btn')
+        .filter((button) => !button.classList.contains('ui-btn--icon'))
+        .map((button) => button.textContent),
+      ['Отменить закрытие', 'Не применять', 'Применить'],
+      'три решения семантики «применить»',
+    );
+
+    // «Отменить закрытие» — диалог остаётся, ничего не пишется.
+    footerButton('Отменить закрытие', confirm).click();
+    await flush(2);
+    assert.equal(backdrops().length, 1, 'отмена закрытия оставила диалог');
+    assert.equal(server.setCalls.length, 0, 'ничего не применено');
+
+    // «Применить» — тот же путь, что кнопка футера: запись и закрытие.
+    pressEscape();
+    await flush(2);
+    footerButton('Применить', topBackdrop()).click();
+    await flush(8);
+    assert.equal(server.setCalls.length, 3, 'значение применено всем трём');
+    assert.equal(backdrops().length, 0, 'после применения диалог закрыт');
+  });
+
+  it('«Не применять» в подтверждении закрывает форму без записи (ed299fa0)', async () => {
+    prepare();
+    const body = await open(['t-a', 't-b', 't-c']);
+    const status = rowByKey(body, 'p-status');
+    check(status, true);
+    type(textInputOf(status), 'архив');
+    pressEscape();
+    await flush(2);
+    footerButton('Не применять', topBackdrop()).click();
+    await flush(2);
+    assert.equal(backdrops().length, 0, 'форма закрыта без подтверждения повторно');
+    assert.equal(server.setCalls.length, 0, 'ничего не записано');
+  });
+
+  it('0 операций — явное сообщение с причиной, диалог остаётся (eca9f6d5)', async () => {
+    prepare();
+    await open(['t-a', 't-b', 't-c']);
+    // «+ свойство» даёт отмеченную строку без значения; у всех выделенных
+    // свойства нет — очищать нечего: раньше «Применить» молчал.
+    await addProperty('Приоритет');
+    footerButton('Применить').click();
+    await flush(6);
+
+    assert.equal(backdrops().length, 1, 'диалог остался открытым');
+    const message = findAllByClass(topBackdrop(), 'prop-bulk-summary')[0]!.flatText();
+    assert.ok(message.includes('Применять нечего'), 'сообщение вместо молчания');
+    assert.ok(message.includes('у отмеченных строк нет значений'), 'причина названа');
+    assert.ok(
+      findAllByClass(topBackdrop(), 'prop-bulk-summary')[0]!.classList.contains(
+        'prop-bulk-summary-error',
+      ),
+      'сообщение выделено как ошибка',
+    );
+    assert.equal(server.setCalls.length, 0, 'записей нет');
+    assert.equal(server.removeCalls.length, 0, 'удалений нет');
+  });
+
+  it('Esc → «Применить» без отмеченных строк: причина «ни одна строка не отмечена»', async () => {
+    prepare();
+    const body = await open(['t-a', 't-b', 't-c']);
+    // Значение без галочки — форма грязная, но применить нечего.
+    type(textInputOf(rowByKey(body, 'p-status')), 'архив');
+    pressEscape();
+    await flush(2);
+    footerButton('Применить', topBackdrop()).click();
+    await flush(4);
+    assert.equal(backdrops().length, 1, 'диалог остался открытым');
+    assert.ok(
+      findAllByClass(topBackdrop(), 'prop-bulk-summary')[0]!.flatText().includes(
+        'ни одна строка не отмечена',
+      ),
+      'причина названа',
+    );
+    assert.equal(server.setCalls.length, 0, 'ничего не записано');
+  });
+
+  it('сценарий заказчика: пикер → авто-галочка → значение → «Применить» пишет и закрывает (eca9f6d5)', async () => {
+    prepare();
+    // Пустая таблица: у выделенных нет значений свойств.
+    for (const thought of THOUGHTS) server.values.set(thought.id, []);
+    const body = await open(['t-a', 't-b', 't-c']);
+    assert.equal(findByClass(body, 'prop-bulk-table'), null, 'до добавления таблицы нет');
+
+    await addProperty('Приоритет');
+    const row = rowByKey(currentBody(), 'p-priority');
+    assert.equal(checkboxOf(row).checked, true, 'авто-галочка (+)');
+    type(textInputOf(row), '+7 999 123-45-67');
+    footerButton('Применить').click();
+    await flush(8);
+
+    assert.equal(server.setCalls.length, 3, 'значение записано всем трём мыслям');
+    assert.equal(backdrops().length, 0, 'успешное применение закрыло диалог');
+
+    const again = await open(['t-a', 't-b', 't-c']);
+    const reopened = rowByKey(again, 'p-priority');
+    assert.equal(textInputOf(reopened).value, '+7 999 123-45-67', 'значение перечитано');
+    assert.ok(
+      reopened.children[1]!.flatText().includes('есть у 3 из 3'),
+      'свойство видно у всех выделенных',
+    );
   });
 });
 

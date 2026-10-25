@@ -524,6 +524,35 @@ export function clearingThoughtCount(
 }
 
 /**
+ * Причина ПУСТОГО плана применения — для явного сообщения вместо молчания
+ * (ошибка eca9f6d5: «Применить» при 0 операций не говорил ничего, заказчик
+ * принял это за неработающую кнопку).
+ *
+ * - `no-thoughts` — выделенные мысли не прочитаны: применять не к кому;
+ * - `no-rows` — ни одна строка не отмечена (путь «применить и закрыть» при
+ *   грязной только значением форме);
+ * - `no-values` — строки отмечены, но значения пусты, а очищать нечего
+ *   (у выделенных этих свойств нет): молчаливый no-op, который и увидел
+ *   заказчик.
+ *
+ * `null` — план не пуст: среди отмеченных строк есть значение.
+ */
+export type BulkEmptyPlanReason = 'no-thoughts' | 'no-rows' | 'no-values';
+
+export function emptyBulkPlanReason(
+  selection: readonly BulkRowSelection[],
+  thoughtCount: number,
+): BulkEmptyPlanReason | null {
+  if (thoughtCount === 0) return 'no-thoughts';
+  const checked = selection.filter((mark) => mark.checked);
+  if (checked.length === 0) return 'no-rows';
+  // Отмеченная строка со значением всегда даёт операции записи.
+  if (checked.some((mark) => mark.value !== null)) return null;
+  return 'no-values';
+}
+
+
+/**
  * Грязная ли форма относительно исходного снимка: отмечена хоть одна строка
  * либо значение строки отличается от исходного (общего/пустого). Снятая
  * галочка сама по себе «грязью» не считается, но введённое в поле значение —

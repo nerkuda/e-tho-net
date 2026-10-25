@@ -20,6 +20,7 @@ import {
   bulkRowKey,
   clearingThoughtCount,
   commonBulkValue,
+  emptyBulkPlanReason,
   isBulkFormDirty,
   planBulkApply,
   splitMultiText,
@@ -539,6 +540,30 @@ describe('план применения (галочка × строка)', () =>
       mark(rows, 'p-attach:source', true, null),
     ];
     assert.equal(clearingThoughtCount(rows, selection), 3, '2 (Ответственный) + 1 (Прикреплено)');
+  });
+
+  it('причина пустого плана: мысли, строки, пустые значения (ошибка eca9f6d5)', () => {
+    const rows = rowsOf(scenarioSnapshot());
+    // Плана нет без выделенных мыслей — применять не к кому.
+    assert.equal(emptyBulkPlanReason([mark(rows, 'p-status', true, 'готово')], 0), 'no-thoughts');
+    // Плана нет без отмеченных строк (грязная только значением форма).
+    assert.equal(emptyBulkPlanReason([mark(rows, 'p-status', false, 'архив')], 3), 'no-rows');
+    // Строка отмечена, значение пусто, очищать нечего — K = 0.
+    const emptyRow = bulkRowFromRegistry(REGISTRY[0]!, null, LINK_TYPES, 3);
+    assert.equal(
+      emptyBulkPlanReason([{ key: emptyRow.key, checked: true, value: null }], 3),
+      'no-values',
+    );
+    // Среди отмеченных есть значение — план не пуст.
+    assert.equal(emptyBulkPlanReason([mark(rows, 'p-status', true, 'готово')], 3), null);
+    assert.equal(
+      emptyBulkPlanReason(
+        [mark(rows, 'p-owner', true, null), mark(rows, 'p-status', true, 'готово')],
+        3,
+      ),
+      null,
+      'пустая строка рядом со значением план не обнуляет',
+    );
   });
 });
 
