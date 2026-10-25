@@ -290,8 +290,12 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     return result;
   }
 
-  /** Полная перерисовка формы: шапка-предупреждения, (+) и таблица/подсказка. */
-  function renderTable(): void {
+  /**
+   * Полная перерисовка формы: шапка-предупреждения, (+) и таблица/подсказка.
+   * `autoCheckedKey` — ключ строки, добавленной через (+) на пустой таблице:
+   * перерисовка строит её заново, и авто-галочка должна пережить пересборку.
+   */
+  function renderTable(autoCheckedKey?: string): void {
     rowStates.clear();
     body.replaceChildren();
 
@@ -333,7 +337,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     thead.append(headRow);
     tbodyEl = el('tbody');
     for (const model of rows) {
-      const state = buildRowState(model);
+      const state = buildRowState(model, model.key === autoCheckedKey);
       rowStates.set(model.key, state);
       tbodyEl.append(state.rowEl);
     }
@@ -342,15 +346,20 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     updateApplyState();
   }
 
-  /** Строит строку формы: чекбокс, имя со счётчиком, редактор значения. */
-  function buildRowState(model: BulkPropertyRow): BulkRowState {
+  /**
+   * Строит строку формы: чекбокс, имя со счётчиком, редактор значения.
+   * `checked` — авто-галочка «+ свойство» (пустое значение — семантика
+   * «галочка без значения»); строки, попавшие в диалог по значениям/типам,
+   * приходят со снятой галочкой.
+   */
+  function buildRowState(model: BulkPropertyRow, checked = false): BulkRowState {
     const state: BulkRowState = {
       model,
-      checked: false,
+      checked,
       value: model.value,
-      wasChecked: false,
+      wasChecked: checked,
       rowEl: el('tr'),
-      checkbox: choiceControl('checkbox'),
+      checkbox: choiceControl('checkbox', { checked }),
       editorBox: div('prop-bulk-value'),
       hintsEl: div('prop-bulk-hints'),
     };
@@ -659,14 +668,13 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       );
       if (rowStates.has(model.key)) return;
       rows = sortBulkRows([...rows, model]);
-      const state = buildRowState(model);
-      state.checked = true;
-      state.wasChecked = true;
-      state.checkbox.checked = true;
+      const state = buildRowState(model, true);
       rowStates.set(model.key, state);
       updateRowState(state);
       if (tbodyEl === null) {
-        renderTable();
+        // Таблицы ещё нет (подсказка пустого набора): пересборка строит строки
+        // заново — передаём ключ, чтобы авто-галочка не потерялась.
+        renderTable(model.key);
         return;
       }
       // Переставляем существующие строки, не пересобирая редакторы: у

@@ -419,6 +419,35 @@ function prepare(): void {
   seedScenario();
 }
 
+/** Нажимает «+ свойство» в форме и выбирает свойство в открывшемся пикере. */
+async function addProperty(name: string): Promise<void> {
+  const body = currentBody();
+  const addButton = findAllByClass(body, 'ui-btn').find(
+    (button) => button.textContent === '+ свойство',
+  );
+  assert.ok(addButton !== undefined, 'кнопка (+) есть');
+  addButton!.click();
+  await flush(4);
+  await chooseFromPicker(name);
+}
+
+/** Активирует строку открытого пикера (+) двойным кликом по сетке. */
+async function chooseFromPicker(name: string): Promise<void> {
+  const picker = currentBody();
+  const grid = findByClass(picker, 'vaadin-grid') ?? findTag(picker, 'vaadin-grid');
+  assert.ok(grid !== null, 'список свойств смонтирован');
+  const items = (grid as unknown as { items: Array<{ name: string }> }).items;
+  const index = items.findIndex((item) => item.name === name);
+  assert.ok(index >= 0, `строка «${name}» есть в сетке`);
+  // Адаптер сетки считает индекс через getEventContext; в шиме его
+  // подменяем точечно (в браузере контекст даёт Vaadin Grid).
+  (grid as unknown as { getEventContext: () => { index: number } }).getEventContext = () => ({
+    index,
+  });
+  grid.emit('click', { detail: 2, clientX: 0, clientY: 0 });
+  await flush(4);
+}
+
 // ---------------------------------------------------------------------------
 // Тесты
 // ---------------------------------------------------------------------------
@@ -676,19 +705,41 @@ describe('диалог значений свойств выделения: пи�
 
     // Выбор строки: активация через двойной клик по сетке (адаптер считает
     // индекс через getEventContext; в шиме его подменяем точечно).
-    const priorityIndex = items.findIndex((item) => item.name === 'Приоритет');
-    assert.ok(priorityIndex >= 0, 'строка «Приоритет» есть в сетке');
-    (grid as unknown as { getEventContext: () => { index: number } }).getEventContext = () => ({
-      index: priorityIndex,
-    });
-    grid!.emit('click', { detail: 2, clientX: 0, clientY: 0 });
-    await flush(4);
+    await chooseFromPicker('Приоритет');
 
     assert.equal(backdrops().length, 1, 'пикер закрылся после выбора');
     const after = currentBody();
     const priority = rowByKey(after, 'p-priority');
     assert.equal(checkboxOf(priority).checked, true, 'добавленная строка — с галочкой');
     assert.equal(footerButton('Применить').disabled, false, 'галочка включила «Применить»');
+  });
+
+  it('авто-галочка (+) не теряется: непустая и пустая таблица (ошибка 02ae535e)', async () => {
+    // Непустая таблица: строка вставляется в готовую форму.
+    prepare();
+    await open(['t-a', 't-b', 't-c']);
+    await addProperty('Приоритет');
+    const inserted = rowByKey(currentBody(), 'p-priority');
+    assert.equal(checkboxOf(inserted).checked, true, 'непустая таблица: галочка включена сразу');
+    footerButton('Закрыть').click();
+
+    // Пустая таблица: подсказка вместо таблицы — добавление пересобирает форму,
+    // и авто-галочка должна пережить перерисовку.
+    prepare();
+    for (const thought of THOUGHTS) server.values.set(thought.id, []);
+    const emptyBody = await open(['t-a', 't-b', 't-c']);
+    assert.equal(findByClass(emptyBody, 'prop-bulk-table'), null, 'до добавления таблицы нет');
+    assert.ok(emptyBody.flatText().includes('добавьте (+)'), 'подсказка пустого набора');
+    await addProperty('Приоритет');
+
+    const built = rowByKey(currentBody(), 'p-priority');
+    assert.equal(checkboxOf(built).checked, true, 'пустая таблица: галочка включена сразу');
+    assert.equal(
+      editorBoxOf(built).classList.contains('prop-bulk-value-off'),
+      false,
+      'поле значения активно без ручной отметки',
+    );
+    assert.equal(footerButton('Применить').disabled, false, '«Применить» доступна сразу');
   });
 });
 

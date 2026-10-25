@@ -1,6 +1,6 @@
 {
   "name": "6ebcd8d6-property-bulk",
-  "description": "Сценарий a6b54f0f (0.14.1, задача 6ebcd8d6): массовое изменение значений свойств выделенных мыслей — внетиповые и перепроектированный диалог. 10 шагов спеки панели 2fc9d85c: таблица без «Типа», счётчики «есть у K из N», «разные значения», чекбоксы с приглушением, запись всем, (+) с пикером без «Создать новое…», замена набора связи, частичная неудача N/M с причиной, подтверждение очистки, снятая галочка, грязная форма. Данные (типы Т1/Т2/Т3, свойства «Статус»/«Ответственный»/«Приоритет»/«Прикреплено», мысли A,B,C,D,M,N) заводятся шагами probe через window.etn на изолированном стенде. Эффект проверяется чтением сервера (window.etn.properties.get) — DOM страницы не видит HTTP main-процесса (грабли aa5cf162).",
+  "description": "Сценарий a6b54f0f (0.14.1, задача 6ebcd8d6): массовое изменение значений свойств выделенных мыслей — внетиповые и перепроектированный диалог. 10 шагов спеки панели 2fc9d85c: таблица без «Типа», счётчики «есть у K из N», «разные значения», чекбоксы с приглушением, запись всем, (+) с пикером без «Создать новое…», замена набора связи, частичная неудача N/M с причиной, подтверждение очистки, снятая галочка, грязная форма. Шаг 11 (ошибка 02ae535e): «+ свойство» на ПУСТОЙ таблице (подсказка вместо таблицы) — добавленная строка сразу с включённым чекбоксом; до фикса перерисовка формы теряла авто-галочку. Данные (типы Т1/Т2/Т3, свойства «Статус»/«Ответственный»/«Приоритет»/«Прикреплено», мысли A,B,C,D,M,N) заводятся шагами probe через window.etn на изолированном стенде. Эффект проверяется чтением сервера (window.etn.properties.get) — DOM страницы не видит HTTP main-процесса (грабли aa5cf162).",
   "timeout": 180000,
   "steps": [
     {
@@ -397,26 +397,26 @@
       "waitFor": "document.querySelector('tr:has(input[aria-label=\"Прикреплено\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false"
     },
     {
-      "name": "step7-add-d",
+      "name": "step7-add-b",
       "click": "tr:has(input[aria-label=\"Прикреплено\"]) .link-value-add"
     },
     {
-      "name": "step7-type-d",
-      "text": "D"
+      "name": "step7-type-b",
+      "text": "B"
     },
     {
       "name": "step7-suggestions-visible",
-      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "waitFor": "(() => { const items=[...document.querySelectorAll('.type-combo-item')]; return items.some((e)=>e.textContent.trim() === 'B'); })()",
       "timeout": 20000
     },
     {
-      "name": "step7-pick-d",
-      "probe": "(() => { const item=[...document.querySelectorAll('.type-combo-item')].find((e)=>e.textContent.trim() === 'D'); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "name": "step7-pick-b",
+      "probe": "(() => { const item=[...document.querySelectorAll('.type-combo-item')].find((e)=>e.textContent.trim() === 'B'); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
-      "name": "step7-chips-n-and-d",
-      "waitFor": "(() => { const chips=[...document.querySelectorAll('tr:has(input[aria-label=\"Прикреплено\"]) .prc-title')].map((e)=>e.textContent); return chips.length === 2 && chips.includes('N') && chips.includes('D'); })()",
+      "name": "step7-chips-n-and-b",
+      "waitFor": "(() => { const chips=[...document.querySelectorAll('tr:has(input[aria-label=\"Прикреплено\"]) .prc-title')].map((e)=>e.textContent); return chips.length === 2 && chips.includes('N') && chips.includes('B'); })()",
       "timeout": 20000
     },
     {
@@ -431,11 +431,10 @@
     },
     {
       "name": "step7-failure-reason-shown",
-      "probe": "(() => { const report=document.querySelector('.prop-bulk-report'); const text=(report?.textContent ?? '').trim(); return { visible:report !== null && report.hidden === false, hasThought:text.includes('A'), hasProperty:text.includes('Прикреплено'), hasReason:/тип|type/i.test(text) }; })()",
+      "probe": "(() => { const report=document.querySelector('.prop-bulk-report'); const text=(report?.textContent ?? '').trim(); return { visible:report !== null && report.hidden === false, hasThought:text.includes('B, свойство «Прикреплено»'), hasReason:/itself|сам|связ/i.test(text) }; })()",
       "expect": {
         "visible": true,
         "hasThought": true,
-        "hasProperty": true,
         "hasReason": true
       }
     },
@@ -446,13 +445,11 @@
     },
     {
       "name": "step7-partial-effect-on-server",
-      "probe": "(async () => { const N='{{networkId}}'; const b=window.__bulk; const read=async(id)=>{ const vs=await window.etn.properties.get(N,'thought',id); const v=vs.find((x)=>x.property_name==='Прикреплено' && Array.isArray(x.values)); return v ? v.values.map((x)=>x.target_id) : []; }; const a=await read(b.A); const bb=await read(b.B); const c=await read(b.C); return { aNOnly:a.length===1 && a[0]===b.N, bHasN:bb.includes(b.N), bHasD:bb.includes(b.D), cHasN:c.includes(b.N), cHasD:c.includes(b.D) }; })()",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__bulk; const read=async(id)=>{ const vs=await window.etn.properties.get(N,'thought',id); const v=vs.find((x)=>x.property_name==='Прикреплено' && Array.isArray(x.values)); return v ? v.values.map((x)=>x.target_id) : []; }; const a=await read(b.A); const bb=await read(b.B); const c=await read(b.C); return { aHasNB:a.length===2 && a.includes(b.N) && a.includes(b.B), bNOnly:bb.length===1 && bb[0]===b.N, cHasNB:c.length===2 && c.includes(b.N) && c.includes(b.B) }; })()",
       "expect": {
-        "aNOnly": true,
-        "bHasN": true,
-        "bHasD": true,
-        "cHasN": true,
-        "cHasD": true
+        "aHasNB": true,
+        "bNOnly": true,
+        "cHasNB": true
       }
     },
 
@@ -569,6 +566,104 @@
       "name": "step10-dialog-closed-without-confirmation",
       "waitFor": "document.querySelector('.prop-bulk-table') === null && document.querySelectorAll('.dialog-backdrop').length === 0",
       "timeout": 20000
+    },
+
+    {
+      "name": "step11-clear-selection",
+      "probe": "(() => { const btn=document.querySelector('.selection-header .ui-btn[title=\"Очистить список\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "step11-selection-empty",
+      "waitFor": "document.querySelectorAll('.selection-item').length === 0"
+    },
+    {
+      "name": "step11-select-only-d",
+      "probe": "(() => { const el=document.querySelector('.cloud[data-id=\"'+window.__bulk.D+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "step11-selection-only-d",
+      "waitFor": "(() => { const items=[...document.querySelectorAll('.selection-item')]; return items.length === 1 && items[0].dataset.id === window.__bulk.D; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "step11-open-properties-menu",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "step11-open-property-values-dialog",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "step11-empty-table-hint",
+      "waitFor": "(() => { const hint=document.querySelector('.prop-bulk-empty'); return hint !== null && document.querySelector('.prop-bulk-table') === null && (hint.textContent ?? '').includes('добавьте (+)'); })()",
+      "timeout": 20000
+    },
+    {
+      "name": "step11-open-picker",
+      "click": ".prop-bulk-toolbar .ui-btn"
+    },
+    {
+      "name": "step11-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+      "timeout": 20000
+    },
+    {
+      "name": "step11-filter-priority",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "step11-type-priority",
+      "text": "Приоритет"
+    },
+    {
+      "name": "step11-dispatch-filter",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "step11-one-row",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 1 && items[0].name === 'Приоритет'; })()"
+    },
+    {
+      "name": "step11-focus-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "step11-select-row",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "step11-choose-row",
+      "key": "Enter"
+    },
+    {
+      "name": "step11-row-added-checked-immediately",
+      "waitFor": "(() => { const cb=document.querySelector('.prop-bulk-table input[type=checkbox][aria-label=\"Приоритет\"]'); return cb !== null && cb.checked === true; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "step11-added-row-state",
+      "probe": "(() => { const tr=document.querySelector('tr:has(input[aria-label=\"Приоритет\"])'); const apply=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Применить'); return { table:document.querySelector('.prop-bulk-table')!==null, hintGone:document.querySelector('.prop-bulk-empty')===null, checked:tr?.querySelector('input[type=checkbox]')?.checked ?? null, muted:tr?.querySelector('.prop-bulk-value')?.classList.contains('prop-bulk-value-off') ?? null, applyDisabled:apply?.disabled === true }; })()",
+      "expect": {
+        "table": true,
+        "hintGone": true,
+        "checked": true,
+        "muted": false,
+        "applyDisabled": false
+      }
+    },
+    {
+      "name": "step11-close",
+      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "step11-dialog-closed",
+      "waitFor": "document.querySelector('.prop-bulk-table') === null && document.querySelectorAll('.dialog-backdrop').length === 0"
     }
   ]
 }
