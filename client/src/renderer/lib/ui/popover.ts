@@ -27,8 +27,7 @@
  */
 
 import { div, el } from '../dom.js';
-import { defineKeyContext, keyContextStack, pushKeyContext, removeKeyContext } from '../keymap.js';
-import { pushEscapeLayer } from '../escape-layers.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from '../keymap.js';
 
 /** Класс панели. Объявлен только здесь — прямой разметкой панели занимается компонент. */
 export const POPOVER_CLASS = 'ui-popover';
@@ -205,6 +204,8 @@ interface ActivePopover {
   closeOnScroll: boolean;
   closeOnBlur: boolean;
   onClose?: (() => void) | undefined;
+  /** Регистрация слоя `Escape` в диспетчере; `null` — панель не закрывается по Escape. */
+  escapeOverlay: KeyOverlayHandle | null;
   close(): void;
 }
 
@@ -212,39 +213,14 @@ interface ActivePopover {
 const active: ActivePopover[] = [];
 let listenersReady = false;
 
-/** Идентификатор контекста сочетаний панелей (кладётся, пока открыта хоть одна). */
-const POPOVER_CONTEXT_ID = 'ui-popover';
-
-/** Escape закрывает только самую верхнюю (последнюю открытую) панель. */
-function closeTopmostOnEsc(): boolean {
-  for (let i = active.length - 1; i >= 0; i--) {
-    const popover = active[i]!;
-    if (!popover.closeOnEsc) continue;
-    popover.close();
-    return true;
-  }
-  return false;
-}
-
 /**
- * Держит контекст `ui-popover` на вершине стека, пока открыта хоть одна
- * панель: Escape по верхней панели — приоритетнее сочетаний под ней.
- * Наличие контекста проверяется по стеку — так состояние самовосстанавливается.
+ * Держит делегированные слушатели (один раз за сессию рендерера).
+ *
+ * `Escape` закрывает только верхнюю панель — через реестр всплывающих слоёв
+ * общеклиентского диспетчера (`pushKeyOverlay` в `openPopover`; ADR b420b08c,
+ * ошибка 9ff6b606). Своего контекста сочетаний и document-слушателя `Escape`
+ * у компонента нет: приоритет слоёв решает `lib/keymap.ts`.
  */
-function syncPopoverContext(): void {
-  const onStack = keyContextStack().includes(POPOVER_CONTEXT_ID);
-  if (active.length > 0 && !onStack) {
-    defineKeyContext({
-      id: POPOVER_CONTEXT_ID,
-      bindings: [{ command: 'popover.close', chord: 'Escape', run: closeTopmostOnEsc }],
-    });
-    pushKeyContext(POPOVER_CONTEXT_ID);
-  } else if (active.length === 0 && onStack) {
-    removeKeyContext(POPOVER_CONTEXT_ID);
-  }
-}
-
-/** Ставит делегированные слушатели (один раз за сессию рендерера). */
 function ensureListeners(): void {
   if (listenersReady) return;
   listenersReady = true;
@@ -389,29 +365,32 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
     closeOnScroll: options.closeOnScroll ?? true,
     closeOnBlur: options.closeOnBlur ?? true,
     onClose: options.onClose,
+    escapeOverlay: null,
     close: () => undefined,
   };
   /**
-   * Слой `Escape` для диалогов под панелью (ошибка 9ff6b606): пока панель
-   * открыта, каркас диалога уступает ей нажатие. Регистрируется только у
-   * панелей, которые действительно закрываются по `Escape` (`closeOnEsc`):
-   * иначе диалог уступил бы нажатие панели, которая его проигнорирует.
+   * Слой `Escape` панели (ошибка 9ff6b606): пока она открыта, диспетчер отдаёт
+   * `Escape` ей (верхней из открытых), а каркас диалога под панелью уступает.
+   * Регистрируются только панели, которые действительно закрываются по
+   * `Escape` (`closeOnEsc`): иначе диалог уступил бы нажатие панели, которая его
+   * проигнорирует.
    */
-  const releaseEscapeLayer = record.closeOnEsc ? pushEscapeLayer() : null;
+  record.escapeOverlay = record.closeOnEsc
+    ? pushKeyOverlay({ id: 'popover', onEscape: () => record.close() })
+    : null;
   record.close = (): void => {
     const index = active.indexOf(record);
     if (index === -1) return; // уже закрыта
     active.splice(index, 1);
     element.remove();
-    releaseEscapeLayer?.();
-    syncPopoverContext();
+    record.escapeOverlay?.release();
+    record.escapeOverlay = null;
     record.onClose?.();
   };
 
   document.body.append(element);
   position();
   active.push(record);
-  syncPopoverContext();
   ensureListeners();
 
   return {

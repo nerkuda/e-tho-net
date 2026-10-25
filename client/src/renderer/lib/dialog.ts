@@ -29,7 +29,11 @@ import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
 import { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './ui/focus-anchor.js';
-import { escapeLayerSnapshot, hasEscapeLayerAbove } from './escape-layers.js';
+import {
+  hasKeyOverlayAbove,
+  keyOverlaySnapshot,
+  resolveEscapeOverlay,
+} from './keymap.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -612,11 +616,13 @@ export function showDialog(opts: DialogOptions): () => void {
   const previouslyFocused = document.activeElement as FocusableElement | null | undefined;
   const focusAnchor = resolveFocusAnchor(previouslyFocused);
   /**
-   * Слои, уже открытые к моменту показа диалога (ошибка 9ff6b606). Слой,
-   * открытый ПОЗЖЕ (меню, поповер, выпадашка подсказок), лежит выше диалога и
-   * получает `Escape` первым — диалог на это же нажатие не реагирует.
+   * Слои `Escape`, уже открытые к моменту показа диалога (ошибка 9ff6b606).
+   * Слой, открытый ПОЗЖЕ (меню, поповер, выпадашка, лупа, панель поиска), лежит
+   * выше диалога и получает `Escape` первым — диалог на это же нажатие не
+   * реагирует. Реестр — `lib/keymap.ts` (ADR b420b08c: второго механизма
+   * приоритетов нет).
    */
-  const layersAtOpen = escapeLayerSnapshot();
+  const overlaysAtOpen = keyOverlaySnapshot();
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
   // Бокс принимает программный фокус (fallback, когда в диалоге нет ни поля, ни
@@ -798,10 +804,16 @@ export function showDialog(opts: DialogOptions): () => void {
     // Lower dialogs ignore Escape even though they see the event too —
     // same-target capture listeners run in registration order.
     if (event.key === 'Escape' && !event.repeat && stack[stack.length - 1] === backdrop) {
-      // Открытый ВЫШЕ диалога слой (меню, поповер, выпадающий список) сам
-      // закрывается своим `Escape` (ошибка 9ff6b606): диалог не обрабатывает то
-      // же нажатие — иначе оно закрывает/подтверждает диалог под слоем.
-      if (hasEscapeLayerAbove(layersAtOpen)) return;
+      // Открытый ВЫШЕ диалога слой сам закрывается своим `Escape` (ошибка
+      // 9ff6b606): нажатие отдаём диспетчеру, диалог его не обрабатывает —
+      // иначе оно закрывает/подтверждает диалог под слоем. Дальше события не
+      // пускаем: `Escape` поглощён верхним слоем, а не диалогом.
+      if (hasKeyOverlayAbove(overlaysAtOpen)) {
+        resolveEscapeOverlay(event);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       // preventDefault marks the press as consumed: the global Escape handler
       // (app.initKeyboard, bubble phase) must not close the dialog *below*
       // the one just closed here (L21 fix — Escape over a stacked dialog

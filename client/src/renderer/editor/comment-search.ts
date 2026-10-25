@@ -25,7 +25,13 @@
 
 import { div, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
-import { defineKeyContext, pushKeyContext, type KeyBindingDef } from '../lib/keymap.js';
+import {
+  defineKeyContext,
+  pushKeyContext,
+  pushKeyOverlay,
+  type KeyBindingDef,
+  type KeyOverlayHandle,
+} from '../lib/keymap.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
 import { renderIcon } from '../lib/ui/icon.js';
@@ -383,6 +389,14 @@ export function createCommentSearch(opts: CommentSearchOptions): CommentSearch {
 
   let open = false;
   let current = -1;
+  /**
+   * Слой `Escape` открытой панели (ошибка 9ff6b606): панель открывается ПОЗЖЕ
+   * диалога-хозяина, поэтому диспетчер отдаёт `Escape` ей, а каркас диалога
+   * уступает — нажатие закрывает панель, а не зовёт подтверждение несохранённых
+   * изменений. Регистрация не зависит от фокуса: панель закрывается по `Esc`
+   * и тогда, когда фокус ушёл из её полей.
+   */
+  let escapeOverlay: KeyOverlayHandle | null = null;
   /** Совпадения в правке (смещения документа). */
   let editorMatches: TextMatch[] = [];
   /** Диапазоны совпадений в просмотре. */
@@ -494,6 +508,10 @@ export function createCommentSearch(opts: CommentSearchOptions): CommentSearch {
     open = true;
     panel.hidden = false;
     replaceRow.hidden = effective !== 'replace';
+    escapeOverlay ??= pushKeyOverlay({
+      id: 'comment-search',
+      onEscape: () => closePanel(true),
+    });
     runSearch();
     findInput.focus();
     findInput.select();
@@ -504,6 +522,8 @@ export function createCommentSearch(opts: CommentSearchOptions): CommentSearch {
     open = false;
     panel.hidden = true;
     replaceRow.hidden = true;
+    escapeOverlay?.release();
+    escapeOverlay = null;
     editorMatches = [];
     viewRanges = [];
     current = -1;

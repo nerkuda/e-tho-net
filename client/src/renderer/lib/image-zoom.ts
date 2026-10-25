@@ -30,7 +30,7 @@ import { etn } from './etn.js';
 import { el } from './dom.js';
 import { createDelayedOpen } from './preview-open-delay.js';
 import { placeAtCursor, watchOutsideTap } from './ui/popover.js';
-import { pushEscapeLayer } from './escape-layers.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from './keymap.js';
 import { store } from '../state.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
@@ -160,11 +160,13 @@ export function initImageZoom(): void {
 
   let current: ZoomAnchor | null = null;
   /**
-   * Слой `Escape` открытой лупы (ошибка 9ff6b606): каркас диалога под лупой
-   * уступает `Escape` — лупа закрывается своим document-слушателем, диалог
-   * остаётся открытым.
+   * Слой `Escape` открытой лупы (ошибка 9ff6b606): диспетчер отдаёт `Escape`
+   * верхнему всплывающему слою, поэтому диалог под лупой уступает нажатие —
+   * лупа закрывается, диалог остаётся открытым. Своего `Escape`-перехвата у
+   * лупы нет; в document-слушателе ниже остаётся только отмена ещё не
+   * показанной лупы.
    */
-  let releaseEscapeLayer: (() => void) | null = null;
+  let escapeOverlay: KeyOverlayHandle | null = null;
   let mouseX = 0;
   let mouseY = 0;
   /**
@@ -178,8 +180,8 @@ export function initImageZoom(): void {
     generation++;
     current = null;
     popup.classList.add('hidden');
-    releaseEscapeLayer?.();
-    releaseEscapeLayer = null;
+    escapeOverlay?.release();
+    escapeOverlay = null;
   };
 
   /** Places the popup beside the cursor, keeping it inside the window — the
@@ -209,7 +211,7 @@ export function initImageZoom(): void {
     popup.src = src;
     popup.classList.remove('hidden');
     place();
-    releaseEscapeLayer ??= pushEscapeLayer();
+    escapeOverlay ??= pushKeyOverlay({ id: 'image-zoom', onEscape: () => hide() });
     if (zoom === null) return;
     void resolveIconAttachment(zoom.thought, zoom.attachment).then((filePath) => {
       if (current !== anchor || filePath === null || filePath === '') return;
@@ -276,10 +278,14 @@ export function initImageZoom(): void {
   });
 
   // Ctrl pressed while already hovering a picture (no new mouseover fires).
+  // `Escape` показанной лупы обрабатывает её слой в реестре диспетчера:
+  // `handleEscape` ответит `false`, если над лупой открыт меню/поповер — тогда
+  // нажатие остаётся верхнему слою. Событие не гасим: приоритет решает
+  // `lib/keymap.ts`. Здесь же — отмена ещё НЕ показанной лупы.
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       zoomScheduler.cancel();
-      hide();
+      escapeOverlay?.handleEscape(event);
       return;
     }
     if (event.key === 'Control' && current === null) {

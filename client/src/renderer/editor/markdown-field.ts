@@ -45,6 +45,7 @@ import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
 import { isInsidePopover, watchOutsideTap } from '../lib/ui/popover.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
@@ -833,6 +834,15 @@ export function createMarkdownField(opts: {
   /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
   let editing = false;
   /**
+   * Слой `Escape` режима правки (ошибка 9ff6b606, замечание приёмки): пока поле
+   * правится, `Escape` отменяет правку — это штатное поведение CM6-редактора
+   * (`mdEditorExtensions`), но каркас диалога-хозяина перехватывает `Escape`
+   * раньше поля. Слой в реестре диспетчера (`lib/keymap.ts`) возвращает нажатие
+   * полю: диалог под ним уступает, правка отменяется, подтверждения
+   * несохранённых изменений нет. Снимается при выходе из правки.
+   */
+  let editEscapeOverlay: KeyOverlayHandle | null = null;
+  /**
    * Узел ГРУППЫ правки (`opts.editGroup`), удерживающий единую правку записи:
    * фокус/нажатие внутри группы не считаются выходом из поля. `null` — группа
    * не задана (поле одиночное).
@@ -1266,6 +1276,8 @@ export function createMarkdownField(opts: {
     void sourceLocks?.release();
     sourceLocks = null;
     editing = false;
+    editEscapeOverlay?.release();
+    editEscapeOverlay = null;
     deactivateFieldKeys();
     root.classList.remove('md-field--editing');
     modeActions.setEditing(false);
@@ -1686,6 +1698,12 @@ export function createMarkdownField(opts: {
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
+    // `Escape` принадлежит правке: верхний слой реестра диспетчера отменяет её
+    // (то же, что делает CM6, когда фокус доходит до поля).
+    editEscapeOverlay ??= pushKeyOverlay({
+      id: 'markdown-edit',
+      onEscape: () => finishEdit(true),
+    });
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
     mountEditor(locate, enterBlockAt);
@@ -1833,6 +1851,10 @@ export function createMarkdownField(opts: {
     },
     dispose: () => {
       detachOutsidePointer();
+      // Поле снимают вместе с экраном/диалогом — слой `Escape` правки не должен
+      // пережить его и отнимать нажатие у следующего диалога.
+      editEscapeOverlay?.release();
+      editEscapeOverlay = null;
     },
   });
 
