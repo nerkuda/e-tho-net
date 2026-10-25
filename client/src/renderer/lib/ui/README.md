@@ -62,6 +62,10 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
     `guard-list-nav`, ADR `fadf99e0`). Адаптеры ленты «Дневника»
     (`screens/chronicle/feed-nav.ts`) и библиотеки «Публикаций»
     (`screens/publications/library-nav.ts`) отдают ядру лишь разметку и реакции.
+    Клавиатура из поля поиска (первая строка списка) идёт тем же ядром через
+    мост `search-nav.ts`: фасад списка отдаёт `handleKey`, мост передаёт ему
+    ↑/↓/Enter без второго разбора — фокус остаётся в поле (требование
+    `11ddd910`, стандарт `b6b2821d`).
 12. **Переупорядочивание строк — только `lib/row-reorder.ts`.** Компонента
     собирает DnD (поверх `drag-list.ts`), `Alt+↑/↓` (действия ядра) и пункты
     меню «Переместить выше/ниже» в один колбэк `onMove(from, to)`. Локальные
@@ -90,7 +94,8 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `splitter.ts` / `splitter.css` | `uiSplitter`, `wireSplitter`, `splitterElement`, `SPLITTER_CLASS` | Разделитель/ресайзер: pointer-drag и гриф; ось/знак/min/max задаёт владелец | задача `50f57b82` |
 | `state.ts` | `select`, `selectMany`, `deepEqual` | Реактивные селекторы поверх store (основа списков) | задача `60fcc702`, требование `628d33ee` |
 | `nav-core.ts` | `NAV_KEY_ACTIONS`, `resolveNavAction`, `nextNavIndex`, `listTargetIndex`, `isEditingTarget` | **Общее ядро клавиатурной навигации** таблиц и списков: клавиши, границы, Home/End, PgUp/PgDn, отсутствие выделения, отсечка полей ввода | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
-| `list.ts` | `createListNav` | **Общий компонент списка**: навигация списков (лента «Дневника», библиотека «Публикаций») через ядро; разметку caller рисует keyed-сверкой | ADR `fadf99e0`, требование `93115633`, задача `7893e429` |
+| `list.ts` | `createListNav` | **Общий компонент списка**: навигация списков (лента «Дневника», библиотека «Публикаций») через ядро; разметку caller рисует keyed-сверкой. `ListNavHandle.handleKey` — программный вход того же обработчика для моста поля поиска | ADR `fadf99e0`, требование `93115633`, задача `7893e429`, ошибка `be095da7` |
+| `search-nav.ts` | `bindSearchNav`, `SearchNavTarget`, `SEARCH_NAV_KEYS`, `SEARCH_NAV_CONTEXT_ID` | **Мост «поле поиска → навигация списка»**: ↑/↓/Enter из первой строки поиска уходят в `handleKey` штатного списка через общеклиентский диспетчер; своих правил клавиш и локальных `keydown` нет, фокус остаётся в поле. Наличие моста у списков с поиском проверяет `guard-list-nav` | требование `11ddd910`, стандарт `b6b2821d`, ошибка `58981cf5`, ADR `fadf99e0` |
 | `drag-list.ts` / `drag-list.css` | `createDragList`, `dragHandle`, классы `DRAG_*` | **Общий drag-фасад ручного порядка**: сортируемый список поверх `createListNav` — pointer-драг с порогом, клон-призрак, линии вставки, авто-скролл, отмена `Escape` (`cancelOnEscape`) и клавиатурный сдвиг `Alt+↑/↓` (действия ядра `moveUp`/`moveDown`). Группа — «соседи одного родителя»; drag-логика только здесь | задача `d13fd645`, ADR `fadf99e0`, задача `223f7d50` |
 | `drag-tree.ts` / `drag-tree.css` | `createDragTree`, `resolveDragTreeRowTarget`, `DRAG_TREE_OVER_EMPTY_CLASS`, интерфейсы `DragTree*` | **Общий drag-фасад кросс-группового переноса узлов дерева**: pointer-жест с порогом, клон-призрак, авто-скролл, подсветка цели (`before`/`after`/`empty`), `Shift`-признак копирования, отмена `Escape` через `lib/keymap`; цель броска (`groupId`, `index`) резолвит адаптер вызывающего. Нужен там, где контракт `drag-list` («порядок одной группы») недостаточен; цели пересчитываются по точке `pointerup` | задача `31b228f0`, ADR `442e7ff5`, ADR `e538090f` |
 | `keyed-list.ts` | `reconcileKeyed`, `DEFAULT_KEY_ATTR` | Инкрементальная сверка списка по ключу (identity неизменных узлов) | задача `6952c619`, ADR keyed-обновления |
