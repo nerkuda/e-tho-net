@@ -414,6 +414,49 @@ describe('Escape: верхний слой над диалогом (ошибка 
     }
   });
 
+  it('поле выпало из DOM с открытым списком: Escape закрывает список и не достаётся диалогу', async () => {
+    const host = div('form-stack');
+    const input = (globalThis as any).document.createElement('input') as ShimElement;
+    input.value = '';
+    host.append(input as unknown as Node);
+    bodyEl().append(host as unknown as ShimElement);
+    const handle = wireSuggest(input as unknown as HTMLInputElement, {
+      sources: [
+        historySuggestSource({
+          load: () => [{ value: 'v1', label: 'Москва' }],
+        }),
+      ],
+      onPick: () => undefined,
+    });
+    try {
+      input.emit('focus');
+      await flush();
+      assert.ok(
+        bodyEl().children.some((child) => child.classList.contains('type-combo-list')),
+        'выпадашка открыта',
+      );
+
+      // Диалог регистрируется ПОЗЖЕ списка — его слой выше в реестре.
+      openEditor(true);
+      assert.equal(backdrops().length, 1, 'диалог открыт');
+
+      // Поле выпало из документа (перерисовка/отключение панели), список остался.
+      host.replaceChildren();
+      input.isConnected = false;
+      assert.equal(input.isConnected, false, 'поле отключено от документа');
+
+      pressEscape();
+      assert.equal(
+        bodyEl().children.some((child) => child.classList.contains('type-combo-list')),
+        false,
+        'мёртвый список закрыт',
+      );
+      assert.equal(backdrops().length, 1, 'Escape не достался диалогу — подтверждения нет');
+    } finally {
+      handle.dispose();
+    }
+  });
+
   it('панель поиска в «грязном» диалоге: первый Escape закрывает панель, второй — подтверждение (блокер приёмки)', () => {
     openEditor(true);
     const root = div('md-field');

@@ -731,6 +731,19 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
    */
   const onWinKey = (event: KeyboardEvent): void => {
     if (!input.isConnected) {
+      // Поле выпало из DOM при открытом списке (перерисованный редактор,
+      // закрытый диалог, отключённая панель кэшированной вкладки): мёртвый
+      // список закрываем и `Escape` поглощаем сами. Иначе то же нажатие
+      // обработает диалог, зарегистрированный позже, — двойное действие
+      // (ошибка 9ff6b606). `handleEscape` делает это, когда выпадашка ещё
+      // верхний слой; если над ней уже диалог, снимаем мёртвый слой и гасим
+      // событие явно.
+      if (event.key === 'Escape' && !event.repeat) {
+        if (escapeOverlay?.handleEscape(event) !== true) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }
       unwireWindow();
       close();
       return;

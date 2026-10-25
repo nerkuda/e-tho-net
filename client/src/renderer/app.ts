@@ -13,7 +13,7 @@
 
 import type { Thought } from '@etn/shared';
 
-import { closeDialog, errorDialog, hasOpenDialog } from './lib/dialog.js';
+import { errorDialog, hasOpenDialog } from './lib/dialog.js';
 import { errText, hasTextSelection } from './lib/dom.js';
 import { describeConnectFailure } from './lib/connect-failure.js';
 import { etn } from './lib/etn.js';
@@ -25,7 +25,6 @@ import {
   resetFocusToHome,
   publishFocusResponse,
 } from './lib/layer-resync.js';
-import { closeMenu } from './lib/menu.js';
 import {
   GLOBAL_CONTEXT_ID,
   defineKeyContext,
@@ -833,17 +832,6 @@ function globalKeyBindings(): KeyBindingDef[] {
       bindings.push(when === undefined ? { command, chord, run } : { command, chord, run, when });
     }
   };
-
-  bind('app.closeOverlay', ['Escape'], (event) => {
-    // A dialog that consumed the press (the top dialog's capture handler
-    // calls preventDefault) already closed itself — closing again here
-    // would pop the dialog below it (L21 fix). Key auto-repeat is ignored
-    // for the same reason: a held Escape would otherwise walk the stack down.
-    if (event.defaultPrevented || event.repeat) return false;
-    closeMenu();
-    closeDialog();
-    return true;
-  });
 
   // Copy / paste of thoughts (workplan L26). Only fire when the focus is
   // *not* inside an editable surface — there the native Ctrl+C/V must run
