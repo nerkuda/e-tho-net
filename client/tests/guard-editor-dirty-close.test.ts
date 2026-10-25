@@ -117,7 +117,10 @@ const EDITOR_SPECS: readonly EditorSpec[] = [
   {
     file: 'screens/thought-type/filter-dialog.ts',
     name: 'редактор отбора (представления)',
-    start: 'const criteriaBase = buildViewAst(state);',
+    // Маркер — присваивание без `const`/`let`: база «грязной» проверки
+    // пересчитывается при переразборе на повторе чтения реестра (071acfc2),
+    // поэтому объявление — `let`.
+    start: 'criteriaBase = buildViewAst(state);',
     end: '// Save flow',
   },
 ];

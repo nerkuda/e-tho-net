@@ -116,6 +116,19 @@ type ViewOwner =
   | { kind: 'type'; typeId: string; typeName: string }
   | { kind: 'thought'; thoughtId: string; thoughtName: string };
 
+/**
+ * Причина, по которой запись отбора могла бы молча потерять условия по
+ * свойствам (ошибка 071acfc2). Причина обязана называться ПО ФАКТУ: после
+ * успешного повтора чтения реестра «реестр не прочитан» — ложь.
+ *
+ * - `registryPending` — реестр сети ещё не прочитан, определение разобрано без
+ *   него, ждём повтор чтения на тике store;
+ * - `conditionsLost` — реестр прочитан, но форму правили до него: условия из
+ *   сохранённого определения в состоянии отсутствуют, запись потеряет их;
+ * - `null` — потерь нет, сохранение разрешено.
+ */
+type LossRisk = 'registryPending' | 'conditionsLost' | null;
+
 /** Ровно один владелец: тип XOR мысль (спека e0257ca5). */
 function resolveOwner(opts: OpenViewEditorOptions): ViewOwner {
   const typed = opts.thoughtTypeId !== undefined;
@@ -209,7 +222,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
         }).lost
       : [];
   /** Отказ реестра мог стоить условий по свойствам — сохранение блокируется. */
-  let registryLossRisk = lossesWithoutRegistry.length > 0;
+  let lossRiskReason: LossRisk = lossesWithoutRegistry.length > 0 ? 'registryPending' : null;
   /** Жёлтая диагностика отбора: потеря из-за отказа реестра либо настоящая. */
   let lossIssues: readonly FilterIssue[] =
     lossesWithoutRegistry.length > 0
@@ -306,13 +319,18 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
    * (требование b58f6aad). Снимок — тем же конвертером, поэтому нетронутая
    * форма не считается изменённой.
    *
+   * ПРИ ПЕРЕРАЗБОРЕ на повторе чтения реестра база пересчитывается вместе с
+   * заменой состояния: иначе восстановленные условия выглядели бы правкой
+   * пользователя и диалог без правок спрашивал бы подтверждение закрытия
+   * (ошибка 071acfc2, п. б).
+   *
    * Объявлен ДО сборки редактора: фабрика синхронно строит футер, его
    * `refresh` читает `host.baseline()` — обратись к `criteriaBase` из стрелки
    * `baseline` ниже по коду, получили бы TDZ-ошибку «Cannot access
    * 'criteriaBase' before initialization» при открытии диалога отбора
    * (ошибка 609deba0 п. C1).
    */
-  const criteriaBase = buildViewAst(state);
+  let criteriaBase = buildViewAst(state);
   const editor = buildFilterEditor({
     profile: 'thoughts',
     networkId,
@@ -394,7 +412,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       editor.refresh();
     },
     refreshEditor: () => editor.refresh(),
-    lossRisk: () => registryLossRisk,
+    lossRiskReason: () => lossRiskReason,
   });
   showDialog({
     title,
@@ -473,12 +491,20 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
           lossIssues = lostConditionIssues(nextLosses);
           if (!formDirty(criteriaBase, buildViewAst(state))) {
             Object.assign(state, parseViewDefinition(opts.view, registry));
-            registryLossRisk = false;
+            // База пересчитывается ВМЕСТЕ с состоянием: восстановленные условия —
+            // не правка пользователя, иначе диалог сразу «грязный»
+            // (ошибка 071acfc2, п. б).
+            criteriaBase = buildViewAst(state);
+            // Реестр прочитан и состояние переразобрано — потерь нет.
+            lossRiskReason = null;
           } else {
             // Пользователь правил отбор без реестра: переразбор перетёр бы его
             // правку. Если реестр вернул условия, которых в состоянии нет, —
-            // сохранять нельзя: перезапись потеряет их молча.
-            registryLossRisk = nextLosses.length < lossesWithoutRegistry.length;
+            // сохранять нельзя: перезапись потеряет их молча. Причина — именно
+            // потеря условий, а не «реестр не прочитан»: он уже прочитан
+            // (ошибка 071acfc2, п. а).
+            lossRiskReason =
+              nextLosses.length < lossesWithoutRegistry.length ? 'conditionsLost' : null;
           }
           editor.refresh();
         })
@@ -517,8 +543,11 @@ interface SaveCtx {
   setServerIssues: (issues: readonly FilterIssue[]) => void;
   /** Перерисовать редактор из модели (подсветка строк, футер). */
   refreshEditor: () => void;
-  /** Реестр не прочитан и мог стоить условий по свойствам — сохранять нельзя. */
-  lossRisk: () => boolean;
+  /**
+   * Причина возможной потери условий по свойствам: реестр не прочитан либо
+   * правка шла без реестра и условия не восстановлены (`null` — потерь нет).
+   */
+  lossRiskReason: () => LossRisk;
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
@@ -552,12 +581,22 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     );
     return;
   }
-  // Реестр свойств не прочитан, а определение могло нести условия по свойствам:
-  // запись перезаписала бы их молча — ждём повтора чтения/переоткрытия
-  // (ошибка db42100b). Стоит ДО запрета пустого отбора: без реестра дерево
-  // выглядит пустым именно из-за потери, и сообщение обязано называть причину.
-  if (ctx.lossRisk()) {
-    showFieldError(ctx, t('filterEditor.registryPendingSave'));
+  // Запись перезаписала бы условия по свойствам молча — ждём либо повтора
+  // чтения реестра, либо переоткрытия отбора: причина называется ПО ФАКТУ
+  // (реестр не прочитан / условия не восстановлены после его чтения), чтобы
+  // не отправлять пользователя ждать уже прочитанный реестр (ошибка 071acfc2).
+  // Стоит ДО запрета пустого отбора: без реестра дерево выглядит пустым именно
+  // из-за потери, и сообщение обязано называть причину.
+  const lossRiskReason = ctx.lossRiskReason();
+  if (lossRiskReason !== null) {
+    showFieldError(
+      ctx,
+      t(
+        lossRiskReason === 'registryPending'
+          ? 'filterEditor.registryPendingSave'
+          : 'filterEditor.conditionsLostSave',
+      ),
+    );
     return;
   }
   // Запрет пустого отбора (ошибка e8365d29): без условий отбор бессмыслен.
