@@ -122,8 +122,13 @@ describe('вкладка «Граф» — мини-граф на всю высо
     assert.ok(graphSrc.includes("registerTabContent('graph'"), 'graph tab content registered');
     assert.ok(graphSrc.includes('fillHeight: true'), 'mini-graph fills the tab');
     // Резолв соседей до полных карточек переехал сюда из links-tab.
+    // С круга 4 ошибки 42a7c0a1 в том же батче резолвится ЦЕНТР (свежая
+    // подпись после чужого realtime-переименования), поэтому соседи занимают
+    // 99 слотов из 100.
     assert.ok(
-      /etn\.thoughts\.resolve\(\s*networkId,\s*neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\b/.test(graphSrc),
+      /etn\.thoughts\.resolve\(\s*networkId,\s*\[\s*ctx\.ownerId,\s*\.\.\.neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\s*-\s*1\)/.test(
+        graphSrc,
+      ),
       'neighbours are batch-resolved in graph-tab',
     );
   });
