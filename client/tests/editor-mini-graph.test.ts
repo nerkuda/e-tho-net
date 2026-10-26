@@ -21,6 +21,10 @@ const SRC = {
   graph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
   graphTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'graph-tab.ts'),
   model: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph-model.ts'),
+  editor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'editor.ts'),
+  properties: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+  trash: resolve(import.meta.dirname, '..', 'src', 'renderer', 'trash.ts'),
+  contextMenu: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'context-menu.ts'),
   css: assembledStylesFile(),
 };
 
@@ -471,5 +475,174 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     const model = readText(SRC.model);
     assert.ok(model.includes('TRASHED_EDGE_DASH'), 'the dash rule lives in the model');
     assert.ok(model.includes('isTrashedEdge(link)'), 'the model decides the trashed dash');
+  });
+});
+
+/**
+ * Панель «Граф» строит снимок соседей/связей один раз, поэтому любое
+ * изменение состава рёбер обязано её инвалидировать — иначе метка корзины,
+ * чип «+N», подсказка и счётчик шапки остаются прежними (блокер круга 3:
+ * восстановление связи из корзины не убирало метку до перезапуска клиента).
+ * Проверяем оба входа: свои мутации (общий путь `reflectLinkUpdate` и
+ * редакторы) и realtime-события через существующий слой live, без второго
+ * механизма.
+ */
+describe('граф пересобирается при изменении состава рёбер (ошибка 42a7c0a1, круг 3)', () => {
+  it('invalidateGraphTab — единственный путь пересборки, через кэш панелей', () => {
+    const editor = readText(SRC.editor);
+    assert.ok(
+      /export function invalidateGraphTab\(\): void \{\s*invalidatePanes\(\['graph'\]\);/.test(editor),
+      'invalidateGraphTab drops the cached «Граф» pane through invalidatePanes',
+    );
+  });
+
+  it('reflectLinkUpdate инвалидирует граф по фактическому изменению полей связи', () => {
+    const editor = readText(SRC.editor);
+    // Прежнее состояние — из нормализованного кэша: без него restore из корзины
+    // неотличим от no-op и метка остаётся (блокер круга 3).
+    assert.ok(
+      /export function reflectLinkUpdate\(updated: Link\): void \{\s*const before = getEntity<Link>\('link', updated\.id\);/.test(
+        editor,
+      ),
+      'reflectLinkUpdate reads the previous link state from the entity cache',
+    );
+    assert.ok(
+      /if \(linkChangeAffectsGraph\(before, updated\)\) invalidateGraphTab\(\);/.test(editor),
+      'reflectLinkUpdate rebuilds the graph only when the change is visible on it',
+    );
+  });
+
+  it('saveLink и reflectThoughtUpdate пересобирают граф только по значимым полям', () => {
+    const editor = readText(SRC.editor);
+    assert.ok(
+      /if \(linkPatchAffectsGraph\(link, patch as Readonly<Record<string, unknown>>\)\) \{\s*invalidateGraphTab\(\);/.test(
+        editor,
+      ),
+      'saveLink rebuilds the graph for an actually changed graph field',
+    );
+    assert.ok(
+      /if \(thoughtChangesAffectGraph\(changes\)\) invalidateGraphTab\(\);/.test(editor),
+      'reflectThoughtUpdate rebuilds the graph for visible thought fields',
+    );
+    // Правка комментария/синонимов/версии не должна мигать панелью: решает
+    // чистая модель, а не сам факт события.
+    const model = readText(SRC.model);
+    assert.ok(
+      model.includes('export function thoughtChangesAffectGraph(') &&
+        model.includes('GRAPH_THOUGHT_FIELDS'),
+      'the visible-field filter lives in the pure model',
+    );
+  });
+
+  it('свойства-связи и общие пути (корзина, контекстное меню) идут через ту же инвалидацию', () => {
+    const properties = readText(SRC.properties);
+    assert.ok(
+      /invalidateGraphTab\(\);\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;/.test(
+        properties,
+      ),
+      'a link-property write rebuilds the graph even when the editor sits outside the canvas focus',
+    );
+    const trash = readText(SRC.trash);
+    assert.ok(
+      /onTrash:[\s\S]*?reflectLinkUpdate\(updated\);/.test(trash),
+      'the link trash dialog reflects the update through the common path',
+    );
+    const contextMenu = readText(SRC.contextMenu);
+    assert.equal(
+      (contextMenu.match(/reflectLinkUpdate\(updated\);/g) ?? []).length,
+      2,
+      'toggle-active and invert go through reflectLinkUpdate',
+    );
+    assert.ok(
+      !contextMenu.includes('patchFocusEdge'),
+      'the context menu does not patch the canvas edge behind the graph\'s back',
+    );
+  });
+
+  it('realtime из другой вкладки — существующий слой live, без второго механизма', () => {
+    const graphTab = readText(SRC.graphTab);
+    // Те же импорты, что у «Свойств» и «Упоминаний»: подписка на инвалидацию
+    // запросов + разбор причины события.
+    assert.ok(
+      /import \{ asRealtimeCause, onQueryInvalidated \} from '\.\.\/lib\/live\/index\.js';/.test(
+        graphTab,
+      ),
+      'the graph subscribes through the shared live layer',
+    );
+    assert.ok(
+      /onQueryInvalidated\(\(prefix, _keys, cause\) => \{\s*if \(prefix !== queryKeys\.focusAll\(\) && !prefix\.startsWith\('focus:@'\)\) return;/.test(
+        graphTab,
+      ),
+      'the graph listens to the focus-key invalidation (whole prefix and addressed keys)',
+    );
+    assert.ok(
+      /const evt = asRealtimeCause\(cause\);/.test(graphTab) &&
+        /if \(!graphEventAffects\(evt, state\)\) return;/.test(graphTab) &&
+        /state\.reload\(\);/.test(graphTab),
+      'only events that touch the pane snapshot trigger a rebuild',
+    );
+    // «Свойства» пользуются тем же механизмом — показываем переиспользование.
+    const properties = readText(SRC.properties);
+    assert.ok(
+      properties.includes('asRealtimeCause') && properties.includes('onQueryInvalidated'),
+      'properties already use the same invalidation mechanism',
+    );
+    assert.ok(
+      !graphTab.includes("from '../lib/ws.js'") && !graphTab.includes('WebSocket'),
+      'no second websocket subscription is invented',
+    );
+  });
+
+  it('устаревшая сборка не дописывает второй граф (своя мутация + realtime-эхо)', () => {
+    const graphTab = readText(SRC.graphTab);
+    assert.ok(
+      /const token = \(state\.renderToken \+= 1\);/.test(graphTab),
+      'every rebuild takes a generation number',
+    );
+    assert.ok(
+      /if \(token !== state\.renderToken\) return;/.test(graphTab),
+      'a stale build is dropped instead of appending a second graph',
+    );
+    assert.ok(
+      /host\.replaceChildren\(body\);/.test(graphTab),
+      'the DOM is replaced only by the winning build',
+    );
+    assert.ok(
+      /if \(state\.renderToken === token\) \{/.test(graphTab),
+      'the realtime snapshot is written by the winning build only',
+    );
+  });
+
+  it('пересборка сохраняет вид: зум/панорама и позиции узлов', () => {
+    const graph = readText(SRC.graph);
+    assert.ok(
+      graph.includes('export function readMiniGraphView(') &&
+        graph.includes('zoomTransform(svg)'),
+      'the view snapshot reads the live zoom transform',
+    );
+    assert.ok(
+      /zoomIdentity\s*\.translate\(opts\.view\.zoom\.x, opts\.view\.zoom\.y\)\s*\.scale\(opts\.view\.zoom\.k\)/.test(
+        graph,
+      ),
+      'the snapshot is re-applied after the rebuild',
+    );
+    assert.ok(
+      graph.includes("g.setAttribute('data-thought-id', node.id)"),
+      'nodes are addressable so their positions can be snapshotted',
+    );
+    assert.ok(
+      graph.includes('const savedPositions = opts.view?.positions ?? {};'),
+      'saved node positions seed the rebuilt simulation',
+    );
+    const graphTab = readText(SRC.graphTab);
+    assert.ok(
+      /const next = readMiniGraphView\(root\) \?\? view;/.test(graphTab) &&
+        /savedView = \{ ownerId: ctx\.ownerId, view: next \};/.test(graphTab),
+      'the pane snapshots the view before rebuilding',
+    );
+    assert.ok(
+      /lifecycle\?\.onDispose\(\(\) => \{[\s\S]*?readMiniGraphView\(root\)/.test(graphTab),
+      'closing the pane keeps the last view for the next open',
+    );
   });
 });

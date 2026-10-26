@@ -15,6 +15,7 @@ import type { Link, LinkType } from '@etn/shared';
 
 import {
   EDGE_LANE_GAP,
+  GRAPH_LINK_FIELDS,
   MASS_LINK_THRESHOLD,
   PERIPHERY_CAP,
   TRASHED_EDGE_DASH,
@@ -23,14 +24,18 @@ import {
   computeGraphStats,
   edgeTooltip,
   edgeTypeName,
+  graphEventAffects,
   graphStatEntries,
   isTrashedEdge,
+  linkChangeAffectsGraph,
+  linkPatchAffectsGraph,
   massChipTooltip,
   neutralEdgeVisual,
   orientLink,
   planGraphEdges,
   resolveEdgeVisual,
   shiftEdgeByLane,
+  thoughtChangesAffectGraph,
 } from '../src/renderer/editor/mini-graph-model.js';
 
 const CENTER = 'thought-center';
@@ -498,5 +503,143 @@ describe('mini-graph-model — показатели шапки (п.6)', () => {
     const entries = graphStatEntries(computeGraphStats(4, 0));
     assert.equal(entries.length, 1);
     assert.ok(entries[0]!.text.startsWith('Соседей:'));
+  });
+});
+
+describe('mini-graph-model — что требует пересборки графа (ошибка 42a7c0a1, круг 3)', () => {
+  const base = link({ id: 'link-1', type_id: 'type-1' });
+
+  it('GRAPH_LINK_FIELDS покрывает концы, тип, оформление, активность и корзину', () => {
+    assert.deepEqual(
+      [...GRAPH_LINK_FIELDS].sort(),
+      ['active', 'color', 'marked_for_deletion', 'source_id', 'style', 'target_id', 'type_id', 'width'].sort(),
+    );
+  });
+
+  it('обновление связи значимо, если изменилось видимое на графе поле', () => {
+    assert.equal(linkChangeAffectsGraph(base, { ...base, marked_for_deletion: true }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, marked_for_deletion: false }), false);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, type_id: null }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, active: false }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, color: '#f00' }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, style: 'dashed' }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, width: 3 }), true);
+    assert.equal(linkChangeAffectsGraph(base, base), false);
+  });
+
+  it('без прежнего состояния изменение считается значимым (restore мимо кэша)', () => {
+    assert.equal(linkChangeAffectsGraph(undefined, base), true);
+  });
+
+  it('PATCH связи значим только по реально изменённому видимому полю', () => {
+    assert.equal(linkPatchAffectsGraph(base, { marked_for_deletion: true }), true);
+    assert.equal(linkPatchAffectsGraph({ ...base, marked_for_deletion: true }, { marked_for_deletion: true }), false);
+    assert.equal(linkPatchAffectsGraph(base, { type_id: 'type-1' }), false);
+    assert.equal(linkPatchAffectsGraph(base, { active: false }), true);
+    assert.equal(linkPatchAffectsGraph(base, {}), false);
+  });
+
+  it('правка мысли пересобирает граф только по видимым полям', () => {
+    assert.equal(thoughtChangesAffectGraph({ title: 'Новое' }), true);
+    assert.equal(thoughtChangesAffectGraph({ marked_for_deletion: true }), true);
+    assert.equal(thoughtChangesAffectGraph({ active: false }), true);
+    assert.equal(thoughtChangesAffectGraph({ fg_color: '#123456' }), true);
+    assert.equal(thoughtChangesAffectGraph({ synonyms: ['x'] }), false);
+    assert.equal(thoughtChangesAffectGraph({ comment: 'текст' }), false);
+    assert.equal(thoughtChangesAffectGraph({ version: 2 }), false);
+  });
+
+  const context = {
+    ownerId: CENTER,
+    linkIds: new Set(['link-1', 'link-2']),
+    neighbourIds: new Set([OTHER, THIRD]),
+  };
+
+  it('события связей: создание/обновление/удаление касательно центра', () => {
+    assert.equal(
+      graphEventAffects({ type: 'link.created', data: { link: link({ id: 'new' }) } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'link.created', data: { link: link({ id: 'other-link', source_id: THIRD, target_id: HIDDEN }) } },
+        context,
+      ),
+      false,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'link.updated', data: { id: 'link-1', changes: { marked_for_deletion: false } } },
+        context,
+      ),
+      true,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'link.updated', data: { id: 'link-1', changes: { width: 2 } } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'link.updated', data: { id: 'link-1', changes: {} } }, context),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'link.updated', data: { id: 'postoronniy', changes: { active: false } } }, context),
+      false,
+    );
+    assert.equal(graphEventAffects({ type: 'link.deleted', data: { id: 'link-1' } }, context), true);
+    assert.equal(graphEventAffects({ type: 'link.deleted', data: { id: 'postoronniy' } }, context), false);
+  });
+
+  it('значения свойств граф не пересобирают — рёбра приходят отдельными link.* событиями', () => {
+    // Свойство-связь — проекция рёбер: сервер публикует по нему link.created/
+    // link.deleted/link.updated (routes/properties.ts). Скалярная правка рёбер
+    // не меняет — пересборка на property-value.* была бы миганием (круг 3, п.3).
+    assert.equal(
+      graphEventAffects(
+        { type: 'property-value.set', data: { owner_type: 'thought', owner_id: CENTER } },
+        context,
+      ),
+      false,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'property-value.deleted', data: { owner_type: 'thought', owner_id: THIRD } },
+        context,
+      ),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'property-value.set', data: { owner_type: 'link', owner_id: 'link-1' } }, context),
+      false,
+    );
+  });
+
+  it('сосед: обновление видимых полей или удаление пересобирают граф', () => {
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: OTHER, changes: { marked_for_deletion: true } } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: OTHER, changes: { comment: 'x' } } }, context),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: HIDDEN, changes: { title: 'x' } } }, context),
+      false,
+    );
+    assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: THIRD } }, context), true);
+    assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: HIDDEN } }, context), false);
+  });
+
+  it('типы связей и мыслей меняют оформление — граф пересобирается', () => {
+    for (const type of [
+      'link-type.updated',
+      'link-type.deleted',
+      'thought-type.updated',
+      'thought-type.deleted',
+    ]) {
+      assert.equal(graphEventAffects({ type, data: {} }, context), true, type);
+    }
+    assert.equal(graphEventAffects({ type: 'comment.updated', data: {} }, context), false);
   });
 });

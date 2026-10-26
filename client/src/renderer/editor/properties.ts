@@ -60,7 +60,13 @@ import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions.js';
 import { onReconnected, store } from '../state.js';
-import { registerTabContent, registerTabRetarget, type EditorContext, type TabPaneLifecycle } from './editor.js';
+import {
+  invalidateGraphTab,
+  registerTabContent,
+  registerTabRetarget,
+  type EditorContext,
+  type TabPaneLifecycle,
+} from './editor.js';
 import { groupSection } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import {
@@ -597,6 +603,11 @@ function pendingOutsideDefinition(
  * всей окрестности на каждый чип не делается — только по факту записи.
  */
 function repaintAfterLinkValueWrite(ownerType: 'thought' | 'link', ownerId: string): void {
+  // Значение свойства-связи создаёт/удаляет РЕБРО: открытая вкладка «Граф»
+  // обязана пересобрать план, иначе линия/чип «+N» останутся прежними
+  // (ошибка 42a7c0a1, круг 3). Граф редактора не зависит от фокуса карты,
+  // поэтому инвалидация идёт ДО проверки окрестности.
+  invalidateGraphTab();
   if (!inFocusNeighbourhood(ownerType, ownerId)) return;
   // Слой данных (G2/G3): гасим focus-, structures- и chronicle-ключи —
   // активная окрестность, «Структуры» и лента «Дневника» перечитаются слоем

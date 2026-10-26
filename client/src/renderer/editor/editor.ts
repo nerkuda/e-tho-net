@@ -61,6 +61,7 @@ import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';
 import { inNeighbourhood } from '../lib/focus-neighbourhood.js';
+import { getEntity } from '../lib/live/entities.js';
 import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidateSelectionThought } from '../selection/selection.js';
@@ -81,6 +82,11 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
+import {
+  linkChangeAffectsGraph,
+  linkPatchAffectsGraph,
+  thoughtChangesAffectGraph,
+} from './mini-graph-model.js';
 // Набор ВЛОЖЕНИЙ показанной сущности (ошибки 05bd8809, abd25adb): изменения
 // приходят кэш-путём слоя — роутер гасит ключ `attachments:@owner`, локальные
 // производители зовут `invalidateQueries` того же ключа. Локальный канал
@@ -1040,6 +1046,20 @@ function invalidatePanes(ids: readonly EditorTabId[]): void {
     stalePanes.delete(id);
   }
   if (shownWasDropped) displayTab(shownTab);
+}
+
+/**
+ * Пересобрать вкладку «Граф» из свежих данных (ошибка 42a7c0a1, круг 3).
+ *
+ * Панель графа строит снимок соседей/связей один раз и не подписана на
+ * мутации сама; после изменения состава рёбер (корзина, свойства-связи,
+ * realtime) её кэш устаревает — метка корзины, чип «+N», подсказка и счётчик
+ * шапки остаются прежними. Граф пересобирается ТОЛЬКО когда вызывающий уже
+ * решил, что изменение видно на графе (см. `mini-graph-model`); зум/панорама
+ * и позиции узлов переживают пересборку (`readMiniGraphView`).
+ */
+export function invalidateGraphTab(): void {
+  invalidatePanes(['graph']);
 }
 
 /**
@@ -2130,6 +2150,11 @@ export function reflectThoughtUpdate(
   // выделения: переименование/смена оформления выделенной мысли обновляет её
   // строку точечно (ошибка 3a64e680).
   invalidateSelectionThought(id);
+  // Вкладка «Граф» показывает пилюлю и соседей этой мысли: правка заголовка,
+  // значка, типа, «актуально» или корзины видна на графе. Остальные поля
+  // (комментарий, синонимы, версия) граф не пересобирают — иначе панель
+  // мигала бы на каждое сохранение (ошибка 42a7c0a1, круг 3).
+  if (thoughtChangesAffectGraph(changes)) invalidateGraphTab();
 }
 
 /**
@@ -2138,9 +2163,17 @@ export function reflectThoughtUpdate(
  * связи из панели использования/корзины). Своё realtime-эхо приходит позже
  * (04-realtime §5), поэтому обновляем из ответа PATCH: ребро фокуса, холст
  * (стиль/метка корзины), открытый редактор связи (снимок `editorTarget.link`
- * — иначе шапка и вкладки живут на старом объекте) и список структур.
+ * — иначе шапка и вкладки живут на старом объекте), список структур и вкладку
+ * «Граф».
+ *
+ * «Граф» пересобирается только когда обновление видно на нём (концы, тип,
+ * оформление, `active`, метка корзины): правка прочих полей не должна мигать
+ * панелью. Прежнее состояние берём из нормализованного кэша; если записи нет
+ * (restore из корзины мимо кэша), изменение считается значимым — иначе
+ * устаревшая метка корзины остаётся на графе (блокер круга 3).
  */
 export function reflectLinkUpdate(updated: Link): void {
+  const before = getEntity<Link>('link', updated.id);
   patchFocusEdge(updated);
   // Связь могла сменить `marked_for_deletion`/`active` — зоны и связки
   // пересобираются с сервера, как при `saveLink`.
@@ -2153,6 +2186,7 @@ export function reflectLinkUpdate(updated: Link): void {
   // счётчиках/строках редактора, поэтому перечитываем тем же путём, что
   // `saveLink`.
   scheduleStructuresRefresh();
+  if (linkChangeAffectsGraph(before, updated)) invalidateGraphTab();
 }
 
 /**
@@ -2225,6 +2259,11 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
     // The structures results list is server-rendered; reload it so the saved
     // link type/style show up right away (the actor's own event arrives later).
     scheduleStructuresRefresh();
+    // «Граф» рисует тип/оформление/активность связи — правим только те поля,
+    // что реально изменились (правка прочих панель не пересобирает).
+    if (linkPatchAffectsGraph(link, patch as Readonly<Record<string, unknown>>)) {
+      invalidateGraphTab();
+    }
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {

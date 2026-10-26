@@ -433,6 +433,148 @@ export function computeGraphStats(total: number, massHidden: number): GraphStats
   return { total, visible, massHidden, peripheryHidden: total - visible };
 }
 
+// ---------------------------------------------------------------------------
+// Что требует пересборки графа (ошибка 42a7c0a1, круг 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Поля связи, которые видны на графе: концы (сосед/направление), тип
+ * (подпись и оформление), собственные переопределения вида, активность и
+ * метка корзины. Изменение любого из них обязано пересобрать план рёбер;
+ * правка прочих полей (комментарий и т.п.) граф не трогает — иначе панель
+ * мигала бы на каждое сохранение.
+ */
+export const GRAPH_LINK_FIELDS = [
+  'source_id',
+  'target_id',
+  'type_id',
+  'color',
+  'style',
+  'width',
+  'active',
+  'marked_for_deletion',
+] as const;
+
+/**
+ * Поля мысли, которые видны на графе: подпись пилюли, значок и оформление
+ * (включая эффективные от типа), активность и метка корзины. Всё остальное
+ * (комментарий, синонимы, версия) граф не перерисовывает.
+ */
+export const GRAPH_THOUGHT_FIELDS = [
+  'title',
+  'type_id',
+  'icon',
+  'icon_kind',
+  'icon_attachment_id',
+  'icon_color',
+  'fg_color',
+  'bg_color',
+  'font_bold',
+  'font_italic',
+  'font_underline',
+  'font_strike',
+  'active',
+  'marked_for_deletion',
+] as const;
+
+/**
+ * Меняет ли обновление СВЯЗИ её отображение на графе. `before` — состояние до
+ * обновления (нормализованный кэш): без него изменение считается значимым —
+ * безопаснее пересобрать, чем показать устаревшую метку корзины (блокер
+ * круга 3: restore из корзины не гасил `.mini-graph-mass-trash`).
+ */
+export function linkChangeAffectsGraph(before: Link | undefined, after: Link): boolean {
+  if (before === undefined) return true;
+  return GRAPH_LINK_FIELDS.some((field) => before[field] !== after[field]);
+}
+
+/** Меняет ли PATCH связи (тот же набор полей) её отображение на графе. */
+export function linkPatchAffectsGraph(
+  before: Link,
+  patch: Readonly<Record<string, unknown>>,
+): boolean {
+  return GRAPH_LINK_FIELDS.some((field) => field in patch && patch[field] !== before[field]);
+}
+
+/** Меняет ли правка мысли её отображение на графе (пилюля/состав соседей). */
+export function thoughtChangesAffectGraph(changes: Readonly<Record<string, unknown>>): boolean {
+  return GRAPH_THOUGHT_FIELDS.some((field) => field in changes);
+}
+
+/**
+ * Какие realtime-события обязаны пересобрать открытый граф мысли-владельца.
+ * `linkIds`/`neighbourIds` — текущий снимок панели: событие про постороннюю
+ * связь или постороннюю мысль граф не трогает (нет мигания).
+ */
+export interface GraphEventContext {
+  /** Мысль-центр открытой вкладки. */
+  ownerId: string;
+  /** id связей, показанных в текущем снимке панели. */
+  linkIds: ReadonlySet<string>;
+  /** id соседей из текущего снимка панели. */
+  neighbourIds: ReadonlySet<string>;
+}
+
+/** Минимальная форма события шины, достаточная для решения (без DOM/сети). */
+export interface GraphEventLike {
+  type: string;
+  data: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Требует ли событие шины пересборки открытого графа. Проверены все пути
+ * изменения рёбер (таблица — в отчёте круга 3):
+ *  • `link.created` — ребро центра с мыслью (создание/перенос узла);
+ *  • `link.updated` — связь из снимка панели, меняющая видимые поля;
+ *  • `link.deleted` — связь из снимка (purge из корзины);
+ *  • `thought.updated` — сосед сменил подпись/вид или ушёл в корзину;
+ *  • `thought.deleted` — сосед удалён;
+ *  • `link-type.*` / `thought-type.*` — эффективное оформление линий/пилюль.
+ *
+ * `property-value.set/deleted` сюда НЕ входят: значения свойств-связей — это
+ * проекция рёбер, и сервер публикует по ним отдельные `link.created` /
+ * `link.deleted` / `link.updated` (`routes/properties.ts`). Скалярное
+ * свойство рёбер не меняет — пересборка на него была бы миганием (круг 3,
+ * п.3: инвалидировать только по фактическому изменению).
+ */
+export function graphEventAffects(
+  event: GraphEventLike,
+  context: GraphEventContext,
+): boolean {
+  const data = event.data;
+  switch (event.type) {
+    case 'link.created': {
+      const link = data.link as Link | undefined;
+      if (link === undefined) return true;
+      return link.source_id === context.ownerId || link.target_id === context.ownerId;
+    }
+    case 'link.updated': {
+      if (!context.linkIds.has(String(data.id))) return false;
+      const changes = data.changes;
+      if (typeof changes !== 'object' || changes === null) return true;
+      return GRAPH_LINK_FIELDS.some((field) => field in (changes as Record<string, unknown>));
+    }
+    case 'link.deleted':
+      return context.linkIds.has(String(data.id));
+    case 'thought.updated': {
+      if (!context.neighbourIds.has(String(data.id))) return false;
+      const changes = data.changes;
+      if (typeof changes !== 'object' || changes === null) return true;
+      return thoughtChangesAffectGraph(changes as Record<string, unknown>);
+    }
+    case 'thought.deleted':
+      return context.neighbourIds.has(String(data.id));
+    case 'link-type.updated':
+    case 'link-type.deleted':
+    case 'thought-type.updated':
+    case 'thought-type.deleted':
+      return true;
+    default:
+      return false;
+  }
+}
+
+
 /** Строка шапки: текст и понятное объяснение во всплывающей подсказке. */
 export interface StatEntry {
   text: string;

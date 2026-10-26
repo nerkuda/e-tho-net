@@ -34,7 +34,7 @@ import {
   type SnapshotDeps,
 } from './clipboard.js';
 import { getRef, invalidateRef, requestZoneAnimation } from './canvas.js';
-import { patchFocusEdge, store } from '../state.js';
+import { store } from '../state.js';
 import { errorDialog, promptDialog } from '../lib/dialog.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
@@ -48,7 +48,7 @@ import {
 } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
-import { reflectThoughtUpdate } from '../editor/editor.js';
+import { reflectLinkUpdate, reflectThoughtUpdate } from '../editor/editor.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
@@ -224,9 +224,9 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
       link.version,
     );
     // Repaint at once (B1: own event arrives asynchronously);
-    // the debounced refresh reconciles the neighbour zones.
-    patchFocusEdge(updated);
-    scheduleRefresh();
+    // общий путь отражения связи пересобирает окрестность И вкладку «Граф»
+    // (активность влияет на состав рёбер — ошибка 42a7c0a1, круг 3).
+    reflectLinkUpdate(updated);
   } catch (err) {
     errorDialog('Изменить актуальность', err);
   }
@@ -249,13 +249,10 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
     // Own event arrives asynchronously (B1) — patch locally for instant feedback. Both
     // store updates render synchronously BEFORE the animation flag is armed,
     // so the flag is consumed by the debounced zone-reconciling refresh only.
-    patchFocusEdge(updated);
-    const target = store.state.editorTarget;
-    if (target !== null && target.kind === 'link' && target.id === linkId) {
-      store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
-    }
+    // Общий путь также пересобирает вкладку «Граф»: инверсия меняет концы
+    // рёбер, видимые на графе (ошибка 42a7c0a1, круг 3).
+    reflectLinkUpdate(updated);
     requestZoneAnimation();
-    scheduleRefresh();
     notice('Связь инвертирована.');
   } catch (err) {
     if ((err as { code?: string } | null)?.code === 'DUPLICATE') {

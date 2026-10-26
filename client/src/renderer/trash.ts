@@ -435,14 +435,16 @@ export async function openLinkDeleteDialog(
     },
     onTrash: async (close) => {
       try {
-        await etn.links.update(
+        const updated = await etn.links.update(
           networkId,
           linkId,
           { marked_for_deletion: !alreadyMarked },
           await linkVersion(networkId, linkId),
         );
         close();
-        scheduleRefresh();
+        // Общий путь отражения связи: метка корзины и чип «+N» на графе
+        // редактора не должны ждать realtime-эха (ошибка 42a7c0a1, круг 3).
+        reflectLinkUpdate(updated);
         notice(alreadyMarked ? 'Связь возвращена из корзины.' : 'Связь помещена в корзину.');
       } catch (err) {
         errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);

@@ -58,7 +58,7 @@ import {
   type SimulationNodeDatum,
 } from 'd3-force';
 import { select } from 'd3-selection';
-import { zoom, type D3ZoomEvent } from 'd3-zoom';
+import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent } from 'd3-zoom';
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/ui/icon.js';
@@ -108,6 +108,18 @@ const MASS_TRASH_OFFSET_Y = 22;
  */
 const TRASH_BADGE_T = 0.3;
 
+/**
+ * Снимок вида мини-графа, переживающий пересборку панели (ошибка 42a7c0a1,
+ * круг 3): обновление состава рёбер инвалидирует вкладку, и без снимка
+ * сбрасывались бы зум/панорама и раскладка узлов.
+ */
+export interface MiniGraphView {
+  /** Текущий зум/панорама (d3 transform мира). */
+  zoom: { k: number; x: number; y: number };
+  /** Позиции узлов в мировых координатах (по id мысли). */
+  positions: Record<string, { x: number; y: number }>;
+}
+
 export interface MiniGraphOptions {
   /** Текущая редактируемая мысль (центр). */
   thought: Thought;
@@ -120,6 +132,8 @@ export interface MiniGraphOptions {
    * `false` — фиксированные 280 px, как в группе «Локальный граф».
    */
   fillHeight?: boolean;
+  /** Восстановить зум/панораму и стартовые позиции узлов после пересборки. */
+  view?: MiniGraphView;
 }
 
 /** Узел симуляции: пилюля-облачко. */
@@ -201,26 +215,31 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   document.body.append(probeHost);
 
   const nodes: GNode[] = [];
+  // Позиции из снимка вида (пересборка панели не должна «прыгать» узлами):
+  // для новых/незнакомых узлов остаются стартовые координаты по кругу.
+  const savedPositions = opts.view?.positions ?? {};
+  const centerSaved = savedPositions[center.id];
   nodes.push({
     id: center.id,
     title: center.title,
     ref: center,
     w: measureCloudWidth(probeHost, center),
     center: true,
-    x: 0,
-    y: 0,
+    x: centerSaved?.x ?? 0,
+    y: centerSaved?.y ?? 0,
   });
   // Стартовые позиции по кругу — физике легче расходиться.
   visibleNeighbours.forEach((nb, i) => {
     const angle = (2 * Math.PI * i) / Math.max(visibleNeighbours.length, 1);
+    const saved = savedPositions[nb.id];
     nodes.push({
       id: nb.id,
       title: nb.title,
       ref: nb,
       w: measureCloudWidth(probeHost, nb),
       center: false,
-      x: 120 * Math.cos(angle),
-      y: 90 * Math.sin(angle),
+      x: saved?.x ?? 120 * Math.cos(angle),
+      y: saved?.y ?? 90 * Math.sin(angle),
     });
   });
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -430,6 +449,9 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   for (const node of nodes) {
     const g = svgEl('g');
     g.setAttribute('class', node.center ? 'mini-node mini-node-center' : 'mini-node');
+    // id мысли на группе узла — для снятия снимка вида при пересборке панели
+    // (`readMiniGraphView`) и адресных DOM-проб.
+    g.setAttribute('data-thought-id', node.id);
 
     // Пилюля — HTML-облачко общей фабрики (профиль `graph`), положенное в SVG
     // через <foreignObject>: значок, цвета, начертание, бледность, метка
@@ -659,6 +681,16 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     });
   svg.addEventListener('contextmenu', (event) => event.preventDefault());
   select(svg).call(zoomBehavior).on('dblclick.zoom', null);
+  // Пересборка панели (обновление состава рёбер) возвращает прежний зум и
+  // панораму: без этого пересборка «прыгала» бы в стартовый вид (круг 3).
+  if (opts.view !== undefined) {
+    select(svg).call(
+      zoomBehavior.transform,
+      zoomIdentity
+        .translate(opts.view.zoom.x, opts.view.zoom.y)
+        .scale(opts.view.zoom.k),
+    );
+  }
 
   // --- Drag узлов ------------------------------------------------------------
   for (const entry of byId.values()) {
@@ -813,4 +845,26 @@ async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void>
       focusHandler: () => void focusLinkRef(node.id),
     },
   );
+}
+
+/**
+ * Снимок текущего вида мини-графа: зум/панорама (d3 transform на SVG) и
+ * позиции узлов (мировые координаты из `transform` групп). Снимается перед
+ * пересборкой панели, чтобы обновление состава рёбер не сбрасывало вид
+ * (ошибка 42a7c0a1, круг 3). `null` — граф ещё не отрисован.
+ */
+export function readMiniGraphView(host: HTMLElement): MiniGraphView | null {
+  const svg = host.querySelector<SVGSVGElement>('.mini-graph-canvas');
+  if (svg === null) return null;
+  const transform = zoomTransform(svg);
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (const g of host.querySelectorAll<SVGGElement>('.mini-node[data-thought-id]')) {
+    const id = g.dataset.thoughtId;
+    const match = /translate\(\s*([^,\s]+)\s*,\s*([^)\s]+)\s*\)/.exec(
+      g.getAttribute('transform') ?? '',
+    );
+    if (id === undefined || match === null) continue;
+    positions[id] = { x: Number(match[1]), y: Number(match[2]) };
+  }
+  return { zoom: { k: transform.k, x: transform.x, y: transform.y }, positions };
 }
