@@ -49,6 +49,11 @@ import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
 import { notice } from '../lib/notice.js';
 import { t } from '../lib/i18n.js';
 import { store } from '../state.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+  type ScreenPair,
+} from '../screens/tabs/tab-state.js';
 
 /** Mode of the lower zone: children of the focus or a specific view's run. */
 export type StripMode =
@@ -340,9 +345,23 @@ export function mountFilterStrip(canvasHost: HTMLElement): void {
 }
 
 /**
+ * Относится ли снятая пара к текущему экрану. Полоса адресует запросы сети
+ * ФОКУСА, а не текущей сети стора: при смене/восстановлении сети рендер может
+ * прийти со старым `focus` уже после публикации новой сети, и запрос views
+ * уходил бы в чужую сеть (404, ошибка ff5efa1a). Тот же примитив пары, что в
+ * 58c55bb9, — новый механизм не заводим.
+ */
+function isScreenPairCurrent(pair: ScreenPair | null): pair is ScreenPair {
+  return pair !== null && isCurrentScreenPair(pair);
+}
+
+/**
  * Repaints the strip for the current focus. Pass `null` when the canvas has
  * no focus (the strip hides itself).
  *
+ * `opts.pair` — пара «сеть + вкладка», которой принадлежит `focus`; снимается
+ * вызывающим ВМЕСТЕ с focus (до первого ожидания). Устаревший рендер (пара уже
+ * не текущая) не порождает ни запроса, ни правок DOM: он описывает чужую сеть.
  * `opts.resetActiveIfDeleted` — realtime-перестройка после удаления отбора:
  * если активным был удалённый отбор, полоса уходит на «Потомки», а не на
  * дефолт (спека df84de22). Перенос (`reason: 'moved'`) этим флагом НЕ
@@ -350,9 +369,14 @@ export function mountFilterStrip(canvasHost: HTMLElement): void {
  */
 export async function renderStrip(
   focus: FocusResponse | null,
-  opts?: { resetActiveIfDeleted?: boolean },
+  opts?: { resetActiveIfDeleted?: boolean; pair?: ScreenPair | null },
 ): Promise<void> {
   if (stripEl === null || buttonsEl === null || host === null) return;
+  // Явно переданная пара (в т.ч. `null` — сеть уже не открыта) не подменяется
+  // текущей: иначе устаревший рендер снова взял бы сеть из стора.
+  const pair: ScreenPair | null =
+    opts !== undefined && opts.pair !== undefined ? opts.pair : currentScreenPair();
+  if (focus !== null && !isScreenPairCurrent(pair)) return;
   if (focus === null) {
     stripEl.classList.add('hidden');
     currentFocusId = null;
@@ -379,7 +403,10 @@ export async function renderStrip(
   // (требование 045f539a): и типовые по цепочке, и внетиповые, со `scope`,
   // `defined_on`, `inherited`, `is_default` и `definition`. Двухшаговый
   // fallback (`thoughts.get.meta.views` + list) убран.
-  const views = await loadEffectiveViews(focus);
+  const views = await loadEffectiveViews(focus, pair);
+  // Пара сменилась, пока шёл запрос: ответ принадлежит прежнему экрану —
+  // не публикуем его в полосе новой сети (ошибка ff5efa1a).
+  if (!isScreenPairCurrent(pair)) return;
   effectiveViews = views;
   // Pick the mode: persisted > default view > «Потомки». Персист переживает
   // смену фокуса и перезагрузку; дефолт открывается только без сохранённого
@@ -456,12 +483,16 @@ function viewModeFromRow(row: EffectiveViewRow): StripMode {
  * тип, и внетиповые отборы мысли приходят тем же набором (требование
  * 23e0f78e).
  */
-async function loadEffectiveViews(focus: FocusResponse): Promise<EffectiveViewRow[]> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return [];
+async function loadEffectiveViews(
+  focus: FocusResponse,
+  pair: ScreenPair | null,
+): Promise<EffectiveViewRow[]> {
+  // Сеть запроса — сеть ФОКУСА (пара рендера), а не текущая сеть стора.
+  // Устаревший рендер (пара уже не текущая) запроса не порождает (ff5efa1a).
+  if (!isScreenPairCurrent(pair)) return [];
   let rows: readonly unknown[] = [];
   try {
-    const resp = await etn.thoughtCustomViews.list(networkId, focus.focused.id, {
+    const resp = await etn.thoughtCustomViews.list(pair.networkId, focus.focused.id, {
       includeEffective: true,
     });
     rows = Array.isArray(resp.meta.effective) ? resp.meta.effective : [];
@@ -1149,10 +1180,15 @@ function prefetchViewDefinition(viewId: string): void {
   viewKeywordsCache.set(viewId, definitionUsesKeywords(parsed));
 }
 
-export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult | null> {
+export async function runActiveViewIfNeeded(
+  focusId: string,
+  pair: ScreenPair | null = currentScreenPair(),
+): Promise<ViewResult | null> {
   if (currentMode.kind !== 'view') return null;
-  const networkId = store.state.networkId;
-  if (networkId === null) return null;
+  // Запрос адресует мысль фокуса в сети ПАРЫ, а не текущей сети стора: вызов,
+  // пришедший после смены сети, не должен уходить в чужую сеть (ff5efa1a).
+  if (!isScreenPairCurrent(pair)) return null;
+  const networkId = pair.networkId;
   const seq = ++runSeq;
   try {
     // Прочитать определение — только ради кеша признака `keywords` (G3).
@@ -1171,6 +1207,7 @@ export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult
     // another focus would paint foreign thoughts into the lower zone, and
     // `null` must mean "no fresh result", never "the view is empty"
     // (ошибка 90811979).
+    if (!isScreenPairCurrent(pair)) return null;
     if (seq !== runSeq) {
       return lastResult !== null && lastResult.focusId === focusId ? lastResult : null;
     }
@@ -1224,8 +1261,14 @@ export function hasMoreViewResult(): boolean {
  * Возвращает обновлённый результат или `null`, если догружать нечего либо
  * порцию перекрыл более свежий запуск отбора.
  */
-export async function loadMoreViewResult(focusId: string): Promise<ViewResult | null> {
+export async function loadMoreViewResult(
+  focusId: string,
+  pair: ScreenPair | null = currentScreenPair(),
+): Promise<ViewResult | null> {
   if (currentMode.kind !== 'view') return null;
+  // Сеть запроса — сеть пары, которой принадлежит результат отбора. Вызов
+  // после смены сети не догружает чужую сеть (ff5efa1a).
+  if (!isScreenPairCurrent(pair)) return null;
   const result = lastResult;
   if (
     result === null ||
@@ -1235,8 +1278,7 @@ export async function loadMoreViewResult(focusId: string): Promise<ViewResult | 
     return null;
   }
   if (result.exhausted) return result;
-  const networkId = store.state.networkId;
-  if (networkId === null) return result;
+  const networkId = pair.networkId;
   // Запуск отбора мог быть перекрыт (смена фокуса/режима/realtime): тогда
   // `runSeq` уже сдвинут, а `lastResult` заменён/сброшен — порцию не применяем.
   const seq = runSeq;
@@ -1248,6 +1290,7 @@ export async function loadMoreViewResult(focusId: string): Promise<ViewResult | 
       limit: VIEW_PAGE_SIZE,
       offset: result.nextOffset,
     });
+    if (!isScreenPairCurrent(pair)) return null;
     if (seq !== runSeq || lastResult !== result) return lastResult;
     const known = new Set(result.items.map((item) => item.id));
     const fresh = resp.data.filter((item) => item.id !== focusId && !known.has(item.id));
@@ -1308,6 +1351,9 @@ let realtimeRebuildSeq = 0;
 async function refreshStripFromRealtime(resetActiveIfDeleted: boolean): Promise<void> {
   const focus = store.state.focus;
   if (focus === null) return;
+  // Пара снимается ВМЕСТЕ с фокусом: realtime-событие могло прийти в момент
+  // смены сети, и рендер прежней пары не должен адресовать новую (ff5efa1a).
+  const pair = currentScreenPair();
   const seq = ++realtimeRebuildSeq;
   // The event carries a view definition change: the cached `keywords` flag may
   // be stale, while the focus itself did not change (so `renderStrip` no longer
@@ -1315,7 +1361,7 @@ async function refreshStripFromRealtime(resetActiveIfDeleted: boolean): Promise<
   invalidateViewDefinitionCache();
   await renderStrip(
     focus,
-    resetActiveIfDeleted ? { resetActiveIfDeleted: true } : undefined,
+    resetActiveIfDeleted ? { resetActiveIfDeleted: true, pair } : { pair },
   );
   if (seq !== realtimeRebuildSeq) return;
   // The mode may have shifted to a default view after the rebuild; the
@@ -1324,7 +1370,7 @@ async function refreshStripFromRealtime(resetActiveIfDeleted: boolean): Promise<
   // Re-run the view if the active mode is a view (children don't need a
   // refresh — `scheduleRefresh` is handled at the realtime bridge level).
   if (currentMode.kind === 'view') {
-    await runActiveViewIfNeeded(focus.focused.id);
+    await runActiveViewIfNeeded(focus.focused.id, pair);
     notifyModeChange();
   }
 }

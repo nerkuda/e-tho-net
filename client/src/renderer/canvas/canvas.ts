@@ -125,6 +125,11 @@ import { queryKeys } from '../lib/live/query-keys.js';
 import { onQueryInvalidated } from '../lib/live/query-registry.js';
 import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import { openThoughtDeleteDialog } from '../trash.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+  type ScreenPair,
+} from '../screens/tabs/tab-state.js';
 
 // Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6): облачка
 // холста (фокус и зоны) собирает `createThoughtCloud`; здесь остаётся только
@@ -773,6 +778,10 @@ async function render(): Promise<void> {
   finishFocusTransition();
   applyCanvasScaleVars(host);
   const focus = store.state.focus;
+  // Пара «сеть + вкладка» снимается ВМЕСТЕ с фокусом (один синхронный тик):
+  // ниже идут ожидания (`enrichRefs`, запросы полосы), за время которых сеть
+  // может смениться, а `focus` останется от прежней (ошибка ff5efa1a).
+  const pair = currentScreenPair();
   // Смена мыслесети (спека «Проявление карты при смене мыслесети», задача
   // 70a99f09): прежнее содержимое убирается одномоментно, а новый расклад
   // проявляется одним общим fade-in — не хореографией смены фокуса.
@@ -822,7 +831,7 @@ async function render(): Promise<void> {
   refCache.set(focus.focused.id, focus.focused);
 
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
-  await enrichRefs(focus);
+  await enrichRefs(focus, pair);
   relatedTitles = visibleRelatedTitles(focus);
   // Resolve the filter strip and any active view result BEFORE rebuilding the
   // DOM. The rebuild and the focus transition MUST share one synchronous task
@@ -832,7 +841,7 @@ async function render(): Promise<void> {
   // old focus "returns" as the held overlay. Hoisting every await above the
   // rebuild means the first painted frame of the new state already holds the
   // old content. `guard-focus-animation` guards the invariant.
-  await renderFilterStrip(focus);
+  await renderFilterStrip(focus, { pair });
   const stripMode = getStripActiveMode();
   let viewResult: ViewResult | null = null;
   if (stripMode.kind !== 'children') {
@@ -840,7 +849,7 @@ async function render(): Promise<void> {
     // The mode change listener also calls `render()`; this call may execute
     // repeatedly during a mode toggle, and the strip's run cancellation keeps
     // stale responses from overwriting fresh ones.
-    viewResult = await runActiveViewIfNeeded(focus.focused.id);
+    viewResult = await runActiveViewIfNeeded(focus.focused.id, pair);
   }
 
   // --- Rebuild + transition: one synchronous task, one paint --------------
@@ -1459,7 +1468,7 @@ function syncZoneTotalsWithFreshFocus(): void {
   // ошибка c02ff7dc). Общие рёбра фокуса чинятся самим `edgeSource` — снимок их
   // не хранит.
   void reconcileZoneTotals(focus).then(() => {
-    if (hasSupplementalEdges()) void refreshZoneEdges(focus);
+    if (hasSupplementalEdges()) void refreshZoneEdges(focus, currentScreenPair());
   });
 }
 
@@ -1592,7 +1601,10 @@ async function maybeLoadMoreViewResult(zone: HTMLElement): Promise<void> {
   }
   const focus = store.state.focus;
   if (focus === null) return;
-  const result = await loadMoreViewResult(focus.focused.id);
+  // Пара — вместе с фокусом: догрузка не должна уйти в сеть, которая уже
+  // сменилась, пока нижняя зона листалась (ошибка ff5efa1a).
+  const pair = currentScreenPair();
+  const result = await loadMoreViewResult(focus.focused.id, pair);
   if (result === null) return;
   renderZone('children', viewResultToZoneEntries(result, focus));
   paintZoneIndicators();
@@ -1614,6 +1626,9 @@ async function appendNextZonePage(
   const focus = store.state.focus;
   const networkId = store.state.networkId;
   if (focus === null || networkId === null) return;
+  // Пара — вместе с фокусом: догрузка сектора не должна адресовать сменившуюся
+  // сеть (запросы идут снятой сетью, ответ отбрасывает zonePagingToken).
+  const pair = currentScreenPair();
   const token = zonePagingToken;
   counters.loading = true;
   try {
@@ -1666,7 +1681,7 @@ async function appendNextZonePage(
         if (token !== zonePagingToken) return;
         renderZone(dir, groupByThought(zoneNeighbors(dir, focus)));
       });
-      void refreshZoneEdges(focus);
+      void refreshZoneEdges(focus, pair);
     }
   } catch {
     // Best effort: the next scroll of the sector retries.
@@ -1683,9 +1698,14 @@ async function appendNextZonePage(
  * already in `focus.edges` are dropped from the snapshot so the overlay renders
  * shared edges from the live focus response (ошибка c02ff7dc).
  */
-async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+async function refreshZoneEdges(
+  focus: FocusResponse,
+  pair: ScreenPair | null,
+): Promise<void> {
+  // Сеть — из пары, снятой вместе с фокусом; устаревший вызов не адресует
+  // мысли прежней сети в новой (ошибка ff5efa1a).
+  if (pair === null || !isCurrentScreenPair(pair)) return;
+  const networkId = pair.networkId;
   const token = zonePagingToken;
   const ids = [...zoneVisibleIds];
   try {
@@ -1693,13 +1713,14 @@ async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
     // фокусу и порциям секторов (ошибка a617b4c6); иначе на холст вернутся
     // рёбра отфильтрованных типов.
     const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
+    if (!isCurrentScreenPair(pair)) return;
     const edges = await etn.structures.edges(
       networkId,
       ids,
       store.state.showInactive,
       linkFilter,
     );
-    if (token !== zonePagingToken) return;
+    if (token !== zonePagingToken || !isCurrentScreenPair(pair)) return;
     setSupplementalEdges(edges, focus.edges ?? []);
     redrawLinks?.();
   } catch {
@@ -1822,9 +1843,14 @@ export function visibleRelatedTitles(focus: {
 }
 
 /** Fetches missing refs for all neighbours of a focus response. */
-async function enrichRefs(focus: FocusResponse): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+async function enrichRefs(
+  focus: FocusResponse,
+  pair: ScreenPair | null,
+): Promise<void> {
+  // Сеть — из пары, снятой вместе с фокусом: рендер, начавшийся до смены сети,
+  // не должен резолвить мысли прежней сети в новой (ошибка ff5efa1a).
+  if (pair === null || !isCurrentScreenPair(pair)) return;
+  const networkId = pair.networkId;
   const ids = [...focus.parents, ...focus.children, ...focus.siblings]
     .map((n) => n.id)
     .filter((id) => !refCache.has(id));
@@ -1832,6 +1858,7 @@ async function enrichRefs(focus: FocusResponse): Promise<void> {
   if (unique.length === 0) return;
   try {
     const resolved = await resolveThoughtRefs(networkId, unique);
+    if (!isCurrentScreenPair(pair)) return;
     for (const ref of resolved) refCache.set(ref.id, ref);
   } catch {
     // Enrichment is best-effort: clouds render with default styling.
