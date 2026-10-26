@@ -1,6 +1,6 @@
 {
   "name": "markdown-shift-block-text (49ebba76)",
-  "description": "Ошибка 49ebba76: клик/каретка после escape или HTML-entity в обычном (блочном) тексте не должны смещаться. Сценарий сам заводит постоянный комментарий корневой мысли (api POST, {{homeId}}), поэтому --seed-comment не нужен. Проверяет: (1) в просмотре <p> и <th> несут карту сдвига data-md-shift; (2) программный двойной клик по слову после &amp; в абзаце входит в правку и ставит каретку/выделение в ТОЧНЫЕ смещения исходника; (3) то же для entity в ячейке th таблицы; (4) то же для escape \\* в ячейке td. Ожидания не зашиты: смещение считается по тексту самого редактора (__srcIndex), каретка читается из DOM-выделения CodeMirror (__cmSel), шаг probe сверяется expectFrom. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.49ebba76-markdown-shift.scenario.json --out .tmp/49ebba76.",
+  "description": "Ошибка 49ebba76: клик/каретка после escape или HTML-entity в обычном (блочном) тексте не должны смещаться. Сценарий сам заводит постоянный комментарий корневой мысли (api POST, {{homeId}}), поэтому --seed-comment не нужен. Проверяет: (1) в просмотре <p> и <th> несут карту сдвига data-md-shift; (2) программный двойной клик по слову после &amp; в абзаце входит в правку и ставит каретку/выделение в ТОЧНЫЕ смещения исходника; (3) то же для entity в ячейке th таблицы; (4) то же для escape \\* в ячейке td; для th/td сверяются И anchor, И head выделения. Смещения считаются по тексту самого редактора (__srcIndex), выделение читается из DOM CodeMirror (__cmSel), шаг probe сверяется expectFrom. Исключение — значения \"3:4\" в пробах view-paragraph-has-shift/view-cell-has-shift: это КОНСТАНТА атрибута data-md-shift для фикстуры (&amp; рендерится одним символом против пяти исходных, граница после 3 отрисованных символов), а не вычисление из фикстуры. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.49ebba76-markdown-shift.scenario.json --out .tmp/49ebba76.",
   "timeout": 90000,
   "steps": [
     {
@@ -149,11 +149,26 @@
       "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
     },
     {
+      "name": "cell-start-expected",
+      "probe": {
+        "name": "cellStart",
+        "expression": "window.__srcIndex('c &amp; d', 8)"
+      }
+    },
+    {
       "name": "cell-end-expected",
       "probe": {
         "name": "cellEnd",
         "expression": "window.__srcIndex('c &amp; d', 'c &amp; d'.length)"
       }
+    },
+    {
+      "name": "cell-caret-anchor",
+      "probe": {
+        "name": "cellCaretAnchor",
+        "expression": "window.__cmSel()?.anchor ?? null"
+      },
+      "expectFrom": "cell-start-expected"
     },
     {
       "name": "cell-caret-head",
@@ -184,11 +199,26 @@
       "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
     },
     {
+      "name": "escape-start-expected",
+      "probe": {
+        "name": "escapeStart",
+        "expression": "window.__srcIndex('f ' + String.fromCharCode(92) + '* g', 5)"
+      }
+    },
+    {
       "name": "escape-end-expected",
       "probe": {
         "name": "escapeEnd",
         "expression": "window.__srcIndex('f ' + String.fromCharCode(92) + '* g', 6)"
       }
+    },
+    {
+      "name": "escape-caret-anchor",
+      "probe": {
+        "name": "escapeCaretAnchor",
+        "expression": "window.__cmSel()?.anchor ?? null"
+      },
+      "expectFrom": "escape-start-expected"
     },
     {
       "name": "escape-caret-head",
