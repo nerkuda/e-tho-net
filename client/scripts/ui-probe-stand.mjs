@@ -26,10 +26,12 @@
  * Зависимостей нет: встроенные `fetch` (Node 22) и `node:child_process`.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { startDelayProxy } from './ui-probe-delay-proxy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDir = path.resolve(__dirname, '..');
@@ -62,6 +64,11 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
       --seed-name <s>    Имя пробной сети (по умолчанию «GUI-стенд»).
       --seed-title <s>   Заголовок пробной мысли (по умолчанию «Проба стенда»).
       --seed-comment <s> Начальный текст постоянного комментария мысли.
+      --delay-seed-ms <ms>
+                         Поднять перед сервером замедляющий прокси: запросы к
+                         засеянной сети идут с задержкой <ms> (проверка гонки
+                         «поздний ответ openNetwork», ошибка 58c55bb9). Клиент
+                         подключается через прокси, шаги api — напрямую.
       --keep             Не удалять каталог стенда после прогона сценария.
   -h, --help             Эта справка.
 
@@ -86,6 +93,7 @@ export function parseArgs(argv) {
     seedName: 'GUI-стенд',
     seedTitle: 'Проба стенда',
     seedComment: 'стартовый текст',
+    delaySeedMs: 0,
     keep: false,
     help: false,
   };
@@ -96,6 +104,13 @@ export function parseArgs(argv) {
   const int = (value, flag) => {
     const n = Number(value);
     if (!Number.isInteger(n) || n < 0 || n > 65535) throw new Error(`${flag} требует целое 0..65535`);
+    return n;
+  };
+  const ms = (value, flag) => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0 || n > 600000) {
+      throw new Error(`${flag} требует целое 0..600000`);
+    }
     return n;
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -154,6 +169,10 @@ export function parseArgs(argv) {
         break;
       case '--seed-comment':
         opts.seedComment = need(argv[i + 1], arg);
+        i += 1;
+        break;
+      case '--delay-seed-ms':
+        opts.delaySeedMs = ms(need(argv[i + 1], arg), arg);
         i += 1;
         break;
       case '--keep':
@@ -296,6 +315,73 @@ export function parseInitKey(log) {
 }
 
 /**
+ * Правила серверного лога из сценария (необязательный верхний ключ
+ * `serverLog`: `{ "absent": [<regex>…], "present": [<regex>…] }`).
+ *
+ * Это единственный способ честно проверить «в лог не ушёл чужой запрос»:
+ * рендерер не видит серверный лог, а шаги сценария работают в странице.
+ * Стенд читает правила и проверяет накопленный лог сервера после прогона.
+ *
+ * @returns {{absent:string[], present:string[]}|null}
+ */
+export function readScenarioLogRules(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`не удалось прочитать сценарий «${file}»: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const rules = parsed?.serverLog;
+  if (rules === undefined || rules === null) return null;
+  if (typeof rules !== 'object' || Array.isArray(rules)) {
+    throw new Error('serverLog: ожидается объект { absent?: string[], present?: string[] }');
+  }
+  const list = (value, key) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item === '')) {
+      throw new Error(`serverLog.${key}: ожидается непустой массив строк-регулярок`);
+    }
+    return value;
+  };
+  return { absent: list(rules.absent, 'absent'), present: list(rules.present, 'present') };
+}
+
+/**
+ * Нарушения правил серверного лога: `absent` — шаблон найден (нельзя),
+ * `present` — шаблон не найден (обязан быть). Некорректная регулярка — ошибка
+ * сценария (код возврата 2), а не «тихий пропуск». Счётчик и первые совпавшие
+ * строки — в нарушении: по ним видно, СКОЛЬКО и КАКИЕ запросы нарушили гейт.
+ */
+export function serverLogViolations(log, rules) {
+  const violations = [];
+  const compile = (pattern) => {
+    try {
+      return new RegExp(pattern);
+    } catch (err) {
+      throw new Error(
+        `serverLog: некорректное регулярное выражение «${pattern}»: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+  const lines = log.split('\n');
+  for (const pattern of rules.absent ?? []) {
+    const matches = lines.filter((line) => compile(pattern).test(line));
+    if (matches.length > 0) {
+      violations.push({
+        kind: 'absent',
+        pattern,
+        count: matches.length,
+        matches: matches.slice(0, 3).map((line) => line.slice(0, 400)),
+      });
+    }
+  }
+  for (const pattern of rules.present ?? []) {
+    if (!compile(pattern).test(log)) violations.push({ kind: 'present', pattern, count: 0, matches: [] });
+  }
+  return violations;
+}
+
+/**
  * Засеять детерминированную пробную сеть: сеть → HOME → мысль с постоянным
  * комментарием (дочерняя HOME, чтобы попасть на холст фокуса).
  * @returns {{networkId:string, networkName:string, homeId:string, thoughtId:string}}
@@ -381,6 +467,8 @@ async function main(argv) {
   const apiBase = `${serverRoot}/api/v1`;
 
   const children = [];
+  /** Прокси задержки (--delay-seed-ms); закрывается в finally. */
+  let delayProxy = null;
   const stopAll = () => {
     for (const entry of children) killTree(entry.child);
   };
@@ -430,6 +518,27 @@ async function main(argv) {
       );
     }
 
+    // --- 3а. Прокси задержки медленной сети (--delay-seed-ms) --------------
+    // Клиент подключается ЧЕРЕЗ прокси, поэтому открытие засеянной сети
+    // отвечает медленно, а остальные — быстро: это и есть воспроизведение
+    // гонки «поздний ответ openNetwork» (ошибка 58c55bb9).
+    let clientRoot = serverRoot;
+    if (opts.delaySeedMs > 0) {
+      if (seed === null) {
+        throw new Error('--delay-seed-ms требует засеянную сеть (не используйте с --no-seed)');
+      }
+      delayProxy = await startDelayProxy({
+        targetPort: serverPort,
+        networkId: seed.networkId,
+        delayMs: opts.delaySeedMs,
+        log: (line) => process.stdout.write(`[delay-proxy] ${line}\n`),
+      });
+      clientRoot = `http://127.0.0.1:${delayProxy.port}`;
+      process.stdout.write(
+        `ui-probe-stand: прокси задержки ${opts.delaySeedMs} мс для сети ${seed.networkId}: ${clientRoot}\n`,
+      );
+    }
+
     // --- 3б. Фикстура сценария (--scenario-seed) ---------------------------
     // Прогон должен быть воспроизводим одной командой: фикстура получает
     // каталог данных стенда и id засеянных сущностей, поэтому не нужно
@@ -471,13 +580,41 @@ async function main(argv) {
     }
     process.stdout.write(`ui-probe-stand: клиент готов (CDP http://127.0.0.1:${cdpPort})\n`);
 
-    const probeArgs = buildProbeArgs(opts, { cdp: cdpPort, apiBase, serverRoot }, seed, apiKey);
+    // Онбординг (переменная serverUrl) идёт через прокси задержки, шаги `api`
+    // — напрямую: служебные проверки не должны ждать медленную сеть.
+    const probeArgs = buildProbeArgs(opts, { cdp: cdpPort, apiBase, serverRoot: clientRoot }, seed, apiKey);
 
     // --- 5а. Прогон сценария ----------------------------------------------
     if (opts.scenario !== null) {
       const probe = spawnNode(probeArgs[0], probeArgs.slice(1));
       children.push(probe);
-      const code = await new Promise((resolve) => probe.child.on('exit', resolve));
+      let code = await new Promise((resolve) => probe.child.on('exit', resolve));
+      // Правила серверного лога из сценария (`serverLog`): «чужой запрос не
+      // ушёл» проверяется по логу сервера — рендерер его не видит.
+      if (code === 0) {
+        const rules = readScenarioLogRules(opts.scenario);
+        if (rules !== null) {
+          const violations = serverLogViolations(server.getLog(), rules);
+          for (const violation of violations) {
+            process.stderr.write(
+              `ui-probe-stand: серверный лог — ${
+                violation.kind === 'absent' ? 'найдено запрещённое' : 'не найдено обязательное'
+              } «${violation.pattern}»` +
+                (violation.count > 0 ? ` (строк: ${violation.count})` : '') +
+                '\n',
+            );
+            for (const line of violation.matches ?? []) {
+              process.stderr.write(`  ${line}\n`);
+            }
+          }
+          if (violations.length > 0) {
+            process.stderr.write('ui-probe-stand: прогон провален по правилам serverLog\n');
+            code = 1;
+          } else {
+            process.stdout.write('ui-probe-stand: серверный лог соответствует правилам сценария\n');
+          }
+        }
+      }
       process.stdout.write(
         `ui-probe-stand: сценарий завершён (код ${code}); стенд в ${work}\n`,
       );
@@ -499,6 +636,9 @@ async function main(argv) {
     return 0;
   } finally {
     stopAll();
+    if (delayProxy !== null) {
+      await delayProxy.close().catch(() => undefined);
+    }
     if (opts.scenario !== null && !opts.keep) {
       // Уборка не должна перекрывать код прогона: лок профиля после taskkill
       // может держаться ещё мгновение (EBUSY) — повторяем, но не бросаем.

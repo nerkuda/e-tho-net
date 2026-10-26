@@ -1,11 +1,17 @@
 /**
  * Типы для `ui-probe-stand.mjs` (подъём изолированного GUI-стенда, задача
- * 38ef87cc). Нужны юнит-тесту `tests/ui-probe-stand.test.ts`: проверяются
- * чистые функции разбора аргументов и извлечения ключа.
+ * 38ef87cc; фикстура сценария, прокси задержки и проверка правил серверного
+ * лога — ошибка 58c55bb9). Нужны юнит-тестам `tests/ui-probe-stand.test.ts`:
+ * проверяются чистые функции разбора аргументов, извлечения ключа, правил
+ * лога и отбора задерживаемых запросов.
  */
 
 export interface StandOptions {
   scenario: string | null;
+  /** Фикстура сценария: модуль, готовящий данные до запуска клиента. */
+  scenarioSeed: string | null;
+  /** Дополнительные аргументы фикстуры (`--scenario-seed-arg a=b`). */
+  scenarioSeedArgs: string[];
   dataFrom: string | null;
   apiKey: string | null;
   serverPort: number;
@@ -16,6 +22,8 @@ export interface StandOptions {
   seedName: string;
   seedTitle: string;
   seedComment: string;
+  /** Задержка HTTP-ответов засеянной сети, мс (0 — прокси не поднимается). */
+  delaySeedMs: number;
   keep: boolean;
   help: boolean;
 }
@@ -48,3 +56,22 @@ export declare function buildProbeArgs(
   seed: StandSeed | null,
   key: string,
 ): string[];
+
+/** Правила серверного лога из сценария (`serverLog`). */
+export interface ServerLogRules {
+  /** Шаблоны, которых в логе быть НЕ ДОЛЖНО. */
+  absent?: string[];
+  /** Шаблоны, которые в логе ОБЯЗАНЫ быть. */
+  present?: string[];
+}
+
+/** Нарушение правил лога: вид, шаблон, число строк и первые совпадения. */
+export interface ServerLogViolation {
+  kind: 'absent' | 'present';
+  pattern: string;
+  count: number;
+  matches: string[];
+}
+
+export declare function readScenarioLogRules(file: string): ServerLogRules | null;
+export declare function serverLogViolations(log: string, rules: ServerLogRules): ServerLogViolation[];

@@ -7,9 +7,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-import { parseArgs, parseInitKey, buildProbeArgs } from '../scripts/ui-probe-stand.mjs';
+import {
+  buildProbeArgs,
+  parseArgs,
+  parseInitKey,
+  readScenarioLogRules,
+  serverLogViolations,
+} from '../scripts/ui-probe-stand.mjs';
+import { needsDelay } from '../scripts/ui-probe-delay-proxy.mjs';
 
 test('parseArgs: значения по умолчанию', () => {
   const opts = parseArgs([]);
@@ -98,4 +107,65 @@ test('buildProbeArgs: интерактив (scenario=null) без --scenario и 
   assert.equal(args.some((arg) => arg === null || arg === undefined), false);
   // Печатная команда строится из тех же аргументов — «.includes» по null не падает.
   assert.doesNotThrow(() => args.map((arg) => arg.includes(' ')));
+});
+
+test('parseArgs: --delay-seed-ms (простой и с ошибкой)', () => {
+  assert.equal(parseArgs([]).delaySeedMs, 0);
+  assert.equal(parseArgs(['--delay-seed-ms', '3000']).delaySeedMs, 3000);
+  assert.throws(() => parseArgs(['--delay-seed-ms', 'fast']), /0\.\.600000/);
+  assert.throws(() => parseArgs(['--delay-seed-ms']), /требует значения/);
+});
+
+test('needsDelay: медленная сеть — только по сегменту /<networkId>/', () => {
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  assert.equal(needsDelay(`/api/v1/networks/${id}/thoughts`, id), true);
+  assert.equal(needsDelay(`/api/v1/networks/${id}`, id), true);
+  assert.equal(needsDelay('/api/v1/networks/other/thoughts', id), false);
+  // Похожий префикс id не считается своей сетью (сегмент целиком).
+  assert.equal(needsDelay(`/api/v1/networks/${id}x/thoughts`, id), false);
+  assert.equal(needsDelay('/api/v1/health', id), false);
+  assert.equal(needsDelay(undefined, id), false);
+  assert.equal(needsDelay('/api/v1/networks/x/', ''), false);
+});
+
+test('serverLogViolations: absent/present и некорректная регулярка', () => {
+  const bad = '{"url":"/api/v1/networks/b/chronicle/query","status":422}';
+  const ok = '{"url":"/api/v1/networks/b/chronicle/query","status":200}';
+  const log = [bad, ok].join('\n');
+  assert.deepEqual(
+    serverLogViolations(log, { absent: ['"status":500'], present: ['"status":200'] }),
+    [],
+  );
+  // Нарушение несёт счётчик и первые совпавшие строки: по ним видно, СКОЛЬКО
+  // и КАКИЕ запросы нарушили гейт (ошибка 58c55bb9).
+  assert.deepEqual(serverLogViolations(log, { absent: ['"status":422'] }), [
+    { kind: 'absent', pattern: '"status":422', count: 1, matches: [bad] },
+  ]);
+  assert.deepEqual(serverLogViolations(log, { present: ['"status":201'] }), [
+    { kind: 'present', pattern: '"status":201', count: 0, matches: [] },
+  ]);
+  assert.throws(() => serverLogViolations(log, { absent: ['['] }), /некорректное регулярное/);
+});
+
+test('readScenarioLogRules: правила из сценария; без ключа — null', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-stand-rules-'));
+  try {
+    const withRules = path.join(dir, 'with.json');
+    writeFileSync(
+      withRules,
+      JSON.stringify({ name: 's', serverLog: { absent: ['a'], present: ['b'] } }),
+      'utf8',
+    );
+    assert.deepEqual(readScenarioLogRules(withRules), { absent: ['a'], present: ['b'] });
+
+    const without = path.join(dir, 'without.json');
+    writeFileSync(without, JSON.stringify({ name: 's', steps: [] }), 'utf8');
+    assert.equal(readScenarioLogRules(without), null);
+
+    const broken = path.join(dir, 'broken.json');
+    writeFileSync(broken, JSON.stringify({ serverLog: { absent: [1] } }), 'utf8');
+    assert.throws(() => readScenarioLogRules(broken), /serverLog\.absent/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -1,0 +1,108 @@
+{
+  "name": "58c55bb9-late-network-open",
+  "description": "Официальный GUI-сценарий ошибки 58c55bb9 для гонки «поздний ответ openNetwork»: стенд запускается с --delay-seed-ms 3000 (засеянная сеть A отвечает медленно). Открыты A/B/C, активна C; клик A (медленно) → через 300 мс клик B (быстро). B публикуется сразу, поздний ответ A не должен откатить активную вкладку: финальная активная — B. Красный гейт — late-response-not-published.",
+  "timeout": 400000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 150000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 150000,
+      "waitFor": "document.querySelector('.view-switch') !== null"
+    },
+    {
+      "name": "create-networks-b-c",
+      "probe": "(async () => { const b = await window.etn.networks.create('Сеть B late'); const c = await window.etn.networks.create('Сеть C late'); window.__netB = b.id; window.__netC = c.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker-b",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B late'))"
+    },
+    {
+      "name": "open-b-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B late')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B late'))"
+    },
+    {
+      "name": "open-picker-c",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-c",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть C late'))"
+    },
+    {
+      "name": "open-c-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть C late')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-c-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть C late'))"
+    },
+    {
+      "name": "click-a-then-b",
+      "probe": "(async () => { const find = (needle) => [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes(needle)); const a = find('{{networkName}}'); if (a === undefined) return 'no-a'; const b = find('Сеть B late'); if (b === undefined) return 'no-b'; a.click(); await new Promise((r) => setTimeout(r, 300)); b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "b-active-after-fast-open",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B late'))"
+    },
+    {
+      "name": "late-response-not-published",
+      "probe": "(async () => { const out = []; const t0 = Date.now(); for (let i = 0; i < 100; i += 1) { const active = [...document.querySelectorAll('.tab.tab-active')].map((e) => (e.textContent || '').trim()); out.push({ t: Date.now() - t0, active: active[0] === undefined ? '' : (active[0].includes('Сеть B late') ? 'B' : active[0].includes('Сеть C late') ? 'C' : 'A') }); await new Promise((r) => setTimeout(r, 100)); } window.__late = JSON.stringify(out.filter((x, i) => i === 0 || x.active !== out[i - 1].active)); return out[out.length - 1].active === 'B'; })()",
+      "expect": true
+    },
+    {
+      "name": "report",
+      "eval": "(() => JSON.stringify({ timeline: window.__late }))()"
+    }
+  ]
+}

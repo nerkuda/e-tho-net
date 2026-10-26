@@ -1,0 +1,174 @@
+{
+  "name": "58c55bb9-chronicle-network-switch",
+  "description": "Официальный GUI-сценарий ошибки 58c55bb9 для «Дневника»: снимок вкладки сети A содержит условие по типу, которого в B нет. После переключений A→B→A→B (окно openNetwork, скрытый «Дневник» ещё живёт состоянием A) запрос счётчиков календаря не должен уходить в B с чужим отбором. Красный гейт — правило serverLog: до фикса в логе есть POST /networks/<B>/chronicle/query → 422; после — только 200.",
+  "timeout": 300000,
+  "serverLog": {
+    "present": ["\"url\":\"[^\"]*/chronicle/query\",\"status\":200"],
+    "absent": ["\"url\":\"[^\"]*/chronicle/query\",\"status\":422"]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Дневник\"]') !== null"
+    },
+    {
+      "name": "create-network-b",
+      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B 58c55bb9 chronicle'); window.__netB = n.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "create-type-a",
+      "probe": "(async () => { const t = await window.etn.types.createThoughtType('{{networkId}}', { name: 'Тип 58c55bb9 chronicle' }); window.__typeA = t.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 chronicle'))"
+    },
+    {
+      "name": "open-network-b-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B 58c55bb9 chronicle')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 chronicle'))"
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('button.view-tab[title=\"Дневник\"]') !== null"
+    },
+    {
+      "name": "inject-a-snapshot",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const tab = tabs.find((t) => t.network_id === '{{networkId}}'); if (tab === undefined) return 'no-tab'; const state = { filter: { order: 'asc', date_mode: 'presets', targets: { type_ids: [window.__typeA] } }, month: null, savedFilterId: null }; await window.etn.tabs.updateState(tab.tab_id, { chronicle_state: JSON.stringify(state) }); const fresh = (await window.etn.tabs.list()).find((t) => t.tab_id === tab.tab_id); return typeof fresh.chronicle_state === 'string' && fresh.chronicle_state.includes(window.__typeA) ? 'ok' : 'not-persisted'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "refresh-tabs-via-b",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9 chronicle')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-refresh",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 chronicle'))"
+    },
+    {
+      "name": "back-to-tab-a-fresh",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-fresh",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('button.view-tab[title=\"Дневник\"]') !== null"
+    },
+    {
+      "name": "open-chronicle-a",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Дневник\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a-panel-applied",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 50; i += 1) { if (document.querySelectorAll('.chron-filter-area .ft-row').length > 0) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "switch-to-b-first",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9 chronicle')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-again",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 chronicle'))"
+    },
+    {
+      "name": "back-to-tab-a-second",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-second",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelectorAll('.chron-filter-area .ft-row').length > 0"
+    },
+    {
+      "name": "switch-to-b-final",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9 chronicle')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-final",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 chronicle'))"
+    },
+    {
+      "name": "open-chronicle-b",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Дневник\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b-panel-reset",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 60; i += 1) { const rows = document.querySelectorAll('.chron-filter-area .ft-row').length; const area = document.querySelector('.chron-filter-area'); const foreign = area !== null && (area.textContent || '').includes('Тип 58c55bb9 chronicle'); const issues = document.querySelectorAll('.chron-filter-area .ft-issue').length; if (rows === 0 && !foreign && issues === 0) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "b-tab-snapshot-null",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === window.__netB); return t === undefined ? 'no-tab' : t.chronicle_state === null; })()",
+      "expect": true
+    },
+    {
+      "name": "settle",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 2500)); return true; })()",
+      "expect": true
+    }
+  ]
+}

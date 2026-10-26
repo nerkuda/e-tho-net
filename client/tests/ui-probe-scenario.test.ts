@@ -113,6 +113,19 @@ test('validateScenario: неизвестные поля сценария и ша
   );
 });
 
+test('validateScenario: serverLog — допустимое верхнее поле (проверяет стенд)', () => {
+  // Правила лога исполняет стенд (`ui-probe-stand.mjs`), но в файле сценария
+  // это законное поле: без него раннер отвергал бы сценарий с гейтом по логу
+  // (ошибка 58c55bb9).
+  const scenario = validateScenario({
+    name: 'log-gate',
+    serverLog: { absent: ['"status":422'], present: ['"status":200'] },
+    steps: [{ key: 'Tab' }],
+  });
+  assert.equal(scenario.name, 'log-gate');
+  assert.equal(scenario.steps.length, 1);
+});
+
 test('stepKind: ровно одно действие на шаг', () => {
   assert.equal(stepKind({ key: 'Enter' }), 'key');
   assert.equal(stepKind({ shot: 'a.png' }), 'shot');

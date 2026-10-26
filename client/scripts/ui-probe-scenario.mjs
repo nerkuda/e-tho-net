@@ -11,6 +11,10 @@
  * {
  *   "name": "diary-smoke",            // необязательно
  *   "timeout": 8000,                  // необязательно, мс на шаг по умолчанию
+ *   "serverLog": {                    // необязательно, проверяет СТЕНД
+ *     "absent": ["<regex>"],          //   (`ui-probe-stand.mjs`): шаблон не
+ *     "present": ["<regex>"]          //   должен / обязан встретиться в логе
+ *   },                                //   сервера за прогон
  *   "steps": [ <шаг>, … ]             // непустой массив
  * }
  *
@@ -682,7 +686,7 @@ function validateStep(raw, index, defaultTimeout) {
 export function validateScenario(value) {
   if (!isPlainObject(value)) fail('сценарий должен быть JSON-объектом');
   for (const extra of Object.keys(value)) {
-    if (!['name', 'description', 'steps', 'timeout'].includes(extra)) {
+    if (!['name', 'description', 'steps', 'timeout', 'serverLog'].includes(extra)) {
       fail(`неизвестное поле сценария «${extra}»`);
     }
   }
