@@ -391,8 +391,9 @@ async function excludeTypedProperty(opts: {
     if (matches.length === 0) {
       // Зеркальная строка (`id: mirror:<property>`) — привязка живёт на другом
       // типе (стороне-источнике), в цепочке владельца снимать нечего. Обе ветки —
-      // подсказка по устаревшему клиентскому списку `definitions`: серверного
-      // вызова ещё не было, поэтому это не сбой и не error-тост.
+      // подсказка по списку `definitions`, полученному серверным чтением
+      // (`etn.types.listTypeProperties` выше): изменяющего вызова ещё не было,
+      // поэтому это не сбой и не error-тост.
       const mirrored = definitions.some(
         (definition) =>
           definition.id.startsWith('mirror:') &&
