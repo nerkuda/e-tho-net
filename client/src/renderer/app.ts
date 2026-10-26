@@ -13,6 +13,7 @@
 
 import type { Thought } from '@etn/shared';
 
+import type { TabDto } from '../main/ipc/contract.js';
 import { errorDialog, hasOpenDialog } from './lib/dialog.js';
 import { errText, hasTextSelection } from './lib/dom.js';
 import { describeConnectFailure } from './lib/connect-failure.js';
@@ -83,6 +84,7 @@ import {
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
+import { findOpenTargetTab } from './screens/tabs/tab-state.js';
 import { serverLabelOf, store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 
@@ -197,6 +199,54 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     etn.types.listThoughtTypes(networkId),
   ]);
 
+  // Q3: целевая вкладка разрешается ДО публикации новой сети. Стор обязан
+  // переключиться на «новая сеть + её вкладка» ОДНИМ обновлением: между
+  // отдельными обновлениями тик стора показывал новую сеть со старым
+  // `activeTabId`, и экран «Структур» применял снимок вкладки прежней сети к
+  // новой — отбор уходил запросом в чужую сеть и получал 422 «Тип … удалён из
+  // сети» (ошибка 58c55bb9, гонка в логах: query и 422 разошлись на 1 мс).
+  //
+  // Вкладка принадлежит своей сети: `tabId` чужой сети не переиспользуется
+  // (иначе её пер-вкладочные снимки и подпись относились бы к чужой сети) —
+  // открывается новая вкладка. `tabId` своей сети wins, как и раньше.
+  let tabs: TabDto[] = store.state.tabs;
+  let activeTabId: string | null = null;
+  let activeTabView: WorkspaceView | null = null;
+  let activeTabFocusId: string | null = null;
+  let activeTabLayerId: string | null = null;
+  try {
+    tabs = await etn.tabs.list();
+    let target = findOpenTargetTab(tabs, tabId, networkId);
+    // No matching tab of THIS network? The networks screen entry opens without
+    // a tab — create one so the strip populates. Duplicates are explicit and
+    // re-openings of the same network still create a fresh tab.
+    if (target === null) {
+      const fresh = await etn.tabs.open(networkId);
+      tabs = await etn.tabs.list();
+      target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? null;
+    }
+    activeTabId = target?.tab_id ?? null;
+    activeTabView = target?.view_mode ?? null;
+    activeTabFocusId = target?.focus_id ?? null;
+    activeTabLayerId = target?.layer_id ?? null;
+  } catch {
+    // ignore — workspace still usable without tab strip state; сеть всё равно
+    // публикуется без активной вкладки, поэтому чужой снимок не прочитается.
+  }
+
+  // Q-bugfix: per-tab view_mode takes priority over the legacy L4 key, so
+  // switching tabs inside a network actually swaps the view (not just the
+  // highlighted tab).
+  const viewFromTab = activeTabView;
+  const knownView = (value: string | null): value is WorkspaceView =>
+    value === 'structures' || value === 'chronicle' || value === 'publications';
+  const resolvedView: WorkspaceView =
+    knownView(viewFromTab)
+      ? viewFromTab
+      : knownView(activeViewRaw)
+        ? activeViewRaw
+        : 'map';
+
   store.update({
     network,
     networkId,
@@ -224,6 +274,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     structuresActiveThoughtId: null,
     structuresActiveThought: null,
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
+    // Сеть, вкладка и экран публикуются вместе — переход атомарен для подписок
+    // экранов (ошибка 58c55bb9).
+    tabs,
+    activeTabId,
+    activeView: resolvedView,
   });
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
   setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
@@ -237,41 +292,6 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // (ошибка cb9b466f): читается один раз на сеть/пользователя, best-effort.
   ensureUserNamesLoaded();
 
-  // Q3: refresh tab list and activate the right entry. When the caller
-  // supplies `tabId` (the picker / tab activation), that exact tab wins —
-  // duplicate opens of the same network don't collapse onto the first
-  // existing tab.
-  let activeTabId: string | null = null;
-  let activeTabView: WorkspaceView | null = null;
-  let activeTabFocusId: string | null = null;
-  let activeTabLayerId: string | null = null;
-  try {
-    let tabs = await etn.tabs.list();
-    let target: { tab_id: string } | null = null;
-    if (tabId !== undefined) {
-      target = tabs.find((t) => t.tab_id === tabId) ?? null;
-    }
-    // No matching tab yet? The networks screen entry opens without a tab —
-    // create one so the strip populates. Duplicates are explicit and
-    // re-openings of the same network still create a fresh tab.
-    if (target === null) {
-      const fresh = await etn.tabs.open(networkId);
-      tabs = await etn.tabs.list();
-      target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? { tab_id: fresh.tab_id };
-    }
-    const fullTarget = tabs.find((t) => t.tab_id === target!.tab_id) ?? null;
-    activeTabId = fullTarget?.tab_id ?? target!.tab_id;
-    activeTabView = fullTarget?.view_mode ?? null;
-    activeTabFocusId = fullTarget?.focus_id ?? null;
-    activeTabLayerId = fullTarget?.layer_id ?? null;
-    store.update({
-      tabs,
-      activeTabId,
-    });
-  } catch {
-    // ignore — workspace still usable without tab strip state
-  }
-
   // S11 (13-layers.md §10.3): the layer is a property of the TAB. Align the
   // server-side session to the tab's layer BEFORE the focus loads — the focus
   // (and every later read/write) must resolve in this tab's layer, not in
@@ -282,20 +302,6 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   } catch {
     // offline / layer deleted elsewhere — the workspace stays usable
   }
-
-  // Q-bugfix: per-tab view_mode takes priority over the legacy L4 key, so
-  // switching tabs inside a network actually swaps the view (not just the
-  // highlighted tab).
-  const viewFromTab = activeTabView;
-  const knownView = (value: string | null): value is WorkspaceView =>
-    value === 'structures' || value === 'chronicle' || value === 'publications';
-  const resolvedView: WorkspaceView =
-    knownView(viewFromTab)
-      ? viewFromTab
-      : knownView(activeViewRaw)
-        ? activeViewRaw
-        : 'map';
-  store.update({ activeView: resolvedView });
 
   showScreen('workspace');
 
