@@ -33,6 +33,12 @@ import {
   parseScenario,
 } from './ui-probe-scenario.mjs';
 import { decodePng, runRegionChecks } from './ui-probe-image.mjs';
+import {
+  POINT_CHECK_ATTEMPTS,
+  hitExpression,
+  mismatchMessage,
+  pointCheckText,
+} from './ui-probe-point.mjs';
 
 /** Ошибки вызова/подключения — код возврата 2 (в отличие от провала шага, 1). */
 class UsageError extends Error {
@@ -72,6 +78,8 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
                          старте — если прогрев занял больше порога (1 с) или сам
                          прогрев не дождался экрана; при быстром прогреве условие
                          падает по своей причине, и подсказка не подмешивается.
+                         С --no-warmup старт не измеряется, поэтому подсказка НЕ
+                         добавляется (недоказанную гипотезу в таймаут не кладём).
   -h, --help             Эта справка.
 
 Перед прогоном раннер по умолчанию «будит» скрытое окно обёртки через CDP
@@ -88,6 +96,11 @@ Page.setWebLifecycleState('active')) — иначе rAF/layout замороже�
 элемента-якоря (особая точка холста, смещение за границы) разрешается явно:
 { "click": { "selector": ".canvas", "at": [300, 40], "allowMismatch": true } }
 — только с этим флагом промах не валит шаг и виден в отчёте как разрешённый.
+
+Той же сверкой защищены «hover» (точка наведения) и начало «drag» (drag.from):
+промах валит шаг, и событие НЕ отправляется — ни mouseMoved, ни mousePressed.
+Флага allowMismatch у них нет: наведение и захват обязаны попадать в свой
+элемент (холст наводится на сам элемент холста, поэтому исключения не нужны).
 
 Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага или несошедшееся
 ожидание; 2 — ошибка вызова, сценария или подключения к CDP.
@@ -568,10 +581,29 @@ async function resolvePoint(cdp, spec) {
   return { px: Math.round(spec.x), py: Math.round(spec.y) };
 }
 
-/** Навести курсор (только `mouseMoved`) — включает CSS `:hover` без клика. */
+/**
+ * Навести курсор (только `mouseMoved`) — включает CSS `:hover` без клика.
+ *
+ * Точка наведения сверяется с целью тем же механизмом, что точка клика:
+ * `elementFromPoint` + `closest(selector)` непосредственно перед отправкой
+ * события. Промах валит шаг, `mouseMoved` НЕ отправляется — иначе наведение
+ * молча уходило в пустоту и «ok» подтверждал несуществующий hover (блокер
+ * проверки af96d388). `allowMismatch` у hover намеренно НЕТ: во всех сценариях
+ * стенда наведение целится в сам элемент (включая холст — селектор `.canvas`
+ * совпадает с элементом под указателем), «наведение по пустой точке» не нужно.
+ * Без `selector` (чистые координаты) сверять нечего — событие отправляется.
+ */
 async function doHover(cdp, spec) {
-  const { px, py } = await resolvePoint(cdp, spec);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
+  const point = await resolveCheckedPoint(cdp, spec);
+  if (point.mismatched === true) return point;
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.px,
+    y: point.py,
+    button: 'none',
+    buttons: 0,
+  });
+  return point;
 }
 
 async function doClick(cdp, spec) {
@@ -606,80 +638,53 @@ async function doClick(cdp, spec) {
   return point;
 }
 
-/** Сколько раз перемерить точку клика перед нажатием (сдвиг разметки). */
-const CLICK_HIT_ATTEMPTS = 4;
-
 /**
- * Точка клика с проверкой попадания НЕПОСРЕДСТВЕННО перед нажатием.
+ * Точка ввода с проверкой попадания НЕПОСРЕДСТВЕННО перед событием — общая для
+ * `click`, `hover` и `drag.from` (проверка обязана быть одна, иначе класс
+ * «точка не сверена с целью» остаётся открытым на соседнем шаге, af96d388).
  *
- * Прямоугольник элемента и координаты нажатия разнесены по времени (hover,
+ * Прямоугольник элемента и координаты события разнесены по времени (hover,
  * постановка кадра); за это время разметка может сдвинуться — первый рендер
- * холодного клиента, загрузка картинки, смена размера окна. Нажатие в устаревшую
- * точку браузер доставит соседнему элементу, и клик молча пропадёт (симптом
+ * холодного клиента, загрузка картинки, смена размера окна. Событие в устаревшую
+ * точку браузер доставит соседнему элементу, и действие молча пропадёт (симптом
  * `af96d388`: таймаут следующего `waitFor` без единого запроса на сервере).
  * Поэтому `elementFromPoint` сверяется с целью, при промахе прямоугольник
- * перемеряется (до {@link CLICK_HIT_ATTEMPTS} раз). Если попадания так и нет,
- * клик ПО УМОЛЧАНИЮ НЕ ВЫПОЛНЯЕТСЯ, а шаг падает (блокер проверки `af96d388`):
- * промах — дефект сценария или разметки, а не повод кликнуть в чужой элемент.
- * Точечные исключения (клик по особой точке холста, смещение за границы
- * элемента-якоря) разрешаются явно — `allowMismatch: true` в описании клика;
- * тогда нажатие выполняется, а расхождение видно в отчёте как разрешённый
- * промах (грабли 7c521541).
+ * перемеряется (до {@link POINT_CHECK_ATTEMPTS} раз). Если попадания так и нет,
+ * событие ПО УМОЛЧАНИЮ НЕ ВЫПОЛНЯЕТСЯ, а шаг падает: промах — дефект сценария
+ * или разметки, а не повод кликнуть в чужой элемент. Точечное исключение —
+ * только у `click` (`allowMismatch: true` в описании клика, грабли 7c521541).
  */
 async function resolveCheckedPoint(cdp, spec) {
   let point = await resolvePoint(cdp, spec);
   if (spec.selector === null) return { ...point, hit: null };
   let last = null;
-  for (let attempt = 0; attempt < CLICK_HIT_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < POINT_CHECK_ATTEMPTS; attempt += 1) {
     last = await hitAt(cdp, point.px, point.py, spec.selector);
     if (last !== null && last.matched === true) {
       return { ...point, retries: attempt, hit: last.element };
     }
-    if (attempt + 1 < CLICK_HIT_ATTEMPTS) {
+    if (attempt + 1 < POINT_CHECK_ATTEMPTS) {
       await waitFrames(cdp, 1);
       point = await resolvePoint(cdp, spec);
     }
   }
   return {
     ...point,
-    retries: CLICK_HIT_ATTEMPTS - 1,
+    retries: POINT_CHECK_ATTEMPTS - 1,
     hit: last === null ? null : last.element,
     mismatched: true,
   };
 }
 
-/**
- * Текст провала шага `click`: куда целились, сколько раз перемеряли и что
- * оказалось под указателем. Промах без `allowMismatch` валит шаг (af96d388).
- */
-function clickMismatchMessage(spec, point) {
-  const under = point.hit;
-  const fact =
-    under === null || under === undefined
-      ? 'под указателем пусто'
-      : `${under.tag} class="${under.className}"`;
-  const retries = point.retries ?? CLICK_HIT_ATTEMPTS - 1;
-  return (
-    `клик не выполнен: точка ${point.px},${point.py} не попадает в «${spec.selector}»` +
-    ` за ${retries} перемеров — ${fact}`
-  );
-}
-
-/**
- * Выражение проверки попадания: что лежит в точке и совпадает ли элемент (или
- * его предок) с ожидаемым селектором. Промах координат должен быть виден
- * текстом, а не молчаливым «ok» (грабли 7c521541).
- */
-function hitExpression(px, py, selector) {
-  return (
-    '(() => { const el = document.elementFromPoint(' +
-    `${px}, ${py}); ` +
-    'if (el === null) return { matched: false, element: null }; ' +
-    `const target = el.closest(${JSON.stringify(selector)}); ` +
-    "const cls = el.getAttribute('class') || ''; " +
-    'return { matched: target !== null, ' +
-    "element: { tag: el.tagName, className: cls, text: (el.textContent || '').slice(0, 80) } }; })()"
-  );
+/** Диагностика точки для записи отчёта (JSON). */
+function pointDiagnostics(point) {
+  return {
+    x: point.px,
+    y: point.py,
+    retries: point.retries ?? 0,
+    mismatched: point.mismatched === true,
+    under: point.hit,
+  };
 }
 
 /** Факт попадания в точке (без ожидания). */
@@ -715,9 +720,17 @@ async function waitForHit(cdp, px, py, selector, timeout) {
  * Составной шаг `drag`: pointerdown в источнике, `steps` промежуточных
  * `mouseMoved`, ожидание целевого селектора под указателем и pointerup.
  * `modifiers` (битовая маска CDP) доносят Shift — копирование.
+ *
+ * Источник (`from`) сверяется с целью ДО первого события: промах возвращает
+ * `aborted` — нажатия и перемещений НЕТ, шаг падает в runStep. Иначе захват
+ * уходил бы в чужой элемент и жест молча ломался (блокер проверки af96d388).
+ * Цель (`to`) уже проверялась перед отпусканием (`waitForHit`); теперь
+ * проверяется и её попадание после отпускания.
  */
 async function doDrag(cdp, spec) {
-  const from = await resolvePoint(cdp, spec.from);
+  const from = await resolveCheckedPoint(cdp, spec.from);
+  const fromCheck = from.retries > 0 || from.mismatched === true ? pointDiagnostics(from) : null;
+  if (from.mismatched === true) return { aborted: true, from: pointDiagnostics(from) };
   const to = await resolvePoint(cdp, spec.to);
   const modifiers = spec.modifiers;
   const send = (params) => cdp.send('Input.dispatchMouseEvent', { modifiers, ...params });
@@ -762,6 +775,7 @@ async function doDrag(cdp, spec) {
     modifiers,
     expect: spec.expect,
     hit: hit.element,
+    fromCheck,
   };
 }
 
@@ -805,28 +819,54 @@ async function runStep(cdp, step, outDir, entry, report, context) {
       // чтобы попасть в цель (и попали ли вообще) — видно в отчёте.
       if (point.retries > 0 || point.mismatched === true) {
         entry.click = {
-          x: point.px,
-          y: point.py,
-          retries: point.retries ?? 0,
-          mismatched: point.mismatched === true,
+          ...pointDiagnostics(point),
           allowed: point.mismatched === true && step.click.allowMismatch === true,
-          under: point.hit,
         };
       }
       if (point.mismatched === true && step.click.allowMismatch !== true) {
         // Нажатие уже не отправлено (doClick вышел до dispatch) — шаг падает.
-        throw new Error(clickMismatchMessage(step.click, point));
+        throw new Error(mismatchMessage('клик не выполнен', step.click.selector, point));
       }
       await waitFrames(cdp, 2);
       break;
     }
-    case 'hover':
-      await doHover(cdp, step.hover);
+    case 'hover': {
+      const point = await doHover(cdp, step.hover);
+      if (point.retries > 0 || point.mismatched === true) {
+        entry.hover = pointDiagnostics(point);
+      }
+      if (point.mismatched === true) {
+        // mouseMoved не отправлен — шаг падает (af96d388).
+        throw new Error(mismatchMessage('наведение не выполнено', step.hover.selector, point));
+      }
       await waitFrames(cdp, 2);
       break;
-    case 'drag':
-      entry.drag = await doDrag(cdp, step.drag);
+    }
+    case 'drag': {
+      const result = await doDrag(cdp, step.drag);
+      if (result.aborted === true) {
+        // Ни нажатия, ни перемещений: источник не под указателем (af96d388).
+        entry.drag = {
+          fromCheck: result.from,
+          steps: step.drag.steps,
+          expect: step.drag.expect,
+        };
+        throw new Error(
+          mismatchMessage(
+            'перетаскивание не начато',
+            step.drag.from.selector,
+            {
+              px: result.from.x,
+              py: result.from.y,
+              retries: result.from.retries,
+              hit: result.from.under,
+            },
+          ),
+        );
+      }
+      entry.drag = result;
       break;
+    }
     case 'text':
       await cdp.send('Input.insertText', { text: step.text });
       await waitFrames(cdp, 2);
@@ -928,9 +968,11 @@ function formatStep(entry) {
       detail += entry.expectFrom === undefined ? ')' : ` — снимок шага «${entry.expectFrom}»)`;
     }
   } else if (entry.drag !== undefined) {
-    detail =
-      ` ${describeValue(entry.drag.from)} → ${describeValue(entry.drag.to)}` +
-      ` (цель «${entry.drag.expect}», шагов ${entry.drag.steps})`;
+    detail = entry.drag.from === undefined ? '' : ` ${describeValue(entry.drag.from)}`;
+    if (entry.drag.to !== undefined) detail += ` → ${describeValue(entry.drag.to)}`;
+    if (entry.drag.expect !== undefined) {
+      detail += ` (цель «${entry.drag.expect}», шагов ${entry.drag.steps})`;
+    }
   } else if (entry.assert !== undefined) {
     const checks = entry.assert.checks
       .map((check) => `${check.ok ? '✓' : '✗'} ${check.name}: ${check.fact} — ожидание ${check.expect}`)
@@ -948,20 +990,13 @@ function formatStep(entry) {
     detail = ` ${entry.eval.name}`;
   }
   if (entry.click !== undefined) {
-    const retries = entry.click.retries ?? 0;
-    detail += ` [точка ${entry.click.x},${entry.click.y}`;
-    detail += retries === 0 ? ']' : `, перемер ${retries}]`;
-    if (entry.click.mismatched === true) {
-      const under = entry.click.under;
-      const fact =
-        under === null || under === undefined
-          ? 'под указателем пусто'
-          : `${under.tag} class="${under.className}"`;
-      detail +=
-        entry.click.allowed === true
-          ? ` — ПРОМАХ (разрешён allowMismatch): ${fact}`
-          : ` — ПРОМАХ: ${fact}`;
-    }
+    detail += pointCheckText(entry.click, entry.click.allowed === true);
+  }
+  if (entry.hover !== undefined) {
+    detail += pointCheckText(entry.hover, false);
+  }
+  if (entry.drag !== undefined && entry.drag.fromCheck !== null && entry.drag.fromCheck !== undefined) {
+    detail += pointCheckText(entry.drag.fromCheck, false);
   }
   if (entry.error !== undefined) detail += ` — ${entry.error}`;
   return `${status} ${String(entry.index + 1).padStart(2)} ${entry.kind.padEnd(7)} ${entry.name}${detail} (${entry.ms} мс)`;
@@ -1078,9 +1113,10 @@ async function main(argv) {
           '\n',
       );
     } else {
-      // Прогрев отключён: измерить старт нечем, поэтому гипотеза «клиент
-      // свежий» (её и сообщает стенд флагом --cold-start) остаётся в силе.
-      context.coldStart = opts.coldStart;
+      // Прогрев отключён: измерить старт нечем, а подсказка «холодный старт» —
+      // утверждение о ПРИЧИНЕ таймаута. Недоказанную гипотезу в текст таймаута
+      // не кладём (замечание проверки af96d388): в этом режиме подсказки нет.
+      context.coldStart = false;
     }
     report = await runScenario(cdp, scenario, outDir, base, context);
   } finally {

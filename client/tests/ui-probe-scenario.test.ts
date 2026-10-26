@@ -247,7 +247,7 @@ test('click.count: двойной клик; ноль/дробь/нечисло �
   );
 });
 
-test('click.allowMismatch: по умолчанию false; true только с selector; у hover поля нет', () => {
+test('click.allowMismatch: по умолчанию false; true только с selector; у hover и drag поля нет', () => {
   // По умолчанию промах после перемеров ВАЛИТ шаг (блокер af96d388): флаг
   // обязан быть явным, а значение по умолчанию — false.
   const byDefault = validateScenario(scenarioFrom([{ click: { selector: '.canvas', at: [300, 40] } }]));
@@ -268,9 +268,29 @@ test('click.allowMismatch: по умолчанию false; true только с s
     () => validateScenario(scenarioFrom([{ click: { selector: '#x', allowMismatch: 'yes' } }])),
     ScenarioError,
   );
-  // У наведения флага нет: наведение не кликает и не проверяет попадание.
+  // У наведения флага нет: точка наведения сверяется с целью, и промах всегда
+  // валит шаг — «наведение по пустой точке» стенду не нужно (af96d388).
   assert.throws(
     () => validateScenario(scenarioFrom([{ hover: { selector: '#x', allowMismatch: true } }])),
+    ScenarioError,
+  );
+  // У точек drag флага тоже нет: источник и цель обязаны попадать в свой элемент.
+  assert.throws(
+    () =>
+      validateScenario(
+        scenarioFrom([
+          { drag: { from: { selector: '#handle', allowMismatch: true }, to: '#row', expect: '#row' } },
+        ]),
+      ),
+    ScenarioError,
+  );
+  assert.throws(
+    () =>
+      validateScenario(
+        scenarioFrom([
+          { drag: { from: '#handle', to: { selector: '#row', allowMismatch: true }, expect: '#row' } },
+        ]),
+      ),
     ScenarioError,
   );
 });

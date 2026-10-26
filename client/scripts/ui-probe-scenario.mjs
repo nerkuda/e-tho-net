@@ -28,14 +28,19 @@
  *     | { "hover": [640, 400] } | { "hover": { "x": 10, "y": 20 } }
  *     — навести курсор на точку/элемент БЕЗ клика: синтезирует `mouseMoved`,
  *     включает CSS `:hover` (проверка hover-видимости действий; форма точки —
- *     как у `click`, поля `count` нет).
+ *     как у `click`, полей `count`/`allowMismatch` НЕТ). Точка наведения
+ *     сверяется с целью `elementFromPoint`; промах валит шаг, и событие не
+ *     отправляется (ошибка af96d388): наведение обязано попадать в свой
+ *     элемент, «наведение по пустой точке» стенду не нужно.
  *   { "drag": { "from": "#handle", "to": { "selector": "#row", "at": [10, 2] },
  *               "expect": "#row", "steps": 8, "duration": 120,
  *               "modifiers": ["shift"], "targetTimeout": 2000 } }
  *     — составной жест: pointerdown в `from`, `steps` промежуточных
  *     `mouseMoved`, ожидание попадания `document.elementFromPoint` в `expect`
  *     и pointerup в `to`. `expect` обязателен: промах координат ПРОВАЛИВАЕТ
- *     шаг, а не даёт молчаливое «ok» (грабли 7c521541). `modifiers` — Shift для
+ *     шаг, а не даёт молчаливое «ok» (грабли 7c521541). Источник `from` тоже
+ *     сверяется с целью ДО первого события: промах валит шаг, нажатия и
+ *     перемещений нет (ошибка af96d388). `modifiers` — Shift для
  *     копирования; `duration` — мс на серию перемещений.
  *   { "text": "строка" }                              — ввод текста
  *   { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
@@ -254,6 +259,10 @@ function normalizeClick(value, where, field = 'click', withCount = true) {
   // `allowMismatch` — тоже только у клика: явное разрешение нажать в точку,
   // которая не попадает в элемент-якорь (особая точка холста, смещение за
   // границы). По умолчанию промах валит шаг (ошибка af96d388).
+  // У `hover` и точек `drag` флага НЕТ (withCount = false): наведение и захват
+  // обязаны попадать в свой элемент — «наведение по пустой точке» не нужно
+  // (холст наводится на сам элемент холста), а у `drag.from` промах означает
+  // захват чужого элемента. Промах там всегда валит шаг без события.
   const countField = withCount ? { count: 1, allowMismatch: false } : {};
   if (typeof value === 'string') {
     return { selector: asString(value, `${where}.${field}`), at: null, x: null, y: null, ...countField };
