@@ -257,9 +257,21 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     }
   };
 
+  /**
+   * Номер последнего вызова `openNetwork` (ошибка 58c55bb9, поздний ответ).
+   *
+   * `getNetwork` — сетевой запрос: если пользователь успел открыть другую сеть,
+   * запоздавший ответ прежнего запуска не должен переписывать «текущую сеть»
+   * главного процесса (её читают статус realtime, история переходов и
+   * разрешение вложений). Побеждает ПОСЛЕДНИЙ клик.
+   */
+  let openNetworkSeq = 0;
+
   const openNetwork = async (networkId: string): Promise<Network> => {
     if (!rest) throw new Error('Not connected: call etn.server.connect first');
+    const seq = ++openNetworkSeq;
     const network = await rest.getNetwork(networkId);
+    if (seq !== openNetworkSeq) return network;
     currentNetworkId = networkId;
     if (profile) {
       opts.localDb.setUiState(profile.id, networkId, UI_STATE_KEY.CURRENT_NETWORK_ID, networkId);

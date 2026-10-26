@@ -122,6 +122,23 @@ function runFallbackRefresh(): void {
 export { findRootThought } from './lib/layer-resync.js';
 
 /**
+ * Номер последнего запуска `openNetwork` (ошибка 58c55bb9).
+ *
+ * `openNetwork` — длинная цепочка ожиданий (сеть, предпочтения, L4, вкладки,
+ * слой, фокус). Если пользователь за это время открыл другую сеть/вкладку,
+ * запоздавший ответ прежнего запуска не должен публиковать СВОЁ состояние
+ * поверх уже открытого: иначе последний клик проигрывает медленному ответу, и
+ * экран/активная вкладка откатываются к прежней сети. Каждый запуск снимает
+ * номер на входе и сверяет его перед каждой публикацией/побочным шагом.
+ */
+let openNetworkSeq = 0;
+
+/** Актуален ли ещё запуск `openNetwork` с этим номером. */
+function isCurrentOpenNetwork(seq: number): boolean {
+  return seq === openNetworkSeq;
+}
+
+/**
  * Opens a network (H3): loads L2 meta, L3 preferences and L4 ui_state, picks
  * the initial focus (stored focus → HOME) and mounts the workspace.
  *
@@ -131,6 +148,7 @@ export { findRootThought } from './lib/layer-resync.js';
  * workspace restores the right focus / view.
  */
 export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
+  const seq = ++openNetworkSeq;
   // The cursor lives on a cloud from the previously open network — drop it
   // before anything else, otherwise a quick Ctrl+V in the new network would
   // target an id that no longer exists on the map.
@@ -139,11 +157,13 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // слушатель писал бы фокус закрытой сети в store.
   deactivateFocusQuery();
   const network = await etn.networks.open(networkId);
+  if (!isCurrentOpenNetwork(seq)) return;
   // The pool was created lazily by `networks.open`; refresh the per-network
   // status snapshot so the indicator does not wait for the next broadcast
   // (defect de34b35b, verify remark 4).
   void refreshRealtimeStatuses();
   const prefs = await etn.networks.getPreferences(networkId);
+  if (!isCurrentOpenNetwork(seq)) return;
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
@@ -173,6 +193,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
       etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
       etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
     ]);
+  if (!isCurrentOpenNetwork(seq)) return;
 
   const editorPosition = (
     ['left', 'right', 'top', 'bottom', 'hidden'].includes(posRaw ?? '') ? posRaw : 'right'
@@ -198,6 +219,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     etn.types.listLinkTypes(networkId),
     etn.types.listThoughtTypes(networkId),
   ]);
+  if (!isCurrentOpenNetwork(seq)) return;
 
   // Q3: целевая вкладка разрешается ДО публикации новой сети. Стор обязан
   // переключиться на «новая сеть + её вкладка» ОДНИМ обновлением: между
@@ -216,13 +238,16 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   let activeTabLayerId: string | null = null;
   try {
     tabs = await etn.tabs.list();
+    if (!isCurrentOpenNetwork(seq)) return;
     let target = findOpenTargetTab(tabs, tabId, networkId);
     // No matching tab of THIS network? The networks screen entry opens without
     // a tab — create one so the strip populates. Duplicates are explicit and
     // re-openings of the same network still create a fresh tab.
     if (target === null) {
       const fresh = await etn.tabs.open(networkId);
+      if (!isCurrentOpenNetwork(seq)) return;
       tabs = await etn.tabs.list();
+      if (!isCurrentOpenNetwork(seq)) return;
       target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? null;
     }
     activeTabId = target?.tab_id ?? null;
@@ -246,6 +271,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
       : knownView(activeViewRaw)
         ? activeViewRaw
         : 'map';
+
+  // Публикация сети/вкладки/экрана — только если этот запуск ещё актуален:
+  // запоздавший ответ прежней сети не откатывает уже открытую (ошибка
+  // 58c55bb9, поздний ответ openNetwork).
+  if (!isCurrentOpenNetwork(seq)) return;
 
   store.update({
     network,
@@ -298,10 +328,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // whatever layer the previous tab left behind. Failures keep the base layer
   // and an empty layer list; the menu recovers on the next open.
   try {
-    await syncLayersForTab(networkId, activeTabLayerId);
+    await syncLayersForTab(networkId, activeTabLayerId, () => isCurrentOpenNetwork(seq));
   } catch {
     // offline / layer deleted elsewhere — the workspace stays usable
   }
+  if (!isCurrentOpenNetwork(seq)) return;
 
   showScreen('workspace');
 
@@ -317,13 +348,16 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     } catch {
       initial = null; // stored focus vanished — fall through to HOME
     }
+    if (!isCurrentOpenNetwork(seq)) return;
   }
   if (initial !== null) {
-    await loadFocusForTab(initial.id, networkId, activeTabId);
+    await loadFocusForTab(initial.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq));
   } else {
     const root = await findRootThought(networkId);
-    await loadFocusForTab(root.id, networkId, activeTabId);
+    if (!isCurrentOpenNetwork(seq)) return;
+    await loadFocusForTab(root.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq));
   }
+  if (!isCurrentOpenNetwork(seq)) return;
 
   // 8efd5cf8 (Q5): `store.tabs` is only populated HERE — the accessibility
   // pass fired right after `server.connect` (boot / restoreSession) runs
@@ -347,9 +381,13 @@ export async function loadFocusForTab(
   thoughtId: string,
   networkId: string,
   tabId: string | null,
+  isCurrent?: () => boolean,
 ): Promise<void> {
   try {
     const response = await etn.thoughts.focus(networkId, thoughtId);
+    // Запуск перекрыт более новым открытием сети/вкладки — ответ не публикуем
+    // (ошибка 58c55bb9, поздний ответ openNetwork).
+    if (isCurrent !== undefined && !isCurrent()) return;
     // Слой данных (G2): свежий ответ идёт в кэш `focus:@id`, активная
     // окрестность подписывается на него — холст рисует из кэша.
     publishFocusResponse(response);
@@ -362,6 +400,7 @@ export async function loadFocusForTab(
     // `openNetwork` when this returns no focus at all.
     return;
   }
+  if (isCurrent !== undefined && !isCurrent()) return;
   // Defensive: if the persisted focus_id on the tab row got lost somehow,
   // restore it now — better than a workspace that opens on a stale HOME
   // after every restart.
