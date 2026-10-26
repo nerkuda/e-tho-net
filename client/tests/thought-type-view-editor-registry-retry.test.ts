@@ -202,8 +202,9 @@ before(async () => {
 
 afterEach(() => {
   closeDialogIfAny();
-  const body = bodyEl();
-  while (body.children.length > 0) body.children.pop();
+  // `HTMLCollection` (body.children) не имеет мутаторов вроде `pop`; очистка
+  // документа — штатным методом узла (ошибка cca54310, круг 2).
+  bodyEl().replaceChildren();
 });
 
 function setBaseLayer(): void {
