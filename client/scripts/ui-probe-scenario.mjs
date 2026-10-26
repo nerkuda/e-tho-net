@@ -20,7 +20,10 @@
  *   { "click": "#sel" } | { "click": { "selector": "#sel", "at": [4, 4] } }
  *     | { "click": [640, 400] } | { "click": { "x": 10, "y": 20 } }
  *     | { "click": { "selector": "#sel", "count": 2 } } — `count` задаёт число
- *       последовательных нажатий (2 — настоящий двойной клик, `click.detail=2`)
+ *       последовательных нажатий (2 — настоящий двойной клик, `click.detail=2`);
+ *       `allowMismatch: true` (только с `selector`) разрешает нажать в точку,
+ *       которая не попадает в элемент-якорь. По умолчанию промах после
+ *       перемеров ВАЛИТ шаг, и нажатие не выполняется (ошибка af96d388).
  *   { "hover": "#sel" } | { "hover": { "selector": "#sel", "at": [4, 4] } }
  *     | { "hover": [640, 400] } | { "hover": { "x": 10, "y": 20 } }
  *     — навести курсор на точку/элемент БЕЗ клика: синтезирует `mouseMoved`,
@@ -248,7 +251,10 @@ export function resolveKey(spec) {
 function normalizeClick(value, where, field = 'click', withCount = true) {
   // `count` — только у клика (у наведения его нет): число последовательных
   // нажатий, 2 — настоящий двойной клик (браузер отдаёт `click` с `detail = 2`).
-  const countField = withCount ? { count: 1 } : {};
+  // `allowMismatch` — тоже только у клика: явное разрешение нажать в точку,
+  // которая не попадает в элемент-якорь (особая точка холста, смещение за
+  // границы). По умолчанию промах валит шаг (ошибка af96d388).
+  const countField = withCount ? { count: 1, allowMismatch: false } : {};
   if (typeof value === 'string') {
     return { selector: asString(value, `${where}.${field}`), at: null, x: null, y: null, ...countField };
   }
@@ -257,12 +263,25 @@ function normalizeClick(value, where, field = 'click', withCount = true) {
     return { selector: null, at: null, x: asNumber(value[0], `${where}.${field}[0]`), y: asNumber(value[1], `${where}.${field}[1]`), ...countField };
   }
   if (!isPlainObject(value)) fail(`${where}.${field}: ожидается селектор, [x,y] или объект`);
-  const allowed = withCount ? ['selector', 'x', 'y', 'at', 'count'] : ['selector', 'x', 'y', 'at'];
+  const allowed = withCount
+    ? ['selector', 'x', 'y', 'at', 'count', 'allowMismatch']
+    : ['selector', 'x', 'y', 'at'];
   for (const extra of Object.keys(value)) {
     if (!allowed.includes(extra)) fail(`${where}.${field}: неизвестное поле «${extra}»`);
   }
   if (withCount && value.count !== undefined) {
     countField.count = asPositiveInt(value.count, `${where}.${field}.count`);
+  }
+  if (withCount && value.allowMismatch !== undefined) {
+    // Флаг имеет смысл только вместе с селектором: без него попадание не
+    // проверяется и разрешать нечего.
+    if (value.selector === undefined) {
+      fail(`${where}.${field}.allowMismatch: допустим только вместе с «selector»`);
+    }
+    if (typeof value.allowMismatch !== 'boolean') {
+      fail(`${where}.${field}.allowMismatch: ожидается булево`);
+    }
+    countField.allowMismatch = value.allowMismatch;
   }
   const hasSelector = value.selector !== undefined;
   const hasCoords = value.x !== undefined || value.y !== undefined;

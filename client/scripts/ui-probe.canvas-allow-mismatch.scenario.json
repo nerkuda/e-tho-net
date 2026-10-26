@@ -1,0 +1,47 @@
+{
+  "name": "canvas-allow-mismatch",
+  "description": "Демонстрация явного разрешения промаха в шаге click (ошибка af96d388, стенд ui-probe). Клик задан от облачка-якоря со смещением [250, 250] — точка заведомо НЕ попадает в облачко; без allowMismatch такой шаг падает, с allowMismatch клик выполняется, а в отчёте виден «ПРОМАХ (разрешён allowMismatch)». Доставку клика подтверждает слушатель document: проба click-delivered. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.canvas-allow-mismatch.scenario.json.",
+  "timeout": 15000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "install-click-probe",
+      "eval": "(() => { window.__canvasClick = null; document.addEventListener('click', (event) => { window.__canvasClick = { x: event.clientX, y: event.clientY, tag: event.target?.tagName ?? null, className: event.target?.getAttribute?.('class') ?? '' }; }, true); return 'ok'; })()"
+    },
+    {
+      "name": "click-outside-anchor",
+      "click": {
+        "selector": "[data-id=\"{{thoughtId}}\"].cloud",
+        "at": [250, 250],
+        "allowMismatch": true
+      }
+    },
+    {
+      "name": "click-delivered",
+      "probe": "window.__canvasClick !== null",
+      "expect": true
+    },
+    {
+      "name": "click-not-on-anchor",
+      "probe": "(() => { const c = window.__canvasClick; if (c === null) return false; const classes = String(c.className).split(/\\s+/); return classes.includes('cloud') === false; })()",
+      "expect": true
+    }
+  ]
+}

@@ -52,9 +52,30 @@ test('parseScenario: сценарий со всеми действиями ра�
     ['key', 'click', 'click', 'click', 'hover', 'hover', 'text', 'waitFor', 'probe', 'shot', 'eval'],
   );
   assert.equal(scenario.steps[0]?.key?.code, 'ArrowDown');
-  assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null, count: 1 });
-  assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null, count: 1 });
-  assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400, count: 1 });
+  assert.deepEqual(scenario.steps[1]?.click, {
+    selector: '#feed',
+    at: null,
+    x: null,
+    y: null,
+    count: 1,
+    allowMismatch: false,
+  });
+  assert.deepEqual(scenario.steps[2]?.click, {
+    selector: '.card',
+    at: [4, 6],
+    x: null,
+    y: null,
+    count: 1,
+    allowMismatch: false,
+  });
+  assert.deepEqual(scenario.steps[3]?.click, {
+    selector: null,
+    at: null,
+    x: 640,
+    y: 400,
+    count: 1,
+    allowMismatch: false,
+  });
   assert.deepEqual(scenario.steps[4]?.hover, { selector: '#card', at: null, x: null, y: null });
   assert.deepEqual(scenario.steps[5]?.hover, { selector: '.row', at: [2, 3], x: null, y: null });
   assert.equal(scenario.steps[6]?.text, 'привет');
@@ -222,6 +243,34 @@ test('click.count: двойной клик; ноль/дробь/нечисло �
   // У наведения `count` — неизвестное поле (наведение не кликает).
   assert.throws(
     () => validateScenario(scenarioFrom([{ hover: { selector: '#x', count: 2 } }])),
+    ScenarioError,
+  );
+});
+
+test('click.allowMismatch: по умолчанию false; true только с selector; у hover поля нет', () => {
+  // По умолчанию промах после перемеров ВАЛИТ шаг (блокер af96d388): флаг
+  // обязан быть явным, а значение по умолчанию — false.
+  const byDefault = validateScenario(scenarioFrom([{ click: { selector: '.canvas', at: [300, 40] } }]));
+  assert.equal(byDefault.steps[0]?.click?.allowMismatch, false, 'по умолчанию промах запрещён');
+
+  const allowed = validateScenario(
+    scenarioFrom([{ click: { selector: '.canvas', at: [300, 40], allowMismatch: true } }]),
+  );
+  assert.equal(allowed.steps[0]?.click?.allowMismatch, true, 'явное разрешение сохраняется');
+
+  // Без селектора попадание не проверяется — разрешать нечего.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { x: 10, y: 20, allowMismatch: true } }])),
+    ScenarioError,
+  );
+  // Не булево — ошибка валидации, а не «истинно всё, что не false».
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { selector: '#x', allowMismatch: 'yes' } }])),
+    ScenarioError,
+  );
+  // У наведения флага нет: наведение не кликает и не проверяет попадание.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: { selector: '#x', allowMismatch: true } }])),
     ScenarioError,
   );
 });
