@@ -1,30 +1,48 @@
 {
   "name": "42a7c0a1-mass-links",
-  "description": "GUI-гейт ошибки 42a7c0a1: вкладка «Граф» редактора при массовых связях. В изолированном стенде у засеянной мысли есть сосед с 12 однотипными (нетипизированными) рёбрами — порог MASS_LINK_THRESHOLD. Ожидание: на графе ровно одна линия этой пары (плюс линия структурного родителя HOME), остальные 11 рёбер — числом в чипе «+11» и в счётчике шапки «Скрыто массовых: 11». На дофиксовой сборке сценарий краснеет: линий 13 (одна линия HOME + 12 линий массовой пары), чип при этом уже показывает «+11» — обещание счётчика расходится с отрисовкой. Фикстуру готовит client/scripts/ui-probe.42a7c0a1-seed.mjs (штатный REST create_link + клонирование рёбер в изолированной БД стенда). Подстановки {{serverUrl}}, {{apiKey}}, {{thoughtId}}, {{seedTitle}} ставит ui-probe-stand.mjs.",
+  "description": "GUI-гейт ошибки 42a7c0a1: вкладка «Граф» редактора при массовых связях. В изолированном стенде у засеянной мысли есть сосед с 12 однотипными (нетипизированными) рёбрами — порог MASS_LINK_THRESHOLD. Ожидание: на графе ровно одна линия этой пары (плюс линия структурного родителя HOME), остальные 11 рёбер — числом в чипе «+11» и в счётчике шапки «Скрыто массовых: 11»; полный список — на вкладке «Свойства», где все 12 рёбер видны отдельными чипами. На дофиксовой сборке сценарий краснеет: линий 13 (одна линия HOME + 12 линий массовой пары), чип при этом уже показывает «+11» — обещание счётчика расходится с отрисовкой. Прогон ОДНОЙ командой (фикстуру вызывает сам стенд): node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-mass-links.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs. Фикстура идемпотентна: повторный запуск на том же стенде число рёбер не меняет. Подстановки {{serverUrl}}, {{apiKey}}, {{thoughtId}}, {{seedTitle}} ставит ui-probe-stand.mjs.",
   "timeout": 90000,
   "steps": [
     {
       "name": "onboarding-visible",
       "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
     },
-    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
-    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
     {
       "name": "fill-api-key",
       "click": "input[type=password]"
     },
-    { "name": "api-key-typed", "text": "{{apiKey}}" },
-    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
     {
       "name": "networks-visible",
       "waitFor": "document.querySelectorAll('.network-item').length > 0"
     },
-    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
     {
       "name": "seeded-cloud-visible",
       "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
     },
-    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
     {
       "name": "thought-opened",
       "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
@@ -61,7 +79,7 @@
     {
       "name": "chip-tooltip",
       "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
-      "expect": "связь: ещё 11 связей. Полный список — на вкладке «Связи»."
+      "expect": "связь: ещё 11 связей. Полный список — на вкладке «Свойства»."
     },
     {
       "name": "header-mass",
@@ -84,8 +102,22 @@
     },
     {
       "name": "lines-plus-hidden",
-      "probe": "document.querySelectorAll('.mini-graph-edge').length + 11",
+      "probe": "document.querySelectorAll('.mini-graph-edge').length + Number((document.querySelector('.mini-graph-mass-chip text')?.textContent ?? '+0').slice(1))",
       "expect": 13
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Свойства'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "properties-ready",
+      "timeout": 15000,
+      "waitFor": "Math.max(0, ...Array.from(document.querySelectorAll('.link-value-editor')).map((e) => e.querySelectorAll('.prop-ref-cloud').length)) === 12"
+    },
+    {
+      "name": "properties-chips",
+      "probe": "Math.max(0, ...Array.from(document.querySelectorAll('.link-value-editor')).map((e) => e.querySelectorAll('.prop-ref-cloud').length))",
+      "expect": 12
     }
   ]
 }

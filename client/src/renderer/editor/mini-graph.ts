@@ -38,10 +38,11 @@
  * Правила рёбер и счётчиков шапки живут в чистой модели
  * `mini-graph-model.ts` (направление/имя типа/тултип, оформление линии,
  * массовые связи, показатели) — здесь только отрисовка. Массовые связи
- * (≥10 рёбер одного типа к одному соседу с одной стороны) дают одну линию
- * пары, остальные видны числом в чипе «+N»; лишние соседи сверх порога —
- * счётчиком «Ещё не поместилось». План рёбер и число на чипе строит одна
- * функция {@link planGraphEdges} — линии и счётчики не могут разойтись.
+ * (≥10 рёбер одного типа к одному соседу, считая обе стороны) дают по одной
+ * линии на каждую присутствующую сторону пары, остальные видны числом в чипе
+ * «+N»; лишние соседи сверх порога — счётчиком «Ещё не поместилось». План
+ * рёбер и число на чипе строит одна функция {@link planGraphEdges} — линии и
+ * счётчики не могут разойтись.
  */
 
 import type { Link, Thought, ThoughtRef } from '@etn/shared';
@@ -95,6 +96,12 @@ const ARROW_LEN = 9;
 const ARROW_W = 7;
 /** Сторона метки корзины на помеченном ребре, px (мир графа). */
 const TRASH_BADGE_SIZE = 18;
+/**
+ * Смещение метки корзины у массового чипа «+N» вверх, px (над текстом чипа):
+ * справа и под чипом метка попадала под foreignObject облачка соседа —
+ * точку клика перехватывал `cloud-title`, кнопка была недостижима.
+ */
+const MASS_TRASH_OFFSET_Y = 22;
 /**
  * Где на ребре живёт метка корзины (доля от начала): не в середине — там
  * постоянная подпись типа связи и чип «+N» (ошибка 355319d4).
@@ -218,10 +225,11 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   });
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // План рёбер: одна линия на пару (тип, сосед, сторона), лишние массовые —
-  // только числом в чипе «+N» и счётчике шапки (ошибка 42a7c0a1). План
-  // ограничен НАРИСОВАННЫМИ соседями: у соседа за PERIPHERY_CAP чипа нет,
-  // поэтому его рёбра не должны попадать в «скрыто массовых».
+  // План рёбер: одна линия на пару (тип, сосед); в массовой паре — по одной
+  // на каждую присутствующую сторону, лишние рёбра — только числом в чипе
+  // «+N» и счётчике шапки (ошибка 42a7c0a1). План ограничен НАРИСОВАННЫМИ
+  // соседями: у соседа за PERIPHERY_CAP чипа нет, поэтому его рёбра не должны
+  // попадать в «скрыто массовых».
   const linkTypes = store.state.linkTypes;
   const plan = planGraphEdges(
     opts.links,
@@ -498,8 +506,15 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   probeHost.remove();
   // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick. Число на
   // чипе и подсказка строятся из того же плана, что и линии, — сумма линий и
-  // чипов сходится с фактическим числом рёбер нарисованных соседей.
-  const massChips: Array<{ g: SVGGElement; node: GNode }> = [];
+  // чипов сходится с фактическим числом рёбер нарисованных соседей. Если в
+  // скрытой части пары есть рёбра в корзине, у чипа появляется общая метка
+  // корзины (`.link-trash-badge`): клик открывает корзину — путь к
+  // восстановлению скрытых рёбер, иначе с графа до них не добраться.
+  const massChips: Array<{
+    g: SVGGElement;
+    node: GNode;
+    trash: SVGForeignObjectElement | null;
+  }> = [];
   for (const nb of visibleNeighbours) {
     const mass = plan.massByNeighbour.get(nb.id);
     const entry = byId.get(nb.id);
@@ -513,7 +528,30 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     chipText.textContent = `+${mass.hidden}`;
     chip.append(chipText);
     edgesG.append(chip);
-    massChips.push({ g: chip, node: entry.node });
+    let trash: SVGForeignObjectElement | null = null;
+    if (mass.trashed > 0) {
+      trash = svgEl('foreignObject');
+      trash.setAttribute('class', 'mini-graph-mass-trash');
+      trash.setAttribute('width', String(TRASH_BADGE_SIZE));
+      trash.setAttribute('height', String(TRASH_BADGE_SIZE));
+      const btn = el('button', 'link-trash-badge');
+      btn.type = 'button';
+      btn.append(svgIcon('trash', 11));
+      setTooltip(
+        btn,
+        `Связи в корзине: ${mass.trashed} — нажмите, чтобы открыть корзину и восстановить`,
+      );
+      // Кнопка самостоятельна: mousedown не должен стартовать панораму
+      // холста (d3-zoom слушает svg), клик — открывать корзину.
+      btn.addEventListener('mousedown', (event) => event.stopPropagation());
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void openTrashDialogForNetwork();
+      });
+      trash.append(btn);
+      edgesG.append(trash);
+    }
+    massChips.push({ g: chip, node: entry.node, trash });
   }
 
   // --- Раскладка каждого кадра симуляции ------------------------------------
@@ -576,9 +614,14 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     }
     for (const draw of edgeDraws) paintEdge(draw);
     for (const chip of massChips) {
-      chip.g.setAttribute(
+      const x = (chip.node.x ?? 0) + chip.node.w / 2 + 4;
+      const y = (chip.node.y ?? 0) - CLOUD_H / 2 - 4;
+      chip.g.setAttribute('transform', `translate(${x},${y})`);
+      // Метка корзины — над текстом чипа: под чипом и справа от него она
+      // попадала под foreignObject облачка соседа, и клик перехватывало оно.
+      chip.trash?.setAttribute(
         'transform',
-        `translate(${(chip.node.x ?? 0) + chip.node.w / 2 + 4},${(chip.node.y ?? 0) - CLOUD_H / 2 - 4})`,
+        `translate(${x},${y - MASS_TRASH_OFFSET_Y})`,
       );
     }
   };
@@ -718,6 +761,18 @@ async function openTrashedLinkDialog(linkId: string): Promise<void> {
   if (networkId === null) return;
   const { openLinkDeleteDialog } = await import('../trash.js');
   await openLinkDeleteDialog(networkId, linkId);
+}
+
+/**
+ * Клик по метке корзины у массового чипа: скрытых рёбер в корзине может быть
+ * несколько, поэтому открываем общий диалог корзины (там каждая связь —
+ * отдельной строкой с восстановлением), а не диалог одного ребра.
+ */
+async function openTrashDialogForNetwork(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const { openTrashDialog } = await import('../trash.js');
+  await openTrashDialog(networkId);
 }
 
 async function focusLinkRef(id: string): Promise<void> {

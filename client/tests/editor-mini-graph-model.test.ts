@@ -260,33 +260,56 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
   const type = linkType({ id: 't-mass', name_forward: 'связано с', name_reverse: 'связано с' });
   const visible = [OTHER];
 
-  it('ниже порога рисует все рёбра и не создаёт чип', () => {
-    const links = Array.from({ length: MASS_LINK_THRESHOLD - 1 }, (_, i) =>
-      link({ id: `few${i}`, type_id: type.id }),
+  /** Рёбра «центр → сосед» (по умолчанию к OTHER). */
+  const outgoing = (n: number, typeId: string | null = type.id, prefix = 'out'): Link[] =>
+    Array.from({ length: n }, (_, i) =>
+      link({ id: `${prefix}${i}`, source_id: CENTER, target_id: OTHER, type_id: typeId }),
     );
+  /** Встречные рёбра «сосед → центр». */
+  const incoming = (n: number, typeId: string | null = type.id, prefix = 'in'): Link[] =>
+    Array.from({ length: n }, (_, i) =>
+      link({ id: `${prefix}${i}`, source_id: OTHER, target_id: CENTER, type_id: typeId }),
+    );
+  /** Краткая форма результата: линии, скрытые и разбивка чипа по сторонам. */
+  const brief = (
+    plan: ReturnType<typeof planGraphEdges>,
+    otherId = OTHER,
+  ): { drawn: number; hidden: number; sides: string[] } => ({
+    drawn: plan.drawnIds.size,
+    hidden: plan.hidden,
+    sides: (plan.massByNeighbour.get(otherId)?.pairs ?? []).map(
+      (pair) => `${pair.side}:${pair.hidden}`,
+    ),
+  });
+
+  it('ниже порога — все рёбра линиями, чипа нет (4 исходящих + 5 входящих)', () => {
+    const links = [...outgoing(4), ...incoming(5)];
     const plan = planGraphEdges(links, CENTER, visible, [type]);
-    assert.equal(plan.drawnIds.size, links.length);
-    assert.equal(plan.hidden, 0);
+    assert.deepEqual(brief(plan), { drawn: 9, hidden: 0, sides: [] });
     assert.equal(plan.massByNeighbour.size, 0);
   });
 
-  it('на пороге рисует ровно одну линию пары, остальные скрывает в чип', () => {
-    const links = Array.from({ length: MASS_LINK_THRESHOLD + 2 }, (_, i) =>
-      link({ id: `mass${i}`, type_id: type.id }),
-    );
+  it('12 исходящих → 1 линия, 11 скрытых', () => {
+    const links = outgoing(12);
     const plan = planGraphEdges(links, CENTER, visible, [type]);
-    assert.equal(plan.drawnIds.size, 1, 'одна линия на пару');
-    assert.ok(plan.drawnIds.has(links[0]!.id), 'линия — первое (живое) ребро пары');
-    assert.equal(plan.hidden, MASS_LINK_THRESHOLD + 1);
-    const mass = plan.massByNeighbour.get(OTHER);
-    assert.equal(mass?.hidden, MASS_LINK_THRESHOLD + 1);
-    assert.deepEqual(mass?.pairs, [
-      { label: 'связано с', side: 'out', hidden: MASS_LINK_THRESHOLD + 1, trashed: 0 },
-    ]);
-    assert.equal(mass?.label, 'связано с');
+    assert.deepEqual(brief(plan), { drawn: 1, hidden: 11, sides: ['out:11'] });
+    assert.ok(plan.drawnIds.has(links[0]!.id), 'линия — первое живое ребро пары');
+    const mass = plan.massByNeighbour.get(OTHER)!;
+    assert.deepEqual(mass.pairs, [{ label: 'связано с', side: 'out', hidden: 11, trashed: 0 }]);
+    assert.equal(mass.label, 'связано с');
   });
 
-  it('разные типы между одной парой — разные линии и отдельные пороги', () => {
+  it('5 исходящих + 5 входящих → 2 линии, 8 скрытых (порог по СУММЕ сторон)', () => {
+    const plan = planGraphEdges([...outgoing(5), ...incoming(5)], CENTER, visible, [type]);
+    assert.deepEqual(brief(plan), { drawn: 2, hidden: 8, sides: ['out:4', 'in:4'] });
+  });
+
+  it('12 исходящих + 5 входящих → 2 линии, 15 скрытых', () => {
+    const plan = planGraphEdges([...outgoing(12), ...incoming(5)], CENTER, visible, [type]);
+    assert.deepEqual(brief(plan), { drawn: 2, hidden: 15, sides: ['out:11', 'in:4'] });
+  });
+
+  it('разные типы между одной парой — разные пары и отдельные пороги', () => {
     const a = linkType({ id: 't-a', name_forward: 'тип а', name_reverse: 'тип а' });
     const b = linkType({ id: 't-b', name_forward: 'тип б', name_reverse: 'тип б' });
     const links = [
@@ -301,19 +324,25 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
     assert.equal(mass?.label, 'тип а, тип б');
   });
 
-  it('встречные рёбра одной пары — разные линии: направление не схлопывается', () => {
+  it('встречные рёбра одного направленного типа: обе линии, свои имена сторон', () => {
     const directed = linkType({
       id: 't-directed',
       name_forward: 'версия',
       name_reverse: 'работы версии',
     });
-    const out = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
-      link({ id: `out${i}`, source_id: CENTER, target_id: OTHER, type_id: directed.id }),
+    const plan = planGraphEdges(
+      [
+        ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+          link({ id: `out${i}`, source_id: CENTER, target_id: OTHER, type_id: directed.id }),
+        ),
+        ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+          link({ id: `in${i}`, source_id: OTHER, target_id: CENTER, type_id: directed.id }),
+        ),
+      ],
+      CENTER,
+      visible,
+      [directed],
     );
-    const inc = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
-      link({ id: `in${i}`, source_id: OTHER, target_id: CENTER, type_id: directed.id }),
-    );
-    const plan = planGraphEdges([...out, ...inc], CENTER, visible, [directed]);
     assert.equal(plan.drawnIds.size, 2, 'прямая и встречная линии сохраняются обе');
     assert.equal(plan.hidden, 2 * (MASS_LINK_THRESHOLD - 1));
     const mass = plan.massByNeighbour.get(OTHER);
@@ -326,31 +355,16 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
     );
   });
 
-  it('порог считается ПО СТОРОНЕ: 5+5 рёбер одной пары — 10 линий, не массовая', () => {
-    const out = Array.from({ length: 5 }, (_, i) =>
-      link({ id: `out${i}`, source_id: CENTER, target_id: OTHER, type_id: type.id }),
-    );
-    const inc = Array.from({ length: 5 }, (_, i) =>
-      link({ id: `in${i}`, source_id: OTHER, target_id: CENTER, type_id: type.id }),
-    );
-    const plan = planGraphEdges([...out, ...inc], CENTER, visible, [type]);
-    assert.equal(plan.drawnIds.size, 10);
-    assert.equal(plan.hidden, 0);
-    assert.equal(plan.massByNeighbour.size, 0);
-  });
-
   it('связь без типа подписана «связь» и сворачивается своей парой', () => {
-    const links = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
-      link({ id: `u${i}`, type_id: null }),
-    );
-    const plan = planGraphEdges(links, CENTER, visible, []);
+    const plan = planGraphEdges(outgoing(MASS_LINK_THRESHOLD, null, 'u'), CENTER, visible, []);
     assert.equal(plan.drawnIds.size, 1);
+    assert.equal(plan.hidden, MASS_LINK_THRESHOLD - 1);
     assert.equal(plan.massByNeighbour.get(OTHER)?.label, UNTYPED_LINK_LABEL);
   });
 
   it('план ограничен нарисованными соседями: у соседа без чипа нет и «скрытых»', () => {
     const links = [
-      ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) => link({ id: `v${i}`, type_id: type.id })),
+      ...outgoing(MASS_LINK_THRESHOLD, type.id, 'v'),
       ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
         link({ id: `h${i}`, target_id: THIRD, type_id: type.id }),
       ),
@@ -363,12 +377,8 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
 
   it('сумма линий и чисел на чипах сходится с числом рёбер видимых соседей', () => {
     const links = [
-      ...Array.from({ length: MASS_LINK_THRESHOLD + 2 }, (_, i) =>
-        link({ id: `v${i}`, type_id: type.id }),
-      ),
-      ...Array.from({ length: 3 }, (_, i) =>
-        link({ id: `in${i}`, source_id: OTHER, target_id: CENTER, type_id: type.id }),
-      ),
+      ...outgoing(MASS_LINK_THRESHOLD + 2, type.id, 'v'),
+      ...incoming(3, type.id, 'in'),
       ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
         link({ id: `t${i}`, target_id: THIRD, type_id: type.id }),
       ),
@@ -384,13 +394,14 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
       2 * MASS_LINK_THRESHOLD + 5,
       'линии + чипы = рёбра видимых соседей',
     );
-    // У OTHER: 12 прямых (массовая, 1 линия) + 3 встречных (ниже порога, 3 линии).
-    assert.equal(plan.massByNeighbour.get(OTHER)?.hidden, MASS_LINK_THRESHOLD + 1);
+    // У OTHER: 12 прямых + 3 встречных = массовая пара (порог по сумме):
+    // 2 линии (out+in), скрыто 11 + 2.
+    assert.deepEqual(brief(plan), { drawn: 3, hidden: 22, sides: ['out:11', 'in:2'] });
     // У THIRD: 10 рёбер (массовая, 1 линия).
     assert.equal(plan.massByNeighbour.get(THIRD)?.hidden, MASS_LINK_THRESHOLD - 1);
   });
 
-  it('представитель пары — живое ребро; скрытые в корзине попадают в подсказку', () => {
+  it('представитель стороны — живое ребро; скрытые в корзине попадают в подсказку', () => {
     const links = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
       link({ id: `m${i}`, type_id: type.id, marked_for_deletion: i === 0 }),
     );
@@ -400,17 +411,44 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
     assert.equal(drawn[0]!.marked_for_deletion, false, 'линия пары не выглядит «в корзине»');
     const mass = plan.massByNeighbour.get(OTHER)!;
     assert.equal(mass.trashed, 1);
-    assert.ok(massChipTooltip(mass).includes('в корзине: 1'));
+    const tip = massChipTooltip(mass);
+    assert.ok(tip.includes('в корзине: 1'), tip);
+    assert.ok(tip.includes('метка корзины у чипа'), tip);
+    // Помеченные рёбра из значений свойства не приходят — «Свойства» дают
+    // полный список только ЖИВЫХ связей (проверено GUI-пробой: 11 из 12).
+    assert.ok(tip.includes('Полный список живых связей'), tip);
   });
 
-  it('подсказка чипа называет тип, число скрытых и где полный список', () => {
-    const links = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
-      link({ id: `m${i}`, type_id: type.id }),
-    );
-    const mass = planGraphEdges(links, CENTER, visible, [type]).massByNeighbour.get(OTHER)!;
+  it('подсказка чипа: тип, число скрытых и реальная вкладка «Свойства»', () => {
+    const mass = planGraphEdges(outgoing(MASS_LINK_THRESHOLD), CENTER, visible, [type])
+      .massByNeighbour.get(OTHER)!;
     assert.equal(
       massChipTooltip(mass),
-      'связано с: ещё 9 связей. Полный список — на вкладке «Связи».',
+      'связано с: ещё 9 связей. Полный список — на вкладке «Свойства».',
+    );
+  });
+
+  it('подсказка склоняет «связь» (21 → «связь», не «связей»)', () => {
+    const mass = planGraphEdges(outgoing(22), CENTER, visible, [type]).massByNeighbour.get(OTHER)!;
+    assert.equal(mass.hidden, 21);
+    assert.equal(
+      massChipTooltip(mass),
+      'связано с: ещё 21 связь. Полный список — на вкладке «Свойства».',
+    );
+  });
+
+  it('подсказка различает стороны, когда имена типа совпадают', () => {
+    // Нетипизированная пара с обеими сторонами: обе записи называются «связь»,
+    // без пометки стороны они неразличимы.
+    const mass = planGraphEdges(
+      [...outgoing(MASS_LINK_THRESHOLD, null, 'o'), ...incoming(MASS_LINK_THRESHOLD, null, 'i')],
+      CENTER,
+      visible,
+      [],
+    ).massByNeighbour.get(OTHER)!;
+    assert.equal(
+      massChipTooltip(mass),
+      'связь (исходящие): 9; связь (входящие): 9. Полный список — на вкладке «Свойства».',
     );
   });
 
@@ -449,8 +487,11 @@ describe('mini-graph-model — показатели шапки (п.6)', () => {
     }
     const massTooltip = entries[1]!.tooltip;
     assert.ok(massTooltip.includes(String(MASS_LINK_THRESHOLD)), 'explains the mass threshold');
-    assert.ok(massTooltip.includes('«Связи»'), 'explains where to see the hidden links');
-    assert.ok(entries[2]!.tooltip.includes('«Связи»'), 'points to the full neighbour list');
+    // Полный список прямых связей живёт на вкладке «Свойства»; вкладки
+    // «Связи» в клиенте нет (ошибка 42a7c0a1, круг 2).
+    assert.ok(massTooltip.includes('«Свойства»'), 'explains where to see the hidden links');
+    assert.ok(!massTooltip.includes('«Связи»'), 'does not point at a nonexistent tab');
+    assert.ok(entries[2]!.tooltip.includes('«Свойства»'), 'points to the full neighbour list');
   });
 
   it('не показывает нулевые показатели', () => {

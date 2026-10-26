@@ -12,13 +12,22 @@
 
 import type { Link, LinkStyle, LinkType } from '@etn/shared';
 
+import { pluralRu } from '../lib/plural.js';
 import { LINK_STYLE_DEFAULTS, resolveLinkTypeVisual } from '../lib/type-tree.js';
 
 /** Слово вместо имени типа связи, когда тип не задан (п.3 задачи). */
 export const UNTYPED_LINK_LABEL = 'связь';
 
-/** Порог «массовости» пары (тип, сосед, сторона): избыточные рёбра прячутся за «+N». */
+/** Порог «массовости» пары (тип, сосед): избыточные рёбра прячутся за «+N». */
 export const MASS_LINK_THRESHOLD = 10;
+
+/** Где в клиенте живёт полный список прямых связей мысли (вкладка редактора). */
+export const LINKS_TAB_TITLE = 'Свойства';
+
+/** Согласованная форма «связь/связи/связей» для числа скрытых рёбер. */
+function linksWord(n: number): string {
+  return pluralRu(n, 'связь', 'связи', 'связей');
+}
 
 /** Сколько соседей рисуется пилюлями; остальные — за счётчиком «не поместилось». */
 export const PERIPHERY_CAP = 40;
@@ -225,15 +234,20 @@ export function neutralEdgeVisual(): EdgeVisual {
 /** Сторона пары относительно центральной мысли: центр — источник или цель. */
 export type MassSide = 'out' | 'in';
 
-/** Скрытые рёбра одной массовой пары (тип связи, сосед, сторона). */
+/**
+ * Скрытые рёбра одной СТОРОНЫ массовой пары (тип связи, сосед). Пара свёртки
+ * — без стороны: порог считается по сумме обеих сторон, а линия-представитель
+ * рисуется на каждую присутствующую сторону (встречные рёбра, 6452c840).
+ */
 export interface MassPair {
-  /** Имя типа связи в направлении центра (или «связь»). */
+  /** Имя типа связи в направлении стороны (``name_forward`` для `out`,
+   *  ``name_reverse`` для `in`; «связь» у ребра без типа). */
   label: string;
   /** Сторона пары: центр — источник (`out`) или цель (`in`). */
   side: MassSide;
-  /** Сколько рёбер пары скрыто (одно ребро пары остаётся линией). */
+  /** Сколько рёбер стороны скрыто (одно ребро стороны остаётся линией). */
   hidden: number;
-  /** Сколько из скрытых рёбер помечено на удаление (корзина). */
+  /** Сколько из скрытых рёбер стороны помечено на удаление (корзина). */
   trashed: number;
 }
 
@@ -259,11 +273,10 @@ export interface GraphEdgePlan {
   hidden: number;
 }
 
-/** Накопитель рёбер одной пары (тип, сосед, сторона) при построении плана. */
+/** Накопитель рёбер одной пары (тип связи, сосед) при построении плана. */
 interface PairGroup {
   otherId: string;
-  label: string;
-  side: MassSide;
+  type: LinkType | undefined;
   links: Link[];
 }
 
@@ -271,23 +284,25 @@ interface PairGroup {
  * Строит план рёбер мини-графа для НАРИСОВАННЫХ соседей: какие связи
  * получают линию, а какие видны только числом в чипе «+N».
  *
- * Пара свёртки — (тип связи, сосед, СТОРОНА). Прямые и встречные рёбра одной
- * пары мыслей считаются раздельно: по спеке (ошибка 6452c840) они рисуются
- * разными параллельными линиями со своей стрелкой и подписью, поэтому
- * свёртка «через сторону» спрятала бы целое направление. Разные типы между
- * теми же узлами — тоже разные пары и разные линии.
- *
- * От {@link MASS_LINK_THRESHOLD} рёбер в паре рисуется ровно одна линия,
- * остальные связиваются в чип «+N» у соседа; ниже порога рисуются все рёбра.
+ * Пара свёртки — (тип связи, сосед), БЕЗ стороны: порог
+ * {@link MASS_LINK_THRESHOLD} считается по сумме рёбер обеих сторон (спека
+ * «Вкладка «Граф» редактора», 9a23c3b1). В массовой паре рисуется не более
+ * ОДНОЙ линии на каждую присутствующую сторону — так сохраняется требование
+ * ошибки 6452c840 о встречных рёбрах (две параллельные линии со своими
+ * стрелками и подписями), но повторные рёбра стороны не превращаются в
+ * десяток наложенных линий. Примеры: 12 исходящих — 1 линия и 11 скрытых;
+ * 5 исходящих + 5 входящих — 2 линии и 8 скрытых; 12 исходящих + 5 входящих —
+ * 2 линии и 15 скрытых. Ниже порога рисуются все рёбра, как раньше.
  *
  * `visibleNeighbourIds` ограничивает план нарисованными соседями: массовые
  * рёбра соседа за `PERIPHERY_CAP` не имеют чипа, поэтому не должны попадать
  * ни в число скрытых, ни в счётчик шапки — иначе сумма линий и чипов не
  * сходится с фактическим числом рёбер.
  *
- * Представитель пары — живое ребро, если оно есть: помеченное на удаление
- * ребро пары не должно «приглушать» линию, за которой стоят живые связи.
- * Скрытые рёбра в корзине считаются и попадают в подсказку чипа.
+ * Представитель стороны — живое ребро, если оно есть: помеченное на удаление
+ * ребро не должно «приглушать» линию, за которой стоят живые связи. Скрытые
+ * рёбра в корзине считаются и попадают в подсказку чипа; путь к их
+ * восстановлению — метка корзины у чипа (общий диалог корзины).
  */
 export function planGraphEdges(
   links: readonly Link[],
@@ -304,17 +319,13 @@ export function planGraphEdges(
     if (!fromCenter && !toCenter) continue;
     const otherId = fromCenter ? link.target_id : link.source_id;
     if (otherId === centerId || !visible.has(otherId)) continue;
-    const side: MassSide = fromCenter ? 'out' : 'in';
-    const key = `${link.type_id ?? ''}|${otherId}|${side}`;
+    const key = `${link.type_id ?? ''}|${otherId}`;
     let group = groups.get(key);
     if (group === undefined) {
-      const type =
-        link.type_id === null ? undefined : linkTypes.find((t) => t.id === link.type_id);
-      const typeName = edgeTypeName(type, fromCenter);
       group = {
         otherId,
-        label: typeName === '' ? UNTYPED_LINK_LABEL : typeName,
-        side,
+        type:
+          link.type_id === null ? undefined : linkTypes.find((t) => t.id === link.type_id),
         links: [],
       };
       groups.set(key, group);
@@ -330,21 +341,38 @@ export function planGraphEdges(
       for (const link of group.links) drawnIds.add(link.id);
       continue;
     }
-    // Представитель — живое ребро: помеченное на удаление ребро пары не
-    // должно делать всю линию «в корзине», когда у пары есть живые связи.
-    const representative = group.links.find((link) => !isTrashedEdge(link)) ?? group.links[0]!;
-    drawnIds.add(representative.id);
-    const hiddenLinks = group.links.filter((link) => link !== representative);
-    const trashed = hiddenLinks.filter((link) => isTrashedEdge(link)).length;
-    hidden += hiddenLinks.length;
-    let info = massByNeighbour.get(group.otherId);
-    if (info === undefined) {
-      info = { hidden: 0, label: '', pairs: [], trashed: 0 };
-      massByNeighbour.set(group.otherId, info);
+    // Массовая пара: по одной линии-представителю на каждую сторону, которая
+    // в паре присутствует. Встречные рёбра (6452c840) остаются видимыми, а
+    // повторные рёбра стороны — только числом в чипе.
+    const sides = new Map<MassSide, Link[]>();
+    for (const link of group.links) {
+      const side: MassSide = link.source_id === centerId ? 'out' : 'in';
+      const list = sides.get(side);
+      if (list === undefined) sides.set(side, [link]);
+      else list.push(link);
     }
-    info.hidden += hiddenLinks.length;
-    info.trashed += trashed;
-    info.pairs.push({ label: group.label, side: group.side, hidden: hiddenLinks.length, trashed });
+    let info = massByNeighbour.get(group.otherId);
+    for (const [side, sideLinks] of sides) {
+      const representative = sideLinks.find((link) => !isTrashedEdge(link)) ?? sideLinks[0]!;
+      drawnIds.add(representative.id);
+      const hiddenLinks = sideLinks.filter((link) => link !== representative);
+      if (hiddenLinks.length === 0) continue;
+      const trashed = hiddenLinks.filter((link) => isTrashedEdge(link)).length;
+      hidden += hiddenLinks.length;
+      if (info === undefined) {
+        info = { hidden: 0, label: '', pairs: [], trashed: 0 };
+        massByNeighbour.set(group.otherId, info);
+      }
+      info.hidden += hiddenLinks.length;
+      info.trashed += trashed;
+      const typeName = edgeTypeName(group.type, side === 'out');
+      info.pairs.push({
+        label: typeName === '' ? UNTYPED_LINK_LABEL : typeName,
+        side,
+        hidden: hiddenLinks.length,
+        trashed,
+      });
+    }
   }
   for (const info of massByNeighbour.values()) {
     info.label = [...new Set(info.pairs.map((pair) => pair.label))].join(', ');
@@ -352,14 +380,39 @@ export function planGraphEdges(
   return { drawnIds, massByNeighbour, hidden };
 }
 
-/** Подсказка чипа «+N»: тип и число скрытых связей, корзина, где полный список. */
+/** Перечень «тип: N» по сторонам пары; сторону печатаем, когда метки совпали. */
+function massPairList(pairs: readonly MassPair[]): string {
+  const sameLabel = new Set(pairs.map((pair) => pair.label)).size !== pairs.length;
+  return pairs
+    .map((pair) => {
+      // У симметричного имени типа (и у ребра без типа) прямое и обратное имена
+      // совпадают — без пометки стороны две встречные записи неразличимы.
+      const label = sameLabel
+        ? `${pair.label} (${pair.side === 'out' ? 'исходящие' : 'входящие'})`
+        : pair.label;
+      return `${label}: ${pair.hidden}`;
+    })
+    .join('; ');
+}
+
+/**
+ * Подсказка чипа «+N»: тип/сторона и число скрытых связей, корзина, где
+ * полный список. Полный список ЖИВЫХ прямых связей живёт на вкладке
+ * «Свойства» (свойства-связи; вкладки «Связи» в клиенте нет — 42a7c0a1,
+ * круг 2). Помеченные на удаление рёбра из значений свойства не приходят,
+ * поэтому при непустой корзине подсказка честно говорит «живых», а путь к
+ * помеченным — корзина через метку у чипа.
+ */
 export function massChipTooltip(mass: MassInfo): string {
+  const only = mass.pairs.length === 1 ? mass.pairs[0]! : null;
   const details =
-    mass.pairs.length === 1
-      ? `${mass.pairs[0]!.label}: ещё ${mass.pairs[0]!.hidden} связей`
-      : mass.pairs.map((pair) => `${pair.label}: ${pair.hidden}`).join('; ');
-  const trashed = mass.trashed > 0 ? `, в корзине: ${mass.trashed}` : '';
-  return `${details}${trashed}. Полный список — на вкладке «Связи».`;
+    only !== null ? `${only.label}: ещё ${only.hidden} ${linksWord(only.hidden)}` : massPairList(mass.pairs);
+  const trashed =
+    mass.trashed > 0
+      ? `, в корзине: ${mass.trashed} (метка корзины у чипа — восстановление через корзину)`
+      : '';
+  const liveWord = mass.trashed > 0 ? 'живых связей ' : '';
+  return `${details}${trashed}. Полный список ${liveWord}— на вкладке «${LINKS_TAB_TITLE}».`;
 }
 
 /** Показатели шапки графа. */
@@ -403,10 +456,10 @@ export function graphStatEntries(stats: GraphStats): StatEntry[] {
     entries.push({
       text: `Скрыто массовых: ${stats.massHidden}`,
       tooltip:
-        `Когда с одним соседом связано ${MASS_LINK_THRESHOLD} и более рёбер одного типа с одной стороны, ` +
-        `рисуется одна линия пары, а остальные связываются в чип «+N» у этого соседа ` +
-        '(подсказка чипа — тип и число скрытых связей). Счётчик суммирует числа на чипах. ' +
-        'Развернуть их на графе нельзя; полный список — на вкладке «Связи».',
+        `Когда с одним соседом связано ${MASS_LINK_THRESHOLD} и более рёбер одного типа (считая обе стороны), ` +
+        'рисуется по одной линии на каждую сторону пары, а остальные связываются в чип «+N» у этого соседа ' +
+        '(подсказка чипа — тип, сторона и число скрытых связей). Счётчик суммирует числа на чипах. ' +
+        `Развернуть их на графе нельзя; полный список — на вкладке «${LINKS_TAB_TITLE}».`,
     });
   }
   if (stats.peripheryHidden > 0) {
@@ -414,7 +467,7 @@ export function graphStatEntries(stats: GraphStats): StatEntry[] {
       text: `Ещё не поместилось: ${stats.peripheryHidden}`,
       tooltip:
         `На графе показаны первые ${PERIPHERY_CAP} соседей, остальные ${stats.peripheryHidden} не поместились. ` +
-        'Полный список соседей — на вкладке «Связи».',
+        `Полный список соседей и связей — на вкладке «${LINKS_TAB_TITLE}».`,
     });
   }
   return entries;

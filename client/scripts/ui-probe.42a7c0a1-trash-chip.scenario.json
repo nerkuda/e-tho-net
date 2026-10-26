@@ -1,0 +1,127 @@
+{
+  "name": "42a7c0a1-trash-chip",
+  "description": "GUI-проверка ошибки 42a7c0a1 (круг 2): скрытые рёбра в корзине должны быть видимы и достижимы с графа. Фикстура помещает одно из 11 скрытых рёбер пары в корзину. Ожидание: у массового чипа «+11» появляется метка корзины (общий .link-trash-badge), подсказка чипа называет число рёбер в корзине и путь восстановления, клик по метке открывает общий диалог корзины с кнопкой «Восстановить»; на вкладке «Свойства» видны все 11 ЖИВЫХ рёбер пары отдельными чипами, помеченное ребро доступно только через корзину. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-trash-chip.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs --scenario-seed-arg --trash --scenario-seed-arg 1",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-graph-tab",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "graph-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.mini-graph-mass-chip') !== null && document.querySelector('.mini-graph-mass-trash .link-trash-badge') !== null"
+    },
+    {
+      "name": "chip-text",
+      "probe": "document.querySelector('.mini-graph-mass-chip text')?.textContent ?? null",
+      "expect": "+11"
+    },
+    {
+      "name": "chip-tooltip-trashed",
+      "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
+      "expect": "связь: ещё 11 связей, в корзине: 1 (метка корзины у чипа — восстановление через корзину). Полный список живых связей — на вкладке «Свойства»."
+    },
+    {
+      "name": "chip-trash-badge",
+      "probe": "document.querySelectorAll('.mini-graph-mass-trash .link-trash-badge').length",
+      "expect": 1
+    },
+    {
+      "name": "line-badge-absent",
+      "probe": "document.querySelectorAll('.mini-graph-edge-trash .link-trash-badge').length",
+      "expect": 0
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Свойства'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "properties-ready",
+      "timeout": 15000,
+      "waitFor": "Math.max(0, ...Array.from(document.querySelectorAll('.link-value-editor')).map((e) => e.querySelectorAll('.prop-ref-cloud').length)) === 11"
+    },
+    {
+      "name": "properties-count",
+      "probe": "Math.max(0, ...Array.from(document.querySelectorAll('.link-value-editor')).map((e) => e.querySelectorAll('.prop-ref-cloud').length))",
+      "expect": 11
+    },
+    {
+      "name": "back-to-graph",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "chip-visible-again",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.mini-graph-mass-trash .link-trash-badge') !== null"
+    },
+    {
+      "name": "click-trash-badge",
+      "click": ".mini-graph-mass-trash .link-trash-badge"
+    },
+    {
+      "name": "trash-dialog-open",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.trash') !== null"
+    },
+    {
+      "name": "trash-dialog",
+      "probe": "document.querySelector('.trash') !== null",
+      "expect": true
+    },
+    {
+      "name": "restore-command",
+      "probe": "Array.from(document.querySelectorAll('.trash button')).some((b) => b.textContent.trim() === 'Восстановить')",
+      "expect": true
+    },
+    {
+      "name": "trashed-link-listed",
+      "probe": "(document.querySelector('.trash')?.textContent ?? '').includes('связь')",
+      "expect": true
+    }
+  ]
+}

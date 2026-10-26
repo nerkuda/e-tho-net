@@ -12,6 +12,12 @@
  * срабатывает (SQLite считает NULL различными), поэтому клонирование не
  * требует правки схемы.
  *
+ * Скрипт ИДЕМПОТЕНТЕН: повторный запуск на том же стенде ничего не меняет —
+ * он определяет фактическое число рёбер и досоздаёт только недостающие;
+ * загрязнённый стенд (рёбер больше цели) громко отвергается.
+ * `--trash <k>` дополнительно помещает k рёбер пары в корзину (кроме
+ * линии-представителя) — для GUI-проверки метки корзины у массового чипа.
+ *
  * Скрипт отказывается работать вне каталога `.tmp/` — живые данные пользователя
  * и полигон он трогать не должен.
  *
@@ -19,9 +25,9 @@
  *   node client/scripts/ui-probe.42a7c0a1-seed.mjs \
  *     --data-dir .tmp/42a7c0a1/stand/data \
  *     --network-id <uuid> --center-id <uuid> \
- *     --api http://127.0.0.1:4417/api/v1 --api-key etn_…
+ *     --api http://127.0.0.1:4417/api/v1 --api-key etn_… [--trash 1]
  *
- * Печатает JSON: { neighbourId, linkId, cloned, total }.
+ * Печатает JSON: { neighbourId, linkId, total, cloned, trashed }.
  */
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -88,6 +94,14 @@ function parseArgs(argv) {
       case '--api-key':
         opts.apiKey = need();
         break;
+      case '--trash': {
+        const value = Number.parseInt(need(), 10);
+        if (!Number.isInteger(value) || value < 0) {
+          throw new Error('--trash требует целое число ≥ 0');
+        }
+        opts.trash = value;
+        break;
+      }
       default:
         throw new Error(`неизвестный аргумент «${arg}»`);
     }
@@ -128,7 +142,7 @@ async function main(argv) {
   if (opts.help) {
     process.stdout.write(
       'node client/scripts/ui-probe.42a7c0a1-seed.mjs --data-dir <dir> --network-id <uuid> ' +
-        '--center-id <uuid> --api <url> --api-key <key>\n',
+        '--center-id <uuid> --api <url> --api-key <key> [--trash <k>]\n',
     );
     return 0;
   }
@@ -164,50 +178,99 @@ async function main(argv) {
           create_link: { direction: 'parent', target_thought_id: opts.centerId },
         });
 
-  // 2. Клонируем ребро до порога MASS_LINK_THRESHOLD в изолированной БД.
+  // 2. Доводим число рёбер до MASS_LINK_THRESHOLD в изолированной БД.
+  //    Идемпотентность: считаем фактическое состояние и досоздаём ТОЛЬКО
+  //    недостающие рёбра; повторный запуск не меняет ничего. Стенд с большим
+  //    числом рёбер — уже загрязнён (кто-то прогонял старую версию или чужой
+  //    сценарий), молча продолжать нельзя: ожидания «+11» разъедутся.
   const dbPath = path.join(opts.dataDir, 'networks', opts.networkId, 'data.db');
   const db = new Database(dbPath, { fileMustExist: true });
+  const countSql =
+    'SELECT COUNT(*) AS c FROM links WHERE source_id = ? AND target_id = ? AND type_id IS NULL AND deleted = 0';
+  let baseLinkId;
+  let cloned = 0;
   try {
     const base = db
       .prepare(
-        'SELECT id FROM links WHERE source_id = ? AND target_id = ? AND type_id IS NULL AND deleted = 0 ORDER BY pk DESC LIMIT 1',
+        'SELECT id FROM links WHERE source_id = ? AND target_id = ? AND type_id IS NULL AND deleted = 0 ORDER BY pk ASC LIMIT 1',
       )
       .get(opts.centerId, neighbour.id);
     if (base === undefined) {
       throw new Error('штатное ребро центра к соседу не найдено — REST create_link не сработал');
     }
-    const columns = db
-      .prepare('PRAGMA table_info(links)')
-      .all()
-      .map((column) => column.name)
-      .filter((name) => name !== 'pk' && name !== 'id');
-    const insert = db.prepare(
-      `INSERT INTO links (id, ${columns.join(', ')})
-       SELECT ?, ${columns.join(', ')} FROM links WHERE id = ?`,
-    );
-    const clone = db.transaction((count) => {
-      for (let i = 0; i < count; i += 1) insert.run(randomUUID(), base.id);
-    });
-    clone(MASS_LINK_TOTAL - 1);
-    const total = db
-      .prepare(
-        'SELECT COUNT(*) AS c FROM links WHERE source_id = ? AND target_id = ? AND type_id IS NULL AND deleted = 0',
-      )
-      .get(opts.centerId, neighbour.id).c;
-    if (total < MASS_LINK_TOTAL) {
-      throw new Error(`рёбер скопировано ${total}, ожидалось не меньше ${MASS_LINK_TOTAL}`);
+    baseLinkId = base.id;
+    const before = db.prepare(countSql).get(opts.centerId, neighbour.id).c;
+    if (before > MASS_LINK_TOTAL) {
+      throw new Error(
+        `в стенде уже ${before} рёбер пары (цель ${MASS_LINK_TOTAL}) — каталог не чист, поднимите свежий стенд`,
+      );
     }
-    process.stdout.write(
-      `${JSON.stringify({
-        neighbourId: neighbour.id,
-        linkId: base.id,
-        cloned: MASS_LINK_TOTAL - 1,
-        total,
-      })}\n`,
-    );
+    cloned = MASS_LINK_TOTAL - before;
+    if (cloned > 0) {
+      const columns = db
+        .prepare('PRAGMA table_info(links)')
+        .all()
+        .map((column) => column.name)
+        .filter((name) => name !== 'pk' && name !== 'id');
+      const insert = db.prepare(
+        `INSERT INTO links (id, ${columns.join(', ')})
+         SELECT ?, ${columns.join(', ')} FROM links WHERE id = ?`,
+      );
+      const clone = db.transaction((count) => {
+        for (let i = 0; i < count; i += 1) insert.run(randomUUID(), base.id);
+      });
+      clone(cloned);
+    }
+    const total = db.prepare(countSql).get(opts.centerId, neighbour.id).c;
+    if (total !== MASS_LINK_TOTAL) {
+      throw new Error(`рёбер в паре ${total}, ожидалось ровно ${MASS_LINK_TOTAL}`);
+    }
   } finally {
     db.close();
   }
+
+  // 3. `--trash k`: помещаем в корзину k рёбер пары, НЕ трогая линию-
+  //    представитель (первое по pk живое ребро). Идемпотентно: уже помеченные
+  //    считаются, досоздаётся только нехватка. Через REST — сервер узнаёт о
+  //    пометке (прямой UPDATE БД оставил бы его кеши/события в стороне).
+  const trashTarget = opts.trash ?? 0;
+  let trashed = 0;
+  if (trashTarget > 0) {
+    const db2 = new Database(dbPath, { fileMustExist: true });
+    let rows;
+    try {
+      rows = db2
+        .prepare(
+          `SELECT id, marked_for_deletion FROM links
+           WHERE source_id = ? AND target_id = ? AND type_id IS NULL AND deleted = 0
+           ORDER BY pk ASC`,
+        )
+        .all(opts.centerId, neighbour.id);
+    } finally {
+      db2.close();
+    }
+    const already = rows.filter((row) => row.marked_for_deletion === 1).length;
+    const need = Math.max(0, trashTarget - already);
+    // Первое живое ребро — представитель пары: его линия должна остаться живой,
+    // иначе маркер корзины переедет на всю линию, а не на чип.
+    const candidates = rows.filter((row) => row.marked_for_deletion === 0).slice(1);
+    for (const row of candidates.slice(0, need)) {
+      await rest(opts, 'PATCH', `/networks/${opts.networkId}/links/${row.id}`, {
+        marked_for_deletion: true,
+      });
+    }
+    trashed = already + need;
+  }
+
+  process.stdout.write(
+    `${JSON.stringify({
+      neighbourId: neighbour.id,
+      linkId: baseLinkId,
+      total: MASS_LINK_TOTAL,
+      cloned,
+      trashed,
+    })}\n`,
+  );
   return 0;
 }
 

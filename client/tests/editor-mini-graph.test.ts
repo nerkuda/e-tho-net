@@ -323,9 +323,12 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       assert.ok(model.includes(label), `the model names the stat «${label}»`);
     }
     assert.ok(
-      model.includes('вкладке «Связи»'),
+      model.includes("LINKS_TAB_TITLE = 'Свойства'") && model.includes('LINKS_TAB_TITLE'),
       'the tooltip explains how to see the hidden links',
     );
+    // Вкладки «Связи» в клиенте нет — прямые связи живут на «Свойствах»
+    // (ошибка 42a7c0a1, круг 2).
+    assert.ok(!model.includes('вкладке «Связи»'), 'no tooltip points at a nonexistent tab');
   });
 
   it('одна линия на пару массовых связей: в DOM попадают только рёбра из плана — 42a7c0a1', () => {
@@ -356,6 +359,71 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'graph-tab does not precompute mass separately — one source of truth',
     );
     assert.ok(!/\bmass\s*:/.test(graphTab), 'graph-tab does not pass a second mass map');
+  });
+
+  it('пара свёртки — (тип, сосед) без стороны; представитель на каждую сторону — 42a7c0a1', () => {
+    const model = readText(SRC.model);
+    // Ключ группы не содержит сторону: порог считается по сумме обеих сторон.
+    assert.ok(
+      /const key = `\$\{link\.type_id \?\? ''\}\|\$\{otherId\}`/.test(model),
+      'the mass pair key is (type, neighbour) — the side is not part of the key',
+    );
+    // В массовой паре — по одной линии на присутствующую сторону.
+    assert.ok(
+      /for \(const \[side, sideLinks\] of sides\)/.test(model),
+      'one representative line per present side (6452c840 preserved)',
+    );
+    assert.ok(
+      /const representative = sideLinks\.find\(\(link\) => !isTrashedEdge\(link\)\)/.test(model),
+      'the representative of a side is a live edge',
+    );
+    // 5 исходящих + 5 входящих — двухстрочный случай таблицы: 2 линии, 8 скрытых.
+    assert.ok(
+      /5 исходящих \+ 5 входящих — 2 линии и 8 скрытых/.test(model),
+      'the model documents the 5+5 case (threshold by the sum of both sides)',
+    );
+  });
+
+  it('подсказки: склонение, сторона при совпадении имён, реальная вкладка — 42a7c0a1', () => {
+    const model = readText(SRC.model);
+    assert.ok(
+      model.includes("from '../lib/plural.js'") && model.includes('pluralRu('),
+      'the «связь/связи/связей» form comes from the shared plural helper',
+    );
+    assert.ok(
+      model.includes("'связь', 'связи', 'связей'"),
+      'the plural forms are wired for the links word',
+    );
+    assert.ok(
+      /pair\.side === 'out' \? 'исходящие' : 'входящие'/.test(model),
+      'colliding side names are distinguished by direction',
+    );
+    assert.ok(
+      model.includes('LINKS_TAB_TITLE = \'Свойства\''),
+      'the model knows where the full link list actually lives',
+    );
+  });
+
+  it('скрытые рёбра в корзине видны и достижимы: метка корзины у чипа → корзина — 42a7c0a1', () => {
+    const src = readText(SRC.graph);
+    assert.ok(
+      src.includes('mini-graph-mass-trash') && src.includes("'link-trash-badge'"),
+      'the mass chip carries the shared trash badge when hidden edges are trashed',
+    );
+    assert.ok(
+      /mass\.trashed > 0/.test(src),
+      'the badge appears only when hidden edges are actually in the trash',
+    );
+    assert.ok(
+      /openTrashDialogForNetwork\(\)/.test(src) && src.includes('openTrashDialog'),
+      'the badge opens the shared trash dialog (restore path)',
+    );
+    assert.ok(
+      /Связи в корзине: \$\{mass\.trashed\}/.test(src),
+      'the badge tooltip names the hidden trashed count',
+    );
+    const css = readText(SRC.css);
+    assert.ok(css.includes('.mini-graph-mass-trash'), 'CSS styles the chip trash badge container');
   });
 
   it('линии оформляются кастомными свойствами (подсветка не перебивается) — п.4', () => {

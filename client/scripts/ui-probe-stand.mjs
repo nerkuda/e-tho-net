@@ -9,6 +9,9 @@
  *      полигона, иначе свежая инициализация во временном `.tmp/ui-stand/<id>`);
  *   2. поднимает сервер ETN на этом каталоге и ждёт готовности (health);
  *   3. засеивает детерминированную пробную сеть (можно отключить `--no-seed`);
+ *      `--scenario-seed <file>` дополнительно готовит фикстуру сценария (скрипт
+ *      получает `--data-dir`, `--network-id`, `--center-id`, `--api`, `--api-key`
+ *      и может добавить свои `--trash` и т.п. через `--scenario-seed-arg`);
  *   4. поднимает СКРЫТЫЙ клиент обёрткой `ui-probe-launch.mjs` (невидимое окно,
  *      изолированный профиль — клиент пользователя не затрагивается,
  *      грабли 91720eda);
@@ -41,6 +44,13 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
 Опции:
       --scenario <file>  JSON-сценарий (шаблон с {{подстановками}}). Задан —
                          стенд поднимется, прогонит сценарий и погаснет.
+      --scenario-seed <file>
+                         Скрипт-фикстура сценария: запускается после засева сети
+                         с --data-dir/--network-id/--center-id/--api/--api-key.
+                         Требует засеянную сеть (не с --no-seed).
+      --scenario-seed-arg <a>
+                         Дополнительный аргумент фикстуры (повторяемый), например
+                         --scenario-seed-arg --trash --scenario-seed-arg 1.
       --data-from <dir>  Каталог данных для КОПИИ (полигон). Требует --api-key
                          (ключ того каталога); без него — свежая инициализация.
       --api-key <key>    API-key для копии данных (--data-from).
@@ -64,6 +74,8 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
 export function parseArgs(argv) {
   const opts = {
     scenario: null,
+    scenarioSeed: null,
+    scenarioSeedArgs: [],
     dataFrom: null,
     apiKey: null,
     serverPort: 0,
@@ -95,6 +107,14 @@ export function parseArgs(argv) {
         break;
       case '--scenario':
         opts.scenario = path.resolve(need(argv[i + 1], arg));
+        i += 1;
+        break;
+      case '--scenario-seed':
+        opts.scenarioSeed = path.resolve(need(argv[i + 1], arg));
+        i += 1;
+        break;
+      case '--scenario-seed-arg':
+        opts.scenarioSeedArgs.push(need(argv[i + 1], arg));
         i += 1;
         break;
       case '--data-from':
@@ -408,6 +428,37 @@ async function main(argv) {
       process.stdout.write(
         `ui-probe-stand: сеть «${seed.networkName}» (${seed.networkId}), мысль ${seed.thoughtId}\n`,
       );
+    }
+
+    // --- 3б. Фикстура сценария (--scenario-seed) ---------------------------
+    // Прогон должен быть воспроизводим одной командой: фикстура получает
+    // каталог данных стенда и id засеянных сущностей, поэтому не нужно
+    // вручную поднимать стенд, запускать seed и только потом ui-probe.
+    if (opts.scenarioSeed !== null) {
+      if (seed === null) {
+        throw new Error('--scenario-seed требует засеянную сеть (не используйте с --no-seed)');
+      }
+      const fixture = spawnNode(opts.scenarioSeed, [
+        '--data-dir',
+        dataDir,
+        '--network-id',
+        seed.networkId,
+        '--center-id',
+        seed.thoughtId,
+        '--api',
+        apiBase,
+        '--api-key',
+        apiKey,
+        ...opts.scenarioSeedArgs,
+      ]);
+      children.push(fixture);
+      const code = await new Promise((resolve) => fixture.child.on('exit', resolve));
+      children.pop();
+      if (code !== 0) {
+        throw new Error(
+          `фикстура сценария завершилась с кодом ${code}\n${fixture.getLog().slice(-1500)}`,
+        );
+      }
     }
 
     // --- 4. Скрытый клиент -------------------------------------------------
