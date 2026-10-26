@@ -1,0 +1,69 @@
+{
+  "name": "28d22b8a-toasts",
+  "description": "Задача 28d22b8a: одновременный стек тостов ≤5, снизу вверх, шестое сообщение вытесняет старейшее; рутинное подтверждение уходит в зону сообщений статус-бара справа от индикатора сервера, важное (потеря соединения) остаётся в стеке. Шесть подряд ошибок «HOME-мысль нельзя деактивировать» — штатная ошибка без побочных эффектов на сервере. В конце — агрегирующий вердикт: на дофиксовой сборке он падает со всеми наблюдениями (стек отсутствует, шесть тостов на body, подтверждение в тосте), на исправленной — зелёный.",
+  "timeout": 60000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "home-cloud-visible", "waitFor": "document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null" },
+    {
+      "name": "paste-space-clear",
+      "waitFor": "document.querySelectorAll('.notice').length === 0"
+    },
+    {
+      "name": "six-errors-to-stack",
+      "timeout": 30000,
+      "probe": "(async () => { window.__obs = {}; const home = () => document.querySelector('[data-id=\"{{homeId}}\"].cloud'); const stack = () => document.querySelector('.notice-stack'); const firstToast = () => stack()?.querySelector('.notice') ?? null; const countStack = () => stack()?.querySelectorAll('.notice').length ?? 0; const countBody = () => document.querySelectorAll('.notice').length; const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const counts = []; window.__firstToastNode = null; for (let i = 0; i < 6; i += 1) { const cloud = home(); if (cloud === null) return 'no-home-cloud'; const rect = cloud.getBoundingClientRect(); cloud.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) })); let item = null; for (let tick = 0; tick < 40 && item === null; tick += 1) { item = [...document.querySelectorAll('.menu .menu-item')].find((row) => (row.querySelector('.menu-item-label')?.textContent ?? '').trim() === 'Изменить актуальность') ?? null; if (item === null) await sleep(25); } if (item === null) return 'no-toggle-item'; const before = firstToast(); item.click(); for (let tick = 0; tick < 80; tick += 1) { if (firstToast() !== before) break; if (stack() === null && countBody() > i) break; await sleep(25); } if (i === 0) window.__firstToastNode = firstToast(); counts.push([countStack(), countBody()]); } window.__obs.counts = counts; return counts; })()"
+    },
+    {
+      "name": "stack-state",
+      "probe": "(() => { const stack = document.querySelector('.notice-stack'); const boxes = stack === null ? [] : [...stack.querySelectorAll('.notice')]; const rects = boxes.map((b) => b.getBoundingClientRect()); const first = window.__firstToastNode; window.__obs.stackCount = boxes.length; window.__obs.bodyCount = document.querySelectorAll('.notice').length; window.__obs.firstDetached = first !== null && first !== undefined && document.body.contains(first) === false; window.__obs.bottomUp = rects.length > 1 && rects.every((r, i) => i === 0 || r.top < rects[i - 1].top); return { stackCount: window.__obs.stackCount, bodyCount: window.__obs.bodyCount, firstDetached: window.__obs.firstDetached, bottomUp: window.__obs.bottomUp, orderTopPx: rects.map((r) => Math.round(r.top)) }; })()"
+    },
+    {
+      "name": "routine-copy-to-statusbar",
+      "timeout": 20000,
+      "probe": "(async () => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-seed-cloud'; const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const rect = cloud.getBoundingClientRect(); cloud.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) })); let item = null; for (let tick = 0; tick < 40 && item === null; tick += 1) { item = [...document.querySelectorAll('.menu .menu-item')].find((row) => (row.querySelector('.menu-item-label')?.textContent ?? '').trim() === 'Копировать') ?? null; if (item === null) await sleep(25); } if (item === null) return 'no-copy-item'; item.click(); const zone = () => document.querySelector('.sb-message'); for (let tick = 0; tick < 80 && (zone()?.textContent ?? '') === ''; tick += 1) await sleep(25); window.__obs.routineMessage = zone()?.textContent ?? null; window.__obs.routineInToast = [...document.querySelectorAll('.notice')].some((n) => (n.textContent ?? '').includes('Скопировано')); return { message: window.__obs.routineMessage, routineInToast: window.__obs.routineInToast }; })()"
+    },
+    {
+      "name": "statusbar-zone-geometry",
+      "probe": "(() => { const status = document.querySelector('.sb-status'); const zone = document.querySelector('.sb-message'); const area = document.querySelector('.event-area'); const present = status !== null && zone !== null && area !== null && (zone.textContent ?? '') !== ''; if (!present) { window.__obs.zoneRightOfServer = false; window.__obs.zoneOverlapsServer = false; window.__obs.zoneWithinBar = false; return { present: false }; } const s = status.getBoundingClientRect(); const z = zone.getBoundingClientRect(); const a = area.getBoundingClientRect(); window.__obs.zoneRightOfServer = z.left + 0.5 >= s.right; window.__obs.zoneOverlapsServer = z.left < s.right - 0.5 && z.right > s.left; window.__obs.zoneWithinBar = z.right <= a.right + 0.5 && z.left >= a.left - 0.5; return { present: true, statusRightPx: Math.round(s.right), zoneLeftPx: Math.round(z.left), zoneRightPx: Math.round(z.right), areaRightPx: Math.round(a.right) }; })()"
+    },
+    {
+      "name": "statusbar-zone-ttl",
+      "timeout": 20000,
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 6500)); const zone = document.querySelector('.sb-message'); window.__obs.zoneClearedAfterTtl = zone !== null && (zone.textContent ?? '') === '' && getComputedStyle(zone).display === 'none'; return { zoneClearedAfterTtl: window.__obs.zoneClearedAfterTtl, toastsLeft: document.querySelectorAll('.notice').length }; })()"
+    },
+    {
+      "name": "connection-loss-to-stack",
+      "timeout": 20000,
+      "probe": "(async () => { await window.etn.server.disconnect(); const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const isLoss = (t) => /Нет соединения|Соединение потеряно|Проверяем связь|Переподключение/.test(t); const texts = (root) => [...root.querySelectorAll('.notice')].map((n) => (n.querySelector('.notice-text')?.textContent ?? '').trim()); let all = []; for (let tick = 0; tick < 160; tick += 1) { all = texts(document.body); if (all.some(isLoss)) break; await sleep(25); } const stack = document.querySelector('.notice-stack'); const stackTexts = stack === null ? [] : texts(stack); const lossText = all.find(isLoss) ?? null; window.__obs.lossInStack = lossText !== null && stackTexts.includes(lossText); window.__obs.lossText = lossText; window.__obs.stackAfterLoss = stackTexts.length; return { lossText: window.__obs.lossText, lossInStack: window.__obs.lossInStack, stackAfterLoss: window.__obs.stackAfterLoss, bodyTexts: all }; })()"
+    },
+    {
+      "name": "verdict",
+      "probe": "(() => window.__obs)()",
+      "expect": {
+        "counts": [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [5, 5]],
+        "stackCount": 5,
+        "bodyCount": 5,
+        "firstDetached": true,
+        "bottomUp": true,
+        "routineMessage": "Скопировано: «{{seedTitle}}»",
+        "routineInToast": false,
+        "zoneRightOfServer": true,
+        "zoneOverlapsServer": false,
+        "zoneWithinBar": true,
+        "zoneClearedAfterTtl": true,
+        "lossInStack": true,
+        "lossText": "Нет соединения — правка сохранена как черновик и отправится после восстановления связи.",
+        "stackAfterLoss": 1
+      }
+    }
+  ]
+}

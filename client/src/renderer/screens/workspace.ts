@@ -26,6 +26,7 @@
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
+import { mountStatusMessage, unmountStatusMessage } from '../lib/status-message.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { store, getRtStatus, getRtStatusDetail, type RtStatus, type RtStatusDetail } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
@@ -427,6 +428,10 @@ export function buildWorkspace(): HTMLElement {
   const statusText = span('', 'sb-status-text');
   const sbStatus = div('sb-status');
   sbStatus.append(statusLeft, statusText);
+  // Зона сообщений статусной строки (задача 28d22b8a): рутинные подтверждения
+  // клиента («сохранено», «скопировано») справа от индикации сервера. Одно
+  // сообщение — новое заменяет предыдущее, TTL — `lib/status-message.ts`.
+  const sbMessage = span('', 'sb-item sb-message');
   // Zoom indicator (08-ui-spec §11): sits to the LEFT of the history strip,
   // immediately after the connection dot — the old position next to the
   // event area invited the layout to repaint the history chips every time
@@ -448,7 +453,7 @@ export function buildWorkspace(): HTMLElement {
   const eventArea = div('event-area');
   const countsLabel = span('', 'sb-item sb-counts');
   const eventLabel = span('', 'sb-item sb-event');
-  eventArea.append(sbStatus, countsLabel, eventLabel);
+  eventArea.append(sbStatus, sbMessage, countsLabel, eventLabel);
   const conflictHost = div('sb-conflict hidden');
   const conflictText = span(t('workspace.conflict.changed'));
   conflictHost.append(svgIcon('alert', 14), conflictText);
@@ -515,6 +520,10 @@ export function buildWorkspace(): HTMLElement {
   mountSelectionResizer(selectionResizer, body);
   mountUsageResizer(usageResizer, body);
   mountEventAreaResizer(eventAreaResizer, statusbar);
+  // Зона сообщений статусной строки живёт ровно столько, сколько статус-бар:
+  // teardown отпускает узел и гасит таймер TTL (задача 28d22b8a).
+  mountStatusMessage(sbMessage);
+  onWorkspaceTeardown(unmountStatusMessage);
   onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));
   onWorkspaceTeardown(mountSelection(selectionHost));
   onWorkspaceTeardown(mountUsagePanel(usageHost, usageResizer));

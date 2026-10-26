@@ -46,6 +46,7 @@ import { BASE_LAYER_ID } from '@etn/shared';
 import { invalidateQueries } from '../src/renderer/lib/live/index.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
+import { mountStatusMessage } from '../src/renderer/lib/status-message.js';
 
 type StripModule = typeof import('../src/renderer/canvas/focus-filter-strip.js');
 let strip: StripModule;
@@ -344,6 +345,10 @@ function installShim(): Harness {
   host.append(focusRow, splitter, empty, layerLabel);
 
   const body = new ShimElement('body');
+  // С 0.14.1 (задача 28d22b8a) рутинные подсказки — не тосты, а зона
+  // сообщений статус-бара: тест монтирует её, чтобы видеть текст.
+  const statusHost = new ShimElement('span', 'sb-item sb-message');
+  body.append(statusHost);
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
@@ -356,6 +361,8 @@ function installShim(): Harness {
     unobserve(): void {}
     disconnect(): void {}
   };
+
+  mountStatusMessage(statusHost);
 
   return {
     host,
@@ -404,13 +411,19 @@ function textOf(node: ShimElement): string {
   return out;
 }
 
+/** Тексты сообщений зоны статус-бара (рутинные подсказки; 0.14.1). */
 function noticesOnBody(): string[] {
-  return bodyEl().children.map(textOf);
+  const message = bodyEl().querySelector('.sb-message');
+  const text = message?.textContent ?? '';
+  return text === '' ? [] : [text];
 }
 
 function clearBody(): void {
   const body = bodyEl();
-  while (body.children.length > 0) body.children.pop();
+  // Зона сообщений — часть статус-бара: переживает очистку body между тестами,
+  // иначе ссылка модуля указывала бы на снятый узел.
+  const keep = body.children.filter((child) => child.classList.contains('sb-message'));
+  body.replaceChildren(...keep);
 }
 
 /** Последнее открытое меню (`showMenuAt` кладёт `.menu` в body). */

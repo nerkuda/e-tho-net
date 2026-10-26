@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
+import { mountStatusMessage } from '../src/renderer/lib/status-message.js';
 
 interface Call {
   method: string;
@@ -62,11 +63,18 @@ function fakeEtn(opts: {
 }
 
 function installShim(): void {
+  const body = new ShimElement('body');
+  // Рутинные подтверждения (0.14.1, задача 28d22b8a) больше не тосты: они
+  // показываются в зоне сообщений статус-бара. Тест монтирует её, чтобы
+  // проверять текст итога — канал сообщения сменился, обязательство «итог
+  // виден пользователю» осталось.
+  const statusHost = new ShimElement('span', 'sb-item sb-message');
+  body.append(statusHost);
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: new ShimElement('html'),
-    body: new ShimElement('body'),
+    body,
   };
   (globalThis as any).window = {
     innerWidth: 1200,
@@ -79,6 +87,7 @@ function installShim(): void {
     },
     clearTimeout: () => undefined,
   };
+  mountStatusMessage(statusHost);
 }
 
 installShim();
@@ -91,13 +100,20 @@ function body(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
 }
 
-/** Тексты показанных всплывашек (все `.notice .notice-text`). */
+/**
+ * Тексты сообщений итога операции. С 0.14.1 (задача 28d22b8a) рутинные
+ * подтверждения идут в зону сообщений статус-бара, а не в тосты; пустая зона —
+ * «сообщения нет».
+ */
 function notices(): string[] {
   const out: string[] = [];
-  for (const box of body().children) {
-    if (!box.classList.contains('notice')) continue;
-    for (const span of box.children) {
-      if (span.classList.contains('notice-text')) out.push(span.textContent ?? '');
+  const message = body().querySelector('.sb-message')?.textContent ?? '';
+  if (message !== '') out.push(message);
+  const stack = body().querySelector('.notice-stack');
+  if (stack !== null) {
+    for (const box of stack.children) {
+      const text = box.children.find((child) => child.classList.contains('notice-text'));
+      if (text !== undefined) out.push(text.textContent ?? '');
     }
   }
   return out;

@@ -23,6 +23,7 @@ import { BASE_LAYER_ID } from '@etn/shared';
 
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
+import { mountStatusMessage } from '../src/renderer/lib/status-message.js';
 
 const NETWORK_ID = '00000000-0000-4000-8000-000000000001';
 const TYPE_ID = '00000000-0000-4000-8000-000000000010';
@@ -107,11 +108,16 @@ function installFakeApi(): void {
 
 function installShim(): void {
   (globalThis as any).HTMLElement = class {};
+  const body = new ShimElement('body');
+  // С 0.14.1 (задача 28d22b8a) рутинные подсказки — не тосты, а зона
+  // сообщений статус-бара: тест монтирует её, чтобы видеть текст.
+  const statusHost = new ShimElement('span', 'sb-item sb-message');
+  body.append(statusHost);
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: new ShimElement('html'),
-    body: new ShimElement('body'),
+    body,
     activeElement: null,
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
@@ -135,6 +141,7 @@ function installShim(): void {
     disconnect(): void {}
   };
   (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
+  mountStatusMessage(statusHost);
 }
 
 /** Узлы диалога и его тела. */
@@ -168,8 +175,11 @@ function dialogButton(label: string): ShimElement | undefined {
   return dialog?.querySelectorAll('button').find((btn) => textOf(btn).trim() === label);
 }
 
+/** Тексты сообщений зоны статус-бара (рутинные подсказки; 0.14.1). */
 function noticesOnBody(): string[] {
-  return bodyEl().children.map(textOf);
+  const message = bodyEl().querySelector('.sb-message');
+  const text = message?.textContent ?? '';
+  return text === '' ? [] : [text];
 }
 
 async function settle(): Promise<void> {
@@ -195,7 +205,10 @@ before(async () => {
 afterEach(() => {
   closeDialogIfAny();
   const body = bodyEl();
-  while (body.children.length > 0) body.children.pop();
+  // Зона сообщений — часть статус-бара: переживает очистку body между
+  // тестами, иначе ссылка модуля указывала бы на снятый узел (0.14.1).
+  const keep = body.children.filter((child) => child.classList.contains('sb-message'));
+  body.replaceChildren(...keep);
 });
 
 function setLayer(id: string): void {

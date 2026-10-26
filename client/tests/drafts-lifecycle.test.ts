@@ -229,8 +229,12 @@ async function settleAsync(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+/** Число важных сообщений в стеке тостов (0 — сообщений нет).
+ *  С 0.14.1 (задача 28d22b8a) тосты живут в контейнере `.notice-stack`, а
+ *  рутинные подтверждения уходят в статус-бар и здесь не считаются. */
 function noticeCount(): number {
-  return body.children.length;
+  const stack = body.children.find((child) => child.classList.contains('notice-stack'));
+  return stack?.childElementCount ?? 0;
 }
 
 // ---------------------------------------------------------------------------

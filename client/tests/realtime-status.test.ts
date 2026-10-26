@@ -31,12 +31,12 @@ function installDom(): void {
   };
 }
 
-/** Тексты тостов, висящих в `document.body`. */
+/** Тексты тостов в стеке (0.14.1: контейнер `.notice-stack`). */
 function noticeTexts(): string[] {
   const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
-  return body.children
-    .filter((el) => el.className.includes('notice'))
-    .map((el) => el.children.map((child) => child.textContent).join(' '));
+  const stack = body.children.find((el) => el.classList.contains('notice-stack'));
+  if (stack === undefined) return [];
+  return stack.children.map((box) => box.children.map((child) => child.textContent).join(' '));
 }
 
 describe('renderer realtime status (de34b35b)', () => {

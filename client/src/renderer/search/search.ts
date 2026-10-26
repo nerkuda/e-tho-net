@@ -1313,7 +1313,7 @@ function runQuickCommand(
   command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed',
 ): void {
   if (command === 'parentInFocus' && (store.state.focus?.focused.id ?? null) === null) {
-    notice(t('search.focusRequired'), 'warning');
+    notice(t('search.focusRequired'));
     return;
   }
   const next = addSearchQuickCondition(options.tree ?? null, SEARCH_QUICK_CONDITIONS[command]());

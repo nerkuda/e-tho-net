@@ -20,7 +20,7 @@ import { errText, isConnectionLostError, isDuplicateError } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { findPermanentComment } from './lib/permanent-comment.js';
 import { t } from './lib/i18n.js';
-import { notice } from './lib/notice.js';
+import { notice, toast } from './lib/notice.js';
 import { isConnected } from './realtime.js';
 import { getRtStatus, store, type RtStatus } from './state.js';
 
@@ -99,7 +99,9 @@ export function initDrafts(): void {
     if (connected && !lastConnected) {
       // Recovery notice only after a real loss: the very first connect must
       // not claim «Соединение восстановлено» (de34b35b).
-      if (hadConnection) notice(t('realtime.link.recovered'), 'success');
+      // Восстановление связи — важное сообщение (доступность сервера), поэтому
+      // тост, а не рутинная строка статус-бара (задача 28d22b8a).
+      if (hadConnection) toast(t('realtime.link.recovered'), 'success');
       hadConnection = true;
     } else if (!connected && lastConnected) {
       // One notice per connected → not-connected transition; the status text

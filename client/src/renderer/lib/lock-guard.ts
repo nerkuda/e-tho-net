@@ -93,7 +93,7 @@ export async function acquireOrShowBlocked(
     if (me !== null && existing.user_id === me.id) {
       return { kind: 'self', lock: existing };
     }
-    notice(blockedByLockMessage(entityType, existing), 'info');
+    notice(blockedByLockMessage(entityType, existing), 'warning');
     return { kind: 'blocked', holder: existing };
   }
 
@@ -131,10 +131,10 @@ export async function acquireOrShowBlocked(
         client_id: details.holder?.client_id ?? null,
         acquired_at_ms: Date.now(),
       };
-      notice(blockedByLockMessage(entityType, holder), 'info');
+      notice(blockedByLockMessage(entityType, holder), 'warning');
       return { kind: 'blocked', holder };
     }
-    notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'info');
+    notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'warning');
     return { kind: 'failed', error: err };
   }
 }
@@ -153,7 +153,7 @@ export async function acquireOrShowBlocked(
 export function foreignLockBlocksEdit(entityType: LockEntityType | string, entityId: string): boolean {
   const existing = otherHolder(entityType, entityId);
   if (existing === null) return false;
-  notice(blockedByLockMessage(entityType, existing), 'info');
+  notice(blockedByLockMessage(entityType, existing), 'warning');
   return true;
 }
 

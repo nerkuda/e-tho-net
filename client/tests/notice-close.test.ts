@@ -14,6 +14,10 @@
  * 2. закрывается именно нажатый тост, остальные остаются, счётчик узлов стека
  *    только уменьшается;
  * 3. автозакрытие по таймеру (4 с) не задето.
+ *
+ * С 0.14.1 (задача 28d22b8a) тосты живут в общем контейнере `.notice-stack`
+ * (стек не более пяти, снизу вверх), поэтому счётчики ведутся по нему, а не по
+ * `document.body`; внутри стека первый ребёнок — самый новый (нижний).
  */
 
 import { beforeEach, test } from 'node:test';
@@ -22,7 +26,8 @@ import assert from 'node:assert/strict';
 import { ShimElement } from './dom-shim.js';
 
 /* ------------------------------------------------------------------ *
- * DOM-шим: notice() рисует тост в document.body и ставит TTL через window
+ * DOM-шим: notice() рисует тост в стеке `document.body` и ставит TTL через
+ * window
  * ------------------------------------------------------------------ */
 
 const body = new ShimElement('body');
@@ -50,8 +55,17 @@ win['removeEventListener'] = () => undefined;
 
 import { notice } from '../src/renderer/lib/notice.js';
 
-/** Тост-корень по индексу в стеке `document.body`. */
-function toastAt(index: number): ShimElement {  const box = body.children[index];
+/** Контейнер стека тостов (создаётся лениво первым тостом). */
+function stackOf(): ShimElement {
+  const stack = body.children.find((child) => child.classList.contains('notice-stack'));
+  assert.ok(stack !== undefined, 'контейнер .notice-stack не создан');
+  return stack;
+}
+
+/** Тост-корень по индексу в стеке (0 — самый новый, он внизу). */
+function toastAt(index: number): ShimElement {
+  const stack = stackOf();
+  const box = stack.children[index];
   assert.ok(box !== undefined, `тост #${index} отсутствует в стеке`);
   return box;
 }
@@ -82,7 +96,7 @@ beforeEach(() => {
 
 test('pointerdown на крестике закрывает тост (click может уйти мимо)', () => {
   notice('Ошибка сохранения', 'error');
-  assert.equal(body.childElementCount, 1, 'тост показан');
+  assert.equal(stackOf().childElementCount, 1, 'тост показан');
 
   const box = toastAt(0);
   const close = closeButtonOf(box);
@@ -90,7 +104,7 @@ test('pointerdown на крестике закрывает тост (click мо�
   // крестиком может появиться новый тост (исходный дефект).
   close.dispatch('pointerdown', { target: close });
 
-  assert.equal(body.childElementCount, 0, 'нажатый тост закрыт');
+  assert.equal(stackOf().childElementCount, 0, 'нажатый тост закрыт');
 });
 
 // ---------------------------------------------------------------------------
@@ -98,27 +112,29 @@ test('pointerdown на крестике закрывает тост (click мо�
 // ---------------------------------------------------------------------------
 
 test('крестик закрывает свой тост из стека, остальные не задеты', () => {
-  notice('первое');
-  notice('второе');
-  notice('третье');
-  assert.equal(body.childElementCount, 3, 'три тоста в стеке');
+  notice('первое', 'error');
+  notice('второе', 'error');
+  notice('третье', 'error');
+  assert.equal(stackOf().childElementCount, 3, 'три тоста в стеке');
+  // Стек растёт снизу вверх: первый ребёнок — самый новый.
+  assert.deepEqual(stackOf().children.map(textOf), ['третье', 'второе', 'первое']);
 
-  // Нажимаем крестик ВТОРОГО (среднего) тоста.
+  // Нажимаем крестик СРЕДНЕГО тоста — «второе».
   const middle = toastAt(1);
   closeButtonOf(middle).dispatch('pointerdown', { target: middle });
 
-  assert.equal(body.childElementCount, 2, 'счётчик стека уменьшился, а не вырос');
+  assert.equal(stackOf().childElementCount, 2, 'счётчик стека уменьшился, а не вырос');
   assert.deepEqual(
-    body.children.map(textOf),
-    ['первое', 'третье'],
+    stackOf().children.map(textOf),
+    ['третье', 'первое'],
     'закрыт именно нажатый тост',
   );
 
   // Закрываем оставшиеся — стек пуст.
-  for (const box of [...body.children]) {
+  for (const box of [...stackOf().children]) {
     closeButtonOf(box).dispatch('pointerdown', { target: box });
   }
-  assert.equal(body.childElementCount, 0, 'все тосты закрываются своими крестиками');
+  assert.equal(stackOf().childElementCount, 0, 'все тосты закрываются своими крестиками');
 });
 
 // ---------------------------------------------------------------------------
@@ -127,12 +143,12 @@ test('крестик закрывает свой тост из стека, ос�
 
 test('тост сам снимается по таймеру 4 с', () => {
   timers.length = 0;
-  notice('самоисчезающий');
-  assert.equal(body.childElementCount, 1);
+  notice('самоисчезающий', 'warning');
+  assert.equal(stackOf().childElementCount, 1);
 
   assert.equal(timers.length, 1, 'TTL поставлен');
   assert.equal(timers[0]!.ms, 4000, 'задержка автозакрытия — 4 с');
 
   timers[0]!.callback();
-  assert.equal(body.childElementCount, 0, 'по таймеру тост исчез');
+  assert.equal(stackOf().childElementCount, 0, 'по таймеру тост исчез');
 });

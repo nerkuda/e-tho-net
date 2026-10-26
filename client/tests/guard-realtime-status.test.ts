@@ -95,7 +95,13 @@ describe('guard: статусы realtime-соединения', () => {
     );
     assert.match(workspace, /const sbStatus = div\('sb-status'\)/);
     assert.match(workspace, /sbStatus\.append\(statusLeft, statusText\)/);
-    assert.match(workspace, /eventArea\.append\(sbStatus, countsLabel, eventLabel\)/);
+    // Зона сообщений статус-бара (задача 28d22b8a) стоит СРАЗУ справа от
+    // индикатора соединения и монтируется вместе со статус-баром; тостовая
+    // зона — отдельный стек, не статус-бар.
+    assert.match(workspace, /const sbMessage = span\('', 'sb-item sb-message'\)/);
+    assert.match(workspace, /eventArea\.append\(sbStatus, sbMessage, countsLabel, eventLabel\)/);
+    assert.match(workspace, /mountStatusMessage\(sbMessage\)/);
+    assert.match(workspace, /onWorkspaceTeardown\(unmountStatusMessage\)/);
     assert.match(
       workspace,
       /statusbar\.append\(\s*zoomLabel,\s*historyHost,\s*eventAreaResizer,\s*eventArea,\s*conflictHost,?\s*\)/,
