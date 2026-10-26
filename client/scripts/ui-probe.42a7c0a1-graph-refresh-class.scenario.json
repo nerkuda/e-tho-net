@@ -1,6 +1,6 @@
 {
   "name": "42a7c0a1-graph-refresh-class",
-  "description": "GUI-проверка КЛАССА ошибки 42a7c0a1 (круг 3): вкладка «Граф» отражает любое изменение состава рёбер в той же сессии, а обычные правки несвязанных полей панель не пересобирают. Реальный сторонний актор: создание соседа через REST раннера (POST /thoughts с create_link). Остальные изменения — прямыми вызовами API из рендерера мимо UI-отражения, то есть проверяется realtime-путь: переименование соседа (thought.updated), корзина и восстановление скрытого ребра (link.updated), purge цели (thought.deleted + link.deleted), свойство-связь set/remove (link.created/link.deleted). Без пересборки: синонимы мысли и скалярное свойство — canvas сохраняет идентичность. Инвариант в конце: массовая пара 12 рёбер → 1 линия пары + чип «+11», метки корзины нет. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-graph-refresh-class.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs",
+  "description": "GUI-проверка КЛАССА ошибки 42a7c0a1 (круг 3): вкладка «Граф» отражает любое изменение состава рёбер в той же сессии, а обычные правки несвязанных полей панель не пересобирают. Реальный сторонний актор: создание соседа через REST раннера (POST /thoughts с create_link). Остальные изменения — прямыми вызовами API из рендерера мимо UI-отражения, то есть проверяется realtime-путь: переименование соседа (thought.updated), корзина и восстановление скрытого ребра (link.updated), purge цели (thought.deleted + link.deleted), свойство-связь set/remove (link.created/link.deleted). Без пересборки: синонимы мысли и скалярное свойство — canvas сохраняет идентичность. Круг 4: «уйти на другую вкладку → стороннее изменение → вернуться» — граф показывает 4 узла/3 линии (скрытая панель инвалидируется, а не держит устаревший снимок), и realtime-переименование ЦЕНТРАЛЬНОЙ мысли из другого клиента обновляет центральную пилюлю. Инвариант в конце: массовая пара 12 рёбер → 1 линия пары + чип «+11», метки корзины нет. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-graph-refresh-class.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs",
   "timeout": 120000,
   "steps": [
     {
@@ -58,7 +58,7 @@
     },
     {
       "name": "class-helper",
-      "eval": "(() => { const nid='{{networkId}}'; const center='{{thoughtId}}'; const q=(s)=>document.querySelector(s); const g={ nodes:()=>document.querySelectorAll('.mini-node').length, lines:()=>document.querySelectorAll('.mini-graph-edge').length, chip:()=>q('.mini-graph-mass-chip text')?.textContent ?? null, badge:()=>document.querySelectorAll('.mini-graph-mass-trash .link-trash-badge').length, keep:()=>{ window.__kept=q('.mini-graph-canvas'); return window.__kept!==null; }, kept:()=>window.__kept===q('.mini-graph-canvas'), sleep:(ms)=>new Promise((r)=>setTimeout(()=>r('ok'),ms)), children:async()=>((await window.etn.links.listByThought(nid,center,true)).untyped_children||[]), markHidden:async()=>{ const rows=await g.children(); const row=rows[Math.min(1,rows.length-1)]; const full=await window.etn.links.get(nid,row.link.id); const u=await window.etn.links.update(nid,row.link.id,{marked_for_deletion:true},full.version); return u.marked_for_deletion; }, unmarkHidden:async()=>{ const rows=await g.children(); const row=rows.find((r)=>r.link.marked_for_deletion); if(!row) return 'none'; const full=await window.etn.links.get(nid,row.link.id); const u=await window.etn.links.update(nid,row.link.id,{marked_for_deletion:false},full.version); return u.marked_for_deletion; }, synonyms:async()=>{ const t=await window.etn.thoughts.get(nid,center); const u=await window.etn.thoughts.update(nid,center,{synonyms:['класс-проверка']},t.version); return u.id===center; }, scalar:async()=>{ await window.etn.propertyRegistry.create(nid,{name:'Класс-скаляр',value_type:'text'}); await window.etn.properties.set(nid,'thought',center,'Класс-скаляр','значение'); return 'ok'; }, child:async()=>{ const kids=await window.etn.thoughts.neighbors(nid,center,'children',200); return kids.find((t)=>t.title.indexOf('Массовый сосед 42a7c0a1')===0)||null; }, renameNeighbour:async()=>{ const t=await g.child(); if(!t) return false; const full=await window.etn.thoughts.get(nid,t.id); const u=await window.etn.thoughts.update(nid,t.id,{title:'Массовый сосед 42a7c0a1+'},full.version); return u.title==='Массовый сосед 42a7c0a1+'; }, extraId:async()=>{ const kids=await window.etn.thoughts.neighbors(nid,center,'children',200); const t=kids.find((x)=>x.title==='Класс-сосед'); return t?t.id:null; }, purgeExtra:async()=>{ const id=await g.extraId(); if(!id) return 'no-extra'; const t=await window.etn.thoughts.get(nid,id); await window.etn.thoughts.update(nid,id,{marked_for_deletion:true},t.version); const t2=await window.etn.thoughts.get(nid,id); await window.etn.thoughts.remove(nid,id,t2.version); return 'ok'; }, propDeclare:async()=>{ const def=await window.etn.propertyRegistry.create(nid,{name:'Класс-ссылка',value_type:'link',name_forward:'ссылается на',name_reverse:'используется в'}); const b=await window.etn.thoughts.create(nid,{title:'Класс-цель'}); window.__prop={name:def.name,id:b.id}; return 'ok'; }, propSet:async()=>{ await window.etn.properties.set(nid,'thought',center,window.__prop.name,[window.__prop.id]); return 'ok'; }, propRemove:async()=>{ await window.etn.properties.remove(nid,'thought',center,window.__prop.name); return 'ok'; } }; window.__g=g; return 'ok'; })()"
+      "eval": "(() => { const nid='{{networkId}}'; const center='{{thoughtId}}'; const q=(s)=>document.querySelector(s); const g={ nodes:()=>document.querySelectorAll('.mini-node').length, lines:()=>document.querySelectorAll('.mini-graph-edge').length, chip:()=>q('.mini-graph-mass-chip text')?.textContent ?? null, badge:()=>document.querySelectorAll('.mini-graph-mass-trash .link-trash-badge').length, keep:()=>{ window.__kept=q('.mini-graph-canvas'); return window.__kept!==null; }, kept:()=>window.__kept===q('.mini-graph-canvas'), sleep:(ms)=>new Promise((r)=>setTimeout(()=>r('ok'),ms)), children:async()=>((await window.etn.links.listByThought(nid,center,true)).untyped_children||[]), markHidden:async()=>{ const rows=await g.children(); const row=rows[Math.min(1,rows.length-1)]; const full=await window.etn.links.get(nid,row.link.id); const u=await window.etn.links.update(nid,row.link.id,{marked_for_deletion:true},full.version); return u.marked_for_deletion; }, unmarkHidden:async()=>{ const rows=await g.children(); const row=rows.find((r)=>r.link.marked_for_deletion); if(!row) return 'none'; const full=await window.etn.links.get(nid,row.link.id); const u=await window.etn.links.update(nid,row.link.id,{marked_for_deletion:false},full.version); return u.marked_for_deletion; }, synonyms:async()=>{ const t=await window.etn.thoughts.get(nid,center); const u=await window.etn.thoughts.update(nid,center,{synonyms:['класс-проверка']},t.version); return u.id===center; }, scalar:async()=>{ await window.etn.propertyRegistry.create(nid,{name:'Класс-скаляр',value_type:'text'}); await window.etn.properties.set(nid,'thought',center,'Класс-скаляр','значение'); return 'ok'; }, child:async()=>{ const kids=await window.etn.thoughts.neighbors(nid,center,'children',200); return kids.find((t)=>t.title.indexOf('Массовый сосед 42a7c0a1')===0)||null; }, renameNeighbour:async()=>{ const t=await g.child(); if(!t) return false; const full=await window.etn.thoughts.get(nid,t.id); const u=await window.etn.thoughts.update(nid,t.id,{title:'Массовый сосед 42a7c0a1+'},full.version); return u.title==='Массовый сосед 42a7c0a1+'; }, extraId:async()=>{ const kids=await window.etn.thoughts.neighbors(nid,center,'children',200); const t=kids.find((x)=>x.title==='Класс-сосед'); return t?t.id:null; }, purgeExtra:async()=>{ const id=await g.extraId(); if(!id) return 'no-extra'; const t=await window.etn.thoughts.get(nid,id); await window.etn.thoughts.update(nid,id,{marked_for_deletion:true},t.version); const t2=await window.etn.thoughts.get(nid,id); await window.etn.thoughts.remove(nid,id,t2.version); return 'ok'; }, propDeclare:async()=>{ const def=await window.etn.propertyRegistry.create(nid,{name:'Класс-ссылка',value_type:'link',name_forward:'ссылается на',name_reverse:'используется в'}); const b=await window.etn.thoughts.create(nid,{title:'Класс-цель'}); window.__prop={name:def.name,id:b.id}; return 'ok'; }, propSet:async()=>{ await window.etn.properties.set(nid,'thought',center,window.__prop.name,[window.__prop.id]); return 'ok'; }, propRemove:async()=>{ await window.etn.properties.remove(nid,'thought',center,window.__prop.name); return 'ok'; }, renameCenter:async()=>{ const t=await window.etn.thoughts.get(nid,center); const u=await window.etn.thoughts.update(nid,center,{title:'{{seedTitle}}+'},t.version); return u.title; } }; window.__g=g; return 'ok'; })()"
     },
     {
       "name": "class-baseline",
@@ -212,6 +212,103 @@
       "expect": {
         "nodes": 3,
         "lines": 2,
+        "chip": "+11",
+        "badge": 0
+      }
+    },
+    {
+      "name": "keep-hidden-baseline",
+      "probe": "(() => { window.__hiddenKept = document.querySelector('.mini-graph-canvas'); return window.__hiddenKept !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "switch-to-properties",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Свойства'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "graph-detached",
+      "timeout": 5000,
+      "waitFor": "document.querySelector('.mini-graph-canvas') === null"
+    },
+    {
+      "name": "external-add-hidden",
+      "api": {
+        "name": "external-add-hidden",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Класс-скрытый",
+          "create_link": {
+            "direction": "parent",
+            "target_thought_id": "{{thoughtId}}"
+          }
+        },
+        "expression": "data.id"
+      }
+    },
+    {
+      "name": "hidden-change-settled",
+      "eval": "window.__g.sleep(1200)"
+    },
+    {
+      "name": "return-to-graph",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "hidden-add-applied",
+      "timeout": 15000,
+      "waitFor": "window.__g.nodes() === 4 && window.__g.lines() === 3"
+    },
+    {
+      "name": "hidden-add-probe",
+      "probe": "(() => ({ nodes: window.__g.nodes(), lines: window.__g.lines(), canvases: document.querySelectorAll('.mini-graph-canvas').length }))()",
+      "expect": {
+        "nodes": 4,
+        "lines": 3,
+        "canvases": 1
+      }
+    },
+    {
+      "name": "hidden-add-rebuilt",
+      "probe": "window.__hiddenKept !== document.querySelector('.mini-graph-canvas')",
+      "expect": true
+    },
+    {
+      "name": "keep-before-center-rename",
+      "probe": "(() => { window.__centerKept = document.querySelector('.mini-graph-canvas'); return window.__centerKept !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "center-pill-before",
+      "probe": "(document.querySelector('.mini-node-center .cloud-title')?.textContent ?? '')",
+      "expect": "{{seedTitle}}"
+    },
+    {
+      "name": "rename-center",
+      "probe": "window.__g.renameCenter()",
+      "expect": "{{seedTitle}}+"
+    },
+    {
+      "name": "realtime-center-title",
+      "timeout": 15000,
+      "waitFor": "(document.querySelector('.mini-node-center .cloud-title')?.textContent ?? '') === '{{seedTitle}}+'"
+    },
+    {
+      "name": "center-rename-rebuilt",
+      "probe": "window.__centerKept !== document.querySelector('.mini-graph-canvas')",
+      "expect": true
+    },
+    {
+      "name": "center-pill-text",
+      "probe": "(document.querySelector('.mini-node-center .cloud-title')?.textContent ?? '')",
+      "expect": "{{seedTitle}}+"
+    },
+    {
+      "name": "center-rename-metrics",
+      "probe": "(() => ({ nodes: window.__g.nodes(), lines: window.__g.lines(), chip: window.__g.chip(), badge: window.__g.badge() }))()",
+      "expect": {
+        "nodes": 4,
+        "lines": 3,
         "chip": "+11",
         "badge": 0
       }
