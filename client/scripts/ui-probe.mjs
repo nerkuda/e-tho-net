@@ -60,12 +60,28 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
       --api <url>        Базовый URL REST стенда для шагов api.
       --api-key <key>    API-key для шагов api (заголовок Authorization).
       --no-wake          Не «будить» страницу через CDP перед прогоном.
+      --no-warmup        Не ждать готовности клиента (первый экран) перед
+                         прогоном. По умолчанию раннер ждёт, пока документ
+                         загрузится и приложение отрисует первый экран, — это
+                         прогревает холодный клиент (стенд поднимает его заново
+                         на каждый прогон) и снимает гонку с первым рендером.
+      --cold-start       Пометить прогон как холодный старт клиента (стенд
+                         ставит флаг всегда: клиент поднимается с нуля на
+                         изолированном профиле). Диагностические сообщения
+                         таймаутов тогда называют «холодный старт», а не
+                         «шаг упал»: флак прогрева не маскируется под дефект.
   -h, --help             Эта справка.
 
 Перед прогоном раннер по умолчанию «будит» скрытое окно обёртки через CDP
 (Page.bringToFront, Emulation.setFocusEmulationEnabled,
 Page.setWebLifecycleState('active')) — иначе rAF/layout заморожены и условия
 не наступают (грабли 03e33360). Отключить: --no-wake.
+
+Шаг «click» сверяет попадание точки с целью через «document.elementFromPoint»
+непосредственно перед нажатием (грабли 7c521541): если разметка сдвинулась
+между измерением прямоугольника и нажатием (первый рендер холодного клиента,
+загрузка картинки, смена размера окна), точка перемеряется — «потерянный» клик
+не превращается в молчаливый таймаут следующего «waitFor».
 
 Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага или несошедшееся
 ожидание; 2 — ошибка вызова, сценария или подключения к CDP.
@@ -88,6 +104,8 @@ function parseArgs(argv) {
     api: null,
     apiKey: null,
     wake: true,
+    warmup: true,
+    coldStart: false,
     help: false,
   };
   const need = (value, flag) => {
@@ -154,6 +172,12 @@ function parseArgs(argv) {
         break;
       case '--no-wake':
         opts.wake = false;
+        break;
+      case '--no-warmup':
+        opts.warmup = false;
+        break;
+      case '--cold-start':
+        opts.coldStart = true;
         break;
       default:
         throw new UsageError(`неизвестный аргумент «${arg}» (справка: --help)`);
@@ -305,7 +329,7 @@ function waitFrames(cdp, frames) {
 }
 
 /** Поллинг выражения до истины или таймаута (ожидание по условию). */
-async function waitForExpression(cdp, expression, timeout) {
+async function waitForExpression(cdp, expression, timeout, coldStart = false) {
   const deadline = Date.now() + timeout;
   let lastError = null;
   for (;;) {
@@ -318,10 +342,43 @@ async function waitForExpression(cdp, expression, timeout) {
     if (truthy) return;
     if (Date.now() >= deadline) {
       const suffix = lastError === null ? '' : ` (последняя ошибка: ${lastError.message})`;
-      throw new Error(`таймаут ${timeout} мс: условие не стало истинным${suffix}`);
+      throw new Error(
+        `таймаут ${timeout} мс: условие не стало истинным${suffix}${coldStartHint(coldStart)}`,
+      );
     }
     await sleep(50);
   }
+}
+
+/**
+ * Хвост диагностического сообщения для прогонов с холодным клиентом (стенд
+ * поднимает клиент заново на изолированном профиле). Флак прогрева тогда
+ * назван «холодным стартом», а не выглядит провалом шага/дефектом продукта.
+ */
+function coldStartHint(coldStart) {
+  return coldStart
+    ? ' — холодный старт клиента: стенд поднимает его заново; прогрейте и повторите прогон или увеличьте timeout'
+    : '';
+}
+
+/**
+ * Прогрев перед сценарием: ждёт полной загрузки документа и первого экрана
+ * приложения. Стенд поднимает клиент с нуля на каждый прогон, поэтому первый
+ * рендер и раскладка ещё «догоняют» старт сценария: без прогрева ранние шаги
+ * гоняются с инициализацией клиента (холодный старт).
+ * Возвращает, сколько пришлось ждать (0 — клиент был готов).
+ */
+const READY_EXPRESSION = "document.readyState === 'complete' && document.querySelector('#app .screen') !== null";
+
+async function warmupPage(cdp, timeout, coldStart) {
+  const started = Date.now();
+  try {
+    await waitForExpression(cdp, READY_EXPRESSION, timeout, coldStart);
+  } catch (err) {
+    throw new Error(`прогрев: клиент не показал первый экран (${err.message})`);
+  }
+  await waitFrames(cdp, 2);
+  return Date.now() - started;
 }
 
 /**
@@ -503,7 +560,8 @@ async function doHover(cdp, spec) {
 }
 
 async function doClick(cdp, spec) {
-  const { px, py } = await resolvePoint(cdp, spec);
+  const point = await resolveCheckedPoint(cdp, spec);
+  const { px, py } = point;
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
   // `count` последовательных нажатий: со второго браузер отдаёт `click` с
   // `detail = 2` — так прогоняется настоящий двойной клик (шаг `click`).
@@ -526,6 +584,46 @@ async function doClick(cdp, spec) {
       clickCount: i,
     });
   }
+  return point;
+}
+
+/** Сколько раз перемерить точку клика перед нажатием (сдвиг разметки). */
+const CLICK_HIT_ATTEMPTS = 4;
+
+/**
+ * Точка клика с проверкой попадания НЕПОСРЕДСТВЕННО перед нажатием.
+ *
+ * Прямоугольник элемента и координаты нажатия разнесены по времени (hover,
+ * постановка кадра); за это время разметка может сдвинуться — первый рендер
+ * холодного клиента, загрузка картинки, смена размера окна. Нажатие в устаревшую
+ * точку браузер доставит соседнему элементу, и клик молча пропадёт (симптом
+ * `af96d388`: таймаут следующего `waitFor` без единого запроса на сервере).
+ * Поэтому `elementFromPoint` сверяется с целью, при промахе прямоугольник
+ * перемеряется (до {@link CLICK_HIT_ATTEMPTS} раз). Если попадания так и нет
+ * (сценарий сознательно целится в особую точку), клик выполняется как раньше, а
+ * расхождение возвращается в отчёт (`hit.mismatched`) — промах видим текстом, а
+ * не молчаливым «ok» (грабли 7c521541).
+ */
+async function resolveCheckedPoint(cdp, spec) {
+  let point = await resolvePoint(cdp, spec);
+  if (spec.selector === null) return { ...point, hit: null };
+  let last = null;
+  for (let attempt = 0; attempt < CLICK_HIT_ATTEMPTS; attempt += 1) {
+    last = await hitAt(cdp, point.px, point.py, spec.selector);
+    if (last !== null && last.matched === true) {
+      return { ...point, retries: attempt, hit: last.element };
+    }
+    if (attempt + 1 < CLICK_HIT_ATTEMPTS) {
+      await waitFrames(cdp, 1);
+      point = await resolvePoint(cdp, spec);
+    }
+  }
+  return {
+    ...point,
+    retries: CLICK_HIT_ATTEMPTS - 1,
+    hit: last === null ? null : last.element,
+    mismatched: true,
+  };
 }
 
 /**
@@ -662,10 +760,22 @@ async function runStep(cdp, step, outDir, entry, report, context) {
       await doKey(cdp, step.key);
       await waitFrames(cdp, 2);
       break;
-    case 'click':
-      await doClick(cdp, step.click);
+    case 'click': {
+      const point = await doClick(cdp, step.click);
+      // Диагностика сдвига разметки: сколько раз точку пришлось перемерить,
+      // чтобы попасть в цель (и попали ли вообще) — видно в отчёте.
+      if (point.retries > 0 || point.mismatched === true) {
+        entry.click = {
+          x: point.px,
+          y: point.py,
+          retries: point.retries ?? 0,
+          mismatched: point.mismatched === true,
+          under: point.hit,
+        };
+      }
       await waitFrames(cdp, 2);
       break;
+    }
     case 'hover':
       await doHover(cdp, step.hover);
       await waitFrames(cdp, 2);
@@ -679,7 +789,7 @@ async function runStep(cdp, step, outDir, entry, report, context) {
       break;
     case 'waitFor':
       if (step.waitFor.expression !== null) {
-        await waitForExpression(cdp, step.waitFor.expression, step.timeout);
+        await waitForExpression(cdp, step.waitFor.expression, step.timeout, context.coldStart);
       }
       if (step.waitFor.frames > 0) {
         await waitFrames(cdp, step.waitFor.frames);
@@ -753,10 +863,13 @@ async function runStep(cdp, step, outDir, entry, report, context) {
   }
 }
 
-function withTimeout(timeout, promise, label) {
+function withTimeout(timeout, promise, label, coldStart = false) {
   let timer;
   const guard = new Promise((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`таймаут шага ${timeout} мс (${label})`)), timeout);
+    timer = setTimeout(
+      () => reject(new Error(`таймаут шага ${timeout} мс (${label})${coldStartHint(coldStart)}`)),
+      timeout,
+    );
   });
   return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
 }
@@ -789,6 +902,19 @@ function formatStep(entry) {
     detail = ` → ${entry.shot}`;
   } else if (entry.eval !== undefined) {
     detail = ` ${entry.eval.name}`;
+  }
+  if (entry.click !== undefined) {
+    const retries = entry.click.retries ?? 0;
+    detail += ` [точка ${entry.click.x},${entry.click.y}`;
+    detail += retries === 0 ? ']' : `, перемер ${retries}]`;
+    if (entry.click.mismatched === true) {
+      const under = entry.click.under;
+      const fact =
+        under === null || under === undefined
+          ? 'под указателем пусто'
+          : `${under.tag} class="${under.className}"`;
+      detail += ` — ПРОМАХ: ${fact}`;
+    }
   }
   if (entry.error !== undefined) detail += ` — ${entry.error}`;
   return `${status} ${String(entry.index + 1).padStart(2)} ${entry.kind.padEnd(7)} ${entry.name}${detail} (${entry.ms} мс)`;
@@ -829,7 +955,12 @@ async function runScenario(cdp, scenario, outDir, base, context) {
     try {
       // Every step — including `waitFor` by frames — is bounded by the step
       // deadline, so a stalled frame supply cannot hang the run.
-      await withTimeout(step.timeout, runStep(cdp, step, outDir, entry, report, context), step.name);
+      await withTimeout(
+        step.timeout,
+        runStep(cdp, step, outDir, entry, report, context),
+        step.name,
+        context.coldStart,
+      );
     } catch (err) {
       entry.status = 'failed';
       entry.error = err instanceof Error ? err.message : String(err);
@@ -874,16 +1005,22 @@ async function main(argv) {
   const base = opts.cdp ?? `http://${opts.host}:${opts.port}`;
   const target = await resolvePageTarget(base, opts.target);
   const cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
-  const context = { api: { base: opts.api, key: opts.apiKey }, values: new Map() };
+  const context = { api: { base: opts.api, key: opts.apiKey }, values: new Map(), coldStart: opts.coldStart };
   let report;
+  let warmupMs = null;
   try {
     await cdp.send('Runtime.enable');
     await cdp.send('Page.enable');
     if (opts.wake) await wakePage(cdp);
+    if (opts.warmup) {
+      warmupMs = await warmupPage(cdp, 15000, opts.coldStart);
+      process.stdout.write(`ui-probe: прогрев — клиент готов за ${warmupMs} мс\n`);
+    }
     report = await runScenario(cdp, scenario, outDir, base, context);
   } finally {
     cdp.close();
   }
+  if (warmupMs !== null) report.warmupMs = warmupMs;
 
   const reportPath = path.join(outDir, 'report.json');
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
