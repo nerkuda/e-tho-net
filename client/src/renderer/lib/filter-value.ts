@@ -494,8 +494,9 @@ function filterValuePayloadValue(
  * старым содержимым — модель и сервер новые, DOM старый (блокер проверки этапа
  * 3). Виджеты `entity` перекрывают этот приёмник своим и обновляют разметку
  * сами (чипы/комбо). Несовместимый бросок модель не меняет и объясняет причину
- * тостом; в приёмник панели «Структур» он не проваливается — ближайший
- * зарегистрированный предок (`walkDropField`) остаётся этим.
+ * в зоне сообщений статус-бара (рутинная валидация, задача 28d22b8a); в
+ * приёмник панели «Структур» он не проваливается — ближайший зарегистрированный
+ * предок (`walkDropField`) остаётся этим.
  */
 function acceptFilterValueDrop(
   leaf: FilterTreeLeaf,
@@ -504,7 +505,7 @@ function acceptFilterValueDrop(
   payload: ThoughtDropPayload,
 ): boolean {
   if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
-    notice(filterValueDropRejectionText(payload), 'warning');
+    notice(filterValueDropRejectionText(payload));
     return false;
   }
   const value = filterValuePayloadValue(leaf, payload);
@@ -2033,7 +2034,7 @@ function entityOperandControl(
   // перерисовка чипов), второго способа записи значения нет.
   const acceptEntityPayload = (payload: ThoughtDropPayload): boolean => {
     if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
-      notice(filterValueDropRejectionText(payload), 'warning');
+      notice(filterValueDropRejectionText(payload));
       return false;
     }
     const id = payload.kind === 'thought' || payload.kind === 'type' ? payload.id : null;

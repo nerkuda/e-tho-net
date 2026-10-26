@@ -1874,7 +1874,7 @@ async function copyRecord(id: string): Promise<void> {
     // Локальная мутация — через слой: гасим ключ ленты (единственный путь, G3).
     invalidateQueries(queryKeys.chronicleFeedAll());
   } catch (err) {
-    notice(t('diary.copyFailed', [errText(err)]), 'error');
+    notice(t('diary.copyFailed', [errText(err)]));
   }
 }
 

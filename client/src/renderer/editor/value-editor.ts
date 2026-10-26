@@ -56,7 +56,7 @@ import { formatCrossNetworkAddress, parseCrossNetworkAddress } from '@etn/shared
 import { store } from '../state.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { notice } from '../lib/notice.js';
+import { notice, noticePartial } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { markCrossNetworkThoughtPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { loadCrossNetworkCandidates } from '../lib/entity-picker.js';
@@ -498,11 +498,11 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       }
       render();
       const unresolved = result.values.filter((v) => v.unresolved).length;
-      notice(
+      noticePartial(
         unresolved === 0
           ? 'Снапшоты обновлены.'
           : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
-        'info',
+        unresolved,
       );
       notifyPropertyValuesRefreshed(key);
     } catch (err) {

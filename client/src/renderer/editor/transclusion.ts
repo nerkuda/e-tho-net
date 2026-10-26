@@ -1805,7 +1805,7 @@ async function copyTransclusionText(text: string, okMessage: string): Promise<vo
     await navigator.clipboard.writeText(text);
     notice(okMessage);
   } catch {
-    notice(t('comment.transclusion.menu.copyError'), 'error');
+    notice(t('comment.transclusion.menu.copyError'));
   }
 }
 

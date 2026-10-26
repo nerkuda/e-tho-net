@@ -73,9 +73,15 @@ let builder: typeof import('../src/renderer/lib/filter-builder.js');
 let treeMod: typeof import('../src/renderer/lib/filter-tree.js');
 let valueMod: typeof import('../src/renderer/lib/filter-value.js');
 let dropMod: typeof import('../src/renderer/lib/thought-drop.js');
+/** Зона сообщений статус-бара: рутинная валидация броска идёт сюда, не тостом. */
+let statusHost: ShimElement;
 
 before(async () => {
   installShim();
+  const { mountStatusMessage } = await import('../src/renderer/lib/status-message.js');
+  statusHost = new ShimElement('span', 'sb-message');
+  (globalThis as any).document.body.append(statusHost);
+  mountStatusMessage(statusHost);
   builder = await import('../src/renderer/lib/filter-builder.js');
   treeMod = await import('../src/renderer/lib/filter-tree.js');
   valueMod = await import('../src/renderer/lib/filter-value.js');
@@ -318,11 +324,8 @@ describe('приём облачка в условие: ближайший при
     assert.equal(JSON.stringify(state.tree.children[1]), before, 'модель не изменилась');
     assert.equal(touches(), 0, 'перерисовки/сохранения не было');
     assert.equal(panelAdds(), 0, 'в приёмник панели бросок не провалился');
-    // Объяснение — тост с понятной причиной (notice).
-    const body = (globalThis as any).document.body as ShimElement;
-    const notice = body.findAll((node) => node.className.includes('notice'))[0];
-    assert.ok(notice !== undefined, 'объяснение показано');
-    assert.match(notice!.flatText(), /не принимает мысль/);
+    // Объяснение — рутинная валидация в зоне сообщений статус-бара (28d22b8a).
+    assert.match(statusHost.textContent, /не принимает мысль/, 'объяснение показано');
     handle.destroy();
   });
 });

@@ -549,7 +549,7 @@ async function copyPublicationLink(): Promise<void> {
     await navigator.clipboard.writeText(`[[#pub:${id}]]`);
     notice(t('publication.copy.linkDone'));
   } catch {
-    notice(t('publication.copy.failed'), 'error');
+    notice(t('publication.copy.failed'));
   }
 }
 
@@ -561,7 +561,7 @@ async function copyPublicationId(): Promise<void> {
     await navigator.clipboard.writeText(id);
     notice(t('publication.copy.idDone'));
   } catch {
-    notice(t('publication.copy.failed'), 'error');
+    notice(t('publication.copy.failed'));
   }
 }
 
@@ -1422,9 +1422,9 @@ async function openCoverDialog(): Promise<void> {
       });
     } catch (err) {
       // 409 ATTACHMENT_OWNER_IS_ICON — вложение держит сама публикация как
-      // обложку: внятное сообщение вместо технической ошибки.
+      // обложку: отказ сервера на изменяющей операции — важное, тостом.
       if (isIconOwnerBlock(err)) {
-        notice(t('publication.cover.removeOwnerBlocked'));
+        notice(t('publication.cover.removeOwnerBlocked'), 'error');
         return;
       }
       errorDialog(t('publication.cover.removeOwner'), err);

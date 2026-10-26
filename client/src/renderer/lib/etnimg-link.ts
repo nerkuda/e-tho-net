@@ -99,7 +99,6 @@ async function openEtnimgLink(anchor: HTMLElement, href: string): Promise<void> 
   if (ctx === null) {
     notice(
       'Не удалось открыть файл: ссылка вне поля комментария — владелец вложения неизвестен.',
-      'error',
     );
     return;
   }
@@ -110,7 +109,7 @@ async function openEtnimgLink(anchor: HTMLElement, href: string): Promise<void> 
   }
   const filePath = decodeEtnimgUrl(href);
   if (filePath === null) {
-    notice(`Не удалось разобрать путь во вложении: ${href}`, 'error');
+    notice(`Не удалось разобрать путь во вложении: ${href}`);
     return;
   }
   let attachments: Attachment[];

@@ -119,6 +119,11 @@ test('сторож: все итоги со счётчиками проблем �
     '«Создано/связано: N, ошибок: M» в редакторе — частичный итог',
   );
   assert.match(
+    read('src/renderer/editor/value-editor.ts'),
+    /noticePartial\(\s*unresolved === 0/,
+    '«Обновлено X из Y; N нерезолвлено» — частичный итог',
+  );
+  assert.match(
     read('src/renderer/editor/link-value-removal.ts'),
     /Часть связей заблокирована и осталась в корзине\.', 'warning'\)/,
     'частичная блокировка рёбер — предупреждение',
