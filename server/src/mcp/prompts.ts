@@ -306,7 +306,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
         seed_ids: z
           .string()
           .describe(
-            'id ядер подграфа: JSON-массив строк (["id1","id2"]) или список через запятую/пробелы; 1..20',
+            'id ядер подграфа строкой: JSON-массив (["id1","id2"]) или список через запятую/пробелы; 1..20',
           ),
         radius: z
           .string()
