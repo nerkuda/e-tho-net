@@ -17,7 +17,7 @@ import { LINK_STYLE_DEFAULTS, resolveLinkTypeVisual } from '../lib/type-tree.js'
 /** Слово вместо имени типа связи, когда тип не задан (п.3 задачи). */
 export const UNTYPED_LINK_LABEL = 'связь';
 
-/** Порог «массовости» пары (тип, сосед): избыточные рёбра прячутся за «+N». */
+/** Порог «массовости» пары (тип, сосед, сторона): избыточные рёбра прячутся за «+N». */
 export const MASS_LINK_THRESHOLD = 10;
 
 /** Сколько соседей рисуется пилюлями; остальные — за счётчиком «не поместилось». */
@@ -222,53 +222,144 @@ export function neutralEdgeVisual(): EdgeVisual {
   };
 }
 
-/** Скрытые избыточные рёбра одного типа к одному соседу. */
-export interface MassInfo {
-  /** Сколько рёбер скрыто (одно из пары всегда рисуется). */
-  hidden: number;
+/** Сторона пары относительно центральной мысли: центр — источник или цель. */
+export type MassSide = 'out' | 'in';
+
+/** Скрытые рёбра одной массовой пары (тип связи, сосед, сторона). */
+export interface MassPair {
   /** Имя типа связи в направлении центра (или «связь»). */
   label: string;
+  /** Сторона пары: центр — источник (`out`) или цель (`in`). */
+  side: MassSide;
+  /** Сколько рёбер пары скрыто (одно ребро пары остаётся линией). */
+  hidden: number;
+  /** Сколько из скрытых рёбер помечено на удаление (корзина). */
+  trashed: number;
+}
+
+/** Скрытые массовые рёбра одного соседа — содержимое чипа «+N». */
+export interface MassInfo {
+  /** Всего скрыто у соседа — число на чипе и вклад в счётчик шапки. */
+  hidden: number;
+  /** Имена типов скрытых пар (через запятую) — короткая подпись чипа. */
+  label: string;
+  /** Разбивка по парам — точная подсказка «тип и число». */
+  pairs: MassPair[];
+  /** Сколько скрытых рёбер в корзине (пометка в подсказке чипа). */
+  trashed: number;
+}
+
+/** План рёбер мини-графа: что рисуем линиями и что показываем числом. */
+export interface GraphEdgePlan {
+  /** id связей, у которых есть нарисованная линия: по одной на пару. */
+  drawnIds: ReadonlySet<string>;
+  /** Скрытые массовые рёбра по id соседа — чипы «+N». */
+  massByNeighbour: ReadonlyMap<string, MassInfo>;
+  /** Всего скрыто массовых (сумма чисел на чипах) — счётчик шапки. */
+  hidden: number;
+}
+
+/** Накопитель рёбер одной пары (тип, сосед, сторона) при построении плана. */
+interface PairGroup {
+  otherId: string;
+  label: string;
+  side: MassSide;
+  links: Link[];
 }
 
 /**
- * Считает массовые связи: для каждой пары (тип связи, сосед) — сколько рёбер
- * к этому соседу. От {@link MASS_LINK_THRESHOLD} и выше лишние (всё, кроме
- * первого) скрываются за чипом «+N» у узла соседа.
+ * Строит план рёбер мини-графа для НАРИСОВАННЫХ соседей: какие связи
+ * получают линию, а какие видны только числом в чипе «+N».
+ *
+ * Пара свёртки — (тип связи, сосед, СТОРОНА). Прямые и встречные рёбра одной
+ * пары мыслей считаются раздельно: по спеке (ошибка 6452c840) они рисуются
+ * разными параллельными линиями со своей стрелкой и подписью, поэтому
+ * свёртка «через сторону» спрятала бы целое направление. Разные типы между
+ * теми же узлами — тоже разные пары и разные линии.
+ *
+ * От {@link MASS_LINK_THRESHOLD} рёбер в паре рисуется ровно одна линия,
+ * остальные связиваются в чип «+N» у соседа; ниже порога рисуются все рёбра.
+ *
+ * `visibleNeighbourIds` ограничивает план нарисованными соседями: массовые
+ * рёбра соседа за `PERIPHERY_CAP` не имеют чипа, поэтому не должны попадать
+ * ни в число скрытых, ни в счётчик шапки — иначе сумма линий и чипов не
+ * сходится с фактическим числом рёбер.
+ *
+ * Представитель пары — живое ребро, если оно есть: помеченное на удаление
+ * ребро пары не должно «приглушать» линию, за которой стоят живые связи.
+ * Скрытые рёбра в корзине считаются и попадают в подсказку чипа.
  */
-export function computeMassLinks(
+export function planGraphEdges(
   links: readonly Link[],
   centerId: string,
+  visibleNeighbourIds: readonly string[],
   linkTypes: readonly LinkType[],
   threshold: number = MASS_LINK_THRESHOLD,
-): Map<string, MassInfo> {
-  const pairCounts = new Map<string, { label: string; count: number }>();
+): GraphEdgePlan {
+  const visible = new Set(visibleNeighbourIds);
+  const groups = new Map<string, PairGroup>();
   for (const link of links) {
-    const otherId = link.source_id === centerId ? link.target_id : link.source_id;
-    if (otherId === centerId) continue;
-    const key = `${link.type_id ?? ''}|${otherId}`;
-    const existing = pairCounts.get(key);
-    if (existing === undefined) {
-      const oriented = orientLink(link, centerId);
-      const type = link.type_id === null ? undefined : linkTypes.find((t) => t.id === link.type_id);
-      const typeName = edgeTypeName(type, oriented.fromCenter);
-      pairCounts.set(key, {
+    const fromCenter = link.source_id === centerId;
+    const toCenter = link.target_id === centerId;
+    if (!fromCenter && !toCenter) continue;
+    const otherId = fromCenter ? link.target_id : link.source_id;
+    if (otherId === centerId || !visible.has(otherId)) continue;
+    const side: MassSide = fromCenter ? 'out' : 'in';
+    const key = `${link.type_id ?? ''}|${otherId}|${side}`;
+    let group = groups.get(key);
+    if (group === undefined) {
+      const type =
+        link.type_id === null ? undefined : linkTypes.find((t) => t.id === link.type_id);
+      const typeName = edgeTypeName(type, fromCenter);
+      group = {
+        otherId,
         label: typeName === '' ? UNTYPED_LINK_LABEL : typeName,
-        count: 1,
-      });
-    } else {
-      existing.count += 1;
+        side,
+        links: [],
+      };
+      groups.set(key, group);
     }
+    group.links.push(link);
   }
-  const mass = new Map<string, MassInfo>();
-  for (const [key, info] of pairCounts) {
-    if (info.count < threshold) continue;
-    const otherId = key.slice(key.indexOf('|') + 1);
-    const entry = mass.get(otherId) ?? { hidden: 0, label: info.label };
-    entry.hidden += info.count - 1; // одно ребро пары рисуется, остальные прячем
-    entry.label = info.label;
-    mass.set(otherId, entry);
+
+  const drawnIds = new Set<string>();
+  const massByNeighbour = new Map<string, MassInfo>();
+  let hidden = 0;
+  for (const group of groups.values()) {
+    if (group.links.length < threshold) {
+      for (const link of group.links) drawnIds.add(link.id);
+      continue;
+    }
+    // Представитель — живое ребро: помеченное на удаление ребро пары не
+    // должно делать всю линию «в корзине», когда у пары есть живые связи.
+    const representative = group.links.find((link) => !isTrashedEdge(link)) ?? group.links[0]!;
+    drawnIds.add(representative.id);
+    const hiddenLinks = group.links.filter((link) => link !== representative);
+    const trashed = hiddenLinks.filter((link) => isTrashedEdge(link)).length;
+    hidden += hiddenLinks.length;
+    let info = massByNeighbour.get(group.otherId);
+    if (info === undefined) {
+      info = { hidden: 0, label: '', pairs: [], trashed: 0 };
+      massByNeighbour.set(group.otherId, info);
+    }
+    info.hidden += hiddenLinks.length;
+    info.trashed += trashed;
+    info.pairs.push({ label: group.label, side: group.side, hidden: hiddenLinks.length, trashed });
   }
-  return mass;
+  for (const info of massByNeighbour.values()) {
+    info.label = [...new Set(info.pairs.map((pair) => pair.label))].join(', ');
+  }
+  return { drawnIds, massByNeighbour, hidden };
+}
+
+/** Подсказка чипа «+N»: тип и число скрытых связей, корзина, где полный список. */
+export function massChipTooltip(mass: MassInfo): string {
+  const details =
+    mass.pairs.length === 1
+      ? `${mass.pairs[0]!.label}: ещё ${mass.pairs[0]!.hidden} связей`
+      : mass.pairs.map((pair) => `${pair.label}: ${pair.hidden}`).join('; ');
+  const trashed = mass.trashed > 0 ? `, в корзине: ${mass.trashed}` : '';
+  return `${details}${trashed}. Полный список — на вкладке «Связи».`;
 }
 
 /** Показатели шапки графа. */
@@ -312,8 +403,9 @@ export function graphStatEntries(stats: GraphStats): StatEntry[] {
     entries.push({
       text: `Скрыто массовых: ${stats.massHidden}`,
       tooltip:
-        `Когда с одним соседом связано ${MASS_LINK_THRESHOLD} и более рёбер одного типа, рисуется одна линия, ` +
-        `а остальные связываются в чип «+N» у этого соседа (подсказка чипа — тип и число скрытых связей). ` +
+        `Когда с одним соседом связано ${MASS_LINK_THRESHOLD} и более рёбер одного типа с одной стороны, ` +
+        `рисуется одна линия пары, а остальные связываются в чип «+N» у этого соседа ` +
+        '(подсказка чипа — тип и число скрытых связей). Счётчик суммирует числа на чипах. ' +
         'Развернуть их на графе нельзя; полный список — на вкладке «Связи».',
     });
   }

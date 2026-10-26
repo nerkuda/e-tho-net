@@ -1,0 +1,91 @@
+{
+  "name": "42a7c0a1-mass-links",
+  "description": "GUI-гейт ошибки 42a7c0a1: вкладка «Граф» редактора при массовых связях. В изолированном стенде у засеянной мысли есть сосед с 12 однотипными (нетипизированными) рёбрами — порог MASS_LINK_THRESHOLD. Ожидание: на графе ровно одна линия этой пары (плюс линия структурного родителя HOME), остальные 11 рёбер — числом в чипе «+11» и в счётчике шапки «Скрыто массовых: 11». На дофиксовой сборке сценарий краснеет: линий 13 (одна линия HOME + 12 линий массовой пары), чип при этом уже показывает «+11» — обещание счётчика расходится с отрисовкой. Фикстуру готовит client/scripts/ui-probe.42a7c0a1-seed.mjs (штатный REST create_link + клонирование рёбер в изолированной БД стенда). Подстановки {{serverUrl}}, {{apiKey}}, {{thoughtId}}, {{seedTitle}} ставит ui-probe-stand.mjs.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-graph-tab",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+    },
+    {
+      "name": "graph-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.mini-graph-mass-chip') !== null && document.querySelectorAll('.mini-node-cloud').length === 3"
+    },
+    {
+      "name": "lines",
+      "probe": "document.querySelectorAll('.mini-graph-edge').length",
+      "expect": 2
+    },
+    {
+      "name": "arrows",
+      "probe": "document.querySelectorAll('.mini-graph-edge-arrow').length",
+      "expect": 2
+    },
+    {
+      "name": "hover-zones",
+      "probe": "document.querySelectorAll('.mini-graph-edge-hit').length",
+      "expect": 2
+    },
+    {
+      "name": "chip-text",
+      "probe": "document.querySelector('.mini-graph-mass-chip text')?.textContent ?? null",
+      "expect": "+11"
+    },
+    {
+      "name": "chip-tooltip",
+      "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
+      "expect": "связь: ещё 11 связей. Полный список — на вкладке «Связи»."
+    },
+    {
+      "name": "header-mass",
+      "probe": "Array.from(document.querySelectorAll('.mini-graph-header-stat')).map((s) => s.textContent).find((t) => t.startsWith('Скрыто массовых:')) ?? null",
+      "expect": "Скрыто массовых: 11"
+    },
+    {
+      "name": "hover-mass-line",
+      "eval": "(() => { const hits = document.querySelectorAll('.mini-graph-edge-hit'); const hit = hits[hits.length - 1]; if (hit === undefined) return false; hit.dispatchEvent(new MouseEvent('mouseenter')); return true; })()"
+    },
+    {
+      "name": "hovered-lines",
+      "probe": "document.querySelectorAll('.mini-graph-edge.hovered').length",
+      "expect": 1
+    },
+    {
+      "name": "highlighted-nodes",
+      "probe": "document.querySelectorAll('.mini-node.edge-hi').length",
+      "expect": 2
+    },
+    {
+      "name": "lines-plus-hidden",
+      "probe": "document.querySelectorAll('.mini-graph-edge').length + 11",
+      "expect": 13
+    }
+  ]
+}

@@ -38,8 +38,10 @@
  * Правила рёбер и счётчиков шапки живут в чистой модели
  * `mini-graph-model.ts` (направление/имя типа/тултип, оформление линии,
  * массовые связи, показатели) — здесь только отрисовка. Массовые связи
- * (≥10 одинакового типа к одному соседу) скрываются за чипом «+N»; лишние
- * соседи сверх порога — счётчиком «Ещё не поместилось».
+ * (≥10 рёбер одного типа к одному соседу с одной стороны) дают одну линию
+ * пары, остальные видны числом в чипе «+N»; лишние соседи сверх порога —
+ * счётчиком «Ещё не поместилось». План рёбер и число на чипе строит одна
+ * функция {@link planGraphEdges} — линии и счётчики не могут разойтись.
  */
 
 import type { Link, Thought, ThoughtRef } from '@etn/shared';
@@ -74,8 +76,10 @@ import {
   edgeTypeName,
   graphStatEntries,
   isTrashedEdge,
+  massChipTooltip,
   neutralEdgeVisual,
   orientLink,
+  planGraphEdges,
   resolveEdgeVisual,
   shiftEdgeByLane,
   type EdgeVisual,
@@ -104,8 +108,6 @@ export interface MiniGraphOptions {
   neighbours: ThoughtRef[];
   /** Связи текущей мысли (тип ребра и направление от центра). */
   links: Link[];
-  /** Соседи с массовыми связями: id цели → { hidden: number, label: string }. */
-  mass: Map<string, { hidden: number; label: string }>;
   /**
    * Занять всю доступную высоту родителя (вкладка «Граф»). По умолчанию
    * `false` — фиксированные 280 px, как в группе «Локальный граф».
@@ -216,13 +218,27 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   });
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Рёбра: для каждого видимого соседа возьмём все связи с ним. Направление и
-  // имя типа берём у САМОЙ связи (фактический источник → цель), а не «от
-  // центра»: входящая связь рисуется стрелкой в центр (задача 6811d5e7, п.1).
-  const edges: GEdge[] = [];
+  // План рёбер: одна линия на пару (тип, сосед, сторона), лишние массовые —
+  // только числом в чипе «+N» и счётчике шапки (ошибка 42a7c0a1). План
+  // ограничен НАРИСОВАННЫМИ соседями: у соседа за PERIPHERY_CAP чипа нет,
+  // поэтому его рёбра не должны попадать в «скрыто массовых».
   const linkTypes = store.state.linkTypes;
+  const plan = planGraphEdges(
+    opts.links,
+    center.id,
+    visibleNeighbours.map((nb) => nb.id),
+    linkTypes,
+  );
+
+  // Рёбра: для каждого видимого соседа возьмём только те связи, которым план
+  // оставил линию. Направление и имя типа берём у САМОЙ связи (фактический
+  // источник → цель), а не «от центра»: входящая связь рисуется стрелкой в
+  // центр (задача 6811d5e7, п.1).
+  const edges: GEdge[] = [];
   for (const nb of visibleNeighbours) {
-    const between = opts.links.filter((l) => l.target_id === nb.id || l.source_id === nb.id);
+    const between = opts.links
+      .filter((l) => l.target_id === nb.id || l.source_id === nb.id)
+      .filter((l) => plan.drawnIds.has(l.id));
     if (between.length === 0) {
       // Сосед без записи связи (структурное ребро вне списка) — нейтральная
       // линия от центра, без типа.
@@ -480,16 +496,18 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     nodesG.append(g);
   }
   probeHost.remove();
-  // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick.
+  // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick. Число на
+  // чипе и подсказка строятся из того же плана, что и линии, — сумма линий и
+  // чипов сходится с фактическим числом рёбер нарисованных соседей.
   const massChips: Array<{ g: SVGGElement; node: GNode }> = [];
   for (const nb of visibleNeighbours) {
-    const mass = opts.mass.get(nb.id);
+    const mass = plan.massByNeighbour.get(nb.id);
     const entry = byId.get(nb.id);
     if (mass === undefined || entry === undefined) continue;
     const chip = svgEl('g');
     chip.setAttribute('class', 'mini-graph-mass-chip');
     const chipTitle = svgEl('title');
-    chipTitle.textContent = `${mass.label}: ещё ${mass.hidden} связей`;
+    chipTitle.textContent = massChipTooltip(mass);
     chip.append(chipTitle);
     const chipText = svgEl('text');
     chipText.textContent = `+${mass.hidden}`;
@@ -643,11 +661,10 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   root.append(viewport);
 
   // Шапка: понятные показатели, каждый со своей подсказкой (задача 6811d5e7,
-  // п.6). «Соседей» — все прямые соседи; «скрыто массовых» — избыточные рёбра
-  // однотипных пар, свёрнутые в чипы «+N»; «ещё не поместилось» — соседи сверх
-  // порога PERIPHERY_CAP. Механика и тексты — в mini-graph-model.
-  const hiddenMass = [...opts.mass.values()].reduce((s, m) => s + m.hidden, 0);
-  const stats = computeGraphStats(totalNeighbours, hiddenMass);
+  // п.6). «Соседей» — все прямые соседи; «скрыто массовых» — сумма чисел на
+  // чипах «+N» из того же плана, что и линии; «ещё не поместилось» — соседи
+  // сверх порога PERIPHERY_CAP. Механика и тексты — в mini-graph-model.
+  const stats = computeGraphStats(totalNeighbours, plan.hidden);
   const header = div('mini-graph-header');
   for (const entry of graphStatEntries(stats)) {
     const stat = span(entry.text, 'mini-graph-header-stat');

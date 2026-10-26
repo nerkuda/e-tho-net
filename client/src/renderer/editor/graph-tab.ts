@@ -6,9 +6,9 @@
  * Содержимое прежней группы «Локальный граф» с вкладки «Связи» переехало
  * сюда целиком: центр = редактируемая мысль, вокруг — все прямые соседи
  * (структурные родители/потомки + типизированные связи в обе стороны).
- * Массовые связи (≥10 одинакового типа к одной цели) скрываются за
- * чипом «+N». Граф строится при первом открытии вкладки (ленивая
- * активация панели редактора).
+ * Свёртку массовых связей (одна линия пары, остальные — числом в чипе «+N»)
+ * считает чистая модель внутри `buildMiniGraph`. Граф строится при первом
+ * открытии вкладки (ленивая активация панели редактора).
  *
  * Здесь нет сворачиваемой группы: вкладка одна, мини-граф заполняет всё
  * доступное место (`fillHeight: true`).
@@ -18,10 +18,8 @@ import type { Link, ThoughtRef } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { buildMiniGraph } from './mini-graph.js';
-import { computeMassLinks } from './mini-graph-model.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
@@ -108,9 +106,9 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
     return root;
   }
 
-  // Массовые связи: ≥ MASS_LINK_THRESHOLD рёбер одного типа к одному соседу —
-  // лишние прячутся за чипом «+N» (единственный источник правила — модель).
-  const massMap = computeMassLinks(links, ctx.ownerId, store.state.linkTypes);
+  // План рёбер (одна линия на пару, скрытые массовые — в чипы «+N» и счётчик
+  // шапки) строит чистая модель внутри buildMiniGraph: там же, где рисуются
+  // линии, поэтому числа на чипах и счётчике не могут разойтись с DOM.
 
   if (neighbours.length === 0) {
     root.append(el('p', 'muted', 'У мысли нет прямых связей.'));
@@ -155,7 +153,6 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
       thought: ctx.thought,
       neighbours: graphRefs,
       links,
-      mass: massMap,
       fillHeight: true,
     }),
   );

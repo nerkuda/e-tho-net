@@ -308,10 +308,6 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       /etn\.links\.listByThought\(networkId, ctx\.ownerId, true\)/.test(src),
       'all links come from listByThought without a type filter',
     );
-    assert.ok(
-      src.includes('computeMassLinks('),
-      'mass-link counting is delegated to the pure model',
-    );
   });
 
   it('шапка — понятные показатели с подсказками, механика скрытия объяснена — п.6', () => {
@@ -330,6 +326,36 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       model.includes('вкладке «Связи»'),
       'the tooltip explains how to see the hidden links',
     );
+  });
+
+  it('одна линия на пару массовых связей: в DOM попадают только рёбра из плана — 42a7c0a1', () => {
+    const src = readText(SRC.graph);
+    assert.ok(src.includes('planGraphEdges('), 'the plan is built by the pure model');
+    assert.ok(
+      /\.filter\(\(l\) => plan\.drawnIds\.has\(l\.id\)\)/.test(src),
+      'only links with a planned line become DOM elements',
+    );
+    assert.ok(
+      !/const between = opts\.links\.filter\(\(l\) => l\.target_id === nb\.id \|\| l\.source_id === nb\.id\);/.test(
+        src,
+      ),
+      'the unfiltered per-neighbour link loop is gone (regression 42a7c0a1)',
+    );
+    assert.ok(
+      src.includes('plan.massByNeighbour.get(nb.id)'),
+      'chips read the same plan as the lines',
+    );
+    assert.ok(src.includes('massChipTooltip('), 'chip tooltip is built by the model');
+    assert.ok(
+      src.includes('computeGraphStats(totalNeighbours, plan.hidden)'),
+      'the header counter reads the same plan (lines + chips are consistent)',
+    );
+    const graphTab = readText(SRC.graphTab);
+    assert.ok(
+      !graphTab.includes('computeMassLinks('),
+      'graph-tab does not precompute mass separately — one source of truth',
+    );
+    assert.ok(!/\bmass\s*:/.test(graphTab), 'graph-tab does not pass a second mass map');
   });
 
   it('линии оформляются кастомными свойствами (подсветка не перебивается) — п.4', () => {
