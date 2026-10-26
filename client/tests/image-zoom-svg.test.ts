@@ -22,6 +22,10 @@ import { describe, it } from 'node:test';
 
 const SRC = {
   zoom: resolve(import.meta.dirname, '..', 'src', 'renderer', 'lib', 'image-zoom.ts'),
+  // Предикат якоря/зума живёт в нейтральном модуле, общем с Ctrl+hover-
+  // предпросмотром (ошибка d0338c48): `hover-preview.ts` не может импортировать
+  // `image-zoom.ts` — тот тянет markdown-field → canvas → hover-preview (цикл).
+  anchor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'lib', 'zoom-anchor.ts'),
   graph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
 };
 
@@ -32,21 +36,26 @@ function readText(path: string): string {
 describe('«лупа» на SVG-иконках (ошибка e4ef6a27)', () => {
   it('SVG <image> распознаётся как якорь магнификатора', () => {
     const src = readText(SRC.zoom);
+    const anchor = readText(SRC.anchor);
     assert.ok(
-      src.includes('type ZoomAnchor = HTMLImageElement | SVGImageElement'),
+      anchor.includes('type ZoomAnchor = HTMLImageElement | SVGImageElement'),
       'the anchor union covers HTML <img> and SVG <image>',
     );
     assert.ok(
       /isZoomAnchor\(node: EventTarget \| null\): node is ZoomAnchor \{\s*return node instanceof HTMLImageElement \|\| node instanceof SVGImageElement;/.test(
-        src,
+        anchor,
       ),
       'the runtime predicate checks SVGImageElement too',
     );
     // Оба пути открытия (mouseover и Ctrl уже зажат) идут через предикат, а не
     // через прямой instanceof HTMLImageElement — иначе восстановленный Ctrl не
     // сработал бы на SVG-иконке.
+    assert.ok(
+      src.includes("from './zoom-anchor.js'"),
+      'the magnifier uses the shared anchor predicate module',
+    );
     assert.equal(
-      (src.match(/isZoomAnchor\(/g) ?? []).length >= 3,
+      (src.match(/isZoomAnchor\(/g) ?? []).length >= 2,
       true,
       'both open paths (mouseover, Ctrl keydown) use the shared predicate',
     );

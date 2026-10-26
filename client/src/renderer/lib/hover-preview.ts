@@ -78,6 +78,7 @@ import { commentShell } from './ui/comment.js';
 import { openPopover, watchOutsideTap, type PopoverHandle } from './ui/popover.js';
 import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
 import { store } from '../state.js';
+import { imageOwnsCtrlPreview } from './zoom-anchor.js';
 
 /** Grace delay before closing the whole chain once the cursor leaves it, ms
  *  (task requirement: exactly 0.3 s — gives time to move the cursor into the
@@ -768,6 +769,17 @@ function cancelPendingOpen(): void {
   openScheduler.cancel();
 }
 
+/**
+ * Отменяет предпросмотр вместе с уже идущим асинхронным резолвером: результат
+ * `doOpen`, пришедший после ухода курсора на картинку, которой владеет лупа,
+ * не должен открыть попап (ошибка d0338c48 — иначе превью комментария
+ * появится над иконкой и будет сосуществовать с лупой).
+ */
+function abandonPendingOpen(): void {
+  cancelPendingOpen();
+  openGeneration++;
+}
+
 function cancelEntryCloseTimer(entry: ChainEntry): void {
   if (entry.closeTimer !== null) {
     window.clearTimeout(entry.closeTimer);
@@ -820,6 +832,21 @@ function closeChain(): void {
     cancelEntryCloseTimer(entry);
     entry.popover.close();
   }
+}
+
+/**
+ * Картинка, которой владеет лупа (`image-zoom.ts`) и которая лежит внутри
+ * root-триггера открытой цепочки, забирает точку у превью: попап постоянного
+ * комментария облачка должен закрыться, а не оставаться «наведённым» только
+ * потому, что иконка — часть того же облачка (ошибка d0338c48). Чистая
+ * функция: тестируется моками контейнеров, как {@link isChainEntryAlive}.
+ */
+function pictureTakesOverPoint(
+  pictureOwnsPoint: boolean,
+  root: ContainerLike | null,
+  node: Node | null,
+): boolean {
+  return pictureOwnsPoint && root !== null && node !== null && root.contains(node);
 }
 
 /**
@@ -943,20 +970,39 @@ export function initHoverPreview(): void {
     mouseX = event.clientX;
     mouseY = event.clientY;
     const target = event.target instanceof Element ? event.target : null;
+    // Картинка под курсором при зажатом Ctrl принадлежит лупе: у облачка с
+    // иконкой-вложением и постоянным комментарием превью комментария обязано
+    // уступить точке (ошибка d0338c48). Решение принимает общий предикат
+    // `zoom-anchor.ts`, чтобы движки не разошлись в том, покажет ли лупа
+    // картинку.
+    const pictureOwnsPoint = event.ctrlKey && imageOwnsCtrlPreview(target);
+    const rootYielded = pictureTakesOverPoint(pictureOwnsPoint, rootTrigger, target);
 
     // Each open popup decides independently whether it is still "hovered"
     // (task fix, ETN 420a1f7e): a shallower popup stays alive while the
     // cursor sits over ANY deeper popup opened from inside it, but moving the
     // cursor back onto it (or away entirely) starts ITS OWN close timer —
     // it no longer waits for every popup in the chain to be left at once.
+    // Картинка-иконка внутри root-триггера не считается «наведением» на
+    // облачко: root-попап получает свой таймер закрытия (300 мс < задержка
+    // лупы 500 мс, поэтому два превью не показываются одновременно).
     for (let i = 0; i < chain.length; i++) {
       const entry = chain[i]!;
-      if (isChainEntryAlive(chain, i, rootTrigger, target)) cancelEntryCloseTimer(entry);
+      const alive =
+        isChainEntryAlive(chain, i, rootTrigger, target) && !(rootYielded && i === 0);
+      if (alive) cancelEntryCloseTimer(entry);
       else scheduleEntryClose(entry);
     }
 
     if (!event.ctrlKey) {
       cancelPendingOpen();
+      return;
+    }
+    // Над картинкой второго предпросмотра нет — лупа покажет её сама.
+    // `abandonPendingOpen` гасит и уже идущий резолвер: его результат не
+    // должен открыть попап после ухода курсора на картинку.
+    if (pictureOwnsPoint) {
+      abandonPendingOpen();
       return;
     }
     const candidate = target?.closest<HTMLElement>('[data-hp-kind]') ?? null;
@@ -979,6 +1025,15 @@ export function initHoverPreview(): void {
     }
     if (event.key !== 'Control') return;
     const at = document.elementFromPoint(mouseX, mouseY);
+    // Курсор уже лежит на картинке-иконке облачка — mousemove не сработает.
+    // Точку забирает лупа, поэтому превью комментария закрывается сразу:
+    // отложенное закрытие отменил бы следующий mousemove без Ctrl, и лупа
+    // открылась бы поверх облачного попапа (ошибка d0338c48).
+    if (imageOwnsCtrlPreview(at)) {
+      abandonPendingOpen();
+      if (pictureTakesOverPoint(true, rootTrigger, at)) closeChain();
+      return;
+    }
     const candidate = at instanceof Element ? at.closest<HTMLElement>('[data-hp-kind]') : null;
     if (candidate !== null) tryScheduleOpen(candidate);
   });
@@ -1016,6 +1071,7 @@ export const hoverPreviewInternals = {
   depthFor,
   isAlreadyOpenAt,
   isChainEntryAlive,
+  pictureTakesOverPoint,
   MAX_DEPTH,
   CTRL_PREVIEW_OPEN_DELAY_MS,
   CLOSE_DELAY_MS,

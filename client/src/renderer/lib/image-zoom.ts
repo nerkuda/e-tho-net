@@ -32,6 +32,12 @@ import { createDelayedOpen } from './preview-open-delay.js';
 import { placeAtCursor, watchOutsideTap } from './ui/popover.js';
 import { pushKeyOverlay, type KeyOverlayHandle } from './keymap.js';
 import { store } from '../state.js';
+import { isZoomAnchor, zoomable, type ZoomAnchor } from './zoom-anchor.js';
+
+// `zoomable` остаётся экспортом этого модуля для существующих потребителей
+// (`tests/renderer-pure.test.ts`); сам предикат живёт в нейтральном
+// `zoom-anchor.ts`, общем с движком Ctrl+hover-предпросмотра (ошибка d0338c48).
+export { zoomable } from './zoom-anchor.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
 const POPUP_OFFSET = 14;
@@ -65,28 +71,6 @@ async function resolveIconAttachment(
   }
   attachPathCache.set(key, { path, at: Date.now() });
   return path;
-}
-
-/**
- * True when enlarging makes sense: the image has loaded and at least one side
- * is displayed smaller than its natural size.
- */
-export function zoomable(
-  natural: { w: number; h: number },
-  displayed: { w: number; h: number },
-): boolean {
-  return natural.w > 0 && natural.h > 0 && (displayed.w < natural.w || displayed.h < natural.h);
-}
-
-/**
- * A rendered picture the magnifier can anchor to: an HTML `<img>` anywhere in
- * the UI, or an SVG `<image>` — the only SVG-rendered icons in the client are
- * the thought icons of the editor's local graph (`editor/mini-graph.ts`).
- */
-type ZoomAnchor = HTMLImageElement | SVGImageElement;
-
-function isZoomAnchor(node: EventTarget | null): node is ZoomAnchor {
-  return node instanceof HTMLImageElement || node instanceof SVGImageElement;
 }
 
 /**
