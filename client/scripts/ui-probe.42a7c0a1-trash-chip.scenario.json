@@ -1,7 +1,7 @@
 {
   "name": "42a7c0a1-trash-chip",
-  "description": "GUI-проверка ошибки 42a7c0a1 (круг 2): скрытые рёбра в корзине должны быть видимы и достижимы с графа. Фикстура помещает одно из 11 скрытых рёбер пары в корзину. Ожидание: у массового чипа «+11» появляется метка корзины (общий .link-trash-badge), подсказка чипа называет число рёбер в корзине и путь восстановления, клик по метке открывает общий диалог корзины с кнопкой «Восстановить»; на вкладке «Свойства» видны все 11 ЖИВЫХ рёбер пары отдельными чипами, помеченное ребро доступно только через корзину. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-trash-chip.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs --scenario-seed-arg --trash --scenario-seed-arg 1",
-  "timeout": 90000,
+  "description": "GUI-проверка ошибки 42a7c0a1 (круги 2–3): скрытые рёбра в корзине видимы и достижимы с графа, а восстановление обновляет граф БЕЗ перезапуска клиента. Фикстура помещает одно из 11 скрытых рёбер пары в корзину. До восстановления: у массового чипа «+11» метка корзины (общий .link-trash-badge), подсказка называет «в корзине: 1», клик по метке открывает общий диалог корзины; на «Свойствах» 11 живых рёбер пары отдельными чипами. Восстановление: выбрать строку-связь → «Восстановить» → Escape → waitFor исчезновения .mini-graph-mass-trash .link-trash-badge на «Графе» (вкладку НЕ переключаем и клиент НЕ перезапускаем). После: 12 активных рёбер → 1 линия + 11 скрытых, метки нет, подсказка без «в корзине», зум/панорама и выделение пережили пересборку. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-trash-chip.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs --scenario-seed-arg --trash --scenario-seed-arg 1",
+  "timeout": 120000,
   "steps": [
     {
       "name": "onboarding-visible",
@@ -100,6 +100,25 @@
       "waitFor": "document.querySelector('.mini-graph-mass-trash .link-trash-badge') !== null"
     },
     {
+      "name": "graph-zoomed",
+      "eval": "(() => { const svg=document.querySelector('.mini-graph-canvas'); if(!svg) return 'no-svg'; const r=svg.getBoundingClientRect(); svg.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-240,clientX:Math.round(r.left+r.width/2),clientY:Math.round(r.top+r.height/2)})); const zoom=document.querySelector('.mini-graph-world')?.getAttribute('transform') ?? null; window.__graphView={zoom}; return zoom; })()"
+    },
+    {
+      "name": "zoom-applied",
+      "probe": "(() => { const z=window.__graphView?.zoom ?? null; return z !== null && !/^translate\\(0,0\\) scale\\(1\\)$/.test(z); })()",
+      "expect": true
+    },
+    {
+      "name": "select-neighbour-node",
+      "probe": "(() => { const cloud=document.querySelector('.mini-node:not(.mini-node-center) .mini-node-cloud'); if(!cloud) return false; cloud.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "selection-panel-visible",
+      "timeout": 15000,
+      "waitFor": "(() => { const panel=document.querySelector('.selection-panel'); return panel !== null && !panel.classList.contains('hidden') && panel.querySelectorAll('.selection-item').length === 1; })()"
+    },
+    {
       "name": "click-trash-badge",
       "click": ".mini-graph-mass-trash .link-trash-badge"
     },
@@ -121,6 +140,127 @@
     {
       "name": "trashed-link-listed",
       "probe": "(document.querySelector('.trash')?.textContent ?? '').includes('связь')",
+      "expect": true
+    },
+    {
+      "name": "select-trashed-link-row",
+      "probe": "(() => { const g=document.querySelector('.trash vaadin-grid'); if(!g) return 'no-grid'; const idx=(g.items||[]).findIndex((x)=>x && x.kind==='link'); if(idx<0) return 'no-row'; const rows=g.shadowRoot?[...g.shadowRoot.querySelectorAll('tr')]:[]; const r=rows.find((x)=>x.index===idx)||rows[idx]; const cell=r?(r.querySelector('td')||r):null; if(!cell) return 'no-cell'; const b=cell.getBoundingClientRect(); cell.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true,detail:1,clientX:Math.round(b.left+10),clientY:Math.round(b.top+10)})); return g.activeItem && g.activeItem.kind==='link' ? 'ok' : 'no-current'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "restore-link",
+      "probe": "(() => { const b=[...document.querySelectorAll('.trash-toolbar button')].find((x)=>x.textContent.trim()==='Восстановить'); if(!b || b.disabled) return 'no-btn'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "trashed-link-restored",
+      "timeout": 15000,
+      "waitFor": "(() => { const g=document.querySelector('.trash vaadin-grid'); return g !== null && !(g.items||[]).some((x)=>x && x.kind==='link'); })()"
+    },
+    {
+      "name": "close-trash",
+      "key": "Escape"
+    },
+    {
+      "name": "trash-closed",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.trash') === null"
+    },
+    {
+      "name": "graph-badge-gone",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.mini-graph-mass-trash .link-trash-badge') === null"
+    },
+    {
+      "name": "restored-single-root",
+      "probe": "document.querySelectorAll('.links-local-graph').length",
+      "expect": 1
+    },
+    {
+      "name": "restored-single-canvas",
+      "probe": "document.querySelectorAll('.mini-graph-canvas').length",
+      "expect": 1
+    },
+    {
+      "name": "restored-edge-elements",
+      "probe": "(() => [...document.querySelectorAll('.mini-graph-edge')].map((e) => ({ tag: e.tagName, cls: e.getAttribute('class') })))()"
+    },
+    {
+      "name": "restored-node-count",
+      "probe": "document.querySelectorAll('.mini-node').length",
+      "expect": 3
+    },
+    {
+      "name": "restored-edge-label-count",
+      "probe": "document.querySelectorAll('.mini-graph-edge-label').length"
+    },
+    {
+      "name": "restored-hit-count",
+      "probe": "document.querySelectorAll('.mini-graph-edge-hit').length"
+    },
+    {
+      "name": "restored-chip-text",
+      "probe": "document.querySelector('.mini-graph-mass-chip text')?.textContent ?? null",
+      "expect": "+11"
+    },
+    {
+      "name": "restored-chip-tooltip",
+      "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
+      "expect": "связь: ещё 11 связей. Полный список — на вкладке «Свойства»."
+    },
+    {
+      "name": "restored-chip-tooltip-has-no-trash",
+      "probe": "(document.querySelector('.mini-graph-mass-chip title')?.textContent ?? '').includes('в корзине')",
+      "expect": false
+    },
+    {
+      "name": "restored-header-hidden",
+      "probe": "(() => { const s=[...document.querySelectorAll('.mini-graph-header-stat')].map((e)=>e.textContent.trim()); return s.find((t)=>t.startsWith('Скрыто массовых')) ?? null; })()",
+      "expect": "Скрыто массовых: 11"
+    },
+    {
+      "name": "restored-db-links",
+      "probe": "window.etn.links.listByThought('{{networkId}}', '{{thoughtId}}', true).then((g) => { const rows=(g.untyped_children||[]); return { parents:(g.untyped_parents||[]).length, children:rows.length, markedChildren:rows.filter((r)=>r.link.marked_for_deletion).length }; })",
+      "expect": {
+        "parents": 1,
+        "children": 12,
+        "markedChildren": 0
+      }
+    },
+    {
+      "name": "restored-invariant",
+      "probe": "(() => { const lines=document.querySelectorAll('.mini-graph-edge').length; const neighbours=document.querySelectorAll('.mini-node').length-1; const chips=document.querySelectorAll('.mini-graph-mass-chip').length; const chip=Number((document.querySelector('.mini-graph-mass-chip text')?.textContent ?? '').replace('+','')); const massLines=lines-(neighbours-chips); return { lines, neighbours, chips, massLines, chip, massTotal: massLines+chip }; })()",
+      "expect": {
+        "lines": 2,
+        "neighbours": 2,
+        "chips": 1,
+        "massLines": 1,
+        "chip": 11,
+        "massTotal": 12
+      }
+    },
+    {
+      "name": "restored-lines",
+      "probe": "document.querySelectorAll('.mini-graph-edge').length",
+      "expect": 2
+    },
+    {
+      "name": "restored-line-badges",
+      "probe": "document.querySelectorAll('.mini-graph-edge-trash .link-trash-badge').length",
+      "expect": 0
+    },
+    {
+      "name": "restored-zoom-after",
+      "probe": "(() => { const now=document.querySelector('.mini-graph-world')?.getAttribute('transform') ?? null; return { before: window.__graphView?.zoom ?? null, after: now, same: now !== null && now === window.__graphView?.zoom }; })()"
+    },
+    {
+      "name": "restored-zoom-preserved",
+      "probe": "(() => { const now=document.querySelector('.mini-graph-world')?.getAttribute('transform') ?? null; return now !== null && now === window.__graphView?.zoom; })()",
+      "expect": true
+    },
+    {
+      "name": "restored-selection-kept",
+      "probe": "(() => { const panel=document.querySelector('.selection-panel'); return panel !== null && !panel.classList.contains('hidden') && panel.querySelectorAll('.selection-item').length === 1; })()",
       "expect": true
     }
   ]
