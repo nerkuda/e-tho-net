@@ -20,6 +20,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { McpPromptName } from '@etn/shared';
 
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
@@ -251,6 +252,47 @@ export async function connectMcpClient(ctx: McpTestContext, key: string): Promis
 
 /** The (non-task) tool-result shape returned by `Client.callTool`. */
 export type ClientCallToolResult = Awaited<ReturnType<Client['callTool']>>;
+
+/**
+ * Полный набор аргументов промпта в wire-форме — только строки: протокол
+ * `prompts/get` передаёт `Record<string, string>` (ошибка b2223e98), поэтому
+ * числовые и массивные аргументы в тестах обязаны идти строкой.
+ *
+ * Запись типизирована `Record<McpPromptName, …>`: новый промпт без аргументов
+ * в этом наборе не скомпилируется, а неизвестное имя даст явную ошибку.
+ */
+const WIRE_PROMPT_ARGS: Record<
+  McpPromptName,
+  (networkId: string, thoughtId: string) => Record<string, string>
+> = {
+  'etn.summarize_thought': (networkId, thoughtId) => ({ network_id: networkId, thought_id: thoughtId }),
+  'etn.suggest_links': (networkId, thoughtId) => ({ network_id: networkId, thought_id: thoughtId }),
+  'etn.detect_duplicates': (networkId, thoughtId) => ({
+    network_id: networkId,
+    seed_thought_id: thoughtId,
+    radius: '2',
+  }),
+  'etn.generate_report': (networkId, thoughtId) => ({
+    network_id: networkId,
+    topic: 'проверка ссылок',
+    seed_ids: thoughtId,
+    radius: '2',
+  }),
+  'etn.how_to_merge_partial': (networkId) => ({ network_id: networkId, layer_id: 'probe-layer' }),
+  'etn.how_to_purge': (networkId) => ({ network_id: networkId }),
+  'etn.how_to_write_batch': (networkId) => ({ network_id: networkId }),
+};
+
+/** Wire-аргументы промпта по имени; неизвестное имя — явная ошибка. */
+export function wirePromptArguments(
+  name: string,
+  networkId: string,
+  thoughtId: string,
+): Record<string, string> {
+  const build = WIRE_PROMPT_ARGS[name as McpPromptName];
+  if (build === undefined) throw new Error(`нет wire-аргументов для промпта ${name}`);
+  return build(networkId, thoughtId);
+}
 
 /**
  * Вызвать редкую операцию через `etn.ops` (0.8.3, задача 86ef2ff4): `params` —

@@ -26,6 +26,7 @@ import {
   closeMcpContext,
   connectMcpClient,
   nativeAvailable,
+  wirePromptArguments,
 } from './mcp-helpers.js';
 
 /** Единственное текстовое сообщение промпта. */
@@ -40,26 +41,6 @@ function promptText(result: GetPromptResult): string {
 function seedIdsFragment(ids: readonly string[]): string {
   return `seed_ids=[${ids.map((id) => JSON.stringify(id)).join(', ')}]`;
 }
-
-/** Аргументы каждого промпта в wire-форме — только строки. */
-const WIRE_ARGS: Record<(typeof MCP_PROMPT_NAMES)[number], (net: string, thought: string) => Record<string, string>> = {
-  'etn.summarize_thought': (net, thought) => ({ network_id: net, thought_id: thought }),
-  'etn.suggest_links': (net, thought) => ({ network_id: net, thought_id: thought }),
-  'etn.detect_duplicates': (net, thought) => ({
-    network_id: net,
-    seed_thought_id: thought,
-    radius: '2',
-  }),
-  'etn.generate_report': (net, thought) => ({
-    network_id: net,
-    topic: 'проверка ссылок',
-    seed_ids: thought,
-    radius: '2',
-  }),
-  'etn.how_to_merge_partial': (net) => ({ network_id: net, layer_id: 'probe-layer' }),
-  'etn.how_to_purge': (net) => ({ network_id: net }),
-  'etn.how_to_write_batch': (net) => ({ network_id: net }),
-};
 
 /** Ожидание ошибки валидации аргументов (`-32602`) с фрагментами текста. */
 async function assertInvalid(promise: Promise<unknown>, ...patterns: RegExp[]): Promise<void> {
@@ -82,14 +63,45 @@ describe('MCP prompts: аргументы prompts/get — строки (b2223e98
         // промпт без строковых аргументов уронит этот тест, а не пройдёт молча.
         assert.deepEqual(prompts.map((prompt) => prompt.name).sort(), [...MCP_PROMPT_NAMES].sort());
         for (const prompt of prompts) {
-          const build = WIRE_ARGS[prompt.name as keyof typeof WIRE_ARGS];
-          assert.ok(build !== undefined, `нет wire-аргументов для промпта ${prompt.name}`);
           const result = await handle.client.getPrompt({
             name: prompt.name,
-            arguments: build(ctx.networkId, ctx.homeId),
+            arguments: wirePromptArguments(prompt.name, ctx.networkId, ctx.homeId),
           });
           assert.ok(promptText(result).length > 0, `промпт ${prompt.name} вернул пустой текст`);
         }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('нестроковый аргумент отвергает клиентский SDK до сервера: expected string, received array', async () => {
+    // Симптом карточки b2223e98 с другой стороны провода: массив в
+    // `prompts/get.arguments` недостижим — клиентский SDK проверяет
+    // `Record<string, string>` и падает ДО сервера. Тест фиксирует границу
+    // протокола: массив нельзя вернуть в argsSchema «ради удобства».
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        await assert.rejects(
+          handle.client.getPrompt({
+            name: 'etn.generate_report',
+            arguments: {
+              network_id: ctx.networkId,
+              topic: 'массив',
+              seed_ids: [ctx.homeId],
+            } as unknown as Record<string, string>,
+          }),
+          (err: unknown) => {
+            const message = (err as Error).message;
+            assert.match(message, /expected string/u);
+            assert.match(message, /received array/u);
+            return true;
+          },
+        );
       } finally {
         await handle.close();
       }

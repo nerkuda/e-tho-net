@@ -37,10 +37,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { MCP_PROMPT_NAMES, MCP_TOOL_NAMES } from '@etn/shared';
 
-import { registerPrompts } from '../src/mcp/prompts.js';
 import { GUIDE_TOPIC_NAMES, OPS_ACTION_NAMES } from '../src/mcp/tools/ops-catalog.js';
 import {
   buildMcpContext,
@@ -48,6 +47,7 @@ import {
   connectMcpClient,
   nativeAvailable,
   toolText,
+  wirePromptArguments,
 } from './mcp-helpers.js';
 
 /** Ссылка на инструмент в полной форме `etn.<группа>.<имя>`. */
@@ -101,43 +101,45 @@ function danglingRefs({ source, text }: AgentText, live: ReadonlySet<string> = L
 }
 
 /**
- * Тела промптов снимаются с production-регистрации, а не через `prompts/get`:
- * протокол передаёт аргументы промпта только строками, а `etn.generate_report`
- * объявляет `seed_ids` массивом (отдельная ошибка протокольного контракта),
- * поэтому wire-вызов этого промпта падает до тела. Захват регистрации видит
- * РОВНО авторский текст промптов — независимо от ограничения транспорта.
+ * Тексты промптов снимаются wire-вызовом `prompts/get` в реальной
+ * MCP-сессии — ровно то, что видит агент. До исправления ошибки b2223e98
+ * захват шёл с production-регистрации в обход протокола: `seed_ids`
+ * `etn.generate_report` был объявлен массивом, wire-вызов падал до тела.
+ * Теперь промпты достижимы, и сторож ловит не только висячие ссылки, но и
+ * нестроковый контракт аргументов (падение `getPrompt`).
  */
-function capturedPrompts(networkId: string, thoughtId: string): AgentText[] {
-  const captured: Array<{
-    name: string;
-    config: { title?: string; description?: string };
-    callback: (args: Record<string, unknown>) => { messages: Array<{ content: { type: string; text?: string } }> };
-  }> = [];
-  const fake = {
-    registerPrompt: (name: string, config: never, callback: never) => {
-      captured.push({ name, config, callback });
-    },
-  };
-  registerPrompts(fake as unknown as McpServer, undefined as never);
-  const args = {
-    network_id: networkId,
-    thought_id: thoughtId,
-    seed_thought_id: thoughtId,
-    seed_ids: [thoughtId],
-    topic: 'проверка ссылок',
-  };
-  return captured.flatMap(({ name, config, callback }) => {
-    const texts: AgentText[] = [
-      { source: `prompts/list ${name}.title`, text: config.title ?? '' },
-      { source: `prompts/list ${name}.description`, text: config.description ?? '' },
-    ];
-    for (const message of callback(args).messages) {
-      if (message.content.type === 'text') {
-        texts.push({ source: `prompt ${name}`, text: message.content.text ?? '' });
+async function promptTexts(
+  client: Client,
+  networkId: string,
+  thoughtId: string,
+): Promise<AgentText[]> {
+  const texts: AgentText[] = [];
+  const { prompts } = await client.listPrompts();
+  for (const prompt of prompts) {
+    texts.push({ source: `prompts/list ${prompt.name}.title`, text: prompt.title ?? '' });
+    texts.push({
+      source: `prompts/list ${prompt.name}.description`,
+      text: prompt.description ?? '',
+    });
+    for (const argument of prompt.arguments ?? []) {
+      if (argument.description !== undefined) {
+        texts.push({
+          source: `prompts/list ${prompt.name}.arguments.${argument.name}`,
+          text: argument.description,
+        });
       }
     }
-    return texts;
-  });
+    const result = await client.getPrompt({
+      name: prompt.name,
+      arguments: wirePromptArguments(prompt.name, networkId, thoughtId),
+    });
+    for (const message of result.messages) {
+      if (message.content.type === 'text') {
+        texts.push({ source: `prompt ${prompt.name}`, text: message.content.text });
+      }
+    }
+  }
+  return texts;
 }
 
 describe('guard: агентские тексты MCP не ссылаются на снятые инструменты (60f085b4)', { skip: !nativeAvailable() }, () => {
@@ -156,7 +158,7 @@ describe('guard: агентские тексты MCP не ссылаются н�
           if (title !== undefined) texts.push({ source: `tools/list ${tool.name}.title`, text: title });
         }
 
-        texts.push(...capturedPrompts(ctx.networkId, ctx.homeId));
+        texts.push(...(await promptTexts(handle.client, ctx.networkId, ctx.homeId)));
 
         // MCP-ресурсы — такая же агентская поверхность, как tools/list:
         // описание шаблона уходит агенту в resources/templates/list.
