@@ -1,6 +1,6 @@
 {
   "name": "image-zoom-escape-over-dirty-dialog",
-  "description": "Лупа изображения (lib/image-zoom.ts) — всплывающий слой поверх «грязного» диалога (ошибка 9ff6b606, замечание приёмки). В открытый диалог внетипового отбора добавляется условие (диалог «грязный») и картинка; Ctrl+наведение показывает лупу, Escape обязан закрыть ТОЛЬКО лупу — диалог остаётся один, подтверждения нет; следующее Escape зовёт подтверждение уже у диалога. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.image-zoom-escape.scenario.json.",
+  "description": "Лупа изображения (lib/image-zoom.ts) — всплывающий слой поверх «грязного» диалога (ошибка 9ff6b606, замечание приёмки). В открытый диалог внетипового отбора добавляется условие (диалог «грязный») и картинка; Ctrl+наведение показывает лупу, Escape обязан закрыть ТОЛЬКО лупу — диалог остаётся один, подтверждения нет; следующее Escape зовёт подтверждение уже у диалога. Кнопки группы фильтров («+ условие») видны и кликабельны только при наведении на группу, поэтому перед кликом — hover группы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.image-zoom-escape.scenario.json.",
   "timeout": 90000,
   "steps": [
     {
@@ -33,6 +33,10 @@
     {
       "name": "view-dialog-open",
       "waitFor": "document.querySelector('.view-editor-dialog .ft-add-condition') !== null && document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "reveal-group-actions",
+      "hover": { "selector": ".view-editor-dialog .ft-group[data-path=\"\"]", "at": [4, 4] }
     },
     { "name": "add-condition", "click": ".view-editor-dialog .ft-add-condition" },
     {

@@ -1,6 +1,6 @@
 {
   "name": "escape-over-filter-popover-in-dirty-dialog",
-  "description": "Честный красный GUI-гейт ошибки 9ff6b606: поповер открыт ПОСЛЕ показа «грязного» диалога действием внутри него. Двойной клик по облачку на карте — фокус мысли (полоса отборов), «+» — диалог внетипового отбора, «+ условие» делает диалог грязным, клик по ячейке «Что» — поповер lib/ui. Первый Escape обязан закрыть ТОЛЬКО поповер: диалог остаётся один, подтверждения нет. На до-фиксной сборке диалог получает Escape первым и зовёт подтверждение, поповер остаётся открытым. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.escape-over-popover.scenario.json.",
+  "description": "Честный красный GUI-гейт ошибки 9ff6b606: поповер открыт ПОСЛЕ показа «грязного» диалога действием внутри него. Двойной клик по облачку на карте — фокус мысли (полоса отборов), «+» — диалог внетипового отбора, «+ условие» делает диалог грязным, клик по ячейке «Что» — поповер lib/ui. Первый Escape обязан закрыть ТОЛЬКО поповер: диалог остаётся один, подтверждения нет. На до-фиксной сборке диалог получает Escape первым и зовёт подтверждение, поповер остаётся открытым. Кнопки группы фильтров («+ условие») видны и кликабельны только при наведении на группу, поэтому перед кликом — hover группы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.escape-over-popover.scenario.json.",
   "timeout": 90000,
   "steps": [
     {
@@ -34,6 +34,10 @@
     {
       "name": "view-dialog-open",
       "waitFor": "document.querySelector('.view-editor-dialog .ft-add-condition') !== null && document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "reveal-group-actions",
+      "hover": { "selector": ".view-editor-dialog .ft-group[data-path=\"\"]", "at": [4, 4] }
     },
     { "name": "add-condition", "click": ".view-editor-dialog .ft-add-condition" },
     {

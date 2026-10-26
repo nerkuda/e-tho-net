@@ -501,6 +501,18 @@ test('expect: допустим только у probe и api', () => {
   assert.equal(ok.steps[0]?.expect, 2);
   assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expect: 1 }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expect: 1 }])), ScenarioError);
+  // `expect` — СОСЕД действия, а не поле внутри объекта `probe`/`api`:
+  // вложенная форма отвергается как неизвестное поле действия.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ probe: { expression: '1 + 1', expect: 2 } }])),
+    ScenarioError,
+    'expect внутри probe — неизвестное поле probe',
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x', expect: 1 } }])),
+    ScenarioError,
+    'expect внутри api — неизвестное поле api',
+  );
 });
 
 test('expectFrom: ожидание — снимок ранее выполненного шага (делает сценарий самопроверяемым)', () => {
