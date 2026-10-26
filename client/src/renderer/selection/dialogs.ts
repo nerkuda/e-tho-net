@@ -47,6 +47,7 @@ import {
   emptyBulkPlanReason,
   isBulkFormDirty,
   planBulkApply,
+  skippedBulkRows,
   sortBulkRows,
   type BulkApplyOperation,
   type BulkEmptyPlanReason,
@@ -178,6 +179,12 @@ interface BulkRowState {
   checkbox: HTMLInputElement;
   editorBox: HTMLElement;
   hintsEl: HTMLElement;
+  /**
+   * Зафиксировать недописанное значение редактора (чип-поле: набранный текст
+   * без Enter). Вызывается перед построением плана — иначе набранное значение
+   * не попадало в план, и строка молча пропускалась (ошибка bba5a7ce).
+   */
+  pendingCommit?: () => Promise<void>;
 }
 
 /** Предел одновременных запросов при чтении значений и применении. */
@@ -445,6 +452,11 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       commitOn: 'change',
       historyPropertyId: model.propertyId,
       boolTriState: true,
+      // Чип-поля (multiple text/url) отдают сюда «зафиксировать набранное без
+      // Enter»: значение читается планом программно, не по commit поля.
+      registerPendingCommit: (commit) => {
+        state.pendingCommit = commit;
+      },
       ...(differing && (model.valueType === 'text' || model.valueType === 'url')
         ? { placeholder: t('selection.properties.different') }
         : {}),
@@ -488,6 +500,18 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     }));
   }
 
+  /**
+   * Фиксирует недописанные значения всех строк (чип-поле: набранный текст без
+   * Enter). Вызывается перед чтением отметок для плана — см. {@link applyAll}.
+   */
+  async function flushPendingCommits(): Promise<void> {
+    const commits: Array<() => Promise<void>> = [];
+    for (const state of rowStates.values()) {
+      if (state.pendingCommit !== undefined) commits.push(state.pendingCommit);
+    }
+    await Promise.all(commits.map((commit) => commit()));
+  }
+
   /** «Применить» недоступна без отмеченных строк и во время применения. */
   function updateApplyState(): void {
     if (applyBtn === null) return;
@@ -504,6 +528,11 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
    */
   async function applyAll(close: () => void): Promise<void> {
     if (applying) return;
+    // Недописанное значение (набранный в чип-поле текст без Enter) фиксируем
+    // ДО плана: иначе в план уходит пустое значение, и строка молча
+    // пропускается — заказчик видит «свойство проигнорировано» (ошибка
+    // bba5a7ce). Фиксация — то же, что Enter в поле, только по «Применить».
+    await flushPendingCommits();
     const selection = currentSelection();
     const thoughtIds = thoughts.map((thought) => thought.id);
     const operations = planBulkApply(rows, selection, thoughtIds);
@@ -511,6 +540,11 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       showNothingToApply(emptyBulkPlanReason(selection, thoughtIds.length) ?? 'no-values');
       return;
     }
+    // Отмеченные строки без значения, у которых нечего очищать, не дают ни
+    // одной операции. По спеке это no-op для строки, но применять остальное
+    // МОЛЧА нельзя: пользователь считает, что свойство изменено (ошибка
+    // bba5a7ce). Такие строки попадают в отчёт, диалог не закрывается.
+    const skipped = skippedBulkRows(rows, selection);
 
     const clearing = clearingThoughtCount(rows, selection);
     if (clearing > 0) {
@@ -560,7 +594,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       // сбой побочного сигнала не оставляет «Применить» навсегда заблокированной
       // (внешне — та же «мёртвая кнопка», что в ошибке eca9f6d5).
       await load();
-      showReport(applied, failures);
+      showReport(applied, failures, skipped);
       applying = false;
       updateApplyState();
       // Прокрутка живёт на теле каркаса (`.dialog-body`), а не на нашем стеке:
@@ -570,8 +604,9 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     }
 
     // Успех (все операции выполнены) закрывает диалог — решение заказчика
-    // 2026-10-25 (ошибка eca9f6d5, ревизия спеки 2fc9d85c).
-    if (applied > 0 && failures.length === 0) close();
+    // 2026-10-25 (ошибка eca9f6d5, ревизия спеки 2fc9d85c). Пропущенные
+    // строки — не полный успех: диалог остаётся с отчётом (bba5a7ce).
+    if (applied > 0 && failures.length === 0 && skipped.length === 0) close();
   }
 
   /**
@@ -608,48 +643,70 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     );
   }
 
-  /** Итог операций в футере + причины отказа списком над таблицей. */
+  /**
+   * Итог операций в футере + причины отказа списком над таблицей.
+   *
+   * `skipped` — отмеченные строки без значения, у которых нечего очищать: для
+   * них не было ни одной операции, и раньше они пропадали молча (ошибка
+   * bba5a7ce). Показываются отдельным блоком, диалог из-за них не закрывается.
+   */
   function showReport(
     applied: number,
     failures: ReadonlyArray<{ operation: BulkApplyOperation; reason: string }>,
+    skipped: readonly BulkPropertyRow[] = [],
   ): void {
+    const tail: string[] = [];
+    if (failures.length > 0) tail.push(t('selection.properties.failed', failures.length));
+    if (skipped.length > 0) tail.push(t('selection.properties.skippedCount', skipped.length));
     summaryEl.textContent =
-      failures.length === 0
+      tail.length === 0
         ? t('selection.properties.applied', applied)
-        : `${t('selection.properties.applied', applied)}, ${t('selection.properties.failed', failures.length)}`;
-    summaryEl.classList.toggle('prop-bulk-summary-error', failures.length > 0);
-    if (failures.length === 0) {
+        : `${t('selection.properties.applied', applied)}, ${tail.join(', ')}`;
+    summaryEl.classList.toggle('prop-bulk-summary-error', failures.length > 0 || skipped.length > 0);
+    if (failures.length === 0 && skipped.length === 0) {
       reportEl.hidden = true;
       reportEl.replaceChildren();
       return;
     }
-    const title = span(t('selection.properties.applyFailed'), 'error-text prop-bulk-report-title');
-    const list = el('ul', 'prop-bulk-report-list');
-    for (const failure of failures.slice(0, BULK_FAILURE_LINES)) {
-      const thought = thoughts.find((candidate) => candidate.id === failure.operation.thoughtId);
-      const row = rows.find((candidate) => candidate.key === failure.operation.rowKey);
-      list.append(
-        el(
-          'li',
-          undefined,
-          t('selection.properties.failureLine', [
-            thought?.title ?? failure.operation.thoughtId,
-            row?.name ?? failure.operation.propertyKey,
-            failure.reason,
-          ]),
-        ),
-      );
+    const blocks: HTMLElement[] = [];
+    if (failures.length > 0) {
+      const title = span(t('selection.properties.applyFailed'), 'error-text prop-bulk-report-title');
+      const list = el('ul', 'prop-bulk-report-list');
+      for (const failure of failures.slice(0, BULK_FAILURE_LINES)) {
+        const thought = thoughts.find((candidate) => candidate.id === failure.operation.thoughtId);
+        const row = rows.find((candidate) => candidate.key === failure.operation.rowKey);
+        list.append(
+          el(
+            'li',
+            undefined,
+            t('selection.properties.failureLine', [
+              thought?.title ?? failure.operation.thoughtId,
+              row?.name ?? failure.operation.propertyKey,
+              failure.reason,
+            ]),
+          ),
+        );
+      }
+      if (failures.length > BULK_FAILURE_LINES) {
+        list.append(
+          el(
+            'li',
+            'muted',
+            t('selection.properties.failureMore', failures.length - BULK_FAILURE_LINES),
+          ),
+        );
+      }
+      blocks.push(title, list);
     }
-    if (failures.length > BULK_FAILURE_LINES) {
-      list.append(
-        el(
-          'li',
-          'muted',
-          t('selection.properties.failureMore', failures.length - BULK_FAILURE_LINES),
-        ),
-      );
+    if (skipped.length > 0) {
+      const title = span(t('selection.properties.skippedTitle'), 'error-text prop-bulk-report-title');
+      const list = el('ul', 'prop-bulk-report-list');
+      for (const row of skipped) {
+        list.append(el('li', undefined, t('selection.properties.skippedLine', [row.name])));
+      }
+      blocks.push(title, list);
     }
-    reportEl.replaceChildren(title, list);
+    reportEl.replaceChildren(...blocks);
     reportEl.hidden = false;
   }
 

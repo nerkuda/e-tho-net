@@ -551,6 +551,28 @@ export function emptyBulkPlanReason(
   return 'no-values';
 }
 
+/**
+ * Отмеченные строки, которые не дадут ни одной операции: значение пустое, а
+ * очищать нечего (`presentCount === 0`). Такая строка раньше молча
+ * пропускалась — заказчик принял это за «свойство проигнорировано» (ошибка
+ * bba5a7ce: набранный в чип-поле номер телефона не был зафиксирован). Диалог
+ * применяет остальные строки, но называет пропущенные в отчёте и остаётся
+ * открытым: молчаливый no-op недопустим.
+ */
+export function skippedBulkRows(
+  rows: readonly BulkPropertyRow[],
+  selection: readonly BulkRowSelection[],
+): BulkPropertyRow[] {
+  const rowsByKey = new Map(rows.map((row) => [row.key, row]));
+  const skipped: BulkPropertyRow[] = [];
+  for (const mark of selection) {
+    if (!mark.checked || mark.value !== null) continue;
+    const row = rowsByKey.get(mark.key);
+    if (row === undefined || row.presentCount > 0) continue;
+    skipped.push(row);
+  }
+  return skipped;
+}
 
 /**
  * Грязная ли форма относительно исходного снимка: отмечена хоть одна строка

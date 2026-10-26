@@ -164,6 +164,16 @@ export interface ValueEditorOptions {
    * b610729c-2fdf-4f18-b526-7e7aeddb860f).
    */
   textListAsArray?: boolean;
+  /**
+   * Хост-черновик может попросить редактор зафиксировать НЕдописанное
+   * значение: чип-поле (text/url + `config.multiple`) отдаёт здесь функцию
+   * «добавить набранный в поле добавления текст как значение». Нужен там, где
+   * значение читается ПРОГРАММНО по кнопке («Применить» массового диалога,
+   * «Применить» отбора), а не по уходу из поля: без явного вызова набранное
+   * оставалось в поле ввода и терялось молча (ошибка bba5a7ce — «телефоны»
+   * типа «Персона» это text + multiple, набранный номер не попадал в план).
+   */
+  registerPendingCommit?: (commit: () => Promise<void>) => void;
 }
 
 /**
@@ -977,10 +987,18 @@ function buildMultiTextChipsEditor(opts: {
   extraSuggest?: readonly SuggestSource[];
   /** `true` — в `save` идёт массив значений, а не comma-joined строка (text). */
   listAsArray?: boolean;
+  /** Режим коммита хоста: у черновика (`'change'`) набранный текст не теряется
+   *  и при уходе из поля — см. {@link ValueEditorOptions.registerPendingCommit}. */
+  commitOn?: 'blur' | 'change';
+  /** Хук «зафиксировать набранное без Enter» для хостов, читающих значение по
+   *  кнопке (массовый диалог, отбор), — см. {@link ValueEditorOptions.registerPendingCommit}. */
+  registerPendingCommit?: (commit: () => Promise<void>) => void;
 }): HTMLElement {
   const { kind, definition } = opts;
   let items = [...opts.items];
   const root = div('st-f-chipfield value-chips-field');
+  /** Поле добавления текущей отрисовки — источник недописанного текста. */
+  let currentInput: HTMLInputElement | null = null;
 
   // Свойство со списком вариантов: история не ведётся — выпадашку занимает
   // сам список, который открывается сразу при входе в поле добавления и до
@@ -993,13 +1011,13 @@ function buildMultiTextChipsEditor(opts: {
    */
   let refocusInput = false;
 
-  const commit = (next: string[]): void => {
+  const commit = (next: string[]): Promise<void> => {
     items = next;
     render();
     // text хранит набор comma-joined строкой; `listAsArray` сохраняет список
     // дискретным (конструктор условий: значения — аргумент операции «в списке»).
     const payload = kind === 'text' && opts.listAsArray !== true ? next.join(', ') : next;
-    void Promise.resolve()
+    return Promise.resolve()
       .then(() => opts.save(next.length > 0 ? payload : null))
       .then((ok) => {
         if (ok === true && opts.historyPropertyId !== undefined && options.length === 0) {
@@ -1008,13 +1026,31 @@ function buildMultiTextChipsEditor(opts: {
       });
   };
 
+  /**
+   * Зафиксировать текст, набранный в поле добавления, но не подтверждённый
+   * Enter: он становится ещё одним значением (ошибка bba5a7ce — без этого
+   * «Применить» массового диалога строила план по пустому значению и строка
+   * молча пропускалась). Пустое поле — no-op.
+   */
+  const commitPending = async (): Promise<void> => {
+    const input = currentInput;
+    if (input === null) return;
+    const value = input.value.trim();
+    if (value === '') return;
+    input.value = '';
+    if (items.includes(value)) return;
+    await commit([...items, value]);
+  };
+
   const render = (): void => {
     root.replaceChildren();
     for (const item of items) {
       root.append(
         buildTextChip(item, {
           icon: kind === 'url' ? '🔗' : '',
-          onRemove: () => commit(items.filter((v) => v !== item)),
+          onRemove: () => {
+            void commit(items.filter((v) => v !== item));
+          },
           ...(kind === 'url'
             ? {
                 onClick: () => {
@@ -1091,9 +1127,20 @@ function buildMultiTextChipsEditor(opts: {
       input.value = '';
       if (!items.includes(value)) {
         refocusInput = true;
-        commit([...items, value]);
+        void commit([...items, value]);
       }
     });
+    currentInput = input;
+    // Черновик (`'change'` — массовый диалог/отбор): уход из поля не теряет
+    // набранный текст — он становится значением. Уход ВНУТРЬ того же поля
+    // (каретка ▾ открывает список вариантов) значением не считается.
+    if (opts.commitOn === 'change') {
+      input.addEventListener('blur', (event) => {
+        const related = (event as { relatedTarget?: unknown }).relatedTarget;
+        if (related !== null && related !== undefined && root.contains(related as Node)) return;
+        void commitPending();
+      });
+    }
     root.append(input);
     // Вернуть фокус в поле ввода после добавления чипа (замечание п.6г). Фокус
     // здесь ставится сразу; если перерисовка хоста пересоберёт редактор, поле
@@ -1105,6 +1152,7 @@ function buildMultiTextChipsEditor(opts: {
   };
 
   render();
+  opts.registerPendingCommit?.(commitPending);
   return root;
 }
 
@@ -1278,7 +1326,11 @@ function buildTextEditor(opts: ValueEditorOptions): HTMLElement {
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
       extraSuggest: opts.extraSuggest,
+      commitOn: opts.commitOn ?? 'blur',
       ...(opts.textListAsArray === true ? { listAsArray: true } : {}),
+      ...(opts.registerPendingCommit !== undefined
+        ? { registerPendingCommit: opts.registerPendingCommit }
+        : {}),
     });
   }
   return buildScalarTextEditor(opts, 'text');
@@ -1295,6 +1347,10 @@ function buildUrlEditor(opts: ValueEditorOptions): HTMLElement {
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
       extraSuggest: opts.extraSuggest,
+      commitOn: opts.commitOn ?? 'blur',
+      ...(opts.registerPendingCommit !== undefined
+        ? { registerPendingCommit: opts.registerPendingCommit }
+        : {}),
     });
   }
   return buildScalarTextEditor(opts, 'url');
