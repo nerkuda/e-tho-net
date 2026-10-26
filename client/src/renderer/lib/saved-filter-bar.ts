@@ -464,7 +464,7 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   // 58981cf5): клавиатура остаётся от фасада (текущая строка, подсветка,
   // прокрутка), фокус — в поле, набор запроса продолжается.
   search.addEventListener('input', () => render());
-  bindSearchNav(search, { handleKey: (key) => table.handleKey(key) });
+  bindSearchNav(search, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   close = showDialog({
     title: t('savedFilters.title'),

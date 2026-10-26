@@ -501,7 +501,12 @@ export function mountPublicationWorkspace(
     elementOf: (entry) => blockNode(entry.key),
     applyHighlight: (entry) => paintDocFrames(entry),
     onCollapse: (entry, isCollapsed) => {
-      if (entry.kind === 'section' && entry.collapsible) setSectionCollapsed(entry.thoughtId, isCollapsed);
+      // Ctrl+↑/↓ (прежняя роль ←/→, решение пользователя 2026-10-25):
+      // сворачивается только раздел документа; строка текста — лист, событие
+      // не перехватывается (стандарт b6b2821d, задача 15236418).
+      if (entry.kind !== 'section' || !entry.collapsible) return false;
+      setSectionCollapsed(entry.thoughtId, isCollapsed);
+      return true;
     },
     onActivate: (entry) => openThought(entry.thoughtId),
     onClick: (target) => {

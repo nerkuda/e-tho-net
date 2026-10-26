@@ -99,7 +99,12 @@ import { modifierChordVariants } from '../keymap-chords.js';
 import { showMenuAt, type MenuItem } from '../menu.js';
 import { emptyState, type EmptyStateOptions, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
-import { nextNavIndex, resolveNavAction, type NavAction } from './nav-core.js';
+import {
+  nextNavIndex,
+  resolveNavAction,
+  type NavAction,
+  type NavKeyModifiers,
+} from './nav-core.js';
 import { select, type StateSelector } from './state.js';
 import {
   vaadinGridAdapter,
@@ -354,9 +359,10 @@ export interface TableHandle<T> {
    * Обработать клавишу штатным обработчиком фасада — тем же, что получает
    * нажатия при фокусе на таблице (правила `nav-core`, Enter-активация).
    * Нужен мостам от полей поиска (`./search-nav.ts`): клавиатура остаётся
-   * общей, второго разбора клавиш не появляется. `true` — клавиша обработана.
+   * общей, второго разбора клавиш не появляется. `modifiers` передаются мостом,
+   * чтобы `Ctrl+↑/↓` не читались как обычные стрелки. `true` — клавиша обработана.
    */
-  handleKey(key: string): boolean;
+  handleKey(key: string, modifiers?: NavKeyModifiers): boolean;
   /** Отписывается от селектора и удаляет узел. */
   destroy(): void;
 }
@@ -1011,15 +1017,17 @@ export function createTable<T>(spec: TableSpec<T>): TableHandle<T> {
     focus(): void {
       wrapper.focus();
     },
-    handleKey(key: string): boolean {
-      // Тот же обработчик, что и у настоящего нажатия: модификаторы не
-      // передаются — мосту поиска нужны только ↑/↓/Enter без Ctrl/Meta/Shift.
+    handleKey(key: string, modifiers: NavKeyModifiers = {}): boolean {
+      // Тот же обработчик, что и у настоящего нажатия; модификаторы передаёт
+      // мост поиска — иначе Ctrl+↑/↓ из поля поиска читались бы как обычные
+      // стрелки и двигали строку (в таблице Ctrl-сочетания, кроме Ctrl+C,
+      // навигацией не управляют).
       return handleTableKey({
         key,
-        ctrlKey: false,
-        metaKey: false,
-        shiftKey: false,
-        altKey: false,
+        ctrlKey: modifiers.ctrlKey === true,
+        metaKey: modifiers.metaKey === true,
+        shiftKey: modifiers.shiftKey === true,
+        altKey: modifiers.altKey === true,
         code: '',
       } as KeyboardEvent);
     },

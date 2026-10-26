@@ -1,10 +1,11 @@
 /**
  * Клавиатурная навигация по сворачиваемой записи «Дневника» (0.10.2, задача
- * 41ed99ab, требование 165323a7 в новой редакции): ←/→ на поле «заголовок» в
- * просмотре сворачивают/разворачивают ТЕЛО записи и оставляют фокус на
+ * 41ed99ab, требование 165323a7 в новой редакции): Ctrl+↑/↓ на поле «заголовок»
+ * в просмотре сворачивают/разворачивают ТЕЛО записи и оставляют фокус на
  * заголовке; поле «комментарий» доступно только у развёрнутой записи (Tab с
  * заголовка в свёрнутой уходит на «дата/период»); Enter на заголовке входит в
- * правку заголовка.
+ * правку заголовка. Прежняя роль ←/→ перешла к Ctrl+↑/↓ (решение пользователя
+ * 2026-10-25): ←/→ в одноколоночной ленте соседей не имеют и не перехватываются.
  */
 
 import assert from 'node:assert/strict';
@@ -57,11 +58,12 @@ function buildFeed(collapsed = false): Feed {
   return { root, card, title, body, date };
 }
 
-function press(root: ShimElement, key: string, shift = false): void {
+function press(root: ShimElement, key: string, modifiers: { ctrlKey?: boolean; shiftKey?: boolean } = {}): void {
   root.emit('focusin', {});
   keymap.dispatchKeyEvent({
     key,
-    shiftKey: shift,
+    ctrlKey: modifiers.ctrlKey === true,
+    shiftKey: modifiers.shiftKey === true,
     target: root,
     preventDefault: () => undefined,
   } as unknown as KeyboardEvent);
@@ -83,7 +85,7 @@ function toTitle(root: ShimElement): void {
 }
 
 describe('навигация по сворачиваемой записи (задача 41ed99ab, пп.3, 5)', () => {
-  it('← на заголовке сворачивает тело, фокус остаётся на заголовке', () => {
+  it('Ctrl+↑ на заголовке сворачивает тело, фокус остаётся на заголовке', () => {
     const feed = buildFeed();
     const calls: Array<[string, string, boolean]> = [];
     attachFeedNav(feed.root as unknown as HTMLElement, {
@@ -94,7 +96,11 @@ describe('навигация по сворачиваемой записи (за�
     toTitle(feed.root);
     assert.ok(feed.title.classList.contains(FEED_NAV_ELEMENT_CLASS), 'текущее поле — заголовок');
 
+    // Обычная ← в одноколоночной ленте соседей не имеет — событие не наше.
     press(feed.root, 'ArrowLeft');
+    assert.deepEqual(calls, [], 'обычная ← свёрнутость не трогает');
+
+    press(feed.root, 'ArrowUp', { ctrlKey: true });
     assert.deepEqual(calls, [['2026-09-11', 'r1', true]], 'запрос свернуть тело');
     // Экран сворачивает на месте — имитируем и убеждаемся, что фокус на заголовке.
     applyRecordCollapsed(feed.card as unknown as HTMLElement, true, {
@@ -104,7 +110,7 @@ describe('навигация по сворачиваемой записи (за�
     assert.equal(feed.title.focused, true, 'фокус остался на заголовке');
   });
 
-  it('→ на заголовке разворачивает тело', () => {
+  it('Ctrl+↓ на заголовке разворачивает тело', () => {
     const feed = buildFeed(true);
     const calls: Array<[string, string, boolean]> = [];
     attachFeedNav(feed.root as unknown as HTMLElement, {
@@ -114,6 +120,8 @@ describe('навигация по сворачиваемой записи (за�
     });
     toTitle(feed.root);
     press(feed.root, 'ArrowRight');
+    assert.deepEqual(calls, [], 'обычная → свёрнутость не трогает');
+    press(feed.root, 'ArrowDown', { ctrlKey: true });
     assert.deepEqual(calls, [['2026-09-11', 'r1', false]], 'запрос развернуть тело');
   });
 
@@ -158,7 +166,8 @@ describe('навигация по сворачиваемой записи (за�
 });
 
 // ---------------------------------------------------------------------------
-// Задача 9cdede6b: ←/→ сворачивают запись ЦЕЛИКОМ из навигации по ленте
+// Задача 9cdede6b: Ctrl+↑/↓ сворачивают запись ЦЕЛИКОМ из навигации по ленте
+// (прежняя роль ←/→ — решение пользователя 2026-10-25)
 // ---------------------------------------------------------------------------
 
 const LABELS = { collapse: 'Свернуть', expand: 'Развернуть' };
@@ -206,10 +215,16 @@ function buildFeed2(): Feed2 {
 }
 
 /** Нажатие с произвольной целью (для проверки режима правки текста). */
-function pressKey(root: ShimElement, key: string, target?: ShimElement): void {
+function pressKey(
+  root: ShimElement,
+  key: string,
+  target?: ShimElement,
+  modifiers: { ctrlKey?: boolean } = {},
+): void {
   root.emit('focusin', {});
   keymap.dispatchKeyEvent({
     key,
+    ctrlKey: modifiers.ctrlKey === true,
     shiftKey: false,
     target: target ?? root,
     preventDefault: () => undefined,
@@ -217,8 +232,8 @@ function pressKey(root: ShimElement, key: string, target?: ShimElement): void {
   root.emit('focusout', {});
 }
 
-describe('запись целиком: ←/→ сворачивают/разворачивают из навигации (9cdede6b)', () => {
-  it('↑/↓ выделяет запись; ← сворачивает тело, → разворачивает — без входа в поля', () => {
+describe('запись целиком: Ctrl+↑/↓ сворачивают/разворачивают из навигации (9cdede6b)', () => {
+  it('↑/↓ выделяет запись; Ctrl+↑ сворачивает тело, Ctrl+↓ разворачивает — без входа в поля', () => {
     const feed = buildFeed2();
     const calls: Array<[string, string, boolean]> = [];
     attachFeedNav(feed.root as unknown as HTMLElement, {
@@ -240,26 +255,28 @@ describe('запись целиком: ←/→ сворачивают/разво
     );
 
     // Числа до: тело видимо, карточка не свёрнута.
-    assert.equal(feed.body('r1').hidden, false, 'до ← тело видимо');
+    assert.equal(feed.body('r1').hidden, false, 'до Ctrl+↑ тело видимо');
     assert.equal(feed.card('r1').classList.contains('is-collapsed'), false);
 
     const bodyNode = feed.body('r1');
-    press(feed.root, 'ArrowLeft');
+    press(feed.root, 'ArrowLeft'); // обычная ← — соседей нет, свёрнутость не трогает
+    assert.deepEqual(calls, [], 'обычная ← свёрнутость не трогает');
+    press(feed.root, 'ArrowUp', { ctrlKey: true });
     assert.deepEqual(calls, [['2026-09-11', 'r1', true]], 'запрос свернуть тело записи');
     // Экран сворачивает на месте — имитируем и сверяем числа.
     applyRecordCollapsed(feed.card('r1') as unknown as HTMLElement, true, LABELS);
-    assert.equal(feed.body('r1').hidden, true, 'после ← тело скрыто');
+    assert.equal(feed.body('r1').hidden, true, 'после Ctrl+↑ тело скрыто');
     assert.equal(feed.card('r1').classList.contains('is-collapsed'), true, 'карточка свёрнута');
     assert.equal(feed.body('r1'), bodyNode, 'тело — тот же узел (переключение на месте)');
 
-    press(feed.root, 'ArrowRight');
+    press(feed.root, 'ArrowDown', { ctrlKey: true });
     assert.deepEqual(calls[1], ['2026-09-11', 'r1', false], 'запрос развернуть тело записи');
     applyRecordCollapsed(feed.card('r1') as unknown as HTMLElement, false, LABELS);
-    assert.equal(feed.body('r1').hidden, false, 'после → тело снова видимо');
+    assert.equal(feed.body('r1').hidden, false, 'после Ctrl+↓ тело снова видимо');
     assert.equal(feed.card('r1').classList.contains('is-collapsed'), false);
   });
 
-  it('после ←/→ выделение остаётся на записи, ↓ двигает его дальше (фокус не потерян)', () => {
+  it('после Ctrl+↑/↓ выделение остаётся на записи, ↓ двигает его дальше (фокус не потерян)', () => {
     const feed = buildFeed2();
     attachFeedNav(feed.root as unknown as HTMLElement, {
       onSetDayCollapsed: () => undefined,
@@ -270,7 +287,7 @@ describe('запись целиком: ←/→ сворачивают/разво
 
     press(feed.root, 'ArrowDown');
     press(feed.root, 'ArrowDown'); // r1
-    press(feed.root, 'ArrowLeft'); // свернуть r1 целиком
+    press(feed.root, 'ArrowUp', { ctrlKey: true }); // свернуть r1 целиком
     assert.ok(
       feed.card('r1').classList.contains(FEED_NAV_CURRENT_CLASS),
       'выделение осталось на r1',
@@ -280,12 +297,12 @@ describe('запись целиком: ←/→ сворачивают/разво
     press(feed.root, 'ArrowDown'); // следующая запись
     assert.ok(
       feed.card('r2').classList.contains(FEED_NAV_CURRENT_CLASS),
-      '↓ после ←/→ двигает выделение дальше',
+      '↓ после Ctrl+↑/↓ двигает выделение дальше',
     );
     assert.ok(!feed.card('r1').classList.contains(FEED_NAV_CURRENT_CLASS));
   });
 
-  it('на прочих полях записи (дата/период, мысли) ←/→ свёрнутость не трогают', () => {
+  it('на прочих полях записи (дата/период, мысли) Ctrl+↑/↓ свёрнутость не трогают', () => {
     const feed = buildFeed2();
     const calls: Array<[string, string, boolean]> = [];
     attachFeedNav(feed.root as unknown as HTMLElement, {
@@ -299,25 +316,25 @@ describe('запись целиком: ←/→ сворачивают/разво
     press(feed.root, 'Enter'); // режим полей → дата/период
     assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS));
 
-    press(feed.root, 'ArrowLeft');
-    press(feed.root, 'ArrowRight');
-    assert.deepEqual(calls, [], 'на поле «дата/период» стрелки свёрнутость не трогают');
+    press(feed.root, 'ArrowUp', { ctrlKey: true });
+    press(feed.root, 'ArrowDown', { ctrlKey: true });
+    assert.deepEqual(calls, [], 'на поле «дата/период» сочетания свёрнутость не трогают');
 
     press(feed.root, 'Tab'); // мысли
     assert.ok(feed.chips('r1').classList.contains(FEED_NAV_ELEMENT_CLASS));
-    press(feed.root, 'ArrowLeft');
-    assert.deepEqual(calls, [], 'на поле «мысли» стрелки свёрнутость не трогают');
+    press(feed.root, 'ArrowUp', { ctrlKey: true });
+    assert.deepEqual(calls, [], 'на поле «мысли» сочетания свёрнутость не трогают');
 
     press(feed.root, 'Tab'); // заголовок
-    press(feed.root, 'ArrowLeft');
+    press(feed.root, 'ArrowUp', { ctrlKey: true });
     assert.deepEqual(
       calls,
       [['2026-09-11', 'r1', true]],
-      'на поле «заголовок» прежнее поведение сохранено',
+      'на поле «заголовок» прежнее поведение сохранено (Ctrl+↑)',
     );
   });
 
-  it('в правке текста ←/→ принадлежат редактору — лента молчит', () => {
+  it('в правке текста Ctrl+↑/↓ и ←/→ принадлежат редактору — лента молчит', () => {
     const feed = buildFeed2();
     const calls: Array<[string, string, boolean]> = [];
     attachFeedNav(feed.root as unknown as HTMLElement, {
@@ -331,6 +348,8 @@ describe('запись целиком: ←/→ сворачивают/разво
     const input = new ShimElement('input', 'diary-record-title-input');
     pressKey(feed.root, 'ArrowLeft', input);
     pressKey(feed.root, 'ArrowRight', input);
-    assert.deepEqual(calls, [], 'в поле правки стрелки не сворачивают запись');
+    pressKey(feed.root, 'ArrowUp', input, { ctrlKey: true });
+    pressKey(feed.root, 'ArrowDown', input, { ctrlKey: true });
+    assert.deepEqual(calls, [], 'в поле правки сочетания не сворачивают запись');
   });
 });

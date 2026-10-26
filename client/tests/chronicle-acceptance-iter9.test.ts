@@ -81,12 +81,18 @@ async function navModule(): Promise<typeof import('../src/renderer/screens/chron
 }
 
 /** Нажатие клавиши на ленте; `target` — узел, где случилось событие. */
-function press(root: ShimElement, key: string, target?: ShimElement, shift = false): void {
+function press(
+  root: ShimElement,
+  key: string,
+  target?: ShimElement,
+  modifiers: { shiftKey?: boolean; ctrlKey?: boolean } = {},
+): void {
   let prevented = false;
   root.emit('focusin', {});
   keymap.dispatchKeyEvent({
     key,
-    shiftKey: shift,
+    shiftKey: modifiers.shiftKey === true,
+    ctrlKey: modifiers.ctrlKey === true,
     target: target ?? root,
     preventDefault: () => {
       prevented = true;
@@ -164,7 +170,7 @@ describe('приёмка №9, п.2: клавиатурная навигация
     assert.deepEqual(handle.current(), { kind: 'day', key: '2026-09-10' }, 'записи свёрнутой группы пропущены');
   });
 
-  it('Enter на группе сворачивает/разворачивает; «влево»/«вправо» — тоже', async () => {
+  it('Enter на группе сворачивает/разворачивает; Ctrl+↑/↓ — тоже (прежняя роль ←/→)', async () => {
     const feed = buildFeed([{ day: '2026-09-11', records: ['r1'] }]);
     const calls: Array<{ day: string; collapsed: boolean }> = [];
     const { handle } = await attach(feed.root, calls, []);
@@ -177,10 +183,15 @@ describe('приёмка №9, п.2: клавиатурная навигация
     press(feed.root, 'Enter');
     assert.deepEqual(calls.at(-1), { day: '2026-09-11', collapsed: false }, 'Enter свёрнутой группы разворачивает');
 
+    // ←/→ в одноколоночной ленте соседей не имеют и сворачивание не трогают.
+    const before = calls.length;
     press(feed.root, 'ArrowLeft');
-    assert.deepEqual(calls.at(-1), { day: '2026-09-11', collapsed: true }, '«влево» сворачивает');
     press(feed.root, 'ArrowRight');
-    assert.deepEqual(calls.at(-1), { day: '2026-09-11', collapsed: false }, '«вправо» разворачивает');
+    assert.equal(calls.length, before, '←/→ свёрнутость группы не меняют');
+    press(feed.root, 'ArrowUp', undefined, { ctrlKey: true });
+    assert.deepEqual(calls.at(-1), { day: '2026-09-11', collapsed: true }, 'Ctrl+↑ сворачивает');
+    press(feed.root, 'ArrowDown', undefined, { ctrlKey: true });
+    assert.deepEqual(calls.at(-1), { day: '2026-09-11', collapsed: false }, 'Ctrl+↓ разворачивает');
   });
 
   it('Enter входит в поля, Tab/Shift+Tab ходят по полям, Enter — действие поля', async () => {
@@ -233,7 +244,7 @@ describe('приёмка №9, п.2: клавиатурная навигация
     // По кругу и назад.
     press(feed.root, 'Tab');
     assert.ok(feed.date('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Tab с комментария — снова дата');
-    press(feed.root, 'Tab', undefined, true);
+    press(feed.root, 'Tab', undefined, { shiftKey: true });
     assert.ok(feed.body('r1').classList.contains(FEED_NAV_ELEMENT_CLASS), 'Shift+Tab с даты — комментарий');
 
     // Esc — выход из режима полей, запись остаётся текущей «единой строкой».

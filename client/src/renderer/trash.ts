@@ -1055,7 +1055,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   // ↑/↓/Enter из поиска (первая строка диалога, правило 1 требования
   // 11ddd910) исполняет штатную навигацию таблицы общим мостом; фокус
   // остаётся в поле, набор запроса продолжается (ошибка 58981cf5).
-  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   /** Полная физическая очистка корзины (массовое управление над списком). */
   async function purgeAll(): Promise<void> {

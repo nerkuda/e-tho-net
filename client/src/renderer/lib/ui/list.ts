@@ -12,7 +12,8 @@
  * навешивает на неё ПОСЛЕДОВАТЕЛЬНОСТЬ и КЛАВИАТУРУ.
  *
  * **Ядро — `nav-core.ts`.** Все правила (какие клавиши, границы, Home/End,
- * разворот/сворачивание группы, активация, отсечка полей ввода) живут в ядре;
+ * переход по колонкам ←/→, сворачивание/разворачивание группы Ctrl+↑/↓,
+ * активация, отсечка полей ввода) живут в ядре;
  * компонент связывает их с DOM. Свой обработчик стрелок в экране развёрнутого
  * списка не нужен и запрещён сторожем (`guard-list-nav`).
  *
@@ -39,7 +40,10 @@
  * ({@link ListNavAdapter.boxOf}); стрелки ходят по геометрии строк/столбцов
  * (выбор цели — чистое ядро `nav-core.ts::pickSpatialTarget`), Home/End —
  * границы текущей группы, Ctrl+Home/End — первой/последней. Без этого режима
- * поведение не меняется.
+ * поведение не меняется. **←/→ — соседи по колонке** (решение пользователя
+ * 2026-10-25, стандарт b6b2821d): работают только в 2D-режиме; нет соседа —
+ * клавиша не перехватывается. Свёрнутость узла/группы — `Ctrl+↑`/`Ctrl+↓`
+ * ({@link ListNavAdapter.onCollapse}), в том числе в последовательном режиме.
  */
 
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
@@ -51,6 +55,7 @@ import {
   pickSpatialTarget,
   resolveNavAction,
   type NavBox,
+  type NavKeyModifiers,
 } from './nav-core.js';
 
 /** Счётчик списков: у каждого свой контекст сочетаний (замыкание навигации). */
@@ -93,8 +98,9 @@ export interface ListNavAdapter<E> {
   focus?(entry: E, el: HTMLElement | null): void;
   /** Отсечка полей ввода (по умолчанию — {@link coreIsEditingTarget}). */
   isEditingTarget?(target: unknown | null): boolean;
-  /** ←/→: свернуть (`collapsed: true`) или развернуть текущую группу/сущность. */
-  onCollapse?(entry: E, collapsed: boolean): void;
+  /** Ctrl+↑/↓: свернуть (`collapsed: true`) или развернуть текущий узел/группу.
+   *  `false` — сущность не сворачивается (лист): событие не перехватывается. */
+  onCollapse?(entry: E, collapsed: boolean): boolean;
   /** Enter — активация текущей сущности. */
   onActivate?(entry: E): void;
   /**
@@ -111,12 +117,13 @@ export interface ListNavAdapter<E> {
    * представлений (полки «книжками»): ←/→/↑/↓ перемещают по геометрии
    * (столбцами/строками, как на карте), Home/End — границы текущей группы,
    * Ctrl+Home/End — границы первой/последней группы. Без неё — обычный
-   * последовательный ход ↑/↓. Требует {@link ListNavAdapter.boxOf}.
+   * последовательный ход ↑/↓, а ←/→ соседей не имеют (одна колонка) и не
+   * перехватываются. Требует {@link ListNavAdapter.boxOf}.
    */
   useSpatialNav?(): boolean;
   /** Прямоугольник сущности в координатах окна — вход 2D-навигации. */
   boxOf?(entry: E): NavBox | null;
-  /** Сущность — заголовок группы: на ней ←/→ сворачивают, а не двигают вбок. */
+  /** Сущность — заголовок группы (граница группы для Home/End и стрелок). */
   isGroupHead?(entry: E): boolean;
   /** Ключ группы сущности (полка) — для Home/End «границы группы». */
   groupOf?(entry: E): string | null;
@@ -158,9 +165,11 @@ export interface ListNavHandle<E> {
    * Обработать клавишу штатным обработчиком списка — тем же, что получает
    * нажатия при фокусе на списке (правила `nav-core`, Enter-активация).
    * Нужен мостам от полей поиска (`./search-nav.ts`): клавиатура остаётся
-   * общей, второго разбора клавиш не появляется. `true` — клавиша обработана.
+   * общей, второго разбора клавиш не появляется. `modifiers` передаются мостом:
+   * по ним ядро отличает `Ctrl+↑/↓` (свёрнутость) от обычных стрелок.
+   * `true` — клавиша обработана.
    */
-  handleKey(key: string): boolean;
+  handleKey(key: string, modifiers?: NavKeyModifiers): boolean;
   /** Снять слушатели (размонтирование вида). */
   destroy(): void;
 }
@@ -282,28 +291,39 @@ export function createListNav<E>(
    * групп, и с заголовка вверх ожидается предыдущий заголовок, а не последний
    * ряд предыдущей группы). Вниз с заголовка геометрия сама даёт первую книжку
    * своей группы.
+   *
+   * ←/→ — шаг ТОЛЬКО в своём ряду (`sameRowOnly`): цель обязана пересекаться с
+   * текущей по вертикали, иначе с карточки неполного последнего ряда шаг вправо
+   * находил бы «соседа» в предыдущем ряду и прыгал через ряд. У крайней колонки
+   * и у неполного ряда соседа справа/слева нет — `false` (решение пользователя
+   * 2026-10-25: «нет соседа — не перехватывать»).
+   *
+   * `false` — цели в направлении нет: событие обязано остаться
+   * необработанным.
    */
-  const moveSpatial = (dx: -1 | 0 | 1, dy: -1 | 0 | 1): void => {
+  const moveSpatial = (dx: -1 | 0 | 1, dy: -1 | 0 | 1): boolean => {
     const entries = list();
     if (entries.length === 0) {
       setCurrent(null);
-      return;
+      return false;
     }
     if (current === null) {
+      // ←/→ без выделения соседа не имеют (не с чем сравнивать) — не наше.
+      if (dy === 0) return false;
       const first = entries[0] as E;
-      setCurrent(dy > 0 || dx > 0 ? first : (entries[entries.length - 1] as E), { reveal: true });
-      return;
+      setCurrent(dy > 0 ? first : (entries[entries.length - 1] as E), { reveal: true });
+      return true;
     }
     const isHead = (entry: E): boolean => adapter.isGroupHead?.(entry) === true;
     if (dy < 0 && isHead(current)) {
       const prevHead = previousGroupHead(current);
       if (prevHead !== null) {
         setCurrent(prevHead, { reveal: true });
-        return;
+        return true;
       }
     }
     const currentBox = boxOfEntry(current);
-    if (currentBox === null) return;
+    if (currentBox === null) return false;
     const boxes = entries
       .map((entry) => ({ entry, box: boxOfEntry(entry) }))
       .filter((item): item is { entry: E; box: NavBox } => item.box !== null);
@@ -314,9 +334,11 @@ export function createListNav<E>(
       dy,
       (item) => adapter.tokenOf(item.entry),
       adapter.tokenOf(current),
-      { lateral: 'overlap' },
+      { lateral: 'overlap', sameRowOnly: true },
     );
-    if (next !== null) setCurrent(next.entry, { reveal: true });
+    if (next === null) return false;
+    setCurrent(next.entry, { reveal: true });
+    return true;
   };
 
   /**
@@ -398,11 +420,14 @@ export function createListNav<E>(
     // Поле правки текста: стрелки/Tab/Enter принадлежат редактору.
     if (isEditing(target)) return false;
     // Alt+↑/↓ — сдвиг порядка; навигацию курсора ведёт базовый разбор без Alt.
-    const action = resolveNavAction(key, { altKey: event.altKey === true });
+    // Ctrl+↑/↓ — свёрнутость узла (прежняя роль ←/→, стандарт b6b2821d).
+    const action = resolveNavAction(key, {
+      altKey: event.altKey === true,
+      ctrlKey: event.ctrlKey === true,
+    });
     if (action === null) return false;
     navActive = true;
     const useSpatial = spatial();
-    const onGroupHead = current !== null && adapter.isGroupHead?.(current) === true;
     switch (action) {
       case 'up':
         if (useSpatial) moveSpatial(0, -1);
@@ -412,6 +437,15 @@ export function createListNav<E>(
         if (useSpatial) moveSpatial(0, 1);
         else move(1);
         return true;
+      case 'left':
+      case 'right': {
+        // ←/→ — к соседнему элементу слева/справа (решение пользователя
+        // 2026-10-25). Соседи есть только в многоколоночном (2D) наборе;
+        // в последовательном списке одна колонка — клавиша не перехватывается.
+        // Цели нет (край ряда/неполный ряд) — тоже не перехватываем.
+        if (!useSpatial) return false;
+        return moveSpatial(action === 'left' ? -1 : 1, 0);
+      }
       case 'home':
         if (useSpatial) moveGroupEdge(false, event.ctrlKey === true);
         else moveToEdge(false);
@@ -422,17 +456,11 @@ export function createListNav<E>(
         return true;
       case 'collapse':
       case 'expand': {
-        // В пространственном режиме на КНИЖКЕ ←/→ — перемещение по горизонтали,
-        // а сворачивание — только на заголовке группы (спека 1eecd988).
-        if (useSpatial && !onGroupHead) {
-          moveSpatial(action === 'collapse' ? -1 : 1, 0);
-          return true;
-        }
-        if (current !== null && adapter.onCollapse !== undefined) {
-          adapter.onCollapse(current, action === 'collapse');
-          return true;
-        }
-        return false;
+        // Сворачивает/разворачивает узел адаптер: полку, группу дня, тело
+        // записи, раздел документа. Лист (публикация, запись дня) возвращает
+        // `false` — событие уходит дальше, навигация его не гасит.
+        if (current === null || adapter.onCollapse === undefined) return false;
+        return adapter.onCollapse(current, action === 'collapse');
       }
       case 'activate':
         if (current !== null && adapter.onActivate !== undefined) {
@@ -471,6 +499,11 @@ export function createListNav<E>(
       { command: 'list.down', chord: 'ArrowDown', run: handleKeyDown },
       { command: 'list.left', chord: 'ArrowLeft', run: handleKeyDown },
       { command: 'list.right', chord: 'ArrowRight', run: handleKeyDown },
+      // Ctrl+↑/↓ — свернуть/развернуть текущий узел (группу, полку, тело
+      // записи): прежняя роль ←/→ перешла сюда (решение пользователя
+      // 2026-10-25, стандарт b6b2821d, задача 15236418).
+      { command: 'list.collapse', chord: 'Ctrl+ArrowUp', run: handleKeyDown },
+      { command: 'list.expand', chord: 'Ctrl+ArrowDown', run: handleKeyDown },
       { command: 'list.home', chord: 'Home', run: handleKeyDown },
       { command: 'list.end', chord: 'End', run: handleKeyDown },
       { command: 'list.home.global', chord: 'Ctrl+Home', run: handleKeyDown },
@@ -530,18 +563,19 @@ export function createListNav<E>(
     token(): string | null {
       return current === null ? null : adapter.tokenOf(current);
     },
-    handleKey(key: string): boolean {
-      // Тот же обработчик, что и у настоящего нажатия: модификаторы не
-      // передаются — мосту поиска нужны только ↑/↓/Enter без Ctrl/Meta/Shift.
-      // `target: null` — нажатие передано мостом из поля поиска, а не набрано
-      // на самом списке, поэтому отсечка `isEditing` не применяется.
+    handleKey(key: string, modifiers: NavKeyModifiers = {}): boolean {
+      // Тот же обработчик, что и у настоящего нажатия; модификаторы передаёт
+      // мост поиска — иначе Ctrl+↑/↓ из поля поиска читались бы как обычные
+      // стрелки и двигали выделение. `target: null` — нажатие передано мостом
+      // из поля поиска, а не набрано на самом списке, поэтому отсечка
+      // `isEditing` не применяется.
       return handleKeyDown({
         key,
         target: null,
-        ctrlKey: false,
-        metaKey: false,
-        shiftKey: false,
-        altKey: false,
+        ctrlKey: modifiers.ctrlKey === true,
+        metaKey: modifiers.metaKey === true,
+        shiftKey: modifiers.shiftKey === true,
+        altKey: modifiers.altKey === true,
       } as unknown as KeyboardEvent);
     },
     destroy(): void {

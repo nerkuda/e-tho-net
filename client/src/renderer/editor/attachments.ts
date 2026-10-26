@@ -1127,7 +1127,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     // Поиск — первая строка панели: ↑/↓/Enter из поля исполняют штатную
     // навигацию списка общим мостом, фокус остаётся в поле (стандарт b6b2821d).
     const unbindSearchNav = bindSearchNav(searchInput, {
-      handleKey: (key) => searchNav.handleKey(key),
+      handleKey: (key, modifiers) => searchNav.handleKey(key, modifiers),
     });
 
     const searchPanel = div('att-tab-panel hidden');

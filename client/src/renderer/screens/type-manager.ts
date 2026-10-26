@@ -693,7 +693,7 @@ export function buildThoughtTypesPanel(): CataloguePanel {
   // Поиск — первая строка диалога-списка (правило 1 требования 11ddd910):
   // ↑/↓/Enter из него исполняет штатную навигацию дерева общим мостом, фокус
   // остаётся в поле (ошибка 58981cf5, стандарт b6b2821d).
-  bindSearchNav(searchInput, { handleKey: (key) => tree.handleKey(key) });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => tree.handleKey(key, modifiers) });
 
   /** Deletes a thought type (forced: thoughts detached, values dropped). */
   async function removeRow(type: ThoughtType): Promise<void> {

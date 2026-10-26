@@ -371,6 +371,42 @@ describe('lib/ui/tree: флажок, клик, клавиатура', () => {
     assert.equal(tree.getCurrentId(), 'b', '→ у раскрытой ветви идёт к потомку');
   });
 
+  it('Ctrl+↓ разворачивает узел, Ctrl+↑ сворачивает; на листе — не перехватываются', async () => {
+    const T = await treeModule();
+    const host = new ShimElement('div');
+    const tree = T.createTree<Item>({
+      items: ITEMS,
+      expandedIds: ['root'],
+      renderContent: () => textNode('x'),
+    });
+    host.append(tree.root as unknown as ShimElement);
+    const root = tree.root as unknown as ShimElement;
+    // На монтировании текущая — первая видимая строка (root).
+    assert.deepEqual(tree.getCurrentId(), 'root');
+    press(root, key('ArrowDown')); // a (ветвь свёрнута)
+    assert.deepEqual(tree.getCurrentId(), 'a');
+    assert.equal(tree.isExpanded('a'), false);
+    // Ctrl+↓ — дублирующее сочетание прежней роли →.
+    press(root, keyMods('ArrowDown', { ctrlKey: true }));
+    assert.equal(tree.isExpanded('a'), true, 'Ctrl+↓ развернул узел');
+    // Ctrl+↑ — дублирующее сочетание прежней роли ←.
+    press(root, keyMods('ArrowUp', { ctrlKey: true }));
+    assert.equal(tree.isExpanded('a'), false, 'Ctrl+↑ свернул узел');
+    // Лист: свёрнутости нет — сочетания не перехватываются и состояние не меняют.
+    press(root, keyMods('ArrowDown', { ctrlKey: true })); // развернуть обратно
+    press(root, key('ArrowDown')); // b — лист
+    assert.deepEqual(tree.getCurrentId(), 'b');
+    press(root, keyMods('ArrowDown', { ctrlKey: true }));
+    assert.equal(tree.isExpanded('b'), false, 'Ctrl+↓ на листе не раскрывает');
+    press(root, keyMods('ArrowUp', { ctrlKey: true }));
+    assert.deepEqual(tree.getCurrentId(), 'b', 'Ctrl+↑ на листе выделение не сдвигает');
+    // ←/→ сохраняют прежнюю семантику дерева (решение: дублирование, не перенос).
+    press(root, key('ArrowLeft'));
+    assert.deepEqual(tree.getCurrentId(), 'a', '← с листа уходит к родителю');
+    press(root, key('ArrowRight'));
+    assert.deepEqual(tree.getCurrentId(), 'b', '→ у раскрытого узла идёт к потомку');
+  });
+
   it('без флажка клик по строке делает её текущей, двойной клик активирует (пикер)', async () => {
     const T = await treeModule();
     const host = new ShimElement('div');

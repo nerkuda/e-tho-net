@@ -841,7 +841,7 @@ export function buildPropertyList(opts: {
   // него исполняет штатную навигацию таблицы (ядро nav-core), оставаясь в поле —
   // набор запроса продолжается, выделение и прокрутка списка видны. Второго
   // разбора клавиш нет (ошибка 58981cf5, стандарт b6b2821d).
-  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   return {
     root,

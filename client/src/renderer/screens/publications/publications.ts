@@ -218,9 +218,11 @@ export function mountPublications(hostEl: HTMLElement): () => void {
   // Поиск — первая строка библиотеки (правило 1 требования 11ddd910): ↑/↓/Enter
   // из него исполняют штатную навигацию списка через общий мост, фокус остаётся
   // в поле — набор запроса продолжается, выделение и прокрутка видны (ошибка
-  // be095da7, стандарт b6b2821d). Второго разбора клавиш нет.
+  // be095da7, стандарт b6b2821d). Ctrl+↑/↓ тоже передаются — свёрнутость полки
+  // работает из поиска; модификаторы идут в тот же обработчик, второго разбора
+  // клавиш нет.
   const unbindSearchNav = bindSearchNav(ui.search, {
-    handleKey: (key) => libraryNav?.handleKey(key) === true,
+    handleKey: (key, modifiers) => libraryNav?.handleKey(key, modifiers) === true,
   });
   wsHost = div('publications-host pub-ws-host hidden');
   hostEl.append(wsHost);

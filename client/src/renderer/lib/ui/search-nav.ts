@@ -16,6 +16,15 @@
  * Escape и прочие клавиши не перехватываются — ими распоряжаются поле и
  * каркас диалога.
  *
+ * **←/→ и Ctrl+↑/↓ (решение задачи 15236418, для карточки компонента).**
+ * ←/→ НЕ передаются: в поле поиска это клавиши каретки, и перехват ломал бы
+ * набор/правку запроса (переход по колонкам доступен после ↓ — фокус
+ * переходит в список клавиатурой, а выделение уже стоит на первой строке).
+ * Ctrl+↑/↓ передаются: в однострочном поле они не управляют кареткой, а
+ * свёрнутость полки/узла нужна и во время набора (библиотека публикаций).
+ * Модификаторы идут в штатный `handleKey` фасада, поэтому `Ctrl+↓` не читается
+ * как обычное «вниз».
+ *
  * **Механика.** Контекст сочетаний объявляется один раз на модуль (повторное
  * объявление того же id идемпотентно — реестр `lib/keymap.ts` не растёт с
  * каждым открытием диалога); конкретная цель нажатия ищется по `event.target`
@@ -28,21 +37,26 @@
  */
 
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
+import type { NavKeyModifiers } from './nav-core.js';
 
 /** Идентификатор контекста моста — один на клиент. */
 export const SEARCH_NAV_CONTEXT_ID = 'list-search-nav';
 
-/** Клавиши, передаваемые списку: выделение и выбор. */
-export const SEARCH_NAV_KEYS = ['ArrowDown', 'ArrowUp', 'Enter'] as const;
+/**
+ * Клавиши, передаваемые списку: выделение, выбор и свёрнутость узла.
+ * ←/→ сюда НЕ входят — в поле поиска они принадлежат каретке (см. выше).
+ */
+export const SEARCH_NAV_KEYS = ['ArrowDown', 'ArrowUp', 'Enter', 'Ctrl+ArrowDown', 'Ctrl+ArrowUp'] as const;
 
 /** Цель моста — список, который обработает нажатие своим штатным механизмом. */
 export interface SearchNavTarget {
   /**
    * Обработать клавишу так же, как при фокусе на списке (↑/↓ двигают текущую
-   * строку с прокруткой, Enter активирует её). `false` — клавиша списку не
-   * принадлежит.
+   * строку с прокруткой, Enter активирует её, Ctrl+↑/↓ сворачивают узел).
+   * `modifiers` — модификаторы исходного нажатия: без них `Ctrl+↓` в фасаде
+   * не отличить от обычного «вниз». `false` — клавиша списку не принадлежит.
    */
-  handleKey: (key: string) => boolean;
+  handleKey: (key: string, modifiers?: NavKeyModifiers) => boolean;
 }
 
 /** Активные мосты: поле поиска → цель навигации. */
@@ -54,7 +68,10 @@ function handleSearchNav(event: KeyboardEvent): boolean {
   if (source === null || typeof source !== 'object') return false;
   const target = targets.get(source);
   if (target === undefined) return false;
-  return target.handleKey(event.key);
+  // Событие само несёт модификаторы нажатия — отдаём его как
+  // `NavKeyModifiers`: они не разбираются повторно (иначе `Ctrl+↓` пришёл бы в
+  // фасад обычной «вниз»).
+  return target.handleKey(event.key, event);
 }
 
 /** Привязки контекста: объявление идемпотентно (повторная запись того же id). */
@@ -68,6 +85,10 @@ function ensureContext(): void {
       // диалога и полю (подтверждение, вставка) — модификаторные привязки
       // здесь не размножаем (`lib/keymap-chords.ts`).
       { command: 'listSearch.enter', chord: 'Enter', run: handleSearchNav },
+      // Свёрнутость узла/полки доступна прямо из поиска (задача 15236418):
+      // Ctrl-стрелки в поле не управляют кареткой.
+      { command: 'listSearch.collapse', chord: 'Ctrl+ArrowUp', run: handleSearchNav },
+      { command: 'listSearch.expand', chord: 'Ctrl+ArrowDown', run: handleSearchNav },
     ],
   });
 }

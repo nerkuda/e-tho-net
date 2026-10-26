@@ -212,6 +212,10 @@ describe('guard: обнаружимость действий (e45ca252, стан
     const offenders: string[] = [];
     for (const file of fs.readdirSync(UI_ROOT).filter((f) => f.endsWith('.ts'))) {
       const src = fs.readFileSync(path.join(UI_ROOT, file), 'utf8');
+      // Чистое правило без единого DOM-слушателя не может сделать действие
+      // «только клавиатурным»: хоткей и мышиный путь ему навешивает фасад
+      // (`nav-core.ts` — правила ядра, разрешает Ctrl+↑/↓ и ←/→).
+      if (!/addEventListener\(/.test(src)) continue;
       const hotkey = /(?:ctrlKey|metaKey)/.test(src);
       if (!hotkey) continue;
       const pointerPath = /addEventListener\(\s*['"](?:pointerdown|mousedown|click|dblclick)['"]/.test(src);

@@ -248,7 +248,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
   searchInput.addEventListener('input', () => applyFilter());
   // Поиск — первая строка списка (правило 1 требования 11ddd910): ↑/↓/Enter
   // из него исполняет штатную навигацию таблицы общим мостом (ошибка 58981cf5).
-  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   content.replaceChildren(searchRow, toolbar, wrap, addUserRow());
   applyFilter();
@@ -527,7 +527,7 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
   }
   searchInput.addEventListener('input', () => applyFilter());
   // ↑/↓/Enter из поиска — штатная навигация таблицы (ошибка 58981cf5).
-  bindSearchNav(searchInput, { handleKey: (key) => table.handleKey(key) });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   content.replaceChildren(searchRow, toolbar, wrap);
   applyFilter();
@@ -685,7 +685,7 @@ function renderAudit(content: HTMLElement): void {
   searchInput.addEventListener('input', () => paint());
   // ↑/↓/Enter из поиска — штатная навигация ТЕКУЩЕЙ таблицы журнала: paint
   // пересобирает её, поэтому цель моста берётся из замыкания (ошибка 58981cf5).
-  bindSearchNav(searchInput, { handleKey: (key) => auditTable?.handleKey(key) === true });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => auditTable?.handleKey(key, modifiers) === true });
 
   async function loadAudit(): Promise<void> {
     tableWrap.replaceChildren(loadingState());

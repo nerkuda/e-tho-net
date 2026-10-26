@@ -2831,7 +2831,7 @@ export function buildLinkTypesPanel(): CataloguePanel {
   // Поиск — первая строка диалога-списка (правило 1 требования 11ddd910):
   // ↑/↓/Enter из него исполняет штатную навигацию дерева общим мостом, фокус
   // остаётся в поле (ошибка 58981cf5, стандарт b6b2821d).
-  bindSearchNav(searchInput, { handleKey: (key) => tree.handleKey(key) });
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => tree.handleKey(key, modifiers) });
 
   // Realtime через слой (G5): `link-type.*`/`property-registry.*` гасят
   // `types-catalog` (роутер), причина — само событие. Клик открывает свойство,

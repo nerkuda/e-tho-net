@@ -970,7 +970,7 @@ export async function pickEntitiesModal(
     // Поиск — первая строка пикера (правило 1 требования 11ddd910): ↑/↓/Enter
     // из него исполняет штатную навигацию дерева общим мостом, фокус остаётся
     // в поле (ошибка 58981cf5). Второго разбора клавиш нет.
-    bindSearchNav(searchInput, { handleKey: (key) => tree.handleKey(key) });
+    bindSearchNav(searchInput, { handleKey: (key, modifiers) => tree.handleKey(key, modifiers) });
 
     let clearBtn: HTMLButtonElement | null = null;
     let applyBtn: HTMLButtonElement | null = null;

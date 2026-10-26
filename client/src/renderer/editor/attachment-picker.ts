@@ -373,7 +373,7 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
       // из него исполняют штатную навигацию списка через общий мост, фокус
       // остаётся в поле — набор запроса продолжается, выделение и прокрутка
       // видны (ошибка be095da7, стандарт b6b2821d). Второго разбора клавиш нет.
-      bindSearchNav(search, { handleKey: (key) => nav.handleKey(key) });
+      bindSearchNav(search, { handleKey: (key, modifiers) => nav.handleKey(key, modifiers) });
 
       /** Ближайшая строка-вложение от узла клика. */
       function closestRow(target: HTMLElement): HTMLElement | null {

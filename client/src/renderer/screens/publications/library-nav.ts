@@ -13,6 +13,13 @@
  * разметки, отдаёт узлы, рисует класс выделения и сообщает экрану о
  * сворачивании полки / открытии публикации.
  *
+ * **Роли клавиш (решение пользователя 2026-10-25, стандарт b6b2821d, задача
+ * 15236418).** Вид «Полки» — многоколоночный: ←/→ переходят к соседней
+ * карточке слева/справа (геометрия ряда, задача 432ab7ba п.2), у края ряда и на
+ * заголовке полки соседей нет — клавиша не перехватывается. Вид «Список» —
+ * одна колонка: ←/→ тоже не перехватываются. Свёрнутость полки в обоих видах —
+ * Ctrl+↑ (свернуть) / Ctrl+↓ (развернуть); прежняя роль ←/→ перешла к ним.
+ *
  * **Почему отдельный модуль.** Он не тянет Electron/сеть и проверяется
  * DOM-тестами на шиме (`tests/publications-library-nav.test.ts`): симуляция
  * keydown, проверка выделения и колбэков. Разметку и данные держит
@@ -27,7 +34,12 @@
  */
 
 import { createListNav, type ListNavAdapter } from '../../lib/ui/list.js';
-import { isEditingTarget, shouldDrawCurrentFrame, type NavBox } from '../../lib/ui/nav-core.js';
+import {
+  isEditingTarget,
+  shouldDrawCurrentFrame,
+  type NavBox,
+  type NavKeyModifiers,
+} from '../../lib/ui/nav-core.js';
 import { visibleLibraryEntities, type LibraryEntity, type LibraryGroupLike } from './model.js';
 
 /** Класс секции группы (полки) — общий для обоих видов. */
@@ -80,10 +92,11 @@ export interface LibraryNavHandle {
   /**
    * Обработать клавишу штатным обработчиком библиотеки — тем же, что получает
    * нажатия при фокусе на ней. Нужен мосту поиска (`lib/ui/search-nav.ts`):
-   * ↑/↓/Enter из поля поиска ведут навигацию библиотеки, фокус остаётся в
-   * поле (ошибка be095da7, стандарт b6b2821d).
+   * ↑/↓/Enter и Ctrl+↑/↓ из поля поиска ведут навигацию библиотеки, фокус
+   * остаётся в поле (ошибка be095da7, стандарт b6b2821d). `modifiers`
+   * передаются мостом — по ним Ctrl+↑/↓ отличаются от обычных стрелок.
    */
-  handleKey(key: string): boolean;
+  handleKey(key: string, modifiers?: NavKeyModifiers): boolean;
   /** Снять слушатели (размонтирование вида). */
   destroy(): void;
 }
@@ -243,7 +256,11 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
       current = entry?.entity ?? null;
     },
     onCollapse: (entry, collapsed) => {
-      if (entry.entity.kind === 'shelf') opts.onToggleShelf(entry.entity.key, collapsed);
+      // Сворачивается только полка-группа; публикация-лист событие не
+      // перехватывает (решение пользователя 2026-10-25, Ctrl+↑/↓).
+      if (entry.entity.kind !== 'shelf') return false;
+      opts.onToggleShelf(entry.entity.key, collapsed);
+      return true;
     },
     onActivate: (entry) => {
       if (entry.entity.kind === 'shelf') opts.onEditShelf(entry.entity.key);
@@ -302,8 +319,8 @@ export function attachLibraryNav(root: HTMLElement, opts: LibraryNavOptions): Li
         ({ kind: 'publication', key: publicationId } as LibraryEntity);
       nav.setCurrent({ entity: entry, el: null }, { reveal: true, focus: true });
     },
-    handleKey(key: string): boolean {
-      return nav.handleKey(key);
+    handleKey(key: string, modifiers?: NavKeyModifiers): boolean {
+      return nav.handleKey(key, modifiers);
     },
     destroy(): void {
       nav.destroy();
