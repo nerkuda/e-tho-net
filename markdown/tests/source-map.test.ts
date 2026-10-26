@@ -1215,6 +1215,51 @@ test('таблица: escaped pipe не режет ячейку — диапаз
   assert.equal(clickOffset(src, 'c', 'c'), 11);
 });
 
+test('таблица: маркер списка в начале ЯЧЕЙКИ не срезается (49ebba76)', () => {
+  const cellRanges = (html: string): number[][] =>
+    [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
+      .map((m) => [Number(m[1]), Number(m[2])]);
+
+  // Таблица разбирается РАНЬШЕ списка, поэтому `- a` на верхнем уровне — ячейка,
+  // а не маркер списка (регресс 62acccf3).
+  for (const marker of ['-', '*', '+']) {
+    const src = marker + ' a | b\n--- | ---';
+    const html = renderMarkdown(src, { sourceMap: true });
+    assert.deepEqual(cellRanges(html), [[0, 3], [6, 7]], `${src}\n${html}`);
+    assert.match(html, /<table data-md-start="0"/, html);
+    assert.match(html, /<tr data-md-start="0"/, html);
+    assert.equal(clickOffset(src, marker + ' a', marker), 0, src);
+    assert.equal(clickOffset(src, marker + ' a', 'a'), 2, src);
+  }
+
+  for (const marker of ['1.', '1)']) {
+    const src = marker + ' a | b\n--- | ---';
+    const html = renderMarkdown(src, { sourceMap: true });
+    assert.deepEqual(cellRanges(html), [[0, 4], [7, 8]], `${src}\n${html}`);
+    assert.match(html, /<tr data-md-start="0"/, html);
+    assert.equal(clickOffset(src, marker + ' a', 'a'), 3, src);
+  }
+
+  // Цитата не делает маркер контейнерным: `>` срезается, `- ` — содержимое.
+  const quoted = '> - a | b\n> --- | ---';
+  const quotedHtml = renderMarkdown(quoted, { sourceMap: true });
+  assert.deepEqual(cellRanges(quotedHtml), [[2, 5], [8, 9]], quotedHtml);
+  assert.match(quotedHtml, /<tr data-md-start="2"/, quotedHtml);
+  assert.equal(clickOffset(quoted, '- a', '-'), 2);
+
+  // Таблица со ВТОРОЙ строки элемента списка: маркер на её шапке — содержимое.
+  const second = '- текст\n  - a | b\n  --- | ---';
+  const secondHtml = renderMarkdown(second, { sourceMap: true });
+  assert.deepEqual(cellRanges(secondHtml), [[10, 13], [16, 17]], secondHtml);
+  assert.equal(clickOffset(second, '- a', 'a'), 12);
+
+  // Симптом карточки в этой форме: entity в ячейке, начинающейся с маркера.
+  const entity = '- a &amp; b | c\n--- | ---';
+  const entityHtml = renderMarkdown(entity, { sourceMap: true });
+  assert.deepEqual(cellRanges(entityHtml), [[0, 11], [14, 15]], entityHtml);
+  assert.equal(clickOffset(entity, '- a & b', 'b'), 10);
+});
+
 test('таблица в элементе списка: маркер списка не становится ячейкой (49ebba76)', () => {
   const cellRanges = (html: string): number[][] =>
     [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
@@ -1224,16 +1269,20 @@ test('таблица в элементе списка: маркер списка
   const bulletHtml = renderMarkdown(bullet, { sourceMap: true });
   // Маркер `- ` пропущен (как `tShift` у markdown-it), а не стал ячейкой.
   assert.deepEqual(cellRanges(bulletHtml), [[4, 13], [16, 17]], bulletHtml);
+  assert.match(bulletHtml, /<table data-md-start="4"/, bulletHtml);
+  assert.match(bulletHtml, /<tr data-md-start="4"/, bulletHtml);
   assertBlockClick(bullet, 'a & b', 'b', 'b');
 
   const ordered = '1. | a &amp; b | c |\n   | --- | --- |';
   const orderedHtml = renderMarkdown(ordered, { sourceMap: true });
   assert.deepEqual(cellRanges(orderedHtml), [[5, 14], [17, 18]], orderedHtml);
+  assert.match(orderedHtml, /<tr data-md-start="5"/, orderedHtml);
   assertBlockClick(ordered, 'a & b', 'b', 'b');
 
   const quoted = '> - | a &amp; b | c |\n>   | --- | --- |';
   const quotedHtml = renderMarkdown(quoted, { sourceMap: true });
   assert.deepEqual(cellRanges(quotedHtml), [[6, 15], [18, 19]], quotedHtml);
+  assert.match(quotedHtml, /<tr data-md-start="6"/, quotedHtml);
   assertBlockClick(quoted, 'a & b', 'b', 'b');
 });
 

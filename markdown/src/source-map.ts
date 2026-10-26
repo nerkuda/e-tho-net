@@ -87,9 +87,13 @@
  * and its inline token is given the absolute content start (`mdInlineBase`) —
  * the origin for construct ranges and the shift map inside the cell. The row
  * prefix is skipped the way markdown-it's own `tShift` already skips it —
- * blockquote markers, list markers and indentation — so a table that starts on
- * a list item's FIRST line (`- | a | b |`) does not turn the marker into the
- * first cell. A click in a cell is therefore mapped against the cell, not the
+ * blockquote markers, indentation and the marker of the enclosing list item —
+ * but a list marker is skipped ONLY when the row line is the first line of its
+ * list item (`list_item_open.map[0]`): the block ruler runs the TABLE rule
+ * BEFORE the list rule, so at the top level `- a | b` is a table whose first cell
+ * is `- a`, while on a list item's first line the marker was already consumed
+ * (`- | a | b |`) (регресс `62acccf3`). The `<table>`/`<tr>` ranges follow the
+ * same rule. A click in a cell is therefore mapped against the cell, not the
  * whole row, and escapes / entities / embedded comments in a cell are
  * compensated like in any block.
  *
@@ -335,14 +339,18 @@ function headingContentEnd(src: string, lineStart: number, lineEnd: number): num
   return e;
 }
 
-/** Block token types that receive a source range. */
+/**
+ * Block token types that receive a source range through {@link blockRange}.
+ * `table_open` / `tr_open` are absent on purpose: their first line may start
+ * with a list marker that is CELL CONTENT (`- a | b`), which `skipBlockPrefix`
+ * would strip; they get their range from {@link tableBlockRange} /
+ * {@link stampTableCells} with the list-item rule (ошибка `49ebba76`).
+ */
 const RANGE_BLOCK_TYPES = new Set<string>([
   'paragraph_open',
   'heading_open',
   'blockquote_open',
   'list_item_open',
-  'table_open',
-  'tr_open',
   'fence',
   'code_block',
 ]);
@@ -619,20 +627,29 @@ function setRangeAttrs(token: Token, range: SourceRange): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Skips the container markup of a table row line — blockquote markers, list
- * markers and indentation — i.e. what markdown-it's block parser leaves before
- * the row content (`bMarks + tShift` after the blockquote/list rules rewrote the
- * line). Unlike {@link skipBlockPrefix} the leading `|` is NOT consumed: the row
- * splitter treats it as an empty first segment, exactly like markdown-it does.
+ * Skips the container markup of a table row line — blockquote markers,
+ * indentation and (only when `skipListMarkers`) the marker of the enclosing list
+ * item, i.e. what markdown-it's block parser leaves before the row content
+ * (`bMarks + tShift` after the blockquote/list rules rewrote the line). Unlike
+ * {@link skipBlockPrefix} the leading `|` is NOT consumed: the row splitter
+ * treats it as an empty first segment, exactly like markdown-it does.
  *
- * The list marker matters because a table may start on the FIRST line of a list
- * item (`- | a | b |`): markdown-it hands the table rule the line with `tShift`
- * already past `- `, while this skipper reads the raw source line from
- * `tr_open.map` (ошибка `49ebba76`). A heading / task box / bare `|` is left
- * alone: a heading cannot head a table, and `[ ]` or `#` may legitimately start
- * a cell.
+ * The list marker is conditional on purpose (ошибка `49ebba76`, регресс
+ * `62acccf3`): markdown-it's block ruler runs the TABLE rule BEFORE the list
+ * rule, so a `- ` that starts a table's header line at the top level is CELL
+ * CONTENT (`- a | b` is a table whose first cell is `- a`), while on the FIRST
+ * line of a list item the marker was already consumed by the list rule and
+ * `tShift` points past it (`- | a | b |`). The caller decides by comparing the
+ * enclosing list item's first line (`list_item_open.map[0]`) with the row line.
+ * A heading / task box / bare `|` is always left alone: a heading cannot head a
+ * table, and `[ ]` or `#` may legitimately start a cell.
  */
-function skipRowPrefix(src: string, from: number, lineEnd: number): number {
+function skipRowPrefix(
+  src: string,
+  from: number,
+  lineEnd: number,
+  skipListMarkers: boolean,
+): number {
   let i = from;
   for (;;) {
     const before = i;
@@ -641,14 +658,62 @@ function skipRowPrefix(src: string, from: number, lineEnd: number): number {
       i = skipSpaces(src, i + 1, lineEnd);
       continue;
     }
-    const list = skipListMarker(src, i, lineEnd);
-    if (list !== i) {
-      i = list;
+    if (skipListMarkers) {
+      const list = skipListMarker(src, i, lineEnd);
+      if (list !== i) {
+        i = list;
+        continue;
+      }
+    }
+    if (i === before) break;
+  }
+  return i;
+}
+
+/**
+ * First rendered source character of a table row: the row line's container
+ * markup ({@link skipRowPrefix}) plus a leading `|` and the spaces around it,
+ * which are row markup too (mirrors {@link skipBlockPrefix} for blocks).
+ */
+function tableRowContentStart(
+  src: string,
+  from: number,
+  lineEnd: number,
+  skipListMarkers: boolean,
+): number {
+  let i = skipRowPrefix(src, from, lineEnd, skipListMarkers);
+  for (;;) {
+    const before = i;
+    i = skipSpaces(src, i, lineEnd);
+    if (src[i] === '|') {
+      i = skipSpaces(src, i + 1, lineEnd);
       continue;
     }
     if (i === before) break;
   }
   return i;
+}
+
+/**
+ * For every token — the first line of its nearest enclosing `list_item_open`, or
+ * `null` outside list items. A single forward pass with an open-token stack, so
+ * the table pass can ask the per-row question of {@link skipRowPrefix} in O(1):
+ * did the list rule already consume this row line's marker?
+ */
+function computeListItemFirstLines(tokens: readonly Token[]): Array<number | null> {
+  const lines: Array<number | null> = new Array(tokens.length).fill(null);
+  const stack: Array<number | null> = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.nesting === -1) stack.pop();
+    const enclosing = stack.length > 0 ? stack[stack.length - 1]! : null;
+    lines[i] = enclosing;
+    if (token.nesting === 1) {
+      const own = token.type === 'list_item_open' && token.map !== null ? token.map[0]! : enclosing;
+      stack.push(own);
+    }
+  }
+  return lines;
 }
 
 /** Trims spaces/tabs of a row segment; `null` when nothing is left. */
@@ -680,8 +745,9 @@ function tableRowCellRanges(
   src: string,
   lineStart: number,
   lineEnd: number,
+  skipListMarkers: boolean,
 ): Array<SourceRange | null> {
-  const start = skipRowPrefix(src, lineStart, lineEnd);
+  const start = skipRowPrefix(src, lineStart, lineEnd, skipListMarkers);
   let end = lineEnd;
   while (end > start && (src[end - 1] === ' ' || src[end - 1] === '\t')) end--;
   const raw: Array<{ start: number; end: number }> = [];
@@ -707,23 +773,33 @@ function tableRowCellRanges(
  * annotated ancestor of its own text, so without a range a click inside it was
  * mapped against the whole row (`<tr>`), and the block shift map of escapes /
  * entities / embedded HTML comments had nowhere to land (the row start is the
- * first cell's content, not the clicked cell's).
+ * first cell's content, not the clicked cell's). Returns the row's own range
+ * (first rendered character .. end of the row line) so the caller stamps the
+ * `<tr>` with the same prefix rule.
  *
  * The row line comes from `tr_open`'s map; the cell spans are located on that
  * same line (see {@link tableRowCellRanges}). `th_open`/`td_open` have no line
- * map of their own, hence the explicit inline base.
+ * map of their own, hence the explicit inline base. A leading list marker is
+ * skipped ONLY when this row line is the first line of the enclosing list item
+ * (`listItemLines[trIndex] === row line`); otherwise `- `/`1. ` is cell content,
+ * because markdown-it's table rule runs before its list rule (регресс
+ * `62acccf3`, ошибка `49ebba76`).
  */
 function stampTableCells(
   src: string,
   lineStarts: readonly number[],
   tokens: readonly Token[],
   trIndex: number,
-): void {
+  listItemLines: ReadonlyArray<number | null>,
+): SourceRange | null {
   const tr = tokens[trIndex];
-  if (tr === undefined || tr.map === null) return;
-  const lineStart = lineStarts[tr.map[0]!];
-  if (lineStart === undefined) return;
-  const ranges = tableRowCellRanges(src, lineStart, lineContentEnd(src, lineStart));
+  if (tr === undefined || tr.map === null) return null;
+  const rowLine = tr.map[0]!;
+  const lineStart = lineStarts[rowLine];
+  if (lineStart === undefined) return null;
+  const lineEnd = lineContentEnd(src, lineStart);
+  const skipListMarkers = listItemLines[trIndex] === rowLine;
+  const ranges = tableRowCellRanges(src, lineStart, lineEnd, skipListMarkers);
   let cellIndex = 0;
   for (let i = trIndex + 1; i < tokens.length; i++) {
     const token = tokens[i]!;
@@ -738,6 +814,40 @@ function stampTableCells(
     const meta = (inline.meta ?? (inline.meta = {})) as RangeCarrier;
     meta.mdInlineBase = range.start;
   }
+  const rowStart = tableRowContentStart(src, lineStart, lineEnd, skipListMarkers);
+  const rowEnd = lineStarts[tr.map[1]!] ?? src.length;
+  return { start: rowStart, end: Math.max(rowStart, rowEnd) };
+}
+
+/**
+ * Source range of a table block: from the first rendered character of its header
+ * row (container markup, including a list marker only when the row is its list
+ * item's first line, and a leading `|` are skipped) to the end of the table.
+ * Kept separate from {@link blockRange} because `skipBlockPrefix` always strips
+ * list markers, which would eat a header cell that starts with `- ` or `1. `
+ * (ошибка `49ebba76`).
+ */
+function tableBlockRange(
+  src: string,
+  lineStarts: readonly number[],
+  tokens: readonly Token[],
+  tableIndex: number,
+  listItemLines: ReadonlyArray<number | null>,
+): SourceRange | null {
+  const table = tokens[tableIndex];
+  if (table === undefined || table.map === null) return null;
+  const firstLine = table.map[0]!;
+  const lineStart = lineStarts[firstLine];
+  if (lineStart === undefined) return null;
+  const end = lineStarts[table.map[1]!] ?? src.length;
+  const skipListMarkers = listItemLines[tableIndex] === firstLine;
+  const start = tableRowContentStart(
+    src,
+    lineStart,
+    lineContentEnd(src, lineStart),
+    skipListMarkers,
+  );
+  return { start, end: Math.max(start, end) };
 }
 
 /**
@@ -749,12 +859,30 @@ function stampTableCells(
 function stampRanges(state: { src: string; tokens: Token[] }, input: string): void {
   const src = input;
   const lineStarts = computeLineStarts(src);
+  const listItemLines = computeListItemFirstLines(state.tokens);
   for (let ti = 0; ti < state.tokens.length; ti++) {
     const token = state.tokens[ti]!;
     // A row is stamped BEFORE its cells are visited: the cell ranges give both
     // the nearest annotated ancestor for a click inside a cell and the inline
     // base for the cell's own relative positions (ошибка `49ebba76`).
-    if (token.type === 'tr_open') stampTableCells(src, lineStarts, state.tokens, ti);
+    if (token.type === 'tr_open') {
+      const range = stampTableCells(src, lineStarts, state.tokens, ti, listItemLines);
+      if (range !== null) {
+        const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
+        meta.mdRange = range;
+        setRangeAttrs(token, range);
+      }
+      continue;
+    }
+    if (token.type === 'table_open') {
+      const range = tableBlockRange(src, lineStarts, state.tokens, ti, listItemLines);
+      if (range !== null) {
+        const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
+        meta.mdRange = range;
+        setRangeAttrs(token, range);
+      }
+      continue;
+    }
     if (RANGE_BLOCK_TYPES.has(token.type)) {
       const range = blockRange(src, lineStarts, token);
       if (range !== null) {
