@@ -56,6 +56,8 @@ let strip: StripModule;
 // ---------------------------------------------------------------------------
 
 const NETWORK_ID = '00000000-0000-4000-8000-000000000001';
+/** Вторая сеть — для гонки «рендер прежней пары после смены сети» (ff5efa1a). */
+const OTHER_NETWORK_ID = '00000000-0000-4000-8000-000000000002';
 const TYPE_ID = '00000000-0000-4000-8000-000000000010';
 const ROOT_TYPE_ID = '00000000-0000-4000-8000-0000000000aa';
 const FOCUS_ID = '00000000-0000-4000-8000-000000000100';
@@ -173,6 +175,8 @@ interface FakeState {
   effectiveList: {
     calls: { nid: string; tid: string; opts?: unknown }[];
     effective: Record<string, unknown>[];
+    /** Управляемая задержка ответа: пока промис не разрешён, запрос «в полёте». */
+    gate: Promise<void> | null;
   };
   /** `thoughts.get` — не должен вызываться (двухшаговый fallback убран). */
   thoughtsGetCalls: { nid: string; id: string }[];
@@ -200,7 +204,7 @@ let state: FakeState;
 
 function installFakeApi(): any {
   state = {
-    effectiveList: { calls: [], effective: [] },
+    effectiveList: { calls: [], effective: [], gate: null },
     thoughtsGetCalls: [],
     typeOwn: { calls: [], data: [], error: null },
     propertyRegistry: { calls: 0 },
@@ -268,6 +272,7 @@ function installFakeApi(): any {
     thoughtCustomViews: {
       list: async (nid: string, tid: string, opts?: unknown) => {
         state.effectiveList.calls.push({ nid, tid, opts });
+        if (state.effectiveList.gate !== null) await state.effectiveList.gate;
         return { data: [], meta: { effective: state.effectiveList.effective } };
       },
       create: async (...args: any[]) => {
@@ -520,10 +525,59 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
   it('берёт набор из единственного GET include_effective, без thoughts.get/list типа', async () => {
     await mountWith([row('v-1', 'Актуальные работы')]);
     assert.equal(state.effectiveList.calls.length, 1, 'один GET на рендер');
+    assert.equal(state.effectiveList.calls[0]?.nid, NETWORK_ID, 'сеть запроса — сеть пары');
     assert.equal(state.effectiveList.calls[0]?.tid, FOCUS_ID);
     assert.deepEqual(state.effectiveList.calls[0]?.opts, { includeEffective: true });
     assert.equal(state.thoughtsGetCalls.length, 0, 'thoughts.get не вызывается');
     assert.equal(state.typeOwn.calls.length, 0, 'на рендере список отборов типа не нужен');
+  });
+
+  it('устаревший рендер чужой пары не порождает запроса views (ff5efa1a)', async () => {
+    const harness = installShim();
+    // Сеть уже сменилась на B, а рендер пришёл со старым focus сети A.
+    store.update({ networkId: OTHER_NETWORK_ID, activeTabId: null, focus: null });
+    strip.mountFilterStrip(harness.host as any);
+    state.effectiveList.effective = [row('v-1', 'Отбор сети A')];
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'Сеть A')), {
+      pair: { networkId: NETWORK_ID, tabId: null },
+    });
+    assert.equal(state.effectiveList.calls.length, 0, 'запрос в чужую сеть не ушёл');
+    assert.equal(harness.findViewButton('v-1'), null, 'кнопки чужой пары не нарисованы');
+    assert.ok(harness.findStrip()!.classList.contains('hidden'), 'полоса не раскрыта чужим рендером');
+  });
+
+  it('ответ views, пришедший после смены пары, не публикуется в полосе (ff5efa1a)', async () => {
+    const harness = installShim();
+    store.update({ networkId: NETWORK_ID, activeTabId: null, focus: null });
+    strip.mountFilterStrip(harness.host as any);
+    state.effectiveList.effective = [row('v-1', 'Отбор сети A')];
+    let release: () => void = () => undefined;
+    state.effectiveList.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = strip.renderStrip(focusOf(thought(FOCUS_ID, 'Сеть A')));
+    await settle();
+    assert.equal(state.effectiveList.calls.length, 1, 'запрос ушёл в сети A');
+    assert.equal(state.effectiveList.calls[0]?.nid, NETWORK_ID, 'сеть запроса — сеть фокуса');
+    store.update({ networkId: OTHER_NETWORK_ID });
+    release();
+    await pending;
+    assert.equal(harness.findViewButton('v-1'), null, 'ответ прежней пары не опубликован');
+  });
+
+  it('runActiveViewIfNeeded устаревшей пары не шлёт views.run (ff5efa1a)', async () => {
+    await mountWith([row('v-1', 'Отбор по умолчанию', { isDefault: true })]);
+    state.viewRun.response = {
+      data: [],
+      meta: { total: 0, view: { name: 'x', name_key: 'x' }, unresolved: [], directions: {} },
+    };
+    store.update({ networkId: OTHER_NETWORK_ID });
+    const run = await strip.runActiveViewIfNeeded(FOCUS_ID, {
+      networkId: NETWORK_ID,
+      tabId: null,
+    });
+    assert.equal(run, null, 'устаревший вызов не исполняет отбор');
+    assert.equal(state.viewRun.calls.length, 0, 'views.run в чужую сеть не ушёл');
   });
 
   it('paints «Потомки», then views in server order, then «⋯», «+», filter', async () => {

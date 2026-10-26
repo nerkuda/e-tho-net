@@ -472,7 +472,7 @@ describe('edgeSource: живые рёбра фокуса + подгруженн�
     const src = readFileSync(CANVAS_SRC, 'utf8');
     assert.match(
       src,
-      /reconcileZoneTotals\(focus\)\.then\(\(\) => \{[\s\S]*?if \(hasSupplementalEdges\(\)\) void refreshZoneEdges\(focus\)/,
+      /reconcileZoneTotals\(focus\)\.then\(\(\) => \{[\s\S]*?if \(hasSupplementalEdges\(\)\) void refreshZoneEdges\(focus, currentScreenPair\(\)\)/,
       'снимок перечитывается ПОСЛЕ сверки секторов и только когда он есть',
     );
   });

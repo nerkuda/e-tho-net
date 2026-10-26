@@ -48,7 +48,7 @@ describe('счётчик нижней зоны карты в режиме отб
     );
     assert.match(
       canvas,
-      /loadMoreViewResult\(focus\.focused\.id\)/,
+      /loadMoreViewResult\(focus\.focused\.id, pair\)/,
       'догрузка вызывает loadMoreViewResult активного отбора',
     );
   });
