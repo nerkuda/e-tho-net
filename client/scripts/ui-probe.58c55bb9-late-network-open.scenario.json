@@ -96,13 +96,19 @@
       "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B late'))"
     },
     {
-      "name": "late-response-not-published",
-      "probe": "(async () => { const out = []; const t0 = Date.now(); for (let i = 0; i < 100; i += 1) { const active = [...document.querySelectorAll('.tab.tab-active')].map((e) => (e.textContent || '').trim()); out.push({ t: Date.now() - t0, active: active[0] === undefined ? '' : (active[0].includes('Сеть B late') ? 'B' : active[0].includes('Сеть C late') ? 'C' : 'A') }); await new Promise((r) => setTimeout(r, 100)); } window.__late = JSON.stringify(out.filter((x, i) => i === 0 || x.active !== out[i - 1].active)); return out[out.length - 1].active === 'B'; })()",
-      "expect": true
+      "name": "late-watch",
+      "timeout": 60000,
+      "probe": "(async () => { const out = []; const t0 = Date.now(); for (let i = 0; i < 250; i += 1) { const active = [...document.querySelectorAll('.tab.tab-active')].map((e) => (e.textContent || '').trim()); out.push({ t: Date.now() - t0, active: active[0] === undefined ? '' : (active[0].includes('Сеть B late') ? 'B' : active[0].includes('Сеть C late') ? 'C' : 'A') }); await new Promise((r) => setTimeout(r, 100)); } window.__late = { final: out[out.length - 1].active, timeline: out.filter((x, i) => i === 0 || x.active !== out[i - 1].active) }; return 'watched'; })()",
+      "expect": "watched"
     },
     {
-      "name": "report",
-      "eval": "(() => JSON.stringify({ timeline: window.__late }))()"
+      "name": "late-report",
+      "eval": "(() => JSON.stringify(window.__late))()"
+    },
+    {
+      "name": "late-response-not-published",
+      "probe": "window.__late.final === 'B'",
+      "expect": true
     }
   ]
 }
