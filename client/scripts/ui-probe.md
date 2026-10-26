@@ -48,6 +48,24 @@ node client/scripts/ui-probe-stand.mjs            # свежая база + си
 node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key etn_…
 ```
 
+### Фикстура данных сценария (`--scenario-seed`)
+
+Если сценарию нужны данные сверх пробной сети (например, 12 рёбер одной пары),
+передай скрипт фикстуры — стенд запустит его ПОСЛЕ засева и ДО сценария, сам
+подставив `--data-dir`, `--network-id`, `--center-id`, `--api`, `--api-key`:
+
+```bash
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.42a7c0a1-mass-links.scenario.json \
+  --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs
+```
+
+Дополнительные аргументы фикстуры — повторяемый `--scenario-seed-arg <значение>`
+(например, `--scenario-seed-arg --trash --scenario-seed-arg 1`). Ненулевой код
+фикстуры останавливает прогон; с `--no-seed` опция несовместима. Фикстура
+обязана быть идемпотентной: повторный запуск на том же стенде не должен менять
+данные — иначе ожидания сценария разъедутся.
+
 ## Сценарий
 
 Формат — JSON-объект `{ name?, description?, timeout?, steps: [...] }`. Каждый
