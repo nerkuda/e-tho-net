@@ -1,12 +1,13 @@
 /**
- * Структурная причина сетевого отказа в `RestClient` (ошибка 390e9746).
+ * Структурная причина сетевого отказа в `RestClient` (ошибки 390e9746,
+ * 69790006).
  *
  * Диалог подключения не должен угадывать причину по тексту исключения:
  * транспорт различает её сам и кладёт в `details` ошибки
  * (`{ kind: 'connect-failed', reason }`). Тест фиксирует распознавание
  * реальных форм отказа Node/undici (системный код в `cause` и живые пробы:
- * мёртвый порт, несуществующий хост, молчащий сервер, сброс сокета) и честный
- * `other`, когда причина неразличима.
+ * мёртвый порт, несуществующий хост, молчащий сервер, сброс сокета, обрыв
+ * тела уже начатого ответа) и честный `other`, когда причина неразличима.
  */
 
 import assert from 'node:assert/strict';
@@ -67,14 +68,70 @@ async function fetchFailure(url: string, init?: RequestInit): Promise<unknown> {
   assert.fail(`ожидался отказ подключения: ${url}`);
 }
 
-function makeClient(fetchImpl: typeof fetch): RestClient {
+function makeClient(fetchImpl: typeof fetch, baseUrl = 'http://127.0.0.1:19777'): RestClient {
   return new RestClient({
-    baseUrl: 'http://127.0.0.1:19777',
+    baseUrl,
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
     fetchImpl,
     random: () => 0,
   });
+}
+
+/**
+ * Сервер, который отдаёт ЗАГОЛОВКИ и обрывает тело (69790006): объявлен
+ * `Content-Length: 100`, фактически уходит 8 байт тела, затем сокет
+ * разрушается. `fetch` в этом случае уже вернул `Response` — ошибка приходит
+ * из чтения тела (`TypeError: terminated`), а не из установки соединения.
+ */
+async function startTruncatedBodyServer(status = '200 OK'): Promise<ProbeServer> {
+  return startProbeServer((socket) => {
+    socket.once('data', () => {
+      socket.write(
+        `HTTP/1.1 ${status}\r\n` +
+          'Content-Type: application/json\r\n' +
+          'Content-Length: 100\r\n' +
+          'Connection: close\r\n' +
+          '\r\n' +
+          '{"data":',
+        () => setTimeout(() => socket.destroy(), 40),
+      );
+    });
+  });
+}
+
+/**
+ * `fetch`, тело ответа которого рвётся при чтении — форма реального обрыва
+ * undici (`TypeError: terminated`, cause `UND_ERR_SOCKET` «other side closed»).
+ * Нужен для методов, читающих тело в обход JSON-конверта (байты/HTML).
+ */
+function brokenBodyFetch(cause?: Error): typeof fetch {
+  const error =
+    cause ??
+    Object.assign(new TypeError('terminated'), {
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    });
+  return (() =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(error);
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )) as typeof fetch;
+}
+
+/** Утверждения нормализованного обрыва тела: EtnError + причина + без огрызков. */
+function assertBodyBreak(err: unknown): true {
+  assert.ok(err instanceof EtnError, `ожидался EtnError, получено ${String(err)}`);
+  assert.equal(err.code, 'INTERNAL');
+  assert.deepEqual(err.details, { kind: 'connect-failed', reason: 'reset' });
+  assert.match(err.message, /соединение сброшено сервером/);
+  assert.doesNotMatch(err.message, /terminated|other side closed/i);
+  return true;
 }
 
 describe('classifyConnectFailure: различимые причины (390e9746)', () => {
@@ -118,6 +175,38 @@ describe('classifyConnectFailure: различимые причины (390e9746)
     assert.equal(classifyConnectFailure(new Error('boom')), 'other');
     assert.equal(classifyConnectFailure(undefined), 'other');
     assert.equal(classifyConnectFailure({ code: 42 }), 'other');
+    // Терминальный обрыв без причины (69790006): причина не выдумывается.
+    assert.equal(classifyConnectFailure(new TypeError('terminated')), 'other');
+  });
+
+  it('вложенная цепочка cause: fetch failed → terminated → UND_ERR_SOCKET — reset', () => {
+    // Обрыв тела (69790006) приходит именно так: внешняя ошибка чтения тела,
+    // внутри — причина сокета. Классификатор обязан пройти всю цепочку.
+    const socket = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+    const terminated = Object.assign(new TypeError('terminated'), { cause: socket });
+    const failed = Object.assign(new TypeError('fetch failed'), { cause: terminated });
+    assert.equal(classifyConnectFailure(failed), 'reset');
+  });
+
+  it('обрыв тела по объявленному Content-Length — reset', () => {
+    // Живая форма 69790006 в undici: сервер объявил Content-Length, но закрыл
+    // соединение раньше — `ResponseContentLengthMismatchError`
+    // (`UND_ERR_RES_CONTENT_LENGTH_MISMATCH`). Это обрыв тела, не «other».
+    const cause = Object.assign(
+      new Error('Response body length does not match content-length header'),
+      { code: 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH' },
+    );
+    const err = Object.assign(new TypeError('terminated'), { cause });
+    assert.equal(classifyConnectFailure(err), 'reset');
+  });
+
+  it('оборванное chunked-тело (HPE_INVALID_EOF_STATE) — reset', () => {
+    const cause = Object.assign(
+      new Error('Response does not match the HTTP/1.1 protocol (Invalid EOF state)'),
+      { code: 'HPE_INVALID_EOF_STATE' },
+    );
+    const err = Object.assign(new TypeError('terminated'), { cause });
+    assert.equal(classifyConnectFailure(err), 'reset');
   });
 });
 
@@ -186,4 +275,67 @@ describe('RestClient: причина отказа едет в details (390e9746)
       return true;
     });
   });
+});
+
+describe('RestClient: обрыв тела ответа после заголовков (69790006)', () => {
+  it('живой сервер: 200 + Content-Length 100, 8 байт тела, сокет разрушен → reset', async () => {
+    // Точное доказательство карточки: заголовки получены, тело оборвано.
+    // До фикса здесь был сырой `TypeError: terminated` без details.
+    const server = await startTruncatedBodyServer();
+    try {
+      const client = makeClient(fetch, `http://127.0.0.1:${server.port}`);
+      await assert.rejects(client.getMe(), assertBodyBreak);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('обрыв тела у ответа с ошибкой (404) нормализуется так же', async () => {
+    // Тело читается ДО разбора статуса — обрыв не должен подменяться
+    // «HTTP 404: <обрывок>» и не должен терять причину.
+    const server = await startTruncatedBodyServer('404 Not Found');
+    try {
+      const client = makeClient(fetch, `http://127.0.0.1:${server.port}`);
+      await assert.rejects(client.getMe(), assertBodyBreak);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('requestRaw (GET /health) идёт через ту же нормализацию', async () => {
+    const server = await startTruncatedBodyServer();
+    try {
+      const client = makeClient(fetch, `http://127.0.0.1:${server.port}`);
+      await assert.rejects(client.getHealth(), assertBodyBreak);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('обрыв тела без различимой причины — общий текст, без «terminated»', async () => {
+    // Нераспознанная причина честно уходит в `other`; технический огрызок
+    // чтения тела в сообщение не попадает.
+    const client = makeClient(brokenBodyFetch(new TypeError('terminated')));
+    await assert.rejects(client.getMe(), (err: unknown) => {
+      assert.ok(err instanceof EtnError, `ожидался EtnError, получено ${String(err)}`);
+      assert.deepEqual(err.details, { kind: 'connect-failed', reason: 'other' });
+      assert.doesNotMatch(err.message, /terminated|other side closed/i);
+      assert.match(err.message, /не удалось определить причину отказа/);
+      return true;
+    });
+  });
+
+  // Чтения тела в обход JSON-конверта (байты/HTML) — тот же класс обрыва.
+  const rawReaders: Array<[string, (client: RestClient) => Promise<unknown>]> = [
+    ['getAttachmentRaw', (client) => client.getAttachmentRaw('net1', 'C:\\data\\file.png')],
+    ['downloadJob', (client) => client.downloadJob('job-1')],
+    ['downloadServerLogFile', (client) => client.downloadServerLogFile('server.log')],
+    ['getPublicationPrintHtml', (client) => client.getPublicationPrintHtml('net1', 'pub-1')],
+  ];
+  for (const [name, read] of rawReaders) {
+    it(`${name}: обрыв тела → EtnError connect-failed/reset`, async () => {
+      const client = makeClient(brokenBodyFetch());
+      await assert.rejects(read(client), assertBodyBreak);
+    });
+  }
 });

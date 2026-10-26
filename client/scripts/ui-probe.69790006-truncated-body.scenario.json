@@ -1,0 +1,78 @@
+{
+  "name": "69790006-truncated-body",
+  "description": "Сервер отдаёт 200 OK с Content-Length: 100 и обрывает тело после 8 байт (127.0.0.1:19779). Все три пути подключения (форма, автоподключение при запуске, сохранённый профиль) должны показывать причину «соединение сброшено сервером», а не техническое «terminated» (ошибка 69790006).",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "wait-onboarding",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.screen-onboarding .form-stack') !== null"
+    },
+    { "name": "fill-url", "click": ".form-stack .ui-field:nth-child(2) .ui-input" },
+    { "name": "type-url", "text": "http://127.0.0.1:19779" },
+    { "name": "fill-key", "click": ".form-stack .ui-field:nth-child(3) .ui-input" },
+    { "name": "type-key", "text": "etn_deadbeefdeadbeefdeadbeefdeadbeef" },
+    { "name": "submit", "click": ".form-row .ui-btn" },
+    {
+      "name": "wait-form-error",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.form-row .error-text')?.textContent?.length > 0"
+    },
+    {
+      "name": "form-error-text",
+      "probe": {
+        "name": "formError",
+        "expression": "document.querySelector('.form-row .error-text')?.textContent ?? null"
+      },
+      "expect": "Не удалось подключиться к серверу http://127.0.0.1:19779: соединение сброшено сервером"
+    },
+    {
+      "name": "form-error-has-no-terminated",
+      "probe": {
+        "name": "formHasTerminated",
+        "expression": "/terminated|other side closed/i.test(document.querySelector('.form-row .error-text')?.textContent ?? '')"
+      },
+      "expect": false
+    },
+    { "name": "reload", "eval": "location.reload()" },
+    {
+      "name": "wait-profiles",
+      "timeout": 45000,
+      "waitFor": "document.querySelectorAll('.profile-item').length > 0"
+    },
+    {
+      "name": "boot-error-text",
+      "probe": {
+        "name": "bootError",
+        "expression": "(() => { const el = document.querySelector('.onboarding-error'); return el !== null && el.hidden === false ? el.textContent : null; })()"
+      },
+      "expect": "Не удалось подключиться к серверу http://127.0.0.1:19779: соединение сброшено сервером"
+    },
+    {
+      "name": "clear-boot-error",
+      "eval": "(() => { const el = document.querySelector('.onboarding-error'); if (el !== null) { el.textContent = ''; el.hidden = true; } })()"
+    },
+    { "name": "click-saved", "click": { "selector": ".profile-item", "at": [40, 8] } },
+    {
+      "name": "wait-connect-error",
+      "timeout": 40000,
+      "waitFor": "(() => { const el = document.querySelector('.onboarding-error'); return el !== null && el.hidden === false && el.textContent.length > 0; })()"
+    },
+    {
+      "name": "connect-error-text",
+      "probe": {
+        "name": "connectError",
+        "expression": "document.querySelector('.onboarding-error')?.textContent ?? null"
+      },
+      "expect": "Не удалось подключиться к серверу http://127.0.0.1:19779: соединение сброшено сервером"
+    },
+    {
+      "name": "connect-error-has-no-terminated",
+      "probe": {
+        "name": "connectHasTerminated",
+        "expression": "/terminated|other side closed/i.test(document.querySelector('.onboarding-error')?.textContent ?? '')"
+      },
+      "expect": false
+    }
+  ]
+}

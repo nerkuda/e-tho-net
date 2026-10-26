@@ -596,7 +596,7 @@ export class RestClient {
         duration_ms: Date.now() - attemptStarted,
         status: res.status,
       });
-      return await this.parseResponse<T>(res);
+      return await this.parseResponse<T>(res, ro.signal);
     }
 
     // Loop exited without returning — exhausted retries.
@@ -619,9 +619,16 @@ export class RestClient {
   /**
    * Parses a fetch `Response` into its typed success envelope (`data` + the
    * `meta` of THIS response) and converts error envelopes into {@link EtnError}.
+   *
+   * Тело читается через {@link readResponseBody}: обрыв уже начатого ответа
+   * (заголовки получены, сокет закрыт) нормализуется в `EtnError` с причиной
+   * (ошибка 69790006), а не уходит сырым `TypeError: terminated`.
    */
-  private async parseResponse<T>(res: Response): Promise<ResponseEnvelope<T>> {
-    const text = await res.text();
+  private async parseResponse<T>(
+    res: Response,
+    callerSignal?: AbortSignal,
+  ): Promise<ResponseEnvelope<T>> {
+    const text = await readResponseBody(() => res.text(), callerSignal);
     const empty = text.length === 0;
     let payload: unknown = undefined;
     if (!empty) {
@@ -2372,7 +2379,7 @@ export class RestClient {
       );
     }
     const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
-    return { contentType, body: Buffer.from(await res.arrayBuffer()) };
+    return { contentType, body: Buffer.from(await readResponseBody(() => res.arrayBuffer())) };
   }
 
   /**
@@ -3357,7 +3364,7 @@ export class RestClient {
       const text = await res.text().catch(() => '');
       throw new Error(`download failed: HTTP ${res.status} ${text.slice(0, 200)}`);
     }
-    const arrayBuffer = await res.arrayBuffer();
+    const arrayBuffer = await readResponseBody(() => res.arrayBuffer());
     const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
     return { contentType, body: Buffer.from(arrayBuffer) };
   }
@@ -3415,7 +3422,7 @@ export class RestClient {
       );
     }
     const contentType = res.headers.get('content-type') ?? 'text/plain; charset=utf-8';
-    return { contentType, body: Buffer.from(await res.arrayBuffer()) };
+    return { contentType, body: Buffer.from(await readResponseBody(() => res.arrayBuffer())) };
   }
 
   /**
@@ -3888,7 +3895,10 @@ export class RestClient {
         `publication print failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
       );
     }
-    return { html: await res.text(), slug: res.headers.get('x-publication-slug') ?? '' };
+    return {
+      html: await readResponseBody(() => res.text()),
+      slug: res.headers.get('x-publication-slug') ?? '',
+    };
   }
 
   /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */
@@ -4075,6 +4085,11 @@ const CONNECT_FAILURE_CODES: Readonly<Record<string, ConnectFailureReason>> = {
   ENETUNREACH: 'unreachable',
   EHOSTUNREACH: 'unreachable',
   ECONNRESET: 'reset',
+  // Тело уже начатого ответа оборвано раньше объявленного Content-Length или
+  // chunked-потока (ошибка 69790006): другая сторона закрыла соединение,
+  // недослав тело. Для пользователя это тот же сброс соединения, а не «other».
+  UND_ERR_RES_CONTENT_LENGTH_MISMATCH: 'reset',
+  HPE_INVALID_EOF_STATE: 'reset',
 };
 
 /**
@@ -4119,4 +4134,62 @@ export function classifyConnectFailure(err: unknown): ConnectFailureReason {
   }
   const message = errTextShort(err);
   return /timeout|timed out/i.test(message) ? 'timeout' : 'other';
+}
+
+/**
+ * Русские формулировки причин отказа для ТЕКСТА ошибки транспорта. Диалог
+ * подключения берёт текст из `details` и своего словаря ru (`connect.reason.*`,
+ * ошибка 390e9746); здесь — сообщение для журнала и путей, показывающих
+ * `EtnError.message` напрямую. Технические огрызки (`terminated`,
+ * `other side closed`) сюда попадать не должны (ошибка 69790006).
+ */
+const CONNECT_FAILURE_REASON_TEXT: Readonly<Record<ConnectFailureReason, string>> = {
+  refused: 'соединение отклонено — сервер не запущен или порт закрыт',
+  timeout: 'сервер не ответил за отведённое время',
+  dns: 'адрес не найден — проверьте имя хоста',
+  unreachable: 'сервер недоступен по сети — проверьте подключение',
+  reset: 'соединение сброшено сервером',
+  other: 'не удалось определить причину отказа',
+};
+
+/**
+ * Обрыв тела УЖЕ начатого ответа (ошибка 69790006): заголовки получены,
+ * `fetch` вернул `Response`, но чтение тела упало — `TypeError: terminated`
+ * (cause `UND_ERR_SOCKET` «other side closed»,
+ * `UND_ERR_RES_CONTENT_LENGTH_MISMATCH` и т.п.). Раньше ошибка уходила наружу
+ * сырой, и GUI показывал «Не удалось подключиться к серверу <адрес>:
+ * terminated».
+ *
+ * Нормализация — той же схемой, что у отказа подключения (390e9746):
+ * {@link classifyConnectFailure} проходит cause-цепочку, причина едет в
+ * `details { kind: 'connect-failed', reason }`, текст — человеческий.
+ * `kind` остаётся `connect-failed`: для потребителей это транспортный отказ с
+ * причиной, и все три пути подключения рендерят её из `details`, не разбирая
+ * текст исключения; новый `kind` потребовал бы синхронных правок всех
+ * потребителей без выигрыша в смысле.
+ */
+function responseBodyFailure(err: unknown): EtnError {
+  const reason = classifyConnectFailure(err);
+  return new EtnError(
+    'INTERNAL',
+    `Сетевая ошибка: ${CONNECT_FAILURE_REASON_TEXT[reason]}`,
+    { kind: 'connect-failed', reason } satisfies ConnectFailureDetails,
+  );
+}
+
+/**
+ * Читает тело ответа, нормализуя транспортный обрыв (ошибка 69790006).
+ * Отмена ВЫЗЫВАЮЩИМ сохраняет исходную ошибку — как и на этапе установки
+ * соединения, где `ro.signal?.aborted` пробрасывает её без обёртки.
+ */
+async function readResponseBody<T>(
+  read: () => Promise<T>,
+  callerSignal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await read();
+  } catch (err) {
+    if (callerSignal?.aborted === true) throw callerSignal.reason ?? err;
+    throw responseBodyFailure(err);
+  }
 }
