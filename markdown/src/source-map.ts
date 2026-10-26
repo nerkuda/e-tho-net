@@ -86,16 +86,20 @@
  * like markdown-it's own table splitter, every cell gets its visible-text range,
  * and its inline token is given the absolute content start (`mdInlineBase`) —
  * the origin for construct ranges and the shift map inside the cell. The row
- * prefix is skipped the way markdown-it's own `tShift` already skips it —
- * blockquote markers, indentation and the marker of the enclosing list item —
- * but a list marker is skipped ONLY when the row line is the first line of its
- * list item (`list_item_open.map[0]`): the block ruler runs the TABLE rule
- * BEFORE the list rule, so at the top level `- a | b` is a table whose first cell
- * is `- a`, while on a list item's first line the marker was already consumed
- * (`- | a | b |`) (регресс `62acccf3`). The `<table>`/`<tr>` ranges follow the
- * same rule. A click in a cell is therefore mapped against the cell, not the
- * whole row, and escapes / entities / embedded comments in a cell are
- * compensated like in any block.
+ * content start is NOT guessed from the raw line: it is markdown-it's own
+ * `bMarks + tShift` of the row line, snapshotted INSIDE the `table` block rule
+ * (`mdRowShift`, see {@link installBlockTableCapture}). At that moment every
+ * enclosing container has already rewritten the line — blockquote markers,
+ * indentation and the marker of each enclosing list item are consumed — while a
+ * marker still left on the line belongs to the row CONTENT, because within one
+ * `tokenize` call the TABLE rule runs before the LIST rule (`- a | b` at the top
+ * level is a table whose first cell is `- a`; `- | a | b |` had its marker
+ * consumed by the outer list rule). The earlier per-list-item criterion could
+ * not tell the levels apart when containers nest (регресс проверки `b24cd8b9`:
+ * `- > - a | b` kept only `a` in the cell instead of `- a`). The
+ * `<table>`/`<tr>` ranges follow the same base. A click in a cell is therefore
+ * mapped against the cell, not the whole row, and escapes / entities /
+ * embedded comments in a cell are compensated like in any block.
  *
  * A shift entry is recorded ONLY for a run at the map owner's own text level:
  * the rendered cursor walks nested constructs too (to stay aligned with the
@@ -117,6 +121,10 @@
  *   splitter BEFORE the inline parser sees the cell content, so that one source
  *   character per escaped pipe is not compensated by the cell's shift map
  *   (ошибка `49ebba76`, see {@link tableRowCellRanges}).
+ * - An EMPTY autocompleted table cell (markdown-it pads a short row to the
+ *   header's column count) has no source characters of its own, so it gets no
+ *   `data-md-*` range (`<td>`/`<th>` without attributes): a click there maps
+ *   against the nearest annotated ancestor and lands on the row boundary.
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -179,6 +187,18 @@ interface RangeCarrier {
    * `indexOf` of the cell text.
    */
   mdInlineBase?: number;
+  /**
+   * Content start of a table row line (`tr_open` / `table_open`) as a shift
+   * from that line's start: markdown-it's own `bMarks + tShift` snapshotted
+   * inside the `table` block rule (ошибка `49ebba76`, see
+   * {@link installBlockTableCapture}). Relative on purpose — markdown-it
+   * normalizes `\r\n`/`\r` to `\n` before block parsing, so its absolute
+   * offsets drift from the caller's original string; the line start is taken
+   * from the original source instead. The rest of the line is untrimmed: leading
+   * spaces of an indented continuation line are row markup, and the cell
+   * splitter trims each segment anyway.
+   */
+  mdRowShift?: number;
 }
 
 /**
@@ -627,61 +647,34 @@ function setRangeAttrs(token: Token, range: SourceRange): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Skips the container markup of a table row line — blockquote markers,
- * indentation and (only when `skipListMarkers`) the marker of the enclosing list
- * item, i.e. what markdown-it's block parser leaves before the row content
- * (`bMarks + tShift` after the blockquote/list rules rewrote the line). Unlike
- * {@link skipBlockPrefix} the leading `|` is NOT consumed: the row splitter
- * treats it as an empty first segment, exactly like markdown-it does.
- *
- * The list marker is conditional on purpose (ошибка `49ebba76`, регресс
- * `62acccf3`): markdown-it's block ruler runs the TABLE rule BEFORE the list
- * rule, so a `- ` that starts a table's header line at the top level is CELL
- * CONTENT (`- a | b` is a table whose first cell is `- a`), while on the FIRST
- * line of a list item the marker was already consumed by the list rule and
- * `tShift` points past it (`- | a | b |`). The caller decides by comparing the
- * enclosing list item's first line (`list_item_open.map[0]`) with the row line.
- * A heading / task box / bare `|` is always left alone: a heading cannot head a
- * table, and `[ ]` or `#` may legitimately start a cell.
+ * Absolute content start of a table row line, as markdown-it itself saw it when
+ * its `table` block rule consumed the row: `bMarks[line] + tShift[line]`
+ * ({@link installBlockTableCapture} records it as `mdRowShift` on the
+ * `table_open` / `tr_open` tokens). Every enclosing container has already
+ * rewritten the line by that moment — blockquote markers, indentation and the
+ * marker of each enclosing list item are consumed — while any marker still on
+ * the line is row CONTENT, because within one `tokenize` call the TABLE rule
+ * runs before the LIST rule. That is exactly the distinction the raw-line
+ * prefix guessing could not make when containers nest (регресс проверки
+ * `b24cd8b9`: `- > - a | b` had both the outer and the inner `- ` cut, leaving
+ * only `a`). The shift is relative to the line start (markdown-it parses a
+ * `\r\n`-normalized copy), so the line start comes from the original source.
+ * It is the line start when the token has no snapshot (a table produced by a
+ * foreign block rule).
  */
-function skipRowPrefix(
-  src: string,
-  from: number,
-  lineEnd: number,
-  skipListMarkers: boolean,
-): number {
-  let i = from;
-  for (;;) {
-    const before = i;
-    i = skipSpaces(src, i, lineEnd);
-    if (src[i] === '>') {
-      i = skipSpaces(src, i + 1, lineEnd);
-      continue;
-    }
-    if (skipListMarkers) {
-      const list = skipListMarker(src, i, lineEnd);
-      if (list !== i) {
-        i = list;
-        continue;
-      }
-    }
-    if (i === before) break;
-  }
-  return i;
+function tableRowBase(tokens: readonly Token[], index: number, lineStart: number): number {
+  const token = tokens[index];
+  const shift = (token?.meta as RangeCarrier | null)?.mdRowShift;
+  return shift === undefined ? lineStart : lineStart + shift;
 }
 
 /**
- * First rendered source character of a table row: the row line's container
- * markup ({@link skipRowPrefix}) plus a leading `|` and the spaces around it,
- * which are row markup too (mirrors {@link skipBlockPrefix} for blocks).
+ * First rendered source character of a table row: the recorded row base
+ * ({@link tableRowBase}) plus a leading `|` and the spaces around it, which are
+ * row markup too (mirrors {@link skipBlockPrefix} for blocks).
  */
-function tableRowContentStart(
-  src: string,
-  from: number,
-  lineEnd: number,
-  skipListMarkers: boolean,
-): number {
-  let i = skipRowPrefix(src, from, lineEnd, skipListMarkers);
+function tableRowContentStart(src: string, from: number, lineEnd: number): number {
+  let i = from;
   for (;;) {
     const before = i;
     i = skipSpaces(src, i, lineEnd);
@@ -692,28 +685,6 @@ function tableRowContentStart(
     if (i === before) break;
   }
   return i;
-}
-
-/**
- * For every token — the first line of its nearest enclosing `list_item_open`, or
- * `null` outside list items. A single forward pass with an open-token stack, so
- * the table pass can ask the per-row question of {@link skipRowPrefix} in O(1):
- * did the list rule already consume this row line's marker?
- */
-function computeListItemFirstLines(tokens: readonly Token[]): Array<number | null> {
-  const lines: Array<number | null> = new Array(tokens.length).fill(null);
-  const stack: Array<number | null> = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]!;
-    if (token.nesting === -1) stack.pop();
-    const enclosing = stack.length > 0 ? stack[stack.length - 1]! : null;
-    lines[i] = enclosing;
-    if (token.nesting === 1) {
-      const own = token.type === 'list_item_open' && token.map !== null ? token.map[0]! : enclosing;
-      stack.push(own);
-    }
-  }
-  return lines;
 }
 
 /** Trims spaces/tabs of a row segment; `null` when nothing is left. */
@@ -734,7 +705,9 @@ function trimCellRange(src: string, start: number, end: number): SourceRange | n
  * dropped, and each cell is trimmed. This is NOT a second markdown parse: the
  * spans only locate the cell contents markdown-it has already produced on this
  * very line, so the single-parser rule holds (ADR `01ec1467` — block
- * segmentation belongs to `@etn/markdown`, where this lives).
+ * segmentation belongs to `@etn/markdown`, where this lives). `rowBase` is the
+ * line's content start recorded by the table rule ({@link tableRowBase}), so
+ * container markup is never taken for a cell.
  *
  * Honest limit: `escapedSplit` strips the backslash of an escaped pipe (`\|`)
  * from the cell CONTENT before the inline parser sees it, so that one source
@@ -743,11 +716,10 @@ function trimCellRange(src: string, start: number, end: number): SourceRange | n
  */
 function tableRowCellRanges(
   src: string,
-  lineStart: number,
+  rowBase: number,
   lineEnd: number,
-  skipListMarkers: boolean,
 ): Array<SourceRange | null> {
-  const start = skipRowPrefix(src, lineStart, lineEnd, skipListMarkers);
+  const start = Math.min(rowBase, lineEnd);
   let end = lineEnd;
   while (end > start && (src[end - 1] === ' ' || src[end - 1] === '\t')) end--;
   const raw: Array<{ start: number; end: number }> = [];
@@ -775,22 +747,20 @@ function tableRowCellRanges(
  * entities / embedded HTML comments had nowhere to land (the row start is the
  * first cell's content, not the clicked cell's). Returns the row's own range
  * (first rendered character .. end of the row line) so the caller stamps the
- * `<tr>` with the same prefix rule.
+ * `<tr>`.
  *
- * The row line comes from `tr_open`'s map; the cell spans are located on that
- * same line (see {@link tableRowCellRanges}). `th_open`/`td_open` have no line
- * map of their own, hence the explicit inline base. A leading list marker is
- * skipped ONLY when this row line is the first line of the enclosing list item
- * (`listItemLines[trIndex] === row line`); otherwise `- `/`1. ` is cell content,
- * because markdown-it's table rule runs before its list rule (регресс
- * `62acccf3`, ошибка `49ebba76`).
+ * The row line comes from `tr_open`'s map; the row's content start is the
+ * `mdRowShift` markdown-it recorded while parsing that very line, so a list
+ * marker left on the line is cell content and a marker consumed by an enclosing
+ * container is not (ошибка `49ebba76`, регресс `62acccf3`, проверка
+ * `b24cd8b9`). `th_open`/`td_open` have no line map of their own, hence the
+ * explicit inline base.
  */
 function stampTableCells(
   src: string,
   lineStarts: readonly number[],
   tokens: readonly Token[],
   trIndex: number,
-  listItemLines: ReadonlyArray<number | null>,
 ): SourceRange | null {
   const tr = tokens[trIndex];
   if (tr === undefined || tr.map === null) return null;
@@ -798,8 +768,8 @@ function stampTableCells(
   const lineStart = lineStarts[rowLine];
   if (lineStart === undefined) return null;
   const lineEnd = lineContentEnd(src, lineStart);
-  const skipListMarkers = listItemLines[trIndex] === rowLine;
-  const ranges = tableRowCellRanges(src, lineStart, lineEnd, skipListMarkers);
+  const rowBase = tableRowBase(tokens, trIndex, lineStart);
+  const ranges = tableRowCellRanges(src, rowBase, lineEnd);
   let cellIndex = 0;
   for (let i = trIndex + 1; i < tokens.length; i++) {
     const token = tokens[i]!;
@@ -814,25 +784,23 @@ function stampTableCells(
     const meta = (inline.meta ?? (inline.meta = {})) as RangeCarrier;
     meta.mdInlineBase = range.start;
   }
-  const rowStart = tableRowContentStart(src, lineStart, lineEnd, skipListMarkers);
+  const rowStart = tableRowContentStart(src, rowBase, lineEnd);
   const rowEnd = lineStarts[tr.map[1]!] ?? src.length;
   return { start: rowStart, end: Math.max(rowStart, rowEnd) };
 }
 
 /**
  * Source range of a table block: from the first rendered character of its header
- * row (container markup, including a list marker only when the row is its list
- * item's first line, and a leading `|` are skipped) to the end of the table.
- * Kept separate from {@link blockRange} because `skipBlockPrefix` always strips
- * list markers, which would eat a header cell that starts with `- ` or `1. `
- * (ошибка `49ebba76`).
+ * row (the recorded `mdRowShift`, with a leading `|` and its spaces skipped) to
+ * the end of the table. Kept separate from {@link blockRange} because
+ * `skipBlockPrefix` always strips list markers, which would eat a header cell
+ * that starts with `- ` or `1. ` (ошибка `49ebba76`).
  */
 function tableBlockRange(
   src: string,
   lineStarts: readonly number[],
   tokens: readonly Token[],
   tableIndex: number,
-  listItemLines: ReadonlyArray<number | null>,
 ): SourceRange | null {
   const table = tokens[tableIndex];
   if (table === undefined || table.map === null) return null;
@@ -840,12 +808,10 @@ function tableBlockRange(
   const lineStart = lineStarts[firstLine];
   if (lineStart === undefined) return null;
   const end = lineStarts[table.map[1]!] ?? src.length;
-  const skipListMarkers = listItemLines[tableIndex] === firstLine;
   const start = tableRowContentStart(
     src,
-    lineStart,
+    tableRowBase(tokens, tableIndex, lineStart),
     lineContentEnd(src, lineStart),
-    skipListMarkers,
   );
   return { start, end: Math.max(start, end) };
 }
@@ -859,14 +825,13 @@ function tableBlockRange(
 function stampRanges(state: { src: string; tokens: Token[] }, input: string): void {
   const src = input;
   const lineStarts = computeLineStarts(src);
-  const listItemLines = computeListItemFirstLines(state.tokens);
   for (let ti = 0; ti < state.tokens.length; ti++) {
     const token = state.tokens[ti]!;
     // A row is stamped BEFORE its cells are visited: the cell ranges give both
     // the nearest annotated ancestor for a click inside a cell and the inline
     // base for the cell's own relative positions (ошибка `49ebba76`).
     if (token.type === 'tr_open') {
-      const range = stampTableCells(src, lineStarts, state.tokens, ti, listItemLines);
+      const range = stampTableCells(src, lineStarts, state.tokens, ti);
       if (range !== null) {
         const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
         meta.mdRange = range;
@@ -875,7 +840,7 @@ function stampRanges(state: { src: string; tokens: Token[] }, input: string): vo
       continue;
     }
     if (token.type === 'table_open') {
-      const range = tableBlockRange(src, lineStarts, state.tokens, ti, listItemLines);
+      const range = tableBlockRange(src, lineStarts, state.tokens, ti);
       if (range !== null) {
         const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
         meta.mdRange = range;
@@ -970,6 +935,87 @@ function injectRangeAttrs(html: string, range: SourceRange): string {
     if (gt !== -1) return html.slice(0, gt) + attrs + html.slice(gt);
   }
   return html;
+}
+
+// ---------------------------------------------------------------------------
+// Table row base: markdown-it's own bMarks + tShift snapshot (ошибка 49ebba76)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal structural view of markdown-it's `StateBlock` the table capture needs
+ * (a real state satisfies it; kept local like the inline state view). The
+ * `table` rule reads a row line as `src.slice(bMarks[line] + tShift[line], …)`,
+ * and by the time it runs the enclosing container rules have already rewritten
+ * both arrays for that line.
+ */
+interface BlockStateLike {
+  src: string;
+  bMarks: number[];
+  tShift: number[];
+  tokens: Token[];
+  env: unknown;
+}
+
+/** A markdown-it block rule function. */
+type BlockRuleFn = (
+  state: BlockStateLike,
+  startLine: number,
+  endLine: number,
+  silent: boolean,
+) => boolean;
+
+/** One entry of markdown-it's block `ruler.__rules__` (internal but stable). */
+interface BlockRuleEntry {
+  name: string;
+  fn: BlockRuleFn;
+}
+
+/**
+ * Records the content start of every table row markdown-it's `table` block rule
+ * produces: `table_open` and each `tr_open` get `mdRowShift` — `bMarks + tShift`
+ * of their first line, relative to that line's start (ошибка `49ebba76`). The
+ * snapshot MUST be taken during the rule call: the enclosing blockquote and list
+ * rules restore the original line offsets once their nested `tokenize` returns,
+ * so after the block pass the container-adjusted coordinates are gone. The shift
+ * is stored RELATIVE because markdown-it parses a newline-normalized copy of the
+ * source (`\r\n`/`\r` → `\n`), while `data-md-*` offsets are in the caller's
+ * original string; line starts agree between the two, in-line shifts do not.
+ * Reading these coordinates here is not a second parse — it is the very
+ * coordinate markdown-it uses to locate the row, which makes "container markup
+ * vs cell content" exact at any nesting depth (a list marker still on the row
+ * line at this point is cell content, because the TABLE rule runs before the
+ * LIST rule within the same `tokenize` call).
+ */
+function installBlockTableCapture(md: MarkdownIt): void {
+  const ruler = md.block.ruler as unknown as {
+    __rules__: BlockRuleEntry[];
+    __cache__: unknown;
+  };
+  const entry = ruler.__rules__.find((rule) => rule.name === 'table');
+  if (entry === undefined) return;
+  const orig = entry.fn;
+  entry.fn = (state, startLine, endLine, silent) => {
+    const before = state.tokens.length;
+    const ok = orig(state, startLine, endLine, silent);
+    if (!ok || silent || !sourceMapEnabled(state.env)) return ok;
+    for (let i = before; i < state.tokens.length; i++) {
+      const token = state.tokens[i]!;
+      if (token.type !== 'table_open' && token.type !== 'tr_open') continue;
+      if (token.map === null) continue;
+      const line = token.map[0]!;
+      const bMark = state.bMarks[line];
+      const shift = state.tShift[line];
+      if (bMark === undefined || shift === undefined) continue;
+      const base = bMark + shift;
+      // The blockquote rule moves `bMarks` INTO the line, so the line start is
+      // recovered from the source rather than assumed to be `bMark`.
+      const lineStart = state.src.lastIndexOf('\n', base - 1) + 1;
+      const meta = (token.meta ?? (token.meta = {})) as RangeCarrier;
+      meta.mdRowShift = base - lineStart;
+    }
+    return ok;
+  };
+  ruler.__cache__ = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,6 +1357,7 @@ function installInlineCapture(md: MarkdownIt): void {
 
 /** Registers the source-map rule on the shared renderer. */
 export function sourceMapPlugin(md: MarkdownIt): void {
+  installBlockTableCapture(md);
   installInlineCapture(md);
 
   md.core.ruler.after('inline', 'source_map', (state) => {
