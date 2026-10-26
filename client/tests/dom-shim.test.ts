@@ -20,8 +20,13 @@
  * `replaceChild`, `NotFoundError` на чужом узле/якоре, `TypeError` на
  * примитиве, `cloneNode()` по умолчанию неглубокий, `children`/`childNodes`
  * видят мутации через ссылку, взятую ДО них, и не имеют мутаторов массива.
- * Эталон — пробы на живом Chromium (`.tmp/verify/cca54310/parity-ops-r2.js`,
- * сводка `parity-compare-r2.log`), а не документация.
+ *
+ * Круг 3 закрыл слепой участок `replaceWith` с несколькими аргументами-
+ * братьями (якорь — первый следующий брат НЕ из аргументов), живость
+ * СОХРАНЁННОГО итератора и регистронезависимые позиции
+ * `insertAdjacentElement`. Эталон — пробы на живом Chromium
+ * (`.tmp/verify/cca54310/parity-ops-r2.js`, сводка `parity-compare-r3.log`),
+ * а не документация.
  */
 
 import assert from 'node:assert/strict';
@@ -546,5 +551,169 @@ describe('DOM-шим: children/childNodes — живые коллекции (cca
     assert.throws(() => {
       (children as unknown as { length: number }).length = 5;
     }, TypeError);
+  });
+});
+
+/**
+ * Круг 3: `replaceWith` с несколькими аргументами-следующими братьями —
+ * бывший слепой участок (в круге 2 проверялся только последний ребёнок и один
+ * следующий брат). Ожидания сняты с живого Chromium (`parity-ops-r2.js`,
+ * группы `replaceWithSiblings` / `replaceWithSingles`).
+ */
+describe('DOM-шим: replaceWith с аргументами-следующими братьями (cca54310, круг 3)', () => {
+  function nodeKinds(node: ShimElement): string[] {
+    return Array.from(node.childNodes).map((child) =>
+      child.isTextNode ? `#text:${child.textContent}` : child.tagName,
+    );
+  }
+
+  interface Abcd {
+    host: ShimElement;
+    a: ShimElement;
+    b: ShimElement;
+    c: ShimElement;
+    d: ShimElement;
+  }
+
+  function hostABCD(): Abcd {
+    const host = new ShimElement('div');
+    const [a, b, c, d] = ['A', 'B', 'C', 'D'].map(
+      (value) => new ShimElement('span', undefined, value),
+    );
+    host.append(a!, b!, c!, d!);
+    return { host, a: a!, b: b!, c: c!, d: d! };
+  }
+
+  const cases: Array<{
+    name: string;
+    apply: (nodes: Abcd) => void;
+    text: string;
+    kinds: string[];
+  }> = [
+    {
+      name: 'a.replaceWith(b, c) → BCD (якорь — d, а не b)',
+      apply: ({ a, b, c }) => a.replaceWith(b, c),
+      text: 'BCD',
+      kinds: ['span', 'span', 'span'],
+    },
+    {
+      name: 'b.replaceWith(c, a) → CAD',
+      apply: ({ a, b, c }) => b.replaceWith(c, a),
+      text: 'CAD',
+      kinds: ['span', 'span', 'span'],
+    },
+    {
+      name: 'a.replaceWith(b, c, новый D) → BCDD',
+      apply: ({ a, b, c }) => a.replaceWith(b, c, new ShimElement('span', undefined, 'D')),
+      text: 'BCDD',
+      kinds: ['span', 'span', 'span', 'span'],
+    },
+    {
+      name: "a.replaceWith(b, 'x', c) → BxCD",
+      apply: ({ a, b, c }) => a.replaceWith(b, 'x', c),
+      text: 'BxCD',
+      kinds: ['span', '#text:x', 'span', 'span'],
+    },
+    {
+      name: 'b.replaceWith(c, d) → ACD',
+      apply: ({ b, c, d }) => b.replaceWith(c, d),
+      text: 'ACD',
+      kinds: ['span', 'span', 'span'],
+    },
+    {
+      name: 'a.replaceWith(b, a) → BACD (узел сам в аргументах)',
+      apply: ({ a, b }) => a.replaceWith(b, a),
+      text: 'BACD',
+      kinds: ['span', 'span', 'span', 'span'],
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      const nodes = hostABCD();
+      testCase.apply(nodes);
+      assert.deepEqual(nodeKinds(nodes.host), testCase.kinds);
+      assert.equal(nodes.host.textContent, testCase.text);
+    });
+  }
+
+  it('одиночные аргументы-братья остаются верными', () => {
+    const singles: Array<{ apply: (nodes: Abcd) => void; text: string }> = [
+      { apply: ({ b, c }) => c.replaceWith(b), text: 'ABD' },
+      { apply: ({ a, c }) => a.replaceWith(c), text: 'CBD' },
+      { apply: ({ c, d }) => d.replaceWith(c), text: 'ABC' },
+      { apply: ({ a, b }) => b.replaceWith(a), text: 'ACD' },
+    ];
+    for (const single of singles) {
+      const nodes = hostABCD();
+      single.apply(nodes);
+      assert.equal(nodes.host.textContent, single.text);
+    }
+  });
+});
+
+/**
+ * Круг 3, замечания: сохранённый до мутации итератор обязан видеть актуальный
+ * состав (как `NodeList`/`HTMLCollection` в браузере), а позиции
+ * `insertAdjacentElement` сравниваются без учёта регистра.
+ */
+describe('DOM-шим: живые итераторы и регистр insertAdjacentElement (cca54310, круг 3)', () => {
+  function nodeKinds(node: ShimElement): string[] {
+    return Array.from(node.childNodes).map((child) =>
+      child.isTextNode ? `#text:${child.textContent}` : child.tagName,
+    );
+  }
+
+  it('итераторы, взятые до мутации, видят актуальный состав', () => {
+    const host = new ShimElement('div');
+    const childrenIterator = host.children[Symbol.iterator]();
+    const valuesIterator = host.childNodes.values();
+    const keysIterator = host.childNodes.keys();
+    const entriesIterator = host.childNodes.entries();
+    host.append(new ShimElement('span', undefined, 'S'));
+
+    assert.deepEqual(
+      Array.from(childrenIterator).map((child) => child.textContent),
+      ['S'],
+      'children[Symbol.iterator](), взятый до append',
+    );
+    assert.deepEqual(
+      Array.from(valuesIterator).map((child) => child.textContent),
+      ['S'],
+      'childNodes.values(), взятый до append',
+    );
+    assert.deepEqual(Array.from(keysIterator), [0], 'childNodes.keys() живой');
+    assert.deepEqual(
+      Array.from(entriesIterator).map(([index, child]) => [index, child.textContent]),
+      [[0, 'S']],
+      'childNodes.entries() живой',
+    );
+  });
+
+  it('итератор, взятый до очистки, пуст', () => {
+    const host = new ShimElement('div', undefined, 'A');
+    const iterator = host.childNodes[Symbol.iterator]();
+    host.replaceChildren();
+    assert.deepEqual(Array.from(iterator), [], 'снимок вернул бы старый состав');
+  });
+
+  it('insertAdjacentElement принимает camelCase и произвольный регистр', () => {
+    const expectations: Record<string, { kinds: string[]; text: string }> = {
+      beforeBegin: { kinds: ['span', 'span', 'span'], text: 'AZB' },
+      afterBegin: { kinds: ['span', 'span'], text: 'AZB' },
+      beforeEnd: { kinds: ['span', 'span'], text: 'ABZ' },
+      afterEnd: { kinds: ['span', 'span', 'span'], text: 'ABZ' },
+      BEFOREBEGIN: { kinds: ['span', 'span', 'span'], text: 'AZB' },
+    };
+    for (const [position, expected] of Object.entries(expectations)) {
+      const host = new ShimElement('div');
+      const a = new ShimElement('span', undefined, 'A');
+      const b = new ShimElement('span', undefined, 'B');
+      host.append(a, b);
+      const inserted = b.insertAdjacentElement(position, new ShimElement('span', undefined, 'Z'));
+      assert.equal(inserted!.tagName, 'span', `${position}: возвращается вставленный узел`);
+      assert.deepEqual(nodeKinds(host), expected.kinds, `${position}: состав хоста`);
+      assert.equal(host.textContent, expected.text, `${position}: текст хоста`);
+    }
   });
 });
