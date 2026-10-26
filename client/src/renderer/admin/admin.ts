@@ -374,7 +374,7 @@ function showApiKey(apiKey: string): void {
       onClick: () => {
         void navigator.clipboard.writeText(apiKey).then(
           () => notice('Ключ скопирован.'),
-          () => notice('Не удалось скопировать ключ.', 'error'),
+          () => notice('Не удалось скопировать ключ.'),
         );
       },
     }),

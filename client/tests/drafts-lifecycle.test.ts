@@ -16,7 +16,7 @@
  *    (источник «вечного» черновика с устаревшей baseVersion).
  */
 
-import { test } from 'node:test';
+import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { EtnError } from '@etn/shared';
@@ -56,6 +56,12 @@ import {
   type DraftRecord,
   type DraftStatus,
 } from '../src/renderer/drafts.js';
+
+// Тосты живут в общем body: чистим стек между тестами, иначе дедупликация
+// (28d22b8a) засчитает повтор того же текста как обновление старого тоста.
+beforeEach(() => {
+  body.replaceChildren();
+});
 
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 const OTHER_NET = 'c4f9a3b2-1111-2222-3333-444455556677';

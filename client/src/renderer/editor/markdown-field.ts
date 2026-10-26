@@ -1103,7 +1103,6 @@ export function createMarkdownField(opts: {
     if (idx === -1) {
       notice(
         `Не удалось вставить ссылку: текст «${matchedText}» не найден в исходнике (изменён форматированием).`,
-        'error',
       );
       return;
     }
@@ -2091,7 +2090,7 @@ async function insertResourceAt(
     }
     case 'file': {
       if (owner === undefined) {
-        notice('Не удалось вставить картинку: у поля нет владельца.', 'error');
+        notice('Не удалось вставить картинку: у поля нет владельца.');
         return;
       }
       const source = result.source;

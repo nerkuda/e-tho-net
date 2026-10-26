@@ -150,7 +150,7 @@ export async function openLinkPropertyDropDialog(opts: {
         keepOpen: true,
         onClick: (close) => {
           if (pick === null) {
-            notice(t('thoughtDrop.pickProperty'), 'error');
+            notice(t('thoughtDrop.pickProperty'));
             return;
           }
           const chosen = pick;

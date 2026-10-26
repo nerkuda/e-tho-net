@@ -1678,7 +1678,7 @@ export function mountPublicationWorkspace(
     // Защита от цикла: даже если диалог обойдён, перенос в собственного потомка
     // (или в себя) отвергается — иначе REST neighbors возвращает A↔A1.
     if (subtreeIds(block.thoughtId, sectionTreeItems()).has(targetSectionId)) {
-      notice(t('publications.block.moveCycle'), 'error');
+      notice(t('publications.block.moveCycle'));
       return;
     }
     try {
@@ -1703,7 +1703,7 @@ export function mountPublicationWorkspace(
     if (oldOwner === targetSectionId) return;
     const sources = publication?.text_sources ?? [];
     if (sources.length === 0) {
-      notice(t('publications.ws.noTextSources'), 'error');
+      notice(t('publications.ws.noTextSources'));
       return;
     }
     try {
@@ -2464,7 +2464,7 @@ export function mountPublicationWorkspace(
     if (kind === 'text') {
       const sources = publication?.text_sources ?? [];
       if (sources.length === 0) {
-        notice(t('publications.ws.noTextSources'), 'error');
+        notice(t('publications.ws.noTextSources'));
         return;
       }
       const rows = await loadPropertyRows(networkId);
@@ -2478,7 +2478,7 @@ export function mountPublicationWorkspace(
         (row) => !row.structural && row.valueType === 'link' && sources.includes(row.propertyId),
       );
       if (listRows.length === 0) {
-        notice(t('publications.ws.noTextSources'), 'error');
+        notice(t('publications.ws.noTextSources'));
         return;
       }
       linkProperty = { rows: listRows };

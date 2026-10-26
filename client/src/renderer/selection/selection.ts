@@ -1009,7 +1009,7 @@ async function runImport(): Promise<void> {
   const focus = store.state.focus;
   const parentId = focus?.focused.id;
   if (parentId === undefined) {
-    notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.', 'error');
+    notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.');
     return;
   }
   let picked: Awaited<ReturnType<typeof etn.system.pickArchiveFile>>;

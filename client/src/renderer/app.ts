@@ -996,10 +996,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   if (targetId === null) {
-    notice(
-      'Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.',
-      'error',
-    );
+    notice('Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.');
     return;
   }
   const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
@@ -1021,10 +1018,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
  *  With multiple thoughts selected we fall back to the canvas focus. */
 async function globalPaste(targetId: string | null): Promise<void> {
   if (targetId === null) {
-    notice(
-      'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
-      'error',
-    );
+    notice('Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.');
     return;
   }
   const networkId = store.state.networkId;

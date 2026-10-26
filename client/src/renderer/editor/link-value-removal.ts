@@ -177,7 +177,7 @@ export async function removeLinkValueEdges(opts: LinkValueRemovalOptions): Promi
       try {
         const { purged } = await etn.trash.purge(opts.networkId, linkIds);
         if (purged < linkIds.length) {
-          notice('Часть связей заблокирована и осталась в корзине.', 'error');
+          notice('Часть связей заблокирована и осталась в корзине.', 'warning');
           return true;
         }
       } catch (err) {

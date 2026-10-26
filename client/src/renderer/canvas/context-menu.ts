@@ -259,7 +259,7 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
     notice('Связь инвертирована.');
   } catch (err) {
     if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
-      notice('В обратном направлении такая связь уже существует.', 'error');
+      notice('В обратном направлении такая связь уже существует.');
       return;
     }
     errorDialog('Инвертировать связь', err);
@@ -397,7 +397,7 @@ export function buildThoughtMenuItems(
     menuAction('Копировать ID', () => {
       void navigator.clipboard.writeText(target.id).then(
         () => notice('ID мысли скопирован.'),
-        () => notice('Не удалось скопировать ID.', 'error'),
+        () => notice('Не удалось скопировать ID.'),
       );
     });
   // Мысль недоступна в сети (значение условия осталось по снапшоту имени):
@@ -647,7 +647,7 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
   try {
     const thought = await etn.thoughts.get(networkId, id);
     if (thought.is_protected && thought.is_root) {
-      notice('HOME-мысль нельзя деактивировать.', 'error');
+      notice('HOME-мысль нельзя деактивировать.');
       return;
     }
     await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);

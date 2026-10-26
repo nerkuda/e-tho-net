@@ -90,7 +90,7 @@ function buildIdRow(id: string | null): HTMLElement {
     onClick: () => {
       void navigator.clipboard.writeText(id).then(
         () => notice('ID скопирован.'),
-        () => notice('Не удалось скопировать ID.', 'error'),
+        () => notice('Не удалось скопировать ID.'),
       );
     },
   });

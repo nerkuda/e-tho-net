@@ -6,16 +6,20 @@
  * - **Стек тостов** — не более {@link NOTICE_STACK_LIMIT} одновременно; стек
  *   растёт снизу вверх (новый тост появляется внизу, показанные раньше
  *   поднимаются); шестой вытесняет самый старый (верхний), у вытесненного
- *   отменяется таймер;
- * - **Тосты — только важное**: сбой (`error`) и предупреждение (`warning`) —
- *   доступность сервера, ошибки соединения, потеря данных;
- * - **Рутинные подтверждения** (`info`/`success`) — не тост, а сообщение в
- *   зоне статусной строки (`lib/status-message.ts`).
+ *   отменяется таймер; повтор того же текста не добавляет дубль, а обновляет
+ *   существующий тост и перезапускает его TTL;
+ * - **Тосты — только важное, влияющее на работу клиента**: доступность
+ *   сервера, обрыв или потеря соединения, потеря данных, реальный сбой
+ *   операции (`error`), частичный итог с ненулевыми проблемами (`warning`);
+ * - **Рутинное — в статусбар**: подсказки, валидации пользовательского
+ *   действия, штатные подтверждения, итоги без ошибок (`info`/`success`).
  *
  * Поэтому {@link notice} — единая точка неблокирующей обратной связи: канал
- * выбирается по виду сообщения. Важное подтверждение, которое обязано быть
- * тостом (например, восстановление соединения), вызывается напрямую через
- * {@link toast}.
+ * выбирается по виду сообщения, и вид обязан отражать важность, а не факт
+ * отказа: «Буфер обмена пуст.» — валидация и идёт в статусбар, «Не удалось
+ * сохранить» — реальный сбой и идёт тостом. Важное подтверждение, которое
+ * обязано быть тостом (например, восстановление соединения), вызывается
+ * напрямую через {@link toast}.
  *
  * Блокирующие вопросы идут через `lib/dialog.ts`; ошибки диалога — строкой в
  * панели кнопок (`lib/ui/messages.ts`, требование 397c5a56), тост для них не
@@ -73,11 +77,51 @@ function removeToast(box: HTMLElement): void {
   box.remove();
 }
 
+/** Запускает (или перезапускает) автозакрытие тоста. */
+function armTimer(box: HTMLElement): void {
+  timers.set(
+    box,
+    window.setTimeout(() => removeToast(box), NOTICE_TTL_MS),
+  );
+}
+
+/**
+ * Живой тост с тем же текстом или `null`. Повтор одинакового сообщения —
+ * признак серии (например, каждая попытка войти в заблокированную правку):
+ * такая серия обязана обновлять один тост, а не занимать очередь дублями и
+ * вытеснять другие важные сообщения.
+ */
+function findToastByText(host: HTMLElement, text: string): HTMLElement | null {
+  const children = Array.from(host.children) as HTMLElement[];
+  for (const child of children) {
+    if (!child.classList.contains('notice')) continue;
+    if ((child.querySelector('.notice-text')?.textContent ?? '') === text) return child;
+  }
+  return null;
+}
+
 /**
  * Показывает важное сообщение тостом. Вид окрашивает левую кромку: `error` —
  * красная, `warning` — жёлтая, `success` — зелёная.
  */
 export function toast(text: string, kind: ToastKind): void {
+  const host = noticeStack();
+  const existing = findToastByText(host, text);
+  if (existing !== null) {
+    // Дедупликация: обновляем вид и перезапускаем TTL, оставляя тост на его
+    // месте. Порядок стека не меняется — повтор не «омолаживает» позицию и
+    // не даёт серии одинаковых предупреждений вытеснить соседние сообщения.
+    existing.classList.remove('success', 'warning', 'error');
+    existing.classList.add(KIND_CLASS[kind]);
+    const timer = timers.get(existing);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      timers.delete(existing);
+    }
+    armTimer(existing);
+    return;
+  }
+
   const box = div(`notice ${KIND_CLASS[kind]}`);
   box.append(span(text, 'notice-text'));
   const close = button('×', () => removeToast(box), 'notice-close');
@@ -91,7 +135,6 @@ export function toast(text: string, kind: ToastKind): void {
   close.addEventListener('pointerdown', () => removeToast(box));
   box.append(close);
 
-  const host = noticeStack();
   // Новый тост — ВНИЗУ: стек растёт снизу вверх (`column-reverse` в CSS),
   // поэтому он вставляется первым ребёнком; показанные раньше поднимаются.
   host.prepend(box);
@@ -102,20 +145,30 @@ export function toast(text: string, kind: ToastKind): void {
     if (oldest === undefined) break;
     removeToast(oldest);
   }
-  timers.set(
-    box,
-    window.setTimeout(() => removeToast(box), NOTICE_TTL_MS),
-  );
+  armTimer(box);
 }
 
 /**
  * Единая точка неблокирующей обратной связи. Канал выбирается по важности
- * (вид сообщения): сбой и предупреждение — тост, рутинное подтверждение —
- * зона сообщений статусной строки.
+ * (вид сообщения): реальный сбой и предупреждение — тост; рутинное
+ * подтверждение, подсказка или валидация — зона сообщений статусной строки.
  */
 export function notice(text: string, kind: NoticeKind = 'info'): void {
   if (kind === 'error' || kind === 'warning') {
     toast(text, kind);
+    return;
+  }
+  statusMessage(text);
+}
+
+/**
+ * Итог операции с частичными проблемами: ненулевой счётчик — важное
+ * предупреждение (пользователь не должен пропустить, что часть работы не
+ * выполнена), нулевой — рутинное подтверждение в статусбаре.
+ */
+export function noticePartial(text: string, problems: number): void {
+  if (problems > 0) {
+    toast(text, 'warning');
     return;
   }
   statusMessage(text);

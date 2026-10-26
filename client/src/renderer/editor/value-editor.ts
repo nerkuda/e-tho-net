@@ -473,7 +473,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
    */
   const refreshNames = async (): Promise<void> => {
     if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
-      notice('Обновление имени доступно только для свойств мыслей.', 'error');
+      notice('Обновление имени доступно только для свойств мыслей.');
       return;
     }
     const key = opts.definition.key ?? '';

@@ -205,7 +205,7 @@ export async function pasteThoughtsTo(targetId: string): Promise<void> {
   if (networkId === null) return;
   const snap = getClipboard();
   if (snap === null || snap.thoughts.length === 0) {
-    notice('Буфер обмена пуст.', 'error');
+    notice('Буфер обмена пуст.');
     return;
   }
   const rewrittenThoughts = snap.thoughts.map((item) => {

@@ -2744,7 +2744,7 @@ function onDragEnd(_event: MouseEvent): void {
       direction: outcome.direction,
     });
   } else {
-    notice('Диалог добавления мыслей ещё не готов.', 'error');
+    notice('Диалог добавления мыслей ещё не готов.');
   }
 }
 

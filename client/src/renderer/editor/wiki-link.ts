@@ -218,7 +218,7 @@ export function confirmSwitchToMap(): Promise<boolean> {
  */
 export async function openThoughtByRef(thought: Thought): Promise<void> {
   if (!thought.active && !store.state.showInactive) {
-    notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.', 'error');
+    notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.');
     return;
   }
 
@@ -312,7 +312,7 @@ async function openResolvedThought(networkId: string, thoughtId: string, name: s
 export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<void> {
   const networkId = safeCurrentNetworkId();
   if (networkId === null) {
-    notice('Сначала откройте сеть.', 'error');
+    notice('Сначала откройте сеть.');
     return;
   }
 
@@ -576,7 +576,7 @@ export function initWikiLinkNavigation(): void {
     if (id !== null && id !== '') {
       const targetNetworkId = link.getAttribute(WIKI_LINK_NETWORK_ATTR) ?? safeCurrentNetworkId();
       if (targetNetworkId === null) {
-        notice('Сначала откройте сеть.', 'error');
+        notice('Сначала откройте сеть.');
         return;
       }
       void openWikiIdTarget(targetNetworkId, id);

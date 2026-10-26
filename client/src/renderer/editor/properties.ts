@@ -261,7 +261,7 @@ async function openPropertyEditorById(propertyId: string): Promise<void> {
     const registry = await etn.propertyRegistry.list(networkId);
     const row = registry.find((candidate) => candidate.id === propertyId);
     if (row === undefined) {
-      notice('Свойство не найдено в справочнике сети.', 'error');
+      notice('Свойство не найдено в справочнике сети.');
       return;
     }
     openPropertyManagerEditor(row, refreshPropertiesPanels);

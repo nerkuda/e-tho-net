@@ -50,7 +50,7 @@ import { openEntityDeleteDialog } from './lib/delete-dialog.js';
 import { div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { resolveThoughtRefs } from './lib/thought-ref-batch.js';
-import { notice } from './lib/notice.js';
+import { notice, noticePartial } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
@@ -726,7 +726,7 @@ export async function openThoughtGroupDeleteDialog(
             // alongside the canvas.
             scheduleStructuresRefresh();
             refreshSearchIfVisible();
-            notice(failures > 0 ? `Применено, ошибок: ${failures}.` : 'Применено.');
+            noticePartial(failures > 0 ? `Применено, ошибок: ${failures}.` : 'Применено.', failures);
           } catch (err) {
             errorDialog('Удаление выбранного', err);
           }
@@ -1062,7 +1062,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     try {
       const { purged, skipped } = await etn.trash.purge(networkId);
       scheduleRefresh();
-      notice(`Удалено ${purged}, осталось заблокировано ${skipped}.`);
+      noticePartial(`Удалено ${purged}, осталось заблокировано ${skipped}.`, skipped);
       await render();
     } catch (err) {
       errorDialog('Очистить корзину', err);

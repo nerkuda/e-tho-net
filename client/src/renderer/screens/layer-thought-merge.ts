@@ -25,7 +25,7 @@ import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { div, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
-import { notice } from '../lib/notice.js';
+import { notice, noticePartial } from '../lib/notice.js';
 import { choiceGroup, radioRow } from '../lib/ui/choice-row.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { store } from '../state.js';
@@ -219,8 +219,9 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
                 if (selected === 'discard') {
                   notice(`Изменения ${titleText} удалены из слоя.`);
                 } else if (combineAvailable && result.conflicts > 0) {
-                  notice(
+                  noticePartial(
                     `Слито мыслей: ${result.merged}. Комментарий объединён, конфликтных блоков: ${result.conflicts}.`,
+                    result.conflicts,
                   );
                 } else {
                   notice(`Слито в «${target}»: ${result.merged}.`);

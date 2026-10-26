@@ -990,7 +990,7 @@ async function runPlanUnits(
   try {
     const parentId = await port.resolveParent(owner);
     if (parentId === null) {
-      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
+      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`);
       return;
     }
 
@@ -1107,7 +1107,7 @@ async function runSelectionDialog(
   try {
     const parentId = await port.resolveParent(owner);
     if (parentId === null) {
-      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
+      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`);
       return;
     }
     const parentTitle = await port.thoughtTitle(parentId);

@@ -225,7 +225,7 @@ export async function runCommentThoughtInsert(
   try {
     const parents = await port.resolveParents(hint, owner);
     if (parents === null) {
-      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`, 'error');
+      notice(`${t('comment.create.error')}: ${t('comment.create.noParent')}`);
       return;
     }
     const result = await port.pick({ anchorId: parents.primaryId, anchorTitle: parents.primaryTitle });

@@ -462,10 +462,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       return;
     }
     // Nothing was recognised — say so instead of failing silently.
-    notice(
-      'Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.',
-      'error',
-    );
+    notice('Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.');
   }
 
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
@@ -913,6 +910,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       });
     } catch (err) {
       if (isIconOwnerBlock(err)) {
+        // Отказ сервера (409): операция не выполнена — важное, тостом.
         notice(t('attachments.move.iconBlocked'), 'error');
       } else {
         notice(`${t('attachments.move.removeFailed')}: ${errText(err)}`, 'error');
@@ -992,6 +990,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       refreshAttachments();
     } catch (err) {
       if (isIconOwnerBlock(err)) {
+        // Отказ сервера (409): операция не выполнена — важное, тостом.
         notice(t('attachments.remove.iconBlocked'), 'error');
         return;
       }

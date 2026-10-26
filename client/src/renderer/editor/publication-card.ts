@@ -1424,7 +1424,7 @@ async function openCoverDialog(): Promise<void> {
       // 409 ATTACHMENT_OWNER_IS_ICON — вложение держит сама публикация как
       // обложку: внятное сообщение вместо технической ошибки.
       if (isIconOwnerBlock(err)) {
-        notice(t('publication.cover.removeOwnerBlocked'), 'error');
+        notice(t('publication.cover.removeOwnerBlocked'));
         return;
       }
       errorDialog(t('publication.cover.removeOwner'), err);

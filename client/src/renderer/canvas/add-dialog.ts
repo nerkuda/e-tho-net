@@ -45,7 +45,7 @@ import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { addLinkPropertyValue } from '../lib/link-property-write.js';
-import { notice } from '../lib/notice.js';
+import { notice, noticePartial } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo, loadCrossNetworkCandidates, type LinkPropertyPick } from '../lib/entity-picker.js';
@@ -343,8 +343,10 @@ async function insertIntoCanvas(
       failed++;
     }
   }
-  if (failed > 0) notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
-  else notice(`Готово: ${created}.`);
+  noticePartial(
+    failed > 0 ? `Создано/связано: ${created}, ошибок: ${failed}` : `Готово: ${created}.`,
+    failed,
+  );
   // Диалог добавления связи с карты пишет РЕБРО (в т.ч. типизированное, которое
   // видно значением свойства-связи фокуса). Своего realtime-эха у клиента нет,
   // а сверка окрестности замечает не всякую правку: второе ребро другого типа к
