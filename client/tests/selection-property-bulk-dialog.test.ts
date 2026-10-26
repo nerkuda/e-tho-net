@@ -138,6 +138,9 @@ const REGISTRY: RegistryRow[] = [
   registryRow({ id: 'p-owner', name: 'Ответственный' }),
   registryRow({ id: 'p-priority', name: 'Приоритет' }),
   registryRow({ id: 'p-flag', name: 'Флаг', value_type: 'bool' }),
+  // Типовое multiple text — как «телефоны» у типа «Персона» в сети заказчика
+  // (ошибка bba5a7ce: чип-поле теряло набранное без Enter).
+  registryRow({ id: 'p-phones', name: 'Телефоны', config: { multiple: true } }),
   registryRow({
     id: 'p-attach',
     name: 'Прикреплено',
@@ -783,6 +786,56 @@ describe('диалог значений свойств выделения: пр�
     assert.ok(
       reopened.children[1]!.flatText().includes('есть у 3 из 3'),
       'свойство видно у всех выделенных',
+    );
+  });
+
+  it('типовое multiple text: набранное без Enter фиксируется по «Применить» (bba5a7ce)', async () => {
+    prepare();
+    // Пустая таблица, свойство добавляется через (+) — как «телефоны» в сети
+    // заказчика (типовое, text + multiple). Значение набирается в чип-поле и
+    // Enter не нажимается: раньше оно оставалось в поле, план строил пустое
+    // значение, строка молча пропускалась, а внетиповое скалярное записывалось.
+    for (const thought of THOUGHTS) server.values.set(thought.id, []);
+    await open(['t-a', 't-b', 't-c']);
+    await addProperty('Телефоны');
+    const phones = rowByKey(currentBody(), 'p-phones');
+    assert.equal(checkboxOf(phones).checked, true, 'строка из (+) отмечена сразу');
+    const input = textInputOf(phones);
+    assert.ok(input.classList.contains('value-chips-input'), 'multiple text — чип-поле');
+    type(input, '+7 900 000-00-00');
+
+    footerButton('Применить').click();
+    await flush(8);
+
+    assert.equal(server.setCalls.length, 3, 'набранное значение записано всем трём мыслям');
+    assert.ok(server.setCalls.every((call) => call.key === 'Телефоны'));
+    assert.ok(
+      server.setCalls.every((call) => call.value === '+7 900 000-00-00'),
+      'в save ушла хранимая форма набора (одно значение — та же строка)',
+    );
+    assert.equal(backdrops().length, 0, 'полный успех закрывает диалог');
+  });
+
+  it('отмеченная пустая строка не пропадает молча: итог с пропущенными и причина (bba5a7ce)', async () => {
+    prepare();
+    await open(['t-a', 't-b', 't-c']);
+    // Отмеченная строка из (+) без значения и без данных для очистки.
+    await addProperty('Приоритет');
+    const status = rowByKey(currentBody(), 'p-status');
+    check(status, true);
+    type(textInputOf(status), 'готово');
+
+    footerButton('Применить').click();
+    await flush(8);
+
+    assert.equal(server.setCalls.length, 3, 'валидная строка применена');
+    assert.equal(backdrops().length, 1, 'диалог не закрыт: пропущенная строка — не полный успех');
+    const text = topBackdrop().flatText();
+    assert.ok(text.includes('пропущено строк: 1'), 'итог называет пропущенные строки');
+    assert.ok(text.includes('Строки без значения'), 'заголовок блока пропущенных');
+    assert.ok(
+      text.includes('«Приоритет»: значение не задано, а очищать нечего'),
+      'строка названа по имени',
     );
   });
 });

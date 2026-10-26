@@ -23,6 +23,7 @@ import {
   emptyBulkPlanReason,
   isBulkFormDirty,
   planBulkApply,
+  skippedBulkRows,
   splitMultiText,
   type BulkLinkType,
   type BulkPropertyRow,
@@ -525,11 +526,112 @@ describe('план применения (галочка × строка)', () =>
     assert.equal(removeOps[0]!.side, 'source', 'очистка адресует сторону');
   });
 
+  it('связь-сторона target: план адресует сторону, ключ — имя реестрового свойства', () => {
+    const snapshot = valueMap({
+      't-b': [
+        linkValues({
+          ownerId: 't-b',
+          propertyId: 'p-attach',
+          propertyName: 'Прикреплено к',
+          linkTypeId: 'lt-attach',
+          side: 'target',
+          targets: [{ id: 't-m' }],
+        }),
+      ],
+    });
+    const rows = rowsOf(snapshot);
+    const row = rowByKey(rows, 'p-attach:target');
+    assert.equal(row.name, 'Прикреплено к', 'имя строки — обратное имя стороны');
+
+    const ops = planBulkApply(rows, [mark(rows, 'p-attach:target', true, ['t-n'])], ['t-b']);
+    assert.equal(ops[0]!.side, 'target', 'запись адресует сторону строки');
+    assert.equal(ops[0]!.propertyKey, 'Прикреплено', 'ключ — имя реестрового свойства');
+    assert.deepEqual(ops[0]!.value, ['t-n']);
+  });
+
   it('пустая строка из (+) с галочкой ничего не удаляет: K = 0', () => {
     const row = bulkRowFromRegistry(REGISTRY[0]!, null, LINK_TYPES, 3);
     const ops = planBulkApply([row], [{ key: row.key, checked: true, value: null }], ['t-a', 't-b']);
     assert.deepEqual(ops, []);
     assert.equal(clearingThoughtCount([row], [{ key: row.key, checked: true, value: null }]), 0);
+  });
+
+  it('типовое и внетиповое свойства планируются одинаково: происхождение в плане не участвует (bba5a7ce)', () => {
+    // «Теги» — multiple text с наличным значением у одной мысли, «Статус» —
+    // скаляр у другой. Признак «типовое/внетиповое» живёт только в чтении
+    // (`outside_type`) и на план влиять не должен: заказчик видел потерю
+    // именно типового multiple-свойства, но причиной была потеря значения
+    // чип-редактора, а не фильтр по происхождению.
+    const snapshot = valueMap({
+      't-a': [scalar('t-a', 'p-tags', 'Теги', '+7 900, +7 901')],
+      't-b': [scalar('t-b', 'p-status', 'Статус', 'в работе')],
+    });
+    const rows = rowsOf(snapshot);
+    const ops = planBulkApply(
+      rows,
+      [
+        mark(rows, 'p-tags', true, '+7 900, +7 901, +7 902'),
+        mark(rows, 'p-status', true, 'готово'),
+      ],
+      THOUGHTS.map((thought) => thought.id),
+    );
+    const tags = ops.filter((op) => op.propertyKey === 'Теги');
+    assert.equal(tags.length, 3, 'set — всем выделенным, независимо от наличия значения');
+    assert.ok(tags.every((op) => op.kind === 'set' && op.value === '+7 900, +7 901, +7 902'));
+    assert.equal(tags[0]!.propertyId, 'p-tags');
+    assert.equal(tags[0]!.side, null);
+
+    const status = ops.filter((op) => op.propertyKey === 'Статус');
+    assert.equal(status.length, 3, 'скаляр ведёт себя так же');
+    assert.ok(status.every((op) => op.kind === 'set' && op.value === 'готово'));
+  });
+
+  it('multiple url: набор массивом уходит в план как есть', () => {
+    const snapshot = valueMap({
+      't-a': [scalar('t-a', 'p-urls', 'Ссылки', ['https://a.test'], 'url')],
+    });
+    const rows = rowsOf(snapshot);
+    const ops = planBulkApply(
+      rows,
+      [mark(rows, 'p-urls', true, ['https://a.test', 'https://b.test'])],
+      ['t-a'],
+    );
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0]!.kind, 'set');
+    assert.deepEqual(ops[0]!.value, ['https://a.test', 'https://b.test']);
+  });
+
+  it('multiple text: очистка снимает значение только там, где оно было', () => {
+    const snapshot = valueMap({
+      't-a': [scalar('t-a', 'p-tags', 'Теги', '+7 900')],
+    });
+    const rows = rowsOf(snapshot);
+    const ops = planBulkApply(rows, [mark(rows, 'p-tags', true, null)], ['t-a', 't-b', 't-c']);
+    assert.deepEqual(ops.map((op) => op.thoughtId), ['t-a']);
+    assert.equal(ops[0]!.kind, 'remove');
+  });
+
+  it('пропущенные строки: отмечена, значение пусто, очищать нечего (K = 0)', () => {
+    const rows = rowsOf(scenarioSnapshot());
+    const emptyRow = bulkRowFromRegistry(REGISTRY[0]!, null, LINK_TYPES, 3);
+    const skipped = skippedBulkRows([...rows, emptyRow], [
+      mark(rows, 'p-status', true, 'готово'),
+      { key: emptyRow.key, checked: true, value: null },
+    ]);
+    assert.deepEqual(skipped.map((row) => row.key), [emptyRow.key]);
+
+    const selectionWithValue = [mark(rows, 'p-owner', true, null)];
+    assert.equal(skippedBulkRows(rows, selectionWithValue).length, 0, 'K > 0 — будет очистка');
+    assert.equal(
+      skippedBulkRows(rows, [mark(rows, 'p-owner', false, null)]).length,
+      0,
+      'снятая галочка не пропущенная строка',
+    );
+    assert.equal(
+      skippedBulkRows(rows, [mark(rows, 'p-owner', true, 'Пётр')]).length,
+      0,
+      'значение есть — строка применяется',
+    );
   });
 
   it('счётчик очистки суммирует K отмеченных пустых строк', () => {

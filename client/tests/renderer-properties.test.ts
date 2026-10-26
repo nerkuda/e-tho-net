@@ -2338,6 +2338,71 @@ describe('buildValueEditor — множественный url чипами (ве
 
     assert.deepEqual(saved, [null], 'an empty list clears the property');
   });
+
+  it('registerPendingCommit фиксирует набранный без Enter текст (bba5a7ce)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    let pending: (() => Promise<void>) | null = null;
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+      registerPendingCommit: (commit: () => Promise<void>) => {
+        pending = commit;
+      },
+    }) as unknown as ShimElement;
+
+    const addInput = editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+    addInput.value = 'https://b.test';
+    assert.equal(saved.length, 0, 'набранное без Enter в save не уходит');
+    assert.ok(pending !== null, 'хост получил функцию фиксации');
+    await (pending as () => Promise<void>)();
+
+    assert.deepEqual(saved, [['https://a.test', 'https://b.test']], 'набранное стало значением');
+    assert.equal(findChips(editor).length, 2, 'чип появился');
+    assert.equal(
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!.value,
+      '',
+      'поле ввода очищено после фиксации',
+    );
+  });
+
+  it('черновик (`change`): уход из поля фиксирует набранное, уход внутрь поля — нет (bba5a7ce)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      commitOn: 'change',
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const inputOf = (): ShimElement =>
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+
+    // Уход ВНУТРЬ поля (каретка ▾ открывает список вариантов) — не значение.
+    inputOf().value = 'https://inside.test';
+    inputOf().dispatch('blur', { relatedTarget: inputOf() });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [], 'уход внутрь поля набранное не фиксирует');
+
+    // Уход ИЗ поля (любая кнопка диалога) — фиксирует.
+    inputOf().dispatch('blur', { relatedTarget: null });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      saved,
+      [['https://a.test', 'https://inside.test']],
+      'уход из поля сохраняет набранное значение',
+    );
+  });
 });
 
 /**
