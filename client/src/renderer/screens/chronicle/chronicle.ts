@@ -36,6 +36,7 @@ import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
   UI_STATE_KEY,
+  type ChronicleFilterDefinition,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -158,6 +159,7 @@ import {
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
 import {
+  currentScreenPair,
   isCurrentScreenPair,
   readTabScreenState,
   tabBelongsToNetwork,
@@ -195,6 +197,24 @@ const CAL_COUNTS_MAX_PAGES = 20;
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}`. */
 let networkIdSeen: string | null = null;
+/**
+ * Пара «сеть + вкладка», для которой инициализирован ТЕКУЩИЙ модульный отбор.
+ * Снимок отбора и пара снимаются вместе (ошибка 58c55bb9): в окне `openNetwork`
+ * сеть в store уже новая, а отбор панели — ещё прежней пары; запрос с чужим
+ * типом уходил бы в новую сеть и получал 422 «Тип … удалён из сети».
+ */
+let filterPair: ScreenPair | null = null;
+
+/**
+ * Отбор модуля принадлежит текущей паре «сеть + вкладка»? Запросы ленты,
+ * «+50», счётчиков календаря и запись снимка идут только при `true`: иначе
+ * определение отбора (`chronicleQueryDefinition`) относится к прежней паре, а
+ * сеть запроса была бы новой (ошибка 58c55bb9).
+ */
+function chronicleFilterIsCurrent(pair: ScreenPair | null = currentScreenPair()): boolean {
+  if (pair === null || filterPair === null) return false;
+  return filterPair.networkId === pair.networkId && filterPair.tabId === pair.tabId;
+}
 
 // ---------------------------------------------------------------------------
 // Feed state
@@ -594,6 +614,10 @@ export async function ensureChronicleInitialised(): Promise<void> {
   resetFilterState();
   // Пара этого запуска: любой await ниже может пережить смену сети/вкладки.
   const pair: ScreenPair = { networkId, tabId };
+  // Сброшенный (и далее прочитанный из снимка) отбор принадлежит ЭТОЙ паре:
+  // до следующей инициализации запросы идут только при её совпадении с парой
+  // store (ошибка 58c55bb9).
+  filterPair = pair;
 
   try {
     // Снимок вкладки ЧУЖОЙ сети не применяется (ошибка 58c55bb9).
@@ -629,6 +653,10 @@ function persistState(): void {
   const networkId = store.state.networkId;
   if (tabId === null || networkId === null) return;
   if (!tabBelongsToNetwork(networkId, tabId)) return;
+  // Снимок пишется только от отбора ЭТОЙ пары: в окне `openNetwork` вкладка уже
+  // новой сети, а модульный отбор — ещё прежней, и чужой фильтр лёг бы в
+  // состояние вкладки новой сети (ошибка 58c55bb9).
+  if (!chronicleFilterIsCurrent({ networkId, tabId })) return;
   void etn.tabs
     .updateState(tabId, {
       chronicle_state: JSON.stringify({
@@ -694,7 +722,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     onMonthChange: (year, monthNo) => {
       month = { year, month: monthNo };
       persistState();
-      void refreshCalendarCounts();
+      void refreshCalendarCounts(calendarCountsSnapshot());
     },
   });
   calWrap.append(calendar.root);
@@ -764,7 +792,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   });
 
   main.append(addBar, feedWrap);
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(calendarCountsSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
   bindChronicleFeed();
@@ -807,7 +835,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       calendar?.setFirstDayOfWeek(firstDayOfWeek);
       syncCalendar();
       scheduleChronicleFeedRefresh();
-      if (store.state.activeView === 'chronicle') void refreshCalendarCounts();
+      if (store.state.activeView === 'chronicle') {
+        void refreshCalendarCounts(calendarCountsSnapshot());
+      }
     }
     // Показ скрытого вида снимает отложенную пометку одним перезапросом
     // (ошибка 8e702d8c) — событий копилось сколько угодно, запрос один.
@@ -832,16 +862,24 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
 
 /** Applies the current filter from scratch (the «Применить» path). */
 async function applyFilter(): Promise<void> {
+  // Пара и отбор снимаются ДО ожиданий: после `await` текущая сеть может быть
+  // уже другой (окно openNetwork), и счётчики ушли бы чужим отбором в неё
+  // (ошибка 58c55bb9).
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const counts = calendarCountsSnapshot();
   // Ручное применение снимает подсветку перехода.
   jumpHighlightId = null;
   persistState();
   await getHome().catch(() => undefined);
+  if (!isCurrentScreenPair(pair)) return;
   await reload();
   // Смена отбора показывает ленту с начала: reload пересобирает её с якорем,
   // поэтому позицию сбрасываем явно поверх.
   if (feedWrap !== null) feedWrap.scrollTop = 0;
+  if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(counts);
 }
 
 /**
@@ -862,6 +900,9 @@ async function reload(preserveDepth = false): Promise<void> {
   // сеть, поэтому 422 не даёт, но строки чужой сети до перезапроса
   // показывались бы как лента текущей.
   const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
+  // Отбор запроса — только от ЭТОЙ пары: в окне `openNetwork` сеть уже новая,
+  // а отбор ещё прежней, и запрос с чужим типом получал 422 (ошибка 58c55bb9).
+  if (!chronicleFilterIsCurrent(pair)) return;
   // Отбор — часть ключа запроса слоя: смена критериев/периода переносит снимок
   // на новый ключ (инвалидации роутера адресуют актуальный ключ).
   retargetChronicleFeed();
@@ -919,6 +960,9 @@ async function loadMore(): Promise<void> {
   if (networkId === null || loadingMore || rows.length >= total) return;
   // Догруженная страница принадлежит паре на старте (ошибка 58c55bb9).
   const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
+  // Отбор дозагрузки — тоже отбор ЭТОЙ пары (окно `openNetwork`: сеть новая,
+  // отбор прежней пары — 422 «Тип … удалён из сети»).
+  if (!chronicleFilterIsCurrent(pair)) return;
   // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
   // страницу заново (данные важнее экономии запроса); прокрутку держит renderFeed.
   // Глубину сохраняем — иначе перезапрос усекает ленту до одной страницы и
@@ -1061,9 +1105,15 @@ async function refreshFeedAndCalendar(): Promise<void> {
     window.clearTimeout(feedRefreshTimer);
     feedRefreshTimer = null;
   }
+  // Отбор и пара — на входе: перезапрос, переживший смену сети/вкладки, не
+  // должен посчитать календарь новой сети чужим отбором (ошибка 58c55bb9).
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const counts = calendarCountsSnapshot();
   await reloadKeepingDepth();
+  if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(counts);
 }
 
 /** Опубликовать снимок ленты в кэш слоя (наблюдатели/диагностика). */
@@ -1251,7 +1301,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   renderFeed();
   publishChronicleSnapshot();
   syncCalendar();
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(calendarCountsSnapshot());
   feedNav?.refresh();
 }
 
@@ -2203,41 +2253,90 @@ function showRecordDayInCalendar(day: string): void {
 }
 
 /**
+ * Снимок для счётчиков календаря: пара «сеть + вкладка» и отбор месяца
+ * снимаются ВМЕСТЕ, в одной точке. Иначе запрос уходит с сетью текущего тика и
+ * отбором прежней пары: окно `openNetwork` между публикацией новой сети и
+ * переинициализацией скрытого экрана (ошибка 58c55bb9) — 422 «Тип … удалён из
+ * сети» на `POST /networks/<B>/chronicle/query` с чужим отбором.
+ */
+interface CalendarCountsSnapshot {
+  pair: ScreenPair;
+  definition: ChronicleFilterDefinition;
+  /** Границы месяца для разбора длительности записей (`rowDays`). */
+  first: string;
+  last: string;
+}
+
+/** Снять пару и отбор месяца в текущей точке; `null` — считать нечего. */
+function calendarCountsSnapshot(): CalendarCountsSnapshot | null {
+  const pair = currentScreenPair();
+  if (pair === null || calendar === null) return null;
+  // Счётчики считаются отбором ТОЛЬКО своей пары: в окне `openNetwork` сеть
+  // уже новая, а отбор — ещё прежней пары; такой снимок не снимается вовсе
+  // (ошибка 58c55bb9 — 422 «Тип … удалён из сети» на счётчиках календаря).
+  if (!chronicleFilterIsCurrent(pair)) return null;
+  const { year, month: monthNo } = calendar.getMonth();
+  const first = `${year}-${pad2(monthNo)}-01`;
+  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
+  // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
+  // сервере = сутки UTC (469d8d69), и запись у локальной полуночи первого/1-го
+  // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
+  // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
+  // плоские границы вместе сервер отвергает.
+  return {
+    pair,
+    first,
+    last,
+    definition: chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last)),
+  };
+}
+
+/**
  * Счётчики записей по дням ОТОБРАЖАЕМОГО месяца (0.10.1, элемент 55b07702):
  * отдельный запрос по границам месяца с текущими критериями, БЕЗ периода —
  * поэтому счётчик виден и на выделенной, и на невыделенной дате. Числа дней
  * считаются тем же разбором длительности записи, что и лента (`rowDays`).
+ *
+ * Пара и отбор — из {@link CalendarCountsSnapshot}: смена пары после любого
+ * `await` отменяет запрос (чужие типы/период в новой сети не применяются),
+ * ошибка текущей пары показывается штатной диагностикой отбора, а не тишиной.
  */
-async function refreshCalendarCounts(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null || calendar === null) return;
-  const { year, month: monthNo } = calendar.getMonth();
-  const first = `${year}-${pad2(monthNo)}-01`;
-  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
+async function refreshCalendarCounts(snapshot: CalendarCountsSnapshot | null): Promise<void> {
+  if (snapshot === null || calendar === null) return;
+  const { pair, definition, first, last } = snapshot;
+  if (!isCurrentScreenPair(pair)) return;
   const tally = new Map<string, number>();
   try {
-    // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
-    // сервере = сутки UTC (469d8d69) и запись у локальной полуночи первого/1-го
-    // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
-    // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
-    // плоские границы вместе сервер отвергает.
-    const def = chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last));
     let offset = 0;
     for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
-      const res = await etn.chronicle.query(networkId, {
-        ...def,
+      const res = await etn.chronicle.query(pair.networkId, {
+        ...definition,
         limit: CHRONICLE_QUERY_MAX_LIMIT,
         offset,
       });
+      // Пара сменилась, пока шла страница: её строки принадлежат прежнему
+      // отбору и не считаются (ошибка 58c55bb9).
+      if (!isCurrentScreenPair(pair)) return;
       for (const row of res.rows) {
         for (const day of rowDays(row, first, last)) tally.set(day, (tally.get(day) ?? 0) + 1);
       }
       offset += res.rows.length;
       if (res.rows.length === 0 || offset >= res.total) break;
     }
-  } catch {
-    return; // сеть недоступна — оставляем прежние счётчики
+  } catch (err) {
+    // Сбой текущей пары не глотаем: красная диагностика ядра — в строки
+    // редактора (штатный канал, как у запроса ленты). Ошибка прежней пары к
+    // новой не относится — молча выходим.
+    if (!isCurrentScreenPair(pair)) return;
+    const issues = filterIssuesFromQueryError(err);
+    if (issues.length > 0) {
+      setFilterServerIssues(issues);
+    } else {
+      notice(`${t('diary.countsFailed', [errText(err)])}`, 'error');
+    }
+    return; // прежние счётчики остаются на месте
   }
+  if (!isCurrentScreenPair(pair)) return;
   dayCounts.clear();
   for (const [day, count] of tally) dayCounts.set(day, count);
   const period = chroniclePeriod();
