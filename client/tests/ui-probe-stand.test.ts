@@ -116,6 +116,26 @@ test('parseArgs: --delay-seed-ms (простой и с ошибкой)', () => {
   assert.throws(() => parseArgs(['--delay-seed-ms']), /требует значения/);
 });
 
+test('parseArgs: --delay-seed-path (пусто по умолчанию, значение, требует --delay-seed-ms)', () => {
+  assert.equal(parseArgs([]).delaySeedPath, '');
+  assert.equal(
+    parseArgs(['--delay-seed-ms', '3000', '--delay-seed-path', '/thoughts/resolve']).delaySeedPath,
+    '/thoughts/resolve',
+  );
+  assert.throws(() => parseArgs(['--delay-seed-path']), /требует значения/);
+});
+
+test('needsDelay: pathFilter сужает задержку до конкретного ожидания', () => {
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const resolve = `/api/v1/networks/${id}/thoughts/resolve`;
+  const focus = `/api/v1/networks/${id}/thoughts/x/focus`;
+  assert.equal(needsDelay(resolve, id, '/thoughts/resolve'), true);
+  assert.equal(needsDelay(focus, id, '/thoughts/resolve'), false);
+  // Без фильтра задерживается вся медленная сеть, как раньше.
+  assert.equal(needsDelay(focus, id), true);
+  assert.equal(needsDelay(focus, id, ''), true);
+});
+
 test('needsDelay: медленная сеть — только по сегменту /<networkId>/', () => {
   const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   assert.equal(needsDelay(`/api/v1/networks/${id}/thoughts`, id), true);

@@ -4,8 +4,12 @@
  * чистая функция отбора задерживаемых запросов.
  */
 
-/** Задерживать ли запрос этой сети (сегмент `<networkId>` в пути). */
-export declare function needsDelay(url: string | undefined, networkId: string | undefined): boolean;
+/** Задерживать ли запрос этой сети (сегмент `<networkId>` в пути + pathFilter). */
+export declare function needsDelay(
+  url: string | undefined,
+  networkId: string | undefined,
+  pathFilter?: string,
+): boolean;
 
 /** Опции запуска прокси задержки. */
 export interface DelayProxyOptions {
@@ -15,6 +19,8 @@ export interface DelayProxyOptions {
   networkId: string;
   /** Задержка ответа, мс (по умолчанию 3000). */
   delayMs?: number;
+  /** Задерживать только пути, содержащие подстроку ('' — все пути сети). */
+  pathFilter?: string;
   /** Журнал запуска/остановки (по умолчанию тишина). */
   log?: (line: string) => void;
 }

@@ -17,11 +17,15 @@ import net from 'node:net';
 /**
  * Задерживать ли запрос: путь содержит сегмент `/<networkId>/` или ЗАКАНЧИВАЕТСЯ
  * этим сегментом (`/networks/<id>` — само открытие сети, `/networks/<id>?…`).
- * `networkId` пустой/не задан — не задерживать ничего.
+ * `networkId` пустой/не задан — не задерживать ничего. `pathFilter` сужает
+ * задержку до запросов, чей путь содержит подстроку (например,
+ * `/thoughts/resolve`): так окно гонки создаётся в конкретном ожидании рендера,
+ * а не во всей цепочке открытия сети.
  */
-export function needsDelay(url, networkId) {
+export function needsDelay(url, networkId, pathFilter = '') {
   if (typeof url !== 'string' || url === '') return false;
   if (typeof networkId !== 'string' || networkId === '') return false;
+  if (typeof pathFilter === 'string' && pathFilter !== '' && !url.includes(pathFilter)) return false;
   const marker = `/${networkId}`;
   const at = url.indexOf(marker);
   if (at < 0) return false;
@@ -34,10 +38,16 @@ export function needsDelay(url, networkId) {
 /**
  * Поднять прокси на свободном порту 127.0.0.1.
  *
- * @param {{targetPort:number, networkId:string, delayMs?:number, log?:(line:string)=>void}} opts
+ * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string, log?:(line:string)=>void}} opts
  * @returns {Promise<{port:number, close:()=>Promise<void>}>}
  */
-export async function startDelayProxy({ targetPort, networkId, delayMs = 3000, log = () => undefined }) {
+export async function startDelayProxy({
+  targetPort,
+  networkId,
+  delayMs = 3000,
+  pathFilter = '',
+  log = () => undefined,
+}) {
   const forwardHttp = (req, res) => {
     const upstream = http.request(
       {
@@ -60,7 +70,7 @@ export async function startDelayProxy({ targetPort, networkId, delayMs = 3000, l
   };
 
   const server = http.createServer((req, res) => {
-    if (needsDelay(req.url, networkId)) {
+    if (needsDelay(req.url, networkId, pathFilter)) {
       log(`delay ${delayMs}ms ${req.method} ${req.url}`);
       setTimeout(() => forwardHttp(req, res), delayMs);
       return;
@@ -93,7 +103,9 @@ export async function startDelayProxy({ targetPort, networkId, delayMs = 3000, l
   });
   const address = server.address();
   const port = typeof address === 'object' && address !== null ? address.port : 0;
-  log(`listening ${port} -> ${targetPort}, delay ${delayMs}ms for /${networkId}/`);
+  log(`listening ${port} -> ${targetPort}, delay ${delayMs}ms for /${networkId}/${
+    pathFilter === '' ? '' : ` (path ${pathFilter})`
+  }`);
   return {
     port,
     close: () =>

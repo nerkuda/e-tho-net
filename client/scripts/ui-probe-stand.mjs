@@ -69,6 +69,12 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          засеянной сети идут с задержкой <ms> (проверка гонки
                          «поздний ответ openNetwork», ошибка 58c55bb9). Клиент
                          подключается через прокси, шаги api — напрямую.
+      --delay-seed-path <s>
+                         Сузить задержку до запросов, чей путь содержит <s>
+                         (например, thoughts/resolve — без ведущего слеша,
+                         иначе Git Bash подменит его путём к своей установке):
+                         окно гонки создаётся в конкретном ожидании рендера
+                         (ошибка ff5efa1a). Требует --delay-seed-ms.
       --keep             Не удалять каталог стенда после прогона сценария.
   -h, --help             Эта справка.
 
@@ -94,6 +100,7 @@ export function parseArgs(argv) {
     seedTitle: 'Проба стенда',
     seedComment: 'стартовый текст',
     delaySeedMs: 0,
+    delaySeedPath: '',
     keep: false,
     help: false,
   };
@@ -173,6 +180,10 @@ export function parseArgs(argv) {
         break;
       case '--delay-seed-ms':
         opts.delaySeedMs = ms(need(argv[i + 1], arg), arg);
+        i += 1;
+        break;
+      case '--delay-seed-path':
+        opts.delaySeedPath = need(argv[i + 1], arg);
         i += 1;
         break;
       case '--keep':
@@ -531,12 +542,16 @@ async function main(argv) {
         targetPort: serverPort,
         networkId: seed.networkId,
         delayMs: opts.delaySeedMs,
+        pathFilter: opts.delaySeedPath,
         log: (line) => process.stdout.write(`[delay-proxy] ${line}\n`),
       });
       clientRoot = `http://127.0.0.1:${delayProxy.port}`;
       process.stdout.write(
-        `ui-probe-stand: прокси задержки ${opts.delaySeedMs} мс для сети ${seed.networkId}: ${clientRoot}\n`,
+        `ui-probe-stand: прокси задержки ${opts.delaySeedMs} мс для сети ${seed.networkId}` +
+          `${opts.delaySeedPath === '' ? '' : ` (путь ${opts.delaySeedPath})`}: ${clientRoot}\n`,
       );
+    } else if (opts.delaySeedPath !== '') {
+      throw new Error('--delay-seed-path требует --delay-seed-ms');
     }
 
     // --- 3б. Фикстура сценария (--scenario-seed) ---------------------------

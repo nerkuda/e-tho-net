@@ -1,0 +1,115 @@
+{
+  "name": "ff5efa1a-focus-strip-network-switch",
+  "description": "Официальный GUI-сценарий ошибки ff5efa1a: полоса отборов фокуса при смене сети не должна запрашивать effective views мысли прежней сети. Гонка детерминирована прокси стенда: задерживается только POST /thoughts/resolve сети A (окно рендера между публикацией фокуса A и renderStrip), вкладка B уже заведена заранее и кликается внутри окна. До фикса рендер полосы уходит в GET /networks/<B>/thoughts/<мысль A>/views?include_effective=true → 404. Красный гейт — serverLog: до фикса есть 404 на views, после — views 200 и 404 нет. Полоса B после переключения корректна: раскрыта, отборов чужой сети нет.",
+  "timeout": 300000,
+  "serverLog": {
+    "present": [
+      "\"url\":\"[^\"]*/thoughts/[^\"]+/views\\?include_effective=true\",\"status\":200",
+      "\"url\":\"[^\"]*/thoughts/resolve\",\"status\":200"
+    ],
+    "absent": ["\"url\":\"[^\"]*/thoughts/[^\"]+/views\\?include_effective=true\",\"status\":404"]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "prepare-network-b",
+      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B ff5efa1a strip'); window.__netB = n.id; const tab = await window.etn.tabs.open(window.__netB); window.__tabB = tab.tab_id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "wait-inside-render-window",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 1200)); return document.querySelectorAll('.canvas-filter-strip').length === 1; })()",
+      "expect": true
+    },
+    {
+      "name": "switch-to-b-inside-window",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B ff5efa1a strip')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B ff5efa1a strip'))"
+    },
+    {
+      "name": "strip-b-clean",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 100; i += 1) { const s = document.querySelector('.canvas-filter-strip'); if (s !== null && !s.classList.contains('hidden')) { const views = s.querySelectorAll('[data-view-id]').length; const children = [...s.querySelectorAll('.canvas-filter-strip-btn')].some((b) => (b.textContent || '') === 'Потомки'); if (views === 0 && children) return true; } await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-back",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "strip-a-back-visible",
+      "timeout": 30000,
+      "waitFor": "(() => { const s = document.querySelector('.canvas-filter-strip'); return s !== null && !s.classList.contains('hidden'); })()"
+    },
+    {
+      "name": "switch-to-b-final",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B ff5efa1a strip')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-final",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B ff5efa1a strip'))"
+    },
+    {
+      "name": "strip-b-final-clean",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 100; i += 1) { const s = document.querySelector('.canvas-filter-strip'); if (s !== null && !s.classList.contains('hidden')) { const views = s.querySelectorAll('[data-view-id]').length; const children = [...s.querySelectorAll('.canvas-filter-strip-btn')].some((b) => (b.textContent || '') === 'Потомки'); if (views === 0 && children) return true; } await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "settle",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 2500)); return true; })()",
+      "expect": true
+    }
+  ]
+}

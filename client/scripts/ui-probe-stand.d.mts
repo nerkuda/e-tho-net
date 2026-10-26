@@ -24,6 +24,8 @@ export interface StandOptions {
   seedComment: string;
   /** Задержка HTTP-ответов засеянной сети, мс (0 — прокси не поднимается). */
   delaySeedMs: number;
+  /** Сузить задержку до путей, содержащих подстроку ('' — вся сеть). */
+  delaySeedPath: string;
   keep: boolean;
   help: boolean;
 }
