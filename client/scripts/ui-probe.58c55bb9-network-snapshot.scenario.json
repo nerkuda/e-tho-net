@@ -1,0 +1,199 @@
+{
+  "name": "58c55bb9-network-snapshot",
+  "description": "Ошибка 58c55bb9: снимок отбора «Структур» принадлежит паре «сеть + вкладка». Сценарий применяет в сети A отбор по типу мысли, заводит вторую сеть B, возвращается на A и переключается на вкладку B: до фикса клиент отправлял отбор сети A в сеть B и показывал «Ошибка отбора» (422 «Тип … удалён из сети»), после — экран B переинициализирован, панель пуста, чужой отбор в B не уходит. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.58c55bb9-network-snapshot.scenario.json --out .tmp/58c55bb9/gui",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 40000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
+    {
+      "name": "create-network-b",
+      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B 58c55bb9'); window.__netB = n.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9'))"
+    },
+    {
+      "name": "open-network-b-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B 58c55bb9')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9'))"
+    },
+    {
+      "name": "create-type-a",
+      "probe": "(async () => { const t = await window.etn.types.createThoughtType('{{networkId}}', { name: 'Тип 58c55bb9' }); window.__typeA = t.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
+    {
+      "name": "open-structures-a",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "structures-editor-a",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.st-filter .ft-add-condition') !== null"
+    },
+    {
+      "name": "add-condition",
+      "eval": "(() => { const b = document.querySelector('.st-filter .ft-add-condition'); if (b === null) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "condition-row-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 1"
+    },
+    {
+      "name": "open-what",
+      "eval": "(() => { const b = document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if (b === undefined || b === null) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "type-operand-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') !== null"
+    },
+    {
+      "name": "pick-type-operand",
+      "eval": "(() => { const item = document.querySelector('.ft-choice__item[data-key=\"type\"]'); if (item === null) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "type-value-field-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .ft-row__value .entity-combo-input, .st-filter .ft-row__value .entity-chip-input') !== null"
+    },
+    {
+      "name": "open-type-values",
+      "eval": "(() => { const caret = document.querySelector('.st-filter .ft-row__value .entity-combo-caret'); if (caret !== null) { caret.click(); return 'ok'; } const input = document.querySelector('.st-filter .ft-row__value .entity-combo-input, .st-filter .ft-row__value .entity-chip-input'); if (input === null) return 'no-input'; input.focus(); input.click(); return 'ok'; })()"
+    },
+    {
+      "name": "type-options-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.type-combo-item:not(.type-combo-create)') !== null"
+    },
+    {
+      "name": "pick-custom-type",
+      "probe": "(() => { const row = [...document.querySelectorAll('.type-combo-item:not(.type-combo-create)')].find((e) => (e.textContent || '').includes('Тип 58c55bb9')); if (row === undefined) return 'no-row'; row.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "value-chip-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row__value .prop-ref-cloud, .st-filter .ft-row__value .cloud').length > 0"
+    },
+    {
+      "name": "close-dropdown",
+      "key": "Escape"
+    },
+    {
+      "name": "apply-filter-a",
+      "eval": "(() => { const b = document.querySelector('.st-filter .ff-apply'); if (b === null) return 'no-apply'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a-snapshot-persisted",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 60; i += 1) { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); if (t !== undefined && typeof t.structures_state === 'string' && t.structures_state.includes('\"type\"')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "switch-to-b-first",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-again",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9'))"
+    },
+    {
+      "name": "back-to-tab-a-second",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-second",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "switch-to-b-final",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "foreign-filter-error-absent",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 1500)); return document.body.textContent.includes('Ошибка отбора'); })()",
+      "expect": false
+    },
+    {
+      "name": "open-structures-b",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b-panel-reset",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 60; i += 1) { const rows = document.querySelectorAll('.st-filter .ft-row').length; if (rows === 0 && !document.body.textContent.includes('Ошибка отбора')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "b-tab-snapshot-null",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === window.__netB); return t === undefined ? 'no-tab' : t.structures_state === null; })()",
+      "expect": true
+    }
+  ]
+}
