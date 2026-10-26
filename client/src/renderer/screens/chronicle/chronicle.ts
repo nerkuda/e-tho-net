@@ -149,6 +149,7 @@ import {
   preloadFilterRegistry,
   readFilterDefinition,
   registryWithSides,
+  resetFilterState,
   setChroniclePeriod,
   setFilterServerIssues,
   setFilterState,
@@ -156,6 +157,12 @@ import {
   unmountChronicleFilterPanel,
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
+import {
+  isCurrentScreenPair,
+  readTabScreenState,
+  tabBelongsToNetwork,
+  type ScreenPair,
+} from '../tabs/tab-state.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
 import {
@@ -454,13 +461,18 @@ function setDayRecordsCollapsed(day: string, collapsed: boolean): void {
 // переход в `connected` после обрыва связи) повторяет чтение и ПЕРЕРАЗБИРАЕТ
 // снимок.
 
-/** Сырой снимок отбора, не разобранный из-за отказа чтения реестра. */
-let pendingFilterSnapshot: string | null = null;
 /**
- * Подпись состояния панели, разобранного БЕЗ реестра: если пользователь успел
- * поправить отбор, переразбор снимка перетёр бы его правку — ожидание снимается.
+ * Сырой снимок отбора, не разобранный из-за отказа чтения реестра. Пара
+ * «сеть + вкладка» — часть снимка: отложенный путь применяется только там, где
+ * снимок снят (ошибка 58c55bb9).
  */
-let pendingFilterSnapshotSignature: string | null = null;
+interface PendingFilterSnapshot {
+  raw: string;
+  pair: ScreenPair;
+  /** Подпись панели, разобранной БЕЗ реестра: правка пользователя её меняет. */
+  signature: string;
+}
+let pendingFilterSnapshot: PendingFilterSnapshot | null = null;
 /** Сторож гонки: повтор уже идёт (тики store чаще, чем чтение реестра). */
 let filterSnapshotRetryInFlight = false;
 
@@ -481,17 +493,18 @@ function filterStateSignature(): string {
  * нормализация wire-определения тоже компилирует условия свойств под-выборки
  * целей и без реестра их выбрасывает, поэтому повтор разбирает снимок заново.
  */
-async function loadFilterSnapshot(raw: string): Promise<void> {
+async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> {
   pendingFilterSnapshot = null;
-  pendingFilterSnapshotSignature = null;
   const ok = await preloadFilterRegistry();
+  // Пара сменилась, пока читали реестр: снимок принадлежит прежней сети/вкладке
+  // и в текущую применяться не должен (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
   const parsed = parseChronicleState(raw, registryWithSides());
   setFilterState(readFilterDefinition(parsed.filter));
   setSavedFilterId(parsed.savedFilterId);
   if (parsed.month !== null) month = parsed.month;
   if (ok) return;
-  pendingFilterSnapshot = raw;
-  pendingFilterSnapshotSignature = filterStateSignature();
+  pendingFilterSnapshot = { raw, pair, signature: filterStateSignature() };
 }
 
 /**
@@ -501,33 +514,42 @@ async function loadFilterSnapshot(raw: string): Promise<void> {
  * следующего тика store (подпись каталога панели при отказе тоже сброшена).
  */
 async function retryPendingFilterSnapshot(): Promise<void> {
-  const raw = pendingFilterSnapshot;
-  if (raw === null || filterSnapshotRetryInFlight) return;
-  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
-  if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+  const pending = pendingFilterSnapshot;
+  if (pending === null || filterSnapshotRetryInFlight) return;
+  // Экран уже в другой паре «сеть + вкладка» — ожидание недействительно
+  // (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pending.pair)) {
     pendingFilterSnapshot = null;
-    pendingFilterSnapshotSignature = null;
+    return;
+  }
+  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
+  if (pending.signature !== filterStateSignature()) {
+    pendingFilterSnapshot = null;
     return;
   }
   filterSnapshotRetryInFlight = true;
   try {
     const ok = await preloadFilterRegistry();
     // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
-    // чтения (сеть/вкладка) — переразбирать нечего.
-    if (!ok || pendingFilterSnapshot !== raw) return;
+    // чтения — переразбирать нечего.
+    if (!ok || pendingFilterSnapshot !== pending) return;
+    // Пара сменилась, ПОКА шло чтение реестра: снимок прежней пары к текущей
+    // не применяется (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pending.pair)) {
+      pendingFilterSnapshot = null;
+      return;
+    }
     // Пользователь правил отбор, ПОКА шло чтение реестра: его правка приоритетна
     // (ошибка b177ae40, та же гонка, что f76a3ef9 в «Структурах»). Подпись
     // сверена и на входе, но между ней и чтением прошёл IPC-запрос: без
     // повторной сверки снимок перетёр бы правку.
-    if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+    if (pending.signature !== filterStateSignature()) {
       pendingFilterSnapshot = null;
-      pendingFilterSnapshotSignature = null;
       return;
     }
     pendingFilterSnapshot = null;
-    pendingFilterSnapshotSignature = null;
     const next = readFilterDefinition(
-      parseChronicleState(raw, registryWithSides()).filter,
+      parseChronicleState(pending.raw, registryWithSides()).filter,
     );
     // Переразбор без изменений (снимок новой модели реестра не требует) —
     // лишний сетевой перезапрос ленты не гоним.
@@ -566,39 +588,47 @@ export async function ensureChronicleInitialised(): Promise<void> {
   homeNetworkId = null;
   homePromise = null;
   // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
-  // снимается вместе с остальным состоянием (ошибка ad063c2f).
+  // снимается вместе с остальным состоянием. Панель — модульный синглтон,
+  // поэтому её отбор сбрасывается ДО чтения нового снимка (ошибка 58c55bb9).
   pendingFilterSnapshot = null;
-  pendingFilterSnapshotSignature = null;
+  resetFilterState();
+  // Пара этого запуска: любой await ниже может пережить смену сети/вкладки.
+  const pair: ScreenPair = { networkId, tabId };
 
   try {
-    let raw: string | null = null;
-    if (tabId !== null) {
-      const tab = store.state.tabs.find((tb) => tb.tab_id === tabId);
-      raw = tab?.chronicle_state ?? null;
-    }
+    // Снимок вкладки ЧУЖОЙ сети не применяется (ошибка 58c55bb9).
+    let raw = readTabScreenState(networkId, tabId, 'chronicle_state');
     if (raw === null) {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
+      if (!isCurrentScreenPair(pair)) return;
     }
     if (raw !== null && raw !== '') {
       // Реестр свойств нужен конвертеру определения (условия под-выборки целей
       // и свойств) — прежний плоский снимок иначе терял бы часть условий.
       // Отказ чтения не теряется: снимок остаётся в ожидании переразбора.
-      await loadFilterSnapshot(raw);
+      await loadFilterSnapshot(raw, pair);
+      if (!isCurrentScreenPair(pair)) return;
     }
   } catch {
     // Fall back to the empty filter.
   }
   await getHome().catch(() => undefined);
+  if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
   await loadCollapsedRecords();
+  if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
 }
 
-/** Persists the current filter + month to L4 (per-tab). */
+/** Persists the current filter + month to L4 (per-tab). Запись адресуется
+ *  паре «сеть + вкладка»: снимок экрана текущей сети не ложится в строку
+ *  вкладки чужой сети (ошибка 58c55bb9). */
 function persistState(): void {
   const tabId = store.state.activeTabId;
-  if (tabId === null) return;
+  const networkId = store.state.networkId;
+  if (tabId === null || networkId === null) return;
+  if (!tabBelongsToNetwork(networkId, tabId)) return;
   void etn.tabs
     .updateState(tabId, {
       chronicle_state: JSON.stringify({
@@ -827,6 +857,11 @@ async function applyFilter(): Promise<void> {
 async function reload(preserveDepth = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || feedList === null) return;
+  // Ответ адресуется паре на старте: после смены сети/вкладки запись ленты
+  // перетёрла бы состояние новой пары (ошибка 58c55bb9). Запрос ушёл в СВОЮ
+  // сеть, поэтому 422 не даёт, но строки чужой сети до перезапроса
+  // показывались бы как лента текущей.
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
   // Отбор — часть ключа запроса слоя: смена критериев/периода переносит снимок
   // на новый ключ (инвалидации роутера адресуют актуальный ключ).
   retargetChronicleFeed();
@@ -847,6 +882,7 @@ async function reload(preserveDepth = false): Promise<void> {
         }),
     );
     if (seq !== querySeq) return;
+    if (!isCurrentScreenPair(pair)) return;
     rows = result.rows;
     total = result.total;
     pendingReconcile = false;
@@ -857,6 +893,9 @@ async function reload(preserveDepth = false): Promise<void> {
     publishChronicleSnapshot();
   } catch (err) {
     if (seq !== querySeq) return;
+    // Ошибка запроса прежней пары не относится к текущей сети/вкладке
+    // (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
     renderStatus('error', err);
@@ -878,6 +917,8 @@ async function reloadKeepingDepth(): Promise<void> {
 async function loadMore(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || loadingMore || rows.length >= total) return;
+  // Догруженная страница принадлежит паре на старте (ошибка 58c55bb9).
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
   // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
   // страницу заново (данные важнее экономии запроса); прокрутку держит renderFeed.
   // Глубину сохраняем — иначе перезапрос усекает ленту до одной страницы и
@@ -895,6 +936,9 @@ async function loadMore(): Promise<void> {
       offset: rows.length,
     });
     if (seq !== querySeq) return;
+    // Пара сменилась, пока шло чтение: страница прежней пары в ленту не
+    // дописывается (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     rows = [...rows, ...result.rows];
     total = result.total;
     // Дозагрузка «+50» дописывает страницу — прокрутка не должна прыгать вверх.

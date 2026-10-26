@@ -88,11 +88,18 @@ import {
   mountFilterPanel,
   parseFilterState,
   preloadFilterRegistry,
+  resetFilterState,
   setFilterServerIssues,
   setFilterState,
   unmountFilterPanel,
   type FilterState,
 } from './filter-panel.js';
+import {
+  isCurrentScreenPair,
+  readTabScreenState,
+  tabBelongsToNetwork,
+  type ScreenPair,
+} from '../tabs/tab-state.js';
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 
 // ---------------------------------------------------------------------------
@@ -238,6 +245,9 @@ export async function ensureStructuresInitialised(): Promise<void> {
   const key = `${networkId}:${tabId ?? ''}`;
   if (networkIdSeen === key) return;
   networkIdSeen = key;
+  // Пара принадлежит этому запуску: любой await ниже может пережить смену
+  // сети/вкладки (окно openNetwork), и тогда его результат — устаревший.
+  const pair: ScreenPair = { networkId, tabId };
 
   // Новый снимок грузится целиком — отложенный полный путь больше не нужен.
   fullRefreshPending = false;
@@ -255,25 +265,31 @@ export async function ensureStructuresInitialised(): Promise<void> {
   resultPager.reset();
   resetStructuresCursor();
   // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
-  // снимается вместе с остальным состоянием (ошибка cdeb62f1).
+  // снимается вместе с остальным состоянием. САМА панель — модульный синглтон
+  // и переживает перемонтирование, поэтому её отбор сбрасывается ДО чтения
+  // нового снимка: иначе отбор прежней сети ушёл бы запросом в новую
+  // (ошибка 58c55bb9).
   pendingFilterSnapshot = null;
-  pendingFilterSnapshotSignature = null;
+  resetFilterState();
 
   // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
   // the active tab has no entry (migration / fresh tab).
   try {
-    let raw: string | null = null;
-    if (tabId !== null) {
-      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
-      raw = tab?.structures_state ?? null;
-    }
+    // Снимок вкладки ЧУЖОЙ сети не применяется: сеть вкладки — часть адреса
+    // снимка (ошибка 58c55bb9). Ошибка «Тип … удалён из сети» прилетала ровно
+    // из окна, где сеть уже новая, а активна ещё старая вкладка.
+    let raw = readTabScreenState(networkId, tabId, 'structures_state');
     if (raw === null) {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
+      // Пока читали L4, пару могли переключить — экран инициализирует уже
+      // другой запуск, этот результат применять нельзя.
+      if (!isCurrentScreenPair(pair)) return;
     }
     if (raw !== null && raw !== '') {
       // Реестр свойств сети нужен конвертеру определения: прежний плоский
       // снимок несёт условия по свойствам, и без реестра они бы выпали.
-      await loadFilterSnapshot(raw);
+      await loadFilterSnapshot(raw, pair);
+      if (!isCurrentScreenPair(pair)) return;
     }
     // Миграционное значение прежней ширины панели (`structures_state`) —
     // каркас читает его геттером, поэтому переприменяем состояние после
@@ -282,6 +298,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter (HOME).
   }
+  if (!isCurrentScreenPair(pair)) return;
   await applyQuery(true);
 }
 
@@ -296,13 +313,19 @@ export async function ensureStructuresInitialised(): Promise<void> {
 // оставляет снимок в ожидании, а штатный тик store (в т.ч. переход в
 // `connected` после обрыва связи) повторяет чтение и ПЕРЕРАЗБИРАЕТ снимок.
 
-/** Снимок отбора, не разобранный из-за отказа чтения реестра свойств. */
-let pendingFilterSnapshot: string | null = null;
 /**
- * Подпись состояния панели, разобранного БЕЗ реестра: если пользователь успел
- * поправить отбор, переразбор снимка перетёр бы его правку — ожидание снимается.
+ * Снимок отбора, не разобранный из-за отказа чтения реестра свойств. Пара
+ * «сеть + вкладка» — часть снимка: отложенный путь обязан применяться только
+ * там, где снимок снят (ошибка 58c55bb9), иначе отбор покинутой сети уходит
+ * запросом в текущую.
  */
-let pendingFilterSnapshotSignature: string | null = null;
+interface PendingFilterSnapshot {
+  raw: string;
+  pair: ScreenPair;
+  /** Подпись панели, разобранной БЕЗ реестра: правка пользователя её меняет. */
+  signature: string;
+}
+let pendingFilterSnapshot: PendingFilterSnapshot | null = null;
 /** Сторож гонки: повтор уже идёт (тики store чаще, чем чтение реестра). */
 let filterSnapshotRetryInFlight = false;
 
@@ -321,14 +344,15 @@ function signatureOfFilterState(state: Pick<FilterState, 'tree' | 'sortKeys'>): 
  * собирается из того, что есть (видимый набор не теряется целиком), а снимок
  * остаётся в ожидании переразбора на следующем тике store.
  */
-async function loadFilterSnapshot(raw: string): Promise<void> {
+async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> {
   pendingFilterSnapshot = null;
-  pendingFilterSnapshotSignature = null;
   const ok = await preloadFilterRegistry();
+  // Пара сменилась, пока читали реестр: снимок принадлежит прежней сети/вкладке
+  // и в текущую применяться не должен (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
   setFilterState(parseFilterState(raw));
   if (ok) return;
-  pendingFilterSnapshot = raw;
-  pendingFilterSnapshotSignature = filterStateSignature();
+  pendingFilterSnapshot = { raw, pair, signature: filterStateSignature() };
 }
 
 /**
@@ -336,33 +360,46 @@ async function loadFilterSnapshot(raw: string): Promise<void> {
  * успехе ПЕРЕРАЗБИРАЕТ снимок — дерево условий получает свойства, применение
  * отбора перезапрашивает снимок страницы. Отказ оставляет ожидание до
  * следующего тика store (подпись каталога панели при отказе тоже сброшена).
+ *
+ * Снимок помнит пару «сеть + вкладка» (ошибка 58c55bb9): уход из пары снимает
+ * ожидание, даже если повтор уже в полёте — иначе отбор покинутой сети
+ * применился бы к текущей.
  */
 async function retryPendingFilterSnapshot(): Promise<void> {
-  const raw = pendingFilterSnapshot;
-  if (raw === null || filterSnapshotRetryInFlight) return;
-  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
-  if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+  const pending = pendingFilterSnapshot;
+  if (pending === null || filterSnapshotRetryInFlight) return;
+  // Экран уже в другой паре — ожидание недействительно; инициализация новой
+  // пары сбросит и остальное состояние.
+  if (!isCurrentScreenPair(pending.pair)) {
     pendingFilterSnapshot = null;
-    pendingFilterSnapshotSignature = null;
+    return;
+  }
+  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
+  if (pending.signature !== filterStateSignature()) {
+    pendingFilterSnapshot = null;
     return;
   }
   filterSnapshotRetryInFlight = true;
   try {
     const ok = await preloadFilterRegistry();
     // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
-    // чтения (сеть/вкладка) — переразбирать нечего.
-    if (!ok || pendingFilterSnapshot !== raw) return;
+    // чтения — переразбирать нечего.
+    if (!ok || pendingFilterSnapshot !== pending) return;
+    // Пара сменилась, ПОКА шло чтение реестра (сеть/вкладка): применять снимок
+    // прежней пары к текущей нельзя (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pending.pair)) {
+      pendingFilterSnapshot = null;
+      return;
+    }
     // Пользователь правил отбор, ПОКА шло чтение реестра: его правка приоритетна
     // (ошибка f76a3ef9). Подпись сверена и на входе, но между ней и чтением
     // прошёл IPC-запрос: без повторной сверки снимок перетёр бы правку.
-    if (pendingFilterSnapshotSignature !== filterStateSignature()) {
+    if (pending.signature !== filterStateSignature()) {
       pendingFilterSnapshot = null;
-      pendingFilterSnapshotSignature = null;
       return;
     }
     pendingFilterSnapshot = null;
-    pendingFilterSnapshotSignature = null;
-    const next = parseFilterState(raw);
+    const next = parseFilterState(pending.raw);
     // Переразбор без изменений (снимок новой модели реестра не требует) —
     // лишний сетевой перезапрос страницы не гоним.
     if (signatureOfFilterState(next) === filterStateSignature()) return;
@@ -373,10 +410,14 @@ async function retryPendingFilterSnapshot(): Promise<void> {
   }
 }
 
-/** Persists the current filter state to the L4 `structures_state` key. */
+/** Persists the current filter state to the L4 `structures_state` key.
+ *  Запись адресуется паре «сеть + вкладка»: снимок экрана текущей сети не
+ *  должен лечь в строку вкладки чужой сети (окно гонки, ошибка 58c55bb9). */
 function persistFilterState(): void {
   const tabId = store.state.activeTabId;
-  if (tabId === null) return;
+  const networkId = store.state.networkId;
+  if (tabId === null || networkId === null) return;
+  if (!tabBelongsToNetwork(networkId, tabId)) return;
   void etn.tabs
     .updateState(tabId, { structures_state: JSON.stringify(getFilterState()) })
     .catch(() => undefined);
@@ -402,6 +443,11 @@ function buildFilter(): StructureFilter {
 async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // Ответ адресуется паре на старте: после смены сети/вкладки запись кэшей
+  // экрана перетёрла бы состояние новой пары (ошибка 58c55bb9). Запрос уже
+  // ушёл в СВОЮ сеть, поэтому 422 не даёт, но строки чужой сети до перезапроса
+  // показывались бы как результат текущей.
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
   const seq = ++querySeq;
   // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
   // его fetch в main прерывается, ответа нет вовсе.
@@ -432,6 +478,9 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
       { signal: controller.signal },
     );
     if (seq !== querySeq) return; // a newer query won the race
+    // Пара сменилась, а новая инициализация ещё ждёт чтений: ответ прежней пары
+    // в кэши экрана не пишем (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     // Серверная диагностика отбора (неразрешимые токены — требование b7fdab20):
     // строки редактора подсвечиваются, красное запрещает применение (44d61c8a).
     setFilterServerIssues(filterIssuesFromQueryResult(result));
@@ -460,6 +509,10 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
     // Отменённый запрос — не ошибка: его сменил более новый (требование
     // ebed4980). Ничего не показываем.
     if (controller.signal.aborted) return;
+    // Ошибка запроса прежней пары не относится к текущей сети/вкладке
+    // (ошибка 58c55bb9): её диагностика и уведомление перетёрли бы состояние
+    // новой пары.
+    if (!isCurrentScreenPair(pair)) return;
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
     notice(`Ошибка отбора: ${errText(err)}`, 'error');

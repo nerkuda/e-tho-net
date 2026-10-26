@@ -183,6 +183,22 @@ export function getFilterState(): FilterState {
   return state;
 }
 
+/**
+ * Сброс состояния панели к дефолтному (пустой отбор). Зовётся при
+ * инициализации экрана на НОВОЙ паре «сеть + вкладка»: панель — модульный
+ * синглтон и переживает перемонтирование, поэтому без сброса отбор прежней
+ * сети попал бы в запрос новой (ошибка 58c55bb9). Сохранённый отбор и
+ * серверная диагностика прежней сети не переживают смену пары.
+ */
+export function resetFilterState(): void {
+  state = defaultState();
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
+  serverIssues = [];
+  renderPanel();
+}
+
 /** Replaces the state (L4 restore / saved filter applied) and rebuilds the DOM. */
 export function setFilterState(next: FilterState): void {
   state = { ...defaultState(), ...next };

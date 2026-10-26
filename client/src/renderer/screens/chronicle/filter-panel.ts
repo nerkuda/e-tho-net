@@ -545,6 +545,24 @@ export function getFilterState(): FilterState {
   return filter;
 }
 
+/**
+ * Сброс состояния панели к дефолтному. Зовётся при инициализации экрана на
+ * НОВОЙ паре «сеть + вкладка»: панель — модульный синглтон и переживает
+ * перемонтирование, поэтому отбор прежней сети попал бы в запрос новой
+ * (ошибка 58c55bb9). Сохранённый отбор и серверная диагностика прежней сети
+ * смену пары не переживают.
+ */
+export function resetFilterState(): void {
+  filter = defaultState();
+  keywordSlice = { keywords: '', keywordInTitle: true, keywordInSynonyms: true, keywordInComment: true };
+  savedFilterId = null;
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
+  serverIssues = [];
+  renderPanel();
+}
+
 /** Replaces the filter state and repaints the panel (L4 restore / saved filter). */
 export function setFilterState(next: FilterState): void {
   filter = { ...defaultState(), ...next, tree: next.tree ?? defaultFilterTreeGroup('and') };
