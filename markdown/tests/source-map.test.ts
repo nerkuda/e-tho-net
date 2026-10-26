@@ -1178,6 +1178,28 @@ test('таблица: скрытый HTML-комментарий в ячейке
   assertBlockClick(src, 'b', 'b', 'b');
 });
 
+test('таблица без внешних труб и в цитате: клик точен (49ebba76)', () => {
+  // Строка без внешних `|`: первый сегмент — уже ячейка, а не пустой префикс.
+  const bare = 'a &amp; b | c\n--- | ---\nd &lt; e | f';
+  assertBlockClick(bare, 'a & b', 'b', 'b');
+  assertBlockClick(bare, 'd < e', 'e', 'e');
+  // Ячейки внутри цитаты: префикс `> ` не должен приниматься за содержимое.
+  const quoted = '> | a &amp; b | c |\n> | --- | --- |\n> | d &lt; e | f |';
+  assertBlockClick(quoted, 'a & b', 'b', 'b');
+  assertBlockClick(quoted, 'd < e', 'e', 'e');
+});
+
+test('таблица: одинаковые ячейки не путаются по глобальному indexOf (49ebba76)', () => {
+  const src = '| x &amp; y |\n| --- |\n| x &amp; y |';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const starts = [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(
+    starts,
+    [src.indexOf('x &amp; y'), src.lastIndexOf('x &amp; y')],
+    html,
+  );
+});
+
 test('таблица: без sourceMap вывод не меняется (49ebba76)', () => {
   assert.equal(
     renderMarkdown('| a &amp; b | c |\n| --- | --- |'),
