@@ -147,8 +147,10 @@ let savedFiltersWired = false;
  * Запрос перехода из меню мысли «что происходило с этой сущностью»
  * (сценарий 7a1a354b, шаг 3): лента по `entity_id`. Живёт до инициализации
  * вида — иначе первое чтение сохранённого отбора перезаписало бы его.
+ * `networkId` — сеть, в которой переход запрошен: после смены сети отложенный
+ * переход прежней сети не применяется к новой (ошибка 58c55bb9).
  */
-let pendingEntity: { id: string; title: string | null } | null = null;
+let pendingEntity: { id: string; title: string | null; networkId: string } | null = null;
 let rows: ActivityRow[] = [];
 let total = 0;
 let offset = 0;
@@ -255,22 +257,27 @@ export async function ensureActivityInitialised(): Promise<void> {
       // Потеря миграции (например, автор «не заполнено») видна жёлтой
       // диагностикой футера — до первого касания отбора пользователем.
       migrationDropped = parsed.dropped;
-      // Восстановленный отбор редактор рисует сам из состояния (`refresh`);
-      // футер пересчитывает фразу-превью и диагностику.
-      filterEditor?.refresh();
-      // Миграционное значение прежнего снимка подхватывает каркас панели.
-      activityFrame?.apply();
     }
   } catch {
     // Fall back to the empty filter.
   }
+  // Панель обязана соответствовать ФАКТИЧЕСКОЙ модели, а не прошлой: при
+  // null-снимке (новая сеть/вкладка) модель уже сброшена выше, но без явной
+  // перерисовки DOM остаётся от прежней пары — «Сущность = <мысль A>» в сети B
+  // при пустом AST запроса (ошибка 58c55bb9). Перерисовка — ВНЕ ветки снимка.
+  filterEditor?.refresh();
+  // Миграционное значение прежнего снимка подхватывает каркас панели.
+  activityFrame?.apply();
   // Идентичность сохранённого отбора восстанавливается ПО id: список личных
   // отборов перечитывается, имя и baseline берутся из найденной строки. Отбор
   // исчез (удалён другим клиентом) — идентичность снимается, условия остаются.
-  await resolveSavedFilterIdentity();
+  await resolveSavedFilterIdentity(pair);
+  // Пара могла смениться, пока читался список отборов: отложенный переход и
+  // лента принадлежат паре на старте (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
   // Переход из меню мысли сильнее сохранённого снимка: лента открывается
   // отбором «Сущность = id» (сценарий 7a1a354b, шаг 3).
-  applyPendingEntityFilter();
+  applyPendingEntityFilter(pair);
   // `EnsureLoaded` triggers an async `users` fetch; rows rendered before it
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
@@ -284,9 +291,12 @@ export async function ensureActivityInitialised(): Promise<void> {
  * из найденной строки имя и baseline (маркер ●). Отбор не найден — идентичность
  * очищается, условия снимка остаются как есть.
  */
-async function resolveSavedFilterIdentity(): Promise<void> {
+async function resolveSavedFilterIdentity(pair: ScreenPair): Promise<void> {
   if (savedFilterId === null || savedFilters === null) return;
   await savedFilters.reload();
+  // Список перечитан, но пара могла смениться: имя/baseline прежней пары в
+  // новую не переносятся (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
   const row = savedFilters.rows().find((entry) => entry.id === savedFilterId);
   if (row === undefined) {
     savedFilterId = null;
@@ -307,19 +317,24 @@ async function resolveSavedFilterIdentity(): Promise<void> {
  * (lazy import active-view), а фильтр ждёт инициализации в `pendingEntity`.
  */
 export function showActivityForEntity(entityId: string, title?: string): void {
-  pendingEntity = { id: entityId, title: title ?? null };
   const networkId = store.state.networkId;
+  if (networkId === null) return;
+  pendingEntity = { id: entityId, title: title ?? null, networkId };
   const tabId = store.state.activeTabId;
-  if (host !== null && networkId !== null && networkIdSeen === `${networkId}:${tabId ?? ''}`) {
-    applyPendingEntityFilter();
+  if (host !== null && networkIdSeen === `${networkId}:${tabId ?? ''}`) {
+    applyPendingEntityFilter({ networkId, tabId });
     persistState();
     void applyQuery();
   }
 }
 
 /** Применить отложенный переход к сущности к модели отбора (до запроса). */
-function applyPendingEntityFilter(): void {
+function applyPendingEntityFilter(pair: ScreenPair): void {
   if (pendingEntity === null) return;
+  // Переход запрошен в другой сети — к этой паре он не относится (ошибка
+  // 58c55bb9); ждёт своей сети, чтобы примениться при возврате в неё.
+  if (pendingEntity.networkId !== pair.networkId) return;
+  if (!isCurrentScreenPair(pair)) return;
   const { id, title } = pendingEntity;
   pendingEntity = null;
   const ast = {
