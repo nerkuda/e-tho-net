@@ -128,10 +128,9 @@ function bodyEl(): ShimEl {
   return (globalThis as any).document.body as ShimEl;
 }
 
+/** Текст поддерева: шим агрегирует `textContent` как браузер (ошибка cca54310). */
 function textOf(node: ShimEl): string {
-  let out = node.textContent;
-  for (const child of node.children) out += textOf(child);
-  return out;
+  return node.textContent;
 }
 
 /** Монтирует редактор свойства и дожидается загрузки строк использования. */

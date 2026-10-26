@@ -149,10 +149,9 @@ function bodyEl(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
 }
 
+/** Текст поддерева: шим агрегирует `textContent` как браузер (ошибка cca54310). */
 function textOf(node: ShimElement): string {
-  let out = node.textContent;
-  for (const child of node.children) out += textOf(child);
-  return out;
+  return node.textContent;
 }
 
 function lastDialog(): ShimElement | undefined {

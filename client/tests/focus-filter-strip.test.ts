@@ -404,11 +404,9 @@ function bodyEl(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
 }
 
-/** Текст всего поддерева (ShimElement не агрегирует textContent детей). */
+/** Текст всего поддерева: шим агрегирует `textContent` как браузер. */
 function textOf(node: ShimElement): string {
-  let out = node.textContent;
-  for (const child of node.children) out += textOf(child);
-  return out;
+  return node.textContent;
 }
 
 /** Тексты сообщений зоны статус-бара (рутинные подсказки; 0.14.1). */

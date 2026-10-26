@@ -383,31 +383,46 @@ const NO_SECOND_PHRASE_BUILDER = {
 };
 
 /**
- * Точки СБОРКИ фразы — вызов любого экспорта композера, собирающего фразу
- * (строка, токены раскраски, определение отбора):
+ * Признак точки СБОРКИ фразы — вызов любого экспорта композера, собирающего
+ * фразу (строка, токены раскраски, определение отбора) либо её узел/лист:
  *   • `composeFilterPhrase` / `composeFilterPhraseFromDefinition` — текстовая фраза;
  *   • `filterPhraseTokens` / `filterPhraseTokensFromDefinition` — токены (задача 58f77990);
- *   • `filterPhraseNodeTokens` — токены узла дерева.
- * Вспомогательные экспорты композера (`filterPhraseToken`, `filterPhraseValue`,
- * `filterPhraseThoughtIds` — подписи значений и сбор id) сюда НЕ входят: их
- * зовут и виджеты значения (`lib/filter-value.ts`), это не сборка фразы.
+ *   • `filterPhraseNodeTokens` — токены узла дерева;
+ *   • `filterPhraseNode` / `filterPhraseLeaf` — текст узла/листа (экспортированные
+ *     фрагменты; ошибка cca54310: вызов `filterPhraseNode()` с постороннего
+ *     модуля оставлял сторож зелёным, хотя `filterPhraseNodeTokens()` в том же
+ *     месте краснил — «вторая сборка фразы» проходила через фрагмент).
+ * Вспомогательные экспорты сюда НЕ входят — это не сборка фразы:
+ * `filterPhraseToken`/`filterPhraseValue` (подписи значений, их зовут виджеты
+ * `lib/filter-value.ts`), `filterPhraseThoughtIds` (сбор id для догрузки имён),
+ * `filterPhraseLeafCount` (счётчик условий в под-выборке),
+ * `filterPhraseKeywordScopes`/`filterKeywordScopeLabel` (подписи областей),
+ * `truncateFilterPhrase`/`truncateFilterName` (обрезка текста).
  */
 const PHRASE_BUILDER_CALL =
-  /(?:composeFilterPhrase|filterPhraseTokens|filterPhraseNodeTokens)\w*\s*\(/;
+  /(?:composeFilterPhrase|filterPhraseTokens|filterPhraseNodeTokens|filterPhraseNode(?![A-Za-z])|filterPhraseLeaf(?![A-Za-z]))\w*\s*\(/;
 
 /**
- * Потребители композера — файлы, собирающие фразу вызовом композера
- * ({@link PHRASE_BUILDER_CALL}). Их ровно два: фабрика редактора и футер. Новое
- * место обязано звать композер, а не строить фразу само (ошибка d17a8bfd).
+ * Потребители композера в заданном корне — файлы, собирающие фразу вызовом
+ * композера ({@link PHRASE_BUILDER_CALL}); сам модуль-композер исключён (его
+ * внутренние вызовы фрагментов нарушением не считаются). В рабочем дереве их
+ * ровно два: фабрика редактора и футер. Новое место обязано звать композер, а
+ * не строить фразу само (ошибка d17a8bfd). Корень — параметр для
+ * самопроверки на фикстурах.
  */
-function phraseComposerCallers(): string[] {
+function phraseComposerCallersAt(root: string): string[] {
   const out: string[] = [];
-  for (const abs of listSourceFiles(RENDERER_ROOT)) {
-    const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
+  for (const abs of listSourceFiles(root)) {
+    const rel = path.relative(root, abs).replace(/\\/g, '/');
     if (rel === PHRASE_MODULE) continue;
     if (PHRASE_BUILDER_CALL.test(fs.readFileSync(abs, 'utf8'))) out.push(rel);
   }
   return out.sort();
+}
+
+/** Потребители композера в рабочем дереве рендерера. */
+function phraseComposerCallers(): string[] {
+  return phraseComposerCallersAt(RENDERER_ROOT);
 }
 
 /** Читает модуль общего каркаса редактора. */
@@ -664,6 +679,61 @@ describe('guard: условия отбора строятся только об�
     // (`filterPhraseTokens`/`composeFilterPhrase`), а не строить фразу само
     // (ошибка d17a8bfd, задача 58f77990).
     assert.deepEqual(phraseComposerCallers(), ['lib/filter-editor.ts', 'lib/filter-footer.ts']);
+  });
+
+  it('самопроверка: вызов фрагмента фразы с чужого модуля — точка сборки (cca54310)', () => {
+    // Фикстура: законный потребитель (зовёт композер целиком) — зелёный;
+    // вызов ЭКСПОРТА-ФРАГМЕНТА `filterPhraseNode`/`filterPhraseLeaf` с
+    // постороннего модуля — красный (попадает в список потребителей, и точное
+    // равенство выше падает). Вспомогательные экспорты (`filterPhraseValue`,
+    // `filterPhraseLeafCount`) сборкой фразы не считаются.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-phrase-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'screens', 'fake'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'lib', 'filter-phrase.ts'),
+        [
+          'export function filterPhraseLeaf(node) { return String(node); }',
+          'export function filterPhraseNode(node) { return filterPhraseLeaf(node); }',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'footer.ts'),
+        'composeFilterPhrase(state, ctx);\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'own-phrase.ts'),
+        'filterPhraseNode(node, ctx);\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'own-leaf.ts'),
+        'filterPhraseLeaf(leaf, ctx);\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'value-widget.ts'),
+        ['filterPhraseValue(leaf, ctx);', 'filterPhraseLeafCount(tree);'].join('\n'),
+        'utf8',
+      );
+      assert.deepEqual(
+        phraseComposerCallersAt(dir),
+        ['screens/fake/footer.ts', 'screens/fake/own-leaf.ts', 'screens/fake/own-phrase.ts'],
+        'законный вызов — в списке; вызовы фрагментов — тоже (для рабочего дерева это красный); ' +
+          'вспомогательные экспорты — нет',
+      );
+      // Сам композер исключён: его внутренний вызов фрагмента — не нарушение.
+      assert.equal(
+        phraseComposerCallersAt(dir).includes('lib/filter-phrase.ts'),
+        false,
+        'внутренние вызовы композера нарушением не считаются',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('правила краснеют на умышленном нарушении', () => {

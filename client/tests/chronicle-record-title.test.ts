@@ -84,9 +84,11 @@ function pressEscape(node: ShimElement): void {
   } as unknown as KeyboardEvent);
 }
 
-/** Последний текстовый узел кнопки-заголовка — её надпись (после replaceChildren). */
+/** Последний текстовый узел кнопки-заголовка — её надпись (после replaceChildren).
+ *  `childNodes` (а не `children`): в браузере `children` — только ЭЛЕМЕНТЫ,
+ *  текстовый узел надписи в него не входит. */
 function labelOf(view: ShimElement): string {
-  const last = view.children[view.children.length - 1];
+  const last = view.childNodes[view.childNodes.length - 1];
   return last?.textContent ?? '';
 }
 
@@ -238,7 +240,9 @@ describe('компонент заголовка записи: просмотр �
       placeholder: 'Заголовок',
       collapsible: false,
     });
-    assert.equal(handle.node().firstChild, null, 'индикатора-стрелки нет');
+    // Стрелки-индикатора нет. Проверяем ЭЛЕМЕНТ-ребёнка: `firstChild` в браузере
+    // — текстовый узел надписи, он есть и без стрелки (шим честен, cca54310).
+    assert.equal(handle.node().firstElementChild, null, 'индикатора-стрелки нет');
   });
 
   it('повторный beginEdit после коммита открывает поле с последним значением', async () => {
