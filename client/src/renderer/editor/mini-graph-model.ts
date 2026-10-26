@@ -527,8 +527,9 @@ export interface GraphEventLike {
  *  • `link.created` — ребро центра с мыслью (создание/перенос узла);
  *  • `link.updated` — связь из снимка панели, меняющая видимые поля;
  *  • `link.deleted` — связь из снимка (purge из корзины);
- *  • `thought.updated` — сосед сменил подпись/вид или ушёл в корзину;
- *  • `thought.deleted` — сосед удалён;
+ *  • `thought.updated` — сосед сменил подпись/вид или ушёл в корзину, либо
+ *    изменилась САМА центральная мысль (её пилюля в центре графа);
+ *  • `thought.deleted` — сосед удалён или удалена центральная мысль;
  *  • `link-type.*` / `thought-type.*` — эффективное оформление линий/пилюль.
  *
  * `property-value.set/deleted` сюда НЕ входят: значения свойств-связей — это
@@ -557,13 +558,19 @@ export function graphEventAffects(
     case 'link.deleted':
       return context.linkIds.has(String(data.id));
     case 'thought.updated': {
-      if (!context.neighbourIds.has(String(data.id))) return false;
+      // Центр графа — такая же пилюля, как соседи: его переименование/смена
+      // вида приходят тем же `thought.updated`, но в `neighbourIds` его нет
+      // (замечание 1 круга 4).
+      const id = String(data.id);
+      if (id !== context.ownerId && !context.neighbourIds.has(id)) return false;
       const changes = data.changes;
       if (typeof changes !== 'object' || changes === null) return true;
       return thoughtChangesAffectGraph(changes as Record<string, unknown>);
     }
-    case 'thought.deleted':
-      return context.neighbourIds.has(String(data.id));
+    case 'thought.deleted': {
+      const id = String(data.id);
+      return id === context.ownerId || context.neighbourIds.has(id);
+    }
     case 'link-type.updated':
     case 'link-type.deleted':
     case 'thought-type.updated':

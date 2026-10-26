@@ -254,7 +254,9 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
   it('graph-tab резолвит соседей до полных карточек (значки/цвета) для графа', () => {
     const src = readText(SRC.graphTab);
     assert.ok(
-      /etn\.thoughts\.resolve\(\s*networkId,\s*neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\b/.test(src),
+      /etn\.thoughts\.resolve\(\s*networkId,\s*\[\s*ctx\.ownerId,\s*\.\.\.neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\s*-\s*1\)/.test(
+        src,
+      ),
       'neighbours are batch-resolved to ThoughtRef before building the graph',
     );
     assert.ok(
@@ -643,6 +645,52 @@ describe('граф пересобирается при изменении сос
     assert.ok(
       /lifecycle\?\.onDispose\(\(\) => \{[\s\S]*?readMiniGraphView\(root\)/.test(graphTab),
       'closing the pane keeps the last view for the next open',
+    );
+  });
+
+  it('скрытая вкладка не держит устаревший снимок: событие помечает панель устаревшей', () => {
+    // Блокер круга 4: при `!root.isConnected` ранний выход оставлял кэш
+    // устаревшим до перезапуска. Контракт «панель либо актуальна, либо
+    // помечена устаревшей»: отсоединённая панель инвалидируется, и
+    // `displayTab` собирает её заново при возврате.
+    const graphTab = readText(SRC.graphTab);
+    assert.ok(
+      /if \(!root\.isConnected\) \{[\s\S]{0,400}?invalidateGraphTab\(\);[\s\S]{0,120}?return;/.test(
+        graphTab,
+      ),
+      'a detached pane marks itself stale instead of silently skipping the reload',
+    );
+    // Циклической инвалидации нет: disposePane снимает `current`, повторные
+    // события до вкладки уже не доходят.
+    assert.ok(
+      /lifecycle\?\.onDispose\(\(\) => \{[\s\S]{0,120}?if \(current === state\) current = null;/.test(
+        graphTab,
+      ),
+      'disposing the pane clears the current state (no repeated invalidation)',
+    );
+    // Устаревшая панель удаляется из кэша целиком — на возврате ровно одна
+    // сборка (displayTab строит отсутствующую панель).
+    assert.ok(
+      /function invalidatePanes\(ids: readonly EditorTabId\[\]\): void \{[\s\S]{0,200}?for \(const id of ids\) \{[\s\S]{0,160}?disposePane\(id\);[\s\S]{0,80}?builtPanes\.delete\(id\);/.test(
+        readText(SRC.editor),
+      ),
+      'invalidation drops the cached pane so displayTab rebuilds it once',
+    );
+  });
+
+  it('центр пересобираемого графа резолвится свежим, а не берётся из снимка редактора', () => {
+    // `ctx.thought` — снимок момента открытия редактора: после realtime-
+    // переименования из другого клиента пересборка нарисовала бы старую
+    // подпись (замечание 1 круга 4). Центр обязан идти в том же резолве.
+    const graphTab = readText(SRC.graphTab);
+    assert.ok(
+      /etn\.thoughts\.resolve\(networkId, \[\s*ctx\.ownerId,/.test(graphTab),
+      'the center is resolved in the same batch as the neighbours',
+    );
+    assert.ok(
+      /centerRef = byId\.get\(ctx\.ownerId\) \?\? centerRef;/.test(graphTab) &&
+        /thought: centerRef,/.test(graphTab),
+      'the rebuilt graph draws the fresh center card',
     );
   });
 });

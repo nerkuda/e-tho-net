@@ -631,6 +631,33 @@ describe('mini-graph-model — что требует пересборки гра
     assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: HIDDEN } }, context), false);
   });
 
+  it('центральная мысль — такая же пилюля: её правка и удаление пересобирают граф', () => {
+    // Центра нет в `neighbourIds`, но его подпись/вид рисуются на графе
+    // (замечание 1 круга 4): realtime-переименование из другого клиента
+    // обязано обновить центральную пилюлю.
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: CENTER, changes: { title: 'x' } } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'thought.updated', data: { id: CENTER, changes: { marked_for_deletion: true } } },
+        context,
+      ),
+      true,
+    );
+    // Несвязанное поле центра граф не пересобирает — как и у соседа.
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: CENTER, changes: { comment: 'x' } } }, context),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: CENTER, changes: { synonyms: ['x'] } } }, context),
+      false,
+    );
+    assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: CENTER } }, context), true);
+  });
+
   it('типы связей и мыслей меняют оформление — граф пересобирается', () => {
     for (const type of [
       'link-type.updated',

@@ -20,7 +20,12 @@ import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
 import { queryKeys } from '../lib/live/query-keys.js';
-import { registerTabContent, type EditorContext, type TabPaneLifecycle } from './editor.js';
+import {
+  invalidateGraphTab,
+  registerTabContent,
+  type EditorContext,
+  type TabPaneLifecycle,
+} from './editor.js';
 import { buildMiniGraph, readMiniGraphView, type MiniGraphView } from './mini-graph.js';
 import { graphEventAffects } from './mini-graph-model.js';
 
@@ -101,7 +106,15 @@ function buildGraphTab(ctx: EditorContext, lifecycle?: TabPaneLifecycle): HTMLEl
   };
   const view = savedView !== null && savedView.ownerId === ctx.ownerId ? savedView.view : undefined;
   state.reload = () => {
-    if (!root.isConnected) return;
+    if (!root.isConnected) {
+      // Вкладка не показана: пересобирать отсоединённую панель некому, а кэш
+      // с устаревшим снимком вернулся бы при переключении (блокер круга 4).
+      // Помечаем панель устаревшей — `displayTab` соберёт её заново один раз
+      // при возврате. Повторные события уже не дойдут: disposePane очищает
+      // `current`, а `invalidatePanes` идемпотентен.
+      invalidateGraphTab();
+      return;
+    }
     // Свежий снимок вида перед пересборкой: пользователь мог изменить зум.
     const next = readMiniGraphView(root) ?? view;
     if (next !== undefined) savedView = { ownerId: ctx.ownerId, view: next };
@@ -218,6 +231,12 @@ async function buildGraphBody(
   // карточка из id/title. Сервер отдаёт только собственные поля мысли
   // (`null`, если значение задано на типе), поэтому вид типа разрешает сам
   // мини-граф общими хелперами канваса — руками здесь ничего не достраиваем.
+  //
+  // Центр резолвится В ТОМ ЖЕ батче: `ctx.thought` — снимок момента открытия
+  // редактора, поэтому после realtime-переименования из другого клиента
+  // пересборка нарисовала бы старую подпись (замечание 1 круга 4). Лимит
+  // сервера — 100 id за вызов, центр занимает первый слот, соседи — 99.
+  let centerRef: ThoughtRef = ctx.thought;
   let graphRefs: ThoughtRef[] = neighbours.map((nb) => ({
     id: nb.id,
     title: nb.title,
@@ -236,19 +255,20 @@ async function buildGraphBody(
     font_strike: null,
   }));
   try {
-    const resolved = await etn.thoughts.resolve(
-      networkId,
-      neighbours.slice(0, RESOLVE_BATCH).map((nb) => nb.id),
-    );
+    const resolved = await etn.thoughts.resolve(networkId, [
+      ctx.ownerId,
+      ...neighbours.slice(0, RESOLVE_BATCH - 1).map((nb) => nb.id),
+    ]);
     const byId = new Map(resolved.map((r) => [r.id, r]));
     graphRefs = graphRefs.map((r) => byId.get(r.id) ?? r);
+    centerRef = byId.get(ctx.ownerId) ?? centerRef;
   } catch {
     // Оффлайн-мигание — граф рисуется с нейтральными пилюлями.
   }
 
   root.append(
     buildMiniGraph({
-      thought: ctx.thought,
+      thought: centerRef,
       neighbours: graphRefs,
       links,
       fillHeight: true,
