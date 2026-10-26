@@ -1200,6 +1200,43 @@ test('таблица: одинаковые ячейки не путаются п
   );
 });
 
+test('таблица: escaped pipe не режет ячейку — диапазоны и клик (49ebba76)', () => {
+  const src = '| a ' + BACKSLASH + '| b | c |\n| --- | --- |';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const ranges = [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
+    .map((m) => [Number(m[1]), Number(m[2])]);
+  // `\|` — не разделитель ячеек (семантика markdown-it `escapedSplit`):
+  // ячейка 1 — «a \| b» ([2, 8)), ячейка 2 — «c» ([11, 12)).
+  assert.deepEqual(ranges, [[2, 8], [11, 12]], html);
+  // Клик в первой ячейке: backslash срезается ДО inline-разбора, поэтому
+  // `b` даёт 6 при истине 7 — off-by-1 на escaped pipe (документированный предел).
+  assert.equal(clickOffset(src, 'a | b', 'b'), 6);
+  // Вторая ячейка начинается после escaped pipe — клик точен.
+  assert.equal(clickOffset(src, 'c', 'c'), 11);
+});
+
+test('таблица в элементе списка: маркер списка не становится ячейкой (49ebba76)', () => {
+  const cellRanges = (html: string): number[][] =>
+    [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
+      .map((m) => [Number(m[1]), Number(m[2])]);
+
+  const bullet = '- | a &amp; b | c |\n  | --- | --- |';
+  const bulletHtml = renderMarkdown(bullet, { sourceMap: true });
+  // Маркер `- ` пропущен (как `tShift` у markdown-it), а не стал ячейкой.
+  assert.deepEqual(cellRanges(bulletHtml), [[4, 13], [16, 17]], bulletHtml);
+  assertBlockClick(bullet, 'a & b', 'b', 'b');
+
+  const ordered = '1. | a &amp; b | c |\n   | --- | --- |';
+  const orderedHtml = renderMarkdown(ordered, { sourceMap: true });
+  assert.deepEqual(cellRanges(orderedHtml), [[5, 14], [17, 18]], orderedHtml);
+  assertBlockClick(ordered, 'a & b', 'b', 'b');
+
+  const quoted = '> - | a &amp; b | c |\n>   | --- | --- |';
+  const quotedHtml = renderMarkdown(quoted, { sourceMap: true });
+  assert.deepEqual(cellRanges(quotedHtml), [[6, 15], [18, 19]], quotedHtml);
+  assertBlockClick(quoted, 'a & b', 'b', 'b');
+});
+
 test('таблица: без sourceMap вывод не меняется (49ebba76)', () => {
   assert.equal(
     renderMarkdown('| a &amp; b | c |\n| --- | --- |'),

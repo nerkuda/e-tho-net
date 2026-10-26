@@ -85,9 +85,13 @@
  * no line map, so the row's source line (from `tr_open`'s map) is split exactly
  * like markdown-it's own table splitter, every cell gets its visible-text range,
  * and its inline token is given the absolute content start (`mdInlineBase`) —
- * the origin for construct ranges and the shift map inside the cell. A click in
- * a cell is therefore mapped against the cell, not the whole row, and escapes /
- * entities / embedded comments in a cell are compensated like in any block.
+ * the origin for construct ranges and the shift map inside the cell. The row
+ * prefix is skipped the way markdown-it's own `tShift` already skips it —
+ * blockquote markers, list markers and indentation — so a table that starts on
+ * a list item's FIRST line (`- | a | b |`) does not turn the marker into the
+ * first cell. A click in a cell is therefore mapped against the cell, not the
+ * whole row, and escapes / entities / embedded comments in a cell are
+ * compensated like in any block.
  *
  * A shift entry is recorded ONLY for a run at the map owner's own text level:
  * the rendered cursor walks nested constructs too (to stay aligned with the
@@ -227,6 +231,30 @@ function skipSpaces(src: string, i: number, end: number): number {
   return i;
 }
 
+/**
+ * Offset right after a list marker at `i` — bullet (`- ` / `* ` / `+ `) or
+ * ordered (`1. ` / `1) `) — plus the spaces that follow it, or `i` when there is
+ * no marker. Shared by the block-prefix skipper and the table-row prefix
+ * skipper: markdown-it's own `bMarks + tShift` of a row that starts on a list
+ * item's first line already points right after the marker, so the row splitter
+ * must skip it too — otherwise the marker text becomes the first "cell"
+ * (ошибка `49ebba76`).
+ */
+function skipListMarker(src: string, i: number, lineEnd: number): number {
+  const ch = src[i];
+  if ((ch === '-' || ch === '*' || ch === '+') &&
+    (src[i + 1] === ' ' || src[i + 1] === '\t')) {
+    return skipSpaces(src, i + 1, lineEnd);
+  }
+  let n = i;
+  while (n < lineEnd && src[n]! >= '0' && src[n]! <= '9') n++;
+  if (n > i && (src[n] === '.' || src[n] === ')') &&
+    (src[n + 1] === ' ' || src[n + 1] === '\t')) {
+    return skipSpaces(src, n + 1, lineEnd);
+  }
+  return i;
+}
+
 /** True when `src[i..]` starts a task-list marker (`[ ]` / `[x]` / `[X]`). */
 function isTaskMarker(src: string, i: number): number {
   if (src[i] !== '[') return 0;
@@ -274,18 +302,10 @@ function skipBlockPrefix(src: string, from: number, lineEnd: number): number {
       i = skipSpaces(src, i + 1, lineEnd);
       continue;
     }
-    // Bullet list marker.
-    if ((src[i] === '-' || src[i] === '*' || src[i] === '+') &&
-      (src[i + 1] === ' ' || src[i + 1] === '\t')) {
-      i = skipSpaces(src, i + 1, lineEnd);
-      continue;
-    }
-    // Ordered list marker `1.` / `1)`.
-    let n = i;
-    while (n < lineEnd && src[n]! >= '0' && src[n]! <= '9') n++;
-    if (n > i && (src[n] === '.' || src[n] === ')') &&
-      (src[n + 1] === ' ' || src[n + 1] === '\t')) {
-      i = skipSpaces(src, n + 1, lineEnd);
+    // Bullet / ordered list marker.
+    const list = skipListMarker(src, i, lineEnd);
+    if (list !== i) {
+      i = list;
       continue;
     }
     // No further prefix.
@@ -599,11 +619,18 @@ function setRangeAttrs(token: Token, range: SourceRange): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Skips the blockquote markers and indentation of a table row line — what
- * markdown-it's block parser leaves before the row content (`bMarks + tShift`
- * after the blockquote/list rules rewrote the line). Unlike
- * {@link skipBlockPrefix} the leading `|` is NOT consumed: the row splitter
- * treats it as an empty first segment, exactly like markdown-it does.
+ * Skips the container markup of a table row line — blockquote markers, list
+ * markers and indentation — i.e. what markdown-it's block parser leaves before
+ * the row content (`bMarks + tShift` after the blockquote/list rules rewrote the
+ * line). Unlike {@link skipBlockPrefix} the leading `|` is NOT consumed: the row
+ * splitter treats it as an empty first segment, exactly like markdown-it does.
+ *
+ * The list marker matters because a table may start on the FIRST line of a list
+ * item (`- | a | b |`): markdown-it hands the table rule the line with `tShift`
+ * already past `- `, while this skipper reads the raw source line from
+ * `tr_open.map` (ошибка `49ebba76`). A heading / task box / bare `|` is left
+ * alone: a heading cannot head a table, and `[ ]` or `#` may legitimately start
+ * a cell.
  */
 function skipRowPrefix(src: string, from: number, lineEnd: number): number {
   let i = from;
@@ -612,6 +639,11 @@ function skipRowPrefix(src: string, from: number, lineEnd: number): number {
     i = skipSpaces(src, i, lineEnd);
     if (src[i] === '>') {
       i = skipSpaces(src, i + 1, lineEnd);
+      continue;
+    }
+    const list = skipListMarker(src, i, lineEnd);
+    if (list !== i) {
+      i = list;
       continue;
     }
     if (i === before) break;
