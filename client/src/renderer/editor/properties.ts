@@ -390,7 +390,9 @@ async function excludeTypedProperty(opts: {
     );
     if (matches.length === 0) {
       // Зеркальная строка (`id: mirror:<property>`) — привязка живёт на другом
-      // типе (стороне-источнике), в цепочке владельца снимать нечего.
+      // типе (стороне-источнике), в цепочке владельца снимать нечего. Обе ветки —
+      // подсказка по устаревшему клиентскому списку `definitions`: серверного
+      // вызова ещё не было, поэтому это не сбой и не error-тост.
       const mirrored = definitions.some(
         (definition) =>
           definition.id.startsWith('mirror:') &&
@@ -401,7 +403,6 @@ async function excludeTypedProperty(opts: {
         mirrored
           ? 'Строка зеркальная: привязка свойства живёт на другом типе — исключите её там.'
           : 'Привязка свойства не найдена.',
-        mirrored ? 'info' : 'error',
       );
       return;
     }

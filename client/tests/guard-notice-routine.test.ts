@@ -7,9 +7,14 @@
  * задачи нашла нарушенной трижды: «не удалось скопировать» уезжало тостом,
  * а отказ 409 по обложке — наоборот, в статусбар.
  *
- * Мутации, которые краснят: вернуть `'error'` любому из шести рутинных
+ * Дублирование записи дневника (`copyRecord`) — не буфер, а серверная
+ * операция `comments.get` + `createMulti`: её сбой идёт error-тостом, хотя
+ * по тексту похож на рутинное копирование.
+ *
+ * Мутации, которые краснят: вернуть `'error'` любому из семи рутинных
  * вызовов; убрать `'error'` у отказа `ATTACHMENT_OWNER_IS_ICON` в карточке
- * публикации; вернуть `'warning'` отклонению несовместимого drop фильтра.
+ * публикации; вернуть `'warning'` отклонению несовместимого drop фильтра;
+ * убрать `'error'` у сбоя дублирования записи в хронике.
  */
 
 import assert from 'node:assert/strict';
@@ -49,18 +54,15 @@ describe('сторож: рутина — в статусбар, сбой и от
     );
   });
 
-  it('копирование в буфер в хронике и трансклюзии — без вида', () => {
-    const chronicle = read('screens/chronicle/chronicle.ts');
+  it('дублирование записи в хронике — error-тост (серверная операция)', () => {
     assert.match(
-      chronicle,
-      /notice\(t\('diary\.copyFailed', \[errText\(err\)\]\)\);/,
-      'отказ копирования записи дневника — в статусбар',
+      read('screens/chronicle/chronicle.ts'),
+      /notice\(t\('diary\.duplicateFailed', \[errText\(err\)\]\), 'error'\);/,
+      'сбой создания дубля записи (comments.get + createMulti) — важное сообщение',
     );
-    assert.doesNotMatch(
-      chronicle,
-      /notice\(t\('diary\.copyFailed', \[errText\(err\)\]\), 'error'\)/,
-      'рутинное копирование не должно идти error-тостом',
-    );
+  });
+
+  it('копирование блока в буфер трансклюзии — без вида', () => {
     const transclusion = read('editor/transclusion.ts');
     assert.match(
       transclusion,
