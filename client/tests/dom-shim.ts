@@ -149,7 +149,6 @@ function createLiveCollection(resolve: () => ShimElement[]): ShimCollection {
   const readMethods = new Set([
     'at',
     'concat',
-    'entries',
     'every',
     'filter',
     'find',
@@ -159,7 +158,6 @@ function createLiveCollection(resolve: () => ShimElement[]): ShimCollection {
     'includes',
     'indexOf',
     'join',
-    'keys',
     'lastIndexOf',
     'map',
     'reduce',
@@ -168,7 +166,6 @@ function createLiveCollection(resolve: () => ShimElement[]): ShimCollection {
     'some',
     'toLocaleString',
     'toString',
-    'values',
   ]);
   // Мутаторы массива браузерным коллекциям не принадлежат. Цель прокси —
   // массив (нужен для `Array.isArray` и `assert.deepEqual` существующих
@@ -184,13 +181,39 @@ function createLiveCollection(resolve: () => ShimElement[]): ShimCollection {
     'splice',
     'unshift',
   ]);
+  // Итераторы читают живой состав на КАЖДОМ шаге: итератор, сохранённый до
+  // мутации, обязан видеть актуальные узлы (в браузере `NodeList.values()`
+  // и `[Symbol.iterator]()` живые; снимок «замерзал» — замечание круга 3).
+  function* liveValues(): Generator<ShimElement> {
+    let index = 0;
+    while (index < resolve().length) {
+      yield resolve()[index]!;
+      index += 1;
+    }
+  }
+  function* liveKeys(): Generator<number> {
+    let index = 0;
+    while (index < resolve().length) {
+      yield index;
+      index += 1;
+    }
+  }
+  function* liveEntries(): Generator<[number, ShimElement]> {
+    let index = 0;
+    while (index < resolve().length) {
+      yield [index, resolve()[index]!];
+      index += 1;
+    }
+  }
   const handler: ProxyHandler<Record<string | symbol, unknown>> = {
     get(target, property) {
       if (property === 'length') return resolve().length;
       if (property === 'item') {
         return (index: number): ShimElement | null => resolve()[index] ?? null;
       }
-      if (property === Symbol.iterator) return resolve()[Symbol.iterator].bind(resolve());
+      if (property === Symbol.iterator || property === 'values') return liveValues;
+      if (property === 'keys') return liveKeys;
+      if (property === 'entries') return liveEntries;
       if (typeof property === 'string' && /^\d+$/.test(property)) {
         return resolve()[Number(property)];
       }
@@ -577,7 +600,9 @@ export class ShimElement {
     if (isPrimitive(node)) {
       throw new TypeError("Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.");
     }
-    switch (where) {
+    // Позиция в DOM сравнивается без учёта регистра: `beforeBegin`, `beforebegin`
+    // и `BEFOREBEGIN` равнозначны (круг 3 cca54310).
+    switch (String(where).toLowerCase()) {
       case 'beforebegin':
         return this.parent === null ? null : this.parent.insertBefore(node, this);
       case 'afterbegin':
@@ -628,21 +653,59 @@ export class ShimElement {
   }
 
   /** `ChildNode.replaceWith`: строки становятся текстовыми узлами, аргументов
-   *  может быть несколько; detached-узел — no-op. Возврата нет. */
+   *  может быть несколько; detached-узел — no-op. Возврата нет.
+   *
+   *  Порядок — как в спецификации DOM (круг 3 cca54310):
+   *  1) якорь `viableNextSibling` — первый следующий брат, которого НЕТ среди
+   *     аргументов (аргументы-братья при «преобразовании во фрагмент» уедут со
+   *     своих мест, и якорь по ним поплывёт);
+   *  2) аргументы по порядку снимаются со старых мест (как append в
+   *     DocumentFragment; повторный аргумент переезжает в конец);
+   *  3) если `this` ещё в родителе — штатная замена (якорь — следующий брат
+   *     ПОСЛЕ снятия аргументов), иначе pre-insert перед `viableNextSibling`. */
   replaceWith(...nodes: ShimInsertable[]): void {
     const parent = this.parent;
     if (parent === null) return;
     const index = parent.nodes.indexOf(this);
     if (index === -1) return;
-    // Якорь — следующий брат: после снятия `this` и поочерёдной вставки порядок
-    // аргументов сохраняется, а якорь не «плывёт» от сдвига индексов.
-    const next = parent.nodes[index + 1] ?? null;
-    parent.nodes.splice(index, 1);
-    this.parent = null;
-    for (const node of nodes) {
-      // Сам заменяемый узел тоже проходит через insertBefore: `el.replaceWith(el)`
-      // возвращает узел на прежнее место (в браузере — no-op).
-      parent.insertBefore(this.toNode(node), next);
+
+    // 1. Аргументы → узлы; строки становятся новыми текстовыми узлами.
+    const args = nodes.map((node) => this.toNode(node));
+
+    // 2. `viableNextSibling` — первый следующий брат не из аргументов.
+    let viableNextSibling: ShimElement | null = null;
+    for (let cursor = index + 1; cursor < parent.nodes.length; cursor += 1) {
+      const sibling = parent.nodes[cursor]!;
+      if (!args.includes(sibling)) {
+        viableNextSibling = sibling;
+        break;
+      }
+    }
+
+    // 3. «Преобразование во фрагмент»: снятие каждого узла со старого места.
+    const fragment: ShimElement[] = [];
+    for (const node of args) {
+      const duplicate = fragment.indexOf(node);
+      if (duplicate >= 0) fragment.splice(duplicate, 1);
+      this.detach(node);
+      fragment.push(node);
+    }
+
+    // 4. Штатная замена (this ещё в parent) либо pre-insert перед
+    //    viableNextSibling (this сам был аргументом и уже отвязан).
+    const stillAttached = this.parent === parent;
+    const anchor = stillAttached
+      ? (parent.nodes[parent.nodes.indexOf(this) + 1] ?? null)
+      : viableNextSibling;
+    if (stillAttached) {
+      parent.nodes.splice(parent.nodes.indexOf(this), 1);
+      this.parent = null;
+    }
+    let at = anchor === null ? parent.nodes.length : parent.nodes.indexOf(anchor);
+    for (const node of fragment) {
+      node.parent = parent;
+      parent.nodes.splice(at, 0, node);
+      at += 1;
     }
   }
 
