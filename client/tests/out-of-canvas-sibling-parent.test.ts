@@ -1,14 +1,17 @@
 /**
  * Меню мысли ВНЕ холста: «Добавить → налево (родственник)» создаёт соседа под
- * родителем КЛИКНУТОЙ мысли, а не мысли в фокусе карты (ошибка 2baa78fb).
+ * родителем КЛИКНУТОЙ мысли, а не мысли в фокусе карты (ошибка 2baa78fb), и
+ * заголовок диалога называет ЭТОГО родителя, а не мысль в фокусе (ошибка
+ * 89964a9b).
  *
- * Дефект: конструктор меню (`canvas/context-menu.ts`) при отсутствии
+ * Дефект родителя: конструктор меню (`canvas/context-menu.ts`) при отсутствии
  * `target.siblingParentId` берёт `focus.parents[0].id`. Места вне холста обязаны
- * передать родителя явно — резолв `resolveSiblingParentId` ДО открытия меню и
+ * передать родителя явно — резолв `resolveSiblingParent` ДО открытия меню и
  * сверка сети ПОСЛЕ ответа (класс a3151e33). Проверка поведенческая: реальный
  * экран поднимается на DOM-шиме (`./dom-shim.js`), правый клик по чипу мысли M
  * (ребёнок P2) при фокусе T (ребёнок P1) открывает меню, клик по «налево»
- * доходит до `etn.thoughts.create` с `create_link.target_thought_id = P2`.
+ * доходит до `etn.thoughts.create` с `create_link.target_thought_id = P2`, а
+ * диалог показывает «вниз к «P2-имя»», не имя фокуса.
  *
  * Покрытие по местам:
  *  - полоса истории: чип полосы и строка overflow-дропдауна
@@ -23,7 +26,9 @@
  * без `siblingParentId` (чип истории, строка дропдауна, дерево «Структур»,
  * панель использования) — создание уходит под P1; убрать в `usage-panel`
  * сверку сети после `await import` — меню открывается для мысли прежней сети;
- * убрать сверку сети в общем фасаде — поздний ответ родителя открывает меню.
+ * убрать сверку сети в общем фасаде — поздний ответ родителя открывает меню;
+ * перестать передавать `siblingParentTitle` (или вернуть подстановку
+ * `focused.title`) — заголовок диалога называет фокус вместо P2 (89964a9b).
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -78,6 +83,8 @@ let holdNeighbors: Promise<void> | null = null;
 let releaseNeighbors: (() => void) | null = null;
 /** Что вернуть `neighbors` в сети B (родитель «чужой» сети). */
 let parentsInB: string[] = [];
+/** Имя родителя кликнутой мысли; `null` — ответ без имени (старый API). */
+let parentTitle: string | null = 'Родитель Меншна';
 
 function shimDom(): void {
   (globalThis as Dict).HTMLElement = ShimElement;
@@ -201,8 +208,13 @@ const bridge: Dict = {
     neighbors: async (networkId: string, id: string) => {
       calls.neighbors.push({ networkId, id });
       if (holdNeighbors !== null) await holdNeighbors;
-      if (networkId === NET_B) return parentsInB.map((parentId) => ({ id: parentId }));
-      return [{ id: id === CLICKED_ID ? CLICKED_PARENT : FOCUS_PARENT }];
+      if (networkId === NET_B) {
+        return parentsInB.map((parentId) => ({ id: parentId, title: `Родитель ${parentId}` }));
+      }
+      const parentId = id === CLICKED_ID ? CLICKED_PARENT : FOCUS_PARENT;
+      return parentTitle === null
+        ? [{ id: parentId }]
+        : [{ id: parentId, title: parentTitle }];
     },
     create: async (networkId: string, input: any) => {
       calls.creates.push({ networkId, input });
@@ -282,6 +294,7 @@ afterEach(() => {
   holdNeighbors = null;
   releaseNeighbors = null;
   parentsInB = [];
+  parentTitle = 'Родитель Меншна';
   historyIds = [CLICKED_ID];
   structuresItems = [{ id: 'home-root' }];
   stateMod.store.update({ networkId: null, focus: null } as any);
@@ -348,12 +361,55 @@ function clickAddSibling(): void {
   sibling.click();
 }
 
-/** Подтвердить диалог «Добавить» вводом имени: создаёт новую мысль. */
-async function confirmCreate(title: string): Promise<void> {
+/** Заголовок открытого диалога «Добавить» (`null` — диалог не открыт). */
+function dialogTitle(): string | null {
+  const body = (globalThis as Dict).document as { body: ShimElement };
+  const backdrop = body.body.children.find((node) => node.className === 'dialog-backdrop');
+  return backdrop?.children[0]?.querySelector('.dialog-title')?.textContent ?? null;
+}
+
+/**
+ * Закрыть открытый диалог «Добавить» отменой — уборка после неудачной проверки,
+ * чтобы несозданный диалог не подвешивал прогон (Promise resolution is still
+ * pending) и следующие кейсы падали по своей причине, а не по чужой.
+ */
+async function cancelOpenDialog(): Promise<void> {
+  const body = (globalThis as Dict).document as { body: ShimElement };
+  const backdrop = body.body.children.find((node) => node.className === 'dialog-backdrop');
+  const box = backdrop?.children[0];
+  const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+  footer?.children
+    .find(
+      (c) =>
+        c.className.split(/\s+/).includes('ui-btn') &&
+        !c.className.split(/\s+/).includes('ui-btn--primary'),
+    )
+    ?.click();
+  await flush();
+}
+
+/**
+ * Подтвердить диалог «Добавить» вводом имени: создаёт новую мысль. Заодно
+ * проверяется заголовок диалога — он обязан называть фактического родителя-
+ * якоря, а не мысль в фокусе карты (ошибка 89964a9b).
+ */
+async function confirmCreate(title: string, expectedAnchor: string): Promise<void> {
   await flush();
   const body = (globalThis as Dict).document as { body: ShimElement };
   const backdrop = body.body.children.find((node) => node.className === 'dialog-backdrop');
   assert.ok(backdrop !== undefined, 'диалог «Добавить» открылся');
+  const shownTitle = dialogTitle() ?? '';
+  const namesAnchor = shownTitle.includes(`вниз к «${expectedAnchor}»`);
+  const namesFocus = shownTitle.includes('Фокус');
+  if (!namesAnchor || namesFocus) {
+    // Сначала гасим диалог: красный кейс не должен оставлять висящий промис.
+    await cancelOpenDialog();
+    assert.ok(
+      namesAnchor,
+      `заголовок диалога называет фактического родителя «${expectedAnchor}»: ${shownTitle}`,
+    );
+    assert.ok(!namesFocus, `заголовок диалога не называет мысль в фокусе: ${shownTitle}`);
+  }
   const box = backdrop.children[0];
   assert.ok(box !== undefined, 'тело диалога построено');
   const input = box.querySelector('textarea');
@@ -491,7 +547,7 @@ describe('меню вне холста: «налево» создаёт под �
       'родитель запрошен у САМОЙ кликнутой мысли',
     );
     clickAddSibling();
-    await confirmCreate('Исторический Сосед');
+    await confirmCreate('Исторический Сосед', 'Родитель Меншна');
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 
@@ -503,7 +559,7 @@ describe('меню вне холста: «налево» создаёт под �
       'родитель запрошен у САМОЙ кликнутой мысли',
     );
     clickAddSibling();
-    await confirmCreate('Сосед Дропдауна');
+    await confirmCreate('Сосед Дропдауна', 'Родитель Меншна');
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 
@@ -515,7 +571,7 @@ describe('меню вне холста: «налево» создаёт под �
       'родитель запрошен у САМОЙ кликнутой мысли',
     );
     clickAddSibling();
-    await confirmCreate('Дневниковый Сосед');
+    await confirmCreate('Дневниковый Сосед', 'Родитель Меншна');
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 
@@ -531,7 +587,7 @@ describe('меню вне холста: «налево» создаёт под �
       'родитель запрошен у САМОЙ кликнутой мысли',
     );
     clickAddSibling();
-    await confirmCreate('Использованный Сосед');
+    await confirmCreate('Использованный Сосед', 'Родитель Меншна');
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 
@@ -576,7 +632,17 @@ describe('меню вне холста: «налево» создаёт под �
       'родитель запрошен у САМОЙ кликнутой мысли',
     );
     clickAddSibling();
-    await confirmCreate('Сосед Структур');
+    await confirmCreate('Сосед Структур', 'Родитель Меншна');
+    assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
+  });
+
+  it('родитель без имени: в заголовке id родителя, а не имя мысли в фокусе', async () => {
+    // Ответ соседей без названия (старый/урезанный API): подписывать якорь
+    // именем фокуса запрещено — показываем id фактического родителя (89964a9b).
+    parentTitle = null;
+    await openHistoryMenu();
+    clickAddSibling();
+    await confirmCreate('Сосед Без Имени', CLICKED_PARENT);
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 });

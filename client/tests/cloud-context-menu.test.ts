@@ -178,8 +178,9 @@ describe('контекстное меню облачка — общий конс
     assert.ok(
       menu.includes('showThoughtContextMenu(') &&
         menu.includes('showThoughtMenuUnder(') &&
-        menu.includes('resolveSiblingParentId('),
-      'меню открывается общим фасадом, родитель для «налево» резолвится явно',
+        menu.includes('resolveSiblingParent(') &&
+        menu.includes('siblingParentTitle'),
+      'меню открывается общим фасадом, родитель и его имя для «налево» передаются явно',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
@@ -209,8 +210,10 @@ describe('контекстное меню облачка — общий конс
     // «Контекстное меню мысли», ошибка ffc173c9).
     const menu = functionBody(src, 'async function openPinnedThoughtMenu(');
     assert.ok(
-      menu.includes('resolveSiblingParentId(') && menu.includes('siblingParentId'),
-      'строка закреплённых передаёт siblingParentId явно (резолв до открытия меню)',
+      menu.includes('resolveSiblingParent(') &&
+        menu.includes('siblingParentId') &&
+        menu.includes('siblingParentTitle'),
+      'строка закреплённых передаёт id и имя родителя явно (резолв до открытия меню)',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
@@ -234,9 +237,10 @@ describe('контекстное меню облачка — общий конс
     const menu = functionBody(src, 'async function openOutOfCanvasThoughtMenu(');
     assert.ok(
       menu.includes('showThoughtContextMenu(') &&
-        menu.includes('resolveSiblingParentId(') &&
-        menu.includes('siblingParentId'),
-      'меню вне холста передаёт siblingParentId явно (резолв до открытия)',
+        menu.includes('resolveSiblingParent(') &&
+        menu.includes('siblingParentId') &&
+        menu.includes('siblingParentTitle'),
+      'меню вне холста передаёт id и имя родителя явно (резолв до открытия)',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
@@ -265,10 +269,11 @@ describe('контекстное меню облачка — общий конс
     const menu = functionBody(src, 'function openOwnerThoughtMenu(');
     assert.ok(
       menu.includes('showThoughtContextMenu(') &&
-        menu.includes('resolveSiblingParentId(') &&
+        menu.includes('resolveSiblingParent(') &&
+        menu.includes('siblingParentTitle') &&
         menu.includes('extraItems') &&
         menu.includes("t('publication.cover.ownerRemove')"),
-      'общее меню + команда контекста «Убрать из владельцев»',
+      'общее меню + команда контекста «Убрать из владельцев»; якорь «налево» — с именем',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
@@ -280,8 +285,10 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.contextMenu);
     const helper = functionBody(src, 'export async function showOutOfCanvasThoughtMenu(');
     assert.ok(
-      helper.includes('resolveSiblingParentId(') && helper.includes('siblingParentId'),
-      'родитель «налево» резолвится ДО открытия меню и передаётся явно',
+      helper.includes('resolveSiblingParent(') &&
+        helper.includes('siblingParentId') &&
+        helper.includes('siblingParentTitle'),
+      'родитель «налево» резолвится ДО открытия меню и передаётся с именем',
     );
     assert.ok(
       helper.includes('store.state.networkId !== networkId'),
@@ -337,9 +344,10 @@ describe('контекстное меню облачка — общий конс
     const menu = functionBody(src, 'async function openNeighborPreviewThoughtMenu(');
     assert.ok(
       menu.includes('showThoughtContextMenu(') &&
-        menu.includes('resolveSiblingParentId(') &&
-        menu.includes('siblingParentId'),
-      'строка соседа передаёт siblingParentId явно (резолв до открытия)',
+        menu.includes('resolveSiblingParent(') &&
+        menu.includes('siblingParentId') &&
+        menu.includes('siblingParentTitle'),
+      'строка соседа передаёт id и имя родителя явно (резолв до открытия)',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),

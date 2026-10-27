@@ -838,17 +838,20 @@ async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void>
   if (networkId === null) return;
   // Ленивый импорт: статический замкнул бы цикл
   // canvas/context-menu → editor/editor → editor/mini-graph.
-  const { showThoughtMenuUnder, resolveSiblingParentId } =
+  const { showThoughtMenuUnder, resolveSiblingParent } =
     await import('../canvas/context-menu.js');
+  // Пилюля не в зоне холста — родителя для «налево (родственник)» резолвим
+  // запросом (на холсте он приходит с ответом фокуса); имя родителя нужно
+  // диалогу, чтобы назвать якорь, а не мысль в фокусе (ошибка 89964a9b).
+  const siblingParent = await resolveSiblingParent(networkId, node.id);
   showThoughtMenuUnder(
     anchor,
     {
       id: node.id,
       title: node.title,
       dir: 'siblings',
-      // Пилюля не в зоне холста — родителя для «налево (родственник)»
-      // резолвим запросом (на холсте он приходит с ответом фокуса).
-      siblingParentId: await resolveSiblingParentId(networkId, node.id),
+      siblingParentId: siblingParent?.id ?? null,
+      siblingParentTitle: siblingParent?.title,
       trashed: node.ref.marked_for_deletion === true,
     },
     {

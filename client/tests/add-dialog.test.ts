@@ -115,6 +115,12 @@ function installShim(): void {
     },
     etn: {
       thoughts: {
+        // Якорь вне холста приходит в `openAddDialog` одним id: диалог
+        // обязан прочитать его имя сам и НЕ подставлять имя фокуса (89964a9b).
+        get: async (_networkId: string, id: string) => {
+          if (id === 'GONE') throw new Error('thought not found');
+          return { id, title: `Имя ${id}` };
+        },
         findDuplicates: async (
           _networkId: string,
           title: string,
@@ -334,6 +340,51 @@ describe('заголовок диалога называет якорь, а не
       ?.click();
     assert.equal(await done, undefined);
     store.update({ networkId: null, focus: null });
+  });
+
+  it('openAddDialog без имени якоря читает имя якоря, а не берёт имя фокуса (89964a9b)', async () => {
+    const mod = await loadDialog();
+    store.update({ networkId: 'n1', focus: focusWith('Мысль в фокусе') });
+    const done = mod.openAddDialog({ anchorId: 'P2', direction: 'child' });
+    await settle();
+    const body = (globalThis as any).document.body as ShimElement;
+    const box = body.children.find((c) => c.className === 'dialog-backdrop')?.children[0];
+    const title = box?.querySelector('.dialog-title')?.textContent ?? '';
+    // Гасим диалог до проверки: красный кейс не оставляет висящий промис.
+    const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+    footer?.children
+      .find((c) => isUiButton(c) && !c.className.split(/\s+/).includes('ui-btn--primary'))
+      ?.click();
+    assert.equal(await done, undefined);
+    store.update({ networkId: null, focus: null });
+    assert.equal(
+      title,
+      'Добавить мысль (вниз к «Имя P2»)',
+      'заголовок называет имя фактического якоря, прочитанное по id',
+    );
+    assert.ok(!title.includes('Мысль в фокусе'), 'имя фокуса не подставлено');
+  });
+
+  it('openAddDialog с недоступным якорем показывает id, а не имя фокуса (89964a9b)', async () => {
+    const mod = await loadDialog();
+    store.update({ networkId: 'n1', focus: focusWith('Мысль в фокусе') });
+    const done = mod.openAddDialog({ anchorId: 'GONE', direction: 'child' });
+    await settle();
+    const body = (globalThis as any).document.body as ShimElement;
+    const box = body.children.find((c) => c.className === 'dialog-backdrop')?.children[0];
+    const title = box?.querySelector('.dialog-title')?.textContent ?? '';
+    const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+    footer?.children
+      .find((c) => isUiButton(c) && !c.className.split(/\s+/).includes('ui-btn--primary'))
+      ?.click();
+    assert.equal(await done, undefined);
+    store.update({ networkId: null, focus: null });
+    assert.equal(
+      title,
+      'Добавить мысль (вниз к «GONE»)',
+      'неизвестное имя якоря подписывается его id, а не именем фокуса',
+    );
+    assert.ok(!title.includes('Мысль в фокусе'), 'имя фокуса не подставлено');
   });
 
   it('направление берётся из эллипса: верхний даёт «вверх к якорю»', async () => {

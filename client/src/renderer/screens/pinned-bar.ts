@@ -38,7 +38,7 @@ import { focusFromUi } from '../app.js';
 // представления мысли (стандарт «представление мысли — только через фабрику»).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import {
-  resolveSiblingParentId,
+  resolveSiblingParent,
   showThoughtContextMenu,
   type ThoughtMenuOptions,
 } from '../canvas/context-menu.js';
@@ -296,9 +296,19 @@ async function openPinnedThoughtMenu(
 ): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const siblingParentId = await resolveSiblingParentId(networkId, id);
+  const siblingParent = await resolveSiblingParent(networkId, id);
   if (store.state.networkId !== networkId) return;
-  showThoughtContextMenu(event, { id, title, dir: 'siblings', siblingParentId }, opts);
+  showThoughtContextMenu(
+    event,
+    {
+      id,
+      title,
+      dir: 'siblings',
+      siblingParentId: siblingParent?.id ?? null,
+      siblingParentTitle: siblingParent?.title,
+    },
+    opts,
+  );
 }
 
 /**

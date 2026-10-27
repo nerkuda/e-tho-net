@@ -104,7 +104,7 @@ import {
 } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import {
-  resolveSiblingParentId,
+  resolveSiblingParent,
   showThoughtContextMenu,
   showZoneContextMenu,
 } from './context-menu.js';
@@ -2605,11 +2605,17 @@ async function openNeighborPreviewThoughtMenu(
 ): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const siblingParentId = await resolveSiblingParentId(networkId, id);
+  const siblingParent = await resolveSiblingParent(networkId, id);
   if (store.state.networkId !== networkId) return;
   showThoughtContextMenu(
     event,
-    { id, title, dir: 'siblings', siblingParentId },
+    {
+      id,
+      title,
+      dir: 'siblings',
+      siblingParentId: siblingParent?.id ?? null,
+      siblingParentTitle: siblingParent?.title,
+    },
     {
       openHandler: (openId) => {
         closeHoverPreview();

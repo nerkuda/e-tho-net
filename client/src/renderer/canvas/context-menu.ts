@@ -159,6 +159,14 @@ export interface CloudMenuTarget {
    */
   siblingParentId?: string | null;
   /**
+   * Имя родителя-якоря «налево (родственник)»: диалог добавления обязан
+   * назвать фактического родителя, а не мысль в фокусе карты (ошибка
+   * 89964a9b). Вне холста имя приходит вместе с id из `resolveSiblingParent`;
+   * на холсте берётся из ответа фокуса. Не задано вместе с явным `siblingParentId`
+   * — диалог подпишет якорь его id, но НЕ именем фокуса.
+   */
+  siblingParentTitle?: string;
+  /**
    * Мысль помечена на удаление — подпись «Удалить/восстановить» (S13). На холсте
    * флаг берётся из фокуса/кеша облачков, вне холста кеш пуст — передаёт
    * вызывающий, у которого есть `ThoughtRef`.
@@ -345,19 +353,29 @@ export function showThoughtMenuUnder(
   showMenuAt(rect.left, rect.bottom + 2, buildThoughtMenuItems(networkId, target, opts));
 }
 
+/** Родитель-якорь «налево (родственник)»: id и имя для подписи диалога. */
+export interface SiblingParent {
+  id: string;
+  title: string;
+}
+
 /**
  * Родитель мысли — якорь команды «налево (родственник)» — для меню вне холста:
  * мини-облачко чипа и пилюля мини-графа не живут в зоне холста, где родитель
- * приходит с ответом фокуса, поэтому его спрашивают у сервера. Неудача —
- * `null`: команда просто неактивна (меню важнее, чем её один пункт).
+ * приходит с ответом фокуса, поэтому его спрашивают у сервера. Возвращается
+ * вместе с именем: диалог добавления обязан назвать фактического родителя, а
+ * не мысль в фокусе карты (ошибка 89964a9b) — второй запрос за именем не нужен,
+ * `neighbors` уже отдаёт `ThoughtRef`. Неудача — `null`: команда просто
+ * неактивна (меню важнее, чем её один пункт).
  */
-export async function resolveSiblingParentId(
+export async function resolveSiblingParent(
   networkId: string,
   id: string,
-): Promise<string | null> {
+): Promise<SiblingParent | null> {
   try {
     const parents = await etn.thoughts.neighbors(networkId, id, 'parents', 1);
-    return parents[0]?.id ?? null;
+    const parent = parents[0];
+    return parent === undefined ? null : { id: parent.id, title: parent.title };
   } catch {
     return null;
   }
@@ -371,22 +389,31 @@ export async function resolveSiblingParentId(
  * вне зон холста его приходится спрашивать у сервера ДО открытия меню —
  * конструктор без `siblingParentId` молча берёт родителя фокуса
  * (`focus.parents[0]`) и «налево» создаёт мысль не под тем родителем
- * (ошибка 2baa78fb). После ожидания сверяется сеть — поздний ответ не должен
- * открыть меню для мысли прежней сети (класс a3151e33).
+ * (ошибка 2baa78fb), а без имени родителя диалог подписывает якорь именем
+ * фокуса (ошибка 89964a9b). После ожидания сверяется сеть — поздний ответ не
+ * должен открыть меню для мысли прежней сети (класс a3151e33).
  *
  * Места без холста зовут этот помощник, а не `showThoughtContextMenu`
  * напрямую: резолв родителя и сверка сети не должны расползаться копиями.
  */
 export async function showOutOfCanvasThoughtMenu(
   event: MouseEvent,
-  target: Omit<CloudMenuTarget, 'siblingParentId'>,
+  target: Omit<CloudMenuTarget, 'siblingParentId' | 'siblingParentTitle'>,
   opts: ThoughtMenuOptions = {},
 ): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const siblingParentId = await resolveSiblingParentId(networkId, target.id);
+  const siblingParent = await resolveSiblingParent(networkId, target.id);
   if (store.state.networkId !== networkId) return;
-  showThoughtContextMenu(event, { ...target, siblingParentId }, opts);
+  showThoughtContextMenu(
+    event,
+    {
+      ...target,
+      siblingParentId: siblingParent?.id ?? null,
+      siblingParentTitle: siblingParent?.title,
+    },
+    opts,
+  );
 }
 
 /**
@@ -434,15 +461,19 @@ export function buildThoughtMenuItems(
   }
   const focus = store.state.focus;
   // «налево (родственник)»: на холсте — родитель фокуса (зона «Родственники»),
-  // вне холста — родитель самой мысли, который резолвит вызывающий.
-  const siblingParentId =
-    target.siblingParentId !== undefined ? target.siblingParentId : (focus?.parents[0]?.id ?? null);
+  // вне холста — родитель самой мысли, который резолвит вызывающий вместе с
+  // именем (`resolveSiblingParent`).
+  const siblingParentExplicit = target.siblingParentId !== undefined;
+  const siblingParentId: string | null = siblingParentExplicit
+    ? (target.siblingParentId ?? null)
+    : (focus?.parents[0]?.id ?? null);
   // Якорь диалога «Добавить» — владелец вызова (08-ui-spec.md §4.1–4.2), а не
-  // мысль в фокусе: диалог обязан назвать именно его (ошибка c8bd4676). Имя
-  // родителя-родственника известно только в холстовом случае — вне холста
-  // `siblingParentId` приходит от вызывающего без имени.
-  const siblingParentTitle =
-    target.siblingParentId === undefined ? focus?.parents[0]?.title : undefined;
+  // мысль в фокусе: диалог обязан назвать именно его (ошибка c8bd4676), а для
+  // «налево» — фактического родителя (ошибка 89964a9b). Имени нет — подписываем
+  // якорь его id; подставлять имя фокуса нельзя ни при каком раскладе.
+  const siblingParentTitle = siblingParentExplicit
+    ? (target.siblingParentTitle ?? target.siblingParentId ?? undefined)
+    : focus?.parents[0]?.title;
   const canAddSibling = siblingParentId !== null;
   const inSelection = store.state.selection.includes(target.id);
   // Задача f5c363a3: команда «слить в основу» — только для мысли, изменённой в

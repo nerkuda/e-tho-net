@@ -1,0 +1,301 @@
+{
+  "name": "89964a9b-sibling-title",
+  "description": "Диалог «Добавить → налево (родственник)» вне холста обязан называть ФАКТИЧЕСКОГО родителя кликнутой мысли, а не мысль в фокусе карты. Посев: T — ребёнок P1 (мысль в фокусе), M — ребёнок P2 (по ней кликают), у M есть дневниковая запись. В полосе истории, «Дневнике» и «Структурах»: ПКМ по облачку M → «Добавить» → «налево» → заголовок диалога = «Добавить мысль (вниз к «P2»)», не имя T; создание в истории всё ещё уходит под P2. На дофиксовой сборке заголовок называет T («вниз к «ДваДевять Цель Фокуса»»). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.89964a9b-sibling-title.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "seed",
+      "eval": "(async () => { const nid='{{networkId}}'; const p1=await window.etn.thoughts.create(nid,{title:'ДваДевять Родитель Цели'}); const p2=await window.etn.thoughts.create(nid,{title:'ДваДевять Родитель Меншена'}); const t=await window.etn.thoughts.create(nid,{title:'ДваДевять Цель Фокуса', create_link:{direction:'parent',target_thought_id:p1.id}}); const m=await window.etn.thoughts.create(nid,{title:'ДваДевять Меншн Клика', create_link:{direction:'parent',target_thought_id:p2.id}}); const now=new Date().toISOString(); await window.etn.comments.createMulti(nid, [{owner_type:'thought', owner_id:m.id}], {kind:'chronological', title:'ДваДевять запись с меншном', body_md:'Запись для проверки заголовка диалога вне холста.', valid_from:now, valid_to:now}); window.__9a9b={nid,p1:p1.id,p2:p2.id,t:t.id,m:m.id,p2title:'ДваДевять Родитель Меншена',ttitle:'ДваДевять Цель Фокуса'}; return JSON.stringify(window.__9a9b); })()"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "map-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('[data-id]') !== null"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "seed-layout-correct",
+      "probe": "(async () => { const {nid,t,m,p1,p2}=window.__9a9b; const tp=await window.etn.thoughts.neighbors(nid,t,'parents'); const mp=await window.etn.thoughts.neighbors(nid,m,'parents'); return tp.some((x)=>x.id===p1) && mp.some((x)=>x.id===p2) && p1 !== p2; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-mention",
+      "eval": "(() => { const i=document.querySelector('.search-input'); i.focus(); i.value='ДваДевять Меншн Клика'; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "mention-hit-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__9a9b.m+'\"]') !== null"
+    },
+    {
+      "name": "click-mention-hit",
+      "eval": "(() => { const c=document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__9a9b.m+'\"]'); c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "editor-open",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.editor-tabs .editor-tab') !== null"
+    },
+    {
+      "name": "focus-target",
+      "eval": "(() => { const i=document.querySelector('.search-input'); i.focus(); i.value='ДваДевять Цель Фокуса'; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "target-hit-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__9a9b.t+'\"]') !== null"
+    },
+    {
+      "name": "click-target-hit",
+      "eval": "(() => { const c=document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__9a9b.t+'\"]'); c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "focus-is-target-not-mention",
+      "timeout": 15000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((x)=>x.network_id===window.__9a9b.nid); return tab?.focus_id === window.__9a9b.t && tab?.focus_id !== window.__9a9b.m; })()"
+    },
+    {
+      "name": "history-chip-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.history-cloud[data-id=\"'+window.__9a9b.m+'\"]') !== null"
+    },
+    {
+      "name": "right-click-history",
+      "eval": "(() => { const c=document.querySelector('.history-cloud[data-id=\"'+window.__9a9b.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    {
+      "name": "history-menu-open",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "open-history-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    {
+      "name": "history-submenu-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu > .menu-sub') !== null"
+    },
+    {
+      "name": "click-history-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('menu-item-disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "history-dialog-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null"
+    },
+    {
+      "name": "history-dialog-title-text",
+      "probe": {
+        "name": "historyDialogTitle",
+        "expression": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null)"
+      }
+    },
+    {
+      "name": "history-title-names-parent",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '') === 'Добавить мысль (вниз к «' + window.__9a9b.p2title + '»)'",
+      "expect": true
+    },
+    {
+      "name": "history-title-not-focus",
+      "probe": "!(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '').includes(window.__9a9b.ttitle)",
+      "expect": true
+    },
+    {
+      "name": "history-type-title",
+      "eval": "(() => { const ta=document.querySelector('.dialog-backdrop textarea'); if(!ta) return 'no-input'; ta.focus(); ta.value='ДваДевять Сосед Истории'; ta.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "history-apply",
+      "modifiers": [
+        "ctrl"
+      ],
+      "key": "Enter"
+    },
+    {
+      "name": "history-dialog-closed",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "history-created-under-p2",
+      "probe": "(async () => { const {nid,p1,p2}=window.__9a9b; const c1=await window.etn.thoughts.neighbors(nid,p1,'children'); const c2=await window.etn.thoughts.neighbors(nid,p2,'children'); return c2.some((x)=>x.title==='ДваДевять Сосед Истории') && !c1.some((x)=>x.title==='ДваДевять Сосед Истории'); })()",
+      "expect": true
+    },
+    {
+      "name": "open-diary",
+      "eval": "(() => { const tab=document.querySelector('button.view-tab[title=\"Дневник\"]'); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "diary-chip-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.diary-chip[data-id=\"'+window.__9a9b.m+'\"]') !== null"
+    },
+    {
+      "name": "right-click-diary",
+      "eval": "(() => { const c=document.querySelector('.diary-chip[data-id=\"'+window.__9a9b.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    {
+      "name": "diary-menu-open",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "open-diary-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    {
+      "name": "diary-submenu-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu > .menu-sub') !== null"
+    },
+    {
+      "name": "click-diary-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('menu-item-disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "diary-dialog-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null"
+    },
+    {
+      "name": "diary-dialog-title-text",
+      "probe": {
+        "name": "diaryDialogTitle",
+        "expression": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null)"
+      }
+    },
+    {
+      "name": "diary-title-names-parent",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '') === 'Добавить мысль (вниз к «' + window.__9a9b.p2title + '»)'",
+      "expect": true
+    },
+    {
+      "name": "diary-title-not-focus",
+      "probe": "!(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '').includes(window.__9a9b.ttitle)",
+      "expect": true
+    },
+    {
+      "name": "close-diary-dialog",
+      "key": "Escape"
+    },
+    {
+      "name": "diary-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-structures",
+      "eval": "(() => { const tab=document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "structures-tree-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.st-row') !== null"
+    },
+    {
+      "name": "expand-clicked-parent",
+      "eval": "(() => { const row=document.querySelector('.st-row[data-id=\"'+window.__9a9b.p2+'\"]'); if(!row) return 'no-row'; const ell=row.querySelector('.ellipse-bottom'); if(!ell) return 'no-ellipse'; ell.click(); return 'ok'; })()"
+    },
+    {
+      "name": "structures-cloud-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.st-cloud[data-id=\"'+window.__9a9b.m+'\"]') !== null"
+    },
+    {
+      "name": "right-click-structures",
+      "eval": "(() => { const c=document.querySelector('.st-cloud[data-id=\"'+window.__9a9b.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    {
+      "name": "structures-menu-open",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "open-structures-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    {
+      "name": "structures-submenu-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu > .menu-sub') !== null"
+    },
+    {
+      "name": "click-structures-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('menu-item-disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "structures-dialog-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null"
+    },
+    {
+      "name": "structures-dialog-title-text",
+      "probe": {
+        "name": "structuresDialogTitle",
+        "expression": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null)"
+      }
+    },
+    {
+      "name": "structures-title-names-parent",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '') === 'Добавить мысль (вниз к «' + window.__9a9b.p2title + '»)'",
+      "expect": true
+    },
+    {
+      "name": "structures-title-not-focus",
+      "probe": "!(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '').includes(window.__9a9b.ttitle)",
+      "expect": true
+    },
+    {
+      "name": "close-structures-dialog",
+      "key": "Escape"
+    },
+    {
+      "name": "structures-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "final-titles",
+      "probe": "JSON.stringify({expected: 'Добавить мысль (вниз к «' + window.__9a9b.p2title + '»)', focus: window.__9a9b.ttitle})"
+    }
+  ]
+}

@@ -966,10 +966,12 @@ type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
  * правого клика (`showThoughtContextMenu`) либо край облачка при открытии с
  * клавиатуры (`showThoughtMenuUnder`).
  *
- * `siblingParentId` передаётся ЯВНО (`resolveSiblingParentId`), иначе «налево
- * (родственник)» взяло бы родителя мысли в фокусе карты (ловушка
- * `context-menu.ts:412-413`). После ожидания резолва сверяется сеть: поздний
- * ответ не должен открыть меню для мысли прежней сети (класс a3151e33).
+ * `siblingParentId` и `siblingParentTitle` передаются ЯВНО
+ * (`resolveSiblingParent`), иначе «налево (родственник)» взяло бы родителя
+ * мысли в фокусе карты (ловушка `context-menu.ts:412-413`), а диалог назвал бы
+ * якорь именем фокуса (ошибка 89964a9b). После ожидания резолва сверяется
+ * сеть: поздний ответ не должен открыть меню для мысли прежней сети (класс
+ * a3151e33).
  */
 function openSearchThoughtMenu(
   id: string,
@@ -980,11 +982,17 @@ function openSearchThoughtMenu(
   if (networkId === null) return;
   void (async () => {
     try {
-      const { showThoughtContextMenu, showThoughtMenuUnder, resolveSiblingParentId } =
+      const { showThoughtContextMenu, showThoughtMenuUnder, resolveSiblingParent } =
         await import('../canvas/context-menu.js');
-      const siblingParentId = await resolveSiblingParentId(networkId, id);
+      const siblingParent = await resolveSiblingParent(networkId, id);
       if (store.state.networkId !== networkId) return;
-      const target = { id, title, dir: 'siblings' as const, siblingParentId };
+      const target = {
+        id,
+        title,
+        dir: 'siblings' as const,
+        siblingParentId: siblingParent?.id ?? null,
+        siblingParentTitle: siblingParent?.title,
+      };
       if ('event' in place) showThoughtContextMenu(place.event, target);
       else showThoughtMenuUnder(place.anchor, target);
     } catch (err) {

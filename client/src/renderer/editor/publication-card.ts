@@ -1397,14 +1397,20 @@ async function openCoverDialog(): Promise<void> {
   ): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null) return;
-    const { showThoughtContextMenu, resolveSiblingParentId } = await import(
+    const { showThoughtContextMenu, resolveSiblingParent } = await import(
       '../canvas/context-menu.js'
     );
-    const siblingParentId = await resolveSiblingParentId(networkId, id);
+    const siblingParent = await resolveSiblingParent(networkId, id);
     if (store.state.networkId !== networkId) return;
     showThoughtContextMenu(
       event,
-      { id, title: owner.title ?? id, dir: 'siblings', siblingParentId },
+      {
+        id,
+        title: owner.title ?? id,
+        dir: 'siblings',
+        siblingParentId: siblingParent?.id ?? null,
+        siblingParentTitle: siblingParent?.title,
+      },
       {
         extraItems: [
           menuAction(t('publication.cover.ownerRemove'), () =>

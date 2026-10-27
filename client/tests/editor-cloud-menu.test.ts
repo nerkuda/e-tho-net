@@ -68,7 +68,7 @@ describe('меню облачка в редакторе — единый кон�
     // Родителя для «налево (родственник)» вне холста резолвит один общий
     // помощник (иначе он расползётся копиями по editor-модулям).
     assert.ok(
-      src.includes('export async function resolveSiblingParentId('),
+      src.includes('export async function resolveSiblingParent('),
       'the sibling-parent lookup must live here, not in the editor',
     );
   });
@@ -102,8 +102,8 @@ describe('меню облачка в редакторе — единый кон�
     );
     assert.ok(helper.includes('focusHandler'), '«В фокус» comes from the shared builder');
     assert.ok(
-      helper.includes('resolveSiblingParentId'),
-      'the chip is not in a canvas zone — its parent is resolved explicitly',
+      helper.includes('resolveSiblingParent') && helper.includes('siblingParentTitle'),
+      'the chip is not in a canvas zone — its parent and its name are resolved explicitly',
     );
     // Своего списка команд и своей копии резолвера родителя у чипа больше нет.
     for (const label of ['Копировать ID', 'Открепить мысль', 'Закрепить мысль']) {

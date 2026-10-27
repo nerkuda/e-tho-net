@@ -1588,17 +1588,20 @@ async function openThoughtCloudMenu(opts: {
   extraItems?: MenuItem[];
   anchor: Element;
 }): Promise<void> {
-  const { showThoughtMenuUnder, resolveSiblingParentId } =
+  const { showThoughtMenuUnder, resolveSiblingParent } =
     await import('../canvas/context-menu.js');
+  // Чип не живёт в зоне холста — родителя для «налево (родственник)»
+  // резолвим запросом (на холсте он приходит с ответом фокуса); имя родителя
+  // нужно диалогу, чтобы назвать якорь, а не мысль в фокусе (89964a9b).
+  const siblingParent = await resolveSiblingParent(opts.networkId, opts.id);
   showThoughtMenuUnder(
     opts.anchor,
     {
       id: opts.id,
       title: opts.title,
       dir: 'siblings',
-      // Чип не живёт в зоне холста — родителя для «налево (родственник)»
-      // резолвим запросом (на холсте он приходит с ответом фокуса).
-      siblingParentId: await resolveSiblingParentId(opts.networkId, opts.id),
+      siblingParentId: siblingParent?.id ?? null,
+      siblingParentTitle: siblingParent?.title,
       trashed: opts.trashed,
     },
     {

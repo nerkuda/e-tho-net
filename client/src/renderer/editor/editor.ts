@@ -2681,18 +2681,21 @@ async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElemen
   const networkId = requireNetworkId();
   // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
   // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
-  const { showThoughtMenuUnder, resolveSiblingParentId } =
+  const { showThoughtMenuUnder, resolveSiblingParent } =
     await import('../canvas/context-menu.js');
   const { focusThoughtOnMap } = await import('../screens/active-view.js');
+  // Мысль не в зоне холста — родителя для «налево (родственник)» резолвим
+  // запросом (на холсте он приходит с ответом фокуса); имя родителя нужно
+  // диалогу, чтобы назвать якорь, а не мысль в фокусе (ошибка 89964a9b).
+  const siblingParent = await resolveSiblingParent(networkId, thought.id);
   showThoughtMenuUnder(
     anchor,
     {
       id: thought.id,
       title: thought.title,
       dir: 'siblings',
-      // Мысль не в зоне холста — родителя для «налево (родственник)» резолвим
-      // запросом (на холсте он приходит с ответом фокуса).
-      siblingParentId: await resolveSiblingParentId(networkId, thought.id),
+      siblingParentId: siblingParent?.id ?? null,
+      siblingParentTitle: siblingParent?.title,
       trashed: thought.marked_for_deletion,
     },
     {

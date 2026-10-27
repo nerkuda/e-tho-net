@@ -1654,11 +1654,11 @@ async function thoughtAvailable(networkId: string, id: string): Promise<boolean>
  */
 export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
   lazily(async () => {
-    const { showThoughtMenuUnder, resolveSiblingParentId } =
+    const { showThoughtMenuUnder, resolveSiblingParent } =
       await import('../canvas/context-menu.js');
     // Родитель для «налево (родственник)» и доступность мысли — параллельно.
-    const [siblingParentId, available] = await Promise.all([
-      resolveSiblingParentId(opts.networkId, opts.id),
+    const [siblingParent, available] = await Promise.all([
+      resolveSiblingParent(opts.networkId, opts.id),
       thoughtAvailable(opts.networkId, opts.id),
     ]);
     wireFilterCloudInvalidation();
@@ -1669,8 +1669,10 @@ export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
         title: opts.title,
         dir: 'siblings',
         // Чип не живёт в зоне холста — родителя резолвим запросом (как чипы
-        // редактора: value-editor).
-        siblingParentId,
+        // редактора: value-editor); имя нужно диалогу, чтобы назвать якорь,
+        // а не мысль в фокусе (ошибка 89964a9b).
+        siblingParentId: siblingParent?.id ?? null,
+        siblingParentTitle: siblingParent?.title,
         trashed: opts.trashed === true,
       },
       {

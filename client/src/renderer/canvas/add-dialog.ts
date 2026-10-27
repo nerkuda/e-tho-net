@@ -243,9 +243,10 @@ export function mountAddDialog(): void {
  * `anchorTitle` is the anchor's OWN name: the dialog's «вверх/вниз к …» suffix
  * names the call owner (08-ui-spec.md §4.1–4.2), which for an ellipse drag is
  * the thought whose ellipse was dragged — passing nothing used to make the
- * suffix name the FOCUSED thought instead (ошибка c8bd4676). Callers that do
- * not know the anchor's name still get the focus fallback of
- * {@link pickThoughtsDialog}.
+ * suffix name the FOCUSED thought instead (ошибка c8bd4676). Out-of-canvas
+ * callers that only know the anchor id (the sibling parent of «налево») get
+ * the name read from the thought itself; if that read fails the suffix names
+ * the id — never the focused thought (ошибка 89964a9b).
  */
 export async function openAddDialog(ctx: {
   anchorId: string | null;
@@ -264,10 +265,19 @@ export async function openAddDialog(ctx: {
   } catch {
     propertyRows = [];
   }
+  // Якорь вне холста приходит одним id (родитель «налево»): имя читаем у самой
+  // мысли, и только при неудаче подписываем якорь его id. Подставлять имя
+  // мысли в фокусе запрещено — диалог назвал бы не того родителя (89964a9b).
+  let anchorTitle = ctx.anchorTitle;
+  if (ctx.anchorId !== null && anchorTitle === undefined) {
+    anchorTitle = (await readThoughtTitle(networkId, ctx.anchorId)) ?? ctx.anchorId;
+    // Поздний ответ не должен открыть диалог для мысли прежней сети (класс a3151e33).
+    if (store.state.networkId !== networkId) return;
+  }
   const result = await pickThoughtsDialog({
     networkId,
     anchor: ctx.anchorId !== null ? { id: ctx.anchorId, direction: ctx.direction } : null,
-    anchorTitle: ctx.anchorTitle,
+    anchorTitle,
     allowCreate: true,
     allowLinkType: false,
     linkProperty: { rows: propertyRows },
@@ -275,6 +285,19 @@ export async function openAddDialog(ctx: {
   });
   if (result === null) return;
   await insertIntoCanvas(networkId, ctx, result);
+}
+
+/**
+ * Имя мысли по id для подписи якоря диалога. Ошибка чтения — `null`:
+ * вызывающий подпишет якорь его id, но НЕ именем мысли в фокусе (89964a9b).
+ */
+async function readThoughtTitle(networkId: string, id: string): Promise<string | null> {
+  try {
+    const thought = await etn.thoughts.get(networkId, id);
+    return thought.title;
+  } catch {
+    return null;
+  }
 }
 
 /** Creates/links every picked item (the old insertAll flow, L19 focus). */
