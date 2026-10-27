@@ -26,12 +26,17 @@ export interface StandOptions {
   delaySeedMs: number;
   /** Сузить задержку до путей, содержащих подстроку ('' — вся сеть). */
   delaySeedPath: string;
+  /** Повторяемые правила `<ms>:<путь>`: разным путям — разная задержка. */
+  delaySeedRules: { delayMs: number; path: string }[];
   keep: boolean;
   help: boolean;
 }
 
 export declare function parseArgs(argv: string[]): StandOptions;
 export declare function parseInitKey(log: string): string;
+
+/** Разобрать `--delay-seed-rule <ms>:<путь>` (путь обязателен). */
+export declare function parseDelaySeedRule(value: string): { delayMs: number; path: string };
 
 /**
  * Подставить id засеянных сущностей (`{{networkId}}`, `{{thoughtId}}`,

@@ -59,6 +59,10 @@ const NETWORK_ID = '00000000-0000-4000-8000-000000000001';
 /** Вторая сеть — для гонки «рендер прежней пары после смены сети» (ff5efa1a). */
 const OTHER_NETWORK_ID = '00000000-0000-4000-8000-000000000002';
 const TYPE_ID = '00000000-0000-4000-8000-000000000010';
+/** Другой тип того же фокуса: типовые отборы наследуются по цепочке типа. */
+const OTHER_TYPE_ID = '00000000-0000-4000-8000-000000000011';
+/** Другой слой сессии: внетиповые отборы ветвятся по `layer_id` (миграция 052). */
+const OTHER_LAYER_ID = '00000000-0000-4000-8000-0000000000dd';
 const ROOT_TYPE_ID = '00000000-0000-4000-8000-0000000000aa';
 const FOCUS_ID = '00000000-0000-4000-8000-000000000100';
 const OTHER_ID = '00000000-0000-4000-8000-0000000001ff';
@@ -1684,6 +1688,73 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
       2,
       'событие чужого внетипового отбора не перечитывает набор фокуса',
     );
+  });
+
+  it('6d78ccab круг 2: смена типа мысли перечитывает эффективный набор', async () => {
+    await mountWith([row('v-type', 'Типовой', { isDefault: true })]);
+    assert.equal(state.effectiveList.calls.length, 1, 'первый рендер — один GET');
+
+    // Тот же фокус и тот же тип — набор из кэша (DoD п.3 круга 1).
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'МЛИ-инструменты')));
+    assert.equal(state.effectiveList.calls.length, 1, 'тот же контекст — из кэша');
+
+    // Тип мысли фокуса сменился: типовые отборы наследуются по цепочке типа,
+    // прежний набор описывал ДРУГОЙ тип — кэш невалиден (блокер круга 2).
+    const retyped = thought(FOCUS_ID, 'МЛИ-инструменты', OTHER_TYPE_ID);
+    store.update({ focus: focusOf(retyped) });
+    await strip.renderStrip(focusOf(retyped));
+    assert.equal(
+      state.effectiveList.calls.length,
+      2,
+      'смена типа фокуса обязана перечитать include_effective',
+    );
+  });
+
+  it('6d78ccab круг 2: смена слоя сессии перечитывает эффективный набор', async () => {
+    const focus = thought(FOCUS_ID, 'МЛИ-инструменты');
+    await mountWith([row('v-layer', 'Слоёный', { isDefault: true })]);
+    assert.equal(state.effectiveList.calls.length, 1, 'первый рендер — один GET');
+
+    await strip.renderStrip(focusOf(focus));
+    assert.equal(state.effectiveList.calls.length, 1, 'тот же слой — из кэша');
+
+    // Слой — часть контекста отбора: `thought_custom_views.layer_id` ветвит
+    // внетиповые отборы, типовые тоже живут в слоях. Прежний ответ невалиден.
+    store.update({ currentLayer: { id: OTHER_LAYER_ID, title: 'Черновик' } });
+    await strip.renderStrip(focusOf(focus));
+    assert.equal(
+      state.effectiveList.calls.length,
+      2,
+      'смена слоя обязана перечитать include_effective',
+    );
+  });
+
+  it('6d78ccab круг 2: поздний ответ прежнего фокуса не публикуется в lastResult', async () => {
+    await mountWith([row('v-late', 'Поздний', { isDefault: true })]);
+    let release: () => void = () => undefined;
+    state.viewRun.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    state.viewRun.response = runResponse('v-late', 'Поздний', [
+      refItem('00000000-0000-4000-8000-0000000000c1'),
+    ]);
+    const pending = strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(strip.getViewRunStatus(), 'loading');
+
+    // Фокус сменился, пока прогон в полёте. Сброс статуса гасит эпоху: даже
+    // если ответ уже доехал (abort не успел отменить fetch), он принадлежит
+    // прежнему фокусу и не должен попасть в кэш результата — иначе
+    // `isThoughtInViewResult` даст ложное срабатывание на чужой мысли.
+    await strip.renderStrip(focusOf(thought(OTHER_ID, 'Другая мысль')));
+    release();
+    const late = await pending;
+    assert.equal(late, null, 'ответ прежнего фокуса не отдан вызывающему');
+    assert.equal(
+      strip.takeViewResult(),
+      null,
+      'кэш результата не загрязнён данными прежнего фокуса',
+    );
+    assert.equal(strip.isThoughtInViewResult('00000000-0000-4000-8000-0000000000c1'), false);
   });
 
   // -------------------------------------------------------------------

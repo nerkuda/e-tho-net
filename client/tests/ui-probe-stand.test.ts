@@ -14,12 +14,13 @@ import path from 'node:path';
 import {
   buildProbeArgs,
   parseArgs,
+  parseDelaySeedRule,
   parseInitKey,
   readScenarioLogRules,
   resolveDelaySeedPath,
   serverLogViolations,
 } from '../scripts/ui-probe-stand.mjs';
-import { needsDelay } from '../scripts/ui-probe-delay-proxy.mjs';
+import { delayForUrl, matchDelayRule, needsDelay } from '../scripts/ui-probe-delay-proxy.mjs';
 
 test('parseArgs: значения по умолчанию', () => {
   const opts = parseArgs([]);
@@ -31,6 +32,7 @@ test('parseArgs: значения по умолчанию', () => {
   assert.equal(opts.seedName, 'GUI-стенд');
   assert.equal(opts.keep, false);
   assert.equal(opts.help, false);
+  assert.deepEqual(opts.delaySeedRules, []);
 });
 
 test('parseArgs: сценарий, порты, флаги, сид', () => {
@@ -170,6 +172,54 @@ test('resolveDelaySeedPath: id засеянных сущностей подст�
   // Пустой фильтр и отсутствие сида (интерактивный стенд) — без изменений.
   assert.equal(resolveDelaySeedPath('', seed), '');
   assert.equal(resolveDelaySeedPath('/thoughts/resolve', null), '/thoughts/resolve');
+});
+
+test('parseDelaySeedRule: <ms>:<путь>, ошибки на пустом пути и мусоре', () => {
+  assert.deepEqual(parseDelaySeedRule('6000:views/parentsof6d78ccab'), {
+    delayMs: 6000,
+    path: 'views/parentsof6d78ccab',
+  });
+  // Разделитель — ПЕРВОЕ двоеточие: остальное принадлежит пути.
+  assert.deepEqual(parseDelaySeedRule('1500:a:b'), { delayMs: 1500, path: 'a:b' });
+  assert.throws(() => parseDelaySeedRule('6000:'), /путь обязателен/);
+  assert.throws(() => parseDelaySeedRule('views/x'), /<ms>:<путь>/);
+  assert.throws(() => parseDelaySeedRule('x:views'), /целое/);
+});
+
+test('parseArgs: повторяемые --delay-seed-rule', () => {
+  const opts = parseArgs([
+    '--delay-seed-rule',
+    '6000:views/a',
+    '--delay-seed-rule',
+    '1500:views/b',
+  ]);
+  assert.deepEqual(opts.delaySeedRules, [
+    { delayMs: 6000, path: 'views/a' },
+    { delayMs: 1500, path: 'views/b' },
+  ]);
+});
+
+test('delayForUrl: правило B короче A, GET набора не задерживается', () => {
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const a = `/api/v1/networks/${id}/thoughts/f/views/parentsof6d78ccab/run`;
+  const b = `/api/v1/networks/${id}/thoughts/f/views/childrenof6d78ccab/run`;
+  const list = `/api/v1/networks/${id}/thoughts/f/views?include_effective=true`;
+  const rules = [
+    { delayMs: 6000, pathFilter: 'views/parentsof6d78ccab' },
+    { delayMs: 1500, pathFilter: 'views/childrenof6d78ccab' },
+  ];
+  assert.equal(delayForUrl(a, id, rules), 6000);
+  // B ждёт меньше A: при старте B после A ответ B приходит РАНЬШЕ — это и
+  // есть воспроизведение гонки «поздний A» (замечание круга 2 к 6d78ccab).
+  assert.equal(delayForUrl(b, id, rules), 1500);
+  assert.equal(delayForUrl(list, id, rules), null, 'GET эффективного набора не задержан');
+  assert.equal(matchDelayRule(a, id, rules), 0);
+  assert.equal(matchDelayRule(b, id, rules), 1);
+  assert.equal(matchDelayRule(list, id, rules), -1);
+  // URL чужой сети — не задерживается ни одним правилом.
+  assert.equal(delayForUrl(a, 'other-network', rules), null);
+  // Первое совпадение выигрывает: широкое правило раньше узкого.
+  assert.equal(delayForUrl(a, id, [{ delayMs: 100, pathFilter: 'views/' }, ...rules]), 100);
 });
 
 test('serverLogViolations: absent/present и некорректная регулярка', () => {

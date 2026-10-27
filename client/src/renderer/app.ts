@@ -78,6 +78,7 @@ import { initLockReconnect } from './lib/lock-guard.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
+import { invalidateStripContextCaches } from './canvas/focus-filter-strip.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
@@ -602,6 +603,12 @@ export function scheduleRefresh(cause?: InvalidationCause): void {
 export async function resyncAfterLayerSwitch(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // Полоса отборов фокуса прочитала эффективный набор и результат прогона в
+  // ПРЕЖНЕМ слое: `thought_custom_views.layer_id` ветвит отборы по слоям, а
+  // типовой результат мог ссылаться на мысли, которых в новом слое нет.
+  // Гасим кэши полосы до перечитывания фокуса (замечание верификатора круга 2
+  // к ошибке 6d78ccab).
+  invalidateStripContextCaches();
   // Cloud metadata (trash mark, active, colors) and the indicator counts were
   // resolved in the previous layer's context — drop them so the re-read below
   // re-resolves everything through the new layer chain (13-layers.md §12).

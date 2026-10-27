@@ -78,6 +78,12 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          Подставляются id засеянных сущностей: {{networkId}},
                          {{thoughtId}}, {{homeId}} — сценарий может задержать
                          фокус конкретной мысли, зная её только как seed-id. 
+      --delay-seed-rule <ms>:<path>
+                         Отдельное правило задержки (повторяемое; первое
+                         совпадение выигрывает). Нужно гонкам, где ответ B
+                         обязан прийти РАНЬШЕ ответа A: разным путям — разная
+                         задержка (ошибка 6d78ccab, круг 2). Подстановки те же,
+                         что у --delay-seed-path; путь непустой.
       --keep             Не удалять каталог стенда после прогона сценария.
   -h, --help             Эта справка.
 
@@ -103,6 +109,23 @@ export function resolveDelaySeedPath(filter, seed) {
     .replaceAll('{{homeId}}', seed.homeId);
 }
 
+/**
+ * Разобрать повторяемый `--delay-seed-rule <ms>:<путь>`. Путь обязателен:
+ * правило без пути задержало бы все запросы сети и перекрыло следующие
+ * (первое совпадение выигрывает).
+ */
+export function parseDelaySeedRule(value) {
+  const at = typeof value === 'string' ? value.indexOf(':') : -1;
+  if (at <= 0) throw new Error('--delay-seed-rule требует <ms>:<путь>');
+  const delayMs = Number(value.slice(0, at));
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 600000) {
+    throw new Error('--delay-seed-rule: задержка — целое 0..600000 мс');
+  }
+  const path = value.slice(at + 1);
+  if (path === '') throw new Error('--delay-seed-rule: путь обязателен');
+  return { delayMs, path };
+}
+
 /** Разбор аргументов стенда (ошибка → Error, код возврата 2). */
 export function parseArgs(argv) {
   const opts = {
@@ -121,6 +144,7 @@ export function parseArgs(argv) {
     seedComment: 'стартовый текст',
     delaySeedMs: 0,
     delaySeedPath: '',
+    delaySeedRules: [],
     keep: false,
     help: false,
   };
@@ -204,6 +228,10 @@ export function parseArgs(argv) {
         break;
       case '--delay-seed-path':
         opts.delaySeedPath = need(argv[i + 1], arg);
+        i += 1;
+        break;
+      case '--delay-seed-rule':
+        opts.delaySeedRules.push(parseDelaySeedRule(need(argv[i + 1], arg)));
         i += 1;
         break;
       case '--keep':
@@ -549,32 +577,52 @@ async function main(argv) {
       );
     }
 
-    // --- 3а. Прокси задержки медленной сети (--delay-seed-ms) --------------
+    // --- 3а. Прокси задержки медленной сети (--delay-seed-ms / правила) ----
     // Клиент подключается ЧЕРЕЗ прокси, поэтому открытие засеянной сети
     // отвечает медленно, а остальные — быстро: это и есть воспроизведение
-    // гонки «поздний ответ openNetwork» (ошибка 58c55bb9).
+    // гонки «поздний ответ openNetwork» (ошибка 58c55bb9). Несколько правил
+    // (`--delay-seed-rule`) дают РАЗНУЮ задержку разным путям — так ответ B
+    // приходит раньше ответа A (гонка отборов, ошибка 6d78ccab, круг 2).
     let clientRoot = serverRoot;
+    /** Правила в порядке применения (первое совпадение выигрывает). */
+    const delayRules = [];
     if (opts.delaySeedMs > 0) {
-      if (seed === null) {
-        throw new Error('--delay-seed-ms требует засеянную сеть (не используйте с --no-seed)');
-      }
       // id мысли/сети/дома известны только после засева — подставляем их в
       // путь фильтра (сценарии гонки фокуса одной мысли, ошибка 1656ef58).
-      const delayPath = resolveDelaySeedPath(opts.delaySeedPath, seed);
+      delayRules.push({
+        delayMs: opts.delaySeedMs,
+        pathFilter: resolveDelaySeedPath(opts.delaySeedPath, seed),
+      });
+    } else if (opts.delaySeedPath !== '') {
+      throw new Error('--delay-seed-path требует --delay-seed-ms');
+    }
+    for (const rule of opts.delaySeedRules) {
+      delayRules.push({
+        delayMs: rule.delayMs,
+        pathFilter: resolveDelaySeedPath(rule.path, seed),
+      });
+    }
+    if (delayRules.length > 0) {
+      if (seed === null) {
+        throw new Error('задержка требует засеянную сеть (не используйте с --no-seed)');
+      }
       delayProxy = await startDelayProxy({
         targetPort: serverPort,
         networkId: seed.networkId,
-        delayMs: opts.delaySeedMs,
-        pathFilter: delayPath,
+        rules: delayRules,
         log: (line) => process.stdout.write(`[delay-proxy] ${line}\n`),
       });
       clientRoot = `http://127.0.0.1:${delayProxy.port}`;
       process.stdout.write(
-        `ui-probe-stand: прокси задержки ${opts.delaySeedMs} мс для сети ${seed.networkId}` +
-          `${delayPath === '' ? '' : ` (путь ${delayPath})`}: ${clientRoot}\n`,
+        `ui-probe-stand: прокси задержки для сети ${seed.networkId}: ` +
+          delayRules
+            .map(
+              (rule) =>
+                `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}`,
+            )
+            .join(', ') +
+          `: ${clientRoot}\n`,
       );
-    } else if (opts.delaySeedPath !== '') {
-      throw new Error('--delay-seed-path требует --delay-seed-ms');
     }
 
     // --- 3б. Фикстура сценария (--scenario-seed) ---------------------------
@@ -653,16 +701,26 @@ async function main(argv) {
           }
         }
       }
-      // `--delay-seed-path` с опечаткой молча отключил бы задержку, и гейт
-      // стал бы вакуумным: прогон «зелёный» без единого задержанного запроса
-      // (замечание верификатора к ff5efa1a). Фильтр обязан сработать хотя бы
-      // раз — иначе это ошибка стенда, а не результат сценария.
-      if (opts.delaySeedPath !== '' && delayProxy !== null && delayProxy.delayedCount() === 0) {
-        process.stderr.write(
-          `ui-probe-stand: --delay-seed-path «${opts.delaySeedPath}» не совпал ни с одним запросом — ` +
-            'задержка не сработала, гейт вакуумный\n',
-        );
-        code = 1;
+      // Правило с опечаткой в пути молча отключило бы задержку, и гейт стал бы
+      // вакуумным: прогон «зелёный» без единого задержанного запроса
+      // (замечание верификатора к ff5efa1a). Каждое правило обязано сработать
+      // хотя бы раз — иначе это ошибка стенда, а не результат сценария.
+      if (delayProxy !== null) {
+        const counts = delayProxy.delayedByRule();
+        const vacuous = delayRules.filter((_rule, index) => (counts[index] ?? 0) === 0);
+        for (const rule of vacuous) {
+          process.stderr.write(
+            `ui-probe-stand: правило задержки «${
+              rule.pathFilter === '' ? 'все пути' : rule.pathFilter
+            }» не совпало ни с одним запросом — задержка не сработала, гейт вакуумный\n`,
+          );
+        }
+        if (vacuous.length > 0) code = 1;
+        else {
+          process.stdout.write(
+            `ui-probe-stand: задержка сработала по всем правилам (${counts.join('/')})\n`,
+          );
+        }
       }
       process.stdout.write(
         `ui-probe-stand: сценарий завершён (код ${code}); стенд в ${work}\n`,

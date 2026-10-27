@@ -1,6 +1,6 @@
 {
   "name": "6d78ccab-parent-filter-loading",
-  "description": "GUI-сценарий ошибки 6d78ccab «Отбор по родителю выполняется слишком долго» (клиентская часть). Фикстура даёт фокусу крупную ветку (60 детей) и три внетиповых отбора: «Родитель = $thought» (дети фокуса), «Потомок = $thought» (родители фокуса — HOME, другой набор строк) и «Сломанный отбор 6d78ccab» (неизвестный токен $nope → 422). Стенд задерживает прокси на 3 с только прогоны отборов (--delay-seed-path /views/), поэтому состояния детерминированы. Проверки: (1) во время прогона «Родитель = $thought» нижняя зона показывает единое состояние загрузки lib/ui (.ui-state-loading), а НЕ ложное «Подчинённых мыслей нет» и НЕ строки прежнего вида; (2) переключение на «Потомок = $thought» до ответа первого прогона гасит его: появляется HOME, строк «Ребёнок 6d78ccab …» нет; (3) отказ прогона (422) показывает .ui-state-error с текстом «Не удалось исполнить отбор». До фикса сценарий красный на шаге загрузки: зона держит прежние облачка детей, состояния загрузки нет.",
+  "description": "GUI-сценарий ошибки 6d78ccab «Отбор по родителю выполняется слишком долго» (клиентская часть). Фикстура даёт фокусу крупную ветку (60 детей) и три внетиповых отбора: ParentsOf6d78ccab (дети фокуса), ChildrenOf6d78ccab (родители фокуса — HOME, другой набор строк) и «Сломанный отбор 6d78ccab» (условие по удалённому свойству → 422). Стенд задерживает прогоны правилами: A=6000 мс, B=1500 мс (--delay-seed-rule), поэтому B отвечает РАНЬШЕ A — сценарий воспроизводит гонку «поздний A» (круг 2). Проверки: (1) во время прогона A нижняя зона показывает единое состояние загрузки lib/ui (.ui-state-loading), а НЕ ложное «Подчинённых мыслей нет» и НЕ строки прежнего вида; (2) переключение на B до ответа A гасит A, B рисует HOME, а поздний ответ A не перезаписывает B (settle после 6000 мс); (3) отказ прогона (422) показывает .ui-state-error с текстом «Не удалось исполнить отбор». До фикса сценарий красный на шаге загрузки: зона держит прежние облачка детей, состояния загрузки нет.",
   "timeout": 300000,
   "serverLog": {
     "present": [
@@ -70,11 +70,11 @@
     {
       "name": "strip-ready",
       "timeout": 30000,
-      "waitFor": "(() => { const texts = [...document.querySelectorAll('.canvas-filter-strip-btn')].map((e) => (e.textContent || '').trim()); return texts.includes('Родитель = $thought') && texts.includes('Потомок = $thought') && texts.includes('Сломанный отбор 6d78ccab'); })()"
+      "waitFor": "(() => { const texts = [...document.querySelectorAll('.canvas-filter-strip-btn')].map((e) => (e.textContent || '').trim()); return texts.includes('ParentsOf6d78ccab') && texts.includes('ChildrenOf6d78ccab') && texts.includes('Сломанный отбор 6d78ccab'); })()"
     },
     {
       "name": "click-view-a",
-      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'Родитель = $thought'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'ParentsOf6d78ccab'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -85,7 +85,7 @@
     },
     {
       "name": "click-view-b-while-a-inflight",
-      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'Потомок = $thought'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'ChildrenOf6d78ccab'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -106,7 +106,7 @@
     },
     {
       "name": "settle-after-a-late-answer",
-      "probe": "(async () => { await new Promise((r) => setTimeout(r, 1200)); const zone = document.querySelector('.zone-children'); if (zone === null) return 'no-zone'; const hasHome = zone.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null; const titles = [...zone.querySelectorAll('.cloud-title')].map((e) => (e.textContent || '').trim()); return hasHome && !titles.some((t) => t.startsWith('Ребёнок 6d78ccab')) ? 'ok' : 'stale-overwrite'; })()",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 3000)); const zone = document.querySelector('.zone-children'); if (zone === null) return 'no-zone'; const hasHome = zone.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null; const titles = [...zone.querySelectorAll('.cloud-title')].map((e) => (e.textContent || '').trim()); return hasHome && !titles.some((t) => t.startsWith('Ребёнок 6d78ccab')) ? 'ok' : 'stale-overwrite'; })()",
       "expect": "ok"
     },
     {

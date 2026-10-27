@@ -15,42 +15,86 @@ import http from 'node:http';
 import net from 'node:net';
 
 /**
- * Задерживать ли запрос: путь содержит сегмент `/<networkId>/` или ЗАКАНЧИВАЕТСЯ
- * этим сегментом (`/networks/<id>` — само открытие сети, `/networks/<id>?…`).
- * `networkId` пустой/не задан — не задерживать ничего. `pathFilter` сужает
- * задержку до запросов, чей путь содержит подстроку (например,
- * `/thoughts/resolve`): так окно гонки создаётся в конкретном ожидании рендера,
- * а не во всей цепочке открытия сети.
+ * Относится ли URL к запросам засеянной сети: путь содержит сегмент
+ * `/<networkId>/` или ЗАКАНЧИВАЕТСЯ этим сегментом (`/networks/<id>` — само
+ * открытие сети, `/networks/<id>?…`). Похожий префикс id (`<id>x`) своей сетью
+ * не считается.
  */
-export function needsDelay(url, networkId, pathFilter = '') {
+function isSeedNetworkUrl(url, networkId) {
   if (typeof url !== 'string' || url === '') return false;
   if (typeof networkId !== 'string' || networkId === '') return false;
-  if (typeof pathFilter === 'string' && pathFilter !== '' && !url.includes(pathFilter)) return false;
   const marker = `/${networkId}`;
   const at = url.indexOf(marker);
   if (at < 0) return false;
   const next = url.charAt(at + marker.length);
-  // Сегмент целиком: конец пути, `/` или начало query. Похожий префикс id
-  // (`<id>x`) своей сетью не считается.
   return next === '' || next === '/' || next === '?';
+}
+
+/**
+ * Задерживать ли запрос: путь принадлежит засеянной сети, а `pathFilter`
+ * (если задан) — подстрока пути (например, `/thoughts/resolve`): так окно
+ * гонки создаётся в конкретном ожидании рендера, а не во всей цепочке
+ * открытия сети.
+ */
+export function needsDelay(url, networkId, pathFilter = '') {
+  if (!isSeedNetworkUrl(url, networkId)) return false;
+  return typeof pathFilter !== 'string' || pathFilter === '' || url.includes(pathFilter);
+}
+
+/**
+ * Индекс первого подходящего правила (первое совпадение выигрывает) или -1.
+ * Отдельно от {@link delayForUrl}, чтобы сервер прокси вёл счётчик по правилу.
+ */
+export function matchDelayRule(url, networkId, rules) {
+  if (!isSeedNetworkUrl(url, networkId)) return -1;
+  const list = Array.isArray(rules) ? rules : [];
+  return list.findIndex((rule) => {
+    const filter = typeof rule.pathFilter === 'string' ? rule.pathFilter : '';
+    return filter === '' || url.includes(filter);
+  });
+}
+
+/**
+ * Задержка по списку правил (первое совпавшее выигрывает): нужна сценариям,
+ * где ответ B обязан прийти РАНЬШЕ ответа A (разные задержки разных путей,
+ * замечание верификатора круга 2 к ошибке 6d78ccab). Возвращает миллисекунды
+ * или `null`, если ни одно правило не совпало.
+ */
+export function delayForUrl(url, networkId, rules) {
+  const index = matchDelayRule(url, networkId, rules);
+  if (index < 0) return null;
+  const delay = rules[index]?.delayMs;
+  return typeof delay === 'number' ? delay : null;
 }
 
 /**
  * Поднять прокси на свободном порту 127.0.0.1.
  *
- * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string, log?:(line:string)=>void}} opts
- * @returns {Promise<{port:number, delayedCount:()=>number, close:()=>Promise<void>}>}
+ * `rules` — список правил `{delayMs, pathFilter}` (первое совпадение); без них
+ * действует прежняя пара `delayMs`/`pathFilter`. Счётчик задержек ведётся и
+ * по каждому правилу: стенд проверяет, что фильтр с опечаткой не сделал гейт
+ * вакуумным.
+ *
+ * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string,
+ *          rules?:Array<{delayMs:number, pathFilter?:string}>, log?:(line:string)=>void}} opts
+ * @returns {Promise<{port:number, delayedCount:()=>number, delayedByRule:()=>number[],
+ *                    close:()=>Promise<void>}>}
  */
 export async function startDelayProxy({
   targetPort,
   networkId,
   delayMs = 3000,
   pathFilter = '',
+  rules = [],
   log = () => undefined,
 }) {
+  const effectiveRules =
+    Array.isArray(rules) && rules.length > 0 ? rules : [{ delayMs, pathFilter }];
   /** Сколько запросов реально задержано — стенд проверяет, что path-фильтр
    *  не сделал гейт вакуумным (опечатка в пути молча отключает задержку). */
   let delayed = 0;
+  /** По правилу: правило, не совпавшее ни разу, — ошибка стенда. */
+  const delayedPerRule = effectiveRules.map(() => 0);
   const forwardHttp = (req, res) => {
     const upstream = http.request(
       {
@@ -73,10 +117,13 @@ export async function startDelayProxy({
   };
 
   const server = http.createServer((req, res) => {
-    if (needsDelay(req.url, networkId, pathFilter)) {
+    const hitIndex = matchDelayRule(req.url, networkId, effectiveRules);
+    if (hitIndex >= 0) {
+      const hitDelay = effectiveRules[hitIndex]?.delayMs ?? delayMs;
       delayed += 1;
-      log(`delay ${delayMs}ms ${req.method} ${req.url}`);
-      setTimeout(() => forwardHttp(req, res), delayMs);
+      delayedPerRule[hitIndex] = (delayedPerRule[hitIndex] ?? 0) + 1;
+      log(`delay ${hitDelay}ms ${req.method} ${req.url}`);
+      setTimeout(() => forwardHttp(req, res), hitDelay);
       return;
     }
     forwardHttp(req, res);
@@ -107,13 +154,21 @@ export async function startDelayProxy({
   });
   const address = server.address();
   const port = typeof address === 'object' && address !== null ? address.port : 0;
-  log(`listening ${port} -> ${targetPort}, delay ${delayMs}ms for /${networkId}/${
-    pathFilter === '' ? '' : ` (path ${pathFilter})`
-  }`);
+  log(
+    `listening ${port} -> ${targetPort}, ${effectiveRules.length} rule(s) for /${networkId}/: ` +
+      effectiveRules
+        .map(
+          (rule, i) =>
+            `#${i} ${rule.delayMs}ms${typeof rule.pathFilter === 'string' && rule.pathFilter !== '' ? ` (path ${rule.pathFilter})` : ''}`,
+        )
+        .join(', '),
+  );
   return {
     port,
     /** Сколько запросов прокси реально задержал (0 — фильтр не совпал). */
     delayedCount: () => delayed,
+    /** Счётчики по правилам: не совпавшее ни разу правило — вакуумный гейт. */
+    delayedByRule: () => [...delayedPerRule],
     close: () =>
       new Promise((resolve) => {
         server.close(() => resolve());

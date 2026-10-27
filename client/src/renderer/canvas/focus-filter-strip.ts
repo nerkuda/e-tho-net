@@ -157,21 +157,42 @@ export function getViewRunError(): string | null {
  * Кэш эффективного набора отборов по фокусу (ошибка 6d78ccab, DoD п.3).
  * `GET /thoughts/{id}/views?include_effective=true` вызывался на КАЖДЫЙ
  * рендер холста (store-нотификация, пагинация зоны, realtime), хотя набор
- * меняется только событиями отборов и сменой фокуса. Ключ — сеть + фокус:
- * ответ принадлежит паре, в которой он снят.
+ * меняется только событиями отборов, сменой фокуса, типа мысли и слоя.
+ * Ключ — сеть + фокус + тип мысли + слой: типовые отборы наследуются по
+ * цепочке типа, внетиповые ветвятся по `layer_id` (миграция 052), поэтому
+ * ответ валиден только в контексте, в котором снят (замечание верификатора
+ * круга 2 к 6d78ccab).
  */
 interface EffectiveViewsCache {
   networkId: string;
   focusId: string;
+  /** Тип мысли фокуса (`null` — безтиповая). */
+  typeId: string | null;
+  /** Текущий слой сессии (`null` — основа). */
+  layerId: string | null;
   rows: EffectiveViewRow[];
 }
 let effectiveViewsCache: EffectiveViewsCache | null = null;
 
-/** Сбрасывает кэш эффективного набора: фокус/сеть сменились или пришло
- *  realtime-событие отбора (`thought-type-view.*` / `thought-custom-view.*`,
- *  включая перенос владельца `reason: 'moved'`). */
+/** Сбрасывает кэш эффективного набора: фокус/сеть/тип/слой сменились,
+ *  пришло realtime-событие отбора (`thought-type-view.*` /
+ *  `thought-custom-view.*`, включая перенос владельца `reason: 'moved'`) или
+ *  вызывающий код увидел смену контекста вне полосы. */
 function invalidateEffectiveViewsCache(): void {
   effectiveViewsCache = null;
+}
+
+/**
+ * Контекст фокуса сменился ВНЕ полосы — другой слой сессии
+ * (`resyncAfterLayerSwitch`) или другой тип мысли (`thought.updated`):
+ * эффективный набор, признак `keywords` определения и результат прогона
+ * прочитаны в прежнем контексте и недействительны. Набор перечитывается
+ * лениво при следующем `renderStrip`, прогон — при следующем рендере холста.
+ */
+export function invalidateStripContextCaches(): void {
+  invalidateEffectiveViewsCache();
+  invalidateViewDefinitionCache();
+  resetViewRunState();
 }
 /** Currently focused thought id (used as the map key in L4). */
 let currentFocusId: string | null = null;
@@ -259,14 +280,6 @@ export function getActiveMode(): StripMode {
  *  «Потомки» or a view has not been run yet. */
 export function takeViewResult(): ViewResult | null {
   return lastResult;
-}
-
-/** Drops the cached view result (called when the user goes back to
- *  «Потомки» so the next focus render does not briefly flash stale data). */
-export function clearViewResult(): void {
-  lastResult = null;
-  runStatus = 'idle';
-  lastRunError = null;
 }
 
 /**
@@ -462,7 +475,7 @@ export async function renderStrip(
   // `defined_on`, `inherited`, `is_default` и `definition`. Двухшаговый
   // fallback (`thoughts.get.meta.views` + list) убран. Повторный рендер того
   // же фокуса идёт из кэша по `focusId` (ошибка 6d78ccab, DoD п.3); кэш
-  // гасят realtime-события отборов и смена фокуса.
+  // гасят realtime-события отборов, смена фокуса, типа мысли и слоя.
   const views = await loadEffectiveViews(focus, pair);
   // Пара сменилась, пока шёл запрос: ответ принадлежит прежнему экрану —
   // не публикуем его в полосе новой сети (ошибка ff5efa1a).
@@ -550,12 +563,17 @@ async function loadEffectiveViews(
   // Сеть запроса — сеть ФОКУСА (пара рендера), а не текущая сеть стора.
   // Устаревший рендер (пара уже не текущая) запроса не порождает (ff5efa1a).
   if (!isScreenPairCurrent(pair)) return [];
-  // Кэш по паре «сеть + фокус»: повторный рендер того же фокуса не делает
-  // второй GET. Ответ принадлежит паре, поэтому сеть — часть ключа.
+  // Контекст, в котором снят ответ: повторный рендер того же фокуса не делает
+  // второй GET, но смена типа мысли (типовые отборы по цепочке) или слоя
+  // (ветвление `thought_custom_views.layer_id`) делает прежний ответ чужим.
+  const typeId = focus.focused.type_id ?? null;
+  const layerId = store.state.currentLayer?.id ?? null;
   if (
     effectiveViewsCache !== null &&
     effectiveViewsCache.networkId === pair.networkId &&
-    effectiveViewsCache.focusId === focus.focused.id
+    effectiveViewsCache.focusId === focus.focused.id &&
+    effectiveViewsCache.typeId === typeId &&
+    effectiveViewsCache.layerId === layerId
   ) {
     return effectiveViewsCache.rows;
   }
@@ -598,7 +616,13 @@ async function loadEffectiveViews(
   }
   // Кэшируем только удачный ответ: ошибка сети не должна «залипать» на фокусе
   // до следующего realtime-события.
-  effectiveViewsCache = { networkId: pair.networkId, focusId: focus.focused.id, rows: out };
+  effectiveViewsCache = {
+    networkId: pair.networkId,
+    focusId: focus.focused.id,
+    typeId,
+    layerId,
+    rows: out,
+  };
   return out;
 }
 
@@ -1228,6 +1252,12 @@ function cancelInflightRun(): void {
  *  определения отбора. Результат и статус больше не описывают текущий вид. */
 function resetViewRunState(): void {
   cancelInflightRun();
+  // Эпоха сдвигается ВСЕГДА, а не только на старте нового прогона: ответ,
+  // уже доехавший до континуации (abort не успел, ответ получен), не должен
+  // опубликоваться в `lastResult` после сброса — иначе кэш результата
+  // загрязняется данными прежнего фокуса/режима, и `isThoughtInViewResult`
+  // даёт ложное срабатывание (замечание верификатора круга 2 к 6d78ccab).
+  runSeq += 1;
   lastResult = null;
   runStatus = 'idle';
   lastRunError = null;

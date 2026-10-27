@@ -388,11 +388,26 @@ describe(
     it('AST-листья «Родитель = X» и «Потомок = X» укладываются в потолок 50 мс', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const { homeId, parentId } = seedStand(ndb);
+        const { parentId } = seedStand(ndb);
         const base: ThoughtQueryRequest = { sort: 'alpha', order: 'asc', limit: 100, offset: 0, count: true };
         const parentsEq = astLeafRequest(base, 'parents', parentId);
-        const childrenEq = astLeafRequest(base, 'children', homeId);
-
+        // «Потомок = X» адресует мысли, у которых X — ПОТОМОК. `homeId` —
+        // корень дерева (потомков у него вверх нет), поэтому значение обязано
+        // быть мыслью с родителем: иначе кейс мерил пустой отбор (замечание
+        // верификатора круга 2 к 6d78ccab).
+        const childrenEq = astLeafRequest(base, 'children', parentId);
+        // Непустота обоих отборов — условие вакуумности гейта: время пустого
+        // результата не характеризует стоимость AST-листа.
+        const parentsProbe = queryThoughts(ndb, STAND_USER, parentsEq, { emptyFilterMode: 'all' });
+        const childrenProbe = queryThoughts(ndb, STAND_USER, childrenEq, { emptyFilterMode: 'all' });
+        assert.ok(
+          (parentsProbe.total ?? 0) > 0,
+          `AST «Родитель = X» вернул 0 строк — гейт вакуумный`,
+        );
+        assert.ok(
+          (childrenProbe.total ?? 0) > 0,
+          `AST «Потомок = X» вернул 0 строк — гейт вакуумный`,
+        );
         const parentsMs = measure(() => {
           queryThoughts(ndb, STAND_USER, parentsEq, { emptyFilterMode: 'all' });
         });
@@ -421,7 +436,7 @@ describe(
     it('на 10 тыс. мыслей AST-листья укладываются в потолок ~200 мс', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const { homeId, parentId } = seedStand(ndb, LARGE_STAND_THOUGHTS);
+        const { parentId } = seedStand(ndb, LARGE_STAND_THOUGHTS);
         const linkCount = (ndb.prepare('SELECT COUNT(*) AS c FROM links').get() as { c: number }).c;
         assert.ok(
           linkCount >= LARGE_STAND_THOUGHTS * 2 - 10,
@@ -429,7 +444,13 @@ describe(
         );
         const base: ThoughtQueryRequest = { sort: 'alpha', order: 'asc', limit: 100, offset: 0, count: true };
         const parentsEq = astLeafRequest(base, 'parents', parentId);
-        const childrenEq = astLeafRequest(base, 'children', homeId);
+        // Непустое значение и ассерт непустоты — как в кейсе 1500: пустой
+        // отбор не мерит стоимость AST-листа (замечание круга 2 к 6d78ccab).
+        const childrenEq = astLeafRequest(base, 'children', parentId);
+        const parentsProbe = queryThoughts(ndb, STAND_USER, parentsEq, { emptyFilterMode: 'all' });
+        const childrenProbe = queryThoughts(ndb, STAND_USER, childrenEq, { emptyFilterMode: 'all' });
+        assert.ok((parentsProbe.total ?? 0) > 0, 'AST «Родитель = X» на 10k вернул 0 строк');
+        assert.ok((childrenProbe.total ?? 0) > 0, 'AST «Потомок = X» на 10k вернул 0 строк');
         const parentsMs = measure(() => {
           queryThoughts(ndb, STAND_USER, parentsEq, { emptyFilterMode: 'all' });
         });
@@ -466,7 +487,12 @@ describe(
           subtree: { roots: [homeId], include_roots: false, max_depth: 20, include_inactive_links: false },
         };
         const parentsEq = astLeafRequest(base, 'parents', parentId);
-        const childrenEq = astLeafRequest(base, 'children', homeId);
+        // «Потомок = X» — значение с родителем (см. кейс 1500), не пустой отбор.
+        const childrenEq = astLeafRequest(base, 'children', parentId);
+        const parentsProbe = queryThoughts(ndb, STAND_USER, parentsEq, { emptyFilterMode: 'all' });
+        const childrenProbe = queryThoughts(ndb, STAND_USER, childrenEq, { emptyFilterMode: 'all' });
+        assert.ok((parentsProbe.total ?? 0) > 0, 'слой-снапшот: «Родитель = X» вернул 0 строк');
+        assert.ok((childrenProbe.total ?? 0) > 0, 'слой-снапшот: «Потомок = X» вернул 0 строк');
 
         const parentMs = measure(() => {
           queryThoughts(ndb, STAND_USER, parentRequest, { emptyFilterMode: 'all' });
