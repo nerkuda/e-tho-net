@@ -103,9 +103,11 @@ import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from '.
 // ---------------------------------------------------------------------------
 
 /**
- * Оператор условия по значению свойства — объединение наборов обоих фасадов:
- * `in`/`not_in`/`is_empty`/`not_empty` — из REST-фильтра «Структур»,
- * `ne`/`gte`/`lte`/`any_of`/`all_of`/`none_of` — из `etn.thoughts.query`.
+ * Оператор условия по значению свойства — канон плоской формы
+ * (`FLAT_PROPERTY_OPS`, задача 40c76144): REST `properties[].op` и MCP
+ * `properties[].operator` принимают один и тот же набор. Применимость
+ * конкретного оператора к природе свойства ограничивает гейт
+ * {@link OPS_BY_VALUE_TYPE} ниже.
  */
 export type ThoughtQueryPropertyOperator =
   | 'eq'
@@ -127,7 +129,9 @@ export type ThoughtQueryPropertyOperator =
 export interface ThoughtQueryPropertyCondition {
   property_id: string;
   operator: ThoughtQueryPropertyOperator;
-  value: string | number | boolean | Array<string | number | boolean>;
+  /** Необязательно для `is_empty`/`not_empty` (задача 40c76144): наличие
+   *  значения решает строка `property_values`, переданное игнорируется. */
+  value?: string | number | boolean | Array<string | number | boolean>;
 }
 
 /**
@@ -460,7 +464,10 @@ export function mcpRequestToQuery(
       return {
         property_id: c.property_id,
         operator: c.operator,
-        value: c.value,
+        // Пара наличия значение не читает (задача 40c76144): контракт
+        // `etn.thoughts.query` разрешает `value` отсутствующим, в канон идёт
+        // пустая строка — движок ветвится по оператору раньше.
+        value: c.value ?? '',
       };
     }),
     active: req.active,

@@ -5,6 +5,7 @@
  * depth of every hit.
  */
 
+import type { FlatPropertyOp } from '../enums.js';
 import type { LinkTypeFilterInput } from './link.js';
 import type { NetworksCatalog } from './network.js';
 import type { CrossNetworkTruncationReason } from './search.js';
@@ -18,7 +19,9 @@ export type ThoughtQueryActive = 'true' | 'false' | 'any';
 export type ThoughtQueryTrashed = 'true' | 'false' | 'any';
 
 /**
- * Оператор условия по значению свойства.
+ * Оператор условия по значению свойства — канон плоской формы
+ * ({@link FlatPropertyOp}, задача 40c76144): `in`/`not_in`/`is_empty`/
+ * `not_empty` добавлены к MCP-плоской форме для паритета с REST и AST.
  *
  * `any_of`/`all_of`/`none_of` (задача 20effcbd, 0.8.1) — операторы для
  * наборов значений: свойство-связь (`value_type: 'link'`, набор целей рёбер)
@@ -28,17 +31,7 @@ export type ThoughtQueryTrashed = 'true' | 'false' | 'any';
  *   * `all_of` — набор содержит все перечисленные значения;
  *   * `none_of` — набор не содержит ни одного из перечисленных.
  */
-export type PropertyQueryOperator =
-  | 'eq'
-  | 'ne'
-  | 'contains'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'any_of'
-  | 'all_of'
-  | 'none_of';
+export type PropertyQueryOperator = FlatPropertyOp;
 
 /** Одно условие по значению свойства мысли (AND-группа). */
 export interface PropertyQueryCondition {
@@ -69,8 +62,13 @@ export interface PropertyQueryCondition {
    * («связь такого типа есть либо отсутствует»). Для `any_of`/`all_of`/`none_of`
    * (свойство-связь и `config.multiple` `url`) — непустой массив
    * id/строк.
+   *
+   * Необязательно для `is_empty`/`not_empty` (наличие значения, задача
+   * 40c76144): переданное значение движок игнорирует. Для остальных
+   * операторов обязательно; отсутствие — `VALIDATION_ERROR` на границе
+   * контракта (MCP) либо при исполнении (REST).
    */
-  value: string | number | boolean | string[];
+  value?: string | number | boolean | string[];
 }
 
 /** Сортировка результата. */

@@ -1,0 +1,155 @@
+/**
+ * Сторож: каждый оператор плоского условия по свойству объявлен в спеке
+ * (канон требования 00eb824b) и ОДИНАКОВО присутствует в MCP-схеме, REST-enum,
+ * гейте движка, справке `etn.guide` и описании инструмента `tools/list`
+ * (ошибка 40c76144).
+ *
+ * Дефект, который закрывает сторож: набор операторов жил в пяти местах, и
+ * расхождения были незаметны — MCP отвергал `in`/`not_in`/`is_empty`/
+ * `not_empty`, REST отвергал `gte`/`lte`, хотя справка и спека обещали их.
+ * Агент планировал вызов по справке и получал `VALIDATION_ERROR`.
+ *
+ * Канон здесь задан ЛИТЕРАЛОМ (`CANON`), а не импортом `FLAT_PROPERTY_OPS`:
+ * если сверять источники только между собой, удаление оператора из самого
+ * источника (или из мест, которые из него генерируются) пройдёт зелёным.
+ * Литерал делает сторож независимым от кода, который он стережёт.
+ *
+ * **ВНИМАНИЕ: `@etn/shared` читается из собранного `dist`.** После правки
+ * `shared/src/enums.ts` нужен `npm -w @etn/shared run build`, иначе сторож
+ * увидит старый набор (процесс тестов намеренно не собирает shared).
+ *
+ * Проверка описания идёт по реально рекламируемому каталогу (`tools/list`),
+ * как у `guard-mcp-description-contracts.test.ts`: агент видит именно его,
+ * а не исходник.
+ */
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import { FLAT_PROPERTY_OPS, STRUCTURE_PROPERTY_OPS } from '@etn/shared';
+
+import { ThoughtsQuery } from '../src/contracts.js';
+import { OPS_BY_VALUE_TYPE } from '../src/domain/query-service.js';
+import { GUIDE_TOPICS_BY_NAME } from '../src/mcp/tools/ops-catalog.js';
+import {
+  buildMcpContext,
+  closeMcpContext,
+  connectMcpClient,
+  nativeAvailable,
+} from './mcp-helpers.js';
+
+/** Канон плоской формы (требование 00eb824b, задача 40c76144). */
+const CANON = [
+  'eq',
+  'ne',
+  'contains',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'in',
+  'not_in',
+  'is_empty',
+  'not_empty',
+  'any_of',
+  'all_of',
+  'none_of',
+] as const;
+
+/** Сортированный набор без дублей — источники сверяются как множества. */
+function opsOf(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort();
+}
+
+const CANON_SORTED = opsOf(CANON);
+
+/** Разбор slash-перечисления операторов из строки источника. */
+function splitOps(span: string): string[] {
+  const parts = span.split('/').map((v) => v.trim()).filter((v) => v !== '');
+  assert.ok(parts.length > 0, 'перечисление операторов пустое');
+  return parts;
+}
+
+describe(
+  'сторож: набор плоских операторов один во всех источниках (40c76144)',
+  { skip: !nativeAvailable() },
+  () => {
+    it('единственный источник FLAT_PROPERTY_OPS = канон', () => {
+      assert.deepEqual(
+        opsOf(FLAT_PROPERTY_OPS),
+        CANON_SORTED,
+        'FLAT_PROPERTY_OPS (shared/src/enums.ts) разошёлся с каноном 00eb824b',
+      );
+    });
+
+    it('MCP-схема etn.thoughts.query { properties[].operator } = канон', () => {
+      // Схема — ZodObject с refine (zod 4 сохраняет объект): `properties`
+      // объявлено `z.array(...).optional()` — разворачиваем optional.
+      const properties = ThoughtsQuery.schema.shape.properties.unwrap();
+      const operator = properties.element.shape.operator;
+      assert.deepEqual(
+        opsOf(operator.options as readonly string[]),
+        CANON_SORTED,
+        'enum операторов плоской формы MCP разошёлся с каноном 00eb824b',
+      );
+    });
+
+    it('REST-enum STRUCTURE_PROPERTY_OPS = канон', () => {
+      assert.deepEqual(
+        opsOf(STRUCTURE_PROPERTY_OPS),
+        CANON_SORTED,
+        'wire-enum REST properties[].op разошёлся с каноном 00eb824b',
+      );
+    });
+
+    it('гейт движка OPS_BY_VALUE_TYPE (объединение по типам) = канон', () => {
+      const engine = Object.values(OPS_BY_VALUE_TYPE).flat() as readonly string[];
+      assert.deepEqual(
+        opsOf(engine),
+        CANON_SORTED,
+        'исполнитель (OPS_BY_VALUE_TYPE) принимает набор, отличный от канона 00eb824b',
+      );
+    });
+
+    it('справка etn.guide { topic: "thoughts.query" } = канон', () => {
+      const topic = GUIDE_TOPICS_BY_NAME.get('thoughts.query');
+      assert.ok(topic !== undefined, 'тема thoughts.query обязана быть в реестре гайда');
+      const match = /Плоская форма — канон из 14 операторов `([a-z_/]+)`/.exec(topic.body_md);
+      assert.ok(
+        match !== null,
+        'в справке не найден маркер «Плоская форма — канон из 14 операторов `…`»',
+      );
+      assert.deepEqual(
+        opsOf(splitOps(match![1]!)),
+        CANON_SORTED,
+        'справка thoughts.query перечисляет набор, отличный от канона 00eb824b',
+      );
+    });
+
+    it('описание etn.thoughts.query в tools/list = канон', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const { tools } = await handle.client.listTools();
+          const tool = tools.find((t) => t.name === 'etn.thoughts.query');
+          assert.ok(tool !== undefined, 'инструмент etn.thoughts.query обязан быть в tools/list');
+          const match = /канон ([a-z_/]+);/.exec(tool!.description ?? '');
+          assert.ok(
+            match !== null,
+            'в описании etn.thoughts.query не найден маркер «канон <операторы>;»',
+          );
+          assert.deepEqual(
+            opsOf(splitOps(match![1]!)),
+            CANON_SORTED,
+            'описание инструмента рекламирует набор, отличный от канона 00eb824b',
+          );
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+  },
+);

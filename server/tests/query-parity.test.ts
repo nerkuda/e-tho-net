@@ -300,13 +300,66 @@ describe(
             },
           },
           {
+            // 0.14.1 (ошибка 40c76144): REST-плоская форма принимает `gte`
+            // (раньше enum отвергал — сравнение разрешено спекой 00eb824b для
+            // number/date). Оба фасада сравнивают включительно.
             label: 'свойство Приоритет gte',
             rest: {
-              properties: [{ property_id: priorityPropId, op: 'gt', value: 5 }],
+              properties: [{ property_id: priorityPropId, op: 'gte', value: 3 }],
               ...SORT_ALPHA,
             },
             mcp: {
-              properties: [{ property: 'Приоритет', operator: 'gte', value: 8 }],
+              properties: [{ property: 'Приоритет', operator: 'gte', value: 3 }],
+              sort: 'title',
+              order: 'asc',
+            },
+          },
+          {
+            label: 'свойство Приоритет lte',
+            rest: {
+              properties: [{ property_id: priorityPropId, op: 'lte', value: 5 }],
+              ...SORT_ALPHA,
+            },
+            mcp: {
+              properties: [{ property: 'Приоритет', operator: 'lte', value: 5 }],
+              sort: 'title',
+              order: 'asc',
+            },
+          },
+          // 0.14.1 (ошибка 40c76144): пара наличия в плоской форме — MCP по
+          // имени свойства, REST по id; `value` не передаётся (не нужен).
+          {
+            label: 'свойство Статус is_empty',
+            rest: {
+              properties: [{ property_id: statusPropId, op: 'is_empty' }],
+              ...SORT_ALPHA,
+            },
+            mcp: {
+              properties: [{ property: 'Статус', operator: 'is_empty' }],
+              sort: 'title',
+              order: 'asc',
+            },
+          },
+          {
+            label: 'свойство Статус not_empty',
+            rest: {
+              properties: [{ property_id: statusPropId, op: 'not_empty' }],
+              ...SORT_ALPHA,
+            },
+            mcp: {
+              properties: [{ property: 'Статус', operator: 'not_empty' }],
+              sort: 'title',
+              order: 'asc',
+            },
+          },
+          {
+            label: 'свойство Статус not_in (массив значений)',
+            rest: {
+              properties: [{ property_id: statusPropId, op: 'not_in', value: ['согласовано'] }],
+              ...SORT_ALPHA,
+            },
+            mcp: {
+              properties: [{ property: 'Статус', operator: 'not_in', value: ['согласовано'] }],
               sort: 'title',
               order: 'asc',
             },

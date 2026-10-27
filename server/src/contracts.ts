@@ -41,6 +41,7 @@ import {
   EXPORT_FORMATS,
   EtnError,
   ETNX_SUBTREE_DEPTH_MAX,
+  FLAT_PROPERTY_OPS,
   SORT_KINDS,
   STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_SORTS,
@@ -988,19 +989,19 @@ const QueryPropertyFields = z
   .object({
     property_id: z.string().min(1).optional(),
     property: z.string().min(1).optional(),
-    operator: z.enum([
-      'eq',
-      'ne',
-      'contains',
-      'gt',
-      'gte',
-      'lt',
-      'lte',
-      'any_of',
-      'all_of',
-      'none_of',
-    ]),
-    value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string().min(1)).min(1)]),
+    // Канон плоской формы — один источник `FLAT_PROPERTY_OPS` (задача
+    // 40c76144, требование 00eb824b): состав операторов совпадает с REST
+    // `STRUCTURE_PROPERTY_OPS`, паритет держит сторож
+    // `guard-flat-property-operators.test.ts`. Применимость оператора к
+    // природе свойства проверяет движок (`OPS_BY_VALUE_TYPE`) — одинаково
+    // для MCP и REST.
+    operator: z.enum(FLAT_PROPERTY_OPS),
+    // `value` необязателен для пары наличия (`is_empty`/`not_empty`):
+    // переданное значение движок игнорирует. Обязательность для остальных
+    // операторов — refine ниже.
+    value: z
+      .union([z.string(), z.number(), z.boolean(), z.array(z.string().min(1)).min(1)])
+      .optional(),
   })
   // `.passthrough()` до refine (ошибка f4580fff, 0.12.1): zod по умолчанию
   // ВЫРЕЗАЕТ неизвестные ключи ещё до проверок, поэтому refine по `Object.keys`
@@ -1038,7 +1039,15 @@ const QueryPropertyFields = z
   // `VALIDATION_ERROR`.
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
     message: 'Укажите property_id или property в условии свойства.',
-  });
+  })
+  // Значение обязательно для всех операторов, кроме пары наличия (задача
+  // 40c76144): `is_empty`/`not_empty` решают по строке значения, `value` им
+  // не нужен (переданное игнорируется). Без этого refine отсутствие значения
+  // у сравнения давало бы ошибку позже и с менее понятным текстом.
+  .refine(
+    (v) => v.operator === 'is_empty' || v.operator === 'not_empty' || v.value !== undefined,
+    { message: 'Укажите value условия свойства (кроме операторов is_empty/not_empty).' },
+  );
 /**
  * Старые критерии выборки, с которыми `ast` несовместим (требование 91983c20,
  * задача cb78315b): отбор выражается ЛИБО деревом `ast`, ЛИБО плоскими полями,
