@@ -32,7 +32,7 @@
 
 import type { ThoughtRef } from '@etn/shared';
 
-import { setFocus } from '../app.js';
+import { focusFromUi } from '../app.js';
 // Мини-облачка закреплённых и строки их дропдауна собирает общая фабрика:
 // значок, цвета, начертание, бледность и метка корзины — из одного
 // представления мысли (стандарт «представление мысли — только через фабрику»).
@@ -142,7 +142,7 @@ function openPinnedEntry(id: string): void {
   } else if (store.state.activeView === 'chronicle') {
     void openChronicleThought(id);
   } else {
-    void setFocus(id);
+    focusFromUi(id);
   }
 }
 

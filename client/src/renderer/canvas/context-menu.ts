@@ -24,7 +24,7 @@
 import type { FocusDir, Link } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
-import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { getActiveMode as getStripActiveMode } from './focus-filter-strip.js';
 import { openAddDialog } from './add-dialog.js';
 import {
@@ -531,7 +531,7 @@ export function buildThoughtMenuItems(
     menuAction('Добавить вложение', () => {
       if (opts.attachmentHandler !== undefined) opts.attachmentHandler(target.id);
       else if (opts.openHandler !== undefined) opts.openHandler(target.id);
-      else void setFocus(target.id);
+      else focusFromUi(target.id);
     }),
     MENU_SEPARATOR,
     ...(opts.hideOpenCommand === true
@@ -539,7 +539,7 @@ export function buildThoughtMenuItems(
       : [
           menuAction(opts.openLabel ?? 'Открыть редактор', () => {
             if (opts.openHandler !== undefined) opts.openHandler(target.id);
-            else void setFocus(target.id);
+            else focusFromUi(target.id);
           }),
         ]),
     ...(opts.focusHandler !== undefined

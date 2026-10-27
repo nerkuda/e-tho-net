@@ -88,7 +88,7 @@ describe('Enter по выбранной строке результатов (з�
   it('хит-мысль ведёт в фокус, группа — сворачивается/разворачивается', () => {
     const src = readText(SEARCH_TS);
     assert.equal(
-      (src.match(/const activate = activateHit\(key, \(\) => void setFocus\(hit\.thought_id\)\);/g) ?? [])
+      (src.match(/const activate = activateHit\(key, \(\) => focusFromUi\(hit\.thought_id\)\);/g) ?? [])
         .length,
       2,
       'обе группы мыслей (имена, тексты) ведут в фокус',

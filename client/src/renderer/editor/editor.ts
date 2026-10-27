@@ -359,6 +359,10 @@ export function openThoughtInEditor(id: string): void {
       store.state.selectedLinkId === null &&
       store.state.structuresActiveThoughtId === null
     ) {
+      // Намеренный no-op: мысль уже в фокусе и уже открыта в редакторе.
+      // Метка в журнале нужна, чтобы такой клик не путали с зависанием
+      // (ошибка 1656ef58: «клик без ответа» не имел пояснения).
+      logUiEvent('ui.focus.noop', { id });
       return;
     }
     // Following the focus again: the halo/current-thought pointer is the

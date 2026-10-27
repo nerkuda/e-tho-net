@@ -31,7 +31,7 @@ import {
 // начертание, бледность и метка корзины; эллипсы и индикаторы дерево
 // добавляет само (домен структур — те же, что на холсте).
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
-import { setFocus } from '../../app.js';
+import { focusFromUi } from '../../app.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
@@ -1369,7 +1369,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
                 // «Найти на карте мыслей» (L23, §15.8): switch the view first so
                 // the map is visible while the focus response arrives.
                 setActiveView('map');
-                void setFocus(targetId);
+                focusFromUi(targetId);
               },
             },
           );

@@ -23,7 +23,41 @@ import type { FocusResponse, Thought } from '@etn/shared';
 import { etn } from './etn.js';
 import { queryKeys } from './live/query-keys.js';
 import { setQueryData, subscribeQuery } from './live/query-registry.js';
+import { currentScreenPair, isCurrentScreenPair } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
+
+// ---------------------------------------------------------------------------
+// Поколение установки фокуса (ошибка 1656ef58)
+// ---------------------------------------------------------------------------
+//
+// Установка фокуса — длинная операция: `thoughts.focus` идёт по сети, затем
+// ещё раз ждёт история (`noteThoughtWillOpen`). Если пользователь за это время
+// выбрал другую мысль или ушёл в другую сеть/вкладку, запоздавший ответ
+// прежней операции не имеет права публиковаться: он перезаписывал более новый
+// фокус (карта показывала старую мысль в центре, а у неё — прежних детей) и
+// переподписывал окрестность на прежнюю мысль.
+//
+// Каждая ПОЛЬЗОВАТЕЛЬСКАЯ операция берёт номер (`beginFocusOp`); фоновые пути
+// (`refreshFocusOrNull`, `resetFocusToHome`) номер только читают — фон не
+// отменяет выбор пользователя, но обязан уступить, если тот начал новую
+// операцию, пока фон ждал сеть.
+let focusOpSeq = 0;
+
+/** Начать пользовательскую установку фокуса; вернуть номер операции. */
+export function beginFocusOp(): number {
+  focusOpSeq += 1;
+  return focusOpSeq;
+}
+
+/** Актуальна ли ещё операция установки фокуса с этим номером. */
+export function isFocusOpCurrent(seq: number): boolean {
+  return seq === focusOpSeq;
+}
+
+/** Номер последней операции — для фоновых путей, которые не начинают новую. */
+export function currentFocusOpSeq(): number {
+  return focusOpSeq;
+}
 
 // ---------------------------------------------------------------------------
 // Привязка окрестности фокуса к слою данных (G2 тех.проекта 269016e2)
@@ -92,8 +126,13 @@ export function deactivateFocusQuery(): void {
  * Мутатор-путь G2: и своя правка (REST-ответ), и чужая (перезапрос по
  * инвалидации роутера) приходят в один кэш `focus:@id`, затем в store — холст
  * перерисовывается из кэша без ручных вызовов обновления.
+ *
+ * `seq` — номер операции установки фокуса, если ответ пришёл из длинной
+ * пользовательской цепочки: устаревший ответ (пользователь уже выбрал другую
+ * мысль — ошибка 1656ef58) не публикуется вовсе.
  */
-export function publishFocusResponse(response: FocusResponse): void {
+export function publishFocusResponse(response: FocusResponse, seq?: number): void {
+  if (seq !== undefined && !isFocusOpCurrent(seq)) return;
   setQueryData(queryKeys.focus(response.focused.id), response);
   // Если на этот фокус уже подписана активная окрестность, её слушатель сам
   // спроецировал данные (setQueryData уведомляет синхронно) — не дублируем.
@@ -181,9 +220,20 @@ export async function ensureManualPositionsInitialized(
 export async function refreshFocusOrNull(networkId: string): Promise<FocusResponse | null> {
   const focusId = store.state.focus?.focused.id;
   if (focusId === undefined) return null;
+  // Фон НЕ начинает новую операцию (не отменяет выбор пользователя), но
+  // уступает, если пользователь начал свою, пока этот запрос ждал сеть:
+  // поздний фоновый ответ не должен перезаписать более новый фокус.
+  const seq = currentFocusOpSeq();
+  const pair = currentScreenPair();
   try {
     const response: FocusResponse = await etn.thoughts.focus(networkId, focusId);
-    publishFocusResponse(response);
+    const stillCurrent =
+      isFocusOpCurrent(seq) &&
+      pair !== null &&
+      isCurrentScreenPair(pair) &&
+      store.state.focus?.focused.id === focusId;
+    if (!stillCurrent) return response;
+    publishFocusResponse(response, seq);
     activateFocusQuery(networkId, focusId);
     return response;
   } catch {
@@ -201,15 +251,20 @@ export async function refreshFocusOrNull(networkId: string): Promise<FocusRespon
  * helper does NOT switch the server session.
  */
 export async function resetFocusToHome(networkId: string): Promise<FocusResponse | null> {
+  // Снимок поколения: если пользователь успел начать собственную установку
+  // фокуса (клик по карте/ссылка) — HOME не публикуем, его выбор новее.
+  const seq = currentFocusOpSeq();
   let home: Thought;
   try {
     home = await findRootThought(networkId);
   } catch {
     return null;
   }
+  if (!isFocusOpCurrent(seq)) return null;
   try {
     const response: FocusResponse = await etn.thoughts.focus(networkId, home.id);
-    publishFocusResponse(response);
+    if (!isFocusOpCurrent(seq)) return null;
+    publishFocusResponse(response, seq);
     activateFocusQuery(networkId, home.id);
     return response;
   } catch {

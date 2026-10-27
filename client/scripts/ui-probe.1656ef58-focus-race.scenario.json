@@ -1,0 +1,107 @@
+{
+  "name": "1656ef58-focus-race",
+  "description": "Гейт ошибки 1656ef58 (доказанный класс): поздний ответ установки фокуса A не перезаписывает более новый фокус B. Стенд задерживает прокси ровно POST /thoughts/<A>/focus на 4 с (--delay-seed-ms 4000 --delay-seed-path '/thoughts/{{thoughtId}}/focus'); фикстура даёт A большое поддерево (40 детей), а B — сестру под HOME с двумя реальными детьми. Сценарий: реальный двойной клик по A (CDP, селектор по data-id засеянной мысли) → двойной клик по B внутри окна задержки (синтетический dblclick в пробе, вокруг него замер отклика двумя requestAnimationFrame, порог 500 мс) → settle 8 с > задержки. До фикса поздний ответ A публикуется поверх B: в центре A («Проба стенда»), дерево — дети A; целевая проба «один .focus-cloud = B» красная. После фикса в центре ровно одно облачко B, B отсутствует в .zone-children, реальные дети B (B-ребёнок 1/2 1656ef58) присутствуют. serverLog: не меньше ДВУХ focus-запросов со статусом 200 и ни одного 5xx; стенд отдельно подтверждает delayedCount > 0 (гейт не вакуумный).",
+  "timeout": 300000,
+  "serverLog": {
+    "present": [
+      "(\"url\":\"[^\"]*/thoughts/[^\"]+/focus\",\"status\":200[\\s\\S]*){2}"
+    ],
+    "absent": ["\"url\":\"[^\"]*/thoughts/[^\"]+/focus\",\"status\":5"]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "map-ready-a-and-b",
+      "timeout": 60000,
+      "waitFor": "(() => { const focus = document.querySelector('.canvas-focus-row .focus-cloud'); if (focus === null) return false; const titles = [...document.querySelectorAll('.zone-children .cloud')].map((e) => { const t = e.querySelector('.cloud-title'); return (t ? t.textContent : e.textContent || '').trim(); }); return titles.includes('{{seedTitle}}') && titles.includes('B 1656ef58'); })()"
+    },
+    {
+      "name": "dblclick-a-real",
+      "timeout": 30000,
+      "click": {
+        "selector": ".zone-children .cloud[data-id=\"{{thoughtId}}\"]",
+        "count": 2
+      }
+    },
+    {
+      "name": "raf-probe-a",
+      "timeout": 30000,
+      "probe": "(async () => { const t0 = performance.now(); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const ms = performance.now() - t0; window.__focusProbeA = ms; return ms < 500 ? 'ok' : 'blocked:' + Math.round(ms); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "dblclick-b-inside-delay-window",
+      "timeout": 30000,
+      "probe": "(async () => { const cloud = [...document.querySelectorAll('.zone-children .cloud')].find((e) => { const t = e.querySelector('.cloud-title'); return (t ? t.textContent : e.textContent || '').trim() === 'B 1656ef58'; }); if (cloud === undefined) return 'no-cloud'; const t0 = performance.now(); cloud.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window })); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const ms = performance.now() - t0; window.__focusProbeB = ms; return ms < 500 ? 'ok' : 'blocked:' + Math.round(ms); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "settle-after-delay",
+      "timeout": 30000,
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 8000)); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-cloud-is-b",
+      "timeout": 30000,
+      "probe": "(() => { const clouds = [...document.querySelectorAll('.canvas-focus-row .focus-cloud')]; if (clouds.length !== 1) return 'count:' + clouds.length; const t = clouds[0].querySelector('.cloud-title'); const title = (t ? t.textContent : clouds[0].textContent || '').trim(); return title === 'B 1656ef58' ? 'ok' : 'focus:' + title; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "b-not-in-children-zone",
+      "timeout": 30000,
+      "probe": "(() => { const found = [...document.querySelectorAll('.zone-children .cloud')].some((e) => { const t = e.querySelector('.cloud-title'); return (t ? t.textContent : e.textContent || '').trim() === 'B 1656ef58'; }); return found ? 'duplicate' : 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "real-b-children-present",
+      "timeout": 30000,
+      "probe": "(() => { const titles = [...document.querySelectorAll('.zone-children .cloud')].map((e) => { const t = e.querySelector('.cloud-title'); return (t ? t.textContent : e.textContent || '').trim(); }); const missing = ['B-ребёнок 1 1656ef58', 'B-ребёнок 2 1656ef58'].filter((wanted) => !titles.includes(wanted)); return missing.length === 0 ? 'ok' : 'missing:' + missing.join(','); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "ui-response-within-threshold",
+      "timeout": 30000,
+      "probe": "(() => { const a = window.__focusProbeA; const b = window.__focusProbeB; if (typeof a !== 'number' || typeof b !== 'number') return 'not-measured'; return a < 500 && b < 500 ? 'ok' : 'blocked:' + Math.round(a) + '/' + Math.round(b); })()",
+      "expect": "ok"
+    }
+  ]
+}

@@ -22,7 +22,7 @@
 
 import type { MentionHit, PublicationUsageItem, ThoughtRef } from '@etn/shared';
 
-import { requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, requireNetworkId } from '../app.js';
 // Облачка мыслей во вкладке «Связи» (эндпоинты и строки упоминаний) собирает
 // общая фабрика: значок, цвета, начертание, бледность и единые жесты.
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -203,7 +203,7 @@ function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
     width: 'container',
     actions: {
       onClick: (id) => openThoughtInEditor(id),
-      onDoubleClick: (id) => void setFocus(id),
+      onDoubleClick: (id) => focusFromUi(id),
       onCtrlClick: (id) => toggleSelection([id]),
       onContextMenu: (event, id) => {
         event.stopPropagation();
@@ -310,7 +310,7 @@ function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
 
   async function open(hit: MentionHit): Promise<void> {
     if (hit.owner_type === 'thought') {
-      void setFocus(hit.owner_id);
+      focusFromUi(hit.owner_id);
       return;
     }
     try {
@@ -427,7 +427,7 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
   /** Opens the mentioning entity (thought → focus, link → editor). */
   async function open(hit: MentionHit): Promise<void> {
     if (hit.owner_type === 'thought') {
-      void setFocus(hit.owner_id);
+      focusFromUi(hit.owner_id);
       return;
     }
     try {

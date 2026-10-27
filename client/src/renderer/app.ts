@@ -20,8 +20,10 @@ import { describeConnectFailure } from './lib/connect-failure.js';
 import { etn } from './lib/etn.js';
 import {
   activateFocusQuery,
+  beginFocusOp,
   deactivateFocusQuery,
   findRootThought,
+  isFocusOpCurrent,
   refreshFocusOrNull,
   resetFocusToHome,
   publishFocusResponse,
@@ -84,7 +86,11 @@ import {
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
-import { findOpenTargetTab } from './screens/tabs/tab-state.js';
+import {
+  currentScreenPair,
+  findOpenTargetTab,
+  isCurrentScreenPair,
+} from './screens/tabs/tab-state.js';
 import { serverLabelOf, store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 
@@ -156,6 +162,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // Слой данных (G2): снимаем подписку прошлой окрестности — иначе её
   // слушатель писал бы фокус закрытой сети в store.
   deactivateFocusQuery();
+  // Открытие сети — уничтожение прежнего контекста фокуса (ошибка 1656ef58):
+  // запоздавший ответ прежней установки фокуса не публикует свою мысль в
+  // уже открытую сеть. Свою загрузку фокуса этот запуск проводит под этим же
+  // номером — любая более новая пользовательская операция его отменяет.
+  const focusSeq = beginFocusOp();
   const network = await etn.networks.open(networkId);
   if (!isCurrentOpenNetwork(seq)) return;
   // The pool was created lazily by `networks.open`; refresh the per-network
@@ -351,11 +362,17 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     if (!isCurrentOpenNetwork(seq)) return;
   }
   if (initial !== null) {
-    await loadFocusForTab(initial.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq));
+    await loadFocusForTab(
+      initial.id,
+      networkId,
+      activeTabId,
+      () => isCurrentOpenNetwork(seq),
+      focusSeq,
+    );
   } else {
     const root = await findRootThought(networkId);
     if (!isCurrentOpenNetwork(seq)) return;
-    await loadFocusForTab(root.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq));
+    await loadFocusForTab(root.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq), focusSeq);
   }
   if (!isCurrentOpenNetwork(seq)) return;
 
@@ -382,15 +399,19 @@ export async function loadFocusForTab(
   networkId: string,
   tabId: string | null,
   isCurrent?: () => boolean,
+  focusSeq?: number,
 ): Promise<void> {
   try {
     const response = await etn.thoughts.focus(networkId, thoughtId);
     // Запуск перекрыт более новым открытием сети/вкладки — ответ не публикуем
     // (ошибка 58c55bb9, поздний ответ openNetwork).
     if (isCurrent !== undefined && !isCurrent()) return;
+    // Пока грузился фокус, пользователь начал собственную установку фокуса —
+    // его выбор новее, поздний ответ этого запуска не публикуем (1656ef58).
+    if (focusSeq !== undefined && !isFocusOpCurrent(focusSeq)) return;
     // Слой данных (G2): свежий ответ идёт в кэш `focus:@id`, активная
     // окрестность подписывается на него — холст рисует из кэша.
-    publishFocusResponse(response);
+    publishFocusResponse(response, focusSeq);
     activateFocusQuery(networkId, thoughtId);
     store.update({ editorTarget: null, selectedLinkId: null });
   } catch {
@@ -401,6 +422,7 @@ export async function loadFocusForTab(
     return;
   }
   if (isCurrent !== undefined && !isCurrent()) return;
+  if (focusSeq !== undefined && !isFocusOpCurrent(focusSeq)) return;
   // Defensive: if the persisted focus_id on the tab row got lost somehow,
   // restore it now — better than a workspace that opens on a stale HOME
   // after every restart.
@@ -433,17 +455,32 @@ export async function setFocus(id: string): Promise<void> {
   const startedAt = Date.now();
   const networkId = requireNetworkId();
   const tabId = store.state.activeTabId;
+  // Поколение пользовательской операции + пара «сеть + вкладка» — на момент
+  // клика. Поздний ответ этой установки не имеет права ни публиковать фокус,
+  // ни писать историю, если пользователь уже выбрал другую мысль, сменил
+  // сеть/вкладку (ошибка 1656ef58: поздний ответ A перезаписывал более новый B
+  // и дерево фокуса показывало прежнюю мысль с её детьми).
+  const focusSeq = beginFocusOp();
+  const pair = currentScreenPair();
   const response = await etn.thoughts.focus(networkId, id);
+  // Проверка ДО истории: иначе запоздавший клик писал бы поворот истории в
+  // чужую (более новую) вкладку/сеть.
+  if (!isFocusOpCurrent(focusSeq)) return;
+  if (pair === null || !isCurrentScreenPair(pair)) return;
   // Unified visit history (0.5.5): records whatever thought was current a
   // moment ago (the previous focus, or a thought/link open in the editor
   // without moving the focus) — not necessarily the old focus. Must run
   // before the store update below (same reasoning as before: the history bar
   // re-renders from store changes, so this needs to land first).
   await noteThoughtWillOpen(id);
+  // `noteThoughtWillOpen` тоже ждёт сеть/запись — за это время операция могла
+  // устареть. Повторная сверка перед публикацией.
+  if (!isFocusOpCurrent(focusSeq)) return;
+  if (pair === null || !isCurrentScreenPair(pair)) return;
   // Слой данных (G2): ответ фокуса кладётся в кэш `focus:@id` (мутатор-путь),
   // активная окрестность подписывается на ключ. Ручного перечитывания
   // окрестности нет — холст перерисовывается из кэша.
-  publishFocusResponse(response);
+  publishFocusResponse(response, focusSeq);
   activateFocusQuery(networkId, id);
   store.update({
     editorTarget: null,
@@ -463,6 +500,20 @@ export async function setFocus(id: string): Promise<void> {
   } else {
     void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
   }
+}
+
+/**
+ * UI-вход установки фокуса (клик/двойной клик, клавиатура, панели).
+ *
+ * Синхронные обработчики не могут ждать промис и не имеют места для `catch`:
+ * без обработки отказ `thoughts.focus` терялся (необработанный отказ), а
+ * пользователь видел «зависший» интерфейс без реакции — ровно симптом
+ * ошибки 1656ef58. Реальный сбой операции по правилам `notice` идёт тостом.
+ */
+export function focusFromUi(id: string): void {
+  void setFocus(id).catch((error) => {
+    notice(errText(error), 'error');
+  });
 }
 
 /**
@@ -588,6 +639,9 @@ export function backToNetworks(): void {
   // окрестности старой сети не должны сработать после перехода.
   clearRefreshTimers();
   deactivateFocusQuery();
+  // Поздний ответ установки фокуса прежней сети не публикуется в список
+  // сетей (ошибка 1656ef58 — тот же класс, что поздний openNetwork).
+  beginFocusOp();
   store.resetNetwork();
   showScreen('networks');
 }
@@ -635,6 +689,10 @@ export async function disconnect(): Promise<void> {
   // иначе континуация в полёте успеет опубликовать сеть/вкладку/экран уже
   // после ухода на онбординг.
   openNetworkSeq += 1;
+  // Разрыв соединения — тоже уничтожение контекста фокуса: поколение
+  // двигается ДО первого await, чтобы ответ установки фокуса, ждавший сеть,
+  // не опубликовался на онбординг (ошибка 1656ef58).
+  beginFocusOp();
   await etn.server.disconnect();
   clearRefreshTimers();
   deactivateFocusQuery();

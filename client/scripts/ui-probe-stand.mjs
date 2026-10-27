@@ -75,6 +75,9 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          иначе Git Bash подменит его путём к своей установке):
                          окно гонки создаётся в конкретном ожидании рендера
                          (ошибка ff5efa1a). Требует --delay-seed-ms.
+                         Подставляются id засеянных сущностей: {{networkId}},
+                         {{thoughtId}}, {{homeId}} — сценарий может задержать
+                         фокус конкретной мысли, зная её только как seed-id. 
       --keep             Не удалять каталог стенда после прогона сценария.
   -h, --help             Эта справка.
 
@@ -82,6 +85,23 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
 (npm -w @etn/client run build). Сценарий запускается дочерним ui-probe.mjs.
 Код возврата: код прогона сценария (0 — успех), либо 1/2 при ошибке стенда.
 `;
+
+/**
+ * Подставить id засеянных сущностей в путь задержки (`--delay-seed-path`).
+ *
+ * Путь задаётся до прогона, а id мысли известен только после засева — сценарий
+ * гонки фокуса конкретной мысли (ошибка 1656ef58) иначе требовал бы ручной
+ * подстановки id, и прогон переставал бы быть одной командой. Подстановки те
+ * же, что у сценария: `{{networkId}}`, `{{thoughtId}}`, `{{homeId}}`.
+ */
+export function resolveDelaySeedPath(filter, seed) {
+  if (typeof filter !== 'string' || filter === '') return filter;
+  if (seed === null || seed === undefined) return filter;
+  return filter
+    .replaceAll('{{networkId}}', seed.networkId)
+    .replaceAll('{{thoughtId}}', seed.thoughtId)
+    .replaceAll('{{homeId}}', seed.homeId);
+}
 
 /** Разбор аргументов стенда (ошибка → Error, код возврата 2). */
 export function parseArgs(argv) {
@@ -538,17 +558,20 @@ async function main(argv) {
       if (seed === null) {
         throw new Error('--delay-seed-ms требует засеянную сеть (не используйте с --no-seed)');
       }
+      // id мысли/сети/дома известны только после засева — подставляем их в
+      // путь фильтра (сценарии гонки фокуса одной мысли, ошибка 1656ef58).
+      const delayPath = resolveDelaySeedPath(opts.delaySeedPath, seed);
       delayProxy = await startDelayProxy({
         targetPort: serverPort,
         networkId: seed.networkId,
         delayMs: opts.delaySeedMs,
-        pathFilter: opts.delaySeedPath,
+        pathFilter: delayPath,
         log: (line) => process.stdout.write(`[delay-proxy] ${line}\n`),
       });
       clientRoot = `http://127.0.0.1:${delayProxy.port}`;
       process.stdout.write(
         `ui-probe-stand: прокси задержки ${opts.delaySeedMs} мс для сети ${seed.networkId}` +
-          `${opts.delaySeedPath === '' ? '' : ` (путь ${opts.delaySeedPath})`}: ${clientRoot}\n`,
+          `${delayPath === '' ? '' : ` (путь ${delayPath})`}: ${clientRoot}\n`,
       );
     } else if (opts.delaySeedPath !== '') {
       throw new Error('--delay-seed-path требует --delay-seed-ms');

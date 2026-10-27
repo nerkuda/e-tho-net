@@ -24,7 +24,7 @@
 import { THOUGHT_RESOLVE_MAX_IDS } from '@etn/shared';
 import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/shared';
 
-import { scheduleRefresh, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -749,8 +749,44 @@ function scheduleRender(): void {
   renderScheduled = true;
   queueMicrotask(() => {
     renderScheduled = false;
-    void render();
+    void render().catch((error) => {
+      // Отказ render() НЕ должен теряться (ошибка 1656ef58): прежде `void
+      // render()` оставлял исключение необработанным отказом, и сбой выглядел
+      // как «зависание» без реакции. Логируем и повторяем расклад целиком.
+      console.error('[canvas] рендер прерван — повтор на следующем тике', error);
+      rebuildFailures += 1;
+      scheduleRebuildRetry();
+    });
   });
+}
+
+/**
+ * Полная пересборка DOM расклада — одна синхронная задача (дефект 1 задачи
+ * e9f0af94). Если она бросила исключение на середине, карта осталась
+ * полуразобранной: фокус уже новый, а зоны — прежние (или наоборот). Это и
+ * есть «неверное дерево» ошибки 1656ef58, поэтому такая пересборка не
+ * считается применённой: следующий тик повторяет render() ЦЕЛИКОМ.
+ *
+ * Число повторов ограничено: постоянный сбой (например, недоступный DOM)
+ * не должен крутить микротаски бесконечно — следующий внешний триггер
+ * (уведомление стора, resize, realtime) снова попробует расклад.
+ */
+const REBUILD_RETRY_LIMIT = 3;
+/** Сколько подряд пересборок упало — сбрасывается успешной. */
+let rebuildFailures = 0;
+/** Повтор уже стоит в очереди — не плодим таймеры одной пачки триггеров. */
+let rebuildRetryScheduled = false;
+
+function scheduleRebuildRetry(): void {
+  if (rebuildRetryScheduled || rebuildFailures > REBUILD_RETRY_LIMIT) return;
+  rebuildRetryScheduled = true;
+  // Следующий тик, а не микротаска: источник сбоя (гонка с пересборкой
+  // разметки редактора) получает шанс завершиться, а не спорить в той же
+  // задаче. `scheduleRender` сам коалессирует повтор с прочими триггерами.
+  window.setTimeout(() => {
+    rebuildRetryScheduled = false;
+    scheduleRender();
+  }, 0);
 }
 
 /**
@@ -856,27 +892,45 @@ async function render(): Promise<void> {
   // Проиграл гонку — уступил более свежему рендеру: DOM не трогаем вовсе
   // (иначе две дорисовки пересобирали бы расклад по очереди и облачка мелькали).
   if (generation !== renderGeneration) return;
-  renderFocusRow(focus);
-  updateFocusBand();
-  renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
-  renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
-  // Lower zone: the strip's active mode decides whether it shows real children
-  // or a view's run result. View results share the children-zone DOM (same
-  // virtualization, same cloud shape) but the gestures that imply a
-  // parent/child link to the focus (manual order, double-click-to-add) are
-  // gated on `viewResultActive`.
-  if (stripMode.kind === 'children') {
-    renderZone('children', groupByThought(zoneNeighbors('children', focus)));
-    setZoneAsViewResult(false, null);
-  } else {
-    renderZone('children', viewResultToZoneEntries(viewResult, focus));
-    setZoneAsViewResult(true, viewResult);
+  try {
+    // Смена фокуса: прежняя позиция прокрутки принадлежит прежнему набору
+    // соседей. Без сброса окно виртуализации считается по старому `scrollTop`
+    // (`renderZoneContent`) и показывает не тот участок нового дерева —
+    // «неверный рендер дерева фокуса» ошибки 1656ef58.
+    if (focusChanged) resetZoneScroll();
+    renderFocusRow(focus);
+    updateFocusBand();
+    renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
+    renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
+    // Lower zone: the strip's active mode decides whether it shows real children
+    // or a view's run result. View results share the children-zone DOM (same
+    // virtualization, same cloud shape) but the gestures that imply a
+    // parent/child link to the focus (manual order, double-click-to-add) are
+    // gated on `viewResultActive`.
+    if (stripMode.kind === 'children') {
+      renderZone('children', groupByThought(zoneNeighbors('children', focus)));
+      setZoneAsViewResult(false, null);
+    } else {
+      renderZone('children', viewResultToZoneEntries(viewResult, focus));
+      setZoneAsViewResult(true, viewResult);
+    }
+    lastFocusId = focus.focused.id;
+    lastNetworkId = store.state.networkId;
+    // The response is now on screen: a further store notification with the SAME
+    // object is a layout/selection re-render, not fresh neighbourhood data.
+    lastFocusResponse = focus;
+    // Расклад применён целиком — счётчик сбоев подряд обнуляется.
+    rebuildFailures = 0;
+  } catch (error) {
+    // Исключение на середине пересборки оставило карту полуразобранной:
+    // «применённым» этот расклад не считаем (lastFocusId/lastFocusResponse не
+    // двигаем), следующий тик повторяет render() целиком. Без этого фокус
+    // оставался новым, а зоны — прежними до следующего внешнего триггера.
+    console.error('[canvas] пересборка расклада прервана — повтор целиком', error);
+    rebuildFailures += 1;
+    scheduleRebuildRetry();
+    return;
   }
-  lastFocusId = focus.focused.id;
-  lastNetworkId = store.state.networkId;
-  // The response is now on screen: a further store notification with the SAME
-  // object is a layout/selection re-render, not fresh neighbourhood data.
-  lastFocusResponse = focus;
   // Totals for the count indicators (async) — a fresh focus seeds every
   // sector's counters; a fresh response for the SAME focus is reconciled by
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
@@ -1999,6 +2053,22 @@ const ZONE_DIRS: readonly ('parents' | 'siblings' | 'children')[] = [
 ];
 
 /**
+ * Сбрасывает прокрутку зон к началу при смене фокуса (ошибка 1656ef58).
+ *
+ * Позиция прокрутки принадлежит прежнему набору соседей: окно виртуализации
+ * `renderZoneContent` считается по `scrollTop` ДО обновления высоты spacer'а,
+ * поэтому новый (меньший) набор рисовался бы со «сдвинутого» окна — пустые
+ * места и не те мысли на экране.
+ */
+function resetZoneScroll(): void {
+  if (zones === null) return;
+  for (const dir of ZONE_DIRS) {
+    const zone = zones[dir];
+    if (zone.scrollTop !== 0) zone.scrollTop = 0;
+  }
+}
+
+/**
  * Порционная подгрузка секторов (задача c8fa74ba). Серверный ответ фокуса
  * отдаёт первые {@link ZONE_PAGE_SIZE} мыслей каждого сектора; при скролле
  * сектора следующие порции догружаются в фоне через
@@ -2141,6 +2211,14 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     prefix[i + 1] = top;
   }
 
+  // Высоту spacer'а обновляем ДО чтения scrollTop: набор соседей мог
+  // уменьшиться, и старый scrollTop уже за пределами нового содержимого —
+  // окно виртуализации нарисовало бы пустоту вместо последних строк
+  // (ошибка 1656ef58). Браузер клампит scrollTop только после смены высоты,
+  // поэтому клампим сами и считаем окно от фактической позиции.
+  spacer.style.height = `${prefix[rows]!}px`;
+  const maxScrollTop = Math.max(0, prefix[rows]! - zone.clientHeight);
+  if (zone.scrollTop > maxScrollTop) zone.scrollTop = maxScrollTop;
   let startRow = 0;
   while (startRow + 1 < rows && prefix[startRow + 1]! <= zone.scrollTop) startRow++;
   let endRow = startRow;
@@ -2149,7 +2227,6 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   startRow = Math.max(0, startRow - OVERSCAN_ROWS);
   endRow = Math.min(rows, endRow + OVERSCAN_ROWS);
 
-  spacer.style.height = `${prefix[rows]!}px`;
   // Anchor the grid inside the zone's content box (task f45ffc8a): the zones
   // pull towards the focus row (parents/siblings — bottom edge, children — top
   // edge), so the clouds read as one cluster instead of scattered corners. The
@@ -2299,7 +2376,7 @@ function buildCloud(
           setCursor(id);
           openThoughtInEditor(id);
         },
-        onDoubleClick: (id) => void setFocus(id),
+        onDoubleClick: (id) => focusFromUi(id),
         onCtrlClick: (id) => selectionHooks?.onCloudClick(id),
         onContextMenu: (event, id) => {
           event.stopPropagation();
@@ -2422,7 +2499,7 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
       },
       onDoubleClick: (id) => {
         closeHoverPreview();
-        void setFocus(id);
+        focusFromUi(id);
       },
     },
   });

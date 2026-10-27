@@ -50,7 +50,7 @@
  *   and opens the link in the editor (spec §3.1).
  */
 
-import { setFocus } from '../app.js';
+import { focusFromUi, setFocus } from '../app.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -859,7 +859,7 @@ function renderIdResult(thought: Thought | null): void {
     // factory-built cloud as the canvas (08-ui-spec.md §2.2) with the id as
     // the snippet.
     // Клик и Enter выполняют одну и ту же активацию строки (задача a1766c7d).
-    const activate = activateHit(key, () => void setFocus(thought.id));
+    const activate = activateHit(key, () => focusFromUi(thought.id));
     rowActivations.set(row, activate);
     row.append(
       createThoughtCloud(thought, {
@@ -989,7 +989,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
       title: 'Найдено по именам',
       hits: response.by_names.map((hit) => {
         const key = `thought:${hit.thought_id}`;
-        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        const activate = activateHit(key, () => focusFromUi(hit.thought_id));
         return {
           lead: createThoughtCloud(
             { ...hit, id: hit.thought_id },
@@ -1015,7 +1015,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
       title: 'Найдено по текстам',
       hits: response.by_texts.map((hit) => {
         const key = `thought:${hit.thought_id}`;
-        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        const activate = activateHit(key, () => focusFromUi(hit.thought_id));
         return {
           lead: createThoughtCloud(
             { ...hit, id: hit.thought_id },
@@ -1152,7 +1152,7 @@ async function openLinkHit(linkId: string): Promise<void> {
 async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promise<void> {
   const networkId = requireNetworkId();
   if (owner === 'thought') {
-    void setFocus(ownerId);
+    focusFromUi(ownerId);
     return;
   }
   try {

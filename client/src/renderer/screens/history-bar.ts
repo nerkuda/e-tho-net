@@ -40,7 +40,7 @@
  *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
  */
 
-import { setFocus } from '../app.js';
+import { focusFromUi } from '../app.js';
 import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { commitEntity, getEntity } from '../lib/live/index.js';
@@ -132,7 +132,7 @@ function openEntry(id: string): void {
   } else if (store.state.activeView === 'chronicle') {
     void openChronicleThought(id);
   } else {
-    void setFocus(id);
+    focusFromUi(id);
   }
 }
 

@@ -16,6 +16,7 @@ import {
   parseArgs,
   parseInitKey,
   readScenarioLogRules,
+  resolveDelaySeedPath,
   serverLogViolations,
 } from '../scripts/ui-probe-stand.mjs';
 import { needsDelay } from '../scripts/ui-probe-delay-proxy.mjs';
@@ -148,6 +149,27 @@ test('needsDelay: медленная сеть — только по сегмен
   assert.equal(needsDelay('/api/v1/health', id), false);
   assert.equal(needsDelay(undefined, id), false);
   assert.equal(needsDelay('/api/v1/networks/x/', ''), false);
+});
+
+test('resolveDelaySeedPath: id засеянных сущностей подставляются в путь фильтра', () => {
+  const seed = {
+    networkId: 'net-1',
+    networkName: 'Сеть',
+    homeId: 'home-1',
+    thoughtId: 'thought-1',
+  };
+  // Сценарий гонки фокуса (1656ef58) знает мысль только как seed-id.
+  assert.equal(
+    resolveDelaySeedPath('/thoughts/{{thoughtId}}/focus', seed),
+    '/thoughts/thought-1/focus',
+  );
+  assert.equal(
+    resolveDelaySeedPath('/networks/{{networkId}}/thoughts/{{homeId}}/focus', seed),
+    '/networks/net-1/thoughts/home-1/focus',
+  );
+  // Пустой фильтр и отсутствие сида (интерактивный стенд) — без изменений.
+  assert.equal(resolveDelaySeedPath('', seed), '');
+  assert.equal(resolveDelaySeedPath('/thoughts/resolve', null), '/thoughts/resolve');
 });
 
 test('serverLogViolations: absent/present и некорректная регулярка', () => {

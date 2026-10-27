@@ -454,7 +454,7 @@ describe('вкладка «Мысли» редактора связи — обл
       "profile: 'tree'",
       'markThoughtCommentPreview(cloud',
       'openThoughtInEditor(',
-      'setFocus(',
+      'focusFromUi(',
       'toggleSelection(',
       'showThoughtContextMenu(',
     ]) {

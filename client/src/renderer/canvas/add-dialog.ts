@@ -30,7 +30,7 @@
  * the zone drop handlers create thoughts with an attachment.
  */
 
-import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 // Строки кандидатов-дублей рисует общая выпадашка подсказок (общая сборка
@@ -355,7 +355,7 @@ async function insertIntoCanvas(
   // записи; перечитывание идемпотентно.
   if (ctx.anchorId !== null && created > 0) notifyPropertyValuesRefreshed();
   scheduleRefresh();
-  if (result.focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
+  if (result.focusFirst && firstAddedId !== null) focusFromUi(firstAddedId);
 }
 
 /** Счётчик диалогов добавления: уникальные id контекстов диспетчера. */

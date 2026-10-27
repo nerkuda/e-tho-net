@@ -33,6 +33,16 @@ export interface StandOptions {
 export declare function parseArgs(argv: string[]): StandOptions;
 export declare function parseInitKey(log: string): string;
 
+/**
+ * Подставить id засеянных сущностей (`{{networkId}}`, `{{thoughtId}}`,
+ * `{{homeId}}`) в путь задержки: сценарий знает мысль только как seed-id
+ * (гонка фокуса одной мысли, ошибка 1656ef58).
+ */
+export declare function resolveDelaySeedPath(
+  filter: string,
+  seed: StandSeed | null,
+): string;
+
 /** Порты/адреса стенда для сборки команды прогона. */
 export interface StandPorts {
   cdp: number;
