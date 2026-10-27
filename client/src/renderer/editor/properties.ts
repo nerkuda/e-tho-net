@@ -1695,7 +1695,7 @@ function outsideRowSpec(
   onRemove: () => void,
   registryLookup?: (propertyId: string) => PropertyRegistryRow | undefined,
   reorderOf?: (key: string) => OutsideReorderSlot | null,
-  registerPendingCommit?: (commit: () => Promise<void>) => void,
+  registerPendingCommit?: (commit: () => Promise<void>, key: string) => void,
 ): KeyedRenderSpec<OutsideRow> {
   const fill = (
     row: HTMLElement,
@@ -1867,7 +1867,7 @@ function fillPendingOutsideRow(
   target: PropertiesTarget,
   onChanged: () => void,
   hint: string | null = null,
-  registerPendingCommit?: (commit: () => Promise<void>) => void,
+  registerPendingCommit?: (commit: () => Promise<void>, key: string) => void,
 ): void {
   const definition = pendingOutsideDefinition(pending, target.ownerType);
   const isLink = definition.value_type === 'link';
@@ -1978,7 +1978,7 @@ function buildOutsideLinkCell(
    *  сторонам (`binding_*_type_ids`, ошибка f8f8fa49); недоступна —
    *  определение без ограничения. */
   registry?: PropertyRegistryRow,
-  registerPendingCommit?: (commit: () => Promise<void>) => void,
+  registerPendingCommit?: (commit: () => Promise<void>, key: string) => void,
 ): HTMLElement {
   if (value.property_id !== '') {
     // Сторона входит в определение и уходит в редактор значения: и запись,
@@ -2459,27 +2459,30 @@ function buildTypePropertiesBody(
  * таблицы значений. Строка пересобирается через `replaceChildren`/`fillRow`,
  * тело группы снимается с экрана — в этих случаях сфокусированный узел не
  * получает `blur`, а его замыкание держит единственную копию набранного.
- * `flush` запускает фиксацию всех и очищает реестр: редакторы пересобранных
- * строк зарегистрируются заново.
+ * Регистрация хранится по ключу строки: пересборка строки заменяет коммит,
+ * а перечитывание без изменения строки (`reconcileKeyed` обновляет только
+ * изменившиеся) сохраняет его — иначе следующий flush был бы пуст
+ * (bfe1bc24, круг 2).
  */
 interface PendingValueCommits {
-  register(commit: () => Promise<void>): void;
+  register(commit: () => Promise<void>, key: string): void;
   flush(): Promise<void>;
 }
 
 function createPendingValueCommits(): PendingValueCommits {
-  const commits = new Set<() => Promise<void>>();
+  const commits = new Map<string, () => Promise<void>>();
   return {
-    register(commit) {
-      commits.add(commit);
+    register(commit, key) {
+      commits.set(key, commit);
     },
     flush() {
       if (commits.size === 0) return Promise.resolve();
-      // Снимок и очистка: `commit` чип-поля сам перерисовывает редактор, а
-      // сверка строк тем временем может зарегистрировать новые.
-      const pending = [...commits];
-      commits.clear();
-      return Promise.all(pending.map((commit) => commit())).then(() => undefined);
+      // Набор НЕ очищается: иначе редактор неизменённой строки терял
+      // регистрацию навсегда. Повторный вызов идемпотентен — скаляры
+      // сравнивают значение с baseline, чип-поле видит уже пустой ввод.
+      return Promise.all([...commits.values()].map((commit) => commit())).then(
+        () => undefined,
+      );
     },
   };
 }
@@ -2506,10 +2509,16 @@ function buildEditorCell(opts: {
    *  черновики: после записи строка становится серверной). */
   onSaved?: () => void;
   /** Реестр таблицы: сюда редактор отдаёт «зафиксировать набранное без Enter»
-   *  (ошибка bfe1bc24) — фиксация до пересборки строки/снятия тела. */
-  registerPendingCommit?: (commit: () => Promise<void>) => void;
+   *  (ошибка bfe1bc24) — фиксация до пересборки строки/снятия тела. Ключ —
+   *  строка таблицы: повторная сборка заменяет коммит, неизменённая строка
+   *  сохраняет регистрацию между перечитываниями (круг 2). */
+  registerPendingCommit?: (commit: () => Promise<void>, key: string) => void;
 }): HTMLElement {
   const { networkId, ownerType, ownerId, definition, current } = opts;
+  // Ключ строки: свойство + сторона у связи + владелец. Пересборка строки
+  // (`fillRow`) регистрирует новый коммит под тем же ключом.
+  const commitKey = `${ownerType}:${ownerId}:${definition.id}:${opts.side ?? ''}`;
+  const registerPending = opts.registerPendingCommit;
   const cell = el('td');
   const stored = current !== undefined && current.value_type !== 'link' ? current.value : null;
 
@@ -2581,9 +2590,13 @@ function buildEditorCell(opts: {
         // она подключается по ключу network+property для text/url/link —
         // включая свойства-связи (ошибка 880c3add).
         historyPropertyId: definition.property_id,
-        // «Зафиксировать набранное без Enter» — в реестр таблицы (bfe1bc24).
-        ...(opts.registerPendingCommit !== undefined
-          ? { registerPendingCommit: opts.registerPendingCommit }
+        // «Зафиксировать набранное без Enter» — в реестр таблицы (bfe1bc24):
+        // ключ строки добавляется здесь, контракт общего редактора не меняется.
+        ...(registerPending !== undefined
+          ? {
+              registerPendingCommit: (commit: () => Promise<void>): void =>
+                registerPending(commit, commitKey),
+            }
           : {}),
       }),
     );

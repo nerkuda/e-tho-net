@@ -2546,6 +2546,62 @@ describe('buildValueEditor — множественный url чипами (ве
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(saved, [['https://a.test', 'https://inside.test']], 'пустой blur не пишет');
   });
+
+  it('карточка (`blur`): «✕» другого чипа фиксирует набранное, а не теряет (bfe1bc24, круг 2)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      // `commitOn` НЕ задан — режим карточки мысли `'blur'` (умолчание).
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const inputOf = (): ShimElement =>
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+    const removeBtnOf = (): ShimElement =>
+      findChips(editor)[0]!.children.find((c) => hasClass(c, 'st-f-clear-inline'))!;
+
+    // Клик по «✕» — уход ВНУТРЬ корня: blur пропускается, затем onRemove
+    // перерисовывает поле. Набранное обязано стать значением до перерисовки.
+    inputOf().value = 'https://b.test';
+    const removeBtn = removeBtnOf();
+    inputOf().dispatch('blur', { relatedTarget: removeBtn });
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(
+      saved,
+      [['https://b.test']],
+      'конечное состояние: удалён выбранный чип, набранное добавлено',
+    );
+    assert.equal(findChips(editor).length, 1, 'остался один чип');
+    assert.equal(inputOf().value, '', 'поле добавления очищено');
+  });
+
+  it('карточка (`blur`): «✕» при пустом вводе даёт одну запись удаления (bfe1bc24, круг 2)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test', 'https://b.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const removeBtn = findChips(editor)[0]!.children.find((c) => hasClass(c, 'st-f-clear-inline'))!;
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(saved, [['https://b.test']], 'ровно одна запись — остаток набора');
+  });
 });
 
 /**
@@ -2684,6 +2740,72 @@ describe('editor properties — flush недописанного значени�
       saves,
       [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
       'набранное записано владельцу, у которого оно было набрано',
+    );
+  });
+
+  it('пустое перечитывание не снимает регистрацию: следующее фиксирует набранное', async () => {
+    const { box, saves } = await buildMultipleTextBody();
+
+    // Перечитывание при пустом поле: коммитов нет, строки не изменились —
+    // `reconcileKeyed` их не пересобирает, редактор не перерегистрируется.
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(saves, [], 'до ввода записей нет');
+
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено');
+    input!.value = 'срочно';
+
+    // Следующее перечитывание обязано зафиксировать набранное: регистрация
+    // редактора неизменённой строки не потеряна (bfe1bc24, круг 2).
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное записано после пустого перечитывания',
+    );
+    assert.equal(chipInputOf(box)?.value, '', 'поле очищено — значение стало чипом');
+  });
+
+  it('смена мысли после пустого перечитывания фиксирует набранное прежнему владельцу', async () => {
+    const { box, saves } = await buildMultipleTextBody(true);
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(saves, [], 'до ввода записей нет');
+
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено во вкладке');
+    input!.value = 'срочно';
+
+    const { retargetPropertiesTab } = await import('../src/renderer/editor/properties.js');
+    retargetPropertiesTab(ctxOf('t2') as any);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное ушло прежнему владельцу t1',
+    );
+  });
+
+  it('повторный flush без нового ввода не дублирует запись', async () => {
+    const { box, saves } = await buildMultipleTextBody();
+    chipInputOf(box)!.value = 'срочно';
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Реестр не очищается намеренно (bfe1bc24, круг 2); коммит чипа после
+    // успешной записи видит пустой ввод и не пишет второй раз.
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'ровно одна запись',
     );
   });
 });

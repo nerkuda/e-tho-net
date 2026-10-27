@@ -327,8 +327,10 @@ function buildPublicationRefEditor(opts: ValueEditorOptions): HTMLElement {
     placeholder: t('publications.field.placeholder'),
     addPlaceholder: t('publications.field.addPlaceholder'),
     // Набранный текст — запрос поиска, а не значение: публикация выбирается
-    // из списка (DoD-альтернатива ошибки bfe1bc24).
+    // из списка (DoD-альтернатива ошибки bfe1bc24). Подсказка постоянная,
+    // брошенный непустой запрос озвучивается при уходе (круг 2).
     inputTitle: 'Значение — публикация из списка: начните вводить название и выберите строку',
+    discardNotice: 'Значение не добавлено: выберите публикацию из списка.',
   });
   root.append(field.root);
 
@@ -633,6 +635,19 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       render();
       commit();
     },
+  });
+  // Набранный текст — запрос поиска, а не значение: при уходе из поля он
+  // очищается. Очистка молчаливая, поэтому непустой брошенный запрос
+  // озвучивается сообщением — так же, как в поле свойства-связи
+  // (DoD-альтернатива ошибки bfe1bc24, круг 2). Уход внутрь поля
+  // (кнопки/чипы) потерей не считается.
+  addInput.addEventListener('blur', (event) => {
+    const typed = addInput.value.trim();
+    if (typed === '') return;
+    const related = (event as { relatedTarget?: unknown }).relatedTarget;
+    if (related !== null && related !== undefined && root.contains(related as Node)) return;
+    addInput.value = '';
+    notice('Значение не добавлено: выберите мысль из списка.', 'info');
   });
 
   /**
@@ -1034,6 +1049,16 @@ function buildMultiTextChipsEditor(opts: {
   };
 
   /**
+   * Текст поля добавления, ещё не ставший значением (без пробелов); `null` —
+   * поле пустое. Вынесено из {@link commitPending}: набранное нужно знать и
+   * путям, которые перерисовывают поле, не вызывая сам коммит (удаление чипа).
+   */
+  const pendingValue = (): string | null => {
+    const value = currentInput?.value.trim() ?? '';
+    return value === '' ? null : value;
+  };
+
+  /**
    * Зафиксировать текст, набранный в поле добавления, но не подтверждённый
    * Enter: он становится ещё одним значением (ошибка bba5a7ce — без этого
    * «Применить» массового диалога строила план по пустому значению и строка
@@ -1042,8 +1067,8 @@ function buildMultiTextChipsEditor(opts: {
   const commitPending = async (): Promise<void> => {
     const input = currentInput;
     if (input === null) return;
-    const value = input.value.trim();
-    if (value === '') return;
+    const value = pendingValue();
+    if (value === null) return;
     input.value = '';
     if (items.includes(value)) return;
     await commit([...items, value]);
@@ -1056,7 +1081,14 @@ function buildMultiTextChipsEditor(opts: {
         buildTextChip(item, {
           icon: kind === 'url' ? '🔗' : '',
           onRemove: () => {
-            void commit(items.filter((v) => v !== item));
+            // Клик по «✕» — уход ВНУТРЬ корня: blur пропущен выше, а `commit`
+            // сразу перерисовывает поле. Набранное без Enter обязано стать
+            // чипом ДО перерисовки (bfe1bc24, круг 2). Одна запись вместо
+            // «зафиксировать + удалить»: в набор идёт конечное состояние.
+            const next = items.filter((v) => v !== item);
+            const pending = pendingValue();
+            if (pending !== null && !next.includes(pending)) next.push(pending);
+            void commit(next);
           },
           ...(kind === 'url'
             ? {
@@ -1104,6 +1136,9 @@ function buildMultiTextChipsEditor(opts: {
         sources,
         onPick: (entry) => {
           const value = entry.value;
+          // Явный выбор строки заменяет набранный запрос выбранным значением:
+          // выпадашка — способ ПОДТВЕРДИТЬ другой вариант, а не сохранить оба.
+          // Оставлено как есть по разбору bfe1bc24, круг 2 (вероятно, ожидаемо).
           input.value = '';
           if (!items.includes(value)) {
             refocusInput = true;
