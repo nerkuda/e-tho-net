@@ -1427,6 +1427,10 @@ function buildOutsidePropertiesBody(
       tableAttached = true;
     }
     shownRows = outsideRows(outside, requestOwnerId, pending);
+    // Повторный flush ПЕРЕД сверкой строк: чтение асинхронное, и набранное
+    // могло появиться, пока оно шло. Без этого `reconcileKeyed` пересобрал бы
+    // изменившуюся строку и снял поле с введённым текстом (bfe1bc24, круг 3).
+    await pendingCommits.flush();
     reconcileKeyed(tbody, shownRows, rowSpec);
     afterRowsChanged();
     // Курсор в редактор значения свежевыбранной строки (сценарии 9aea535d,
@@ -2441,6 +2445,11 @@ function buildTypePropertiesBody(
       value: valueByKey.get(definitionValueKey(definition)),
     }));
     shownRows = rows;
+    // Повторный flush ПЕРЕД сверкой строк: definitions/values читаются
+    // асинхронно, и набранное могло появиться, пока чтение шло. Без этого
+    // `reconcileKeyed` пересобрал бы изменившуюся строку и снял поле с
+    // введённым текстом (bfe1bc24, круг 3).
+    await pendingCommits.flush();
     reconcileKeyed(tbody, rows, rowSpec);
     collectRowNodes();
     nav?.refresh();

@@ -2646,10 +2646,12 @@ describe('editor properties — flush недописанного значени�
   /**
    * Таблица «Свойства типа» с одним multiple-text свойством (чип-поле) и
    * записанными вызовами `etn.properties.set`. `asTab` — строить вкладку
-   * целиком (две группы; даёт retarget при смене владельца).
+   * целиком (две группы; даёт retarget при смене владельца), `getValues` —
+   * подменить чтение значений (управляемые/отложенные ответы для окна гонки).
    */
   async function buildMultipleTextBody(
     asTab = false,
+    getValues: () => Promise<unknown[]> = async () => [],
   ): Promise<{ box: ShimElement; saves: unknown[][] }> {
     shimDocument();
     sharedWindow = (globalThis as any).window ?? {};
@@ -2674,7 +2676,7 @@ describe('editor properties — flush недописанного значени�
       ],
     };
     etnApi['properties'] = {
-      get: async () => [],
+      get: getValues,
       set: async (...args: unknown[]) => {
         saves.push(args);
       },
@@ -2767,6 +2769,125 @@ describe('editor properties — flush недописанного значени�
       'набранное записано после пустого перечитывания',
     );
     assert.equal(chipInputOf(box)?.value, '', 'поле очищено — значение стало чипом');
+  });
+
+  it('окно гонки: набрано во время перечитывания — фиксируется перед сверкой строк', async () => {
+    // Перечитывание уже идёт (ответ `properties.get` отложен), и только ПОСЛЕ
+    // начала чтения пользователь набирает текст. Flush в начале reload к этому
+    // моменту уже отработал: без второго flush перед `reconcileKeyed` пришедшее
+    // значение пересобирает изменившуюся строку и снимает поле с набранным
+    // (bfe1bc24, круг 3).
+    let releaseSecondRead: (() => void) | null = null;
+    let reads = 0;
+    const getValues = async (): Promise<unknown[]> => {
+      reads += 1;
+      if (reads === 1) return [];
+      return new Promise<unknown[]>((resolve) => {
+        releaseSecondRead = () =>
+          resolve([
+            {
+              id: 'vTags',
+              owner_type: 'thought',
+              owner_id: 't1',
+              property_id: 'pTags',
+              property_name: 'Теги',
+              value_type: 'text',
+              value: ['срочно'],
+              outside_type: false,
+              updated_at: '2026',
+            },
+          ]);
+      });
+    };
+    const { box, saves } = await buildMultipleTextBody(false, getValues);
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено');
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(releaseSecondRead !== null, 'второе чтение запрошено и ещё не завершено');
+    input!.value = 'окно';
+    assert.deepEqual(saves, [], 'чтение ещё идёт — записи нет');
+
+    (releaseSecondRead as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'окно', null]],
+      'набранное сохранено ДО пересборки изменившейся строки',
+    );
+  });
+
+  it('окно гонки (внетиповая таблица): набранное фиксируется перед сверкой строк', async () => {
+    // Та же гонка для группы «Свойства вне типа»: скаляр перечитывается с
+    // изменённым значением уже после ввода — строка пересобирается, и без
+    // второго flush перед сверкой набранное гибнет (bfe1bc24, круг 3).
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    etnApi['system'] = { openExternal: async () => '' };
+    const saves: unknown[][] = [];
+    const scalar = (value: string): Record<string, unknown> => ({
+      id: 'v1',
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: 'po1',
+      property_name: 'Отвалившееся',
+      value_type: 'text',
+      value,
+      outside_type: true,
+      updated_at: '2026',
+    });
+    let reads = 0;
+    let releaseSecondRead: (() => void) | null = null;
+    etnApi['properties'] = {
+      get: async (): Promise<unknown[]> => {
+        reads += 1;
+        if (reads === 1) return [scalar('A')];
+        return new Promise<unknown[]>((resolve) => {
+          releaseSecondRead = () => resolve([scalar('A2')]);
+        });
+      },
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+      remove: async () => undefined,
+    };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildOutsidePropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      typeId: null,
+      hasOwnType: false,
+    }) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const input = box.findAll(
+      (e) => e.className.split(' ').includes('prop-editor'),
+    )[0];
+    assert.ok(input !== undefined, 'поле внетиповой строки построено');
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(releaseSecondRead !== null, 'второе чтение запрошено и ещё не завершено');
+    input!.value = 'B2';
+    assert.deepEqual(saves, [], 'чтение ещё идёт — записи нет');
+
+    (releaseSecondRead as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Отвалившееся', 'B2', null]],
+      'набранное сохранено ДО пересборки изменившейся внетиповой строки',
+    );
   });
 
   it('смена мысли после пустого перечитывания фиксирует набранное прежнему владельцу', async () => {

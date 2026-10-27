@@ -1,0 +1,99 @@
+{
+  "name": "bfe1bc24-reload-window",
+  "description": "Ошибка bfe1bc24, круг 3: набранное чип-поле теряется, если перечитывание строки уже началось до ввода. Запускать ТОЛЬКО с искусственной задержкой чтения: --delay-seed-path thought-types --delay-seed-ms 1500. Seed: тип Т1 с типовым свойством «Теги» (text + config.multiple), у P1 значение «срочно». Открываем P1 → «Свойства» (в поле чип «срочно»), затем внешней записью добавляем P1 значение «смена»: приходит realtime-событие, клиент начинает перечитывание, а чтение определений типа задержано прокси. Пока оно идёт, в показанное поле ставится текст «окно» БЕЗ blur. Когда отложенное чтение завершается, пришедший набор «срочно, смена» меняет строку, и reconcileKeyed её пересобирает: повторный flush перед сверкой обязан сохранить «окно» (window-server содержит «окно»; локальный набор при этом оптимистично перезаписывает внешнюю правку — «срочно, окно»). На 09ccd6e7 flush есть только в начале reload, до ввода: строка пересобирается, поле с «окно» снимается без blur, значение гибнет (window-server = «срочно, смена», без «окно»).",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "seed",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const pTags=await et.propertyRegistry.create(N,{name:'Теги',value_type:'text',config:{multiple:true}}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:pTags.id,required:false,position:0}); const r=await et.thoughts.create(N,{title:'Персона 1',type_id:t1.id,create_link:{direction:'parent',target_thought_id:H}}); await et.properties.set(N,'thought',r.id,'Теги','срочно',null); window.__repro={t1:t1.id,tags:pTags.id,P1:r.id}; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "thoughts-on-canvas",
+      "waitFor": "(() => { const b=window.__repro; return b !== undefined && document.querySelector('.cloud[data-id=\"'+b.P1+'\"]') !== null; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-p1",
+      "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "p1-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'",
+      "timeout": 20000
+    },
+    {
+      "name": "open-properties-tab",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "p1-chip-visible",
+      "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const t=[...body.querySelectorAll('.prc-title')].map(n=>n.textContent); return t.includes('срочно'); })()",
+      "timeout": 20000
+    },
+    {
+      "name": "window-set-value",
+      "probe": "(async () => { const b=window.__repro; const before=document.querySelector('.properties-type-body .value-chips-input'); window.__windowField=before; await window.etn.properties.set('{{networkId}}','thought',b.P1,'Теги','срочно, смена',null); return before !== null ? 'ok' : 'no-input'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-mark-set",
+      "probe": "(() => { const i=window.__windowField; if(!i || !i.isConnected) return 'stale-input'; i.setAttribute('data-probe','x'); i.value='окно'; i.dispatchEvent(new Event('input')); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-typed",
+      "probe": "(() => { const i=window.__windowField; return i && i.value === 'окно' && i.isConnected ? 'ok' : 'bad'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-settled-rebuild",
+      "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const t=[...body.querySelectorAll('.prc-title')].map(n=>n.textContent); return t.includes('смена'); })()",
+      "timeout": 15000
+    },
+    {
+      "name": "window-old-field-gone",
+      "probe": "(() => { const i=window.__windowField; return i !== null && i.isConnected === false ? 'ok' : 'still-connected'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-server",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()",
+      "expect": "срочно, окно"
+    }
+  ]
+}

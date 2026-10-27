@@ -42,6 +42,7 @@
     { "name": "p1-again", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'", "timeout": 20000 },
     { "name": "phase3-open-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "phase3-chip-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
+    { "name": "phase3-stable", "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const titles=[...body.querySelectorAll('.prc-title')].map((n)=>n.textContent); return titles.includes('срочно') && titles.includes('смена'); })()", "timeout": 20000 },
     { "name": "phase3-focus", "click": ".properties-type-body .value-chips-input" },
     { "name": "phase3-type", "text": "свернуть" },
     { "name": "phase3-typed", "probe": "document.querySelector('.properties-type-body .value-chips-input')?.value ?? null", "expect": "свернуть" },
