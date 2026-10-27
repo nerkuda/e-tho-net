@@ -262,8 +262,8 @@ function buildApi(): EtnBridgeApi {
         invoke('thoughtTypeViews.update', networkId, thoughtTypeId, viewId, input, expectedVersion),
       remove: (networkId, thoughtTypeId, viewId, expectedVersion) =>
         invoke('thoughtTypeViews.remove', networkId, thoughtTypeId, viewId, expectedVersion),
-      run: (networkId, thoughtId, viewName, opts) =>
-        invoke('thoughtTypeViews.run', networkId, thoughtId, viewName, opts),
+      run: (networkId, thoughtId, viewName, opts, requestId) =>
+        invokeCancellable('thoughtTypeViews.run', [networkId, thoughtId, viewName, opts], requestId),
       moveToThought: (networkId, thoughtTypeId, viewId, targetThoughtId) =>
         invoke('thoughtTypeViews.moveToThought', networkId, thoughtTypeId, viewId, targetThoughtId),
     },

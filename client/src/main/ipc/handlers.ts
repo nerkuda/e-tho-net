@@ -1321,18 +1321,26 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughtTypeViews.run',
-    bind(
+    // Отменяемый прогон (ошибка 6d78ccab): `AbortSignal` контекста вызова
+    // доезжает до fetch, поэтому устаревший прогон отпускает соединение, а
+    // его ответ не публикуется в нижней зоне.
+    bindCancellable(
       (
         networkId: string,
         thoughtId: string,
         viewName: string,
-        opts?: {
+        opts: {
           sort?: import('@etn/shared').StructureSort;
           order?: import('@etn/shared').SortOrder;
           limit?: number;
           offset?: number;
-        },
-      ) => requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, opts),
+        } | undefined,
+        ctx: IpcCallContext,
+      ) =>
+        requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, {
+          ...(opts ?? {}),
+          requestOptions: { signal: ctx.signal },
+        }),
     ),
   );
   handlers.set(

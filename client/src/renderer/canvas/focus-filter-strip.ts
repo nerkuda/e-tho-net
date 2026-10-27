@@ -123,6 +123,56 @@ let overflowBtn: HTMLButtonElement | null = null;
 let currentMode: StripMode = { kind: 'children' };
 /** Last view run result; `null` until the user clicks a view button. */
 let lastResult: ViewResult | null = null;
+
+/**
+ * Состояние прогона активного отбора (ошибка 6d78ccab, DoD):
+ *   * `idle` — прогона нет (режим «Потомки» или результат сброшен);
+ *   * `loading` — прогон в полёте; нижняя зона обязана показать загрузку,
+ *     а не ложное «Подчинённых мыслей нет»;
+ *   * `ready` — последний прогон завершён, {@link lastResult} актуален;
+ *   * `error` — прогон отказал; нижняя зона показывает состояние ошибки.
+ *
+ * Флаг — единственный источник правды для холста: «результата нет» больше не
+ * означает «отбор пуст», потому что пустой/неразрешённый результат приходит
+ * как `ready` с `empty`.
+ */
+export type ViewRunStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+/** Текущее состояние прогона активного отбора. */
+let runStatus: ViewRunStatus = 'idle';
+/** Текст последнего отказа прогона — для `errorState` нижней зоны. */
+let lastRunError: string | null = null;
+
+/** Состояние прогона активного отбора для холста (ошибка 6d78ccab). */
+export function getViewRunStatus(): ViewRunStatus {
+  return runStatus;
+}
+
+/** Текст последнего отказа прогона; `null` — отказа не было. */
+export function getViewRunError(): string | null {
+  return lastRunError;
+}
+
+/**
+ * Кэш эффективного набора отборов по фокусу (ошибка 6d78ccab, DoD п.3).
+ * `GET /thoughts/{id}/views?include_effective=true` вызывался на КАЖДЫЙ
+ * рендер холста (store-нотификация, пагинация зоны, realtime), хотя набор
+ * меняется только событиями отборов и сменой фокуса. Ключ — сеть + фокус:
+ * ответ принадлежит паре, в которой он снят.
+ */
+interface EffectiveViewsCache {
+  networkId: string;
+  focusId: string;
+  rows: EffectiveViewRow[];
+}
+let effectiveViewsCache: EffectiveViewsCache | null = null;
+
+/** Сбрасывает кэш эффективного набора: фокус/сеть сменились или пришло
+ *  realtime-событие отбора (`thought-type-view.*` / `thought-custom-view.*`,
+ *  включая перенос владельца `reason: 'moved'`). */
+function invalidateEffectiveViewsCache(): void {
+  effectiveViewsCache = null;
+}
 /** Currently focused thought id (used as the map key in L4). */
 let currentFocusId: string | null = null;
 /** Currently focused thought title (used in menu labels/confirmations). */
@@ -215,6 +265,8 @@ export function takeViewResult(): ViewResult | null {
  *  «Потомки» so the next focus render does not briefly flash stale data). */
 export function clearViewResult(): void {
   lastResult = null;
+  runStatus = 'idle';
+  lastRunError = null;
 }
 
 /**
@@ -241,7 +293,12 @@ export function isThoughtInViewResult(id: string): boolean {
  */
 export function invalidateViewResultForRealtime(): boolean {
   if (currentMode.kind !== 'view') return false;
+  // Устаревший прогон, если он в полёте, гасим: его ответ описывает прежнее
+  // состояние данных, а не то, из-за которого пришло событие.
+  cancelInflightRun();
   lastResult = null;
+  runStatus = 'idle';
+  lastRunError = null;
   return true;
 }
 
@@ -396,13 +453,16 @@ export async function renderStrip(
   // and paint the lower zone empty until the user toggled the mode by hand
   // (ошибка 90811979). The definition cache is dropped with it and re-read lazily.
   if (focusChanged) {
-    lastResult = null;
+    resetViewRunState();
+    invalidateEffectiveViewsCache();
     invalidateViewDefinitionCache();
   }
   // Единственный источник набора — `GET /thoughts/{id}/views?include_effective=true`
   // (требование 045f539a): и типовые по цепочке, и внетиповые, со `scope`,
   // `defined_on`, `inherited`, `is_default` и `definition`. Двухшаговый
-  // fallback (`thoughts.get.meta.views` + list) убран.
+  // fallback (`thoughts.get.meta.views` + list) убран. Повторный рендер того
+  // же фокуса идёт из кэша по `focusId` (ошибка 6d78ccab, DoD п.3); кэш
+  // гасят realtime-события отборов и смена фокуса.
   const views = await loadEffectiveViews(focus, pair);
   // Пара сменилась, пока шёл запрос: ответ принадлежит прежнему экрану —
   // не публикуем его в полосе новой сети (ошибка ff5efa1a).
@@ -490,6 +550,15 @@ async function loadEffectiveViews(
   // Сеть запроса — сеть ФОКУСА (пара рендера), а не текущая сеть стора.
   // Устаревший рендер (пара уже не текущая) запроса не порождает (ff5efa1a).
   if (!isScreenPairCurrent(pair)) return [];
+  // Кэш по паре «сеть + фокус»: повторный рендер того же фокуса не делает
+  // второй GET. Ответ принадлежит паре, поэтому сеть — часть ключа.
+  if (
+    effectiveViewsCache !== null &&
+    effectiveViewsCache.networkId === pair.networkId &&
+    effectiveViewsCache.focusId === focus.focused.id
+  ) {
+    return effectiveViewsCache.rows;
+  }
   let rows: readonly unknown[] = [];
   try {
     const resp = await etn.thoughtCustomViews.list(pair.networkId, focus.focused.id, {
@@ -527,6 +596,9 @@ async function loadEffectiveViews(
       own_default: row['own_default'] === true,
     });
   }
+  // Кэшируем только удачный ответ: ошибка сети не должна «залипать» на фокусе
+  // до следующего realtime-события.
+  effectiveViewsCache = { networkId: pair.networkId, focusId: focus.focused.id, rows: out };
   return out;
 }
 
@@ -543,6 +615,7 @@ function buildChildrenButton(mode: StripMode): HTMLButtonElement {
   if (mode.kind === 'children') btn.classList.add('active');
   btn.addEventListener('click', () => {
     if (currentMode.kind === 'children') return;
+    resetViewRunState();
     setMode({ kind: 'children' }, true);
     persistForCurrentFocus();
     notifyModeChange();
@@ -830,9 +903,11 @@ function openViewEditorForExisting(networkId: string, row: EffectiveViewRow): vo
         // перезапуском, чтобы run выполнился по актуальному определению.
         currentMode.viewName = savedView.name_key;
         // Определение могло поменяться (условия/sort/limit и т.п.) —
-        // сбрасываем кеш признака `keywords`, чтобы новый run прочитал
-        // свежую `definition`.
+        // сбрасываем кеш признака `keywords` и результат прежнего прогона:
+        // новый run обязан прочитать свежую `definition`, а не отдать кэш
+        // «того же фокуса и отбора» (ошибка 6d78ccab, DoD п.2).
         invalidateViewDefinitionCache();
+        resetViewRunState();
         const focus = store.state.focus;
         if (focus !== null) {
           await runActiveViewIfNeeded(focus.focused.id);
@@ -1050,6 +1125,7 @@ async function deleteView(networkId: string, view: EffectiveViewRow): Promise<vo
     if (currentMode.kind === 'view' && currentMode.viewId === view.id) {
       // Удаление активного отбора всегда переключает на «Потомки»
       // (ошибка 04da7519), а не на отбор по умолчанию.
+      resetViewRunState();
       setMode({ kind: 'children' }, true);
       persistForCurrentFocus();
       notifyModeChange();
@@ -1112,12 +1188,50 @@ function notifyModeChange(): void {
 
 /**
  * Runs the currently active view against the focused thought and caches the
- * result for the canvas to paint. Called when the canvas detects that the
- * strip mode is `view` but no result has been cached yet (focus switch,
- * mode switch, or realtime view update). Safe to call multiple times — the
- * server call is cancelled if a newer run starts.
+ * result for the canvas to paint.
+ *
+ * Контракт прогона (ошибка 6d78ccab, DoD):
+ *   * повторный вызов при неизменившихся `focusId + viewId` из кэша не шлёт
+ *     второй POST (холст рендерится на любое уведомление стора);
+ *   * пока прогон в полёте, параллельный вызов с тем же ключом ждёт ЕГО, а не
+ *     запускает второй запрос;
+ *   * новый прогон с другим ключом гасит предыдущий `AbortSignal`; ответ
+ *     устаревшего прогона (эпоха `runSeq` или пара экрана) не публикуется;
+ *   * состояние прогона видно через {@link getViewRunStatus}: `loading` до
+ *     ответа, `ready` (в т.ч. пустой/неразрешённый результат), `error` при
+ *     отказе.
  */
 let runSeq = 0;
+
+/** Эпоха и отмена прогона в полёте. */
+interface InflightRun {
+  key: string;
+  controller: AbortController;
+  promise: Promise<ViewResult | null>;
+}
+let inflightRun: InflightRun | null = null;
+
+/** Ключ прогона: сеть + фокус + отбор. Одинаковые ключи делят один POST. */
+function runKey(networkId: string, focusId: string, viewId: string): string {
+  return `${networkId}\u0000${focusId}\u0000${viewId}`;
+}
+
+/** Гасит прогон в полёте (если есть). Его ответ уже никому не нужен. */
+function cancelInflightRun(): void {
+  const current = inflightRun;
+  if (current === null) return;
+  inflightRun = null;
+  current.controller.abort();
+}
+
+/** Полный сброс состояния прогона: смена фокуса/режима, realtime, правка
+ *  определения отбора. Результат и статус больше не описывают текущий вид. */
+function resetViewRunState(): void {
+  cancelInflightRun();
+  lastResult = null;
+  runStatus = 'idle';
+  lastRunError = null;
+}
 
 /**
  * Кеш признака «определение отбора использует критерий `keywords`», ключ —
@@ -1189,56 +1303,102 @@ export async function runActiveViewIfNeeded(
   // пришедший после смены сети, не должен уходить в чужую сеть (ff5efa1a).
   if (!isScreenPairCurrent(pair)) return null;
   const networkId = pair.networkId;
-  const seq = ++runSeq;
-  try {
-    // Прочитать определение — только ради кеша признака `keywords` (G3).
-    // Сортировку не передаём: исполнитель читает её из определения отбора сам
-    // (`readSavedSort` для плоской пары, `ast.sort` для многоуровневой), поэтому
-    // ни отбраковать, ни подменить её полоса не может (ADR 23fab347).
-    prefetchViewDefinition(currentMode.viewId);
-    const resp = await etn.thoughtTypeViews.run(
-      networkId,
-      focusId,
-      currentMode.viewName,
-      undefined,
-    );
-    // Stale response (the focus changed or the user re-clicked) — drop it.
-    // Hand back only a cached result that belongs to THIS focus: a result for
-    // another focus would paint foreign thoughts into the lower zone, and
-    // `null` must mean "no fresh result", never "the view is empty"
-    // (ошибка 90811979).
-    if (!isScreenPairCurrent(pair)) return null;
-    if (seq !== runSeq) {
-      return lastResult !== null && lastResult.focusId === focusId ? lastResult : null;
-    }
-    const unresolved = resp.meta.unresolved;
-    const hasUnresolved = Array.isArray(unresolved) && unresolved.length > 0;
-    const items = resp.data;
-    // `meta.total` — полное число совпадений по серверу; индикатор нижней зоны
-    // обязан показывать его, а не длину первой порции (ошибка 4493811f).
-    const total = resp.meta.total;
-    lastResult = {
-      viewId: currentMode.viewId,
-      viewName: resp.meta.view.name,
-      // Владелец — из ответа сервера; fallback на активный режим для
-      // совместимости (старый сервер не присылал scope/defined_on).
-      scope: resp.meta.view.scope ?? currentMode.scope,
-      definedOn: resp.meta.view.defined_on ?? currentMode.definedOn,
-      focusId,
-      items,
-      directions: resp.meta.directions ?? {},
-      unresolved: hasUnresolved ? (unresolved as ReadonlyArray<{ token: string; reason: string }>) : null,
-      empty: items.length === 0 && !hasUnresolved,
-      total,
-      nextOffset: VIEW_PAGE_SIZE,
-      exhausted: items.length >= total,
-    };
+  const mode = currentMode;
+  const key = runKey(networkId, focusId, mode.viewId);
+  // Результат этого же фокуса/отбора уже получен — второй POST не нужен
+  // (ошибка 6d78ccab, DoD п.2). Пустой/неразрешённый результат тоже `ready`:
+  // «нет результата» ≠ «отбор пуст».
+  if (
+    runStatus === 'ready' &&
+    lastResult !== null &&
+    lastResult.focusId === focusId &&
+    lastResult.viewId === mode.viewId
+  ) {
     return lastResult;
-  } catch (err) {
-    notice(formatStripError(err, t('strip.runFailed')), 'error');
-    lastResult = null;
-    return null;
   }
+  // Прогон с тем же ключом уже в полёте — ждём его ответ, а не шлём второй.
+  if (inflightRun !== null && inflightRun.key === key) {
+    return inflightRun.promise;
+  }
+  // Другой прогон (прежний фокус/отбор) гасим: его ответ устарел.
+  cancelInflightRun();
+  const controller = new AbortController();
+  const seq = ++runSeq;
+  runStatus = 'loading';
+  lastRunError = null;
+  // Прежний результат больше не описывает текущий вид: индикатор нижней зоны
+  // и холст должны видеть «нет свежего результата», пока идёт прогон.
+  lastResult = null;
+  // Прочитать определение — только ради кеша признака `keywords` (G3).
+  // Сортировку не передаём: исполнитель читает её из определения отбора сам
+  // (`readSavedSort` для плоской пары, `ast.sort` для многоуровневой), поэтому
+  // ни отбраковать, ни подменить её полоса не может (ADR 23fab347).
+  prefetchViewDefinition(mode.viewId);
+  const promise = (async (): Promise<ViewResult | null> => {
+    try {
+      const resp = await etn.thoughtTypeViews.run(
+        networkId,
+        focusId,
+        mode.viewName,
+        undefined,
+        { signal: controller.signal },
+      );
+      // Stale response (the focus changed or the user re-clicked) — drop it.
+      // Hand back only a cached result that belongs to THIS focus: a result for
+      // another focus would paint foreign thoughts into the lower zone, and
+      // `null` must mean "no fresh result", never "the view is empty"
+      // (ошибка 90811979).
+      if (!isScreenPairCurrent(pair)) return null;
+      if (seq !== runSeq) {
+        const cached = takeViewResult();
+        return cached !== null && cached.focusId === focusId ? cached : null;
+      }
+      const unresolved = resp.meta.unresolved;
+      const hasUnresolved = Array.isArray(unresolved) && unresolved.length > 0;
+      const items = resp.data;
+      // `meta.total` — полное число совпадений по серверу; индикатор нижней зоны
+      // обязан показывать его, а не длину первой порции (ошибка 4493811f).
+      const total = resp.meta.total;
+      lastResult = {
+        viewId: mode.viewId,
+        viewName: resp.meta.view.name,
+        // Владелец — из ответа сервера; fallback на активный режим для
+        // совместимости (старый сервер не присылал scope/defined_on).
+        scope: resp.meta.view.scope ?? mode.scope,
+        definedOn: resp.meta.view.defined_on ?? mode.definedOn,
+        focusId,
+        items,
+        directions: resp.meta.directions ?? {},
+        unresolved: hasUnresolved ? (unresolved as ReadonlyArray<{ token: string; reason: string }>) : null,
+        empty: items.length === 0 && !hasUnresolved,
+        total,
+        nextOffset: VIEW_PAGE_SIZE,
+        exhausted: items.length >= total,
+      };
+      runStatus = 'ready';
+      lastRunError = null;
+      return lastResult;
+    } catch (err) {
+      // Отмена — не отказ: состояние принадлежит новому прогону, который его
+      // уже выставил в `loading` (или сбросил). Нижняя зона не должна мигнуть
+      // ошибкой из-за того, что пользователь просто переключил отбор.
+      if (controller.signal.aborted) return null;
+      if (seq !== runSeq) return null;
+      runStatus = 'error';
+      lastRunError = formatStripError(err, t('strip.runFailed'));
+      notice(lastRunError, 'error');
+      lastResult = null;
+      return null;
+    } finally {
+      // Снимаем слот, только если он всё ещё наш: новый прогон мог занять его
+      // раньше, и его отмена через `cancelInflightRun` была бы ошибкой.
+      if (inflightRun !== null && inflightRun.key === key && inflightRun.controller === controller) {
+        inflightRun = null;
+      }
+    }
+  })();
+  inflightRun = { key, controller, promise };
+  return promise;
 }
 
 /**
@@ -1357,8 +1517,14 @@ async function refreshStripFromRealtime(resetActiveIfDeleted: boolean): Promise<
   const seq = ++realtimeRebuildSeq;
   // The event carries a view definition change: the cached `keywords` flag may
   // be stale, while the focus itself did not change (so `renderStrip` no longer
-  // drops the cache on its own).
+  // drops the cache on its own). Эффективный набор фокуса тоже мог измениться
+  // (создание/удаление/перенос владельца) — кэш `include_effective` гасим;
+  // результат активного прогона гасим вместе с ним, чтобы следующий run
+  // прочитал новое определение, а не отдал «тот же фокус/отбор» из кэша
+  // (ошибка 6d78ccab, DoD п.2-3).
   invalidateViewDefinitionCache();
+  invalidateEffectiveViewsCache();
+  resetViewRunState();
   await renderStrip(
     focus,
     resetActiveIfDeleted ? { resetActiveIfDeleted: true, pair } : { pair },

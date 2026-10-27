@@ -28,6 +28,8 @@ import { focusFromUi, scheduleRefresh } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { errorState, loadingState } from '../lib/ui/empty-state.js';
+import { t } from '../lib/i18n.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
 import { takeFocusOrigin } from '../lib/focus-origin.js';
 import { etn } from '../lib/etn.js';
@@ -113,6 +115,8 @@ import { splitterElement } from '../lib/ui/splitter.js';
 import {
   activeViewUsesKeywords,
   getActiveMode as getStripActiveMode,
+  getViewRunError,
+  getViewRunStatus,
   hasMoreViewResult,
   invalidateViewResultForRealtime,
   isThoughtInViewResult,
@@ -884,13 +888,23 @@ async function render(): Promise<void> {
   // rebuild means the first painted frame of the new state already holds the
   // old content. `guard-focus-animation` guards the invariant.
   await renderFilterStrip(focus, { pair });
+  // Пока шёл запрос набора отборов, более свежий рендер мог выиграть гонку:
+  // дорисовка устаревшего не должна ни красить загрузку, ни запускать прогон.
+  if (generation !== renderGeneration) return;
   const stripMode = getStripActiveMode();
   let viewResult: ViewResult | null = null;
   if (stripMode.kind !== 'children') {
+    // Нижняя зона при активном прогоне показывает загрузку, а не содержимое
+    // прежнего вида и не ложное «Подчинённых мыслей нет» (ошибка 6d78ccab).
+    // Свежий результат этого фокуса/отбора красится без перерисовки загрузки.
+    const cached = takeViewResult();
+    const cachedFresh =
+      cached !== null && cached.focusId === focus.focused.id && cached.viewId === stripMode.viewId;
+    if (!cachedFresh) paintChildrenZonePhase('loading');
     // Run the view against the focused thought (no-op if already cached).
     // The mode change listener also calls `render()`; this call may execute
-    // repeatedly during a mode toggle, and the strip's run cancellation keeps
-    // stale responses from overwriting fresh ones.
+    // repeatedly during a mode toggle, and the strip's run de-duplication and
+    // cancellation keep stale responses from overwriting fresh ones.
     viewResult = await runActiveViewIfNeeded(focus.focused.id, pair);
   }
 
@@ -914,11 +928,18 @@ async function render(): Promise<void> {
     // parent/child link to the focus (manual order, double-click-to-add) are
     // gated on `viewResultActive`.
     if (stripMode.kind === 'children') {
-      renderZone('children', groupByThought(zoneNeighbors('children', focus)));
+      childrenZonePhase = 'idle';
+      // Dataset снимается ДО отрисовки зоны: иначе пустая зона потомков
+      // показала бы «Ничего не найдено» от прошлого результата отбора.
       setZoneAsViewResult(false, null);
+      renderZone('children', groupByThought(zoneNeighbors('children', focus)));
     } else {
-      renderZone('children', viewResultToZoneEntries(viewResult, focus));
+      // Ошибка прогона — отдельная фаза; `null` без ошибки значит «ещё не
+      // пришёл свежий результат» (прогон отменён/идёт следующий).
+      childrenZonePhase =
+        viewResult !== null ? 'idle' : getViewRunStatus() === 'error' ? 'error' : 'loading';
       setZoneAsViewResult(true, viewResult);
+      renderZone('children', viewResultToZoneEntries(viewResult, focus));
     }
     lastFocusId = focus.focused.id;
     lastNetworkId = store.state.networkId;
@@ -987,6 +1008,29 @@ function setZoneAsViewResult(active: boolean, result: ViewResult | null): void {
     delete zone.dataset['viewResult'];
     delete zone.dataset['unresolved'];
   }
+}
+
+/**
+ * Немедленно красит нижнюю зону состоянием прогона отбора (ошибка 6d78ccab)
+ * ДО ожидания ответа: пока прогон в полёте, пользователь видит «Загрузка…»
+ * (или состояние ошибки), а не содержимое прежнего вида и не ложное
+ * «Подчинённых мыслей нет. Двойной клик для добавления».
+ *
+ * Зона очищается от прежних облачков: они описывают другой отбор/детей фокуса
+ * и были бы неверной картинкой происходящего. Полная пересборка расклада
+ * после ответа заменит фазу обычным содержимым.
+ */
+function paintChildrenZonePhase(phase: 'loading' | 'error'): void {
+  if (zones === null) return;
+  childrenZonePhase = phase;
+  // Нижняя зона показывает именно прогон отбора: жесты «только для потомков»
+  // и счётчик зоны обязаны вести себя как в режиме отбора.
+  zones['children'].classList.add('zone-children-view-result');
+  zoneData.set('children', []);
+  renderZoneContent('children');
+  // Облачка нижней зоны убраны — у линий к ним больше нет целей.
+  redrawLinks?.();
+  paintZoneIndicators();
 }
 
 /** Builds ZoneEntry rows for the children zone from a view run result. The
@@ -1954,6 +1998,15 @@ const ZONE_EMPTY_LABELS: Record<'parents' | 'siblings' | 'children', string> = {
   children: 'Подчинённых мыслей нет. Двойной клик для добавления',
 };
 
+/**
+ * Фаза нижней зоны в режиме отбора (ошибка 6d78ccab): `loading` — прогон
+ * отбора в полёте, `error` — прогон отказал, `idle` — показывать обычное
+ * содержимое (пусто/неразрешённый токен/строки результата). Ложное
+ * «Подчинённых мыслей нет» при активном прогоне — дефект, который эта фаза
+ * закрывает: «результата нет» больше не означает «отбор пуст».
+ */
+let childrenZonePhase: 'idle' | 'loading' | 'error' = 'idle';
+
 /** Builds a grid zone with scroll → virtualization wiring. */
 function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   const zone = div(`zone zone-${dir}`);
@@ -2158,13 +2211,25 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     // Drop the previous render's content width: a leftover box would keep the
     // empty zone horizontally scrollable (ошибка 1deced69).
     grid.style.width = '';
-    // The children zone carries a view-result empty state when the active
-    // strip mode is a view (spec 9984aa98). Distinguish three cases:
+    // The children zone carries a view-result state when the active strip mode
+    // is a view (spec 9984aa98). Distinguish four cases:
+    //   * "loading" — прогон отбора ещё в полёте: единое состояние загрузки
+    //     lib/ui (`loadingState`), а НЕ ложное «Подчинённых мыслей нет»
+    //     (ошибка 6d78ccab);
+    //   * "error" — прогон отказал: `errorState` с текстом отказа;
     //   * "unresolved" — the filter referenced a token that did not bind;
     //     surface the reason instead of the generic «Ничего не найдено».
     //   * "empty" — the filter ran and returned nothing.
     //   * otherwise — render the children zone's default hint.
     if (dir === 'children') {
+      if (childrenZonePhase === 'loading') {
+        empty.replaceChildren(loadingState());
+        return;
+      }
+      if (childrenZonePhase === 'error') {
+        empty.replaceChildren(errorState(getViewRunError() ?? t('strip.runFailed')));
+        return;
+      }
       const viewResult = zone.dataset['viewResult'];
       if (viewResult === 'unresolved') {
         const raw = zone.dataset['unresolved'];
@@ -2194,6 +2259,10 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     return;
   }
   empty.classList.add('hidden');
+  // Скрытое пустое состояние не должно хранить разметку прежнего состояния
+  // (например, `loadingState`): при следующем показе его содержание задаётся
+  // заново — текстом или заменой узлов.
+  empty.replaceChildren();
 
   const gridInfo = zoneGridOf(dir);
   if (gridInfo === null) return;

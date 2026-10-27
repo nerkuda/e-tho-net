@@ -993,12 +993,17 @@ export interface EtnApi {
      *  (case-insensitive); the server matches it in the effective chain
      *  and substitutes `$thought.*` tokens before executing the filter.
      *  When the resolver cannot bind a token, `meta.unresolved` explains
-     *  why and the lower zone reads from there (spec `9984aa98`). */
+     *  why and the lower zone reads from there (spec `9984aa98`).
+     *
+     *  `options.signal` отменяет устаревший прогон (ошибка 6d78ccab):
+     *  быстрый перебор отборов не оставляет конкурирующие запросы, а ответ
+     *  отменённого прогона не публикуется в нижней зоне. */
     run(
       networkId: string,
       thoughtId: string,
       viewName: string,
       opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+      options?: { signal?: AbortSignal },
     ): Promise<RunThoughtTypeViewResult>;
     /**
      * `POST /thought-types/{id}/views/{viewId}/move-to-thought` — перенос
@@ -1772,13 +1777,31 @@ export type EtnBridgeStructures = Omit<EtnApi['structures'], 'query' | 'queryIds
 };
 
 /**
+ * Мост-форма отменяемого прогона отбора (ошибка 6d78ccab): тот же приём, что
+ * у «Структур». `AbortSignal` — host-объект и не переживает сериализацию
+ * `contextBridge`, поэтому за мост уходит только `requestId`, а слушатель
+ * `abort` живёт в renderer-фасаде {@link EtnApi['thoughtTypeViews'].run}.
+ */
+export type EtnBridgeThoughtTypeViews = Omit<EtnApi['thoughtTypeViews'], 'run'> & {
+  /** `POST /thoughts/{thoughtId}/views/{view}/run` с отменяемым `requestId`. */
+  run(
+    networkId: string,
+    thoughtId: string,
+    viewName: string,
+    opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+    requestId?: string,
+  ): Promise<RunThoughtTypeViewResult>;
+};
+
+/**
  * Сырая поверхность, которую preload выставляет в renderer через
  * `contextBridge.exposeInMainWorld('etn', …)` — то, чем реально является
  * `window.etn`. Renderer-код работает с ней через фасад `renderer/lib/etn.ts`,
  * типизированный публичной {@link EtnApi} (сигнатура с `AbortSignal`).
  */
-export type EtnBridgeApi = Omit<EtnApi, 'structures'> & {
+export type EtnBridgeApi = Omit<EtnApi, 'structures' | 'thoughtTypeViews'> & {
   structures: EtnBridgeStructures;
+  thoughtTypeViews: EtnBridgeThoughtTypeViews;
   /**
    * Fire-and-forget отмена вызова по `requestId` (требование ebed4980): шлёт
    * `etn:cancel` в main, ответа не ждёт. Вызывается renderer-фасадом из

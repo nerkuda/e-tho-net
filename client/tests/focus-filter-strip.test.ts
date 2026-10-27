@@ -195,7 +195,21 @@ interface FakeState {
   typeUpdate: { calls: any[] };
   typeRemove: { calls: any[] };
   typeMoveToThought: { calls: any[] };
-  viewRun: { calls: { nid: string; tid: string; name: string; opts?: unknown }[]; response: any };
+  viewRun: {
+    calls: { nid: string; tid: string; name: string; opts?: unknown; requestId?: unknown }[];
+    response: any;
+    /** Задержка ответа: пока промис не разрешён, запрос «в полёте». */
+    gate: Promise<void> | null;
+    /** Управляемая ошибка ответа (отказ прогона). */
+    error: Error | null;
+    /**
+     * Независимые гейты/ответы по имени отбора (`name_key`) — гонка A→B:
+     * ответ A приходит позже ответа B и не должен рисоваться.
+     */
+    byName: Record<string, { gate?: Promise<void>; response?: any; error?: Error }>;
+  };
+  /** Отмены прогона, доехавшие до моста (`cancelRequest(requestId)`). */
+  cancelled: string[];
   uiGet: { calls: { nid: string; key: string }[]; value: string | null };
   uiSet: { calls: { nid: string; key: string; value: string }[] };
 }
@@ -215,11 +229,17 @@ function installFakeApi(): any {
     typeUpdate: { calls: [] },
     typeRemove: { calls: [] },
     typeMoveToThought: { calls: [] },
-    viewRun: { calls: [], response: null },
+    viewRun: { calls: [], response: null, gate: null, error: null, byName: {} },
+    cancelled: [],
     uiGet: { calls: [], value: null },
     uiSet: { calls: [] },
   };
   return {
+    // Мост отмены прогона (ошибка 6d78ccab): renderer-фасад зовёт его из
+    // слушателя `abort` реального сигнала.
+    cancelRequest: (requestId: string) => {
+      state.cancelled.push(requestId);
+    },
     thoughts: {
       get: async (nid: string, id: string) => {
         state.thoughtsGetCalls.push({ nid, id });
@@ -238,8 +258,14 @@ function installFakeApi(): any {
         if (state.typeOwn.error !== null) throw state.typeOwn.error;
         return { data: state.typeOwn.data, meta: { effective: [] } };
       },
-      run: async (nid: string, tid: string, name: string, opts?: unknown) => {
-        state.viewRun.calls.push({ nid, tid, name, opts });
+      run: async (nid: string, tid: string, name: string, opts?: unknown, requestId?: unknown) => {
+        state.viewRun.calls.push({ nid, tid, name, opts, requestId });
+        const per = state.viewRun.byName[name];
+        if (per?.gate !== undefined) await per.gate;
+        if (per?.error !== undefined) throw per.error;
+        if (per?.response !== undefined) return per.response;
+        if (state.viewRun.gate !== null) await state.viewRun.gate;
+        if (state.viewRun.error !== null) throw state.viewRun.error;
         return state.viewRun.response;
       },
       update: async (...args: any[]) => {
@@ -1508,6 +1534,156 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     await mountWith([]);
     assert.equal(await strip.loadMoreViewResult(FOCUS_ID), null);
     assert.equal(strip.hasMoreViewResult(), false);
+  });
+
+  // -------------------------------------------------------------------
+  // Ошибка 6d78ccab: загрузка/ошибка прогона, отмена A→B, дедуп, кэш набора
+  // -------------------------------------------------------------------
+
+  /** Ответ прогона отбора в форме `RunThoughtTypeViewResult`. */
+  function runResponse(
+    viewId: string,
+    viewName: string,
+    items: any[],
+    unresolved: unknown[] = [],
+  ): any {
+    return {
+      data: items,
+      meta: {
+        total: items.length,
+        limit: 100,
+        offset: 0,
+        directions: {},
+        view: { id: viewId, name: viewName, scope: 'type', defined_on: TYPE_ID },
+        unresolved,
+      },
+    };
+  }
+
+  it('6d78ccab: во время прогона статус loading, результат дедуплицируется одним POST', async () => {
+    await mountWith([row('v-load', 'Загрузка', { isDefault: true })]);
+    let release: () => void = () => undefined;
+    state.viewRun.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(strip.getViewRunStatus(), 'loading', 'до ответа — загрузка');
+    // Второй вход того же фокуса/отбора (холст рендерится на любое
+    // уведомление стора) не запускает второй POST, а ждёт первый.
+    const second = strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(state.viewRun.calls.length, 1, 'один POST на пару focusId+viewId');
+    assert.equal(strip.getViewRunStatus(), 'loading');
+
+    state.viewRun.response = runResponse('v-load', 'Загрузка', []);
+    release();
+    const [r1, r2] = await Promise.all([first, second]);
+    assert.equal(r1, r2, 'оба вызова получили один и тот же результат');
+    assert.equal(strip.getViewRunStatus(), 'ready', 'пустой ответ — не ошибка и не загрузка');
+    assert.equal(r1!.empty, true, 'пусто отличается от неразрешённого');
+    assert.equal(r1!.unresolved, null);
+  });
+
+  it('6d78ccab: повторный рендер того же фокуса/отбора не шлёт второй POST', async () => {
+    await mountWith([row('v-cache', 'Кэш', { isDefault: true })]);
+    state.viewRun.response = runResponse('v-cache', 'Кэш', []);
+    const first = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.ok(first !== null);
+    assert.equal(state.viewRun.calls.length, 1);
+
+    // Полный рендер полосы того же фокуса (store-нотификация, pager, realtime
+    // без события отбора) — кэш результата остаётся валидным.
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'МЛИ-инструменты')));
+    const second = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(second, first, 'результат из кэша, тот же объект');
+    assert.equal(state.viewRun.calls.length, 1, 'POST не повторился');
+    assert.equal(strip.getViewRunStatus(), 'ready');
+  });
+
+  it('6d78ccab: отказ прогона — статус error и объяснимый текст', async () => {
+    await mountWith([row('v-err', 'Ошибка', { isDefault: true })]);
+    state.viewRun.error = new Error('boom');
+    const result = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(result, null);
+    assert.equal(strip.getViewRunStatus(), 'error');
+    assert.match(
+      strip.getViewRunError() ?? '',
+      /Не удалось исполнить отбор/,
+      'нижняя зона получает текст отказа для errorState',
+    );
+    assert.equal(strip.takeViewResult(), null);
+    // Повторный вход после отказа — новый прогон, а не «кэш ошибки».
+    assert.equal(strip.getViewRunStatus(), 'error');
+  });
+
+  it('6d78ccab: A→B гасит прогон A по AbortSignal, ответ A не рисуется', async () => {
+    const harness = await mountWith([row('v-a', 'A'), row('v-b', 'B')]);
+    let releaseA: () => void = () => undefined;
+    let releaseB: () => void = () => undefined;
+    state.viewRun.byName['a'] = {
+      gate: new Promise<void>((resolve) => {
+        releaseA = resolve;
+      }),
+      response: runResponse('v-a', 'A', [refItem('00000000-0000-4000-8000-0000000000a1')]),
+    };
+    state.viewRun.byName['b'] = {
+      gate: new Promise<void>((resolve) => {
+        releaseB = resolve;
+      }),
+      response: runResponse('v-b', 'B', [refItem('00000000-0000-4000-8000-0000000000b1')]),
+    };
+
+    harness.findViewButton('v-a')!.click();
+    const pendingA = strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(strip.getViewRunStatus(), 'loading');
+    assert.equal(state.viewRun.calls.length, 1, 'A ушёл одним POST');
+
+    // Пользователь переключился на B, не дождавшись A: прогон A гасится
+    // реальным AbortSignal (renderer-фасад зовёт cancelRequest).
+    harness.findViewButton('v-b')!.click();
+    const pendingB = strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(state.viewRun.calls.length, 2, 'B ушёл своим POST');
+    assert.equal(state.cancelled.length, 1, 'прогон A отменён через AbortSignal');
+    assert.equal(strip.getViewRunStatus(), 'loading', 'пока B в полёте — загрузка');
+
+    // B отвечает первым, A — позже: ответ устаревшего A не должен перетереть
+    // результат B (эпоха прогона).
+    releaseB();
+    const resultB = await pendingB;
+    assert.equal(resultB!.viewId, 'v-b');
+    releaseA();
+    await pendingA;
+    const drawn = strip.takeViewResult();
+    assert.equal(drawn?.viewId, 'v-b', 'на экране остаётся результат B');
+    assert.deepEqual(
+      drawn?.items.map((item) => item.id),
+      ['00000000-0000-4000-8000-0000000000b1'],
+      'строк A в результате нет',
+    );
+    assert.equal(strip.getViewRunStatus(), 'ready');
+  });
+
+  it('6d78ccab: include_effective кэшируется по фокусу и инвалидируется realtime-событием', async () => {
+    await mountWith([]);
+    assert.equal(state.effectiveList.calls.length, 1, 'первый рендер — один GET');
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'МЛИ-инструменты')));
+    assert.equal(state.effectiveList.calls.length, 1, 'тот же фокус — из кэша');
+
+    // Realtime-событие отбора типа (существующий канал инвалидации
+    // `views:@<typeId>`) гасит кэш: состав эффективного набора мог измениться.
+    store.update({ focus: focusOf(thought(FOCUS_ID, 'МЛИ-инструменты')) });
+    invalidateQueries(`views:@${TYPE_ID}`);
+    await settle();
+    assert.equal(state.effectiveList.calls.length, 2, 'событие отбора инвалидирует кэш');
+
+    // Внетиповое событие чужой мысли набор фокуса не меняет — кэш жив
+    // (фильтр по владельцу стоит в подписке на инвалидации).
+    invalidateQueries(`thought-views:@${OTHER_ID}`);
+    await settle();
+    assert.equal(
+      state.effectiveList.calls.length,
+      2,
+      'событие чужого внетипового отбора не перечитывает набор фокуса',
+    );
   });
 
   // -------------------------------------------------------------------
