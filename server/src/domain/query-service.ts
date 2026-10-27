@@ -2581,6 +2581,29 @@ function astStringList(
 }
 
 /**
+ * Форма `value` подстрочных операторов — ТОЛЬКО строка (ошибка 9420a34c).
+ *
+ * `not_contains` в AST исполняется как отрицание `contains`, поэтому значение
+ * проверяется здесь ДО делегата: иначе `String(value)` снова молча склеил бы
+ * массив через запятую (`['al','pha']` → `"al,pha"`), а `details.operator`
+ * врал бы — `not_contains` выдавал бы себя за `contains` (замечание
+ * верификатора круга 2). Оператор в деталях — фактический.
+ */
+function assertContainsValueIsString(
+  value: unknown,
+  operator: 'contains' | 'not_contains',
+  requestId?: string,
+): asserts value is string {
+  if (typeof value === 'string') return;
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+    { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS, operator },
+    requestId,
+  );
+}
+
+/**
  * Лист по свойству. Семантика — по природе левого операнда (требования
  * 1e19504b/7f0e3f8c/f14e48ab/25324388/bd0348b3):
  *
@@ -2672,7 +2695,11 @@ function propertyLeafClause(
   }
 
   if (operator === 'not_contains') {
-    const inner = propertyClauses(ndb, [{ property_id: def.id, operator: 'contains', value: leaf.value as string }], requestId)[0] ?? AST_FALSE;
+    // Проверка с ФАКТИЧЕСКИМ оператором: `details.operator` = "not_contains"
+    // (замечание верификатора круга 2). Делегат ниже исполняет отрицание
+    // `contains` уже с проверенной строкой.
+    assertContainsValueIsString(leaf.value, 'not_contains', requestId);
+    const inner = propertyClauses(ndb, [{ property_id: def.id, operator: 'contains', value: leaf.value }], requestId)[0] ?? AST_FALSE;
     return astNegate(inner);
   }
   return delegate();
@@ -3335,14 +3362,7 @@ function propertyClauses(
       // без ошибки. MCP-контракт (`contracts.ts`) и REST-разбор
       // (`structure-service.ts`) отвергают не-строку раньше; движок
       // страхует прямых вызывающих (AST-лист, доменные тесты).
-      if (typeof cond.value !== 'string') {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
-          { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS },
-          requestId,
-        );
-      }
+      assertContainsValueIsString(cond.value, 'contains', requestId);
       // «Содержит» — подстрочно и регистронезависимо (требование f14e48ab):
       // регистр сворачивается unicode_lower с обеих сторон.
       const fold = foldsCase(def);
