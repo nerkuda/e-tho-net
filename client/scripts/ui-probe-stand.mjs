@@ -84,6 +84,13 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          обязан прийти РАНЬШЕ ответа A: разным путям — разная
                          задержка (ошибка 6d78ccab, круг 2). Подстановки те же,
                          что у --delay-seed-path; путь непустой.
+      --fail-seed-path <s>
+                         Режим «форвард + подмена статуса»: запросы засеянной
+                         сети, чей путь содержит <s>, всё равно уходят на сервер
+                         (read-only, serverLog видит их), но клиент получает
+                         HTTP 404. Проверка поведения интерфейса на отказе
+                         сервера (ошибка b213cf60). Путь без ведущего слеша;
+                         подстановки id — как у --delay-seed-path.
       --keep             Не удалять каталог стенда после прогона сценария.
   -h, --help             Эта справка.
 
@@ -145,6 +152,7 @@ export function parseArgs(argv) {
     delaySeedMs: 0,
     delaySeedPath: '',
     delaySeedRules: [],
+    failSeedPath: '',
     keep: false,
     help: false,
   };
@@ -232,6 +240,10 @@ export function parseArgs(argv) {
         break;
       case '--delay-seed-rule':
         opts.delaySeedRules.push(parseDelaySeedRule(need(argv[i + 1], arg)));
+        i += 1;
+        break;
+      case '--fail-seed-path':
+        opts.failSeedPath = need(argv[i + 1], arg);
         i += 1;
         break;
       case '--keep':
@@ -375,13 +387,16 @@ export function parseInitKey(log) {
 
 /**
  * Правила серверного лога из сценария (необязательный верхний ключ
- * `serverLog`: `{ "absent": [<regex>…], "present": [<regex>…] }`).
+ * `serverLog`: `{ "absent": [<regex>…], "present": [<regex>…],
+ * "atMost": [{ "pattern": <regex>, "max": <n> }] }`).
  *
  * Это единственный способ честно проверить «в лог не ушёл чужой запрос»:
  * рендерер не видит серверный лог, а шаги сценария работают в странице.
  * Стенд читает правила и проверяет накопленный лог сервера после прогона.
+ * `atMost` — верхняя граница числа совпадений: этим проверяется «панель не
+ * крутит» (ошибка b213cf60), когда одного «запрещено/обязательно» мало.
  *
- * @returns {{absent:string[], present:string[]}|null}
+ * @returns {{absent:string[], present:string[], atMost:Array<{pattern:string, max:number}>}|null}
  */
 export function readScenarioLogRules(file) {
   let parsed;
@@ -393,7 +408,7 @@ export function readScenarioLogRules(file) {
   const rules = parsed?.serverLog;
   if (rules === undefined || rules === null) return null;
   if (typeof rules !== 'object' || Array.isArray(rules)) {
-    throw new Error('serverLog: ожидается объект { absent?: string[], present?: string[] }');
+    throw new Error('serverLog: ожидается объект { absent?: string[], present?: string[], atMost?: [{pattern, max}] }');
   }
   const list = (value, key) => {
     if (value === undefined) return [];
@@ -402,14 +417,35 @@ export function readScenarioLogRules(file) {
     }
     return value;
   };
-  return { absent: list(rules.absent, 'absent'), present: list(rules.present, 'present') };
+  const atMost = rules.atMost === undefined ? [] : rules.atMost;
+  if (!Array.isArray(atMost)) {
+    throw new Error('serverLog.atMost: ожидается массив { pattern, max }');
+  }
+  for (const rule of atMost) {
+    if (
+      typeof rule !== 'object' ||
+      rule === null ||
+      typeof rule.pattern !== 'string' ||
+      rule.pattern === '' ||
+      !Number.isInteger(rule.max) ||
+      rule.max < 0
+    ) {
+      throw new Error('serverLog.atMost[]: нужны непустой pattern и целый max ≥ 0');
+    }
+  }
+  return {
+    absent: list(rules.absent, 'absent'),
+    present: list(rules.present, 'present'),
+    atMost: atMost.map((rule) => ({ pattern: rule.pattern, max: rule.max })),
+  };
 }
 
 /**
  * Нарушения правил серверного лога: `absent` — шаблон найден (нельзя),
- * `present` — шаблон не найден (обязан быть). Некорректная регулярка — ошибка
- * сценария (код возврата 2), а не «тихий пропуск». Счётчик и первые совпавшие
- * строки — в нарушении: по ним видно, СКОЛЬКО и КАКИЕ запросы нарушили гейт.
+ * `present` — шаблон не найден (обязан быть), `atMost` — совпадений больше
+ * предела. Некорректная регулярка — ошибка сценария (код возврата 2), а не
+ * «тихий пропуск». Счётчик и первые совпавшие строки — в нарушении: по ним
+ * видно, СКОЛЬКО и КАКИЕ запросы нарушили гейт.
  */
 export function serverLogViolations(log, rules) {
   const violations = [];
@@ -436,6 +472,18 @@ export function serverLogViolations(log, rules) {
   }
   for (const pattern of rules.present ?? []) {
     if (!compile(pattern).test(log)) violations.push({ kind: 'present', pattern, count: 0, matches: [] });
+  }
+  for (const rule of rules.atMost ?? []) {
+    const matches = lines.filter((line) => compile(rule.pattern).test(line));
+    if (matches.length > rule.max) {
+      violations.push({
+        kind: 'atMost',
+        pattern: rule.pattern,
+        max: rule.max,
+        count: matches.length,
+        matches: matches.slice(0, 3).map((line) => line.slice(0, 400)),
+      });
+    }
   }
   return violations;
 }
@@ -526,8 +574,8 @@ async function main(argv) {
   const apiBase = `${serverRoot}/api/v1`;
 
   const children = [];
-  /** Прокси задержки (--delay-seed-ms); закрывается в finally. */
-  let delayProxy = null;
+  /** Прокси задержки/подмены статуса (--delay-seed-ms / --fail-seed-path). */
+  let probeProxy = null;
   const stopAll = () => {
     for (const entry of children) killTree(entry.child);
   };
@@ -577,12 +625,14 @@ async function main(argv) {
       );
     }
 
-    // --- 3а. Прокси задержки медленной сети (--delay-seed-ms / правила) ----
+    // --- 3а. Прокси задержки/отказов медленной сети -------------------------
     // Клиент подключается ЧЕРЕЗ прокси, поэтому открытие засеянной сети
     // отвечает медленно, а остальные — быстро: это и есть воспроизведение
     // гонки «поздний ответ openNetwork» (ошибка 58c55bb9). Несколько правил
     // (`--delay-seed-rule`) дают РАЗНУЮ задержку разным путям — так ответ B
     // приходит раньше ответа A (гонка отборов, ошибка 6d78ccab, круг 2).
+    // `--fail-seed-path` — «форвард + 404»: поведение клиента на отказе
+    // сервера при живом соединении (ошибка b213cf60).
     let clientRoot = serverRoot;
     /** Правила в порядке применения (первое совпадение выигрывает). */
     const delayRules = [];
@@ -602,25 +652,33 @@ async function main(argv) {
         pathFilter: resolveDelaySeedPath(rule.path, seed),
       });
     }
-    if (delayRules.length > 0) {
+    const failPath = resolveDelaySeedPath(opts.failSeedPath, seed);
+    if (delayRules.length > 0 || failPath !== '') {
       if (seed === null) {
-        throw new Error('задержка требует засеянную сеть (не используйте с --no-seed)');
+        throw new Error('задержка/подмена статуса требует засеянную сеть (не используйте с --no-seed)');
       }
-      delayProxy = await startDelayProxy({
+      probeProxy = await startDelayProxy({
         targetPort: serverPort,
         networkId: seed.networkId,
         rules: delayRules,
-        log: (line) => process.stdout.write(`[delay-proxy] ${line}\n`),
+        // Без правил задержки (режим только --fail-seed-path) прокси не должен
+        // задерживать: иначе дефолт 3000 мс замедлил бы всю сеть.
+        delayMs: 0,
+        failPath,
+        log: (line) => process.stdout.write(`[probe-proxy] ${line}\n`),
       });
-      clientRoot = `http://127.0.0.1:${delayProxy.port}`;
+      clientRoot = `http://127.0.0.1:${probeProxy.port}`;
       process.stdout.write(
-        `ui-probe-stand: прокси задержки для сети ${seed.networkId}: ` +
-          delayRules
-            .map(
-              (rule) =>
-                `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}`,
-            )
-            .join(', ') +
+        `ui-probe-stand: прокси для сети ${seed.networkId}: ` +
+          (delayRules.length > 0
+            ? delayRules
+                .map(
+                  (rule) =>
+                    `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}`,
+                )
+                .join(', ')
+            : 'без задержки') +
+          (failPath === '' ? '' : `; 404 на путь ${failPath}`) +
           `: ${clientRoot}\n`,
       );
     }
@@ -682,10 +740,14 @@ async function main(argv) {
         if (rules !== null) {
           const violations = serverLogViolations(server.getLog(), rules);
           for (const violation of violations) {
+            const label =
+              violation.kind === 'absent'
+                ? 'найдено запрещённое'
+                : violation.kind === 'atMost'
+                  ? `превышен предел ${violation.max}`
+                  : 'не найдено обязательное';
             process.stderr.write(
-              `ui-probe-stand: серверный лог — ${
-                violation.kind === 'absent' ? 'найдено запрещённое' : 'не найдено обязательное'
-              } «${violation.pattern}»` +
+              `ui-probe-stand: серверный лог — ${label} «${violation.pattern}»` +
                 (violation.count > 0 ? ` (строк: ${violation.count})` : '') +
                 '\n',
             );
@@ -705,21 +767,39 @@ async function main(argv) {
       // вакуумным: прогон «зелёный» без единого задержанного запроса
       // (замечание верификатора к ff5efa1a). Каждое правило обязано сработать
       // хотя бы раз — иначе это ошибка стенда, а не результат сценария.
-      if (delayProxy !== null) {
-        const counts = delayProxy.delayedByRule();
-        const vacuous = delayRules.filter((_rule, index) => (counts[index] ?? 0) === 0);
-        for (const rule of vacuous) {
-          process.stderr.write(
-            `ui-probe-stand: правило задержки «${
-              rule.pathFilter === '' ? 'все пути' : rule.pathFilter
-            }» не совпало ни с одним запросом — задержка не сработала, гейт вакуумный\n`,
-          );
+      if (probeProxy !== null) {
+        if (delayRules.length > 0) {
+          const counts = probeProxy.delayedByRule();
+          const vacuous = delayRules.filter((_rule, index) => (counts[index] ?? 0) === 0);
+          for (const rule of vacuous) {
+            process.stderr.write(
+              `ui-probe-stand: правило задержки «${
+                rule.pathFilter === '' ? 'все пути' : rule.pathFilter
+              }» не совпало ни с одним запросом — задержка не сработала, гейт вакуумный\n`,
+            );
+          }
+          if (vacuous.length > 0) code = 1;
+          else {
+            process.stdout.write(
+              `ui-probe-stand: задержка сработала по всем правилам (${counts.join('/')})\n`,
+            );
+          }
         }
-        if (vacuous.length > 0) code = 1;
-        else {
-          process.stdout.write(
-            `ui-probe-stand: задержка сработала по всем правилам (${counts.join('/')})\n`,
-          );
+        // Та же защита для подмены статуса: опечатка в пути не должна давать
+        // «зелёный» прогон, в котором ни один ответ не был подменён (ошибка
+        // b213cf60; общий урок ff5efa1a).
+        if (failPath !== '') {
+          const injected = probeProxy.failedCount();
+          if (injected === 0) {
+            process.stderr.write(
+              `ui-probe-stand: правило --fail-seed-path «${failPath}» не совпало ни с одним запросом — подмена не сработала, гейт вакуумный\n`,
+            );
+            code = 1;
+          } else {
+            process.stdout.write(
+              `ui-probe-stand: подмена HTTP 404 сработала (запросов: ${injected})\n`,
+            );
+          }
         }
       }
       process.stdout.write(
@@ -743,8 +823,8 @@ async function main(argv) {
     return 0;
   } finally {
     stopAll();
-    if (delayProxy !== null) {
-      await delayProxy.close().catch(() => undefined);
+    if (probeProxy !== null) {
+      await probeProxy.close().catch(() => undefined);
     }
     if (opts.scenario !== null && !opts.keep) {
       // Уборка не должна перекрывать код прогона: лок профиля после taskkill

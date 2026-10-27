@@ -1,6 +1,6 @@
 /**
- * Замедляющий HTTP/WS-прокси стенда `ui-probe-stand` — детерминированная
- * проверка гонки «поздний ответ `openNetwork`» (ошибка 58c55bb9, круг 2).
+ * Прокси стенда `ui-probe-stand`: задержка ответов (гонки «поздний ответ»,
+ * ошибки 58c55bb9/6d78ccab) и подмена статуса на отказе (ошибка b213cf60).
  *
  * Прокси стоит между скрытым клиентом и сервером стенда и задерживает ТОЛЬКО
  * запросы, в пути которых есть `/<networkId>/` (медленная сеть). Остальные
@@ -8,8 +8,15 @@
  * «перекрыть» её запуск. WebSocket-апгрейды не задерживаются: задержка нужна
  * HTTP-ответам открытия сети, а не realtime-каналу.
  *
- * Запуск — из `ui-probe-stand` (`--delay-seed-ms`), отдельного процесса не
- * требуется. Чистая функция {@link needsDelay} покрыта юнит-тестом.
+ * Режим `failPath` — «форвард + подмена статуса»: запрос ВСЁ РАВНО уходит на
+ * сервер (read-only операция, и serverLog стенда видит, сколько запросов
+ * реально дошло), а клиенту возвращается заданный статус (по умолчанию 404).
+ * Так проверяется поведение интерфейса на отказе сервера и одновременно
+ * работает счётчик `atMost` в правилах серверного лога.
+ *
+ * Запуск — из `ui-probe-stand` (`--delay-seed-ms` / `--fail-seed-path`),
+ * отдельного процесса не требуется. Чистая функция {@link needsDelay} покрыта
+ * юнит-тестом.
  */
 import http from 'node:http';
 import net from 'node:net';
@@ -75,10 +82,16 @@ export function delayForUrl(url, networkId, rules) {
  * по каждому правилу: стенд проверяет, что фильтр с опечаткой не сделал гейт
  * вакуумным.
  *
+ * `failPath` — путь (подстрока URL засеянной сети) для режима «форвард +
+ * подмена статуса»: запрос уходит на сервер, клиенту возвращается
+ * `failStatus`. Счётчик подмен — `failedCount()`; ноль при заданном
+ * `failPath` означает вакуумный гейт.
+ *
  * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string,
- *          rules?:Array<{delayMs:number, pathFilter?:string}>, log?:(line:string)=>void}} opts
+ *          rules?:Array<{delayMs:number, pathFilter?:string}>, failPath?:string,
+ *          failStatus?:number, log?:(line:string)=>void}} opts
  * @returns {Promise<{port:number, delayedCount:()=>number, delayedByRule:()=>number[],
- *                    close:()=>Promise<void>}>}
+ *                    failedCount:()=>number, close:()=>Promise<void>}>}
  */
 export async function startDelayProxy({
   targetPort,
@@ -86,16 +99,45 @@ export async function startDelayProxy({
   delayMs = 3000,
   pathFilter = '',
   rules = [],
+  failPath = '',
+  failStatus = 404,
   log = () => undefined,
 }) {
   const effectiveRules =
-    Array.isArray(rules) && rules.length > 0 ? rules : [{ delayMs, pathFilter }];
+    Array.isArray(rules) && rules.length > 0
+      ? rules
+      : delayMs > 0
+        ? [{ delayMs, pathFilter }]
+        : [];
   /** Сколько запросов реально задержано — стенд проверяет, что path-фильтр
    *  не сделал гейт вакуумным (опечатка в пути молча отключает задержку). */
   let delayed = 0;
   /** По правилу: правило, не совпавшее ни разу, — ошибка стенда. */
   const delayedPerRule = effectiveRules.map(() => 0);
-  const forwardHttp = (req, res) => {
+  /** Сколько запросов получило подменённый статус (режим failPath). */
+  let failed = 0;
+  const sendInjected = (res, status) => {
+    if (!res.headersSent) {
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+    }
+    res.end(
+      JSON.stringify({
+        error: { code: 'PROBE_INJECTED', message: `ui-probe-stand: injected HTTP ${status}` },
+      }),
+    );
+  };
+  /**
+   * `injectStatus === null` — обычный форвард. Иначе запрос всё равно уходит
+   * на сервер (серверный лог видит его, read-only путь не мутирует данные), но
+   * клиент получает подменённый статус вместо ответа сервера.
+   */
+  const forwardHttp = (req, res, injectStatus = null) => {
+    let settled = false;
+    const finishInjected = () => {
+      if (settled) return;
+      settled = true;
+      sendInjected(res, injectStatus);
+    };
     const upstream = http.request(
       {
         host: '127.0.0.1',
@@ -105,11 +147,23 @@ export async function startDelayProxy({
         headers: req.headers,
       },
       (upRes) => {
+        if (injectStatus !== null) {
+          // Дренаж тела: сервер должен завершить запись/лог, соединение —
+          // закрыться штатно, а не висеть keep-alive.
+          upRes.resume();
+          upRes.on('end', finishInjected);
+          upRes.on('error', finishInjected);
+          return;
+        }
         res.writeHead(upRes.statusCode ?? 502, upRes.headers);
         upRes.pipe(res);
       },
     );
     upstream.on('error', (err) => {
+      if (injectStatus !== null) {
+        finishInjected();
+        return;
+      }
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
       res.end(`delay-proxy upstream error: ${err.message}`);
     });
@@ -117,16 +171,22 @@ export async function startDelayProxy({
   };
 
   const server = http.createServer((req, res) => {
+    const injectStatus =
+      failPath !== '' && needsDelay(req.url, networkId, failPath) ? failStatus : null;
+    if (injectStatus !== null) {
+      failed += 1;
+      log(`inject ${injectStatus} ${req.method} ${req.url}`);
+    }
     const hitIndex = matchDelayRule(req.url, networkId, effectiveRules);
     if (hitIndex >= 0) {
       const hitDelay = effectiveRules[hitIndex]?.delayMs ?? delayMs;
       delayed += 1;
       delayedPerRule[hitIndex] = (delayedPerRule[hitIndex] ?? 0) + 1;
       log(`delay ${hitDelay}ms ${req.method} ${req.url}`);
-      setTimeout(() => forwardHttp(req, res), hitDelay);
+      setTimeout(() => forwardHttp(req, res, injectStatus), hitDelay);
       return;
     }
-    forwardHttp(req, res);
+    forwardHttp(req, res, injectStatus);
   });
 
   // WebSocket и прочие upgrade — без задержки: realtime-канал не относится к
@@ -161,7 +221,8 @@ export async function startDelayProxy({
           (rule, i) =>
             `#${i} ${rule.delayMs}ms${typeof rule.pathFilter === 'string' && rule.pathFilter !== '' ? ` (path ${rule.pathFilter})` : ''}`,
         )
-        .join(', '),
+        .join(', ') +
+      (failPath === '' ? '' : `; inject ${failStatus} on path ${failPath}`),
   );
   return {
     port,
@@ -169,6 +230,8 @@ export async function startDelayProxy({
     delayedCount: () => delayed,
     /** Счётчики по правилам: не совпавшее ни разу правило — вакуумный гейт. */
     delayedByRule: () => [...delayedPerRule],
+    /** Сколько запросов получило подменённый статус (0 — failPath не совпал). */
+    failedCount: () => failed,
     close: () =>
       new Promise((resolve) => {
         server.close(() => resolve());

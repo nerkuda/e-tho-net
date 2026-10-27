@@ -1721,20 +1721,39 @@ export function planSelectionRows(
   return { removed, order: [...next] };
 }
 
+/** Подпись строки панели выделенных для подтверждённо отсутствующей мысли. */
+export const SELECTION_UNAVAILABLE_TITLE = 'недоступна';
+
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
 /**
- * Подписи строк панели выделенных: имя разрешённой мысли, для неразрешённой —
- * ПРЕЖНЯЯ подпись, а при её отсутствии пустая строка. Идентификатор мысли в
- * интерфейсе не показывается никогда (ошибка 3a64e680: пока ref-кэш
- * переразрешался, панель на несколько секунд подменяла имена их id).
+ * Подписи строк панели выделенных: имя разрешённой мысли, для подтверждённо
+ * отсутствующей — «недоступна», для ещё не разрешённой — ПРЕЖНЯЯ подпись, а
+ * при её отсутствии пустая строка. Идентификатор мысли в интерфейсе не
+ * показывается никогда (ошибка 3a64e680: пока ref-кэш переразрешался, панель
+ * на несколько секунд подменяла имена их id).
+ *
+ * `unavailable` — id, по которым успешный `thoughts.resolve` не вернул ref
+ * (удалена, не видна в текущем слое): такой id не переспрашивается, а строка
+ * честно говорит «недоступна» (ошибка b213cf60). Необязательный параметр:
+ * существующие вызовы и тесты сохраняют прежнюю семантику.
  */
 export function selectionRowTitles(
   ids: readonly string[],
   resolved: ReadonlyMap<string, { title: string }>,
   previous: ReadonlyMap<string, string>,
+  unavailable: ReadonlySet<string> = EMPTY_IDS,
 ): Map<string, string> {
   const titles = new Map<string, string>();
   for (const id of ids) {
-    titles.set(id, resolved.get(id)?.title ?? previous.get(id) ?? '');
+    const found = resolved.get(id)?.title;
+    if (found !== undefined) {
+      titles.set(id, found);
+    } else if (unavailable.has(id)) {
+      titles.set(id, SELECTION_UNAVAILABLE_TITLE);
+    } else {
+      titles.set(id, previous.get(id) ?? '');
+    }
   }
   return titles;
 }

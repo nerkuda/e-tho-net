@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,7 +21,12 @@ import {
   resolveDelaySeedPath,
   serverLogViolations,
 } from '../scripts/ui-probe-stand.mjs';
-import { delayForUrl, matchDelayRule, needsDelay } from '../scripts/ui-probe-delay-proxy.mjs';
+import {
+  delayForUrl,
+  matchDelayRule,
+  needsDelay,
+  startDelayProxy,
+} from '../scripts/ui-probe-delay-proxy.mjs';
 
 test('parseArgs: значения по умолчанию', () => {
   const opts = parseArgs([]);
@@ -33,6 +39,7 @@ test('parseArgs: значения по умолчанию', () => {
   assert.equal(opts.keep, false);
   assert.equal(opts.help, false);
   assert.deepEqual(opts.delaySeedRules, []);
+  assert.equal(opts.failSeedPath, '');
 });
 
 test('parseArgs: сценарий, порты, флаги, сид', () => {
@@ -128,6 +135,15 @@ test('parseArgs: --delay-seed-path (пусто по умолчанию, знач
     '/thoughts/resolve',
   );
   assert.throws(() => parseArgs(['--delay-seed-path']), /требует значения/);
+});
+
+test('parseArgs: --fail-seed-path (пусто по умолчанию, значение, пропущенное значение)', () => {
+  assert.equal(parseArgs([]).failSeedPath, '');
+  assert.equal(
+    parseArgs(['--fail-seed-path', 'thoughts/resolve']).failSeedPath,
+    'thoughts/resolve',
+  );
+  assert.throws(() => parseArgs(['--fail-seed-path']), /требует значения/);
 });
 
 test('needsDelay: pathFilter сужает задержку до конкретного ожидания', () => {
@@ -241,16 +257,39 @@ test('serverLogViolations: absent/present и некорректная регул
   assert.throws(() => serverLogViolations(log, { absent: ['['] }), /некорректное регулярное/);
 });
 
+test('serverLogViolations: atMost — предел числа совпадений (b213cf60)', () => {
+  const line = '{"url":"/api/v1/networks/n/thoughts/resolve","status":200}';
+  const log = [line, line, line].join('\n');
+  const pattern = '"url":"[^"]*/thoughts/resolve","status":200';
+  // В пределах предела — нарушений нет; выше — нарушение с max и счётчиком.
+  assert.deepEqual(serverLogViolations(log, { atMost: [{ pattern, max: 3 }] }), []);
+  assert.deepEqual(serverLogViolations(log, { atMost: [{ pattern, max: 2 }] }), [
+    { kind: 'atMost', pattern, max: 2, count: 3, matches: [line, line, line] },
+  ]);
+  // Чужие пути в счёт не идут.
+  assert.deepEqual(
+    serverLogViolations('{"url":"/api/v1/networks/n/thoughts","status":200}', {
+      atMost: [{ pattern, max: 0 }],
+    }),
+    [],
+  );
+});
+
 test('readScenarioLogRules: правила из сценария; без ключа — null', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-stand-rules-'));
   try {
     const withRules = path.join(dir, 'with.json');
+    const atMost = [{ pattern: 'resolve', max: 4 }];
     writeFileSync(
       withRules,
-      JSON.stringify({ name: 's', serverLog: { absent: ['a'], present: ['b'] } }),
+      JSON.stringify({ name: 's', serverLog: { absent: ['a'], present: ['b'], atMost } }),
       'utf8',
     );
-    assert.deepEqual(readScenarioLogRules(withRules), { absent: ['a'], present: ['b'] });
+    assert.deepEqual(readScenarioLogRules(withRules), {
+      absent: ['a'],
+      present: ['b'],
+      atMost,
+    });
 
     const without = path.join(dir, 'without.json');
     writeFileSync(without, JSON.stringify({ name: 's', steps: [] }), 'utf8');
@@ -259,7 +298,73 @@ test('readScenarioLogRules: правила из сценария; без клю�
     const broken = path.join(dir, 'broken.json');
     writeFileSync(broken, JSON.stringify({ serverLog: { absent: [1] } }), 'utf8');
     assert.throws(() => readScenarioLogRules(broken), /serverLog\.absent/);
+
+    const brokenAtMost = path.join(dir, 'broken-atmost.json');
+    writeFileSync(
+      brokenAtMost,
+      JSON.stringify({ serverLog: { atMost: [{ pattern: '', max: 2 }] } }),
+      'utf8',
+    );
+    assert.throws(() => readScenarioLogRules(brokenAtMost), /serverLog\.atMost/);
+
+    const brokenMax = path.join(dir, 'broken-max.json');
+    writeFileSync(
+      brokenMax,
+      JSON.stringify({ serverLog: { atMost: [{ pattern: 'x', max: -1 }] } }),
+      'utf8',
+    );
+    assert.throws(() => readScenarioLogRules(brokenMax), /serverLog\.atMost/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('startDelayProxy: failPath — форвард + подмена статуса и счётчик (b213cf60)', async () => {
+  const NET = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  let upstreamHits = 0;
+  const upstream = http.createServer((req, res) => {
+    upstreamHits += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  const upstreamPort = typeof address === 'object' && address !== null ? address.port : 0;
+  // Без delay-правил: подмена статуса не должна задерживать запросы.
+  const proxy = await startDelayProxy({
+    targetPort: upstreamPort,
+    networkId: NET,
+    delayMs: 0,
+    failPath: 'thoughts/resolve',
+  });
+  const get = (pathname: string): Promise<{ status: number; body: string }> =>
+    new Promise((resolve, reject) => {
+      http
+        .get({ host: '127.0.0.1', port: proxy.port, path: pathname }, (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => {
+            body += chunk;
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        })
+        .on('error', reject);
+    });
+  try {
+    const injected = await get(`/api/v1/networks/${NET}/thoughts/resolve`);
+    assert.equal(injected.status, 404, 'клиент получил подменённый статус');
+    assert.match(injected.body, /PROBE_INJECTED/);
+    assert.equal(proxy.failedCount(), 1);
+    assert.equal(upstreamHits, 1, 'подменённый запрос всё равно ушёл на сервер');
+
+    const normal = await get(`/api/v1/networks/${NET}/thoughts`);
+    assert.equal(normal.status, 200, 'прочие пути идут обычным форвардом');
+    assert.equal(normal.body, '{"ok":true}');
+    assert.equal(proxy.failedCount(), 1, 'счётчик считает только подмены');
+    assert.equal(upstreamHits, 2);
+    assert.equal(proxy.delayedCount(), 0, 'без delay-правил задержки нет');
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });

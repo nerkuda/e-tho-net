@@ -1,0 +1,55 @@
+{
+  "name": "b213cf60-selection-resolve-fail",
+  "description": "GUI-гейт ошибки b213cf60 (G2): отказ thoughts.resolve не зацикливает панель выделенных. Стенд поднимается с --fail-seed-path thoughts/resolve: прокси форвардит запрос на сервер (serverLog видит его), а клиенту возвращает HTTP 404; при недоступном сервере/отказе старая панель крутила render → resolveRows → render быстрым спином. Сценарий: Ctrl+клик по засеянному облачку, settle 1,2 с, проба — строка не показывает id и не помечается «недоступна» (отказ отсутствие не подтверждает), панель видима; serverLog.atMost ограничивает число resolve-запросов. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.b213cf60-selection-resolve-fail.scenario.json --fail-seed-path thoughts/resolve",
+  "timeout": 180000,
+  "serverLog": {
+    "atMost": [
+      {
+        "pattern": "\"url\":\"[^\"]*/thoughts/resolve\",\"status\":200",
+        "max": 60
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seed-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "select-seed-thought",
+      "eval": "(() => { const el = document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); if (!el) throw new Error('no cloud'); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true })); return 'ok'; })()"
+    },
+    {
+      "name": "row-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.selection-item').length === 1"
+    },
+    {
+      "name": "settle-after-fail",
+      "eval": "(async () => { await new Promise((r) => setTimeout(r, 1200)); return true; })()"
+    },
+    {
+      "name": "row-after-fail",
+      "probe": {
+        "name": "rowAfterFail",
+        "expression": "(() => { const rows = [...document.querySelectorAll('.selection-item')]; const text = rows.map((e) => (e.textContent || '').trim()).join('|'); return { count: rows.length, showsId: text.includes('{{thoughtId}}'), unavailable: text.includes('недоступна'), named: text.includes('{{seedTitle}}'), panelVisible: !document.querySelector('.selection-panel').classList.contains('hidden') }; })()"
+      },
+      "expect": { "count": 1, "showsId": false, "unavailable": false, "named": false, "panelVisible": true }
+    }
+  ]
+}

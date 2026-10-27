@@ -19,7 +19,11 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
 import { store } from '../src/renderer/state.js';
-import { planSelectionRows, selectionRowTitles } from '../src/renderer/lib/pure.js';
+import {
+  SELECTION_UNAVAILABLE_TITLE,
+  planSelectionRows,
+  selectionRowTitles,
+} from '../src/renderer/lib/pure.js';
 import { subscribeSelectionChanges } from '../src/renderer/selection/selection.js';
 
 beforeEach(() => {
@@ -64,6 +68,20 @@ describe('selectionRowTitles — имя строки никогда не id (3a6
   it('неразрешённое имя сохраняет прежнюю подпись', () => {
     const titles = selectionRowTitles(['b'], new Map(), new Map([['b', 'Роли']]));
     assert.equal(titles.get('b'), 'Роли');
+  });
+
+  it('подтверждённо отсутствующая мысль — «недоступна» (b213cf60)', () => {
+    const titles = selectionRowTitles(
+      ['a', 'b', 'c'],
+      new Map([['a', { title: 'Персоны' }]]),
+      new Map([['c', 'Старое имя']]),
+      new Set(['b', 'c']),
+    );
+    assert.equal(titles.get('a'), 'Персоны');
+    assert.equal(titles.get('b'), SELECTION_UNAVAILABLE_TITLE);
+    // Подтверждённое отсутствие важнее прежней подписи: строка не должна
+    // выглядеть как обычная, если мысль недоступна в текущем контексте.
+    assert.equal(titles.get('c'), SELECTION_UNAVAILABLE_TITLE);
   });
 });
 

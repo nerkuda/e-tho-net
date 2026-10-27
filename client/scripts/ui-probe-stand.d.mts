@@ -28,6 +28,11 @@ export interface StandOptions {
   delaySeedPath: string;
   /** Повторяемые правила `<ms>:<путь>`: разным путям — разная задержка. */
   delaySeedRules: { delayMs: number; path: string }[];
+  /**
+   * Режим «форвард + подмена статуса»: подстрока пути засеянной сети, запросы
+   * которой получают 404 ('' — режим выключен; ошибка b213cf60).
+   */
+  failSeedPath: string;
   keep: boolean;
   help: boolean;
 }
@@ -74,18 +79,28 @@ export declare function buildProbeArgs(
   key: string,
 ): string[];
 
+/** Верхняя граница числа совпадений шаблона в серверном логе. */
+export interface ServerLogAtMostRule {
+  pattern: string;
+  max: number;
+}
+
 /** Правила серверного лога из сценария (`serverLog`). */
 export interface ServerLogRules {
   /** Шаблоны, которых в логе быть НЕ ДОЛЖНО. */
   absent?: string[];
   /** Шаблоны, которые в логе ОБЯЗАНЫ быть. */
   present?: string[];
+  /** Шаблоны с верхней границей числа совпадений (например, «нет цикла»). */
+  atMost?: ServerLogAtMostRule[];
 }
 
 /** Нарушение правил лога: вид, шаблон, число строк и первые совпадения. */
 export interface ServerLogViolation {
-  kind: 'absent' | 'present';
+  kind: 'absent' | 'present' | 'atMost';
   pattern: string;
+  /** Предел `atMost` (только у нарушения этого вида). */
+  max?: number;
   count: number;
   matches: string[];
 }
