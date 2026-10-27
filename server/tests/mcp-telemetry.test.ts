@@ -657,6 +657,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // эха resolved_* и «поверх дерева» у link_filter. Схема стала короче
         // на ~105 Б: замер 50 736 → 50 631 Б, D+I 45 735 → 45 630 Б. Планки
         // НЕ менялись (запас 169 / 170 Б).
+        // 0.14.1 (40c76144, замечание верификатора круга 3): `value` вернул
+        // читаемый тип в `inputSchema` (стандарт 75f38020 §2: схема — контракт
+        // вызова, не урезается): union string/number/boolean/array/object/null
+        // + описание «presence игнорирует»; строгая форма сравнений осталась в
+        // refine. Прирост схемы компенсирован сжатием прозы того же описания:
+        // замер 50 631 → 50 760 Б (+129), D+I 45 630 → 45 759 Б. Планки НЕ
+        // менялись (запас 40 / 41 Б).
         assert.ok(
           bytes <= 50_800,
           `tools/list JSON is ${bytes} bytes — over the 0.14.1 budget of 50800`,
@@ -690,6 +697,21 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
             'utf8',
           );
         }
+        // 0.14.1 (ошибка 40c76144, замечание верификатора круга 3): оговорка
+        // «для имён» у эха `resolved_types`/`resolved_properties` — смысловая
+        // часть контракта (эхо соответствует только адресации по имени;
+        // id-адресация его не даёт). Сжатие прозы не должно её съедать:
+        // удаление оговорки краснит этот сторож.
+        const thoughtsQueryTool = tools.find((t) => t.name === 'etn.thoughts.query');
+        assert.ok(
+          thoughtsQueryTool !== undefined,
+          'etn.thoughts.query обязан быть в tools/list',
+        );
+        assert.match(
+          thoughtsQueryTool!.description ?? '',
+          /`resolved_types`\/`resolved_properties` для имён/,
+          'в описании etn.thoughts.query пропала оговорка «для имён» у эха resolved_*',
+        );
         // 0.11.1 (задача 8f6857f8): прирост целиком от 22 новых инструментов
         // подсистемы «Публикации» — см. блок выше. Планка 36 801 → 51 200.
         // 0.11.1 (задача e754527d, круг 2): +`etn.publications.accept` и

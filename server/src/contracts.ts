@@ -987,9 +987,7 @@ const QUERY_PROPERTY_CONDITION_KEYS = ['property_id', 'property', 'operator', 'v
 
 /**
  * Строгая форма `value` для операторов, которым значение НУЖНО (всё, кроме
- * пары наличия). Вынесена из описания поля, чтобы presence мог принять любую
- * шумовую форму и молча её проигнорировать — как REST (замечание верификатора
- * круга 2 по ошибке 40c76144).
+ * пары наличия) — по ней идёт refine ниже.
  */
 const QUERY_PROPERTY_VALUE = z.union([
   z.string(),
@@ -997,6 +995,25 @@ const QUERY_PROPERTY_VALUE = z.union([
   z.boolean(),
   z.array(z.string().min(1)).min(1),
 ]);
+
+/**
+ * Полная форма `value` для `inputSchema` (стандарт 75f38020 §2: схема —
+ * контракт вызова, ради бюджета не урезается; замечание верификатора круга 3
+ * по ошибке 40c76144). Помимо значений сравнений принимает presence-формы
+ * `null`, объект и любой массив: `is_empty`/`not_empty` значение игнорируют
+ * (паритет с REST), и схема не должна отвергать шумовой `value` до refine.
+ * Для сравнений допустимость проверяет {@link QUERY_PROPERTY_VALUE}.
+ */
+const QUERY_PROPERTY_VALUE_SCHEMA = z
+  .union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(z.unknown()),
+    z.object({}),
+    z.null(),
+  ])
+  .describe('presence игнорирует');
 
 const QueryPropertyFields = z
   .object({
@@ -1009,14 +1026,14 @@ const QueryPropertyFields = z
     // природе свойства проверяет движок (`OPS_BY_VALUE_TYPE`) — одинаково
     // для MCP и REST.
     operator: z.enum(FLAT_PROPERTY_OPS),
-    // Форма `value` намеренно не описана здесь (замечание верификатора круга 2
-    // по ошибке 40c76144): для пары наличия (`is_empty`/`not_empty`) значение
-    // НЕ НУЖНО, и любая переданная форма — включая `null` и объект — обязана
-    // молча игнорироваться. REST-разбор (`parsePropertyCondition`,
-    // structure-service.ts) ведёт себя так же. Строгая форма для остальных
-    // операторов проверяется отдельным refine ниже — контракт не ослаблен,
-    // но и presence не отвергается из-за шумового `value`.
-    value: z.unknown().optional(),
+    // Форма `value` описана схемой (QUERY_PROPERTY_VALUE_SCHEMA): читаемый
+    // union + presence-формы. Для пары наличия (`is_empty`/`not_empty`)
+    // значение НЕ НУЖНО, и любая переданная форма — включая `null` и объект —
+    // молча игнорируется (REST-разбор `parsePropertyCondition` ведёт себя так
+    // же). Строгая форма для остальных операторов проверяется отдельным
+    // refine ниже — контракт не ослаблен, но и presence не отвергается из-за
+    // шумового `value`.
+    value: QUERY_PROPERTY_VALUE_SCHEMA.optional(),
   })
   // `.passthrough()` до refine (ошибка f4580fff, 0.12.1): zod по умолчанию
   // ВЫРЕЗАЕТ неизвестные ключи ещё до проверок, поэтому refine по `Object.keys`

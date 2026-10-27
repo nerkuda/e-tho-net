@@ -278,13 +278,13 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       // `not_empty` паритет с REST; пара наличия обходится без `value`.
       // Прирост прозы уложен сжатием тех же описаний (бюджет `tools/list`).
       description:
-        'Структурная выборка (без текста), фильтры AND: ' +
-        '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
-        '`keywords` (мини-синтаксис по названию и синонимам; слово без `*` совпадает и со ' +
-        'словом `*`-синонима: `проектиров*` → «проектирование»), `properties[]` (канон ' +
+        'Структурная выборка (без текста), AND: ' +
+        '`in_subtree_of`(+`max_depth`), `type_id[]` (либо `type[]`), `active`/`trashed`, ' +
+        '`keywords` (мини-синтаксис по названию/синонимам; слово без `*` совпадает и с ' +
+        '`*`-синонимом: `проектиров*` → «проектирование»), `properties[]` (канон ' +
         'eq/ne/contains/gt/gte/lt/lte/in/not_in/is_empty/not_empty/any_of/all_of/none_of; ' +
         '`is_empty`/`not_empty` — без `value`), `created_*`/`updated_*`, ' +
-        '`author_id`/`editor_id`, `link_filter` (совместим с `ast`: пред-сужение поверх дерева). ' +
+        '`author_id`/`editor_id`, `link_filter` (с `ast`: пред-сужение поверх дерева). ' +
         'Или `ast` — дерево условий ' +
         '(грамматика — `etn.guide { topic: "thoughts.query" }`), XOR с плоскими критериями. ' +
         'Ответ: `thought_types`, эхо `resolved_types`/`resolved_properties` для имён; ' +

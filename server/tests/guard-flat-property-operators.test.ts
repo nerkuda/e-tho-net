@@ -61,6 +61,18 @@ function opsOf(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
 }
 
+/** Типы JSON Schema узла (anyOf/oneOf раскрываются рекурсивно). */
+function schemaTypes(node: unknown, acc = new Set<string>()): Set<string> {
+  if (node === null || typeof node !== 'object') return acc;
+  const obj = node as Record<string, unknown>;
+  if (typeof obj['type'] === 'string') acc.add(obj['type']);
+  for (const key of ['anyOf', 'oneOf'] as const) {
+    const branches = obj[key];
+    if (Array.isArray(branches)) for (const branch of branches) schemaTypes(branch, acc);
+  }
+  return acc;
+}
+
 const CANON_SORTED = opsOf(CANON);
 
 /**
@@ -201,6 +213,56 @@ describe(
         }
       } finally {
         await closeMcpContext(ctx);
+      }
+    });
+    it('inputSchema etn.thoughts.query: value — читаемый union, presence-формы допустимы', async () => {
+      // Стандарт 75f38020 §2: `inputSchema` — контракт вызова, ради бюджета
+      // не урезается. `value: z.unknown()` давал в схеме пустой `{}` —
+      // замечание верификатора круга 3 по ошибке 40c76144.
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const { tools } = await handle.client.listTools();
+          const tool = tools.find((t) => t.name === 'etn.thoughts.query');
+          assert.ok(tool !== undefined, 'инструмент etn.thoughts.query обязан быть в tools/list');
+          const schema = tool!.inputSchema as {
+            properties?: {
+              properties?: { items?: { properties?: Record<string, unknown> } };
+            };
+          };
+          const value = schema.properties?.properties?.items?.properties?.['value'];
+          assert.ok(value !== undefined, 'в inputSchema нет поля properties[].value');
+          assert.ok(
+            typeof value === 'object' && value !== null && Object.keys(value).length > 0,
+            'inputSchema properties[].value — пустая схема {}: контракт вызова не читается',
+          );
+          assert.deepEqual(
+            [...schemaTypes(value)].sort(),
+            ['array', 'boolean', 'null', 'number', 'object', 'string'],
+            'inputSchema properties[].value должен читаемо перечислять типы ' +
+              '(строка/число/логическое/массив/объект/null — presence-формы)',
+          );
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+
+      // Presence-формы проходят контракт до refine: `is_empty`/`not_empty`
+      // значение игнорируют в любой форме (паритет с REST).
+      for (const value of [null, { junk: true }, [1, 2]]) {
+        const parsed = ThoughtsQuery.schema.safeParse({
+          network_id: 'net',
+          properties: [{ property: 'X', operator: 'is_empty', value }],
+        });
+        assert.equal(
+          parsed.success,
+          true,
+          `presence с value=${JSON.stringify(value)} обязан проходить контракт: ` +
+            (parsed.success ? '' : JSON.stringify(parsed.error.issues)),
+        );
       }
     });
   },
