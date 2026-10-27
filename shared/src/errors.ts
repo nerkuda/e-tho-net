@@ -73,3 +73,26 @@ export class EtnError extends Error {
     this.requestId = requestId;
   }
 }
+
+/**
+ * Причины отказа записи/удаления значения свойства-связи по адресу стороны
+ * (`side`) — машиночитаемый дискриминатор `details.reason` (0.14.1, ошибка
+ * d9bc6012).
+ *
+ * Серверный текст таких `422` адресован API и агентам (в нём есть `side`,
+ * `source`, `target`), а пользователю клиент показывает свою формулировку из
+ * словаря — выбор формулировки идёт по ЭТИМ значениям, а не по разбору
+ * серверного текста. Один источник правды для обеих сторон контракта.
+ *
+ *   * `side-required` — сторона не указана, а имя адресует обе стороны
+ *     симметричного типа связи и обе живые (либо display-имя принадлежит
+ *     нескольким свойствам сети);
+ *   * `side-mismatch` — при удалении/очистке указанная сторона пуста, а рёбра
+ *     есть на противоположной (сверка с фактическим направлением).
+ */
+export const PROPERTY_SIDE_ERROR_REASON = {
+  required: 'side-required',
+  mismatch: 'side-mismatch',
+} as const;
+export type PropertySideErrorReason =
+  (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];

@@ -7,6 +7,10 @@
  *
  * `addLinkPropertyValue` обязан найти набор выбранной стороны (id + `side`),
  * а легаси-ребро без реестрового свойства — по display-имени стороны.
+ *
+ * 0.14.1 (ошибка d9bc6012): найденная сторона обязана уйти и в ЗАПИСЬ —
+ * `properties.set(..., side)`. Ключ здесь — display-имя стороны, но при
+ * симметричном типе связи направление по имени не выводится.
  */
 
 import assert from 'node:assert/strict';
@@ -20,6 +24,8 @@ interface FakeCall {
   ownerId: string;
   key: string;
   targets: string[];
+  /** Адрес стороны, ушедший в `properties.set` (шестой аргумент). */
+  side: string | null;
 }
 
 function installBridge(values: unknown[]): FakeCall[] {
@@ -34,8 +40,9 @@ function installBridge(values: unknown[]): FakeCall[] {
           ownerId: string,
           key: string,
           targets: string[],
+          side?: string | null,
         ) => {
-          calls.push({ ownerId, key, targets });
+          calls.push({ ownerId, key, targets, side: side ?? null });
         },
       },
     },
@@ -64,7 +71,7 @@ describe('addLinkPropertyValue: сторона значения-связи (4524
     );
 
     assert.deepEqual(calls, [
-      { ownerId: 'owner1', key: 'Содержится в', targets: ['t-tgt', 't-anchor'] },
+      { ownerId: 'owner1', key: 'Содержится в', targets: ['t-tgt', 't-anchor'], side: 'target' },
     ]);
   });
 
@@ -81,7 +88,7 @@ describe('addLinkPropertyValue: сторона значения-связи (4524
     );
 
     assert.deepEqual(calls, [
-      { ownerId: 'owner1', key: 'Читал в', targets: ['t-old', 't-anchor'] },
+      { ownerId: 'owner1', key: 'Читал в', targets: ['t-old', 't-anchor'], side: null },
     ]);
   });
 });

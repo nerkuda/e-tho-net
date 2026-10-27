@@ -1046,8 +1046,8 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await done;
     assert.deepEqual(
       writes,
-      [['n1', 'thought', 'new1', SIDE_FORWARD, ['A']]],
-      'свойство записано добавляемой мысли ключом-именем стороны со значением якоря',
+      [['n1', 'thought', 'new1', SIDE_FORWARD, ['A'], 'source']],
+      'свойство записано добавляемой мысли ключом-именем стороны + side',
     );
     assert.equal(batches.length, 0, 'бестиповая пакетная связь не создаётся — ребро даёт свойство');
     assert.equal(creates[0]?.create_link, undefined, 'новая мысль создана без create_link');
@@ -1061,7 +1061,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     input.value = 'Задача';
     press(input, key('Enter'));
     await done;
-    assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A']]]);
+    assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A'], 'target']]);
   });
 
   it('без выбора свойства — прежняя бестиповая связь в направлении диалога', async () => {
@@ -1121,8 +1121,8 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await done;
     assert.deepEqual(
       writes,
-      [['n1', 'thought', 'E1', SIDE_FORWARD, ['A']]],
-      'свойство записано существующей мысли',
+      [['n1', 'thought', 'E1', SIDE_FORWARD, ['A'], 'source']],
+      'свойство записано существующей мысли (ключ-имя стороны + side)',
     );
     assert.equal(creates.length, 0, 'новая мысль не создаётся');
   });
@@ -1171,6 +1171,10 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       .find((b) => b.textContent === 'Добавить')!
       .click();
     await done;
-    assert.deepEqual(writes, [['n1', 'thought', 'E1', SIDE_FORWARD, ['X', 'A']]], 'якорь добавлен к существующему набору');
+    assert.deepEqual(
+      writes,
+      [['n1', 'thought', 'E1', SIDE_FORWARD, ['X', 'A'], 'source']],
+      'якорь добавлен к существующему набору (ключ-имя стороны + side)',
+    );
   });
 });

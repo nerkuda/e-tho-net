@@ -1305,6 +1305,108 @@ describe('типовая строка связи и значение чужой 
     );
   });
 
+  it('типовая строка ОБРАТНОЙ стороны пишет пару «имя стороны + сторона» (d9bc6012)', async () => {
+    // Карточка мысли: свойство-связь привязано стороной target, и сервер
+    // отдаёт эффективным ключом имя ЭТОЙ стороны («Содержится в B»). Запись
+    // обязана уйти той же парой; реестровое имя адресовало бы source, и
+    // пользователь сохранял бы значение не под тем именем (ошибка d9bc6012).
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const saves: unknown[][] = [];
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'lk-rev',
+          property_id: 'p-rev',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Содержится в B',
+          value_type: 'link',
+          config: { link_type_id: 'lt1', direction: 'in' },
+          required: false,
+          position: 0,
+          side: 'target',
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [
+        {
+          property_id: 'p-rev',
+          property_name: 'Содержится в B',
+          value_type: 'link',
+          outside_type: false,
+          direction: 'in',
+          side: 'target',
+          link_type_id: 'lt1',
+          structural: false,
+          count: 2,
+          values: [
+            edge('rev-1', 'rev-target-1', 'Цель 1'),
+            edge('rev-2', 'rev-target-2', 'Цель 2'),
+          ],
+        },
+      ],
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+    };
+    etnApi['thoughts'] = { findDuplicates: async () => [], resolve: async () => [] };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildPropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    } as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const row = box.children[0]!.children[0]!.children[0]!.children[0]!.children[0]!;
+    const chip = row.findAll((e) => e.dataset['id'] === 'rev-target-1')[0];
+    assert.ok(chip !== undefined, 'виден чип обратной стороны');
+    const btn = chip!.findAll((e) => e.className.includes('st-f-clear-inline'))[0];
+    assert.ok(btn !== undefined, 'у чипа есть «×»');
+    btn!.fire('click', {
+      shiftKey: true,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Содержится в B', ['rev-target-2'], 'target']],
+      'ключ записи — имя обратной стороны, сторона — target',
+    );
+  });
+
   it('definitionValueKey: property_id + сторона у связи, property_id у скаляра', async () => {
     const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
     const key = propertiesInternals.definitionValueKey as unknown as (

@@ -28,8 +28,10 @@ export interface LinkPropertyWritePick {
  * Добавляет якорь в набор значения свойства-связи владельца (ошибка 1dd08949):
  * существующие цели ЧИТАЮТСЯ и объединяются с якорем — `properties.set`
  * заменяет набор целиком, а добавление не должно молча терять уже
- * проставленные значения. Ключ записи — display-имя выбранной стороны; сервер
- * сам выводит направление ребра, поэтому связь ложится в типизированное свойство.
+ * проставленные значения. Ключ записи — display-имя выбранной стороны, и
+ * `side` едет вместе с ним: при симметричном имени направление по одному
+ * ключу не выводится (ошибка d9bc6012 — раньше адрес терялся, и рёбра ложились
+ * по живым/привязке).
  */
 export async function addLinkPropertyValue(
   networkId: string,
@@ -51,7 +53,7 @@ export async function addLinkPropertyValue(
     /* набор не прочитался — пишем только якорь (лучше связь, чем отказ) */
   }
   const targets = existing.includes(anchorId) ? existing : [...existing, anchorId];
-  await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
+  await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets, pick.side ?? null);
   // Своё значение свойства-связи меняет состав публикации: сигнал слоя (до B1)
   // с владельцем и якорем.
   signalPublicationCompositionChanged([ownerId, anchorId]);

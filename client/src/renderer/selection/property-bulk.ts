@@ -65,6 +65,7 @@ export interface BulkValueDefinition {
   required: boolean;
   default_value: null;
   side: LinkPropertySide | null;
+  /** Ключ записи: у связи — имя ВЫБРАННОЙ стороны (согласовано с `side`). */
   key: string;
   property_id: string;
   /** Допустимые типы противоположной стороны — из привязок реестра
@@ -113,7 +114,12 @@ export interface BulkApplyOperation {
   rowKey: string;
   thoughtId: string;
   kind: 'set' | 'remove';
-  /** Имя реестрового свойства — ключ записи (`properties.set/remove`). */
+  /**
+   * Ключ записи (`properties.set/remove`): у скаляра — имя реестрового
+   * свойства, у связи — display-имя ВЫБРАННОЙ СТОРОНЫ строки (согласовано с
+   * `side`, ошибка d9bc6012). Реестровое имя адресует сторону привязки и для
+   * обратной стороны пары «имя + сторона» не совпадало с видимым именем.
+   */
   propertyKey: string;
   propertyId: string;
   side: LinkPropertySide | null;
@@ -415,7 +421,11 @@ export function buildBulkPropertyRows(args: {
         required: false,
         default_value: null,
         side,
-        key: property.name,
+        // Ключ записи — имя ВИДИМОЙ стороны строки, а не реестровое имя
+        // свойства: пара «имя + `side`» обязана быть согласованной, иначе
+        // запись обратной стороны уходила под именем прямой (ошибка
+        // d9bc6012). У скаляра стороны нет — имя реестровое.
+        key: name,
         property_id: property.id,
         ...(property.value_type === 'link'
           ? {
@@ -440,11 +450,15 @@ export function bulkRowFromRegistry(
   linkTypes: readonly BulkLinkType[],
   totalCount: number,
 ): BulkPropertyRow {
+  // Имя строки (у связи — имя выбранной стороны); оно же ключ записи —
+  // пара «имя + `side`» согласована (ошибка d9bc6012).
+  const name =
+    (side === null ? property.name : linkSideName(linkTypes, property, side)) ?? property.name;
   return {
     key: bulkRowKey(property.id, side),
     propertyId: property.id,
     side,
-    name: (side === null ? property.name : linkSideName(linkTypes, property, side)) ?? property.name,
+    name,
     sortName: property.name,
     valueType: property.value_type,
     config: property.config,
@@ -460,7 +474,7 @@ export function bulkRowFromRegistry(
       required: false,
       default_value: null,
       side,
-      key: property.name,
+      key: name,
       property_id: property.id,
       ...(property.value_type === 'link'
         ? {

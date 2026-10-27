@@ -7,6 +7,8 @@
  * those paths use {@link renderHtml} and are documented at call sites.
  */
 
+import { PROPERTY_SIDE_ERROR_REASON } from '@etn/shared';
+
 import { t } from './i18n.js';
 import { splitHighlightRuns } from './pure.js';
 
@@ -152,6 +154,9 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
  *   `ETIMEDOUT`, «Сетевая ошибка») → «сервер недоступен, попробуйте позже» —
  *   technical words, codes and stacks never leak;
+ * - `422` по адресу стороны свойства-связи (`details.field === 'side'`) →
+ *   формулировка пользователя по `details.reason`: серверный текст адресован
+ *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
  * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
  *   `VERSION_CONFLICT`, …) keep their server-authored message verbatim.
  */
@@ -163,7 +168,26 @@ export function errText(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   if (ABORT_ERROR_RE.test(message)) return t('errors.actionCancelled');
   if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
+  const sideText = propertySideErrorText(like);
+  if (sideText !== null) return sideText;
   return message;
+}
+
+/**
+ * Текст для `422`, адресующего сторону свойства-связи: выбор — по
+ * машиночитаемому `details.reason` (общий контракт с сервером,
+ * `PROPERTY_SIDE_ERROR_REASON`), а не по разбору серверного сообщения.
+ * `null` — ошибка не про сторону (текст остаётся серверным).
+ */
+function propertySideErrorText(like: ErrorLike | null): string | null {
+  if (like?.code !== 'VALIDATION_ERROR') return null;
+  const details = like.details;
+  if (typeof details !== 'object' || details === null) return null;
+  const { field, reason } = details as { field?: unknown; reason?: unknown };
+  if (field !== 'side') return null;
+  return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
+    ? t('errors.propertySideMismatch')
+    : t('errors.propertySideRequired');
 }
 
 /** Formats an ISO date as `ДД.ММ.ГГГГ` (Russian locale). */

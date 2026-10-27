@@ -1,0 +1,236 @@
+{
+  "name": "d9bc6012-bulk-reverse-side",
+  "description": "Официальный GUI-сценарий ошибки d9bc6012: массовое назначение ОБРАТНОЙ стороны свойства-связи. Стенд: мысли A/B/C/D/E типа «Задача d9»; свойство-связь «версия» (прямая сторона) — «работы версии» (обратная) привязано к типу стороной source. Живой поиск обратной строки ограничен привязками (допустимые источники ребра — типы source-стороны), поэтому значение — мысль E того же типа; пара «имя стороны + сторона» от выбора значения не зависит. Пользователь выделяет A/B/C → «Свойства» → «Изменить значение свойства…» → (+) → строка «работы версии» (side=target) → значение E → «Применить». До фикса клиент отправлял РЕЕСТРОВОЕ имя «версия» + side=target, сервер отвечал 422 «сторона противоречит имени»: значения не записывались, диалог оставался с причинами. После фикса: диалог закрыт, у A/B/C живут рёбра обратной стороны (E→A/B/C), чтение отдаёт имя «работы версии»/side target, прямой стороны нет, у E — «версия»/source с четырьмя целями. Отдельный шаг пишет по API реестровым именем «версия» + side=target мысли D — проверка серверного правила «явный side приоритетен» на живой сборке (до фикса — 422).",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "seed-ontology-and-thoughts",
+      "timeout": 60000,
+      "probe": "(async () => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; const t=await et.types.createThoughtType(N,{name:'Задача d9'}); const p=await et.propertyRegistry.create(N,{name:'версия',value_type:'link',name_forward:'версия',name_reverse:'работы версии'}); await et.types.createTypeProperty(N,'thought_type',t.id,{mode:'attach',property_id:p.id,required:false,position:0,side:'source'}); const mk=async (title)=>{ const r=await et.thoughts.create(N,{title,type_id:t.id,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const A=await mk('Задача A d9'); const B=await mk('Задача B d9'); const C=await mk('Задача C d9'); const D=await mk('Задача D d9'); const E=await mk('Задача E d9'); const V=await et.thoughts.create(N,{title:'Версия 0.14.1 d9',create_link:{direction:'parent',target_thought_id:H}}); window.__d9={A,B,C,D,E,V:V.id,typeId:t.id,propertyId:p.id}; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-thoughts-on-canvas",
+      "timeout": 90000,
+      "waitFor": "(() => { const b=window.__d9; return b && ['A','B','C','D','E'].every((k)=>document.querySelector('.cloud[data-id=\"'+b[k]+'\"]') !== null); })()"
+    },
+    {
+      "name": "server-priority-record",
+      "timeout": 30000,
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; let outcome; try { const r=await window.etn.properties.set(N,'thought',b.D,'версия',[b.E],'target'); outcome={ok:r&&Object.keys(r), raw:r}; } catch (err) { outcome={error:String(err&&err.message?err.message:err)}; } const vs=await window.etn.properties.get(N,'thought',b.D); const rows=vs.filter((x)=>Array.isArray(x.values)).map((x)=>({name:x.property_name,side:x.side,count:x.values.length})); return JSON.stringify({outcome,rows}); })()"
+    },
+    {
+      "name": "select-a-b-c",
+      "probe": "(() => { const b=window.__d9; const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; return { A:click(b.A), B:click(b.B), C:click(b.C) }; })()",
+      "expect": {
+        "A": true,
+        "B": true,
+        "C": true
+      }
+    },
+    {
+      "name": "selection-panel-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.selection-item').length === 3"
+    },
+    {
+      "name": "selection-titles-ready",
+      "timeout": 30000,
+      "waitFor": "(() => [...document.querySelectorAll('.selection-item .prc-title')].map((e)=>e.textContent.trim()).filter((t)=>t!=='').length === 3)()"
+    },
+    {
+      "name": "open-properties-menu",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-property-values-dialog",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "dialog-loaded",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.prop-bulk-toolbar') !== null && (document.querySelector('.prop-bulk-table') !== null || document.querySelector('.prop-bulk-empty') !== null)"
+    },
+    {
+      "name": "open-picker",
+      "click": ".prop-bulk-toolbar .ui-btn"
+    },
+    {
+      "name": "picker-both-sides",
+      "timeout": 20000,
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.some((r)=>r.name==='версия' && r.side==='source') && items.some((r)=>r.name==='работы версии' && r.side==='target'); })()"
+    },
+    {
+      "name": "filter-reverse-side",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "type-reverse-side",
+      "text": "работы версии"
+    },
+    {
+      "name": "dispatch-filter",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "reverse-property-both-sides",
+      "timeout": 20000,
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].side === 'source' && items[1].name === 'работы версии' && items[1].side === 'target'; })()"
+    },
+    {
+      "name": "focus-picker-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "select-row",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "select-target-row",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choose-row",
+      "key": "Enter"
+    },
+    {
+      "name": "reverse-row-added-checked",
+      "timeout": 20000,
+      "waitFor": "(() => { const cb=document.querySelector('input[type=checkbox][aria-label=\"работы версии\"]'); return cb !== null && cb.checked === true; })()"
+    },
+    {
+      "name": "link-editor-active",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"работы версии\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false"
+    },
+    {
+      "name": "add-chip",
+      "click": "tr:has(input[aria-label=\"работы версии\"]) .link-value-add"
+    },
+    {
+      "name": "type-untyped-value",
+      "eval": "(() => { const row=document.querySelector('tr:has(input[aria-label=\"работы версии\"])'); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.focus(); input.value='Версия 0.14.1 d9'; input.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "untyped-target-not-suggested",
+      "timeout": 20000,
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,800)); const items=[...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()); return items.some((t)=>t==='Версия 0.14.1 d9'); })()",
+      "expect": false
+    },
+    {
+      "name": "type-value",
+      "eval": "(() => { const row=document.querySelector('tr:has(input[aria-label=\"работы версии\"])'); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.focus(); input.value='Задача E d9'; input.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "suggestions-visible",
+      "timeout": 20000,
+      "waitFor": "(() => { const items=[...document.querySelectorAll('.type-combo-item')]; return items.some((e)=>e.textContent.trim() === 'Задача E d9'); })()"
+    },
+    {
+      "name": "pick-value",
+      "probe": "(() => { const item=[...document.querySelectorAll('.type-combo-item')].find((e)=>e.textContent.trim() === 'Задача E d9'); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "chip-is-value",
+      "timeout": 20000,
+      "waitFor": "(() => { const chips=[...document.querySelectorAll('tr:has(input[aria-label=\"работы версии\"]) .prc-title')].map((e)=>e.textContent); return chips.length === 1 && chips[0] === 'Задача E d9'; })()"
+    },
+    {
+      "name": "apply",
+      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Применить'); if(!btn) return 'no-button'; if(btn.disabled) return 'disabled'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "apply-facts",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; const sleep=(ms)=>new Promise((r)=>setTimeout(r,ms)); let open=false, sideError=false; for (let i=0;i<40;i++) { const toolbar=document.querySelector('.prop-bulk-toolbar'); const report=document.querySelector('.prop-bulk-report-list'); open=toolbar!==null; if (report!==null) { sideError=/сторона|связей/.test(report.textContent || ''); break; } if (!open && i>=12) break; await sleep(50); } const vs=await window.etn.properties.get(N,'thought',b.A); const e=vs.find((x)=>Array.isArray(x.values) && x.side==='target'); return { dialogOpen: open, sideError, edgeToE: e ? e.values.length===1 && e.values[0].target_id===b.E : false }; })()",
+      "expect": {
+        "dialogOpen": false,
+        "sideError": false,
+        "edgeToE": true
+      }
+    },
+    {
+      "name": "dialog-closed-after-apply",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.prop-bulk-toolbar') === null"
+    },
+    {
+      "name": "reverse-edges-on-server",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; const read=async (id)=>{ const vs=await window.etn.properties.get(N,'thought',id); const v=vs.find((x)=>Array.isArray(x.values) && x.side==='target' && x.property_name==='работы версии'); return v ? v.values.map((e)=>e.target_id) : null; }; const a=await read(b.A), bb=await read(b.B), c=await read(b.C); return { a: a===null ? null : a.length===1 && a[0]===b.E, b: bb===null ? null : bb.length===1 && bb[0]===b.E, c: c===null ? null : c.length===1 && c[0]===b.E }; })()",
+      "expect": {
+        "a": true,
+        "b": true,
+        "c": true
+      }
+    },
+    {
+      "name": "reverse-name-and-side-in-read",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; const vs=await window.etn.properties.get(N,'thought',b.A); const v=vs.find((x)=>Array.isArray(x.values) && x.side==='target'); return { name: v?.property_name ?? null, side: v?.side ?? null, direction: v?.direction ?? null, count: v?.values.length ?? 0 }; })()",
+      "expect": {
+        "name": "работы версии",
+        "side": "target",
+        "direction": "in",
+        "count": 1
+      }
+    },
+    {
+      "name": "no-forward-side-edges",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; const read=async (id)=>{ const vs=await window.etn.properties.get(N,'thought',id); const v=vs.find((x)=>Array.isArray(x.values) && x.side==='source' && x.property_name==='версия'); return v ? v.values.length : 0; }; return { a:await read(b.A), b:await read(b.B), c:await read(b.C) }; })()",
+      "expect": {
+        "a": 0,
+        "b": 0,
+        "c": 0
+      }
+    },
+    {
+      "name": "registry-name-opposite-side-api",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; const r=await window.etn.properties.set(N,'thought',b.D,'версия',[b.E],'target'); if (r && r.__etnError) return 'refused: ' + String(r.error && r.error.message ? r.error.message : r.error); const vs=await window.etn.properties.get(N,'thought',b.D); const v=vs.find((x)=>Array.isArray(x.values) && x.side==='target'); return 'ok: ' + (v?.property_name ?? 'none'); })()",
+      "expect": "ok: работы версии"
+    },
+    {
+      "name": "value-thought-sees-forward-name",
+      "probe": "(async () => { const N='{{networkId}}'; const b=window.__d9; const vs=await window.etn.properties.get(N,'thought',b.E); const v=vs.find((x)=>Array.isArray(x.values) && x.property_name==='версия'); return { name: v?.property_name ?? null, side: v?.side ?? null, count: v?.values.length ?? 0 }; })()",
+      "expect": {
+        "name": "версия",
+        "side": "source",
+        "count": 4
+      }
+    }
+  ]
+}

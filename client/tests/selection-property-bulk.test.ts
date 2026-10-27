@@ -459,6 +459,33 @@ describe('общее значение и счётчик присутствия',
     );
   });
 
+  it('ограничение цели строки — с ПРОТИВОПОЛОЖНОЙ стороны, своей у каждой (уточнение d9bc6012)', () => {
+    // Живой поиск цели массового диалога фильтруется по
+    // `allowed_opposite_type_ids` выбранной стороны (уточнение заказчика:
+    // «редактируешь версию — поиск показывает только версии»; ограничение
+    // относится к ЦЕЛИ, не к владельцу — ADR cb95fb4e).
+    const both = registry({
+      id: 'p-version',
+      name: 'версия',
+      value_type: 'link',
+      config: { link_type_id: 'lt-attach' },
+      binding_source_type_ids: ['tt-task'],
+      binding_target_type_ids: ['tt-version'],
+    });
+    const forward = bulkRowFromRegistry(both, 'source', LINK_TYPES, 3);
+    const reverse = bulkRowFromRegistry(both, 'target', LINK_TYPES, 3);
+    assert.deepEqual(
+      forward.definition.allowed_opposite_type_ids,
+      ['tt-version'],
+      'прямая строка: допустимые цели — типы target-привязок',
+    );
+    assert.deepEqual(
+      reverse.definition.allowed_opposite_type_ids,
+      ['tt-task'],
+      'обратная строка: допустимые источники — типы source-привязок',
+    );
+  });
+
   it('строка, добавленная через (+), пустая и с нулевым присутствием', () => {
     const row = bulkRowFromRegistry(
       REGISTRY.find((property) => property.id === 'p-owner')!,
@@ -526,7 +553,7 @@ describe('план применения (галочка × строка)', () =>
     assert.equal(removeOps[0]!.side, 'source', 'очистка адресует сторону');
   });
 
-  it('связь-сторона target: план адресует сторону, ключ — имя реестрового свойства', () => {
+  it('связь-сторона target: план адресует сторону, ключ — имя ЭТОЙ стороны (d9bc6012)', () => {
     const snapshot = valueMap({
       't-b': [
         linkValues({
@@ -542,11 +569,63 @@ describe('план применения (галочка × строка)', () =>
     const rows = rowsOf(snapshot);
     const row = rowByKey(rows, 'p-attach:target');
     assert.equal(row.name, 'Прикреплено к', 'имя строки — обратное имя стороны');
+    assert.equal(row.definition.key, 'Прикреплено к', 'ключ определения — имя той же стороны');
 
     const ops = planBulkApply(rows, [mark(rows, 'p-attach:target', true, ['t-n'])], ['t-b']);
     assert.equal(ops[0]!.side, 'target', 'запись адресует сторону строки');
-    assert.equal(ops[0]!.propertyKey, 'Прикреплено', 'ключ — имя реестрового свойства');
+    assert.equal(
+      ops[0]!.propertyKey,
+      'Прикреплено к',
+      'пара «имя + сторона» согласована: реестровое «Прикреплено» адресовало бы source',
+    );
     assert.deepEqual(ops[0]!.value, ['t-n']);
+  });
+
+  it('обе стороны одной связи: ключ записи каждой строки совпадает с её видимым именем', () => {
+    const rows = [
+      ...rowsOf(
+        valueMap({
+          't-a': [
+            linkValues({
+              ownerId: 't-a',
+              propertyId: 'p-attach',
+              propertyName: 'Прикреплено',
+              linkTypeId: 'lt-attach',
+              side: 'source',
+              targets: [{ id: 't-n' }],
+            }),
+          ],
+        }),
+      ),
+    ];
+    const sourceRow = rowByKey(rows, 'p-attach:source');
+    const targetRow = bulkRowFromRegistry(
+      REGISTRY.find((property) => property.id === 'p-attach')!,
+      'target',
+      LINK_TYPES,
+      3,
+    );
+    assert.equal(sourceRow.definition.key, 'Прикреплено');
+    assert.equal(sourceRow.side, 'source');
+    assert.equal(targetRow.definition.key, 'Прикреплено к');
+    assert.equal(targetRow.side, 'target');
+
+    const ops = planBulkApply(
+      [...rows, targetRow],
+      [
+        mark(rows, 'p-attach:source', true, ['t-n']),
+        { key: targetRow.key, checked: true, value: ['t-m'] },
+      ],
+      ['t-a'],
+    );
+    assert.deepEqual(
+      ops.map((op) => [op.propertyKey, op.side]),
+      [
+        ['Прикреплено', 'source'],
+        ['Прикреплено к', 'target'],
+      ],
+      'имя и сторона каждой операции берутся из одной строки',
+    );
   });
 
   it('пустая строка из (+) с галочкой ничего не удаляет: K = 0', () => {

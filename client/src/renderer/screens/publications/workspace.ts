@@ -1754,7 +1754,16 @@ export function mountPublicationWorkspace(
       const remaining = entry.values
         .map((item) => item.target_id)
         .filter((id) => id !== block.thoughtId);
-      await etn.properties.set(networkId, 'thought', oldOwner, propertyKey, remaining);
+      // Сторона строки — адрес набора прежнего владельца (как и у
+      // добавления): без неё симметричное имя не различить (ошибка d9bc6012).
+      await etn.properties.set(
+        networkId,
+        'thought',
+        oldOwner,
+        propertyKey,
+        remaining,
+        row.side,
+      );
     } catch (err) {
       errorDialog(t('publications.block.moveToSectionTitle'), err);
       return;
@@ -2625,7 +2634,16 @@ export function mountPublicationWorkspace(
       existing = [];
     }
     const targets = existing.includes(targetId) ? existing : [...existing, targetId];
-    await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
+    // `side` едет вместе с ключом: ключ — display-имя стороны, при
+    // симметричном имени направление по нему не выводится (ошибка d9bc6012).
+    await etn.properties.set(
+      networkId,
+      'thought',
+      ownerId,
+      pick.key,
+      targets,
+      pick.side ?? null,
+    );
   }
 
   // --- Публичный дескриптор ------------------------------------------------

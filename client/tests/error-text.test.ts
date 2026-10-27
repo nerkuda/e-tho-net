@@ -89,6 +89,43 @@ describe('errText: дружелюбные сообщения', () => {
     }
   });
 
+  it('422 по стороне свойства-связи — пользовательский текст, без source/target/side (d9bc6012)', () => {
+    // Серверный текст адресован API/агентам: в нём `side`, `source`, `target`.
+    // Пользователю показываем формулировку по машиночитаемому `details.reason`.
+    const required = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'имя свойства «см. также» адресует обе стороны связи, и обе стороны живые — укажите side',
+        { field: 'side', reason: 'side-required', allowed: ['source', 'target'] },
+      ),
+    );
+    assert.equal(required, 'у свойства есть связи с обеих сторон — выберите сторону');
+    assert.doesNotMatch(required, /source|target|side/i);
+
+    const mismatch = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'сторона «target» не совпадает с фактическим направлением рёбер свойства «см. также»',
+        { field: 'side', reason: 'side-mismatch', actual_side: 'source' },
+      ),
+    );
+    assert.equal(
+      mismatch,
+      'с выбранной стороны связей нет — значение уже изменили, обновите карточку',
+    );
+    assert.doesNotMatch(mismatch, /source|target|side/i);
+  });
+
+  it('422 по стороне без details.reason (сервер старше 0.14.1) — всё равно без внутренних терминов', () => {
+    const text = errText(
+      new EtnError('VALIDATION_ERROR', 'имя свойства «X» адресует обе стороны — укажите side', {
+        field: 'side',
+      }),
+    );
+    assert.equal(text, 'у свойства есть связи с обеих сторон — выберите сторону');
+    assert.doesNotMatch(text, /source|target|side/i);
+  });
+
   it('не-Error значения приводятся к строке (совместимость)', () => {
     assert.equal(errText('строка'), 'строка');
   });

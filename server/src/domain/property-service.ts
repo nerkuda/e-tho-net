@@ -32,6 +32,7 @@ import {
   EtnError,
   LINK_PROPERTY_DIRECTIONS,
   LINK_PROPERTY_SIDES,
+  PROPERTY_SIDE_ERROR_REASON,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
   typeNameKey,
@@ -3558,10 +3559,16 @@ function linkPropertyDirectionFromDisplayName(
 //
 //   * запись со `side` создаёт рёбра указанной стороны — в том числе
 //     отсутствующей у мысли (сверки с живыми рёбрами нет);
-//   * имя, однозначно адресующее сторону (несимметричный тип), со `side`
-//     другой стороны — 422 (противоречие адресов);
+//   * при записи явный `side` ПРИОРИТЕТЕН, имя лишь резолвит свойство: даже
+//     когда display-имя однозначно адресует другую сторону (несимметричный
+//     тип), запись идёт по адресу `side` (0.14.1, ошибка d9bc6012: клиент
+//     вправе передать реестровое имя свойства + выбранную пользователем
+//     сторону; 422 «сторона противоречит имени» спекой не предусмотрен);
 //   * без `side` у симметричного имени: одна живая сторона — выводим её,
 //     обе живые — 422 (нужен `side`), ни одной — `config.direction`;
+//   * 422 записи по стороне — только настоящая неоднозначность: обе стороны
+//     живы без `side` либо display-имя принадлежит нескольким свойствам
+//     сети (коллизия имён, уточнение 2 спеки 906a29c9);
 //   * удаление/очистка дополнительно сверяет сторону с ФАКТИЧЕСКИМ
 //     направлением живых рёбер (422 при расхождении).
 
@@ -3624,7 +3631,12 @@ function resolveLiveLinkDirection(
       throw new EtnError(
         'VALIDATION_ERROR',
         `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
-        { field: 'side', key, allowed: LINK_PROPERTY_SIDES },
+        {
+          field: 'side',
+          reason: PROPERTY_SIDE_ERROR_REASON.required,
+          key,
+          allowed: LINK_PROPERTY_SIDES,
+        },
       );
     }
     if (live.length === 1) return live[0]!;
@@ -3653,15 +3665,11 @@ function resolveLinkDirectionForWrite(
   const matched = linkDirectionsByDisplayName(ndb, config, key);
   const sideDir = side === null ? null : directionFromSide(side);
   if (matched.length === 1) {
-    const keyDir = matched[0]!;
-    if (sideDir !== null && sideDir !== keyDir) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `сторона «${side}» противоречит имени свойства «${key}»: имя адресует сторону «${sideFromDirection(keyDir)}»`,
-        { field: 'side', key, side, actual_side: sideFromDirection(keyDir) },
-      );
-    }
-    return sideDir ?? keyDir;
+    // Явный `side` — адрес записи, имя только резолвит свойство (0.14.1,
+    // ошибка d9bc6012): реестровое имя может адресовать ДРУГУЮ сторону, чем
+    // выбранная пользователем строка, и это не противоречие — пишем ту, что
+    // адресована `side`.
+    return sideDir ?? matched[0]!;
   }
   if (matched.length === 2) {
     // Симметричный тип связи: имя адресует обе стороны.
@@ -3712,7 +3720,12 @@ function resolveSamePropertyLinkDirection(
     throw new EtnError(
       'VALIDATION_ERROR',
       `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
-      { field: 'side', key, allowed: LINK_PROPERTY_SIDES },
+      {
+        field: 'side',
+        reason: PROPERTY_SIDE_ERROR_REASON.required,
+        key,
+        allowed: LINK_PROPERTY_SIDES,
+      },
     );
   }
   if (live.length === 1) return live[0]!;
@@ -3755,11 +3768,12 @@ function resolveSamePropertyLinkDirection(
  * Шаг 1 (типовой ключ эффективного набора) направление не задаёт — его, как и
  * раньше, определяет сторона привязки владельца (ошибка c67676f3).
  *
- * **0.14.1, параметр `side`** (спека 906a29c9): сторона — адрес записи. Если
- * имя адресует обе стороны симметричного типа связи (`name_forward ==
+ * **0.14.1, параметр `side`** (спека 906a29c9): сторона — адрес записи. При
+ * записи явный `side` приоритетен, ключ только резолвит свойство (ошибка
+ * d9bc6012): имя может адресовать другую сторону — пишем ту, что адресована.
+ * Если имя адресует обе стороны симметричного типа связи (`name_forward ==
  * name_reverse`), `side` выбирает сторону; без него сторона выводится из
- * живых рёбер, а при обеих живых — 422. У несимметричного имени `side` другой
- * стороны — 422 (противоречие адресов). Для внетипового владельца с одной
+ * живых рёбер, а при обеих живых — 422. Для внетипового владельца с одной
  * живой стороной `side` позволяет создать ОТСУТСТВУЮЩУЮ сторону.
  *
  * Connectivity to the owner's type is NOT checked here — callers decide
@@ -3849,6 +3863,7 @@ export function resolveDefinition(
                 : `property name "${key}" is ambiguous`,
               {
                 field: side === null ? 'side' : 'property',
+                ...(side === null ? { reason: PROPERTY_SIDE_ERROR_REASON.required } : {}),
                 name: key,
                 ...(side === null ? { allowed: LINK_PROPERTY_SIDES } : {}),
                 candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
@@ -3894,6 +3909,7 @@ export function resolveDefinition(
             : `property name "${key}" is ambiguous`,
           {
             field: allLink && side === null ? 'side' : 'property',
+            ...(allLink && side === null ? { reason: PROPERTY_SIDE_ERROR_REASON.required } : {}),
             name: key,
             ...(allLink && side === null ? { allowed: LINK_PROPERTY_SIDES } : {}),
             candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
@@ -5561,6 +5577,7 @@ export function deletePropertyValue(
           `сторона «${side}» не совпадает с фактическим направлением рёбер свойства «${key}»`,
           {
             field: 'side',
+            reason: PROPERTY_SIDE_ERROR_REASON.mismatch,
             key,
             side,
             actual_side: sideFromDirection(oppositeDirection),

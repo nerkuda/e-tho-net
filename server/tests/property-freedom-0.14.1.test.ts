@@ -289,8 +289,10 @@ describe(
         assert.equal(deleteSource.statusCode, 204);
         assert.equal(getLinkPropertyValues(ctx.ndb, 'thought', owner, linkTypeId, 'out').length, 0);
 
-        // Несимметричное имя + side другой стороны — противоречие адресов, 422.
-        createNetworkProperty(
+        // Несимметричное имя + side ДРУГОЙ стороны: при записи `side` — адрес,
+        // имя лишь резолвит свойство; 422 «сторона противоречит имени» нет
+        // (ошибка d9bc6012) — ребро ложится на указанную сторону.
+        const asymmetric = createNetworkProperty(
           ctx.ndb,
           {
             name: 'ссылается на',
@@ -300,8 +302,23 @@ describe(
           },
           USER,
         );
-        const contradiction = await putProperty(ctx, owner, 'ссылается на', first, 'target');
-        assert.equal(contradiction.statusCode, 422, contradiction.body);
+        const picked = await putProperty(ctx, owner, 'ссылается на', first, 'target');
+        assert.equal(picked.statusCode, 200, picked.body);
+        const asymmetricTypeId = asymmetric.config?.link_type_id as string;
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', owner, asymmetricTypeId, 'in').map(
+            (v) => v.target_id,
+          ),
+          [first],
+          'реестровое имя + side=target создаёт рёбра целевой стороны',
+        );
+        // Чтение показывает имя ЭТОЙ стороны — та же пара «имя + сторона», что
+        // видит пользователь в строке свойства.
+        const readAsymmetric = (await listProperties(ctx, owner)).find(
+          (entry) => entry.property_id === asymmetric.id,
+        );
+        assert.equal(readAsymmetric?.property_name, 'сослано из');
+        assert.equal(readAsymmetric?.side, 'target');
 
         // Типовая привязка со стороной target: живая сторона одна (по
         // привязке), обеих сторон нет — без side пишется сторона привязки (in).
@@ -335,6 +352,148 @@ describe(
           [typedPeer],
           'без side создаётся сторона привязки',
         );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('реестровое имя + противоположный side у типового свойства: рёбра обратной стороны (ошибка d9bc6012)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Сценарий заказчика: свойство-связь «версия» (прямая сторона) —
+        // «работы версии» (обратная); у выделенных мыслей в таблице выбрана
+        // ОБРАТНАЯ строка. Клиент до фикса отправлял реестровое имя «версия»
+        // + side=target и получал 422. Теперь side — адрес записи.
+        const versionType = createThoughtType(ctx.ndb, { name: 'Версия d9bc6012' }, USER);
+        const taskType = createThoughtType(ctx.ndb, { name: 'Задача d9bc6012' }, USER);
+        const prop = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'версия',
+            value_type: 'link',
+            name_forward: 'версия',
+            name_reverse: 'работы версии',
+          },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          taskType.id,
+          { key: 'версия', value_type: 'link', side: 'source' },
+          USER,
+        );
+        const task = await createThought(ctx, 'Задача в версии', taskType.id);
+        const version = await createThought(ctx, 'Версия 0.14.1', versionType.id);
+
+        const reverse = await putProperty(ctx, task, 'версия', version, 'target');
+        assert.equal(reverse.statusCode, 200, reverse.body);
+        const linkTypeId = prop.config?.link_type_id as string;
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', task, linkTypeId, 'in').map(
+            (v) => v.target_id,
+          ),
+          [version],
+          'реестровое имя + side=target создаёт рёбра обратной стороны',
+        );
+        // Чтение отдаёт ДВЕ строки одного свойства: типовую прямую «версия» с
+        // нулём и внетиповую обратную «работы версии» с живым ребром — именно
+        // её видит пользователь, выбирая строку в таблице массового назначения.
+        const readRows = (await listProperties(ctx, task)).filter(
+          (entry) => entry.property_id === prop.id,
+        );
+        const readTarget = readRows.find((entry) => entry.side === 'target');
+        assert.equal(readTarget?.property_name, 'работы версии');
+        assert.equal(readTarget?.count, 1);
+        assert.equal(readTarget?.outside_type, true);
+        const readSource = readRows.find((entry) => entry.side === 'source');
+        assert.equal(readSource?.property_name, 'версия');
+        assert.equal(readSource?.count, 0);
+
+        // 422 записи — только несуществующее свойство (спека 906a29c9).
+        const missing = await putProperty(ctx, task, 'нет такого свойства d9bc6012', version);
+        assert.equal(missing.statusCode, 422, missing.body);
+        // Без side имя по-прежнему адресует ПРЯМУЮ сторону: обе стороны живут
+        // одновременно, адресация записи не изменилась.
+        const forward = await putProperty(ctx, task, 'версия', version);
+        assert.equal(forward.statusCode, 200, forward.body);
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', task, linkTypeId, 'out').map(
+            (v) => v.target_id,
+          ),
+          [version],
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('владелец того же типа, что цель, — свободен; ограничение ЦЕЛИ по привязке остаётся (уточнение d9bc6012)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Разграничение двух ограничений (уточнение заказчика к d9bc6012):
+        // тип ВЛАДЕЛЬЦА не проверяется (ADR cb95fb4e), тип ЦЕЛИ проверяется по
+        // противоположной стороне привязки (a6513df0) и остаётся в силе.
+        const taskType = createThoughtType(ctx.ndb, { name: 'Задача-владелец d9' }, USER);
+        const versionType = createThoughtType(ctx.ndb, { name: 'Версия-цель d9' }, USER);
+        const prop = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'версия владельца',
+            value_type: 'link',
+            name_forward: 'версия владельца',
+            name_reverse: 'работы версии владельца',
+          },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          taskType.id,
+          { key: 'версия владельца', value_type: 'link', side: 'source' },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          versionType.id,
+          { key: 'версия владельца', value_type: 'link', side: 'target' },
+          USER,
+        );
+        const linkTypeId = prop.config?.link_type_id as string;
+
+        const task = await createThought(ctx, 'Задача-владелец', taskType.id);
+        const taskPeer = await createThought(ctx, 'Задача-сосед', taskType.id);
+        const versionOwner = await createThought(ctx, 'Версия-владелец', versionType.id);
+        const versionTarget = await createThought(ctx, 'Версия-цель', versionType.id);
+
+        // Владелец — представитель ЦЕЛЕВОГО типа: у его типа есть привязка
+        // (сторона target), но отказа по типу владельца нет — значение
+        // записывается (уточнение заказчика: «свойство можно назначить даже
+        // самой мысли-версии»). Прямое имя адресует сторону источника, цель —
+        // версия: цЕль ограничению не противоречит.
+        const ownerIsTarget = await putProperty(
+          ctx,
+          versionOwner,
+          'версия владельца',
+          versionTarget,
+        );
+        assert.equal(ownerIsTarget.statusCode, 200, ownerIsTarget.body);
+        assert.deepEqual(
+          getLinkPropertyValues(ctx.ndb, 'thought', versionOwner, linkTypeId, 'out').map(
+            (v) => v.target_id,
+          ),
+          [versionTarget],
+          'свойство назначено мысли-версии — без 422 по типу владельца',
+        );
+
+        // Ограничение ЦЕЛИ сохраняется: прямая строка задачи допускает только
+        // типы target-привязок (версию); задача как цель — 422.
+        const wrongTarget = await putProperty(ctx, task, 'версия владельца', taskPeer);
+        assert.equal(wrongTarget.statusCode, 422, wrongTarget.body);
+        assert.match(wrongTarget.body, /required type/);
+        const rightTarget = await putProperty(ctx, task, 'версия владельца', versionTarget);
+        assert.equal(rightTarget.statusCode, 200, rightTarget.body);
       } finally {
         await closeRestContext(ctx);
       }
@@ -758,6 +917,65 @@ describe(
           const ambiguous = await add('см. также', hall.id);
           assert.equal(ambiguous.isError, true, 'нужен side');
           assert.match(toolText(ambiguous), /side/);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.properties.add: реестровое имя + противоположный side (ошибка d9bc6012)', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        // Асимметричный тип связи: имя «читал в» адресует прямую сторону,
+        // «читальный зал» — обратную. MCP присылает РЕЕСТРОВОЕ имя и
+        // side=target — это запись обратной стороны, а не 422.
+        const prop = createNetworkProperty(
+          ndb,
+          {
+            name: 'читал в',
+            value_type: 'link',
+            name_forward: 'читал в',
+            name_reverse: 'читальный зал',
+          },
+          ctx.adminId,
+        );
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Конспект d9bc6012',
+          });
+          const hall = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Зал d9bc6012',
+          });
+          const res = await handle.client.callTool({
+            name: 'etn.properties.add',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: owner.id,
+              key: 'читал в',
+              value: hall.id,
+              side: 'target',
+            },
+          });
+          assert.notEqual(res.isError, true, toolText(res));
+          assert.equal(toolJson<{ created: boolean }>(res).created, true);
+          const linkTypeId = prop.config?.link_type_id as string;
+          assert.deepEqual(
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, 'in').map(
+              (v) => v.target_id,
+            ),
+            [hall.id],
+            'реестровое имя + side=target создаёт рёбра обратной стороны',
+          );
+          assert.deepEqual(
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, 'out'),
+            [],
+            'прямая сторона не тронута',
+          );
         } finally {
           await handle.close();
         }
