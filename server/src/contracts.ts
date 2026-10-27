@@ -985,6 +985,19 @@ export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields
 /** Допустимые поля одного условия отбора по свойству (контракт `etn.thoughts.query`). */
 const QUERY_PROPERTY_CONDITION_KEYS = ['property_id', 'property', 'operator', 'value'] as const;
 
+/**
+ * Строгая форма `value` для операторов, которым значение НУЖНО (всё, кроме
+ * пары наличия). Вынесена из описания поля, чтобы presence мог принять любую
+ * шумовую форму и молча её проигнорировать — как REST (замечание верификатора
+ * круга 2 по ошибке 40c76144).
+ */
+const QUERY_PROPERTY_VALUE = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string().min(1)).min(1),
+]);
+
 const QueryPropertyFields = z
   .object({
     property_id: z.string().min(1).optional(),
@@ -996,12 +1009,14 @@ const QueryPropertyFields = z
     // природе свойства проверяет движок (`OPS_BY_VALUE_TYPE`) — одинаково
     // для MCP и REST.
     operator: z.enum(FLAT_PROPERTY_OPS),
-    // `value` необязателен для пары наличия (`is_empty`/`not_empty`):
-    // переданное значение движок игнорирует. Обязательность для остальных
-    // операторов — refine ниже.
-    value: z
-      .union([z.string(), z.number(), z.boolean(), z.array(z.string().min(1)).min(1)])
-      .optional(),
+    // Форма `value` намеренно не описана здесь (замечание верификатора круга 2
+    // по ошибке 40c76144): для пары наличия (`is_empty`/`not_empty`) значение
+    // НЕ НУЖНО, и любая переданная форма — включая `null` и объект — обязана
+    // молча игнорироваться. REST-разбор (`parsePropertyCondition`,
+    // structure-service.ts) ведёт себя так же. Строгая форма для остальных
+    // операторов проверяется отдельным refine ниже — контракт не ослаблен,
+    // но и presence не отвергается из-за шумового `value`.
+    value: z.unknown().optional(),
   })
   // `.passthrough()` до refine (ошибка f4580fff, 0.12.1): zod по умолчанию
   // ВЫРЕЗАЕТ неизвестные ключи ещё до проверок, поэтому refine по `Object.keys`
@@ -1047,6 +1062,20 @@ const QueryPropertyFields = z
   .refine(
     (v) => v.operator === 'is_empty' || v.operator === 'not_empty' || v.value !== undefined,
     { message: 'Укажите value условия свойства (кроме операторов is_empty/not_empty).' },
+  )
+  // Форма значения для сравнений — прежний контракт (скаляр или непустой
+  // массив строк). Presence сюда не входит: `is_empty`/`not_empty` принимают
+  // `value` любой формы (включая `null`/объект) и игнорируют его — паритет с
+  // REST-разбором, где для пары наличия значение тоже не читается.
+  .refine(
+    (v) =>
+      v.operator === 'is_empty' ||
+      v.operator === 'not_empty' ||
+      QUERY_PROPERTY_VALUE.safeParse(v.value).success,
+    {
+      message:
+        'value должен быть строкой, числом, логическим или непустым массивом строк.',
+    },
   );
 /**
  * Старые критерии выборки, с которыми `ast` несовместим (требование 91983c20,

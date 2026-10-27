@@ -163,8 +163,9 @@ export type StructureSort = (typeof STRUCTURE_SORTS)[number];
  * даёт `VALIDATION_ERROR` на обоих фасадах.
  *
  * `is_empty` / `not_empty` — наличие значения: `is_empty` — значения нет
- * (нет строки в `property_values` либо её колонка NULL/пуста), `not_empty` —
- * есть. `value` для пары не требуется (переданное игнорируется). Для `bool`
+ * (нет строки в `property_values` с непустой колонкой; у свойства-связи —
+ * нет живого ребра `links_v`), `not_empty` — есть. `value` для пары не
+ * требуется (переданное любой формы игнорируется). Для `bool`
  * пара запрещена — тот же смысл дают `eq true` / `eq false` (требование
  * 9bdddad6).
  *

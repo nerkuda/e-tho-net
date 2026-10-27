@@ -384,6 +384,70 @@ describe(
       }
     });
 
+    it('presence игнорирует value ЛЮБОЙ формы (null/объект/массив) на обоих фасадах; форма сравнения строгая', async () => {
+      const world = await buildWorld();
+      try {
+        const text = await createProperty(world.rest, { name: 'Метка', value_type: 'text' });
+        const root = insertThought(world.ndb, 'Корень');
+        const filled = insertThought(world.ndb, 'Заполненная');
+        const empty = insertThought(world.ndb, 'Пустая');
+        for (const child of [filled, empty]) insertLink(world.ndb, root, child);
+        insertValue(world.ndb, filled, text.id, 'value_text', 'alpha');
+        const expected = sorted([root, empty]);
+
+        // Замечание верификатора круга 2: MCP отвергал `null`/объект zod-схемой,
+        // а REST молча подставлял `''`. Теперь обе формы входа принимают любую
+        // шумовую форму значения у пары наличия и игнорируют её.
+        const ignored: unknown[] = [null, { junk: true }, [1, 2], 'ignored'];
+        for (const value of ignored) {
+          const tag = `value=${JSON.stringify(value)}`;
+          const rest = await restQuery(world.rest, {
+            parent_ids: [root],
+            properties: [{ property_id: text.id, op: 'is_empty', value }],
+            sort: 'alpha',
+            order: 'asc',
+          });
+          assert.equal(
+            rest.statusCode,
+            200,
+            `${tag}: REST ${rest.statusCode} ${JSON.stringify(rest.body)}`,
+          );
+          assert.deepEqual(sorted(rest.ids), expected, `${tag}: REST — presence не зависит от value`);
+
+          const mcp = await mcpQuery(world.handle, world.rest.networkId, {
+            in_subtree_of: root,
+            properties: [{ property: 'Метка', operator: 'is_empty', value }],
+            sort: 'title',
+            order: 'asc',
+          });
+          assert.equal(mcp.isError, false, `${tag}: MCP не должен падать — ${mcp.text}`);
+          assert.deepEqual(sorted(mcp.ids), expected, `${tag}: MCP = REST`);
+        }
+
+        // Для сравнений форма значения осталась строгой на обоих фасадах:
+        // объект — VALIDATION_ERROR, а не молчаливое сравнение.
+        const restObject = await restQuery(world.rest, {
+          parent_ids: [root],
+          properties: [{ property_id: text.id, op: 'eq', value: { junk: true } }],
+        });
+        assert.equal(restObject.statusCode, 422, 'REST eq с объектом — 422');
+        assert.equal(
+          (restObject.body as { error: { code: string } }).error.code,
+          'VALIDATION_ERROR',
+        );
+
+        const mcpObject = await mcpQuery(world.handle, world.rest.networkId, {
+          in_subtree_of: root,
+          properties: [{ property: 'Метка', operator: 'eq', value: { junk: true } }],
+        });
+        assert.equal(mcpObject.isError, true, 'MCP eq с объектом обязан падать');
+        assert.match(mcpObject.text, /VALIDATION_ERROR/);
+        assert.match(mcpObject.text, /value/);
+      } finally {
+        await closeWorld(world);
+      }
+    });
+
     it('in/not_in: массивы совпадают у MCP и REST, пустой массив → понятная VALIDATION_ERROR', async () => {
       const world = await buildWorld();
       try {

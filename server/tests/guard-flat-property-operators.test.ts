@@ -63,6 +63,37 @@ function opsOf(values: Iterable<string>): string[] {
 
 const CANON_SORTED = opsOf(CANON);
 
+/**
+ * Канон применимости по природе свойства — таблица требования 00eb824b,
+ * тоже ЛИТЕРАЛОМ. Сверка объединения (как было в первой версии сторожа) не
+ * ловит снятие оператора из ОДНОГО типа: `gte` остаётся в `date` и
+ * объединение не меняется (замечание верификатора круга 2). Поэтому каждый
+ * `value_type` сверяется отдельно.
+ */
+const CANON_BY_VALUE_TYPE: Record<string, readonly string[]> = {
+  text: [
+    'contains', 'eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty',
+    'any_of', 'all_of', 'none_of',
+  ],
+  url: [
+    'contains', 'eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty',
+    'any_of', 'all_of', 'none_of',
+  ],
+  date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
+  number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
+  bool: ['eq', 'ne'],
+  link: [
+    'eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of',
+    'none_of',
+  ],
+  thought_ref: [
+    'eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of',
+    'none_of',
+  ],
+  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
+  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
+};
+
 /** Разбор slash-перечисления операторов из строки источника. */
 function splitOps(span: string): string[] {
   const parts = span.split('/').map((v) => v.trim()).filter((v) => v !== '');
@@ -102,12 +133,33 @@ describe(
       );
     });
 
-    it('гейт движка OPS_BY_VALUE_TYPE (объединение по типам) = канон', () => {
-      const engine = Object.values(OPS_BY_VALUE_TYPE).flat() as readonly string[];
+    it('гейт движка OPS_BY_VALUE_TYPE = канон по КАЖДОМУ value_type', () => {
+      const engine = OPS_BY_VALUE_TYPE as unknown as Record<string, readonly string[]>;
       assert.deepEqual(
-        opsOf(engine),
-        CANON_SORTED,
-        'исполнитель (OPS_BY_VALUE_TYPE) принимает набор, отличный от канона 00eb824b',
+        Object.keys(engine).sort(),
+        Object.keys(CANON_BY_VALUE_TYPE).sort(),
+        'набор value_type в гейте движка разошёлся с таблицей 00eb824b',
+      );
+      for (const [valueType, canon] of Object.entries(CANON_BY_VALUE_TYPE)) {
+        assert.deepEqual(
+          opsOf(engine[valueType] ?? []),
+          opsOf(canon),
+          `OPS_BY_VALUE_TYPE.${valueType} (исполнитель) разошёлся с таблицей 00eb824b`,
+        );
+      }
+    });
+
+    it('справка описывает наличие свойства-связи по живым рёбрам links_v', () => {
+      const topic = GUIDE_TOPICS_BY_NAME.get('thoughts.query');
+      assert.ok(topic !== undefined, 'тема thoughts.query обязана быть в реестре гайда');
+      // Presence свойства-связи считается по `links_v`, а не по строке
+      // `property_values` (query-service.ts, linkPropertyClause). Ошибочная
+      // формулировка «нет строки/колонка пуста» для link — замечание
+      // верификатора круга 2.
+      assert.match(
+        topic!.body_md,
+        /нет живого ребра `links_v`/,
+        'справка обязана говорить: для свойства-связи наличие — по живым рёбрам `links_v`',
       );
     });
 

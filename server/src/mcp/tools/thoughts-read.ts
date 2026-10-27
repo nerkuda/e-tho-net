@@ -13,7 +13,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
 import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, parseLinkTypeFilterValue } from '@etn/shared';
-import type { EffectiveThoughtView, McpViewMode } from '@etn/shared';
+import type { EffectiveThoughtView, FlatPropertyOp, McpViewMode, PropertyQueryCondition } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
@@ -78,6 +78,29 @@ function buildCrossNetworkAccess(
     userId: rt.deps.auth.userId,
     clientId: mcpLayerClientId(rt),
     logger: rt.deps.logger,
+  };
+}
+
+/**
+ * Приведение условия `properties[]` из MCP-контракта к канону домена
+ * (`PropertyQueryCondition`). Контракт намеренно принимает `value` любой формы
+ * (`z.unknown()`), чтобы пара наличия (`is_empty`/`not_empty`) молча
+ * игнорировала шумовое значение — паритет с REST (замечание верификатора
+ * круга 2 по ошибке 40c76144). Для остальных операторов форма уже проверена
+ * refine'ом контракта.
+ */
+function toDomainPropertyCondition(cond: {
+  property_id?: string;
+  property?: string;
+  operator: FlatPropertyOp;
+  value?: unknown;
+}): PropertyQueryCondition {
+  return {
+    ...cond,
+    value:
+      cond.operator === 'is_empty' || cond.operator === 'not_empty'
+        ? ''
+        : (cond.value as PropertyQueryCondition['value']),
   };
 }
 
@@ -261,10 +284,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'словом `*`-синонима: `проектиров*` → «проектирование»), `properties[]` (канон ' +
         'eq/ne/contains/gt/gte/lt/lte/in/not_in/is_empty/not_empty/any_of/all_of/none_of; ' +
         '`is_empty`/`not_empty` — без `value`), `created_*`/`updated_*`, ' +
-        '`author_id`/`editor_id`, `link_filter` (совместим с `ast`: пред-сужение дерева). ' +
+        '`author_id`/`editor_id`, `link_filter` (совместим с `ast`: пред-сужение поверх дерева). ' +
         'Или `ast` — дерево условий ' +
         '(грамматика — `etn.guide { topic: "thoughts.query" }`), XOR с плоскими критериями. ' +
-        'Ответ: `thought_types`, эхо `resolved_types`/`resolved_properties`; ' +
+        'Ответ: `thought_types`, эхо `resolved_types`/`resolved_properties` для имён; ' +
         'неизвестное имя в плоских полях — `NOT_FOUND`; значения `ast`-листьев — только id (имена ' +
         'не резолвятся и молча не совпадают); неразрешимый `ast`-токен → пустая страница и ' +
         '`unresolved`; удалённая сущность — `VALIDATION_ERROR` ' +
@@ -314,10 +337,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           // сети будут фильтроваться по тому же `property_id` — если свойства
           // нет, фильтр вернёт пусто, что корректно.
           let resolvedProperties: Array<{ input: string; id: string; name: string }> | undefined;
-          let domainProperties = args.properties;
+          let domainProperties: PropertyQueryCondition[] | undefined;
           if (args.properties !== undefined) {
             const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
-            const out: NonNullable<typeof args.properties> = [];
+            const out: PropertyQueryCondition[] = [];
             let resolved: Array<{ input: string; id: string; name: string }> | null = null;
             for (const cond of args.properties) {
               if (cond.property !== undefined) {
@@ -332,7 +355,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   });
                 }
                 const propName = getNetworkProperty(firstNdb, ref.propertyId)?.name;
-                out.push({ ...cond, property_id: cond.property });
+                out.push(toDomainPropertyCondition({ ...cond, property_id: cond.property }));
                 if (resolved === null) resolved = [];
                 resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
                 continue;
@@ -347,7 +370,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   property_id: cond.property_id,
                 });
               }
-              out.push(cond);
+              out.push(toDomainPropertyCondition(cond));
             }
             domainProperties = out;
             if (resolved !== null) resolvedProperties = resolved;
@@ -419,9 +442,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         let resolvedProperties:
           | Array<{ input: string; id: string; name: string }>
           | undefined;
-        let domainProperties = args.properties;
+        let domainProperties: PropertyQueryCondition[] | undefined;
         if (args.properties !== undefined) {
-          const out: NonNullable<typeof args.properties> = [];
+          const out: PropertyQueryCondition[] = [];
           let resolved: Array<{ input: string; id: string; name: string }> | null = null;
           for (const cond of args.properties) {
             if (cond.property !== undefined) {
@@ -437,7 +460,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 });
               }
               const propName = getNetworkProperty(ndb, ref.propertyId)?.name;
-              out.push({ ...cond, property_id: cond.property });
+              out.push(toDomainPropertyCondition({ ...cond, property_id: cond.property }));
               if (resolved === null) resolved = [];
               resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
               continue;
@@ -451,7 +474,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 property_id: cond.property_id,
               });
             }
-            out.push(cond);
+            out.push(toDomainPropertyCondition(cond));
           }
           domainProperties = out;
           if (resolved !== null) resolvedProperties = resolved;
