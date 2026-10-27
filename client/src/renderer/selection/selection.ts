@@ -15,7 +15,7 @@
  *   per-entity calls (style, "only parent", property values).
  */
 
-import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { t } from '../lib/i18n.js';
 import {
   setAddToSelectionHook,
@@ -253,8 +253,9 @@ function buildRow(id: string, ref: ThoughtRef | null, title: string): HTMLElemen
       actions: {
         onClick: (targetId) => {
           // Click on the row focuses the thought (canvas + editor repaint);
-          // it stays in the selection.
-          void setFocus(targetId).catch(() => undefined);
+          // it stays in the selection. Отказ установки фокуса показывается
+          // тостом единым UI-входом (ошибка 1656ef58).
+          focusFromUi(targetId);
         },
         onContextMenu: (event) => {
           event.stopPropagation();

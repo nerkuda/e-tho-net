@@ -20,7 +20,7 @@ import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR, WIKI_LINK_ID_ATTR, WIKI_LINK_NE
 import type { Thought } from '@etn/shared';
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import { openNetwork, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, openNetwork, requireNetworkId } from '../app.js';
 import { showDialog } from '../lib/dialog.js';
 import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -242,7 +242,9 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
     return;
   }
 
-  await setFocus(thought.id);
+  // Единый UI-вход: отказ показывается тостом и не отклоняет промис
+  // (ошибка 1656ef58).
+  await focusFromUi(thought.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,10 +347,17 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
       // просмотре — открыть созданную (формат ссылки НЕ меняется), в правке —
       // заменить ссылку в буфере.
       await tryCreateThoughtFromLegacyLink(target.anchorEl, target.name, {
-        onCreated: (thoughtId) =>
-          plan.navigate
-            ? openResolvedThought(networkId, thoughtId, target.name)
-            : doConvert(thoughtId),
+        onCreated: (thoughtId) => {
+          if (!plan.navigate) {
+            doConvert(thoughtId);
+            return;
+          }
+          // Поздний отказ открытия (после диалога создания) — тостом: это
+          // уже отдельная от создания операция.
+          void openResolvedThought(networkId, thoughtId, target.name).catch((error) => {
+            notice(`Не удалось открыть «${target.name}»: ${errText(error)}`, 'error');
+          });
+        },
       });
       return;
     }
@@ -373,8 +382,11 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
       // Ветка 2: поповер у места клика → выбор → открыть (просмотр) или
       // конвертировать в буфере (правка).
       showLegacyCandidatesPopover(target, candidates, (thoughtId) => {
-        if (plan.navigate) void openResolvedThought(networkId, thoughtId, target.name);
-        else doConvert(thoughtId);
+        if (plan.navigate) {
+          void openResolvedThought(networkId, thoughtId, target.name).catch((error) => {
+            notice(`Не удалось открыть «${target.name}»: ${errText(error)}`, 'error');
+          });
+        } else doConvert(thoughtId);
       });
   }
 }
@@ -552,6 +564,8 @@ export function initWikiLinkNavigation(): void {
       name,
       anchorEl: widget,
       ...(edit !== undefined ? { edit } : {}),
+    }).catch((error) => {
+      notice(`Не удалось открыть «${name}»: ${errText(error)}`, 'error');
     });
   });
 
@@ -579,7 +593,9 @@ export function initWikiLinkNavigation(): void {
         notice('Сначала откройте сеть.');
         return;
       }
-      void openWikiIdTarget(targetNetworkId, id);
+      void openWikiIdTarget(targetNetworkId, id).catch((error) => {
+        notice(`Не удалось открыть мысль: ${errText(error)}`, 'error');
+      });
       return;
     }
 
@@ -588,6 +604,8 @@ export function initWikiLinkNavigation(): void {
     // флоу создания мысли в этой же развилке.
     const name = link.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (name === null || name === '') return;
-    void runLegacyWikiLinkFork({ name, anchorEl: link });
+    void runLegacyWikiLinkFork({ name, anchorEl: link }).catch((error) => {
+      notice(`Не удалось открыть «${name}»: ${errText(error)}`, 'error');
+    });
   });
 }

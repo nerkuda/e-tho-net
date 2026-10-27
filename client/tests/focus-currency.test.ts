@@ -25,14 +25,24 @@
  * Дополнительно: `resetFocusToHome` не публикует HOME, если пользователь
  * успел начать свой фокус; обычная установка фокуса без вмешательства
  * работает как раньше (регресс).
+ *
+ * Круг 2 (снятие `beginFocusOp` в `disconnect`/`backToNetworks` обязано
+ * краснить эти кейсы):
+ *   4. `disconnect()` во время `setFocus(A)`, затем возврат в ту же пару
+ *      «сеть + вкладка» — поздний A не публикуется и историю не двигает;
+ *   5. `backToNetworks()` — то же для выхода в список сетей;
+ *   6. отказ `thoughts.focus` из строки панели выделенных и из async-пути
+ *      «В фокус» (`focusThoughtOnMap`): тост показан, состояние не меняется,
+ *      unhandled rejection нет (молчаливый отказ выглядел как зависание).
  */
 
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import type { FocusNeighbor, FocusResponse, Thought } from '@etn/shared';
+import type { FocusNeighbor, FocusResponse, Thought, ThoughtRef } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import { SINGLE_CLICK_DELAY_MS } from '../src/renderer/lib/thought-cloud.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -81,8 +91,12 @@ function shimDom(): void {
     string,
     unknown
   >;
-  win.setTimeout = (handler: (...args: any[]) => void, ms?: number, ...rest: any[]) =>
-    (globalThis as any).setTimeout(handler, ms, ...rest);
+  win.setTimeout = (handler: (...args: any[]) => void, ms?: number, ...rest: any[]) => {
+    // Длинные таймеры (TTL тоста — 4 с) в юните не крутим: они держат event
+    // loop после теста, а проверяется факт тоста, не его автоскрытие.
+    if ((ms ?? 0) > 1000) return 0;
+    return (globalThis as any).setTimeout(handler, ms, ...rest);
+  };
   win.clearTimeout = (id: any) => (globalThis as any).clearTimeout(id);
   win.dispatchEvent = () => undefined;
   win.addEventListener = () => undefined;
@@ -136,6 +150,27 @@ function thought(id: string, title: string, extra: Partial<Thought> = {}): Thoug
   };
 }
 
+/** Легковесная карточка мысли — ответ `thoughts.resolve` для строк выделения. */
+function thoughtRef(id: string, title: string): ThoughtRef {
+  const t = thought(id, title);
+  return {
+    id: t.id,
+    title: t.title,
+    type_id: t.type_id,
+    icon: t.icon,
+    icon_kind: t.icon_kind,
+    icon_attachment_id: t.icon_attachment_id,
+    active: t.active,
+    marked_for_deletion: t.marked_for_deletion,
+    fg_color: t.fg_color,
+    bg_color: t.bg_color,
+    font_bold: t.font_bold,
+    font_italic: t.font_italic,
+    font_underline: t.font_underline,
+    font_strike: t.font_strike,
+  };
+}
+
 function focusResponse(
   id: string,
   title: string,
@@ -174,6 +209,64 @@ function focusDeferred(id: string): Deferred<FocusResponse> {
 
 function resolveFocus(id: string, response: FocusResponse): void {
   focusDeferred(id).resolve(response);
+}
+
+/** Отказ `thoughts.focus` для id — проверка обратной связи (тост). */
+function failFocus(id: string, error: Error): void {
+  focusDeferred(id).reject(error);
+}
+
+/**
+ * Возврат в ту же пару «сеть + вкладка» после выхода (disconnect /
+ * backToNetworks): строки вкладок живут на сервере, поэтому после
+ * переподключения `tab_id` тот же. Нужен, чтобы страж пары не маскировал
+ * проверку поколения операций: поздний ответ обязан гасить именно `seq`.
+ */
+function restoreSameScreenPair(): void {
+  store.update({
+    screen: 'workspace',
+    networkId: NET_A,
+    activeTabId: TAB_A,
+    tabs: [
+      {
+        tab_id: TAB_A,
+        slot_idx: 0,
+        network_id: NET_A,
+        view_mode: 'map',
+        focus_id: null,
+        layer_id: null,
+      },
+    ],
+  } as any);
+}
+
+/** Тост-ошибка в стеке уведомлений (или null). */
+function errorToast(): ShimElement | null {
+  const body = (globalThis as any).document.body as ShimElement;
+  const stack = body.querySelector('.notice-stack');
+  return stack?.querySelector('.notice.error') ?? null;
+}
+
+/**
+ * Прогоняет сценарий и возвращает все unhandled rejection за его время:
+ * `focusFromUi` обязан гасить отказ фокуса сам, иначе симптом «зависания»
+ * остаётся (ошибка 1656ef58).
+ */
+async function collectUnhandled(run: () => Promise<void>): Promise<unknown[]> {
+  const reasons: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    reasons.push(reason);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await run();
+    await flushMicrotasks();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+  return reasons;
 }
 
 /** Полный мост `window.etn` для путей фокуса и открытия сети. */
@@ -259,7 +352,11 @@ function stubEtn(): void {
         return focusDeferred(id).promise;
       },
       get: async (_networkId: string, id: string) => thought(id, `T:${id}`),
-      resolve: async () => [],
+      // Панель выделенных на каждый рендер без известного ref заново зовёт
+      // `resolve`; пустой ответ оставил бы её в бесконечной цепочке микрозадач
+      // (`render → resolveRows → render`), и таймеры не получили бы хода.
+      resolve: async (_networkId: string, ids: string[]) =>
+        ids.map((id) => thoughtRef(id, `T:${id}`)),
       neighbors: async () => [],
       setFocusOrder: async () => undefined,
       setFocusPreferences: async () => undefined,
@@ -474,5 +571,89 @@ describe('фокус 1656ef58: поздний ответ прежней уста
     assert.equal(store.state.focus?.focused.id, FOCUS_A);
     assert.equal(await activeFocusId(), FOCUS_A);
     assert.deepEqual(rotates, [{ oldId: HOME, newId: FOCUS_A, tabId: TAB_A }]);
+  });
+
+  it('disconnect() во время setFocus(A): поздний A не публикуется и после возврата в ту же пару', async () => {
+    const promise = app.setFocus(FOCUS_A);
+    await flushMicrotasks();
+
+    await app.disconnect();
+    // Переподключение восстанавливает ту же строку вкладки (tab_id с сервера) —
+    // пара снова совпадает со снимком, поэтому поздний ответ обязан гасить seq.
+    restoreSameScreenPair();
+
+    resolveFocus(FOCUS_A, focusResponse(FOCUS_A, 'Мысль A'));
+    await promise;
+
+    assert.equal(store.state.focus, null, 'поздний A не опубликован');
+    assert.deepEqual(rotates, [], 'история не получила поворот для A');
+    assert.equal(await activeFocusId(), null, 'окрестность не подписана на A');
+  });
+
+  it('backToNetworks() во время setFocus(A): поздний A не публикуется после возврата', async () => {
+    const promise = app.setFocus(FOCUS_A);
+    await flushMicrotasks();
+
+    app.backToNetworks();
+    restoreSameScreenPair();
+
+    resolveFocus(FOCUS_A, focusResponse(FOCUS_A, 'Мысль A'));
+    await promise;
+
+    assert.equal(store.state.focus, null, 'поздний A не опубликован');
+    assert.deepEqual(rotates, [], 'история не получила поворот для A');
+    assert.equal(await activeFocusId(), null, 'окрестность не подписана на A');
+  });
+
+  it('отказ thoughts.focus из строки панели выделенных: тост, фокус не меняется, rejection погашен', async () => {
+    const selection = await import('../src/renderer/selection/selection.js');
+    const host = new ShimElement('div');
+    const teardown = selection.mountSelection(host as unknown as HTMLElement);
+    try {
+      const reasons = await collectUnhandled(async () => {
+        selection.toggleSelection([FOCUS_A]);
+        await flushMicrotasks();
+        const row = host.querySelector('.selection-item');
+        assert.ok(row !== null, 'строка выделения построена');
+        row.emit('click');
+        // Одиночный клик облачка отложен на 220 мс — окно двойного клика;
+        // дожидаемся его реальным таймером, иначе гейт отказа ещё не создан.
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, SINGLE_CLICK_DELAY_MS + 40),
+        );
+        assert.ok(focusCalls.includes(FOCUS_A), 'клик по строке запросил фокус');
+        failFocus(FOCUS_A, new Error('Сеть недоступна'));
+      });
+
+      assert.deepEqual(reasons, [], 'unhandled rejection нет');
+      const toast = errorToast();
+      assert.ok(toast !== null, 'тост об отказе показан');
+      assert.match(toast.flatText(), /Сеть недоступна/u);
+      assert.equal(store.state.focus?.focused.id, HOME, 'фокус не изменился');
+      assert.deepEqual(rotates, [], 'история не тронута');
+    } finally {
+      teardown();
+    }
+  });
+
+  it('отказ thoughts.focus в focusThoughtOnMap: тост, экран «Карта», фокус не меняется', async () => {
+    const active = await import('../src/renderer/screens/active-view.js');
+    store.update({ activeView: 'structures' } as any);
+
+    const reasons = await collectUnhandled(async () => {
+      const promise = active.focusThoughtOnMap(FOCUS_A);
+      failFocus(FOCUS_A, new Error('focus offline'));
+      // Промис не отклоняется — иначе вызов из void-обработчика дал бы
+      // unhandled rejection и «молчащий» интерфейс.
+      await promise;
+    });
+
+    assert.deepEqual(reasons, [], 'unhandled rejection нет');
+    const toast = errorToast();
+    assert.ok(toast !== null, 'тост об отказе показан');
+    assert.match(toast.flatText(), /focus offline/u);
+    assert.equal(store.state.activeView, 'map', 'экран переключён на карту');
+    assert.equal(store.state.focus?.focused.id, HOME, 'фокус не изменился');
+    assert.deepEqual(rotates, [], 'история не тронута');
   });
 });

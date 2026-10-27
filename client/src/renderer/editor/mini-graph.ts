@@ -816,9 +816,15 @@ async function openTrashDialogForNetwork(): Promise<void> {
 async function focusLinkRef(id: string): Promise<void> {
   // Фокус + активация экрана «Карта мыслей» — общий помощник (ошибка 562356a9):
   // с другого экрана (структуры, хроника, события) смена фокуса без
-  // переключения вида незаметна.
-  const { focusThoughtOnMap } = await import('../screens/active-view.js');
-  await focusThoughtOnMap(id);
+  // переключения вида незаметна. Отказ фокуса помощник показывает тостом; здесь
+  // гасим только отказ ленивого импорта, чтобы `void focusLinkRef(...)` не давал
+  // unhandled rejection (ошибка 1656ef58).
+  try {
+    const { focusThoughtOnMap } = await import('../screens/active-view.js');
+    await focusThoughtOnMap(id);
+  } catch (error) {
+    console.error('[mini-graph] не удалось открыть карту мыслей', error);
+  }
 }
 
 /**

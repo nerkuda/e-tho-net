@@ -289,7 +289,12 @@ function buildActions(
     {
       label: `Перейти к «${thought.title}»`,
       onClick: () => {
-        void navigateToMention(thought);
+        // `navigateToMention` ловит отказ чтения мысли; сюда приходит только
+        // отказ открытия (структуры/хроника/фокус) — показываем его тостом,
+        // иначе промис уходил в unhandled rejection (ошибка 1656ef58).
+        void navigateToMention(thought).catch((error) => {
+          notice(`Не удалось открыть «${thought.title}»: ${errText(error)}`, 'error');
+        });
       },
     },
     {

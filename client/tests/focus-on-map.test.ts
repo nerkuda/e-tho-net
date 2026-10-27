@@ -255,7 +255,12 @@ describe('focusThoughtOnMap — «В фокус» с любого экрана (
     const activeView = readText(SRC.activeView);
     const helper = functionBody(activeView, 'export async function focusThoughtOnMap(');
     assert.ok(helper.includes("setActiveView('map')"), 'помощник обязан показать карту');
-    assert.ok(helper.includes('await setFocus('), 'помощник обязан поставить мысль в фокус');
+    // Фокус — через единый UI-вход `focusFromUi`: отказ `thoughts.focus`
+    // показывается тостом, а не теряется (ошибка 1656ef58).
+    assert.ok(
+      helper.includes('await focusFromUi('),
+      'помощник обязан поставить мысль в фокус через focusFromUi',
+    );
 
     // Вход 1 — подменю «Действия ▾» шапки редактора.
     const actions = functionBody(readText(SRC.editor), 'async function openThoughtActionsMenu(');

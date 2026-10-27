@@ -2011,9 +2011,13 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
           // а не пара «setActiveView + setFocus» копией. Импорт ленивый:
           // active-view статически тянет chronicle — замкнул бы цикл.
           focusHandler: () => {
-            void import('../active-view.js').then(({ focusThoughtOnMap }) =>
-              focusThoughtOnMap(target.thought.id),
-            );
+            // Отказ фокуса показывает тостом `focusThoughtOnMap`; здесь гасим
+            // только отказ ленивого импорта (ошибка 1656ef58).
+            void import('../active-view.js')
+              .then(({ focusThoughtOnMap }) => focusThoughtOnMap(target.thought.id))
+              .catch((error) => {
+                console.error('[chronicle] не удалось открыть карту мыслей', error);
+              });
           },
           extraItems: [
             menuAction(t('chrono.menu.detach'), () => void detachChip(rowId, target)),
