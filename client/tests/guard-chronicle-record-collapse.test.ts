@@ -12,8 +12,9 @@
  *  • поле «комментарий» доступно только у развёрнутой записи (`feed-nav`);
  *  • календарь использует точки (`calendarDotCount`), а не число `.cal-count`;
  *  • заголовок выходного дня красится токеном `--cal-weekend` (обе темы);
- *  • смена надписи заголовка (`setRecordTitleLabel`) сохраняет иконку-шеврон —
- *    первый узел кнопки не затирается (задача d586f340).
+ *  • смена надписи заголовка (`setRecordTitleLabel`) сохраняет иконку-шеврон:
+ *    индикатор передаётся явно и не угадывается по первому узлу кнопки
+ *    (задачи d586f340, ошибка dbdb8b9f).
  *
  * Сторож зелёный на исправленном коде и краснеет, если эти пути откатят.
  */
@@ -184,12 +185,19 @@ describe('сторож: сворачиваемая запись «Дневник
     // Задача 472457bf: тот же приём, что у групп дня, — стрелка внутри
     // кнопки-заголовка, поворот единым путём через класс `is-collapsed` заголовка.
     // Компонент заголовка — единый модуль `record-title.ts` (ошибка 36c330a3).
+    // Ошибка dbdb8b9f: индикатор создаётся ОДИН раз в замыкании компонента и
+    // только у сворачиваемой группы; у несворачиваемой его нет вовсе.
+    assert.match(
+      RECORD_TITLE,
+      /const icon = collapsible \? svgIcon\('chevron-down',\s*\d+\) : null/,
+      'стрелка-шеврон создаётся в замыкании, у `collapsible: false` — null',
+    );
     const buildView =
       /function buildView\(\): HTMLButtonElement \{([\s\S]*?)\n {2}\}/.exec(RECORD_TITLE)?.[1] ?? '';
     assert.ok(buildView !== '', 'тело buildView найдено');
     assert.match(
       buildView,
-      /view\.prepend\(svgIcon\('chevron-down',\s*\d+\)\)/,
+      /if \(icon !== null\) view\.prepend\(icon\)/,
       'стрелка-индикатор внутри кнопки-заголовка (общий `svgIcon`)',
     );
     // Карточка собирает заголовок через ЕДИНЫЙ конструктор шапки, а сам узел
@@ -226,31 +234,44 @@ describe('сторож: сворачиваемая запись «Дневник
     );
   });
 
-  it('смена надписи заголовка сохраняет иконку-шеврон (не стирает узлы)', () => {
-    // Задача d586f340: проверки одного вызова `setRecordTitleLabel(view, …)` мало —
-    // возврат тела помощника к `view.textContent = label` стирал бы svg-иконку
-    // (первый узел кнопки), оставаясь зелёным. Разбираем тело помощника.
-    const body =
-      /function setRecordTitleLabel\(view: HTMLElement, label: string\): void \{([\s\S]*?)\n\}/.exec(
-        RECORD_TITLE,
-      )?.[1] ?? '';
-    assert.ok(body !== '', 'тело setRecordTitleLabel найдено');
-    const code = body.replace(/\/\/[^\n]*/g, '');
-    // Иконка — первый узел: помощник берёт её и собирает содержимое заново.
-    assert.match(code, /view\.firstChild/, 'берёт иконку-шеврон первым узлом');
-    assert.match(
-      code,
-      /view\.replaceChildren\(\s*icon\s*,\s*label\s*\)/,
-      'надпись ставится без затирания узлов (replaceChildren, а не textContent)',
+  it('надпись заголовка ставится с явной иконкой, а не угадывается по firstChild', () => {
+    // Задача d586f340 + ошибка dbdb8b9f. Проверки одного вызова
+    // `setRecordTitleLabel(view, …)` мало: возврат помощника к
+    // `view.textContent = label` стирал бы svg-иконку, а прежняя эвристика
+    // `view.firstChild` при `collapsible: false` принимала за иконку ТЕКСТ
+    // надписи и клеила «AB»/«AA». Контракт теперь: иконка — параметр помощника
+    // (нет иконки — `null`), позиционного поиска в модуле нет.
+    // Комментарии не код: пояснение о прежней эвристике рядом с помощником
+    // само упоминает `view.firstChild` — ищем вызов в коде.
+    const code = RECORD_TITLE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    assert.ok(
+      !/view\.firstChild/.test(code),
+      'иконка не берётся первым узлом кнопки (`view.firstChild`) — текст надписи не иконка',
     );
-    // `textContent = label` допустим ТОЛЬКО как запасной путь для кнопки без иконки.
-    const outsideFallback = code.replace(
-      /if\s*\(\s*icon\s*===\s*null\s*\)\s*\{[\s\S]*?\n\s*\}/,
-      '',
+    const helper =
+      /export function setRecordTitleLabel\(([\s\S]*?)\n\}/.exec(code)?.[0] ?? '';
+    assert.ok(helper !== '', 'тело setRecordTitleLabel найдено');
+    assert.match(
+      helper,
+      /icon: Node \| null = null/,
+      'иконка — явный необязательный параметр (у несворачиваемой группы null)',
+    );
+    assert.match(
+      helper,
+      /view\.replaceChildren\(\.\.\.\(icon !== null \? \[icon\] : \[\]\), label\)/,
+      'надпись заменяется через replaceChildren; необязательная иконка — только массивом',
     );
     assert.ok(
-      !/view\.textContent\s*=\s*label/.test(outsideFallback),
-      'вне ветки без иконки надпись не ставится через textContent (потеря шеврона)',
+      !/view\.textContent\s*=/.test(helper),
+      'надпись не ставится через textContent (потеря шеврона либо затирание)',
+    );
+    // Оба вызова модуля (showView и setContent) передают иконку из замыкания:
+    // забытая передача вернула бы «AB»/«AA» при `collapsible: false`.
+    const passed = code.match(/setRecordTitleLabel\(view, label, icon\)/g) ?? [];
+    assert.equal(passed.length, 2, 'оба вызова передают иконку (showView и setContent)');
+    assert.ok(
+      !/setRecordTitleLabel\(view, label\)/.test(code),
+      'вызова без иконки нет (иначе иконка теряется у сворачиваемой группы)',
     );
   });
 });

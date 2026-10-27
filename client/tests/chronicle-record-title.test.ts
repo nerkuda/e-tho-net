@@ -50,6 +50,7 @@ interface TitleHandle {
   isEditing(): boolean;
   beginEdit(): void;
   endEdit(commit: boolean, refocus: boolean): void;
+  setContent(value: string, label?: string): void;
 }
 
 async function makeTitle(opts: Record<string, unknown>): Promise<TitleHandle> {
@@ -243,6 +244,83 @@ describe('компонент заголовка записи: просмотр �
     // Стрелки-индикатора нет. Проверяем ЭЛЕМЕНТ-ребёнка: `firstChild` в браузере
     // — текстовый узел надписи, он есть и без стрелки (шим честен, cca54310).
     assert.equal(handle.node().firstElementChild, null, 'индикатора-стрелки нет');
+  });
+
+  it('`setContent` заменяет надпись у несворачиваемого заголовка, а не дописывает', async () => {
+    // Ошибка dbdb8b9f: первый узел кнопки без стрелки — ТЕКСТ надписи; прежний
+    // помощник принимал его за иконку и оставлял впереди (`replaceChildren(icon,
+    // label)`), поэтому «A» + «B» давало «AB».
+    const handle = await makeTitle({
+      value: 'A',
+      label: 'A',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+      collapsible: false,
+    });
+    assert.equal(handle.node().textContent, 'A', 'исходная надпись');
+
+    handle.setContent('B', 'B');
+
+    assert.equal(handle.node().textContent, 'B', 'старый текст не остался впереди');
+    assert.equal(handle.node().firstElementChild, null, 'иконка не появилась из текста');
+  });
+
+  it('выход из правки у несворачиваемого заголовка не задваивает надпись', async () => {
+    // Тот же корень (dbdb8b9f): `endEdit` → `showView` → помощник считал текст
+    // надписи «иконкой» и при неизменном значении получал «AA».
+    const handle = await makeTitle({
+      value: 'A',
+      label: 'A',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+      collapsible: false,
+    });
+    const host = new ShimElement('div');
+    host.append(handle.node());
+    const view = handle.node();
+
+    handle.beginEdit();
+    assert.equal(handle.node().tagName, 'input', 'правка открыта');
+    handle.endEdit(false, false);
+
+    assert.equal(handle.node(), view, 'вернулась та же кнопка-заголовок');
+    assert.equal(handle.node().textContent, 'A', 'надпись не задвоилась');
+    assert.equal(handle.node().firstElementChild, null, 'стрелки по-прежнему нет');
+  });
+
+  it('повторный `setContent` оставляет только последнюю надпись', async () => {
+    const handle = await makeTitle({
+      value: 'A',
+      label: 'A',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+      collapsible: false,
+    });
+
+    handle.setContent('B', 'B');
+    handle.setContent('C', 'C');
+
+    assert.equal(handle.node().textContent, 'C', 'старые надписи не накапливаются');
+  });
+
+  it('у сворачиваемого заголовка `setContent` сохраняет тот же svg-индикатор', async () => {
+    // Существующий продуктовый путь (`collapsible` по умолчанию): иконка
+    // передаётся явно, остаётся ПЕРВЫМ узлом и тем же самым элементом.
+    const handle = await makeTitle({
+      value: 'A',
+      label: 'A',
+      editHint: 'Правка',
+      placeholder: 'Заголовок',
+    });
+    const view = handle.node();
+    const icon = view.firstChild;
+    assert.equal(icon?.tagName, 'svg', 'индикатор-стрелка на месте');
+
+    handle.setContent('B', 'B');
+
+    assert.equal(view.firstChild, icon, 'иконка сохранена (та же нода)');
+    assert.equal(view.firstChild!.tagName, 'svg', 'первый узел — по-прежнему svg');
+    assert.equal(view.textContent, 'B', 'надпись заменена');
   });
 
   it('повторный beginEdit после коммита открывает поле с последним значением', async () => {
