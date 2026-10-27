@@ -1,0 +1,145 @@
+{
+  "name": "5768f479-publications-network-switch",
+  "description": "Официальный GUI-сценарий ошибки 5768f479: библиотека публикаций в сети A с полкой, затем переключение на сеть B, пока запрос списка A задержан прокси стенда (--delay-seed-ms 6000 --delay-seed-path /publications). Поздний ответ A не должен рисоваться в B и не должен порождать запросы бейджей в B с id публикаций A (404). Ожидание контента B — до паузы; после полного окна задержки в B остаётся только публикация B, затем возврат в A показывает публикацию A. Красный гейт — serverLog: до фикса есть 404 (бейджи чужой сети), после — ни одного.",
+  "timeout": 300000,
+  "serverLog": {
+    "present": [
+      "\"url\":\"[^\"]*/publications[^\"]*\",\"status\":200",
+      "\"url\":\"[^\"]*/candidates[^\"]*\",\"status\":200"
+    ],
+    "absent": ["\"status\":404"]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Публикации\"]') !== null"
+    },
+    {
+      "name": "mark-a-view-button",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Публикации\"]'); if (b === null) return 'no-tab'; b.dataset.probe = 'a'; return 'ok'; })()"
+    },
+    {
+      "name": "set-a-shelf-state",
+      "timeout": 30000,
+      "probe": "(async () => { const shelves = await window.etn.publications.listShelves('{{networkId}}'); const shelf = shelves.find((s) => (s.title || '').includes('Полка A 5768f479')); if (shelf === undefined) return 'no-shelf'; const state = { viewMode: 'shelves', sort: 'manual', activeFilter: 'true', shelfFilter: shelf.id, query: '', filtersOpen: false, textWidth: 100 }; await window.etn.ui.setState('{{networkId}}', 'publications_state', JSON.stringify(state)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-publications-a",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Публикации\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a-request-in-flight",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.pub-state .ui-state-loading') !== null"
+    },
+    {
+      "name": "hold-in-flight-window",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 600)); return document.querySelector('.pub-state .ui-state-loading') !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B 5768f479 publications'))"
+    },
+    {
+      "name": "switch-to-b-inside-window",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B 5768f479 publications')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 5768f479 publications'))"
+    },
+    {
+      "name": "workspace-b-rebuilt",
+      "timeout": 40000,
+      "waitFor": "(() => { const b = document.querySelector('button.view-tab[title=\"Публикации\"]'); return b !== null && b.dataset.probe !== 'a'; })()"
+    },
+    {
+      "name": "open-publications-b",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"Публикации\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b-dom-after-click",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 1500)); const host = document.querySelector('.publications-host'); return JSON.stringify({ hidden: host === null ? 'no-host' : host.classList.contains('hidden'), toolbar: document.querySelector('.pub-toolbar') !== null, cards: document.querySelectorAll('.pub-card-title').length, entries: document.querySelectorAll('.pub-entry-title').length, state: (document.querySelector('.pub-state') && document.querySelector('.pub-state').textContent || '').slice(0, 80), empty: document.querySelector('.pub-state .ui-empty__title') === null ? null : document.querySelector('.pub-state .ui-empty__title').textContent }); })()"
+    },
+    {
+      "name": "b-content",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.pub-card-title')].some((e) => (e.textContent || '').includes('Публикация B 5768f479')) && document.querySelector('.pub-state .ui-state-loading') === null"
+    },
+    {
+      "name": "b-content-before-pause",
+      "probe": "(() => { const titles = [...document.querySelectorAll('.pub-card-title')].map((e) => e.textContent || ''); if (!titles.some((t) => t.includes('Публикация B 5768f479'))) return 'no-b'; if (titles.some((t) => t.includes('Публикация A 5768f479'))) return 'foreign-a'; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-out-delay-window",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 9000)); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "b-content-after-late-a",
+      "timeout": 15000,
+      "probe": "(() => { const titles = [...document.querySelectorAll('.pub-card-title')].map((e) => e.textContent || ''); if (titles.length === 0) return 'empty'; if (!titles.some((t) => t.includes('Публикация B 5768f479'))) return 'no-b'; if (titles.some((t) => t.includes('Публикация A 5768f479'))) return 'foreign-a'; if (document.querySelector('.pub-state .ui-state-error') !== null) return 'error-state'; const tabB = [...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 5768f479 publications')); return tabB ? 'ok' : 'not-tab-b'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "a-content-back",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.pub-card-title')].some((e) => (e.textContent || '').includes('Публикация A 5768f479'))"
+    },
+    {
+      "name": "a-content-only-a",
+      "probe": "(() => { const titles = [...document.querySelectorAll('.pub-card-title')].map((e) => e.textContent || ''); if (!titles.some((t) => t.includes('Публикация A 5768f479'))) return 'no-a'; if (titles.some((t) => t.includes('Публикация B 5768f479'))) return 'foreign-b'; return 'ok'; })()",
+      "expect": "ok"
+    }
+  ]
+}

@@ -125,6 +125,7 @@ import { renderMarkdown } from '@etn/markdown';
 import { currentThoughtId } from '../../history.js';
 import * as users from '../../lib/users.js';
 import { store } from '../../state.js';
+import { currentScreenPair, isCurrentScreenPair } from '../tabs/tab-state.js';
 
 /** Внешние точки входа рабочей области (связь с экраном «Публикации»). */
 export interface PublicationWorkspaceOptions {
@@ -787,7 +788,8 @@ export function mountPublicationWorkspace(
   // --- Загрузка ------------------------------------------------------------
 
   async function load(): Promise<void> {
-    const networkId = store.state.networkId;
+    const pair = currentScreenPair();
+    const networkId = pair?.networkId ?? null;
     if (networkId === null || publicationId === null) return;
     loading = true;
     loadError = null;
@@ -797,6 +799,9 @@ export function mountPublicationWorkspace(
         etn.publications.get(networkId, publicationId),
         etn.publications.assembly(networkId, publicationId, page > 1 ? { page } : {}),
       ]);
+      // Ответ снятой пары (сеть/вкладка сменилась, рабочую область уже
+      // уничтожили) не применяется к чужому экрану (ошибка 5768f479).
+      if (pair === null || !isCurrentScreenPair(pair)) return;
       publication = card;
       assembly = doc;
       assembledSummaryRaw = card.summary_md ?? '';
@@ -817,6 +822,7 @@ export function mountPublicationWorkspace(
       renderState();
       updateRebuildStale();
     } catch (err) {
+      if (pair === null || !isCurrentScreenPair(pair)) return;
       loading = false;
       loadError = err;
       renderState();
@@ -2649,6 +2655,7 @@ export function mountPublicationWorkspace(
   // --- Публичный дескриптор ------------------------------------------------
 
   async function open(id: string, target?: PublicationOpenTarget): Promise<void> {
+    const pair = currentScreenPair();
     const samePublication = publicationId === id;
     if (!samePublication) {
       candidates = null;
@@ -2664,6 +2671,9 @@ export function mountPublicationWorkspace(
     // Ширина текста — из персональных настроек при каждом открытии (пункт 5).
     applyTextWidth(opts.getTextWidth());
     await load();
+    // Пока грузилась сборка, пару могли сменить — якорь и кегль применяем только
+    // на своей паре (ошибка 5768f479).
+    if (pair === null || !isCurrentScreenPair(pair)) return;
     if (target?.anchor !== undefined) scrollToAnchor(target.anchor);
     // После первой раскладки листа кегль титула мог быть не измерен (документ
     // рендерился в момент переключения вида) — пересчитываем ещё раз (замечание

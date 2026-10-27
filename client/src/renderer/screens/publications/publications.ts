@@ -11,7 +11,13 @@
  * Разметка — из фасадов `lib/ui` (кнопки, поля, сегменты, чипы, состояния,
  * меню) и `lib/dialog.ts`; списки обновляются инкрементально (`reconcileKeyed`,
  * стандарт «Списки рендерятся инкрементально»). Realtime-обновление — по
- * `publication.*`/`shelf.*` (см. `realtime-ui.ts`).
+ * `publication.*`/`shelf.*` (см. `lib/live`).
+ *
+ * **Модуль — синглтон, переживающий teardown.** Поэтому у состояния экрана есть
+ * владелец: `viewStateNetworkId` (какой сети принадлежит `viewState`), поколение
+ * смонтированного экрана и снятая с запуска пара «сеть + вкладка». Запрос и
+ * запись L4 идут только при совпадении владельца; ответ `load()` применяется
+ * только последним запуском на живом экране своей пары (ошибка 5768f479).
  */
 
 import type {
@@ -54,6 +60,11 @@ import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { bindSearchNav } from '../../lib/ui/search-nav.js';
 import { store } from '../../state.js';
 import * as users from '../../lib/users.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+  type ScreenPair,
+} from '../tabs/tab-state.js';
 import {
   commitEntity,
   onQueryInvalidated,
@@ -118,7 +129,16 @@ const ACTIVE_LABEL_KEY = {
 // ---------------------------------------------------------------------------
 
 let viewState: PublicationsViewState = defaultPublicationsViewState();
-let stateLoaded = false;
+/**
+ * Чья это `viewState` — сеть (L4 «пользователь × сеть», не вкладка). `null` —
+ * состояние никому не принадлежит (сеть сменилась, экран снят): ни запрос, ни
+ * запись L4 с ним не выполняются (ошибка 5768f479).
+ */
+let viewStateNetworkId: string | null = null;
+/** Поколение смонтированного экрана: растёт на каждом mount/teardown. */
+let instanceGeneration = 0;
+/** Номер запуска `load()`: применяет ответ только последний запуск. */
+let loadSeq = 0;
 let publications: Publication[] = [];
 let shelves: Shelf[] = [];
 let total = 0;
@@ -201,6 +221,8 @@ export async function ensurePublicationsInitialised(): Promise<void> {
 
 /** Монтирует вид в хост рабочего пространства; возвращает teardown. */
 export function mountPublications(hostEl: HTMLElement): () => void {
+  instanceGeneration += 1;
+  const generation = instanceGeneration;
   ui = buildUi(hostEl);
   // Корень принимает фокус: клавиатурная навигация (↑/↓/Home/End/←/→/Enter)
   // слушается на нём и обслуживает оба вида (задача 55ee3c85).
@@ -252,6 +274,14 @@ export function mountPublications(hostEl: HTMLElement): () => void {
   });
   unsubStore = store.subscribe(() => {
     if (hostEl.isConnected !== true) return;
+    // Смена сети обнуляет владение состоянием СИНХРОННО: отложенные таймеры и
+    // realtime-инвалидации окна `openNetwork` не должны отправить полку/поиск
+    // прежней сети в новую (ошибка 5768f479).
+    if (store.state.networkId !== initializedNetworkId) {
+      viewStateNetworkId = null;
+      loading = false;
+      loadError = null;
+    }
     // Двухрамочная навигация (ADR e6d48e09): смена открытой в редакторе
     // публикации перерисовывает рамки библиотеки (пунктир/сплошная).
     const opened = openedPublicationKey();
@@ -262,6 +292,9 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     if (store.state.activeView === 'publications') void initForNetwork(false);
   });
   return () => {
+    // Устаревший teardown не вправе снять более новое монтирование.
+    if (generation !== instanceGeneration) return;
+    instanceGeneration += 1;
     unsubStore?.();
     unsubStore = null;
     layerUnsub?.();
@@ -277,7 +310,23 @@ export function mountPublications(hostEl: HTMLElement): () => void {
     workspace = null;
     wsHost = null;
     ui = null;
+    // Экран снят: состояние и недоделанная загрузка прежнего экрана больше не
+    // принадлежат никому — поздний ответ не применяется (поколение/владелец),
+    // запись L4 запрещена (ошибка 5768f479).
     initializedNetworkId = null;
+    viewStateNetworkId = null;
+    viewState = defaultPublicationsViewState();
+    publications = [];
+    shelves = [];
+    total = 0;
+    offset = 0;
+    loading = false;
+    loadError = null;
+    loadSeq += 1;
+    badgeCounts.clear();
+    badgeBadges.clear();
+    collapsedShelves.clear();
+    initPromise = null;
   };
 }
 
@@ -323,24 +372,32 @@ function retargetPublicationsQuery(): void {
 
 /** Инвалидирует список (перечитать из сервера с дебаунсом). */
 export function invalidatePublications(): void {
+  const pair = currentScreenPair();
+  if (pair === null) return;
   if (reloadTimer !== null) window.clearTimeout(reloadTimer);
   reloadTimer = window.setTimeout(() => {
     reloadTimer = null;
+    // Отложенная инвалидация прежней пары (окно `openNetwork`) не запускает
+    // загрузку на новой паре: её триггер принадлежал снятому экрану.
+    if (!isCurrentScreenPair(pair)) return;
     void load();
   }, 150);
 }
 
 /** Открывает карточку публикации в панели редактора (ADR eb687eea). */
 export async function openPublicationCard(id: string): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
   // Панель редактирования скрыта — показать её (карточка живёт там).
   if (store.state.editorPosition === 'hidden') {
     store.update({ editorPosition: store.state.lastEditorPosition });
   }
   store.update({ editorTarget: { kind: 'publication', id } });
   try {
-    const publication = await etn.publications.get(networkId, id);
+    const publication = await etn.publications.get(pair.networkId, id);
+    // Ответ снятой пары не применяется: цель в редакторе уже могла стать
+    // публикацией другой сети (ошибка 5768f479).
+    if (!isCurrentScreenPair(pair)) return;
     commitEntity('publication', id, publication);
     const live = store.state.editorTarget;
     if (live?.kind === 'publication' && live.id === id) {
@@ -359,10 +416,16 @@ export async function openPublicationCard(id: string): Promise<void> {
  * с принятым экраном библиотеки — собственных контроллеров здесь нет.
  */
 export async function revealPublicationInLibrary(id: string): Promise<void> {
+  const pair = currentScreenPair();
+  if (pair === null) return;
   // Ленивый импорт: статический замкнул бы цикл publications → active-view.
   const { setActiveView } = await import('../active-view.js');
+  // Пока грузился модуль, сеть могли сменить — тогда id принадлежит прежней
+  // сети и подсвечивать его в библиотеке новой нельзя (ошибка 5768f479).
+  if (!isCurrentScreenPair(pair)) return;
   setActiveView('publications');
   await ensurePublicationsInitialised();
+  if (!isCurrentScreenPair(pair)) return;
   closePublicationWorkspace();
   libraryNav?.revealPublication(id);
 }
@@ -474,9 +537,14 @@ function buildUi(root: HTMLElement): Ui {
   root.append(container);
 
   search.addEventListener('input', () => {
+    const pair = currentScreenPair();
+    if (pair === null) return;
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => {
       searchTimer = null;
+      // Поле прежнего экрана/пары (окно `openNetwork`) не дописывает запрос в
+      // состояние новой сети (ошибка 5768f479).
+      if (ui === null || ui.search !== search || !isCurrentScreenPair(pair)) return;
       viewState = { ...viewState, query: search.value };
       offset = 0;
       persist();
@@ -512,53 +580,111 @@ function emptyNode(node: HTMLElement): void {
 // Загрузка данных и настройки
 // ---------------------------------------------------------------------------
 
+/** Жив ли экран, снявший запуск: тот же `ui`, не отстыкован, то же поколение. */
+function publicationsInstanceAlive(ownerUi: Ui, generation: number): boolean {
+  return ui === ownerUi && ownerUi.root.isConnected && generation === instanceGeneration;
+}
+
+/**
+ * Можно ли применять ответ запуска `load`: его экран и поколение живы, пара
+ * «сеть + вкладка» не сменилась, запуск последний (порядковый номер) и
+ * `viewState` по-прежнему принадлежит сети запроса.
+ */
+function canApplyLoad(
+  ownerUi: Ui,
+  generation: number,
+  pair: ScreenPair,
+  seq: number,
+): boolean {
+  return (
+    publicationsInstanceAlive(ownerUi, generation) &&
+    isCurrentScreenPair(pair) &&
+    seq === loadSeq &&
+    viewStateNetworkId === pair.networkId
+  );
+}
+
+/** Сеть сменилась: состояние прежней сети больше не владеет экраном. */
+function resetStateForNetworkChange(): void {
+  viewStateNetworkId = null;
+  viewState = defaultPublicationsViewState();
+  offset = 0;
+  publications = [];
+  shelves = [];
+  total = 0;
+  loading = false;
+  loadError = null;
+  badgeCounts.clear();
+  badgeBadges.clear();
+  collapsedShelves.clear();
+}
+
 async function initForNetwork(force: boolean): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null || ui === null) return;
+  const pair = currentScreenPair();
+  const ownerUi = ui;
+  if (pair === null || ownerUi === null) return;
+  const generation = instanceGeneration;
+  const networkId = pair.networkId;
   if (!force && initializedNetworkId === networkId) return;
   if (initPromise !== null && initializedNetworkId === networkId) return;
   const networkChanged = initializedNetworkId !== null && initializedNetworkId !== networkId;
-  if (networkChanged) {
-    stateLoaded = false;
-    offset = 0;
-    publications = [];
-    shelves = [];
-    total = 0;
-    badgeCounts.clear();
-    badgeBadges.clear();
-    collapsedShelves.clear();
-  }
+  // Владение `viewState` снимается СИНХРОННО: до разбора L4 новой сети ни один
+  // запрос и ни одна запись не имеют права использовать состояние прежней
+  // (окно `openNetwork`; ошибка 5768f479).
+  if (networkChanged) resetStateForNetworkChange();
   initializedNetworkId = networkId;
-  initPromise = (async () => {
+  const promise = (async () => {
     users.ensureLoaded();
-    if (!stateLoaded) {
-      stateLoaded = true;
+    if (viewStateNetworkId !== networkId) {
       const raw = await etn.ui.getState(networkId, UI_STATE_KEY.PUBLICATIONS_STATE).catch(() => null);
+      // Пока читали L4, экран могли снять, перемонтировать (A→B→A) или сменить
+      // сеть: чужой разбор не применяется.
+      if (!publicationsInstanceAlive(ownerUi, generation) || !isCurrentScreenPair(pair)) return;
+      if (initializedNetworkId !== networkId) return;
       viewState = parsePublicationsViewState(raw);
-      ui!.viewSwitch.setActive(viewState.viewMode);
-      ui!.activeSwitch.setActive(viewState.activeFilter);
-      ui!.search.value = viewState.query;
+      viewStateNetworkId = networkId;
+      ownerUi.viewSwitch.setActive(viewState.viewMode);
+      ownerUi.activeSwitch.setActive(viewState.activeFilter);
+      ownerUi.search.value = viewState.query;
     }
+    if (!publicationsInstanceAlive(ownerUi, generation) || !isCurrentScreenPair(pair)) return;
     renderFilters();
     renderToolbarLabels();
     await load();
   })().finally(() => {
-    initPromise = null;
+    // `finally` прежнего запуска не обнуляет промис нового (смена поколения).
+    if (initPromise === promise) initPromise = null;
   });
-  await initPromise;
+  initPromise = promise;
+  await promise;
 }
 
 function persist(): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  // Состояние принадлежит сети: под ключ ДРУГОЙ сети оно не пишется (окно
+  // `openNetwork`, снятый экран; ошибка 5768f479).
+  if (viewStateNetworkId !== pair.networkId) return;
   void etn.ui
-    .setState(networkId, UI_STATE_KEY.PUBLICATIONS_STATE, serializePublicationsViewState(viewState))
+    .setState(pair.networkId, UI_STATE_KEY.PUBLICATIONS_STATE, serializePublicationsViewState(viewState))
     .catch(() => undefined);
 }
 
 async function load(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null || ui === null) return;
+  const pair = currentScreenPair();
+  const ownerUi = ui;
+  if (pair === null || ownerUi === null) return;
+  const generation = instanceGeneration;
+  // Чужой `viewState` (сеть сменилась, L4 ещё не разобрана) не отправляется ни
+  // в один запрос: сервер молча вернул бы пустой список по полке другой сети.
+  if (viewStateNetworkId !== pair.networkId) return;
+  if (!publicationsInstanceAlive(ownerUi, generation)) return;
+
+  const seq = (loadSeq += 1);
+  // Снимок условий запуска: запрос и его ответ относятся ровно к этому
+  // состоянию (иммутабельные spread'ы — identity снимка работает).
+  const snapshot = viewState;
+  const offsetSnapshot = offset;
   // Ключ снимка следует за условиями (поиск/полка/страница) — инвалидации слоя
   // попадают ровно в активный запрос.
   retargetPublicationsQuery();
@@ -567,16 +693,19 @@ async function load(): Promise<void> {
   renderState();
   try {
     const [list, shelfList] = await Promise.all([
-      etn.publications.list(networkId, {
-        ...(viewState.query.trim() !== '' ? { q: viewState.query.trim() } : {}),
-        ...(viewState.shelfFilter !== null ? { shelf: viewState.shelfFilter } : {}),
-        active: viewState.activeFilter,
-        sort: viewState.sort,
+      etn.publications.list(pair.networkId, {
+        ...(snapshot.query.trim() !== '' ? { q: snapshot.query.trim() } : {}),
+        ...(snapshot.shelfFilter !== null ? { shelf: snapshot.shelfFilter } : {}),
+        active: snapshot.activeFilter,
+        sort: snapshot.sort,
         limit: PAGE_SIZE,
-        offset,
+        offset: offsetSnapshot,
       }),
-      etn.publications.listShelves(networkId).catch(() => []),
+      etn.publications.listShelves(pair.networkId).catch(() => []),
     ]);
+    // Ответ устаревшего запуска (снятая сеть/экран, обогнанный более поздним
+    // запуском) не применяется и не трогает `loading` актуального.
+    if (!canApplyLoad(ownerUi, generation, pair, seq)) return;
     publications = list.items;
     total = list.total;
     shelves = shelfList;
@@ -586,8 +715,11 @@ async function load(): Promise<void> {
     for (const shelf of shelfList) commitEntity('shelf', shelf.id, shelf);
     loading = false;
     renderAll();
-    void loadBadges();
+    // Бейджи запрашиваются ровно по принятому списку и его паре — id публикаций
+    // прежней сети в другой сети дают 404 (ошибка 5768f479).
+    void loadBadges(list.items, pair, generation);
   } catch (err) {
+    if (!canApplyLoad(ownerUi, generation, pair, seq)) return;
     loading = false;
     loadError = err;
     renderState();
@@ -595,21 +727,29 @@ async function load(): Promise<void> {
 }
 
 /** Ленивая догрузка бейджей «+N новых» для видимых публикаций. */
-async function loadBadges(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const pending = publications
+async function loadBadges(
+  items: readonly Publication[],
+  pair: ScreenPair,
+  generation: number,
+): Promise<void> {
+  const ownerUi = ui;
+  if (ownerUi === null || !publicationsInstanceAlive(ownerUi, generation)) return;
+  const pending = items
     .filter((p) => !badgeCounts.has(p.id))
     .slice(0, BADGE_LIMIT - badgeCounts.size);
   for (const publication of pending) {
+    if (!publicationsInstanceAlive(ownerUi, generation) || !isCurrentScreenPair(pair)) return;
     try {
-      const result = await etn.publications.candidates(networkId, publication.id, { limit: 1 });
+      const result = await etn.publications.candidates(pair.networkId, publication.id, { limit: 1 });
+      if (!publicationsInstanceAlive(ownerUi, generation) || !isCurrentScreenPair(pair)) return;
       badgeCounts.set(publication.id, result.total);
     } catch {
+      if (!publicationsInstanceAlive(ownerUi, generation) || !isCurrentScreenPair(pair)) return;
       badgeCounts.set(publication.id, 0);
     }
   }
-  for (const publication of publications) {
+  if (!publicationsInstanceAlive(ownerUi, generation) || !isCurrentScreenPair(pair)) return;
+  for (const publication of items) {
     const count = badgeCounts.get(publication.id);
     const node = badgeBadges.get(publication.id);
     if (count === undefined || node === undefined) continue;
@@ -1269,9 +1409,14 @@ function wireDropTarget(target: HTMLElement, shelfId: string | null): void {
 
 /** Переносит публикацию на полку (или снимает со всех, если `shelfId` = null). */
 async function movePublication(publicationId: string, targetShelfId: string | null): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   const current = shelves.filter((s) => s.items.some((i) => i.publication_id === publicationId));
+  // Мутации адресуются сети, где началось действие, — это цель переноса. Но
+  // диалог ошибки и инвалидация — только в актуальной паре: пока запросы
+  // летят, пользователь мог уйти в другую сеть (ошибка 5768f479).
+  const stillCurrent = (): boolean => isCurrentScreenPair(pair);
   if (targetShelfId !== null) {
     if (current.some((s) => s.id === targetShelfId)) return; // уже там
     for (const shelf of current) {
@@ -1285,14 +1430,14 @@ async function movePublication(publicationId: string, targetShelfId: string | nu
     try {
       await etn.publications.addShelfItem(networkId, targetShelfId, publicationId, position);
     } catch (err) {
-      errorDialog(t('publications.title'), err);
+      if (stillCurrent()) errorDialog(t('publications.title'), err);
     }
   } else {
     for (const shelf of current) {
       await etn.publications.removeShelfItem(networkId, shelf.id, publicationId).catch(() => undefined);
     }
   }
-  invalidatePublications();
+  if (stillCurrent()) invalidatePublications();
 }
 
 // ---------------------------------------------------------------------------
@@ -1427,15 +1572,18 @@ function publicationBlockedLines(blocking: PublicationDeletionBlocking): string[
 
 /** Диалог удаления публикации: «Удалить совсем» (если возможно) / «В корзину». */
 async function openPublicationDeleteDialog(publication: Publication): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   let check: { blocked: boolean; blocking: PublicationDeletionBlocking };
   try {
     check = await etn.publications.deletionCheck(networkId, publication.id);
   } catch (err) {
-    errorDialog(t('publications.title'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publications.title'), err);
     return;
   }
+  // Проверка шла для снятой пары — модальный диалог в чужой сети не открываем.
+  if (!isCurrentScreenPair(pair)) return;
   const alreadyMarked = publication.marked_for_deletion;
   openEntityDeleteDialog({
     title: t('publications.delete.publicationTitle', publication.title),
@@ -1447,9 +1595,9 @@ async function openPublicationDeleteDialog(publication: Publication): Promise<vo
         await etn.publications.purge(networkId, publication.id);
         close();
       } catch (err) {
-        errorDialog(t('publications.delete.publicationTitle', publication.title), err);
+        if (isCurrentScreenPair(pair)) errorDialog(t('publications.delete.publicationTitle', publication.title), err);
       }
-      invalidatePublications();
+      if (isCurrentScreenPair(pair)) invalidatePublications();
     },
     onTrash: async (close) => {
       try {
@@ -1457,24 +1605,26 @@ async function openPublicationDeleteDialog(publication: Publication): Promise<vo
         else await etn.publications.trash(networkId, publication.id);
         close();
       } catch (err) {
-        errorDialog(t('publications.title'), err);
+        if (isCurrentScreenPair(pair)) errorDialog(t('publications.title'), err);
       }
-      invalidatePublications();
+      if (isCurrentScreenPair(pair)) invalidatePublications();
     },
   });
 }
 
 /** Диалог удаления полки: «Удалить совсем» (только в основе) / «В корзину». */
 async function openShelfDeleteDialog(shelf: Shelf): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   let check: { blocked: boolean };
   try {
     check = await etn.publications.shelfDeletionCheck(networkId, shelf.id);
   } catch (err) {
-    errorDialog(t('publications.title'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publications.title'), err);
     return;
   }
+  if (!isCurrentScreenPair(pair)) return;
   const alreadyMarked = shelf.marked_for_deletion;
   openEntityDeleteDialog({
     title: t('publications.delete.shelfTitle', shelf.title),
@@ -1486,10 +1636,12 @@ async function openShelfDeleteDialog(shelf: Shelf): Promise<void> {
         await etn.publications.purgeShelf(networkId, shelf.id);
         close();
       } catch (err) {
-        errorDialog(t('publications.delete.shelfTitle', shelf.title), err);
+        if (isCurrentScreenPair(pair)) errorDialog(t('publications.delete.shelfTitle', shelf.title), err);
       }
-      dropShelfFilter(shelf.id);
-      invalidatePublications();
+      if (isCurrentScreenPair(pair)) {
+        dropShelfFilter(shelf.id);
+        invalidatePublications();
+      }
     },
     onTrash: async (close) => {
       try {
@@ -1497,10 +1649,12 @@ async function openShelfDeleteDialog(shelf: Shelf): Promise<void> {
         else await etn.publications.trashShelf(networkId, shelf.id);
         close();
       } catch (err) {
-        errorDialog(t('publications.title'), err);
+        if (isCurrentScreenPair(pair)) errorDialog(t('publications.title'), err);
       }
-      dropShelfFilter(shelf.id);
-      invalidatePublications();
+      if (isCurrentScreenPair(pair)) {
+        dropShelfFilter(shelf.id);
+        invalidatePublications();
+      }
     },
   });
 }
@@ -1582,30 +1736,32 @@ function startShelfRename(
 
 /** PATCH имени полки после inline-правки; перечитать список. */
 async function commitShelfRename(shelf: Shelf, title: string): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
   try {
-    await etn.publications.updateShelf(networkId, shelf.id, { title });
+    await etn.publications.updateShelf(pair.networkId, shelf.id, { title });
   } catch (err) {
-    errorDialog(t('publications.title'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publications.title'), err);
   }
-  invalidatePublications();
+  if (isCurrentScreenPair(pair)) invalidatePublications();
 }
 
 async function createShelf(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
   // Контракт диалога СОЗДАНИЯ (ошибка 87ad669a): заголовок «Новая полка»,
   // подпись «Название полки», пустое поле. Переименование — inline, двойным
   // кликом по имени полки (задача 00160da1).
   const title = await promptDialog(t('publications.shelf.create'), t('publications.shelf.name'), '');
   if (title === null || title.trim() === '') return;
+  // Запрос адресуется паре, где диалог открыт (это цель действия), но ошибка и
+  // инвалидация — только если пара ещё актуальна (ошибка 5768f479).
   try {
-    await etn.publications.createShelf(networkId, { title: title.trim() });
+    await etn.publications.createShelf(pair.networkId, { title: title.trim() });
   } catch (err) {
-    errorDialog(t('publications.title'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publications.title'), err);
   }
-  invalidatePublications();
+  if (isCurrentScreenPair(pair)) invalidatePublications();
 }
 
 /** Меню формата экспорта из рабочей области открытой публикации (2ebacd12). */

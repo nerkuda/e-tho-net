@@ -77,6 +77,10 @@ import {
 import { buildMetadataBlock } from '../lib/metadata.js';
 import type { PropertyRegistryRow } from '../lib/property-list.js';
 import { store } from '../state.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+} from '../screens/tabs/tab-state.js';
 import { buildCover } from '../screens/publications/cover.js';
 import {
   assemblyDateLabel,
@@ -992,7 +996,11 @@ function openSettingsDialog(): void {
   settingsShelvesHost = shelvesHost;
   body.append(fieldRow({ label: t('publication.settings.shelves'), control: shelvesHost }));
 
+  // Список полок принадлежит паре, открывшей диалог: ответ снятой пары не
+  // подменяет кэш и не рисуется в чужой сети (ошибка 5768f479).
+  const pair = currentScreenPair();
   void loadShelves().then((list) => {
+    if (pair === null || !isCurrentScreenPair(pair)) return;
     allShelvesCache = list;
     renderShelfCheckboxes(shelvesHost, publication.id);
   });
@@ -1071,8 +1079,9 @@ async function moveWithinShelf(
   publicationId: string,
   direction: -1 | 1,
 ): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   const shelf = allShelvesCache.find((s) => s.id === shelfId);
   if (shelf === undefined) return;
   const updates = shelfSwapUpdates(shelf.items, publicationId, direction);
@@ -1081,10 +1090,14 @@ async function moveWithinShelf(
     for (const update of updates) {
       await etn.publications.addShelfItem(networkId, shelfId, update.publication_id, update.position);
     }
+    // Перечитывание и перерисовка — только на своей паре: ответ/кэш прежней
+    // сети в новую не попадает (ошибка 5768f479).
+    if (!isCurrentScreenPair(pair)) return;
     allShelvesCache = await loadShelves();
+    if (!isCurrentScreenPair(pair)) return;
     reopenSettingsHost(publicationId);
   } catch (err) {
-    errorDialog(t('publication.error'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publication.error'), err);
   }
 }
 
@@ -1102,15 +1115,18 @@ async function toggleShelfMembership(
   shelfId: string,
   on: boolean,
 ): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   try {
     if (on) await etn.publications.addShelfItem(networkId, shelfId, publicationId);
     else await etn.publications.removeShelfItem(networkId, shelfId, publicationId);
+    if (!isCurrentScreenPair(pair)) return;
     allShelvesCache = await loadShelves();
+    if (!isCurrentScreenPair(pair)) return;
     reopenSettingsHost(publicationId);
   } catch (err) {
-    errorDialog(t('publication.error'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publication.error'), err);
   }
 }
 
