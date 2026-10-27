@@ -22,6 +22,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
+import type { FocusResponse } from '@etn/shared';
+
+import { ShimElement } from './dom-shim.js';
+
 const SRC = {
   historyBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'history-bar.ts'),
   pinnedBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'pinned-bar.ts'),
@@ -86,7 +90,7 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.pinnedBar);
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
-      chip.includes('showThoughtContextMenu('),
+      chip.includes('openPinnedThoughtMenu('),
       'чип закреплённых обязан вешать общее меню мысли',
     );
   });
@@ -169,8 +173,26 @@ describe('контекстное меню облачка — общий конс
     );
     const wire = functionBody(src, 'function wirePinnedContextMenu(');
     assert.ok(
-      wire.includes('showThoughtContextMenu(') && wire.includes('openHandler'),
+      wire.includes('openPinnedThoughtMenu('),
       'меню строки — общий конструктор, открытие идёт путём строки',
+    );
+    // «Налево (родственник)» вне холста цепляет родителя САМОЙ мысли: явный
+    // резолв, иначе конструктор берёт родителя фокуса (спецификация
+    // «Контекстное меню мысли», ошибка ffc173c9).
+    const menu = functionBody(src, 'async function openPinnedThoughtMenu(');
+    assert.ok(
+      menu.includes('resolveSiblingParentId(') && menu.includes('siblingParentId'),
+      'строка закреплённых передаёт siblingParentId явно (резолв до открытия меню)',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+    // Тот же дефект был у видимого чипа панели: он тоже идёт через общий резолв.
+    const chip = functionBody(src, 'function buildChip(');
+    assert.ok(
+      chip.includes('openPinnedThoughtMenu('),
+      'видимый чип закреплённых резолвит родителя так же, как строка дропдауна',
     );
   });
 
@@ -178,8 +200,25 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.linksTab);
     const actions = functionBody(src, 'function mentionCloudActions(');
     assert.ok(
-      actions.includes('onContextMenu') && actions.includes('showThoughtContextMenu('),
+      actions.includes('onContextMenu') && actions.includes('openOutOfCanvasThoughtMenu('),
       'чип упоминания обязан открывать общее меню мысли',
+    );
+    const menu = functionBody(src, 'async function openOutOfCanvasThoughtMenu(');
+    assert.ok(
+      menu.includes('showThoughtContextMenu(') &&
+        menu.includes('resolveSiblingParentId(') &&
+        menu.includes('siblingParentId'),
+      'меню вне холста передаёт siblingParentId явно (резолв до открытия)',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+    // Второе место того же файла — облачко конца связи во вкладке «Мысли».
+    const endpoint = functionBody(src, 'function buildThoughtCloud(');
+    assert.ok(
+      endpoint.includes('openOutOfCanvasThoughtMenu('),
+      'облачко конца связи резолвит родителя той же функцией',
     );
     assert.equal(
       (src.match(/actions: mentionCloudActions\(\(\) => void open\(hit\), /g) ?? []).length,
@@ -214,9 +253,169 @@ describe('контекстное меню облачка — общий конс
     const row = functionBody(src, 'function neighborPreviewRow(');
     assert.ok(
       row.includes('onContextMenu') &&
-        row.includes('showThoughtContextMenu(') &&
+        row.includes('openNeighborPreviewThoughtMenu(') &&
         row.includes('closeHoverPreview()'),
       'строка соседа открывает меню мысли и закрывает превью при открытии',
     );
+    const menu = functionBody(src, 'async function openNeighborPreviewThoughtMenu(');
+    assert.ok(
+      menu.includes('showThoughtContextMenu(') &&
+        menu.includes('resolveSiblingParentId(') &&
+        menu.includes('siblingParentId'),
+      'строка соседа передаёт siblingParentId явно (резолв до открытия)',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+  });
+});
+
+/**
+ * Поведенческий кейс блокера круга 2: правый клик по строке облачка ВНЕ холста
+ * обязан спросить родителя САМОЙ мысли (`thoughts.neighbors`), а не взять
+ * родителя мысли в фокусе. На дофиксовом `25ada42f` строка overflow-дропдауна
+ * закреплённых открывала меню без резолва — счётчик обращений остаётся нулевым
+ * (кейс красный).
+ */
+type Dict = Record<string, unknown>;
+
+function installShims(bridge: Dict): void {
+  (globalThis as Dict).HTMLElement = ShimElement;
+  (globalThis as Dict).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    body: new ShimElement('body'),
+    documentElement: { style: {} },
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => undefined,
+    querySelector: () => null,
+    activeElement: null,
+    getSelection: () => null,
+  } satisfies Dict;
+  const win = ((globalThis as Dict).window ?? ((globalThis as Dict).window = {})) as Dict;
+  win.setTimeout = setTimeout;
+  win.clearTimeout = clearTimeout;
+  win.etn = bridge;
+  win.addEventListener = () => undefined;
+  win.removeEventListener = () => undefined;
+  win.dispatchEvent = () => undefined;
+  win.innerWidth = 1024;
+  win.innerHeight = 768;
+  (globalThis as Dict).ResizeObserver = class {
+    observe(): void {
+      /* шим */
+    }
+    unobserve(): void {
+      /* шим */
+    }
+    disconnect(): void {
+      /* шим */
+    }
+  };
+}
+
+let activeUnmount: (() => void) | null = null;
+
+async function mountPinnedForMenu(options: {
+  pins: string[];
+  focusParents: string[];
+  parentsOf: (id: string) => Promise<Dict[]>;
+}): Promise<{
+  host: ShimElement;
+  body: ShimElement;
+  store: typeof import('../src/renderer/state.js').store;
+  neighborCalls: { id: string; dir: string; depth: number }[];
+  flush: () => Promise<void>;
+  unmount: () => void;
+}> {
+  activeUnmount?.();
+  activeUnmount = null;
+  const neighborCalls: { id: string; dir: string; depth: number }[] = [];
+  const bridge: Dict = {
+    pins: {
+      list: () => Promise.resolve(options.pins.map((id) => ({ thought_id: id, position: 0 }))),
+    },
+    thoughts: {
+      resolve: (_networkId: string, ids: string[]) =>
+        Promise.resolve(ids.map((id) => ({ id, title: `t-${id}`, active: true }))),
+      neighbors: (_networkId: string, id: string, dir: string, depth: number) => {
+        neighborCalls.push({ id, dir, depth });
+        return options.parentsOf(id);
+      },
+    },
+  };
+  installShims(bridge);
+  const { store } = await import('../src/renderer/state.js');
+  const { setQueryData, queryKeys } = await import('../src/renderer/lib/live/index.js');
+  const { mountPinnedBar } = await import('../src/renderer/screens/pinned-bar.js');
+  const focus = {
+    focused: { id: 'T' },
+    parents: options.focusParents.map((id) => ({ id })),
+    sorts: {
+      parents: { sort: 'alpha', order: 'asc' },
+      children: { sort: 'alpha', order: 'asc' },
+      siblings: { sort: 'alpha', order: 'asc' },
+    },
+  } as unknown as FocusResponse;
+  store.update({
+    profileId: 'profile-1',
+    networkId: 'network-1',
+    activeTabId: 'tab-A',
+    activeView: 'map',
+    screen: 'workspace',
+    editorTarget: null,
+    focus,
+    showInactive: false,
+    showTrash: true,
+    rtStatusByNetwork: { 'network-1': 'connected' },
+  });
+  setQueryData(queryKeys.pins(), options.pins);
+  const host = new ShimElement('div', 'pinned-bar');
+  // Раскладки в шиме нет — заставляем панель перенести второй чип в дропдаун.
+  (host as unknown as { scrollWidth: number }).scrollWidth = 100;
+  (host as unknown as { clientWidth: number }).clientWidth = 10;
+  const unmount = mountPinnedBar(host as unknown as HTMLElement);
+  activeUnmount = unmount;
+  return {
+    host,
+    body: ((globalThis as Dict).document as { body: ShimElement }).body,
+    store,
+    neighborCalls,
+    flush: async (): Promise<void> => {
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+      }
+    },
+    unmount,
+  };
+}
+
+describe('меню вне холста: родитель «налево» — родитель самой мысли (ffc173c9)', () => {
+  it('строка overflow-дропдауна закреплённых резолвит родителя M, а не фокуса T', async () => {
+    const harness = await mountPinnedForMenu({
+      pins: ['T', 'M'],
+      // Фокус — T (ребёнок P1); кликаем по M (ребёнок P2).
+      focusParents: ['P1'],
+      parentsOf: async (id) => [{ id: id === 'M' ? 'P2' : 'P1' }],
+    });
+    await harness.flush();
+    const more = harness.host.querySelector('.pinned-more');
+    assert.ok(more !== null, 'второй закреплённый ушёл в overflow-дропдаун');
+    more.click();
+    const row = harness.body
+      .findAll('menu-item')
+      .find((element) => element.dataset['dragId'] === 'M');
+    assert.ok(row !== undefined, 'строка мысли M есть в дропдауне');
+    row.dispatchContextMenu();
+    await harness.flush();
+    assert.deepEqual(
+      harness.neighborCalls,
+      [{ id: 'M', dir: 'parents', depth: 1 }],
+      'родитель запрошен для САМОЙ мысли M, а не для мысли в фокусе T',
+    );
+    assert.equal(harness.body.querySelectorAll('.menu').length, 1, 'меню мысли открылось');
+    harness.unmount();
   });
 });

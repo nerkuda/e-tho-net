@@ -37,7 +37,11 @@ import { focusFromUi } from '../app.js';
 // значок, цвета, начертание, бледность и метка корзины — из одного
 // представления мысли (стандарт «представление мысли — только через фабрику»).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
-import { showThoughtContextMenu } from '../canvas/context-menu.js';
+import {
+  resolveSiblingParentId,
+  showThoughtContextMenu,
+  type ThoughtMenuOptions,
+} from '../canvas/context-menu.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { button, clear, div, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -270,12 +274,31 @@ function wirePinnedContextMenu(el: HTMLElement, id: string, title: string): void
   el.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    showThoughtContextMenu(
-      event,
-      { id, title, dir: 'siblings' },
-      { openHandler: (openId) => openPinnedEntry(openId) },
-    );
+    void openPinnedThoughtMenu(event, id, title, {
+      openHandler: (openId) => openPinnedEntry(openId),
+    });
   });
+}
+
+/**
+ * Общее меню мысли для чипа/строки закреплённых (вне холста): родитель для
+ * «налево (родственник)» — родитель самой мысли, а не мысли в фокусе карты
+ * (спецификация «Контекстное меню мысли»). Резолв явный: без него конструктор
+ * берёт родителя фокуса (ловушка `context-menu.ts:412-413`) и «налево» создаёт
+ * мысль не под тем родителем (ошибка ffc173c9). После ожидания сверяется сеть
+ * (класс a3151e33).
+ */
+async function openPinnedThoughtMenu(
+  event: MouseEvent,
+  id: string,
+  title: string,
+  opts: ThoughtMenuOptions = {},
+): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const siblingParentId = await resolveSiblingParentId(networkId, id);
+  if (store.state.networkId !== networkId) return;
+  showThoughtContextMenu(event, { id, title, dir: 'siblings', siblingParentId }, opts);
 }
 
 /**
@@ -409,7 +432,7 @@ function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
         onClick: (targetId) => openPinnedEntry(targetId),
         onContextMenu: (event) => {
           event.stopPropagation();
-          showThoughtContextMenu(event, { id, title: ref?.title ?? id, dir: 'siblings' });
+          void openPinnedThoughtMenu(event, id, ref?.title ?? id);
         },
       },
     },

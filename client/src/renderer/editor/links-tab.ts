@@ -27,7 +27,7 @@ import { focusFromUi, requireNetworkId } from '../app.js';
 // общая фабрика: значок, цвета, начертание, бледность и единые жесты.
 import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-cloud.js';
 import { t } from '../lib/i18n.js';
-import { showThoughtContextMenu } from '../canvas/context-menu.js';
+import { resolveSiblingParentId, showThoughtContextMenu } from '../canvas/context-menu.js';
 import { div, el, isConnectionLostError, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
@@ -207,7 +207,7 @@ function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
       onCtrlClick: (id) => toggleSelection([id]),
       onContextMenu: (event, id) => {
         event.stopPropagation();
-        showThoughtContextMenu(event, { id, title: ref.title, dir: 'siblings' });
+        void openOutOfCanvasThoughtMenu(event, id, ref.title);
       },
     },
   });
@@ -230,9 +230,30 @@ function mentionCloudActions(open: () => void, title: string): ThoughtCloudActio
     onClick: open,
     onContextMenu: (event, id) => {
       event.stopPropagation();
-      showThoughtContextMenu(event, { id, title, dir: 'siblings' });
+      void openOutOfCanvasThoughtMenu(event, id, title);
     },
   };
+}
+
+/**
+ * Общее меню мысли для облачка ВНЕ холста (упоминания, концы связи): родитель
+ * для «налево (родственник)» — родитель самой мысли, а не мысли в фокусе
+ * карты (спецификация «Контекстное меню мысли»). Резолв явный: без него
+ * конструктор меню берёт родителя фокуса (ловушка `context-menu.ts:412-413`) и
+ * «налево» создаёт мысль не под тем родителем (ошибка ffc173c9). После
+ * ожидания сверяется сеть — поздний ответ не должен открыть меню для мысли
+ * прежней сети (класс a3151e33).
+ */
+async function openOutOfCanvasThoughtMenu(
+  event: MouseEvent,
+  id: string,
+  title: string,
+): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const siblingParentId = await resolveSiblingParentId(networkId, id);
+  if (store.state.networkId !== networkId) return;
+  showThoughtContextMenu(event, { id, title, dir: 'siblings', siblingParentId });
 }
 
 /** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */

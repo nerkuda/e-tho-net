@@ -101,7 +101,11 @@ import {
   prefersReducedMotion,
 } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
-import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
+import {
+  resolveSiblingParentId,
+  showThoughtContextMenu,
+  showZoneContextMenu,
+} from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
 import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
@@ -2509,22 +2513,41 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
       // (открыть в редакторе и закрыть превью), а не двигает фокус холста.
       onContextMenu: (event, id) => {
         event.stopPropagation();
-        showThoughtContextMenu(
-          event,
-          { id, title: ref.title, dir: 'siblings' },
-          {
-            openHandler: (openId) => {
-              closeHoverPreview();
-              openThoughtInEditor(openId);
-            },
-          },
-        );
+        void openNeighborPreviewThoughtMenu(event, id, ref.title);
       },
     },
   });
   row.classList.add('link-group-item');
   markThoughtCommentPreview(row, ref.id, ref.title);
   return row;
+}
+
+/**
+ * Общее меню мысли для строки соседа в Ctrl-hover попапе (вне зон холста):
+ * родитель для «налево (родственник)» — родитель самой мысли, а не мысли в
+ * фокусе карты (спецификация «Контекстное меню мысли»). Резолв явный: без него
+ * конструктор берёт родителя фокуса (ловушка `context-menu.ts:412-413`)
+ * (ошибка ffc173c9). После ожидания сверяется сеть (класс a3151e33).
+ */
+async function openNeighborPreviewThoughtMenu(
+  event: MouseEvent,
+  id: string,
+  title: string,
+): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const siblingParentId = await resolveSiblingParentId(networkId, id);
+  if (store.state.networkId !== networkId) return;
+  showThoughtContextMenu(
+    event,
+    { id, title, dir: 'siblings', siblingParentId },
+    {
+      openHandler: (openId) => {
+        closeHoverPreview();
+        openThoughtInEditor(openId);
+      },
+    },
+  );
 }
 
 /** Builds the `neighbors` popup content: incoming/outgoing links of the
