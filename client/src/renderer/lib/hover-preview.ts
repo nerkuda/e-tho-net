@@ -50,8 +50,9 @@
  *    closed it, and changing that would be a UX change, not a refactor.
  *
  * NOTE on dependency direction: this module intentionally imports only from
- * `lib/*`, `state.ts`, shared types, `@etn/markdown` (constants only) and
- * `editor/wiki-link-resolver.ts` (which itself has no further renderer
+ * `lib/*`, `state.ts`, `screens/tabs/tab-state.ts` (пара «сеть + вкладка» —
+ * страж открытия, ошибка a3151e33), shared types, `@etn/markdown` (constants
+ * only) and `editor/wiki-link-resolver.ts` (which itself has no further renderer
  * dependencies). It must NOT import from `editor/markdown-field.ts`,
  * `editor/chrono-tab.ts` or `editor/attachments.ts` — those already import
  * `canvas/canvas.ts`, and `canvas.ts` imports this module to wire its
@@ -77,6 +78,7 @@ import { createDelayedOpen, CTRL_PREVIEW_OPEN_DELAY_MS } from './preview-open-de
 import { commentShell } from './ui/comment.js';
 import { openPopover, watchOutsideTap, type PopoverHandle } from './ui/popover.js';
 import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
+import { currentScreenPair, isCurrentScreenPair, type ScreenPair } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
 import { imageOwnsCtrlPreview } from './zoom-anchor.js';
 
@@ -763,6 +765,36 @@ let openGeneration = 0;
 let mouseX = 0;
 let mouseY = 0;
 
+/**
+ * Снимок «стража» открытия: поколение открытий и пара «сеть + вкладка» на
+ * момент триггера. Сетевые резолверы читают данные ТЕКУЩЕЙ сети, поэтому
+ * содержимое, разрешённое для одной пары, не показывается в другой (ошибка
+ * a3151e33: попап с комментарием мысли сети A поверх вкладки сети B).
+ */
+interface OpenGuard {
+  generation: number;
+  pair: ScreenPair | null;
+}
+
+/**
+ * Можно ли показывать контент, разрешённый для `guard` — ОДИН страж на все
+ * kind резолверов (`comment`, `chrono`, `attachments`, wiki-ссылки, файлы):
+ *  - поколение не перекрыто более новым открытием/отменой;
+ *  - пара «сеть + вкладка», в которой снят триггер, всё ещё текущая;
+ *  - триггер ещё в документе: переключение сети пересоздаёт DOM рабочего
+ *    пространства (`teardownWorkspace` + `clear(root)`), и попап, открытый
+ *    якорем к откреплённому узлу, повисает в чужом экране.
+ * Чистая функция (без DOM и store) — юнит-тесты `hover-preview-network-switch.test.ts`.
+ */
+function isOpenGuardValid(
+  guard: OpenGuard,
+  current: { generation: number; pairIsCurrent: boolean; attached: boolean },
+): boolean {
+  if (guard.generation !== current.generation) return false;
+  if (guard.pair === null || !current.pairIsCurrent) return false;
+  return current.attached;
+}
+
 /** Отменяет ещё не открывшийся предпросмотр (сработавший таймер общей задержки
  *  или отменённый до его истечения). Уже открытая цепочка не трогается. */
 function cancelPendingOpen(): void {
@@ -901,20 +933,34 @@ function isAlreadyOpenAt(candidate: HTMLElement, depth: number): boolean {
 
 async function doOpen(candidate: HTMLElement, depth: number): Promise<void> {
   if (depth > MAX_DEPTH) return;
+  // Триггер откреплён ещё до старта резолвера (сменилась сеть/вкладка, список
+  // перерисован): запрос в текущую сеть за сущностью прошлого экрана не нужен.
+  if (!candidate.isConnected) return;
   const kind = candidate.dataset['hpKind'];
   if (kind === undefined) return;
   const resolver = resolvers.get(kind);
   if (resolver === undefined) return;
 
-  const gen = ++openGeneration;
+  // Пара снимается ВМЕСТЕ с триггером, до первого await (ошибка a3151e33):
+  // резолвер адресует данные текущей сети, а после ответа попап обязан
+  // показываться только в той же паре и у живого триггера.
+  const guard: OpenGuard = { generation: ++openGeneration, pair: currentScreenPair() };
   let content: HoverPreviewContent | null;
   try {
     content = await resolver(candidate);
   } catch {
     content = null;
   }
-  if (gen !== openGeneration) return; // superseded by a newer open/close
   if (content === null) return; // e.g. no permanent comment — show nothing
+  if (
+    !isOpenGuardValid(guard, {
+      generation: openGeneration,
+      pairIsCurrent: guard.pair !== null && isCurrentScreenPair(guard.pair),
+      attached: candidate.isConnected,
+    })
+  ) {
+    return; // пара/триггер устарели, пока шёл резолвер — содержимое не показываем
+  }
 
   if (depth === 1) {
     closeChain();
@@ -1071,6 +1117,7 @@ export const hoverPreviewInternals = {
   depthFor,
   isAlreadyOpenAt,
   isChainEntryAlive,
+  isOpenGuardValid,
   pictureTakesOverPoint,
   MAX_DEPTH,
   CTRL_PREVIEW_OPEN_DELAY_MS,
