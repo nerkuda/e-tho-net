@@ -16,12 +16,16 @@
  * поведенческие пробы движка (`hover-preview-close.test.ts`).
  */
 
-import { test } from 'node:test';
+import { beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { hoverPreviewInternals } from '../src/renderer/lib/hover-preview.js';
+import { store } from '../src/renderer/state.js';
 
-const { isOpenGuardValid } = hoverPreviewInternals;
+const { isOpenGuardValid, screenPairKey, watchScreenPairChange } = hoverPreviewInternals;
+
+const NET = '00000000-0000-4000-8000-000000000001';
+const OTHER_NET = '00000000-0000-4000-8000-000000000002';
 
 const PAIR = { networkId: '00000000-0000-4000-8000-000000000001', tabId: 'tab-a' };
 const GUARD = { generation: 7, pair: PAIR };
@@ -46,4 +50,69 @@ test('isOpenGuardValid: триггер откреплён (workspace перес�
 
 test('isOpenGuardValid: пара не снята (нет открытой сети) — попап не открывается', () => {
   assert.equal(isOpenGuardValid({ generation: 7, pair: null }, CURRENT), false);
+});
+
+// ---------------------------------------------------------------------------
+// Круг 3: уже ОТКРЫТАЯ цепочка закрывается при смене пары «сеть + вкладка»
+// (ошибка a3151e33). Панель монтируется в `document.body` и переживает
+// `teardownWorkspace` + `clear(root)`, поэтому закрытие живёт в подписке движка.
+// ---------------------------------------------------------------------------
+
+describe('watchScreenPairChange: смена пары закрывает открытую цепочку (a3151e33)', () => {
+  beforeEach(() => {
+    store.update({ networkId: null, activeTabId: null });
+  });
+
+  test('смена сети — по одному вызову на переход', () => {
+    let calls = 0;
+    const stop = watchScreenPairChange(() => {
+      calls += 1;
+    });
+    store.update({ networkId: NET });
+    assert.equal(calls, 1);
+    store.update({ networkId: OTHER_NET });
+    assert.equal(calls, 2);
+    stop();
+  });
+
+  test('смена вкладки в той же сети — тоже смена пары', () => {
+    store.update({ networkId: NET, activeTabId: 'tab-a' });
+    let calls = 0;
+    const stop = watchScreenPairChange(() => {
+      calls += 1;
+    });
+    store.update({ activeTabId: 'tab-b' });
+    assert.equal(calls, 1);
+    stop();
+  });
+
+  test('обновление состояния без смены пары цепочку не закрывает', () => {
+    store.update({ networkId: NET, activeTabId: 'tab-a' });
+    let calls = 0;
+    const stop = watchScreenPairChange(() => {
+      calls += 1;
+    });
+    store.update({ showInactive: true });
+    store.update({ focus: null });
+    store.update({ networkId: NET, activeTabId: 'tab-a' });
+    assert.equal(calls, 0);
+    stop();
+  });
+
+  test('после отписки смена пары закрытие не вызывает', () => {
+    store.update({ networkId: NET, activeTabId: 'tab-a' });
+    let calls = 0;
+    const stop = watchScreenPairChange(() => {
+      calls += 1;
+    });
+    stop();
+    store.update({ networkId: OTHER_NET });
+    assert.equal(calls, 0);
+  });
+
+  test('screenPairKey различает сеть и вкладку, null — пустой ключ', () => {
+    assert.equal(screenPairKey(null), '');
+    assert.notEqual(screenPairKey(PAIR), screenPairKey({ ...PAIR, tabId: 'tab-b' }));
+    assert.notEqual(screenPairKey(PAIR), screenPairKey({ ...PAIR, networkId: OTHER_NET }));
+  });
 });

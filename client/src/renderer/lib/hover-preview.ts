@@ -795,6 +795,30 @@ function isOpenGuardValid(
   return current.attached;
 }
 
+/** Ключ пары «сеть + вкладка» для сравнения «та же пара?» без объектов. */
+function screenPairKey(pair: ScreenPair | null): string {
+  return pair === null ? '' : `${pair.networkId}\u0000${pair.tabId ?? ''}`;
+}
+
+/**
+ * Подписка движка на смену пары «сеть + вкладка»: `onChange` вызывается ровно
+ * один раз на каждый переход (обычные обновления store той же пары — тишина).
+ * Вынесено из {@link initHoverPreview} ради юнит-теста. Панель предпросмотра
+ * монтируется в `document.body` (`lib/ui/popover.ts`) и переживает
+ * `teardownWorkspace()` + `clear(root)` при смене сети, поэтому уже открытая
+ * цепочка обязана закрыться здесь — страж `isOpenGuardValid` отсекает только
+ * НОВЫЕ открытия (ошибка a3151e33, круг 3). Возвращает отписку.
+ */
+function watchScreenPairChange(onChange: () => void): () => void {
+  let key = screenPairKey(currentScreenPair());
+  return store.subscribe(() => {
+    const next = screenPairKey(currentScreenPair());
+    if (next === key) return;
+    key = next;
+    onChange();
+  });
+}
+
 /** Отменяет ещё не открывшийся предпросмотр (сработавший таймер общей задержки
  *  или отменённый до его истечения). Уже открытая цепочка не трогается. */
 function cancelPendingOpen(): void {
@@ -1012,6 +1036,17 @@ export function initHoverPreview(): void {
   if (initialized) return;
   initialized = true;
 
+  // Панель предпросмотра живёт в `document.body` и переживает пересоздание
+  // рабочего пространства при смене сети/вкладки. Содержимое открытой цепочки
+  // относится к прежней паре «сеть + вкладка», поэтому смена пары закрывает её
+  // и гасит резолвер в полёте (ошибка a3151e33: открытый попап висел поверх
+  // чужой сети; страж `isOpenGuardValid` отсекает только новые открытия).
+  // Обычные обновления store той же пары попап не трогают.
+  watchScreenPairChange(() => {
+    abandonPendingOpen();
+    closeChain();
+  });
+
   document.addEventListener('mousemove', (event) => {
     mouseX = event.clientX;
     mouseY = event.clientY;
@@ -1118,6 +1153,8 @@ export const hoverPreviewInternals = {
   isAlreadyOpenAt,
   isChainEntryAlive,
   isOpenGuardValid,
+  screenPairKey,
+  watchScreenPairChange,
   pictureTakesOverPoint,
   MAX_DEPTH,
   CTRL_PREVIEW_OPEN_DELAY_MS,
