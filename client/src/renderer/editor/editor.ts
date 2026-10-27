@@ -2596,6 +2596,30 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
  *
  * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
  */
+
+/**
+ * «В фокус» из меню «Действия ▾»: `focusThoughtOnMap` показывает отказ
+ * установки фокуса тостом сам и не отклоняет промис, но отказ ленивого
+ * импорта `active-view.js` (сбой загрузки чанка) промис отклоняет. Обработчик
+ * меню вызывается без ожидания, поэтому rejection гасится здесь тостом и
+ * записью в журнал — иначе клик по команде молча ничего не делает
+ * (ошибка 53d21e82). Второго тоста на штатный отказ фокуса нет: его уже
+ * показал помощник.
+ */
+function focusOnMapFromMenu(
+  focusOnMap: (id: string) => Promise<void>,
+  thoughtId: string,
+): void {
+  if (!canSave()) {
+    offlineNotice();
+    return;
+  }
+  void focusOnMap(thoughtId).catch((error: unknown) => {
+    console.error('[editor] не удалось открыть карту мыслей', error);
+    notice(t('editor.focusOnMapFailed', errText(error)), 'error');
+  });
+}
+
 async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElement): Promise<void> {
   const networkId = requireNetworkId();
   // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
@@ -2616,13 +2640,7 @@ async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElemen
     },
     {
       hideOpenCommand: true,
-      focusHandler: () => {
-        if (!canSave()) {
-          offlineNotice();
-          return;
-        }
-        void focusThoughtOnMap(thought.id);
-      },
+      focusHandler: () => focusOnMapFromMenu(focusThoughtOnMap, thought.id),
       attachmentHandler: (id) => {
         // Мысль уже открыта в редакторе: «Добавить вложение» ведёт прямо на её
         // вкладку «Вложения». Для чужой мысли (или если вкладки нет — например,
@@ -2914,6 +2932,12 @@ function openLinkSettings(link: Link): void {
 export const editorInternals = {
   /** Registered «Комментарий» sections — must not grow per `mountEditor` call. */
   mainSectionCount: (): number => mainSectionBuilders.length,
+  /**
+   * «В фокус» из меню «Действия ▾» (ошибка 53d21e82): тест подаёт
+   * отклоняющий `focusOnMap` и проверяет, что rejection погашен тостом, а не
+   * уходит в unhandled.
+   */
+  focusOnMapFromMenu,
   /** Comma-separated synonyms field parser (editor-shaking regression). */
   parseSynonymsField,
   /** Order-sensitive synonym list equality (editor-shaking regression). */

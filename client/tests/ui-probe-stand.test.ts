@@ -40,6 +40,22 @@ test('parseArgs: значения по умолчанию', () => {
   assert.equal(opts.help, false);
   assert.deepEqual(opts.delaySeedRules, []);
   assert.equal(opts.failSeedPath, '');
+  assert.equal(opts.failSeedStatus, 404);
+});
+
+test('parseArgs: --fail-seed-status — статус подмены, только вместе с путём', () => {
+  const opts = parseArgs(['--fail-seed-path', 'thoughts/x/focus', '--fail-seed-status', '500']);
+  assert.equal(opts.failSeedPath, 'thoughts/x/focus');
+  assert.equal(opts.failSeedStatus, 500);
+  assert.throws(
+    () => parseArgs(['--fail-seed-status', '500']),
+    /требует --fail-seed-path/,
+    'статус без пути не имеет смысла',
+  );
+  assert.throws(
+    () => parseArgs(['--fail-seed-path', 'p', '--fail-seed-status', '302']),
+    /400\.\.599/,
+  );
 });
 
 test('parseArgs: сценарий, порты, флаги, сид', () => {

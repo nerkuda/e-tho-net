@@ -101,6 +101,7 @@ import { notice } from '../lib/notice.js';
 import { t } from '../lib/i18n.js';
 import {
   UI_STATE_KEY,
+  type Link,
   type SearchResponse,
   type SearchScope,
   type Thought,
@@ -1241,30 +1242,82 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
   applySelection(lastSelectedKey, false);
 }
 
-/** Opens a link hit: focuses the source thought, opens the link editor. */
+/**
+ * Порт хитового перехода (тестовый шов, как `setCommentThoughtInsertPort`):
+ * связь, установка фокуса и открытие редактора. Боевой порт — системные
+ * функции; подмена позволяет проверить классификацию отказов (stale 404
+ * молчит, сетевой отказ — тост) без живого сервера и DOM редактора
+ * (ошибка 53d21e82).
+ */
+export interface SearchHitPort {
+  /** Связь по id; 404 — хит устарел (связь удалили после поиска). */
+  getLink(networkId: string, linkId: string): Promise<Link>;
+  /** Установка фокуса карты; 404 — мысль-источник удалена (тоже stale). */
+  setFocus(thoughtId: string): Promise<void>;
+  /** Открыть связь в редакторе — только после успешной установки фокуса. */
+  openLinkInEditor(link: Link): void;
+}
+
+let hitPort: SearchHitPort | null = null;
+
+/** Подменяет порт хитового перехода (тестовый шов); `null` — системный порт. */
+export function setSearchHitPort(port: SearchHitPort | null): void {
+  hitPort = port;
+}
+
+/** Действующий порт хитового перехода: системные функции по умолчанию. */
+function searchHitPort(): SearchHitPort {
+  return (
+    hitPort ?? {
+      getLink: (networkId, linkId) => etn.links.get(networkId, linkId),
+      setFocus,
+      openLinkInEditor,
+    }
+  );
+}
+
+/**
+ * Отказ открытия хита связи. Stale-хит (404/неразрешённый) — тишина: связь
+ * или её источник удалили после поиска, шуметь не о чем. Любой другой отказ
+ * (сеть, сервер) — тост из словаря: иначе клик по строке не даёт видимого
+ * результата и выглядит «зависшим» (ошибка 53d21e82).
+ */
+function reportHitFailure(error: unknown): void {
+  if (isNotFoundError(error)) return;
+  notice(t('search.hitOpenFailed', errText(error)), 'error');
+}
+
+/**
+ * Opens a link hit: focuses the source thought, opens the link editor.
+ *
+ * Stale-хит и сетевой отказ различаются (ошибка 53d21e82): прежний общий
+ * `catch {}` глотал оба, и при недоступном сервере пользователь не получал
+ * ни фокуса, ни редактора, ни сообщения. `openLinkInEditor` выполняется
+ * только после успешной установки фокуса — при любом отказе он не нужен.
+ */
 async function openLinkHit(linkId: string): Promise<void> {
-  const networkId = requireNetworkId();
   try {
-    const link = await etn.links.get(networkId, linkId);
-    await setFocus(link.source_id);
-    openLinkInEditor(link);
-  } catch {
-    // stale hit
+    const port = searchHitPort();
+    const link = await port.getLink(requireNetworkId(), linkId);
+    await port.setFocus(link.source_id);
+    port.openLinkInEditor(link);
+  } catch (error) {
+    reportHitFailure(error);
   }
 }
 
 /** Opens a chronology hit on its owner (thought → focus, link → editor). */
 async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promise<void> {
-  const networkId = requireNetworkId();
   if (owner === 'thought') {
     focusFromUi(ownerId);
     return;
   }
   try {
-    const link = await etn.links.get(networkId, ownerId);
-    openLinkInEditor(link);
-  } catch {
-    // stale hit
+    const port = searchHitPort();
+    const link = await port.getLink(requireNetworkId(), ownerId);
+    port.openLinkInEditor(link);
+  } catch (error) {
+    reportHitFailure(error);
   }
 }
 
@@ -1445,4 +1498,6 @@ export const searchInternals = {
   parseThoughtIdLookupQuery,
   MIN_QUERY_LENGTH,
   nextNavIndex,
+  openLinkHit,
+  openChronoHit,
 };

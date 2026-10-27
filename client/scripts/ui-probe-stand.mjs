@@ -88,9 +88,14 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          Режим «форвард + подмена статуса»: запросы засеянной
                          сети, чей путь содержит <s>, всё равно уходят на сервер
                          (read-only, serverLog видит их), но клиент получает
-                         HTTP 404. Проверка поведения интерфейса на отказе
-                         сервера (ошибка b213cf60). Путь без ведущего слеша;
-                         подстановки id — как у --delay-seed-path.
+                         HTTP 404 (или статус из --fail-seed-status). Проверка
+                         поведения интерфейса на отказе сервера (ошибка
+                         b213cf60). Путь без ведущего слеша; подстановки id —
+                         как у --delay-seed-path.
+      --fail-seed-status <n>
+                         Статус подмены для --fail-seed-path (400..599, по
+                         умолчанию 404). 500 — сетевой/серверный отказ, который
+                         не является stale-хитом (ошибка 53d21e82).
       --keep             Не удалять каталог стенда после прогона сценария.
   -h, --help             Эта справка.
 
@@ -153,6 +158,7 @@ export function parseArgs(argv) {
     delaySeedPath: '',
     delaySeedRules: [],
     failSeedPath: '',
+    failSeedStatus: 404,
     keep: false,
     help: false,
   };
@@ -246,12 +252,24 @@ export function parseArgs(argv) {
         opts.failSeedPath = need(argv[i + 1], arg);
         i += 1;
         break;
+      case '--fail-seed-status': {
+        const status = int(need(argv[i + 1], arg), arg);
+        if (status < 400 || status > 599) {
+          throw new Error('--fail-seed-status требует 400..599');
+        }
+        opts.failSeedStatus = status;
+        i += 1;
+        break;
+      }
       case '--keep':
         opts.keep = true;
         break;
       default:
         throw new Error(`неизвестный аргумент «${arg}» (справка: --help)`);
     }
+  }
+  if (opts.failSeedPath === '' && opts.failSeedStatus !== 404) {
+    throw new Error('--fail-seed-status требует --fail-seed-path');
   }
   return opts;
 }
@@ -631,8 +649,9 @@ async function main(argv) {
     // гонки «поздний ответ openNetwork» (ошибка 58c55bb9). Несколько правил
     // (`--delay-seed-rule`) дают РАЗНУЮ задержку разным путям — так ответ B
     // приходит раньше ответа A (гонка отборов, ошибка 6d78ccab, круг 2).
-    // `--fail-seed-path` — «форвард + 404»: поведение клиента на отказе
-    // сервера при живом соединении (ошибка b213cf60).
+    // `--fail-seed-path` — «форвард + подмена статуса» (по умолчанию 404,
+    // `--fail-seed-status` — например 500): поведение клиента на отказе
+    // сервера при живом соединении (ошибки b213cf60, 53d21e82).
     let clientRoot = serverRoot;
     /** Правила в порядке применения (первое совпадение выигрывает). */
     const delayRules = [];
@@ -665,6 +684,7 @@ async function main(argv) {
         // задерживать: иначе дефолт 3000 мс замедлил бы всю сеть.
         delayMs: 0,
         failPath,
+        failStatus: opts.failSeedStatus,
         log: (line) => process.stdout.write(`[probe-proxy] ${line}\n`),
       });
       clientRoot = `http://127.0.0.1:${probeProxy.port}`;
@@ -678,7 +698,7 @@ async function main(argv) {
                 )
                 .join(', ')
             : 'без задержки') +
-          (failPath === '' ? '' : `; 404 на путь ${failPath}`) +
+          (failPath === '' ? '' : `; ${opts.failSeedStatus} на путь ${failPath}`) +
           `: ${clientRoot}\n`,
       );
     }
@@ -797,7 +817,7 @@ async function main(argv) {
             code = 1;
           } else {
             process.stdout.write(
-              `ui-probe-stand: подмена HTTP 404 сработала (запросов: ${injected})\n`,
+              `ui-probe-stand: подмена HTTP ${opts.failSeedStatus} сработала (запросов: ${injected})\n`,
             );
           }
         }
