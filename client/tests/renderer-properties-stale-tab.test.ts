@@ -18,11 +18,15 @@
  *     обновляются без пересборки вкладки;
  *  2) событие о ЧУЖОМ владельце не перечитывает и не перерисовывает
  *     показанную панель (адресация по `owner_id`);
- *  3) обычный возврат на вкладку без изменений не читает (нет лишних запросов).
+ *  3) обычный возврат на вкладку без изменений не читает (нет лишних запросов);
+ *  4) транзиентный отказ чтения значений на возврате не теряет dirty-метку —
+ *     следующий показ обязан перечитать (замечание верификатора к 9667b75c,
+ *     круг 3: типовая таблица снимала метку до чтения значений).
  *
  * На дофиксовом HEAD оба обязательных кейса красные: (1) второго
  * `properties.get` нет и чип остаётся «срочно»; (2) показанная панель
- * перечитывается на чужое событие.
+ * перечитывается на чужое событие. Кейс 4 на дофиксовом HEAD тоже красный:
+ * метка снимается до чтения значений, и после отказа следующий показ молчит.
  */
 
 import assert from 'node:assert/strict';
@@ -206,6 +210,8 @@ describe('вкладка «Свойства» после скрытия пере
       },
     ];
     let getCalls = 0;
+    /** Транзиентный отказ чтения значений: все `properties.get` бросают. */
+    let failValuesReads = false;
     let realtimeHandler: ((raw: unknown) => void) | null = null;
 
     (globalThis as any).window.etn = {
@@ -214,6 +220,7 @@ describe('вкладка «Свойства» после скрытия пере
       properties: {
         get: async () => {
           getCalls += 1;
+          if (failValuesReads) throw new Error('transient values read failure');
           return propertyRows.map((row) => ({ ...(row as object) }));
         },
         set: async () => undefined,
@@ -366,6 +373,69 @@ describe('вкладка «Свойства» после скрытия пере
     await waitFor(() => chipTitles(host).includes('смена'));
     check(getCalls === callsBeforeReturn, 'показ без dirty-метки перечитал значения');
     check(builds() === 1, 'вкладка пересобиралась на обычном показе');
+
+    // --- Кейс 4: отказ чтения значений на возврате — метка не теряется ------
+    // Замечание верификатора (круг 3): снятие dirty-метки допустимо только
+    // после УСПЕШНОГО чтения значений. Иначе транзиентный отказ «съедает»
+    // метку, и следующий показ показывает снимок без повторного чтения.
+    editorInternals.activateTab('metadata');
+    await waitFor(() => findAllByClass(host, 'properties-tab').length === 0);
+    propertyRows = [
+      {
+        id: 'vTags',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'pTags',
+        property_name: 'Теги',
+        value_type: 'text',
+        value: ['срочно', 'ретрей'],
+        outside_type: false,
+        updated_at: '2026-01-03',
+      },
+      {
+        id: 'vExt',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'pExt',
+        property_name: 'Внешнее',
+        value_type: 'text',
+        value: 'повтор',
+        outside_type: true,
+        updated_at: '2026-01-03',
+      },
+    ];
+    failValuesReads = true;
+    await feed('property-value.set', 'n1', {
+      owner_type: 'thought',
+      owner_id: 't1',
+      key: 'Теги',
+      values: ['срочно', 'ретрей'],
+    });
+    const callsBeforeFailedReturn = getCalls;
+    editorInternals.activateTab('properties');
+    // Первый возврат: чтения значений отвечают отказом (типовая таблица,
+    // внетиповая и счётчик группы — все три).
+    await waitFor(() => getCalls > callsBeforeFailedReturn);
+    await waitFor(() => false, 60);
+    const callsAfterFailedReturn = getCalls;
+    check(
+      callsAfterFailedReturn > callsBeforeFailedReturn,
+      'возврат при отказе чтения не пытался прочитать значения',
+    );
+
+    // Следующий показ: метка обязана пережить отказ и вызвать повторное чтение.
+    editorInternals.activateTab('metadata');
+    await waitFor(() => findAllByClass(host, 'properties-tab').length === 0);
+    failValuesReads = false;
+    editorInternals.activateTab('properties');
+    await waitFor(() => getCalls > callsAfterFailedReturn, 500);
+    check(
+      getCalls > callsAfterFailedReturn,
+      'показ после отказа чтения не перечитал значения (dirty-метка потеряна)',
+    );
+    await waitFor(() => chipTitles(host).includes('ретрей'), 500);
+    same(chipTitles(host), ['срочно', 'ретрей'], 'после ретрая типовая строка не обновилась');
+    check(outsideScalarValue(host) === 'повтор', 'после ретрая внетиповая строка не обновилась');
 
     assert.deepEqual(failures, [], `дефекты вкладки «Свойства»:\n${failures.join('\n')}`);
   });

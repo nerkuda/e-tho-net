@@ -2483,11 +2483,6 @@ function buildTypePropertiesBody(
     // From here the table is considered bound to this owner (even the empty-set
     // branch below) — the detached-pane guard keys off it.
     shownOwnerId = requestOwnerId;
-    // Прочитано на экране — метка «изменён не на экране» снята (ошибка
-    // 9667b75c); скрытая панель метку сохраняет до показа.
-    if (box.isConnected) {
-      dirtyValueOwners.delete(ownerKey(target.ownerType, requestOwnerId));
-    }
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
     // владельца для гейта берут из того, что реально отрисовано сейчас.
@@ -2501,13 +2496,23 @@ function buildTypePropertiesBody(
       return;
     }
     let values: Array<PropertyValue | LinkPropertyValues> = [];
+    let valuesRead = false;
     try {
       values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
+      valuesRead = true;
     } catch {
       // The main table still renders even if the values fetch fails.
     }
     // Same guard after the values fetch — the slowest leg of the pair.
     if (requestOwnerId !== target.ownerId) return;
+    // Метка «изменён не на экране» снимается только после УСПЕШНОГО чтения
+    // значений (замечание верификатора к 9667b75c, круг 3): при транзиентном
+    // отказе значения не прочитаны, и метка должна остаться, чтобы следующий
+    // показ повторил чтение. Внетиповая таблица снимает метку так же — после
+    // обоих чтений (`:1464`); скрытая панель сохраняет её до показа.
+    if (valuesRead && box.isConnected) {
+      dirtyValueOwners.delete(ownerKey(target.ownerType, requestOwnerId));
+    }
     // Ключ — свойство + сторона связи (ошибка 45248206): один `property_id`
     // на обе стороны; сопоставление только по id отдавало типовой строке
     // значение чужой стороны.
