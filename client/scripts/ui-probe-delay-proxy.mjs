@@ -39,7 +39,7 @@ export function needsDelay(url, networkId, pathFilter = '') {
  * Поднять прокси на свободном порту 127.0.0.1.
  *
  * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string, log?:(line:string)=>void}} opts
- * @returns {Promise<{port:number, close:()=>Promise<void>}>}
+ * @returns {Promise<{port:number, delayedCount:()=>number, close:()=>Promise<void>}>}
  */
 export async function startDelayProxy({
   targetPort,
@@ -48,6 +48,9 @@ export async function startDelayProxy({
   pathFilter = '',
   log = () => undefined,
 }) {
+  /** Сколько запросов реально задержано — стенд проверяет, что path-фильтр
+   *  не сделал гейт вакуумным (опечатка в пути молча отключает задержку). */
+  let delayed = 0;
   const forwardHttp = (req, res) => {
     const upstream = http.request(
       {
@@ -71,6 +74,7 @@ export async function startDelayProxy({
 
   const server = http.createServer((req, res) => {
     if (needsDelay(req.url, networkId, pathFilter)) {
+      delayed += 1;
       log(`delay ${delayMs}ms ${req.method} ${req.url}`);
       setTimeout(() => forwardHttp(req, res), delayMs);
       return;
@@ -108,6 +112,8 @@ export async function startDelayProxy({
   }`);
   return {
     port,
+    /** Сколько запросов прокси реально задержал (0 — фильтр не совпал). */
+    delayedCount: () => delayed,
     close: () =>
       new Promise((resolve) => {
         server.close(() => resolve());

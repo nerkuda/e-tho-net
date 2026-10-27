@@ -630,6 +630,17 @@ async function main(argv) {
           }
         }
       }
+      // `--delay-seed-path` с опечаткой молча отключил бы задержку, и гейт
+      // стал бы вакуумным: прогон «зелёный» без единого задержанного запроса
+      // (замечание верификатора к ff5efa1a). Фильтр обязан сработать хотя бы
+      // раз — иначе это ошибка стенда, а не результат сценария.
+      if (opts.delaySeedPath !== '' && delayProxy !== null && delayProxy.delayedCount() === 0) {
+        process.stderr.write(
+          `ui-probe-stand: --delay-seed-path «${opts.delaySeedPath}» не совпал ни с одним запросом — ` +
+            'задержка не сработала, гейт вакуумный\n',
+        );
+        code = 1;
+      }
       process.stdout.write(
         `ui-probe-stand: сценарий завершён (код ${code}); стенд в ${work}\n`,
       );

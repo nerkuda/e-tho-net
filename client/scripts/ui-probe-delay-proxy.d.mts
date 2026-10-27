@@ -25,9 +25,11 @@ export interface DelayProxyOptions {
   log?: (line: string) => void;
 }
 
-/** Поднятый прокси: адрес и остановка. */
+/** Поднятый прокси: адрес, счётчик задержек и остановка. */
 export interface DelayProxyHandle {
   port: number;
+  /** Сколько запросов реально задержано (0 — path-фильтр не совпал). */
+  delayedCount: () => number;
   close: () => Promise<void>;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "ff5efa1a-focus-strip-network-switch",
-  "description": "Официальный GUI-сценарий ошибки ff5efa1a: полоса отборов фокуса при смене сети не должна запрашивать effective views мысли прежней сети. Гонка детерминирована прокси стенда: задерживается только POST /thoughts/resolve сети A (окно рендера между публикацией фокуса A и renderStrip), вкладка B уже заведена заранее и кликается внутри окна. До фикса рендер полосы уходит в GET /networks/<B>/thoughts/<мысль A>/views?include_effective=true → 404. Красный гейт — serverLog: до фикса есть 404 на views, после — views 200 и 404 нет. Полоса B после переключения корректна: раскрыта, отборов чужой сети нет.",
+  "description": "Официальный GUI-сценарий ошибки ff5efa1a: полоса отборов фокуса при смене сети не должна запрашивать effective views мысли прежней сети и публиковать чужие отборы. Гонка детерминирована прокси стенда: задерживается только POST /thoughts/resolve сети A (окно рендера между публикацией фокуса A и renderStrip), вкладка B уже заведена заранее и кликается внутри окна. У мысли A заранее создан внетиповой отбор «Отбор A ff5efa1a» — он делает публикацию позднего ответа видимой (без него полоса B и при мутации страховочного гейта остаётся пустой). До фикса рендер полосы уходит в GET /networks/<B>/thoughts/<мысль A>/views?include_effective=true → 404. Красный гейт — serverLog: до фикса есть 404 на views, после — views 200 и 404 нет. Полоса B после переключения и ПОСЛЕ полного settle (> задержки resolve) корректна: раскрыта, отборов чужой сети нет.",
   "timeout": 300000,
   "serverLog": {
     "present": [
@@ -39,8 +39,8 @@
       "waitFor": "document.querySelectorAll('.network-item').length > 0"
     },
     {
-      "name": "prepare-network-b",
-      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B ff5efa1a strip'); window.__netB = n.id; const tab = await window.etn.tabs.open(window.__netB); window.__tabB = tab.tab_id; return 'ok'; })()",
+      "name": "prepare-network-b-and-view-a",
+      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B ff5efa1a strip'); window.__netB = n.id; const tab = await window.etn.tabs.open(window.__netB); window.__tabB = tab.tab_id; const view = await window.etn.thoughtCustomViews.create('{{networkId}}', '{{homeId}}', { name: 'Отбор A ff5efa1a', definition: '{}' }); window.__viewA = view.id; const resp = await window.etn.thoughtCustomViews.list('{{networkId}}', '{{homeId}}', { includeEffective: true }); const rows = (resp.meta && resp.meta.effective) || []; return rows.some((v) => (v.name || '').includes('Отбор A ff5efa1a')) ? 'ok' : 'view-not-effective'; })()",
       "expect": "ok"
     },
     {
@@ -76,6 +76,17 @@
       "expect": true
     },
     {
+      "name": "wait-render-window-end",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 8000)); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "strip-b-late-clean",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 100; i += 1) { const s = document.querySelector('.canvas-filter-strip'); if (s !== null && !s.classList.contains('hidden')) { const views = s.querySelectorAll('[data-view-id]').length; const children = [...s.querySelectorAll('.canvas-filter-strip-btn')].some((b) => (b.textContent || '') === 'Потомки'); const tabB = [...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B ff5efa1a strip')); if (views === 0 && children && tabB) return true; } await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
       "name": "back-to-tab-a",
       "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
       "expect": "ok"
@@ -104,11 +115,6 @@
       "name": "strip-b-final-clean",
       "timeout": 30000,
       "probe": "(async () => { for (let i = 0; i < 100; i += 1) { const s = document.querySelector('.canvas-filter-strip'); if (s !== null && !s.classList.contains('hidden')) { const views = s.querySelectorAll('[data-view-id]').length; const children = [...s.querySelectorAll('.canvas-filter-strip-btn')].some((b) => (b.textContent || '') === 'Потомки'); if (views === 0 && children) return true; } await new Promise((r) => setTimeout(r, 100)); } return false; })()",
-      "expect": true
-    },
-    {
-      "name": "settle",
-      "probe": "(async () => { await new Promise((r) => setTimeout(r, 2500)); return true; })()",
       "expect": true
     }
   ]
