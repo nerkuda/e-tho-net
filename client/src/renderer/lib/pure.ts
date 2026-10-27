@@ -46,6 +46,8 @@ import {
   type RealtimeEventType,
 } from '@etn/shared';
 
+import { t } from './i18n.js';
+
 // ---------------------------------------------------------------------------
 // Cloud geometry (11-settings-and-state.md §2.4)
 // ---------------------------------------------------------------------------
@@ -1721,8 +1723,17 @@ export function planSelectionRows(
   return { removed, order: [...next] };
 }
 
-/** Подпись строки панели выделенных для подтверждённо отсутствующей мысли. */
-export const SELECTION_UNAVAILABLE_TITLE = 'недоступна';
+/** Ключ словаря для подписи подтверждённо отсутствующей мысли. */
+export const SELECTION_UNAVAILABLE_TITLE_KEY = 'selection.unavailable';
+
+/**
+ * Подпись строки панели выделенных для подтверждённо отсутствующей мысли
+ * (значение на момент импорта — для сравнений и тестов). В отрисовке берётся
+ * `t(SELECTION_UNAVAILABLE_TITLE_KEY)`, чтобы смена языка подхватывалась
+ * следующей перерисовкой. Текст — из словаря, не литерал (требование
+ * 0e5ff1c6, замечание верификатора к b213cf60).
+ */
+export const SELECTION_UNAVAILABLE_TITLE = t(SELECTION_UNAVAILABLE_TITLE_KEY);
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
@@ -1750,7 +1761,7 @@ export function selectionRowTitles(
     if (found !== undefined) {
       titles.set(id, found);
     } else if (unavailable.has(id)) {
-      titles.set(id, SELECTION_UNAVAILABLE_TITLE);
+      titles.set(id, t(SELECTION_UNAVAILABLE_TITLE_KEY));
     } else {
       titles.set(id, previous.get(id) ?? '');
     }

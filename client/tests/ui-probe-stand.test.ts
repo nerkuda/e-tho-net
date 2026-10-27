@@ -282,13 +282,25 @@ test('serverLogViolations: atMost — предел числа совпадени
   assert.deepEqual(serverLogViolations(log, { atMost: [{ pattern, max: 2 }] }), [
     { kind: 'atMost', pattern, max: 2, count: 3, matches: [line, line, line] },
   ]);
-  // Чужие пути в счёт не идут.
+  // Чужие пути в счёт не идут — но ноль совпадений теперь НАРУШЕНИЕ:
+  // вакуумный гейт (опечатка в pattern) не должен давать зелёный прогон
+  // (замечание верификатора к b213cf60).
   assert.deepEqual(
     serverLogViolations('{"url":"/api/v1/networks/n/thoughts","status":200}', {
       atMost: [{ pattern, max: 0 }],
     }),
-    [],
+    [{ kind: 'atMost', pattern, max: 0, count: 0, matches: [] }],
   );
+});
+
+test('serverLogViolations: atMost без совпадений — вакуумный гейт (b213cf60)', () => {
+  const pattern = '"url":"[^"]*/thoughts/resolve","status":200';
+  const log = '{"url":"/api/v1/networks/n/thoughts","status":200}';
+  // Правило с опечаткой/несовпавшим путём обязано краснеть: иначе гейт
+  // «не больше N запросов» молча зелёный при нуле наблюдений.
+  assert.deepEqual(serverLogViolations(log, { atMost: [{ pattern, max: 10 }] }), [
+    { kind: 'atMost', pattern, max: 10, count: 0, matches: [] },
+  ]);
 });
 
 test('readScenarioLogRules: правила из сценария; без ключа — null', () => {

@@ -22,12 +22,19 @@
  *      имя восстанавливается (guard не делает данные вечно устаревшими);
  *   5. смена поколения (`invalidateAllRefs`) в полёте: поздний ответ прежнего
  *      контекста не публикуется и не рендерит, `finally` старого запроса не
- *      открывает дубль нового.
+ *      открывает дубль нового;
+ *   6. инвалидация ДРУГОГО id в полёте (`invalidateSelectionThought(Y)`):
+ *      поздний ответ прежнего поколения отбрасывается, но id X, оставшийся в
+ *      выделении, получает ровно один компенсирующий запрос и имя;
+ *   7. после отказа resolve снятие и повторное добавление id дают новую
+ *      попытку (снятие с выделения очищает `attempted`).
  *
  * Мутации, обязанные краснить этот файл:
  *   • убрать `attempted` из фильтра `missing` — п. 1/2/3 по счётчику запросов;
  *   • убрать пометку `unavailable` — п. 1/3 по видимому состоянию;
- *   • вернуть безусловный `render()` после ответа — п. 5 по счётчику render.
+ *   • вернуть безусловный `render()` после ответа — п. 5 по счётчику render;
+ *   • убрать компенсирующий повтор в ветке позднего ответа — п. 6;
+ *   • не очищать `attempted` при снятии с выделения — п. 7.
  */
 
 import assert from 'node:assert/strict';
@@ -328,6 +335,63 @@ describe('панель выделенных: resolve не зацикливает
     gates[1]!.resolve([thoughtRef(X, 'Новое имя')]);
     await flush();
     assert.match(rowText(0), /Новое имя/u);
+    assert.equal(resolveCalls.length, 2);
+  });
+
+  it('инвалидация другого id в полёте: отброшенный X получает повтор и имя', async () => {
+    selection.toggleSelection([X, Y]);
+    assert.equal(resolveCalls.length, 1);
+    assert.deepEqual(resolveCalls[0], [X, Y], 'набор запрошен одной пачкой');
+
+    // Инвалидация Y поднимает поколение; рендер заново запрашивает только Y,
+    // X остаётся «уже спрошенным» в старом поколении.
+    selection.invalidateSelectionThought(Y);
+    await flush();
+    assert.equal(resolveCalls.length, 2);
+    assert.deepEqual(resolveCalls[1], [Y], 'новое поколение запрашивает только Y');
+
+    // Поздний ответ старого поколения [X, Y] отбрасывается. X остался в
+    // выделении — для него обязателен ровно один компенсирующий запрос, иначе
+    // строка навсегда остаётся пустой (замечание верификатора).
+    gates[0]!.resolve([thoughtRef(X, 'Старое имя X'), thoughtRef(Y, 'Старое имя Y')]);
+    await flush();
+    assert.equal(resolveCalls.length, 3, 'отброшенный id получает ровно один повтор');
+    assert.deepEqual(resolveCalls[2], [X], 'повтор только для отброшенного X');
+
+    gates[2]!.resolve([thoughtRef(X, 'Имя X')]);
+    await flush();
+    assert.match(rowText(0), /Имя X/u);
+    assert.equal(rowText(0).includes(X), false, 'id в интерфейсе не показывается');
+    assert.equal(resolveCalls.length, 3, 'повтор не порождает новых запросов');
+
+    gates[1]!.resolve([thoughtRef(Y, 'Имя Y')]);
+    await flush();
+    assert.match(rowText(1), /Имя Y/u);
+    assert.equal(resolveCalls.length, 3);
+  });
+
+  it('после отказа снятие и повторное добавление id дают новую попытку', async () => {
+    const reasons = await collectUnhandled(async () => {
+      selection.toggleSelection([X]);
+      assert.equal(resolveCalls.length, 1);
+      gates[0]!.reject(new Error('Сеть недоступна'));
+    });
+    assert.deepEqual(reasons, [], 'unhandled rejection нет');
+    assert.equal(resolveCalls.length, 1);
+    assert.equal(rowText(0).includes(X), false);
+
+    // Снятие и возврат — новое намерение пользователя: попытка не должна
+    // наследовать «уже спрашивали» от прежнего поколения.
+    selection.toggleSelection([X]);
+    await flush();
+    selection.toggleSelection([X]);
+    await flush();
+    assert.equal(resolveCalls.length, 2, 'повторное добавление — новая попытка');
+    assert.deepEqual(resolveCalls[1], [X]);
+
+    gates[1]!.resolve([thoughtRef(X, 'Имя после возврата')]);
+    await flush();
+    assert.match(rowText(0), /Имя после возврата/u);
     assert.equal(resolveCalls.length, 2);
   });
 });

@@ -241,6 +241,10 @@ function render(): void {
   if (ids.length === 0) {
     listHost.replaceChildren();
     rows.clear();
+    // Пустое выделение — все прежние попытки резолва больше не актуальны:
+    // повторное добавление id должно получить новую попытку (b213cf60,
+    // замечание верификатора).
+    forgetResolveAttempts(rowOrder);
     rowOrder = [];
     return;
   }
@@ -255,6 +259,9 @@ function render(): void {
   for (const id of plan.removed) {
     rows.get(id)?.el.remove();
     rows.delete(id);
+    // Снятая с выделения мысль при возврате получает новую попытку resolve:
+    // иначе после отказа строка оставалась пустой навсегда (b213cf60).
+    forgetResolveAttempts([id]);
   }
   const titles = selectionRowTitles(ids, refCache, labelCache, unavailable);
   for (const id of plan.order) {
@@ -378,13 +385,19 @@ async function resolveRows(ids: readonly string[]): Promise<void> {
       if (generation !== resolveGeneration || networkId !== store.state.networkId) {
         // Поздний ответ прежнего контекста (сеть/слой): не публикуем. Свои
         // метки снимаем только там, где новый запрос не успел их занять, —
-        // иначе его `resolving` обнулился бы и пошёл дубль.
+        // иначе его `resolving` обнулился бы и пошёл дубль. Если отброшенный
+        // id остался в выделении, для него нужен один компенсирующий запрос:
+        // иначе строка навсегда останется без имени (замечание верификатора:
+        // инвалидация ДРУГОГО id при полётном resolve).
+        let retry = false;
         for (const id of chunkIds) {
           if (resolving.get(id) === generation) {
             resolving.delete(id);
             attempted.delete(id);
+            if (store.state.selection.includes(id)) retry = true;
           }
         }
+        if (retry && host !== null) void resolveRows(store.state.selection);
         return;
       }
       // Публикуем пачки по мере получения: отказ следующей не теряет уже
@@ -455,7 +468,8 @@ export function invalidateSelectionThought(thoughtId: string): void {
 
 /** Toggles the given ids in the selection (adds when missing, else removes). */
 export function toggleSelection(ids: string[]): void {
-  const current = new Set(store.state.selection);
+  const previous = store.state.selection;
+  const current = new Set(previous);
   let changed = false;
   for (const id of ids) {
     if (current.has(id)) {
@@ -465,6 +479,8 @@ export function toggleSelection(ids: string[]): void {
     }
     changed = true;
   }
+  const removed = previous.filter((id) => !current.has(id));
+  if (removed.length > 0) forgetResolveAttempts(removed);
   if (changed) store.update({ selection: [...current] });
 }
 
@@ -489,12 +505,30 @@ export function removeFromSelection(ids: string[]): void {
   if (ids.length === 0) return;
   const drop = new Set(ids);
   const kept = store.state.selection.filter((id) => !drop.has(id));
-  if (kept.length !== store.state.selection.length) store.update({ selection: kept });
+  if (kept.length !== store.state.selection.length) {
+    forgetResolveAttempts(store.state.selection.filter((id) => drop.has(id)));
+    store.update({ selection: kept });
+  }
 }
 
 /** Clears the selection list (the panel hides itself on empty). */
 function clearSelection(): void {
+  forgetResolveAttempts(store.state.selection);
   store.update({ selection: [] });
+}
+
+/**
+ * Забывает попытки резолва для id, покинувших выделение (ошибка b213cf60,
+ * замечание верификатора). Снятие и повторное добавление — новое намерение
+ * пользователя: id снова получает ровно одну попытку, иначе после отказа
+ * запроса строка навсегда оставалась без имени. Имя в `refCache`/`labelCache`
+ * не трогаем — известная подпись показывается сразу.
+ */
+function forgetResolveAttempts(ids: Iterable<string>): void {
+  for (const id of ids) {
+    attempted.delete(id);
+    unavailable.delete(id);
+  }
 }
 
 // ---------------------------------------------------------------------------

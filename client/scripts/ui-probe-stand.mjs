@@ -461,9 +461,10 @@ export function readScenarioLogRules(file) {
 /**
  * Нарушения правил серверного лога: `absent` — шаблон найден (нельзя),
  * `present` — шаблон не найден (обязан быть), `atMost` — совпадений больше
- * предела. Некорректная регулярка — ошибка сценария (код возврата 2), а не
- * «тихий пропуск». Счётчик и первые совпавшие строки — в нарушении: по ним
- * видно, СКОЛЬКО и КАКИЕ запросы нарушили гейт.
+ * предела ИЛИ не найдено ни одного (вакуумный гейт: опечатка в pattern не
+ * должна давать молчаливо зелёный прогон). Некорректная регулярка — ошибка
+ * сценария (код возврата 2), а не «тихий пропуск». Счётчик и первые совпавшие
+ * строки — в нарушении: по ним видно, СКОЛЬКО и КАКИЕ запросы нарушили гейт.
  */
 export function serverLogViolations(log, rules) {
   const violations = [];
@@ -493,7 +494,18 @@ export function serverLogViolations(log, rules) {
   }
   for (const rule of rules.atMost ?? []) {
     const matches = lines.filter((line) => compile(rule.pattern).test(line));
-    if (matches.length > rule.max) {
+    if (matches.length === 0) {
+      // Ноль совпадений — не «в пределах предела», а вакуумный гейт:
+      // опечатка в pattern иначе дала бы молчаливо зелёный прогон
+      // (замечание верификатора к b213cf60, общий урок ff5efa1a).
+      violations.push({
+        kind: 'atMost',
+        pattern: rule.pattern,
+        max: rule.max,
+        count: 0,
+        matches: [],
+      });
+    } else if (matches.length > rule.max) {
       violations.push({
         kind: 'atMost',
         pattern: rule.pattern,
@@ -764,7 +776,9 @@ async function main(argv) {
               violation.kind === 'absent'
                 ? 'найдено запрещённое'
                 : violation.kind === 'atMost'
-                  ? `превышен предел ${violation.max}`
+                  ? violation.count === 0
+                    ? 'шаблон не совпал ни разу — гейт вакуумный'
+                    : `превышен предел ${violation.max}`
                   : 'не найдено обязательное';
             process.stderr.write(
               `ui-probe-stand: серверный лог — ${label} «${violation.pattern}»` +
@@ -779,7 +793,22 @@ async function main(argv) {
             process.stderr.write('ui-probe-stand: прогон провален по правилам serverLog\n');
             code = 1;
           } else {
-            process.stdout.write('ui-probe-stand: серверный лог соответствует правилам сценария\n');
+            // Счётчик на успехе: видно, сколько совпадений реально дал каждый
+            // atMost-шаблон (иначе «зелёный» не отличить от вакуумного).
+            const atMostReport = (rules.atMost ?? [])
+              .map((rule) => {
+                const count = server
+                  .getLog()
+                  .split('\n')
+                  .filter((line) => new RegExp(rule.pattern).test(line)).length;
+                return `${count}/${rule.max}`;
+              })
+              .join(', ');
+            process.stdout.write(
+              'ui-probe-stand: серверный лог соответствует правилам сценария' +
+                (atMostReport === '' ? '' : ` (atMost: ${atMostReport})`) +
+                '\n',
+            );
           }
         }
       }
