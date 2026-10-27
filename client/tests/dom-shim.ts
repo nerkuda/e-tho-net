@@ -52,6 +52,12 @@
  * Намеренные расхождения остаются у `innerHTML`: это строковое поле (HTML не
  * разбирается на узлы), поэтому разметка, положенная через `innerHTML`, в
  * `textContent`/`flatText()` не попадает — потребители об этом знают.
+ *
+ * `querySelectorAll`/`querySelector` понимают ведущий `:scope` с дочерними
+ * комбинаторами (`:scope > .menu-item`, `:scope > .cloud-main > .cloud-title`):
+ * продукт ищет так прямых детей (меню, облачка, группы редактора), а шим без
+ * этой формы молча не находил строки и жесты на них не подключались.
+ * Селекторы без `:scope` по-прежнему ищут по всем потомкам.
  * `parentNode` не заведён отдельным полем — `parent` того же назначения;
  * объекты-заглушки (не `ShimElement`) методы вставки принимают как узлы —
  * этого требует несколько существующих тестов.
@@ -59,6 +65,19 @@
 
 /** Тег текстового узла шима (`Node.TEXT_NODE`): собственные данные — `textData`. */
 const TEXT_NODE_TAG = '#text';
+
+/**
+ * Шаги scoped-селектора после ведущего `:scope`: `:scope > .a > .b` →
+ * `['.a', '.b']`. `null` — селектор не scoped (обычный поиск по потомкам).
+ */
+function parseScopedSelector(selector: string): string[] | null {
+  const parts = selector
+    .trim()
+    .split('>')
+    .map((part) => part.trim());
+  if (parts[0] !== ':scope') return null;
+  return parts.slice(1).filter((part) => part !== '');
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -864,6 +883,24 @@ export class ShimElement {
   }
 
   querySelectorAll(selector: string): ShimElement[] {
+    // `:scope > .a > .b` — обход ровно по прямым детям на каждом шаге.
+    // Разбор дочерних комбинаторов честный: `>` внутри значения атрибута
+    // продукт в scoped-селекторах не использует (там только классы).
+    const scoped = parseScopedSelector(selector);
+    if (scoped !== null) {
+      let current: ShimElement[] = [this];
+      for (const part of scoped) {
+        const next: ShimElement[] = [];
+        for (const parent of current) {
+          for (const child of parent.children) {
+            if (child.matchesSelector(part)) next.push(child);
+          }
+        }
+        current = next;
+        if (current.length === 0) break;
+      }
+      return current;
+    }
     const hits: ShimElement[] = [];
     const walk = (node: ShimElement): void => {
       // Как `Element.querySelectorAll`: селектор матчит только элементы.

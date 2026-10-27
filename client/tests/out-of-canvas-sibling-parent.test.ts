@@ -11,16 +11,17 @@
  * доходит до `etn.thoughts.create` с `create_link.target_thought_id = P2`.
  *
  * Покрытие по местам:
- *  - полоса истории (чип) — `screens/history-bar.ts`;
+ *  - полоса истории: чип полосы и строка overflow-дропдауна
+ *    (`wireHistoryContextMenu`) — `screens/history-bar.ts`;
  *  - лента «Дневника» — `screens/chronicle/chronicle.ts`;
  *  - панель использования — `screens/usage-panel.ts`, плюс гонка: смена сети
  *    во время ленивого импорта/резолва не открывает меню;
- *  - дерево «Структур» — экран в node:test не поднимается (импортирует холст и
- *    весь DOM-слой, см. `structures-trash-mark.test.ts`), поэтому здесь
- *    источник-кейс: облачко зовёт общий фасад `showOutOfCanvasThoughtMenu`.
+ *  - дерево «Структур» — экран целиком монтируется на DOM-шиме
+ *    (`mountStructures`, как в `structures-network-snapshot-race.test.ts`).
  *
  * Мутации, краснящие кейсы: вернуть в месте прямой `showThoughtContextMenu`
- * без `siblingParentId` — создание уходит под P1; убрать в `usage-panel`
+ * без `siblingParentId` (чип истории, строка дропдауна, дерево «Структур»,
+ * панель использования) — создание уходит под P1; убрать в `usage-panel`
  * сверку сети после `await import` — меню открывается для мысли прежней сети;
  * убрать сверку сети в общем фасаде — поздний ответ родителя открывает меню.
  */
@@ -42,6 +43,26 @@ const FOCUS_PARENT = '00000000-0000-4000-8000-0000000000f2';
 /** Кликнутая мысль — ребёнок P2. */
 const CLICKED_ID = '00000000-0000-4000-8000-0000000000c1';
 const CLICKED_PARENT = '00000000-0000-4000-8000-0000000000c2';
+/** Ещё одна запись истории: держит чип M в overflow-дропдауне. */
+const OTHER_ID = '00000000-0000-4000-8000-0000000000d1';
+
+/** Полная форма мысли для дерева «Структур» (refs экрана — из ответа query). */
+const CLICKED_REF = {
+  id: CLICKED_ID,
+  title: 'Меншн',
+  active: true,
+  type_id: null,
+  icon: null,
+  icon_kind: 'emoji',
+  icon_attachment_id: null,
+  marked_for_deletion: false,
+  fg_color: null,
+  bg_color: null,
+  font_bold: null,
+  font_italic: null,
+  font_underline: null,
+  font_strike: null,
+};
 
 /** Журнал кейсов: у кого просили родителя и с какими аргументами создавали. */
 interface Calls {
@@ -113,7 +134,13 @@ function shimDom(): void {
   (globalThis as Dict).localStorage = win.localStorage;
 }
 
-/** Фальшивый мост: ровно те чтения, что трогают три экрана и диалог «Добавить». */
+/** Записи истории текущего кейса: по умолчанию один чип M. */
+let historyIds: string[] = [CLICKED_ID];
+
+/** Результаты отбора «Структур»; по умолчанию HOME (его же ищет дневник). */
+let structuresItems: Dict[] = [{ id: 'home-root' }];
+
+/** Фальшивый мост: ровно те чтения, что трогают четыре экрана и диалог «Добавить». */
 const bridge: Dict = {
   ui: {
     getState: async () => null,
@@ -130,7 +157,7 @@ const bridge: Dict = {
     updateState: async () => undefined,
   },
   history: {
-    list: async () => [{ thoughtId: CLICKED_ID, visitedAt: '' }],
+    list: async () => historyIds.map((thoughtId) => ({ thoughtId, visitedAt: '' })),
   },
   chronicle: {
     query: async () => ({ rows: [], total: 0, warnings: null }),
@@ -149,11 +176,13 @@ const bridge: Dict = {
   },
   structures: {
     query: async () => ({
-      items: [{ id: 'home-root' }],
-      total: 1,
+      items: structuresItems,
+      total: structuresItems.length,
       directions: {},
       next_cursor: null,
     }),
+    hierarchy: async () => ({ neighbors: [], has_more: false }),
+    edges: async () => [],
   },
   thoughts: {
     get: async (_networkId: string, id: string) => ({
@@ -231,6 +260,7 @@ const stateMod = await import('../src/renderer/state.js');
 const historyMod = await import('../src/renderer/screens/history-bar.js');
 const chronicleMod = await import('../src/renderer/screens/chronicle/chronicle.js');
 const usageMod = await import('../src/renderer/screens/usage-panel.js');
+const structuresMod = await import('../src/renderer/screens/structures/structures.js');
 
 /** Дождаться асинхронных чтений/продолжений экрана и диалога. */
 async function flush(): Promise<void> {
@@ -252,6 +282,8 @@ afterEach(() => {
   holdNeighbors = null;
   releaseNeighbors = null;
   parentsInB = [];
+  historyIds = [CLICKED_ID];
+  structuresItems = [{ id: 'home-root' }];
   stateMod.store.update({ networkId: null, focus: null } as any);
   const body = (globalThis as Dict).document as { body: ShimElement };
   body.body.replaceChildren();
@@ -354,6 +386,45 @@ async function openHistoryMenu(): Promise<{ host: ShimElement; body: ShimElement
   return { host, body: body.body };
 }
 
+/** Смонтировать полосу истории и открыть её overflow-дропдаун на мысли M. */
+async function openHistoryDropdownMenu(): Promise<{ host: ShimElement; body: ShimElement }> {
+  // Фокус T исключается из истории как «текущая» мысль; M остаётся в хвосте,
+  // который при узкой полосе уходит в кнопку «Остальная история».
+  historyIds = [FOCUS_ID, OTHER_ID, CLICKED_ID];
+  installStore(focusOnT());
+  const host = new ShimElement('div', 'history-bar');
+  // Раскладки в шиме нет: ширина полосы и natural-ширины чипов (rect 100)
+  // оставляют первый чип на полосе, а M — в дропдауне.
+  (host as unknown as { clientWidth: number }).clientWidth = 220;
+  teardown = historyMod.mountHistoryBar(host as unknown as HTMLElement);
+  await flush();
+  const more = host.querySelector('.history-more');
+  assert.ok(more !== null, 'часть истории ушла в overflow-дропдаун');
+  more!.click();
+  await flush();
+  const body = (globalThis as Dict).document as { body: ShimElement };
+  const row = body.body.findAll('menu-item').find((el) => el.dataset['dragId'] === CLICKED_ID);
+  assert.ok(row !== undefined, 'строка мысли M есть в дропдауне истории');
+  row!.dispatchContextMenu();
+  await flush();
+  return { host, body: body.body };
+}
+
+/** Смонтировать дерево «Структур» с мыслью M в результатах отбора. */
+async function openStructuresMenu(): Promise<ShimElement> {
+  structuresItems = [CLICKED_REF];
+  installStore(focusOnT());
+  stateMod.store.update({ activeView: 'structures' } as any);
+  const host = new ShimElement('div', 'structures');
+  teardown = structuresMod.mountStructures(host as unknown as HTMLElement);
+  await flush();
+  const cloud = host.findAll('st-cloud').find((el) => el.dataset['id'] === CLICKED_ID);
+  assert.ok(cloud !== undefined, 'облачко мысли M отрисовано в дереве');
+  cloud!.dispatchContextMenu();
+  await flush();
+  return host;
+}
+
 /** Смонтировать «Дневник» с записью, у которой есть чип мысли M. */
 async function openChronicleMenu(): Promise<{ host: ShimElement; body: ShimElement }> {
   const row = {
@@ -424,6 +495,18 @@ describe('меню вне холста: «налево» создаёт под �
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 
+  it('строка overflow-дропдауна истории: клик по M (ребёнок P2) при фокусе T (ребёнок P1)', async () => {
+    await openHistoryDropdownMenu();
+    assert.deepEqual(
+      calls.neighbors,
+      [{ networkId: NET_A, id: CLICKED_ID }],
+      'родитель запрошен у САМОЙ кликнутой мысли',
+    );
+    clickAddSibling();
+    await confirmCreate('Сосед Дропдауна');
+    assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
+  });
+
   it('чип ленты «Дневника»: клик по M (ребёнок P2) при фокусе T (ребёнок P1)', async () => {
     await openChronicleMenu();
     assert.deepEqual(
@@ -485,27 +568,15 @@ describe('меню вне холста: «налево» создаёт под �
     assert.equal(menuRows().length, 0, 'поздний ответ прежней сети не открыл меню');
   });
 
-  it('дерево «Структур»: облачко зовёт общий фасад меню вне холста (источник)', async () => {
-    // Экран целиком в node:test не поднимается (импортирует холст и весь
-    // DOM-слой — см. structures-trash-mark.test.ts), поэтому инвариант
-    // проверяется по исходнику: облачко узла обязано идти через общий фасад,
-    // который резолвит родителя ДО открытия меню и сверяет сеть.
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const src = readFileSync(
-      resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'structures', 'structures.ts'),
-      'utf8',
+  it('дерево «Структур»: клик по M (ребёнок P2) при фокусе T (ребёнок P1)', async () => {
+    await openStructuresMenu();
+    assert.deepEqual(
+      calls.neighbors,
+      [{ networkId: NET_A, id: CLICKED_ID }],
+      'родитель запрошен у САМОЙ кликнутой мысли',
     );
-    const start = src.indexOf('function buildCloud(');
-    assert.ok(start >= 0, 'buildCloud дерева определён');
-    const cloud = src.slice(start, src.indexOf('\n}\n', start));
-    assert.ok(
-      cloud.includes('showOutOfCanvasThoughtMenu('),
-      'облачко узла открывает меню общим фасадом вне холста',
-    );
-    assert.ok(
-      !/showThoughtContextMenu\(/.test(cloud),
-      'обходного прямого вызова конструктора в дереве нет (иначе родитель берётся от фокуса)',
-    );
+    clickAddSibling();
+    await confirmCreate('Сосед Структур');
+    assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 });
