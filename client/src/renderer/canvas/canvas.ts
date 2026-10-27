@@ -1456,6 +1456,10 @@ async function readZoneTotal(
  */
 function syncZoneTotalsWithFreshFocus(): void {
   const focus = store.state.focus;
+  // Пара снимается ВМЕСТЕ с focus — до первого await: поздний ответ
+  // `reconcileZoneTotals` не должен перечитывать рёбра сети, которую уже
+  // сменили (принцип фикса ff5efa1a, замечание верификатора).
+  const pair = currentScreenPair();
   if (focus === null || focus === lastFocusResponse) return;
   if (focus.focused.id !== lastFocusId) return;
   lastFocusResponse = focus;
@@ -1468,7 +1472,7 @@ function syncZoneTotalsWithFreshFocus(): void {
   // ошибка c02ff7dc). Общие рёбра фокуса чинятся самим `edgeSource` — снимок их
   // не хранит.
   void reconcileZoneTotals(focus).then(() => {
-    if (hasSupplementalEdges()) void refreshZoneEdges(focus, currentScreenPair());
+    if (hasSupplementalEdges()) void refreshZoneEdges(focus, pair);
   });
 }
 
