@@ -21,6 +21,12 @@
  *       падает, а штатный `contains` строкой продолжает работать
  *       (мутация «вернуть `String(cond.value)`» даёт красный).
  *
+ * Только проверке (г) нужна БД: без собранного native-биндинга
+ * `better-sqlite3` она скипается, а (а)–(в) продолжают стеречь правило.
+ * Нельзя навешивать `skip` на весь `describe`: в окружении без пересборки
+ * native файл молча давал `tests 0` — правило не стереглось вообще
+ * (замечание верификатора круга 2).
+ *
  * Канон текста и `details` задан здесь ЛИТЕРАЛОМ, а не импортом: если сверять
  * константы только между слоями, правка самого `shared/src/enums.ts` пройдёт
  * зелёной, хотя контракт ошибки изменился.
@@ -180,7 +186,6 @@ function runEngine(ndb: NetworkDb, properties: Array<Record<string, unknown>>): 
 
 describe(
   'сторож: contains — только строка, одно правило на трёх слоях (9420a34c)',
-  { skip: !nativeAvailable() },
   () => {
     it('канон текста и details ошибки contains', () => {
       assert.equal(
@@ -310,48 +315,54 @@ describe(
       }
     });
 
-    it('движок — вторая линия: массив падает, строка работает, presence не зависит от value', () => {
-      const ndb = createInMemoryNetworkDb();
-      const status = seedPropertyDefinition(ndb, 'status', 'text');
-      const alpha = seedThought(ndb, 'Альфа');
-      const beta = seedThought(ndb, 'Бета');
-      seedThought(ndb, 'Без значения');
-      seedPropertyValue(ndb, alpha, status, 'alpha');
-      seedPropertyValue(ndb, beta, status, 'beta');
+    it(
+      'движок — вторая линия: массив падает, строка работает, presence не зависит от value',
+      // Единственная проверка, которой нужна БД. Без native-биндинга —
+      // честный skip одного теста, а не всего файла.
+      { skip: !nativeAvailable() && 'нужен собранный native-биндинг better-sqlite3' },
+      () => {
+        const ndb = createInMemoryNetworkDb();
+        const status = seedPropertyDefinition(ndb, 'status', 'text');
+        const alpha = seedThought(ndb, 'Альфа');
+        const beta = seedThought(ndb, 'Бета');
+        seedThought(ndb, 'Без значения');
+        seedPropertyValue(ndb, alpha, status, 'alpha');
+        seedPropertyValue(ndb, beta, status, 'beta');
 
-      assert.deepEqual(
-        runEngine(ndb, [{ property_id: status, operator: 'contains', value: 'ALPH' }]),
-        ['Альфа'],
-        'contains строкой обязан работать (регистронезависимо) — правило не ломает штатный путь',
-      );
-
-      for (const bad of [['alpha'], ['al', 'pha'], [], 5, true, {}, null] as const) {
-        expectContainsValidationError(
-          () => runEngine(ndb, [{ property_id: status, operator: 'contains', value: bad }]),
-          'contains',
-          `движок contains ${JSON.stringify(bad)}`,
+        assert.deepEqual(
+          runEngine(ndb, [{ property_id: status, operator: 'contains', value: 'ALPH' }]),
+          ['Альфа'],
+          'contains строкой обязан работать (регистронезависимо) — правило не ломает штатный путь',
         );
-      }
-      // Отсутствие value — та же ошибка (движок проверяет форму до LIKE).
-      expectContainsValidationError(
-        () => runEngine(ndb, [{ property_id: status, operator: 'contains' }]),
-        'contains',
-        'движок contains без value',
-      );
 
-      const expectations = new Map<string, string[]>([
-        ['is_empty', ['Без значения']],
-        ['not_empty', ['Альфа', 'Бета']],
-      ]);
-      for (const [operator, expected] of expectations) {
-        for (const value of [undefined, null, 5, true, ['a'], { junk: true }] as const) {
-          assert.deepEqual(
-            runEngine(ndb, [{ property_id: status, operator, value }]),
-            [...expected].sort(),
-            `движок ${operator} value=${JSON.stringify(value)}: набор не зависит от формы value`,
+        for (const bad of [['alpha'], ['al', 'pha'], [], 5, true, {}, null] as const) {
+          expectContainsValidationError(
+            () => runEngine(ndb, [{ property_id: status, operator: 'contains', value: bad }]),
+            'contains',
+            `движок contains ${JSON.stringify(bad)}`,
           );
         }
-      }
-    });
+        // Отсутствие value — та же ошибка (движок проверяет форму до LIKE).
+        expectContainsValidationError(
+          () => runEngine(ndb, [{ property_id: status, operator: 'contains' }]),
+          'contains',
+          'движок contains без value',
+        );
+
+        const expectations = new Map<string, string[]>([
+          ['is_empty', ['Без значения']],
+          ['not_empty', ['Альфа', 'Бета']],
+        ]);
+        for (const [operator, expected] of expectations) {
+          for (const value of [undefined, null, 5, true, ['a'], { junk: true }] as const) {
+            assert.deepEqual(
+              runEngine(ndb, [{ property_id: status, operator, value }]),
+              [...expected].sort(),
+              `движок ${operator} value=${JSON.stringify(value)}: набор не зависит от формы value`,
+            );
+          }
+        }
+      },
+    );
   },
 );

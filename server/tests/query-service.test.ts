@@ -412,7 +412,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     // обязана называть ФАКТИЧЕСКИЙ оператор: проверка формы value стоит до
     // делегата (замечание верификатора круга 2). До правки `String(value)`
     // молча склеивал массив, а `details.operator` был "contains".
-    const astLeaf = (value: unknown): CanonicalQueryRequest => ({
+    const astLeaf = (value?: unknown): CanonicalQueryRequest => ({
       sort: 'alpha',
       order: 'asc',
       limit: 50,
@@ -423,7 +423,8 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
         filter: {
           entity: { kind: 'property', property_id: statusDef },
           operator: 'not_contains',
-          value,
+          // Отсутствие ключа — отдельная форма от `value: null`.
+          ...(value === undefined ? {} : { value }),
         } as FilterAstNode,
       },
     });
@@ -437,6 +438,19 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
         `AST not_contains ${JSON.stringify(bad)}: details.operator обязан быть "not_contains"`,
       );
     }
+
+    // Отсутствие `value` — тоже не-строка: проверка формы стоит ДО делегата
+    // `contains`, поэтому диагностика называет фактический оператор (в
+    // фасадах `value` обязателен для сравнений, но движок страхует прямых
+    // вызывающих — AST-лист приходит без `value`).
+    assert.throws(
+      () => queryThoughts(ndb, 'u', astLeaf(), { emptyFilterMode: 'all', maxLimit: 100 }),
+      (e: unknown) =>
+        e instanceof EtnError &&
+        e.code === 'VALIDATION_ERROR' &&
+        (e.details as { operator?: string }).operator === 'not_contains',
+      'AST not_contains без value: details.operator обязан быть "not_contains"',
+    );
 
     // Штатный `not_contains` строкой продолжает работать: «Задача 1» (open)
     // не содержит «clos».
