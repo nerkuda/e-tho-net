@@ -580,6 +580,10 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
 
 /** Returns to the network list (e.g. after `network-lost`). */
 export function backToNetworks(): void {
+  // Выход из сети — уничтожение контекста: эпоха сдвигается синхронно, чтобы
+  // поздний ответ `openNetwork` не опубликовал сеть/рабочую область поверх
+  // списка сетей (ошибка 50fe8807 — тот же класс, что разрыв соединения).
+  openNetworkSeq += 1;
   // Смена сети — уничтожение контекста: отложенные fallback-перечитывания
   // окрестности старой сети не должны сработать после перехода.
   clearRefreshTimers();
@@ -626,6 +630,11 @@ export async function restoreSession(): Promise<void> {
 
 /** Disconnects the profile and returns to onboarding (H18 user menu). */
 export async function disconnect(): Promise<void> {
+  // Разрыв соединения — такое же основание отменить поздний ответ openNetwork,
+  // как смена сети (ошибка 50fe8807). Эпоха двигается ДО первого await:
+  // иначе континуация в полёте успеет опубликовать сеть/вкладку/экран уже
+  // после ухода на онбординг.
+  openNetworkSeq += 1;
   await etn.server.disconnect();
   clearRefreshTimers();
   deactivateFocusQuery();

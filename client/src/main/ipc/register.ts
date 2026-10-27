@@ -13,7 +13,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { ipcMain, type BrowserWindow } from 'electron';
-import { UI_STATE_KEY, type CurrentUser, type Network } from '@etn/shared';
+import { UI_STATE_KEY, type CurrentUser } from '@etn/shared';
 
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog, truncateForLog } from '../log/client-log.js';
@@ -29,6 +29,7 @@ import {
   selfMutationNetwork,
 } from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
+import { ConnectionLifecycle } from './connection-lifecycle.js';
 import { toIpcErrorEnvelope } from './contract.js';
 import type { IpcCallContext, IpcInvokePayload } from './contract.js';
 
@@ -72,11 +73,13 @@ export interface IpcHandle {
  * `etnimg` protocol fallback that downloads server-stored attachment files.
  */
 export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
-  let rest: RestClient | null = null;
-  let pool: TabRealtimePool | null = null;
-  let profile: ServerProfileRow | null = null;
-  let currentNetworkId: string | null = null;
-  let currentUser: CurrentUser | null = null;
+  // Connection state and the `openNetwork` epoch live in an Electron-free
+  // module so the «late answer after disconnect» race is unit-testable
+  // (defect 50fe8807; precedent — `connect-active-profile.ts`).
+  const conn = new ConnectionLifecycle<RestClient, TabRealtimePool, ServerProfileRow, CurrentUser>({
+    setUiState: (profileId, networkId, key, value) =>
+      opts.localDb.setUiState(profileId, networkId, key, value),
+  });
   /** G8 applier state: in-memory thought/link cache. */
   const rtState = new RealtimeState();
   /**
@@ -109,7 +112,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // as down when the pool knows at least one network and NONE is
       // `connected`. An empty pool (startup / no open tabs) never blocks.
       isServerDown: () => {
-        const p2 = pool;
+        const p2 = conn.getPool();
         if (p2 === null) return false;
         const ids = p2.activeNetworkIds();
         return ids.length > 0 && ids.every((id) => p2.getStatus(id) !== 'connected');
@@ -129,7 +132,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       getApiKey: keyResolver(p),
       localDb: opts.localDb,
       rtState,
-      getCurrentUserId: () => currentUser?.id ?? p.user_id ?? null,
+      getCurrentUserId: () => conn.getCurrentUser()?.id ?? p.user_id ?? null,
       removeFromFocusHistoryEverywhere: (thoughtId: string) => {
         // The unified visit history (11 §2.3.1, 0.5.5). Pool only carries one
         // active network at a time per applier invocation; we sweep every
@@ -141,16 +144,17 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         }
       },
       getCurrentFocusId: (nid: string) => {
-        if (!profile) return null;
+        const currentProfile = conn.getProfile();
+        if (currentProfile === null) return null;
         // Walk active tabs to find the focus for the requested network — this
         // is a per-network query, used by the applier when echoing back.
-        for (const tab of opts.localDb.listTabs(profile.id)) {
+        for (const tab of opts.localDb.listTabs(currentProfile.id)) {
           if (tab.network_id !== nid) continue;
-          const focusId = opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, tab.tab_id);
+          const focusId = opts.localDb.getUiState(currentProfile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, tab.tab_id);
           if (focusId !== null) return focusId;
         }
         // Legacy fallback: tab-less rows (migration 001–004).
-        return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
+        return opts.localDb.getUiState(currentProfile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
       },
       broadcast,
       // Link-down tracking per network (defect de34b35b): while the socket is
@@ -174,10 +178,11 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       },
     });
 
-    rest = restClient;
-    pool = rtPool;
-    profile = p;
-    currentUser = me;
+    // Only a successful key-check reaches this point (`connectAndActivate`
+    // above throws on failure). `activate` bumps the `openNetwork` epoch and
+    // tears down the previous pool: an open request already in flight against
+    // the OLD server must not publish into this profile (defect 50fe8807).
+    conn.activate({ rest: restClient, pool: rtPool, profile: p, currentUser: me });
 
     // Q2: re-acquire realtime sockets for every previously open tab so non-
     // active tabs still receive events (dirty-marker «*» requirement).
@@ -217,16 +222,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   };
 
   const disconnect = (): void => {
-    try {
-      pool?.shutdown();
-    } catch {
-      // best-effort: dropping the reference below is the real teardown
-    }
-    pool = null;
-    rest = null;
-    profile = null;
-    currentNetworkId = null;
-    currentUser = null;
+    conn.disconnect();
   };
 
   /**
@@ -236,8 +232,8 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
    * would race against the DB sweep.
    */
   const removeProfile = async (profileId: string): Promise<void> => {
-    if (profile !== null && profile.id === profileId) {
-      disconnect();
+    if (conn.getProfile()?.id === profileId) {
+      conn.disconnect();
     }
     opts.localDb.deleteProfile(profileId);
   };
@@ -247,53 +243,25 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
    * system resume (powerMonitor, index.ts) and on the renderer `online` event
    * (forwarded here as `etn:realtime:online` from the preload bridge): a socket
    * that lived through a sleep or a network switch is often half-open, so we
-   * proactively re-establish instead of waiting for the idle watchdog.
+   * proactively re-establish instead of waiting for the idle watchdog. This is
+   * a resume of the SAME connection — the `openNetwork` epoch must not move
+   * (defect 50fe8807).
    */
   const forceReconnectRealtime = (): void => {
-    try {
-      pool?.forceReconnectAll();
-    } catch {
-      // best-effort — individual clients also swallow their own errors
-    }
-  };
-
-  /**
-   * Номер последнего вызова `openNetwork` (ошибка 58c55bb9, поздний ответ).
-   *
-   * `getNetwork` — сетевой запрос: если пользователь успел открыть другую сеть,
-   * запоздавший ответ прежнего запуска не должен переписывать «текущую сеть»
-   * главного процесса (её читают статус realtime, история переходов и
-   * разрешение вложений). Побеждает ПОСЛЕДНИЙ клик.
-   */
-  let openNetworkSeq = 0;
-
-  const openNetwork = async (networkId: string): Promise<Network> => {
-    if (!rest) throw new Error('Not connected: call etn.server.connect first');
-    const seq = ++openNetworkSeq;
-    const network = await rest.getNetwork(networkId);
-    if (seq !== openNetworkSeq) return network;
-    currentNetworkId = networkId;
-    if (profile) {
-      opts.localDb.setUiState(profile.id, networkId, UI_STATE_KEY.CURRENT_NETWORK_ID, networkId);
-    }
-    // Сеть — единица владения сокетом: `tabs.open` (на каждый таб) и этот
-    // acquire делят ОДНУ ссылку, повторный вызов её не копит (ошибка
-    // 3cd3f995). Сокет закрывается на `tabs.close` последнего таба сети.
-    pool?.acquire(networkId);
-    return network;
+    conn.forceReconnectRealtime();
   };
 
   const handlers = createHandlers({
     localDb: opts.localDb,
-    getRest: () => rest,
-    getRealtimePool: () => pool,
-    getProfile: () => profile,
+    getRest: () => conn.getRest(),
+    getRealtimePool: () => conn.getPool(),
+    getProfile: () => conn.getProfile(),
     connectProfile,
     addProfile,
     removeProfile,
     disconnect,
-    getCurrentNetworkId: () => currentNetworkId,
-    openNetwork,
+    getCurrentNetworkId: () => conn.getCurrentNetworkId(),
+    openNetwork: (networkId) => conn.openNetwork(networkId),
     broadcastRealtimeEvent: (event) => broadcast('realtime:event', event),
     broadcastRealtimeStatus: (status) => broadcast('realtime:status', status),
   });
@@ -308,6 +276,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // Centralised mutation gate (defect de34b35b): while the call's network is
     // not `connected`, mutating channels are rejected HERE, before the handler
     // reaches REST. Reads, `server.*` and `ui.*` are never blocked.
+    const pool = conn.getPool();
     const blockedNetwork =
       pool === null
         ? null
@@ -338,7 +307,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // Liveness probe on a hung action (defect de34b35b): 3 s without a result
     // asks the pool to check the connection instead of letting the user wait
     // for the REST timeout. Cleared as soon as the call settles.
-    const probeNetwork = actionProbeNetwork(payload.method, args, currentNetworkId);
+    const probeNetwork = actionProbeNetwork(payload.method, args, conn.getCurrentNetworkId());
     let probeTimer: NodeJS.Timeout | null = null;
     if (probeNetwork !== null && pool !== null) {
       probeTimer = setTimeout(() => {
@@ -424,7 +393,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     },
     /** Force-reconnect every pooled realtime socket (resume/online, 7f4cef31). */
     forceReconnectRealtime,
-    getRest: () => rest,
-    getCurrentNetworkId: () => currentNetworkId,
+    getRest: () => conn.getRest(),
+    getCurrentNetworkId: () => conn.getCurrentNetworkId(),
   };
 }
