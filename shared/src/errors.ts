@@ -88,11 +88,17 @@ export class EtnError extends Error {
  *     симметричного типа связи и обе живые (либо display-имя принадлежит
  *     нескольким свойствам сети);
  *   * `side-mismatch` — при удалении/очистке указанная сторона пуста, а рёбра
- *     есть на противоположной (сверка с фактическим направлением).
+ *     есть на противоположной (сверка с фактическим направлением);
+ *   * `property-ambiguous` — display-имя принадлежит НЕСКОЛЬКИМ разным
+ *     свойствам сети, и выбрать одно не удалось даже по `side` (`field =
+ *     "property"`; 0.14.1, доработка d9bc6012). Причина общая для записи
+ *     свойства по имени: клиент переводит её в человеческий текст так же, как
+ *     side-причины.
  */
 export const PROPERTY_SIDE_ERROR_REASON = {
   required: 'side-required',
   mismatch: 'side-mismatch',
+  ambiguous: 'property-ambiguous',
 } as const;
 export type PropertySideErrorReason =
   (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];

@@ -154,7 +154,8 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
  *   `ETIMEDOUT`, «Сетевая ошибка») → «сервер недоступен, попробуйте позже» —
  *   technical words, codes and stacks never leak;
- * - `422` по адресу стороны свойства-связи (`details.field === 'side'`) →
+ * - `422` по адресу стороны свойства-связи (`details.field === 'side'`) или
+ *   коллизии display-имён (`details.reason === 'property-ambiguous'`) →
  *   формулировка пользователя по `details.reason`: серверный текст адресован
  *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
  * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
@@ -174,16 +175,20 @@ export function errText(err: unknown): string {
 }
 
 /**
- * Текст для `422`, адресующего сторону свойства-связи: выбор — по
+ * Текст для `422`, адресующего запись свойства-связи: выбор — по
  * машиночитаемому `details.reason` (общий контракт с сервером,
  * `PROPERTY_SIDE_ERROR_REASON`), а не по разбору серверного сообщения.
- * `null` — ошибка не про сторону (текст остаётся серверным).
+ * Причина `property-ambiguous` приходит с `field: 'property'` — коллизия
+ * display-имён разных свойств сети (0.14.1, доработка d9bc6012); остальные
+ * причины адресуют сторону (`field: 'side'`). `null` — ошибка не про сторону
+ * свойства: текст остаётся серверным.
  */
 function propertySideErrorText(like: ErrorLike | null): string | null {
   if (like?.code !== 'VALIDATION_ERROR') return null;
   const details = like.details;
   if (typeof details !== 'object' || details === null) return null;
   const { field, reason } = details as { field?: unknown; reason?: unknown };
+  if (reason === PROPERTY_SIDE_ERROR_REASON.ambiguous) return t('errors.propertyNameAmbiguous');
   if (field !== 'side') return null;
   return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
     ? t('errors.propertySideMismatch')

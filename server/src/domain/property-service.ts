@@ -1236,6 +1236,7 @@ function setLinkPropertyTargets(
   targetIds: string[],
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
+  typedKey = false,
 ): { targets: string[]; createdLinkIds: string[]; removals: LinkRemoval[] } {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
@@ -1247,14 +1248,13 @@ function setLinkPropertyTargets(
   const bindingDirection =
     bindingSide === null ? null : linkPropertyDirection(cfg, bindingSide);
   const direction = nameDirection ?? bindingDirection ?? linkPropertyDirection(cfg);
-  // Валидация цели — по ПРОТИВОПОЛОЖНОЙ стороне привязки владельца — только
-  // когда запись идёт той же стороной, что и привязка. Явно адресованная
-  // другая сторона (`side`, 0.14.1) или внетиповой display-ключ ограничения
-  // стороны не применяют: там ограничения по привязке нет.
-  const side =
-    bindingSide !== null && (nameDirection === null || nameDirection === bindingDirection)
-      ? bindingSide
-      : null;
+  // Валидация цели — по привязке той стороны, на которой стоит владелец в
+  // создаваемом ребре (0.14.1, доработка по верификации d9bc6012): явный `side`
+  // адресует сторону записи и НЕ отменяет ограничение — оно берётся с
+  // ПРОТИВОПОЛОЖНОЙ стороны привязки, как и при записи стороной привязки.
+  // Внетиповой display-ключ (`typedKey === false`) привязки владельца не имеет:
+  // реестрового ограничения нет, остаётся legacy `config.allowed_target_type_ids`.
+  const side = typedKey && bindingSide !== null ? sideFromDirection(direction) : null;
 
   for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId, side);
   for (const targetId of targetIds) {
@@ -1413,6 +1413,7 @@ function addLinkPropertyTarget(
   actorUserId: string,
   warnings: MutationWarning[],
   nameDirection: LinkPropertyDirection | null = null,
+  typedKey = false,
 ): string {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
@@ -1423,11 +1424,10 @@ function addLinkPropertyTarget(
   const bindingDirection =
     bindingSide === null ? null : linkPropertyDirection(cfg, bindingSide);
   const direction = nameDirection ?? bindingDirection ?? linkPropertyDirection(cfg);
-  // Внетиповой display-ключ/другая сторона: ограничения стороны привязки нет.
-  const side =
-    bindingSide !== null && (nameDirection === null || nameDirection === bindingDirection)
-      ? bindingSide
-      : null;
+  // Валидация цели — по привязке стороны, на которой стоит владелец (явный
+  // `side` приоритетен, 0.14.1, доработка d9bc6012); внетиповой display-ключ
+  // привязки владельца не имеет — реестрового ограничения нет.
+  const side = typedKey && bindingSide !== null ? sideFromDirection(direction) : null;
 
   validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
@@ -3524,6 +3524,15 @@ export function attachedPropertyIds(
  */
 export interface ResolvedDefinition extends PropertyLike {
   direction: LinkPropertyDirection | null;
+  /**
+   * Ключ разрешён через ЭФФЕКТИВНЫЙ НАБОР типа владельца (типовой ключ):
+   * значение при записи ограничено привязкой той стороны, на которой стоит
+   * владелец (`direction`). Внетиповой display-ключ и имя реестра — `false`:
+   * привязки владельца у такой строки нет, реестровое ограничение цели не
+   * применяется (остаётся legacy `config.allowed_target_type_ids`).
+   * 0.14.1, доработка по верификации ошибки d9bc6012.
+   */
+  typedKey: boolean;
 }
 
 /**
@@ -3743,6 +3752,29 @@ function resolveSamePropertyLinkDirection(
 }
 
 /**
+ * `422` коллизии display-имён РАЗНЫХ свойств сети (0.14.1, доработка по
+ * верификации d9bc6012): свойств с таким именем несколько, и выбрать одно не
+ * удалось даже по `side`. `details.reason` — машиночитаемый дискриминатор для
+ * клиента (`PROPERTY_SIDE_ERROR_REASON.ambiguous`); текст русский и без
+ * внутренних терминов: его читают не только пользователи GUI, но и MCP/REST.
+ */
+function ambiguousPropertyNameError(
+  key: string,
+  candidates: Array<{ id: string; name: string }>,
+): EtnError {
+  return new EtnError(
+    'VALIDATION_ERROR',
+    `имя свойства «${key}» используют несколько свойств сети — уточните, какое имеется в виду`,
+    {
+      field: 'property',
+      reason: PROPERTY_SIDE_ERROR_REASON.ambiguous,
+      name: key,
+      candidates,
+    },
+  );
+}
+
+/**
  * Resolve a property by the key the READ side shows. Names are unique per
  * network since 0.6.5, so a scalar name alone addresses the property — but a
  * link property reads under its DISPLAY name computed from the link type and
@@ -3828,6 +3860,7 @@ export function resolveDefinition(
           value_type: def.value_type,
           config: def.config,
           direction,
+          typedKey: true,
         };
       }
       if (matches.length > 1) {
@@ -3853,21 +3886,26 @@ export function resolveDefinition(
                   value_type: def.value_type,
                   config: def.config,
                   direction: sideDir,
+                  typedKey: true,
                 };
               }
             }
-            throw new EtnError(
-              'VALIDATION_ERROR',
-              side === null
-                ? `имя свойства «${key}» принадлежит нескольким свойствам сети — укажите side`
-                : `property name "${key}" is ambiguous`,
-              {
-                field: side === null ? 'side' : 'property',
-                ...(side === null ? { reason: PROPERTY_SIDE_ERROR_REASON.required } : {}),
-                name: key,
-                ...(side === null ? { allowed: LINK_PROPERTY_SIDES } : {}),
-                candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
-              },
+            if (side === null) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `имя свойства «${key}» принадлежит нескольким свойствам сети — укажите side`,
+                {
+                  field: 'side',
+                  reason: PROPERTY_SIDE_ERROR_REASON.required,
+                  name: key,
+                  allowed: LINK_PROPERTY_SIDES,
+                  candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
+                },
+              );
+            }
+            throw ambiguousPropertyNameError(
+              key,
+              matches.map((m) => ({ id: m.property_id, name: m.key })),
             );
           }
           // Одно свойство: направление выводим по живым рёбрам/явной записи.
@@ -3887,6 +3925,7 @@ export function resolveDefinition(
                 value_type: def.value_type,
                 config: def.config,
                 direction: wanted,
+                typedKey: true,
               };
             }
           } else if (allowAmbiguous) {
@@ -3899,21 +3938,26 @@ export function resolveDefinition(
               value_type: def.value_type,
               config: def.config,
               direction: null,
+              typedKey: true,
             };
           }
         }
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          allLink && side === null
-            ? `имя свойства «${key}» адресует обе стороны связи — укажите side`
-            : `property name "${key}" is ambiguous`,
-          {
-            field: allLink && side === null ? 'side' : 'property',
-            ...(allLink && side === null ? { reason: PROPERTY_SIDE_ERROR_REASON.required } : {}),
-            name: key,
-            ...(allLink && side === null ? { allowed: LINK_PROPERTY_SIDES } : {}),
-            candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
-          },
+        if (allLink && side === null) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `имя свойства «${key}» адресует обе стороны связи — укажите side`,
+            {
+              field: 'side',
+              reason: PROPERTY_SIDE_ERROR_REASON.required,
+              name: key,
+              allowed: LINK_PROPERTY_SIDES,
+              candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
+            },
+          );
+        }
+        throw ambiguousPropertyNameError(
+          key,
+          matches.map((m) => ({ id: m.property_id, name: m.key })),
         );
       }
     }
@@ -3941,6 +3985,10 @@ export function resolveDefinition(
       value_type: prop.value_type,
       config: prop.config,
       direction,
+      // Имя реестра (не ключ эффективного набора): владелец может иметь
+      // привязку, но адресация идёт мимо строки типа — реестровое ограничение
+      // цели не применяем, остаётся legacy `config.allowed_target_type_ids`.
+      typedKey: false,
     };
   }
   // 3) Внетиповая запись свойства-связи: ключ может быть display-именем любой
@@ -3969,14 +4017,16 @@ export function resolveDefinition(
           resolveOwnerBindingSide(ndb, ownerId, hit.prop.id),
           allowAmbiguous,
         ),
+        // Внетиповая строка: привязки владельца у неё нет — ограничение по
+        // реестру не применяется (legacy config остаётся).
+        typedKey: false,
       };
     }
     if (byDisplay.size > 1) {
-      throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
-        field: 'property',
-        name: key,
-        candidates: [...byDisplay.values()].map((h) => ({ id: h.prop.id, name: h.prop.name })),
-      });
+      throw ambiguousPropertyNameError(
+        key,
+        [...byDisplay.values()].map((h) => ({ id: h.prop.id, name: h.prop.name })),
+      );
     }
   }
   return null;
@@ -4907,6 +4957,9 @@ export function setPropertyValue(
       { key },
       actorUserId,
       prop.direction,
+      // Типовой ключ (эффективный набор типа владельца): ограничение цели по
+      // привязке стороны записи действует и при явном `side` (d9bc6012).
+      prop.typedKey,
       crossNetworkAccess,
     );
   });
@@ -4973,6 +5026,7 @@ function setPropertyValueForProperty(
   errKey: { key: string },
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
+  typedKey = false,
   crossNetworkAccess?: CrossNetworkAccessContext,
 ): PropertyValue {
   // 0.14.1 (ADR cb95fb4e): у владельца-мысли привязка свойства к типу НЕ
@@ -4999,6 +5053,7 @@ function setPropertyValueForProperty(
       normalizeLinkTargets(ndb, value, errKey.key),
       actorUserId,
       nameDirection,
+      typedKey,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     const nowMs = Date.now();
@@ -5201,6 +5256,9 @@ export function setPropertyValueById(
       { key: registryProp.name },
       actorUserId,
       null,
+      // Значение пришло из эффективного набора типа (дефолт привязки) —
+      // ограничение цели по привязке сохраняется, как и до 0.14.1.
+      true,
       crossNetworkAccess,
     );
   });
@@ -5319,6 +5377,7 @@ export function addLinkPropertyValue(
       actorUserId,
       warnings,
       prop.direction,
+      prop.typedKey,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id, created: existing === undefined, warnings };

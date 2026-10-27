@@ -357,15 +357,16 @@ describe(
       }
     });
 
-    it('реестровое имя + противоположный side у типового свойства: рёбра обратной стороны (ошибка d9bc6012)', async () => {
+    it('ограничение цели по привязке действует и при явном side; пара «имя видимой стороны + side» (d9bc6012, круг 2)', async () => {
       const ctx = await buildRestContext();
       try {
-        // Сценарий заказчика: свойство-связь «версия» (прямая сторона) —
-        // «работы версии» (обратная); у выделенных мыслей в таблице выбрана
-        // ОБРАТНАЯ строка. Клиент до фикса отправлял реестровое имя «версия»
-        // + side=target и получал 422. Теперь side — адрес записи.
-        const versionType = createThoughtType(ctx.ndb, { name: 'Версия d9bc6012' }, USER);
-        const taskType = createThoughtType(ctx.ndb, { name: 'Задача d9bc6012' }, USER);
+        // Доработка круга 2: явный `side` приоритетен как АДРЕС ребра, но НЕ
+        // отменяет валидацию цели по привязке — ограничение берётся с
+        // ПРОТИВОПОЛОЖНОЙ стороны той привязки, на которой стоит владелец.
+        // Сеть как в справочнике ETN: задача/ошибка — источник (прямая
+        // «версия»), версия — назначение (обратная «работы версии»).
+        const versionType = createThoughtType(ctx.ndb, { name: 'Версия d9r' }, USER);
+        const taskType = createThoughtType(ctx.ndb, { name: 'Задача d9r' }, USER);
         const prop = createNetworkProperty(
           ctx.ndb,
           {
@@ -383,18 +384,36 @@ describe(
           { key: 'версия', value_type: 'link', side: 'source' },
           USER,
         );
-        const task = await createThought(ctx, 'Задача в версии', taskType.id);
-        const version = await createThought(ctx, 'Версия 0.14.1', versionType.id);
-
-        const reverse = await putProperty(ctx, task, 'версия', version, 'target');
-        assert.equal(reverse.statusCode, 200, reverse.body);
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          versionType.id,
+          { key: 'версия', value_type: 'link', side: 'target' },
+          USER,
+        );
         const linkTypeId = prop.config?.link_type_id as string;
-        assert.deepEqual(
+        const task = await createThought(ctx, 'Задача в версии d9r', taskType.id);
+        const taskPeer = await createThought(ctx, 'Задача-сосед d9r', taskType.id);
+        const version = await createThought(ctx, 'Версия 0.14.1 d9r', versionType.id);
+        const inTargets = () =>
           getLinkPropertyValues(ctx.ndb, 'thought', task, linkTypeId, 'in').map(
             (v) => v.target_id,
-          ),
+          );
+        const outTargets = () =>
+          getLinkPropertyValues(ctx.ndb, 'thought', task, linkTypeId, 'out').map(
+            (v) => v.target_id,
+          );
+
+        // 1) Пользовательский сценарий: клиент после фикса круга 1 шлёт имя
+        //    ВИДИМОЙ обратной строки + side=target, значение — версия. Строка
+        //    внетиповая (у типа задачи привязки стороны target нет) — реестрового
+        //    ограничения у неё нет, ребро создаётся.
+        const clientPair = await putProperty(ctx, task, 'работы версии', version, 'target');
+        assert.equal(clientPair.statusCode, 200, clientPair.body);
+        assert.deepEqual(
+          inTargets(),
           [version],
-          'реестровое имя + side=target создаёт рёбра обратной стороны',
+          'пара «имя обратной стороны + side=target» пишет рёбра стороны назначения',
         );
         // Чтение отдаёт ДВЕ строки одного свойства: типовую прямую «версия» с
         // нулём и внетиповую обратную «работы версии» с живым ребром — именно
@@ -406,23 +425,127 @@ describe(
         assert.equal(readTarget?.property_name, 'работы версии');
         assert.equal(readTarget?.count, 1);
         assert.equal(readTarget?.outside_type, true);
-        const readSource = readRows.find((entry) => entry.side === 'source');
-        assert.equal(readSource?.property_name, 'версия');
-        assert.equal(readSource?.count, 0);
+        assert.equal(readRows.find((entry) => entry.side === 'source')?.count, 0);
 
-        // 422 записи — только несуществующее свойство (спека 906a29c9).
-        const missing = await putProperty(ctx, task, 'нет такого свойства d9bc6012', version);
-        assert.equal(missing.statusCode, 422, missing.body);
-        // Без side имя по-прежнему адресует ПРЯМУЮ сторону: обе стороны живут
-        // одновременно, адресация записи не изменилась.
+        // 2) Гейт круга 2: РЕЕСТРОВОЕ (типовое) имя «версия» + явный
+        //    противоположный side=target. Владелец стоит на стороне назначения,
+        //    значит цель обязана быть источником ребра (задача/ошибка); версия
+        //    недопустима — 422, рёбра не меняются.
+        const registryReverse = await putProperty(ctx, task, 'версия', version, 'target');
+        assert.equal(registryReverse.statusCode, 422, registryReverse.body);
+        assert.match(registryReverse.body, /required type/);
+        assert.deepEqual(
+          (registryReverse.json() as { error: { details: { allowed_type_ids: string[] } } }).error
+            .details.allowed_type_ids,
+          [taskType.id],
+          'ограничение взято с source-стороны привязки (типы источников ребра)',
+        );
+        assert.deepEqual(inTargets(), [version], 'отказ валидации не трогает рёбра');
+
+        // 3) Та же сторона target с допустимой целью (задача) — 200; set-запись
+        //    заменяет набор входящих рёбер.
+        const registryReverseOk = await putProperty(ctx, task, 'версия', taskPeer, 'target');
+        assert.equal(registryReverseOk.statusCode, 200, registryReverseOk.body);
+        assert.deepEqual(inTargets(), [taskPeer]);
+
+        // 4) Прямая сторона: недопустимая цель при явном side=source — задача,
+        //    допустимая — версия. Ограничение действует в обе стороны.
+        const forwardWrong = await putProperty(ctx, task, 'версия', taskPeer, 'source');
+        assert.equal(forwardWrong.statusCode, 422, forwardWrong.body);
+        assert.match(forwardWrong.body, /required type/);
         const forward = await putProperty(ctx, task, 'версия', version);
         assert.equal(forward.statusCode, 200, forward.body);
-        assert.deepEqual(
-          getLinkPropertyValues(ctx.ndb, 'thought', task, linkTypeId, 'out').map(
-            (v) => v.target_id,
-          ),
-          [version],
+        assert.deepEqual(outTargets(), [version]);
+
+        // 5) Несуществующее свойство — по-прежнему 422 (спека 906a29c9).
+        const missing = await putProperty(ctx, task, 'нет такого свойства d9r', version);
+        assert.equal(missing.statusCode, 422, missing.body);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('коллизия display-имён разных свойств сети: русский текст и details.reason (d9bc6012, круг 2)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Два РАЗНЫХ свойства-связи. После переименования типов связи их
+        // display-имя сходится в «rel», а привязки стоят на ОДНОЙ стороне —
+        // значит даже явный side не выбирает одно свойство: 422 с
+        // машиночитаемой причиной и русским текстом (его читают и MCP/REST-
+        // клиенты, английской фразы быть не должно).
+        const ownerType = createThoughtType(ctx.ndb, { name: 'Тема коллизии d9r' }, USER);
+        const spareType = createThoughtType(ctx.ndb, { name: 'Тема без привязок d9r' }, USER);
+        const first = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'rel-prop-1 d9r',
+            value_type: 'link',
+            name_forward: 'rel-one-fwd d9r',
+            name_reverse: 'rel-one-rev d9r',
+          },
+          USER,
         );
+        const second = createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'rel-prop-2 d9r',
+            value_type: 'link',
+            name_forward: 'rel-two-fwd d9r',
+            name_reverse: 'rel-two-rev d9r',
+          },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          ownerType.id,
+          { key: 'rel-one-fwd d9r', value_type: 'link', side: 'source' },
+          USER,
+        );
+        createTypeProperty(
+          ctx.ndb,
+          'thought_type',
+          ownerType.id,
+          { key: 'rel-two-fwd d9r', value_type: 'link', side: 'source' },
+          USER,
+        );
+        updateLinkType(
+          ctx.ndb,
+          first.config?.link_type_id as string,
+          { name_forward: 'rel d9r' },
+          undefined,
+          USER,
+        );
+        updateLinkType(
+          ctx.ndb,
+          second.config?.link_type_id as string,
+          { name_forward: 'rel d9r' },
+          undefined,
+          USER,
+        );
+        const owner = await createThought(ctx, 'Владелец коллизии d9r', ownerType.id);
+        const spare = await createThought(ctx, 'Свободная тема d9r', spareType.id);
+        const value = await createThought(ctx, 'Значение коллизии d9r', spareType.id);
+
+        // Типовой ключ + side: фильтр по стороне оставляет ДВЕ записи.
+        const typed = await putProperty(ctx, owner, 'rel d9r', value, 'source');
+        assert.equal(typed.statusCode, 422, typed.body);
+        const typedBody = typed.json() as {
+          error: { message: string; details: { field?: string; reason?: string } };
+        };
+        assert.equal(typedBody.error.details.field, 'property');
+        assert.equal(typedBody.error.details.reason, 'property-ambiguous');
+        assert.match(typedBody.error.message, /несколько свойств сети/);
+        assert.doesNotMatch(typedBody.error.message, /ambiguous|source|target/i);
+
+        // Внетиповой display-ключ у мысли без привязок — та же коллизия.
+        const outside = await putProperty(ctx, spare, 'rel d9r', value);
+        assert.equal(outside.statusCode, 422, outside.body);
+        const outsideBody = outside.json() as {
+          error: { message: string; details: { reason?: string } };
+        };
+        assert.equal(outsideBody.error.details.reason, 'property-ambiguous');
+        assert.doesNotMatch(outsideBody.error.message, /ambiguous|source|target/i);
       } finally {
         await closeRestContext(ctx);
       }
@@ -976,6 +1099,96 @@ describe(
             [],
             'прямая сторона не тронута',
           );
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.properties.add: ограничение цели по привязке и при явном side (d9bc6012, круг 2)', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const versionType = createThoughtType(ndb, { name: 'Версия MCP d9r' }, ctx.adminId);
+        const taskType = createThoughtType(ndb, { name: 'Задача MCP d9r' }, ctx.adminId);
+        const prop = createNetworkProperty(
+          ndb,
+          {
+            name: 'версия mcp',
+            value_type: 'link',
+            name_forward: 'версия mcp',
+            name_reverse: 'работы версии mcp',
+          },
+          ctx.adminId,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          taskType.id,
+          { key: 'версия mcp', value_type: 'link', side: 'source' },
+          ctx.adminId,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          versionType.id,
+          { key: 'версия mcp', value_type: 'link', side: 'target' },
+          ctx.adminId,
+        );
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const task = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Задача MCP d9r',
+            type_id: taskType.id,
+          });
+          const peer = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Задача-сосед MCP d9r',
+            type_id: taskType.id,
+          });
+          const version = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Версия MCP d9r',
+            type_id: versionType.id,
+          });
+          const add = (key: string, value: string, side?: 'source' | 'target') =>
+            handle.client.callTool({
+              name: 'etn.properties.add',
+              arguments: {
+                network_id: ctx.networkId,
+                owner_type: 'thought',
+                owner_id: task.id,
+                key,
+                value,
+                ...(side === undefined ? {} : { side }),
+              },
+            });
+          const linkTypeId = prop.config?.link_type_id as string;
+          const targets = (direction: 'out' | 'in') =>
+            getLinkPropertyValues(ndb, 'thought', task.id, linkTypeId, direction).map(
+              (v) => v.target_id,
+            );
+
+          // Типовое имя + противоположный side=target: цель проверяется
+          // привязкой стороны назначения (источники ребра — задачи/ошибки),
+          // версия недопустима → 422, ребра нет.
+          const wrong = await add('версия mcp', version.id, 'target');
+          assert.equal(wrong.isError, true, toolText(wrong));
+          assert.match(toolText(wrong), /required type/);
+          assert.deepEqual(targets('in'), []);
+
+          // Допустимая цель той же стороны (задача) — ребро стороны назначения.
+          const ok = await add('версия mcp', peer.id, 'target');
+          assert.notEqual(ok.isError, true, toolText(ok));
+          assert.deepEqual(targets('in'), [peer.id]);
+
+          // Прямая сторона: версия допустима, задача — нет.
+          const forwardWrong = await add('версия mcp', peer.id);
+          assert.equal(forwardWrong.isError, true, toolText(forwardWrong));
+          assert.match(toolText(forwardWrong), /required type/);
+          const forward = await add('версия mcp', version.id);
+          assert.notEqual(forward.isError, true, toolText(forward));
+          assert.deepEqual(targets('out'), [version.id]);
         } finally {
           await handle.close();
         }

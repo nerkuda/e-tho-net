@@ -116,6 +116,21 @@ describe('errText: дружелюбные сообщения', () => {
     assert.doesNotMatch(mismatch, /source|target|side/i);
   });
 
+  it('422 коллизии display-имён — русский текст по details.reason (d9bc6012, круг 2)', () => {
+    // Сервер отвечает английской фразой API-уровня; пользователь видит
+    // формулировку словаря по машиночитаемой причине, без внутренних терминов.
+    const text = errText(
+      new EtnError('VALIDATION_ERROR', 'property name "связано с" is ambiguous', {
+        field: 'property',
+        reason: 'property-ambiguous',
+        name: 'связано с',
+        candidates: [],
+      }),
+    );
+    assert.equal(text, 'имя свойства неоднозначно — его используют несколько свойств сети');
+    assert.doesNotMatch(text, /ambiguous|source|target|side/i);
+  });
+
   it('422 по стороне без details.reason (сервер старше 0.14.1) — всё равно без внутренних терминов', () => {
     const text = errText(
       new EtnError('VALIDATION_ERROR', 'имя свойства «X» адресует обе стороны — укажите side', {
