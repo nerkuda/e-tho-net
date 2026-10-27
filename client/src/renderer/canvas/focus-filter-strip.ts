@@ -301,17 +301,19 @@ export function isThoughtInViewResult(id: string): boolean {
  * `runActiveViewIfNeeded` не переисполнит отбор. Сбрасывает кэш, чтобы при
  * задержке рендера нижняя зона не мигнула устаревшими строками.
  *
+ * Сброс идёт через {@link resetViewRunState}: он не только гасит прогон в
+ * полёте и чистит результат, но и СДВИГАЕТ эпоху `runSeq`. Без сдвига ответ,
+ * уже доехавший до континуации (abort не успел), при `seq === runSeq` записался
+ * бы в `lastResult` после события — и следующий `runActiveViewIfNeeded` отдал
+ * бы устаревший результат из кэша без нового POST (замечание верификатора
+ * круга 3 к ошибке 6d78ccab; тот же класс, что сброс при смене фокуса).
+ *
  * В режиме «Потомки» возвращает `false`: там нижняя зона — сама окрестность
  * фокуса, и её изменения отлавливаются ключом перерисовки.
  */
 export function invalidateViewResultForRealtime(): boolean {
   if (currentMode.kind !== 'view') return false;
-  // Устаревший прогон, если он в полёте, гасим: его ответ описывает прежнее
-  // состояние данных, а не то, из-за которого пришло событие.
-  cancelInflightRun();
-  lastResult = null;
-  runStatus = 'idle';
-  lastRunError = null;
+  resetViewRunState();
   return true;
 }
 

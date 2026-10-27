@@ -1757,6 +1757,56 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     assert.equal(strip.isThoughtInViewResult('00000000-0000-4000-8000-0000000000c1'), false);
   });
 
+  it('6d78ccab круг 3: realtime-событие отбора во время прогона гасит эпоху прогона', async () => {
+    await mountWith([row('v-rt', 'Realtime', { isDefault: true })]);
+    const lateItemId = '00000000-0000-4000-8000-0000000000d1';
+    let release: () => void = () => undefined;
+    state.viewRun.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    state.viewRun.response = runResponse('v-rt', 'Realtime', [refItem(lateItemId)]);
+    const pending = strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(strip.getViewRunStatus(), 'loading');
+
+    // Событие отбора/данных пришло, пока прогон в полёте: результат описывает
+    // ПРЕЖНЕЕ состояние данных. Сброс обязан сдвинуть эпоху — иначе ответ,
+    // уже доехавший до континуации (abort не успел), запишется в `lastResult`
+    // при `seq === runSeq`, и следующий прогон отдаст его из кэша без POST.
+    assert.equal(strip.invalidateViewResultForRealtime(), true);
+    release();
+    const late = await pending;
+    assert.equal(late, null, 'ответ прежнего состояния данных не отдан вызывающему');
+    assert.equal(strip.takeViewResult(), null, 'кэш результата не заполнен поздним ответом');
+    assert.equal(strip.isThoughtInViewResult(lateItemId), false);
+
+    // Следующий вход обязан уйти новым POST, а не отдать устаревший кэш.
+    state.viewRun.response = runResponse('v-rt', 'Realtime', []);
+    const again = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.ok(again !== null);
+    assert.equal(state.viewRun.calls.length, 2, 'после realtime-сброса прогон исполняется заново');
+  });
+
+  it('6d78ccab круг 3 (регресс): realtime после завершённого прогона гасит кэш, следующий вход — новый POST', async () => {
+    await mountWith([row('v-done', 'Готовый', { isDefault: true })]);
+    state.viewRun.response = runResponse('v-done', 'Готовый', [
+      refItem('00000000-0000-4000-8000-0000000000d2'),
+    ]);
+    const first = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.ok(first !== null);
+    assert.equal(state.viewRun.calls.length, 1);
+
+    // Штатный invoke-путь: событие пришло ПОСЛЕ завершённого прогона. Кэш
+    // результата гасится, статус — idle; полоса требует перерисовки.
+    assert.equal(strip.invalidateViewResultForRealtime(), true);
+    assert.equal(strip.takeViewResult(), null);
+    assert.equal(strip.getViewRunStatus(), 'idle');
+
+    state.viewRun.response = runResponse('v-done', 'Готовый', []);
+    const second = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.ok(second !== null);
+    assert.equal(state.viewRun.calls.length, 2, 'следующий render исполняет отбор заново');
+  });
+
   // -------------------------------------------------------------------
   // Realtime
   // -------------------------------------------------------------------
