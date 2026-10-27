@@ -102,6 +102,15 @@ import {
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
+/**
+ * Фиксация недописанных значений (набранный без Enter текст) открытых
+ * редакторов показанной таблицы «Свойства типа» (или null). Вызывается перед
+ * пересборкой строк, сворачиванием группы и закрытием карточки: снятый с
+ * документа сфокусированный узел `blur` не получает (ошибка bfe1bc24).
+ */
+let currentFlush: (() => void) | null = null;
+/** То же для тела группы «Свойства вне типа» (или null, если не построено). */
+let outsideFlush: (() => void) | null = null;
 
 /**
  * Владелец, под которого построена показанная вкладка «Свойства» (задача
@@ -258,6 +267,20 @@ function refreshPropertiesPanels(): void {
   currentReload?.();
   outsideReload?.();
   outsideRefreshCount?.();
+}
+
+/**
+ * Запускает фиксацию недописанных значений обеих таблиц вкладки «Свойства»
+ * ДО того, как их строки/тела будут пересобраны или сняты с экрана (смена
+ * мысли, сворачивание группы, закрытие карточки). Удалённый из документа
+ * сфокусированный узел `blur` не получает, и набранный без Enter текст терялся
+ * молча (ошибка bfe1bc24). Запись идёт своим замыканием строки (владелец
+ * значения захвачен при её построении), поэтому смена владельца до завершения
+ * записи безопасна.
+ */
+function flushPropertiesPending(): void {
+  currentFlush?.();
+  outsideFlush?.();
 }
 
 /** Открывает единый диалог редактирования свойства по реестровому id. */
@@ -685,6 +708,8 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   currentReload = null;
   outsideReload = null;
   outsideRefreshCount = null;
+  currentFlush = null;
+  outsideFlush = null;
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
   const typeGroup = groupSection({
@@ -692,6 +717,9 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     title: 'Свойства типа',
     defaultCollapsed: false,
     buildBody: () => buildPropertiesBodyFor(target, lifecycle),
+    // Тело уходит с экрана при сворачивании: набранное без Enter в чип-полях
+    // и скалярах фиксируем до снятия узлов (ошибка bfe1bc24).
+    onBeforeHide: flushPropertiesPending,
   });
   // Group 2 — «Свойства вне типа» (0.14.1: expanded by default, требование
   // 87039bc8). Заголовок несёт «(+) Добавить свойство» — ранний визуальный
@@ -713,6 +741,8 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     defaultCollapsed: false,
     lazyCount: true,
     actions: [addPropertyBtn],
+    // Сворачивание снимает тело: недописанные значения фиксируем до этого.
+    onBeforeHide: flushPropertiesPending,
     loadCount: async () => {
       // Owner token: a slow badge count of the previous owner must not land on
       // the new one (task 90b2256e, круг 3).
@@ -749,6 +779,11 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // owner and the outside-type badge is re-resolved (its owner lives on the
   // group, not in the body, so it needs an explicit refresh).
   retargetCurrent = (next) => {
+    // Смена мысли пересоберёт изменившиеся строки: набранное без Enter
+    // фиксируем ДО смены владельца — запись идёт замыканием старой строки
+    // (ошибка bfe1bc24). Не ждём: чтение нового владельца не должно стоять
+    // за сетевой записью старого.
+    flushPropertiesPending();
     target.ownerType = next.ownerType;
     target.ownerId = next.ownerId;
     target.typeId = resolveEditorTypeId(next);
@@ -1090,6 +1125,13 @@ function buildOutsidePropertiesBody(
   /** Прикреплена ли таблица к обёртке; пока нет — в ней плейсхолдер/ошибка. */
   let tableAttached = false;
   let everMounted = false;
+  /**
+   * Недописанные значения открытых редакторов этой таблицы: фиксируются до
+   * пересборки строк (`reconcileKeyed`), снятия тела группы и закрытия
+   * карточки — снятый узел blur не получает (ошибка bfe1bc24).
+   */
+  const pendingCommits = createPendingValueCommits();
+  outsideFlush = () => void pendingCommits.flush();
   /** Owner currently rendered in this body (see the in-type table's guard). */
   let shownOwnerId: string | null = null;
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
@@ -1099,6 +1141,9 @@ function buildOutsidePropertiesBody(
     disposed = true;
     retryStop?.();
     retryStop = null;
+    // Карточка закрывается/панель пересобирается: набранное в чип-полях и
+    // скалярных полях без Enter фиксируем до исчезновения узлов (bfe1bc24).
+    void pendingCommits.flush();
   });
 
   /**
@@ -1248,6 +1293,7 @@ function buildOutsidePropertiesBody(
     () => void reload(),
     (propertyId) => registryById.get(propertyId),
     reorderSlotOf,
+    pendingCommits.register,
   );
 
   // Навигация ↑/↓ и Enter — общий компонент списка над ядром nav-core.
@@ -1317,6 +1363,10 @@ function buildOutsidePropertiesBody(
     // A reconnect retry forces the read even while the pane is detached (the
     // editor keeps only the active tab in the DOM; a cached pane is alive).
     if (!force && everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
+    // Недописанное значение строки фиксируем ДО чтения и сверки: сверка ниже
+    // пересобирает изменившиеся строки, а снятый сфокусированный узел blur не
+    // получает (ошибка bfe1bc24).
+    void pendingCommits.flush();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
     if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
@@ -1645,6 +1695,7 @@ function outsideRowSpec(
   onRemove: () => void,
   registryLookup?: (propertyId: string) => PropertyRegistryRow | undefined,
   reorderOf?: (key: string) => OutsideReorderSlot | null,
+  registerPendingCommit?: (commit: () => Promise<void>) => void,
 ): KeyedRenderSpec<OutsideRow> {
   const fill = (
     row: HTMLElement,
@@ -1661,6 +1712,7 @@ function outsideRowSpec(
         target,
         onRemove,
         pending.property.description ?? null,
+        registerPendingCommit,
       );
       return;
     }
@@ -1704,6 +1756,7 @@ function outsideRowSpec(
           target.ownerId,
           onRemove,
           registryLookup?.(current.property_id),
+          registerPendingCommit,
         ),
       );
       return;
@@ -1744,6 +1797,7 @@ function outsideRowSpec(
         ),
         current,
         onSaved: onRemove,
+        ...(registerPendingCommit !== undefined ? { registerPendingCommit } : {}),
       }),
     );
   };
@@ -1813,6 +1867,7 @@ function fillPendingOutsideRow(
   target: PropertiesTarget,
   onChanged: () => void,
   hint: string | null = null,
+  registerPendingCommit?: (commit: () => Promise<void>) => void,
 ): void {
   const definition = pendingOutsideDefinition(pending, target.ownerType);
   const isLink = definition.value_type === 'link';
@@ -1855,6 +1910,7 @@ function fillPendingOutsideRow(
       current: undefined,
       side: pending.side,
       onSaved: onChanged,
+      ...(registerPendingCommit !== undefined ? { registerPendingCommit } : {}),
     }),
   );
 }
@@ -1922,6 +1978,7 @@ function buildOutsideLinkCell(
    *  сторонам (`binding_*_type_ids`, ошибка f8f8fa49); недоступна —
    *  определение без ограничения. */
   registry?: PropertyRegistryRow,
+  registerPendingCommit?: (commit: () => Promise<void>) => void,
 ): HTMLElement {
   if (value.property_id !== '') {
     // Сторона входит в определение и уходит в редактор значения: и запись,
@@ -1937,6 +1994,7 @@ function buildOutsideLinkCell(
       current: value,
       side,
       onSaved: onRemove,
+      ...(registerPendingCommit !== undefined ? { registerPendingCommit } : {}),
     });
     cell.classList.add('prop-outside-cell');
     return cell;
@@ -2074,6 +2132,13 @@ function buildTypePropertiesBody(
 
   let everMounted = false;
   /**
+   * Недописанные значения открытых редакторов этой таблицы: фиксируются до
+   * пересборки строк (`reconcileKeyed`), снятия тела группы и закрытия
+   * карточки — снятый узел blur не получает (ошибка bfe1bc24).
+   */
+  const pendingCommits = createPendingValueCommits();
+  currentFlush = () => void pendingCommits.flush();
+  /**
    * Прикреплена ли таблица к обёртке. Пока нет — в обёртке стоит плейсхолдер
    * («Загрузка…» / ошибка / пустой набор); прикрепив таблицу один раз, держим
    * её и обновляем СТРОКИ инкрементально (`reconcileKeyed`), не пересобирая
@@ -2180,6 +2245,7 @@ function buildTypePropertiesBody(
         onLinkCountChange: (next) => {
           nameText.textContent = propertyNameLabel(definition, next);
         },
+        registerPendingCommit: pendingCommits.register,
       }),
     );
   };
@@ -2274,6 +2340,9 @@ function buildTypePropertiesBody(
     disposed = true;
     retryStop?.();
     retryStop = null;
+    // Карточка закрывается/панель пересобирается: набранное в чип-полях и
+    // скалярных полях без Enter фиксируем до исчезновения узлов (bfe1bc24).
+    void pendingCommits.flush();
   });
   currentReload = () => void reload();
   // Слушаем локальное уведомление о правке значений (общий канал
@@ -2302,6 +2371,11 @@ function buildTypePropertiesBody(
     // shows; an owner change must proceed even while hidden (круг 3), and a
     // reconnect retry must always read (force).
     if (!force && everMounted && !box.isConnected && requestOwnerId === shownOwnerId) return;
+    // Недописанное значение строки фиксируем ДО чтения и сверки: сверка ниже
+    // пересобирает изменившиеся строки (`fillRow` → `replaceChildren`), а
+    // снятый сфокусированный узел blur не получает (ошибка bfe1bc24). Запись
+    // идёт замыканием строки — её владелец захвачен при построении.
+    void pendingCommits.flush();
     const startedAt = Date.now();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
@@ -2380,6 +2454,36 @@ function buildTypePropertiesBody(
   return box;
 }
 
+/**
+ * Реестр «зафиксировать набранное без Enter» у открытых редакторов одной
+ * таблицы значений. Строка пересобирается через `replaceChildren`/`fillRow`,
+ * тело группы снимается с экрана — в этих случаях сфокусированный узел не
+ * получает `blur`, а его замыкание держит единственную копию набранного.
+ * `flush` запускает фиксацию всех и очищает реестр: редакторы пересобранных
+ * строк зарегистрируются заново.
+ */
+interface PendingValueCommits {
+  register(commit: () => Promise<void>): void;
+  flush(): Promise<void>;
+}
+
+function createPendingValueCommits(): PendingValueCommits {
+  const commits = new Set<() => Promise<void>>();
+  return {
+    register(commit) {
+      commits.add(commit);
+    },
+    flush() {
+      if (commits.size === 0) return Promise.resolve();
+      // Снимок и очистка: `commit` чип-поля сам перерисовывает редактор, а
+      // сверка строк тем временем может зарегистрировать новые.
+      const pending = [...commits];
+      commits.clear();
+      return Promise.all(pending.map((commit) => commit())).then(() => undefined);
+    },
+  };
+}
+
 /** Builds the value editor cell for one property — поле строит общий
  *  `buildValueEditor` (стандарт S2); здесь только сохранение и форма значения. */
 function buildEditorCell(opts: {
@@ -2401,6 +2505,9 @@ function buildEditorCell(opts: {
   /** Своя запись прошла успешно — перечитать таблицу (внетиповые строки,
    *  черновики: после записи строка становится серверной). */
   onSaved?: () => void;
+  /** Реестр таблицы: сюда редактор отдаёт «зафиксировать набранное без Enter»
+   *  (ошибка bfe1bc24) — фиксация до пересборки строки/снятия тела. */
+  registerPendingCommit?: (commit: () => Promise<void>) => void;
 }): HTMLElement {
   const { networkId, ownerType, ownerId, definition, current } = opts;
   const cell = el('td');
@@ -2474,6 +2581,10 @@ function buildEditorCell(opts: {
         // она подключается по ключу network+property для text/url/link —
         // включая свойства-связи (ошибка 880c3add).
         historyPropertyId: definition.property_id,
+        // «Зафиксировать набранное без Enter» — в реестр таблицы (bfe1bc24).
+        ...(opts.registerPendingCommit !== undefined
+          ? { registerPendingCommit: opts.registerPendingCommit }
+          : {}),
       }),
     );
   return cell;
@@ -2568,6 +2679,7 @@ function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): 
 
 /** Test seam for unit tests. */
 export const propertiesInternals = {
+  buildPropertiesTab,
   buildPropertiesBody,
   buildOutsideTypeTable,
   buildOutsidePropertiesBody,

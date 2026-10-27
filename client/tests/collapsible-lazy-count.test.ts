@@ -91,4 +91,26 @@ describe('сворачиваемая группа: ленивый счётчик
     await tick();
     assert.equal(calls, 1, 'раскрытие запускает ленивый счётчик');
   });
+
+  it('onBeforeHide зовётся при каждом снятии тела, но не на построении (bfe1bc24)', async () => {
+    shimDom();
+    const { collapsibleSection } = await import('../src/renderer/lib/ui/collapsible.js');
+    let hidden = 0;
+    const section = collapsibleSection({
+      title: 'Свойства типа',
+      collapsed: false,
+      onBeforeHide: () => {
+        hidden += 1;
+        // Тело ещё в дереве: потребитель успевает зафиксировать недописанное.
+        assert.notEqual(section.body, null, 'onBeforeHide до снятия тела');
+      },
+      buildBody: () => new ShimElement('div') as unknown as HTMLElement,
+    });
+    assert.equal(hidden, 0, 'построение развёрнутой группы тело не снимает');
+    section.setCollapsed(true);
+    assert.equal(hidden, 1, 'сворачивание снимает тело через onBeforeHide');
+    section.setCollapsed(false);
+    section.setCollapsed(true);
+    assert.equal(hidden, 2, 'повторное сворачивание снова фиксирует');
+  });
 });

@@ -1163,6 +1163,12 @@ export interface EntityChipFieldOptions {
    */
   addPlaceholder?: string;
   /**
+   * Подсказка поля ввода (`title`): у полей-ссылок значение выбирается из
+   * списка, а набранный текст — только запрос поиска (DoD-альтернатива
+   * ошибки bfe1bc24). Не задана — подсказки нет.
+   */
+  inputTitle?: string;
+  /**
    * Перетаскивание чипов меняет ПОРЯДОК значений (0.11.1, задача a3cfc018:
    * «порядок перетаскиванием» в рецептах публикации). При `true` каждый чип —
    * источник DnD: брошенный на другой чип, перемещается перед ним; `onChange`
@@ -1368,6 +1374,7 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? 'Добавить значение…';
+  if (opts.inputTitle !== undefined) input.title = opts.inputTitle;
 
   /** Каталог, накопленный источником: по нему рисуются облачка значений. */
   const byId = new Map<string, EntityOption>();

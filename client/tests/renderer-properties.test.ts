@@ -2505,6 +2505,187 @@ describe('buildValueEditor — множественный url чипами (ве
       'уход из поля сохраняет набранное значение',
     );
   });
+
+  it('карточка (`blur`): уход из чип-поля фиксирует набранное без Enter (bfe1bc24)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      // `commitOn` НЕ задан — режим карточки мысли `'blur'` (умолчание).
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const inputOf = (): ShimElement =>
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+
+    // Уход ВНУТРЬ поля (каретка ▾ открывает список вариантов) — не значение.
+    inputOf().value = 'https://inside.test';
+    inputOf().dispatch('blur', { relatedTarget: inputOf() });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [], 'уход внутрь поля набранное не фиксирует');
+
+    // Уход ИЗ поля — набранное становится значением, как у скаляров режима
+    // `'blur'`; раньше чип-поле молча теряло текст (ошибка bfe1bc24).
+    inputOf().dispatch('blur', { relatedTarget: null });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      saved,
+      [['https://a.test', 'https://inside.test']],
+      'уход из поля сохраняет набранное значение',
+    );
+    assert.equal(findChips(editor).length, 2, 'чип появился');
+    assert.equal(inputOf().value, '', 'поле ввода очищено');
+
+    // Пустое поле при повторном blur — записи нет (no-op, без шторма).
+    inputOf().dispatch('blur', { relatedTarget: null });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [['https://a.test', 'https://inside.test']], 'пустой blur не пишет');
+  });
+});
+
+/**
+ * Ошибка bfe1bc24: строка карточки пересобирается (`reconcileKeyed` →
+ * `fillRow` → `replaceChildren`) без события `blur` у снятого узла. Набранный
+ * без Enter текст чип-поля обязан быть зафиксирован ДО перечитывания/сверки —
+ * иначе он гибнет при первой же пересборке (смена мысли, realtime-правка,
+ * сворачивание группы, закрытие карточки).
+ */
+describe('editor properties — flush недописанного значения перед пересборкой (bfe1bc24)', () => {
+  /**
+   * Контекст редактора для владельца `ownerId` (тип один — `ty1`): вкладка
+   * «Свойства» перепривязывается к другому владельцу ТОГО ЖЕ типа.
+   */
+  function ctxOf(ownerId: string): Record<string, unknown> {
+    return {
+      ownerType: 'thought',
+      ownerId,
+      thought: {
+        id: ownerId,
+        title: ownerId,
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+  }
+
+  /**
+   * Таблица «Свойства типа» с одним multiple-text свойством (чип-поле) и
+   * записанными вызовами `etn.properties.set`. `asTab` — строить вкладку
+   * целиком (две группы; даёт retarget при смене владельца).
+   */
+  async function buildMultipleTextBody(
+    asTab = false,
+  ): Promise<{ box: ShimElement; saves: unknown[][] }> {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const saves: unknown[][] = [];
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'pTags',
+          property_id: 'pTags',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Теги',
+          value_type: 'text',
+          config: { multiple: true },
+          required: false,
+          position: 0,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [],
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+      remove: async () => undefined,
+    };
+    etnApi['thoughts'] = { resolve: async () => [] };
+    etnApi['propertyRegistry'] = { list: async () => [] };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = (
+      asTab
+        ? propertiesInternals.buildPropertiesTab(ctxOf('t1') as any, {
+            onDispose: () => undefined,
+          })
+        : propertiesInternals.buildPropertiesBody(ctxOf('t1') as any)
+    ) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, saves };
+  }
+
+  function chipInputOf(box: ShimElement): ShimElement | undefined {
+    return box.findAll((e) => e.className.split(' ').includes('value-chips-input'))[0];
+  }
+
+  it('перечитывание таблицы фиксирует набранное до сверки строк', async () => {
+    const { box, saves } = await buildMultipleTextBody();
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено');
+    input!.value = 'срочно';
+    assert.deepEqual(saves, [], 'до blur/пересборки записи нет');
+
+    // Любое перечитывание вкладки (здесь — канал локальной правки значений)
+    // сверяет строки и может их пересобрать; недописанное фиксируется заранее.
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное записано до пересборки строки (ключ, значение, сторона null)',
+    );
+    assert.equal(chipInputOf(box)?.value, '', 'поле очищено — значение стало чипом');
+  });
+
+  it('смена мысли сохраняет набранное за ПРЕЖНИМ владельцем (retarget)', async () => {
+    const { box, saves } = await buildMultipleTextBody(true);
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено во вкладке');
+    input!.value = 'срочно';
+
+    // Перепривязка вкладки к другой мысли того же типа: строки сверяются по
+    // ключам и пересобираются для нового владельца; недописанное значение
+    // обязано уйти СТАРОМУ владельцу (ошибка bfe1bc24).
+    const { retargetPropertiesTab } = await import('../src/renderer/editor/properties.js');
+    retargetPropertiesTab(ctxOf('t2') as any);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное записано владельцу, у которого оно было набрано',
+    );
+  });
 });
 
 /**

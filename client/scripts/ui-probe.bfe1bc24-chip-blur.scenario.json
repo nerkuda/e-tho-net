@@ -1,0 +1,54 @@
+{
+  "name": "bfe1bc24-chip-blur",
+  "description": "Ошибка bfe1bc24: чип-поле карточки мысли теряет набранный текст при уходе из поля без Enter. Seed: тип Т1 с типовым свойством «Теги» (text + config.multiple) и две мысли. Фазы: (1) набрать в .value-chips-input и уйти кликом вне поля — серверное чтение содержит набранное; (2) набрать и переключить мысль ПРОГРАММНЫМ кликом по облачку (фокус из поля не уходит, blur нет) — значение сохранено flush-ом перед пересборкой; (3) набрать и свернуть группу «Свойства типа» программным кликом по заголовку (blur нет) — значение сохранено, при развороте группа показывает чип. До фикса (c0fd28ba) фазы 1–3 КРАСНЫЕ по серверному чтению.",
+  "timeout": 240000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const pTags=await et.propertyRegistry.create(N,{name:'Теги',value_type:'text',config:{multiple:true}}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:pTags.id,required:false,position:0}); const mk=async(title)=>{ const r=await et.thoughts.create(N,{title,type_id:t1.id,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const P1=await mk('Персона 1'); const P2=await mk('Персона 2'); window.__repro={t1:t1.id,tags:pTags.id,P1,P2}; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "thoughts-on-canvas", "waitFor": "(() => { const b=window.__repro; return b !== undefined && [b.P1,b.P2].every((id)=>document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null); })()", "timeout": 20000 },
+
+    { "name": "open-p1", "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "p1-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'", "timeout": 20000 },
+    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "chip-field-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
+
+    { "name": "phase1-focus", "click": ".properties-type-body .value-chips-input" },
+    { "name": "phase1-type", "text": "срочно" },
+    { "name": "phase1-typed", "probe": "document.querySelector('.properties-type-body .value-chips-input')?.value ?? null", "expect": "срочно" },
+    { "name": "phase1-leave-field", "click": ".editor-title-input" },
+    { "name": "phase1-server", "probe": "(async () => { await new Promise((r)=>setTimeout(r,500)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()", "expect": "срочно" },
+
+    { "name": "phase2-open-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "phase2-chip-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
+    { "name": "phase2-focus", "click": ".properties-type-body .value-chips-input" },
+    { "name": "phase2-type", "text": "смена" },
+    { "name": "phase2-typed", "probe": "document.querySelector('.properties-type-body .value-chips-input')?.value ?? null", "expect": "смена" },
+    { "name": "phase2-switch-thought-without-blur", "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P2+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "p2-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 2'", "timeout": 20000 },
+    { "name": "phase2-server-old-owner", "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()", "expect": "срочно, смена" },
+
+    { "name": "phase3-open-p1", "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "p1-again", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'", "timeout": 20000 },
+    { "name": "phase3-open-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "phase3-chip-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
+    { "name": "phase3-focus", "click": ".properties-type-body .value-chips-input" },
+    { "name": "phase3-type", "text": "свернуть" },
+    { "name": "phase3-typed", "probe": "document.querySelector('.properties-type-body .value-chips-input')?.value ?? null", "expect": "свернуть" },
+    { "name": "phase3-collapse-without-blur", "probe": "(() => { const header=document.querySelector('.properties-tab .group .group-header'); if(!header) return 'no-header'; header.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "phase3-group-collapsed", "waitFor": "document.querySelector('.properties-type-body') === null", "timeout": 20000 },
+    { "name": "phase3-server", "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()", "expect": "срочно, смена, свернуть" },
+    { "name": "phase3-expand", "probe": "(() => { const header=document.querySelector('.properties-tab .group .group-header'); if(!header) return 'no-header'; header.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "phase3-expanded-with-value", "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const titles=[...body.querySelectorAll('.prc-title')].map((n)=>n.textContent); return titles.includes('срочно') && titles.includes('смена') && titles.includes('свернуть'); })()", "timeout": 20000 }
+  ]
+}

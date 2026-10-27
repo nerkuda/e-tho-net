@@ -165,13 +165,16 @@ export interface ValueEditorOptions {
    */
   textListAsArray?: boolean;
   /**
-   * Хост-черновик может попросить редактор зафиксировать НЕдописанное
-   * значение: чип-поле (text/url + `config.multiple`) отдаёт здесь функцию
-   * «добавить набранный в поле добавления текст как значение». Нужен там, где
+   * Хост может попросить редактор зафиксировать НЕдописанное значение до
+   * того, как поле будет снято с экрана: чип-поле (text/url + `config.multiple`)
+   * отдаёт здесь функцию «добавить набранный в поле добавления текст как
+   * значение», скаляры в режиме `'blur'` — свой blur-коммит. Нужен там, где
    * значение читается ПРОГРАММНО по кнопке («Применить» массового диалога,
-   * «Применить» отбора), а не по уходу из поля: без явного вызова набранное
-   * оставалось в поле ввода и терялось молча (ошибка bba5a7ce — «телефоны»
-   * типа «Персона» это text + multiple, набранный номер не попадал в план).
+   * «Применить» отбора) или где строка пересобирается без события blur
+   * (смена мысли, сворачивание группы, закрытие карточки): удалённый из
+   * документа сфокусированный узел blur не получает, и набранное терялось
+   * молча (ошибка bba5a7ce — план массового диалога; bfe1bc24 — чип-поле
+   * карточки).
    */
   registerPendingCommit?: (commit: () => Promise<void>) => void;
 }
@@ -323,6 +326,9 @@ function buildPublicationRefEditor(opts: ValueEditorOptions): HTMLElement {
     onOpen: (id) => void openPublicationInWorkspace(id),
     placeholder: t('publications.field.placeholder'),
     addPlaceholder: t('publications.field.addPlaceholder'),
+    // Набранный текст — запрос поиска, а не значение: публикация выбирается
+    // из списка (DoD-альтернатива ошибки bfe1bc24).
+    inputTitle: 'Значение — публикация из списка: начните вводить название и выберите строку',
   });
   root.append(field.root);
 
@@ -578,6 +584,9 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
   addInput.type = 'text';
   addInput.autocomplete = 'off';
   addInput.placeholder = 'Название мысли в другой сети…';
+  // Набранный текст — запрос поиска, а не значение: значение выбирается из
+  // списка (DoD-альтернатива ошибки bfe1bc24). Подсказка постоянная, до ввода.
+  addInput.title = 'Значение — мысль из списка: начните вводить название и выберите строку';
 
   const searchSource: SuggestSource = {
     when: 'typed',
@@ -987,11 +996,9 @@ function buildMultiTextChipsEditor(opts: {
   extraSuggest?: readonly SuggestSource[];
   /** `true` — в `save` идёт массив значений, а не comma-joined строка (text). */
   listAsArray?: boolean;
-  /** Режим коммита хоста: у черновика (`'change'`) набранный текст не теряется
-   *  и при уходе из поля — см. {@link ValueEditorOptions.registerPendingCommit}. */
-  commitOn?: 'blur' | 'change';
   /** Хук «зафиксировать набранное без Enter» для хостов, читающих значение по
-   *  кнопке (массовый диалог, отбор), — см. {@link ValueEditorOptions.registerPendingCommit}. */
+   *  кнопке (массовый диалог, отбор) или пересобирающих строку, — см.
+   *  {@link ValueEditorOptions.registerPendingCommit}. */
   registerPendingCommit?: (commit: () => Promise<void>) => void;
 }): HTMLElement {
   const { kind, definition } = opts;
@@ -1131,16 +1138,17 @@ function buildMultiTextChipsEditor(opts: {
       }
     });
     currentInput = input;
-    // Черновик (`'change'` — массовый диалог/отбор): уход из поля не теряет
-    // набранный текст — он становится значением. Уход ВНУТРЬ того же поля
-    // (каретка ▾ открывает список вариантов) значением не считается.
-    if (opts.commitOn === 'change') {
-      input.addEventListener('blur', (event) => {
-        const related = (event as { relatedTarget?: unknown }).relatedTarget;
-        if (related !== null && related !== undefined && root.contains(related as Node)) return;
-        void commitPending();
-      });
-    }
+    // Набранный без Enter текст не теряется при уходе из поля — ни в черновике
+    // (`'change'`), ни в карточке (`'blur'`): он становится ещё одним чипом
+    // (ошибка bba5a7ce для черновика, bfe1bc24 — для карточки; скаляры того же
+    // редактора коммитят по blur, чип-поле выпадало из контракта `commitOn`).
+    // Уход ВНУТРЬ того же поля (каретка ▾ открывает список вариантов) значением
+    // не считается.
+    input.addEventListener('blur', (event) => {
+      const related = (event as { relatedTarget?: unknown }).relatedTarget;
+      if (related !== null && related !== undefined && root.contains(related as Node)) return;
+      void commitPending();
+    });
     root.append(input);
     // Вернуть фокус в поле ввода после добавления чипа (замечание п.6г). Фокус
     // здесь ставится сразу; если перерисовка хоста пересоберёт редактор, поле
@@ -1210,12 +1218,12 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
     // and a failed save rolls back instead of leaving the field in a
     // "looks saved but isn't" state (карточка 7d094c26).
     let baseline: string | null = stored === '' ? null : stored;
-    const commitValue = (value: string): void => {
+    const commitValue = (value: string): Promise<void> => {
       const next = value === '' ? null : value;
-      if (next === baseline) return;
+      if (next === baseline) return Promise.resolve();
       const prev = baseline;
       baseline = next;
-      void Promise.resolve()
+      return Promise.resolve()
         .then(() => opts.save(next))
         .then((ok) => {
           if (ok !== true) {
@@ -1228,7 +1236,11 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
           }
         });
     };
-    input.addEventListener('blur', () => commitValue(input.value));
+    input.addEventListener('blur', () => void commitValue(input.value));
+    // Хост, снимающий строку с экрана без blur (пересборка/смена мысли),
+    // фиксирует набранное до этого — иначе удалённый из документа
+    // сфокусированный узел терял бы текст без события.
+    opts.registerPendingCommit?.(() => commitValue(input.value));
   }
 
   const sources: SuggestSource[] = [];
@@ -1326,7 +1338,6 @@ function buildTextEditor(opts: ValueEditorOptions): HTMLElement {
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
       extraSuggest: opts.extraSuggest,
-      commitOn: opts.commitOn ?? 'blur',
       ...(opts.textListAsArray === true ? { listAsArray: true } : {}),
       ...(opts.registerPendingCommit !== undefined
         ? { registerPendingCommit: opts.registerPendingCommit }
@@ -1347,7 +1358,6 @@ function buildUrlEditor(opts: ValueEditorOptions): HTMLElement {
       historyPropertyId: opts.historyPropertyId,
       networkId: opts.networkId,
       extraSuggest: opts.extraSuggest,
-      commitOn: opts.commitOn ?? 'blur',
       ...(opts.registerPendingCommit !== undefined
         ? { registerPendingCommit: opts.registerPendingCommit }
         : {}),
@@ -1376,28 +1386,30 @@ function buildNumberEditor(opts: ValueEditorOptions): HTMLElement {
     });
   } else {
     let baseline: number | null = stored;
-    input.addEventListener('blur', () => {
+    const commitValue = (): Promise<void> => {
       if (input.value === '') {
-        if (baseline === null) return;
+        if (baseline === null) return Promise.resolve();
         const prev = baseline;
         baseline = null;
-        void Promise.resolve()
+        return Promise.resolve()
           .then(() => opts.save(null))
           .then((ok) => {
             if (ok !== true) baseline = prev;
           });
-        return;
       }
       const next = Number(input.value);
-      if (!Number.isFinite(next) || next === baseline) return;
+      if (!Number.isFinite(next) || next === baseline) return Promise.resolve();
       const prev = baseline;
       baseline = next;
-      void Promise.resolve()
+      return Promise.resolve()
         .then(() => opts.save(next))
         .then((ok) => {
           if (ok !== true) baseline = prev;
         });
-    });
+    };
+    input.addEventListener('blur', () => void commitValue());
+    // Снятая с экрана строка blur не получает — хост фиксирует набранное сам.
+    opts.registerPendingCommit?.(commitValue);
   }
   return wrapClearable(input, clearNow);
 }
@@ -1422,17 +1434,20 @@ function buildDateEditor(opts: ValueEditorOptions): HTMLElement {
     });
   } else {
     let baseline: string | null = stored;
-    input.addEventListener('blur', () => {
+    const commitValue = (): Promise<void> => {
       const next = input.value === '' ? null : input.value;
-      if (next === baseline) return;
+      if (next === baseline) return Promise.resolve();
       const prev = baseline;
       baseline = next;
-      void Promise.resolve()
+      return Promise.resolve()
         .then(() => opts.save(next))
         .then((ok) => {
           if (ok !== true) baseline = prev;
         });
-    });
+    };
+    input.addEventListener('blur', () => void commitValue());
+    // Снятая с экрана строка blur не получает — хост фиксирует набранное сам.
+    opts.registerPendingCommit?.(commitValue);
   }
   return wrapClearable(input, clearNow);
 }
@@ -2017,6 +2032,9 @@ export function buildLinkValueEditor(opts: {
     addInput.placeholder = current.length === 0
       ? (definition.required === true ? 'Название мысли… (обязательно)' : 'Название мысли…')
       : '+ ещё одну мысль';
+    // Набранный текст — запрос поиска, а не значение: значение выбирается из
+    // списка мысли (DoD-альтернатива ошибки bfe1bc24). Подсказка постоянная.
+    addInput.title = 'Значение — мысль из списка: начните вводить название и выберите строку';
     const sources: SuggestSource[] = [];
     if (opts.historyPropertyId !== undefined) {
       sources.push(linkHistorySource(networkId, opts.historyPropertyId));
@@ -2034,9 +2052,17 @@ export function buildLinkValueEditor(opts: {
       },
     });
     // Набранный текст сам по себе значение не меняет — только явный выбор
-    // из выпадашки (живого поиска/истории); на blur поле очищается.
-    addInput.addEventListener('blur', () => {
+    // из выпадашки (живого поиска/истории); на blur поле очищается. Так как
+    // очистка молчаливая, непустой брошенный запрос озвучивается сообщением
+    // (DoD-альтернатива ошибки bfe1bc24); уход внутрь поля (кнопка «…») — не
+    // потеря, сообщения нет.
+    addInput.addEventListener('blur', (event) => {
+      const typed = addInput.value.trim();
       addInput.value = '';
+      if (typed === '') return;
+      const related = (event as { relatedTarget?: unknown }).relatedTarget;
+      if (related !== null && related !== undefined && root.contains(related as Node)) return;
+      notice('Значение не добавлено: выберите мысль из списка.', 'info');
     });
     field.append(addInput);
     // Клик по свободному месту поля — фокус в живой поиск.
