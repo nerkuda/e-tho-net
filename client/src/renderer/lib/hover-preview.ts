@@ -273,6 +273,10 @@ async function resolveCommentContent(trigger: HTMLElement): Promise<HoverPreview
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
   const view = div('comment-view');
   renderHtml(view, permanent.body_html);
+  // Links inside the preview must themselves be Ctrl+hover triggers (nested
+  // previews, карточка e08159c1) — same marking pass as the comment view and
+  // the other body_html-rendering resolvers below.
+  wireCommentLinksInDom(view);
   void resolveWikiLinksInDom(view, networkId);
   return { title: trigger.dataset['hpTitle'] ?? '—', body: commentPreviewBody(view) };
 }
