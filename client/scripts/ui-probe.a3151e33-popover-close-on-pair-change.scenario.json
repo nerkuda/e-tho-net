@@ -1,0 +1,163 @@
+{
+  "name": "a3151e33-popover-close-on-pair-change",
+  "description": "GUI-гейт круга 3 ошибки a3151e33: УЖЕ ОТКРЫТЫЙ попап Ctrl-предпросмотра (панель монтируется в document.body и переживает teardownWorkspace + clear(root)) обязан закрыться при смене пары «сеть + вкладка». Два пути смены без единого mousemove — чтобы исключить штатное закрытие по уходу курсора: (1) клик по кросс-сетевой wiki-ссылке [[n:<сеть B>#<мысль B>]] внутри попапа, (2) клавиатурная активация вкладки B (focus + Space). Space, а не Enter: раннер шлёт CDP keyDown без keypress, и штатная активация кнопки по Enter не срабатывает (проверено диагностикой diag-keyboard-enter: keydown доходит, click = 0), а по Space — срабатывает (click = 1), потому что для пробела уходит ещё и char-событие; само нажатие всё равно доверенное (Input.dispatchKeyEvent), без mousemove. Перед сменой проба требует ровно один .ui-popover с кросс-ссылкой (гейт невакуумный), сразу после смены и через 3 с — ноль. Резолвер в полёте не участвует: попап открыт и дождался ссылки, поэтому красный на дофиксовой сборке — факт оставшегося попапа, а не таймаут.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "prepare-cross-link",
+      "timeout": 60000,
+      "probe": "(async () => { const netB = await window.etn.networks.create('Сеть B a3151e33 close'); window.__netB = netB.id; const target = await window.etn.thoughts.create(netB.id, { title: 'Цель B close hover' }); window.__targetB = target.id; const created = await window.etn.tabs.open(netB.id); window.__tabB = created.tab_id; const comments = await window.etn.comments.list('{{networkId}}', 'thought', '{{thoughtId}}'); const perm = comments.find((c) => c.kind === 'permanent'); if (perm === undefined) return 'no-permanent'; const body = 'Проба стенда. [[n:' + netB.id + '#' + target.id + '|переход в B]]'; await window.etn.comments.update('{{networkId}}', perm.id, { body_md: body }, perm.version); const tabs = await window.etn.tabs.list(); return tabs.some((t) => t.tab_id === created.tab_id) ? 'ok' : 'no-tab-b'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 90000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "tab-b-in-strip",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.tab')].some((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B a3151e33 close'))"
+    },
+    {
+      "name": "indicator-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-ind .ind') !== null"
+    },
+    {
+      "name": "ctrl-hover-comment-indicator",
+      "probe": "(() => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-cloud'; const ind = cloud.querySelector('.cloud-ind .ind'); if (ind === null) return 'no-ind'; const r = ind.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; ind.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); ind.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "popover-with-cross-link",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1 && document.querySelector('.ui-popover .wiki-link[data-wiki-id][data-wiki-network]') !== null"
+    },
+    {
+      "name": "popup-before-click",
+      "probe": {
+        "name": "popupBeforeClick",
+        "expression": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const links = [...document.querySelectorAll('.ui-popover .wiki-link[data-wiki-id][data-wiki-network]')]; const text = pops.length === 0 ? '' : (pops[0].textContent || ''); return { pops: pops.length, crossLinks: links.length, netMatches: links.length > 0 && links[0].getAttribute('data-wiki-network') === window.__netB, hasBodyText: text.includes('переход в B') }; })()"
+      },
+      "expect": {
+        "pops": 1,
+        "crossLinks": 1,
+        "netMatches": true,
+        "hasBodyText": true
+      }
+    },
+    {
+      "name": "click-cross-link-in-popover",
+      "probe": "(() => { const link = document.querySelector('.ui-popover .wiki-link[data-wiki-id][data-wiki-network]'); if (link === null) return 'no-link'; link.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "pair-switched-by-link",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B a3151e33 close'))"
+    },
+    {
+      "name": "pops-after-link-switch",
+      "probe": {
+        "name": "popsAfterLinkSwitch",
+        "expression": "[...document.querySelectorAll('.ui-popover')].length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "pops-after-link-switch-late",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 3000)); return [...document.querySelectorAll('.ui-popover')].length; })()",
+      "expect": 0
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab-a'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-back",
+      "timeout": 90000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-ind .ind') !== null"
+    },
+    {
+      "name": "ctrl-hover-again",
+      "probe": "(() => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-cloud'; const ind = cloud.querySelector('.cloud-ind .ind'); if (ind === null) return 'no-ind'; const r = ind.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; ind.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); ind.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "popover-before-keyboard",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "popup-before-keyboard",
+      "probe": {
+        "name": "popupBeforeKeyboard",
+        "expression": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const text = pops.length === 0 ? '' : (pops[0].textContent || ''); return { pops: pops.length, hasBodyText: text.includes('переход в B') }; })()"
+      },
+      "expect": { "pops": 1, "hasBodyText": true }
+    },
+    {
+      "name": "focus-tab-b",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B a3151e33 close')); if (tab === undefined) return 'no-tab-b'; tab.focus(); return document.activeElement === tab ? 'ok' : 'not-focused'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "activate-tab-b-by-keyboard",
+      "key": "Space"
+    },
+    {
+      "name": "pair-switched-by-keyboard",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B a3151e33 close'))"
+    },
+    {
+      "name": "pops-after-keyboard-switch",
+      "probe": {
+        "name": "popsAfterKeyboardSwitch",
+        "expression": "[...document.querySelectorAll('.ui-popover')].length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "pops-after-keyboard-switch-late",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 3000)); return [...document.querySelectorAll('.ui-popover')].length; })()",
+      "expect": 0
+    }
+  ]
+}
