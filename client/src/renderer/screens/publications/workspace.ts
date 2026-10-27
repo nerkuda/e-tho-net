@@ -40,6 +40,7 @@ import {
   renderHtml,
   setTooltip,
 } from '../../lib/dom.js';
+import { wireCommentLinksInDom } from '../../lib/hover-preview.js';
 import { t } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
 import { linkEntryMatchesPick } from '../../lib/link-entry-match.js';
@@ -890,6 +891,9 @@ export function mountPublicationWorkspace(
         const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
         if (target === null) continue;
         renderHtml(target, html);
+        // Точечная правка предисловия перерисовала его HTML — размечаем ссылки
+        // заново (ошибка a42c1896), как `renderTextBody` у текста ниже.
+        wireCommentLinksInDom(target);
         // Предисловие с трансклюзией достраиваем из НОВОГО `md` — как текст ниже.
         if (previewTextNeedsExpansion(html, md)) void expandTextTransclusions(target, md);
       } else {
@@ -1885,6 +1889,11 @@ export function mountPublicationWorkspace(
    */
   function renderTextBody(node: HTMLElement, html: string, md: string): void {
     renderHtml(node, html);
+    // Ссылки в тексте публикации — сами по себе триггеры Ctrl+наведения
+    // (ошибка a42c1896): единственный проход разметки `wireCommentLinksInDom`,
+    // что и в просмотре комментария/дневника. ПОСЛЕ вставки HTML и на том же
+    // узле; проход идемпотентен (только (пере)запись data-атрибутов).
+    wireCommentLinksInDom(node);
     const empty = html.trim() === '';
     node.classList.toggle('pub-doc-text-empty', empty);
     if (empty) {
@@ -1916,6 +1925,9 @@ export function mountPublicationWorkspace(
         : null;
     // `renderHtml` сносит содержимое (и грип) через innerHTML — возвращаем грип.
     renderHtml(node, expanded);
+    // Развёртка трансклюзий перерисовала блок ЦЕЛИКОМ — ссылки в новом HTML
+    // снова без разметки (ошибка a42c1896): повторяем проход на том же узле.
+    wireCommentLinksInDom(node);
     node.classList.remove('pub-doc-text-empty');
     if (grip !== null) node.prepend(grip);
   }
@@ -1968,6 +1980,9 @@ export function mountPublicationWorkspace(
         const preamble = div('pub-doc-preamble');
         preamble.dataset['thoughtId'] = block.thoughtId;
         renderHtml(preamble, block.preambleHtml);
+        // Ссылки предисловия раздела — такие же триггеры Ctrl+наведения
+        // (ошибка a42c1896), как в текстах и резюме.
+        wireCommentLinksInDom(preamble);
         node.append(preamble);
       }
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
@@ -2098,6 +2113,9 @@ export function mountPublicationWorkspace(
     if (summaryHtml !== '') {
       const block = div('pub-doc-summary');
       renderHtml(block, summaryHtml);
+      // Ссылки резюме — триггеры Ctrl+наведения (ошибка a42c1896): тот же
+      // проход, что у текстов/предисловий.
+      wireCommentLinksInDom(block);
       node.append(block);
       if (!summaryInSync && htmlHasTransclusionMarkup(summaryHtml)) {
         void expandTextTransclusions(block, summaryRaw);

@@ -21,6 +21,7 @@
  */
 
 import { div, el, renderHtml } from '../../lib/dom.js';
+import { wireCommentLinksInDom } from '../../lib/hover-preview.js';
 import { t } from '../../lib/i18n.js';
 import { commentShell } from '../../lib/ui/comment.js';
 import { store } from '../../state.js';
@@ -51,6 +52,13 @@ export function renderRecordView(
   const view = div(RECORD_VIEW_CLASS);
   if (row.body_html.trim() !== '') {
     renderHtml(view, row.body_html);
+    // Ссылки внутри записи — сами по себе триггеры Ctrl+наведения (ошибка
+    // a42c1896): тем же единственным проходом разметки, что и просмотр поля
+    // markdown / попап постоянного комментария (`wireCommentLinksInDom`).
+    // Проход идемпотентен и идёт ПОСЛЕ вставки HTML — до неё ссылок в `view`
+    // ещё нет. Резолв ID-форм (`resolveWikiLinksInDom`) — забота экрана
+    // (`chronicle.ts`), атрибуты разметки он не снимает.
+    wireCommentLinksInDom(view);
     // Ctrl+колесо над текстом записи масштабирует комментарий так же, как поля
     // markdown (ошибка 157b7c14): тот же жест `--md-font-size`. Масштабируется
     // ТОЛЬКО текст записи (`.diary-body`), прочие поля слота — нет.
