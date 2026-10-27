@@ -131,6 +131,37 @@ describe('errText: дружелюбные сообщения', () => {
     assert.doesNotMatch(text, /ambiguous|source|target|side/i);
   });
 
+  it('422 недопустимого типа значения — пользовательский текст по details.reason (d9bc6012, круг 3)', () => {
+    // Значение свойства-связи не того типа, который допускает привязка.
+    // Сервер отдаёт русскую формулировку с `field: "value"` и машиночитаемой
+    // причиной; клиент переводит её централизованно, без внутренних терминов.
+    const text = errText(
+      new EtnError('VALIDATION_ERROR', 'свойство «Работы версии» не принимает значение этого типа', {
+        key: 'Работы версии',
+        ref: '11111111-2222-4333-8444-555555555555',
+        field: 'value',
+        reason: 'target-type-mismatch',
+        allowed_type_ids: ['aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
+        actual_type_id: '11111111-2222-4333-8444-555555555555',
+      }),
+    );
+    assert.equal(text, 'значение не того типа, который допускает свойство');
+    assert.doesNotMatch(text, /thought|required type|source|target|side/i);
+    assert.doesNotMatch(text, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+
+    // Совместимость: даже если сервер старше и текст английский, пользователь
+    // видит словарную формулировку — перевод идёт по `details.reason`.
+    const legacy = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'thought 11111111-2222-4333-8444-555555555555 is not of a required type',
+        { field: 'value', reason: 'target-type-mismatch' },
+      ),
+    );
+    assert.equal(legacy, 'значение не того типа, который допускает свойство');
+    assert.doesNotMatch(legacy, /thought|required type|[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+
   it('422 по стороне без details.reason (сервер старше 0.14.1) — всё равно без внутренних терминов', () => {
     const text = errText(
       new EtnError('VALIDATION_ERROR', 'имя свойства «X» адресует обе стороны — укажите side', {

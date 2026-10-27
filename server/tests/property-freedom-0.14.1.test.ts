@@ -433,10 +433,23 @@ describe(
         //    недопустима — 422, рёбра не меняются.
         const registryReverse = await putProperty(ctx, task, 'версия', version, 'target');
         assert.equal(registryReverse.statusCode, 422, registryReverse.body);
-        assert.match(registryReverse.body, /required type/);
+        const reverseError = registryReverse.json() as {
+          error: {
+            message: string;
+            details: { field?: string; reason?: string; allowed_type_ids: string[] };
+          };
+        };
+        // Текст — русский и пользовательский, без английской фразы и GUID
+        // (0.14.1, круг 3 d9bc6012); машиночитаемые field/reason — для клиента.
+        assert.match(reverseError.error.message, /не принимает значение этого типа/);
+        assert.doesNotMatch(
+          reverseError.error.message,
+          /thought|required type|[0-9a-f]{8}-[0-9a-f]{4}/i,
+        );
+        assert.equal(reverseError.error.details.field, 'value');
+        assert.equal(reverseError.error.details.reason, 'target-type-mismatch');
         assert.deepEqual(
-          (registryReverse.json() as { error: { details: { allowed_type_ids: string[] } } }).error
-            .details.allowed_type_ids,
+          reverseError.error.details.allowed_type_ids,
           [taskType.id],
           'ограничение взято с source-стороны привязки (типы источников ребра)',
         );
@@ -452,7 +465,7 @@ describe(
         //    допустимая — версия. Ограничение действует в обе стороны.
         const forwardWrong = await putProperty(ctx, task, 'версия', taskPeer, 'source');
         assert.equal(forwardWrong.statusCode, 422, forwardWrong.body);
-        assert.match(forwardWrong.body, /required type/);
+        assert.match(forwardWrong.body, /не принимает значение этого типа/);
         const forward = await putProperty(ctx, task, 'версия', version);
         assert.equal(forward.statusCode, 200, forward.body);
         assert.deepEqual(outTargets(), [version]);
@@ -546,6 +559,16 @@ describe(
         };
         assert.equal(outsideBody.error.details.reason, 'property-ambiguous');
         assert.doesNotMatch(outsideBody.error.message, /ambiguous|source|target/i);
+
+        // Сужение по стороне не помогает: оба свойства адресуют ОДНУ сторону
+        // (name_forward), поэтому с явным side коллизия остаётся настоящей —
+        // 422 (0.14.1, круг 3 d9bc6012; спека 906a29c9 v13, п.3).
+        const outsideSide = await putProperty(ctx, spare, 'rel d9r', value, 'source');
+        assert.equal(outsideSide.statusCode, 422, outsideSide.body);
+        assert.equal(
+          (outsideSide.json() as { error: { details: { reason?: string } } }).error.details.reason,
+          'property-ambiguous',
+        );
       } finally {
         await closeRestContext(ctx);
       }
@@ -614,7 +637,7 @@ describe(
         // типы target-привязок (версию); задача как цель — 422.
         const wrongTarget = await putProperty(ctx, task, 'версия владельца', taskPeer);
         assert.equal(wrongTarget.statusCode, 422, wrongTarget.body);
-        assert.match(wrongTarget.body, /required type/);
+        assert.match(wrongTarget.body, /не принимает значение этого типа/);
         const rightTarget = await putProperty(ctx, task, 'версия владельца', versionTarget);
         assert.equal(rightTarget.statusCode, 200, rightTarget.body);
       } finally {
@@ -1174,7 +1197,8 @@ describe(
           // версия недопустима → 422, ребра нет.
           const wrong = await add('версия mcp', version.id, 'target');
           assert.equal(wrong.isError, true, toolText(wrong));
-          assert.match(toolText(wrong), /required type/);
+          assert.match(toolText(wrong), /не принимает значение этого типа/);
+          assert.doesNotMatch(toolText(wrong), /thought|required type/i);
           assert.deepEqual(targets('in'), []);
 
           // Допустимая цель той же стороны (задача) — ребро стороны назначения.
@@ -1185,10 +1209,123 @@ describe(
           // Прямая сторона: версия допустима, задача — нет.
           const forwardWrong = await add('версия mcp', peer.id);
           assert.equal(forwardWrong.isError, true, toolText(forwardWrong));
-          assert.match(toolText(forwardWrong), /required type/);
+          assert.match(toolText(forwardWrong), /не принимает значение этого типа/);
           const forward = await add('версия mcp', version.id);
           assert.notEqual(forward.isError, true, toolText(forward));
           assert.deepEqual(targets('out'), [version.id]);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.properties.add: внетиповая коллизия display-имён сужается по side (d9bc6012, круг 3)', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const ownerType = createThoughtType(ndb, { name: 'Тема без привязок d9j' }, ctx.adminId);
+        const holderType = createThoughtType(ndb, { name: 'Тема-держатель d9j' }, ctx.adminId);
+        // Два РАЗНЫХ свойства с разными реестровыми именами; после переименования
+        // типов связи их display-имя сходится в «rel-wide d9j», но у одного это
+        // name_forward (сторона source), у другого — name_reverse (target).
+        // Привязки — у постороннего типа, у владельца строки привязки нет
+        // (arm 3 внетиповой записи).
+        const forwardProp = createNetworkProperty(
+          ndb,
+          {
+            name: 'rel-fwd-a d9j',
+            value_type: 'link',
+            name_forward: 'rel-fwd-a d9j',
+            name_reverse: 'rel-back-a d9j',
+          },
+          ctx.adminId,
+        );
+        const reverseProp = createNetworkProperty(
+          ndb,
+          {
+            name: 'rel-fwd-b d9j',
+            value_type: 'link',
+            name_forward: 'rel-fwd-b d9j',
+            name_reverse: 'rel-back-b d9j',
+          },
+          ctx.adminId,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          holderType.id,
+          { key: 'rel-fwd-a d9j', value_type: 'link', side: 'source' },
+          ctx.adminId,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          holderType.id,
+          { key: 'rel-fwd-b d9j', value_type: 'link', side: 'target' },
+          ctx.adminId,
+        );
+        updateLinkType(
+          ndb,
+          forwardProp.config?.link_type_id as string,
+          { name_forward: 'rel-wide d9j' },
+          undefined,
+          ctx.adminId,
+        );
+        updateLinkType(
+          ndb,
+          reverseProp.config?.link_type_id as string,
+          { name_reverse: 'rel-wide d9j' },
+          undefined,
+          ctx.adminId,
+        );
+        const forwardLinkTypeId = forwardProp.config?.link_type_id as string;
+        const reverseLinkTypeId = reverseProp.config?.link_type_id as string;
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Владелец d9j',
+            type_id: ownerType.id,
+          });
+          const valueA = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Значение A d9j',
+            type_id: ownerType.id,
+          });
+          const valueB = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Значение B d9j',
+            type_id: ownerType.id,
+          });
+          const add = (value: string, side: 'source' | 'target') =>
+            handle.client.callTool({
+              name: 'etn.properties.add',
+              arguments: {
+                network_id: ctx.networkId,
+                owner_type: 'thought',
+                owner_id: owner.id,
+                key: 'rel-wide d9j',
+                value,
+                side,
+              },
+            });
+          const targets = (linkTypeId: string, direction: 'out' | 'in') =>
+            getLinkPropertyValues(ndb, 'thought', owner.id, linkTypeId, direction).map(
+              (v) => v.target_id,
+            );
+
+          // side=source оставляет только свойство с привязкой source —
+          // ребро исходящее, второе свойство не тронуто.
+          const sourceSide = await add(valueA.id, 'source');
+          assert.notEqual(sourceSide.isError, true, toolText(sourceSide));
+          assert.deepEqual(targets(forwardLinkTypeId, 'out'), [valueA.id]);
+          assert.deepEqual(targets(reverseLinkTypeId, 'in'), []);
+
+          // side=target оставляет только свойство с привязкой target —
+          // ребро входящее, первое свойство не тронуто.
+          const targetSide = await add(valueB.id, 'target');
+          assert.notEqual(targetSide.isError, true, toolText(targetSide));
+          assert.deepEqual(targets(reverseLinkTypeId, 'in'), [valueB.id]);
+          assert.deepEqual(targets(forwardLinkTypeId, 'out'), [valueA.id]);
         } finally {
           await handle.close();
         }

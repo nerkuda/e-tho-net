@@ -154,8 +154,9 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
  *   `ETIMEDOUT`, «Сетевая ошибка») → «сервер недоступен, попробуйте позже» —
  *   technical words, codes and stacks never leak;
- * - `422` по адресу стороны свойства-связи (`details.field === 'side'`) или
- *   коллизии display-имён (`details.reason === 'property-ambiguous'`) →
+ * - `422` по адресу стороны свойства-связи (`details.field === 'side'`), при
+ *   коллизии display-имён (`details.reason === 'property-ambiguous'`) и при
+ *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) →
  *   формулировка пользователя по `details.reason`: серверный текст адресован
  *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
  * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
@@ -189,6 +190,7 @@ function propertySideErrorText(like: ErrorLike | null): string | null {
   if (typeof details !== 'object' || details === null) return null;
   const { field, reason } = details as { field?: unknown; reason?: unknown };
   if (reason === PROPERTY_SIDE_ERROR_REASON.ambiguous) return t('errors.propertyNameAmbiguous');
+  if (reason === PROPERTY_SIDE_ERROR_REASON.targetType) return t('errors.propertyTargetType');
   if (field !== 'side') return null;
   return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
     ? t('errors.propertySideMismatch')

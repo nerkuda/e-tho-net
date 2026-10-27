@@ -93,12 +93,17 @@ export class EtnError extends Error {
  *     свойствам сети, и выбрать одно не удалось даже по `side` (`field =
  *     "property"`; 0.14.1, доработка d9bc6012). Причина общая для записи
  *     свойства по имени: клиент переводит её в человеческий текст так же, как
- *     side-причины.
+ *     side-причины;
+ *   * `target-type-mismatch` — значение свойства-связи не того типа, который
+ *     допускает привязка целевой стороны (`field = "value"`; 0.14.1, круг 3
+ *     ошибки d9bc6012). Серверный текст русский и без GUID, причина нужна для
+ *     централизованного перевода в клиенте.
  */
 export const PROPERTY_SIDE_ERROR_REASON = {
   required: 'side-required',
   mismatch: 'side-mismatch',
   ambiguous: 'property-ambiguous',
+  targetType: 'target-type-mismatch',
 } as const;
 export type PropertySideErrorReason =
   (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];

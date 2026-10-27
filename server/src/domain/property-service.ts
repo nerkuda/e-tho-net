@@ -992,6 +992,12 @@ function allowedOppositeTypeIdsForValidation(
  * привязки (`side === null`) или пустом реестровом ограничении — legacy
  * `config.allowed_target_type_ids` (совместимость с привязками до миграции 041
  * и валидацией дефолтов реестра).
+ *
+ * Тексты отказов — русские и пользовательские, без `source`/`target` и GUID
+ * (0.14.1, доработка d9bc6012): их читают и MCP/REST-клиенты. Для несовпадения
+ * типа добавлены машиночитаемые `details.field = "value"` и
+ * `details.reason = PROPERTY_SIDE_ERROR_REASON.targetType` — клиент переводит
+ * причину в свой текст централизованно, как side-причины.
  */
 function validateLinkTargetType(
   ndb: NetworkDb,
@@ -1003,10 +1009,11 @@ function validateLinkTargetType(
     | { type_id: string | null }
     | undefined;
   if (!target) {
-    throw new EtnError('VALIDATION_ERROR', `referenced thought ${targetId} does not exist`, {
-      key: prop.name,
-      ref: targetId,
-    });
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `значение свойства «${prop.name}» ссылается на несуществующую мысль`,
+      { key: prop.name, ref: targetId },
+    );
   }
   const registryAllowed =
     side === null ? [] : allowedOppositeTypeIdsForValidation(ndb, prop.id, side);
@@ -1019,12 +1026,18 @@ function validateLinkTargetType(
           (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
         );
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
-    throw new EtnError('VALIDATION_ERROR', `thought ${targetId} is not of a required type`, {
-      key: prop.name,
-      ref: targetId,
-      allowed_type_ids: allowedIds,
-      actual_type_id: target.type_id,
-    });
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `свойство «${prop.name}» не принимает значение этого типа`,
+      {
+        key: prop.name,
+        ref: targetId,
+        field: 'value',
+        reason: PROPERTY_SIDE_ERROR_REASON.targetType,
+        allowed_type_ids: allowedIds,
+        actual_type_id: target.type_id,
+      },
+    );
   }
 }
 
@@ -1260,10 +1273,11 @@ function setLinkPropertyTargets(
   for (const targetId of targetIds) {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     if (src === dst) {
-      throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
-        key: prop.name,
-        ref: targetId,
-      });
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `свойство «${prop.name}» не может связать мысль с самой собой`,
+        { key: prop.name, ref: targetId },
+      );
     }
   }
 
@@ -1432,10 +1446,11 @@ function addLinkPropertyTarget(
   validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
   if (src === dst) {
-    throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
-      key: prop.name,
-      ref: targetId,
-    });
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `свойство «${prop.name}» не может связать мысль с самой собой`,
+      { key: prop.name, ref: targetId },
+    );
   }
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing !== undefined) {
@@ -3996,9 +4011,18 @@ export function resolveDefinition(
   //    направление — из имени стороны (748b80fd) или из `side`/живых рёбер.
   if (ownerType === 'thought') {
     const byDisplay = new Map<string, { prop: NetworkProperty }>();
+    // Явный `side` — адрес стороны и для внетиповой строки: display-имя
+    // адресует сторону ребра (name_forward ⇒ source, name_reverse ⇒ target),
+    // поэтому кандидат, чьё имя называет только ПРОТИВОПОЛОЖНУЮ сторону,
+    // отбрасывается. 422 остаётся только для настоящей неоднозначности —
+    // после сужения по стороне не осталось ровно одного свойства
+    // (0.14.1, доработка d9bc6012; спека 906a29c9 v13, п.3).
+    const wantedDirection = side === null ? null : directionFromSide(side);
     for (const p of listNetworkProperties(ndb)) {
       if (p.value_type !== 'link') continue;
-      if (linkDirectionsByDisplayName(ndb, p.config, key).length === 0) continue;
+      const directions = linkDirectionsByDisplayName(ndb, p.config, key);
+      if (directions.length === 0) continue;
+      if (wantedDirection !== null && !directions.includes(wantedDirection)) continue;
       byDisplay.set(p.id, { prop: p });
     }
     if (byDisplay.size === 1) {
