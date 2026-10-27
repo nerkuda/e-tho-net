@@ -116,7 +116,9 @@ test('parseArgs: --delay-seed-ms (простой и с ошибкой)', () => {
   assert.throws(() => parseArgs(['--delay-seed-ms']), /требует значения/);
 });
 
-test('parseArgs: --delay-seed-path (пусто по умолчанию, значение, требует --delay-seed-ms)', () => {
+// Парное требование «--delay-seed-path требует --delay-seed-ms» проверяет
+// `main` стенда (parseArgs значений не связывает) — здесь только разбор значения.
+test('parseArgs: --delay-seed-path (пусто по умолчанию, значение, пропущенное значение)', () => {
   assert.equal(parseArgs([]).delaySeedPath, '');
   assert.equal(
     parseArgs(['--delay-seed-ms', '3000', '--delay-seed-path', '/thoughts/resolve']).delaySeedPath,

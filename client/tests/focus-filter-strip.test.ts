@@ -1489,6 +1489,21 @@ describe('focus-filter-strip (02ba2ae7; df84de22)', () => {
     assert.equal(strip.hasMoreViewResult(), false);
   });
 
+  it('loadMoreViewResult устаревшей пары не догружает порцию (ff5efa1a)', async () => {
+    await setupDefaultPage(250, refIds(100, 0));
+    const first = await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(first!.total, 250);
+    const callsBefore = state.viewRun.calls.length;
+    // Сеть уже сменилась на B, а догрузка пришла со старой парой сети A.
+    store.update({ networkId: OTHER_NETWORK_ID });
+    const second = await strip.loadMoreViewResult(FOCUS_ID, {
+      networkId: NETWORK_ID,
+      tabId: null,
+    });
+    assert.equal(second, null, 'устаревшая пара не догружает порцию');
+    assert.equal(state.viewRun.calls.length, callsBefore, 'views.run в чужую сеть не ушёл');
+  });
+
   it('loadMoreViewResult — no-op в режиме «Потомки» и без результата (4493811f)', async () => {
     await mountWith([]);
     assert.equal(await strip.loadMoreViewResult(FOCUS_ID), null);
