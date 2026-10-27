@@ -140,6 +140,20 @@ let outsideReload: (() => void) | null = null;
 let wired = false;
 /** Перечитывание счётчика группы «Свойства вне типа» (или null). */
 let outsideRefreshCount: (() => void) | null = null;
+/** Владелец, под которого построена текущая вкладка «Свойства» (или null). */
+let currentTarget: PropertiesTarget | null = null;
+
+/**
+ * Владельцы, чьи значения изменились, пока вкладка «Свойства» их не
+ * показывала: панель скрыта (другая вкладка активна) или показывает другого
+ * владельца. Событие `property-value.set/deleted` адресуется по
+ * `evt.data.owner_id`, а не «показанному» владельцу, поэтому скрытая панель
+ * помечает владельца и перечитывает его при следующем показе (ошибка
+ * 9667b75c: возврат на вкладку показывал устаревшее значение). Набор живёт не
+ * дольше вкладки: вытеснение панели его очищает, новая сборка читает данные
+ * сама.
+ */
+const dirtyValueOwners = new Set<string>();
 
 /**
  * Выбранное в пикере, но ещё не записанное внетиповое свойство (0.14.1,
@@ -163,7 +177,8 @@ interface PendingOutsideProperty {
 
 const pendingOutside = new Map<string, PendingOutsideProperty[]>();
 
-function pendingOwnerKey(ownerType: 'thought' | 'link', ownerId: string): string {
+/** Ключ владельца значения (`ownerType:ownerId`) — для черновиков и dirty-меток. */
+function ownerKey(ownerType: 'thought' | 'link', ownerId: string): string {
   return `${ownerType}:${ownerId}`;
 }
 
@@ -176,7 +191,7 @@ function pendingOutsideFor(
   ownerType: 'thought' | 'link',
   ownerId: string,
 ): PendingOutsideProperty[] {
-  return pendingOutside.get(pendingOwnerKey(ownerType, ownerId)) ?? [];
+  return pendingOutside.get(ownerKey(ownerType, ownerId)) ?? [];
 }
 
 function setPendingOutside(
@@ -184,7 +199,7 @@ function setPendingOutside(
   ownerId: string,
   items: PendingOutsideProperty[],
 ): void {
-  const key = pendingOwnerKey(ownerType, ownerId);
+  const key = ownerKey(ownerType, ownerId);
   if (items.length === 0) pendingOutside.delete(key);
   else pendingOutside.set(key, items);
 }
@@ -658,6 +673,26 @@ function signalCompositionForOwner(ownerType: 'thought' | 'link', ownerId: strin
 }
 
 /**
+ * Значение свойства изменилось (чужой клиент или локальное эхо): помечаем
+ * ВЛАДЕЛЬЦА события, а не «показанного». Панель, показывающая другого
+ * владельца, не перечитывается зря; скрытая — перечитает при следующем показе
+ * через `lifecycle.onShow` (ошибка 9667b75c). Показанная панель обновляется на
+ * месте; отцепленная отсекается гардом самого `reload`, а метка остаётся.
+ * Тело «Свойства вне типа» подписано на тот же поток само (см.
+ * `buildOutsidePropertiesBody`), поэтому здесь его не трогаем — иначе одно
+ * событие давало бы двойное чтение.
+ */
+function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): void {
+  const target = currentTarget;
+  // Вкладка ещё не построена — метка не нужна: первая сборка прочитает данные
+  // сама, а набор не растёт на события до открытия «Свойств».
+  if (target === null) return;
+  dirtyValueOwners.add(ownerKey(ownerType, ownerId));
+  if (target.ownerType !== ownerType || target.ownerId !== ownerId) return;
+  currentReload?.();
+}
+
+/**
  * Registers the «Свойства» tab (task 8ab775d9). Replaces the previous
  * «Свойства» section in the «Комментарий» tab — values now live in their own
  * tab with two collapsible groups, leaving «Комментарий» to the permanent
@@ -672,14 +707,18 @@ export function registerPropertiesGroup(): void {
   if (!wired) {
     wired = true;
     // Чужое значение свойства гасит `focus:@owner` (роутер на
-    // `property-value.set/deleted`) — перечитываем открытую вкладку «Свойства».
+    // `property-value.set/deleted`) — помечаем владельца события и
+    // перечитываем открытую вкладку, только если она показывает именно его.
     // Свой `onRealtimeEvent` снесён (G5): используется причина слоя.
     onQueryInvalidated((prefix, _keys, cause) => {
       if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
       const evt = asRealtimeCause(cause);
       if (evt === null) return;
       if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
-        currentReload?.();
+        const data = evt.data as { owner_type?: unknown; owner_id?: unknown };
+        if (data.owner_type !== 'thought' && data.owner_type !== 'link') return;
+        if (typeof data.owner_id !== 'string') return;
+        noteValueOwnerChanged(data.owner_type, data.owner_id);
       }
     });
   }
@@ -710,6 +749,23 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   outsideRefreshCount = null;
   currentFlush = null;
   outsideFlush = null;
+  currentTarget = target;
+  // Вытеснение панели: её метки «владелец изменён не на экране» больше не
+  // нужны — следующая сборка читает значения сама (ошибка 9667b75c).
+  lifecycle.onDispose(() => {
+    if (currentTarget === target) currentTarget = null;
+    dirtyValueOwners.clear();
+  });
+  // Возврат на скрытую вкладку: пока её не было на экране, значение могло
+  // измениться у показанного владельца. `reload` сам фиксирует набранное и
+  // делает инкрементальную сверку (без пересборки таблицы); гард «скрыто не
+  // читаем» уже не действует — панель прикреплена до вызова хука.
+  lifecycle.onShow(() => {
+    if (!dirtyValueOwners.has(ownerKey(target.ownerType, target.ownerId))) return;
+    currentReload?.();
+    outsideReload?.();
+    outsideRefreshCount?.();
+  });
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
   const typeGroup = groupSection({
@@ -1401,6 +1457,12 @@ function buildOutsidePropertiesBody(
     if (disposed) return;
     if (box.isConnected) everMounted = true;
     shownOwnerId = requestOwnerId;
+    // Владелец прочитан, пока таблица была на экране, — метка «изменён не на
+    // экране» снята. Скрытая панель метку сохраняет: показ перечитает
+    // (ошибка 9667b75c).
+    if (box.isConnected) {
+      dirtyValueOwners.delete(ownerKey(target.ownerType, requestOwnerId));
+    }
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
     // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
     const outside: Array<PropertyValue | LinkPropertyValues> = values.filter(
@@ -1443,10 +1505,11 @@ function buildOutsidePropertiesBody(
   }
   outsideReload = () => void reload();
   void reload();
-  // Keep the outside-type body in sync with the main properties reload (a
-  // delete in either group should refresh the other). The realtime listener
-  // already invokes `currentReload` for both groups; piggy-back on it by
-  // re-rendering ourselves whenever it fires.
+  // Свой owner-гейт на realtime: событие адресуется ВЛАДЕЛЬЦУ
+  // (`evt.data.owner_id`), а не «показанному». Чужой владелец показанную
+  // таблицу не перечитывает (ошибка 9667b75c); скрытая панель метится
+  // модульным слушателем (`noteValueOwnerChanged`) и перечитает себя на
+  // `lifecycle.onShow`.
   onQueryInvalidated((prefix, _keys, cause) => {
     if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
     const evt = asRealtimeCause(cause);
@@ -1471,7 +1534,16 @@ function buildOutsidePropertiesBody(
       return;
     }
     if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
-      if (box.isConnected) void reload();
+      // Событие о владельце, которого эта таблица не показывает, не повод
+      // перечитывать и перерисовывать показанные строки.
+      const data = evt.data;
+      if (
+        box.isConnected &&
+        data.owner_type === target.ownerType &&
+        data.owner_id === target.ownerId
+      ) {
+        void reload();
+      }
     }
   });
   // Тот же локальный канал правок, что у основной таблицы (ошибка ec5ba58c):
@@ -2411,6 +2483,11 @@ function buildTypePropertiesBody(
     // From here the table is considered bound to this owner (even the empty-set
     // branch below) — the detached-pane guard keys off it.
     shownOwnerId = requestOwnerId;
+    // Прочитано на экране — метка «изменён не на экране» снята (ошибка
+    // 9667b75c); скрытая панель метку сохраняет до показа.
+    if (box.isConnected) {
+      dirtyValueOwners.delete(ownerKey(target.ownerType, requestOwnerId));
+    }
     // Индекс показанных определений (ошибка 74b94c26): realtime-события
     // `property-definition.updated/deleted` несут только id привязки, поэтому
     // владельца для гейта берут из того, что реально отрисовано сейчас.

@@ -2694,6 +2694,7 @@ describe('editor properties — flush недописанного значени�
       asTab
         ? propertiesInternals.buildPropertiesTab(ctxOf('t1') as any, {
             onDispose: () => undefined,
+            onShow: () => undefined,
           })
         : propertiesInternals.buildPropertiesBody(ctxOf('t1') as any)
     ) as unknown as ShimElement;

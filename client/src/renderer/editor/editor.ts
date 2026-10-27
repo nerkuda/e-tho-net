@@ -188,6 +188,16 @@ export type EditorTabId =
 export interface TabPaneLifecycle {
   /** Registers a cleanup callback for this pane; safe to call after mount. */
   onDispose(callback: () => void): void;
+  /**
+   * Registers a «pane shown again» callback. Fired when a CACHED pane is
+   * re-attached to the tab host after being detached — the user came back to
+   * its tab. NOT fired on the first build (the builder reads its own data) and
+   * not on a retarget of an already-shown pane (its content is updated in
+   * place). Tabs that skip reads while hidden keep a dirty flag and refresh
+   * here (ошибка 9667b75c: скрытая «Свойства» не перечитывала значение,
+   * изменённое другим клиентом).
+   */
+  onShow(callback: () => void): void;
 }
 
 /** Builds the content of one tab for the current entity. */
@@ -540,11 +550,20 @@ let builtPanes = new Map<EditorTabId, HTMLElement>();
  * because another tab is active.
  */
 const paneDisposers = new Map<EditorTabId, Set<() => void>>();
+/**
+ * «Pane shown again» callbacks, one set per tab id, registered through
+ * {@link TabPaneLifecycle.onShow}. Fired by `displayTab` only when a cached
+ * pane is re-attached after being detached; a fresh build re-registers them
+ * (ошибка 9667b75c).
+ */
+const paneShowCallbacks = new Map<EditorTabId, Set<() => void>>();
 
 /** Runs and forgets the cleanup callbacks of one pane (best-effort). */
 function disposePane(id: EditorTabId): void {
   const callbacks = paneDisposers.get(id);
   paneDisposers.delete(id);
+  // The pane's «shown» callbacks belong to the build that is being evicted too.
+  paneShowCallbacks.delete(id);
   if (callbacks === undefined) return;
   for (const callback of callbacks) {
     try {
@@ -553,6 +572,28 @@ function disposePane(id: EditorTabId): void {
       // One failing cleanup must not block the rest of the eviction.
     }
   }
+}
+
+/** Notifies one pane that it has been re-attached to the tab host (best-effort). */
+function notifyPaneShown(id: EditorTabId): void {
+  const callbacks = paneShowCallbacks.get(id);
+  if (callbacks === undefined) return;
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch {
+      // One failing «shown» hook must not block the rest of the panes.
+    }
+  }
+}
+
+/**
+ * Parent element of a pane node. Real DOM exposes `parentElement`; the test
+ * DOM shim only has `parent` (see `publication-card.ts` for the same idiom).
+ */
+function paneParentOf(node: HTMLElement): HTMLElement | null {
+  const withParent = node as HTMLElement & { parent?: HTMLElement | null };
+  return node.parentElement ?? withParent.parent ?? null;
 }
 
 /** Runs and forgets the cleanup callbacks of every cached pane. */
@@ -924,9 +965,14 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   disposePane(id);
   const disposers = new Set<() => void>();
   paneDisposers.set(id, disposers);
+  const showCallbacks = new Set<() => void>();
+  paneShowCallbacks.set(id, showCallbacks);
   const lifecycle: TabPaneLifecycle = {
     onDispose: (callback) => {
       disposers.add(callback);
+    },
+    onShow: (callback) => {
+      showCallbacks.add(callback);
     },
   };
   const pane = div('tab-pane fixed');
@@ -1007,17 +1053,29 @@ function displayTab(id: EditorTabId): void {
   for (const [tabId, tab] of tabButtons) {
     tab.classList.toggle('active', tabId === id);
   }
-  let pane = builtPanes.get(id);
-  if (pane === undefined) {
+  const cached = builtPanes.get(id);
+  let pane: HTMLElement;
+  let rebuilt = false;
+  if (cached === undefined) {
     pane = buildTabPane(id);
     builtPanes.set(id, pane);
-  } else if (stalePanes.has(id)) {
-    // Content belongs to the previous entity — rebuild it inside the SAME pane
-    // node (identity survives the entity switch, task 90b2256e).
-    stalePanes.delete(id);
-    pane.replaceChildren(...buildTabPane(id).children);
+  } else {
+    pane = cached;
+    if (stalePanes.has(id)) {
+      // Content belongs to the previous entity — rebuild it inside the SAME pane
+      // node (identity survives the entity switch, task 90b2256e).
+      stalePanes.delete(id);
+      pane.replaceChildren(...buildTabPane(id).children);
+      rebuilt = true;
+    }
   }
+  // A cached pane that is not in the host right now is being shown again: its
+  // own `onShow` hooks get a chance to refresh what they had to skip while
+  // hidden (ошибка 9667b75c). A fresh build and a stale rebuild read their own
+  // data — nothing to refresh there.
+  const reattached = cached !== undefined && paneParentOf(pane) !== paneHostEl;
   paneHostEl.replaceChildren(pane);
+  if (reattached && !rebuilt) notifyPaneShown(id);
 }
 
 /** Picks the tab the editor should draw first (saved preference, else «Комментарий»). */

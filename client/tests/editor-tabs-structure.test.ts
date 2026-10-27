@@ -428,6 +428,28 @@ describe('набор вкладок зависит от сущности (0.8.1,
     );
     assert.ok(/if \(shownTab !== 'main'\)/.test(src), 'focusEditorComment reads shownTab');
   });
+
+  it('повторный показ вкладки зовёт lifecycle.onShow только после отцепления', () => {
+    const src = readText(SRC.editor);
+    // Хук «показана» рядом с onDispose (ошибка 9667b75c): скрытая вкладка
+    // помечает изменённого владельца и дочитывает его при возврате.
+    assert.match(
+      src,
+      /export interface TabPaneLifecycle[\s\S]*?onShow\(callback: \(\) => void\): void/,
+      'TabPaneLifecycle exposes onShow next to onDispose',
+    );
+    assert.match(
+      src,
+      /const reattached = cached !== undefined && paneParentOf\(pane\) !== paneHostEl/,
+      'displayTab detects a re-attached cached pane (not a first build)',
+    );
+    assert.match(
+      src,
+      /if \(reattached && !rebuilt\) notifyPaneShown\(id\)/,
+      'onShow fires only on re-attach, never after a stale rebuild',
+    );
+    assert.match(src, /paneShowCallbacks\.delete\(id\)/, 'eviction drops the shown hooks');
+  });
 });
 
 describe('вкладка «Мысли» редактора связи — облачка концов (0.8.1, задача 95775cfd)', () => {
