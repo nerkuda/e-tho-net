@@ -144,18 +144,6 @@ let outsideRefreshCount: (() => void) | null = null;
 let currentTarget: PropertiesTarget | null = null;
 
 /**
- * Владельцы, чьи значения изменились, пока вкладка «Свойства» их не
- * показывала: панель скрыта (другая вкладка активна) или показывает другого
- * владельца. Событие `property-value.set/deleted` адресуется по
- * `evt.data.owner_id`, а не «показанному» владельцу, поэтому скрытая панель
- * помечает владельца и перечитывает его при следующем показе (ошибка
- * 9667b75c: возврат на вкладку показывал устаревшее значение). Набор живёт не
- * дольше вкладки: вытеснение панели его очищает, новая сборка читает данные
- * сама.
- */
-const dirtyValueOwners = new Set<string>();
-
-/**
  * Выбранное в пикере, но ещё не записанное внетиповое свойство (0.14.1,
  * задача 626b29bd, сценарии 9aea535d/1c0d0192): строка появляется в группе
  * «Свойства вне типа» сразу после выбора, с пустым редактором значения, и
@@ -180,6 +168,68 @@ const pendingOutside = new Map<string, PendingOutsideProperty[]>();
 /** Ключ владельца значения (`ownerType:ownerId`) — для черновиков и dirty-меток. */
 function ownerKey(ownerType: 'thought' | 'link', ownerId: string): string {
   return `${ownerType}:${ownerId}`;
+}
+
+/**
+ * Потребители значений владельца на вкладке «Свойства». У каждого СВОЁ чтение
+ * и, значит, своя dirty-метка: успех одного (например, типовой таблицы) не
+ * доказывает, что другой (внетиповая таблица, счётчик группы) прочитал данные —
+ * его чтение могло отказать в том же показе (замечание верификатора к
+ * 9667b75c, круг 4).
+ */
+type ValueConsumer = 'typed' | 'outside' | 'outsideCount';
+
+const VALUE_CONSUMERS: readonly ValueConsumer[] = ['typed', 'outside', 'outsideCount'];
+
+/**
+ * Владельцы, чьи значения изменились, пока вкладка «Свойства» их не
+ * показывала: панель скрыта (другая вкладка активна) или показывает другого
+ * владельца. Событие `property-value.set/deleted` адресуется по
+ * `evt.data.owner_id`, а не «показанному» владельцу, поэтому скрытая панель
+ * помечает владельца и перечитывает его при следующем показе (ошибка
+ * 9667b75c: возврат на вкладку показывал устаревшее значение).
+ *
+ * Метка хранится НА ПОТРЕБИТЕЛЯ и снимается успехом СВОЕГО чтения: типовая
+ * таблица снимает `typed` после чтения значений, тело «Свойства вне типа» —
+ * `outside`, счётчик группы — `outsideCount`. Общая метка позволяла успеху
+ * одной таблицы скрыть отказ другой: при повторном показе внетиповая строка
+ * оставалась с `operationError` до пересборки группы/смены мысли (там же).
+ * Набор живёт не дольше вкладки: вытеснение панели его очищает, новая сборка
+ * читает данные сама.
+ */
+const dirtyValueOwners = new Map<string, Set<ValueConsumer>>();
+
+/** Пометить всех потребителей владельца: значение изменилось не на экране. */
+function markValueOwnerDirty(ownerType: 'thought' | 'link', ownerId: string): void {
+  const key = ownerKey(ownerType, ownerId);
+  const consumers = dirtyValueOwners.get(key);
+  if (consumers === undefined) {
+    dirtyValueOwners.set(key, new Set(VALUE_CONSUMERS));
+    return;
+  }
+  for (const consumer of VALUE_CONSUMERS) consumers.add(consumer);
+}
+
+/** Есть ли у потребителя непрочитанное изменение владельца. */
+function isValueOwnerDirty(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  consumer: ValueConsumer,
+): boolean {
+  return dirtyValueOwners.get(ownerKey(ownerType, ownerId))?.has(consumer) ?? false;
+}
+
+/** Снять метку потребителя после УСПЕШНОГО чтения его данных. */
+function clearValueOwnerDirty(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  consumer: ValueConsumer,
+): void {
+  const key = ownerKey(ownerType, ownerId);
+  const consumers = dirtyValueOwners.get(key);
+  if (consumers === undefined) return;
+  consumers.delete(consumer);
+  if (consumers.size === 0) dirtyValueOwners.delete(key);
 }
 
 /** Ключ строки-черновика совпадает с ключом серверной строки (см. outsideRowKey). */
@@ -687,7 +737,7 @@ function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): 
   // Вкладка ещё не построена — метка не нужна: первая сборка прочитает данные
   // сама, а набор не растёт на события до открытия «Свойств».
   if (target === null) return;
-  dirtyValueOwners.add(ownerKey(ownerType, ownerId));
+  markValueOwnerDirty(ownerType, ownerId);
   if (target.ownerType !== ownerType || target.ownerId !== ownerId) return;
   currentReload?.();
 }
@@ -760,11 +810,15 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // измениться у показанного владельца. `reload` сам фиксирует набранное и
   // делает инкрементальную сверку (без пересборки таблицы); гард «скрыто не
   // читаем» уже не действует — панель прикреплена до вызова хука.
+  // Каждый потребитель возвращает свой долг сам: успех типовой таблицы не
+  // означает, что внетиповая/счётчик прочитали данные (замечание
+  // верификатора к 9667b75c, круг 4).
   lifecycle.onShow(() => {
-    if (!dirtyValueOwners.has(ownerKey(target.ownerType, target.ownerId))) return;
-    currentReload?.();
-    outsideReload?.();
-    outsideRefreshCount?.();
+    if (isValueOwnerDirty(target.ownerType, target.ownerId, 'typed')) currentReload?.();
+    if (isValueOwnerDirty(target.ownerType, target.ownerId, 'outside')) outsideReload?.();
+    if (isValueOwnerDirty(target.ownerType, target.ownerId, 'outsideCount')) {
+      outsideRefreshCount?.();
+    }
   });
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
@@ -821,6 +875,12 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
           (item) => !present.has(pendingOutsideKey(item)),
         );
         const total = outside.length + pending.length;
+        // Счётчик прочитал значения успешно — снимает СВОЮ метку потребителя
+        // (`outsideCount`). Успех типовой/внетиповой таблицы её не снимает и
+        // наоборот (замечание верификатора к 9667b75c, круг 4).
+        if (box.isConnected) {
+          clearValueOwnerDirty(target.ownerType, requestOwnerId, 'outsideCount');
+        }
         return total === 0 ? '(0)' : `(${total})`;
       } catch {
         return undefined;
@@ -1458,10 +1518,12 @@ function buildOutsidePropertiesBody(
     if (box.isConnected) everMounted = true;
     shownOwnerId = requestOwnerId;
     // Владелец прочитан, пока таблица была на экране, — метка «изменён не на
-    // экране» снята. Скрытая панель метку сохраняет: показ перечитает
-    // (ошибка 9667b75c).
+    // экране» снята у ЭТОГО потребителя (`outside`), а не у остальных: успех
+    // типовой таблицы или счётчика не доказывает, что внетиповая прочитала
+    // данные. Скрытая панель метку сохраняет: показ перечитает (ошибка
+    // 9667b75c, круг 4).
     if (box.isConnected) {
-      dirtyValueOwners.delete(ownerKey(target.ownerType, requestOwnerId));
+      clearValueOwnerDirty(target.ownerType, requestOwnerId, 'outside');
     }
     // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
     // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
@@ -2508,10 +2570,12 @@ function buildTypePropertiesBody(
     // Метка «изменён не на экране» снимается только после УСПЕШНОГО чтения
     // значений (замечание верификатора к 9667b75c, круг 3): при транзиентном
     // отказе значения не прочитаны, и метка должна остаться, чтобы следующий
-    // показ повторил чтение. Внетиповая таблица снимает метку так же — после
-    // обоих чтений (`:1464`); скрытая панель сохраняет её до показа.
+    // показ повторил чтение. И только у СВОЕГО потребителя (`typed`): успех
+    // типовой таблицы не снимает нужду перечитать внетиповую/счётчик, чьё
+    // чтение в этом показе могло отказать (круг 4); скрытая панель сохраняет
+    // все метки до показа.
     if (valuesRead && box.isConnected) {
-      dirtyValueOwners.delete(ownerKey(target.ownerType, requestOwnerId));
+      clearValueOwnerDirty(target.ownerType, requestOwnerId, 'typed');
     }
     // Ключ — свойство + сторона связи (ошибка 45248206): один `property_id`
     // на обе стороны; сопоставление только по id отдавало типовой строке

@@ -21,12 +21,18 @@
  *  3) обычный возврат на вкладку без изменений не читает (нет лишних запросов);
  *  4) транзиентный отказ чтения значений на возврате не теряет dirty-метку —
  *     следующий показ обязан перечитать (замечание верификатора к 9667b75c,
- *     круг 3: типовая таблица снимала метку до чтения значений).
+ *     круг 3: типовая таблица снимала метку до чтения значений);
+ *  5) асимметричный отказ: на возврате типовая таблица читает значения
+ *     успешно, внетиповая — нет. Успех типовой не снимает метку внетиповой
+ *     (круг 4): следующий показ обязан перечитать внетиповую и убрать
+ *     `operationError`.
  *
  * На дофиксовом HEAD оба обязательных кейса красные: (1) второго
  * `properties.get` нет и чип остаётся «срочно»; (2) показанная панель
  * перечитывается на чужое событие. Кейс 4 на дофиксовом HEAD тоже красный:
  * метка снимается до чтения значений, и после отказа следующий показ молчит.
+ * Кейс 5 красный на HEAD с общей dirty-меткой (af32e3c7): успех типовой
+ * таблицы снимает общую метку, и внетиповая остаётся с ошибкой.
  */
 
 import assert from 'node:assert/strict';
@@ -176,6 +182,14 @@ function outsideScalarValue(host: ShimElement): string | null {
   return input === undefined ? null : input.value;
 }
 
+/** Текст ошибки чтения в теле «Свойства вне типа» (или null). */
+function outsideErrorText(host: ShimElement): string | null {
+  const body = findAllByClass(host, 'properties-outside-body')[0];
+  if (body === undefined) return null;
+  const line = body.findAll((node) => node.className.split(/\s+/).includes('error-text'))[0];
+  return line === undefined ? null : line.textContent;
+}
+
 // ---------------------------------------------------------------------------
 // Реальный путь: скрытая вкладка «Свойства» и realtime-событие о владельце
 // ---------------------------------------------------------------------------
@@ -212,6 +226,19 @@ describe('вкладка «Свойства» после скрытия пере
     let getCalls = 0;
     /** Транзиентный отказ чтения значений: все `properties.get` бросают. */
     let failValuesReads = false;
+    /**
+     * Отказ ТОЛЬКО внетиповой таблице (кейс 5). Её чтение значений идёт парой
+     * с `propertyRegistry.list` в одном `Promise.all` (properties.ts,
+     * `buildOutsidePropertiesBody`), поэтому «свой» вызов `properties.get`
+     * помечает сам вызов реестра, синхронно следующий за ним. Типовая таблица
+     * читает значения после `listTypeProperties`, счётчик — из refresh-count:
+     * под отказ они не попадают.
+     */
+    let failOutsideReads = false;
+    let lastGetIndex = 0;
+    let outsideGetIndex = -1;
+    /** Сколько раз типовая таблица читала определения (кейс 5: без лишних чтений). */
+    let definitionsCalls = 0;
     let realtimeHandler: ((raw: unknown) => void) | null = null;
 
     (globalThis as any).window.etn = {
@@ -220,6 +247,14 @@ describe('вкладка «Свойства» после скрытия пере
       properties: {
         get: async () => {
           getCalls += 1;
+          const index = getCalls;
+          lastGetIndex = index;
+          // Решение об отказе — после микрозадачи: парный
+          // `propertyRegistry.list` успевает пометить этот вызов внетиповым.
+          await Promise.resolve();
+          if (failOutsideReads && index === outsideGetIndex) {
+            throw new Error('outside values read failure');
+          }
           if (failValuesReads) throw new Error('transient values read failure');
           return propertyRows.map((row) => ({ ...(row as object) }));
         },
@@ -227,21 +262,31 @@ describe('вкладка «Свойства» после скрытия пере
         remove: async () => undefined,
       },
       types: {
-        listTypeProperties: async () => [
-          {
-            id: 'pTags',
-            property_id: 'pTags',
-            owner_type: 'thought_type',
-            owner_id: 'ty1',
-            key: 'Теги',
-            value_type: 'text',
-            config: { multiple: true },
-            required: false,
-            position: 0,
-          },
-        ],
+        listTypeProperties: async () => {
+          definitionsCalls += 1;
+          return [
+            {
+              id: 'pTags',
+              property_id: 'pTags',
+              owner_type: 'thought_type',
+              owner_id: 'ty1',
+              key: 'Теги',
+              value_type: 'text',
+              config: { multiple: true },
+              required: false,
+              position: 0,
+            },
+          ];
+        },
       },
-      propertyRegistry: { list: async () => [] },
+      propertyRegistry: {
+        list: async () => {
+          // `properties.get` внетиповой таблицы вызван прямо перед реестром в
+          // том же `Promise.all` — отмечаем его индекс для кейса 5.
+          if (failOutsideReads) outsideGetIndex = lastGetIndex;
+          return [];
+        },
+      },
       thoughts: { get: async () => null, focus: async () => null, resolve: async () => [] },
       comments: { list: async () => [], create: async () => undefined },
       admin: { listUsers: async () => [] },
@@ -436,6 +481,88 @@ describe('вкладка «Свойства» после скрытия пере
     await waitFor(() => chipTitles(host).includes('ретрей'), 500);
     same(chipTitles(host), ['срочно', 'ретрей'], 'после ретрая типовая строка не обновилась');
     check(outsideScalarValue(host) === 'повтор', 'после ретрая внетиповая строка не обновилась');
+
+    // --- Кейс 5: успех типовой таблицы не снимает метку внетиповой ----------
+    // Замечание верификатора (круг 3/4): dirty-метка была ОДНА на владельца, и
+    // успех типовой таблицы снимал её и для внетиповой. Асимметричный отказ:
+    // типовая читает значения успешно, внетиповая получает отказ. Следующий
+    // показ обязан перечитать внетиповую и убрать operationError.
+    editorInternals.activateTab('metadata');
+    await waitFor(() => findAllByClass(host, 'properties-tab').length === 0);
+    propertyRows = [
+      {
+        id: 'vTags',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'pTags',
+        property_name: 'Теги',
+        value_type: 'text',
+        value: ['срочно', 'асимметрия'],
+        outside_type: false,
+        updated_at: '2026-01-04',
+      },
+      {
+        id: 'vExt',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'pExt',
+        property_name: 'Внешнее',
+        value_type: 'text',
+        value: 'асимметрия',
+        outside_type: true,
+        updated_at: '2026-01-04',
+      },
+    ];
+    failOutsideReads = true;
+    await feed('property-value.set', 'n1', {
+      owner_type: 'thought',
+      owner_id: 't1',
+      key: 'Теги',
+      values: ['срочно', 'асимметрия'],
+    });
+    const callsBeforeAsym = getCalls;
+    editorInternals.activateTab('properties');
+    // Типовая таблица читает значения успешно; внетиповая получает отказ и
+    // показывает operationError.
+    await waitFor(() => chipTitles(host).includes('асимметрия'), 1000);
+    await waitFor(() => outsideErrorText(host) !== null, 1000);
+    check(getCalls > callsBeforeAsym, 'асимметричный возврат не пытался прочитать значения');
+    same(
+      chipTitles(host),
+      ['срочно', 'асимметрия'],
+      'типовая строка не прочиталась успешно при отказе внетиповой',
+    );
+    check(
+      outsideScalarValue(host) !== 'асимметрия',
+      'внетиповая таблица показала значение, хотя её чтение отказало',
+    );
+    check(outsideErrorText(host) !== null, 'внетиповая таблица не показала ошибку чтения');
+    const definitionsAfterAsym = definitionsCalls;
+
+    // Повторный показ: метка внетиповой обязана пережить успех типовой.
+    editorInternals.activateTab('metadata');
+    await waitFor(() => findAllByClass(host, 'properties-tab').length === 0);
+    failOutsideReads = false;
+    const callsBeforeHeal = getCalls;
+    editorInternals.activateTab('properties');
+    await waitFor(() => outsideScalarValue(host) === 'асимметрия', 1000);
+    check(
+      getCalls > callsBeforeHeal,
+      'повторный показ не перечитал внетиповую таблицу — её метку снял успех типовой',
+    );
+    check(
+      outsideScalarValue(host) === 'асимметрия',
+      'внетиповая строка не восстановилась после повторного показа',
+    );
+    check(
+      outsideErrorText(host) === null,
+      'ошибка внетиповой таблицы осталась после повторного показа',
+    );
+    same(chipTitles(host), ['срочно', 'асимметрия'], 'типовая строка изменилась на повторном показе');
+    check(
+      definitionsCalls === definitionsAfterAsym,
+      'повторный показ перечитал определения типовой таблицы — её метка должна была сняться успехом',
+    );
 
     assert.deepEqual(failures, [], `дефекты вкладки «Свойства»:\n${failures.join('\n')}`);
   });
