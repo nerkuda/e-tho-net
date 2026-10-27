@@ -41,6 +41,8 @@ import {
   EXPORT_FORMATS,
   EtnError,
   ETNX_SUBTREE_DEPTH_MAX,
+  FLAT_PROPERTY_CONTAINS_VALUE_DETAILS,
+  FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
   FLAT_PROPERTY_OPS,
   SORT_KINDS,
   STRUCTURE_KEYWORD_SCOPES,
@@ -255,6 +257,9 @@ export interface ZodIssueLike {
   values?: unknown[];
   keys?: unknown[];
   errors?: Array<Array<ZodIssueLike>>;
+  /** Произвольные детали custom-issue (zod 4 `ctx.addIssue({ params })`).
+   *  Переносятся в `details` ошибки — так MCP и REST отвечают одинаково. */
+  params?: Record<string, unknown>;
   message: string;
 }
 
@@ -596,7 +601,8 @@ export function parseRest<S extends z.ZodObject>(
   if (!res.success) {
     const issue = firstIssue(res.error);
     if (issue.code === 'custom') {
-      throw new EtnError('VALIDATION_ERROR', issue.message, undefined, requestId);
+      // Симметрично MCP: `params` custom-issue уходят в `details`.
+      throw new EtnError('VALIDATION_ERROR', issue.message, issue.params, requestId);
     }
     const fieldKey = issueKey('', issue);
     const spec = contract.rest[fieldKey];
@@ -623,7 +629,11 @@ export function mcpValidationError(contract: OperationContract, args: unknown): 
   }
   const issue = firstIssue(res.error);
   if (issue.code === 'custom') {
-    return new EtnError('VALIDATION_ERROR', issue.message);
+    // `params` custom-issue (zod 4) — машинные детали правила; их же отдаёт
+    // REST-парсер в `details` (например, форма `value` у `contains`,
+    // ошибка 9420a34c). Без переноса MCP терял бы `details`, и паритет
+    // фасадов ломался бы на тексте, а не на контракте.
+    return new EtnError('VALIDATION_ERROR', issue.message, issue.params);
   }
   const fieldKey = issueKey('', issue);
   const spec = contract.rest[fieldKey];
@@ -1071,6 +1081,22 @@ const QueryPropertyFields = z
   // `VALIDATION_ERROR`.
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
     message: 'Укажите property_id или property в условии свойства.',
+  })
+  // `contains` принимает ТОЛЬКО строку (ошибка 9420a34c): массив молча
+  // stringify-ился (`String(['al','pha'])` → `"al,pha"`) и отбор давал пустой
+  // результат, а `['alpha']` проходил случайно. Число/объект/`null` — та же
+  // явная ошибка. Проверка стоит ДО refine «value обязателен», чтобы и
+  // отсутствующее значение получало общий с REST текст. Детали (`params`)
+  // переносятся в `details` в {@link mcpValidationError} — MCP и REST отвечают
+  // одинаково. Presence-пару правило не затрагивает: её `value` игнорируется.
+  .superRefine((v, ctx) => {
+    if (v.operator !== 'contains' || typeof v.value === 'string') return;
+    ctx.addIssue({
+      code: 'custom',
+      path: ['value'],
+      message: FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+      params: { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS },
+    });
   })
   // Значение обязательно для всех операторов, кроме пары наличия (задача
   // 40c76144): `is_empty`/`not_empty` решают по строке значения, `value` им

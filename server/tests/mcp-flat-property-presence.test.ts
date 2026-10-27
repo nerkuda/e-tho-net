@@ -17,7 +17,10 @@
  *   * `gte`/`lte` — number и date включительно; text в плоской форме
  *     недопустим (`VALIDATION_ERROR`), а AST-лист по text работает;
  *   * отсутствие `value` у сравнения — `VALIDATION_ERROR` на обоих фасадах;
- *   * AST-лист и плоское условие дают ОДИН набор id (presence).
+ *   * AST-лист и плоское условие дают ОДИН набор id (presence);
+ *   * `contains` принимает только строку (ошибка 9420a34c): массив строк,
+ *     число, объект и `null` отвергаются одинаковыми кодом/текстом/`details`
+ *     на MCP и REST — без молчаливого stringify в `"al,pha"`.
  *
  * Skipped when the `better-sqlite3` native binding is unavailable.
  */
@@ -164,6 +167,15 @@ async function mcpQuery(
 /** Сортированные id — проверки не зависят от порядка страницы. */
 function sorted(ids: readonly string[]): string[] {
   return [...ids].sort();
+}
+
+/**
+ * `details` из текста ошибки MCP (`ETN error [CODE]: message\nDetails: {...}`)
+ * — чтобы сверять их с REST-конвертом `error.details` буквально.
+ */
+function mcpErrorDetails(text: string): unknown {
+  const match = /\nDetails: ([\s\S]+)$/.exec(text);
+  return match === null ? undefined : JSON.parse(match[1]!);
 }
 
 interface World {
@@ -592,6 +604,108 @@ describe(
         });
         assert.equal(textAst.isError, false, `AST text gte — ${textAst.text}`);
         assert.deepEqual(sorted(textAst.ids), [middle], 'AST text gte: строковое сравнение работает');
+      } finally {
+        await closeWorld(world);
+      }
+    });
+
+    it('contains: только строка; массив/число/объект/null — одинаковая VALIDATION_ERROR в MCP и REST (9420a34c)', async () => {
+      const world = await buildWorld();
+      try {
+        const status = await createProperty(world.rest, { name: 'Статус', value_type: 'text' });
+        const root = insertThought(world.ndb, 'Корень');
+        const alpha = insertThought(world.ndb, 'Альфа');
+        const beta = insertThought(world.ndb, 'Бета');
+        for (const child of [alpha, beta]) insertLink(world.ndb, root, child);
+        insertValue(world.ndb, alpha, status.id, 'value_text', 'alpha');
+        insertValue(world.ndb, beta, status.id, 'value_text', 'beta');
+
+        // Штатный `contains` строкой работает на обоих фасадах: подстрока
+        // регистронезависима (требование f14e48ab) — «ALPH» находит «alpha».
+        const restOk = await restQuery(world.rest, {
+          parent_ids: [root],
+          properties: [{ property_id: status.id, op: 'contains', value: 'ALPH' }],
+          sort: 'alpha',
+          order: 'asc',
+        });
+        assert.equal(restOk.statusCode, 200, `REST contains строка: ${JSON.stringify(restOk.body)}`);
+        assert.deepEqual(sorted(restOk.ids), [alpha], 'REST contains строка — 1 совпадение');
+
+        const mcpOk = await mcpQuery(world.handle, world.rest.networkId, {
+          in_subtree_of: root,
+          properties: [{ property: 'Статус', operator: 'contains', value: 'ALPH' }],
+          sort: 'title',
+          order: 'asc',
+        });
+        assert.equal(mcpOk.isError, false, `MCP contains строка — ${mcpOk.text}`);
+        assert.deepEqual(sorted(mcpOk.ids), [alpha], 'MCP contains строка — тот же набор');
+
+        // Не-строка — явная ошибка с ОДИНАКОВЫМИ кодом, текстом и details.
+        // До исправления `['alpha']` проходил случайно (String → "alpha"), а
+        // `['al','pha']` молча превращался в "al,pha" и давал пустой отбор.
+        const badValues: Array<{ label: string; value: unknown }> = [
+          { label: '["alpha"]', value: ['alpha'] },
+          { label: '["al","pha"]', value: ['al', 'pha'] },
+          { label: 'число 5', value: 5 },
+          { label: 'объект', value: { junk: true } },
+          { label: 'null', value: null },
+          { label: 'value отсутствует', value: undefined },
+        ];
+        const expectedDetails = { field: 'value', operator: 'contains', expected: 'string' };
+        for (const bad of badValues) {
+          const tag = `contains ${bad.label}`;
+          const payloadProperty: Record<string, unknown> = { property_id: status.id, op: 'contains' };
+          if (bad.value !== undefined) payloadProperty['value'] = bad.value;
+          const rest = await restQuery(world.rest, {
+            parent_ids: [root],
+            properties: [payloadProperty],
+          });
+          assert.equal(rest.statusCode, 422, `${tag}: REST ${rest.statusCode} ${JSON.stringify(rest.body)}`);
+          const restError = (rest.body as {
+            error: { code: string; message: string; details?: unknown };
+          }).error;
+          assert.equal(restError.code, 'VALIDATION_ERROR', `${tag}: REST code`);
+          assert.equal(
+            restError.message,
+            'Для операции contains value должен быть строкой.',
+            `${tag}: REST message`,
+          );
+          assert.deepEqual(restError.details, expectedDetails, `${tag}: REST details`);
+
+          const mcpProperty: Record<string, unknown> = { property: 'Статус', operator: 'contains' };
+          if (bad.value !== undefined) mcpProperty['value'] = bad.value;
+          const mcp = await mcpQuery(world.handle, world.rest.networkId, {
+            in_subtree_of: root,
+            properties: [mcpProperty],
+          });
+          assert.equal(mcp.isError, true, `${tag}: MCP обязан падать`);
+          assert.match(mcp.text, /ETN error \[VALIDATION_ERROR\]/, `${tag}: MCP code`);
+          assert.ok(
+            mcp.text.includes(restError.message),
+            `${tag}: MCP и REST дают одинаковый текст — MCP: ${mcp.text}`,
+          );
+          assert.deepEqual(mcpErrorDetails(mcp.text), restError.details, `${tag}: MCP details = REST`);
+        }
+
+        // Соседние строковые операторы (`eq`/`ne`) массив тоже не принимают —
+        // обе формы входа падают одинаково (движок, `sqlScalar`), без stringify.
+        for (const operator of ['eq', 'ne'] as const) {
+          const rest = await restQuery(world.rest, {
+            parent_ids: [root],
+            properties: [{ property_id: status.id, op: operator, value: ['alpha'] }],
+          });
+          assert.equal(rest.statusCode, 422, `${operator} [alpha] REST — 422`);
+          const restError = (rest.body as { error: { code: string; message: string; details?: unknown } }).error;
+          assert.equal(restError.code, 'VALIDATION_ERROR');
+          assert.deepEqual(restError.details, { field: 'value' }, `${operator}: REST details`);
+
+          const mcp = await mcpQuery(world.handle, world.rest.networkId, {
+            in_subtree_of: root,
+            properties: [{ property: 'Статус', operator, value: ['alpha'] }],
+          });
+          assert.equal(mcp.isError, true, `${operator} [alpha] MCP обязан падать`);
+          assert.ok(mcp.text.includes(restError.message), `${operator}: MCP текст = REST`);
+        }
       } finally {
         await closeWorld(world);
       }

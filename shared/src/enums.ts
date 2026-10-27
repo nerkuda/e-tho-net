@@ -198,6 +198,28 @@ export const FLAT_PROPERTY_OPS = [
 export type FlatPropertyOp = (typeof FLAT_PROPERTY_OPS)[number];
 
 /**
+ * Форма `value` оператора `contains` (ошибка 9420a34c): только строка.
+ * Массив, объект, `null` и число отвергаются `VALIDATION_ERROR` с одинаковыми
+ * кодом и `details` на обоих фасадах — MCP `etn.thoughts.query` (refine
+ * контракта `server/src/contracts.ts`) и REST `POST /thoughts/query`
+ * (`parsePropertyCondition`, `server/src/domain/structure-service.ts`).
+ * Движок (`query-service.ts`) повторяет проверку второй линией.
+ *
+ * До исправления массив молча stringify-ился (`String(['al','pha'])` →
+ * `"al,pha"`), и отбор давал пустой результат; `['alpha']` проходил случайно.
+ * Presence-операторы (`is_empty`/`not_empty`) правило не затрагивает: они
+ * по-прежнему игнорируют `value` любой формы.
+ */
+export const FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE =
+  'Для операции contains value должен быть строкой.';
+/** Детали ошибки формы `value` у `contains` — одни для MCP и REST. */
+export const FLAT_PROPERTY_CONTAINS_VALUE_DETAILS = {
+  field: 'value',
+  operator: 'contains',
+  expected: 'string',
+} as const;
+
+/**
  * Wire-enum `op` плоского условия REST `POST /thoughts/query`
  * (03-server-api.md §6.10) — ровно {@link FLAT_PROPERTY_OPS}. История:
  * до 0.14.1 здесь не было `gte`/`lte`, из-за чего REST отвергал сравнения,

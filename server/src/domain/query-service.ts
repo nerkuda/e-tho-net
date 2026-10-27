@@ -42,6 +42,8 @@ import {
   EtnError,
   FILTER_AST_VERSION,
   FILTER_LINK_EDGE_STATES,
+  FLAT_PROPERTY_CONTAINS_VALUE_DETAILS,
+  FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
   HIERARCHY_SUBTREE_MAX_NODES,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
@@ -3327,10 +3329,24 @@ function propertyClauses(
     }
 
     if (cond.operator === 'contains') {
+      // Вторая линия после фасадов (ошибка 9420a34c): значение — ТОЛЬКО
+      // строка. До правки `String(cond.value)` молча склеивал массив через
+      // запятую (`['al','pha']` → `"al,pha"`) — отбор давал пустой результат
+      // без ошибки. MCP-контракт (`contracts.ts`) и REST-разбор
+      // (`structure-service.ts`) отвергают не-строку раньше; движок
+      // страхует прямых вызывающих (AST-лист, доменные тесты).
+      if (typeof cond.value !== 'string') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+          { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS },
+          requestId,
+        );
+      }
       // «Содержит» — подстрочно и регистронезависимо (требование f14e48ab):
       // регистр сворачивается unicode_lower с обеих сторон.
       const fold = foldsCase(def);
-      const pattern = buildLikePattern(String(cond.value));
+      const pattern = buildLikePattern(cond.value);
       const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
       const rhs = fold ? 'unicode_lower(?)' : '?';
       out.push({

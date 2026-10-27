@@ -360,6 +360,25 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     const contains = run(ndb, { properties: [{ property_id: statusDef, operator: 'contains', value: 'clos' }] });
     assert.deepEqual(contains.hits.map((h) => h.title), ['Задача 2']);
 
+    // `contains` — только строка (ошибка 9420a34c). Движок — вторая линия
+    // после фасадов: прямой вызов (AST-лист, домен) тоже не stringify-ит
+    // массив через запятую, а даёт явную VALIDATION_ERROR с теми же details.
+    for (const bad of [['alpha'], ['al', 'pha'], 5] as const) {
+      assert.throws(
+        () =>
+          run(ndb, {
+            properties: [
+              { property_id: statusDef, operator: 'contains', value: bad as string | number | string[] },
+            ],
+          }),
+        (e: unknown) =>
+          e instanceof EtnError &&
+          e.code === 'VALIDATION_ERROR' &&
+          (e.details as { operator?: string }).operator === 'contains',
+        `contains ${JSON.stringify(bad)} обязан падать в движке`,
+      );
+    }
+
     const undone = run(ndb, { properties: [{ property_id: doneDef, operator: 'eq', value: false }] });
     assert.deepEqual(undone.hits.map((h) => h.title), ['Задача 1']);
 

@@ -21,6 +21,8 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  FLAT_PROPERTY_CONTAINS_VALUE_DETAILS,
+  FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
   HIERARCHY_EXCLUDE_MAX_IDS,
   SAVED_FILTER_NAME_MAX,
   STRUCTURES_NODE_NEIGHBORS_LIMIT,
@@ -341,6 +343,20 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
     return { property_id: propertyId, op: op as StructurePropertyOp, value: placeholder };
   }
   const value = obj['value'];
+  // `contains` — только строка (ошибка 9420a34c): массив молча
+  // stringify-ился в движке (`String(['al','pha'])` → `"al,pha"`) и давал
+  // пустой отбор, `['alpha']` проходил случайно. Число/объект/`null` — та же
+  // явная ошибка. Текст и `details` совпадают с MCP-контрактом
+  // (`contracts.ts`, refine условия свойства). Presence-пара сюда не доходит:
+  // её `value` любой формы игнорируется выше.
+  if (op === 'contains' && typeof value !== 'string') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+      { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS },
+      requestId,
+    );
+  }
   const isScalar =
     typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
   const isList =
