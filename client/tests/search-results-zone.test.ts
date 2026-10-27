@@ -62,8 +62,10 @@ describe('Enter по выбранной строке результатов (з�
       'клик по строке связи/хронологии и Enter берут одну функцию',
     );
     // Мысль: ту же функцию получают жесты облачка (клик по облачку = Enter).
+    // Набор действий собран общей функцией `searchCloudActions` — она же
+    // добавляет общее меню мысли на правый клик (ошибка ffc173c9).
     assert.equal(
-      (src.match(/actions: \{ onClick: activate, onCtrlClick: activate \},/g) ?? []).length,
+      (src.match(/actions: searchCloudActions\(activate, /g) ?? []).length,
       3,
       'все три облачка результатов активируются той же функцией, что и Enter',
     );

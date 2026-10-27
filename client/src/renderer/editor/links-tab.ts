@@ -25,7 +25,7 @@ import type { MentionHit, PublicationUsageItem, ThoughtRef } from '@etn/shared';
 import { focusFromUi, requireNetworkId } from '../app.js';
 // Облачка мыслей во вкладке «Связи» (эндпоинты и строки упоминаний) собирает
 // общая фабрика: значок, цвета, начертание, бледность и единые жесты.
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-cloud.js';
 import { t } from '../lib/i18n.js';
 import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { div, el, isConnectionLostError, renderHtml, span } from '../lib/dom.js';
@@ -218,6 +218,23 @@ function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
   return cloud;
 }
 
+/**
+ * Действия чипа-мысли в списках упоминаний: клик — открыть упоминающую мысль,
+ * правый клик — ОБЩЕЕ меню мысли (тот же фасад, что у эндпоинтов вкладки и
+ * холста). Своего списка команд нет — правило «меню одинаково везде»
+ * (ошибка f072db61); без обработчика фабрика оставляла ПКМ мёртвым
+ * (ошибка ffc173c9).
+ */
+function mentionCloudActions(open: () => void, title: string): ThoughtCloudActions {
+  return {
+    onClick: open,
+    onContextMenu: (event, id) => {
+      event.stopPropagation();
+      showThoughtContextMenu(event, { id, title, dir: 'siblings' });
+    },
+  };
+}
+
 /** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */
 function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
@@ -287,7 +304,7 @@ function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
                 profile: 'chip',
                 // Ширина — по строке списка упоминаний.
                 width: 'container',
-                actions: { onClick: () => void open(hit) },
+                actions: mentionCloudActions(() => void open(hit), hit.title),
               },
             )
           : span('🔗');
@@ -404,7 +421,7 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
                 profile: 'chip',
                 // Ширина — по строке списка упоминаний.
                 width: 'container',
-                actions: { onClick: () => void open(hit) },
+                actions: mentionCloudActions(() => void open(hit), hit.title),
               },
             )
           : span('🔗');

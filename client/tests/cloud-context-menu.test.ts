@@ -34,6 +34,17 @@ const SRC = {
     'chronicle',
     'chronicle.ts',
   ),
+  search: resolve(import.meta.dirname, '..', 'src', 'renderer', 'search', 'search.ts'),
+  linksTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'links-tab.ts'),
+  publicationCard: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'editor',
+    'publication-card.ts',
+  ),
+  canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
 };
 
 function readText(path: string): string {
@@ -106,6 +117,106 @@ describe('контекстное меню облачка — общий конс
     assert.ok(
       src.includes('function showDiaryLinkMenu('),
       'чип связи в ленте обязан иметь своё короткое меню (общее меню мысли к связи неприменимо)',
+    );
+  });
+
+  it('три облачка результатов поиска: общее меню мысли через ленивый импорт фасада', () => {
+    const src = readText(SRC.search);
+    // Статический импорт замкнул бы цикл `app → search → context-menu → app`.
+    assert.ok(
+      !/import\s*\{[^}]*showThoughtContextMenu/.test(src),
+      'search.ts не импортирует фасад меню статически (цикл импортов)',
+    );
+    assert.match(
+      src,
+      /await import\('\.\.\/canvas\/context-menu\.js'\)/,
+      'фасад меню подключается ленивым import()',
+    );
+    const actions = functionBody(src, 'function searchCloudActions(');
+    assert.ok(
+      actions.includes('onContextMenu') && actions.includes('openSearchThoughtMenu('),
+      'действия облачка-хита обязаны вешать общее меню мысли на правый клик',
+    );
+    assert.equal(
+      (src.match(/actions: searchCloudActions\(activate, /g) ?? []).length,
+      3,
+      'меню получают все три облачка: «Мысль по ID», имена и тексты',
+    );
+    const menu = functionBody(src, 'function openSearchThoughtMenu(');
+    assert.ok(
+      menu.includes('showThoughtContextMenu(') &&
+        menu.includes('showThoughtMenuUnder(') &&
+        menu.includes('resolveSiblingParentId('),
+      'меню открывается общим фасадом, родитель для «налево» резолвится явно',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+    // Клавиатурный путь — только привязки общего диспетчера.
+    assert.ok(
+      src.includes("chord: 'Shift+F10'") && src.includes("chord: 'ContextMenu'"),
+      'Shift+F10/ContextMenu — привязки lib/keymap.ts',
+    );
+  });
+
+  it('строки дропдауна закреплённых зовут общее меню мысли (ошибка ffc173c9)', () => {
+    const src = readText(SRC.pinnedBar);
+    const overflow = functionBody(src, 'function openOverflowMenu(');
+    assert.ok(
+      overflow.includes('wirePinnedContextMenu('),
+      'каждая строка overflow-дропдауна получает меню мысли',
+    );
+    const wire = functionBody(src, 'function wirePinnedContextMenu(');
+    assert.ok(
+      wire.includes('showThoughtContextMenu(') && wire.includes('openHandler'),
+      'меню строки — общий конструктор, открытие идёт путём строки',
+    );
+  });
+
+  it('упоминания в связях: облачко-мысль зовёт общее меню (ошибка ffc173c9)', () => {
+    const src = readText(SRC.linksTab);
+    const actions = functionBody(src, 'function mentionCloudActions(');
+    assert.ok(
+      actions.includes('onContextMenu') && actions.includes('showThoughtContextMenu('),
+      'чип упоминания обязан открывать общее меню мысли',
+    );
+    assert.equal(
+      (src.match(/actions: mentionCloudActions\(\(\) => void open\(hit\), /g) ?? []).length,
+      2,
+      'обе группы упоминаний (ссылки и тексты) получают меню',
+    );
+  });
+
+  it('владелец-мысль в карточке публикации: меню + «Убрать из владельцев» (ffc173c9)', () => {
+    const src = readText(SRC.publicationCard);
+    const cloud = functionBody(src, 'function buildOwnerCloud(');
+    assert.ok(
+      cloud.includes('onContextMenu') && cloud.includes('isThoughtOwner'),
+      'меню вешается только владельцу-МЫСЛИ (связи меню мысли не применимо)',
+    );
+    const menu = functionBody(src, 'function openOwnerThoughtMenu(');
+    assert.ok(
+      menu.includes('showThoughtContextMenu(') &&
+        menu.includes('resolveSiblingParentId(') &&
+        menu.includes('extraItems') &&
+        menu.includes("t('publication.cover.ownerRemove')"),
+      'общее меню + команда контекста «Убрать из владельцев»',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+  });
+
+  it('строка соседа в Ctrl-hover попапе холста: общее меню (ffc173c9)', () => {
+    const src = readText(SRC.canvas);
+    const row = functionBody(src, 'function neighborPreviewRow(');
+    assert.ok(
+      row.includes('onContextMenu') &&
+        row.includes('showThoughtContextMenu(') &&
+        row.includes('closeHoverPreview()'),
+      'строка соседа открывает меню мысли и закрывает превью при открытии',
     );
   });
 });

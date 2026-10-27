@@ -1,0 +1,130 @@
+{
+  "name": "ffc173c9-search-context-menu",
+  "description": "Ошибка ffc173c9: правый клик по облачку мысли в результатах поиска карты был мёртв (фабрика гасила системное меню, а своего не было). Сценарий сам засеивает три мысли-фикстуры (имя, текст комментария, id-запрос), открывает панель поиска и проверяет: (1) ПКМ по облачку группы «Найдено по именам» открывает ОБЩЕЕ меню мысли (есть «Открыть редактор», «Копировать ID», нет «Найти на карте мыслей» и «В фокус»), фокус карты и панель поиска не меняются; (2) пункт «Открыть редактор» доводит до серверной записи focus_id вкладки, панель поиска остаётся видимой; (3) то же меню открывается ПКМ по облачку группы «Найдено по текстам» и по облачку секции «Мысль по ID»; (4) Shift+F10 на облачке в фокусе открывает то же меню с клавиатуры (диспетчер lib/keymap.ts). Группа «Найдено связей» намеренно не проверяется ПКМ-по-облачку: строка связи — глиф-строка без облачка (спецификация «Строка поиска вида «Карта мыслей»»). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ffc173c9-search-context-menu.scenario.json --out .tmp/etn-ffc173c9/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed-search-fixtures",
+      "eval": "(async () => { const nid='{{networkId}}'; const name=await window.etn.thoughts.create(nid,{title:'ФфцПоиск Имя'}); const text=await window.etn.thoughts.create(nid,{title:'Носитель текста', comment:{body_md:'В тексте есть ФфцПоиск.'}}); window.__ffc={nameId:name.id,textId:text.id}; return JSON.stringify(window.__ffc); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { window.__ffcProbe = { panel: () => document.querySelector('.search-panel'), panelVisible: () => { const p=document.querySelector('.search-panel'); return p !== null && !p.classList.contains('hidden'); }, cloudInGroup: (prefix) => { const groups=[...document.querySelectorAll('.search-results .search-group')]; const g=groups.find((x)=>(x.querySelector('.group-title')?.textContent||'').trim().startsWith(prefix)); return g ? g.querySelector('.search-hit .cloud') : null; }, idCloud: () => document.querySelector('.search-results .search-hit.search-hit-cloud .cloud'), groupTitle: (prefix) => { const groups=[...document.querySelectorAll('.search-results .search-group')]; const g=groups.find((x)=>(x.querySelector('.group-title')?.textContent||'').trim().startsWith(prefix)); return g ? (g.querySelector('.group-title')?.textContent||'').trim() : null; }, rightClick: (el) => { if (el === null) return 'no-cloud'; const b=el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:Math.round(b.left+8),clientY:Math.round(b.top+8)})); return 'ok'; }, lastMenu: () => { const m=[...document.querySelectorAll('.menu')]; return m[m.length-1] ?? null; }, menuLabels: () => { const m=window.__ffcProbe.lastMenu(); if (!m) return []; return [...m.querySelectorAll('.menu-item')].map((e)=>(e.textContent||'').trim()).filter((t)=>t!==''&&t!=='—'); }, clickMenu: (text) => { const m=window.__ffcProbe.lastMenu(); if (!m) return 'no-menu'; const it=[...m.querySelectorAll('.menu-item')].find((e)=>(e.textContent||'').trim()===text); if (!it) return 'no-item'; it.click(); return 'ok'; }, closeMenu: () => { document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,clientX:4,clientY:4})); return 'ok'; }, setQuery: (q) => { const i=document.querySelector('.search-input'); if (!i) return 'no-input'; i.focus(); i.value=q; i.dispatchEvent(new Event('input',{bubbles:true})); return i.value; }, focusId: async () => { const tabs=await window.etn.tabs.list(); const t=tabs.find((x)=>x.network_id==='{{networkId}}'); return t?.focus_id ?? null; } }; return 'ok'; })()"
+    },
+    {
+      "name": "focus-search",
+      "eval": "(() => { const i=document.querySelector('.search-input'); if (!i) return 'no-input'; i.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "panel-open",
+      "timeout": 15000,
+      "waitFor": "(() => { const p=document.querySelector('.search-panel'); return p !== null && !p.classList.contains('hidden'); })()"
+    },
+    { "name": "query-typed", "eval": "window.__ffcProbe.setQuery('ФфцПоиск')" },
+    {
+      "name": "names-group-ready",
+      "timeout": 25000,
+      "waitFor": "window.__ffcProbe.groupTitle('Найдено по именам') === 'Найдено по именам (1)'"
+    },
+    {
+      "name": "texts-group-ready",
+      "timeout": 25000,
+      "waitFor": "window.__ffcProbe.groupTitle('Найдено по текстам') === 'Найдено по текстам (1)'"
+    },
+    {
+      "name": "names-cloud-present",
+      "probe": "window.__ffcProbe.cloudInGroup('Найдено по именам') !== null",
+      "expect": true
+    },
+    {
+      "name": "texts-cloud-present",
+      "probe": "window.__ffcProbe.cloudInGroup('Найдено по текстам') !== null",
+      "expect": true
+    },
+    { "name": "focus-before", "probe": "(async () => await window.__ffcProbe.focusId())()" },
+    { "name": "right-click-names", "eval": "window.__ffcProbe.rightClick(window.__ffcProbe.cloudInGroup('Найдено по именам'))" },
+    {
+      "name": "names-menu-open",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ffcProbe.menuLabels().some((l)=>l.includes('Открыть редактор')))()"
+    },
+    {
+      "name": "names-menu-composition",
+      "probe": "(() => { const labels=window.__ffcProbe.menuLabels(); const has=(s)=>labels.some((l)=>l.includes(s)); return JSON.stringify({ open: has('Открыть редактор'), copyId: has('Копировать ID'), changeType: has('Изменить тип'), findOnMap: has('Найти на карте'), focus: has('В фокус'), del: has('Удалить') }); })()",
+      "expect": "{\"open\":true,\"copyId\":true,\"changeType\":true,\"findOnMap\":false,\"focus\":false,\"del\":true}"
+    },
+    { "name": "panel-still-open-after-right-click", "probe": "window.__ffcProbe.panelVisible()", "expect": true },
+    {
+      "name": "focus-unchanged-by-right-click",
+      "probe": "(async () => await window.__ffcProbe.focusId())()",
+      "expectFrom": "focus-before"
+    },
+    { "name": "click-open-editor", "probe": "window.__ffcProbe.clickMenu('Открыть редактор')", "expect": "ok" },
+    {
+      "name": "focus-lands-on-hit",
+      "timeout": 25000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); const t=tabs.find((x)=>x.network_id==='{{networkId}}'); return t !== undefined && t.focus_id === window.__ffc.nameId; })()"
+    },
+    { "name": "panel-open-after-menu-command", "probe": "window.__ffcProbe.panelVisible()", "expect": true },
+    { "name": "right-click-texts", "eval": "window.__ffcProbe.rightClick(window.__ffcProbe.cloudInGroup('Найдено по текстам'))" },
+    {
+      "name": "texts-menu-open",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ffcProbe.menuLabels().some((l)=>l.includes('Открыть редактор')))()"
+    },
+    { "name": "close-menu-after-texts", "eval": "window.__ffcProbe.closeMenu()" },
+    {
+      "name": "menu-closed-after-texts",
+      "timeout": 8000,
+      "waitFor": "window.__ffcProbe.lastMenu() === null"
+    },
+    { "name": "id-query-typed", "eval": "window.__ffcProbe.setQuery(window.__ffc.nameId)" },
+    {
+      "name": "id-section-ready",
+      "timeout": 25000,
+      "waitFor": "window.__ffcProbe.groupTitle('Мысль по ID') === 'Мысль по ID (1)'"
+    },
+    {
+      "name": "id-cloud-present",
+      "probe": "(() => { const c=window.__ffcProbe.idCloud(); return c !== null && (c.querySelector('.cloud-title')?.textContent||'').includes('ФфцПоиск'); })()",
+      "expect": true
+    },
+    { "name": "right-click-id-cloud", "eval": "window.__ffcProbe.rightClick(window.__ffcProbe.idCloud())" },
+    {
+      "name": "id-menu-open",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ffcProbe.menuLabels().some((l)=>l.includes('Копировать ID')))()"
+    },
+    { "name": "close-menu-after-id", "eval": "window.__ffcProbe.closeMenu()" },
+    {
+      "name": "menu-closed-after-id",
+      "timeout": 8000,
+      "waitFor": "window.__ffcProbe.lastMenu() === null"
+    },
+    { "name": "focus-id-cloud", "eval": "(() => { const c=window.__ffcProbe.idCloud(); if (!c) return 'no-cloud'; c.focus(); return 'ok'; })()" },
+    { "name": "id-cloud-focused", "probe": "document.activeElement === window.__ffcProbe.idCloud()", "expect": true },
+    { "name": "shift-f10", "key": { "key": "F10", "code": "F10", "keyCode": 121, "modifiers": ["shift"] } },
+    {
+      "name": "keyboard-menu-open",
+      "timeout": 20000,
+      "waitFor": "(() => window.__ffcProbe.menuLabels().some((l)=>l.includes('Открыть редактор')))()"
+    },
+    {
+      "name": "keyboard-menu-composition",
+      "probe": "(() => { const labels=window.__ffcProbe.menuLabels(); const has=(s)=>labels.some((l)=>l.includes(s)); return JSON.stringify({ open: has('Открыть редактор'), copyId: has('Копировать ID'), findOnMap: has('Найти на карте'), focus: has('В фокус') }); })()",
+      "expect": "{\"open\":true,\"copyId\":true,\"findOnMap\":false,\"focus\":false}"
+    },
+    { "name": "panel-open-at-end", "probe": "window.__ffcProbe.panelVisible()", "expect": true },
+    { "name": "no-error-dialog", "probe": "document.querySelectorAll('.dialog-backdrop').length === 0", "expect": true }
+  ]
+}

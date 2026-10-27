@@ -252,8 +252,30 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
       // Same Ctrl-hover preview as the chips themselves — the overflow menu
       // rows are the same thoughts, just hidden from the bar.
       markThoughtCommentPreview(row, rowId, refs.get(rowId)?.title ?? rowId);
+      // Строка дропдауна — та же мысль, что и чип полосы: правый клик даёт
+      // общее меню мысли, как у чипов и строк истории (ошибка ffc173c9).
+      // `showMenuAt` внутри закроет сам дропдаун.
+      wirePinnedContextMenu(row, rowId, refs.get(rowId)?.title ?? rowId);
     }
   }
+}
+
+/**
+ * Вешает общее меню мысли на строку дропдауна закреплённых (её строит
+ * `showMenuAt`, а не фабрика облачка, поэтому жест подключается здесь) — прямой
+ * аналог `wireHistoryContextMenu` полосы истории. `preventDefault` +
+ * `stopPropagation`: правый клик не должен «протечь» на панель/холст.
+ */
+function wirePinnedContextMenu(el: HTMLElement, id: string, title: string): void {
+  el.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showThoughtContextMenu(
+      event,
+      { id, title, dir: 'siblings' },
+      { openHandler: (openId) => openPinnedEntry(openId) },
+    );
+  });
 }
 
 /**

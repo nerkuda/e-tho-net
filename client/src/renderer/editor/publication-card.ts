@@ -36,7 +36,7 @@ import { commentShell } from '../lib/ui/comment.js';
 import { createThoughtCloud, type ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { createPublicationCloud } from '../lib/ui/publication-cloud.js';
 import { renderMarkdown } from '@etn/markdown';
-import { div, span } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { etn } from '../lib/etn.js';
@@ -1354,11 +1354,65 @@ async function openCoverDialog(): Promise<void> {
             icon: '🔗',
             icon_kind: 'emoji' as const,
           };
+    const isThoughtOwner = owner.owner_type === 'thought';
     return createThoughtCloud(input, {
       profile: 'chip',
       width: 'container',
-      actions: { onRemove: () => void removeOwner(row, owner, refresh) },
+      actions: {
+        onRemove: () => void removeOwner(row, owner, refresh),
+        // Владелец-МЫСЛЬ получает общее меню мысли, как её облачко в любом
+        // другом месте (ошибка ffc173c9); владельцу-связи меню мысли не
+        // применимо — у него остаётся крестик снятия, а системное меню больше
+        // не подавляется впустую (фабрика гасит его только при своём меню).
+        ...(isThoughtOwner
+          ? {
+              onContextMenu: (event: MouseEvent, id: string) => {
+                event.stopPropagation();
+                void openOwnerThoughtMenu(event, id, owner, row, refresh).catch((err: unknown) =>
+                  notice(errText(err), 'error'),
+                );
+              },
+            }
+          : {}),
+      },
     });
+  }
+
+  /**
+   * Общее меню мысли для облачка-владельца в карточке публикации: тот же
+   * конструктор `canvas/context-menu.ts`, что у холста/редактора, плюс команда
+   * контекста «Убрать из владельцев» (аналог крестика). Фасад импортируется
+   * лениво: статический импорт замкнул бы цикл
+   * `canvas/context-menu → editor/editor → publication-card`.
+   * `siblingParentId` резолвится явно (облачко вне холста), после ожидания
+   * сверяется сеть — поздний ответ не должен открыть меню чужой сети
+   * (класс a3151e33).
+   */
+  async function openOwnerThoughtMenu(
+    event: MouseEvent,
+    id: string,
+    owner: AttachmentOwnerRef,
+    row: AttachmentPickerRow,
+    refresh: () => void,
+  ): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    const { showThoughtContextMenu, resolveSiblingParentId } = await import(
+      '../canvas/context-menu.js'
+    );
+    const siblingParentId = await resolveSiblingParentId(networkId, id);
+    if (store.state.networkId !== networkId) return;
+    showThoughtContextMenu(
+      event,
+      { id, title: owner.title ?? id, dir: 'siblings', siblingParentId },
+      {
+        extraItems: [
+          menuAction(t('publication.cover.ownerRemove'), () =>
+            void removeOwner(row, owner, refresh),
+          ),
+        ],
+      },
+    );
   }
 
   /** Заполняет строку облачками владельцев (мысли/публикации/связи). */

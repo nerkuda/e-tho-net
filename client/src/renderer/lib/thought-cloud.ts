@@ -276,8 +276,14 @@ export function wireCloudGestures(
     actions.onDoubleClick?.(id);
   });
   root.addEventListener('contextmenu', (event) => {
+    // Системное меню подавляем ТОЛЬКО когда у облачка есть своё меню мысли:
+    // иначе правый клик превращался в «мёртвую зону» — `preventDefault()` гасил
+    // браузерное меню, а обработчик отсутствовал (ошибка ffc173c9). Место,
+    // которому меню не нужно, не обязано его заводить; облачка с меню (холст,
+    // история, закреплённые, условия отбора) передают `onContextMenu` всегда.
+    if (actions.onContextMenu === undefined) return;
     event.preventDefault();
-    actions.onContextMenu?.(event, id);
+    actions.onContextMenu(event, id);
   });
 }
 

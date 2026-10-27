@@ -47,20 +47,24 @@
  *   corner (default off) and remembered in L4 `ui_state`
  *   (`search_settings_open`), like `search_state`;
  * - clicking a thought hit focuses it; clicking a link hit focuses its source
- *   and opens the link in the editor (spec §3.1).
+ *   and opens the link in the editor (spec §3.1);
+ * - right-click on a thought hit — and `Shift+F10`/`ContextMenu` on the focused
+ *   cloud — opens the SHARED thought menu (`canvas/context-menu.ts`), the same
+ *   command set as on the canvas; opening the menu neither moves the canvas
+ *   focus nor closes the search panel (ошибка ffc173c9).
  */
 
 import { focusFromUi, setFocus } from '../app.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-cloud.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
 } from '../editor/wiki-link-resolver.js';
 import { resolveFirstDayOfWeek } from '../lib/dates.js';
-import { div, el, renderHtml, span } from '../lib/dom.js';
+import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
@@ -435,6 +439,22 @@ export function mountSearch(next: SearchChrome): () => void {
           }
           return true;
         },
+      },
+      // Меню мысли с клавиатуры (спецификация «Контекстное меню мысли»,
+      // ошибка ffc173c9): `Shift+F10` и клавиша `ContextMenu` на облачке
+      // результата открывают то же общее меню, что и правый клик. Локального
+      // `keydown` у панели нет — только привязки общего диспетчера
+      // (`lib/keymap.ts`, ADR b420b08c). Фокус не на облачке — `false`, событие
+      // уходит по стеку контекстов ниже.
+      {
+        command: 'search.cloud.menu',
+        chord: 'Shift+F10',
+        run: openFocusedResultCloudMenu,
+      },
+      {
+        command: 'search.cloud.menu',
+        chord: 'ContextMenu',
+        run: openFocusedResultCloudMenu,
       },
     ],
   });
@@ -868,7 +888,7 @@ function renderIdResult(thought: Thought | null): void {
         // многоточием по списку, а не по холстовым 200px.
         width: 'container',
         highlightTerms: currentHighlightTerms(),
-        actions: { onClick: activate, onCtrlClick: activate },
+        actions: searchCloudActions(activate, thought.title),
       }),
     );
     const info = div('search-hit-info');
@@ -914,6 +934,91 @@ function activateHit(key: string, open: () => void): () => void {
  */
 function currentHighlightTerms(): string[] {
   return chrome === null ? [] : searchHighlightTerms(chrome.input.value);
+}
+
+/**
+ * Действия облачка-хита поиска: клик и Ctrl+клик — активация строки (та же
+ * функция обслуживает Enter, задача a1766c7d), правый клик — ОБЩЕЕ меню мысли.
+ * Меню — тот же фасад, что у холста и чипов (`canvas/context-menu.ts`):
+ * своего списка команд поиск не заводит (правило «меню одинаково везде»,
+ * ошибка f072db61). Фасад импортируется лениво в обработчике: статический
+ * импорт дал бы цикл `app → search → canvas/context-menu → app`.
+ */
+function searchCloudActions(activate: () => void, title: string): ThoughtCloudActions {
+  return {
+    onClick: activate,
+    onCtrlClick: activate,
+    onContextMenu: (event, id) => {
+      // Меню — отдельный слой: правый клик по облачку не должен открывать
+      // меню зоны/экрана под результатами.
+      event.stopPropagation();
+      openSearchThoughtMenu(id, title, { event });
+    },
+  };
+}
+
+/** Где открыть меню мысли для облачка результата поиска. */
+type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
+
+/**
+ * Открывает общее меню мысли для облачка результата поиска. Позиция — точка
+ * правого клика (`showThoughtContextMenu`) либо край облачка при открытии с
+ * клавиатуры (`showThoughtMenuUnder`).
+ *
+ * `siblingParentId` передаётся ЯВНО (`resolveSiblingParentId`), иначе «налево
+ * (родственник)» взяло бы родителя мысли в фокусе карты (ловушка
+ * `context-menu.ts:412-413`). После ожидания резолва сверяется сеть: поздний
+ * ответ не должен открыть меню для мысли прежней сети (класс a3151e33).
+ */
+function openSearchThoughtMenu(
+  id: string,
+  title: string,
+  place: ThoughtMenuPlace,
+): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void (async () => {
+    try {
+      const { showThoughtContextMenu, showThoughtMenuUnder, resolveSiblingParentId } =
+        await import('../canvas/context-menu.js');
+      const siblingParentId = await resolveSiblingParentId(networkId, id);
+      if (store.state.networkId !== networkId) return;
+      const target = { id, title, dir: 'siblings' as const, siblingParentId };
+      if ('event' in place) showThoughtContextMenu(place.event, target);
+      else showThoughtMenuUnder(place.anchor, target);
+    } catch (err) {
+      notice(errText(err), 'error');
+    }
+  })();
+}
+
+/**
+ * Облачко результата под клавиатурным фокусом — якорь меню для `Shift+F10` и
+ * клавиши `ContextMenu` (привязки — в контексте панели ниже; локальный
+ * `keydown` запрещён сторожем `guard-keymap-single-point`).
+ */
+function focusedResultCloud(): { id: string; title: string; anchor: HTMLElement } | null {
+  if (chrome === null) return null;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const cloud = active.closest<HTMLElement>('.search-hit .cloud');
+  if (cloud === null || !chrome.host.contains(cloud)) return null;
+  const id = cloud.dataset['id'];
+  if (id === undefined) return null;
+  const titleNode = cloud.querySelector<HTMLElement>('.cloud-title');
+  return {
+    id,
+    title: titleNode?.title ?? titleNode?.textContent ?? id,
+    anchor: cloud,
+  };
+}
+
+/** `Shift+F10`/`ContextMenu` на облачке результата: `false` — меню не открыто. */
+function openFocusedResultCloudMenu(): boolean {
+  const target = focusedResultCloud();
+  if (target === null) return false;
+  openSearchThoughtMenu(target.id, target.title, { anchor: target.anchor });
+  return true;
 }
 
 /**
@@ -999,7 +1104,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
               // многоточием по списку, а не по холстовым 200px.
               width: 'container',
               highlightTerms,
-              actions: { onClick: activate, onCtrlClick: activate },
+              actions: searchCloudActions(activate, hit.title),
             },
           ),
           isThought: true,
@@ -1027,7 +1132,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
               // Совпадение только в тексте — название остаётся без подсветки,
               // если запроса в нём нет.
               highlightTerms,
-              actions: { onClick: activate, onCtrlClick: activate },
+              actions: searchCloudActions(activate, hit.title),
             },
           ),
           isThought: true,

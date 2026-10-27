@@ -2503,6 +2503,23 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
         closeHoverPreview();
         focusFromUi(id);
       },
+      // Правый клик по строке соседа — то же общее меню мысли, что у облачков
+      // холста (ошибка ffc173c9): строка рисуется фабрикой вне зоны, поэтому
+      // жест подключается здесь. «Открыть редактор» повторяет клик по строке
+      // (открыть в редакторе и закрыть превью), а не двигает фокус холста.
+      onContextMenu: (event, id) => {
+        event.stopPropagation();
+        showThoughtContextMenu(
+          event,
+          { id, title: ref.title, dir: 'siblings' },
+          {
+            openHandler: (openId) => {
+              closeHoverPreview();
+              openThoughtInEditor(openId);
+            },
+          },
+        );
+      },
     },
   });
   row.classList.add('link-group-item');
