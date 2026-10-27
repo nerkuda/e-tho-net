@@ -569,24 +569,26 @@ export function createUsagePanel(options: CreateUsagePanelOptions): UsagePanelHa
     row: UsagePropertyRow,
     target: UsagePanelTarget,
   ): Promise<void> {
-    const { showThoughtContextMenu, resolveSiblingParentId } = await import(
-      '../canvas/context-menu.js'
-    );
     const networkId = store.state.networkId;
     if (networkId === null) return;
+    const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+    // Пока шёл ленивый импорт, сеть могла смениться: поздний вход не должен
+    // открыть меню для мысли прежней сети (класс a3151e33).
+    if (store.state.networkId !== networkId) return;
     const extraItems: MenuItem[] = [
       MENU_SEPARATOR,
       menuAction(t('usagePanel.properties.clearOne'), () => {
         void clearProperty(row, target);
       }),
     ];
-    showThoughtContextMenu(
+    // Строка панели — вне холста: родителя для «налево» резолвит общий
+    // помощник меню вне холста и сверяет сеть после ответа (ошибка 2baa78fb).
+    await showOutOfCanvasThoughtMenu(
       event,
       {
         id,
         title: row.thought.title,
         dir: 'siblings',
-        siblingParentId: await resolveSiblingParentId(networkId, id),
         trashed: row.thought.marked_for_deletion,
       },
       { extraItems },

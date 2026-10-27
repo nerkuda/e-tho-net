@@ -35,12 +35,12 @@ function functionBody(src: string, signature: string, end = '\n}\n'): string {
 }
 
 describe('меню чипа мысли в дневниковой записи — общий конструктор (ошибка 9c5d2e99)', () => {
-  it('чип мысли зовёт showThoughtContextMenu и передаёт focusHandler', () => {
+  it('чип мысли зовёт общий фасад меню вне холста и передаёт focusHandler', () => {
     const src = readText(CHRONICLE);
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
-      chip.includes('showThoughtContextMenu('),
-      'the diary thought chip must use the shared thought-menu constructor',
+      chip.includes('showOutOfCanvasThoughtMenu('),
+      'the diary thought chip must use the shared out-of-canvas thought menu (родитель «налево» — самой мысли, 2baa78fb)',
     );
     assert.ok(
       chip.includes('focusHandler'),

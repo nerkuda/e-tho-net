@@ -49,7 +49,7 @@ import {
 
 import { findRootThought, requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { showThoughtContextMenu } from '../../canvas/context-menu.js';
+import { showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
 import {
@@ -1999,7 +1999,10 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
     event.preventDefault();
     event.stopPropagation();
     if (target.kind === 'thought') {
-      showThoughtContextMenu(
+      // Чип записи — облачко вне холста: родителя для «налево» резолвит общий
+      // помощник меню вне холста ДО открытия и сверяет сеть после ответа
+      // (ошибка 2baa78fb), а не конструктор по фокусу карты.
+      void showOutOfCanvasThoughtMenu(
         event,
         { id: target.thought.id, title: target.thought.title, dir: 'siblings' },
         {

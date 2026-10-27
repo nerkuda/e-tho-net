@@ -145,7 +145,7 @@ async function pollJob(jobId: string): Promise<{ status: string }> {
 type ZoneDir = 'parents' | 'siblings' | 'children';
 
 /** Entry shown in a cloud menu. */
-interface CloudMenuTarget {
+export interface CloudMenuTarget {
   id: string;
   title: string;
   dir: ZoneDir;
@@ -361,6 +361,32 @@ export async function resolveSiblingParentId(
   } catch {
     return null;
   }
+}
+
+/**
+ * Общее меню мысли для облачка ВНЕ холста (полоса истории, лента «Дневника»,
+ * дерево «Структур», панель использования): родитель для «налево
+ * (родственник)» — родитель САМОЙ мысли, а не мысли в фокусе карты
+ * (спецификация «Контекстное меню мысли»). На холсте его знает ответ фокуса;
+ * вне зон холста его приходится спрашивать у сервера ДО открытия меню —
+ * конструктор без `siblingParentId` молча берёт родителя фокуса
+ * (`focus.parents[0]`) и «налево» создаёт мысль не под тем родителем
+ * (ошибка 2baa78fb). После ожидания сверяется сеть — поздний ответ не должен
+ * открыть меню для мысли прежней сети (класс a3151e33).
+ *
+ * Места без холста зовут этот помощник, а не `showThoughtContextMenu`
+ * напрямую: резолв родителя и сверка сети не должны расползаться копиями.
+ */
+export async function showOutOfCanvasThoughtMenu(
+  event: MouseEvent,
+  target: Omit<CloudMenuTarget, 'siblingParentId'>,
+  opts: ThoughtMenuOptions = {},
+): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const siblingParentId = await resolveSiblingParentId(networkId, target.id);
+  if (store.state.networkId !== networkId) return;
+  showThoughtContextMenu(event, { ...target, siblingParentId }, opts);
 }
 
 /**

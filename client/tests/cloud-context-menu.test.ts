@@ -49,6 +49,24 @@ const SRC = {
     'publication-card.ts',
   ),
   canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
+  contextMenu: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'canvas',
+    'context-menu.ts',
+  ),
+  structures: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'screens',
+    'structures',
+    'structures.ts',
+  ),
+  usagePanel: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'usage-panel.ts'),
 };
 
 function readText(path: string): string {
@@ -69,20 +87,30 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.historyBar);
     assert.match(
       src,
-      /import\s*\{[^}]*showThoughtContextMenu[^}]*\}\s*from\s*'\.\.\/canvas\/context-menu\.js'/,
-      'панель истории обязана импортировать общий конструктор меню мысли',
+      /import\s*\{[^}]*showOutOfCanvasThoughtMenu[^}]*\}\s*from\s*'\.\.\/canvas\/context-menu\.js'/,
+      'панель истории обязана импортировать общий фасад меню вне холста',
     );
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
-      chip.includes('onContextMenu') && chip.includes('showThoughtContextMenu('),
+      chip.includes('onContextMenu') && chip.includes('showOutOfCanvasThoughtMenu('),
       'чип полосы истории обязан вешать общее меню мысли на правый клик',
+    );
+    // «Налево (родственник)» вне холста цепляет родителя САМОЙ мысли: фасад
+    // резолвит его явно до открытия меню (ошибка 2baa78fb).
+    assert.ok(
+      chip.includes("dir: 'siblings'") && chip.includes('openHandler'),
+      'чип истории передаёт контекст меню (открытие — путём чипа)',
     );
     // Строки дропдауна строит `showMenuAt` — их меню вешается отдельно.
     const dropdown = functionBody(src, 'function openHistoryMenu(');
     assert.ok(
-      dropdown.includes('showThoughtContextMenu(') ||
-        dropdown.includes('wireHistoryContextMenu('),
+      dropdown.includes('wireHistoryContextMenu('),
       'строка дропдауна истории обязана получать то же меню мысли',
+    );
+    const wire = functionBody(src, 'function wireHistoryContextMenu(');
+    assert.ok(
+      wire.includes('showOutOfCanvasThoughtMenu('),
+      'меню строки дропдауна — общий фасад вне холста (резолв родителя до открытия)',
     );
   });
 
@@ -99,8 +127,8 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.chronicle);
     assert.match(
       src,
-      /import\s*\{[^}]*showThoughtContextMenu[^}]*\}\s*from\s*'\.\.\/\.\.\/canvas\/context-menu\.js'/,
-      'лента дневника обязана импортировать общий конструктор меню мысли',
+      /import\s*\{[^}]*showOutOfCanvasThoughtMenu[^}]*\}\s*from\s*'\.\.\/\.\.\/canvas\/context-menu\.js'/,
+      'лента дневника обязана импортировать общий фасад меню вне холста',
     );
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
@@ -108,7 +136,7 @@ describe('контекстное меню облачка — общий конс
       'buildChip дневника обязан перехватывать правый клик',
     );
     assert.ok(
-      chip.includes('showThoughtContextMenu('),
+      chip.includes('showOutOfCanvasThoughtMenu('),
       'облачко мысли в ленте дневника обязано открывать общее меню мысли',
     );
     // Операции контекста записи передаются опцией, а не вторым списком команд.
@@ -245,6 +273,55 @@ describe('контекстное меню облачка — общий конс
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
       'после await резолва сверяется сеть (класс a3151e33)',
+    );
+  });
+
+  it('общий фасад меню вне холста: резолв родителя до открытия и сверка сети (2baa78fb)', () => {
+    const src = readText(SRC.contextMenu);
+    const helper = functionBody(src, 'export async function showOutOfCanvasThoughtMenu(');
+    assert.ok(
+      helper.includes('resolveSiblingParentId(') && helper.includes('siblingParentId'),
+      'родитель «налево» резолвится ДО открытия меню и передаётся явно',
+    );
+    assert.ok(
+      helper.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+  });
+
+  it('облачко дерева «Структур» зовёт общий фасад меню вне холста (2baa78fb)', () => {
+    const src = readText(SRC.structures);
+    assert.match(
+      src,
+      /import\s*\{[^}]*showOutOfCanvasThoughtMenu[^}]*\}\s*from\s*'\.\.\/\.\.\/canvas\/context-menu\.js'/,
+      'дерево структур обязано импортировать общий фасад меню вне холста',
+    );
+    const cloud = functionBody(src, 'function buildCloud(');
+    assert.ok(
+      cloud.includes('onContextMenu') && cloud.includes('showOutOfCanvasThoughtMenu('),
+      'облачко узла дерева обязано открывать общее меню мысли с родителем САМОЙ мысли',
+    );
+    // «Найти на карте мыслей» — отличие контекста дерева, оно остаётся.
+    assert.ok(
+      cloud.includes('findOnMapHandler'),
+      'команда «Найти на карте мыслей» передаётся опцией контекста',
+    );
+  });
+
+  it('панель использования: меню строки резолвит родителя и сверяет сеть (2baa78fb)', () => {
+    const src = readText(SRC.usagePanel);
+    const menu = functionBody(src, 'async function openRowMenu(');
+    assert.ok(
+      menu.includes('showOutOfCanvasThoughtMenu('),
+      'строка панели открывает общее меню мысли вне холста',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'поздний ленивый импорт не открывает меню для мысли прежней сети',
+    );
+    assert.ok(
+      menu.includes('extraItems'),
+      'команда контекста «Очистить свойство» остаётся блоком extraItems',
     );
   });
 

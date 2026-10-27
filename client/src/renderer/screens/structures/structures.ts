@@ -32,7 +32,7 @@ import {
 // добавляет само (домен структур — те же, что на холсте).
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { focusFromUi } from '../../app.js';
-import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
+import { showLinkContextMenu, showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { currentThoughtId } from '../../history.js';
@@ -1360,7 +1360,10 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
         },
         onContextMenu: (event, id) => {
           event.stopPropagation();
-          showThoughtContextMenu(
+          // Облачко дерева — вне зон холста: родителя для «налево» резолвит
+          // общий помощник меню вне холста ДО открытия и сверяет сеть после
+          // ответа (ошибка 2baa78fb), а не конструктор по фокусу карты.
+          void showOutOfCanvasThoughtMenu(
             event,
             { id, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
             {

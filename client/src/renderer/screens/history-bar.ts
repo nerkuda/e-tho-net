@@ -47,7 +47,7 @@ import { commitEntity, getEntity } from '../lib/live/index.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
-import { showThoughtContextMenu } from '../canvas/context-menu.js';
+import { showOutOfCanvasThoughtMenu } from '../canvas/context-menu.js';
 import { getRtStatus, store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
 // Мини-облачка истории и строки её дропдауна собирает общая фабрика:
@@ -363,10 +363,12 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
         onClick: (targetId) => openEntry(targetId),
         // Контекстное меню — то же общее меню мысли, что у облачка на холсте и
         // чипа закреплённых (спецификация «Контекстное меню мысли»: меню
-        // доступно во всех отображениях, включая чипы истории).
+        // доступно во всех отображениях, включая чипы истории). Чип вне холста:
+        // родителя для «налево» резолвит помощник меню вне холста (ошибка
+        // 2baa78fb), а не конструктор по фокусу карты.
         onContextMenu: (event, targetId) => {
           event.stopPropagation();
-          showThoughtContextMenu(
+          void showOutOfCanvasThoughtMenu(
             event,
             { id: targetId, title: ref?.title ?? id, dir: 'siblings' },
             // Открытие из меню идёт тем же путём, что и клик по чипу: на карте —
@@ -394,7 +396,9 @@ function wireHistoryContextMenu(el: HTMLElement, id: string, title: string): voi
   el.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    showThoughtContextMenu(
+    // Строка дропдауна — тоже облачко вне холста: родитель «налево» — родитель
+    // самой мысли (ошибка 2baa78fb).
+    void showOutOfCanvasThoughtMenu(
       event,
       { id, title, dir: 'siblings' },
       { openHandler: (openId) => openEntry(openId) },
