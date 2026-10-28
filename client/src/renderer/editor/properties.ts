@@ -40,6 +40,7 @@ import {
   asRealtimeCause,
   onQueryInvalidated,
   signalPublicationCompositionChanged,
+  type RealtimeCause,
 } from '../lib/live/index.js';
 import {
   div,
@@ -230,6 +231,80 @@ function clearValueOwnerDirty(
   if (consumers === undefined) return;
   consumers.delete(consumer);
   if (consumers.size === 0) dirtyValueOwners.delete(key);
+}
+
+/**
+ * Поколение чтения значений владельца (ошибка da7bbb53, круг 2).
+ *
+ * Ответ `properties.get` — актуальный снимок, только если чтение ЗАПРОШЕНО в
+ * текущем поколении владельца. Границу двигает всё, что клиент узнал как
+ * изменение данных: применённое data-событие realtime (роутер не присылает
+ * эфемерные `presence.*`/`edit.*` — они данные не меняют), своя мутация
+ * значения и локальный канал правок с карты/из редактора. Ответ, начатый до
+ * границы, — прежний снимок: панель его НЕ применяет и метку «владелец изменён
+ * не на экране» не снимает (спека d9f1dd6f, ревизия 2026-10-27), а перечитывает
+ * владельца заново. Иначе придержанный ответ устаревшего чтения, доехавший
+ * последним, оставлял бы панель на снимке до правки навсегда.
+ *
+ * Поколение — на владельца: изменение чужой сущности не отбрасывает чтение
+ * показанной. Ведётся только для владельцев, которые панель РЕАЛЬНО читает
+ * (`watchValueReads`), — набор ограничен открытыми вкладками. Событие о
+ * владельце без наблюдения и событие без адреса владельца (`layer.merged`,
+ * локальный канал без owner) двигают общую границу — консервативно, как и
+ * дедуп эпохи чтения в `RestClient` (main).
+ */
+const valueReadGenerations = new Map<string, number>();
+
+/** Общая граница изменений данных: применяется ко всем владельцам. */
+let valueReadsEpoch = 0;
+
+/**
+ * События, уже сдвинувшие поколение: слушатель инвалидаций зовётся на КАЖДЫЙ
+ * погашенный ключ одного события, а граница у события одна.
+ */
+const bumpedDataEvents = new WeakSet<object>();
+
+/** Взять владельца под наблюдение поколения (панель читает его значения). */
+function watchValueReads(ownerType: 'thought' | 'link', ownerId: string): void {
+  const key = ownerKey(ownerType, ownerId);
+  if (!valueReadGenerations.has(key)) valueReadGenerations.set(key, valueReadsEpoch);
+}
+
+/** Снять владельца с наблюдения (вкладка вытеснена). */
+function unwatchValueReads(ownerType: 'thought' | 'link', ownerId: string): void {
+  valueReadGenerations.delete(ownerKey(ownerType, ownerId));
+}
+
+/** Текущее поколение чтения владельца (монотонно). */
+function valueReadGeneration(ownerType: 'thought' | 'link', ownerId: string): number {
+  return Math.max(valueReadsEpoch, valueReadGenerations.get(ownerKey(ownerType, ownerId)) ?? 0);
+}
+
+/** Новая граница изменения данных: чтения, начатые раньше, стали снимком. */
+function bumpValueReads(owner?: { ownerType: 'thought' | 'link'; ownerId: string }): void {
+  if (owner === undefined) {
+    valueReadsEpoch += 1;
+    return;
+  }
+  const key = ownerKey(owner.ownerType, owner.ownerId);
+  // Наблюдаемый панелью владелец получает СВОЮ границу; прочие — общую:
+  // изменение чужой сущности не должно отбрасывать чтение показанной.
+  if (!valueReadGenerations.has(key)) {
+    valueReadsEpoch += 1;
+    return;
+  }
+  valueReadGenerations.set(key, valueReadGeneration(owner.ownerType, owner.ownerId) + 1);
+}
+
+/** Владелец, которого адресует data-событие значения свойства (или null). */
+function valueOwnerOfEvent(
+  evt: RealtimeCause,
+): { ownerType: 'thought' | 'link'; ownerId: string } | null {
+  if (evt.type !== 'property-value.set' && evt.type !== 'property-value.deleted') return null;
+  const data = evt.data as { owner_type?: unknown; owner_id?: unknown };
+  if (data.owner_type !== 'thought' && data.owner_type !== 'link') return null;
+  if (typeof data.owner_id !== 'string' || data.owner_id === '') return null;
+  return { ownerType: data.owner_type, ownerId: data.owner_id };
 }
 
 /** Ключ строки-черновика совпадает с ключом серверной строки (см. outsideRowKey). */
@@ -720,6 +795,11 @@ function signalCompositionForOwner(ownerType: 'thought' | 'link', ownerId: strin
   signalPublicationCompositionChanged(ownerType === 'thought' ? [ownerId] : undefined, {
     mayChangeComposition: true,
   });
+  // Своя мутация значения — тоже граница чтения (ошибка da7bbb53, круг 2):
+  // чтение, начатое до записи, не должно применить прежний снимок поверх
+  // нового. Панель после успешной записи перечитывает владельца сама
+  // (`onSaved`), уже в новом поколении.
+  bumpValueReads({ ownerType, ownerId });
 }
 
 /**
@@ -772,8 +852,17 @@ export function registerPropertiesGroup(): void {
     // перечитываем открытую вкладку, только если она показывает именно его.
     // Свой `onRealtimeEvent` снесён (G5): используется причина слоя.
     onQueryInvalidated((prefix, _keys, cause) => {
-      if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
+      // Граница чтения значений (ошибка da7bbb53, круг 2) двигается ДО
+      // перечитывания, которое запускают слушатели этого же события (ниже и в
+      // телах групп): иначе их свежие чтения попадали бы в прежнее поколение и
+      // отбрасывались. Роутер игнорирует `presence.*`/`edit.*` — они сюда не
+      // доходят, данные они не меняют.
       const evt = asRealtimeCause(cause);
+      if (evt !== null && !bumpedDataEvents.has(evt)) {
+        bumpedDataEvents.add(evt);
+        bumpValueReads(valueOwnerOfEvent(evt) ?? undefined);
+      }
+      if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
       if (evt === null) return;
       if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
         const data = evt.data as { owner_type?: unknown; owner_id?: unknown };
@@ -782,6 +871,13 @@ export function registerPropertiesGroup(): void {
         noteValueOwnerChanged(data.owner_type, data.owner_id);
       }
     });
+    // Локальный канал правок значений (карта, редактор значения): владелец в
+    // событии не передаётся — двигаем общую границу. Слушатели тел групп
+    // (ниже по регистрации) перечитают показанного владельца уже в новом
+    // поколении.
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener(PROPERTY_VALUES_REFRESHED_EVENT, () => bumpValueReads());
+    }
   }
 }
 
@@ -811,11 +907,15 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   currentFlush = null;
   outsideFlush = null;
   currentTarget = target;
+  // Поколение чтения значений этого владельца (ошибка da7bbb53, круг 2):
+  // изменение его данных инвалидирует чтения панели, чужих — общая граница.
+  watchValueReads(target.ownerType, target.ownerId);
   // Вытеснение панели: её метки «владелец изменён не на экране» больше не
   // нужны — следующая сборка читает значения сама (ошибка 9667b75c).
   lifecycle.onDispose(() => {
     if (currentTarget === target) currentTarget = null;
     dirtyValueOwners.clear();
+    unwatchValueReads(target.ownerType, target.ownerId);
   });
   // Возврат на скрытую вкладку: пока её не было на экране, значение могло
   // измениться у показанного владельца. `reload` сам фиксирует набранное и
@@ -868,6 +968,10 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
       // Owner token: a slow badge count of the previous owner must not land on
       // the new one (task 90b2256e, круг 3).
       const requestOwnerId = target.ownerId;
+      // Поколение чтения (ошибка da7bbb53, круг 2): ответ, запрошенный до
+      // изменения данных владельца, — прежний снимок. Счётчик — третий
+      // потребитель значений, у него своя метка `outsideCount`.
+      const readGeneration = valueReadGeneration(target.ownerType, requestOwnerId);
       try {
         const networkId = requireNetworkId();
         const values = await etn.properties.get(
@@ -876,6 +980,16 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
           requestOwnerId,
         );
         if (requestOwnerId !== target.ownerId) return undefined;
+        if (readGeneration !== valueReadGeneration(target.ownerType, requestOwnerId)) {
+          // Устаревший ответ не применяем и метку не снимаем: показанному
+          // счётчику нужен ответ, запрошенный после изменения. Повтор — в
+          // микрозадаче (группа уже создана к этому моменту); вытесненная
+          // панель не перечитывается.
+          queueMicrotask(() => {
+            if (currentTarget === target) outsideRefreshCount?.();
+          });
+          return undefined;
+        }
         // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
         // вне типа (dfaacb05), сервер отдаёт его формой LinkPropertyValues.
         const outside = values.filter((v) => v.outside_type === true);
@@ -911,10 +1025,14 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     // (ошибка bfe1bc24). Не ждём: чтение нового владельца не должно стоять
     // за сетевой записью старого.
     flushPropertiesPending();
+    unwatchValueReads(target.ownerType, target.ownerId);
     target.ownerType = next.ownerType;
     target.ownerId = next.ownerId;
     target.typeId = resolveEditorTypeId(next);
     target.hasOwnType = hasOwnLiveType(next);
+    // Поколение нового владельца: его изменения после этого чтения гасят
+    // ответы, начатые раньше (ошибка da7bbb53, круг 2).
+    watchValueReads(target.ownerType, target.ownerId);
     currentReload?.();
     outsideReload?.();
     outsideRefreshCount?.();
@@ -1498,6 +1616,9 @@ function buildOutsidePropertiesBody(
     // обновление не мигает «Загрузкой…» на каждой правке значения.
     if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: Array<PropertyValue | LinkPropertyValues>;
+    // Поколение чтения (ошибка da7bbb53, круг 2) фиксируем ДО запроса: ответ
+    // актуален, только если данных владельца не изменили, пока он был в пути.
+    const readGeneration = valueReadGeneration(target.ownerType, requestOwnerId);
     try {
       const [nextValues, registryRows] = await Promise.all([
         etn.properties.get(networkId, target.ownerType, requestOwnerId),
@@ -1532,7 +1653,14 @@ function buildOutsidePropertiesBody(
     retryStop?.();
     retryStop = null;
     if (disposed) return;
-    if (disposed) return;
+    // Поздний ответ чтения, начатого ДО изменения данных владельца, — прежний
+    // снимок (ошибка da7bbb53, круг 2). Его не применяем и метку `outside` не
+    // снимаем: перечитываем владельца заново — свежий ответ перекроет снимок,
+    // панель не останется на значении до правки.
+    if (readGeneration !== valueReadGeneration(target.ownerType, requestOwnerId)) {
+      if (box.isConnected) void reload();
+      return;
+    }
     if (box.isConnected) everMounted = true;
     shownOwnerId = requestOwnerId;
     // Владелец прочитан, пока таблица была на экране, — метка «изменён не на
@@ -2593,6 +2721,9 @@ function buildTypePropertiesBody(
     let values: Array<PropertyValue | LinkPropertyValues> = [];
     let valuesRead = false;
     let valuesError: unknown = null;
+    // Поколение чтения (ошибка da7bbb53, круг 2) фиксируем ДО запроса: ответ
+    // актуален, только если значения владельца не изменили, пока он был в пути.
+    const readGeneration = valueReadGeneration(target.ownerType, requestOwnerId);
     try {
       values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
       valuesRead = true;
@@ -2604,6 +2735,14 @@ function buildTypePropertiesBody(
     }
     // Same guard after the values fetch — the slowest leg of the pair.
     if (requestOwnerId !== target.ownerId) return;
+    // Поздний ответ чтения, начатого ДО изменения данных владельца, — прежний
+    // снимок (ошибка da7bbb53, круг 2): не применяем его и метку `typed` не
+    // снимаем, а перечитываем владельца. Свежий ответ перекроет снимок, и
+    // панель не останется на значении до правки.
+    if (valuesRead && readGeneration !== valueReadGeneration(target.ownerType, requestOwnerId)) {
+      if (box.isConnected) void reload();
+      return;
+    }
     if (!valuesRead) {
       notifyValuesReadFailed();
       // Обрыв связи: повторяем чтение после переподключения. Тост дедуплицирует
