@@ -2797,9 +2797,30 @@ function buildTypePropertiesBody(
         retryStop?.();
         retryStop = onReconnected(networkId, () => void reload(true));
       }
-      const hasPreviousRows =
-        tableAttached && shownRows.some((row) => row.ownerId === requestOwnerId);
-      if (hasPreviousRows) return;
+      // Прежние строки ЭТОГО владельца — последний успешный снимок таблицы
+      // (ошибка d720265c). Их достаточно, чтобы показать владельца заново:
+      // при обрыве A → B → A таблица после отказа на B заменена сообщением
+      // (`tableAttached` сброшен), но строки A в `shownRows` живы. Тогда
+      // переattach'им таблицу и покажем снимок вместо подмены тела сообщением
+      // (ошибка f803afb6, круг 2).
+      const previousRows = shownRows.filter((row) => row.ownerId === requestOwnerId);
+      if (previousRows.length > 0) {
+        shownOwnerId = requestOwnerId;
+        // Индекс показанных определений — по строкам снимка: realtime-правки
+        // определений гейтятся тем, что реально нарисовано (74b94c26).
+        rememberShownDefinitions(previousRows.map((row) => row.definition));
+        if (!tableAttached) {
+          tableWrap.replaceChildren(table);
+          tableAttached = true;
+        }
+        // Набранное без Enter фиксируем до сверки строк: reconcile снимает
+        // изменившиеся узлы, а blur снятого узла не приходит (bfe1bc24).
+        await pendingCommits.flush();
+        reconcileKeyed(tbody, previousRows, rowSpec);
+        collectRowNodes();
+        nav?.refresh();
+        return;
+      }
       // Прежних строк нет (первый показ владельца): строить таблицу не из
       // чего, определений тоже нет. Вместо технической строки — сообщение из
       // словаря; метку владельца снимаем, чтобы возврат/переключение

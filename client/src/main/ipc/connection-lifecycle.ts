@@ -28,7 +28,7 @@
  * is NOT such an event: the session is the same, so the epoch stays put —
  * otherwise a legitimate post-resume open would be discarded.
  */
-import { UI_STATE_KEY, type Network } from '@etn/shared';
+import { NOT_CONNECTED_ERROR_TEXT, UI_STATE_KEY, type Network } from '@etn/shared';
 
 /** Minimal REST-client shape used by {@link ConnectionLifecycle.openNetwork}. */
 export interface NetworkReader {
@@ -179,7 +179,7 @@ export class ConnectionLifecycle<
    */
   async openNetwork(networkId: string): Promise<Network> {
     const restAtCall = this.rest;
-    if (restAtCall === null) throw new Error('Not connected: call etn.server.connect first');
+    if (restAtCall === null) throw new Error(NOT_CONNECTED_ERROR_TEXT);
     const seq = ++this.openNetworkSeq;
     const network = await restAtCall.getNetwork(networkId);
     if (seq !== this.openNetworkSeq || restAtCall !== this.rest) return network;

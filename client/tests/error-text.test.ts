@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, NOT_CONNECTED_ERROR_TEXT } from '@etn/shared';
 
 import { errText, isConnectionLostError } from '../src/renderer/lib/dom.js';
 
@@ -46,7 +46,7 @@ describe('errText: дружелюбные сообщения', () => {
   });
 
   it('канонический «Not connected…» из main — тоже обрыв связи (f803afb6)', () => {
-    const err = new Error('Not connected: call etn.server.connect first');
+    const err = new Error(NOT_CONNECTED_ERROR_TEXT);
     assert.equal(isConnectionLostError(err), true);
     const text = errText(err);
     assert.equal(text, CONNECTION_LOST);

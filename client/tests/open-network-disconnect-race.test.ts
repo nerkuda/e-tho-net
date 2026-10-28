@@ -32,6 +32,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { NOT_CONNECTED_ERROR_TEXT } from '@etn/shared';
+
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -154,7 +156,7 @@ function stubEtn(options: { deferTypes?: boolean; deferLayers?: boolean }): void
       open: async (networkId: string) => {
         // Окно (а): `tabs.open` бросает «Not connected» в глотающий catch
         // `openNetwork` — именно оно маскировало публикацию до фикса.
-        if (disconnected) throw new Error('Not connected: call etn.server.connect first');
+        if (disconnected) throw new Error(NOT_CONNECTED_ERROR_TEXT);
         tabsOpenCalls += 1;
         return tab(networkId);
       },

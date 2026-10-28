@@ -26,6 +26,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { NOT_CONNECTED_ERROR_TEXT } from '@etn/shared';
+
 import { ShimElement } from './dom-shim.js';
 import { ru } from '../src/renderer/lib/locales/ru.js';
 
@@ -158,7 +160,7 @@ const TAGS_DEFINITION = {
 };
 
 /** Канонический отказ main до установки соединения (`requireRest`). */
-const NOT_CONNECTED = new Error('Not connected: call etn.server.connect first');
+const NOT_CONNECTED = new Error(NOT_CONNECTED_ERROR_TEXT);
 
 async function installEtn(source: DefinitionsSource): Promise<void> {
   const win = (globalThis as any).window as Record<string, unknown>;
@@ -195,13 +197,13 @@ async function installEtn(source: DefinitionsSource): Promise<void> {
   store.update({ networkId: 'n1', rtStatusByNetwork: { n1: 'connecting' } } as any);
 }
 
-/** Контекст редактора для мысли t1 с собственным типом ty1. */
-function thoughtContext(): Record<string, unknown> {
+/** Контекст редактора для мысли с собственным типом ty1. */
+function thoughtContext(ownerId = 't1'): Record<string, unknown> {
   return {
     ownerType: 'thought',
-    ownerId: 't1',
+    ownerId,
     thought: {
-      id: 't1',
+      id: ownerId,
       title: 'T1',
       type_id: 'ty1',
       icon: null,
@@ -348,6 +350,58 @@ describe('панель «Свойства»: отказ чтения опред�
     assert.ok(
       source.calls > callsAfterFailure,
       'чтение определений не повторено после переподключения',
+    );
+  });
+
+  /**
+   * Замечание верификатора к b1d2eb41: таблица живёт в переиспользуемой
+   * вкладке, и на отказе у ЧУЖОГО владельца B она заменялась сообщением
+   * (`tableAttached` сбрасывался). Возврат на ранее показанного A при том же
+   * обрыве снова давал сообщение, хотя `shownRows` хранит строки A — «строки,
+   * показанные ранее» на retarget не выполнялись (ошибка f803afb6, круг 2).
+   */
+  it('A → B → A при отказе: возврат на A показывает прежние строки', async () => {
+    shimDom();
+    const source: DefinitionsSource = { fail: false, calls: 0 };
+    await installEtn(source);
+    const { propertiesInternals, retargetPropertiesTab } = await import(
+      '../src/renderer/editor/properties.js'
+    );
+    // Вкладка целиком: только она даёт retarget при смене владельца того же типа.
+    const box = propertiesInternals.buildPropertiesTab(thoughtContext('t1') as any, {
+      onDispose: () => undefined,
+      onShow: () => undefined,
+    }) as unknown as ShimElement;
+    assert.ok(await waitFor(() => chipTitles(box).includes('срочно')), 'A показана');
+
+    // Обрыв. Переход на B: строк B ещё не было — таблица заменена сообщением.
+    source.fail = true;
+    retargetPropertiesTab(thoughtContext('t2') as any);
+    assert.ok(
+      await waitFor(() => box.flatText().includes(FAILED_MESSAGE)),
+      'отказ на B не показал сообщение из словаря',
+    );
+
+    // Возврат на A при том же обрыве: строки A сохранены в `shownRows` и обязаны
+    // вернуться на экран вместо сообщения, без технического текста.
+    retargetPropertiesTab(thoughtContext('t1') as any);
+    assert.ok(
+      await waitFor(() => chipTitles(box).includes('срочно')),
+      `возврат на A не показал прежние строки: ${JSON.stringify(box.flatText())}`,
+    );
+    assert.equal(
+      box.flatText().includes(FAILED_MESSAGE),
+      false,
+      'тело A подменено сообщением вместо сохранённых строк',
+    );
+    assert.equal(
+      box.flatText().includes('Not connected'),
+      false,
+      'английский текст отказа main попал в интерфейс',
+    );
+    assert.ok(
+      box.findAll((node) => node.tagName.toLowerCase() === 'tbody').length > 0,
+      'таблица не переattach’ена при возврате на A',
     );
   });
 });

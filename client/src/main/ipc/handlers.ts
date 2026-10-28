@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import { CLIENT_META_KEY, EtnError, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
+import { CLIENT_META_KEY, EtnError, NOT_CONNECTED_ERROR_TEXT, NOT_CONNECTED_NETWORK_ERROR_TEXT, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
@@ -91,7 +91,7 @@ function bindCancellable<const A extends unknown[]>(
 function requireRest(deps: HandlerDeps): RestClient {
   const rest = deps.getRest();
   if (!rest) {
-    throw new Error('Not connected: call etn.server.connect first');
+    throw new Error(NOT_CONNECTED_ERROR_TEXT);
   }
   return rest;
 }
@@ -245,7 +245,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'tabs.open',
     bind((networkId: string) => {
       const profile = deps.getProfile();
-      if (!profile) throw new Error('Not connected: call etn.server.connect first');
+      if (!profile) throw new Error(NOT_CONNECTED_ERROR_TEXT);
       // Bugfix Q-bug3: always create a new tab. Duplicates of the same
       // network are explicitly allowed (per the original Q decision); if the
       // user picks an already-open network from the picker we still want a
@@ -1889,7 +1889,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         baseVersion: number | null;
       }) => {
         const profile = deps.getProfile();
-        if (!profile) throw new Error('Not connected: call etn.server.connect first');
+        if (!profile) throw new Error(NOT_CONNECTED_ERROR_TEXT);
         const id = randomUUID();
         deps.localDb.upsertDraft({
           id,
@@ -1973,7 +1973,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
-        throw new Error('Not connected: call etn.server.connect and open a network first');
+        throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       }
       deps.localDb.rotateVisitHistory(profile.id, networkId, tabId ?? null, oldId, newId);
     }),
@@ -1984,7 +1984,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
-        throw new Error('Not connected: call etn.server.connect and open a network first');
+        throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       }
       if (tabId === null || tabId === undefined) {
         // Q4: `null` means «across every tab of the network» — a deleted thought
@@ -2007,7 +2007,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
-        throw new Error('Not connected: call etn.server.connect and open a network first');
+        throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       }
       deps.localDb.clearVisitHistory(profile.id, networkId, tabId ?? null);
     }),

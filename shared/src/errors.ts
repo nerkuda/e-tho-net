@@ -107,3 +107,40 @@ export const PROPERTY_SIDE_ERROR_REASON = {
 } as const;
 export type PropertySideErrorReason =
   (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];
+
+/**
+ * Канонический отказ main-процесса до установки соединения (ошибка f803afb6,
+ * круг 2).
+ *
+ * `requireRest` в `client/src/main/ipc/handlers.ts` и `openNetwork` в
+ * `client/src/main/ipc/connection-lifecycle.ts` бросают эту строку, пока
+ * профиль не подключён/уже отключён; в сеть запрос не уходил. Текст
+ * английский и техничный — до интерфейса он доходить не должен: renderer
+ * распознаёт его предикатом {@link isNotConnectedErrorMessage} и переводит в
+ * словарное «нет соединения с сервером» (а панель «Свойства» — в повторное
+ * чтение после восстановления связи).
+ *
+ * Строка живёт ЗДЕСЬ единственным источником: и main, и renderer, и тесты
+ * берут её отсюда. Дубль литерала по коду краснит сторож
+ * `client/tests/guard-not-connected-literal.test.ts`.
+ */
+export const NOT_CONNECTED_ERROR_PREFIX = 'Not connected: call etn.server.connect';
+
+/** Отказ main, когда нет активного профиля или открытой сети. */
+export const NOT_CONNECTED_NETWORK_ERROR_TEXT = `${NOT_CONNECTED_ERROR_PREFIX} and open a network first`;
+
+/** Отказ main до установки соединения: профиль не подключён. */
+export const NOT_CONNECTED_ERROR_TEXT = `${NOT_CONNECTED_ERROR_PREFIX} first`;
+
+/**
+ * Совпадает ли текст ошибки с каноническим отказом «Not connected…».
+ *
+ * Проверка структурная (по тексту, без `details.kind`): plain-`Error` из
+ * main-процесса переживает IPC без кода и деталей, но означает ровно обрыв
+ * связи. Граница слова после префикса не даёт принять за отказ сообщение,
+ * лишь начинающееся теми же буквами.
+ */
+export function isNotConnectedErrorMessage(message: string): boolean {
+  const escaped = NOT_CONNECTED_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}\\b`, 'i').test(message);
+}
