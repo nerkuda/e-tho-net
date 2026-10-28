@@ -109,16 +109,35 @@ function asErrorLike(err: unknown): ErrorLike | null {
 }
 
 /**
+ * Канонический отказ main до установки соединения (`requireRest` в
+ * `ipc/handlers.ts`). Это не бизнес-ошибка, а отсутствие связи: профиль ещё не
+ * подключён/уже отключён, и запрос вообще не уходил в сеть (ошибка f803afb6 —
+ * английская строка «Not connected…» доезжала до панели «Свойства»).
+ */
+const NOT_CONNECTED_RE = /^Not connected: call etn\.server\.connect\b/i;
+
+/**
  * `true` when the failure is OUR link-down rejection (main-process gate or a
  * cancelled REST request, defect de34b35b). The main process marks both with
  * `details.kind === 'connection-lost'`; the renderer receives a revived
  * `EtnError`, but the check is structural so a plain IPC/replay object works
  * too.
+ *
+ * Также распознаётся канонический отказ «Not connected: call
+ * etn.server.connect first»: он приходит БЕЗ `details.kind` (plain `Error` из
+ * `requireRest`), но означает ровно обрыв связи и обязан приводить к тому же
+ * словарному тексту и повторному чтению после переподключения (ошибка
+ * f803afb6).
  */
 export function isConnectionLostError(err: unknown): boolean {
-  const details = asErrorLike(err)?.details;
-  if (typeof details !== 'object' || details === null) return false;
-  return (details as { kind?: unknown }).kind === 'connection-lost';
+  const like = asErrorLike(err);
+  const details = like?.details;
+  if (typeof details === 'object' && details !== null) {
+    if ((details as { kind?: unknown }).kind === 'connection-lost') return true;
+  }
+  const message =
+    typeof like?.message === 'string' ? like.message : typeof err === 'string' ? err : '';
+  return NOT_CONNECTED_RE.test(message);
 }
 
 /**

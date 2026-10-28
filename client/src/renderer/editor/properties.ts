@@ -50,7 +50,7 @@ import {
   setTooltip,
   span,
 } from '../lib/dom.js';
-import { errorParagraph, footerErrorLine, operationError } from '../lib/ui/messages.js';
+import { errorParagraph, footerErrorLine } from '../lib/ui/messages.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
@@ -823,13 +823,15 @@ function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): 
 }
 
 /**
- * Отказ чтения значений владельца (`properties.get`) — пользователь обязан
- * увидеть, что строки показывают прежние значения (или помечены «не удалось
- * прочитать»), а не стёртые. Текст один на все потребители (типовая таблица,
- * внетиповая): тост дедуплицирует одинаковый текст, поэтому серия отказов и
- * ретраи не плодят сообщения (ошибка d720265c, требование «без спама»).
+ * Отказ чтения свойств владельца: значений (`properties.get`) или определений
+ * типа (ошибка f803afb6) — пользователь обязан увидеть, что строки показывают
+ * прежние значения (или помечены «не удалось прочитать»), а не стёртые, и не
+ * получить техническую строку. Текст один на всех потребителей (типовая
+ * таблица, внетиповая): тост дедуплицирует одинаковый текст, поэтому серия
+ * отказов и ретраи не плодят сообщения (ошибки d720265c, f803afb6 —
+ * требование «без спама»).
  */
-function notifyValuesReadFailed(): void {
+function notifyPropertiesReadFailed(): void {
   notice(t('properties.valuesReadFailed'), 'error');
 }
 
@@ -1634,7 +1636,7 @@ function buildOutsidePropertiesBody(
       // строки этого владельца сохраняем: отказ не доказывает, что значения
       // исчезли. Метка dirty не снимается — следующий показ/канал повторит
       // чтение, и сообщение об отказе не потеряется.
-      notifyValuesReadFailed();
+      notifyPropertiesReadFailed();
       if (isConnectionLostError(err)) {
         retryStop?.();
         retryStop = onReconnected(networkId, () => void reload(true));
@@ -2685,15 +2687,32 @@ function buildTypePropertiesBody(
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
       if (disposed) return;
-      // Same as the outside-type body: forgotten owner mark so returning to the
-      // previous entity re-reads instead of keeping the error (90b2256e, круг 3).
-      shownOwnerId = null;
-      tableWrap.replaceChildren(operationError(err));
-      tableAttached = false;
+      // Отказ чтения определений типа (ошибка f803afb6): это ПЕРВОЕ чтение
+      // панели, и раньше catch заменял таблицу `operationError(err)` — строки
+      // исчезали, а технический английский текст отказа main («Not connected:
+      // …») попадал в интерфейс. Теперь отказ сообщается словарным текстом
+      // (тот же, что у отказа значений: одна серия отказов даёт одно
+      // сообщение), а строки этого владельца сохраняются как есть — их
+      // значения и редакторы остаются последним успешным снимком (ошибка
+      // d720265c).
+      notifyPropertiesReadFailed();
+      // Повтор чтения после восстановления связи — как у отказа значений.
+      // `isConnectionLostError` распознаёт и канонический «Not connected…» без
+      // details.kind (ошибка f803afb6).
       if (isConnectionLostError(err)) {
         retryStop?.();
         retryStop = onReconnected(networkId, () => void reload(true));
       }
+      const hasPreviousRows =
+        tableAttached && shownRows.some((row) => row.ownerId === requestOwnerId);
+      if (hasPreviousRows) return;
+      // Прежних строк нет (первый показ владельца): строить таблицу не из
+      // чего, определений тоже нет. Вместо технической строки — сообщение из
+      // словаря; метку владельца снимаем, чтобы возврат/переключение
+      // перечитали его заново (90b2256e, круг 3).
+      shownOwnerId = null;
+      tableAttached = false;
+      tableWrap.replaceChildren(errorParagraph(t('properties.valuesReadFailed')));
       return;
     }
     // The owner changed while the definitions were in flight — the retarget's
@@ -2744,7 +2763,7 @@ function buildTypePropertiesBody(
       return;
     }
     if (!valuesRead) {
-      notifyValuesReadFailed();
+      notifyPropertiesReadFailed();
       // Обрыв связи: повторяем чтение после переподключения. Тост дедуплицирует
       // одинаковый текст, поэтому серия отказов не даёт спама.
       if (isConnectionLostError(valuesError)) {

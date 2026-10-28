@@ -45,6 +45,14 @@ describe('errText: дружелюбные сообщения', () => {
     assert.equal(errText(err), CONNECTION_LOST);
   });
 
+  it('канонический «Not connected…» из main — тоже обрыв связи (f803afb6)', () => {
+    const err = new Error('Not connected: call etn.server.connect first');
+    assert.equal(isConnectionLostError(err), true);
+    const text = errText(err);
+    assert.equal(text, CONNECTION_LOST);
+    assertFriendly(text);
+  });
+
   it('INTERNAL без признака связи → «сервер недоступен, попробуйте позже»', () => {
     const text = errText(new EtnError('INTERNAL', 'SQLITE_BUSY: database is locked'));
     assert.equal(text, SERVER_UNAVAILABLE);
