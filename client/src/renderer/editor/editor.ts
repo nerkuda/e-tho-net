@@ -1935,12 +1935,6 @@ function renderFull(ctx: EditorContext | null): void {
   // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
   // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
   // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
-  // именно DOM-кнопку.
-  // Первый маунт: `ResizeObserver` сработает только при изменении размера,
-  // а табы могут уже не помещаться в момент открытия редактора. Прогоняем
-  // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
-  // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
-  // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
   // именно DOM-кнопку. Передаём getter `() => stripElements.hidden`, а не
   // сам массив: на момент первого вызова tabBar ещё не в DOM, `clientWidth=0`
   // → recomputeOverflow early-return → `hidden=[]`. ResizeObserver потом
@@ -1998,6 +1992,13 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
   next.focus();
 }
 
+/** id мысли, открытой в редакторе (override редактора, иначе фокус). */
+function shownThoughtId(): string {
+  const target = store.state.editorTarget;
+  if (target !== null && target.kind === 'thought') return target.id;
+  return store.state.focus?.focused.id ?? '';
+}
+
 /**
  * Moves the caret into the permanent-comment field of the «Комментарий» tab —
  * the continuation after a type created from the header type picker was
@@ -2008,13 +2009,6 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-/** id мысли, открытой в редакторе (override редактора, иначе фокус). */
-function shownThoughtId(): string {
-  const target = store.state.editorTarget;
-  if (target !== null && target.kind === 'thought') return target.id;
-  return store.state.focus?.focused.id ?? '';
-}
-
 function focusEditorComment(thoughtId: string, findText?: string, selection?: MdSourceSelection): void {
   const deadline = Date.now() + 8000;
   let activated = false;
