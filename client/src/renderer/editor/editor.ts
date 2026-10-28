@@ -2678,24 +2678,19 @@ function focusOnMapFromMenu(
  * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
  */
 async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElement): Promise<void> {
-  const networkId = requireNetworkId();
   // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
   // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
-  const { showThoughtMenuUnder, resolveSiblingParent } =
-    await import('../canvas/context-menu.js');
+  const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
   const { focusThoughtOnMap } = await import('../screens/active-view.js');
-  // Мысль не в зоне холста — родителя для «налево (родственник)» резолвим
-  // запросом (на холсте он приходит с ответом фокуса); имя родителя нужно
-  // диалогу, чтобы назвать якорь, а не мысль в фокусе (ошибка 89964a9b).
-  const siblingParent = await resolveSiblingParent(networkId, thought.id);
-  showThoughtMenuUnder(
-    anchor,
+  // Мысль не в зоне холста: родителя для «налево (родственник)» резолвит фасад
+  // меню вне холста — вместе с именем, чтобы диалог назвал якорь, а не мысль в
+  // фокусе (ошибки 2baa78fb/89964a9b), и со сверкой сети после ответа.
+  await showOutOfCanvasThoughtMenu(
+    { anchor },
     {
       id: thought.id,
       title: thought.title,
       dir: 'siblings',
-      siblingParentId: siblingParent?.id ?? null,
-      siblingParentTitle: siblingParent?.title,
       trashed: thought.marked_for_deletion,
     },
     {

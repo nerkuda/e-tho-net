@@ -369,7 +369,7 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
         onContextMenu: (event, targetId) => {
           event.stopPropagation();
           void showOutOfCanvasThoughtMenu(
-            event,
+            { event },
             { id: targetId, title: ref?.title ?? id, dir: 'siblings' },
             // Открытие из меню идёт тем же путём, что и клик по чипу: на карте —
             // в фокус, в структурах/дневнике — в редактор без смены фокуса.
@@ -399,7 +399,7 @@ function wireHistoryContextMenu(el: HTMLElement, id: string, title: string): voi
     // Строка дропдауна — тоже облачко вне холста: родитель «налево» — родитель
     // самой мысли (ошибка 2baa78fb).
     void showOutOfCanvasThoughtMenu(
-      event,
+      { event },
       { id, title, dir: 'siblings' },
       { openHandler: (openId) => openEntry(openId) },
     );

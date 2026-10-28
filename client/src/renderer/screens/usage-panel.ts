@@ -584,7 +584,7 @@ export function createUsagePanel(options: CreateUsagePanelOptions): UsagePanelHa
     // Строка панели — вне холста: родителя для «налево» резолвит общий
     // помощник меню вне холста и сверяет сеть после ответа (ошибка 2baa78fb).
     await showOutOfCanvasThoughtMenu(
-      event,
+      { event },
       {
         id,
         title: row.thought.title,

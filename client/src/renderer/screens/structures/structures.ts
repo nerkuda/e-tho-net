@@ -1364,7 +1364,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
           // общий помощник меню вне холста ДО открытия и сверяет сеть после
           // ответа (ошибка 2baa78fb), а не конструктор по фокусу карты.
           void showOutOfCanvasThoughtMenu(
-            event,
+            { event },
             { id, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
             {
               openHandler: (targetId) => void openStructuresThought(targetId),

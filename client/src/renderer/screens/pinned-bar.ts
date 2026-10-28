@@ -38,8 +38,7 @@ import { focusFromUi } from '../app.js';
 // представления мысли (стандарт «представление мысли — только через фабрику»).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import {
-  resolveSiblingParent,
-  showThoughtContextMenu,
+  showOutOfCanvasThoughtMenu,
   type ThoughtMenuOptions,
 } from '../canvas/context-menu.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
@@ -281,12 +280,10 @@ function wirePinnedContextMenu(el: HTMLElement, id: string, title: string): void
 }
 
 /**
- * Общее меню мысли для чипа/строки закреплённых (вне холста): родитель для
- * «налево (родственник)» — родитель самой мысли, а не мысли в фокусе карты
- * (спецификация «Контекстное меню мысли»). Резолв явный: без него конструктор
- * берёт родителя фокуса (ловушка `context-menu.ts:412-413`) и «налево» создаёт
- * мысль не под тем родителем (ошибка ffc173c9). После ожидания сверяется сеть
- * (класс a3151e33).
+ * Общее меню мысли для чипа/строки закреплённых (вне холста) — тонкая обёртка
+ * фасада: цель меню в контексте закреплённых одна, а сеть, резолв родителя
+ * «налево» и сверка после ответа живут в `showOutOfCanvasThoughtMenu`
+ * (ошибка 2baa78fb, задача d8941b76).
  */
 async function openPinnedThoughtMenu(
   event: MouseEvent,
@@ -294,21 +291,7 @@ async function openPinnedThoughtMenu(
   title: string,
   opts: ThoughtMenuOptions = {},
 ): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const siblingParent = await resolveSiblingParent(networkId, id);
-  if (store.state.networkId !== networkId) return;
-  showThoughtContextMenu(
-    event,
-    {
-      id,
-      title,
-      dir: 'siblings',
-      siblingParentId: siblingParent?.id ?? null,
-      siblingParentTitle: siblingParent?.title,
-    },
-    opts,
-  );
+  await showOutOfCanvasThoughtMenu({ event }, { id, title, dir: 'siblings' }, opts);
 }
 
 /**

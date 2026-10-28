@@ -104,7 +104,7 @@ import {
 } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import {
-  resolveSiblingParent,
+  showOutOfCanvasThoughtMenu,
   showThoughtContextMenu,
   showZoneContextMenu,
 } from './context-menu.js';
@@ -2592,30 +2592,19 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
 }
 
 /**
- * Общее меню мысли для строки соседа в Ctrl-hover попапе (вне зон холста):
- * родитель для «налево (родственник)» — родитель самой мысли, а не мысли в
- * фокусе карты (спецификация «Контекстное меню мысли»). Резолв явный: без него
- * конструктор берёт родителя фокуса (ловушка `context-menu.ts:412-413`)
- * (ошибка ffc173c9). После ожидания сверяется сеть (класс a3151e33).
+ * Общее меню мысли для строки соседа в Ctrl-hover попапе (вне зон холста) —
+ * тонкая обёртка фасада меню вне холста: попап живёт вне холста, поэтому
+ * родителя «налево» резолвит фасад (ошибка 2baa78fb), а открытие закрывает
+ * превью и не двигает фокус карты.
  */
 async function openNeighborPreviewThoughtMenu(
   event: MouseEvent,
   id: string,
   title: string,
 ): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const siblingParent = await resolveSiblingParent(networkId, id);
-  if (store.state.networkId !== networkId) return;
-  showThoughtContextMenu(
-    event,
-    {
-      id,
-      title,
-      dir: 'siblings',
-      siblingParentId: siblingParent?.id ?? null,
-      siblingParentTitle: siblingParent?.title,
-    },
+  await showOutOfCanvasThoughtMenu(
+    { event },
+    { id, title, dir: 'siblings' },
     {
       openHandler: (openId) => {
         closeHoverPreview();

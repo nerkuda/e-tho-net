@@ -1654,27 +1654,17 @@ async function thoughtAvailable(networkId: string, id: string): Promise<boolean>
  */
 export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
   lazily(async () => {
-    const { showThoughtMenuUnder, resolveSiblingParent } =
-      await import('../canvas/context-menu.js');
-    // Родитель для «налево (родственник)» и доступность мысли — параллельно.
-    const [siblingParent, available] = await Promise.all([
-      resolveSiblingParent(opts.networkId, opts.id),
-      thoughtAvailable(opts.networkId, opts.id),
-    ]);
+    // Доступность мысли (урезанный набор `unresolvable`) не зависит от фасада:
+    // запрос стартует параллельно ленивой загрузке общего конструктора.
+    const availability = thoughtAvailable(opts.networkId, opts.id);
+    const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+    const available = await availability;
     wireFilterCloudInvalidation();
-    showThoughtMenuUnder(
-      opts.anchor,
-      {
-        id: opts.id,
-        title: opts.title,
-        dir: 'siblings',
-        // Чип не живёт в зоне холста — родителя резолвим запросом (как чипы
-        // редактора: value-editor); имя нужно диалогу, чтобы назвать якорь,
-        // а не мысль в фокусе (ошибка 89964a9b).
-        siblingParentId: siblingParent?.id ?? null,
-        siblingParentTitle: siblingParent?.title,
-        trashed: opts.trashed === true,
-      },
+    // Чип не живёт в зоне холста — родителя «налево (родственник)» и сверку
+    // сети держит фасад меню вне холста (ошибки 2baa78fb/89964a9b).
+    await showOutOfCanvasThoughtMenu(
+      { anchor: opts.anchor },
+      { id: opts.id, title: opts.title, dir: 'siblings', trashed: opts.trashed === true },
       {
         openLabel: 'Открыть в редакторе',
         openHandler: (id) => openThoughtInEditorById(id),

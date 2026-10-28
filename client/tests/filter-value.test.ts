@@ -1288,13 +1288,19 @@ describe('меню чипа-мысли в условии отбора (ошиб�
       body.includes("await import('../canvas/context-menu.js')"),
       'общий конструктор подключается лениво (цикл canvas → editor → lib/filter-value)',
     );
-    assert.ok(body.includes('showThoughtMenuUnder('), 'меню мысли строит showThoughtMenuUnder');
+    assert.ok(
+      body.includes('showOutOfCanvasThoughtMenu('),
+      'меню мысли открывает фасад вне холста (родитель «налево» — внутри)',
+    );
     assert.ok(
       body.includes("openLabel: 'Открыть в редакторе'"),
       'контекст условия — «Открыть в редакторе» (фокус холста не сдвигается)',
     );
     assert.ok(body.includes('focusHandler'), '«В фокус» — от общего набора, а не своей командой');
-    assert.ok(body.includes('siblingParentId'), 'родитель для «налево (родственник)» передан контекстом');
+    assert.ok(
+      !body.includes('resolveSiblingParent') && !body.includes('showThoughtMenuUnder('),
+      'своей копии цепочки «резолв родителя → меню» у чипа условия нет (задача d8941b76)',
+    );
     assert.ok(
       body.includes("menuAction('Убрать из значения условия'"),
       'команда значения — через словарь пунктов меню',

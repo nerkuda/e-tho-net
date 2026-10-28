@@ -58,6 +58,10 @@ import { focusFromUi, setFocus } from '../app.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
 import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-cloud.js';
+// Тип места меню берётся у фасада вне холста: сам фасад импортируется лениво
+// (статический импорт дал бы цикл `app → search → canvas/context-menu → app`),
+// а type-only импорт стирается при сборке и цикла не создаёт.
+import type { ThoughtMenuPlace } from '../canvas/context-menu.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import {
   paintWikiIdsInSnippet,
@@ -958,43 +962,23 @@ function searchCloudActions(activate: () => void, title: string): ThoughtCloudAc
   };
 }
 
-/** Где открыть меню мысли для облачка результата поиска. */
-type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
-
 /**
- * Открывает общее меню мысли для облачка результата поиска. Позиция — точка
- * правого клика (`showThoughtContextMenu`) либо край облачка при открытии с
- * клавиатуры (`showThoughtMenuUnder`).
- *
- * `siblingParentId` и `siblingParentTitle` передаются ЯВНО
- * (`resolveSiblingParent`), иначе «налево (родственник)» взяло бы родителя
- * мысли в фокусе карты (ловушка `context-menu.ts:412-413`), а диалог назвал бы
- * якорь именем фокуса (ошибка 89964a9b). После ожидания резолва сверяется
- * сеть: поздний ответ не должен открыть меню для мысли прежней сети (класс
- * a3151e33).
+ * Открывает общее меню мысли для облачка результата поиска: точка правого
+ * клика или край облачка при открытии с клавиатуры — место передаётся фасаду,
+ * он же резолвит родителя «налево» и сверяет сеть после ожидания
+ * (ошибки 2baa78fb/89964a9b, класс a3151e33). Фасад импортируется лениво:
+ * статический импорт дал бы цикл `app → search → canvas/context-menu → app`.
  */
-function openSearchThoughtMenu(
-  id: string,
-  title: string,
-  place: ThoughtMenuPlace,
-): void {
+function openSearchThoughtMenu(id: string, title: string, place: ThoughtMenuPlace): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   void (async () => {
     try {
-      const { showThoughtContextMenu, showThoughtMenuUnder, resolveSiblingParent } =
-        await import('../canvas/context-menu.js');
-      const siblingParent = await resolveSiblingParent(networkId, id);
+      const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+      // Пока шёл ленивый импорт, сеть могла смениться: поздний вход не должен
+      // открыть меню для мысли прежней сети (класс a3151e33).
       if (store.state.networkId !== networkId) return;
-      const target = {
-        id,
-        title,
-        dir: 'siblings' as const,
-        siblingParentId: siblingParent?.id ?? null,
-        siblingParentTitle: siblingParent?.title,
-      };
-      if ('event' in place) showThoughtContextMenu(place.event, target);
-      else showThoughtMenuUnder(place.anchor, target);
+      await showOutOfCanvasThoughtMenu(place, { id, title, dir: 'siblings' });
     } catch (err) {
       notice(errText(err), 'error');
     }

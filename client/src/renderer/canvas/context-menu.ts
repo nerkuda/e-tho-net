@@ -382,38 +382,50 @@ export async function resolveSiblingParent(
 }
 
 /**
- * Общее меню мысли для облачка ВНЕ холста (полоса истории, лента «Дневника»,
- * дерево «Структур», панель использования): родитель для «налево
- * (родственник)» — родитель САМОЙ мысли, а не мысли в фокусе карты
- * (спецификация «Контекстное меню мысли»). На холсте его знает ответ фокуса;
- * вне зон холста его приходится спрашивать у сервера ДО открытия меню —
- * конструктор без `siblingParentId` молча берёт родителя фокуса
+ * Место открытия меню мысли вне холста: точка правого клика (как у холста) или
+ * якорный элемент (чип, строка списка, кнопка «Действия ▾») — тот же выбор,
+ * что делают всплывающие меню в остальном клиенте. Фасад сам решает, каким
+ * входом конструктора открыть меню.
+ */
+export type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
+
+/**
+ * ЕДИНСТВЕННЫЙ вход меню мысли ВНЕ холста (полоса истории и панель
+ * закреплённых, лента «Дневника», «Структуры», панель использования, поиск,
+ * чипы редактора, локальный граф, вкладка «Связи», карточка публикации,
+ * условия отбора, попап соседей холста):
+ * родитель для «налево (родственник)» — родитель САМОЙ мысли, а не мысли в
+ * фокусе карты (спецификация «Контекстное меню мысли»). На холсте его знает
+ * ответ фокуса; вне зон холста его приходится спрашивать у сервера ДО открытия
+ * меню — конструктор без `siblingParentId` молча берёт родителя фокуса
  * (`focus.parents[0]`) и «налево» создаёт мысль не под тем родителем
  * (ошибка 2baa78fb), а без имени родителя диалог подписывает якорь именем
  * фокуса (ошибка 89964a9b). После ожидания сверяется сеть — поздний ответ не
  * должен открыть меню для мысли прежней сети (класс a3151e33).
  *
- * Места без холста зовут этот помощник, а не `showThoughtContextMenu`
- * напрямую: резолв родителя и сверка сети не должны расползаться копиями.
+ * Вызывающий отдаёт только цель (id/имя/контекст), место и опции меню; сеть,
+ * резолв родителя, сверка и открытие меню живут здесь. Копия цепочки в
+ * модуле-потребителе запрещена сторожем `guard-out-of-canvas-menu`
+ * (задача d8941b76): места без холста не должны расползаться расходящимися
+ * копиями правил «налево».
  */
 export async function showOutOfCanvasThoughtMenu(
-  event: MouseEvent,
+  place: ThoughtMenuPlace,
   target: Omit<CloudMenuTarget, 'siblingParentId' | 'siblingParentTitle'>,
   opts: ThoughtMenuOptions = {},
 ): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const siblingParent = await resolveSiblingParent(networkId, target.id);
+  // Сверка ПОСЛЕ await: поздний ответ прежней сети не открывает меню (a3151e33).
   if (store.state.networkId !== networkId) return;
-  showThoughtContextMenu(
-    event,
-    {
-      ...target,
-      siblingParentId: siblingParent?.id ?? null,
-      siblingParentTitle: siblingParent?.title,
-    },
-    opts,
-  );
+  const full: CloudMenuTarget = {
+    ...target,
+    siblingParentId: siblingParent?.id ?? null,
+    siblingParentTitle: siblingParent?.title,
+  };
+  if ('event' in place) showThoughtContextMenu(place.event, full, opts);
+  else showThoughtMenuUnder(place.anchor, full, opts);
 }
 
 /**

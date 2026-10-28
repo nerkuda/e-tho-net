@@ -834,24 +834,17 @@ async function focusLinkRef(id: string): Promise<void> {
  * редактора — «Открыть в редакторе» без смены фокуса холста и «В фокус».
  */
 async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
   // Ленивый импорт: статический замкнул бы цикл
   // canvas/context-menu → editor/editor → editor/mini-graph.
-  const { showThoughtMenuUnder, resolveSiblingParent } =
-    await import('../canvas/context-menu.js');
-  // Пилюля не в зоне холста — родителя для «налево (родственник)» резолвим
-  // запросом (на холсте он приходит с ответом фокуса); имя родителя нужно
-  // диалогу, чтобы назвать якорь, а не мысль в фокусе (ошибка 89964a9b).
-  const siblingParent = await resolveSiblingParent(networkId, node.id);
-  showThoughtMenuUnder(
-    anchor,
+  const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+  // Пилюля не в зоне холста — родителя «налево (родственник)» и сверку сети
+  // держит фасад меню вне холста (ошибки 2baa78fb/89964a9b).
+  await showOutOfCanvasThoughtMenu(
+    { anchor },
     {
       id: node.id,
       title: node.title,
       dir: 'siblings',
-      siblingParentId: siblingParent?.id ?? null,
-      siblingParentTitle: siblingParent?.title,
       trashed: node.ref.marked_for_deletion === true,
     },
     {

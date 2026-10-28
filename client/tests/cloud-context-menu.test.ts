@@ -176,15 +176,16 @@ describe('контекстное меню облачка — общий конс
     );
     const menu = functionBody(src, 'function openSearchThoughtMenu(');
     assert.ok(
-      menu.includes('showThoughtContextMenu(') &&
-        menu.includes('showThoughtMenuUnder(') &&
-        menu.includes('resolveSiblingParent(') &&
-        menu.includes('siblingParentTitle'),
-      'меню открывается общим фасадом, родитель и его имя для «налево» передаются явно',
+      menu.includes('showOutOfCanvasThoughtMenu('),
+      'меню открывается общим фасадом вне холста (родитель и сверка сети — внутри)',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent(') && !menu.includes('showThoughtContextMenu('),
+      'своей копии цепочки «резолв родителя → меню» в поиске нет (задача d8941b76)',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
-      'после await резолва сверяется сеть (класс a3151e33)',
+      'после await ленивого импорта сверяется сеть (класс a3151e33)',
     );
     // Клавиатурный путь — только привязки общего диспетчера.
     assert.ok(
@@ -205,19 +206,16 @@ describe('контекстное меню облачка — общий конс
       wire.includes('openPinnedThoughtMenu('),
       'меню строки — общий конструктор, открытие идёт путём строки',
     );
-    // «Налево (родственник)» вне холста цепляет родителя САМОЙ мысли: явный
-    // резолв, иначе конструктор берёт родителя фокуса (спецификация
-    // «Контекстное меню мысли», ошибка ffc173c9).
+    // «Налево (родственник)» вне холста цепляет родителя САМОЙ мысли: его
+    // резолвит фасад, а панель только отдаёт цель и контекст меню (d8941b76).
     const menu = functionBody(src, 'async function openPinnedThoughtMenu(');
     assert.ok(
-      menu.includes('resolveSiblingParent(') &&
-        menu.includes('siblingParentId') &&
-        menu.includes('siblingParentTitle'),
-      'строка закреплённых передаёт id и имя родителя явно (резолв до открытия меню)',
+      menu.includes('showOutOfCanvasThoughtMenu(') && menu.includes("dir: 'siblings'"),
+      'строка закреплённых зовёт фасад меню вне холста с контекстом «родственник»',
     );
     assert.ok(
-      menu.includes('store.state.networkId !== networkId'),
-      'после await резолва сверяется сеть (класс a3151e33)',
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtContextMenu('),
+      'локальной копии цепочки в панели закреплённых нет (задача d8941b76)',
     );
     // Тот же дефект был у видимого чипа панели: он тоже идёт через общий резолв.
     const chip = functionBody(src, 'function buildChip(');
@@ -231,26 +229,20 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.linksTab);
     const actions = functionBody(src, 'function mentionCloudActions(');
     assert.ok(
-      actions.includes('onContextMenu') && actions.includes('openOutOfCanvasThoughtMenu('),
+      actions.includes('onContextMenu') && actions.includes('showOutOfCanvasThoughtMenu('),
       'чип упоминания обязан открывать общее меню мысли',
     );
-    const menu = functionBody(src, 'async function openOutOfCanvasThoughtMenu(');
+    // Цепочку «резолв родителя → сверка сети → меню» держит фасад: своей
+    // копии в вкладке «Связи» нет (задача d8941b76).
     assert.ok(
-      menu.includes('showThoughtContextMenu(') &&
-        menu.includes('resolveSiblingParent(') &&
-        menu.includes('siblingParentId') &&
-        menu.includes('siblingParentTitle'),
-      'меню вне холста передаёт id и имя родителя явно (резолв до открытия)',
-    );
-    assert.ok(
-      menu.includes('store.state.networkId !== networkId'),
-      'после await резолва сверяется сеть (класс a3151e33)',
+      !src.includes('resolveSiblingParent') && !src.includes('showThoughtContextMenu('),
+      'вкладка «Связи» зовёт только фасад меню вне холста',
     );
     // Второе место того же файла — облачко конца связи во вкладке «Мысли».
     const endpoint = functionBody(src, 'function buildThoughtCloud(');
     assert.ok(
-      endpoint.includes('openOutOfCanvasThoughtMenu('),
-      'облачко конца связи резолвит родителя той же функцией',
+      endpoint.includes('showOutOfCanvasThoughtMenu('),
+      'облачко конца связи открывает меню тем же фасадом',
     );
     assert.equal(
       (src.match(/actions: mentionCloudActions\(\(\) => void open\(hit\), /g) ?? []).length,
@@ -268,16 +260,18 @@ describe('контекстное меню облачка — общий конс
     );
     const menu = functionBody(src, 'function openOwnerThoughtMenu(');
     assert.ok(
-      menu.includes('showThoughtContextMenu(') &&
-        menu.includes('resolveSiblingParent(') &&
-        menu.includes('siblingParentTitle') &&
+      menu.includes('showOutOfCanvasThoughtMenu(') &&
         menu.includes('extraItems') &&
         menu.includes("t('publication.cover.ownerRemove')"),
-      'общее меню + команда контекста «Убрать из владельцев»; якорь «налево» — с именем',
+      'фасад меню вне холста + команда контекста «Убрать из владельцев»',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtContextMenu('),
+      'родителя «налево» и сверку сети держит фасад, а не копия в карточке (d8941b76)',
     );
     assert.ok(
       menu.includes('store.state.networkId !== networkId'),
-      'после await резолва сверяется сеть (класс a3151e33)',
+      'после await ленивого импорта сверяется сеть (класс a3151e33)',
     );
   });
 
@@ -293,6 +287,13 @@ describe('контекстное меню облачка — общий конс
     assert.ok(
       helper.includes('store.state.networkId !== networkId'),
       'после await резолва сверяется сеть (класс a3151e33)',
+    );
+    // Один фасад на оба места открытия: точка клика и якорный элемент.
+    assert.ok(
+      helper.includes("'event' in place") &&
+        helper.includes('showThoughtContextMenu(place.event') &&
+        helper.includes('showThoughtMenuUnder(place.anchor'),
+      'фасад открывает меню и по событию, и под якорем — второго входа нет',
     );
   });
 
@@ -343,15 +344,12 @@ describe('контекстное меню облачка — общий конс
     );
     const menu = functionBody(src, 'async function openNeighborPreviewThoughtMenu(');
     assert.ok(
-      menu.includes('showThoughtContextMenu(') &&
-        menu.includes('resolveSiblingParent(') &&
-        menu.includes('siblingParentId') &&
-        menu.includes('siblingParentTitle'),
-      'строка соседа передаёт id и имя родителя явно (резолв до открытия)',
+      menu.includes('showOutOfCanvasThoughtMenu(') && menu.includes("dir: 'siblings'"),
+      'строка соседа открывает общее меню вне холста (родитель «налево» — внутри фасада)',
     );
     assert.ok(
-      menu.includes('store.state.networkId !== networkId'),
-      'после await резолва сверяется сеть (класс a3151e33)',
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtContextMenu('),
+      'в холсте нет локальной копии цепочки меню вне холста (задача d8941b76)',
     );
   });
 });

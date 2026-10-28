@@ -1379,14 +1379,12 @@ async function openCoverDialog(): Promise<void> {
   }
 
   /**
-   * Общее меню мысли для облачка-владельца в карточке публикации: тот же
-   * конструктор `canvas/context-menu.ts`, что у холста/редактора, плюс команда
+   * Общее меню мысли для облачка-владельца в карточке публикации: фасад меню
+   * вне холста (тот же конструктор, что у холста/редактора) плюс команда
    * контекста «Убрать из владельцев» (аналог крестика). Фасад импортируется
    * лениво: статический импорт замкнул бы цикл
-   * `canvas/context-menu → editor/editor → publication-card`.
-   * `siblingParentId` резолвится явно (облачко вне холста), после ожидания
-   * сверяется сеть — поздний ответ не должен открыть меню чужой сети
-   * (класс a3151e33).
+   * `canvas/context-menu → editor/editor → publication-card`. Родителя
+   * «налево» и сверку сети после ожидания держит фасад (2baa78fb, 89964a9b).
    */
   async function openOwnerThoughtMenu(
     event: MouseEvent,
@@ -1397,20 +1395,13 @@ async function openCoverDialog(): Promise<void> {
   ): Promise<void> {
     const networkId = store.state.networkId;
     if (networkId === null) return;
-    const { showThoughtContextMenu, resolveSiblingParent } = await import(
-      '../canvas/context-menu.js'
-    );
-    const siblingParent = await resolveSiblingParent(networkId, id);
+    const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+    // Пока шёл ленивый импорт, сеть могла смениться: поздний вход не должен
+    // открыть меню для мысли прежней сети (класс a3151e33).
     if (store.state.networkId !== networkId) return;
-    showThoughtContextMenu(
-      event,
-      {
-        id,
-        title: owner.title ?? id,
-        dir: 'siblings',
-        siblingParentId: siblingParent?.id ?? null,
-        siblingParentTitle: siblingParent?.title,
-      },
+    await showOutOfCanvasThoughtMenu(
+      { event },
+      { id, title: owner.title ?? id, dir: 'siblings' },
       {
         extraItems: [
           menuAction(t('publication.cover.ownerRemove'), () =>

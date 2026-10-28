@@ -478,7 +478,9 @@ describe('вкладка «Мысли» редактора связи — обл
       'openThoughtInEditor(',
       'focusFromUi(',
       'toggleSelection(',
-      'showThoughtContextMenu(',
+      // Меню мысли вне холста — через единый фасад (задача d8941b76): он же
+      // резолвит родителя «налево» и сверяет сеть после ответа.
+      'showOutOfCanvasThoughtMenu(',
     ]) {
       assert.ok(src.includes(anchor), `cloud behaviour anchor missing: ${anchor}`);
     }

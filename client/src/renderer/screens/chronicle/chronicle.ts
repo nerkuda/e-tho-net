@@ -2003,7 +2003,7 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
       // помощник меню вне холста ДО открытия и сверяет сеть после ответа
       // (ошибка 2baa78fb), а не конструктор по фокусу карты.
       void showOutOfCanvasThoughtMenu(
-        event,
+        { event },
         { id: target.thought.id, title: target.thought.title, dir: 'siblings' },
         {
           // Открытие из дневника — в редактор, фокус холста не двигаем.
