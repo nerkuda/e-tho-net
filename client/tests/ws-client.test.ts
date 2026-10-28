@@ -15,7 +15,12 @@ import { afterEach, describe, it } from 'node:test';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { RealtimeClient, normaliseWsUrl } from '../src/main/net/ws-client.js';
+import {
+  RealtimeClient,
+  normaliseWsUrl,
+  type RealtimeStatus,
+  type RealtimeStatusDetail,
+} from '../src/main/net/ws-client.js';
 import type { LocalDb } from '../src/main/db/local-db.js';
 
 /** In-memory `LocalDb` stub: only `getMeta`/`setMeta` are used by the WS client. */
@@ -46,6 +51,58 @@ async function until(cond: () => boolean, ms = 1_500): Promise<void> {
     }
     await wait(15);
   }
+}
+
+/**
+ * Waits for the NEXT `reconnecting` status carrying `detail`, driven by the
+ * `status` EVENT rather than by polling (flake 292a365c). The state is
+ * transient: a planned-restart reconnect is immediate, so `connected` follows
+ * within a few milliseconds, and a 15 ms poll loop can miss the whole window
+ * (the test then waits out its deadline although the client behaved correctly).
+ * A `reconnecting` transition with a DIFFERENT detail rejects at once, so the
+ * mutation «no server-restart detail» fails fast instead of waiting out the
+ * diagnostic ceiling. The ceiling exists only to turn a hung client into a
+ * readable failure; it is not a timing budget for the reconnect itself.
+ */
+function waitForReconnectDetail(
+  client: RealtimeClient,
+  detail: RealtimeStatusDetail,
+  observed: () => string,
+  timeoutMs = 10_000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let timer: NodeJS.Timeout | null = null;
+    const cleanup = (): void => {
+      if (timer !== null) clearTimeout(timer);
+      client.offTyped('status', onStatus);
+    };
+    const onStatus = (status: RealtimeStatus, nextDetail?: RealtimeStatusDetail): void => {
+      if (status !== 'reconnecting') return;
+      if (nextDetail === detail) {
+        cleanup();
+        resolve();
+        return;
+      }
+      cleanup();
+      reject(
+        new Error(
+          `reconnecting с detail «${nextDetail ?? 'нет'}» вместо «${detail}»; ${observed()}`,
+        ),
+      );
+    };
+    timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          `detail «${detail}» не выставлен за ${timeoutMs} мс; текущее состояние: ` +
+            `${client.getStatus()}/${client.getStatusDetail() ?? 'нет'}; ${observed()}`,
+        ),
+      );
+    }, timeoutMs);
+    // Never hold the process alive on the diagnostic timer alone.
+    timer.unref?.();
+    client.onTyped('status', onStatus);
+  });
 }
 
 /** Builds a client pointing at `serverUrl`. Also registers a `disconnect()`
@@ -695,8 +752,17 @@ describe('RealtimeClient — liveness probe & suspect (defect de34b35b)', () => 
     const ws = await conn;
     await waitForResume(ws);
 
+    // Подписка — ДО закрытия сокета: ждём событие перехода, а не поллим
+    // транзитное состояние (флейк 292a365c). При недостижении в диагностике
+    // будут все переходы и запланированные задержки реконнекта.
+    const restarted = waitForReconnectDetail(
+      client,
+      'server-restart',
+      () =>
+        `переходы: ${JSON.stringify(transitions)}; задержки реконнекта: ${delays.join(',') || 'нет'}`,
+    );
     ws.close(1001, 'server shutdown');
-    await until(() => client.getStatusDetail() === 'server-restart', 2_000);
+    await restarted;
     assert.equal(client.getStatus(), 'reconnecting');
     assert.ok(transitions.some(([s, d]) => s === 'reconnecting' && d === 'server-restart'));
     assert.ok(delays.includes(0), `нет немедленного реконнекта: ${delays.join(',')}`);
