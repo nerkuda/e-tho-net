@@ -34,6 +34,11 @@ export interface StandOptions {
    */
   responseSeedRules: { delayMs: number; path: string }[];
   /**
+   * Сколько первых совпавших ответов `responseSeedRules` придержать (0 — все;
+   * ошибка da7bbb53, круг 3): свежее чтение после мутации проходит сразу.
+   */
+  responseSeedLimit: number;
+  /**
    * Режим «форвард + подмена статуса»: подстрока пути засеянной сети; такие
    * запросы получают статус `failSeedStatus` ('' — режим выключен; ошибка
    * b213cf60).

@@ -37,6 +37,8 @@ import { inFocusNeighbourhood } from '../lib/focus-neighbourhood.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
 import {
+  REALTIME_REFETCH_MAX_WAIT_MS,
+  REALTIME_REFETCH_WINDOW_MS,
   asRealtimeCause,
   onQueryInvalidated,
   signalPublicationCompositionChanged,
@@ -410,6 +412,82 @@ function refreshPropertiesPanels(): void {
 }
 
 /**
+ * Склейка realtime-перечитываний значений (ошибка da7bbb53, круг 3).
+ *
+ * Каждое применённое data-событие открытого владельца раньше давало немедленное
+ * перечитывание типовой таблицы и тела «Свойства вне типа»: волна записи из N
+ * событий — 2·N GET мимо окна склейки слоя (в трассе гейта круга 2 — 33
+ * `properties.get` на 4 события). Поколение чтения уже отбрасывает ответы,
+ * начатые до изменения, поэтому перечитывания безопасно отложить до закрытия
+ * того же окна, что у реестра запросов ({@link REALTIME_REFETCH_WINDOW_MS};
+ * жёсткий срок {@link REALTIME_REFETCH_MAX_WAIT_MS} отсчитывается от первого
+ * события волны и потоком не продлевается): одна волна — один проход (два
+ * чтения), непрерывный поток не откладывает обновление дольше секунды.
+ * Действия пользователя и свои мутации остаются немедленными
+ * (`refreshPropertiesPanels`): их причина — не realtime-волна.
+ */
+let valueReloadTimer: ReturnType<typeof setTimeout> | null = null;
+let valueReloadMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
+/** Таблицы значений ждут перечитывания по закрытию волны. */
+let panelsReloadPending = false;
+/** Счётчик группы ждёт перечитывания по тому же окну (ответ был отброшен). */
+let outsideCountReloadPending = false;
+
+function clearValueReloadTimers(): void {
+  if (valueReloadTimer !== null) {
+    clearTimeout(valueReloadTimer);
+    valueReloadTimer = null;
+  }
+  if (valueReloadMaxWaitTimer !== null) {
+    clearTimeout(valueReloadMaxWaitTimer);
+    valueReloadMaxWaitTimer = null;
+  }
+}
+
+/** Закрытие окна: перечитываем ровно тех потребителей, что ждали. */
+function flushValueReloads(): void {
+  clearValueReloadTimers();
+  if (currentTarget === null) {
+    panelsReloadPending = false;
+    outsideCountReloadPending = false;
+    return;
+  }
+  if (panelsReloadPending) {
+    panelsReloadPending = false;
+    currentReload?.();
+    outsideReload?.();
+  }
+  if (outsideCountReloadPending) {
+    outsideCountReloadPending = false;
+    outsideRefreshCount?.();
+  }
+}
+
+/** Завести/продлить окно склейки (жёсткий срок — от первого события). */
+function armValueReloadTimers(): void {
+  if (valueReloadTimer !== null) clearTimeout(valueReloadTimer);
+  valueReloadTimer = setTimeout(flushValueReloads, REALTIME_REFETCH_WINDOW_MS);
+  if (valueReloadMaxWaitTimer === null) {
+    valueReloadMaxWaitTimer = setTimeout(flushValueReloads, REALTIME_REFETCH_MAX_WAIT_MS);
+  }
+}
+
+/** Отложить перечитывание значений до закрытия realtime-волны. */
+function scheduleValueReloads(): void {
+  // Панель не построена — читать нечего; таймеры не заводим.
+  if (currentTarget === null) return;
+  panelsReloadPending = true;
+  armValueReloadTimers();
+}
+
+/** Счётчик отбросил устаревший ответ — перечитать его в том же окне. */
+function scheduleOutsideCountReload(): void {
+  if (currentTarget === null) return;
+  outsideCountReloadPending = true;
+  armValueReloadTimers();
+}
+
+/**
  * Запускает фиксацию недописанных значений обеих таблиц вкладки «Свойства»
  * ДО того, как их строки/тела будут пересобраны или сняты с экрана (смена
  * мысли, сворачивание группы, закрытие карточки). Удалённый из документа
@@ -460,6 +538,11 @@ async function clearRowValue(ref: RowPropertyRef): Promise<void> {
     const networkId = requireNetworkId();
     if (!ref.isLink) {
       await etn.properties.remove(networkId, ref.ownerType, ref.ownerId, ref.key);
+      // Своя мутация значения — граница чтения (спека d9f1dd6f, ошибка
+      // da7bbb53, круг 3): чтение, начатое ДО удаления и доехавшее последним,
+      // не имеет права вернуть удалённое значение. Сдвигаем поколение
+      // владельца ДО перечитывания, которое запускает refresh ниже.
+      bumpValueReads({ ownerType: ref.ownerType, ownerId: ref.ownerId });
       refreshPropertiesPanels();
       return;
     }
@@ -483,6 +566,9 @@ async function clearRowValue(ref: RowPropertyRef): Promise<void> {
     } else {
       notice(marked.length > 1 ? `Восстановлено связей: ${marked.length}.` : 'Связь восстановлена.');
     }
+    // Своя мутация (снятие пометки корзины с рёбер свойства) — та же граница
+    // чтения, что у скаляра: ответ чтения, начатого до неё, не применяется.
+    bumpValueReads({ ownerType: ref.ownerType, ownerId: ref.ownerId });
     refreshPropertiesPanels();
   } catch (err) {
     errorDialog('Очистить', err);
@@ -501,6 +587,9 @@ async function removeOutsideRowValue(ref: RowPropertyRef): Promise<void> {
       ref.key,
       ref.isLink ? ref.side : null,
     );
+    // Своя мутация: поздний ответ чтения, начатого до удаления, не должен
+    // вернуть удалённое значение (ошибка da7bbb53, круг 3).
+    bumpValueReads({ ownerType: ref.ownerType, ownerId: ref.ownerId });
     refreshPropertiesPanels();
   } catch (err) {
     errorDialog('Удалить', err);
@@ -819,7 +908,10 @@ function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): 
   if (target === null) return;
   markValueOwnerDirty(ownerType, ownerId);
   if (target.ownerType !== ownerType || target.ownerId !== ownerId) return;
-  currentReload?.();
+  // Realtime-волна: перечитывание откладывается до закрытия окна склейки
+  // (ошибка da7bbb53, круг 3) — поколение уже отбросит ответы, начатые до
+  // изменения, поэтому задержка не оставляет панель на устаревшем снимке.
+  scheduleValueReloads();
 }
 
 /**
@@ -984,12 +1076,10 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
         if (requestOwnerId !== target.ownerId) return undefined;
         if (readGeneration !== valueReadGeneration(target.ownerType, requestOwnerId)) {
           // Устаревший ответ не применяем и метку не снимаем: показанному
-          // счётчику нужен ответ, запрошенный после изменения. Повтор — в
-          // микрозадаче (группа уже создана к этому моменту); вытесненная
-          // панель не перечитывается.
-          queueMicrotask(() => {
-            if (currentTarget === target) outsideRefreshCount?.();
-          });
+          // счётчику нужен ответ, запрошенный после изменения. Повтор — в том
+          // же окне склейки, что у таблиц (ошибка da7bbb53, круг 3): поток
+          // событий не должен давать чтение на каждое событие.
+          scheduleOutsideCountReload();
           return undefined;
         }
         // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
@@ -1658,7 +1748,9 @@ function buildOutsidePropertiesBody(
     // Поздний ответ чтения, начатого ДО изменения данных владельца, — прежний
     // снимок (ошибка da7bbb53, круг 2). Его не применяем и метку `outside` не
     // снимаем: перечитываем владельца заново — свежий ответ перекроет снимок,
-    // панель не останется на значении до правки.
+    // панель не останется на значении до правки. Повтор немедленный: это
+    // следствие уже начатого чтения, а не новое событие волны; сам поток
+    // событий перечитываний не запускает — они склеены окном ниже (круг 3).
     if (readGeneration !== valueReadGeneration(target.ownerType, requestOwnerId)) {
       if (box.isConnected) void reload();
       return;
@@ -1752,7 +1844,9 @@ function buildOutsidePropertiesBody(
         data.owner_type === target.ownerType &&
         data.owner_id === target.ownerId
       ) {
-        void reload();
+        // Как и типовая таблица: перечитывание по волне откладывается до
+        // закрытия окна склейки (ошибка da7bbb53, круг 3).
+        scheduleValueReloads();
       }
     }
   });
@@ -2757,7 +2851,9 @@ function buildTypePropertiesBody(
     // Поздний ответ чтения, начатого ДО изменения данных владельца, — прежний
     // снимок (ошибка da7bbb53, круг 2): не применяем его и метку `typed` не
     // снимаем, а перечитываем владельца. Свежий ответ перекроет снимок, и
-    // панель не останется на значении до правки.
+    // панель не останется на значении до правки. Повтор немедленный: это
+    // следствие уже начатого чтения; поток событий сам перечитываний не
+    // запускает — они склеены окном (круг 3).
     if (valuesRead && readGeneration !== valueReadGeneration(target.ownerType, requestOwnerId)) {
       if (box.isConnected) void reload();
       return;

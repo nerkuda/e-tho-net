@@ -92,6 +92,13 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          вычисленное до правки, не должно переиспользоваться
                          после неё (задача ddcb8e84). Подстановки id — как у
                          --delay-seed-path; путь непустой.
+      --delay-seed-response-limit <n>
+                         Придержать ответы только у первых <n> совпавших
+                         запросов (0 — все). Нужно гонке «свежий ответ обязан
+                         прийти РАНЬШЕ устаревшего»: чтение до правки
+                         придержано, чтение после неё идёт сразу (ошибка
+                         da7bbb53, круг 3). Требует
+                         --delay-seed-response-rule.
       --fail-seed-path <s>
                          Режим «форвард + подмена статуса»: запросы засеянной
                          сети, чей путь содержит <s>, всё равно уходят на сервер
@@ -166,6 +173,7 @@ export function parseArgs(argv) {
     delaySeedPath: '',
     delaySeedRules: [],
     responseSeedRules: [],
+    responseSeedLimit: 0,
     failSeedPath: '',
     failSeedStatus: 404,
     keep: false,
@@ -261,6 +269,10 @@ export function parseArgs(argv) {
         opts.responseSeedRules.push(parseDelaySeedRule(need(argv[i + 1], arg)));
         i += 1;
         break;
+      case '--delay-seed-response-limit':
+        opts.responseSeedLimit = int(need(argv[i + 1], arg), arg);
+        i += 1;
+        break;
       case '--fail-seed-path':
         opts.failSeedPath = need(argv[i + 1], arg);
         i += 1;
@@ -283,6 +295,9 @@ export function parseArgs(argv) {
   }
   if (opts.failSeedPath === '' && opts.failSeedStatus !== 404) {
     throw new Error('--fail-seed-status требует --fail-seed-path');
+  }
+  if (opts.responseSeedLimit > 0 && opts.responseSeedRules.length === 0) {
+    throw new Error('--delay-seed-response-limit требует --delay-seed-response-rule');
   }
   return opts;
 }
@@ -711,6 +726,7 @@ async function main(argv) {
         networkId: seed.networkId,
         rules: delayRules,
         responseRules,
+        responseLimit: opts.responseSeedLimit,
         // Без правил задержки (режим только --fail-seed-path) прокси не должен
         // задерживать: иначе дефолт 3000 мс замедлил бы всю сеть.
         delayMs: 0,

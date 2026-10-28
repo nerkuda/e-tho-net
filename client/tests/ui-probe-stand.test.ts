@@ -153,6 +153,22 @@ test('parseArgs: --delay-seed-path (пусто по умолчанию, знач
   assert.throws(() => parseArgs(['--delay-seed-path']), /требует значения/);
 });
 
+test('parseArgs: --delay-seed-response-limit (0 по умолчанию, значение, требует правила)', () => {
+  assert.equal(parseArgs([]).responseSeedLimit, 0);
+  const opts = parseArgs([
+    '--delay-seed-response-rule',
+    '4000:thoughts/x/properties',
+    '--delay-seed-response-limit',
+    '2',
+  ]);
+  assert.equal(opts.responseSeedLimit, 2);
+  assert.equal(opts.responseSeedRules.length, 1);
+  assert.throws(
+    () => parseArgs(['--delay-seed-response-limit', '2']),
+    /--delay-seed-response-rule/,
+  );
+});
+
 test('parseArgs: --fail-seed-path (пусто по умолчанию, значение, пропущенное значение)', () => {
   assert.equal(parseArgs([]).failSeedPath, '');
   assert.equal(
@@ -469,6 +485,54 @@ test('startDelayProxy: responseRules придерживают ОТВЕТ, а н�
     const normalElapsed = Date.now() - startedNorm;
     assert.ok(normalElapsed < 300, `посторонний путь без задержки ответа (${normalElapsed} мс)`);
     assert.equal(proxy.delayedResponseCount(), 1, 'счётчик считает только совпавшие пути');
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test('startDelayProxy: responseLimit придерживает только первые ответы (da7bbb53, круг 3)', async () => {
+  const NET = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  const upstreamPort = typeof address === 'object' && address !== null ? address.port : 0;
+  const proxy = await startDelayProxy({
+    targetPort: upstreamPort,
+    networkId: NET,
+    delayMs: 0,
+    responseRules: [{ delayMs: 400, pathFilter: 'properties' }],
+    responseLimit: 1,
+  });
+  const get = (pathname: string): Promise<{ status: number; body: string }> =>
+    new Promise((resolve, reject) => {
+      http
+        .get({ host: '127.0.0.1', port: proxy.port, path: pathname }, (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => {
+            body += chunk;
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        })
+        .on('error', reject);
+    });
+  try {
+    const firstStarted = Date.now();
+    await get(`/api/v1/networks/${NET}/thoughts/x/properties`);
+    const firstElapsed = Date.now() - firstStarted;
+    assert.ok(firstElapsed >= 350, `первый ответ придержан (${firstElapsed} мс ≥ 350)`);
+
+    // Лимит исчерпан — свежее чтение после правки приходит РАНЬШЕ устаревшего.
+    const secondStarted = Date.now();
+    await get(`/api/v1/networks/${NET}/thoughts/x/properties`);
+    const secondElapsed = Date.now() - secondStarted;
+    assert.ok(secondElapsed < 300, `второй ответ прошёл сразу (${secondElapsed} мс < 300)`);
+    assert.equal(proxy.delayedResponseCount(), 1, 'придержан ровно один ответ');
+    assert.deepEqual(proxy.delayedResponseByRule(), [1]);
   } finally {
     await proxy.close();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));

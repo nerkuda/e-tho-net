@@ -102,9 +102,15 @@ export function delayForUrl(url, networkId, rules) {
  * должно переиспользоваться после неё (задача ddcb8e84). Счётчики —
  * `delayedResponseCount()` / `delayedResponseByRule()`.
  *
+ * `responseLimit` — сколько первых совпавших ОТВЕТОВ придержать (0 — все).
+ * Нужно гонке «свежий ответ обязан прийти РАНЬШЕ устаревшего»: придержать
+ * чтение, начатое до правки, но пропустить чтение после неё (ошибка da7bbb53,
+ * круг 3). Без лимита обе задержки одинаковы, и порядок доставки сохраняется.
+ *
  * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string,
  *          rules?:Array<{delayMs:number, pathFilter?:string}>,
  *          responseRules?:Array<{delayMs:number, pathFilter?:string}>,
+ *          responseLimit?:number,
  *          failPath?:string, failStatus?:number, log?:(line:string)=>void}} opts
  * @returns {Promise<{port:number, delayedCount:()=>number, delayedByRule:()=>number[],
  *                    delayedResponseCount:()=>number, delayedResponseByRule:()=>number[],
@@ -117,6 +123,7 @@ export async function startDelayProxy({
   pathFilter = '',
   rules = [],
   responseRules = [],
+  responseLimit = 0,
   failPath = '',
   failStatus = 404,
   log = () => undefined,
@@ -214,7 +221,12 @@ export async function startDelayProxy({
       failed += 1;
       log(`inject ${injectStatus} ${req.method} ${req.url}`);
     }
-    const responseIndex = matchDelayRule(req.url, networkId, effectiveResponseRules);
+    // Лимит придержанных ОТВЕТОВ: после исчерпания пропускаем без задержки —
+    // так свежий ответ приходит раньше устаревшего (ошибка da7bbb53, круг 3).
+    const responseIndex =
+      responseLimit > 0 && delayedResponses >= responseLimit
+        ? -1
+        : matchDelayRule(req.url, networkId, effectiveResponseRules);
     let responseDelayMs = 0;
     if (responseIndex >= 0) {
       responseDelayMs = effectiveResponseRules[responseIndex]?.delayMs ?? 0;
@@ -267,7 +279,8 @@ export async function startDelayProxy({
       effectiveRules.map(describeRule).join(', ') +
       (effectiveResponseRules.length > 0
         ? `; ${effectiveResponseRules.length} response rule(s): ` +
-          effectiveResponseRules.map(describeRule).join(', ')
+          effectiveResponseRules.map(describeRule).join(', ') +
+          (responseLimit > 0 ? ` (limit ${responseLimit})` : '')
         : '') +
       (failPath === '' ? '' : `; inject ${failStatus} on path ${failPath}`),
   );
