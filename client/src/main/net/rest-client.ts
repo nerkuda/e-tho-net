@@ -230,6 +230,17 @@ interface ResponseEnvelope<T> {
 }
 
 /**
+ * One in-flight READ of a dedup lane (plain GET or read-only idempotent POST):
+ * the read epoch it was started in and the shared promise. A read joins it only
+ * within the same epoch — see {@link RestClient.invalidateInFlightReads}
+ * (ошибка da7bbb53).
+ */
+interface InflightRead {
+  epoch: number;
+  promise: Promise<ResponseEnvelope<unknown>>;
+}
+
+/**
  * Strongly-typed ETN REST client. Construct one per active server profile and reuse
  * it for the lifetime of the connection (see `NetContext`, task G7).
  *
@@ -253,23 +264,36 @@ export class RestClient {
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
-   * GETs racing each other share one fetch. Cleared in a `finally` — completed
-   * responses are never cached, so sequential identical GETs fetch again and
-   * realtime freshness is preserved.
+   * GETs of the SAME read epoch share one fetch. Cleared in a `finally` —
+   * completed responses are never cached, so sequential identical GETs fetch
+   * again and realtime freshness is preserved.
    */
-  private readonly inflightGets = new Map<string, Promise<ResponseEnvelope<unknown>>>();
+  private readonly inflightGets = new Map<string, InflightRead>();
+
+  /**
+   * Read epoch (ошибка da7bbb53). Every data-change boundary the client knows
+   * about advances it: its own mutations ({@link performRequest}) and realtime
+   * data events ({@link invalidateInFlightReads}, called by the main-process
+   * realtime layer). A GET started in an older epoch is never reused by a read
+   * issued after the boundary: its response may have been computed against
+   * pre-change data. The requests themselves are NOT aborted — their callers
+   * still get an answer; the epoch only stops that answer from posing as fresh.
+   */
+  private readEpoch = 0;
 
   /**
    * In-flight idempotent POSTs by method+URL+body (see {@link requestEnvelope}):
-   * identical posts racing each other share one fetch. Only routes that opt in
-   * via `idempotentPost` land here — non-idempotent POSTs must never be
+   * identical posts of the SAME read epoch share one fetch. Only routes that opt
+   * in via `idempotentPost` land here — non-idempotent POSTs must never be
    * collapsed, and this map is deliberately separate from {@link inflightGets}
    * (a GET and a POST never share a slot). Cleared in a `finally` — responses
    * are never cached, so sequential posts fetch again and a retry AFTER a
    * failure is a fresh request (the attempt loop inside one call still runs
-   * normally for every joiner).
+   * normally for every joiner). Reads through this lane follow the read epoch
+   * too: a view run computed before a data change is not handed to a run
+   * issued after it (тот же класс, что и GET, ошибка da7bbb53).
    */
-  private readonly inflightIdempotentPosts = new Map<string, Promise<ResponseEnvelope<unknown>>>();
+  private readonly inflightIdempotentPosts = new Map<string, InflightRead>();
 
   /**
    * Сервер не знает полей `count`/`cursor` запроса выборки (старше этапа 4,
@@ -333,6 +357,21 @@ export class RestClient {
       }
     }
     this.activeControllers.delete(networkId);
+  }
+
+  /**
+   * Marks a data-change boundary for in-flight read dedup (ошибка da7bbb53):
+   * advances the read epoch so no read issued from now on joins a GET started
+   * before the change. Called by the main-process realtime layer for every
+   * applied DATA event (`isDataChangingEvent` in `realtime/applier.ts`); own
+   * mutations do it automatically in {@link performRequest}.
+   *
+   * Deliberately does not abort those in-flight requests: their callers still
+   * receive the answer they asked for — the epoch only prevents that answer
+   * from being reused as a fresh read after the boundary.
+   */
+  public invalidateInFlightReads(): void {
+    this.readEpoch += 1;
   }
 
   /** Registers an attempt's controller under its network. */
@@ -405,6 +444,10 @@ export class RestClient {
    * `idempotentPost`. A POST carrying `requestOptions` bypasses its lane, same
    * as a GET (per-caller state must not leak); non-idempotent POSTs never opt
    * in, so they are never collapsed.
+   *
+   * Both read lanes are epoch-scoped (ошибка da7bbb53): joiners share a fetch
+   * only inside the read epoch it was started in, so a slow response computed
+   * before a data change is never handed to a read issued after that change.
    */
   private async requestEnvelope<T>(
     method: string,
@@ -423,24 +466,47 @@ export class RestClient {
   ): Promise<ResponseEnvelope<T>> {
     if (method === 'GET' && opts.requestOptions === undefined) {
       const url = this.buildUrl(path, opts.query);
+      const epoch = this.readEpoch;
       const inflight = this.inflightGets.get(url);
-      if (inflight !== undefined) return inflight as Promise<ResponseEnvelope<T>>;
-      const promise = this.performRequest<T>(method, path, opts).finally(() => {
-        this.inflightGets.delete(url);
+      // Join only a fetch of the CURRENT epoch (ошибка da7bbb53): a GET that
+      // started before a data-change boundary may carry a snapshot computed
+      // before that change, so a read issued after the boundary must not take
+      // its answer. Within one epoch identical parallel GETs still collapse.
+      if (inflight !== undefined && inflight.epoch === epoch) {
+        return inflight.promise as Promise<ResponseEnvelope<T>>;
+      }
+      const entry: InflightRead = {
+        epoch,
+        promise: this.performRequest<T>(method, path, opts),
+      };
+      entry.promise = entry.promise.finally(() => {
+        // Identity check: an older-epoch entry may already be superseded by a
+        // newer fetch of the same URL — its own settle must not drop that one.
+        if (this.inflightGets.get(url) === entry) this.inflightGets.delete(url);
       });
-      this.inflightGets.set(url, promise);
-      return promise;
+      this.inflightGets.set(url, entry);
+      return entry.promise as Promise<ResponseEnvelope<T>>;
     }
     if (method === 'POST' && opts.idempotentPost === true && opts.requestOptions === undefined) {
       const url = this.buildUrl(path, opts.query);
       const key = `POST ${url}\n${stableBodyKey(opts.body)}`;
+      const epoch = this.readEpoch;
       const inflight = this.inflightIdempotentPosts.get(key);
-      if (inflight !== undefined) return inflight as Promise<ResponseEnvelope<T>>;
-      const promise = this.performRequest<T>(method, path, opts).finally(() => {
-        this.inflightIdempotentPosts.delete(key);
+      // Same epoch gate as the GET lane (ошибка da7bbb53): a read-only POST is
+      // still a READ, and a run computed before a data change must not be
+      // handed to a run issued after it.
+      if (inflight !== undefined && inflight.epoch === epoch) {
+        return inflight.promise as Promise<ResponseEnvelope<T>>;
+      }
+      const entry: InflightRead = {
+        epoch,
+        promise: this.performRequest<T>(method, path, opts),
+      };
+      entry.promise = entry.promise.finally(() => {
+        if (this.inflightIdempotentPosts.get(key) === entry) this.inflightIdempotentPosts.delete(key);
       });
-      this.inflightIdempotentPosts.set(key, promise);
-      return promise;
+      this.inflightIdempotentPosts.set(key, entry);
+      return entry.promise as Promise<ResponseEnvelope<T>>;
     }
     return this.performRequest<T>(method, path, opts);
   }
@@ -456,12 +522,24 @@ export class RestClient {
       query?: QueryRecord;
       body?: unknown;
       requestOptions?: RequestOptions;
+      /**
+       * Read-only route opt-in of the idempotent POST dedup lane (passed
+       * through from {@link requestEnvelope}). Such a POST does NOT change
+       * data and hence must not advance the read epoch.
+       */
+      idempotentPost?: boolean;
     } = {},
   ): Promise<ResponseEnvelope<T>> {
     const url = this.buildUrl(path, opts.query);
     const ro = opts.requestOptions ?? {};
     const networkId = networkIdFromApiPath(path);
     const mutating = method !== 'GET' && method !== 'HEAD';
+    // Data-change boundary (ошибка da7bbb53). A write invalidates every GET
+    // already in flight: its response may predate the write. Idempotent POSTs
+    // are read-only routes that explicitly opted into the dedup lane, so they
+    // are not writes and keep the epoch stable.
+    const dataChanging = mutating && opts.idempotentPost !== true;
+    if (dataChanging) this.invalidateInFlightReads();
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -596,7 +674,12 @@ export class RestClient {
         duration_ms: Date.now() - attemptStarted,
         status: res.status,
       });
-      return await this.parseResponse<T>(res, ro.signal);
+      const envelope = await this.parseResponse<T>(res, ro.signal);
+      // Completion boundary (ошибка da7bbb53): a GET started while this write
+      // was in flight could have been computed by the server BEFORE its commit
+      // and delivered after it, so it must not be reused by later reads either.
+      if (dataChanging) this.invalidateInFlightReads();
+      return envelope;
     }
 
     // Loop exited without returning — exhausted retries.

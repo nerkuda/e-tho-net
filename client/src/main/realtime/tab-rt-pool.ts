@@ -26,7 +26,7 @@ import {
   type RealtimeStatus,
   type RealtimeStatusDetail,
 } from '../net/ws-client.js';
-import { RealtimeState, applyRealtimeEvent } from './applier.js';
+import { RealtimeState, applyRealtimeEvent, isDataChangingEvent } from './applier.js';
 
 const NO_USER: string | null = null;
 
@@ -77,6 +77,15 @@ export interface TabRealtimePoolOptions {
   getCurrentFocusId: (networkId: string) => string | null;
   /** Broadcasts an IPC event to the renderer (window may be null/destroyed). */
   broadcast: (channel: string, payload: unknown) => void;
+  /**
+   * Optional main-process side-channel for DATA events (ошибка da7bbb53): an
+   * applied event that changes network data marks a read boundary, so the REST
+   * client can stop reusing in-flight GETs started before it. Ephemeral
+   * families (`presence.*`, `edit.*`) are not reported — see
+   * {@link isDataChangingEvent}. Called BEFORE the renderer broadcast, so any
+   * read the renderer issues in response already belongs to the new epoch.
+   */
+  onDataChange?: (event: AnyRealtimeEvent) => void;
   /**
    * Optional main-process side-channel for status transitions (defect
    * de34b35b): the REST client raises `setLinkDown` per network. Broadcast to
@@ -280,7 +289,13 @@ export class TabRealtimePool {
         },
         event,
       );
-      if (result.applied) this.opts.broadcast('realtime:event', event);
+      if (result.applied) {
+        // Read boundary BEFORE the renderer sees the event (ошибка da7bbb53):
+        // any GET started before this data change must not be reused by the
+        // reads the renderer issues in response to it.
+        if (isDataChangingEvent(event.type)) this.opts.onDataChange?.(event);
+        this.opts.broadcast('realtime:event', event);
+      }
     });
     client.onTyped('status', (status: RealtimeStatus, detail?: RealtimeStatusDetail) => {
       const payload: RealtimeStatusPayload = {

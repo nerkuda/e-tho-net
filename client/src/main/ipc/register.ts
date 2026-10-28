@@ -157,6 +157,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         return opts.localDb.getUiState(currentProfile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
       },
       broadcast,
+      // Read-epoch boundary for the REST in-flight GET dedup (ошибка da7bbb53):
+      // an applied DATA event makes every GET started before it non-shareable —
+      // its snapshot may predate the change. The renderer's follow-up reads are
+      // issued after this hook (broadcast comes second), so they fetch fresh.
+      onDataChange: () => {
+        restClient.invalidateInFlightReads();
+      },
       // Link-down tracking per network (defect de34b35b): while the socket is
       // not `connected`, mutating REST calls for that network are rejected
       // before they leave main, and in-flight requests are aborted without

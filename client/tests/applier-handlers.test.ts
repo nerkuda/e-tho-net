@@ -6,11 +6,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { REALTIME_EVENT_TYPES } from '@etn/shared';
 import type { AnyRealtimeEvent, Thought, Link } from '@etn/shared';
 
 import {
   RealtimeState,
   applyRealtimeEvent,
+  isDataChangingEvent,
   type ApplierHooks,
 } from '../src/main/realtime/applier.js';
 import { createHandlers, type HandlerDeps } from '../src/main/ipc/handlers.js';
@@ -206,6 +208,50 @@ describe('Realtime applier (G8)', () => {
     assert.equal(state.getLink('l1')?.active, false);
     applyRealtimeEvent(state, makeHooks(), envelope('link.deleted', { id: 'l1' }));
     assert.equal(state.getLink('l1'), null);
+  });
+});
+
+describe('граница чтения: какие realtime-события меняют данные (da7bbb53)', () => {
+  it('данные меняют: значения свойств, мысль, связи, определения', () => {
+    const dataChanging = [
+      'property-value.set',
+      'property-value.deleted',
+      'thought.created',
+      'thought.updated',
+      'thought.deleted',
+      'thought.reordered',
+      'link.created',
+      'link.updated',
+      'link.deleted',
+      'property-definition.updated',
+    ] as const;
+    for (const type of dataChanging) {
+      assert.equal(isDataChangingEvent(type), true, `событие ${type} обязано двигать эпоху чтения`);
+    }
+  });
+
+  it('эфемерные presence.* и edit.* эпоху не двигают', () => {
+    const ephemeral = [
+      'presence.joined',
+      'presence.left',
+      'presence.focus_changed',
+      'edit.acquired',
+      'edit.released',
+      'edit.cleared',
+    ] as const;
+    for (const type of ephemeral) {
+      assert.equal(isDataChangingEvent(type), false, `событие ${type} не должно двигать эпоху`);
+    }
+  });
+
+  it('каталог классифицирован полностью: не-данные — ровно presence.* и edit.*', () => {
+    for (const type of REALTIME_EVENT_TYPES) {
+      assert.equal(
+        isDataChangingEvent(type),
+        !/^(?:presence|edit)\./.test(type),
+        `новый тип события ${type} требует явного решения в isDataChangingEvent`,
+      );
+    }
   });
 });
 

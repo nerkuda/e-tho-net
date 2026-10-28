@@ -22,7 +22,25 @@
  * renderer remains the sole owner of what is displayed.
  */
 
-import type { AnyRealtimeEvent, Link, Thought } from '@etn/shared';
+import type { AnyRealtimeEvent, Link, RealtimeEventType, Thought } from '@etn/shared';
+
+/**
+ * Event families that do NOT change persistent network data: `presence.*` is
+ * ephemeral by definition, `edit.*` is object-lock state (a lock changes who may
+ * edit, not the values a cached GET returns). Every other event marks a
+ * data-change boundary: an in-flight REST GET started before it may carry a
+ * pre-change snapshot and must not be reused afterwards (ошибка da7bbb53).
+ */
+const NON_DATA_EVENT_PREFIXES = ['presence.', 'edit.'] as const;
+
+/**
+ * `true` when an applied realtime event changes network data (and therefore
+ * invalidates in-flight reads). See {@link NON_DATA_EVENT_PREFIXES} for the
+ * excluded families.
+ */
+export function isDataChangingEvent(type: RealtimeEventType): boolean {
+  return !NON_DATA_EVENT_PREFIXES.some((prefix) => type.startsWith(prefix));
+}
 
 /** Callbacks the applier needs from the main process (test-friendly). */
 export interface ApplierHooks {
