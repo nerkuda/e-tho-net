@@ -15,12 +15,16 @@
  * `setZoneContextMenuHandler`, `setCloudDragHandlers`).
  *
  * The thought menu lives here, but it is not canvas-only: the single entry for
- * places outside the canvas is `showOutOfCanvasThoughtMenu` (context
+ * the FULL menu outside the canvas is `showOutOfCanvasThoughtMenu` (context
  * differences travel in `ThoughtMenuOptions`). It resolves the sibling parent
- * before opening the menu and re-checks the network after the `await`. A second
+ * before opening the menu and re-checks the network after the `await`. The one
+ * exception is the publication screen: its block menu embeds a SUBSET of the
+ * thought commands built directly by `buildThoughtMenuItems`, with the mandatory
+ * `hideAddCommand: true` and therefore no «налево (родственник)» — that exact
+ * shape is held by `guard-out-of-canvas-menu` (задача c7d5b9d4). A second
  * hand-rolled menu — or a copy of that chain — outside the canvas always drifts
- * away from the canvas one (спецификация «Контекстное меню мысли», задача
- * d8941b76).
+ * away from the canvas one (спецификация «Контекстное меню мысли», задачи
+ * d8941b76/c7d5b9d4).
  */
 
 import type { FocusDir, Link } from '@etn/shared';
@@ -397,7 +401,7 @@ export async function resolveSiblingParent(
 export type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
 
 /**
- * ЕДИНСТВЕННЫЙ вход меню мысли ВНЕ холста (полоса истории и панель
+ * ЕДИНСТВЕННЫЙ вход ПОЛНОГО меню мысли ВНЕ холста (полоса истории и панель
  * закреплённых, панель выделения, лента «Дневника», «Структуры», панель
  * использования, поиск, чипы редактора, локальный граф, вкладка «Связи»,
  * карточка публикации, условия отбора, попап соседей холста):
@@ -409,6 +413,13 @@ export type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
  * (ошибка 2baa78fb), а без имени родителя диалог подписывает якорь именем
  * фокуса (ошибка 89964a9b). После ожидания сверяется сеть — поздний ответ не
  * должен открыть меню для мысли прежней сети (класс a3151e33).
+ *
+ * «Единственный» — про ПОЛНЫЙ набор команд. Оговорка: экран публикации вставляет
+ * в меню блока ПОДМНОЖЕСТВО команд мысли, собранное напрямую
+ * `buildThoughtMenuItems` (`screens/publications/workspace.ts`), — без подменю
+ * «Добавить» (значит, и без «налево»), с обязательным `hideAddCommand: true`
+ * (структурой разделов управляют команды «В публикации», задача 7cfaba7c п.4).
+ * Эту форму держит сторож `guard-out-of-canvas-menu` (задача c7d5b9d4).
  *
  * Вызывающий отдаёт только цель (id/имя/контекст), место и опции меню; сеть,
  * резолв родителя, сверка и открытие меню живут здесь. Копия цепочки в
@@ -440,6 +451,13 @@ export async function showOutOfCanvasThoughtMenu(
  * «Контекстное меню мысли»). Единственный конструктор меню мысли: холст,
  * панель выделения, дерево «Структур», чипы редактора и кнопка «Действия»
  * зовут его же — отличия контекста передаются `ThoughtMenuOptions`.
+ *
+ * Прямой вызов вне этого файла разрешён только экрану публикации
+ * (`screens/publications/workspace.ts`): там в меню блока вставляется
+ * подмножество команд мысли — ОБЯЗАТЕЛЬНО с `hideAddCommand: true`: подменю
+ * «Добавить» (вместе с «налево», которому вне холста нужен явный родитель)
+ * в публикациях не показывается (задача 7cfaba7c п.4). Форму держит сторож
+ * `guard-out-of-canvas-menu` (задача c7d5b9d4).
  */
 export function buildThoughtMenuItems(
   networkId: string,

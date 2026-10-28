@@ -1,5 +1,6 @@
 /**
- * Сторож единственного фасада меню мысли ВНЕ холста (задача d8941b76).
+ * Сторож единственного фасада меню мысли ВНЕ холста (задача d8941b76,
+ * усилен задачей c7d5b9d4).
  *
  * Правило. Цепочка «прочитать сеть → `resolveSiblingParent` → после `await`
  * сверить сеть → открыть меню с явным `siblingParentId`/`siblingParentTitle`»
@@ -10,8 +11,30 @@
  * (так и появились шесть копий к `2baa78fb`), даёт разное поведение в разных
  * местах и теряет сверку сети (класс a3151e33).
  *
+ * Прямое открытие меню мысли (`showThoughtContextMenu`/`showThoughtMenuUnder`)
+ * вне фасада разрешено ровно одному модулю — холсту (`canvas/canvas.ts`):
+ * на холсте `focus.parents[0]` и есть правильный родитель «налево» (зона
+ * «Родственники» показывает детей этого родителя). В любом модуле вне холста
+ * тот же неявный родитель — чужой (ошибка 2baa78fb): меню там открывает только
+ * фасад.
+ *
+ * Прямая сборка меню (`buildThoughtMenuItems`) вне фасада разрешена ровно
+ * одному модулю — экрану публикации (`screens/publications/workspace.ts`):
+ * меню блока — подмножество общих команд мысли рядом с командами «В
+ * публикации», без подменю «Добавить» (структурой разделов управляют команды
+ * публикации, задача 7cfaba7c п.4). Поэтому такой вызов обязан передавать
+ * `hideAddCommand: true`: без флага «налево (родственник)» возьмёт
+ * `focus.parents[0]` и создаст мысль под родителем фокуса (регресс
+ * 2baa78fb) — именно так верификатор обошёл прежнюю версию сторожа.
+ *
  * Что краснит сторож:
  *  - вызов `resolveSiblingParent(` вне фасада;
+ *  - прямой `showThoughtContextMenu(`/`showThoughtMenuUnder(` вне фасада, кроме
+ *    `canvas/canvas.ts` (холстовые пути);
+ *  - `buildThoughtMenuItems(` вне фасада, кроме
+ *    `screens/publications/workspace.ts`;
+ *  - `buildThoughtMenuItems(` в разрешённом модуле без `hideAddCommand: true`
+ *    в том же вызове — подменю «Добавить» вернётся с чужим родителем;
  *  - модуль вне фасада, где одновременно есть резолв родителя и открытие меню
  *    (`showThoughtContextMenu(`/`showThoughtMenuUnder(`) — копия цепочки;
  *  - явная передача `siblingParentId` в цель меню вне фасада — конструктор
@@ -21,7 +44,15 @@
  *    строки панели создавало мысль под родителем фокуса (блокер верификатора
  *    к 245a1992); такого входа быть не должно нигде;
  *  - вне-холстовый потребитель из списка `OUT_OF_CANVAS_CONSUMERS` (включая
- *    панель выделения — десятое место) не зовёт фасад.
+ *    панель выделения — десятое место) не зовёт фасад;
+ *  - ориентиры сторожа пропали (фасад больше не объявляет API, холст перестал
+ *    открывать меню напрямую, публикации перестали собирать меню) — иначе
+ *    запреты становятся вакуумными и зелёный прогон ничего не доказывает.
+ *
+ * Вызовы ищутся по AST (компилятор TypeScript): упоминание имени в
+ * комментарии или строке — не вызов, а `hideAddCommand: true` проверяется
+ * структурно, в аргументах ИМЕННО этого вызова — регуляркой флаг не отличить
+ * от соседнего вызова (прецедент — `guard-comment-actions-placement`).
  *
  * Сторож статический (читает исходники реестра), входит в обычный прогон
  * `npm -w @etn/client test`.
@@ -31,6 +62,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+
+import ts from 'typescript';
 
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 /** Единственный владелец цепочки: фасад, резолвер и конструктор меню. */
@@ -43,6 +76,14 @@ const MENU_OPEN_RES: readonly RegExp[] = [
   /\bshowThoughtContextMenu\s*\(/,
   /\bshowThoughtMenuUnder\s*\(/,
 ];
+/** Те же входы по имени функции — для поиска вызовов по AST. */
+const MENU_OPEN_NAMES: ReadonlySet<string> = new Set([
+  'showThoughtContextMenu',
+  'showThoughtMenuUnder',
+]);
+/** Имя единственного конструктора набора команд меню мысли. */
+const MENU_BUILDER_NAME = 'buildThoughtMenuItems';
+const MENU_BUILDER_NAMES: ReadonlySet<string> = new Set([MENU_BUILDER_NAME]);
 /** Явная передача родителя в цель меню. */
 const EXPLICIT_PARENT_RE = /\bsiblingParentId\b/;
 /** Обходной вход панели выделения: меню без резолва родителя и сверки сети. */
@@ -50,10 +91,35 @@ const BYPASS_ENTRY_RE = /\bshowSelectionThoughtContextMenu\b/;
 /** Вызов единого вне-холстового фасада. */
 const FACADE_CALL_RE = /\bshowOutOfCanvasThoughtMenu\s*\(/;
 
+/** Холст: единственный, кому разрешено прямое открытие меню мысли. */
+const CANVAS = 'canvas/canvas.ts';
+/** Экран публикации: единственный, кому разрешена прямая сборка меню. */
+const PUBLICATION_WORKSPACE = 'screens/publications/workspace.ts';
+
+/**
+ * Прямое открытие меню мысли вне фасада: только холст. На холсте неявный
+ * родитель «налево» — `focus.parents[0]` — и есть правильный родитель
+ * (зона «Родственники»). Вне холста то же умолчание создаёт мысль под
+ * родителем фокуса (ошибка 2baa78fb) — туда только фасад.
+ */
+const DIRECT_MENU_OPENERS: readonly string[] = [CANVAS];
+
+/**
+ * Прямая сборка меню мысли вне фасада: только экран публикации. Меню блока —
+ * подмножество команд мысли (без «Добавить») рядом с командами «В публикации»
+ * (задача 7cfaba7c п.4); обязательный `hideAddCommand: true` проверяется
+ * отдельно — без него вернулся бы обход «налево» (регресс 2baa78fb).
+ */
+const DIRECT_MENU_BUILDERS: readonly string[] = [PUBLICATION_WORKSPACE];
+
 /**
  * Вне-холстовые потребители меню мысли: каждый обязан ходить через фасад.
  * `selection/selection.ts` — десятое место (блокер верификатора к 245a1992:
  * строка панели выделения открывала меню обходным входом без родителя).
+ *
+ * `screens/publications/workspace.ts` сюда не входит: экран собирает меню
+ * блока напрямую (`buildThoughtMenuItems`) как подмножество команд мысли без
+ * «Добавить» — это не открытие полного меню и не потребитель фасада.
  */
 const OUT_OF_CANVAS_CONSUMERS: readonly string[] = [
   'canvas/canvas.ts',
@@ -93,6 +159,87 @@ const SOURCES = new Map(
 
 /** Модули вне фасада (по возрастанию пути — стабильные сообщения). */
 const CONSUMERS = [...SOURCES.keys()].filter((rel) => rel !== FACADE_REL).sort();
+
+/** Разбор исходника один раз: файл маленький, а тестов в наборе много. */
+const PARSED = new Map<string, ts.SourceFile>(
+  [...SOURCES].map(([rel, source]) => [
+    rel,
+    ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS),
+  ]),
+);
+
+/** Обход AST в глубину. */
+function walk(node: ts.Node, visit: (n: ts.Node) => void): void {
+  visit(node);
+  node.forEachChild((child) => {
+    walk(child, visit);
+  });
+}
+
+/** Имя вызванной функции: `f(…)` и `obj.f(…)` → `f`, иначе `null`. */
+function calleeName(expr: ts.Expression): string | null {
+  if (ts.isIdentifier(expr)) return expr.text;
+  if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
+  return null;
+}
+
+/** Один вызов функции меню в модуле. */
+interface MenuCall {
+  /** Имя функции (как записано в коде). */
+  callee: string;
+  /** Номер строки (с 1). */
+  line: number;
+  /** Узел вызова — для структурной проверки аргументов. */
+  node: ts.CallExpression;
+}
+
+/**
+ * Все вызовы функций из `names` в модуле. По AST, поэтому упоминание имени в
+ * комментарии или строковом литерале вызовом не считается.
+ */
+function callsOf(rel: string, names: ReadonlySet<string>): MenuCall[] {
+  const sf = PARSED.get(rel);
+  if (sf === undefined) return [];
+  const out: MenuCall[] = [];
+  walk(sf, (n) => {
+    if (!ts.isCallExpression(n)) return;
+    const callee = calleeName(n.expression);
+    if (callee === null || !names.has(callee)) return;
+    out.push({
+      callee,
+      line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
+      node: n,
+    });
+  });
+  return out;
+}
+
+/**
+ * Передан ли в вызов конструктора `hideAddCommand: true` — свойство объекта в
+ * аргументах ИМЕННО этого вызова. Вложенные вызовы в аргументах не смотрятся
+ * (их флаги — чужие). Переменная, `false` или отсутствие флага не считаются:
+ * только явный `true` доказывает, что подменю «Добавить» в меню нет.
+ */
+function hasHideAddCommand(call: ts.CallExpression): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    // Чужие вызовы в аргументах — не аргументы этого конструктора.
+    if (ts.isCallExpression(node)) return;
+    if (
+      ts.isPropertyAssignment(node) &&
+      (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) &&
+      node.name.text === 'hideAddCommand' &&
+      node.initializer.kind === ts.SyntaxKind.TrueKeyword
+    ) {
+      found = true;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  for (const arg of call.arguments) visit(arg);
+  return found;
+}
 
 describe('сторож: меню мысли вне холста — один фасад (задача d8941b76)', () => {
   it('резолвер родителя «налево» вызывается только в фасаде', () => {
@@ -147,6 +294,79 @@ describe('сторож: меню мысли вне холста — один ф�
       [],
       'showSelectionThoughtContextMenu открывал меню без резолва родителя и сверки сети ' +
         `(блокер к 245a1992): такой вход запрещён, панель выделения ходит через фасад: ${offenders.join(', ')}`,
+    );
+  });
+
+  it('меню мысли напрямую открывает только холст', () => {
+    const offenders: string[] = [];
+    for (const rel of CONSUMERS) {
+      if (DIRECT_MENU_OPENERS.includes(rel)) continue;
+      for (const call of callsOf(rel, MENU_OPEN_NAMES)) {
+        offenders.push(`${rel}:${call.line} — ${call.callee}(…)`);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `прямое открытие меню мысли вне фасада разрешено только ${CANVAS} ` +
+        '(холстовые пути: неявный родитель «налево» — родитель фокуса): в остальных ' +
+        `местах — только ${FACADE_REL} → showOutOfCanvasThoughtMenu: ${offenders.join('; ')}`,
+    );
+  });
+
+  it('buildThoughtMenuItems вне фасада — только экран публикации и только с hideAddCommand: true', () => {
+    const offenders: string[] = [];
+    for (const rel of CONSUMERS) {
+      const builderCalls = callsOf(rel, MENU_BUILDER_NAMES);
+      if (builderCalls.length === 0) continue;
+      const allowed = DIRECT_MENU_BUILDERS.includes(rel);
+      for (const call of builderCalls) {
+        if (!allowed) {
+          offenders.push(`${rel}:${call.line} — ${MENU_BUILDER_NAME}(…) вне разрешённых модулей`);
+        } else if (!hasHideAddCommand(call.node)) {
+          offenders.push(
+            `${rel}:${call.line} — ${MENU_BUILDER_NAME}(…) без hideAddCommand: true`,
+          );
+        }
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `прямая сборка меню мысли разрешена только ${PUBLICATION_WORKSPACE} — это меню блока, ` +
+        'подмножество команд мысли без «Добавить» (задача 7cfaba7c п.4); вызов обязан ' +
+        'передавать hideAddCommand: true, иначе «налево (родственник)» возьмёт родителя ' +
+        `фокуса (регресс 2baa78fb): ${offenders.join('; ')}`,
+    );
+  });
+
+  it('ориентиры сторожа на месте (новые запреты не вакуумные)', () => {
+    const facade = PARSED.get(FACADE_REL);
+    assert.ok(facade !== undefined, `есть ${FACADE_REL}`);
+    const declared = new Set<string>();
+    walk(facade, (n) => {
+      if (ts.isFunctionDeclaration(n) && n.name !== undefined) declared.add(n.name.text);
+    });
+    for (const name of [
+      'resolveSiblingParent',
+      'showOutOfCanvasThoughtMenu',
+      'showThoughtContextMenu',
+      'showThoughtMenuUnder',
+      MENU_BUILDER_NAME,
+    ]) {
+      assert.ok(
+        declared.has(name),
+        `фасад обязан объявлять ${name}: без него запрет проверяет пустоту`,
+      );
+    }
+    assert.ok(
+      callsOf(CANVAS, MENU_OPEN_NAMES).length >= 1,
+      `${CANVAS} обязан прямо открывать меню мысли — иначе запрет «только холст» ничего не проверяет`,
+    );
+    assert.ok(
+      callsOf(PUBLICATION_WORKSPACE, MENU_BUILDER_NAMES).length >= 1,
+      `${PUBLICATION_WORKSPACE} обязан собирать меню напрямую — иначе проверка ` +
+        'hideAddCommand ничего не проверяет',
     );
   });
 
