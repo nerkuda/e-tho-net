@@ -14,11 +14,13 @@
  * Registration happens through canvas hooks (`setCloudContextMenuHandler`,
  * `setZoneContextMenuHandler`, `setCloudDragHandlers`).
  *
- * The thought menu lives here, but it is not canvas-only: `showThoughtMenuUnder`
- * + `ThoughtMenuOptions` let the editor (property-value chips, the local graph
- * and the «Действия» button) show the very same command set — a second
- * hand-rolled menu in the editor always drifts away from the canvas one
- * (спецификация «Контекстное меню мысли»).
+ * The thought menu lives here, but it is not canvas-only: the single entry for
+ * places outside the canvas is `showOutOfCanvasThoughtMenu` (context
+ * differences travel in `ThoughtMenuOptions`). It resolves the sibling parent
+ * before opening the menu and re-checks the network after the `await`. A second
+ * hand-rolled menu — or a copy of that chain — outside the canvas always drifts
+ * away from the canvas one (спецификация «Контекстное меню мысли», задача
+ * d8941b76).
  */
 
 import type { FocusDir, Link } from '@etn/shared';
@@ -152,17 +154,18 @@ export interface CloudMenuTarget {
   /**
    * Родитель мысли — якорь команды «налево (родственник)»: новая мысль
    * создаётся ребёнком того же родителя. На холсте родитель уже есть в ответе
-   * фокуса (`focus.parents[0]`, зона «Родственники»); чипы и кнопка «Действия»
-   * в редакторе задают его сами, потому что в зоне холста не живут. Поле не
-   * задано — работает прежнее поведение (родитель фокуса); `null` — родителя
-   * нет, команда неактивна.
+   * фокуса (`focus.parents[0]`, зона «Родственники»). Вне холста поле задаёт
+   * единственный вне-холстовый вход `showOutOfCanvasThoughtMenu` — он резолвит
+   * родителя ДО меню и сверяет сеть после `await`; вызывающий потребитель это
+   * поле не заполняет. Поле не задано — работает холстовое поведение (родитель
+   * фокуса); `null` — родителя нет, команда неактивна.
    */
   siblingParentId?: string | null;
   /**
    * Имя родителя-якоря «налево (родственник)»: диалог добавления обязан
    * назвать фактического родителя, а не мысль в фокусе карты (ошибка
-   * 89964a9b). Вне холста имя приходит вместе с id из `resolveSiblingParent`;
-   * на холсте берётся из ответа фокуса. Не задано вместе с явным `siblingParentId`
+   * 89964a9b). Вне холста имя приходит вместе с id из резолва фасада; на
+   * холсте берётся из ответа фокуса. Не задано вместе с явным `siblingParentId`
    * — диалог подпишет якорь его id, но НЕ именем фокуса.
    */
   siblingParentTitle?: string;
@@ -289,6 +292,10 @@ export async function deleteLink(networkId: string, linkId: string): Promise<voi
  * расходятся (см. спецификацию «Контекстное меню мысли»).
  */
 export interface ThoughtMenuOptions {
+  /**
+   * Спрятать «Добавить к выделению / Убрать из выделенных»: панель выделения —
+   * запись уже выделена, команда была бы бессмысленной (08-ui-spec.md §5.1).
+   */
   hideSelectionCommand?: boolean;
   /** Куда открывать мысль вне холста. Без обработчика — фокус холста. */
   openHandler?: (id: string) => void;
@@ -391,9 +398,9 @@ export type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
 
 /**
  * ЕДИНСТВЕННЫЙ вход меню мысли ВНЕ холста (полоса истории и панель
- * закреплённых, лента «Дневника», «Структуры», панель использования, поиск,
- * чипы редактора, локальный граф, вкладка «Связи», карточка публикации,
- * условия отбора, попап соседей холста):
+ * закреплённых, панель выделения, лента «Дневника», «Структуры», панель
+ * использования, поиск, чипы редактора, локальный граф, вкладка «Связи»,
+ * карточка публикации, условия отбора, попап соседей холста):
  * родитель для «налево (родственник)» — родитель САМОЙ мысли, а не мысли в
  * фокусе карты (спецификация «Контекстное меню мысли»). На холсте его знает
  * ответ фокуса; вне зон холста его приходится спрашивать у сервера ДО открытия
@@ -426,21 +433,6 @@ export async function showOutOfCanvasThoughtMenu(
   };
   if ('event' in place) showThoughtContextMenu(place.event, full, opts);
   else showThoughtMenuUnder(place.anchor, full, opts);
-}
-
-/**
- * Opens the thought context menu for a selection-list entry (08-ui-spec.md
- * §5.1): the same commands as on the canvas, except the add/remove-selection
- * toggle — the entry is already selected.
- */
-export function showSelectionThoughtContextMenu(event: MouseEvent, target: CloudMenuTarget): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  showMenuAt(
-    event.clientX,
-    event.clientY,
-    buildThoughtMenuItems(networkId, target, { hideSelectionCommand: true }),
-  );
 }
 
 /**

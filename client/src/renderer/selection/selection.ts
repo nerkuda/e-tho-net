@@ -19,7 +19,7 @@ import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { t } from '../lib/i18n.js';
 import {
   setAddToSelectionHook,
-  showSelectionThoughtContextMenu,
+  showOutOfCanvasThoughtMenu,
 } from '../canvas/context-menu.js';
 import { buildMultiThoughtSnapshot, type SnapshotDeps } from '../canvas/clipboard.js';
 import { getRef, invalidateRef, onThoughtRefInvalidated, setSelectionClickHooks } from '../canvas/canvas.js';
@@ -326,9 +326,16 @@ function buildRow(id: string, ref: ThoughtRef | null, title: string): HTMLElemen
         },
         onContextMenu: (event) => {
           event.stopPropagation();
-          // Same context menu as a canvas cloud, minus the selection toggle
-          // (§5.1). Unresolved — an empty title, never the id.
-          showSelectionThoughtContextMenu(event, { id, title, dir: 'siblings' });
+          // Та же композиция команд, что у облачка холста, без команды
+          // выделения (§5.1): запись уже выделена. Строка панели — вне холста,
+          // поэтому «налево» создаёт под родителем САМОЙ мысли: родителя и
+          // сверку сети после ответа держит фасад (ошибка 2baa78fb).
+          // Неразрешённое имя — пустая строка, никогда не id.
+          void showOutOfCanvasThoughtMenu(
+            { event },
+            { id, title, dir: 'siblings' },
+            { hideSelectionCommand: true },
+          );
         },
       },
     },

@@ -13,8 +13,11 @@
  * `etn.thoughts.create` и проверяется `create_link.target_thought_id` —
  * родитель КЛИКНУТОЙ мысли, а не мысли в фокусе карты. Места: вкладка
  * «Упоминания» (`editor/links-tab.ts`), панель закреплённых
- * (`screens/pinned-bar.ts`) и строка соседа в Ctrl-hover попапе холста
- * (`canvas/canvas.ts:2600`, единственный путь меню вне холста в холсте).
+ * (`screens/pinned-bar.ts`), строка соседа в Ctrl-hover попапе холста
+ * (`canvas/canvas.ts:2600`, единственный путь меню вне холста в холсте) и
+ * панель выделения (`selection/selection.ts` — десятое место, блокер
+ * верификатора к 245a1992: строка панели открывала меню обходным входом без
+ * родителя и создавала мысль под родителем фокуса).
  *
  * Дополнительно: смена сети ПОКА `resolveSiblingParent` в полёте. Сверка сети
  * живёт в фасаде ПОСЛЕ `await`; поздний ответ прежней сети не должен открыть
@@ -23,9 +26,12 @@
  *
  * Мутации, краснящие файл:
  *  - `showOutOfCanvasThoughtMenu` резолвит родителя по `store.state.focus`
- *    (родитель фокуса вместо кликнутой мысли) — все три кейса создания;
+ *    (родитель фокуса вместо кликнутой мысли) — все кейсы создания;
  *  - сверка `store.state.networkId !== networkId` перенесена до `await` —
- *    оба кейса гонки;
+ *    все кейсы гонки;
+ *  - возврат обходного входа `showSelectionThoughtContextMenu` без родителя
+ *    (панель выделения зовёт его, а не фасад) — кейсы панели выделения и
+ *    сторож `guard-out-of-canvas-menu.test.ts`;
  *  - возврат локальной копии цепочки в модуль-потребитель — сторож
  *    `guard-out-of-canvas-menu.test.ts` (не ослаблен этим файлом).
  */
@@ -418,6 +424,7 @@ const pinnedMod = await import('../src/renderer/screens/pinned-bar.js');
 const canvasMod = await import('../src/renderer/canvas/canvas.js');
 const hoverMod = await import('../src/renderer/lib/hover-preview.js');
 const contextMenuMod = await import('../src/renderer/canvas/context-menu.js');
+const selectionMod = await import('../src/renderer/selection/selection.js');
 const liveMod = await import('../src/renderer/lib/live/index.js');
 
 /** Дождаться асинхронных чтений/продолжений экранов, попапов и диалога. */
@@ -441,7 +448,7 @@ afterEach(() => {
   releaseNeighbors = null;
   parentsInB = [];
   pinnedIds = [];
-  stateMod.store.update({ networkId: null, focus: null, editorTarget: null } as any);
+  stateMod.store.update({ networkId: null, focus: null, editorTarget: null, selection: [] } as any);
   const body = (globalThis as AnyRec).document as { body: ShimElement };
   body.body.replaceChildren();
 });
@@ -458,6 +465,7 @@ function installStore(pins: string[] = []): void {
     activeView: 'map',
     screen: 'workspace',
     editorTarget: null,
+    selection: [],
     focus: {
       focused: { id: FOCUS_ID, title: TITLES[FOCUS_ID] },
       parents: [neighbor(FOCUS_PARENT)],
@@ -617,6 +625,23 @@ async function mountPinnedBar(): Promise<ShimElement> {
   return chip!;
 }
 
+/**
+ * Смонтировать панель выделения с одной строкой M (фокус карты — T, как в
+ * воспроизведении верификатора: Ctrl+клик по M не меняет фокус).
+ */
+async function mountSelectionPanel(): Promise<ShimElement> {
+  installStore();
+  const host = new ShimElement('div', 'selection-panel');
+  teardown = selectionMod.mountSelection(host as unknown as HTMLElement);
+  selectionMod.toggleSelection([CLICKED_ID]);
+  await flush();
+  const row = host
+    .findAll('selection-item')
+    .find((element) => element.dataset['id'] === CLICKED_ID);
+  assert.ok(row !== undefined, 'строка панели выделения M отрисована');
+  return row!;
+}
+
 describe('меню вне холста: «налево» создаёт под родителем кликнутой мысли (d19c57b7)', () => {
   it('вкладка «Упоминания»: клик по M (ребёнок P2) при фокусе T (ребёнок P1)', async () => {
     const cloud = await mountLinksTab();
@@ -643,6 +668,23 @@ describe('меню вне холста: «налево» создаёт под �
     );
     clickAddSibling();
     await confirmCreate('Сосед Закреплённых', TITLES[CLICKED_PARENT]!);
+    assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
+  });
+
+  it('панель выделения: строка M (ребёнок P2) при фокусе T (ребёнок P1)', async () => {
+    const row = await mountSelectionPanel();
+    row.dispatchContextMenu();
+    await flush();
+    assert.deepEqual(
+      calls.neighbors,
+      [{ networkId: NET_A, id: CLICKED_ID, dir: 'parents' }],
+      'родитель запрошен у САМОЙ кликнутой мысли',
+    );
+    // Команда выделения у строки панели скрыта — запись уже выделена (§5.1).
+    assert.equal(rowByLabel('Добавить к выделению'), undefined, 'нет команды «Добавить к выделению»');
+    assert.equal(rowByLabel('Убрать из выделенных'), undefined, 'нет команды «Убрать из выделенных»');
+    clickAddSibling();
+    await confirmCreate('Сосед Выделения', TITLES[CLICKED_PARENT]!);
     assert.equal(createdParent(), CLICKED_PARENT, 'сосед создан под P2, а не под родителем фокуса');
   });
 
@@ -745,6 +787,26 @@ describe('фасад меню вне холста: смена сети во вр
       releaseNeighbors = resolve;
     });
     chip.dispatchContextMenu();
+    await flush();
+    assert.deepEqual(
+      calls.neighbors,
+      [{ networkId: NET_A, id: CLICKED_ID, dir: 'parents' }],
+      'резолв родителя начался в сети A',
+    );
+    stateMod.store.update({ networkId: NET_B } as any);
+    releaseNeighbors?.();
+    await flush();
+    assert.equal(menuRows().length, 0, 'поздний ответ прежней сети не открыл меню');
+    assert.equal(calls.creates.length, 0, 'ничего не создано');
+  });
+
+  it('вызывающий (панель выделения): поздний ответ прежней сети не открывает меню', async () => {
+    const row = await mountSelectionPanel();
+    parentsInB = [GRAND_ID];
+    holdNeighbors = new Promise<void>((resolve) => {
+      releaseNeighbors = resolve;
+    });
+    row.dispatchContextMenu();
     await flush();
     assert.deepEqual(
       calls.neighbors,

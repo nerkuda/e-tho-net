@@ -15,7 +15,13 @@
  *  - модуль вне фасада, где одновременно есть резолв родителя и открытие меню
  *    (`showThoughtContextMenu(`/`showThoughtMenuUnder(`) — копия цепочки;
  *  - явная передача `siblingParentId` в цель меню вне фасада — конструктор
- *    начинает получать родителя мимо фасада.
+ *    начинает получать родителя мимо фасада;
+ *  - обходной вход панели выделения `showSelectionThoughtContextMenu`: он
+ *    открывал меню без резолва родителя и сверки сети, поэтому «налево» из
+ *    строки панели создавало мысль под родителем фокуса (блокер верификатора
+ *    к 245a1992); такого входа быть не должно нигде;
+ *  - вне-холстовый потребитель из списка `OUT_OF_CANVAS_CONSUMERS` (включая
+ *    панель выделения — десятое место) не зовёт фасад.
  *
  * Сторож статический (читает исходники реестра), входит в обычный прогон
  * `npm -w @etn/client test`.
@@ -39,6 +45,32 @@ const MENU_OPEN_RES: readonly RegExp[] = [
 ];
 /** Явная передача родителя в цель меню. */
 const EXPLICIT_PARENT_RE = /\bsiblingParentId\b/;
+/** Обходной вход панели выделения: меню без резолва родителя и сверки сети. */
+const BYPASS_ENTRY_RE = /\bshowSelectionThoughtContextMenu\b/;
+/** Вызов единого вне-холстового фасада. */
+const FACADE_CALL_RE = /\bshowOutOfCanvasThoughtMenu\s*\(/;
+
+/**
+ * Вне-холстовые потребители меню мысли: каждый обязан ходить через фасад.
+ * `selection/selection.ts` — десятое место (блокер верификатора к 245a1992:
+ * строка панели выделения открывала меню обходным входом без родителя).
+ */
+const OUT_OF_CANVAS_CONSUMERS: readonly string[] = [
+  'canvas/canvas.ts',
+  'editor/editor.ts',
+  'editor/links-tab.ts',
+  'editor/mini-graph.ts',
+  'editor/publication-card.ts',
+  'editor/value-editor.ts',
+  'lib/filter-value.ts',
+  'screens/chronicle/chronicle.ts',
+  'screens/history-bar.ts',
+  'screens/pinned-bar.ts',
+  'screens/structures/structures.ts',
+  'screens/usage-panel.ts',
+  'search/search.ts',
+  'selection/selection.ts',
+];
 
 /** Рекурсивно собирает `.ts`-файлы под каталогом (posix-пути от `renderer/`). */
 function collectTsFiles(dir: string, base = ''): string[] {
@@ -102,6 +134,39 @@ describe('сторож: меню мысли вне холста — один ф�
       [],
       `siblingParentId/siblingParentTitle выставляет только ${FACADE_REL} ` +
         `(иначе имя якоря и сверка сети расходятся с фасадом): ${offenders.join(', ')}`,
+    );
+  });
+
+  it('обходного входа панели выделения нет ни в одном модуле', () => {
+    const offenders: string[] = [];
+    for (const rel of [...SOURCES.keys()].sort()) {
+      if (BYPASS_ENTRY_RE.test(SOURCES.get(rel) ?? '')) offenders.push(rel);
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      'showSelectionThoughtContextMenu открывал меню без резолва родителя и сверки сети ' +
+        `(блокер к 245a1992): такой вход запрещён, панель выделения ходит через фасад: ${offenders.join(', ')}`,
+    );
+  });
+
+  it('вне-холстовые потребители ходят через единый фасад (панель выделения — 10-й)', () => {
+    const missing: string[] = [];
+    for (const rel of OUT_OF_CANVAS_CONSUMERS) {
+      const source = SOURCES.get(rel);
+      assert.ok(source !== undefined, `потребитель ${rel} существует`);
+      if (!FACADE_CALL_RE.test(source)) missing.push(rel);
+    }
+    assert.deepEqual(
+      missing,
+      [],
+      `каждый вне-холстовый потребитель зовёт ${FACADE_REL} → showOutOfCanvasThoughtMenu: ` +
+        `родитель и сверка сети живут только там: ${missing.join(', ')}`,
+    );
+    const selection = SOURCES.get('selection/selection.ts') ?? '';
+    assert.ok(
+      /hideSelectionCommand\s*:\s*true/.test(selection),
+      'панель выделения скрывает команду выделения: запись уже выделена (§5.1)',
     );
   });
 
