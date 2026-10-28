@@ -1,6 +1,6 @@
 /**
  * Сторож единственного источника строки «Not connected…» (ошибка f803afb6,
- * круги 2–4).
+ * круги 2–5).
  *
  * Канонический отказ main до установки соединения — `NOT_CONNECTED_ERROR_TEXT`
  * и `NOT_CONNECTED_NETWORK_ERROR_TEXT` из `@etn/shared`. До этого литерал был
@@ -23,11 +23,18 @@
  * круге 4). Расширения файлов сканируются без учёта регистра (`.TS` — тот же
  * исходник): это правка общего `guard-helpers.ts`, тоже круг 4.
  *
+ * Лексер различает регулярные литералы `/…/` (круг 5): без этого `\/` плюс
+ * закрывающий `/` давали `//` и съедали дубль на той же строке, а `/*` внутри
+ * класса открывал блочный комментарий до `*\/`/EOF. Эвристика и её границы —
+ * в комментарии `commentRanges`.
+ *
  * Мутации, которые краснят: вернуть `throw new Error('Not connected: …')` в
  * `client/src/main/ipc/handlers.ts` или `connection-lifecycle.ts`; вернуть
  * литерал в любой тест; вернуть широкий `rel`-allow; вернуть эвристику
  * «комментарий — по первому символу строки»; вернуть регистрозависимое
- * сравнение расширения в `guard-helpers.ts`.
+ * сравнение расширения в `guard-helpers.ts`; выключить распознавание
+ * регулярок (`startsRegex` → `false`); сломать класс `[…]` (закрывать
+ * литерал по любому `/`).
  */
 
 import assert from 'node:assert/strict';
@@ -51,31 +58,97 @@ interface CommentRange {
   end: number;
 }
 
+/** Режим кадра лексера. */
+type LexMode = 'code' | 'template' | 'single' | 'double' | 'line' | 'block' | 'regex';
+
 /** Кадр стека лексера: режим, глубина `{…}` интерполяции и начало комментария. */
 interface LexFrame {
-  mode: 'code' | 'template' | 'single' | 'double' | 'line' | 'block';
+  mode: LexMode;
   /** Для `code` внутри `${…}`: сколько `{` ещё не закрыто (стартует с 1). */
   braces: number;
   /** Для `line`/`block`: смещение начала комментария; иначе -1. */
   commentStart: number;
+  /** Для `code`: последний значимый токен — слово или одиночный символ. */
+  prev: string;
+  /** Для `code`: накопленный идентификатор — станет `prev` на не-словесном символе. */
+  word: string;
+  /** Для `regex`: внутри класса `[…]` — там `/` не закрывает литерал. */
+  inClass: boolean;
+}
+
+/** Новый кадр в начальном состоянии. */
+function createFrame(mode: LexMode): LexFrame {
+  return { mode, braces: 0, commentStart: -1, prev: '', word: '', inClass: false };
+}
+
+/**
+ * Символы, после которых `/` — начало регулярного литерала, а не деление:
+ * операторы и открывающие скобки.
+ */
+const REGEX_PREFIX_CHARS = new Set('([{,;=:!&|?+-*%<>');
+
+/** Ключевые слова, после которых `/` — начало регулярного литерала. */
+const REGEX_PREFIX_KEYWORDS = new Set([
+  'return',
+  'typeof',
+  'case',
+  'do',
+  'else',
+  'in',
+  'of',
+  'new',
+  'delete',
+  'void',
+  'throw',
+  'instanceof',
+]);
+
+/** Символ идентификатора (ASCII): для ключевых слов эвристики достаточно. */
+const WORD_CHAR = /[A-Za-z0-9_$]/;
+
+/**
+ * Начинается ли в позиции `/` регулярный литерал: по предыдущему значимому
+ * токену — начало файла/строки, оператор, открывающая скобка или ключевое
+ * слово из {@link REGEX_PREFIX_KEYWORDS}. После значения (идентификатор,
+ * число, `)`, `]`, `}`, литерал) `/` — деление.
+ */
+function startsRegex(prev: string): boolean {
+  return prev === '' || REGEX_PREFIX_CHARS.has(prev) || REGEX_PREFIX_KEYWORDS.has(prev);
 }
 
 /**
  * Диапазоны комментариев файла — по состоянию лексера, а не по первому символу
- * строки. Различаются `//`, `/* … *\/`, строки `'…'`/`"…"` и шаблоны `` `…` ``
- * с экранированием и вложенными `${…}` (в интерполяции комментарии настоящие).
+ * строки. Различаются `//`, `/* … *\/`, строки `'…'`/`"…"`, шаблоны `` `…` ``
+ * с экранированием и вложенными `${…}` (в интерполяции комментарии настоящие)
+ * и регулярные литералы `/…/`.
  *
- * Намеренно простой лексер для тест-сторожа: регулярные литералы (`/…/`) не
- * распознаются, поэтому `//` и `/*` внутри них считаются комментарием. Это
- * безопасное направление: пропустить дубль так можно только в файле, где
- * регулярка с таким содержимым стоит ПЕРЕД литералом на той же строке; в
- * `client`/`shared` таких файлов нет. Строки и шаблоны при этом считаются
+ * Регулярка распознаётся эвристикой по предыдущему значимому токену (см.
+ * {@link startsRegex}): `/` открывает литерал в начале файла/строки, после
+ * оператора или открывающей скобки (`(`, `[`, `{`, `,`, `;`, `=`, `:`, `!`,
+ * `&`, `|`, `?`, `+`, `-`, `*`, `%`, `<`, `>`) и после ключевых слов
+ * `return`, `typeof`, `case`, `do`, `else`, `in`, `of`, `new`, `delete`,
+ * `void`, `throw`, `instanceof`. Внутри литерала учитываются класс `[…]`
+ * (там `/` не закрывает), экранирование `\` и флаги после закрывающего `/`.
+ *
+ * Границы эвристики. После значения — идентификатора, числа, `)`, `]`, `}`,
+ * `'…'`, `"…"`, `` `…` ``, другого литерала — `/` считается делением, поэтому
+ * регулярка сразу после `)` (`if (ok) /re/.test(s)`) не распознаётся: её `//`
+ * или `/*` будут приняты за комментарий. Это безопасное направление — так
+ * можно только пропустить дубль, и лишь в таком узком случае. Класс `[…]`
+ * разбирается без вложенности и без особого случая `]` первым символом.
+ * Форматы данных (`.json`) сторож не сканирует: литерал прозой в сценарии —
+ * вне области правила (осознанное ограничение). Строки и шаблоны считаются
  * кодом — литерал в них нарушение, а не цитата.
  */
 function commentRanges(content: string): CommentRange[] {
   const ranges: CommentRange[] = [];
-  const stack: LexFrame[] = [{ mode: 'code', braces: 0, commentStart: -1 }];
+  const stack: LexFrame[] = [createFrame('code')];
   const top = (): LexFrame => stack[stack.length - 1]!;
+  /** Закрывает строку/шаблон/регулярку: следующий `/` — деление, а не литерал. */
+  const popLiteral = (): void => {
+    stack.pop();
+    top().prev = ')';
+  };
   let i = 0;
   while (i < content.length) {
     const frame = top();
@@ -102,7 +175,7 @@ function commentRanges(content: string): CommentRange[] {
         if (ch === '\\') {
           i += 2;
         } else {
-          if (ch === (frame.mode === 'single' ? "'" : '"')) stack.pop();
+          if (ch === (frame.mode === 'single' ? "'" : '"')) popLiteral();
           i += 1;
         }
         break;
@@ -110,39 +183,87 @@ function commentRanges(content: string): CommentRange[] {
         if (ch === '\\') {
           i += 2;
         } else if (ch === '`') {
-          stack.pop();
+          popLiteral();
           i += 1;
         } else if (ch === '$' && content[i + 1] === '{') {
-          stack.push({ mode: 'code', braces: 1, commentStart: -1 });
+          const nested = createFrame('code');
+          nested.braces = 1;
+          stack.push(nested);
           i += 2;
         } else {
           i += 1;
         }
         break;
+      case 'regex':
+        if (ch === '\\') {
+          i += 2; // экранированный символ, в том числе `\/`
+        } else if (ch === '[' && !frame.inClass) {
+          frame.inClass = true;
+          i += 1;
+        } else if (ch === ']' && frame.inClass) {
+          frame.inClass = false;
+          i += 1;
+        } else if (ch === '/' && !frame.inClass) {
+          popLiteral();
+          i += 1;
+          while (i < content.length && /[A-Za-z]/.test(content[i]!)) i += 1; // флаги
+        } else if (ch === '\n') {
+          // Регулярка не переживает перевод строки: ошибка эвристики не должна
+          // глушить файл до EOF — выходим, не съедая перевод строки.
+          popLiteral();
+        } else {
+          i += 1;
+        }
+        break;
       case 'code':
+        // Слово закончилось: последний значимый токен — это оно.
+        if (frame.word !== '' && !WORD_CHAR.test(ch)) {
+          frame.prev = frame.word;
+          frame.word = '';
+        }
         if (ch === '/' && content[i + 1] === '/') {
-          stack.push({ mode: 'line', braces: 0, commentStart: i });
+          const nested = createFrame('line');
+          nested.commentStart = i;
+          stack.push(nested);
           i += 2;
         } else if (ch === '/' && content[i + 1] === '*') {
-          stack.push({ mode: 'block', braces: 0, commentStart: i });
+          const nested = createFrame('block');
+          nested.commentStart = i;
+          stack.push(nested);
           i += 2;
         } else if (ch === "'") {
-          stack.push({ mode: 'single', braces: 0, commentStart: -1 });
+          stack.push(createFrame('single'));
           i += 1;
         } else if (ch === '"') {
-          stack.push({ mode: 'double', braces: 0, commentStart: -1 });
+          stack.push(createFrame('double'));
           i += 1;
         } else if (ch === '`') {
-          stack.push({ mode: 'template', braces: 0, commentStart: -1 });
+          stack.push(createFrame('template'));
           i += 1;
-        } else if (ch === '{' && frame.braces > 0) {
-          frame.braces += 1;
+        } else if (ch === '/') {
+          // `/` — литерал или деление: решает предыдущий значимый токен.
+          if (startsRegex(frame.prev)) stack.push(createFrame('regex'));
+          else frame.prev = '/';
           i += 1;
-        } else if (ch === '}' && frame.braces > 0) {
-          frame.braces -= 1;
-          if (frame.braces === 0) stack.pop();
+        } else if (ch === '{') {
+          frame.prev = '{';
+          if (frame.braces > 0) frame.braces += 1;
+          i += 1;
+        } else if (ch === '}') {
+          if (frame.braces > 0) {
+            frame.braces -= 1;
+            if (frame.braces === 0) stack.pop();
+          } else {
+            frame.prev = '}';
+          }
+          i += 1;
+        } else if (WORD_CHAR.test(ch)) {
+          frame.word += ch;
+          i += 1;
+        } else if (/\s/.test(ch)) {
           i += 1;
         } else {
+          frame.prev = ch;
           i += 1;
         }
         break;
@@ -272,6 +393,105 @@ describe('guard: строка «Not connected…» — один источник
     assert.deepEqual(
       hits.map((v) => `${v.file}:${v.line}`),
       ['src/template.ts:2'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('регулярка /^https?:\\/\\// не превращает остаток строки в комментарий', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-regex-slash-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `\/` + закрывающий `/` дают `//`: без разбора регулярок дубль на той же
+    // строке считался комментарием (замечание проверки круга 5).
+    writeFileSync(
+      path.join(dir, 'src', 'regex-slash.ts'),
+      "const re = /^https?:\\/\\//; throw new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/regex-slash.ts:1'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('регулярка с классом [/*] не открывает блочный комментарий', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-regex-block-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `/*` внутри класса не открывает блочный комментарий: иначе он тянулся бы
+    // до `*/`/EOF и глушил дубль на следующей строке.
+    writeFileSync(
+      path.join(dir, 'src', 'regex-block.ts'),
+      "const re = /[/*]/;\nthrow new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/regex-block.ts:2'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('класс [...] закрывается только вне класса: дубль на той же строке ловится', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-regex-class-'));
+    mkdirSync(path.join(dir, 'src'));
+    // Без учёта класса первый `/` внутри `[///]` преждевременно закрыл бы
+    // литерал, и `//` из оставшихся слешей съел бы дубль на той же строке.
+    writeFileSync(
+      path.join(dir, 'src', 'regex-class.ts'),
+      "const re = /[///]/; throw new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/regex-class.ts:1'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('регулярка с кавычками не оставляет лексер в строке: // после неё — комментарий', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-regex-quote-'));
+    mkdirSync(path.join(dir, 'src'));
+    // Кавычки внутри класса не должны переводить лексер в строковое состояние:
+    // иначе настоящий `//` на следующей строке считался бы кодом (ложное нарушение).
+    writeFileSync(
+      path.join(dir, 'src', 'regex-quote.ts'),
+      "const quote = /['\"]/;\n// Not connected: call etn.server.connect first\n",
+    );
+    // Контрольный дубль в коде: скан не пуст, ложных нарушений нет.
+    writeFileSync(
+      path.join(dir, 'src', 'dup.ts'),
+      "throw new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/dup.ts:1'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('деление не принимается за регулярку: // после него распознан', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-division-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `/` после значения — деление; литерал в настоящем `//`-комментарии разрешён.
+    writeFileSync(
+      path.join(dir, 'src', 'division.ts'),
+      'const half = total / count; // Not connected: call etn.server.connect first\n',
+    );
+    // Контрольный дубль в коде: правило живое, нарушений ровно одно.
+    writeFileSync(
+      path.join(dir, 'src', 'dup.ts'),
+      "throw new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/dup.ts:1'],
       `нарушения: ${JSON.stringify(hits)}`,
     );
   });
