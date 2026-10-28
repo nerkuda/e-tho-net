@@ -83,11 +83,11 @@ function buildCrossNetworkAccess(
 
 /**
  * Приведение условия `properties[]` из MCP-контракта к канону домена
- * (`PropertyQueryCondition`). Контракт намеренно принимает `value` любой формы
- * (`z.unknown()`), чтобы пара наличия (`is_empty`/`not_empty`) молча
- * игнорировала шумовое значение — паритет с REST (замечание верификатора
- * круга 2 по ошибке 40c76144). Для остальных операторов форма уже проверена
- * refine'ом контракта.
+ * (`PropertyQueryCondition`). Схема принимает `value` любой читаемой формы
+ * (строка/число/логическое/массив/объект/`null`): пара наличия
+ * (`is_empty`/`not_empty`) значение ЛЮБОЙ формы игнорирует — паритет с REST,
+ * а для операторов сравнения допустимую форму уже проверил refine контракта
+ * (`QUERY_PROPERTY_VALUE`). Presence-пара приводится к `''` ниже.
  */
 function toDomainPropertyCondition(cond: {
   property_id?: string;
