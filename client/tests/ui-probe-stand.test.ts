@@ -231,6 +231,28 @@ test('parseArgs: повторяемые --delay-seed-rule', () => {
   ]);
 });
 
+test('parseArgs: повторяемые --delay-seed-response-rule (задержка ответа)', () => {
+  assert.deepEqual(parseArgs([]).responseSeedRules, []);
+  assert.deepEqual(
+    parseArgs([
+      '--delay-seed-response-rule',
+      '4000:thoughts/{{thoughtId}}/properties',
+      '--delay-seed-response-rule',
+      '1000:thought-types',
+    ]).responseSeedRules,
+    [
+      { delayMs: 4000, path: 'thoughts/{{thoughtId}}/properties' },
+      { delayMs: 1000, path: 'thought-types' },
+    ],
+  );
+  assert.throws(() => parseArgs(['--delay-seed-response-rule']), /требует значения/);
+  // Формат тот же: без пути — ошибка разбора, а не молчаливая задержка всех путей.
+  assert.throws(
+    () => parseArgs(['--delay-seed-response-rule', '4000']),
+    /<ms>:<путь>/,
+  );
+});
+
 test('delayForUrl: правило B короче A, GET набора не задерживается', () => {
   const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const a = `/api/v1/networks/${id}/thoughts/f/views/parentsof6d78ccab/run`;
@@ -391,6 +413,62 @@ test('startDelayProxy: failPath — форвард + подмена статус
     assert.equal(proxy.failedCount(), 1, 'счётчик считает только подмены');
     assert.equal(upstreamHits, 2);
     assert.equal(proxy.delayedCount(), 0, 'без delay-правил задержки нет');
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test('startDelayProxy: responseRules придерживают ОТВЕТ, а не запрос (ddcb8e84)', async () => {
+  const NET = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  /** Момент, когда сервер реально прочитал запрос (данные — на этот момент). */
+  let upstreamHitAt = 0;
+  const upstream = http.createServer((req, res) => {
+    upstreamHitAt = Date.now();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  const upstreamPort = typeof address === 'object' && address !== null ? address.port : 0;
+  const proxy = await startDelayProxy({
+    targetPort: upstreamPort,
+    networkId: NET,
+    delayMs: 0,
+    responseRules: [{ delayMs: 400, pathFilter: 'properties' }],
+  });
+  const get = (pathname: string): Promise<{ status: number; body: string }> =>
+    new Promise((resolve, reject) => {
+      http
+        .get({ host: '127.0.0.1', port: proxy.port, path: pathname }, (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => {
+            body += chunk;
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        })
+        .on('error', reject);
+    });
+  try {
+    const startedAt = Date.now();
+    const held = await get(`/api/v1/networks/${NET}/thoughts/x/properties`);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(held.status, 200);
+    assert.ok(elapsed >= 350, `ответ придержан (${elapsed} мс ≥ 350)`);
+    assert.ok(
+      upstreamHitAt - startedAt < 200,
+      'запрос дошёл до сервера сразу: снимок данных — на момент запроса',
+    );
+    assert.equal(proxy.delayedCount(), 0, 'отправка запроса не задерживалась');
+    assert.equal(proxy.delayedResponseCount(), 1);
+    assert.deepEqual(proxy.delayedResponseByRule(), [1]);
+
+    const startedNorm = Date.now();
+    await get(`/api/v1/networks/${NET}/thoughts`);
+    const normalElapsed = Date.now() - startedNorm;
+    assert.ok(normalElapsed < 300, `посторонний путь без задержки ответа (${normalElapsed} мс)`);
+    assert.equal(proxy.delayedResponseCount(), 1, 'счётчик считает только совпавшие пути');
   } finally {
     await proxy.close();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));

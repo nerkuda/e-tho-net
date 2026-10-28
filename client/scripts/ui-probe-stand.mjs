@@ -84,6 +84,14 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          обязан прийти РАНЬШЕ ответа A: разным путям — разная
                          задержка (ошибка 6d78ccab, круг 2). Подстановки те же,
                          что у --delay-seed-path; путь непустой.
+      --delay-seed-response-rule <ms>:<path>
+                         Задержка ОТВЕТА (повторяемое; первое совпадение):
+                         запрос уходит на сервер сразу (снимок данных — на
+                         момент запроса), а клиент получает ответ позже.
+                         Этим проверяется дедупликация in-flight GET: чтение,
+                         вычисленное до правки, не должно переиспользоваться
+                         после неё (задача ddcb8e84). Подстановки id — как у
+                         --delay-seed-path; путь непустой.
       --fail-seed-path <s>
                          Режим «форвард + подмена статуса»: запросы засеянной
                          сети, чей путь содержит <s>, всё равно уходят на сервер
@@ -157,6 +165,7 @@ export function parseArgs(argv) {
     delaySeedMs: 0,
     delaySeedPath: '',
     delaySeedRules: [],
+    responseSeedRules: [],
     failSeedPath: '',
     failSeedStatus: 404,
     keep: false,
@@ -246,6 +255,10 @@ export function parseArgs(argv) {
         break;
       case '--delay-seed-rule':
         opts.delaySeedRules.push(parseDelaySeedRule(need(argv[i + 1], arg)));
+        i += 1;
+        break;
+      case '--delay-seed-response-rule':
+        opts.responseSeedRules.push(parseDelaySeedRule(need(argv[i + 1], arg)));
         i += 1;
         break;
       case '--fail-seed-path':
@@ -683,8 +696,13 @@ async function main(argv) {
         pathFilter: resolveDelaySeedPath(rule.path, seed),
       });
     }
+    /** Задержка ОТВЕТА: запрос уходит сразу, ответ придерживается. */
+    const responseRules = opts.responseSeedRules.map((rule) => ({
+      delayMs: rule.delayMs,
+      pathFilter: resolveDelaySeedPath(rule.path, seed),
+    }));
     const failPath = resolveDelaySeedPath(opts.failSeedPath, seed);
-    if (delayRules.length > 0 || failPath !== '') {
+    if (delayRules.length > 0 || responseRules.length > 0 || failPath !== '') {
       if (seed === null) {
         throw new Error('задержка/подмена статуса требует засеянную сеть (не используйте с --no-seed)');
       }
@@ -692,6 +710,7 @@ async function main(argv) {
         targetPort: serverPort,
         networkId: seed.networkId,
         rules: delayRules,
+        responseRules,
         // Без правил задержки (режим только --fail-seed-path) прокси не должен
         // задерживать: иначе дефолт 3000 мс замедлил бы всю сеть.
         delayMs: 0,
@@ -700,16 +719,16 @@ async function main(argv) {
         log: (line) => process.stdout.write(`[probe-proxy] ${line}\n`),
       });
       clientRoot = `http://127.0.0.1:${probeProxy.port}`;
+      const describe = (rule) =>
+        `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}`;
       process.stdout.write(
         `ui-probe-stand: прокси для сети ${seed.networkId}: ` +
           (delayRules.length > 0
-            ? delayRules
-                .map(
-                  (rule) =>
-                    `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}`,
-                )
-                .join(', ')
-            : 'без задержки') +
+            ? `запрос ${delayRules.map(describe).join(', ')}`
+            : 'запрос без задержки') +
+          (responseRules.length > 0
+            ? `; ответ ${responseRules.map(describe).join(', ')}`
+            : '') +
           (failPath === '' ? '' : `; ${opts.failSeedStatus} на путь ${failPath}`) +
           `: ${clientRoot}\n`,
       );
@@ -831,6 +850,26 @@ async function main(argv) {
           else {
             process.stdout.write(
               `ui-probe-stand: задержка сработала по всем правилам (${counts.join('/')})\n`,
+            );
+          }
+        }
+        // Задержка ОТВЕТА: правило, не совпавшее ни разу, — тоже вакуумный
+        // гейт. Иначе сценарий дедупликации in-flight GET (ddcb8e84) стал бы
+        // «зелёным» без единого придержанного ответа, т.е. без самой гонки.
+        if (responseRules.length > 0) {
+          const counts = probeProxy.delayedResponseByRule();
+          const vacuous = responseRules.filter((_rule, index) => (counts[index] ?? 0) === 0);
+          for (const rule of vacuous) {
+            process.stderr.write(
+              `ui-probe-stand: правило задержки ответа «${
+                rule.pathFilter === '' ? 'все пути' : rule.pathFilter
+              }» не совпало ни с одним запросом — задержка ответа не сработала, гейт вакуумный\n`,
+            );
+          }
+          if (vacuous.length > 0) code = 1;
+          else {
+            process.stdout.write(
+              `ui-probe-stand: задержка ответа сработала по всем правилам (${counts.join('/')})\n`,
             );
           }
         }

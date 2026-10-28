@@ -46,6 +46,12 @@ export interface DelayProxyOptions {
   /** Список правил «путь → задержка» (первое совпадение); сильнее delayMs/pathFilter. */
   rules?: DelayProxyRule[];
   /**
+   * Задержка ОТВЕТА: запрос уходит сразу, ответ придерживается. Нужна, чтобы
+   * ответ, вычисленный до правки, был доставлен после неё (дедупликация
+   * in-flight GET, задача ddcb8e84).
+   */
+  responseRules?: DelayProxyRule[];
+  /**
    * Режим «форвард + подмена статуса»: запросы засеянной сети, чей путь
    * содержит подстроку, уходят на сервер, а клиент получает `failStatus`
    * (ошибка b213cf60). `''` — режим выключен.
@@ -64,6 +70,10 @@ export interface DelayProxyHandle {
   delayedCount: () => number;
   /** Сколько запросов задержало каждое правило (по индексам `rules`). */
   delayedByRule: () => number[];
+  /** Сколько ОТВЕТОВ придержано (0 — фильтр `responseRules` не совпал). */
+  delayedResponseCount: () => number;
+  /** Сколько ответов придержало каждое правило (по индексам `responseRules`). */
+  delayedResponseByRule: () => number[];
   /** Сколько запросов получило подменённый статус (0 — failPath не совпал). */
   failedCount: () => number;
   close: () => Promise<void>;

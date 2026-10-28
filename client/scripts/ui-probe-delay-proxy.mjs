@@ -14,9 +14,18 @@
  * Так проверяется поведение интерфейса на отказе сервера и одновременно
  * работает счётчик `atMost` в правилах серверного лога.
  *
- * Запуск — из `ui-probe-stand` (`--delay-seed-ms` / `--fail-seed-path`),
- * отдельного процесса не требуется. Чистая функция {@link needsDelay} покрыта
- * юнит-тестом.
+ * Два независимых вида задержки:
+ * - `rules` — задерживается ОТПРАВКА запроса (сервер прочитает данные только
+ *   после паузы). Этим моделируется медленная сеть и гонка «поздний ответ
+ *   openNetwork»;
+ * - `responseRules` — запрос уходит сразу, а ОТВЕТ придерживается. Только так
+ *   воспроизводится «ответ вычислен до правки, а доставлен после»: клиент,
+ *   склеивший такой GET с более поздним чтением (`rest-client.ts`, дедуп
+ *   in-flight GET), получает снимок ДО правки (задача ddcb8e84, H-C).
+ *
+ * Запуск — из `ui-probe-stand` (`--delay-seed-ms` / `--delay-seed-response-rule`
+ * / `--fail-seed-path`), отдельного процесса не требуется. Чистая функция
+ * {@link needsDelay} покрыта юнит-тестом.
  */
 import http from 'node:http';
 import net from 'node:net';
@@ -87,10 +96,18 @@ export function delayForUrl(url, networkId, rules) {
  * `failStatus`. Счётчик подмен — `failedCount()`; ноль при заданном
  * `failPath` означает вакуумный гейт.
  *
+ * `responseRules` — задержка ОТВЕТА (первое совпадение): запрос уходит сразу,
+ * сервер читает данные в момент запроса, а клиент получает ответ позже. Так
+ * проверяется дедупликация in-flight GET: чтение, вычисленное до правки, не
+ * должно переиспользоваться после неё (задача ddcb8e84). Счётчики —
+ * `delayedResponseCount()` / `delayedResponseByRule()`.
+ *
  * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string,
- *          rules?:Array<{delayMs:number, pathFilter?:string}>, failPath?:string,
- *          failStatus?:number, log?:(line:string)=>void}} opts
+ *          rules?:Array<{delayMs:number, pathFilter?:string}>,
+ *          responseRules?:Array<{delayMs:number, pathFilter?:string}>,
+ *          failPath?:string, failStatus?:number, log?:(line:string)=>void}} opts
  * @returns {Promise<{port:number, delayedCount:()=>number, delayedByRule:()=>number[],
+ *                    delayedResponseCount:()=>number, delayedResponseByRule:()=>number[],
  *                    failedCount:()=>number, close:()=>Promise<void>}>}
  */
 export async function startDelayProxy({
@@ -99,6 +116,7 @@ export async function startDelayProxy({
   delayMs = 3000,
   pathFilter = '',
   rules = [],
+  responseRules = [],
   failPath = '',
   failStatus = 404,
   log = () => undefined,
@@ -114,6 +132,10 @@ export async function startDelayProxy({
   let delayed = 0;
   /** По правилу: правило, не совпавшее ни разу, — ошибка стенда. */
   const delayedPerRule = effectiveRules.map(() => 0);
+  /** Задержка ОТВЕТА: запрос уходит сразу, ответ придерживается. */
+  const effectiveResponseRules = Array.isArray(responseRules) ? responseRules : [];
+  let delayedResponses = 0;
+  const delayedResponsesPerRule = effectiveResponseRules.map(() => 0);
   /** Сколько запросов получило подменённый статус (режим failPath). */
   let failed = 0;
   const sendInjected = (res, status) => {
@@ -130,13 +152,21 @@ export async function startDelayProxy({
    * `injectStatus === null` — обычный форвард. Иначе запрос всё равно уходит
    * на сервер (серверный лог видит его, read-only путь не мутирует данные), но
    * клиент получает подменённый статус вместо ответа сервера.
+   *
+   * `responseDelayMs > 0` — ответ сервера придерживается: запрос уже прочитан
+   * сервером (снимок данных — на момент запроса), но клиент получает его
+   * позже. Так воспроизводится переиспользование устаревшего in-flight GET.
    */
-  const forwardHttp = (req, res, injectStatus = null) => {
+  const forwardHttp = (req, res, injectStatus = null, responseDelayMs = 0) => {
     let settled = false;
     const finishInjected = () => {
       if (settled) return;
       settled = true;
       sendInjected(res, injectStatus);
+    };
+    const afterResponseDelay = (send) => {
+      if (responseDelayMs > 0) setTimeout(send, responseDelayMs);
+      else send();
     };
     const upstream = http.request(
       {
@@ -151,12 +181,19 @@ export async function startDelayProxy({
           // Дренаж тела: сервер должен завершить запись/лог, соединение —
           // закрыться штатно, а не висеть keep-alive.
           upRes.resume();
-          upRes.on('end', finishInjected);
-          upRes.on('error', finishInjected);
+          upRes.on('end', () => afterResponseDelay(finishInjected));
+          upRes.on('error', () => afterResponseDelay(finishInjected));
           return;
         }
-        res.writeHead(upRes.statusCode ?? 502, upRes.headers);
-        upRes.pipe(res);
+        afterResponseDelay(() => {
+          // Клиент мог уйти за время паузы — писать в закрытый ответ нельзя.
+          if (res.writableEnded || res.destroyed) {
+            upRes.resume();
+            return;
+          }
+          res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+          upRes.pipe(res);
+        });
       },
     );
     upstream.on('error', (err) => {
@@ -177,16 +214,25 @@ export async function startDelayProxy({
       failed += 1;
       log(`inject ${injectStatus} ${req.method} ${req.url}`);
     }
+    const responseIndex = matchDelayRule(req.url, networkId, effectiveResponseRules);
+    let responseDelayMs = 0;
+    if (responseIndex >= 0) {
+      responseDelayMs = effectiveResponseRules[responseIndex]?.delayMs ?? 0;
+      delayedResponses += 1;
+      delayedResponsesPerRule[responseIndex] =
+        (delayedResponsesPerRule[responseIndex] ?? 0) + 1;
+      log(`delay-response ${responseDelayMs}ms ${req.method} ${req.url}`);
+    }
     const hitIndex = matchDelayRule(req.url, networkId, effectiveRules);
     if (hitIndex >= 0) {
       const hitDelay = effectiveRules[hitIndex]?.delayMs ?? delayMs;
       delayed += 1;
       delayedPerRule[hitIndex] = (delayedPerRule[hitIndex] ?? 0) + 1;
       log(`delay ${hitDelay}ms ${req.method} ${req.url}`);
-      setTimeout(() => forwardHttp(req, res, injectStatus), hitDelay);
+      setTimeout(() => forwardHttp(req, res, injectStatus, responseDelayMs), hitDelay);
       return;
     }
-    forwardHttp(req, res, injectStatus);
+    forwardHttp(req, res, injectStatus, responseDelayMs);
   });
 
   // WebSocket и прочие upgrade — без задержки: realtime-канал не относится к
@@ -214,14 +260,15 @@ export async function startDelayProxy({
   });
   const address = server.address();
   const port = typeof address === 'object' && address !== null ? address.port : 0;
+  const describeRule = (rule, i) =>
+    `#${i} ${rule.delayMs}ms${typeof rule.pathFilter === 'string' && rule.pathFilter !== '' ? ` (path ${rule.pathFilter})` : ''}`;
   log(
-    `listening ${port} -> ${targetPort}, ${effectiveRules.length} rule(s) for /${networkId}/: ` +
-      effectiveRules
-        .map(
-          (rule, i) =>
-            `#${i} ${rule.delayMs}ms${typeof rule.pathFilter === 'string' && rule.pathFilter !== '' ? ` (path ${rule.pathFilter})` : ''}`,
-        )
-        .join(', ') +
+    `listening ${port} -> ${targetPort}, ${effectiveRules.length} request rule(s) for /${networkId}/: ` +
+      effectiveRules.map(describeRule).join(', ') +
+      (effectiveResponseRules.length > 0
+        ? `; ${effectiveResponseRules.length} response rule(s): ` +
+          effectiveResponseRules.map(describeRule).join(', ')
+        : '') +
       (failPath === '' ? '' : `; inject ${failStatus} on path ${failPath}`),
   );
   return {
@@ -230,6 +277,10 @@ export async function startDelayProxy({
     delayedCount: () => delayed,
     /** Счётчики по правилам: не совпавшее ни разу правило — вакуумный гейт. */
     delayedByRule: () => [...delayedPerRule],
+    /** Сколько ОТВЕТОВ придержано (0 — фильтр не совпал). */
+    delayedResponseCount: () => delayedResponses,
+    /** Счётчики по правилам задержки ответа. */
+    delayedResponseByRule: () => [...delayedResponsesPerRule],
     /** Сколько запросов получило подменённый статус (0 — failPath не совпал). */
     failedCount: () => failed,
     close: () =>
