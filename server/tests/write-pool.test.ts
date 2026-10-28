@@ -248,14 +248,23 @@ describe(
       }
     });
 
-    it('простаивающая привязка не блокирует допуск: очередь допуска будится таймером', async () => {
+    it('простаивающая привязка не блокирует допуск: очередь допуска будится таймером', async (t) => {
       // Регресс ошибки 79c64f3f. Задача новой сети встаёт в очередь допуска,
       // когда все воркеры закреплены, а привязка-владелец УЖЕ простаивает (её
       // последнее событие — прошлая задача). Будить допуск нечем: простаивающая
       // привязка событий не даёт, а `taskTimeoutMs` взводится только при передаче
       // задачи воркеру (`dispatchPin`). Пока `route` не звал `admit`, таймер
-      // допуска не взводился вовсе — задача висела вечно. Пороги конфигурируемы:
-      // реальные 30 с `idleEvictionMs` ждать нельзя.
+      // допуска не взводился вовсе — задача висела вечно.
+      //
+      // Синхронизация — по тикам, не по настенным часам (ошибка 96c43ee6). Раньше
+      // тест ждал исполнения в фиксированном окне 3 с: под нагрузкой подъём
+      // воркера новой сети (tsx-загрузчик + открытие соединения) в него не
+      // укладывался, и тест падал не по делу. Здесь таймеры пула (допуск, WARN,
+      // тайм-аут задачи) и его часы (`Date.now` для порога простоя) —
+      // mock-таймеры node:test: тик переводит время ровно к порогу
+      // `idleEvictionMs`, поэтому вытеснение простаивающей привязки наступает по
+      // тику, а не по реальному простою. Ожидание исполнения (`await runB`) идёт
+      // по реальным часам и не ограничено окном: подъём воркера может быть долгим.
       const other = secondNetwork();
       const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
       const logger = {
@@ -268,37 +277,41 @@ describe(
         NonNullable<ConstructorParameters<typeof WritePool>[0]>['logger']
       >;
 
+      const idleEvictionMs = 1_000;
+      const queueWaitWarnMs = 100;
+      t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
       const pool = new WritePool({
         size: 1,
         taskTimeoutMs: 30_000,
-        idleEvictionMs: 300,
-        queueWaitWarnMs: 40,
+        idleEvictionMs,
+        queueWaitWarnMs,
         logger,
       });
       try {
         // Сеть A занимает единственный воркер и отпускает его, задача исполнена.
-        await pool.run(batchTask(context, ['idle-holder']));
+        // Подъём воркера A — реальное ожидание: mock-таймеры его не ускоряют.
+        // Допуск обслуживается синхронно из `route`, поэтому воркер обязан быть
+        // поднят уже к возврату из `run`: без `admit()` в `route` задача первой
+        // сети не уйдёт воркеру вовсе — это видно сразу, явной диагностикой.
+        const runA = pool.run(batchTask(context, ['idle-holder']));
+        runA.catch(() => {});
+        assert.equal(pool.stats().spawns, 1, 'route обязан поднять воркер сети A (admit в route)');
+        await runA;
         assert.equal(pool.stats().busyWorkers, 0, 'воркер сети A освободился');
         assert.deepEqual(pool.stats().pinnedNetworks, [networkId], 'воркер закреплён за A');
 
         // Сеть B: воркера нет, а привязка A ещё не простояла порог вытеснения —
-        // задача обязана исполниться по таймеру допуска, а не висеть вечно.
-        const outcome = await Promise.race([
-          pool.run(batchTask(other.context, ['idle-second'])).then(
-            () => 'executed' as const,
-            () => 'failed' as const,
-          ),
-          new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 3_000)),
-        ]);
-        assert.equal(
-          outcome,
-          'executed',
-          'задача новой сети обязана дождаться вытеснения простаивающей привязки',
-        );
-        assert.equal(countByPrefix(other.ndb, 'idle-second'), 1, 'новая сеть записана');
-        assert.equal(pool.stats().evicted, 1, 'простаивающая привязка вытеснена по простою');
+        // задача встаёт в допуск, и таймер обязан взвестись из `route`.
+        const runB = pool.run(batchTask(other.context, ['idle-second']));
+        // Если ассерт ниже упадёт, задачи в допуске отклонит `close()`; без этого
+        // обработчика отказ остался бы необработанным и замаскировал причину.
+        runB.catch(() => {});
+        assert.equal(pool.stats().waitingAdmission, 1, 'задача новой сети ждёт допуска');
+        assert.equal(pool.stats().evicted, 0, 'порог простоя ещё не достигнут');
+
         // Аномально долгое ожидание допуска обязано быть видно в логах (WARN),
         // а не только в статистике: иначе зависание в допуске остаётся немым.
+        t.mock.timers.tick(queueWaitWarnMs);
         const admissionWarn = warns.find(
           (w) => w.msg === 'write pool: задача долго ждёт допуска',
         );
@@ -307,7 +320,27 @@ describe(
           `ожидание допуска обязано логироваться WARN; получено: ${warns.map((w) => w.msg).join(' | ')}`,
         );
         assert.equal(admissionWarn!.fields.waitingAdmission, 1, 'WARN видит задачу в допуске');
+        assert.equal(pool.stats().evicted, 0, 'WARN не вытесняет привязку раньше порога');
+
+        // Порог простоя истёк: таймер допуска обязан проснуться и вытеснить
+        // привязку A, а задаче B — достать воркер. Без `admit()` в `route`
+        // таймер не взведён, тик ничего не будит, задача остаётся в допуске.
+        t.mock.timers.tick(idleEvictionMs - queueWaitWarnMs);
+        assert.equal(pool.stats().evicted, 1, 'простаивающая привязка вытеснена по простою');
+        assert.equal(pool.stats().waitingAdmission, 0, 'очередь допуска разбужена таймером');
+        assert.deepEqual(
+          pool.stats().pinnedNetworks,
+          [other.context.networkId],
+          'воркер выдан сети B',
+        );
+
+        // Исполнение — реальное: таймер задачи не тикаем, ждём ответ воркера.
+        await runB;
+        assert.equal(countByPrefix(other.ndb, 'idle-second'), 1, 'новая сеть записана');
       } finally {
+        // Сначала вернуть настоящие таймеры: `close()` ждёт `exit` воркера с
+        // реальным потолком, а не мок-таймером, который никто не тикает.
+        t.mock.timers.reset();
         await pool.close();
       }
     });
