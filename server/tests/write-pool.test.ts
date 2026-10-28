@@ -95,12 +95,19 @@ function countByPrefix(ndb: NetworkDb, prefix: string): number {
   return row.n;
 }
 
-/** Дождаться условия (ожидание по состоянию, не по кадрам). */
+/**
+ * Настоящий `setTimeout`, снятый до подмены mock-таймерами (тест «поздний
+ * коммит» держит таймеры ПУЛА под управлением теста). Ожидание реального
+ * состояния обязано идти по реальным часам и не зависеть от тиков мока.
+ */
+const realSetTimeout = setTimeout;
+
+/** Дождаться условия (ожидание по состоянию, не по кадрам; таймер всегда настоящий). */
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => realSetTimeout(resolve, 5));
   }
   return predicate();
 }
@@ -601,7 +608,7 @@ describe(
       }
     });
 
-    it('поздний коммит после тайм-аута: результат помечается неизвестным', async () => {
+    it('поздний коммит после тайм-аута: результат помечается неизвестным', async (t) => {
       // Задача воркера ЗАСТРЕВАЕТ ПОСРЕДИ ТРАНЗАКЦИИ: соединение главного потока
       // держит разделяемую блокировку чтения, а `COMMIT` воркера не может взять
       // исключительную и ждёт в busy-обработчике. `terminate()` не прерывает
@@ -614,19 +621,52 @@ describe(
       // «чтение → запись» не вызывается), и «зависнуть в транзакции» там нельзя —
       // а именно этот случай и надо воспроизвести. В откатном журнале `COMMIT`
       // ждёт освобождения разделяемой блокировки, что и даёт зависание.
+      //
+      // Синхронизация — по состоянию, не по таймингам (ошибка cc0f69f4). Раньше
+      // тест рассчитывал, что за 1.5 с тайм-аута воркер успеет подняться и войти
+      // в `COMMIT`. Под нагрузкой подъём воркера (tsx-загрузчик, открытие
+      // соединения) и сама запись занимают больше: тайм-аут срабатывал ДО
+      // `COMMIT`, воркер снимался до коммита, позднего коммита не было — тест
+      // падал не по делу. Здесь тайм-аут пула взводится вручную ровно тогда,
+      // когда проба увидела `COMMIT` в полёте.
       ndb.exec('PRAGMA journal_mode = DELETE');
       let readTxn = false;
       ndb.exec('BEGIN');
       readTxn = true;
       ndb.prepare('SELECT COUNT(*) AS n FROM thoughts').get(); // взять разделяемую блокировку
 
+      // Пробное соединение — детектор состояния «воркер в COMMIT». Чтение через
+      // него получает `SQLITE_BUSY` ровно тогда, когда воркер взял PENDING/
+      // EXCLUSIVE (идёт коммит), а на фазе записи RESERVED чтению не мешает.
+      const probe = new DatabaseConstructor(ndb.dbPath);
+      probe.pragma('busy_timeout = 0');
+      const commitInFlight = (): boolean => {
+        try {
+          probe.exec('BEGIN');
+          probe.prepare('SELECT COUNT(*) AS n FROM thoughts').get();
+          probe.exec('ROLLBACK');
+          return false;
+        } catch (err) {
+          try {
+            probe.exec('ROLLBACK');
+          } catch {
+            /* транзакции уже нет */
+          }
+          if ((err as { code?: string }).code !== 'SQLITE_BUSY') throw err;
+          return true;
+        }
+      };
+
+      // Таймер задачи — под управлением теста: `setTimeout` подменён mock-
+      // таймерами node:test, поэтому тайм-аут пула срабатывает ровно в точке
+      // «COMMIT в полёте», а не по настенным часам. `waitFor` ждёт состояние по
+      // реальному времени (см. `realSetTimeout`), тики мока его не двигают.
+      t.mock.timers.enable({ apis: ['setTimeout'] });
       const titles0 = titles('late', BATCH);
-      // Тайм-аут заведомо больше подъёма воркера (иначе он не успеет начать
-      // запись) и заведомо меньше busy_timeout (5 с) — коммит ещё впереди.
       const pool = new WritePool({ size: 1, taskTimeoutMs: 1_500 });
       try {
         let rejected: EtnError | null = null;
-        await pool.run(batchTask(context, titles0)).then(
+        const run = pool.run(batchTask(context, titles0)).then(
           () => {
             throw new Error('задача обязана быть снята по тайм-ауту');
           },
@@ -635,6 +675,16 @@ describe(
             rejected = err;
           },
         );
+        assert.ok(
+          await waitFor(commitInFlight),
+          'воркер дошёл до COMMIT: поздний коммит в полёте (иначе тайм-аут снял бы его раньше)',
+        );
+        // Тайм-аут пула — точно в состоянии «COMMIT ждёт нашу блокировку».
+        t.mock.timers.tick(pool.taskTimeoutMs);
+        // Потолок ожидания `exit` в `terminate()` (TERMINATE_AWAIT_MS, 2 с):
+        // нативный вызов не прерывается, ответ клиенту уходит до позднего коммита.
+        t.mock.timers.tick(2_000);
+        await run;
         assert.match(rejected!.message, /timed out/);
         assert.equal(
           (rejected!.details as { resultUnknown?: boolean }).resultUnknown,
@@ -661,7 +711,11 @@ describe(
             /* транзакции уже нет */
           }
         }
+        // Сначала вернуть настоящие таймеры: `close()` ждёт `exit` воркера с
+        // реальным потолком, а не мок-таймером, который никто не тикает.
+        t.mock.timers.reset();
         await pool.close();
+        probe.close();
       }
 
       // Повтор того же батча дублей не создаёт: гейт дубликатов отвергает его
