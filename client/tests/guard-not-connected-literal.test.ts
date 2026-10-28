@@ -1,6 +1,6 @@
 /**
  * Сторож единственного источника строки «Not connected…» (ошибка f803afb6,
- * круги 2–6).
+ * круги 2–7).
  *
  * Канонический отказ main до установки соединения — `NOT_CONNECTED_ERROR_TEXT`
  * и `NOT_CONNECTED_NETWORK_ERROR_TEXT` из `@etn/shared`. До этого литерал был
@@ -37,6 +37,14 @@
  * (подробно — в `commentRanges`); на дофиксовой базе регулярки не разбирались
  * вовсе, так что дыра не расширена.
  *
+ * Круг 7: `//`-комментарий потребляет свой `\n`, поэтому сброс `prev` в
+ * состоянии `code` не срабатывал, и строка после комментария, начавшаяся с
+ * `/[/*]/`, читалась как деление — `/*` открывал блочный комментарий до EOF и
+ * глушил дубль. Теперь `line` сбрасывает `prev` при закрытии, а многострочный
+ * `block` — при `*\/` (до него на последней строке кода не было). Обратная
+ * сторона — ASI-граница «деление в начале строки-продолжения», описана в
+ * `commentRanges`.
+ *
  * Мутации, которые краснят: вернуть `throw new Error('Not connected: …')` в
  * `client/src/main/ipc/handlers.ts` или `connection-lifecycle.ts`; вернуть
  * литерал в любой тест; вернуть широкий `rel`-allow; вернуть эвристику
@@ -44,7 +52,8 @@
  * сравнение расширения в `guard-helpers.ts`; выключить распознавание
  * регулярок (`startsRegex` → `false`); сломать класс `[…]` (закрывать
  * литерал по любому `/`); трактовать все `++`/`--`/`!` как префиксные;
- * убрать сброс `prev` на переводе строки.
+ * убрать сброс `prev` на переводе строки; убрать сброс `prev` при закрытии
+ * `//`-комментария или многострочного `/* *\/`.
  */
 
 import assert from 'node:assert/strict';
@@ -161,6 +170,13 @@ function endsValue(prev: string): boolean {
  * регулярки не разбирались вовсе (тот же эффект давала любая `/…/`), так что
  * эвристика дыру не расширила, а сузила. Признанная регулярка переводом строки
  * завершается (ветка `regex`), поэтому ошибка эвристики не глушит файл до EOF.
+ * Обратная сторона сброса `prev` на переводе строки (он же происходит при
+ * закрытии `//`-комментария и многострочного `/* … *\/`): деление в начале
+ * строки-продолжения (`const half = total`, перевод строки, `  / count;`)
+ * читается как начало литерала, `//` внутри него съедается литералом, и
+ * литерал в этом «комментарии» даёт ложное нарушение. Осознанная граница:
+ * prettier ставит бинарный оператор в конце строки, в дереве таких строк нет,
+ * а пропуск дубля (обратное направление ошибки) дороже ложного красного.
  * Постфиксные `++`/`--` после значения и TS non-null `!` значение не меняют:
  * `/` после них — деление. Класс `[…]` разбирается без вложенности и без
  * особого случая `]` первым символом. Форматы данных (`.json`) сторож не
@@ -186,6 +202,10 @@ function commentRanges(content: string): CommentRange[] {
         if (ch === '\n') {
           stack.pop();
           ranges.push({ start: frame.commentStart, end: i });
+          // Строка комментария закончилась: следующая начинается как начало
+          // файла. `\n` потреблён этим кадром, поэтому ветка `\n` в `code`
+          // сброс не сделает (замечание проверки круга 6).
+          top().prev = '';
         }
         i += 1;
         break;
@@ -193,6 +213,9 @@ function commentRanges(content: string): CommentRange[] {
         if (ch === '*' && content[i + 1] === '/') {
           stack.pop();
           ranges.push({ start: frame.commentStart, end: i + 2 });
+          // Многострочный комментарий оставляет `*/` на новой строке: до него
+          // на этой строке кода не было, поэтому `prev` — как в начале строки.
+          if (content.lastIndexOf('\n', i) > frame.commentStart) top().prev = '';
           i += 2;
         } else {
           i += 1;
@@ -627,6 +650,44 @@ describe('guard: строка «Not connected…» — один источник
     assert.deepEqual(
       hits.map((v) => `${v.file}:${v.line}`),
       ['src/after-brace-regex.ts:5'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('//-комментарий не съедает начало следующей строки: регулярка после него распознаётся', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-after-line-comment-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `// done` потреблял свой `\n`, поэтому сброс `prev` не срабатывал:
+    // `/[/*]/` на следующей строке читалась как деление, `/*` открывал
+    // блочный комментарий до EOF и глушил дубль (замечание проверки круга 6).
+    writeFileSync(
+      path.join(dir, 'src', 'after-line-comment.ts'),
+      "if (ok) {\n  total += 1;\n} // done\n/[/*]/;\nthrow new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/after-line-comment.ts:5'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('многострочный /* */ закрывается в начале строки: регулярка после него распознаётся', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-after-block-comment-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `*/` на новой строке оставлял `prev` значением прошлой строки (`}`):
+    // `/` после комментария читался как деление, `/*` в `/[/*]/` открывал
+    // блочный комментарий до EOF и глушил дубль (проверка круга 7).
+    writeFileSync(
+      path.join(dir, 'src', 'after-block-comment.ts'),
+      "if (ok) {\n  total += 1;\n} /* note\n  continued */ /[/*]/;\nthrow new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/after-block-comment.ts:5'],
       `нарушения: ${JSON.stringify(hits)}`,
     );
   });
