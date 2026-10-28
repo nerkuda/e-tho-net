@@ -24,15 +24,16 @@
  *     круг 3: типовая таблица снимала метку до чтения значений);
  *  5) асимметричный отказ: на возврате типовая таблица читает значения
  *     успешно, внетиповая — нет. Успех типовой не снимает метку внетиповой
- *     (круг 4): следующий показ обязан перечитать внетиповую и убрать
- *     `operationError`.
+ *     (круг 4): следующий показ обязан перечитать внетиповую. Отказ чтения
+ *     сохраняет показанные строки (ошибка d720265c) и сообщается тостом;
+ *     прежнее значение не подменяется новым/пустым.
  *
  * На дофиксовом HEAD оба обязательных кейса красные: (1) второго
  * `properties.get` нет и чип остаётся «срочно»; (2) показанная панель
  * перечитывается на чужое событие. Кейс 4 на дофиксовом HEAD тоже красный:
  * метка снимается до чтения значений, и после отказа следующий показ молчит.
  * Кейс 5 красный на HEAD с общей dirty-меткой (af32e3c7): успех типовой
- * таблицы снимает общую метку, и внетиповая остаётся с ошибкой.
+ * таблицы снимает общую метку, и внетиповая не перечитывается.
  */
 
 import assert from 'node:assert/strict';
@@ -40,6 +41,7 @@ import { describe, it } from 'node:test';
 
 import type { AnyRealtimeEvent, Thought } from '@etn/shared';
 import { ShimElement } from './dom-shim.js';
+import { t } from '../src/renderer/lib/i18n.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -182,12 +184,12 @@ function outsideScalarValue(host: ShimElement): string | null {
   return input === undefined ? null : input.value;
 }
 
-/** Текст ошибки чтения в теле «Свойства вне типа» (или null). */
-function outsideErrorText(host: ShimElement): string | null {
-  const body = findAllByClass(host, 'properties-outside-body')[0];
-  if (body === undefined) return null;
-  const line = body.findAll((node) => node.className.split(/\s+/).includes('error-text'))[0];
-  return line === undefined ? null : line.textContent;
+/** Тексты живых тостов (`.notice-text` в `document.body`). */
+function toastTexts(): string[] {
+  const body = (globalThis as any).document.body as ShimElement;
+  return body
+    .findAll((node) => node.className.split(/\s+/).includes('notice-text'))
+    .map((node) => node.textContent);
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +488,8 @@ describe('вкладка «Свойства» после скрытия пере
     // Замечание верификатора (круг 3/4): dirty-метка была ОДНА на владельца, и
     // успех типовой таблицы снимал её и для внетиповой. Асимметричный отказ:
     // типовая читает значения успешно, внетиповая получает отказ. Следующий
-    // показ обязан перечитать внетиповую и убрать operationError.
+    // показ обязан перечитать внетиповую; отказ сохраняет её прежние строки и
+    // сообщается пользователю тостом (ошибка d720265c).
     editorInternals.activateTab('metadata');
     await waitFor(() => findAllByClass(host, 'properties-tab').length === 0);
     propertyRows = [
@@ -522,10 +525,10 @@ describe('вкладка «Свойства» после скрытия пере
     });
     const callsBeforeAsym = getCalls;
     editorInternals.activateTab('properties');
-    // Типовая таблица читает значения успешно; внетиповая получает отказ и
-    // показывает operationError.
+    // Типовая таблица читает значения успешно; внетиповая получает отказ,
+    // сохраняет прежнее значение и сообщает об отказе тостом.
     await waitFor(() => chipTitles(host).includes('асимметрия'), 1000);
-    await waitFor(() => outsideErrorText(host) !== null, 1000);
+    await waitFor(() => toastTexts().includes(t('properties.valuesReadFailed')), 1000);
     check(getCalls > callsBeforeAsym, 'асимметричный возврат не пытался прочитать значения');
     same(
       chipTitles(host),
@@ -536,7 +539,14 @@ describe('вкладка «Свойства» после скрытия пере
       outsideScalarValue(host) !== 'асимметрия',
       'внетиповая таблица показала значение, хотя её чтение отказало',
     );
-    check(outsideErrorText(host) !== null, 'внетиповая таблица не показала ошибку чтения');
+    check(
+      outsideScalarValue(host) === 'повтор',
+      `внетиповая таблица потеряла прежнее значение при отказе: ${JSON.stringify(outsideScalarValue(host))}`,
+    );
+    check(
+      toastTexts().includes(t('properties.valuesReadFailed')),
+      'отказ чтения внетиповой не сообщён пользователю',
+    );
     const definitionsAfterAsym = definitionsCalls;
 
     // Повторный показ: метка внетиповой обязана пережить успех типовой.
@@ -553,10 +563,6 @@ describe('вкладка «Свойства» после скрытия пере
     check(
       outsideScalarValue(host) === 'асимметрия',
       'внетиповая строка не восстановилась после повторного показа',
-    );
-    check(
-      outsideErrorText(host) === null,
-      'ошибка внетиповой таблицы осталась после повторного показа',
     );
     same(chipTitles(host), ['срочно', 'асимметрия'], 'типовая строка изменилась на повторном показе');
     check(

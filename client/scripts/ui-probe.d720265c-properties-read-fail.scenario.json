@@ -1,0 +1,43 @@
+{
+  "name": "d720265c-properties-read-fail",
+  "description": "Ошибка d720265c: при отказе properties.get панель «Свойства» не подменяет значения пустотой и сообщает об отказе. Фикстура --scenario-seed ui-probe.d720265c-properties-read-fail-seed.mjs готовит на засеянной мысли тип с «Теги d720265c» (text multiple) и внетиповое «Внешнее d720265c». Стенд поднимается с --fail-seed-path 'thoughts/{{thoughtId}}/properties' --fail-seed-status 500: клиентские чтения значений отвечают отказом, серверные данные целы (шаги api). Ожидание: типовая строка помечена «не удалось прочитать» (пустого редактора нет), внетиповая группа показывает сообщение из словаря, тост «Не удалось прочитать значения свойств…» виден и не дублируется при повторе. На дофиксовом HEAD: типовой пустой редактор, внетиповая строка «Ошибка: …», тостов нет. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d720265c-properties-read-fail.scenario.json --scenario-seed client/scripts/ui-probe.d720265c-properties-read-fail-seed.mjs --fail-seed-path 'thoughts/{{thoughtId}}/properties' --fail-seed-status 500 --out .tmp/etn-d720265c/out",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "thought-on-canvas", "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null", "timeout": 20000 },
+    { "name": "open-thought", "probe": "(() => { const c=document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "thought-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Проба стенда'", "timeout": 20000 },
+    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+
+    { "name": "typed-row-unreadable", "waitFor": "document.querySelector('.properties-type-body .prop-unreadable') !== null", "timeout": 20000 },
+    { "name": "outside-read-message", "waitFor": "document.querySelector('.properties-outside-body .error-text') !== null", "timeout": 20000 },
+    {
+      "name": "panel-state-on-failure",
+      "probe": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return 'no-body'; const marks=[...body.querySelectorAll('.prop-unreadable')].map((n)=>n.textContent.trim()); const editors=body.querySelectorAll('input.prop-editor').length; const outside=document.querySelector('.properties-outside-body'); const outsideText=outside?outside.textContent.trim():''; return JSON.stringify({ hasMarker: marks.includes('не удалось прочитать'), allMarkers: marks.length > 0 && marks.every((t)=>t === 'не удалось прочитать'), editors, outsideHasMessage: outsideText.includes('Не удалось прочитать значения свойств') }); })()",
+      "expect": "{\"hasMarker\":true,\"allMarkers\":true,\"editors\":0,\"outsideHasMessage\":true}"
+    },
+
+    { "name": "server-tags-intact", "api": { "name": "server-tags-intact", "method": "GET", "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties", "expression": "data.find((v) => v.property_name === 'Теги d720265c').value" }, "expect": "срочно" },
+    { "name": "server-outside-intact", "api": { "name": "server-outside-intact", "method": "GET", "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties", "expression": "data.find((v) => v.property_name === 'Внешнее d720265c').value" }, "expect": "старое" },
+
+    { "name": "refresh-values", "probe": "(() => { document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); return 'ok'; })()", "expect": "ok" },
+    { "name": "toast-visible", "waitFor": "[...document.querySelectorAll('.notice-text')].some((n)=>n.textContent.includes('Не удалось прочитать значения свойств'))", "timeout": 5000 },
+    {
+      "name": "toast-no-spam",
+      "probe": "(async () => { const count=()=>[...document.querySelectorAll('.notice-text')].filter((n)=>n.textContent.includes('Не удалось прочитать значения свойств')).length; document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); await new Promise((r)=>setTimeout(r,500)); return count(); })()",
+      "expect": 1
+    },
+    {
+      "name": "panel-values-still-unread",
+      "probe": "(() => { const body=document.querySelector('.properties-type-body'); const editors=body?body.querySelectorAll('input.prop-editor').length:-1; return editors; })()",
+      "expect": 0
+    }
+  ]
+}

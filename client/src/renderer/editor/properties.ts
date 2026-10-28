@@ -49,7 +49,7 @@ import {
   setTooltip,
   span,
 } from '../lib/dom.js';
-import { footerErrorLine, operationError } from '../lib/ui/messages.js';
+import { errorParagraph, footerErrorLine, operationError } from '../lib/ui/messages.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
@@ -740,6 +740,17 @@ function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): 
   markValueOwnerDirty(ownerType, ownerId);
   if (target.ownerType !== ownerType || target.ownerId !== ownerId) return;
   currentReload?.();
+}
+
+/**
+ * Отказ чтения значений владельца (`properties.get`) — пользователь обязан
+ * увидеть, что строки показывают прежние значения (или помечены «не удалось
+ * прочитать»), а не стёртые. Текст один на все потребители (типовая таблица,
+ * внетиповая): тост дедуплицирует одинаковый текст, поэтому серия отказов и
+ * ретраи не плодят сообщения (ошибка d720265c, требование «без спама»).
+ */
+function notifyValuesReadFailed(): void {
+  notice(t('properties.valuesReadFailed'), 'error');
 }
 
 /**
@@ -1497,17 +1508,24 @@ function buildOutsidePropertiesBody(
     } catch (err) {
       if (requestOwnerId !== target.ownerId) return;
       if (disposed) return;
-      // The table is NOT bound to this owner: drop the shown-owner mark so a
-      // retarget back to the previous owner is not mistaken for "already shown"
-      // and gets re-read instead of leaving the error text on screen
-      // (задача 90b2256e, круг 3).
-      shownOwnerId = null;
-      tableAttached = false;
-      wrap.replaceChildren(operationError(err));
+      // Отказ чтения значений (ошибка d720265c): пользователь видит сообщение,
+      // а показанные строки НЕ подменяются пустотой/технической ошибкой. Прежние
+      // строки этого владельца сохраняем: отказ не доказывает, что значения
+      // исчезли. Метка dirty не снимается — следующий показ/канал повторит
+      // чтение, и сообщение об отказе не потеряется.
+      notifyValuesReadFailed();
       if (isConnectionLostError(err)) {
         retryStop?.();
         retryStop = onReconnected(networkId, () => void reload(true));
       }
+      if (shownOwnerId === requestOwnerId && shownRows.length > 0) return;
+      // Прежних строк ещё нет (первый показ): вместо технической строки
+      // показываем понятное сообщение из словаря. The table is NOT bound to
+      // this owner: drop the shown-owner mark so a retarget back to the
+      // previous owner is re-read (задача 90b2256e, круг 3).
+      shownOwnerId = null;
+      tableAttached = false;
+      wrap.replaceChildren(errorParagraph(t('properties.valuesReadFailed')));
       return;
     }
     if (requestOwnerId !== target.ownerId) return;
@@ -2303,6 +2321,12 @@ function buildTypePropertiesBody(
     ownerId: string;
     definition: EffectiveTypeProperty;
     value: PropertyValue | LinkPropertyValues | undefined;
+    /**
+     * Значение не прочитано (`properties.get` отказал), прежнего значения у
+     * строки ещё нет: вместо пустого редактора показываем явную пометку —
+     * пустая строка читалась бы как «значение стёрто» (ошибка d720265c).
+     */
+    unreadable: boolean;
   }
 
   /** Собирает строку строки таблицы: имя (+ ⓘ) и ячейку значения. */
@@ -2310,6 +2334,7 @@ function buildTypePropertiesBody(
     row: HTMLElement,
     definition: EffectiveTypeProperty,
     value: PropertyValue | LinkPropertyValues | undefined,
+    unreadable: boolean,
   ): void => {
     row.replaceChildren();
     // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
@@ -2366,6 +2391,12 @@ function buildTypePropertiesBody(
       },
     );
     row.append(nameCell);
+    if (unreadable) {
+      // Значение не прочитано и прежнего нет: пустой редактор выглядел бы как
+      // «значение стёрто» — показываем явную пометку (ошибка d720265c).
+      row.append(el('td', 'prop-unreadable muted', t('properties.valueUnreadable')));
+      return;
+    }
     row.append(
       buildEditorCell({
         networkId,
@@ -2400,16 +2431,18 @@ function buildTypePropertiesBody(
     key: (row) => (row.definition.id !== '' ? row.definition.id : row.definition.property_id),
     build: (row) => {
       const tr = el('tr');
-      fillRow(tr, row.definition, row.value);
+      fillRow(tr, row.definition, row.value, row.unreadable);
       return tr;
     },
-    update: (tr, row) => fillRow(tr, row.definition, row.value),
+    update: (tr, row) => fillRow(tr, row.definition, row.value, row.unreadable),
     // A row is reused only within the SAME owner: on a retarget to another
     // entity the value cell must be rebuilt even when the displayed value looks
     // equal (an empty value still writes through the OLD owner closure
-    // otherwise — задача 90b2256e, круг 1).
+    // otherwise — задача 90b2256e, круг 1). Пометка «не удалось прочитать»
+    // тоже часть состояния строки (ошибка d720265c).
     equals: (a, b) =>
       a.ownerId === b.ownerId &&
+      a.unreadable === b.unreadable &&
       deepEqual(a.definition, b.definition) &&
       deepEqual(a.value, b.value),
   };
@@ -2559,14 +2592,28 @@ function buildTypePropertiesBody(
     }
     let values: Array<PropertyValue | LinkPropertyValues> = [];
     let valuesRead = false;
+    let valuesError: unknown = null;
     try {
       values = await etn.properties.get(networkId, target.ownerType, requestOwnerId);
       valuesRead = true;
-    } catch {
-      // The main table still renders even if the values fetch fails.
+    } catch (err) {
+      // Отказ чтения значений (ошибка d720265c): таблица по определениям
+      // остаётся на экране, строки сохраняют прежние значения (или явную
+      // пометку «не удалось прочитать»), а отказ сообщается пользователю.
+      valuesError = err;
     }
     // Same guard after the values fetch — the slowest leg of the pair.
     if (requestOwnerId !== target.ownerId) return;
+    if (!valuesRead) {
+      notifyValuesReadFailed();
+      // Обрыв связи: повторяем чтение после переподключения. Тост дедуплицирует
+      // одинаковый текст, поэтому серия отказов не даёт спама.
+      if (isConnectionLostError(valuesError)) {
+        // Здесь `retryStop` уже снят успешным чтением определений (выше) —
+        // ставим новый сторож переподключения без повторной остановки.
+        retryStop = onReconnected(networkId, () => void reload(true));
+      }
+    }
     // Метка «изменён не на экране» снимается только после УСПЕШНОГО чтения
     // значений (замечание верификатора к 9667b75c, круг 3): при транзиентном
     // отказе значения не прочитаны, и метка должна остаться, чтобы следующий
@@ -2581,15 +2628,48 @@ function buildTypePropertiesBody(
     // на обе стороны; сопоставление только по id отдавало типовой строке
     // значение чужой стороны.
     const valueByKey = new Map(values.map((v) => [outsideRowKey(v), v]));
+    // Прежние строки ЭТОГО владельца — единственный достоверный снимок
+    // значений, когда чтение отказало (ошибка d720265c). Строки другого
+    // владельца не переезжают: `rowSpec.equals` всё равно требует совпадения
+    // ownerId, а значения чужой сущности сохранять нельзя (90b2256e).
+    const previousByKey = new Map(
+      shownRows
+        .filter((row) => row.ownerId === requestOwnerId)
+        .map((row) => [definitionValueKey(row.definition), row]),
+    );
     if (!tableAttached) {
       tableWrap.replaceChildren(table);
       tableAttached = true;
     }
-    const rows: PropertyRow[] = definitions.map((definition) => ({
-      ownerId: requestOwnerId,
-      definition,
-      value: valueByKey.get(definitionValueKey(definition)),
-    }));
+    const rows: PropertyRow[] = definitions.map((definition) => {
+      const key = definitionValueKey(definition);
+      if (valuesRead) {
+        return {
+          ownerId: requestOwnerId,
+          definition,
+          value: valueByKey.get(key),
+          unreadable: false,
+        };
+      }
+      const previous = previousByKey.get(key);
+      if (previous !== undefined) {
+        // Прежнее значение (в том числе честно пустое) сохраняется как есть:
+        // отказ чтения не означает, что значение стёрто.
+        return {
+          ownerId: requestOwnerId,
+          definition,
+          value: previous.value,
+          unreadable: previous.unreadable,
+        };
+      }
+      // Прежнего значения ещё нет — явная пометка вместо пустого редактора.
+      return {
+        ownerId: requestOwnerId,
+        definition,
+        value: undefined,
+        unreadable: true,
+      };
+    });
     shownRows = rows;
     // Повторный flush ПЕРЕД сверкой строк: definitions/values читаются
     // асинхронно, и набранное могло появиться, пока чтение шло. Без этого
