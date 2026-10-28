@@ -1,6 +1,6 @@
 /**
  * Сторож единственного источника строки «Not connected…» (ошибка f803afb6,
- * круги 2–7).
+ * круги 2–8).
  *
  * Канонический отказ main до установки соединения — `NOT_CONNECTED_ERROR_TEXT`
  * и `NOT_CONNECTED_NETWORK_ERROR_TEXT` из `@etn/shared`. До этого литерал был
@@ -41,9 +41,14 @@
  * состоянии `code` не срабатывал, и строка после комментария, начавшаяся с
  * `/[/*]/`, читалась как деление — `/*` открывал блочный комментарий до EOF и
  * глушил дубль. Теперь `line` сбрасывает `prev` при закрытии, а многострочный
- * `block` — при `*\/` (до него на последней строке кода не было). Обратная
- * сторона — ASI-граница «деление в начале строки-продолжения», описана в
- * `commentRanges`.
+ * `block` — при `*\/` ниже строки `/*` (до `*\/` на последней строке кода не
+ * было). Обратная сторона — ASI-граница «деление в начале строки-продолжения»,
+ * описана в `commentRanges`.
+ *
+ * Круг 8: закрыты замечания проверки круга 7. Кейс с `*\/` в начале новой
+ * строки проверяет границу сброса, кейс с делением после однострочного `*\/`
+ * (`} /* x *\/ / 2;`) защищает условие `lastIndexOf`: без него `//` на той же
+ * строке съедался нераспознанной регуляркой и давал ложное нарушение.
  *
  * Мутации, которые краснят: вернуть `throw new Error('Not connected: …')` в
  * `client/src/main/ipc/handlers.ts` или `connection-lifecycle.ts`; вернуть
@@ -53,7 +58,8 @@
  * регулярок (`startsRegex` → `false`); сломать класс `[…]` (закрывать
  * литерал по любому `/`); трактовать все `++`/`--`/`!` как префиксные;
  * убрать сброс `prev` на переводе строки; убрать сброс `prev` при закрытии
- * `//`-комментария или многострочного `/* *\/`.
+ * `//`-комментария или многострочного `/* *\/`; сбрасывать `prev` после любого
+ * `*\/`, включая однострочный.
  */
 
 import assert from 'node:assert/strict';
@@ -673,12 +679,13 @@ describe('guard: строка «Not connected…» — один источник
     );
   });
 
-  it('многострочный /* */ закрывается в начале строки: регулярка после него распознаётся', () => {
+  it('многострочный /* */ закрывается в середине новой строки: регулярка после него распознаётся', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-after-block-comment-'));
     mkdirSync(path.join(dir, 'src'));
-    // `*/` на новой строке оставлял `prev` значением прошлой строки (`}`):
-    // `/` после комментария читался как деление, `/*` в `/[/*]/` открывал
-    // блочный комментарий до EOF и глушил дубль (проверка круга 7).
+    // `*/` в середине новой строки (после `continued`) оставлял `prev`
+    // значением прошлой строки (`}`): `/` после комментария читался как
+    // деление, `/*` в `/[/*]/` открывал блочный комментарий до EOF и глушил
+    // дубль (проверка круга 7).
     writeFileSync(
       path.join(dir, 'src', 'after-block-comment.ts'),
       "if (ok) {\n  total += 1;\n} /* note\n  continued */ /[/*]/;\nthrow new Error('Not connected: call etn.server.connect first');\n",
@@ -688,6 +695,49 @@ describe('guard: строка «Not connected…» — один источник
     assert.deepEqual(
       hits.map((v) => `${v.file}:${v.line}`),
       ['src/after-block-comment.ts:5'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('многострочный /* */ закрывается в начале новой строки: регулярка после него распознаётся', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-after-block-comment-bol-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `*/` первым на строке — граничный случай сброса `prev` в ветке `block`:
+    // новая строка начинается там же, где закрывается комментарий.
+    writeFileSync(
+      path.join(dir, 'src', 'after-block-comment-bol.ts'),
+      "if (ok) {\n  total += 1;\n} /* note\n*/ /[/*]/;\nthrow new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/after-block-comment-bol.ts:5'],
+      `нарушения: ${JSON.stringify(hits)}`,
+    );
+  });
+
+  it('однострочный /* */ в середине строки: деление после него не принимается за регулярку', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-not-connected-midline-block-'));
+    mkdirSync(path.join(dir, 'src'));
+    // `*/` в середине строки `prev` НЕ сбрасывает: `/ 2` после него — деление,
+    // литерал в `//`-комментарии разрешён. Безусловный сброс `prev` в ветке
+    // `block` сделал бы `//` частью нераспознанной регулярки и покраснил бы
+    // сторож ложным нарушением (замечание проверки круга 7).
+    writeFileSync(
+      path.join(dir, 'src', 'midline-block.ts'),
+      'if (ok) {\n  total += 1;\n} /* x */ / 2; // Not connected: call etn.server.connect first\n',
+    );
+    // Контрольный дубль в коде: правило живое, нарушений ровно одно.
+    writeFileSync(
+      path.join(dir, 'src', 'dup.ts'),
+      "throw new Error('Not connected: call etn.server.connect first');\n",
+    );
+
+    const hits = collectViolations(dir, rulesFor(dir, path.join(dir, 'src', 'errors.ts')));
+    assert.deepEqual(
+      hits.map((v) => `${v.file}:${v.line}`),
+      ['src/dup.ts:1'],
       `нарушения: ${JSON.stringify(hits)}`,
     );
   });
