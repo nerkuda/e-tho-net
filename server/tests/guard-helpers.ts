@@ -72,7 +72,10 @@ export interface GuardScanOptions {
   exclude?: string[];
 }
 
-/** Расширения, которые сторож считает исходниками. */
+/**
+ * Расширения, которые сторож считает исходниками. Сопоставление
+ * регистронезависимо: `.TS` — тот же исходник, что `.ts`.
+ */
 export const DEFAULT_GUARD_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs'];
 
 /** Каталоги, которые сторож не сканирует никогда. */
@@ -85,7 +88,7 @@ function normalizeRel(rel: string): string {
 
 /** Рекурсивно собирает файлы для сканирования (в обход SKIP_DIRS и exclude). */
 export function listSourceFiles(root: string, options: GuardScanOptions = {}): string[] {
-  const extensions = options.extensions ?? DEFAULT_GUARD_EXTENSIONS;
+  const extensions = new Set((options.extensions ?? DEFAULT_GUARD_EXTENSIONS).map((ext) => ext.toLowerCase()));
   const exclude = (options.exclude ?? []).map(normalizeRel);
   const result: string[] = [];
   const stack = [path.resolve(root)];
@@ -105,7 +108,7 @@ export function listSourceFiles(root: string, options: GuardScanOptions = {}): s
       }
       if (!entry.isFile()) continue;
       const rel = normalizeRel(path.relative(root, abs));
-      if (!extensions.includes(path.extname(entry.name))) continue;
+      if (!extensions.has(path.extname(entry.name).toLowerCase())) continue;
       if (exclude.some((e) => rel === e || rel.startsWith(`${e}/`))) continue;
       result.push(abs);
     }
