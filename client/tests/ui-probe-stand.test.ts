@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -22,6 +23,7 @@ import {
   serverLogViolations,
 } from '../scripts/ui-probe-stand.mjs';
 import {
+  createWsMuteFilter,
   delayForUrl,
   matchDelayRule,
   needsDelay,
@@ -39,6 +41,7 @@ test('parseArgs: значения по умолчанию', () => {
   assert.equal(opts.keep, false);
   assert.equal(opts.help, false);
   assert.deepEqual(opts.delaySeedRules, []);
+  assert.equal(opts.muteWsEvent, '');
   assert.equal(opts.failSeedPath, '');
   assert.equal(opts.failSeedStatus, 404);
 });
@@ -269,6 +272,46 @@ test('parseArgs: повторяемые --delay-seed-response-rule (задерж
   );
 });
 
+test('matchDelayRule: rule.method сужает правило до метода запроса (da7bbb53)', () => {
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const read = `/api/v1/networks/${id}/thoughts/t1/properties`;
+  const mutation = `/api/v1/networks/${id}/thoughts/t1/properties/Tags`;
+  const rules = [{ delayMs: 5000, pathFilter: 'properties', method: 'GET' }];
+  assert.equal(matchDelayRule(read, id, rules, 'GET'), 0, 'GET-чтение придержано');
+  assert.equal(
+    matchDelayRule(mutation, id, rules, 'DELETE'),
+    -1,
+    'DELETE «Очистить» не придержан: иначе мутация завершается после снимка',
+  );
+  assert.equal(delayForUrl(mutation, id, rules, 'DELETE'), null);
+  // Правило без method совпадает с любым методом (поведение до круга 4).
+  assert.equal(matchDelayRule(mutation, id, [{ delayMs: 1, pathFilter: 'properties' }], 'DELETE'), 0);
+});
+
+test('parseArgs: --delay-seed-response-method ограничивает правила ответа', () => {
+  const opts = parseArgs([
+    '--delay-seed-response-rule',
+    '5000:thoughts/{{thoughtId}}/properties',
+    '--delay-seed-response-method',
+    'get',
+  ]);
+  assert.equal(opts.responseSeedMethod, 'GET');
+  assert.throws(
+    () => parseArgs(['--delay-seed-response-method', 'GET']),
+    /требует --delay-seed-response-rule/,
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        '--delay-seed-response-rule',
+        '1:x',
+        '--delay-seed-response-method',
+        'G3T',
+      ]),
+    /HTTP-метод/,
+  );
+});
+
 test('delayForUrl: правило B короче A, GET набора не задерживается', () => {
   const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const a = `/api/v1/networks/${id}/thoughts/f/views/parentsof6d78ccab/run`;
@@ -382,6 +425,131 @@ test('readScenarioLogRules: правила из сценария; без клю�
     assert.throws(() => readScenarioLogRules(brokenMax), /serverLog\.atMost/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parseArgs: --mute-ws-event — подстрока подавляемого realtime-события', () => {
+  const opts = parseArgs(['--mute-ws-event', 'property-value.deleted']);
+  assert.equal(opts.muteWsEvent, 'property-value.deleted');
+  assert.throws(() => parseArgs(['--mute-ws-event']), /требует значения/);
+});
+
+/** Серверный (немаскированный) текстовый WebSocket-кадр RFC 6455. */
+function wsTextFrame(text: string, fin = true): Buffer {
+  const payload = Buffer.from(text, 'utf8');
+  let header: Buffer;
+  if (payload.length < 126) {
+    header = Buffer.from([(fin ? 0x80 : 0x00) | 0x1, payload.length]);
+  } else if (payload.length < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = (fin ? 0x80 : 0x00) | 0x1;
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = (fin ? 0x80 : 0x00) | 0x1;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+/** Кадр-продолжение (opcode 0) текстового сообщения. */
+function wsContinuationFrame(text: string): Buffer {
+  const payload = Buffer.from(text, 'utf8');
+  return Buffer.concat([Buffer.from([0x80, payload.length]), payload]);
+}
+
+test('createWsMuteFilter: подавляет совпавшие сообщения, прочие кадры проходят (da7bbb53)', () => {
+  const out: Buffer[] = [];
+  const filter = createWsMuteFilter('property-value.deleted', (chunk: Buffer) => out.push(chunk));
+  const handshake = Buffer.from(
+    'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+    'latin1',
+  );
+  const keep = wsTextFrame('{"type":"property-value.set"}');
+  const muted = wsTextFrame('{"type":"property-value.deleted","data":{}}');
+  const ping = Buffer.from([0x89, 0x00]);
+  // Один чанк: рукопожатие + проходящий кадр + подавляемый + ping.
+  filter.push(Buffer.concat([handshake, keep, muted, ping]));
+  filter.end();
+  const bytes = Buffer.concat(out);
+  assert.ok(bytes.subarray(0, handshake.length).equals(handshake), 'рукопожатие прошло как есть');
+  assert.ok(bytes.includes(keep), 'чужое realtime-событие доставлено');
+  assert.ok(!bytes.includes(muted.subarray(2)), 'совпавшее событие подавлено целиком');
+  assert.ok(bytes.includes(ping), 'ping прошёл');
+});
+
+test('createWsMuteFilter: фрагментированное сообщение решается целиком (da7bbb53)', () => {
+  const out: Buffer[] = [];
+  const filter = createWsMuteFilter('property-value.deleted', (chunk: Buffer) => out.push(chunk));
+  filter.push(
+    Buffer.from('HTTP/1.1 101 Switching Protocols\r\n\r\n', 'latin1'),
+  );
+  // Подстрока разрезана между кадрами: по отдельности она бы не совпала.
+  filter.push(wsTextFrame('{"type":"property-value.', false));
+  filter.push(wsContinuationFrame('deleted"}'));
+  filter.push(wsTextFrame('{"type":"keep"}'));
+  filter.end();
+  const bytes = Buffer.concat(out);
+  assert.ok(!bytes.includes(Buffer.from('property-value.', 'utf8')), 'фрагменты подавлены все');
+  assert.ok(bytes.includes(Buffer.from('{"type":"keep"}', 'utf8')), 'следующее сообщение прошло');
+});
+
+test('startDelayProxy: muteWsEvent не пропускает кадр через WS-апгрейд (da7bbb53)', async () => {
+  const upgradedSockets: Array<{ destroy(): void }> = [];
+  const upstream = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  upstream.on('upgrade', (_req, socket) => {
+    upgradedSockets.push(socket);
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+    );
+    socket.write(wsTextFrame('{"type":"keep"}'));
+    socket.write(wsTextFrame('{"type":"property-value.deleted"}'));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const address = upstream.address();
+  const upstreamPort = typeof address === 'object' && address !== null ? address.port : 0;
+  const proxy = await startDelayProxy({
+    targetPort: upstreamPort,
+    networkId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    delayMs: 0,
+    muteWsEvent: 'property-value.deleted',
+  });
+  const client = net.connect(proxy.port, '127.0.0.1');
+  const received: Buffer[] = [];
+  client.on('data', (chunk: Buffer) => received.push(chunk));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      client.once('connect', resolve);
+      client.once('error', reject);
+    });
+    client.write(
+      'GET /api/v1/realtime?network_id=n HTTP/1.1\r\n' +
+        'Host: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n',
+    );
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && !Buffer.concat(received).includes(Buffer.from('"keep"'))) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    // Дать доехать (или не доехать) второму кадру.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const bytes = Buffer.concat(received);
+    assert.ok(bytes.includes(Buffer.from('101 Switching Protocols')), 'апгрейд состоялся');
+    assert.ok(bytes.includes(Buffer.from('"keep"')), 'несовпавшее событие доставлено');
+    assert.ok(
+      !bytes.includes(Buffer.from('property-value.deleted')),
+      'realtime-эхо подавлено, канал жив',
+    );
+  } finally {
+    client.destroy();
+    for (const socket of upgradedSockets) socket.destroy();
+    await proxy.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });
 

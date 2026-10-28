@@ -60,11 +60,20 @@ export function needsDelay(url, networkId, pathFilter = '') {
 /**
  * Индекс первого подходящего правила (первое совпадение выигрывает) или -1.
  * Отдельно от {@link delayForUrl}, чтобы сервер прокси вёл счётчик по правилу.
+ *
+ * `method` (необязательно) — метод запроса: правило с полем `method` совпадает
+ * только с ним. Нужно, чтобы задержка ОТВЕТА придерживала чтения, но не
+ * собственную мутацию сценария (`--delay-seed-response-method GET`): иначе
+ * ответ DELETE «Очистить» тоже придержан и мутация завершается уже после
+ * придержанного снимка (красный гейт da7bbb53, круг 4).
  */
-export function matchDelayRule(url, networkId, rules) {
+export function matchDelayRule(url, networkId, rules, method = '') {
   if (!isSeedNetworkUrl(url, networkId)) return -1;
   const list = Array.isArray(rules) ? rules : [];
   return list.findIndex((rule) => {
+    if (typeof rule.method === 'string' && rule.method !== '' && rule.method !== method) {
+      return false;
+    }
     const filter = typeof rule.pathFilter === 'string' ? rule.pathFilter : '';
     return filter === '' || url.includes(filter);
   });
@@ -76,11 +85,140 @@ export function matchDelayRule(url, networkId, rules) {
  * замечание верификатора круга 2 к ошибке 6d78ccab). Возвращает миллисекунды
  * или `null`, если ни одно правило не совпало.
  */
-export function delayForUrl(url, networkId, rules) {
-  const index = matchDelayRule(url, networkId, rules);
+export function delayForUrl(url, networkId, rules, method = '') {
+  const index = matchDelayRule(url, networkId, rules, method);
   if (index < 0) return null;
   const delay = rules[index]?.delayMs;
   return typeof delay === 'number' ? delay : null;
+}
+
+/**
+ * Подавление выбранных realtime-кадров сервер→клиент (ошибка da7bbb53, круг 4).
+ *
+ * Realtime-эхо СОБСТВЕННОЙ мутации двигает поколение чтения и в GUI маскирует
+ * гонку «поздний ответ вернул удалённое значение»: сценарий
+ * `da7bbb53-clear-row` без подавления зелёный и на дофиксовой сборке. Стенду
+ * нужен способ прогнать сценарий БЕЗ этого эха, не трогая продукт, — прокси
+ * разбирает серверные WebSocket-кадры (RFC 6455; сервер ETN кадры не маскирует,
+ * сжатие выключено) и НЕ пропускает клиенту текстовые сообщения, содержащие
+ * заданную подстроку. HTTP-ответ рукопожатия, ping/pong/close и бинарные кадры
+ * проходят байт-в-байт; прочие realtime-события не задерживаются.
+ *
+ * Фрагментированные текстовые сообщения собираются и решаются ЦЕЛИКОМ: иначе
+ * подстрока, разрезанная между кадрами, не совпала бы, и подавление молча
+ * стало бы вакуумным.
+ *
+ * @param {string} needle подстрока текста сообщения (например,
+ *                        `property-value.deleted`)
+ * @param {(chunk: Buffer) => void} write получатель проходящих байтов
+ * @returns {{push:(chunk:Buffer)=>void, end:()=>void}}
+ */
+export function createWsMuteFilter(needle, write) {
+  let pending = Buffer.alloc(0);
+  let handshake = false;
+  /** Кадры и полезная нагрузка текущего текстового сообщения. */
+  let messageFrames = [];
+  let messageParts = [];
+  let messageOpen = false;
+
+  const resetMessage = () => {
+    messageFrames = [];
+    messageParts = [];
+    messageOpen = false;
+  };
+  const flushMessage = () => {
+    if (!messageOpen) return;
+    const text = Buffer.concat(messageParts).toString('utf8');
+    // Совпало — сообщение (все его кадры) не доходит до клиента.
+    if (!text.includes(needle)) for (const frame of messageFrames) write(frame);
+    resetMessage();
+  };
+
+  const push = (chunk) => {
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+    if (!handshake) {
+      const end = pending.indexOf('\r\n\r\n');
+      if (end < 0) return;
+      const header = pending.subarray(0, end + 4);
+      pending = pending.subarray(end + 4);
+      handshake = true;
+      write(header);
+      if (!/^HTTP\/1\.1 101/.test(header.toString('latin1'))) {
+        // Апгрейд не состоялся — дальше обычный поток байтов.
+        if (pending.length > 0) write(pending);
+        pending = Buffer.alloc(0);
+        return;
+      }
+    }
+    for (;;) {
+      if (pending.length < 2) return;
+      const b0 = pending[0];
+      const b1 = pending[1];
+      const fin = (b0 & 0x80) !== 0;
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let length = b1 & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (pending.length < 4) return;
+        length = pending.readUInt16BE(2);
+        offset = 4;
+      } else if (length === 127) {
+        if (pending.length < 10) return;
+        const big = pending.readBigUInt64BE(2);
+        if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+          flushMessage();
+          write(pending);
+          pending = Buffer.alloc(0);
+          return;
+        }
+        length = Number(big);
+        offset = 10;
+      }
+      if (masked) offset += 4;
+      const total = offset + length;
+      if (pending.length < total) return;
+      const frame = pending.subarray(0, total);
+      const payload = pending.subarray(offset, total);
+      pending = pending.subarray(total);
+      // Серверные кадры по RFC не маскируются; маскированный — не наш случай.
+      if (masked) {
+        flushMessage();
+        write(frame);
+        continue;
+      }
+      // Управляющие кадры (close/ping/pong) проходят всегда и сообщение не рвут.
+      if (opcode >= 0x8) {
+        write(frame);
+        continue;
+      }
+      if (opcode === 0x1) {
+        flushMessage();
+        messageOpen = true;
+        messageFrames.push(frame);
+        messageParts.push(payload);
+        if (fin) flushMessage();
+        continue;
+      }
+      if (opcode === 0x0 && messageOpen) {
+        messageFrames.push(frame);
+        messageParts.push(payload);
+        if (fin) flushMessage();
+        continue;
+      }
+      // Бинарные и прочие — как есть; начатое текстовое сообщение закрываем.
+      flushMessage();
+      write(frame);
+    }
+  };
+
+  const end = () => {
+    flushMessage();
+    if (pending.length > 0) write(pending);
+    pending = Buffer.alloc(0);
+  };
+
+  return { push, end };
 }
 
 /**
@@ -107,10 +245,14 @@ export function delayForUrl(url, networkId, rules) {
  * чтение, начатое до правки, но пропустить чтение после неё (ошибка da7bbb53,
  * круг 3). Без лимита обе задержки одинаковы, и порядок доставки сохраняется.
  *
+ * `muteWsEvent` — подстрока текста серверного WebSocket-сообщения, которое НЕ
+ * доставляется клиенту (подавление realtime-эха своей мутации для красного
+ * GUI-гейта da7bbb53, круг 4). Пусто — realtime идёт без фильтра.
+ *
  * @param {{targetPort:number, networkId:string, delayMs?:number, pathFilter?:string,
  *          rules?:Array<{delayMs:number, pathFilter?:string}>,
  *          responseRules?:Array<{delayMs:number, pathFilter?:string}>,
- *          responseLimit?:number,
+ *          responseLimit?:number, muteWsEvent?:string,
  *          failPath?:string, failStatus?:number, log?:(line:string)=>void}} opts
  * @returns {Promise<{port:number, delayedCount:()=>number, delayedByRule:()=>number[],
  *                    delayedResponseCount:()=>number, delayedResponseByRule:()=>number[],
@@ -124,6 +266,7 @@ export async function startDelayProxy({
   rules = [],
   responseRules = [],
   responseLimit = 0,
+  muteWsEvent = '',
   failPath = '',
   failStatus = 404,
   log = () => undefined,
@@ -226,7 +369,7 @@ export async function startDelayProxy({
     const responseIndex =
       responseLimit > 0 && delayedResponses >= responseLimit
         ? -1
-        : matchDelayRule(req.url, networkId, effectiveResponseRules);
+        : matchDelayRule(req.url, networkId, effectiveResponseRules, req.method ?? '');
     let responseDelayMs = 0;
     if (responseIndex >= 0) {
       responseDelayMs = effectiveResponseRules[responseIndex]?.delayMs ?? 0;
@@ -235,7 +378,7 @@ export async function startDelayProxy({
         (delayedResponsesPerRule[responseIndex] ?? 0) + 1;
       log(`delay-response ${responseDelayMs}ms ${req.method} ${req.url}`);
     }
-    const hitIndex = matchDelayRule(req.url, networkId, effectiveRules);
+    const hitIndex = matchDelayRule(req.url, networkId, effectiveRules, req.method ?? '');
     if (hitIndex >= 0) {
       const hitDelay = effectiveRules[hitIndex]?.delayMs ?? delayMs;
       delayed += 1;
@@ -248,7 +391,8 @@ export async function startDelayProxy({
   });
 
   // WebSocket и прочие upgrade — без задержки: realtime-канал не относится к
-  // проверяемой гонке открытия сети.
+  // проверяемой гонке открытия сети. При `muteWsEvent` серверные кадры идут
+  // через фильтр подавления (красный GUI-гейт da7bbb53, круг 4).
   server.on('upgrade', (req, socket, head) => {
     const upstream = net.connect(Number(targetPort), '127.0.0.1', () => {
       upstream.write(
@@ -259,11 +403,31 @@ export async function startDelayProxy({
           '\r\n\r\n',
       );
       if (head.length > 0) upstream.write(head);
-      upstream.pipe(socket);
-      socket.pipe(upstream);
+      if (muteWsEvent === '') upstream.pipe(socket);
     });
     upstream.on('error', () => socket.destroy());
     socket.on('error', () => upstream.destroy());
+    if (muteWsEvent === '') {
+      socket.pipe(upstream);
+      return;
+    }
+    // Клиент → сервер — байт-в-байт (кадры клиента маскированы, разбирать их
+    // незачем); сервер → клиент — через фильтр подавления.
+    socket.pipe(upstream);
+    const filter = createWsMuteFilter(muteWsEvent, (chunk) => {
+      if (socket.destroyed) return;
+      if (!socket.write(chunk)) upstream.pause();
+    });
+    socket.on('drain', () => upstream.resume());
+    upstream.on('data', (chunk) => filter.push(chunk));
+    upstream.on('end', () => {
+      filter.end();
+      socket.end();
+    });
+    socket.on('close', () => {
+      filter.end();
+      upstream.destroy();
+    });
   });
 
   await new Promise((resolve, reject) => {
@@ -273,7 +437,8 @@ export async function startDelayProxy({
   const address = server.address();
   const port = typeof address === 'object' && address !== null ? address.port : 0;
   const describeRule = (rule, i) =>
-    `#${i} ${rule.delayMs}ms${typeof rule.pathFilter === 'string' && rule.pathFilter !== '' ? ` (path ${rule.pathFilter})` : ''}`;
+    `#${i} ${rule.delayMs}ms${typeof rule.pathFilter === 'string' && rule.pathFilter !== '' ? ` (path ${rule.pathFilter})` : ''}` +
+    (typeof rule.method === 'string' && rule.method !== '' ? ` [${rule.method}]` : '');
   log(
     `listening ${port} -> ${targetPort}, ${effectiveRules.length} request rule(s) for /${networkId}/: ` +
       effectiveRules.map(describeRule).join(', ') +

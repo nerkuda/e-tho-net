@@ -10,6 +10,8 @@ export interface DelayProxyRule {
   delayMs: number;
   /** `''`/не задано — задерживать все запросы засеянной сети. */
   pathFilter?: string;
+  /** HTTP-метод, к которому относится правило (''/не задано — любой). */
+  method?: string;
 }
 
 /** Задерживать ли запрос этой сети (сегмент `<networkId>` в пути + pathFilter). */
@@ -24,6 +26,7 @@ export declare function matchDelayRule(
   url: string | undefined,
   networkId: string | undefined,
   rules: DelayProxyRule[],
+  method?: string,
 ): number;
 
 /** Миллисекунды задержки по первому подходящему правилу; `null` — нет совпадения. */
@@ -31,6 +34,7 @@ export declare function delayForUrl(
   url: string | undefined,
   networkId: string | undefined,
   rules: DelayProxyRule[],
+  method?: string,
 ): number | null;
 
 /** Опции запуска прокси задержки. */
@@ -57,6 +61,12 @@ export interface DelayProxyOptions {
    * проходит сразу — обратный порядок ответов.
    */
   responseLimit?: number;
+  /**
+   * Подстрока текста серверного WebSocket-сообщения, которое не доставляется
+   * клиенту: подавление realtime-эха своей мутации для красного GUI-гейта
+   * (ошибка da7bbb53, круг 4). `''` — realtime идёт без фильтра.
+   */
+  muteWsEvent?: string;
   /**
    * Режим «форвард + подмена статуса»: запросы засеянной сети, чей путь
    * содержит подстроку, уходят на сервер, а клиент получает `failStatus`
@@ -86,3 +96,13 @@ export interface DelayProxyHandle {
 }
 
 export declare function startDelayProxy(opts: DelayProxyOptions): Promise<DelayProxyHandle>;
+
+/**
+ * Фильтр сервер→клиент WebSocket-кадров: текстовые сообщения, содержащие
+ * `needle`, не доставляются; прочие кадры и HTTP-рукопожатие проходят
+ * байт-в-байт. Фрагментированное сообщение решается целиком (da7bbb53, круг 4).
+ */
+export declare function createWsMuteFilter(
+  needle: string,
+  write: (chunk: Buffer) => void,
+): { push: (chunk: Buffer) => void; end: () => void };

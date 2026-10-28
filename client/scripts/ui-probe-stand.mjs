@@ -99,6 +99,22 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
                          придержано, чтение после неё идёт сразу (ошибка
                          da7bbb53, круг 3). Требует
                          --delay-seed-response-rule.
+      --delay-seed-response-method <M>
+                         Ограничить правила --delay-seed-response-rule
+                         запросами метода <M> (например, GET). Без него
+                         придерживается и ответ собственной мутации сценария
+                         (DELETE «Очистить»), и она завершается уже после
+                         придержанного снимка — гейт становится вакуумным
+                         (ошибка da7bbb53, круг 4).
+      --mute-ws-event <s>
+                         Не доставлять клиенту серверные WebSocket-сообщения,
+                         текст которых содержит <s>: подавляет realtime-эхо
+                         собственной мутации, чтобы GUI-сценарий был КРАСНЫМ
+                         на дофиксовой сборке (ошибка da7bbb53, круг 4).
+                         Разбираются только серверные текстовые кадры (RFC 6455,
+                         сжатие в ETN выключено); прочие события, ping/pong и
+                         HTTP-трафик не трогаются. Требует прокси — при одном
+                         этом флаге прокси тоже поднимается.
       --fail-seed-path <s>
                          Режим «форвард + подмена статуса»: запросы засеянной
                          сети, чей путь содержит <s>, всё равно уходят на сервер
@@ -174,6 +190,8 @@ export function parseArgs(argv) {
     delaySeedRules: [],
     responseSeedRules: [],
     responseSeedLimit: 0,
+    responseSeedMethod: '',
+    muteWsEvent: '',
     failSeedPath: '',
     failSeedStatus: 404,
     keep: false,
@@ -273,6 +291,19 @@ export function parseArgs(argv) {
         opts.responseSeedLimit = int(need(argv[i + 1], arg), arg);
         i += 1;
         break;
+      case '--delay-seed-response-method': {
+        const method = need(argv[i + 1], arg).toUpperCase();
+        if (!/^[A-Z]+$/.test(method)) {
+          throw new Error('--delay-seed-response-method: ожидается HTTP-метод (например, GET)');
+        }
+        opts.responseSeedMethod = method;
+        i += 1;
+        break;
+      }
+      case '--mute-ws-event':
+        opts.muteWsEvent = need(argv[i + 1], arg);
+        i += 1;
+        break;
       case '--fail-seed-path':
         opts.failSeedPath = need(argv[i + 1], arg);
         i += 1;
@@ -298,6 +329,9 @@ export function parseArgs(argv) {
   }
   if (opts.responseSeedLimit > 0 && opts.responseSeedRules.length === 0) {
     throw new Error('--delay-seed-response-limit требует --delay-seed-response-rule');
+  }
+  if (opts.responseSeedMethod !== '' && opts.responseSeedRules.length === 0) {
+    throw new Error('--delay-seed-response-method требует --delay-seed-response-rule');
   }
   return opts;
 }
@@ -715,18 +749,20 @@ async function main(argv) {
     const responseRules = opts.responseSeedRules.map((rule) => ({
       delayMs: rule.delayMs,
       pathFilter: resolveDelaySeedPath(rule.path, seed),
+      ...(opts.responseSeedMethod === '' ? {} : { method: opts.responseSeedMethod }),
     }));
     const failPath = resolveDelaySeedPath(opts.failSeedPath, seed);
-    if (delayRules.length > 0 || responseRules.length > 0 || failPath !== '') {
-      if (seed === null) {
+    if (delayRules.length > 0 || responseRules.length > 0 || failPath !== '' || opts.muteWsEvent !== '') {
+      if (seed === null && (delayRules.length > 0 || responseRules.length > 0 || failPath !== '')) {
         throw new Error('задержка/подмена статуса требует засеянную сеть (не используйте с --no-seed)');
       }
       probeProxy = await startDelayProxy({
         targetPort: serverPort,
-        networkId: seed.networkId,
+        networkId: seed === null ? '' : seed.networkId,
         rules: delayRules,
         responseRules,
         responseLimit: opts.responseSeedLimit,
+        muteWsEvent: opts.muteWsEvent,
         // Без правил задержки (режим только --fail-seed-path) прокси не должен
         // задерживать: иначе дефолт 3000 мс замедлил бы всю сеть.
         delayMs: 0,
@@ -736,9 +772,10 @@ async function main(argv) {
       });
       clientRoot = `http://127.0.0.1:${probeProxy.port}`;
       const describe = (rule) =>
-        `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}`;
+        `${rule.delayMs} мс${rule.pathFilter === '' ? ' (все пути)' : ` (путь ${rule.pathFilter})`}` +
+        (typeof rule.method === 'string' && rule.method !== '' ? ` [${rule.method}]` : '');
       process.stdout.write(
-        `ui-probe-stand: прокси для сети ${seed.networkId}: ` +
+        `ui-probe-stand: прокси для сети ${seed === null ? '—' : seed.networkId}: ` +
           (delayRules.length > 0
             ? `запрос ${delayRules.map(describe).join(', ')}`
             : 'запрос без задержки') +
@@ -746,6 +783,7 @@ async function main(argv) {
             ? `; ответ ${responseRules.map(describe).join(', ')}`
             : '') +
           (failPath === '' ? '' : `; ${opts.failSeedStatus} на путь ${failPath}`) +
+          (opts.muteWsEvent === '' ? '' : `; подавление WS «${opts.muteWsEvent}»`) +
           `: ${clientRoot}\n`,
       );
     }

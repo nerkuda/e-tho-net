@@ -1,6 +1,6 @@
 {
   "name": "bfe1bc24-reload-window",
-  "description": "Ошибка bfe1bc24, круг 3: набранное чип-поле теряется, если перечитывание строки уже началось до ввода. Запускать ТОЛЬКО с искусственной задержкой чтения: --delay-seed-path thought-types --delay-seed-ms 1500. Seed: тип Т1 с типовым свойством «Теги» (text + config.multiple), у P1 значение «срочно». Открываем P1 → «Свойства» (в поле чип «срочно»), затем внешней записью добавляем P1 значение «смена»: приходит realtime-событие, клиент начинает перечитывание, а чтение определений типа задержано прокси. Пока оно идёт, в показанное поле ставится текст «окно» БЕЗ blur. Когда отложенное чтение завершается, пришедший набор «срочно, смена» меняет строку, и reconcileKeyed её пересобирает: повторный flush перед сверкой обязан сохранить «окно» (window-server содержит «окно»; локальный набор при этом оптимистично перезаписывает внешнюю правку — «срочно, окно»). На 09ccd6e7 flush есть только в начале reload, до ввода: строка пересобирается, поле с «окно» снимается без blur, значение гибнет (window-server = «срочно, смена», без «окно»).",
+  "description": "Ошибка bfe1bc24, круг 4: набранное чип-поле теряется, если перечитывание строки уже началось до ввода. Запускать ТОЛЬКО с задержками: --delay-seed-path thought-types --delay-seed-ms 1500 --delay-seed-response-rule '800:properties' (путь без id: P1 создаётся шагом seed, его id стенду неизвестен; фильтр ограничен засеянной сетью). Seed: тип Т1 с типовым свойством «Теги» (text + config.multiple), у P1 значение «срочно». Открываем P1 → «Свойства» (в поле чип «срочно»), затем внешней записью добавляем P1 значение «смена»: приходит realtime-событие, клиент заводит окно склейки 250 мс и по его закрытию начинает перечитывание; чтение определений типа задержано прокси. Шаг reload-started ждёт СТАРТ перечитывания по условию, а не паузой: группа «Свойства вне типа» перечитывается тем же flush'ом и показывает плейсхолдер «Загрузка…», а старое поле типовой строки ещё в документе — значит чтение уже пошло, но данные ещё не применены. Ответ properties придержан 800 мс именно затем, чтобы этот признак жил, а не был мгновенным. Затем в показанное поле ставится текст «окно» БЕЗ blur. Когда отложенное чтение завершается, пришедший набор «срочно, смена» меняет строку, и reconcileKeyed её пересобирает: повторный flush перед сверкой обязан сохранить «окно» (window-server содержит «окно»; локальный набор при этом оптимистично перезаписывает внешнюю правку — «срочно, окно»). На дофиксовой сборке 09ccd6e7 flush есть только в начале reload, до ввода: строка пересобирается, поле с «окно» снимается без blur, значение гибнет (window-server = «срочно, смена», без «окно»). Запись шага window-set-value отправляется БЕЗ ожидания ответа: ответ POST тоже придержан 800 мс, и сценарий обязан увидеть окно перечитывания до его доставки — иначе на дофиксовой сборке признак старта истекает раньше проверки. Результат записи проверяет window-server.",
   "timeout": 300000,
   "steps": [
     {
@@ -67,8 +67,13 @@
     },
     {
       "name": "window-set-value",
-      "probe": "(async () => { const b=window.__repro; const before=document.querySelector('.properties-type-body .value-chips-input'); window.__windowField=before; await window.etn.properties.set('{{networkId}}','thought',b.P1,'Теги','срочно, смена',null); return before !== null ? 'ok' : 'no-input'; })()",
+      "probe": "(async () => { const b=window.__repro; const before=document.querySelector('.properties-type-body .value-chips-input'); window.__windowField=before; window.__windowWrite=window.etn.properties.set('{{networkId}}','thought',b.P1,'Теги','срочно, смена',null).then(()=>'ok',(err)=>{ window.__windowWriteError=String(err); return 'fail'; }); return before !== null ? 'ok' : 'no-input'; })()",
       "expect": "ok"
+    },
+    {
+      "name": "reload-started",
+      "waitFor": "(() => { const body=document.querySelector('.properties-outside-body'); if (body === null) return false; const reading=[...body.querySelectorAll('.prop-wrap span.muted')].some((n)=>n.textContent.trim() === 'Загрузка…'); const field=window.__windowField; return reading && field !== null && field.isConnected; })()",
+      "timeout": 5000
     },
     {
       "name": "window-mark-set",
@@ -92,7 +97,7 @@
     },
     {
       "name": "window-server",
-      "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()",
+      "probe": "(async () => { if (window.__windowWrite) { const w=await window.__windowWrite; if (w !== 'ok') return 'write-fail' + (window.__windowWriteError ? ': '+window.__windowWriteError : ''); } await new Promise((r)=>setTimeout(r,600)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()",
       "expect": "срочно, окно"
     }
   ]
