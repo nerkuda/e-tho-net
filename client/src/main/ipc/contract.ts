@@ -12,6 +12,12 @@
  */
 
 import type { DraftStatus } from '../db/local-db.js';
+// Вердикт проверки совместимости — сущность 89aad200 (задача 12fd5b0e).
+// Тип объявлен в main-модуле проверки и реэкспортируется здесь как часть
+// IPC-контракта; renderer видит только тип, не код main-процесса.
+import type { CompatibilityResult } from '../compatibility.js';
+
+export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState } from '../compatibility.js';
 
 import type {
   ApiKey,
@@ -453,6 +459,19 @@ export interface EtnApi {
     removeProfile(profileId: string): Promise<void>;
     disconnect(): Promise<void>;
     getStatus(): Promise<ServerStatus>;
+    /**
+     * Текущий вердикт проверки совместимости клиента с сервером (сущность
+     * 89aad200, задача 12fd5b0e): пять статусов, причина, версии, диапазоны,
+     * ссылка на релиз и флаг подтверждённой роли. `null` — проверка ещё не
+     * выполнялась или пользователь отключился.
+     */
+    getCompatibility(): Promise<CompatibilityResult | null>;
+    /**
+     * Подписка на изменение вердикта (канал `compatibility:status`):
+     * подключение/переподключение, `426` в середине сессии, отключение
+     * (`null`). Возвращает функцию отписки.
+     */
+    onCompatibilityChange(cb: (result: CompatibilityResult | null) => void): () => void;
   };
   networks: {
     list(): Promise<NetworkListItem[]>;

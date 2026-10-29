@@ -34,7 +34,7 @@ import {
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
-import type { TabDto } from '../main/ipc/contract.js';
+import type { CompatibilityResult, TabDto } from '../main/ipc/contract.js';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
@@ -215,6 +215,14 @@ export interface AppState {
    * `useTick`/`memo` keys without subscribing to the whole store.
    */
   lockCacheTick: number;
+  /**
+   * Вердикт проверки совместимости клиента с сервером (сущность 89aad200,
+   * задача 12fd5b0e). `null` — проверки ещё не было или пользователь
+   * отключился. Блокирующие статусы (`client-outdated`/`server-outdated`)
+   * показываются диалогом 8623b9ff, `recommended-update`/`unknown` — баннером
+   * ed068706; сами элементы — задачи 0afec967/b57910b5, здесь только состояние.
+   */
+  compatibility: CompatibilityResult | null;
 }
 
 /** Initial snapshot. */
@@ -277,6 +285,7 @@ const initial: AppState = {
   layerOverrides: { thought_ids: [], link_ids: [] },
   lockCache: {},
   lockCacheTick: 0,
+  compatibility: null,
 };
 
 /**

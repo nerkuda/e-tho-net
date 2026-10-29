@@ -13,12 +13,13 @@
 
 import { randomUUID } from 'node:crypto';
 import { ipcMain, type BrowserWindow } from 'electron';
-import { UI_STATE_KEY, type CurrentUser } from '@etn/shared';
+import { NOT_CONNECTED_ERROR_TEXT, UI_STATE_KEY, type CurrentUser, type VersionResponse } from '@etn/shared';
 
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog, truncateForLog } from '../log/client-log.js';
 import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
+import type { RealtimeStatus } from '../net/ws-client.js';
 import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
 import {
@@ -30,6 +31,12 @@ import {
 } from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
 import { ConnectionLifecycle } from './connection-lifecycle.js';
+import {
+  CompatibilityGate,
+  compatibilityRefusal,
+  isReconnectTransition,
+  type CompatibilityResult,
+} from '../compatibility.js';
 import { toIpcErrorEnvelope } from './contract.js';
 import type { IpcCallContext, IpcInvokePayload } from './contract.js';
 
@@ -101,6 +108,35 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     }
   };
 
+  /**
+   * Проверка совместимости (задача 12fd5b0e, требование 4d3be6ca): main
+   * получает `/version` ДО первой авторизованной операции, повторяет проверку
+   * на переподключении и по `426` в середине сессии разрывает соединение и
+   * публикует блокирующий вердикт. Renderer получает его каналом
+   * `compatibility:status` и запросом `server.getCompatibility`.
+   */
+  const compatibility = new CompatibilityGate({
+    clientVersion: opts.clientVersion,
+    publish: (result: CompatibilityResult | null) => broadcast('compatibility:status', result),
+    // Разрыв «в середине сессии»: пул и REST-клиент гасятся сразу. Вердикт при
+    // этом НЕ сбрасывается — reset делает только явное отключение пользователем.
+    teardown: () => conn.disconnect(),
+    log: (level, message, data) => getClientLog()?.[level]('compat', message, data),
+  });
+  /**
+   * Последний известный realtime-статус каждой сети: по переходу в `connected`
+   * после обрыва повторяется проверка совместимости (610169a5, 4d3be6ca).
+   */
+  const lastRealtimeStatus = new Map<string, RealtimeStatus>();
+  /** Текущий REST-клиент для повторной проверки (`/version` — публичный). */
+  const fetchVersion = (): Promise<VersionResponse> => {
+    const rest = conn.getRest();
+    if (rest === null) {
+      return Promise.reject(new Error(NOT_CONNECTED_ERROR_TEXT));
+    }
+    return rest.getVersion();
+  };
+
   const keyResolver = (p: ServerProfileRow): (() => Promise<string>) => {
     return async () => decryptApiKey(p.api_key_encrypted ?? Buffer.alloc(0));
   };
@@ -124,6 +160,10 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         const ids = p2.activeNetworkIds();
         return ids.length > 0 && ids.every((id) => p2.getStatus(id) !== 'connected');
       },
+      // 426 в середине сессии (DoD задачи 12fd5b0e): сервер отклонил
+      // изменяющий запрос клиента вне диапазона — немедленно разрываем
+      // соединение и публикуем блокирующий `client-outdated`.
+      onClientVersionUnsupported: (details) => compatibility.onVersionRejected(details),
     });
     // key check before anything else; only a successful check persists the
     // profile as active (defect «клиент не запоминает сервер»: previously
@@ -131,7 +171,27 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // already-saved profile via `server.connect` left the DB flag on
     // whichever profile was added last, and the next launch reconnected to
     // the wrong server).
-    const me = await connectAndActivate(opts.localDb, profileId, () => restClient.getMe());
+    //
+    // Сначала — проверка совместимости (задача 12fd5b0e, требование
+    // 4d3be6ca): `/version` уходит ДО `GET /me` и любых данных; блокирующий
+    // вердикт или недоступный `/version` (check-failed) не пропускают ни
+    // одного авторизованного запроса.
+    const me = await connectAndActivate(
+      opts.localDb,
+      profileId,
+      () => restClient.getMe(),
+      async () => {
+        const outcome = await compatibility.check(() => restClient.getVersion());
+        if (outcome.ok) return;
+        // check-failed: отказ подключения с ЧЕСТНОЙ причиной недоступного
+        // `/version` (сценарий d2c80aa4), а не «несовместимая версия».
+        if (outcome.error !== undefined) throw outcome.error;
+        throw compatibilityRefusal(outcome.result);
+      },
+    );
+    // `GET /me` подтвердил роль в этой сессии (K3): вердикт `server-outdated`
+    // в середине сессии различит администратора и остальных.
+    compatibility.markRoleConfirmed();
 
     const rtPool = new TabRealtimePool({
       profile: p,
@@ -189,6 +249,15 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
           // the user does not wait for the 30 s × 3 REST retry cycle.
           restClient.setLinkDown(networkId, true);
         }
+        // Переподключение (в т.ч. после обслуживания 1012) — проверка
+        // совместимости повторяется (требование 4d3be6ca). Первый коннект
+        // уже проверен до `GET /me`; блокирующий вердикт здесь разрывает
+        // соединение немедленно (внутри gate).
+        const previous = lastRealtimeStatus.get(networkId) ?? null;
+        lastRealtimeStatus.set(networkId, status);
+        if (isReconnectTransition(previous, status)) {
+          void compatibility.recheck(fetchVersion);
+        }
       },
     });
 
@@ -197,6 +266,9 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // tears down the previous pool: an open request already in flight against
     // the OLD server must not publish into this profile (defect 50fe8807).
     conn.activate({ rest: restClient, pool: rtPool, profile: p, currentUser: me });
+    // Новое соединение — новый отсчёт статусов: переход из `offline` прошлого
+    // профиля не должен выглядеть как переподключение этого.
+    lastRealtimeStatus.clear();
 
     // Q2: re-acquire realtime sockets for every previously open tab so non-
     // active tabs still receive events (dirty-marker «*» requirement).
@@ -236,6 +308,10 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   };
 
   const disconnect = (): void => {
+    // Явное отключение пользователем: вердикта больше нет (баннер hidden,
+    // блокировки сняты). Разрыв по 426 сюда НЕ идёт — там вердикт сохраняется.
+    compatibility.reset();
+    lastRealtimeStatus.clear();
     conn.disconnect();
   };
 
@@ -247,6 +323,8 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
    */
   const removeProfile = async (profileId: string): Promise<void> => {
     if (conn.getProfile()?.id === profileId) {
+      compatibility.reset();
+      lastRealtimeStatus.clear();
       conn.disconnect();
     }
     opts.localDb.deleteProfile(profileId);
@@ -274,6 +352,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     addProfile,
     removeProfile,
     disconnect,
+    getCompatibility: () => compatibility.getResult(),
     getCurrentNetworkId: () => conn.getCurrentNetworkId(),
     openNetwork: (networkId) => conn.openNetwork(networkId),
     broadcastRealtimeEvent: (event) => broadcast('realtime:event', event),

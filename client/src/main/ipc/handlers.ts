@@ -22,6 +22,7 @@ import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
 import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import type { CompatibilityResult } from '../compatibility.js';
 import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
@@ -51,6 +52,12 @@ export interface HandlerDeps {
   removeProfile: (profileId: string) => Promise<void>;
   /** Drops clients and clears the active network. */
   disconnect: () => void;
+  /**
+   * Текущий вердикт проверки совместимости (сущность 89aad200, задача
+   * 12fd5b0e) или `null`, если проверка ещё не выполнялась/пользователь
+   * отключился. Владелец состояния — `CompatibilityGate` в `register.ts`.
+   */
+  getCompatibility: () => CompatibilityResult | null;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
   getCurrentNetworkId: () => string | null;
   /** Opens a network: persists L4 state, connects realtime, returns meta. */
@@ -169,6 +176,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       // network's status for legacy callers.
       return poolStatusFor(pool, networkId);
     }),
+  );
+  // Вердикт проверки совместимости (сущность 89aad200, задача 12fd5b0e):
+  // renderer читает его при старте и слушает `compatibility:status`.
+  handlers.set(
+    'server.getCompatibility',
+    bind(() => deps.getCompatibility()),
   );
 
   // Per-network status snapshot (defect de34b35b): the renderer pulls it once

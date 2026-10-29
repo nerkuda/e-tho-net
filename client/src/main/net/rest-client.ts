@@ -68,6 +68,7 @@ import {
   type SystemLoggingStatus,
   type ThoughtTypeViewsResult,
   type TypeOwnerType,
+  type ClientVersionErrorDetails,
 } from '@etn/shared';
 
 import { getClientLog } from '../log/client-log.js';
@@ -212,6 +213,16 @@ export interface RestClientOptions {
    * `register.ts`: at least one known network and none `connected`.
    */
   isServerDown?: () => boolean;
+  /**
+   * Вызывается при отказе `426 CLIENT_VERSION_UNSUPPORTED` (задача 12fd5b0e,
+   * требование 271e3327): сервер отклонил изменяющий запрос desktop-клиента
+   * вне своего диапазона. Main по этому сигналу немедленно рвёт соединение и
+   * публикует блокирующее состояние — без ожидания перезапуска. `details` —
+   * тело отказа сервера; `null`, если ответ пришёл в неканонической форме.
+   *
+   * Колбэк синхронный и не должен бросать: он вызывается из разбора ответа.
+   */
+  onClientVersionUnsupported?: (details: ClientVersionErrorDetails | null) => void;
 }
 
 /** Extra per-call options accepted by mutating endpoints. */
@@ -273,6 +284,7 @@ export class RestClient {
   private readonly fetchImpl: typeof fetch;
   private readonly random: () => number;
   private readonly isServerDown: () => boolean;
+  private readonly onClientVersionUnsupported: (details: ClientVersionErrorDetails | null) => void;
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
@@ -336,6 +348,7 @@ export class RestClient {
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.random = opts.random ?? Math.random;
     this.isServerDown = opts.isServerDown ?? (() => false);
+    this.onClientVersionUnsupported = opts.onClientVersionUnsupported ?? (() => undefined);
   }
 
   /**
@@ -745,11 +758,14 @@ export class RestClient {
       const body = payload as Partial<{ error: EtnErrorBody }> | undefined;
       const err = body?.error;
       if (err) {
+        this.notifyVersionRejection(err.code, err.details);
         throw new EtnError(err.code, err.message, err.details, err.request_id);
       }
       // Server returned an error in a non-canonical shape.
+      const code = mapHttpStatus(res.status);
+      this.notifyVersionRejection(code, undefined);
       throw new EtnError(
-        mapHttpStatus(res.status),
+        code,
         `HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
       );
     }
@@ -763,6 +779,17 @@ export class RestClient {
 
     // Unexpected success shape (e.g. plain primitive) — return as-is.
     return { data: payload as T, meta: undefined };
+  }
+
+  /**
+   * Сообщает main о `426 CLIENT_VERSION_UNSUPPORTED` (задача 12fd5b0e): сервер
+   * отклонил изменяющий запрос клиента вне диапазона. Признак — канонический
+   * код в конверте ошибки либо HTTP 426 в неканоническом ответе; второго
+   * диапазона клиент не изобретает.
+   */
+  private notifyVersionRejection(code: string, details: unknown): void {
+    if (code !== 'CLIENT_VERSION_UNSUPPORTED') return;
+    this.onClientVersionUnsupported(versionDetailsOrNull(details));
   }
 
   /**
@@ -4170,6 +4197,18 @@ function mapHttpStatus(status: number): EtnErrorCode {
 /** Compact one-line error rendering for journal fields. */
 function errTextShort(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * `details` отказа 426 → типизированный вид; всё, что не похоже на
+ * {@link ClientVersionErrorDetails} (или отсутствует), — `null`: main построит
+ * `client-outdated` без версий сервера, честно оставив поля пустыми.
+ */
+function versionDetailsOrNull(details: unknown): ClientVersionErrorDetails | null {
+  if (typeof details !== 'object' || details === null) return null;
+  const d = details as Record<string, unknown>;
+  if (typeof d['reason'] !== 'string') return null;
+  return details as ClientVersionErrorDetails;
 }
 
 /** Retry reason classification for the journal (timeout / network / 5xx). */

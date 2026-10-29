@@ -12,7 +12,12 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { DeepLinkPayload, EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
+import type {
+  CompatibilityResult,
+  DeepLinkPayload,
+  EtnBridgeApi,
+  IpcInvokePayload,
+} from '../main/ipc/contract.js';
 import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
@@ -55,6 +60,17 @@ function buildApi(): EtnBridgeApi {
       removeProfile: (profileId) => invoke('server.removeProfile', profileId),
       disconnect: () => invoke('server.disconnect'),
       getStatus: () => invoke('server.getStatus'),
+      // Вердикт проверки совместимости (сущность 89aad200, задача 12fd5b0e):
+      // чтение при старте + подписка на изменения (подключение,
+      // переподключение, 426 в середине сессии, отключение → null).
+      getCompatibility: () => invoke('server.getCompatibility'),
+      onCompatibilityChange(cb) {
+        const listener = (_event: unknown, payload: unknown): void => {
+          cb(payload as CompatibilityResult | null);
+        };
+        ipcRenderer.on('compatibility:status', listener);
+        return () => ipcRenderer.removeListener('compatibility:status', listener);
+      },
     },
     networks: {
       list: () => invoke('networks.list'),

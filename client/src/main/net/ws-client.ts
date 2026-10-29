@@ -29,6 +29,11 @@
  *  - close `1001` + reason `server shutdown` raises status detail
  *    `server-restart` («Сервер перезапускается…») and reconnects immediately;
  *    `1001` + `pong timeout` reconnects normally (the server is alive);
+ *  - Close `1012` (сервер на обслуживании, сценарий 610169a5) — отдельный
+ *    режим: подробность `server-maintenance`, переподключение шагом 1 с ±0,5 с,
+ *    не более 12 попыток; после — статус `offline` и остановка цикла (ручной
+ *    повтор — `forceReconnect`). Сетевой обрыв без кадра 1012 идёт прежней
+ *    логикой переподключения;
  *  - `resume.stale` (event-log window exceeded) is re-emitted as `stale` so the UI
  *    can trigger a full re-focus (04-realtime.md §6).
  *
@@ -86,15 +91,38 @@ const HANDSHAKE_TIMEOUT_MS = 5_000;
  */
 const RECV_IDLE_TIMEOUT_MS = 100_000;
 
+/**
+ * Код закрытия «сервер на обслуживании» (сценарий 610169a5, задача 12fd5b0e).
+ *
+ * Живёт локально, а не в `shared`: расширение `REALTIME_CLOSE_CODES` — зона
+ * серверной части обслуживания (задача 479e37ed), клиент лишь распознаёт код,
+ * чтобы не перепутать обслуживание с сетевой аварией.
+ */
+const MAINTENANCE_CLOSE_CODE = 1012;
+
+/** Шаг переподключения при обслуживании сервера, мс (610169a5). */
+const MAINTENANCE_RECONNECT_DELAY_MS = 1_000;
+/** Разброс шага переподключения при обслуживании, ± мс (610169a5). */
+const MAINTENANCE_RECONNECT_JITTER_MS = 500;
+/** Предел попыток восстановиться после 1012 (610169a5: около 15 с). */
+const MAINTENANCE_RECONNECT_LIMIT = 12;
+/**
+ * Сколько соединение должно прожить после открытия, чтобы считать обслуживание
+ * завершённым и обнулить счётчик попыток: сервер может принять сокет и снова
+ * закрыть его кодом 1012, и такой цикл не должен быть бесконечным.
+ */
+const MAINTENANCE_STABLE_MS = 10_000;
+
 /** Connection status surfaced to the UI (07-client-electron.md §5.1; de34b35b). */
 export type RealtimeStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspect';
 
 /**
  * Extra status qualifier shown to the user next to the status text (de34b35b).
  * A detail is not a separate status: `reconnecting` + `server-restart` renders
- * as «Сервер перезапускается…».
+ * as «Сервер перезапускается…», `server-maintenance` — «Сервер обновляется…»
+ * (текст показывает задача обслуживания 479e37ed; клиент передаёт признак).
  */
-export type RealtimeStatusDetail = 'server-restart';
+export type RealtimeStatusDetail = 'server-restart' | 'server-maintenance';
 
 /** Trigger of a liveness probe (de34b35b). */
 export type LivenessProbeTrigger = 'silence' | 'action';
@@ -166,6 +194,14 @@ export interface RealtimeClientOptions {
   offlineAfterMs?: number;
   /** Duration of the fast 0.5–1 s reconnect window, ms (de34b35b). */
   fastReconnectWindowMs?: number;
+  /** Шаг переподключения при обслуживании сервера (1012), мс (610169a5). */
+  maintenanceReconnectDelayMs?: number;
+  /** Разброс шага при обслуживании, ± мс (610169a5). */
+  maintenanceReconnectJitterMs?: number;
+  /** Предел попыток при обслуживании (610169a5). */
+  maintenanceReconnectLimit?: number;
+  /** Время стабильного соединения, обнуляющее счётчик обслуживания, мс. */
+  maintenanceStableMs?: number;
 }
 
 /**
@@ -196,6 +232,10 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private readonly handshakeTimeoutMs: number;
   private readonly offlineAfterMs: number;
   private readonly fastReconnectWindowMs: number;
+  private readonly maintenanceReconnectDelayMs: number;
+  private readonly maintenanceReconnectJitterMs: number;
+  private readonly maintenanceReconnectLimit: number;
+  private readonly maintenanceStableMs: number;
 
   /** Active socket, or `null` when closed. */
   private socket: WebSocket | null = null;
@@ -225,6 +265,15 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private terminalClosed = false;
   /** Wall-clock time of the last inbound frame of any kind (de34b35b). */
   private lastFrameAt = 0;
+  /**
+   * Сервер на обслуживании (close 1012, сценарий 610169a5): переподключение
+   * идёт шагом 1 с ±0,5 с с ограничением попыток, а не обычной лестницей.
+   */
+  private maintenanceMode = false;
+  /** Номер попытки восстановления в режиме обслуживания. */
+  private maintenanceAttempts = 0;
+  /** Таймер «соединение после обслуживания прожило достаточно» (обнуление). */
+  private maintenanceStableTimer: NodeJS.Timeout | null = null;
 
   public constructor(opts: RealtimeClientOptions) {
     super();
@@ -244,6 +293,13 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.handshakeTimeoutMs = opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     this.offlineAfterMs = opts.offlineAfterMs ?? OFFLINE_AFTER_MS;
     this.fastReconnectWindowMs = opts.fastReconnectWindowMs ?? FAST_RECONNECT_WINDOW_MS;
+    this.maintenanceReconnectDelayMs =
+      opts.maintenanceReconnectDelayMs ?? MAINTENANCE_RECONNECT_DELAY_MS;
+    this.maintenanceReconnectJitterMs =
+      opts.maintenanceReconnectJitterMs ?? MAINTENANCE_RECONNECT_JITTER_MS;
+    this.maintenanceReconnectLimit =
+      opts.maintenanceReconnectLimit ?? MAINTENANCE_RECONNECT_LIMIT;
+    this.maintenanceStableMs = opts.maintenanceStableMs ?? MAINTENANCE_STABLE_MS;
     this.lastFrameAt = this.now();
   }
 
@@ -277,6 +333,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.reconnectAttempts = 0;
     this.slowReconnectAttempts = 0;
     this.statusDetail = null;
+    this.resetMaintenance();
     this.openSocket(networkId);
   }
 
@@ -291,6 +348,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.clearIdleWatchdog();
     this.clearSilenceTimer();
     this.clearProbeTimer();
+    this.resetMaintenance();
     const socket = this.socket;
     this.socket = null;
     if (socket !== null) {
@@ -336,6 +394,9 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.clearIdleWatchdog();
     this.clearSilenceTimer();
     this.clearProbeTimer();
+    // Явный триггер (resume/online/«Повторить» после обслуживания) даёт новый
+    // бюджет попыток и снимает режим обслуживания (610169a5).
+    this.resetMaintenance();
     this.reconnectAttempts = 0;
     this.slowReconnectAttempts = 0;
     this.reconnectStartedAt = this.now();
@@ -485,6 +546,10 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.reconnectAttempts = 0;
     this.slowReconnectAttempts = 0;
     this.reconnectStartedAt = null;
+    // Обслуживание считается завершённым открытием WebSocket (610169a5):
+    // сообщение снимается сразу, а бюджет попыток обнуляется, только если
+    // соединение продержится (сервер может принять сокет и снова прислать 1012).
+    if (this.maintenanceMode) this.armMaintenanceStableTimer();
     this.setStatus('connected');
     // Start the liveness clock: the first server ping is expected within 30 s.
     this.noteFrame();
@@ -597,6 +662,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.clearIdleWatchdog();
     this.clearSilenceTimer();
     this.clearProbeTimer();
+    this.clearMaintenanceStableTimer();
     if (this.manualClose) return; // user asked to leave; do not reconnect.
 
     if (code === REALTIME_CLOSE_CODES.UNAUTHORIZED) {
@@ -623,6 +689,24 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
       this.reconnectAttempts = 0;
       this.slowReconnectAttempts = 0;
       this.scheduleReconnect(0);
+      return;
+    }
+    // Обслуживание сервера (610169a5): own step 1 s ±0.5 s with a 12-attempt
+    // budget. A 1012 always means «обслуживание», not «сеть»; any close while
+    // the maintenance episode is still open — including a plain network error
+    // of a retry — stays inside that budget (no infinite loop).
+    if (code === MAINTENANCE_CLOSE_CODE) {
+      if (!this.maintenanceMode) {
+        this.maintenanceMode = true;
+        this.maintenanceAttempts = 0;
+      }
+      this.clearMaintenanceStableTimer();
+      this.scheduleMaintenanceReconnect();
+      return;
+    }
+    if (this.maintenanceMode) {
+      this.clearMaintenanceStableTimer();
+      this.scheduleMaintenanceReconnect();
       return;
     }
     // 1001 + `pong timeout` (the server is alive) and every unexpected close
@@ -684,6 +768,82 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     }, delay);
     // Never hold the process (or the test runner) alive on its own.
     this.reconnectTimer.unref?.();
+  }
+
+  /**
+   * Переподключение в режиме обслуживания сервера (сценарий 610169a5):
+   * шаг 1 с ±0,5 с, не более `maintenanceReconnectLimit` попыток. Исчерпав
+   * бюджет, клиент останавливается в понятном состоянии `offline` с
+   * подробностью `server-maintenance` (ручной повтор — `forceReconnect`),
+   * а не крутит бесконечный цикл.
+   */
+  private scheduleMaintenanceReconnect(): void {
+    if (this.maintenanceAttempts >= this.maintenanceReconnectLimit) {
+      this.maintenanceMode = false;
+      this.clearReconnectTimer();
+      getClientLog()?.warn('ws', 'maintenance reconnect limit reached', {
+        network: this.getNetworkId() ?? '',
+        attempts: this.maintenanceAttempts,
+      });
+      this.setStatus('offline', 'server-maintenance');
+      return;
+    }
+    this.maintenanceAttempts += 1;
+    this.setStatus('reconnecting', 'server-maintenance');
+    const jitter = (this.random() * 2 - 1) * this.maintenanceReconnectJitterMs;
+    const delay = Math.max(0, Math.round(this.maintenanceReconnectDelayMs + jitter));
+    getClientLog()?.info('ws', 'maintenance reconnect scheduled', {
+      network: this.getNetworkId() ?? '',
+      attempt: this.maintenanceAttempts,
+      backoff_ms: delay,
+    });
+    this.clearReconnectTimer();
+    this.reconnectTimer = this.setTimeoutFn(() => {
+      this.reconnectTimer = null;
+      const networkId = this.getNetworkId();
+      if (networkId === null || this.manualClose) {
+        this.setStatus('idle');
+        return;
+      }
+      if (this.socket === null) {
+        void this.openSocket(networkId);
+      }
+    }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  /**
+   * Сбрасывает эпизод обслуживания: режим, счётчик попыток и таймер
+   * стабильности. Вызывается явными триггерами (`connect`/`disconnect`/
+   * `forceReconnect`) и открытием, продержавшимся `maintenanceStableMs`.
+   */
+  private resetMaintenance(): void {
+    this.maintenanceMode = false;
+    this.maintenanceAttempts = 0;
+    this.clearMaintenanceStableTimer();
+  }
+
+  /**
+   * Взводит таймер стабильности после открытия в режиме обслуживания: если
+   * соединение проживёт `maintenanceStableMs`, эпизод считается завершённым и
+   * бюджет попыток обнуляется. Закрытие раньше срока сохраняет бюджет —
+   * сервер, принимающий сокет и снова присылающий 1012, не зациклит клиента.
+   */
+  private armMaintenanceStableTimer(): void {
+    this.clearMaintenanceStableTimer();
+    this.maintenanceStableTimer = this.setTimeoutFn(() => {
+      this.maintenanceStableTimer = null;
+      this.resetMaintenance();
+    }, this.maintenanceStableMs);
+    this.maintenanceStableTimer.unref?.();
+  }
+
+  /** Отменяет таймер стабильности обслуживания. */
+  private clearMaintenanceStableTimer(): void {
+    if (this.maintenanceStableTimer !== null) {
+      this.clearTimeoutFn(this.maintenanceStableTimer);
+      this.maintenanceStableTimer = null;
+    }
   }
 
   /** Sends a raw string frame, guarded against a dead socket. */

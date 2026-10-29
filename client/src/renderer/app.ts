@@ -833,6 +833,24 @@ export function takeBootConnectFailure(): string | null {
 }
 
 /**
+ * Вердикт проверки совместимости в store (сущность 89aad200, задача 12fd5b0e).
+ *
+ * main публикует его каналом `compatibility:status` при подключении,
+ * переподключении, `426` в середине сессии и отключении (`null`); чтение при
+ * старте закрывает разрыв «проверка уже была — подписки ещё нет» (перезагрузка
+ * окна). Показ блокирующего диалога и баннера — задачи 0afec967/b57910b5;
+ * здесь только состояние, из которого они рисуются.
+ */
+export async function initCompatibilityState(): Promise<void> {
+  etn.server.onCompatibilityChange((result) => store.update({ compatibility: result }));
+  try {
+    store.update({ compatibility: await etn.server.getCompatibility() });
+  } catch {
+    // Текущий вердикт — best-effort: подписка доставит следующие изменения.
+  }
+}
+
+/**
  * Boot: initialise realtime plumbing, then route to onboarding (no active
  * profile) or to the last-active tab (Q-bugfix) — when the user has
  * previously opened tabs, drop them straight into the workspace; otherwise
@@ -860,6 +878,9 @@ export async function boot(): Promise<void> {
   // показывала устаревший текст.
   initTransclusionSourceCache();
   initRealtime();
+  // Вердикт совместимости — до первого `server.connect`: проверка в main
+  // публикует его раньше, чем renderer получит `me` (задача 12fd5b0e).
+  void initCompatibilityState();
   setRealtimeEffects({
     // Full visible resync, not just a focus refresh (defect de34b35b):
     // `resume.stale` means the event window was exceeded — the editor and the
