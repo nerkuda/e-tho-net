@@ -1,0 +1,115 @@
+# installer/ — установщик ETN для Windows
+
+Комбинированный установщик (`etn.iss`, Inno Setup 6) ставит сервер ETN
+службой Windows и/или клиент. Каталоги `payload/`, `.cache/` — артефакты
+сборки и в репозитории не версионируются.
+
+```
+installer/
+├── etn.iss                 сценарий Inno Setup (каркас — задача a1211915)
+├── build.ps1               сборка release/ETN-Setup-<версия>.exe
+├── fetch-payload.ps1       подготовка payload (эта задача, 8b1f5980)
+├── service/
+│   └── etn-service.xml     шаблон службы WinSW (плейсхолдеры {{...}})
+├── third-party/            лицензии Node.js и WinSW, NOTICE.md
+├── tests/                  прогон silent-контракта, фикстуры payload
+├── payload/                (gitignored) готовый payload для etn.iss
+└── .cache/                 (gitignored) скачанные архивы и staging сборки
+```
+
+## Порядок сборки
+
+```powershell
+nvm use 22
+npm install                                   # один раз после checkout
+pwsh -File installer/fetch-payload.ps1        # Node, WinSW, серверная поставка + проверки
+pwsh -File installer/build.ps1                # release/ETN-Setup-<версия>.exe
+```
+
+`fetch-payload.ps1` идемпотентен: скачанные Node и WinSW кэшируются в
+`installer/.cache` и сверяются по SHA-256 при каждом запуске, каталоги
+`payload/node`, `payload/service`, `payload/server` пересоздаются.
+`payload/client/` скрипт не трогает — его готовит задача 98ad5eec.
+
+Проверки, которые выполняет скрипт (без установки в систему):
+
+1. `node.exe -v` из поставки — ровно закреплённая версия линии 22;
+2. `require('better-sqlite3')` и реальный SQL-запрос под поставленным
+   `node.exe` — нативный модуль собран под ABI Node 22;
+3. ESM-импорт `@etn/shared` и `@etn/markdown` из `server\node_modules`;
+4. наличие миграций `server\migrations\system` и `network`;
+5. smoke-test (если не указан `-SkipSmokeTest`): `etn init` на временном
+   `ETN_DATA_DIR`, запуск `node.exe server\dist\index.js` на свободном порту,
+   `GET /api/v1/health` → 200 со `status=ok` и версией из
+   `server\package.json`, остановка процесса.
+
+## Раскладка payload
+
+`etn.iss` при компиляции проверяет наличие ключевых файлов и пропускает
+секции `[Files]`, если каталога нет (видны предупреждения компилятора).
+Контракт раскладки:
+
+| payload | куда ставится | что это |
+|---|---|---|
+| `node\node.exe` | `{app}\node\node.exe` | Node 22 LTS из официального win-x64 zip |
+| `service\etn-service.exe` | `{app}\service\etn-service.exe` | WinSW 2.12.0 (x64, self-contained) |
+| `service\etn-service.xml` | `{app}\service\etn-service.xml` | шаблон службы (см. ниже) |
+| `server\package.json` | `{app}\server\package.json` | манифест сервера; версия читается установщиком |
+| `server\dist\` | `{app}\server\dist\` | сборка `@etn/server` (`index.js`, `cli.js`, …) |
+| `server\migrations\` | `{app}\server\migrations\` | миграции `system/` и `network/` |
+| `server\node_modules\` | `{app}\server\node_modules\` | prod-зависимости + собранные `@etn/shared`, `@etn/markdown` |
+| `server-manifest.json` | (не ставится) | что именно попало в поставку: версии, хеши, resolved-зависимости |
+
+Внешний Node на машине не нужен и не проверяется (ADR `01c38213`);
+`better-sqlite3` жёстко 11.1.2 и собран под ABI Node 22.
+
+## Служба Windows и плейсхолдеры
+
+`service/etn-service.xml` — шаблон конфигурации WinSW (ADR `db60302a`).
+WinSW читает файл `<имя exe>.xml` из своего каталога, поэтому установленная
+копия лежит рядом с `etn-service.exe`: `{app}\service\etn-service.xml`.
+
+Три плейсхолдера **подставляет установщик** (`installer/etn.iss`) в момент
+установки или обновления сервера — зона задач `9b310991` (каталог данных,
+порт) и `bb063ac3` (остановка/запуск службы, health-check). Пока
+плейсхолдеры не заменены, службу регистрировать нельзя: литерал `{{PORT}}`
+попадёт в окружение сервера, и он не стартует.
+
+| плейсхолдер | значение по умолчанию установки | куда попадает |
+|---|---|---|
+| `{{DATA_DIR}}` | `%ProgramData%\ETN` (ADR `144bcdb0`) | env `ETN_DATA_DIR`, каталог журнала службы |
+| `{{PORT}}` | 4321 | env `ETN_PORT` |
+| `{{HOST}}` | адрес привязки HTTP API (`0.0.0.0`) | env `ETN_HOST` |
+
+Пути к программе в шаблоне заданы через `%BASE%` — переменную самого WinSW
+(каталог, где лежит `etn-service.exe`), поэтому шаблон не зависит от
+каталога установки и переживает обновление без переписывания путей.
+
+Точка запуска — `node.exe server\dist\index.js`, **не** `etn`: `etn` без
+команды печатает справку и возвращает 1, служба ушла бы в цикл
+перезапусков.
+
+Журнал службы (stdout/stderr сервера) — `{{DATA_DIR}}\logs\service`,
+файлы `etn-service.out.log` и `etn-service.err.log`, ротация по размеру:
+10 МБ, хранится 8 файлов. WinSW сам каталог не создаёт — его обязан создать
+установщик до старта службы (задача `9b310991`). Файловый журнал приложения
+пишется отдельно и с этими файлами не пересекается.
+
+Аварийное поведение: `<onfailure>` перезапускает службу через 10/30/60 с,
+счётчик падений сбрасывается после часа работы; `<stoptimeout>30sec</stoptimeout>`
+даёт серверу время на штатную остановку (чекпойнт WAL) до принудительного
+снятия процесса. Служба работает под `LocalSystem` — у системной учётной
+записи есть доступ к `%ProgramData%\ETN`.
+
+Остановку и запуск службы выполняет установщик командами WinSW
+(`etn-service.exe stop|start`), а не `sc` — задача `bb063ac3`. Режим
+«обычное приложение» (без службы) — тот же `node.exe server\dist\index.js`
+с `ETN_DATA_DIR`, `ETN_PORT`, `ETN_HOST`; его запускает ярлык, отдельного
+helper-процесса нет.
+
+## Лицензии
+
+`third-party/` — `node-LICENSE.txt`, `winsw-LICENSE.txt` и `NOTICE.md` с
+версиями, источниками и SHA-256. Версии и хеши закреплены в
+`fetch-payload.ps1`; при обновлении меняются одним изменением вместе с
+`NOTICE.md`.

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  installer/service/etn-service.xml — шаблон конфигурации службы Windows ETN
+  для WinSW 2.12.0 (ADR db60302a; задача 8b1f5980).
+
+  Назначение: описать службу `ETN`, которая запускает сервер из поставки —
+  `{app}\node\node.exe {app}\server\dist\index.js`. Точка запуска именно
+  `dist/index.js`, а не `etn`: `etn` без команды печатает справку и
+  возвращает 1, служба ушла бы в цикл перезапусков.
+
+  Плейсхолдеры подставляет установщик (installer/etn.iss) в момент установки
+  или обновления — задачи 9b310991 (каталог данных, порт) и bb063ac3
+  (остановка/запуск, health-check). Пока в шаблоне остались `{{...}}`,
+  служба не должна регистрироваться: значение попало бы в окружение сервера
+  буквально, и сервер не стартовал бы.
+
+    {{DATA_DIR}} — абсолютный каталог данных, %ProgramData%\ETN (ADR 144bcdb0);
+    {{PORT}}     — TCP-порт HTTP API (по умолчанию при установке 4321);
+    {{HOST}}     — адрес привязки HTTP API (по умолчанию 0.0.0.0).
+
+  Пути к программе заданы через `%BASE%` — переменную самого WinSW: это
+  каталог, в котором лежит `etn-service.exe` (то есть `{app}\service`).
+  Поэтому шаблон работает и при нестандартном каталоге программы, и при
+  обновлении: путь в xml не «запекается».
+
+  WinSW читает файл с именем `<имя exe>.xml` из своего каталога, поэтому
+  установленная копия обязана лежать рядом с `etn-service.exe`:
+  `{app}\service\etn-service.xml`.
+
+  Журнал службы (stdout/stderr сервера) — `{{DATA_DIR}}\logs\service`,
+  ротация по размеру: 10 МБ, хранится 8 файлов. Файловый журнал самого
+  приложения (`ETN_LOG_FILE` и т.п.) пишется отдельно и с этими файлами
+  не пересекается.
+-->
+<service>
+  <id>ETN</id>
+  <name>ETN</name>
+  <description>ETN — сервер графовых баз знаний</description>
+
+  <!-- Точка запуска: Node 22 из поставки. Путь после подстановки %BASE%
+       абсолютный; кавычки в аргументах обязательны — каталог программы
+       может содержать пробелы. -->
+  <executable>%BASE%\..\node\node.exe</executable>
+  <arguments>"%BASE%\..\server\dist\index.js"</arguments>
+  <workingdirectory>%BASE%\..\server</workingdirectory>
+
+  <!-- Автозапуск после перезагрузки; после падения — перезапуск с
+       нарастающей задержкой. Счётчик падений сбрасывается, если служба
+       проработала час. -->
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- Остановка: WinSW отправляет Ctrl+C и ждёт штатного завершения сервера
+       (остановка таймеров, закрытие пулов, чекпойнт WAL); по истечении
+       тайм-аута процесс снимается принудительно. 30 с — с запасом на
+       чекпойнт больших БД. -->
+  <stoptimeout>30sec</stoptimeout>
+
+  <!-- Параметры, которые установщик передаёт серверу. Все три читает
+       server/src/config.ts при старте. -->
+  <env name="ETN_DATA_DIR" value="{{DATA_DIR}}"/>
+  <env name="ETN_PORT" value="{{PORT}}"/>
+  <env name="ETN_HOST" value="{{HOST}}"/>
+
+  <!-- Служба работает под LocalSystem: у системной учётной записи есть
+       доступ к общему каталогу данных (%ProgramData%\ETN) и право писать
+       в него. -->
+  <serviceaccount>
+    <user>LocalSystem</user>
+  </serviceaccount>
+
+  <!-- Журнал службы с ротацией по размеру (WinSW 2.x, mode="roll-by-size").
+       Имена файлов — etn-service.out.log и etn-service.err.log (по имени exe).
+       Каталог должен существовать до старта службы: WinSW открывает файлы на
+       запись и сам каталог не создаёт — его создаёт установщик (задача
+       9b310991). Ротацию (.1, .2, ...) выполняет WinSW. -->
+  <logpath>{{DATA_DIR}}\logs\service</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
