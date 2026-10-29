@@ -29,6 +29,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 /** Create a thought type via the REST API; returns the parsed DTO. */
@@ -55,7 +56,7 @@ async function postThought(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/thoughts`,
-    headers: { ...authHeaders(ctx), 'client-id': clientId },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload,
   });
   assert.equal(res.statusCode, 201, res.body?.toString());
@@ -71,7 +72,7 @@ async function createLayer(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/layers`,
-    headers: { ...authHeaders(ctx), 'client-id': clientId },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload,
   });
   assert.equal(res.statusCode, 201, res.body?.toString());
@@ -87,7 +88,7 @@ async function selectLayer(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-    headers: { ...authHeaders(ctx), 'client-id': clientId },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload: {},
   });
   assert.equal(res.statusCode, 200, res.body?.toString());
@@ -102,7 +103,7 @@ async function mergeLayer(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/merge`,
-    headers: { ...authHeaders(ctx), 'client-id': clientId },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload: {},
   });
   assert.equal(res.statusCode, 200, res.body?.toString());
@@ -254,7 +255,7 @@ describe(
           const mergeRes = await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${nid}/layers/${l.id}/merge`,
-            headers: { ...authHeaders(ctx), 'client-id': '0' },
+            headers: { ...authHeaders(ctx), ...clientHeaders('0') },
             payload: {},
           });
           assert.equal(mergeRes.statusCode, 200, mergeRes.body?.toString());
@@ -558,7 +559,7 @@ describe(
         // Сетевая сессия per-client-id: типы создаются без client-id
         // (базовый слой по умолчанию), а вся работа в слое — под
         // client-id '0'. Это соглашение выдержано во всём файле.
-        const hLayer = { ...authHeaders(ctx), 'client-id': '0' };
+        const hLayer = { ...authHeaders(ctx), ...clientHeaders('0') };
 
         // Иерархия: parent под корнем, child под parent, newParent под корнем.
         const parent = await postThoughtType(ctx, { name: 'Предок-Тип' });
@@ -718,7 +719,7 @@ describe(
       const ctx = await buildRestContext();
       try {
         const h = authHeaders(ctx);
-        const hLayer = { ...authHeaders(ctx), 'client-id': '0' };
+        const hLayer = { ...authHeaders(ctx), ...clientHeaders('0') };
         const nid = ctx.networkId;
         await selectLayer(ctx, BASE_LAYER_ID);
 

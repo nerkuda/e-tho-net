@@ -45,6 +45,7 @@ import {
   callOp,
   connectMcpClient, toolJson,
 } from './mcp-helpers.js';
+import { clientHeaders } from './rest-helpers.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -167,7 +168,7 @@ function seedUser(running: RunningApp, username: string, asMemberOf?: string): S
 function connect(running: RunningApp, key: string, clientId: string): WebSocket {
   const url = new URL(`ws://127.0.0.1:${running.port}/api/v1/realtime`);
   url.searchParams.set('network_id', running.networkId);
-  const ws = new WebSocket(url, { headers: { authorization: `Bearer ${key}`, 'client-id': clientId } });
+  const ws = new WebSocket(url, { headers: { authorization: `Bearer ${key}`, ...clientHeaders(clientId) } });
   running.sockets.push(ws);
   return ws;
 }
@@ -270,7 +271,7 @@ async function selectLayer(running: RunningApp, key: string, layerId: string, cl
   const res = await running.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${running.networkId}/layers/${layerId}/select`,
-    headers: { authorization: `Bearer ${key}`, 'client-id': clientId },
+    headers: { authorization: `Bearer ${key}`, ...clientHeaders(clientId) },
     payload: {},
   });
   assert.equal(res.statusCode, 200, res.body?.toString());
@@ -285,7 +286,7 @@ async function postThought(
   const res = await running.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${running.networkId}/thoughts`,
-    headers: { authorization: `Bearer ${key}`, 'client-id': clientId },
+    headers: { authorization: `Bearer ${key}`, ...clientHeaders(clientId) },
     payload: { title },
   });
   assert.equal(res.statusCode, 201, res.body?.toString());
@@ -303,7 +304,7 @@ async function patchThought(
   const res = await running.app.inject({
     method: 'PATCH',
     url: `/api/v1/networks/${running.networkId}/thoughts/${id}`,
-    headers: { authorization: `Bearer ${key}`, 'client-id': clientId, 'if-match': String(version) },
+    headers: { authorization: `Bearer ${key}`, ...clientHeaders(clientId), 'if-match': String(version) },
     payload: { title },
   });
   assert.equal(res.statusCode, 200, res.body?.toString());
@@ -431,7 +432,7 @@ describe(
         const baseGet = await running.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${running.networkId}/thoughts/${t.id}`,
-          headers: { authorization: `Bearer ${running.owner.key}`, 'client-id': 'client-base' },
+          headers: { authorization: `Bearer ${running.owner.key}`, ...clientHeaders('client-base') },
         });
         assert.equal(baseGet.statusCode, 200);
         const baseVersion = (baseGet.json().data as { version: number }).version;
@@ -467,7 +468,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}/thoughts/${t.id}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-base2',
+            ...clientHeaders('client-base2'),
             'if-match': String(t.version),
           },
           payload: { marked_for_deletion: true },
@@ -482,7 +483,7 @@ describe(
         const purgeRes = await running.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${running.networkId}/trash/purge`,
-          headers: { authorization: `Bearer ${running.owner.key}`, 'client-id': 'client-base2' },
+          headers: { authorization: `Bearer ${running.owner.key}`, ...clientHeaders('client-base2') },
           payload: {},
         });
         assert.equal(purgeRes.statusCode, 200, purgeRes.body?.toString());

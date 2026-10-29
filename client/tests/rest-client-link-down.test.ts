@@ -22,6 +22,7 @@ function makeClient(fetchImpl: typeof fetch, isServerDown?: () => boolean): Rest
     baseUrl: 'http://localhost:3000',
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
+    clientVersion: '0.15.1',
     fetchImpl,
     random: () => 0,
     ...(isServerDown === undefined ? {} : { isServerDown }),

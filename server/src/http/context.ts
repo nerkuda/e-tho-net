@@ -53,6 +53,14 @@ export const CLIENT_ID_HEADER = 'client-id';
 /** Name of the header carrying the bearer API-key (06-auth.md §1). */
 export const AUTHORIZATION_HEADER = 'authorization';
 
+/**
+ * Name of the header carrying the desktop client version (задача c3f33e6a,
+ * требование 339b507f). Set by every REST request of the client; the guard
+ * rejects mutating requests of a `Client-Id`-carrying caller when the version is
+ * absent, unparseable or outside `client_compatibility` (426).
+ */
+export const CLIENT_VERSION_HEADER = 'client-version';
+
 /** Prefix expected on the bearer token (06-auth.md §1). */
 export const BEARER_PREFIX = 'bearer';
 

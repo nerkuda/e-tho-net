@@ -73,6 +73,7 @@ function makeClient(fetchImpl: typeof fetch, baseUrl = 'http://127.0.0.1:19777')
     baseUrl,
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
+    clientVersion: '0.15.1',
     fetchImpl,
     random: () => 0,
   });

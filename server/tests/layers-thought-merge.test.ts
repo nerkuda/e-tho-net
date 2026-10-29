@@ -29,6 +29,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -46,7 +47,7 @@ async function call(
     url: `/api/v1/networks/${ctx.networkId}${url}`,
     headers: {
       ...authHeaders(ctx),
-      ...(clientId !== undefined ? { 'client-id': clientId } : {}),
+      ...clientHeaders(clientId),
     },
     ...(payload !== undefined ? { payload } : {}),
   });

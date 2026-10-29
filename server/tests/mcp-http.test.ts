@@ -27,7 +27,7 @@ import { systemMigrationsDir } from '../src/paths.js';
 import { createServer } from '../src/http/server.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
-import { MCP_TOOL_NAMES } from '@etn/shared';
+import { MCP_TOOL_NAMES, parseSemver } from '@etn/shared';
 
 import { nativeAvailable } from './mcp-helpers.js';
 
@@ -189,6 +189,69 @@ describe('MCP HTTP endpoint (F1/F2)', { skip: !nativeAvailable() }, () => {
       assert.ok(content.length > 0);
       const thought = JSON.parse(content[0]!.text) as { title: string };
       assert.equal(thought.title, 'HOME');
+    } finally {
+      await closeHttpContext(ctx);
+    }
+  });
+
+  it('MCP не проходит проверку версии desktop-клиента: 426 к /mcp не применяется', async () => {
+    const ctx = await buildHttpContext();
+    try {
+      // Версия заведомо вне client_compatibility сервера: REST с такими
+      // заголовками получил бы 426 на изменяющем запросе (задача c3f33e6a),
+      // но у MCP собственный транспорт (требование e5e8d1da, ADR 6ded6a87).
+      const channel = resolveClientChannel({});
+      const lower = parseSemver(channel.min_client);
+      assert.ok(lower !== null, 'min_client обязан быть версией');
+      const incompatible = `${lower.major}.${lower.minor + 1}.0`;
+      const clientHeaders = { 'client-id': 'mcp-version-probe', 'client-version': incompatible };
+
+      const init = await ctx.app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: {
+          authorization: `Bearer ${ctx.adminKey}`,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...clientHeaders,
+        },
+        payload: initializeBody(),
+      });
+      assert.equal(init.statusCode, 200, init.body);
+      const sessionId = init.headers['mcp-session-id'] as string;
+
+      const called = await ctx.app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: {
+          authorization: `Bearer ${ctx.adminKey}`,
+          'mcp-session-id': sessionId,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...clientHeaders,
+        },
+        payload: {
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: {
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thoughts: [{ ref: 'mcp', thought: { title: 'MCP без проверки версии' } }],
+            },
+          },
+        },
+      });
+      assert.equal(called.statusCode, 200, called.body);
+      const content = called.json().result.content as Array<{ type: string; text: string }>;
+      assert.doesNotMatch(content[0]!.text, /CLIENT_VERSION_UNSUPPORTED/);
+      // Изменение реально произошло: мысль создана, а не отклонена guard'ом.
+      const written = JSON.parse(content[0]!.text) as {
+        items: Array<{ thought_action: string; id: string }>;
+      };
+      assert.equal(written.items[0]?.thought_action, 'created');
+      assert.equal(typeof written.items[0]?.id, 'string');
     } finally {
       await closeHttpContext(ctx);
     }

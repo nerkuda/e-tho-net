@@ -49,6 +49,12 @@ export interface RegisterIpcOptions {
   localDb: LocalDb;
   /** Stable installation Client-Id (G4). */
   clientId: string;
+  /**
+   * Версия этого клиента — `app.getVersion()` в `main/index.ts`. Уходит
+   * заголовком `Client-Version` в каждом REST-запросе (требование 339b507f,
+   * задача c3f33e6a); renderer значение не задаёт.
+   */
+  clientVersion: string;
   /** Resolves the current main window (for realtime broadcast). */
   getWindow: () => BrowserWindow | null;
 }
@@ -107,6 +113,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       baseUrl: p.base_url,
       getApiKey: keyResolver(p),
       getClientId: () => opts.clientId,
+      clientVersion: opts.clientVersion,
       // Pool-wide health for network-less mutating routes (`me.*`,
       // `networks.create`, …), verify remark 1 (de34b35b): the server counts
       // as down when the pool knows at least one network and NONE is

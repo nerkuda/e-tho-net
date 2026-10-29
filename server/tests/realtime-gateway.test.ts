@@ -30,6 +30,7 @@ import { createServer } from '../src/http/server.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
 import { emitDomainEvent } from '../src/realtime/emit.js';
+import { clientHeaders } from './rest-helpers.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -155,7 +156,7 @@ function connect(
   }
   const headers: Record<string, string> = { authorization: `Bearer ${key}` };
   if (clientId !== undefined) {
-    headers['client-id'] = clientId;
+    Object.assign(headers, clientHeaders(clientId));
   }
   const ws = new WebSocket(url, { headers });
   running.sockets.push(ws);
@@ -372,7 +373,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-X',
+            ...clientHeaders('client-X'),
           },
           payload: { display_name: 'Renamed' },
         });
@@ -407,7 +408,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'shared-client',
+            ...clientHeaders('shared-client'),
           },
           payload: { display_name: 'Shared' },
         });
@@ -467,7 +468,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}/preferences/show_inactive`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-X',
+            ...clientHeaders('client-X'),
           },
           payload: { value: true },
         });
@@ -653,7 +654,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-X',
+            ...clientHeaders('client-X'),
           },
           payload: { display_name: 'By X' },
         });
@@ -693,7 +694,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'late-client',
+            ...clientHeaders('late-client'),
           },
           payload: { display_name: 'Hello' },
         });

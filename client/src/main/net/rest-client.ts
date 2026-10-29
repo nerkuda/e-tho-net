@@ -5,9 +5,11 @@
  * Thin, fully-typed wrapper over the global `fetch` (stable on Node 20+ / Electron
  * main process). Responsibilities:
  *
- *  - attaches `Authorization: Bearer <apiKey>` and `Client-Id: <clientId>` to every
- *    request (the API-key is resolved lazily from `safeStorage` via `getApiKey()`,
- *    so it never sits in a long-lived field);
+ *  - attaches `Authorization: Bearer <apiKey>`, `Client-Id: <clientId>` and
+ *    `Client-Version: <semver>` to every request (the API-key is resolved lazily
+ *    from `safeStorage` via `getApiKey()`, so it never sits in a long-lived
+ *    field; the version is fixed in main for the process lifetime) — see
+ *    {@link RestClient.clientHeaders};
  *  - attaches `Client-Request-Id` on mutating requests when the caller provides a
  *    `clientRequestId` (idempotency, 01-architecture.md §6);
  *  - attaches `If-Match: <version>` for optimistic concurrency (03-server-api.md §1);
@@ -188,6 +190,15 @@ export interface RestClientOptions {
   /** Returns the installation Client-Id (sync; already materialised in `client_meta`). */
   getClientId: () => string;
   /**
+   * Версия этого клиента (`app.getVersion()` главного процесса; в разработке —
+   * `client/package.json`). Уходит заголовком `Client-Version` в КАЖДОМ запросе
+   * (требование 339b507f): сервер отклоняет изменяющие запросы desktop-клиента
+   * вне `client_compatibility` кодом `426 CLIENT_VERSION_UNSUPPORTED`
+   * (задача c3f33e6a, ADR 6ded6a87). Значение задаёт main; renderer подменить
+   * его не может.
+   */
+  clientVersion: string;
+  /**
    * Optional override of the global `fetch` — primarily for unit tests. Defaults to
    * the ambient `fetch` (Node 20+ / Electron main).
    */
@@ -258,6 +269,7 @@ export class RestClient {
   private readonly baseUrl: string;
   private readonly getApiKey: () => Promise<string>;
   private readonly getClientId: () => string;
+  private readonly clientVersion: string;
   private readonly fetchImpl: typeof fetch;
   private readonly random: () => number;
   private readonly isServerDown: () => boolean;
@@ -320,6 +332,7 @@ export class RestClient {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
     this.getApiKey = opts.getApiKey;
     this.getClientId = opts.getClientId;
+    this.clientVersion = opts.clientVersion;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.random = opts.random ?? Math.random;
     this.isServerDown = opts.isServerDown ?? (() => false);
@@ -560,7 +573,7 @@ export class RestClient {
       // rotation mid-session is picked up without rebuilding the client.
       const headers: Record<string, string> = {
         Authorization: `Bearer ${await this.getApiKey()}`,
-        'Client-Id': this.getClientId(),
+        ...this.clientHeaders(),
         Accept: 'application/json',
       };
       if (opts.body !== undefined) {
@@ -750,6 +763,20 @@ export class RestClient {
 
     // Unexpected success shape (e.g. plain primitive) — return as-is.
     return { data: payload as T, meta: undefined };
+  }
+
+  /**
+   * Заголовки версии клиента — единственный источник пары `Client-Id` +
+   * `Client-Version` для ВСЕХ запросов этого класса (требование 339b507f):
+   * обычных, вложений, raw-скачивания, печати и публичных `/health`/`/version`.
+   *
+   * Каждое место, где строится объект заголовков, обязано подмешать их через
+   * спред; пропуск в одном месте — `426 CLIENT_VERSION_UNSUPPORTED` на
+   * изменяющем запросе. Дубль литерала заголовка мимо этого метода краснит
+   * сторож `client/tests/guard-rest-client-version-header.test.ts`.
+   */
+  private clientHeaders(): Record<string, string> {
+    return { 'Client-Id': this.getClientId(), 'Client-Version': this.clientVersion };
   }
 
   /** Builds the final URL with query string. Array values are repeated. */
@@ -2450,7 +2477,7 @@ export class RestClient {
       `/attachments/raw?path=${encodeURIComponent(filePath)}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
-      'Client-Id': this.getClientId(),
+      ...this.clientHeaders(),
       Accept: '*/*',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -3440,6 +3467,7 @@ export class RestClient {
     const url = `${this.baseUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/download`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
+      ...this.clientHeaders(),
       Accept: '*/*',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -3493,7 +3521,7 @@ export class RestClient {
     const url = `${this.baseUrl}/api/v1/system/logs/${encodeURIComponent(filename)}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
-      'Client-Id': this.getClientId(),
+      ...this.clientHeaders(),
       Accept: '*/*',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -3967,7 +3995,7 @@ export class RestClient {
       `/publications/${encodeURIComponent(id)}/print`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
-      'Client-Id': this.getClientId(),
+      ...this.clientHeaders(),
       Accept: 'text/html',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -4116,7 +4144,7 @@ export class RestClient {
     const url = `${this.baseUrl}/api/v1${path.startsWith('/') ? path : `/${path}`}`;
     const res = await this.fetchImpl(url, {
       method,
-      headers: { Accept: 'application/json', 'Client-Id': this.getClientId() },
+      headers: { Accept: 'application/json', ...this.clientHeaders() },
     });
     return (await this.parseResponse<T>(res)).data;
   }
@@ -4133,6 +4161,8 @@ function mapHttpStatus(status: number): EtnErrorCode {
   if (status === 404) return 'NOT_FOUND';
   if (status === 409) return 'DUPLICATE';
   if (status === 422) return 'VALIDATION_ERROR';
+  // Изменяющий запрос desktop-клиента отклонён по версии (задача c3f33e6a).
+  if (status === 426) return 'CLIENT_VERSION_UNSUPPORTED';
   if (status === 429) return 'RATE_LIMITED';
   return 'INTERNAL';
 }

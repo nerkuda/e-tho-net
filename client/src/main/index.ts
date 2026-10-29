@@ -575,6 +575,10 @@ app
     ipc = registerIpc({
       localDb,
       clientId,
+      // Версия клиента для заголовка `Client-Version` в каждом REST-запросе
+      // (требование 339b507f): сервер отклоняет изменяющие запросы вне
+      // `client_compatibility` кодом 426 (задача c3f33e6a).
+      clientVersion: app.getVersion(),
       getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     });
 

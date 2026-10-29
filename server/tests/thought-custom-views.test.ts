@@ -66,6 +66,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 const USER = 'user-1';
@@ -248,7 +249,7 @@ async function selectLayer(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-    headers: { ...authHeaders(ctx), 'client-id': clientId },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload: {},
   });
   assert.equal(res.statusCode, 200, res.body?.toString());
@@ -1369,7 +1370,7 @@ describe(
         // одноимённую строку в основе и правим её из слоя — materializeShadow
         // натыкается на UNIQUE, домен отдаёт 409, а не 500.
         const layerId = await createLayerViaRest(ctx, 'Слой коллизии');
-        const layerHeaders = { ...h, 'client-id': 'layer-collision' };
+        const layerHeaders = { ...h, ...clientHeaders('layer-collision') };
         await selectLayer(ctx, layerId, 'layer-collision');
         const layerView = await createCustomView(
           ctx,
@@ -1408,7 +1409,7 @@ describe(
 
         // (2) слой L, сессия A переключена в L.
         const layerId = await createLayerViaRest(ctx, 'Слой дефолта');
-        const layerHeaders = { ...h, 'client-id': 'default-shadow-layer' };
+        const layerHeaders = { ...h, ...clientHeaders('default-shadow-layer') };
         await selectLayer(ctx, layerId, 'default-shadow-layer');
 
         // (3) POST {name:'A'} в L → 201.
@@ -1458,7 +1459,7 @@ describe(
         // Слой L видит свою живую строку «A»; в основе поверх неё появляется
         // одноимённый ДЕФОЛТ (слой его не видел).
         const layerId = await createLayerViaRest(ctx, 'Слой update-дефолта');
-        const layerHeaders = { ...h, 'client-id': 'default-shadow-update' };
+        const layerHeaders = { ...h, ...clientHeaders('default-shadow-update') };
         await selectLayer(ctx, layerId, 'default-shadow-update');
         const layerA = await createCustomView(ctx, thoughtId, { name: 'A' }, layerHeaders);
         assert.equal(layerA.statusCode, 201, layerA.body);
@@ -1943,7 +1944,7 @@ describe(
         const thoughtId = await createThought(ctx, 'Мысль');
         const layerId = await createLayerViaRest(ctx, 'Слой отборов');
         await selectLayer(ctx, layerId, 'views-layer-client');
-        const layerHeaders = { ...h, 'client-id': 'views-layer-client' };
+        const layerHeaders = { ...h, ...clientHeaders('views-layer-client') };
         const inLayer = await createCustomView(ctx, thoughtId, { name: 'Из слоя' }, layerHeaders);
         assert.equal(inLayer.statusCode, 201);
 
@@ -1960,7 +1961,7 @@ describe(
         const baseList = await ctx.app.inject({
           method: 'GET',
           url: customViewsUrl(ctx, thoughtId),
-          headers: { ...h, 'client-id': 'base-client' },
+          headers: { ...h, ...clientHeaders('base-client') },
         });
         assert.deepEqual(baseList.json().data, []);
 
@@ -1987,7 +1988,7 @@ describe(
         const after = await ctx.app.inject({
           method: 'GET',
           url: customViewsUrl(ctx, thoughtId),
-          headers: { ...h, 'client-id': 'base-client' },
+          headers: { ...h, ...clientHeaders('base-client') },
         });
         assert.deepEqual(
           (after.json().data as Array<{ name: string }>).map((v) => v.name),

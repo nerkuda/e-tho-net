@@ -142,6 +142,24 @@ export function authHeaders(ctx: RestTestContext): Record<string, string> {
 }
 
 /**
+ * Версия тестового desktop-клиента — нижняя граница диапазона тестового
+ * сервера (`resolveClientChannel({})`, тот же источник, что у `/version`).
+ * Клиент обязан присылать её на изменяющих запросах (задача c3f33e6a): тесты,
+ * которые адресуют сессию слоя через `Client-Id`, эмулируют desktop-клиент и
+ * без версии получают `426 CLIENT_VERSION_UNSUPPORTED`.
+ */
+export const TEST_CLIENT_VERSION: string = resolveClientChannel({}).min_client;
+
+/**
+ * Заголовки desktop-клиента: `Client-Id` + совместимый `Client-Version`.
+ * Без `clientId` — пустой набор (запрос считается API-интеграцией).
+ */
+export function clientHeaders(clientId: string | undefined): Record<string, string> {
+  if (clientId === undefined) return {};
+  return { 'client-id': clientId, 'client-version': TEST_CLIENT_VERSION };
+}
+
+/**
  * Create a plain, non-admin, non-member user with an API-key inside the
  * context's system DB (task 0.4.2 bug-fix tests: `buildRestContext`'s own
  * user is always a global admin, which now bypasses membership checks by

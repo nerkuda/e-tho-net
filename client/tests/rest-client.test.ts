@@ -65,6 +65,7 @@ function makeClient(fetchImpl: typeof fetch, extra: { random?: () => number } = 
     baseUrl: 'http://localhost:3000',
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
+    clientVersion: '0.15.1',
     fetchImpl,
     random: extra.random ?? (() => 0),
   });
@@ -129,6 +130,9 @@ describe('RestClient — headers', () => {
     const headers = new Headers(calls[0]!.init.headers as HeadersInit);
     assert.equal(headers.get('Authorization'), 'Bearer etn_testkey');
     assert.equal(headers.get('Client-Id'), '11111111-1111-1111-1111-111111111111');
+    // Версия клиента уходит и на чтении (требование 339b507f): сервер проверяет
+    // её только на изменяющих методах, но заголовок обязан быть в каждом запросе.
+    assert.equal(headers.get('Client-Version'), '0.15.1');
     assert.equal(headers.get('Accept'), 'application/json');
     assert.equal(headers.get('Content-Type'), null);
   });
@@ -165,6 +169,7 @@ describe('RestClient — headers', () => {
       baseUrl: 'http://localhost:3000',
       getApiKey: async () => key,
       getClientId: () => 'c1',
+      clientVersion: '0.15.1',
       fetchImpl: fetch,
       random: () => 0,
     });
@@ -233,6 +238,7 @@ describe('RestClient — URL & query', () => {
       baseUrl: 'http://localhost:3000///',
       getApiKey: async () => 'k',
       getClientId: () => 'c',
+      clientVersion: '0.15.1',
       fetchImpl: fetch,
       random: () => 0,
     });
@@ -517,6 +523,7 @@ describe('RestClient — retry & timeout', () => {
       baseUrl: 'http://localhost:3000',
       getApiKey: async () => 'k',
       getClientId: () => 'c',
+      clientVersion: '0.15.1',
       fetchImpl: fetchImpl,
       random: () => 0,
     });
@@ -533,6 +540,7 @@ describe('RestClient — retry & timeout', () => {
       baseUrl: 'http://localhost:3000',
       getApiKey: async () => 'k',
       getClientId: () => 'c',
+      clientVersion: '0.15.1',
       fetchImpl: fetchImpl,
       random: () => 0,
     });
@@ -899,6 +907,8 @@ describe('RestClient — §16 system endpoints', () => {
     assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/health');
     const headers = new Headers(calls[0]!.init.headers as HeadersInit);
     assert.equal(headers.get('Authorization'), null);
+    // Публичный запрос всё равно несёт версию клиента (требование 339b507f).
+    assert.equal(headers.get('Client-Version'), '0.15.1');
     assert.equal(health.status, 'ok');
     assert.equal(health.version, '0.5.5');
   });

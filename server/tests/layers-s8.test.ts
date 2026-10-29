@@ -40,6 +40,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
@@ -60,7 +61,7 @@ async function call(
     url: `/api/v1/networks/${ctx.networkId}${url}`,
     headers: {
       ...authHeaders(ctx),
-      ...(opts.clientId !== undefined ? { 'client-id': opts.clientId } : {}),
+      ...clientHeaders(opts.clientId),
       ...(opts.ifMatch !== undefined ? { 'if-match': String(opts.ifMatch) } : {}),
     },
     ...(payload !== undefined ? { payload } : {}),

@@ -48,6 +48,10 @@ export function httpStatusForCode(code: EtnErrorCode): number {
     case 'VALIDATION_ERROR':
     case 'PROTECTED_ENTITY':
       return 422;
+    case 'CLIENT_VERSION_UNSUPPORTED':
+      // Изменяющий запрос desktop-клиента без версии или вне `client_compatibility`
+      // (требование 271e3327, ADR 6ded6a87) — «Upgrade Required».
+      return 426;
     case 'RATE_LIMITED':
       return 429;
     case 'INTERNAL':

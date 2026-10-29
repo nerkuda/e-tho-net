@@ -22,6 +22,7 @@ import {
   closeRestContext,
   authHeaders,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 
@@ -197,7 +198,7 @@ describe(
       const received: Array<{ type: string; audience: string }> = [];
       const memberWs = new WebSocket(
         `ws://127.0.0.1:${port}/api/v1/realtime?network_id=${ctx.networkId}`,
-        { headers: { authorization: `Bearer ${gen.key}`, 'client-id': 'member-client' } },
+        { headers: { authorization: `Bearer ${gen.key}`, ...clientHeaders('member-client') } },
       );
       await new Promise<void>((resolve, reject) => {
         memberWs.once('open', resolve);

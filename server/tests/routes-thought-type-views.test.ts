@@ -33,6 +33,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
@@ -444,7 +445,7 @@ describe(
           });
           assert.equal(layerRes.statusCode, 201, layerRes.body?.toString());
           const layerId = (layerRes.json().data as { id: string }).id;
-          const layerHeaders = { ...h, 'client-id': 'type-default-collision' };
+          const layerHeaders = { ...h, ...clientHeaders('type-default-collision') };
           const select = await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
@@ -522,7 +523,7 @@ describe(
           });
           assert.equal(layerRes.statusCode, 201);
           const layerId = (layerRes.json().data as { id: string }).id;
-          const layerHeaders = { ...h, 'client-id': 'type-tombstone-name' };
+          const layerHeaders = { ...h, ...clientHeaders('type-tombstone-name') };
           await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
@@ -1474,7 +1475,7 @@ describe(
           const selectRes = await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-            headers: { ...h, 'client-id': 'ver-client' },
+            headers: { ...h, ...clientHeaders('ver-client') },
             payload: {},
           });
           assert.equal(selectRes.statusCode, 200);
@@ -1487,7 +1488,7 @@ describe(
           const layerViewRes = await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
-            headers: { ...h, 'client-id': 'ver-client' },
+            headers: { ...h, ...clientHeaders('ver-client') },
             payload: { name: 'Из слоя', definition: JSON.stringify({ keywords: 'layer' }) },
           });
           assert.equal(layerViewRes.statusCode, 201);
@@ -1503,7 +1504,7 @@ describe(
           const layerList = await ctx.app.inject({
             method: 'GET',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
-            headers: { ...h, 'client-id': 'ver-client' },
+            headers: { ...h, ...clientHeaders('ver-client') },
           });
           assert.equal(layerList.statusCode, 200);
           const layerViews = (layerList.json().data as ViewDto[]).map((v) => v.id);
@@ -1513,7 +1514,7 @@ describe(
           const baseList = await ctx.app.inject({
             method: 'GET',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
-            headers: { ...h, 'client-id': 'base-client' },
+            headers: { ...h, ...clientHeaders('base-client') },
           });
           assert.equal(baseList.statusCode, 200);
           const baseViews = (baseList.json().data as ViewDto[]).map((v) => v.id);
@@ -1523,7 +1524,7 @@ describe(
           const layerEffective = await ctx.app.inject({
             method: 'GET',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views?include_effective=true`,
-            headers: { ...h, 'client-id': 'ver-client' },
+            headers: { ...h, ...clientHeaders('ver-client') },
           });
           assert.equal(layerEffective.statusCode, 200);
           const effectiveNames = (layerEffective.json().meta as { effective: Array<{ name: string }> })
@@ -1535,7 +1536,7 @@ describe(
           const baseEffective = await ctx.app.inject({
             method: 'GET',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views?include_effective=true`,
-            headers: { ...h, 'client-id': 'base-client' },
+            headers: { ...h, ...clientHeaders('base-client') },
           });
           assert.equal(baseEffective.statusCode, 200);
           const baseEffectiveNames = (baseEffective.json().meta as { effective: Array<{ name: string }> })
@@ -1611,7 +1612,7 @@ describe(
           const selectRes = await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-            headers: { ...h, 'client-id': 'layer-client' },
+            headers: { ...h, ...clientHeaders('layer-client') },
             payload: {},
           });
           assert.equal(selectRes.statusCode, 200);
@@ -1620,7 +1621,7 @@ describe(
           const layerPost = await ctx.app.inject({
             method: 'POST',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
-            headers: { ...h, 'client-id': 'layer-client' },
+            headers: { ...h, ...clientHeaders('layer-client') },
             payload: { name: 'Из слоя', definition: JSON.stringify({}) },
           });
           assert.equal(layerPost.statusCode, 201, layerPost.body?.toString());

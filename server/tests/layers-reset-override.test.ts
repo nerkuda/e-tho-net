@@ -37,6 +37,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 type InjectMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -54,7 +55,7 @@ async function call(
     url: `/api/v1/networks/${ctx.networkId}${url}`,
     headers: {
       ...authHeaders(ctx),
-      ...(opts.clientId !== undefined ? { 'client-id': opts.clientId } : {}),
+      ...clientHeaders(opts.clientId),
     },
     ...(payload !== undefined ? { payload } : {}),
   });

@@ -23,6 +23,7 @@ import type { ServerConfig } from '../config.js';
 import type { SystemDb } from '../db/system-db.js';
 import type { Logger } from '../logger.js';
 import { createAuthPreHandler, ensureAuthDecorator } from '../auth/auth-middleware.js';
+import { createClientVersionGuard } from '../auth/client-version-guard.js';
 import { AuthRateLimiter } from '../auth/rate-limiter.js';
 import { createAccessControl } from '../auth/access-control.js';
 import { NetworkMembersService } from '../domain/network-members-service.js';
@@ -66,7 +67,12 @@ import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { createApiKeyAuthProvider } from '../mcp/auth.js';
 import { createMcpHttpEndpoint } from '../mcp/http.js';
-import { HEALTH_STARTED_AT, HEALTH_RESPONSE, buildVersionPayload } from '../version.js';
+import {
+  HEALTH_STARTED_AT,
+  HEALTH_RESPONSE,
+  SERVER_VERSION,
+  buildVersionPayload,
+} from '../version.js';
 
 /** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
 const RATE_LIMITER_CLEANUP_MS = 60_000;
@@ -210,7 +216,21 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   ensureAuthDecorator(app);
   const rateLimiter = new AuthRateLimiter();
   app.decorate('rateLimiter', rateLimiter);
-  app.decorate('authPreHandler', createAuthPreHandler({ systemDb, rateLimiter, logger }));
+  // Версия desktop-клиента проверяется на изменяющих запросах (задача
+  // c3f33e6a). Источник диапазона — тот же `config.clientChannel`, из которого
+  // собран `GET /version`: второго диапазона в проекте нет (ADR 6ded6a87).
+  app.decorate(
+    'authPreHandler',
+    createAuthPreHandler({
+      systemDb,
+      rateLimiter,
+      logger,
+      clientVersionGuard: createClientVersionGuard({
+        clientChannel: config.clientChannel,
+        serverVersion: SERVER_VERSION,
+      }),
+    }),
+  );
   // Periodic eviction of expired failure/ban entries.
   const cleanupTimer = setInterval(() => rateLimiter.cleanup(), RATE_LIMITER_CLEANUP_MS);
   cleanupTimer.unref?.();
