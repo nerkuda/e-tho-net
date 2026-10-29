@@ -85,11 +85,36 @@ export interface HealthResponse {
   uptime: number;
 }
 
-/** Response of `GET /api/v1/version` (03-server-api.md §16–17). */
+/**
+ * Response of `GET /api/v1/version` — the normative version/compatibility
+ * contract (entity «Ответ GET /version», requirement e3ef572c).
+ *
+ * `version`, `api`, `min_client` and `client_compatibility` are mandatory.
+ * `recommended_client_version`, `client_download_url` and `client_sha256` are
+ * optional: a server that predates this contract does not send them at all, so
+ * consumers must tolerate their absence, and the current server sends `null`
+ * when a value is not configured.
+ */
 export interface VersionResponse {
+  /** Server version (semver, from the server `package.json`). */
   version: string;
-  /** Semver range of client versions considered compatible. */
+  /** API path version segment — `v1` for `/api/v1`. */
+  api: string;
+  /** Lower bound of `client_compatibility` (the minimum accepted client). */
+  min_client: string;
+  /** Semver range of client versions considered compatible (`>=X.Y.0 <X.(Y+1).0`). */
   client_compatibility: string;
+  /** Client version the server recommends installing, or `null`. */
+  recommended_client_version?: string | null;
+  /**
+   * Release page the client opens in a browser — never a direct file link.
+   */
+  client_download_url?: string | null;
+  /**
+   * SHA-256 (64 hex) of the Linux client archive checked by `install.sh`;
+   * `null` when the release has no Linux archive hash.
+   */
+  client_sha256?: string | null;
 }
 
 /** audit_log row (02-data-model.md §2.6, 03-server-api.md §15). */

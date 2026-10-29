@@ -3,7 +3,10 @@
  *
  * Required: `ETN_DATA_DIR` (absolute path to the data root). Optional: `ETN_HOST`,
  * `ETN_PORT`, `ETN_TLS_CERT`/`ETN_TLS_KEY` (both-or-neither), `ETN_LOG_LEVEL`,
- * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`, `ETN_MCP_SESSION_IDLE_TTL_MS`.
+ * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`, `ETN_MCP_SESSION_IDLE_TTL_MS` и аварийные
+ * override канала обновления клиента `ETN_CLIENT_COMPATIBILITY`,
+ * `ETN_RECOMMENDED_CLIENT_VERSION`, `ETN_CLIENT_DOWNLOAD_URL`,
+ * `ETN_CLIENT_SHA256` (вывод и валидация — `version.ts`).
  *
  * A bad configuration raises {@link ConfigError} with a human-readable message;
  * the CLI/server entry point surfaces it to the operator at startup.
@@ -13,6 +16,8 @@
 
 import path from 'node:path';
 import { availableParallelism } from 'node:os';
+
+import { resolveClientChannel, type ClientChannel } from './version.js';
 
 /** TLS material pair (both fields required when TLS is enabled). */
 export interface TlsConfig {
@@ -84,6 +89,13 @@ export interface ServerConfig {
    * `wal_checkpoint(TRUNCATE)`.
    */
   walCheckpoint: WalCheckpointConfig;
+  /**
+   * Канал совместимости и обновления клиента для `GET /api/v1/version`
+   * (задача 89a6ea40): диапазон, `min_client`, рекомендация, страница релиза
+   * и хеш Linux-архива. Выводится из версии сервера в `version.ts`;
+   * `ETN_CLIENT_*` — аварийные override с валидацией.
+   */
+  clientChannel: ClientChannel;
 }
 
 /** Настройки фонового чекпойнта WAL (ошибка dac92886). */
@@ -400,6 +412,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     walCheckpointIntervalMs = parsed;
   }
 
+  // --- ETN_CLIENT_* (задача 89a6ea40, сущность «Ответ GET /version») -------
+  // Диапазон совместимости, рекомендация, страница релиза и хеш Linux-архива:
+  // по умолчанию выводятся из версии сервера (`version.ts`), переменные —
+  // аварийные override. Некорректное значение — отказ старта, а не молчаливо
+  // сломанный контракт.
+  let clientChannel: ClientChannel;
+  try {
+    clientChannel = resolveClientChannel(env);
+  } catch (err) {
+    throw new ConfigError((err as Error).message);
+  }
+
   return {
     dataDir,
     host,
@@ -414,5 +438,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       idleEvictionMs: writeEvictIdleMs,
     },
     walCheckpoint: { intervalMs: walCheckpointIntervalMs },
+    clientChannel,
   };
 }

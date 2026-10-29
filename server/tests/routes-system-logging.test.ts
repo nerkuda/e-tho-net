@@ -20,6 +20,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
+import { resolveClientChannel } from '../src/version.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { systemMigrationsDir } from '../src/paths.js';
@@ -82,6 +83,7 @@ async function buildApp(): Promise<Ctx> {
   walCheckpoint: { intervalMs: 0 },
   // Пул записи в тестах выключен: пути записи переводит отдельная задача (c8920d04).
   writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
+  clientChannel: resolveClientChannel({}),
   };
   const app = await createServer({ config, systemDb: sys, logger: createLogger('silent') });
   ctx = { app, sys, dataDir, adminKey: gen.key, logsDir: path.join(dataDir, 'logs') };

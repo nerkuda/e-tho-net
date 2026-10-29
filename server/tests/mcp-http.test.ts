@@ -20,6 +20,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
+import { resolveClientChannel } from '../src/version.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { systemMigrationsDir } from '../src/paths.js';
@@ -98,6 +99,7 @@ async function buildHttpContext(): Promise<{
   walCheckpoint: { intervalMs: 0 },
   // Пул записи в тестах выключен: пути записи переводит отдельная задача (c8920d04).
   writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
+  clientChannel: resolveClientChannel({}),
   };
   const app = await createServer({ config, systemDb: sys, logger: createLogger('silent') });
 
@@ -323,6 +325,7 @@ describe('MCP HTTP endpoint (F1/F2)', { skip: !nativeAvailable() }, () => {
           // Пул записи в тестах выключен: пути записи переводит отдельная
           // задача (c8920d04).
           writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
+          clientChannel: resolveClientChannel({}),
           // Фоновый чекпойнт WAL в тестах выключен: сеть чекпойнтит сам тест.
           walCheckpoint: { intervalMs: 0 },
         },

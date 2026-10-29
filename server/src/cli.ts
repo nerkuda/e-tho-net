@@ -128,6 +128,18 @@ const HELP_GLOBAL = `Использование: etn <команда> [опци�
   ETN_MCP_SESSION_IDLE_TTL_MS
                      Время жизни простаивающей MCP-сессии, мс (по умолчанию
                      86400000 — 24 часа; допустимо 1000…2592000000).
+  ETN_CLIENT_COMPATIBILITY
+                     Аварийный override диапазона совместимых клиентов
+                     (по умолчанию — minor-окно версии сервера,
+                     ">=X.Y.0 <X.(Y+1).0").
+  ETN_RECOMMENDED_CLIENT_VERSION
+                     Аварийный override рекомендованной версии клиента
+                     (по умолчанию — версия сервера; обязана входить
+                     в диапазон совместимости).
+  ETN_CLIENT_DOWNLOAD_URL
+                     Аварийный override страницы релиза для кнопки
+                     «Обновить клиент» (абсолютный https:// URL).
+  ETN_CLIENT_SHA256  SHA-256 (64 hex) Linux-архива клиента для install.sh.
   ETN_API_KEY        API-key для "etn mcp" и "etn publications" (если не
                      передан --api-key).
 

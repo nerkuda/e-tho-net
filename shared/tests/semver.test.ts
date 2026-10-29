@@ -12,7 +12,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { compareSemver, compatibilityRangeFor, parseSemver, satisfiesRange } from '../src/semver.js';
+import {
+  compareSemver,
+  compatibilityRangeFor,
+  parseRangeBounds,
+  parseSemver,
+  satisfiesRange,
+} from '../src/semver.js';
 
 describe('parseSemver', () => {
   it('parses a release version', () => {
@@ -201,6 +207,41 @@ describe('satisfiesRange — minor window', () => {
     assert.equal(satisfiesRange('0.15.1', ''), false);
     assert.equal(satisfiesRange('0.15.1', 'garbage'), false);
     assert.equal(satisfiesRange('0.15.1', undefined), false);
+  });
+});
+
+describe('parseRangeBounds — общие границы диапазона', () => {
+  it('возвращает границы как записаны', () => {
+    assert.deepEqual(parseRangeBounds('>=0.15.0 <0.16.0'), { lower: '0.15.0', upper: '0.16.0' });
+    // Нижняя граница может быть prerelease — это законный override.
+    assert.deepEqual(parseRangeBounds('>=0.16.0-0 <0.17.0'), {
+      lower: '0.16.0-0',
+      upper: '0.17.0',
+    });
+    assert.deepEqual(parseRangeBounds('  >=1.2.3 <1.3.0  '), { lower: '1.2.3', upper: '1.3.0' });
+  });
+
+  it('null на всё, что не является грамматикой из двух границ', () => {
+    assert.equal(parseRangeBounds('>=0.1.0'), null);
+    assert.equal(parseRangeBounds('>=0.15.0 <=0.16.0'), null);
+    assert.equal(parseRangeBounds('0.15.1'), null);
+    assert.equal(parseRangeBounds('>= 0.15.0 < 0.16.0'), null);
+    assert.equal(parseRangeBounds('>=0.15 <0.16.0'), null);
+    assert.equal(parseRangeBounds('garbage'), null);
+    assert.equal(parseRangeBounds(''), null);
+    assert.equal(parseRangeBounds(undefined), null);
+  });
+
+  it('нижняя граница из parseRangeBounds удовлетворяет свой диапазон', () => {
+    for (const range of ['>=0.15.0 <0.16.0', '>=0.14.0 <0.16.0', '>=0.16.0-0 <0.17.0']) {
+      const bounds = parseRangeBounds(range);
+      assert.ok(bounds !== null, range);
+      assert.equal(satisfiesRange(bounds.lower, range), true, `${range} → ${bounds.lower}`);
+    }
+    // Неканоническая верхняя граница по той же паре окно закрывает: пусто.
+    const empty = parseRangeBounds('>=0.15.0 <0.15.4');
+    assert.ok(empty !== null);
+    assert.equal(satisfiesRange(empty.lower, '>=0.15.0 <0.15.4'), false);
   });
 });
 

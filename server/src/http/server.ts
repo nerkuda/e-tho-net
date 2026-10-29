@@ -66,7 +66,7 @@ import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { createApiKeyAuthProvider } from '../mcp/auth.js';
 import { createMcpHttpEndpoint } from '../mcp/http.js';
-import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
+import { HEALTH_STARTED_AT, HEALTH_RESPONSE, buildVersionPayload } from '../version.js';
 
 /** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
 const RATE_LIMITER_CLEANUP_MS = 60_000;
@@ -385,7 +385,12 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     return { ...HEALTH_RESPONSE, uptime: Math.round(process.uptime() * 1000) / 1000 };
   });
 
-  app.get('/api/v1/version', async () => VERSION_PAYLOAD);
+  // Нормативный контракт версии и канала обновления клиента (сущность
+  // «Ответ GET /version», задача 89a6ea40). Поля неизменны в течение жизни
+  // процесса: `loadConfig` вывел их из версии сервера и провалидировал
+  // override на старте. Публичный, всегда 200.
+  const versionPayload = buildVersionPayload(config.clientChannel);
+  app.get('/api/v1/version', async () => versionPayload);
 
   // File-journal management (task 1dd33e23 §4): admin-only status/toggle and
   // per-file download/delete endpoints.

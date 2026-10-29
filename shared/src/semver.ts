@@ -102,6 +102,29 @@ export function compatibilityRangeFor(serverVersion: string | null | undefined):
 }
 
 /**
+ * Returns the two bounds of `range` as written, or `null` when the string is
+ * not the accepted grammar `>=X.Y.Z <X.Y.Z` (both bounds required, exactly one
+ * space between them) or either bound is not a version.
+ *
+ * The bounds are returned verbatim (no normalisation) so callers can expose
+ * the lower bound to clients — that is how `GET /version` reports `min_client`
+ * and `client_compatibility` from the same range. Grammar lives here, next to
+ * {@link satisfiesRange}, so no consumer re-implements it.
+ */
+export function parseRangeBounds(
+  range: string | null | undefined,
+): { lower: string; upper: string } | null {
+  if (typeof range !== 'string') return null;
+  const match = RANGE_PATTERN.exec(range.trim());
+  if (match === null) return null;
+  const lower = match[1];
+  const upper = match[2];
+  if (lower === undefined || upper === undefined) return null;
+  if (parseSemver(lower) === null || parseSemver(upper) === null) return null;
+  return { lower, upper };
+}
+
+/**
  * Checks whether `version` belongs to the minor window described by `range`.
  *
  * `range` must be the exact two-bound grammar `>=X.Y.Z <X.Y.Z`; both bounds are
