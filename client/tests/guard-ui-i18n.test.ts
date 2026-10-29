@@ -57,6 +57,9 @@ const TRANSLATED_FILES = (rel: string): boolean =>
   // все тексты — из словаря; литерал в диалоге обязан краснить.
   rel === 'lib/compatibility-dialog.ts' ||
   rel === 'lib/compatibility-reason.ts' ||
+  // Баннер рекомендованной версии (ed068706, задача b57910b5): тексты
+  // напоминания и нейтрального `unknown` — только из словаря.
+  rel === 'lib/update-banner.ts' ||
   // Полоса отборов и диалог отбора (0.14.1, задача c2bbffab): все подписи,
   // меню, подтверждения и предупреждения — из словаря; литерал обязан краснить.
   rel === 'canvas/focus-filter-strip.ts' ||

@@ -1,0 +1,67 @@
+{
+  "name": "b57910b5-update-banner",
+  "description": "Баннер рекомендованной версии клиента (элемент ed068706, задача b57910b5). Стенд поднимается с ETN_RECOMMENDED_CLIENT_VERSION=0.15.2: сервер 0.15.1 совместим с клиентом 0.15.1 и рекомендует 0.15.2. После подключения и открытия сети в рабочем пространстве видна ненавязчивая полоса «Доступна версия 0.15.2» с текущей версией клиента и кнопками «Позже»/«Обновить клиент»; «Позже» скрывает её до следующего вердикта. Без скриншотов: доказательства — текстовые пробы DOM.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-visible",
+      "waitFor": "document.querySelector('.workspace') !== null"
+    },
+    {
+      "name": "banner-visible",
+      "waitFor": "document.querySelector('.update-banner') !== null"
+    },
+    {
+      "name": "banner-title",
+      "probe": "document.querySelector('.update-banner-title')?.textContent ?? null",
+      "expect": "Доступна версия 0.15.2"
+    },
+    {
+      "name": "banner-current-version",
+      "probe": "document.querySelector('.update-banner-subtitle')?.textContent ?? null",
+      "expect": "Сейчас работает клиент 0.15.1"
+    },
+    {
+      "name": "banner-actions",
+      "probe": "[...document.querySelectorAll('.update-banner-actions button')].map((b) => b.textContent).join('|')",
+      "expect": "Позже|Обновить клиент"
+    },
+    {
+      "name": "banner-above-statusbar",
+      "probe": "document.querySelector('.update-banner')?.nextElementSibling?.classList.contains('statusbar') === true",
+      "expect": true
+    },
+    {
+      "name": "no-blocking-dialog",
+      "probe": "document.querySelector('.dialog-backdrop') === null",
+      "expect": true
+    },
+    {
+      "name": "dismiss",
+      "click": ".update-banner-actions .ui-btn--secondary"
+    },
+    {
+      "name": "banner-hidden-after-dismiss",
+      "waitFor": "document.querySelector('.update-banner') === null"
+    },
+    {
+      "name": "workspace-still-usable",
+      "probe": "document.querySelector('.statusbar') !== null",
+      "expect": true
+    }
+  ]
+}

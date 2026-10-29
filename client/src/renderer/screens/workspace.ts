@@ -27,6 +27,7 @@ import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { mountStatusMessage, unmountStatusMessage } from '../lib/status-message.js';
+import { initUpdateBanner, createUpdateBannerHost } from '../lib/update-banner.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { store, getRtStatus, getRtStatusDetail, type RtStatus, type RtStatusDetail } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
@@ -471,7 +472,12 @@ export function buildWorkspace(): HTMLElement {
     conflictHost,
   );
 
-  root.append(topRow, toolbar, searchRow, searchHost, body, statusbar);
+  // --- баннер рекомендованной версии клиента (ed068706, задача b57910b5) ----
+  // Ненавязчивая полоса над статус-баром. Показом владеет lib/update-banner.ts
+  // — единственная точка напоминания (сторож guard-update-banner).
+  const updateBannerHost = createUpdateBannerHost();
+
+  root.append(topRow, toolbar, searchRow, searchHost, body, updateBannerHost, statusbar);
 
   const handles: WorkspaceHandles = {
     root,
@@ -524,6 +530,19 @@ export function buildWorkspace(): HTMLElement {
   // teardown отпускает узел и гасит таймер TTL (задача 28d22b8a).
   mountStatusMessage(sbMessage);
   onWorkspaceTeardown(unmountStatusMessage);
+  // Баннер рекомендованной версии (ed068706): подписка на вердикт совместимости
+  // снимается вместе с рабочим пространством; «Позже» и открытие страницы
+  // релиза — внутри модуля.
+  onWorkspaceTeardown(
+    initUpdateBanner(updateBannerHost, {
+      getState: () => ({
+        compatibility: store.state.compatibility,
+        authenticated: store.state.me !== null,
+      }),
+      subscribe: (listener) => store.subscribe(listener),
+      openExternal: (url) => etn.system.openExternal(url),
+    }),
+  );
   onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));
   onWorkspaceTeardown(mountSelection(selectionHost));
   onWorkspaceTeardown(mountUsagePanel(usageHost, usageResizer));
