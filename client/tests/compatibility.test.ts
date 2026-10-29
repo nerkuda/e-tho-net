@@ -18,6 +18,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -29,11 +30,17 @@ import {
   compatibilityRefusal,
   isReconnectTransition,
   parseVersionResponse,
+  verifyCompatibilityOnConnect,
   type CompatibilityResult,
 } from '../src/main/compatibility.js';
-import { connectAndActivate } from '../src/main/ipc/connect-active-profile.js';
+import {
+  addProfileAndConnect,
+  connectAndActivate,
+  connectProfileWithCompatibility,
+} from '../src/main/ipc/connect-active-profile.js';
 import { createHandlers, type HandlerDeps } from '../src/main/ipc/handlers.js';
-import type { LocalDb } from '../src/main/db/local-db.js';
+import { RestClient } from '../src/main/net/rest-client.js';
+import type { NewServerProfile } from '../src/main/db/local-db.js';
 
 const CLIENT = '0.15.1';
 const RELEASE_PAGE = 'https://github.com/nerkuda/e-tho-net/releases/tag/v0.15.2';
@@ -70,6 +77,27 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+/** In-memory замена профильной части `LocalDb` (better-sqlite3 в тестах не грузим). */
+interface ProfileStore {
+  activeId: string | null;
+  inserted: NewServerProfile[];
+  setActiveProfile(id: string | null): void;
+  insertProfile(profile: NewServerProfile): void;
+}
+
+function makeProfileStore(): ProfileStore {
+  return {
+    activeId: null,
+    inserted: [],
+    setActiveProfile(id: string | null) {
+      this.activeId = id;
+    },
+    insertProfile(profile: NewServerProfile) {
+      this.inserted.push(profile);
+    },
+  };
 }
 
 describe('checkCompatibility — пять статусов (89aad200)', () => {
@@ -188,17 +216,8 @@ describe('checkCompatibility — пять статусов (89aad200)', () => {
 });
 
 describe('connectAndActivate — проверка до первой авторизованной операции', () => {
-  function makeStore(): Pick<LocalDb, 'setActiveProfile'> & { activeId: string | null } {
-    return {
-      activeId: null,
-      setActiveProfile(id: string | null) {
-        this.activeId = id;
-      },
-    };
-  }
-
   it('порядок вызовов: сначала проверка, затем GET /me', async () => {
-    const db = makeStore();
+    const db = makeProfileStore();
     const order: string[] = [];
     const me = await connectAndActivate(
       db,
@@ -217,7 +236,7 @@ describe('connectAndActivate — проверка до первой автори
   });
 
   it('отказ проверки: getMe не вызывается, профиль не активируется', async () => {
-    const db = makeStore();
+    const db = makeProfileStore();
     db.setActiveProfile('old');
     let meCalls = 0;
     await assert.rejects(
@@ -245,6 +264,265 @@ describe('connectAndActivate — проверка до первой автори
     const details = err.details as { kind: string; result: CompatibilityResult };
     assert.equal(details.kind, 'client-compatibility');
     assert.equal(details.result.status, 'server-outdated');
+  });
+});
+
+describe('verifyCompatibilityOnConnect — блокировка и роль (8623b9ff)', () => {
+  /**
+   * Фейковый сервер: журнал фактических запросов.
+   * `GET /version` — публичная проверка, `GET /me` — единственный допустимый
+   * авторизованный запрос (диагностический, только для роли).
+   */
+  function makeProbe(
+    serverLog: string[],
+    version: () => Promise<VersionResponse>,
+    me: () => Promise<unknown>,
+  ): { getVersion: () => Promise<VersionResponse>; getMe: () => Promise<unknown> } {
+    return {
+      getVersion: async () => {
+        serverLog.push('GET /version');
+        return version();
+      },
+      getMe: async () => {
+        serverLog.push('GET /me');
+        return me();
+      },
+    };
+  }
+
+  function makeGate(): {
+    gate: CompatibilityGate;
+    published: Array<CompatibilityResult | null>;
+  } {
+    const published: Array<CompatibilityResult | null> = [];
+    return {
+      gate: new CompatibilityGate({
+        clientVersion: CLIENT,
+        publish: (result) => published.push(result),
+        teardown: () => undefined,
+      }),
+      published,
+    };
+  }
+
+  it('несовместимый сервер 0.16.0 + администратор: /version, диагностический /me, роль подтверждена, профиль не активирован', async () => {
+    const serverLog: string[] = [];
+    const { gate, published } = makeGate();
+    const probe = makeProbe(
+      serverLog,
+      async () => versionBody({ version: '0.16.0', recommended_client_version: '0.16.0' }),
+      async () => ({ id: 'admin-1', is_admin: true }),
+    );
+    const db = makeProfileStore();
+    db.setActiveProfile('old');
+
+    await assert.rejects(
+      connectProfileWithCompatibility(db, 'new', probe, gate),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError, `ожидался EtnError, получено ${String(err)}`);
+        assert.equal(err.code, 'CLIENT_VERSION_UNSUPPORTED');
+        const details = err.details as { kind: string; result: CompatibilityResult };
+        assert.equal(details.kind, 'client-compatibility');
+        assert.equal(details.result.status, 'client-outdated');
+        assert.equal(details.result.roleConfirmed, true);
+        return true;
+      },
+    );
+
+    // «Журнал сервера»: ровно version + диагностический me, ни одного запроса данных.
+    assert.deepEqual(serverLog, ['GET /version', 'GET /me']);
+    assert.equal(db.activeId, 'old', 'профиль не активирован');
+    const verdict = gate.getResult();
+    assert.equal(verdict?.status, 'client-outdated');
+    assert.equal(verdict?.roleConfirmed, true);
+    assert.deepEqual(published.at(-1), verdict, 'подтверждение роли опубликовано рендереру');
+  });
+
+  it('диагностический /me упал: роль не подтверждена, отказ остаётся блокирующим', async () => {
+    const serverLog: string[] = [];
+    const { gate } = makeGate();
+    const probe = makeProbe(
+      serverLog,
+      async () => versionBody({ version: '0.16.0' }),
+      async () => {
+        throw new EtnError('UNAUTHORIZED', 'Ключ отозван');
+      },
+    );
+
+    await assert.rejects(
+      verifyCompatibilityOnConnect(gate, probe),
+      (err: unknown) => err instanceof EtnError && err.code === 'CLIENT_VERSION_UNSUPPORTED',
+    );
+    assert.deepEqual(serverLog, ['GET /version', 'GET /me']);
+    assert.equal(gate.getResult()?.status, 'client-outdated');
+    assert.equal(gate.getResult()?.roleConfirmed, false, 'ошибка /me роль не подтверждает');
+  });
+
+  it('check-failed: диагностического /me нет, пробрасывается исходная ошибка /version', async () => {
+    const serverLog: string[] = [];
+    const { gate } = makeGate();
+    const failure = new EtnError(
+      'INTERNAL',
+      'Сетевая ошибка: сервер не ответил за отведённое время',
+      { kind: 'connect-failed', reason: 'timeout' },
+    );
+    const probe = makeProbe(
+      serverLog,
+      async () => {
+        throw failure;
+      },
+      async () => ({ id: 'user-1' }),
+    );
+
+    await assert.rejects(
+      verifyCompatibilityOnConnect(gate, probe),
+      (err: unknown) => err === failure,
+      'check-failed отказывает с честной причиной недоступного /version',
+    );
+    assert.deepEqual(serverLog, ['GET /version'], 'авторизованных запросов нет');
+    assert.equal(gate.getResult()?.status, 'check-failed');
+    assert.equal(gate.getResult()?.roleConfirmed, false);
+  });
+
+  it('совместимый сервер: verify не трогает /me, профиль активируется после обычного GET /me', async () => {
+    const serverLog: string[] = [];
+    const { gate } = makeGate();
+    const probe = makeProbe(
+      serverLog,
+      async () => versionBody(),
+      async () => ({ id: 'user-1' }),
+    );
+    await verifyCompatibilityOnConnect(gate, probe);
+    assert.deepEqual(serverLog, ['GET /version'], 'диагностический /me не нужен');
+
+    const db = makeProfileStore();
+    const me = await connectProfileWithCompatibility(db, 'new', probe, gate);
+    assert.deepEqual(me, { id: 'user-1' });
+    assert.deepEqual(serverLog, ['GET /version', 'GET /version', 'GET /me']);
+    assert.equal(db.activeId, 'new');
+    assert.equal(gate.getResult()?.roleConfirmed, true, 'успешный /me подтвердил роль');
+  });
+
+  it('server-outdated (старый сервер 0.14.1): диагностический /me тоже подтверждает роль', async () => {
+    const serverLog: string[] = [];
+    const { gate } = makeGate();
+    const probe = makeProbe(
+      serverLog,
+      async () =>
+        versionBody({ version: '0.14.1', client_compatibility: '>=0.1.0', min_client: '0.1.0' }),
+      async () => ({ id: 'admin-1', is_admin: true }),
+    );
+
+    await assert.rejects(verifyCompatibilityOnConnect(gate, probe));
+    assert.deepEqual(serverLog, ['GET /version', 'GET /me']);
+    assert.equal(gate.getResult()?.status, 'server-outdated');
+    assert.equal(gate.getResult()?.roleConfirmed, true);
+  });
+});
+
+describe('addProfileAndConnect — сохранение без активации (12fd5b0e)', () => {
+  const profile: NewServerProfile = {
+    id: 'new-profile',
+    label: 'Новый сервер',
+    base_url: 'http://localhost:3000',
+  };
+
+  it('профиль вставляется неактивным; активация — только после успешного connect', async () => {
+    const db = makeProfileStore();
+    db.setActiveProfile('old');
+    const order: string[] = [];
+
+    // Реальный `connectProfile` активирует профиль внутри
+    // `connectAndActivate` — здесь это моделируется явно.
+    const me = await addProfileAndConnect(db, profile, async (id) => {
+      order.push(`connect:${id}`);
+      db.setActiveProfile(id);
+      return { id: 'user-1' };
+    });
+
+    assert.deepEqual(order, ['connect:new-profile'], 'connect вызван после вставки');
+    assert.equal(db.inserted.length, 1);
+    assert.equal(db.inserted[0]?.is_active, false, 'вставка неактивной');
+    assert.equal(db.activeId, 'new-profile');
+    assert.deepEqual(me, { id: 'user-1' });
+  });
+
+  it('блокирующий отказ через добавление профиля: профиль сохранён, но активным остаётся прежний', async () => {
+    const db = makeProfileStore();
+    db.setActiveProfile('old');
+
+    await assert.rejects(
+      addProfileAndConnect(db, profile, async () => {
+        throw compatibilityRefusal(check(versionBody({ version: '0.16.0' })));
+      }),
+      (err: unknown) => err instanceof EtnError && err.code === 'CLIENT_VERSION_UNSUPPORTED',
+    );
+
+    assert.equal(db.inserted.length, 1, 'профиль сохранён');
+    assert.equal(db.inserted[0]?.is_active, false, 'сохранён неактивным');
+    assert.equal(db.activeId, 'old', 'активный профиль не переключён на неподключённый');
+  });
+});
+
+/** TCP-сервер, принимающий соединение и не отвечающий ни байтом. */
+async function startSilentServer(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    // Намеренно молчим: именно этот случай держал экран подключения ~5 мин.
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address !== null && typeof address === 'object', 'адрес локального сервера');
+  return {
+    port: address.port,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+describe('молчащий сервер: проверка версии ограничена таймаутом (12fd5b0e)', () => {
+  it('getVersion через gate: check-failed за отведённое время, не дольше таймаута', async () => {
+    const server = await startSilentServer();
+    try {
+      const rest = new RestClient({
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        getApiKey: async () => 'etn_testkey',
+        getClientId: () => '11111111-1111-1111-1111-111111111111',
+        clientVersion: CLIENT,
+        responseTimeoutMs: 150,
+      });
+      const published: Array<CompatibilityResult | null> = [];
+      const gate = new CompatibilityGate({
+        clientVersion: CLIENT,
+        publish: (result) => published.push(result),
+        teardown: () => undefined,
+      });
+
+      const started = Date.now();
+      const outcome = await gate.check(() => rest.getVersion());
+      const elapsed = Date.now() - started;
+
+      assert.equal(outcome.ok, false);
+      assert.equal(outcome.result.status, 'check-failed', 'молчание — не «совместимо»');
+      assert.equal(outcome.result.banner, 'unknown');
+      assert.equal(outcome.result.blocking, false);
+      assert.equal(gate.isBlocking(), false);
+      assert.deepEqual(published.at(-1), outcome.result);
+
+      const error = outcome.ok === false ? outcome.error : undefined;
+      assert.ok(error instanceof EtnError, `ожидался EtnError, получено ${String(error)}`);
+      assert.deepEqual(error.details, { kind: 'connect-failed', reason: 'timeout' });
+      assert.ok(
+        elapsed < 5_000,
+        `отказ за ${elapsed} мс — не дольше прикладного таймаута (150 мс), а не таймаута undici`,
+      );
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -428,11 +706,13 @@ describe('IPC и проводка (сторож задачи 12fd5b0e)', () => {
   const handlersSrc = readFileSync(path.join(CLIENT_ROOT, 'main', 'ipc', 'handlers.ts'), 'utf8');
   const preloadSrc = readFileSync(path.join(CLIENT_ROOT, 'preload', 'index.ts'), 'utf8');
 
-  it('проверка версии стоит в connectProfile до GET /me', () => {
-    assert.match(registerSrc, /connectAndActivate\(/);
-    assert.match(registerSrc, /compatibility\.check\(\(\) => restClient\.getVersion\(\)\)/);
-    // Блокирующий вердикт превращается в отказ подключения, а не в «продолжаем».
-    assert.match(registerSrc, /throw compatibilityRefusal\(outcome\.result\)/);
+  it('проверка версии подключена к connectProfile', () => {
+    // Наличие проводки (исчезновение вызова — регресс). ПОРЯДОК «версия → /me»
+    // проверяется фактической последовательностью вызовов в
+    // `connectProfileWithCompatibility`/`verifyCompatibilityOnConnect` (describe
+    // выше), а не подстрокой: перестановка вызовов с сохранением текста такой
+    // сторож не ловит (замечание верификатора 6).
+    assert.match(registerSrc, /connectProfileWithCompatibility\(\s*opts\.localDb/);
   });
 
   it('426 в середине сессии доходит до gate из RestClient', () => {

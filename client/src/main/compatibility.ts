@@ -422,6 +422,33 @@ export class CompatibilityGate {
   /** Успешный `GET /me`: роль в этой сессии известна (K3). */
   public markRoleConfirmed(): void {
     this.roleConfirmed = true;
+    // Вердикт уже опубликован с `roleConfirmed: false` — обновляем его, иначе
+    // renderer не узнает, что роль подтверждена, и кнопка «Обновить сервер»
+    // не появится (K3, требование 8623b9ff).
+    if (this.current !== null && !this.current.roleConfirmed) {
+      this.current = { ...this.current, roleConfirmed: true };
+      this.publish(this.current);
+    }
+  }
+
+  /**
+   * Блокирующий вердикт НА ПОДКЛЮЧЕНИИ: ровно один диагностический `GET /me`,
+   * чтобы подтвердить роль (K3, требование 8623b9ff). На старом сервере обычный
+   * `GET /me` недоступен (подключение уже запрещено), и без этого вызова роль
+   * не подтвердилась бы никогда → кнопка «Обновить сервер» не появилась бы.
+   *
+   * Результат `/me` не сохраняется и не используется, профиль не активируется,
+   * других авторизованных запросов нет; ошибка `/me` оставляет роль
+   * неподтверждённой. Вне блокировки — no-op.
+   */
+  public async confirmRoleAfterBlocking(getMe: () => Promise<unknown>): Promise<void> {
+    if (!this.isBlocking()) return;
+    try {
+      await getMe();
+    } catch {
+      return;
+    }
+    this.markRoleConfirmed();
   }
 
   /** Сброс (пользователь отключился): вердикта нет, роль не подтверждена. */
@@ -552,4 +579,36 @@ export class CompatibilityGate {
     }
     return ok ? { ok: true, result } : { ok: false, result, ...(error === undefined ? {} : { error }) };
   }
+}
+
+/**
+ * Проверка совместимости на подключении (12fd5b0e) — единственный вход для
+ * `connectProfile`:
+ *
+ *  1. `GET /version` через gate; совместимо — возвращаемся, а обычный `GET /me`
+ *     делает вызывающий (`connectAndActivate`), и только он активирует профиль;
+ *  2. `check-failed` — пробрасывается ИСХОДНАЯ ошибка `/version` (сценарий
+ *     d2c80aa4): подключение отказывает с честной причиной, а не «несовместимая
+ *     версия»;
+ *  3. блокирующий вердикт — ровно один диагностический `GET /me` только для
+ *     подтверждения роли (K3, требование 8623b9ff) и отказ
+ *     `CLIENT_VERSION_UNSUPPORTED` с уже обновлённым вердиктом.
+ *
+ * Ни при каком исходе эта функция не активирует профиль и не запрашивает
+ * данные: авторизованных запросов не больше одного (диагностический `/me`).
+ */
+export async function verifyCompatibilityOnConnect(
+  gate: CompatibilityGate,
+  deps: {
+    /** Публичный `GET /api/v1/version`. */
+    getVersion(): Promise<VersionResponse>;
+    /** `GET /api/v1/me` — только подтверждение роли; результат отбрасывается. */
+    getMe(): Promise<unknown>;
+  },
+): Promise<void> {
+  const outcome = await gate.check(() => deps.getVersion());
+  if (outcome.ok) return;
+  if (outcome.error !== undefined) throw outcome.error;
+  await gate.confirmRoleAfterBlocking(() => deps.getMe());
+  throw compatibilityRefusal(gate.getResult() ?? outcome.result);
 }

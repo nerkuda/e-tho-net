@@ -29,11 +29,13 @@ import {
   createHandlers,
   selfMutationNetwork,
 } from './handlers.js';
-import { connectAndActivate } from './connect-active-profile.js';
+import {
+  addProfileAndConnect,
+  connectProfileWithCompatibility,
+} from './connect-active-profile.js';
 import { ConnectionLifecycle } from './connection-lifecycle.js';
 import {
   CompatibilityGate,
-  compatibilityRefusal,
   isReconnectTransition,
   type CompatibilityResult,
 } from '../compatibility.js';
@@ -173,25 +175,19 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // the wrong server).
     //
     // Сначала — проверка совместимости (задача 12fd5b0e, требование
-    // 4d3be6ca): `/version` уходит ДО `GET /me` и любых данных; блокирующий
-    // вердикт или недоступный `/version` (check-failed) не пропускают ни
-    // одного авторизованного запроса.
-    const me = await connectAndActivate(
+    // 4d3be6ca): `/version` уходит ДО `GET /me` и любых данных. Блокирующий
+    // вердикт не пропускает ни одного запроса данных; при нём допускается
+    // ровно один диагностический `GET /me` — только чтобы подтвердить роль
+    // для кнопки «Обновить сервер» (K3, 8623b9ff). Недоступный `/version`
+    // (check-failed) отказывает с исходной ошибкой (сценарий d2c80aa4).
+    // Порядок запросов зафиксирован в `connectProfileWithCompatibility` и
+    // проверяется тестом по массиву фактических вызовов.
+    const me = await connectProfileWithCompatibility(
       opts.localDb,
       profileId,
-      () => restClient.getMe(),
-      async () => {
-        const outcome = await compatibility.check(() => restClient.getVersion());
-        if (outcome.ok) return;
-        // check-failed: отказ подключения с ЧЕСТНОЙ причиной недоступного
-        // `/version` (сценарий d2c80aa4), а не «несовместимая версия».
-        if (outcome.error !== undefined) throw outcome.error;
-        throw compatibilityRefusal(outcome.result);
-      },
+      restClient,
+      compatibility,
     );
-    // `GET /me` подтвердил роль в этой сессии (K3): вердикт `server-outdated`
-    // в середине сессии различит администратора и остальных.
-    compatibility.markRoleConfirmed();
 
     const rtPool = new TabRealtimePool({
       profile: p,
@@ -296,15 +292,21 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     }
     const id = randomUUID();
     const encrypted = encryptApiKey(input.apiKey);
-    opts.localDb.insertProfile({
-      id,
-      label: input.label.trim() || baseUrl,
-      base_url: baseUrl,
-      api_key_encrypted: encrypted,
-      is_active: true,
-    });
-    opts.localDb.setActiveProfile(id);
-    return connectProfile(id);
+    // Сохранение — всегда, активация — только после успешной проверки версии
+    // и `GET /me` (задача 12fd5b0e): `connectProfile` → `connectAndActivate`
+    // выставит активный профиль. При блокирующем отказе профиль остаётся
+    // сохранённым, но активным остаётся прежний — «запомнить сервер, к
+    // которому не подключились» нельзя (замечание верификатора 5).
+    return addProfileAndConnect(
+      opts.localDb,
+      {
+        id,
+        label: input.label.trim() || baseUrl,
+        base_url: baseUrl,
+        api_key_encrypted: encrypted,
+      },
+      connectProfile,
+    );
   };
 
   const disconnect = (): void => {

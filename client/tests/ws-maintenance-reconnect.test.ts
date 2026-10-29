@@ -64,6 +64,7 @@ function makeFakeTimers(): {
   setTimeout: typeof setTimeout;
   clearTimeout: typeof clearTimeout;
   reconnect: () => FakeTimer | undefined;
+  all: () => FakeTimer[];
   run: (timer: FakeTimer) => void;
 } {
   let nextId = 1;
@@ -83,6 +84,7 @@ function makeFakeTimers(): {
     // Шаг обслуживания — 0…1500 мс; молчание/простой/стабильность в тестах
     // заданы большими значениями и в выборку не попадают.
     reconnect: () => [...timers.values()].find((timer) => timer.ms <= 5_000),
+    all: () => [...timers.values()],
     run: (timer: FakeTimer) => {
       timers.delete(timer.id);
       timer.fn();
@@ -136,7 +138,11 @@ afterEach(async () => {
 function makeClient(
   url: string,
   timers: ReturnType<typeof makeFakeTimers>,
-  opts: { random?: () => number; maintenanceReconnectLimit?: number } = {},
+  opts: {
+    random?: () => number;
+    maintenanceReconnectLimit?: number;
+    maintenanceStableMs?: number;
+  } = {},
 ): RealtimeClient {
   const client = new RealtimeClient({
     baseUrl: url,
@@ -147,7 +153,7 @@ function makeClient(
     random: opts.random ?? (() => 0.5),
     maintenanceReconnectLimit: opts.maintenanceReconnectLimit,
     // Всё, кроме переподключения, в тесте не должно «выстреливать».
-    maintenanceStableMs: 1_000_000,
+    maintenanceStableMs: opts.maintenanceStableMs ?? 1_000_000,
     silenceThresholdMs: 1_000_000,
     idleTimeoutMs: 1_000_000,
     offlineAfterMs: 1_000_000,
@@ -256,6 +262,47 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     await until(() => client.getStatus() === 'offline');
     assert.equal(client.getStatusDetail(), 'server-maintenance');
     assert.equal(timers.reconnect(), undefined, 'бесконечного цикла нет');
+  });
+
+  it('10 с стабильного соединения обнуляют бюджет: следующий 1006 идёт обычной задержкой', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const timers = makeFakeTimers();
+    const conn = nextConnection(server);
+    // random 0.5: обычная fast-лестница = 750 мс, maintenance-шаг = 1000 мс —
+    // исход различим по числам, а не только по detail.
+    const client = makeClient(url, timers, { maintenanceStableMs: 10_000 });
+    client.connect();
+    let ws = await conn;
+    await until(() => client.getStatus() === 'connected');
+
+    // 1012 → режим обслуживания, попытка №1 через 1 с.
+    ws.close(1012, 'maintenance');
+    await until(() => timers.reconnect() !== undefined);
+    const attempt = timers.reconnect()!;
+    assert.equal(attempt.ms, 1_000);
+    assert.equal(client.getStatusDetail(), 'server-maintenance');
+
+    // Сервер вернулся: попытка открывает сокет, взводится таймер стабильности.
+    const reconnected = nextConnection(server);
+    timers.run(attempt);
+    ws = await reconnected;
+    await until(() => client.getStatus() === 'connected');
+    const stable = timers.all().find((timer) => timer.ms === 10_000);
+    assert.ok(stable !== undefined, 'в режиме обслуживания взведён таймер стабильности 10 с');
+
+    // 10 с прожили — эпизод обслуживания закрыт.
+    timers.run(stable);
+
+    // Обычный сетевой обрыв (1006): прежняя fast-лестница 500–1000 мс (750 при
+    // random 0.5), без detail обслуживания. Без сброса бюджета был бы шаг
+    // обслуживания 1000 мс и detail `server-maintenance`.
+    ws.terminate();
+    await until(() => timers.reconnect() !== undefined);
+    const ordinary = timers.reconnect()!;
+    assert.equal(ordinary.ms, 750, 'после стабильности — обычная задержка');
+    assert.equal(client.getStatusDetail(), null, 'режим обслуживания снят');
+    assert.equal(client.getStatus(), 'reconnecting');
   });
 
   it('forceReconnect выдаёт новый бюджет и снимает режим обслуживания', async () => {

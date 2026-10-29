@@ -8,7 +8,10 @@
  * tested if it stayed there. This file has no Electron dependency and runs
  * under the plain `node --test` harness.
  */
-import type { LocalDb } from '../db/local-db.js';
+import type { VersionResponse } from '@etn/shared';
+
+import { verifyCompatibilityOnConnect, type CompatibilityGate } from '../compatibility.js';
+import type { LocalDb, NewServerProfile } from '../db/local-db.js';
 
 /**
  * Runs an optional compatibility gate and then `getMe` (the RestClient
@@ -34,4 +37,55 @@ export async function connectAndActivate<T>(
   const me = await getMe();
   localDb.setActiveProfile(profileId);
   return me;
+}
+
+/**
+ * Подключение профиля ровно в порядке требования 4d3be6ca (задача 12fd5b0e):
+ * проверка совместимости (`GET /version`; при блокировке — один диагностический
+ * `GET /me` для роли) → обычный `GET /me` → подтверждение роли → активация
+ * профиля.
+ *
+ * Вынесено из `register.ts` в Electron-свободный модуль, чтобы ПОСЛЕДОВАТЕЛЬНОСТЬ
+ * запросов проверялась юнит-тестом по массиву фактических вызовов, а не поиском
+ * подстроки в исходнике (замечание верификатора 6).
+ */
+export async function connectProfileWithCompatibility<T>(
+  localDb: Pick<LocalDb, 'setActiveProfile'>,
+  profileId: string,
+  rest: {
+    getVersion(): Promise<VersionResponse>;
+    getMe(): Promise<T>;
+  },
+  gate: CompatibilityGate,
+): Promise<T> {
+  const me = await connectAndActivate(
+    localDb,
+    profileId,
+    () => rest.getMe(),
+    () => verifyCompatibilityOnConnect(gate, rest),
+  );
+  gate.markRoleConfirmed();
+  return me;
+}
+
+/**
+ * Добавление нового профиля (`addProfile`, H2): СОХРАНЕНИЕ — всегда,
+ * АКТИВАЦИЯ — только после успешной проверки и `GET /me` (задача 12fd5b0e).
+ *
+ * Профиль вставляется неактивным и активируется внутри `connect`
+ * (`connectAndActivate`) — только когда подключение действительно состоялось.
+ * Раньше `register.ts` вставлял его с `is_active: true` и вызывал
+ * `setActiveProfile` ДО проверки: при блокирующем отказе сервер оставался
+ * сохранённым И активным, хотя подключения не было (замечание верификатора 5).
+ *
+ * Вынесено из `register.ts` по той же причине, что и {@link connectAndActivate}:
+ * модуль `register.ts` тянет `electron` и не грузится в `node --test`.
+ */
+export async function addProfileAndConnect<T>(
+  localDb: Pick<LocalDb, 'insertProfile'>,
+  profile: NewServerProfile,
+  connect: (profileId: string) => Promise<T>,
+): Promise<T> {
+  localDb.insertProfile({ ...profile, is_active: false });
+  return connect(profile.id);
 }

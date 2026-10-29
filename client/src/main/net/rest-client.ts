@@ -223,6 +223,12 @@ export interface RestClientOptions {
    * Колбэк синхронный и не должен бросать: он вызывается из разбора ответа.
    */
   onClientVersionUnsupported?: (details: ClientVersionErrorDetails | null) => void;
+  /**
+   * Прикладной таймаут одного HTTP-запроса, мс. По умолчанию
+   * {@link RESPONSE_TIMEOUT_MS} (30 с); переопределение — для тестов
+   * (молчащий сервер не должен держать сьют полминуты).
+   */
+  responseTimeoutMs?: number;
 }
 
 /** Extra per-call options accepted by mutating endpoints. */
@@ -285,6 +291,7 @@ export class RestClient {
   private readonly random: () => number;
   private readonly isServerDown: () => boolean;
   private readonly onClientVersionUnsupported: (details: ClientVersionErrorDetails | null) => void;
+  private readonly responseTimeoutMs: number;
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
@@ -349,6 +356,7 @@ export class RestClient {
     this.random = opts.random ?? Math.random;
     this.isServerDown = opts.isServerDown ?? (() => false);
     this.onClientVersionUnsupported = opts.onClientVersionUnsupported ?? (() => undefined);
+    this.responseTimeoutMs = opts.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS;
   }
 
   /**
@@ -605,7 +613,7 @@ export class RestClient {
       if (networkId !== null) this.trackController(networkId, controller);
       const timeout = setTimeout(
         () => controller.abort(new Error('ETN response timeout')),
-        RESPONSE_TIMEOUT_MS,
+        this.responseTimeoutMs,
       );
       if (ro.signal !== undefined) {
         // Forward caller-initiated aborts.
@@ -4166,14 +4174,36 @@ export class RestClient {
    * Variant of {@link request} without the auth header — health/version are
    * public (§16). The path still goes under `/api/v1` like every other
    * endpoint (the server serves no root-level routes).
+   *
+   * Таймаут и нормализация отказа — как у {@link performRequest} (задача
+   * 12fd5b0e): `/version` стоит на критическом пути подключения, и молчащий
+   * сервер не должен держать экран подключения до таймаута undici (~5 мин).
+   * Одна попытка (проверка версии не ждёт 3 × 30 с), причина отказа едет в
+   * `details { kind: 'connect-failed', reason }` (ошибка 390e9746), чтобы
+   * основной процесс отличил timeout/refused от «несовместимой версии».
    */
   private async requestRaw<T>(method: string, path: string): Promise<T> {
     const url = `${this.baseUrl}/api/v1${path.startsWith('/') ? path : `/${path}`}`;
-    const res = await this.fetchImpl(url, {
-      method,
-      headers: { Accept: 'application/json', ...this.clientHeaders() },
-    });
-    return (await this.parseResponse<T>(res)).data;
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error('ETN response timeout')),
+      this.responseTimeoutMs,
+    );
+    try {
+      const res = await this.fetchImpl(url, {
+        method,
+        headers: { Accept: 'application/json', ...this.clientHeaders() },
+        signal: controller.signal,
+      });
+      return (await this.parseResponse<T>(res)).data;
+    } catch (err) {
+      // Ошибка конверта/статуса уже типизирована `parseResponse`; всё прочее —
+      // транспортный отказ (включая собственный таймаут и обрыв тела).
+      if (err instanceof EtnError) throw err;
+      throw transportFailure(err);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -4305,22 +4335,23 @@ const CONNECT_FAILURE_REASON_TEXT: Readonly<Record<ConnectFailureReason, string>
 };
 
 /**
- * Обрыв тела УЖЕ начатого ответа (ошибка 69790006): заголовки получены,
- * `fetch` вернул `Response`, но чтение тела упало — `TypeError: terminated`
- * (cause `UND_ERR_SOCKET` «other side closed»,
- * `UND_ERR_RES_CONTENT_LENGTH_MISMATCH` и т.п.). Раньше ошибка уходила наружу
- * сырой, и GUI показывал «Не удалось подключиться к серверу <адрес>:
- * terminated».
+ * Транспортный отказ без конверта сервера: обрыв уже начатого ответа (ошибка
+ * 69790006: заголовки получены, чтение тела упало — `TypeError: terminated`,
+ * cause `UND_ERR_SOCKET` «other side closed», `UND_ERR_RES_CONTENT_LENGTH_MISMATCH`
+ * и т.п.) либо отказ публичного запроса `requestRaw` до получения ответа
+ * (таймаут, отказ соединения — задача 12fd5b0e). Раньше такие ошибки уходили
+ * наружу сырыми, и GUI показывал «Не удалось подключиться к серверу <адрес>:
+ * terminated/fetch failed».
  *
  * Нормализация — той же схемой, что у отказа подключения (390e9746):
  * {@link classifyConnectFailure} проходит cause-цепочку, причина едет в
  * `details { kind: 'connect-failed', reason }`, текст — человеческий.
  * `kind` остаётся `connect-failed`: для потребителей это транспортный отказ с
- * причиной, и все три пути подключения рендерят её из `details`, не разбирая
+ * причиной, и все пути подключения рендерят её из `details`, не разбирая
  * текст исключения; новый `kind` потребовал бы синхронных правок всех
  * потребителей без выигрыша в смысле.
  */
-function responseBodyFailure(err: unknown): EtnError {
+function transportFailure(err: unknown): EtnError {
   const reason = classifyConnectFailure(err);
   return new EtnError(
     'INTERNAL',
@@ -4342,6 +4373,6 @@ async function readResponseBody<T>(
     return await read();
   } catch (err) {
     if (callerSignal?.aborted === true) throw callerSignal.reason ?? err;
-    throw responseBodyFailure(err);
+    throw transportFailure(err);
   }
 }
