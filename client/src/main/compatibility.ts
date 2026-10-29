@@ -33,6 +33,7 @@
  */
 
 import {
+  CLIENT_VERSION_ERROR_REASON,
   compareSemver,
   compatibilityRangeFor,
   EtnError,
@@ -40,6 +41,7 @@ import {
   parseSemver,
   satisfiesRange,
   type ClientVersionErrorDetails,
+  type ClientVersionErrorReason,
   type VersionResponse,
 } from '@etn/shared';
 
@@ -78,10 +80,11 @@ export type CompatibilityReason = 'client-outdated' | 'server-outdated' | 'check
  * Итог проверки совместимости — IPC-сущность «Результат проверки совместимости
  * клиента с сервером» (89aad200). Передаётся рендереру и управляет блокировкой.
  *
- * Роль администратора в результате НЕ хранится: только флаг
- * `roleConfirmed` — был ли в этой сессии успешный `GET /api/v1/me`. Кнопку
- * «Обновить сервер» показывает диалог (0afec967), сверяя роль из своего
- * снимка `me` (K3: до подтверждения роли — нейтральный текст).
+ * Роль администратора берётся из `GET /api/v1/me` (обычного при подключении или
+ * диагностического после блокирующего вердикта — требование 4d3be6ca) и
+ * попадает в `is_admin` (0afec967): диалог блокировки показывает «Обновить
+ * сервер» только администратору. `roleConfirmed` различает «роль не
+ * запрашивали» от «запросили и получили не администратора».
  */
 export interface CompatibilityResult {
   status: CompatibilityStatus;
@@ -105,6 +108,20 @@ export interface CompatibilityResult {
   downloadUrl: string | null;
   /** `GET /api/v1/me` уже подтвердил роль в этой сессии (K3). */
   roleConfirmed: boolean;
+  /**
+   * `true` — пользователь администратор сервера (`is_admin` из `/api/v1/me`).
+   * `/me` не выполнен или роль не подтверждена — `false`: диалог показывает
+   * нейтральный текст «Обратитесь к администратору сервера», кнопки
+   * «Обновить сервер» нет (требование 8623b9ff, 0afec967).
+   */
+  is_admin: boolean;
+  /**
+   * Машиночитаемая причина отказа сервера `426 CLIENT_VERSION_UNSUPPORTED`
+   * (словарь `CLIENT_VERSION_ERROR_REASON` в `@etn/shared`); `null` — отказ
+   * пришёл не от сервера (проверка `/version` при подключении). По ней диалог
+   * и текст отказа подключения выбирают формулировку (0afec967).
+   */
+  serverReason: ClientVersionErrorReason | null;
 }
 
 /** Вход чистой проверки: версия клиента + тело `/version` как пришло. */
@@ -114,6 +131,8 @@ export interface CompatibilityInput {
   response: unknown;
   /** Подтверждена ли роль после `GET /me` (попадает в результат). */
   roleConfirmed?: boolean;
+  /** Администратор ли пользователь по `GET /me` (попадает в `is_admin`). */
+  isAdmin?: boolean;
 }
 
 /**
@@ -171,6 +190,8 @@ export function checkCompatibility(input: CompatibilityInput): CompatibilityResu
     recommendedClientVersion: null,
     downloadUrl: null,
     roleConfirmed,
+    is_admin: input.isAdmin === true,
+    serverReason: null,
   } as const;
 
   if (clientCompatibility === null || parseSemver(clientVersion) === null) {
@@ -328,6 +349,20 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
+/** Причина отказа `426` из `details.reason`; чужое/битое значение — `null`. */
+function versionReasonOf(value: unknown): ClientVersionErrorReason | null {
+  const known = Object.values(CLIENT_VERSION_ERROR_REASON) as string[];
+  return typeof value === 'string' && known.includes(value)
+    ? (value as ClientVersionErrorReason)
+    : null;
+}
+
+/** Администратор ли пользователь по телу `GET /api/v1/me`; иначе `false`. */
+function isAdminOf(me: unknown): boolean {
+  if (typeof me !== 'object' || me === null) return false;
+  return (me as { is_admin?: unknown }).is_admin === true;
+}
+
 function refusalMessage(result: CompatibilityResult): string {
   const client = `Клиент ${result.clientVersion}`;
   const server = result.serverVersion === null ? 'сервер неизвестной версии' : `сервер ${result.serverVersion}`;
@@ -397,6 +432,8 @@ export class CompatibilityGate {
   private current: CompatibilityResult | null = null;
   /** `GET /me` уже подтвердил роль в этой сессии (K3). */
   private roleConfirmed = false;
+  /** Пользователь — администратор по последнему успешному `/me` (0afec967). */
+  private isAdmin = false;
   /** Номер поколения проверок — отбрасывает устаревшие ответы. */
   private seq = 0;
   /** Идёт повторная проверка (single-flight: шторм реконнектов не плодит запросы). */
@@ -419,14 +456,27 @@ export class CompatibilityGate {
     return this.current?.blocking === true;
   }
 
-  /** Успешный `GET /me`: роль в этой сессии известна (K3). */
-  public markRoleConfirmed(): void {
+  /**
+   * Успешный `GET /me`: роль в этой сессии известна (K3). `me` — тело ответа
+   * `/me`: из него берётся `is_admin` для кнопки «Обновить сервер»
+   * (0afec967). Без аргумента роль подтверждается, администратор остаётся
+   * прежним (совместимость с вызовами, где тело не нужно).
+   */
+  public markRoleConfirmed(me?: unknown): void {
     this.roleConfirmed = true;
-    // Вердикт уже опубликован с `roleConfirmed: false` — обновляем его, иначе
-    // renderer не узнает, что роль подтверждена, и кнопка «Обновить сервер»
-    // не появится (K3, требование 8623b9ff).
-    if (this.current !== null && !this.current.roleConfirmed) {
-      this.current = { ...this.current, roleConfirmed: true };
+    if (me !== undefined) this.isAdmin = isAdminOf(me);
+    // Вердикт уже опубликован с неподтверждённой ролью — обновляем его, иначе
+    // renderer не узнает роль и кнопка «Обновить сервер» не появится
+    // (K3, требование 8623b9ff).
+    if (
+      this.current !== null &&
+      (!this.current.roleConfirmed || this.current.is_admin !== this.isAdmin)
+    ) {
+      this.current = {
+        ...this.current,
+        roleConfirmed: true,
+        is_admin: this.isAdmin,
+      };
       this.publish(this.current);
     }
   }
@@ -437,18 +487,21 @@ export class CompatibilityGate {
    * `GET /me` недоступен (подключение уже запрещено), и без этого вызова роль
    * не подтвердилась бы никогда → кнопка «Обновить сервер» не появилась бы.
    *
-   * Результат `/me` не сохраняется и не используется, профиль не активируется,
-   * других авторизованных запросов нет; ошибка `/me` оставляет роль
-   * неподтверждённой. Вне блокировки — no-op.
+   * Из результата `/me` берётся ТОЛЬКО `is_admin` (0afec967) — иначе кнопка
+   * «Обновить сервер» не появилась бы: профиль не активируется, других
+   * авторизованных запросов нет. Ошибка `/me` оставляет роль неподтверждённой и
+   * `is_admin: false` (нейтральный текст «Обратитесь к администратору
+   * сервера»). Вне блокировки — no-op.
    */
   public async confirmRoleAfterBlocking(getMe: () => Promise<unknown>): Promise<void> {
     if (!this.isBlocking()) return;
+    let me: unknown;
     try {
-      await getMe();
+      me = await getMe();
     } catch {
       return;
     }
-    this.markRoleConfirmed();
+    this.markRoleConfirmed(me);
   }
 
   /** Сброс (пользователь отключился): вердикта нет, роль не подтверждена. */
@@ -456,6 +509,7 @@ export class CompatibilityGate {
     this.seq += 1;
     this.current = null;
     this.roleConfirmed = false;
+    this.isAdmin = false;
     this.publish(null);
   }
 
@@ -470,6 +524,7 @@ export class CompatibilityGate {
     // Новое подключение — роль ещё не подтверждена ЭТИМ сервером (K3): до
     // `GET /me` администратор неизвестен, диалог покажет нейтральный текст.
     this.roleConfirmed = false;
+    this.isAdmin = false;
     return this.run(fetchVersion, false);
   }
 
@@ -510,6 +565,10 @@ export class CompatibilityGate {
       recommendedClientVersion: previous?.recommendedClientVersion ?? null,
       downloadUrl: details?.download_url ?? previous?.downloadUrl ?? null,
       roleConfirmed: this.roleConfirmed,
+      is_admin: this.isAdmin,
+      // Причина отказа от сервера (`details.reason`): диалог и текст отказа
+      // подключения выбирают по ней формулировку (0afec967).
+      serverReason: versionReasonOf(details?.reason),
     };
     this.current = result;
     this.log?.('warn', 'client version rejected mid-session', {
@@ -540,6 +599,7 @@ export class CompatibilityGate {
         clientVersion: this.clientVersion,
         response,
         roleConfirmed: this.roleConfirmed,
+        isAdmin: this.isAdmin,
       });
     } catch (err) {
       error = err;
@@ -548,6 +608,7 @@ export class CompatibilityGate {
         // Битый/недоступный ответ: `check-failed`, а не «совместимо» (DoD).
         response: null,
         roleConfirmed: this.roleConfirmed,
+        isAdmin: this.isAdmin,
       });
     }
 

@@ -74,6 +74,7 @@ import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
+import { initCompatibilityDialog } from './lib/compatibility-dialog.js';
 import { initLockReconnect } from './lib/lock-guard.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
@@ -881,6 +882,27 @@ export async function boot(): Promise<void> {
   // Вердикт совместимости — до первого `server.connect`: проверка в main
   // публикует его раньше, чем renderer получит `me` (задача 12fd5b0e).
   void initCompatibilityState();
+  // Блокирующий диалог несовместимости (элемент 8623b9ff, задача 0afec967):
+  // показывается только после аутентификации; «Повторить» переподключается к
+  // активному профилю, совместимый вердикт закрывает диалог сам.
+  initCompatibilityDialog({
+    getState: () => ({
+      compatibility: store.state.compatibility,
+      authenticated: store.state.me !== null,
+      profileId: store.state.profileId,
+    }),
+    subscribe: (listener) => store.subscribe(listener),
+    openExternal: (url) => etn.system.openExternal(url),
+    copyText: async (text) => {
+      await navigator.clipboard.writeText(text);
+    },
+    loadProfiles: () => etn.server.listProfiles(),
+    retry: async (profileId) => {
+      const me = await etn.server.connect(profileId);
+      store.update({ me });
+      await restoreSession();
+    },
+  });
   setRealtimeEffects({
     // Full visible resync, not just a focus refresh (defect de34b35b):
     // `resume.stale` means the event window was exceeded — the editor and the

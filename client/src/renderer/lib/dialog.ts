@@ -251,6 +251,15 @@ export interface DialogOptions {
    * как всегда. Явные кнопки футера закрывают молча в любом случае.
    */
   dirty?: DialogDirtyGuard;
+  /**
+   * Закрывается ли диалог пользователем — крестиком и Esc. `false` —
+   * блокирующий диалог: крестика в заголовке нет, Esc не закрывает
+   * (требование 8623b9ff, задача 0afec967). Программное закрытие владельцем
+   * (`closeDialog()` / возвращённая функция) работает всегда: диалог
+   * закрывается сам, когда состояние, из-за которого он показан, изменилось.
+   * По умолчанию `true`.
+   */
+  dismissible?: boolean;
 }
 
 /** Open dialogs, bottom first. */
@@ -638,14 +647,18 @@ export function showDialog(opts: DialogOptions): () => void {
 
   const header = div('dialog-header');
   header.append(el('span', 'dialog-title', opts.title));
-  const closeBtn = iconButton({
-    icon: svgIcon('x', 14),
-    title: t('actions.closeShortcut', 'Esc'),
-    role: 'ghost',
-    size: 's',
-    onClick: () => requestClose(),
-  });
-  header.append(closeBtn);
+  // Блокирующий диалог (dismissible: false) не показывает крестик: закрыть его
+  // пользователь не может, только приложение или смена состояния (8623b9ff).
+  if (opts.dismissible !== false) {
+    const closeBtn = iconButton({
+      icon: svgIcon('x', 14),
+      title: t('actions.closeShortcut', 'Esc'),
+      role: 'ghost',
+      size: 's',
+      onClick: () => requestClose(),
+    });
+    header.append(closeBtn);
+  }
   box.append(header);
 
   // Постоянная шапка содержимого (идентичность сущности) — над вкладками,
@@ -802,6 +815,11 @@ export function showDialog(opts: DialogOptions): () => void {
   escapeOverlay = pushKeyOverlay({
     id: 'dialog',
     onEscape: () => {
+      // Блокирующий диалог гасит Esc: закрыть его пользователь не может
+      // (8623b9ff, 0afec967). Возврат без вызова `requestClose` означает
+      // «нажатие принято» — событие не уйдёт нижележащим слоям и общим
+      // командам.
+      if (opts.dismissible === false) return;
       // Слои Escape (задача d23279f6): вызывающий может обработать нажатие
       // сам (закрыть док-панель, отменить клавиатурный драг сплиттера) и
       // оставить диалог открытым.

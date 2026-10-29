@@ -64,7 +64,10 @@ export async function connectProfileWithCompatibility<T>(
     () => rest.getMe(),
     () => verifyCompatibilityOnConnect(gate, rest),
   );
-  gate.markRoleConfirmed();
+  // Тело обычного `/me` тоже несёт `is_admin`: администратор, подключившийся к
+  // совместимому серверу, получит кнопку «Обновить сервер», если вердикт
+  // заблокируется позже (426/переподключение) — 0afec967.
+  gate.markRoleConfirmed(me);
   return me;
 }
 

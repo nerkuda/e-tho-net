@@ -62,11 +62,13 @@ function check(
   response: unknown,
   clientVersion = CLIENT,
   roleConfirmed?: boolean,
+  isAdmin?: boolean,
 ): CompatibilityResult {
   return checkCompatibility({
     clientVersion,
     response,
     ...(roleConfirmed === undefined ? {} : { roleConfirmed }),
+    ...(isAdmin === undefined ? {} : { isAdmin }),
   });
 }
 
@@ -200,6 +202,11 @@ describe('checkCompatibility — пять статусов (89aad200)', () => {
     assert.equal(check(versionBody(), CLIENT, true).roleConfirmed, true);
   });
 
+  it('is_admin попадает в результат из /me (0afec967): по умолчанию false', () => {
+    assert.equal(check(versionBody()).is_admin, false);
+    assert.equal(check(versionBody(), CLIENT, true, true).is_admin, true);
+  });
+
   it('parseVersionResponse: пустые/нестроковые необязательные поля — null', () => {
     const parsed = parseVersionResponse({
       version: '0.15.1',
@@ -325,6 +332,7 @@ describe('verifyCompatibilityOnConnect — блокировка и роль (862
         assert.equal(details.kind, 'client-compatibility');
         assert.equal(details.result.status, 'client-outdated');
         assert.equal(details.result.roleConfirmed, true);
+        assert.equal(details.result.is_admin, true, 'диагностический /me подтвердил администратора');
         return true;
       },
     );
@@ -356,6 +364,11 @@ describe('verifyCompatibilityOnConnect — блокировка и роль (862
     assert.deepEqual(serverLog, ['GET /version', 'GET /me']);
     assert.equal(gate.getResult()?.status, 'client-outdated');
     assert.equal(gate.getResult()?.roleConfirmed, false, 'ошибка /me роль не подтверждает');
+    assert.equal(
+      gate.getResult()?.is_admin,
+      false,
+      'ошибка /me оставляет is_admin=false — нейтральный текст диалога (0afec967)',
+    );
   });
 
   it('check-failed: диагностического /me нет, пробрасывается исходная ошибка /version', async () => {
@@ -621,7 +634,7 @@ describe('CompatibilityGate — вердикт, переподключение �
   it('426 в середине сессии: client-outdated из details, teardown и публикация', async () => {
     const h = makeGate();
     await h.gate.check(async () => versionBody());
-    h.gate.markRoleConfirmed();
+    h.gate.markRoleConfirmed({ id: 'admin-1', is_admin: true });
     h.gate.onVersionRejected({
       reason: 'version-out-of-range',
       server_version: '0.15.2',
@@ -633,11 +646,29 @@ describe('CompatibilityGate — вердикт, переподключение �
     assert.equal(result?.status, 'client-outdated');
     assert.equal(result?.blocking, true);
     assert.equal(result?.roleConfirmed, true, 'роль подтверждена до отказа (K3)');
+    assert.equal(result?.is_admin, true, 'администратор по подтверждённому /me (0afec967)');
+    assert.equal(
+      result?.serverReason,
+      'version-out-of-range',
+      'причина details.reason доходит до диалога (0afec967)',
+    );
     assert.equal(result?.serverVersion, '0.15.2');
     assert.equal(result?.serverCompatibility, '>=0.15.2 <0.16.0');
     assert.equal(result?.downloadUrl, RELEASE_PAGE);
     assert.equal(h.teardownCalls, 1, 'соединение разорвано без ожидания перезапуска');
     assert.deepEqual(h.published.at(-1), result);
+  });
+
+  it('426 с чужой/битой причиной: serverReason null, is_admin по неадминистратору', async () => {
+    const h = makeGate();
+    await h.gate.check(async () => versionBody());
+    h.gate.markRoleConfirmed({ id: 'user-1', is_admin: false });
+    h.gate.onVersionRejected({
+      reason: 'toString' as never,
+      server_version: '0.16.0',
+    });
+    assert.equal(h.gate.getResult()?.serverReason, null, 'унаследованный ключ — не причина');
+    assert.equal(h.gate.getResult()?.is_admin, false);
   });
 
   it('426 обгоняет проверку в полёте: устаревший ответ не перезаписывает вердикт', async () => {
@@ -661,9 +692,23 @@ describe('CompatibilityGate — вердикт, переподключение �
   it('новое подключение сбрасывает подтверждение роли до GET /me', async () => {
     const h = makeGate();
     await h.gate.check(async () => versionBody());
-    h.gate.markRoleConfirmed();
+    h.gate.markRoleConfirmed({ id: 'admin-1', is_admin: true });
     const outcome = await h.gate.check(async () => versionBody({ version: '0.14.1' }));
     assert.equal(outcome.result.roleConfirmed, false);
+    assert.equal(outcome.result.is_admin, false, 'роль нового сервера ещё неизвестна');
+  });
+
+  it('markRoleConfirmed(me) публикует is_admin в уже показанном вердикте (0afec967)', async () => {
+    const h = makeGate();
+    await h.gate.check(async () => versionBody({ version: '0.14.1' }));
+    const before = h.gate.getResult();
+    assert.equal(before?.roleConfirmed, false);
+    assert.equal(before?.is_admin, false);
+    h.gate.markRoleConfirmed({ id: 'admin-1', is_admin: true });
+    const after = h.gate.getResult();
+    assert.equal(after?.roleConfirmed, true);
+    assert.equal(after?.is_admin, true, 'кнопка «Обновить сервер» появится у администратора');
+    assert.deepEqual(h.published.at(-1), after, 'обновлённый вердикт опубликован рендереру');
   });
 
   it('reset публикует null и очищает вердикт', async () => {
