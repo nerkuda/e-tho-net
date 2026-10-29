@@ -126,9 +126,6 @@ export function initDrafts(): void {
       // Проба живости только отправлена — потери связи ещё нет, и на входе в
       // `suspect` пользователю НЕ сообщаем ничего (fb9d6058 п.4). Сообщение
       // появится, только если проба не подтвердит живость (ветка ниже).
-      // Проба живости только отправлена — потери связи ещё нет, и на входе в
-      // `suspect` пользователю НЕ сообщаем ничего (fb9d6058 п.4). Сообщение
-      // появится, только если проба не подтвердит живость (ветка ниже).
     } else if (!connected && (lastConnected || prevActive === 'suspect')) {
       // Реальный обрыв (connected → reconnecting/offline) либо проба, не
       // подтвердившая живость за свой дедлайн (suspect → reconnecting/offline).
@@ -440,6 +437,15 @@ export async function retryPendingDrafts(networkId?: string): Promise<void> {
   if (drafts.length === 0) return;
   let conflicts = 0;
   let unavailable = 0;
+  // Терминальные черновики этой волны уже вышли из очереди `pending` —
+  // повторной волны для них не будет. Поэтому агрегат показывается и при
+  // обрыве связи посреди досылки (fb9d6058, замечание верификатора).
+  const reportTerminalDrafts = (): void => {
+    if (unavailable > 0) {
+      notice(t('drafts.failed.unavailable', [unavailable, draftNoun(unavailable)]), 'warning');
+    }
+    if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
+  };
   for (const draft of drafts) {
     try {
       const outcome = await sendDraft(draft);
@@ -448,14 +454,15 @@ export async function retryPendingDrafts(networkId?: string): Promise<void> {
     } catch (err) {
       notice(t('drafts.retry.failed', errText(err)), 'error');
       // Соединение оборвалось посреди досылки: остальные строки отправлять
-      // бессмысленно, они уйдут на следующем восстановлении связи.
-      if (isConnectionLostError(err)) return;
+      // бессмысленно, они уйдут на следующем восстановлении связи. Агрегат за
+      // уже обработанные терминальные черновики — ДО выхода из волны.
+      if (isConnectionLostError(err)) {
+        reportTerminalDrafts();
+        return;
+      }
     }
   }
-  if (unavailable > 0) {
-    notice(t('drafts.failed.unavailable', [unavailable, draftNoun(unavailable)]), 'warning');
-  }
-  if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
+  reportTerminalDrafts();
 }
 
 /** True when the failure is an `If-Match` version conflict. */

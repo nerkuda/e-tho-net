@@ -774,6 +774,44 @@ test('NOT_FOUND при создании comment-new: цель удалена —
   assert.equal(noticeCount() - before, 1, 'одно сообщение');
 });
 
+test('обрыв связи после терминального черновика: агрегат показан до выхода из волны', async () => {
+  const h = installHarness();
+  // Первый черновик терминален (цель удалена), на втором связь обрывается.
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'УДАЛЁННАЯ ЦЕЛЬ',
+    baseVersion: 1,
+  });
+  h.setRow({
+    entityType: 'comment',
+    entityId: 'comment-after-lost',
+    field: 'body_md',
+    value: 'НЕ ОТПРАВЛЯЛСЯ',
+    baseVersion: 1,
+  });
+  const api = (globalThis as unknown as { window: { etn: { comments: { update: unknown } } } }).window
+    .etn.comments;
+  let calls = 0;
+  api.update = async () => {
+    calls += 1;
+    if (calls === 1) throw new EtnError('NOT_FOUND', 'comment not found');
+    throw new EtnError('INTERNAL', 'server unavailable', { kind: 'connection-lost' });
+  };
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows[0]!.status, 'failed', 'терминальный черновик помечен до обрыва');
+  assert.equal(h.rows[1]!.status, 'pending', 'второй черновик остался в очереди');
+  assert.equal(noticeCount() - before, 2, 'сбой волны и агрегат о недоступных');
+  assert.ok(
+    noticeTexts().some((text) => text.includes('запись недоступна')),
+    `агрегат показан перед выходом: ${noticeTexts().join(' | ')}`,
+  );
+});
+
 test('прочие ошибки остаются ретраибельными: VALIDATION_ERROR не терминален', async () => {
   const h = installHarness();
   h.setRow({
