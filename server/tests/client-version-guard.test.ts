@@ -5,12 +5,17 @@
  * Два слоя проверки:
  *  - юнит-матрица `createClientVersionGuard`: методы × наличие `Client-Id` ×
  *    три причины отказа (`version-missing`, `version-invalid`,
- *    `version-out-of-range`), включая пустой заголовок и массив значений;
+ *    `version-out-of-range`), включая пустой заголовок и массив значений, и
+ *    allowlist читающих `POST`-эндпоинтов (версия их не блокирует, путь
+ *    сравнивается без query string и завершающего слеша);
  *  - сквозная матрица на реальном Fastify-приложении (`buildRestContext`,
- *    настоящий пайплайн и БД): чтение не блокируется, все четыре изменяющих
- *    метода получают 426, запрос без `Client-Id` (API-интеграция) проходит,
- *    диапазон совпадает с `GET /version`, ошибка идёт каноническим конвертом,
- *    а аутентификация выполняется раньше проверки версии.
+ *    настоящий пайплайн и БД): чтение не блокируется (включая читающие
+ *    `POST thoughts/query` и `POST chronicle/query`, которыми клиент читает
+ *    мысли и хронику), все четыре изменяющих метода получают 426, запрос без
+ *    `Client-Id` (API-интеграция) проходит, диапазон совпадает с `GET /version`,
+ *    ошибка идёт каноническим конвертом, а аутентификация выполняется раньше
+ *    проверки версии. Отдельно проверяется, что allowlist не протух: каждый его
+ *    путь — реально зарегистрированный `POST`-маршрут приложения.
  *
  * MCP-путь проверяется отдельно в `mcp-http.test.ts` (у `/mcp` собственный
  * транспорт, guard его не касается). Приоритет `503` обслуживания над `426`
@@ -29,11 +34,18 @@ import {
 } from '@etn/shared';
 
 import {
+  READ_ONLY_POST_ROUTES,
   createClientVersionGuard,
   describeClientVersionRejection,
 } from '../src/auth/client-version-guard.js';
 import { SERVER_VERSION, resolveClientChannel } from '../src/version.js';
-import { authHeaders, buildRestContext, closeRestContext, nativeAvailable } from './rest-helpers.js';
+import {
+  apiCreateThought,
+  authHeaders,
+  buildRestContext,
+  closeRestContext,
+  nativeAvailable,
+} from './rest-helpers.js';
 
 /** Канал для юнит-матрицы: диапазон не зависит от версии репозитория. */
 const UNIT_CHANNEL = {
@@ -41,18 +53,36 @@ const UNIT_CHANNEL = {
   client_download_url: 'https://example.test/releases/tag/v1.2.5',
 };
 
-/** Запрос-двойник guard'а: только метод и заголовки. */
+/**
+ * Запрос-двойник guard'а: метод, заголовки и путь. `routeUrl` — шаблон
+ * зарегистрированного маршрута (`routeOptions.url`), `url` — сырой адрес
+ * (с query string); без `routeUrl` guard обязан пользоваться сырым адресом.
+ */
 function fakeReq(
   method: string,
   headers: Record<string, string | string[] | undefined> = {},
+  routing: { url?: string; routeUrl?: string } = {},
 ): Parameters<ReturnType<typeof createClientVersionGuard>>[0] {
-  return { method, headers };
+  const url = routing.url ?? '/api/v1/unknown';
+  return routing.routeUrl === undefined
+    ? { method, headers, url }
+    : { method, headers, url, routeOptions: { url: routing.routeUrl } };
 }
 
 const unitGuard = createClientVersionGuard({
   clientChannel: UNIT_CHANNEL,
   serverVersion: '1.2.5',
 });
+
+/** Конкретный адрес из шаблона маршрута: `:param` → значение. */
+function concretePath(route: string): string {
+  return route
+    .replace(/:networkId/g, 'net-1')
+    .replace(/:thoughtId/g, 'thought-1')
+    .replace(/:id/g, 'owner-1')
+    .replace(/:key/g, 'author')
+    .replace(/:view/g, 'my-view');
+}
 
 describe('client-version-guard — юнит-матрица', () => {
   it('чтение (GET/HEAD/OPTIONS) не проверяется ни при какой версии', () => {
@@ -64,6 +94,79 @@ describe('client-version-guard — юнит-матрица', () => {
       );
       assert.equal(unitGuard(fakeReq(method, { 'client-id': 'c1' })), null, method);
     }
+  });
+
+  it('читающие POST-эндпоинты не проверяются: allowlist пропускает любую версию', () => {
+    // Самая несовместимая версия, отсутствие версии и мусор — всё допустимо:
+    // чтение не блокируется (ADR 6ded6a87), иначе старый клиент не прочитает
+    // даже список мыслей.
+    for (const route of READ_ONLY_POST_ROUTES) {
+      const concrete = concretePath(route);
+      for (const headers of [
+        { 'client-id': 'c1', 'client-version': '9.9.9' },
+        { 'client-id': 'c1' },
+        { 'client-id': 'c1', 'client-version': 'garbage' },
+      ]) {
+        // Шаблон регистрации + конкретный адрес: guard берёт routeOptions.url.
+        assert.equal(
+          unitGuard(fakeReq('POST', headers, { routeUrl: route, url: concrete })),
+          null,
+          `${route}: ${JSON.stringify(headers)}`,
+        );
+        // Запасной источник — сырой url, когда шаблона нет.
+        assert.equal(unitGuard(fakeReq('POST', headers, { url: concrete })), null, `${route}: raw url`);
+        // Нормализация: query string, фрагмент и завершающий слеш не значимы.
+        assert.equal(
+          unitGuard(fakeReq('POST', headers, { url: `${concrete}/?x=1#frag` })),
+          null,
+          `${route}: normalized`,
+        );
+      }
+    }
+  });
+
+  it('allowlist не распространяется на другие методы и чужие POST-пути', () => {
+    const headers = { 'client-id': 'c1', 'client-version': '1.3.0' };
+    const route = '/api/v1/networks/:networkId/thoughts/query';
+    const concrete = concretePath(route);
+    // DELETE по читающему пути — изменяющий запрос, версия проверяется.
+    for (const method of ['PUT', 'PATCH', 'DELETE']) {
+      assert.equal(
+        unitGuard(fakeReq(method, headers, { routeUrl: route, url: concrete }))?.reason,
+        CLIENT_VERSION_ERROR_REASON.outOfRange,
+        method,
+      );
+    }
+    // Изменяющие POST-маршруты остаются под проверкой: создание, bulk-правка,
+    // экспорт (создаёт задачу) и rollup журнала (удаляет строки).
+    for (const mutating of [
+      '/api/v1/networks',
+      '/api/v1/networks/:networkId/thoughts',
+      '/api/v1/networks/:networkId/thoughts/batch',
+      '/api/v1/networks/:networkId/export',
+      '/api/v1/networks/:networkId/activity/rollup',
+      '/api/v1/networks/:networkId/import/commit',
+    ]) {
+      assert.equal(
+        unitGuard(fakeReq('POST', headers, { routeUrl: mutating, url: concretePath(mutating) }))?.reason,
+        CLIENT_VERSION_ERROR_REASON.outOfRange,
+        mutating,
+      );
+    }
+    // Похожий, но другой путь не срабатывает: allowlist сравнивает путь целиком.
+    assert.equal(
+      unitGuard(
+        fakeReq('POST', headers, {
+          url: '/api/v1/networks/net-1/thoughts/query/extra',
+        }),
+      )?.reason,
+      CLIENT_VERSION_ERROR_REASON.outOfRange,
+    );
+    // Пустой/отсутствующий url не даёт ложного совпадения.
+    assert.equal(
+      unitGuard(fakeReq('POST', headers, { routeUrl: '', url: '' }))?.reason,
+      CLIENT_VERSION_ERROR_REASON.outOfRange,
+    );
   });
 
   it('без Client-Id запрос считается API-интеграцией и пропускается', () => {
@@ -184,6 +287,75 @@ describe(
         assert.equal(get.statusCode, 200, get.body);
         const head = await ctx.app.inject({ method: 'HEAD', url: '/api/v1/me', headers });
         assert.equal(head.statusCode, 200, head.body);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('allowlist состоит из реально зарегистрированных POST-маршрутов', async () => {
+      const ctx = await buildRestContext();
+      try {
+        for (const route of READ_ONLY_POST_ROUTES) {
+          assert.equal(ctx.app.hasRoute({ method: 'POST', url: route }), true, route);
+        }
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('несовместимая версия не мешает чтению: POST thoughts/query и chronicle/query → 200', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const created = await apiCreateThought(ctx, { title: 'Visible to incompatible client' });
+        assert.equal(created.statusCode, 201);
+        const thoughtId = created.data['id'] as string;
+        const headers = { ...authHeaders(ctx), ...clientHeaders(incompatibleVersion) };
+
+        // Клиент читает «Структуры» именно этим POST — 426 здесь означал бы,
+        // что старый клиент не видит ни одной мысли.
+        const query = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/query`,
+          headers,
+          payload: { keywords: 'Visible', limit: 10 },
+        });
+        assert.equal(query.statusCode, 200, query.body);
+        const titles = (query.json().data as Array<{ title: string }>).map((row) => row.title);
+        assert.ok(
+          titles.includes('Visible to incompatible client'),
+          `выдача не содержит созданную мысль: ${JSON.stringify(titles)}`,
+        );
+
+        // Хроника читается тем же несовместимым клиентом.
+        const chronicle = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/chronicle/query`,
+          headers,
+          payload: { thought_ids: [thoughtId], limit: 10 },
+        });
+        assert.equal(chronicle.statusCode, 200, chronicle.body);
+        assert.ok(Array.isArray(chronicle.json().data));
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('изменяющие POST рядом с allowlist по-прежнему получают 426', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const headers = { ...authHeaders(ctx), ...clientHeaders(incompatibleVersion) };
+        const cases: Array<{ url: string; payload: Record<string, unknown> }> = [
+          // Создание мысли в той же сети, чей `…/thoughts/query` разрешён.
+          { url: `/api/v1/networks/${ctx.networkId}/thoughts`, payload: { title: 'Rejected' } },
+          { url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`, payload: { operations: [] } },
+          { url: `/api/v1/networks/${ctx.networkId}/export`, payload: { thought_ids: [], format: 'markdown' } },
+          { url: `/api/v1/networks/${ctx.networkId}/activity/rollup`, payload: {} },
+        ];
+        for (const c of cases) {
+          const res = await ctx.app.inject({ method: 'POST', url: c.url, headers, payload: c.payload });
+          assert.equal(res.statusCode, 426, `${c.url}: ${res.body}`);
+          assert.equal(res.json().error.code, 'CLIENT_VERSION_UNSUPPORTED', c.url);
+        }
       } finally {
         await closeRestContext(ctx);
       }

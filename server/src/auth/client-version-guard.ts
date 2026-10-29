@@ -15,6 +15,10 @@
  *    диапазоном и ссылкой на скачивание.
  *
  * Границы (ADR, «Запрещено»): чтение (`GET`/`HEAD`/`OPTIONS`) не блокируется;
+ * читающие `POST`-эндпоинты (allowlist {@link READ_ONLY_POST_ROUTES}) тоже —
+ * старый desktop-клиент обязан продолжать читать данные, иначе обещание ADR
+ * «старые клиенты читают, но не изменяют» не выполняется: клиент читает мысли
+ * и хронику именно через `POST …/thoughts/query` и `POST …/chronicle/query`.
  * MCP (`/mcp`) идёт своим транспортом и эту проверку не проходит; молча
  * пропускать запрос с `Client-Id` без версии нельзя; второго диапазона здесь
  * нет — только `client_compatibility` из `/version`. Во время обслуживания
@@ -41,6 +45,69 @@ import type { ClientChannel } from '../version.js';
 /** HTTP-методы, на которых проверяется версия desktop-клиента. */
 const MUTATING_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Читающие `POST`-эндпоинты (allowlist): версия клиента на них НЕ проверяется.
+ *
+ * `POST` — не признак изменения: клиент читает мысли, хронику, рёбра, отборы и
+ * упоминания именно `POST`-запросами (`POST /thoughts/query`,
+ * `POST /chronicle/query` и т.д.). Блокировать их значит нарушить обещание ADR
+ * 6ded6a87 «старые desktop-клиенты читают данные, но не могут изменять» —
+ * несовместимый клиент не увидел бы даже список мыслей.
+ *
+ * Список закрытый и явный: новый `POST`-маршрут по умолчанию проверяется,
+ * пока его не внесут сюда осознанно — вместе с тестом, доказывающим, что он
+ * ничего не меняет. Каждая запись — зарегистрированный шаблон Fastify
+ * (`request.routeOptions.url`) с префиксом `/api/v1` и именами параметров
+ * (`:networkId`); сравнение — по нормализованному пути без query string,
+ * фрагмента и завершающего слеша (см. {@link requestPath}), причём параметр
+ * маршрута (`:key`) совпадает с любым непустым сегментом пути: сырой `url`
+ * содержит конкретные id, а шаблон — их имена.
+ *
+ * В список НЕ входят `POST`-маршруты с побочными эффектами, даже если они не
+ * меняют знания: `…/export` и `…/publications/…/export` создают задачу
+ * экспорта, `…/import/preview` — чистый разбор, но `…/import/commit` меняет
+ * данные, `…/activity/rollup` удаляет детальные строки журнала.
+ */
+export const READ_ONLY_POST_ROUTES: readonly string[] = [
+  // «Структуры»: страница мыслей, рёбра между ними, резолв id.
+  '/api/v1/networks/:networkId/thoughts/query',
+  '/api/v1/networks/:networkId/thoughts/edges',
+  '/api/v1/networks/:networkId/thoughts/resolve',
+  // Проверка блокировок удаления (ничего не удаляет и не помечает).
+  '/api/v1/networks/:networkId/thoughts/deletion-check-batch',
+  '/api/v1/networks/:networkId/links/deletion-check-batch',
+  // Хроника.
+  '/api/v1/networks/:networkId/chronicle/query',
+  // Исполнение сохранённого/adhoc-отбора относительно мысли-контекста.
+  '/api/v1/networks/:networkId/thoughts/:thoughtId/views/:view/run',
+  '/api/v1/networks/:networkId/thoughts/:thoughtId/views/run',
+  // Разбор архива без записи в сеть.
+  '/api/v1/networks/:networkId/import/preview',
+  // Явный резолв кросс-сетевых значений (требование c104a0fc: без write-бюджета
+  // и audit-записи как содержательной правки) — для обоих видов владельца.
+  '/api/v1/networks/:networkId/thoughts/:id/properties/:key/cross-resolve',
+  '/api/v1/networks/:networkId/links/:id/properties/:key/cross-resolve',
+  // Поиск упоминаний в присланных текстах (редактор).
+  '/api/v1/networks/:networkId/mentions/scan',
+];
+
+/** Шаблоны allowlist, скомпилированные в регулярные выражения один раз. */
+const READ_ONLY_POST_MATCHERS: readonly RegExp[] = READ_ONLY_POST_ROUTES.map(routeMatcher);
+
+/** Регулярка шаблона Fastify: `:param` — непустой сегмент, остальное буквально. */
+function routeMatcher(route: string): RegExp {
+  const source = route
+    .split('/')
+    .map((segment) => (segment.startsWith(':') ? '[^/]+' : escapeRegExp(segment)))
+    .join('/');
+  return new RegExp(`^${source}$`);
+}
+
+/** Экранирование литерального сегмента пути для регулярного выражения. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Отказ guard'а: машиночитаемая причина и полное тело `details`. */
 export interface ClientVersionRejection {
   reason: ClientVersionErrorReason;
@@ -48,12 +115,20 @@ export interface ClientVersionRejection {
 }
 
 /**
+ * Запрос-двойник guard'а: только то, что guard читает — метод, заголовки и путь
+ * (шаблон зарегистрированного маршрута из `routeOptions.url`; `url` — сырой
+ * адрес с query string, запасной источник). Юнит-тесты не поднимают Fastify.
+ */
+export type ClientVersionGuardRequest = Pick<FastifyRequest, 'method' | 'headers' | 'url'> & {
+  readonly routeOptions?: Pick<FastifyRequest['routeOptions'], 'url'> | undefined;
+};
+
+/**
  * Проверка одного запроса. `null` — запрос допустим; иначе — отказ `426
- * CLIENT_VERSION_UNSUPPORTED`. Принимает только то, что читает (метод и
- * заголовки), поэтому юнит-тесты не поднимают Fastify.
+ * CLIENT_VERSION_UNSUPPORTED`.
  */
 export type ClientVersionGuardFn = (
-  req: Pick<FastifyRequest, 'method' | 'headers'>,
+  req: ClientVersionGuardRequest,
 ) => ClientVersionRejection | null;
 
 /** Зависимости guard'а. */
@@ -78,6 +153,12 @@ export function createClientVersionGuard(options: ClientVersionGuardOptions): Cl
 
   return (req) => {
     if (!MUTATING_METHODS.has(req.method)) {
+      return null;
+    }
+    // Читающий POST: версия не блокирует (см. READ_ONLY_POST_ROUTES). На
+    // остальные методы allowlist не распространяется — `DELETE` по тому же
+    // пути остаётся изменяющим запросом и проверяется.
+    if (req.method === 'POST' && isReadOnlyPostRoute(requestPath(req))) {
       return null;
     }
     // API-интеграция/скрипт: без `Client-Id` версия desktop-клиента не нужна.
@@ -133,6 +214,37 @@ export function describeClientVersionRejection(rejection: ClientVersionRejection
         `(совместимые версии: ${JSON.stringify(details.compatibility ?? '')}). Обновите клиент.`
       );
   }
+}
+
+/**
+ * Путь запроса для сверки с allowlist.
+ *
+ * Приоритет — шаблон зарегистрированного маршрута (`routeOptions.url`): он уже
+ * без query string и с именами параметров (`:networkId`), поэтому сверка не
+ * зависит от конкретных id в адресе. Для запроса вне маршрута (теоретический
+ * 404 до guard'а) берётся сырой `url`; и он, и шаблон нормализуются одинаково —
+ * без query string, фрагмента и завершающего слеша.
+ */
+function requestPath(req: ClientVersionGuardRequest): string {
+  const routeUrl = req.routeOptions?.url;
+  const raw = typeof routeUrl === 'string' && routeUrl.length > 0 ? routeUrl : req.url;
+  return normalizePath(raw);
+}
+
+/** Путь без query string, фрагмента и завершающего слеша (`/x/` → `/x`). */
+function normalizePath(raw: string | undefined): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const cut = raw.search(/[?#]/);
+  const path = cut === -1 ? raw : raw.slice(0, cut);
+  // Корень (`/`) сохраняем как есть: `''` не должен совпасть ни с чем.
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
+/** True для читающего `POST`-маршрута из allowlist. */
+function isReadOnlyPostRoute(path: string): boolean {
+  return path.length > 0 && READ_ONLY_POST_MATCHERS.some((matcher) => matcher.test(path));
 }
 
 /**
