@@ -35,7 +35,7 @@ import { store } from '../state.js';
 const APP_URL = 'https://github.com/nerkuda/e-tho-net';
 
 /** Author and licence (root `LICENSE`: MIT © 2026). */
-const APP_COPYRIGHT = '© 2026 В. Зайцев';
+const APP_COPYRIGHT = '© 2026 В. Зайцев (aka Nerkuda)';
 const APP_LICENSE = 'MIT';
 
 /** External links shown in the dialog (08-ui-spec.md §8.2). */
