@@ -15,7 +15,7 @@
 
 import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 
 import type {
   AnyRealtimeEvent,
@@ -245,6 +245,17 @@ export interface CachedResponse {
   /** JSON-encoded body as stored. */
   body: string | null;
 }
+
+/**
+ * Result of {@link SystemDb.checkFirstUser}: the read-only probe used by
+ * `etn init --check` (installer, task 686c5d76), which must answer "is the
+ * first administrator present" without creating the data directory, the
+ * database or migrations.
+ */
+export type FirstUserCheck =
+  | { state: 'initialized' }
+  | { state: 'not-initialized'; reason: 'no-db' | 'no-users-table' | 'no-first-user' }
+  | { state: 'unreadable'; error: string };
 
 /**
  * Typed accessor for `_system.db`.
@@ -486,6 +497,39 @@ export class SystemDb {
     db.pragma(`journal_size_limit = ${WAL_JOURNAL_SIZE_LIMIT_BYTES}`);
     runMigrations(db, systemMigrationsDir(), log);
     return new SystemDb(db);
+  }
+
+  /**
+   * Read-only probe of the first administrator (`etn init --check`, task
+   * 686c5d76). The criterion is {@link hasFirstUser}, not the presence of
+   * `_system.db`: a database left over from an interrupted attempt reports
+   * `not-initialized` and must be initialised again.
+   *
+   * Never creates the data directory, the database file or migrations: the
+   * connection is opened with `readonly: true` and only `sqlite_master` /
+   * `users` are read.
+   *
+   * @param dataDir - absolute ETN data directory.
+   */
+  static checkFirstUser(dataDir: string): FirstUserCheck {
+    const dbPath = systemDbPath(dataDir);
+    if (!existsSync(dbPath)) return { state: 'not-initialized', reason: 'no-db' };
+    let db: Database.Database | null = null;
+    try {
+      db = new DatabaseConstructor(dbPath, { readonly: true, fileMustExist: true });
+      // База от прерванной попытки: файл создан, миграции не применились.
+      const usersTable = db
+        .prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table' AND name = 'users'")
+        .get() as { c: number };
+      if (usersTable.c === 0) return { state: 'not-initialized', reason: 'no-users-table' };
+      return new SystemDb(db).hasFirstUser()
+        ? { state: 'initialized' }
+        : { state: 'not-initialized', reason: 'no-first-user' };
+    } catch (err) {
+      return { state: 'unreadable', error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      if (db !== null) db.close();
+    }
   }
 
   /** Insert a user and return the domain object. */

@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -42,6 +42,8 @@ describe('parseInitArgs', () => {
     assert.deepEqual(parseInitArgs(['--username', 'admin', '--display-name', 'Admin']), {
       username: 'admin',
       displayName: 'Admin',
+      check: false,
+      keyOut: null,
     });
   });
 
@@ -49,6 +51,8 @@ describe('parseInitArgs', () => {
     assert.deepEqual(parseInitArgs(['--username=admin', '--display-name=Root User']), {
       username: 'admin',
       displayName: 'Root User',
+      check: false,
+      keyOut: null,
     });
   });
 
@@ -56,6 +60,8 @@ describe('parseInitArgs', () => {
     assert.deepEqual(parseInitArgs(['-u', 'bob', '-d', 'Bob']), {
       username: 'bob',
       displayName: 'Bob',
+      check: false,
+      keyOut: null,
     });
   });
 
@@ -63,6 +69,8 @@ describe('parseInitArgs', () => {
     assert.deepEqual(parseInitArgs(['--username', 'solo']), {
       username: 'solo',
       displayName: null,
+      check: false,
+      keyOut: null,
     });
   });
 
@@ -70,11 +78,42 @@ describe('parseInitArgs', () => {
     assert.deepEqual(parseInitArgs(['--username', '  x  ', '--display-name', '   ']), {
       username: 'x',
       displayName: null,
+      check: false,
+      keyOut: null,
     });
+  });
+
+  it('parses --key-out in both forms', () => {
+    assert.equal(
+      parseInitArgs(['--username', 'a', '--key-out', 'C:\\data\\key.txt']).keyOut,
+      'C:\\data\\key.txt',
+    );
+    assert.equal(
+      parseInitArgs(['--username', 'a', '--key-out=C:\\data\\key.txt']).keyOut,
+      'C:\\data\\key.txt',
+    );
+  });
+
+  it('parses --check without a username', () => {
+    assert.deepEqual(parseInitArgs(['--check']), {
+      username: '',
+      displayName: null,
+      check: true,
+      keyOut: null,
+    });
+  });
+
+  it('rejects --check combined with initialisation arguments', () => {
+    assert.throws(() => parseInitArgs(['--check', '--username', 'admin']), /--check/);
+    assert.throws(() => parseInitArgs(['--check', '--key-out', 'x']), /--check/);
   });
 
   it('throws when --username is missing', () => {
     assert.throws(() => parseInitArgs([]), /--username/);
+  });
+
+  it('throws when --key-out has no value', () => {
+    assert.throws(() => parseInitArgs(['--username', 'a', '--key-out']), /--key-out/);
   });
 
   it('throws on unknown argument', () => {
@@ -171,6 +210,66 @@ describe(
 
       // The printed key must not appear in the re-init output.
       assert.doesNotMatch(second.stdout.join('\n'), /etn_[0-9a-f]{32}/);
+    });
+
+    it('--check reports the state without creating anything, then follows hasFirstUser', async () => {
+      const dataDir = mkdtempSync(path.join(os.tmpdir(), 'etn-cli-check-'));
+      tmpRoots.push(dataDir);
+
+      // Чистый каталог: check не создаёт ни каталог, ни базу.
+      const emptyDir = path.join(dataDir, 'not-created');
+      const empty = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: emptyDir } }),
+      );
+      assert.equal(empty.result, 1);
+      assert.equal(existsSync(emptyDir), false, 'check must not create the data directory');
+
+      // Прерванная попытка: _system.db есть, но таблицы users нет.
+      const orphanDbDir = path.join(dataDir, 'orphan');
+      mkdirSync(orphanDbDir, { recursive: true });
+      writeFileSync(path.join(orphanDbDir, '_system.db'), '');
+      const orphan = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: orphanDbDir } }),
+      );
+      assert.equal(orphan.result, 1, 'база от прерванной попытки — не инициализировано');
+
+      // init доинициализирует такую базу, после чего check даёт 0.
+      const initOrphan = await captureConsole(() =>
+        main({
+          argv: ['node', 'etn', 'init', '--username', 'root'],
+          env: { ETN_DATA_DIR: orphanDbDir },
+        }),
+      );
+      assert.equal(initOrphan.result, 0);
+      const after = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: orphanDbDir } }),
+      );
+      assert.equal(after.result, 0);
+      assert.match(after.stdout.join('\n'), /первый администратор есть/);
+    });
+
+    it('--key-out writes the key to a file once and never prints it', async () => {
+      const dataDir = mkdtempSync(path.join(os.tmpdir(), 'etn-cli-keyout-'));
+      tmpRoots.push(dataDir);
+      const env = { ETN_DATA_DIR: dataDir };
+      const keyPath = path.join(dataDir, '.install', 'primary-key.txt');
+
+      const first = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--username', 'admin', '--key-out', keyPath], env }),
+      );
+      assert.equal(first.result, 0);
+      assert.ok(existsSync(keyPath), 'ключ записан в файл');
+      const key = readFileSync(keyPath, 'utf8').trim();
+      assert.match(key, /^etn_[0-9a-f]{32}$/);
+      assert.doesNotMatch(first.stdout.join('\n'), /etn_[0-9a-f]{32}/, 'ключ не печатается');
+      assert.ok(first.stdout.join('\n').includes(keyPath));
+
+      // Повторный init ключ не перезаписывает и файл не портит.
+      const second = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--username', 'other', '--key-out', keyPath], env }),
+      );
+      assert.equal(second.result, 1);
+      assert.equal(readFileSync(keyPath, 'utf8').trim(), key);
     });
   },
 );

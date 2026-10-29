@@ -9,11 +9,27 @@
 ;   8b1f5980 — поставка сервера (Node, prod-node_modules, WinSW, служба);
 ;   bb063ac3 — остановка службы, бэкап, health-check, откат;
 ;   112642a4 — экраны, лицензия, прогресс, итоговая сводка, тексты;
-;   686c5d76 — etn init, экран ключа, критерий «уже инициализирован»;
 ;   98ad5eec — поставка клиента (область установки, ярлыки, закрытие ETN.exe).
+;
+; Задача 686c5d76 (0.15.1) — первичная инициализация и экран ключа:
+;   * «уже инициализирован» — критерий hasFirstUser(), а не наличие
+;     _system.db (база от прерванной попытки доинициализируется);
+;   * init вызывается в привилегированной фазе: node.exe server\dist\cli.js
+;     init --username <логин> --key-out <защищённый файл>; в окружение
+;     процесса выставляются ETN_DATA_DIR, ETN_PORT, ETN_HOST;
+;   * ключ пишется в %ProgramData%\ETN\.install\primary-key.txt, каталог
+;     ограничивается icacls (SYSTEM, администраторы, пользователь,
+;     запустивший установщик); в журнал и install.json ключ не попадает;
+;   * экран ключа — после установки, до итоговой сводки: копирование,
+;     «Я сохранил ключ» разблокирует «Далее», «Назад» недоступен; закрытие
+;     без подтверждения удаляет временный файл;
+;   * сбой после init до показа ключа: файл остаётся, повторный запуск
+;     показывает ключ оттуда;
+;   * silent: init не вызывается никогда, отсутствие администратора — код 10.
 ;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
 ; Проверка silent-контракта: installer/tests/silent-codes.ps1.
+; Проверка init и ключа: installer/tests/init-key.ps1.
 ;
 ; Контракт silent server-only режима (постоянный комментарий задачи):
 ;   ETN-Setup-<версия>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY
@@ -204,6 +220,25 @@ var
   GTestRecord: String;
   GTestParams: String;
   GTestGui: String;
+  { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
+  GTestInit: String;
+  GTestNodeExe: String;
+  GTestLogin: String;
+  GTestKeyState: String;
+  GTestFailAfterInit: String;
+  GTestKeyAck: String;
+  GTestKeyClose: String;
+
+  { Первичная инициализация и ключ }
+  GAdminLogin: String;
+  GAdminDisplayName: String;
+  GOriginalUser: String;
+  GFirstUserChecked: Boolean;
+  GFirstUserPresent: Boolean;
+  GInitAttempted: Boolean;
+  GPendingKey: String;
+  GPendingKeyPrevious: Boolean;
+  GKeyBeforeInstall: String;
 
   { Версия и пути }
   GProductVersion: String;
@@ -256,12 +291,27 @@ var
   GComponentsPage: TWizardPage;
   GServerCheck: TNewCheckBox;
   GServerStateLabel: TNewStaticText;
+  GInitStateLabel: TNewStaticText;
   GClientCheck: TNewCheckBox;
   GClientStateLabel: TNewStaticText;
   GScopeUserRadio: TNewRadioButton;
   GScopeMachineRadio: TNewRadioButton;
   GDataNoteLabel: TNewStaticText;
   GReasonLabel: TNewStaticText;
+
+  { Экраны администратора и ключа }
+  GAdminPage: TWizardPage;
+  GAdminLoginLabel: TNewStaticText;
+  GAdminLoginEdit: TNewEdit;
+  GAdminHintLabel: TNewStaticText;
+  GAdminErrorLabel: TNewStaticText;
+  GKeyPage: TWizardPage;
+  GKeyValueEdit: TNewEdit;
+  GKeyCopyButton: TNewButton;
+  GKeyCopiedLabel: TNewStaticText;
+  GKeyWarningLabel: TNewStaticText;
+  GKeyPreviousLabel: TNewStaticText;
+  GKeyConfirmCheck: TNewCheckBox;
 
 { ---------------------------------------------------------------------------
   Вспомогательные функции: строки, время, коды.
@@ -296,6 +346,12 @@ end;
 function MoveFileExW(lpExistingFileName: String; lpNewFileName: String;
   dwFlags: Cardinal): Boolean; external 'MoveFileExW@kernel32.dll stdcall';
 procedure ExitProcess(uExitCode: Cardinal); external 'ExitProcess@kernel32.dll stdcall';
+{ Окружение для дочерних процессов (etn init): Inno Exec не принимает env,
+  а SetEnvironmentVariableW меняет окружение самого установщика — его
+  наследуют все запускаемые процессы (node.exe, служба через WinSW не нужна:
+  у неё env из шаблона etn-service.xml). }
+function SetEnvironmentVariableW(lpName, lpValue: String): Boolean;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
 
 { ---------------------------------------------------------------------------
   Командная строка
@@ -891,6 +947,297 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
+  Первичная инициализация (etn init) и первичный API-ключ — задача 686c5d76.
+  --------------------------------------------------------------------------- }
+
+{ Каталог временного ключа: общий каталог данных, подкаталог .install.
+  Права ограничиваются icacls до записи ключа (см. HardenKeyDir). }
+function KeyInstallDir: String;
+begin
+  Result := GDataDir + '\.install';
+end;
+
+function KeyFilePath: String;
+begin
+  Result := KeyInstallDir + '\primary-key.txt';
+end;
+
+{ Окружение дочерних процессов: init и любые вызовы node получают те же
+  ETN_DATA_DIR/ETN_PORT/ETN_HOST, что и служба. }
+procedure ApplyServerEnv;
+begin
+  SetEnvironmentVariableW('ETN_DATA_DIR', GDataDir);
+  SetEnvironmentVariableW('ETN_PORT', GServerPort);
+  SetEnvironmentVariableW('ETN_HOST', GServerHost);
+end;
+
+{ Ограничение доступа к каталогу ключа: только SYSTEM, администраторы и
+  пользователь, запустивший установщик (он читает ключ после элевации, даже
+  если UAC подтвердил другой администратор). Наследование снимается: иначе
+  ключ унаследует права %ProgramData% (чтение — все пользователи). }
+function HardenKeyDir: Boolean;
+var
+  Args, User: String;
+  Code: Integer;
+begin
+  Result := False;
+  if not ForceDirectories(KeyInstallDir) then
+  begin
+    LogLine('ERROR', 'Не удалось создать каталог для ключа: ' + KeyInstallDir);
+    Exit;
+  end;
+  User := GOriginalUser;
+  if User = '' then User := GetUserNameString;
+  Args := '"' + KeyInstallDir + '" /inheritance:r /grant:r ' +
+    '"*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "' + User + ':(OI)(CI)F"';
+  if Exec(ExpandConstant('{sys}\icacls.exe'), Args, '', SW_HIDE,
+    ewWaitUntilTerminated, Code) and (Code = 0) then
+  begin
+    LogLine('INFO', 'Доступ к каталогу ключа ограничен: ' + KeyInstallDir);
+    Result := True;
+    Exit;
+  end;
+  LogLine('ERROR', 'icacls не ограничил доступ к ' + KeyInstallDir +
+    ' (код ' + IntToStr(Code) + '): ключ в такой каталог не пишется');
+end;
+
+{ Путь к node.exe поставки; в тестовой сборке подменяется /TESTNODEEXE. }
+function ServerNodeExe(const ServerDir: String): String;
+begin
+  Result := ServerDir + '\node\node.exe';
+#ifdef TestMode
+  if GTestNodeExe <> '' then Result := GTestNodeExe;
+#endif
+end;
+
+function ServerCliPath(const ServerDir: String): String;
+begin
+  Result := ServerDir + '\server\dist\cli.js';
+end;
+
+function ValidAdminLogin(const Login: String): Boolean;
+begin
+  Result := (Trim(Login) <> '') and (Pos('"', Login) = 0) and
+    (Pos(#10, Login) = 0) and (Pos(#13, Login) = 0);
+end;
+
+{ `etn init --check`: 0 — администратор есть, 1 — нет, 2 — проверить не
+  удалось, -1 — проверка невозможна (нет файлов/не запустился процесс). }
+function RunCliCheck(const ServerDir: String): Integer;
+var
+  Node, Cli, Args: String;
+  Code: Integer;
+begin
+  Result := -1;
+  if ServerDir = '' then Exit;
+  Node := ServerNodeExe(ServerDir);
+  Cli := ServerCliPath(ServerDir);
+  if (not FileExists(Node)) or (not FileExists(Cli)) then
+  begin
+    LogLine('WARN', 'Проверка инициализации невозможна: нет ' + Node + ' или ' + Cli);
+    Exit;
+  end;
+  Args := '"' + Cli + '" init --check';
+  if not Exec(Node, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    LogLine('WARN', 'Проверка инициализации: не удалось запустить ' + Node);
+    Exit;
+  end;
+  Result := Code;
+end;
+
+{ Критерий «уже инициализирован» — hasFirstUser(), а не наличие _system.db:
+  база от прерванной попытки должна доинициализироваться. }
+procedure ResolveFirstUserState;
+var
+  Dir: String;
+  Code: Integer;
+begin
+  GFirstUserChecked := False;
+  GFirstUserPresent := False;
+  Dir := ServerFilesDir;
+  if Dir = '' then
+  begin
+    LogLine('INFO', 'Файлы сервера не найдены: первый администратор отсутствует (первая установка)');
+    Exit;
+  end;
+#ifdef TestMode
+  if GTestInit <> 'real' then
+  begin
+    LogLine('INFO', 'TESTINIT не задан: проверка hasFirstUser пропущена (тестовый режим)');
+    Exit;
+  end;
+#endif
+  ApplyServerEnv;
+  Code := RunCliCheck(Dir);
+  if Code = 0 then
+  begin
+    GFirstUserChecked := True;
+    GFirstUserPresent := True;
+  end
+  else if Code = 1 then
+  begin
+    GFirstUserChecked := True;
+    GFirstUserPresent := False;
+  end
+  else
+    LogLine('WARN', 'Проверка hasFirstUser не удалась (код ' + IntToStr(Code) +
+      '): состояние инициализации неизвестно');
+  LogLine('INFO', 'hasFirstUser: ' + Pick(GFirstUserPresent, 'есть', 'нет') +
+    ' (проверено: ' + Pick(GFirstUserChecked, 'да', 'нет') + ')');
+end;
+
+{ Прочитать ключ из защищённого файла во внутреннюю переменную. В журнал и
+  install.json значение не попадает никогда — только длина. }
+procedure LoadPendingKey;
+var
+  Text: String;
+begin
+  GPendingKey := '';
+  if not FileExists(KeyFilePath) then Exit;
+  Text := Trim(ReadTextFile(KeyFilePath));
+  if Text = '' then Exit;
+  GPendingKey := Text;
+end;
+
+function IsSilentServerOnly: Boolean;
+begin
+  Result := GSilent and GServerOnly;
+end;
+
+{ Единственная точка вызова etn init. Работает в привилегированной фазе:
+  файлы сервера уже скопированы, права администратора есть. Повторно init
+  не вызывается: критерий — hasFirstUser. }
+procedure EnsureFirstUser;
+var
+  Dir, Node, Cli, Args: String;
+  Code: Integer;
+begin
+  if not GServerSelected then Exit;
+  if GFirstUserPresent then
+  begin
+    LogLine('INFO', 'etn init не вызывается: первый администратор уже есть');
+    Exit;
+  end;
+  if not GFirstUserChecked then
+  begin
+    ResolveFirstUserState;
+    if GFirstUserPresent then
+    begin
+      LogLine('INFO', 'etn init не вызывается: первый администратор уже есть (проверка в привилегированной фазе)');
+      Exit;
+    end;
+  end;
+  if IsSilentServerOnly then
+  begin
+    LogLine('INFO', 'Silent: etn init не вызывается никогда — нужен ручной режим');
+    Exit;
+  end;
+#ifdef TestMode
+  if GTestInit <> 'real' then
+  begin
+    LogLine('INFO', 'TESTINIT не задан: etn init не вызывается (тестовый режим)');
+    Exit;
+  end;
+#endif
+  if GAdminLogin = '' then GAdminLogin := GOriginalUser;
+  if not ValidAdminLogin(GAdminLogin) then
+  begin
+    GExitCode := EXIT_FAILED;
+    LogLine('ERROR', 'Сбой: etn init отменён — недопустимый логин администратора (код 10)');
+    Exit;
+  end;
+  Dir := ServerFilesDir;
+  Node := ServerNodeExe(Dir);
+  Cli := ServerCliPath(Dir);
+  if (Dir = '') or (not FileExists(Node)) or (not FileExists(Cli)) then
+  begin
+    GExitCode := EXIT_FAILED;
+    LogLine('ERROR', 'Сбой: etn init невозможен — нет ' + Node + ' или ' + Cli + ' (код 10)');
+    Exit;
+  end;
+  if not HardenKeyDir then
+  begin
+    GExitCode := EXIT_FAILED;
+    LogLine('ERROR', 'Сбой: etn init отменён — каталог ключа не защищён (код 10)');
+    Exit;
+  end;
+  { Ключ от предыдущей попытки больше не действителен: init выдаст новый. }
+  if FileExists(KeyFilePath) then DeleteFile(KeyFilePath);
+  ApplyServerEnv;
+  Args := '"' + Cli + '" init --username "' + GAdminLogin + '"';
+  if GAdminDisplayName <> '' then
+    Args := Args + ' --display-name "' + GAdminDisplayName + '"';
+  Args := Args + ' --key-out "' + KeyFilePath + '"';
+  GInitAttempted := True;
+  LogLine('INFO', 'etn init: запуск (данные ' + GDataDir + ', порт ' + GServerPort +
+    ', хост ' + GServerHost + ')');
+  if not Exec(Node, Args, Dir, SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    GExitCode := EXIT_FAILED;
+    LogLine('ERROR', 'Сбой: etn init не запустился (' + Node + '), код 10');
+    Exit;
+  end;
+  if Code = 0 then
+  begin
+    GFirstUserChecked := True;
+    GFirstUserPresent := True;
+    LoadPendingKey;
+    GPendingKeyPrevious := False;
+    if GPendingKey = '' then
+    begin
+      GExitCode := EXIT_FAILED;
+      LogLine('ERROR', 'Сбой: etn init завершился, но файл ключа пуст: ' + KeyFilePath + ' (код 10)');
+    end
+    else
+      LogLine('INFO', 'etn init выполнен; ключ сохранён в защищённый файл (в журнал не пишется)');
+    Exit;
+  end;
+  LogLine('ERROR', 'etn init завершился сбоем (код ' + IntToStr(Code) + ')');
+  { Сработать мог запрет повторной инициализации: если администратор уже есть,
+    установка продолжается без нового ключа. }
+  ResolveFirstUserState;
+  if GFirstUserPresent then
+    LogLine('WARN', 'Первый администратор уже существует: etn init не требуется')
+  else
+  begin
+    GExitCode := EXIT_FAILED;
+    LogLine('ERROR', 'Сбой: сервер не инициализирован (код 10)');
+  end;
+end;
+
+{ В silent etn init не вызывается никогда. Отсутствие администратора после
+  старта — код 10: сервер без администратора не стартует, нужен ручной режим. }
+function SilentAdminPresent: Boolean;
+begin
+  Result := False;
+  ResolveFirstUserState;
+#ifdef TestMode
+  if GTestInit <> 'real' then
+  begin
+    LogLine('INFO', 'TESTINIT не задан: проверка администратора в silent пропущена (тестовый режим)');
+    Result := True;
+    Exit;
+  end;
+#endif
+  Result := GFirstUserChecked and GFirstUserPresent;
+  if not Result then
+    LogLine('ERROR', 'Первичная инициализация не выполнена: нет первого администратора ' +
+      '(ручной режим: etn init --username <логин>)');
+end;
+
+function InitStateText: String;
+begin
+  if GFirstUserPresent then
+    Result := 'Сервер уже инициализирован — init не повторяется, новый ключ установщик ' +
+      'не выдаёт (перевыпуск — в клиенте).'
+  else if GPendingKey <> '' then
+    Result := 'Найден ключ от предыдущего запуска установщика — он будет показан после установки.'
+  else
+    Result := '';
+end;
+
+{ ---------------------------------------------------------------------------
   Повышение прав
   --------------------------------------------------------------------------- }
 function IsElevatedNow: Boolean;
@@ -931,14 +1278,25 @@ end;
   Секреты в командной строке не передаются: только путь к файлу. }
 function NewParamsFilePath: String;
 var
-  Dir: String;
+  Dir, Probe: String;
+  Writable: Boolean;
 begin
 #ifdef TestMode
   Dir := GDataDir + '\.install';
 #else
   Dir := ExpandConstant('{commonappdata}\ETN\.install');
 #endif
-  if not ForceDirectories(Dir) then
+  { Каталог .install после первой установки ограничен ACL (там же лежит файл
+    ключа): другой пользователь без прав записи должен получить fallback, а
+    не «молча пустой» путь. Проверяем запись пробным файлом. }
+  Writable := ForceDirectories(Dir);
+  if Writable then
+  begin
+    Probe := Dir + '\.etn-params-probe';
+    Writable := SaveStringToFile(Probe, 'probe', False);
+    if Writable then DeleteFile(Probe);
+  end;
+  if not Writable then
   begin
     Dir := GetEnv('PUBLIC');
     if (Dir = '') or (not ForceDirectories(Dir)) then
@@ -970,7 +1328,10 @@ begin
     'mode=' + GServerMode + #13#10 +
     'host=' + GServerHost + #13#10 +
     'port=' + GServerPort + #13#10 +
-    'firewall=' + IntToStr(Ord(GServerFirewall)) + #13#10;
+    'firewall=' + IntToStr(Ord(GServerFirewall)) + #13#10 +
+    'login=' + GAdminLogin + #13#10 +
+    'display_name=' + GAdminDisplayName + #13#10 +
+    'original_user=' + GOriginalUser + #13#10;
   if not SaveStringToFile(GParamsPath, Lines, False) then
     LogLine('ERROR', 'Не удалось записать файл параметров: ' + GParamsPath);
 end;
@@ -991,6 +1352,9 @@ begin
   else if K = 'host' then GServerHost := V
   else if K = 'port' then GServerPort := V
   else if K = 'firewall' then GServerFirewall := V = '1'
+  else if K = 'login' then GAdminLogin := V
+  else if K = 'display_name' then GAdminDisplayName := V
+  else if K = 'original_user' then GOriginalUser := V
   else
     LogLine('INFO', 'параметр ' + K + '=' + V);
 end;
@@ -1433,10 +1797,18 @@ begin
   GServerStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
   GServerStateLabel.Caption := ServerStateText;
 
+  { «Сервер уже инициализирован» / «найден ключ от прошлого запуска» (686c5d76). }
+  GInitStateLabel := TNewStaticText.Create(GComponentsPage);
+  GInitStateLabel.Parent := GComponentsPage.Surface;
+  GInitStateLabel.Left := 20;
+  GInitStateLabel.Top := GServerStateLabel.Top + GServerStateLabel.Height + 2;
+  GInitStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
+  GInitStateLabel.Caption := InitStateText;
+
   GClientCheck := TNewCheckBox.Create(GComponentsPage);
   GClientCheck.Parent := GComponentsPage.Surface;
   GClientCheck.Left := 0;
-  GClientCheck.Top := GServerStateLabel.Top + GServerStateLabel.Height + 14;
+  GClientCheck.Top := GInitStateLabel.Top + GInitStateLabel.Height + 14;
   GClientCheck.Width := GComponentsPage.SurfaceWidth;
   GClientCheck.Caption := 'Клиент ETN';
   GClientCheck.OnClick := @UpdateComponentsState;
@@ -1491,6 +1863,127 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
+  Экран администратора (686c5d76): единственное поле — логин первого
+  администратора. Оформление и полный экран сервера — 112642a4.
+  --------------------------------------------------------------------------- }
+procedure CreateAdminPage;
+begin
+  GAdminPage := CreateCustomPage(GComponentsPage.ID, 'Администратор сервера',
+    'Логин первого администратора ETN. Пароль не задаётся: вход по API-ключу, ' +
+    'который будет показан после установки.');
+
+  GAdminLoginLabel := TNewStaticText.Create(GAdminPage);
+  GAdminLoginLabel.Parent := GAdminPage.Surface;
+  GAdminLoginLabel.Left := 0;
+  GAdminLoginLabel.Top := 0;
+  GAdminLoginLabel.Width := GAdminPage.SurfaceWidth;
+  GAdminLoginLabel.Caption := 'Логин администратора:';
+
+  GAdminLoginEdit := TNewEdit.Create(GAdminPage);
+  GAdminLoginEdit.Parent := GAdminPage.Surface;
+  GAdminLoginEdit.Left := 0;
+  GAdminLoginEdit.Top := GAdminLoginLabel.Top + GAdminLoginLabel.Height + 4;
+  GAdminLoginEdit.Width := GAdminPage.SurfaceWidth;
+  GAdminLoginEdit.Text := GAdminLogin;
+
+  GAdminHintLabel := TNewStaticText.Create(GAdminPage);
+  GAdminHintLabel.Parent := GAdminPage.Surface;
+  GAdminHintLabel.Left := 0;
+  GAdminHintLabel.Top := GAdminLoginEdit.Top + GAdminLoginEdit.Height + 8;
+  GAdminHintLabel.Width := GAdminPage.SurfaceWidth;
+  GAdminHintLabel.Caption := 'Логин используется один раз — при первичной инициализации ' +
+    'сервера. Если сервер уже инициализирован, логин не меняется.';
+
+  GAdminErrorLabel := TNewStaticText.Create(GAdminPage);
+  GAdminErrorLabel.Parent := GAdminPage.Surface;
+  GAdminErrorLabel.Left := 0;
+  GAdminErrorLabel.Top := GAdminHintLabel.Top + GAdminHintLabel.Height + 8;
+  GAdminErrorLabel.Width := GAdminPage.SurfaceWidth;
+  GAdminErrorLabel.Caption := '';
+  GAdminErrorLabel.Font.Color := clRed;
+end;
+
+procedure CopyKeyClick(Sender: TObject);
+var
+  Code: Integer;
+begin
+  { Копирование через clip.exe: ключ не попадает в командную строку (только
+    путь к защищённому файлу), буфер обмена получает его из файла. }
+  if (GPendingKey = '') or (not FileExists(KeyFilePath)) then Exit;
+  if Exec(ExpandConstant('{cmd}'), '/c clip < "' + KeyFilePath + '"', '',
+    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+    GKeyCopiedLabel.Caption := 'Скопировано в буфер обмена'
+  else
+    GKeyCopiedLabel.Caption := 'Не удалось скопировать — выделите ключ и нажмите Ctrl+C';
+end;
+
+procedure UpdateKeyPageState(Sender: TObject);
+begin
+  if (WizardForm <> nil) and (GKeyPage <> nil) and
+     (WizardForm.CurPageID = GKeyPage.ID) then
+    WizardForm.NextButton.Enabled := GKeyConfirmCheck.Checked;
+end;
+
+{ Экран первичного API-ключа: после установки, до итоговой сводки. Ключ
+  берётся из защищённого файла (в журнал не пишется). }
+procedure CreateKeyPage;
+begin
+  GKeyPage := CreateCustomPage(wpInstalling, 'Первичный API-ключ',
+    'Сохраните ключ: он показывается один раз и восстановить его нельзя.');
+
+  GKeyValueEdit := TNewEdit.Create(GKeyPage);
+  GKeyValueEdit.Parent := GKeyPage.Surface;
+  GKeyValueEdit.Left := 0;
+  GKeyValueEdit.Top := 0;
+  GKeyValueEdit.Width := GKeyPage.SurfaceWidth;
+  GKeyValueEdit.ReadOnly := True;
+  GKeyValueEdit.Font.Name := 'Consolas';
+  GKeyValueEdit.Font.Size := 14;
+  GKeyValueEdit.Text := '';
+
+  GKeyCopyButton := TNewButton.Create(GKeyPage);
+  GKeyCopyButton.Parent := GKeyPage.Surface;
+  GKeyCopyButton.Left := 0;
+  GKeyCopyButton.Top := GKeyValueEdit.Top + GKeyValueEdit.Height + 8;
+  GKeyCopyButton.Width := ScaleX(140);
+  GKeyCopyButton.Caption := 'Скопировать';
+  GKeyCopyButton.OnClick := @CopyKeyClick;
+
+  GKeyCopiedLabel := TNewStaticText.Create(GKeyPage);
+  GKeyCopiedLabel.Parent := GKeyPage.Surface;
+  GKeyCopiedLabel.Left := GKeyCopyButton.Width + 12;
+  GKeyCopiedLabel.Top := GKeyCopyButton.Top + 10;
+  GKeyCopiedLabel.Width := GKeyPage.SurfaceWidth - GKeyCopyButton.Width - 12;
+  GKeyCopiedLabel.Caption := '';
+
+  GKeyWarningLabel := TNewStaticText.Create(GKeyPage);
+  GKeyWarningLabel.Parent := GKeyPage.Surface;
+  GKeyWarningLabel.Left := 0;
+  GKeyWarningLabel.Top := GKeyCopyButton.Top + GKeyCopyButton.Height + 14;
+  GKeyWarningLabel.Width := GKeyPage.SurfaceWidth;
+  GKeyWarningLabel.Caption := 'Ключ показывается один раз. Восстановить нельзя — только ' +
+    'выпустить новый. Сохраните его в надёжном месте.';
+
+  GKeyPreviousLabel := TNewStaticText.Create(GKeyPage);
+  GKeyPreviousLabel.Parent := GKeyPage.Surface;
+  GKeyPreviousLabel.Left := 0;
+  GKeyPreviousLabel.Top := GKeyWarningLabel.Top + GKeyWarningLabel.Height + 6;
+  GKeyPreviousLabel.Width := GKeyPage.SurfaceWidth;
+  GKeyPreviousLabel.Caption := 'Ключ получен при предыдущем запуске установщика ' +
+    '(после сбоя) и сохранён в защищённом файле.';
+  GKeyPreviousLabel.Visible := False;
+
+  GKeyConfirmCheck := TNewCheckBox.Create(GKeyPage);
+  GKeyConfirmCheck.Parent := GKeyPage.Surface;
+  GKeyConfirmCheck.Left := 0;
+  GKeyConfirmCheck.Top := GKeyPreviousLabel.Top + GKeyPreviousLabel.Height + 14;
+  GKeyConfirmCheck.Width := GKeyPage.SurfaceWidth;
+  GKeyConfirmCheck.Caption := 'Я сохранил ключ';
+  GKeyConfirmCheck.Checked := False;
+  GKeyConfirmCheck.OnClick := @UpdateKeyPageState;
+end;
+
+{ ---------------------------------------------------------------------------
   События установщика
   --------------------------------------------------------------------------- }
 function InitializeSetup: Boolean;
@@ -1515,6 +2008,21 @@ begin
   GTestRecord := '';
   GTestParams := '';
   GTestGui := '';
+  GTestInit := '';
+  GTestNodeExe := '';
+  GTestLogin := '';
+  GTestKeyState := '';
+  GTestFailAfterInit := '';
+  GTestKeyAck := '';
+  GTestKeyClose := '';
+  GAdminLogin := '';
+  GAdminDisplayName := '';
+  GFirstUserChecked := False;
+  GFirstUserPresent := False;
+  GInitAttempted := False;
+  GPendingKey := '';
+  GPendingKeyPrevious := False;
+  GKeyBeforeInstall := '';
   GParamsPath := '';
   GProductVersion := '{#MyAppVersion}';
   GDataDir := ExpandConstant('{#DataDir}');
@@ -1522,6 +2030,12 @@ begin
   GSilent := WizardSilent;
   GServerOnly := ParamExists('SERVERONLY');
   GPrivilegedPhase := ParamExists('PRIVILEGEDPHASE');
+  { Пользователь, запустивший установщик: ему (помимо SYSTEM и администраторов)
+    разрешается доступ к файлу ключа — элевированный дочерний процесс может
+    работать под другой учётной записью администратора. }
+  GOriginalUser := GetEnv('USERNAME');
+  if GOriginalUser = '' then GOriginalUser := GetUserNameString;
+  GAdminLogin := GOriginalUser;
 #ifdef TestMode
   GTestMode := True;
   GTestHealth := ParamValue('TESTHEALTH');
@@ -1532,6 +2046,13 @@ begin
   GTestRecord := ParamValue('TESTRECORD');
   GTestParams := ParamValue('TESTPARAMS');
   GTestGui := ParamValue('TESTGUIMODE');
+  GTestInit := ParamValue('TESTINIT');
+  GTestNodeExe := ParamValue('TESTNODEEXE');
+  GTestLogin := ParamValue('TESTLOGIN');
+  GTestKeyState := ParamValue('TESTKEYSTATE');
+  GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
+  GTestKeyAck := ParamValue('TESTKEYACK');
+  GTestKeyClose := ParamValue('TESTKEYCLOSE');
 #endif
 
   InitLog;
@@ -1566,6 +2087,23 @@ begin
     файла параметров и не пересчитывается. }
   if not GPrivilegedPhase then
     ApplyDefaultSelection;
+
+  { Окружение etn init и состояние инициализации. Критерий «уже инициализирован»
+    — hasFirstUser(), а не наличие _system.db. В неэлевированном GUI проверка
+    best-effort (база может быть нечитаема); окончательное решение принимает
+    привилегированная фаза перед вызовом init. }
+  ApplyServerEnv;
+  ResolveFirstUserState;
+  LoadPendingKey;
+  GKeyBeforeInstall := GPendingKey;
+  GPendingKeyPrevious := GPendingKey <> '';
+  LogLine('INFO', 'Ключ в защищённом файле: ' +
+    Pick(GPendingKey <> '', 'есть (показ после установки)', 'нет'));
+
+#ifdef TestMode
+  if GTestLogin <> '' then
+    GAdminLogin := GTestLogin;
+#endif
 
 #ifdef TestMode
   { /TESTSELECT подменяет выбор компонентов через ту же ApplySelection, которой
@@ -1644,6 +2182,8 @@ procedure InitializeWizard;
 begin
   if GSilent then Exit;
   CreateComponentsPage;
+  CreateAdminPage;
+  CreateKeyPage;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -1663,13 +2203,103 @@ begin
   { Каталог программы фиксирован ADR 144bcdb0. }
   if PageID = wpSelectDir then
     Result := True;
+  { Логин администратора нужен только серверу, который ещё не инициализирован
+    (критерий — hasFirstUser, а не наличие _system.db). }
+  if (GAdminPage <> nil) and (PageID = GAdminPage.ID) then
+    Result := (not GServerSelected) or GFirstUserPresent;
+  { Экран ключа — только когда ключ реально есть: после init в этом запуске
+    или из защищённого файла предыдущей попытки. }
+  if (GKeyPage <> nil) and (PageID = GKeyPage.ID) then
+    Result := GPendingKey = '';
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
   if GSilent then Exit;
   if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
+  begin
+    if GInitStateLabel <> nil then GInitStateLabel.Caption := InitStateText;
     UpdateComponentsState(nil);
+  end;
+  if (GAdminPage <> nil) and (CurPageID = GAdminPage.ID) then
+  begin
+    if (GAdminLoginEdit <> nil) and (GAdminLoginEdit.Text = '') then
+      GAdminLoginEdit.Text := GAdminLogin;
+    if GAdminErrorLabel <> nil then GAdminErrorLabel.Caption := '';
+    if WizardForm <> nil then
+      WizardForm.NextButton.Enabled := Trim(GAdminLoginEdit.Text) <> '';
+  end;
+  if (GKeyPage <> nil) and (CurPageID = GKeyPage.ID) then
+  begin
+    if GKeyValueEdit <> nil then GKeyValueEdit.Text := GPendingKey;
+    if GKeyCopiedLabel <> nil then GKeyCopiedLabel.Caption := '';
+    if GKeyPreviousLabel <> nil then GKeyPreviousLabel.Visible := GPendingKeyPrevious;
+    if GKeyConfirmCheck <> nil then GKeyConfirmCheck.Checked := False;
+    { «Назад» на экране ключа недоступен: ключ уже создан, вернуться к выбору
+      компонентов нельзя. «Далее» разблокирует только «Я сохранил ключ». }
+    if WizardForm <> nil then
+    begin
+      WizardForm.BackButton.Visible := False;
+      WizardForm.NextButton.Enabled := False;
+    end;
+  end;
+  if CurPageID = wpFinished then
+    if WizardForm <> nil then
+      WizardForm.NextButton.Enabled := True;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (GAdminPage <> nil) and (CurPageID = GAdminPage.ID) then
+  begin
+    GAdminLogin := Trim(GAdminLoginEdit.Text);
+    if not ValidAdminLogin(GAdminLogin) then
+    begin
+      if GAdminErrorLabel <> nil then
+        GAdminErrorLabel.Caption := 'Логин обязателен и не должен содержать кавычек и переводов строк.';
+      Result := False;
+      Exit;
+    end;
+  end;
+  if (GKeyPage <> nil) and (CurPageID = GKeyPage.ID) then
+  begin
+    { «Далее» неактивна без чекбокса; проверка дублируется на случай
+      программного перехода. }
+    if (GKeyConfirmCheck = nil) or (not GKeyConfirmCheck.Checked) then
+    begin
+      Result := False;
+      Exit;
+    end;
+    { Подтверждение получено — временный файл с ключом больше не нужен. }
+    if DeleteFile(KeyFilePath) then
+      LogLine('INFO', 'Временный файл ключа удалён после подтверждения')
+    else
+      LogLine('WARN', 'Не удалось удалить временный файл ключа: ' + KeyFilePath);
+    GPendingKey := '';
+  end;
+end;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  if (GKeyPage <> nil) and (CurPageID = GKeyPage.ID) and (GPendingKey <> '') then
+  begin
+    { Закрытие без подтверждения: предупредить и удалить временный файл.
+      Отказ — остаться на экране ключа. }
+    if SuppressibleMsgBox('Ключ не сохранён. Восстановить его нельзя — только ' +
+        'выпустить новый. Временный файл с ключом будет удалён. Закрыть установщик?',
+        mbConfirmation, MB_YESNO, IDNO) <> IDYES then
+    begin
+      Cancel := False;
+      Exit;
+    end;
+    if DeleteFile(KeyFilePath) then
+      LogLine('INFO', 'Экран ключа закрыт без подтверждения: временный файл ключа удалён')
+    else
+      LogLine('WARN', 'Экран ключа закрыт без подтверждения, но файл не удалён: ' + KeyFilePath);
+    GPendingKey := '';
+    Cancel := True;
+  end;
 end;
 
 { Подтверждение перед установкой: двухфазное повышение прав.
@@ -1719,9 +2349,21 @@ begin
     if GDoPrivilegedWork then
     begin
       { Порядок шагов — контракт bb063ac3: остановка службы, замена файлов,
-        запуск, health-check; install.json пишется только после успешной
-        проверки, иначе после отката файл врал бы о новой версии. }
+        инициализация (только первая установка), запуск, health-check;
+        install.json пишется только после успешной проверки, иначе после
+        отката файл врал бы о новой версии. }
       StopServiceIfRunning;
+      { Инициализация — до запуска службы: сервер без администратора не
+        стартует. Вызывается один раз: критерий hasFirstUser (686c5d76). }
+      if GServerSelected then
+        EnsureFirstUser;
+#ifdef TestMode
+      if (GTestFailAfterInit = '1') and GInitAttempted and (GPendingKey <> '') then
+      begin
+        LogLine('ERROR', 'TESTFAILAFTERINIT: имитация сбоя после etn init до показа ключа');
+        ExitProcess(EXIT_FAILED);
+      end;
+#endif
       StartServiceIfNeeded;
       HealthOk := ProbeHealth;
       if not HealthOk then
@@ -1729,8 +2371,18 @@ begin
         GExitCode := EXIT_FAILED;
         LogLine('ERROR', 'Сбой выполнения: health-check не пройден (код 10)');
       end;
+      { Silent: init не вызывался; без администратора сервер не работает —
+        код 10, нужен ручной режим. }
+      if HealthOk and IsSilentServerOnly then
+      begin
+        if not SilentAdminPresent then
+        begin
+          GExitCode := EXIT_FAILED;
+          LogLine('ERROR', 'Сбой выполнения: сервер не инициализирован (код 10)');
+        end;
+      end;
     end;
-    if HealthOk and NeedInstallRecord then
+    if HealthOk and (GExitCode = EXIT_OK) and NeedInstallRecord then
     begin
       if not WriteInstallJson then
       begin
@@ -1738,6 +2390,42 @@ begin
         LogLine('ERROR', 'Сбой выполнения: install.json не записан (код 10)');
       end;
     end;
+    { Ключ мог создать дочерний (элевированный) процесс: читаем защищённый
+      файл после установки, чтобы показать его на экране ключа. }
+    if GServerSelected then
+      LoadPendingKey;
+    if GPendingKey <> GKeyBeforeInstall then
+      GPendingKeyPrevious := False
+    else
+      GPendingKeyPrevious := GPendingKey <> '';
+#ifdef TestMode
+    { Наблюдаемость без GUI: состояние ключа в журнале (значение ключа —
+      никогда), подтверждение и закрытие экрана без подтверждения. }
+    if GTestKeyState = '1' then
+    begin
+      LogLine('INFO', 'INITSTATE checked=' + Pick(GFirstUserChecked, '1', '0') +
+        ' hasfirstuser=' + Pick(GFirstUserPresent, '1', '0') +
+        ' init_attempted=' + Pick(GInitAttempted, '1', '0') +
+        ' pending=' + Pick(GPendingKey <> '', '1', '0') +
+        ' keylen=' + IntToStr(Length(GPendingKey)) +
+        ' previous=' + Pick(GPendingKeyPrevious, '1', '0') +
+        ' exitcode=' + IntToStr(GExitCode));
+      if GTestKeyAck = '1' then
+      begin
+        DeleteFile(KeyFilePath);
+        LogLine('INFO', 'INITACK deleted=' + Pick(not FileExists(KeyFilePath), '1', '0'));
+        GPendingKey := '';
+      end;
+      if GTestKeyClose = '1' then
+      begin
+        DeleteFile(KeyFilePath);
+        LogLine('INFO', 'INITCLOSE deleted=' + Pick(not FileExists(KeyFilePath), '1', '0') +
+          ' warning=1');
+        GPendingKey := '';
+      end;
+      ExitProcess(GExitCode);
+    end;
+#endif
   end;
 end;
 
