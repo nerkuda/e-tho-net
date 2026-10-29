@@ -55,7 +55,7 @@ linux:
     - AppImage
     - deb
   category: Utility
-  maintainer: В. Зайцев <nerkuda@users.noreply.github.com>
+  maintainer: В. Зайцев (aka Nerkuda) <nerkuda@users.noreply.github.com>
   # Default artifact name uses the npm package name (@etn/client) which
   # breaks the deb output path; the executable name must also be filesystem-
   # and desktop-friendly.
