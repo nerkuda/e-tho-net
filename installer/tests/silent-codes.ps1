@@ -23,6 +23,12 @@
      11. понижение версии                                      -> 20
      12. ключ из файла параметров не попадает в журнал          (redaction)
      13. в .iss нет MsgBox (только журнал); прогоны без окон и без зависаний
+     14. B2: {autopf} при обычном запуске — каталог пользователя
+     15. B1: привилегированная фаза на чистой машине (без install.json/службы)
+     16. B3/B5/Z3: состояние машины и галочки по умолчанию
+         (not-installed/installed/update-available/repair/adopt/downgrade)
+     17. B4: клиент «для всех» ставится, «для меня» — неэлевированной фазой
+     18. Z2: last_log обновляется каждый запуск, повтор версии не меняет версию
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -106,11 +112,71 @@ function New-InstallJson {
 }
 
 function New-ServerFiles {
+    param([string]$Version = '0.15.0')
     New-Item -ItemType Directory -Path (Join-Path $appDir 'server\dist') -Force | Out-Null
     $null = New-Item -ItemType Directory -Path (Join-Path $appDir 'server\node_modules') -Force
     [System.IO.File]::WriteAllText((Join-Path $appDir 'server\package.json'),
-        '{"name":"@etn/server","version":"0.15.0"}')
+        '{"name":"@etn/server","version":"' + $Version + '"}')
     [System.IO.File]::WriteAllText((Join-Path $appDir 'server\dist\index.js'), '// stub')
+}
+
+function New-ParamsFile {
+    param(
+        [int]$Server = 1,
+        [int]$Client = 0,
+        [string]$Scope = 'user',
+        [string]$Mode = 'service',
+        [string]$Port = '4321',
+        [string]$Name = 'params.ini'
+    )
+    $path = Join-Path $workRoot $Name
+    $text = "server=$Server`r`nclient=$Client`r`nclient_scope=$Scope`r`nmode=$Mode`r`nhost=0.0.0.0`r`nport=$Port`r`nfirewall=1`r`n"
+    [System.IO.File]::WriteAllText($path, $text)
+    return $path
+}
+
+function Get-LogLine {
+    param([string]$Pattern)
+    $log = Get-LatestLog
+    if (-not $log) { return '' }
+    $text = Get-Content -LiteralPath $log.FullName -Raw
+    $m = [regex]::Match($text, $Pattern)
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+
+function Invoke-StateProbe {
+    param([string[]]$ExtraArgs = @())
+    $code = Invoke-Setup -Arguments (@($silent) + @('/TESTSTATE=1') + $ExtraArgs)
+    return [pscustomobject]@{
+        Code   = $code
+        State  = (Get-LogLine -Pattern 'TESTSTATE ([^\r\n]+)')
+        Autopf = (Get-LogLine -Pattern 'autopf=([^;\r\n]+)')
+    }
+}
+
+function Add-StateResult {
+    param([string]$Name, [string]$Line, [string[]]$Pairs, [string]$Note = '')
+    $map = @{}
+    foreach ($part in (([string]$Line) -split '\s+')) {
+        if ($part -match '^([^=]+)=(.*)$') { $map[$Matches[1]] = $Matches[2] }
+    }
+    $bad = New-Object System.Collections.Generic.List[string]
+    foreach ($pair in $Pairs) {
+        $kv = $pair -split '=', 2
+        if ($kv.Count -lt 2) { continue }
+        $key = $kv[0]
+        $expected = $kv[1]
+        $actual = '<нет>'
+        if ($map.ContainsKey($key)) { $actual = $map[$key] }
+        if ($actual -ne $expected) { $bad.Add("$key=$actual (ожидалось $expected)") }
+    }
+    $ok = ($bad.Count -eq 0)
+    $text = if ($ok) { $Pairs -join ' ' } else { $bad -join '; ' }
+    if ($Note) { $text = $text + '  ' + $Note }
+    $script:results.Add([pscustomobject]@{ Scenario = $Name; Expected = 1; Actual = [int]$ok; Ok = $ok; Note = $text })
+    $mark = if ($ok) { 'OK  ' } else { 'FAIL' }
+    Write-Host ("{0}  {1,-34} {2}" -f $mark, $Name, $text)
 }
 
 function Get-LatestLog {
@@ -153,6 +219,19 @@ foreach ($required in @('/SUPPRESSMSGBOXES', '/NORESTART', 'SERVERONLY', 'GetCus
     if (-not $present) { $markText = 'FAIL'; $presentText = 'НЕТ' }
     $script:results.Add([pscustomobject]@{ Scenario = "static:$required"; Expected = 1; Actual = [int]$present; Ok = $present; Note = '' })
     Write-Host ("{0}  static:{1,-20} {2}" -f $markText, $required, $presentText)
+}
+# B2: каталог программы выбирается по режиму установки ({autopf}), а не жёстко
+# из Program Files — иначе неэлевированный экземпляр падает с Error 5.
+$staticChecks = @(
+    @{ Name = 'static:autopf-appdir'; Text = '#define AppDir "{autopf}\ETN"'; Note = 'каталог программы по режиму установки' },
+    @{ Name = 'static:defaultdir-app'; Text = 'DefaultDirName={#AppDir}'; Note = '' },
+    @{ Name = 'static:privileged-phase'; Text = 'ValidatePrivilegedPhasePreconditions'; Note = 'отдельная привилегированная фаза' }
+)
+foreach ($check in $staticChecks) {
+    $present = $issText.Contains($check.Text)
+    $markText = if ($present) { 'OK  ' } else { 'FAIL' }
+    $script:results.Add([pscustomobject]@{ Scenario = $check.Name; Expected = 1; Actual = [int]$present; Ok = $present; Note = $check.Note })
+    Write-Host ("{0}  {1,-28} {2}" -f $markText, $check.Name, $check.Note)
 }
 
 # --- Сборка тестового установщика -------------------------------------------
@@ -251,8 +330,18 @@ $filesOk = (Test-Path -LiteralPath (Join-Path $appDir 'server\package.json')) -a
 Add-Result -Name 'success:payload-files' -Expected 1 -Actual ([int]$filesOk)
 
 # --- 10. повторный запуск той же версии -------------------------------------
+Start-Sleep -Milliseconds 1100
 $code = Invoke-Setup -Arguments ($silent + @('/SERVERONLY', '/TESTELEVATED=1', '/TESTSERVICE=present', '/TESTHEALTH=ok'))
 Add-Result -Name 'repeat-same-version' -Expected 0 -Actual $code -Note 'изменений нет'
+$jsonRepeat = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+$lastLog2 = $null
+if ($jsonRepeat -match '"last_log":"([^"]+)"') { $lastLog2 = $Matches[1].Replace('\\', '\') }
+$logAdvanced = $lastLog2 -and ($lastLog2 -ne $lastLog)
+Add-Result -Name 'repeat:last-log-updated' -Expected 1 -Actual ([int][bool]$logAdvanced) -Note ("{0} -> {1}" -f $lastLog, $lastLog2)
+$log2Exists = $lastLog2 -and (Test-Path -LiteralPath $lastLog2)
+Add-Result -Name 'repeat:last-log-exists' -Expected 1 -Actual ([int][bool]$log2Exists)
+$versionKept = $jsonRepeat -match ('"product_version":"' + [regex]::Escape($version) + '"')
+Add-Result -Name 'repeat:version-kept' -Expected 1 -Actual ([int]$versionKept)
 
 # --- 11. понижение версии ----------------------------------------------------
 Reset-State
@@ -276,6 +365,140 @@ $secretLeaked = $logText.Contains('TOPSECRET-SENTINEL')
 Add-Result -Name 'no-secret-in-log' -Expected 0 -Actual ([int]$secretLeaked) -Note 'ключ не пишется в журнал'
 $redacted = $logText -match 'apikey=\*\*\*'
 Add-Result -Name 'secret-redacted' -Expected 1 -Actual ([int]$redacted)
+
+# ============================================================================
+# Замечания независимой проверки: B1–B5, Z2, Z3.
+# ============================================================================
+
+# --- B2: каталог программы по режиму установки ({autopf}) --------------------
+Write-Host '=== Каталог программы: per-user и {autopf} ==='
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/CURRENTUSER')
+$expectedAutopf = Join-Path $env:LOCALAPPDATA 'Programs'
+$autopfOk = ($probe.Autopf.Trim() -eq $expectedAutopf)
+Add-Result -Name 'per-user-autopf' -Expected 1 -Actual ([int]$autopfOk) -Note ("autopf=" + $probe.Autopf + " (ожидалось " + $expectedAutopf + ")")
+
+# --- B3, B5, Z3: состояние машины и галочки по умолчанию --------------------
+Write-Host '=== Состояние машины и выбор компонентов ==='
+Reset-State
+$probe = Invoke-StateProbe
+Add-Result -Name 'state-clean:code' -Expected 0 -Actual $probe.Code
+Add-StateResult -Name 'state-clean:defaults' -Line $probe.State -Pairs @(
+    'server_state=not-installed', 'client_state=not-installed',
+    'default_server=1', 'default_client=1') -Note 'ETN нет вовсе — отмечены оба'
+
+Reset-State
+New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), 'stub')
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'state-client-only:defaults' -Line $probe.State -Pairs @(
+    'server_state=not-installed', 'client_state=installed',
+    'default_server=0', 'default_client=1') -Note 'только установленное'
+
+Reset-State
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $dataDir '_system.db'), 'stub')
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'state-data-only:adopt' -Line $probe.State -Pairs @(
+    'server_state=adopt', 'default_server=1', 'default_client=0') -Note 'подключить существующие данные (B5)'
+
+Reset-State
+Write-InstallJson (New-InstallJson -ProductVersion '0.15.0')
+New-ServerFiles -Version '0.15.0'
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'state-update-available' -Line $probe.State -Pairs @(
+    'server_state=update-available', 'files_version=0.15.0',
+    'default_server=1', 'default_client=0')
+
+Reset-State
+Write-InstallJson (New-InstallJson -ProductVersion $version)
+New-ServerFiles -Version $version
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'state-installed' -Line $probe.State -Pairs @(
+    'server_state=installed', ('files_version=' + $version)) -Note 'актуальная версия, не repair (Z3)'
+
+Reset-State
+Write-InstallJson (New-InstallJson -ProductVersion $version)
+New-ServerFiles -Version '0.15.0'
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'state-repair-version-mismatch' -Line $probe.State -Pairs @(
+    'server_state=repair', 'files_version=0.15.0') -Note 'файлы не соответствуют install.json (Z3)'
+
+Reset-State
+Write-InstallJson (New-InstallJson -ProductVersion '0.16.0')
+New-ServerFiles -Version '0.16.0'
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'state-downgrade:defaults' -Line $probe.State -Pairs @(
+    'server_state=downgrade', 'downgrade=1',
+    'default_server=0', 'default_client=0') -Note 'понижение не отмечается'
+
+# Z3: запись установки Inno (хук /TESTRECORD) — разрушенная установка сервера.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTRECORD=1')
+Add-StateResult -Name 'state-record-only:repair' -Line $probe.State -Pairs @(
+    'server_state=repair', 'record=1', 'default_server=1')
+
+# B3: машинный клиент пишет ту же запись установки — сервер не отмечается.
+Reset-State
+New-Item -ItemType Directory -Path (Join-Path $appDir 'client') -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'client\ETN.exe'), 'stub')
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTRECORD=1')
+Add-StateResult -Name 'state-machine-client-with-record' -Line $probe.State -Pairs @(
+    'server_state=not-installed', 'record=1',
+    'default_server=0', 'default_client=1')
+
+# B4: повышение прав нужно серверу и клиенту «для всех», но не клиенту «для меня».
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=server')
+Add-StateResult -Name 'need-elevation:server' -Line $probe.State -Pairs @('need_elevation=1')
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-machine')
+Add-StateResult -Name 'need-elevation:client-machine' -Line $probe.State -Pairs @('need_elevation=1')
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-user')
+Add-StateResult -Name 'need-elevation:client-user' -Line $probe.State -Pairs @('need_elevation=0')
+
+# --- B1: привилегированная фаза на чистой машине ----------------------------
+Write-Host '=== Привилегированная фаза (B1, B4) ==='
+Reset-State
+$privParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Name 'priv-server.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"", '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+Add-Result -Name 'privileged-clean:code' -Expected 0 -Actual $code -Note 'нет install.json и службы — silent-предусловия не применяются'
+$privFiles = (Test-Path -LiteralPath (Join-Path $appDir 'server\dist\index.js')) -and
+    (Test-Path -LiteralPath (Join-Path $appDir 'service\etn-service.xml'))
+Add-Result -Name 'privileged-clean:files' -Expected 1 -Actual ([int]$privFiles)
+$privJsonPath = Join-Path $dataDir 'install.json'
+$privJsonOk = $false
+if (Test-Path -LiteralPath $privJsonPath) {
+    $privJson = Get-Content -LiteralPath $privJsonPath -Raw
+    $privJsonOk = $privJson -match ('"product_version":"' + [regex]::Escape($version) + '"')
+}
+Add-Result -Name 'privileged-clean:install-json' -Expected 1 -Actual ([int]$privJsonOk)
+
+if ($IsElevated) {
+    Write-Host 'SKIP  privileged-not-elevated      прогон идёт в элевированном процессе'
+} else {
+    Reset-State
+    $privParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Name 'priv-server2.ini'
+    $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"", '/TESTHEALTH=ok'))
+    Add-Result -Name 'privileged-not-elevated' -Expected 20 -Actual $code -Note 'нужны права администратора'
+}
+
+# --- B4: клиент «для всех» ставится, «для меня» — нет -----------------------
+Reset-State
+$privParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'priv-client-machine.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"", '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+Add-Result -Name 'privileged-client-machine:code' -Expected 0 -Actual $code -Note 'элевация при клиенте «для всех»'
+$machineClient = Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')
+Add-Result -Name 'privileged-client-machine:files' -Expected 1 -Actual ([int]$machineClient)
+
+Reset-State
+$privParams = New-ParamsFile -Server 0 -Client 1 -Scope user -Name 'priv-client-user.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"", '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+Add-Result -Name 'privileged-client-user:code' -Expected 0 -Actual $code
+$userClientInChild = (Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')) -or
+    (Test-Path -LiteralPath (Join-Path $appDir 'ETN.exe'))
+Add-Result -Name 'privileged-client-user:not-copied' -Expected 0 -Actual ([int]$userClientInChild) -Note 'пользовательский клиент ставит неэлевированная фаза'
 
 # --- Итог --------------------------------------------------------------------
 $failed = @($script:results | Where-Object { -not $_.Ok })
