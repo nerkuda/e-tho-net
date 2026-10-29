@@ -4,7 +4,7 @@
  * Common types, enumerations, constants, the error contract and the structures
  * keywords parser shared between @etn/server and @etn/client. Runtime logic is
  * limited to value constants, {@link EtnError} and the pure helpers of
- * `keywords.ts`/`mentions.ts`/`chronicle-keywords.ts`.
+ * `keywords.ts`/`mentions.ts`/`chronicle-keywords.ts`/`semver.ts`.
  *
  * Sources of truth: docs/02-data-model.md, docs/03-server-api.md,
  * docs/04-realtime.md, docs/05-mcp-server.md, docs/06-auth.md,
@@ -20,4 +20,5 @@ export * from './chronicle-keywords.js';
 export * from './mentions.js';
 export * from './deep-link.js';
 export * from './filter-profiles.js';
+export * from './semver.js';
 export * from './types/index.js';
