@@ -132,10 +132,14 @@ function Read-PackageVersion {
 # --key-out, подставляет плейсхолдеры шаблона службы и рассчитывает на файлы
 # контракта. Устаревшая поставка (например, dist/cli.js без --key-out)
 # собирается в exe, который падает уже на установке, — поэтому проверка до
-# компиляции. Возвращает список проблем; пустой список — payload годен.
+# компиляции. Возвращает объект { Problems; HashCompared }: пустой Problems —
+# payload годен, HashCompared = false — сравнение SHA-256 с репозиторием
+# пропущено (нет server/dist или шаблона в репозитории), о чём печатается
+# предупреждение и отдельная итоговая формулировка.
 function Test-PayloadFreshness {
     param([string]$Root, [string]$RepoRoot)
     $problems = New-Object System.Collections.Generic.List[string]
+    $result = [pscustomobject]@{ Problems = $problems; HashCompared = $false }
     $required = @(
         'node\node.exe',
         'server\package.json',
@@ -146,14 +150,14 @@ function Test-PayloadFreshness {
         'service\etn-service.xml')
     if (-not (Test-Path -LiteralPath $Root)) {
         $problems.Add("каталог payload не найден: $Root")
-        return $problems
+        return $result
     }
     foreach ($relative in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative))) {
             $problems.Add("нет обязательного файла payload: $relative")
         }
     }
-    if ($problems.Count -gt 0) { return $problems }
+    if ($problems.Count -gt 0) { return $result }
 
     # Версия серверной поставки — та же, что собирается из репозитория.
     $repoVersion = Read-PackageVersion -Path (Join-Path $RepoRoot 'server\package.json')
@@ -164,16 +168,20 @@ function Test-PayloadFreshness {
 
     # Совпадение сборки и шаблона службы с репозиторием. Если dist в
     # репозитории ещё не собран, сравнивать не с чем — об этом предупреждаем.
+    $hashTotal = 0
+    $hashCompared = 0
     foreach ($item in @(
             @{ Relative = 'server\dist\cli.js'; Source = (Join-Path $RepoRoot 'server\dist\cli.js'); What = 'CLI сервера (server\dist\cli.js)' },
             @{ Relative = 'server\dist\index.js'; Source = (Join-Path $RepoRoot 'server\dist\index.js'); What = 'сервер (server\dist\index.js)' },
             @{ Relative = 'service\etn-service.xml'; Source = (Join-Path $PSScriptRoot 'service\etn-service.xml'); What = 'шаблон службы' })) {
+        $hashTotal++
         if (-not (Test-Path -LiteralPath $item.Source)) {
             Write-Warning ("Свежесть payload по $($item.Relative) НЕ ПРОВЕРЕНА: в репозитории нет $($item.Source). " +
                 "Соберите сервер (npm -w @etn/server run build) и обновите payload " +
                 "(pwsh -File installer/fetch-payload.ps1) — иначе exe может разойтись со сборкой.")
             continue
         }
+        $hashCompared++
         $payloadPath = Join-Path $Root $item.Relative
         if ((Get-FileSha256 -Path $item.Source) -ne (Get-FileSha256 -Path $payloadPath)) {
             $problems.Add("payload устарел: $($item.What) отличается от сборки репозитория")
@@ -195,7 +203,7 @@ function Test-PayloadFreshness {
             $problems.Add("в payload service\etn-service.xml нет плейсхолдера $placeholder")
         }
     }
-    return $problems
+    return [pscustomobject]@{ Problems = $problems; HashCompared = ($hashCompared -eq $hashTotal) }
 }
 
 if (-not $Version) { $Version = Get-ServerVersion -Root $repoRoot }
@@ -226,7 +234,8 @@ if ($TestMode) {
         & $psExe -NoProfile -ExecutionPolicy Bypass -File $fetchScript -PayloadRoot $PayloadRoot
         if ($LASTEXITCODE -ne 0) { throw "fetch-payload.ps1 завершился с кодом $LASTEXITCODE." }
     }
-    $payloadProblems = @(Test-PayloadFreshness -Root $PayloadRoot -RepoRoot $repoRoot)
+    $freshness = Test-PayloadFreshness -Root $PayloadRoot -RepoRoot $repoRoot
+    $payloadProblems = @($freshness.Problems)
     if ($payloadProblems.Count -gt 0) {
         $details = ($payloadProblems | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
         throw ("Payload установщика отсутствует или устарел: $PayloadRoot" + [Environment]::NewLine +
@@ -234,7 +243,12 @@ if ($TestMode) {
             'Обновите payload: pwsh -File installer/fetch-payload.ps1 ' +
             '(или запустите build.ps1 с -RefreshPayload).')
     }
-    Write-Host 'Payload свежий: файлы контракта, версия, dist и шаблон службы совпадают с репозиторием.'
+    if ($freshness.HashCompared) {
+        Write-Host 'Payload свежий: файлы контракта, версия, dist и шаблон службы совпадают с репозиторием.'
+    } else {
+        Write-Host ('Payload проверен частично (dist не сравнивался): файлы контракта и версия проверены. ' +
+            'Соберите server/dist (npm -w @etn/server run build) и обновите payload для полной проверки.')
+    }
 }
 
 $iscc = Find-Iscc -Explicit $IsccPath

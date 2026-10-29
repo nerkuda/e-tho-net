@@ -67,7 +67,8 @@
 ;   проверяются только права, каталог программы, каталог данных и порт;
 ;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
 ;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
-;   /TESTFIREWALL, /TESTPRECHECK — только в тестовой сборке
+;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID —
+;   только в тестовой сборке
 ;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
 ; ============================================================================
 
@@ -272,6 +273,10 @@ var
   GTestFirewall: String;
   GTestPrecheck: String;
   GTestResult: String;
+  { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
+    CIM-запроса и PID, который считается PID службы (проверка потомков). }
+  GTestServiceName: String;
+  GTestOwnServicePid: String;
 
   { Первичная инициализация и ключ }
   GAdminLogin: String;
@@ -1925,31 +1930,64 @@ end;
   (bb063ac3). WinSW 2.x запускает сервер дочерним процессом, поэтому
   владелец сокета сравнивается не только с ProcessId службы, но и с её
   потомками до 4 уровней (иначе при обновлении поверх работающей установки
-  порт ошибочно считался бы занятым чужим). Если командлет недоступен или
-  IPv4-слушателей нет, выполняются пробные bind: 0.0.0.0 (зарезервированные
-  диапазоны Hyper-V, TIME_WAIT, dual-stack IPv6) и 127.0.0.1 (loopback).
+  порт ошибочно считался бы занятым чужим).
+  Скрипт передаётся в powershell.exe как -Command "<скрипт>"; вложенные
+  ДВОЙНЫЕ кавычки разбор командной строки срезает — фильтр CIM становится
+  невалидным, служба не находится (дефект B3 той же приёмки). Поэтому внутри
+  скрипта только одинарные кавычки, а имя службы подставляется переменной.
+  IPv6: ETN_HOST в 0.15.1 — только IPv4, поэтому IPv6-слушатели в перебор не
+  входят (IPv6-only слушатель серверу не мешает); dual-stack `::` блокирует
+  bind 0.0.0.0 и ловится пробой ниже. Если сервер начнёт слушать IPv6,
+  перечисление надо расширить.
+  Если командлет недоступен или IPv4-слушателей нет, выполняются пробные
+  bind: 0.0.0.0 (зарезервированные диапазоны Hyper-V, TIME_WAIT, dual-stack
+  IPv6) и 127.0.0.1 (loopback).
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
-  не удалось. }
+  не удалось. Тестовые хуки (только TestMode): TESTSERVICENAME подменяет имя
+  службы, и скрипт возвращает 0/2 по факту её нахождения (поведенческая проба
+  CIM-запроса); TESTOWNSERVICEPID задаёт PID «своей» службы вместо CIM-запроса
+  (поведенческая проба сравнения владельцев и цепочки потомков). }
 function ServerPortStatus(const Port: String): Integer;
 var
-  Script, Args: String;
+  Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed: String;
   Code: Integer;
 begin
   Result := 2;
+  SvcName := SERVICE_NAME;
+  SvcProbe := '0';
+  OwnSeed := '0';
+#ifdef TestMode
+  if GTestServiceName <> '' then
+  begin
+    SvcName := GTestServiceName;
+    SvcProbe := '1';
+  end;
+  { Валидация PID: строка из параметра идёт в скрипт только если это число. }
+  if StrToIntDef(GTestOwnServicePid, 0) > 0 then
+    OwnSeed := IntToStr(StrToIntDef(GTestOwnServicePid, 0));
+#endif
+  { Имя службы — в одинарные кавычки PowerShell; кавычки внутри имени
+    удваиваются (правило PS-литерала). Двойных кавычек в скрипте нет. }
+  SvcNameLiteral := SvcName;
+  StringChangeEx(SvcNameLiteral, '''', '''''', True);
   Script :=
-    '$ErrorActionPreference=''SilentlyContinue'';$port=' + Port + ';$own=@();' +
-    'try{$svc=Get-CimInstance Win32_Service -Filter "Name=''ETN''"|' +
-    'Select-Object -First 1;' +
-    'if($svc -and ([int]$svc.ProcessId -gt 0)){' +
-    '$own+=[int]$svc.ProcessId;' +
-    '$procs=@(Get-CimInstance Win32_Process);' +
-    '$front=@([int]$svc.ProcessId);' +
+    '$ErrorActionPreference=''SilentlyContinue'';$port=' + Port + ';' +
+    '$svcName=''' + SvcNameLiteral + ''';' +
+    '$svcProbe=' + SvcProbe + ';$ownSeed=' + OwnSeed + ';' +
+    '$svcFound=0;$own=@();' +
+    'if($ownSeed -gt 0){$own+=$ownSeed}' +
+    'else{try{$svc=Get-CimInstance Win32_Service|' +
+    'Where-Object{$_.Name -eq $svcName}|Select-Object -First 1;' +
+    'if($svc -and ([int]$svc.ProcessId -gt 0)){$svcFound=1;' +
+    '$own+=[int]$svc.ProcessId}}catch{}};' +
+    'if($svcProbe -eq 1){if($svcFound -eq 1){exit 0};exit 2};' +
+    'if($own.Count -gt 0){$procs=@(Get-CimInstance Win32_Process);' +
+    '$front=@($own);' +
     'for($d=0;$d -lt 4 -and $front.Count -gt 0;$d++){' +
-    '$next=@();' +
-    'foreach($p in $procs){' +
+    '$next=@();foreach($p in $procs){' +
     'if($front -contains [int]$p.ParentProcessId){' +
     '$own+=[int]$p.ProcessId;$next+=[int]$p.ProcessId}};' +
-    '$front=$next}}}catch{};' +
+    '$front=$next}};' +
     '$v4=$null;' +
     'try{$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen ' +
     '-ErrorAction Stop|Where-Object{$_.LocalAddress -notmatch '':''})}catch{};' +
@@ -2763,6 +2801,8 @@ begin
   GTestFirewall := '';
   GTestPrecheck := '';
   GTestResult := '';
+  GTestServiceName := '';
+  GTestOwnServicePid := '';
   GAdminLogin := '';
   GAdminDisplayName := '';
   GFirstUserChecked := False;
@@ -2813,6 +2853,8 @@ begin
   GTestFirewall := ParamValue('TESTFIREWALL');
   GTestPrecheck := ParamValue('TESTPRECHECK');
   GTestResult := ParamValue('TESTRESULT');
+  GTestServiceName := ParamValue('TESTSERVICENAME');
+  GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
   { Подмена каталога данных для предпроверок (путь, занятый файлом,
     недоступный диск): журнал при этом остаётся в обычном каталоге теста. }
   if GTestDataDir <> '' then

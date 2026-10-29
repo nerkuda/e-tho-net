@@ -38,6 +38,10 @@
      23. 9b310991: порт, занятый только на loopback или конкретном адресе,
          — код 20 (B1); ошибка netsh — предупреждение в журнале без отмены
          установки; статический сторож .iss — общий хелпер iss-guard.ps1 (B2)
+     24. 9b310991 B3: CIM-запрос службы в том же -Command находит реальную
+         службу (хук /TESTSERVICENAME); слушатель своего PID и PID-потомка
+         (хук /TESTOWNSERVICEPID) — свободен, чужой — 20; реальный LAN-адрес
+         машины (если есть) — 20
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -252,16 +256,14 @@ $issText = Get-Content -LiteralPath $issPath -Raw -Encoding UTF8
 $guardSelfTest = Test-IssGuardSelfTest
 Add-StaticResult -Name 'static-guard:self-test' -Ok $guardSelfTest.Ok -Note $guardSelfTest.Message
 
-$msgBoxMatches = [regex]::Matches($issText, '(?<!Suppressible)MsgBox\s*\(')
-if ($msgBoxMatches.Count -gt 0) {
-    $script:results.Add([pscustomobject]@{ Scenario = 'static:no-msgbox'; Expected = 0; Actual = $msgBoxMatches.Count; Ok = $false; Note = 'MsgBox в .iss' })
-    Write-Host ("FAIL  static:no-msgbox              найдено MsgBox: {0}" -f $msgBoxMatches.Count)
-} else {
-    $script:results.Add([pscustomobject]@{ Scenario = 'static:no-msgbox'; Expected = 0; Actual = 0; Ok = $true; Note = '' })
-    Write-Host 'OK    static:no-msgbox              MsgBox в .iss нет'
-}
+# MsgBox вне SuppressibleMsgBox быть не должно. Построчный сторож: MsgBox в
+# закомментированной строке ({ MsgBox(...) }) ошибкой не считается.
+$msgBoxInCode = Test-IssCode -Text $issText -Pattern '(?<!Suppressible)MsgBox\s*\('
+Add-StaticResult -Name 'static:no-msgbox' -Ok (-not $msgBoxInCode) `
+    -Note 'MsgBox в коде .iss нет (строки комментариев не считаются)'
 foreach ($required in @('/SUPPRESSMSGBOXES', '/NORESTART', 'SERVERONLY', 'GetCustomSetupExitCode')) {
-    $present = Test-IssCode -Text $issText -Pattern ([regex]::Escape($required))
+    # ini-секции: там ';' — комментарий, а не разделитель операторов.
+    $present = Test-IssCode -Text $issText -Pattern ([regex]::Escape($required)) -IniComments
     Add-StaticResult -Name "static:$required" -Ok $present
 }
 # B2: каталог программы выбирается по режиму установки ({autopf}), а не жёстко
@@ -287,7 +289,6 @@ $staticChecks = @(
     @{ Name = 'static:port-page'; Pattern = [regex]::Escape('CreateServerParamsPage'); Note = 'экран «Параметры сервера»' },
     @{ Name = 'static:port-focus'; Pattern = [regex]::Escape('WizardForm.ActiveControl := GPortEdit'); Note = 'фокус на поле порта при ошибке' },
     @{ Name = 'static:precheck-function'; Pattern = [regex]::Escape('function CheckServerEnvironment'); Note = 'единая предпроверка окружения' },
-    @{ Name = 'static:port-all-listeners'; Pattern = [regex]::Escape('Get-NetTCPConnection -LocalPort $port -State Listen'); Note = 'занятость порта — по всем слушателям (B1)' },
     @{ Name = 'static:port-loopback-bind'; Pattern = [regex]::Escape('TcpListener([Net.IPAddress]::Loopback,$port)'); Note = 'пробный bind на loopback' },
     @{ Name = 'static:port-own-service-children'; Pattern = [regex]::Escape('$p.ParentProcessId'); Note = 'служба ETN: потомки WinSW, не только ProcessId' },
     @{ Name = 'static:firewall-warning-gui'; Pattern = [regex]::Escape('WizardForm.FinishedLabel.Caption'); Note = 'предупреждение netsh на финальном экране' },
@@ -315,9 +316,35 @@ foreach ($check in $staticChecks) {
 Add-StaticResult -Name 'static:no-datadir-choice' `
     -Ok (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('CreateInputDirPage')))) `
     -Note 'нет страницы выбора каталога данных'
-# Замечание 3: тестовый хук health-check не должен попадать в продуктовую сборку.
-$hookUnderIfdef = [regex]::IsMatch($issText, '#ifdef\s+TestMode\s*\r?\n\s*if GTestHealth')
-Add-StaticResult -Name 'static:health-hook-ifdef' -Ok $hookUnderIfdef -Note 'хук /TESTHEALTH под #ifdef TestMode'
+# B1: проверка реального фрагмента ServerPortStatus, а не подстроки по всему
+# файлу: старый bind-only код тоже содержал Get-NetTCPConnection (в ветке
+# своей службы) и проходил подстрочный сторож.
+$portBody = Get-IssFunctionBody -Text $issText -Name 'ServerPortStatus'
+$portAllListeners = ($portBody -ne '') -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen'))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$foreign=@($v4|Where-Object{$own -notcontains')))
+Add-StaticResult -Name 'static:port-all-listeners' -Ok $portAllListeners `
+    -Note 'ServerPortStatus: перебор слушателей и сравнение владельцев (фрагмент функции)'
+# B3: скрипт передаётся как -Command "<скрипт>", вложенные двойные кавычки
+# разбор командной строки срезает — внутри собранного Script их быть не должно
+# (строка Args := ... с кавычками обёртки -Command исключается).
+$portScriptPart = ((($portBody -split "`n") | Where-Object { $_ -notmatch '^\s*Args\s*:=' }) -join "`n")
+Add-StaticResult -Name 'static:port-no-nested-dquotes' `
+    -Ok (($portBody -ne '') -and ($portScriptPart -notmatch '"')) `
+    -Note 'собранный Script в ServerPortStatus без двойных кавычек (B3)'
+Add-StaticResult -Name 'static:port-own-service-hook' `
+    -Ok (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$ownSeed'))) `
+    -Note 'хук /TESTOWNSERVICEPID — своя служба по PID'
+Add-StaticResult -Name 'static:port-service-name-hook' `
+    -Ok (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$svcProbe'))) `
+    -Note 'хук /TESTSERVICENAME — поведенческая проба CIM-запроса'
+# Замечание 3: тестовый хук health-check не должен попадать в продуктовую
+# сборку. Построчно: закомментированная директива блок не открывает.
+$testModeBody = Get-IssIfdefBody -Text $issText -Name 'TestMode'
+$hookUnderIfdef = ($testModeBody -ne '') -and
+    (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('if GTestHealth')))
+Add-StaticResult -Name 'static:health-hook-ifdef' -Ok $hookUnderIfdef `
+    -Note 'хук /TESTHEALTH под #ifdef TestMode (построчно)'
 
 # --- Сторож свежести payload в build.ps1 (дефект 3) --------------------------
 # Продуктовая сборка (без -TestMode) обязана отказаться от устаревшей поставки
@@ -716,6 +743,171 @@ try {
 }
 if (-not $addrCaseOk) {
     Add-Result -Name 'precheck:port-address-busy-code' -Expected 1 -Actual 0 -Note '127.0.0.2 не занялся — сценарий не выполнен'
+}
+
+# B3: ветка «порт занят собственной службой ETN». Скрипт ServerPortStatus
+# передаётся в powershell.exe -Command "<...>", и вложенные двойные кавычки
+# срезаются разбором командной строки: CIM-фильтр становился невалидным,
+# $svc всегда null, слушатель своей службы считался чужим. Поведенческие
+# пробы идут через настоящий ServerPortStatus тестового установщика.
+Write-Host '=== 9b310991 B3: собственная служба и цепочка потомков WinSW ==='
+
+# 1. CIM-запрос в том же -Command: имя реальной запущенной службы подменяется
+#    хуком; скрипт возвращает 0, только если служба действительно найдена
+#    (сломанный фильтр с кавычками даёт 2 при любом имени).
+$probeServiceName = ''
+$spooler = $null
+try {
+    $spooler = @(Get-CimInstance Win32_Service | Where-Object { $_.Name -eq 'Spooler' } |
+        Select-Object -First 1)
+} catch { }
+if (($spooler.Count -gt 0) -and ($spooler[0].State -eq 'Running') -and ([int]$spooler[0].ProcessId -gt 0)) {
+    $probeServiceName = 'Spooler'
+} else {
+    try {
+        $running = @(Get-CimInstance Win32_Service | Where-Object {
+                ($_.State -eq 'Running') -and ([int]$_.ProcessId -gt 0) } |
+            Select-Object -First 1)
+        if ($running.Count -gt 0) { $probeServiceName = $running[0].Name }
+    } catch { }
+}
+if ($probeServiceName -eq '') {
+    Add-StaticResult -Name 'ownsvc:query-real-service' -Ok $false -Note 'на машине нет запущенной службы с PID — проба невозможна'
+} else {
+    Reset-State
+    Reset-PrecheckResult
+    $probePort = Get-FreeTcpPort
+    $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', "/TESTPORT=$probePort",
+        "/TESTSERVICENAME=$probeServiceName", "/TESTRESULT=`"$precheckResult`""))
+    Add-Result -Name 'ownsvc:query-real-service' -Expected 0 -Actual $code `
+        -Note ("служба $probeServiceName найдена через -Command")
+    Add-Result -Name 'ownsvc:query-real-reason-empty' -Expected 1 `
+        -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'причина пуста'
+}
+
+Reset-State
+Reset-PrecheckResult
+$missingPort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', "/TESTPORT=$missingPort",
+    '/TESTSERVICENAME=ETN-NoSuchService-9f2a', "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'ownsvc:query-missing-service' -Expected 20 -Actual $code
+$missingReason = Get-PrecheckResult
+$missingReasonOk = $missingReason -match 'не удалось проверить занятость порта'
+Add-Result -Name 'ownsvc:query-missing-reason' -Expected 1 -Actual ([int]$missingReasonOk) -Note $missingReason
+
+# 2. Слушатель, принадлежащий «своей службе» и её потомку. Дерево процессов:
+#    обёртка (хук = её PID, как PID службы WinSW) -> процесс-слушатель.
+$listenerPort = Get-FreeTcpPort
+$listenerFile = Join-Path $workRoot 'ownsvc-listener.ps1'
+$wrapperFile = Join-Path $workRoot 'ownsvc-wrapper.ps1'
+$childPidFile = Join-Path $workRoot 'ownsvc-child.pid'
+Remove-Item -LiteralPath $childPidFile -Force -ErrorAction SilentlyContinue
+$listenerText = @"
+`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $listenerPort)
+`$l.Start()
+Start-Sleep -Seconds 120
+"@
+[System.IO.File]::WriteAllText($listenerFile, $listenerText, [System.Text.Encoding]::UTF8)
+$wrapperText = @"
+`$child = Start-Process -FilePath '$psExe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','$listenerFile') -PassThru -WindowStyle Hidden
+`$child.Id | Set-Content -LiteralPath '$childPidFile'
+Start-Sleep -Seconds 120
+"@
+[System.IO.File]::WriteAllText($wrapperFile, $wrapperText, [System.Text.Encoding]::UTF8)
+$wrapper = Start-Process -FilePath $psExe `
+    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperFile) `
+    -PassThru -WindowStyle Hidden
+$childPid = 0
+$ownerPid = 0
+try {
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline) {
+        if (($childPid -eq 0) -and (Test-Path -LiteralPath $childPidFile)) {
+            $pidText = ([System.IO.File]::ReadAllText($childPidFile)).Trim()
+            if ($pidText -match '^\d+$') { $childPid = [int]$pidText }
+        }
+        try {
+            $conn = @(Get-NetTCPConnection -LocalPort $listenerPort -State Listen -ErrorAction Stop |
+                Select-Object -First 1)
+            if ($conn.Count -gt 0) { $ownerPid = [int]$conn[0].OwningProcess }
+        } catch { }
+        if (($ownerPid -gt 0) -and ($childPid -gt 0)) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    $ready = ($ownerPid -gt 0) -and ($childPid -gt 0) -and ($ownerPid -eq $childPid)
+    Add-Result -Name 'ownsvc:listener-ready' -Expected 1 -Actual ([int]$ready) `
+        -Note ("слушатель pid=$ownerPid, обёртка pid=" + $wrapper.Id)
+
+    if ($ready) {
+        # Чужой слушатель без хука — занят (контроль: проба не пустая).
+        Reset-State
+        Reset-PrecheckResult
+        $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+            "/TESTPORT=$listenerPort", "/TESTRESULT=`"$precheckResult`""))
+        Add-Result -Name 'ownsvc:foreign-listener-busy' -Expected 20 -Actual $code
+        Add-Result -Name 'ownsvc:foreign-listener-reason' -Expected 1 `
+            -Actual ([int]((Get-PrecheckResult) -match ('порт ' + $listenerPort + ' занят другим приложением'))) `
+            -Note 'слушатель неизвестного PID — занят'
+
+        # PID самой службы = PID процесса-слушателя — своим.
+        Reset-State
+        Reset-PrecheckResult
+        $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+            "/TESTPORT=$listenerPort", "/TESTOWNSERVICEPID=$childPid",
+            "/TESTRESULT=`"$precheckResult`""))
+        Add-Result -Name 'ownsvc:self-pid-code' -Expected 0 -Actual $code
+        Add-Result -Name 'ownsvc:self-pid-reason-empty' -Expected 1 `
+            -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'слушатель своего PID — свободен для ETN'
+
+        # PID службы = PID обёртки (родителя): потомок WinSW — своим.
+        Reset-State
+        Reset-PrecheckResult
+        $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+            "/TESTPORT=$listenerPort", "/TESTOWNSERVICEPID=$($wrapper.Id)",
+            "/TESTRESULT=`"$precheckResult`""))
+        Add-Result -Name 'ownsvc:descendant-pid-code' -Expected 0 -Actual $code
+        Add-Result -Name 'ownsvc:descendant-pid-reason-empty' -Expected 1 `
+            -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'слушатель-потомок WinSW — свободен для ETN'
+    } else {
+        Add-Result -Name 'ownsvc:foreign-listener-busy' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
+        Add-Result -Name 'ownsvc:self-pid-code' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
+        Add-Result -Name 'ownsvc:descendant-pid-code' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
+    }
+} finally {
+    if ($childPid -gt 0) { Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue }
+    if ($ownerPid -gt 0) { Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue }
+    Stop-Process -Id $wrapper.Id -Force -ErrorAction SilentlyContinue
+}
+
+# Замечание 6: реальный LAN-адрес машины (если он есть). Тот же путь кода,
+# что loopback/127.0.0.2, но адрес не из loopback-диапазона.
+$lanAddress = ''
+try {
+    $lanAddress = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object {
+            ($_.IPAddress -notmatch '^127\.') -and ($_.IPAddress -notmatch '^169\.254\.') } |
+        Select-Object -First 1 -ExpandProperty IPAddress)
+} catch { }
+if ($lanAddress) {
+    $lanListener = $null
+    try {
+        $lanListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse($lanAddress), 0)
+        $lanListener.Start()
+        $lanPort = ([System.Net.IPEndPoint]$lanListener.LocalEndpoint).Port
+        Reset-State
+        Reset-PrecheckResult
+        $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+            "/TESTPORT=$lanPort", "/TESTRESULT=`"$precheckResult`""))
+        Add-Result -Name 'precheck:port-lan-busy-code' -Expected 20 -Actual $code -Note ("LAN $lanAddress")
+        $lanReason = Get-PrecheckResult
+        Add-Result -Name 'precheck:port-lan-busy-reason' -Expected 1 `
+            -Actual ([int]($lanReason -match ('порт ' + $lanPort + ' занят другим приложением'))) -Note $lanReason
+    } catch {
+        Write-Host ('      LAN-адрес ' + $lanAddress + ' недоступен для bind: ' + $_.Exception.Message)
+    } finally {
+        if ($null -ne $lanListener) { $lanListener.Stop() }
+    }
+} else {
+    Write-Host '      LAN-адрес не найден — кейс реального LAN-адреса не выполнялся'
 }
 
 # Некорректный порт.
