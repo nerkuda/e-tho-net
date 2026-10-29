@@ -107,14 +107,27 @@ function New-ParamsFile {
         [string]$Scope = 'user',
         [string]$Mode = 'service',
         [string]$Login = 'admin',
+        [string]$DisplayName = '',
+        [int]$Port = 0,
         [string]$Name = 'params.ini'
     )
+    # Свободный порт по умолчанию: предпроверка занятости порта настоящая, а на
+    # машине разработчика 4321 может занимать запущенный сервер (9b310991).
+    if ($Port -le 0) { $Port = Get-FreeTcpPort }
     $path = Join-Path $workRoot $Name
     $text = "server=$Server`r`nclient=$Client`r`nclient_scope=$Scope`r`nmode=$Mode`r`n" +
-        "host=0.0.0.0`r`nport=4321`r`nfirewall=1`r`nlogin=$Login`r`n" +
+        "host=0.0.0.0`r`nport=$Port`r`nfirewall=1`r`nlogin=$Login`r`n" +
+        "display_name=$DisplayName`r`n" +
         "original_user=$env:USERNAME`r`n"
     [System.IO.File]::WriteAllText($path, $text)
     return $path
+}
+
+function Get-FreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try { return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port }
+    finally { $listener.Stop() }
 }
 
 function Get-KeyPath {
@@ -191,6 +204,7 @@ $staticChecks = @(
     @{ Name = 'static:key-confirm'; Text = 'Я сохранил ключ'; Note = 'подтверждение' },
     @{ Name = 'static:key-warning'; Text = 'Ключ показывается один раз'; Note = 'предупреждение' },
     @{ Name = 'static:key-close-warning'; Text = 'SuppressibleMsgBox('; Note = 'закрытие без подтверждения' },
+    @{ Name = 'static:display-name-validation'; Text = 'function ValidDisplayName'; Note = 'display_name из /PARAMS проверяется (дефект 6)' },
     @{ Name = 'static:init-once'; Text = 'etn init не вызывается'; Note = 'повторная инициализация запрещена' }
 )
 foreach ($check in $staticChecks) {
@@ -233,7 +247,8 @@ $initHooks = @('/TESTINIT=real', "/TESTNODEEXE=$nodeExe")
 # --- 1. Первая установка: init один раз, ключ в защищённом файле ------------
 Write-Host '=== Первая установка и ключ ==='
 Reset-State
-$params = New-ParamsFile -Server 1 -Client 0 -Login 'admin'
+$serverPort = Get-FreeTcpPort
+$params = New-ParamsFile -Server 1 -Client 0 -Login 'admin' -Port $serverPort
 $code = Invoke-Setup -Arguments (@($silent) + $elevated + @(
     '/PRIVILEGEDPHASE', "/PARAMS=`"$params`"", '/TESTHEALTH=ok', '/TESTKEYSTATE=1') + $initHooks)
 Add-Result -Name 'first-install:code' -Expected 0 -Actual $code
@@ -245,7 +260,7 @@ $envOk = $false
 $argsOk = $false
 if ($initCall) {
     $envOk = ($initCall.env.ETN_DATA_DIR -eq $dataDir) -and
-        ($initCall.env.ETN_PORT -eq '4321') -and ($initCall.env.ETN_HOST -eq '0.0.0.0')
+        ($initCall.env.ETN_PORT -eq [string]$serverPort) -and ($initCall.env.ETN_HOST -eq '0.0.0.0')
     $argsOk = ($initCall.argv -contains '--key-out') -and ($initCall.argv -contains 'admin')
 }
 Add-Check -Name 'first-install:env' -Ok $envOk -Note 'ETN_DATA_DIR/ETN_PORT/ETN_HOST в дочернем процессе'
@@ -375,6 +390,20 @@ Add-Result -Name 'silent-no-admin:code' -Expected 10 -Actual $code
 Add-Check -Name 'silent-no-admin:init-not-called' -Ok ((Count-Inits (Get-Invocations)) -eq (Count-Inits $invocationsBefore))
 Add-Check -Name 'silent-no-admin:log' -Ok ([bool](Get-LogLine -Pattern '(нет первого администратора[^\r\n]*)')) -Note 'причина в журнале'
 Add-Check -Name 'silent-no-admin:no-key' -Ok (-not (Test-Path -LiteralPath (Get-KeyPath)))
+
+# --- 9. display_name из /PARAMS: та же проверка, что у логина ----------------
+# Кавычка в отображаемом имени ломает командную строку etn init: установщик
+# обязан отказаться (код 10) и не вызывать init (дефект приёмки каркаса 9b310991).
+Write-Host '=== Недопустимый display_name из файла параметров ==='
+Reset-State
+$params = New-ParamsFile -Server 1 -Client 0 -Login 'admin' -DisplayName 'Bad"Name' -Name 'params-badname.ini'
+$code = Invoke-Setup -Arguments (@($silent) + $elevated + @(
+    '/PRIVILEGEDPHASE', "/PARAMS=`"$params`"", '/TESTHEALTH=ok', '/TESTKEYSTATE=1') + $initHooks)
+Add-Result -Name 'bad-display-name:code' -Expected 10 -Actual $code
+Add-Check -Name 'bad-display-name:init-not-called' -Ok ((Count-Inits (Get-Invocations)) -eq 0) -Note 'init не запускался'
+Add-Check -Name 'bad-display-name:log' `
+    -Ok ([bool](Get-LogLine -Pattern '(недопустимое отображаемое имя[^\r\n]*)')) -Note 'причина в журнале'
+Add-Check -Name 'bad-display-name:no-key' -Ok (-not (Test-Path -LiteralPath (Get-KeyPath)))
 
 # --- Итог --------------------------------------------------------------------
 $failed = @($script:results | Where-Object { -not $_.Ok })

@@ -250,7 +250,10 @@ export interface CachedResponse {
  * Result of {@link SystemDb.checkFirstUser}: the read-only probe used by
  * `etn init --check` (installer, task 686c5d76), which must answer "is the
  * first administrator present" without creating the data directory, the
- * database or migrations.
+ * database or migrations. The database is opened with `readonly: true`, but
+ * SQLite in WAL mode may create the `_system.db-shm`/`_system.db-wal` sidecars
+ * next to it — normal SQLite service files that do not change the database
+ * contents (documented behaviour, 9b310991).
  */
 export type FirstUserCheck =
   | { state: 'initialized' }

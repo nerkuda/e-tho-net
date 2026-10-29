@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import { afterEach, describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { main, parseInitArgs } from '../src/cli.js';
+import { SystemDb } from '../src/db/system-db.js';
 
 /** Capture console.{log,error} output during an async callback. */
 async function captureConsole<T>(
@@ -270,6 +272,70 @@ describe(
       );
       assert.equal(second.result, 1);
       assert.equal(readFileSync(keyPath, 'utf8').trim(), key);
+    });
+
+    it('--key-out removes the key file when the database transaction fails', async () => {
+      const dataDir = mkdtempSync(path.join(os.tmpdir(), 'etn-cli-keyfail-'));
+      tmpRoots.push(dataDir);
+
+      // Не первый пользователь с занятым логином: вставка первого
+      // администратора в транзакции упадёт на UNIQUE(users.username).
+      const sys = SystemDb.open(dataDir);
+      try {
+        sys.createUser({
+          id: randomUUID(),
+          username: 'clash',
+          displayName: null,
+          isAdmin: false,
+          isFirstUser: false,
+        });
+      } finally {
+        sys.close();
+      }
+
+      const keyPath = path.join(dataDir, '.install', 'primary-key.txt');
+      await assert.rejects(
+        captureConsole(() =>
+          main({
+            argv: ['node', 'etn', 'init', '--username', 'clash', '--key-out', keyPath],
+            env: { ETN_DATA_DIR: dataDir },
+          }),
+        ),
+        /UNIQUE|users\.username/,
+      );
+      assert.equal(existsSync(keyPath), false, 'ключ удалён после сбоя транзакции');
+
+      // Первый администратор не создан: повторная инициализация по-прежнему нужна.
+      const check = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: dataDir } }),
+      );
+      assert.equal(check.result, 1);
+    });
+
+    it('--check leaves the database contents untouched (sidecars are normal SQLite files)', async () => {
+      const dataDir = mkdtempSync(path.join(os.tmpdir(), 'etn-cli-sidecar-'));
+      tmpRoots.push(dataDir);
+      const env = { ETN_DATA_DIR: dataDir };
+      const dbPath = path.join(dataDir, '_system.db');
+
+      const init = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--username', 'admin'], env }),
+      );
+      assert.equal(init.result, 0);
+      const before = readFileSync(dbPath);
+
+      // Открытие WAL-базы только на чтение может создать рядом служебные
+      // файлы `_system.db-shm`/`_system.db-wal` — это нормальное поведение
+      // SQLite, а не изменение базы (см. контракт `etn init --check`).
+      const first = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env }),
+      );
+      const second = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env }),
+      );
+      assert.equal(first.result, 0);
+      assert.equal(second.result, 0);
+      assert.deepEqual(readFileSync(dbPath), before, 'содержимое _system.db не изменилось');
     });
   },
 );

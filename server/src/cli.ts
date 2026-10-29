@@ -16,7 +16,10 @@
  *
  * `etn init --check` is the installer's idempotency probe (task 686c5d76): it
  * reports whether the first administrator exists (`hasFirstUser()`) without
- * creating the data directory, the database or running migrations. Exit codes:
+ * creating the data directory, the database or running migrations. The database
+ * is opened strictly read-only; SQLite in WAL mode may still create the
+ * `_system.db-shm`/`_system.db-wal` sidecars next to it — normal SQLite files,
+ * not a change of the database contents (9b310991). Exit codes:
  * 0 — initialised, 1 — not initialised, 2 — check failed.
  *
  * Argument parsing is hand-rolled (no external parser dep). `main()` is
@@ -194,7 +197,11 @@ const HELP_INIT = `Использование: etn init --username <логин> 
                      выдаётся один раз: восстановить его нельзя.
   --check            Только сообщить состояние инициализации, ничего не менять
                      и не создавать. Коды: 0 — первый администратор есть,
-                     1 — сервер не инициализирован, 2 — проверить не удалось.`;
+                     1 — сервер не инициализирован, 2 — проверить не удалось.
+                     База открывается строго на чтение; SQLite в режиме WAL
+                     может создать рядом служебные файлы _system.db-shm и
+                     _system.db-wal — это нормальные файлы SQLite, содержимое
+                     _system.db не меняется.`;
 
 const HELP_MCP = `Использование: etn mcp [--api-key <ключ>]
 
@@ -725,7 +732,10 @@ const INIT_CHECK_FAILED = 2;
  * The criterion is `hasFirstUser()`, not the presence of `_system.db`: a
  * database left over from an interrupted attempt must be initialised again.
  * The check opens the database strictly read-only and never creates the data
- * directory, the database file or migrations.
+ * directory, the database file or migrations. SQLite in WAL mode can create the
+ * `_system.db-shm`/`_system.db-wal` sidecars on a read-only open: they are
+ * normal SQLite service files and do not change the database contents
+ * (9b310991); `hasFirstUser()` behaviour is unchanged.
  *
  * @returns 0 — initialised, 1 — not initialised, 2 — check failed.
  */

@@ -109,12 +109,23 @@ function Write-InstallJson {
         (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Get-FreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try { return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port }
+    finally { $listener.Stop() }
+}
+
 function New-InstallJson {
-    param([string]$ProductVersion = '0.15.0', [string]$Mode = 'service')
+    param([string]$ProductVersion = '0.15.0', [string]$Mode = 'service',
+        [int]$Port = 0, [string]$Firewall = 'true')
+    # Порт по умолчанию — свободный: предпроверка порта теперь настоящая, а на
+    # машине разработчика 4321 может занимать запущенный сервер.
+    if ($Port -le 0) { $Port = Get-FreeTcpPort }
     $dataEscaped = $dataDir.Replace('\', '\\')
     return '{"schema":1,"product_version":"' + $ProductVersion + '","mode":"' + $Mode +
-        '","data_dir":"' + $dataEscaped + '","host":"0.0.0.0","port":4321,' +
-        '"firewall":true,"client_scope":null,"installed_at":"2026-10-01T10:00:00","last_log":""}'
+        '","data_dir":"' + $dataEscaped + '","host":"0.0.0.0","port":' + $Port + ',' +
+        '"firewall":' + $Firewall + ',"client_scope":null,"installed_at":"2026-10-01T10:00:00","last_log":""}'
 }
 
 function New-ServerFiles {
@@ -132,11 +143,21 @@ function New-ParamsFile {
         [int]$Client = 0,
         [string]$Scope = 'user',
         [string]$Mode = 'service',
-        [string]$Port = '4321',
+        [int]$Port = 0,
+        [int]$Firewall = 1,
+        [string]$DisplayName = '',
+        [string]$ReasonFile = '',
         [string]$Name = 'params.ini'
     )
+    # Свободный порт по умолчанию: предпроверка порта настоящая, а на машине
+    # разработчика 4321 может быть занят запущенным сервером.
+    if ($Port -le 0) { $Port = Get-FreeTcpPort }
+    $hostValue = '0.0.0.0'
+    if ($Firewall -ne 1) { $hostValue = '127.0.0.1' }
     $path = Join-Path $workRoot $Name
-    $text = "server=$Server`r`nclient=$Client`r`nclient_scope=$Scope`r`nmode=$Mode`r`nhost=0.0.0.0`r`nport=$Port`r`nfirewall=1`r`n"
+    $text = "server=$Server`r`nclient=$Client`r`nclient_scope=$Scope`r`nmode=$Mode`r`n" +
+        "host=$hostValue`r`nport=$Port`r`nfirewall=$Firewall`r`ndisplay_name=$DisplayName`r`n" +
+        "reason_file=$ReasonFile`r`n"
     [System.IO.File]::WriteAllText($path, $text)
     return $path
 }
@@ -208,8 +229,44 @@ New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 
+# --- Сторож статических проверок ---------------------------------------------
+# Поиск идёт по НЕПУСТЫМ строкам без комментария. Прежний подстрочный поиск по
+# всему тексту проходил на закомментированной строке (`; GScopeUserRadio.OnClick
+# := ...`) — дефект приёмки каркаса (9b310991). В Inno `;` — комментарий только
+# в начале строки (в параметрах секций он разделитель), поэтому строка
+# считается комментарием, если после Trim начинается с ';'.
+function Test-IssCode {
+    param([string]$Text, [string]$Pattern)
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq '') { continue }
+        if ($trimmed.StartsWith(';')) { continue }
+        if ($trimmed -match $Pattern) { return $true }
+    }
+    return $false
+}
+
+function Add-StaticResult {
+    param([string]$Name, [bool]$Ok, [string]$Note = '')
+    $script:results.Add([pscustomobject]@{ Scenario = $Name; Expected = 1; Actual = [int]$Ok; Ok = $Ok; Note = $Note })
+    $markText = if ($Ok) { 'OK  ' } else { 'FAIL' }
+    Write-Host ("{0}  {1,-28} {2}" -f $markText, $Name, $Note)
+}
+
 Write-Host '=== Статические проверки .iss ==='
 $issText = Get-Content -LiteralPath $issPath -Raw -Encoding UTF8
+
+# Сторож самопроверяется: закомментированный код НЕ считается, рабочий — считается.
+$commentSample = "; GScopeUserRadio.OnClick := @UpdateComponentsState;"
+$codeSample = "  GScopeUserRadio.OnClick := @UpdateComponentsState;"
+$onClickPattern = [regex]::Escape('GScopeUserRadio.OnClick := @UpdateComponentsState;')
+Add-StaticResult -Name 'static-guard:ignores-comments' `
+    -Ok (-not (Test-IssCode -Text $commentSample -Pattern $onClickPattern)) `
+    -Note 'закомментированный OnClick не считается кодом'
+Add-StaticResult -Name 'static-guard:finds-code' `
+    -Ok (Test-IssCode -Text $codeSample -Pattern $onClickPattern) `
+    -Note 'рабочий OnClick находится'
+
 $msgBoxMatches = [regex]::Matches($issText, '(?<!Suppressible)MsgBox\s*\(')
 if ($msgBoxMatches.Count -gt 0) {
     $script:results.Add([pscustomobject]@{ Scenario = 'static:no-msgbox'; Expected = 0; Actual = $msgBoxMatches.Count; Ok = $false; Note = 'MsgBox в .iss' })
@@ -219,36 +276,83 @@ if ($msgBoxMatches.Count -gt 0) {
     Write-Host 'OK    static:no-msgbox              MsgBox в .iss нет'
 }
 foreach ($required in @('/SUPPRESSMSGBOXES', '/NORESTART', 'SERVERONLY', 'GetCustomSetupExitCode')) {
-    $present = $issText.Contains($required)
-    $markText = 'OK  '
-    $presentText = 'есть'
-    if (-not $present) { $markText = 'FAIL'; $presentText = 'НЕТ' }
-    $script:results.Add([pscustomobject]@{ Scenario = "static:$required"; Expected = 1; Actual = [int]$present; Ok = $present; Note = '' })
-    Write-Host ("{0}  static:{1,-20} {2}" -f $markText, $required, $presentText)
+    $present = Test-IssCode -Text $issText -Pattern ([regex]::Escape($required))
+    Add-StaticResult -Name "static:$required" -Ok $present
 }
 # B2: каталог программы выбирается по режиму установки ({autopf}), а не жёстко
 # из Program Files — иначе неэлевированный экземпляр падает с Error 5.
+# 9b310991: порт/хост/брандмауэр/каталог данных, подстановка шаблона службы,
+# предпроверки и удаление правила при удалении программы.
 $staticChecks = @(
-    @{ Name = 'static:autopf-appdir'; Text = '#define AppDir "{autopf}\ETN"'; Note = 'каталог программы по режиму установки' },
-    @{ Name = 'static:defaultdir-app'; Text = 'DefaultDirName={#AppDir}'; Note = '' },
-    @{ Name = 'static:privileged-phase'; Text = 'ValidatePrivilegedPhasePreconditions'; Note = 'отдельная привилегированная фаза' },
-    @{ Name = 'static:radio-onclick-user'; Text = 'GScopeUserRadio.OnClick := @UpdateComponentsState;'; Note = 'радиокнопка «только для меня»' },
-    @{ Name = 'static:radio-onclick-machine'; Text = 'GScopeMachineRadio.OnClick := @UpdateComponentsState;'; Note = 'радиокнопка «для всех»' },
-    @{ Name = 'static:selection-from-controls'; Text = 'ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);'; Note = 'выбор читается с контролов' },
-    @{ Name = 'static:context-admin-mode'; Text = 'GIsElevated and IsAdminInstallMode'; Note = 'привилегированный контекст — только admin mode' },
-    @{ Name = 'static:params-shared-dir'; Text = '{commonappdata}\ETN\.install'; Note = 'файл параметров в общем каталоге' },
-    @{ Name = 'static:params-public-fallback'; Text = "GetEnv('PUBLIC')"; Note = 'запасной общий каталог' }
+    @{ Name = 'static:autopf-appdir'; Pattern = [regex]::Escape('#define AppDir "{autopf}\ETN"'); Note = 'каталог программы по режиму установки' },
+    @{ Name = 'static:defaultdir-app'; Pattern = [regex]::Escape('DefaultDirName={#AppDir}'); Note = '' },
+    @{ Name = 'static:privileged-phase'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions'); Note = 'отдельная привилегированная фаза' },
+    @{ Name = 'static:radio-onclick-user'; Pattern = [regex]::Escape('GScopeUserRadio.OnClick := @UpdateComponentsState;'); Note = 'радиокнопка «только для меня»' },
+    @{ Name = 'static:radio-onclick-machine'; Pattern = [regex]::Escape('GScopeMachineRadio.OnClick := @UpdateComponentsState;'); Note = 'радиокнопка «для всех»' },
+    @{ Name = 'static:selection-from-controls'; Pattern = [regex]::Escape('ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);'); Note = 'выбор читается с контролов' },
+    @{ Name = 'static:context-admin-mode'; Pattern = [regex]::Escape('GIsElevated and IsAdminInstallMode'); Note = 'привилегированный контекст — только admin mode' },
+    @{ Name = 'static:params-shared-dir'; Pattern = [regex]::Escape('{commonappdata}\ETN\.install'); Note = 'файл параметров в общем каталоге' },
+    @{ Name = 'static:params-public-fallback'; Pattern = [regex]::Escape("GetEnv('PUBLIC')"); Note = 'запасной общий каталог' },
+    @{ Name = 'static:params-write-probe'; Pattern = [regex]::Escape('ProbeWritableDir(Dir)'); Note = 'проверка записи пробным файлом (дефект 1)' },
+    @{ Name = 'static:params-temp-fallback'; Pattern = [regex]::Escape("ExpandConstant('{tmp}')"); Note = 'последний запасной каталог — %TEMP%' },
+    @{ Name = 'static:port-default'; Pattern = [regex]::Escape("GServerPort := '4321'"); Note = 'порт по умолчанию 4321' },
+    @{ Name = 'static:host-from-checkbox'; Pattern = [regex]::Escape("GServerHost := '127.0.0.1'"); Note = 'чекбокс задаёт ETN_HOST' },
+    @{ Name = 'static:host-lan'; Pattern = [regex]::Escape("GServerHost := '0.0.0.0'"); Note = 'включённый чекбокс — 0.0.0.0' },
+    @{ Name = 'static:data-dir-fixed'; Pattern = [regex]::Escape('{commonappdata}\ETN'); Note = 'каталог данных %ProgramData%\ETN' },
+    @{ Name = 'static:port-page'; Pattern = [regex]::Escape('CreateServerParamsPage'); Note = 'экран «Параметры сервера»' },
+    @{ Name = 'static:port-focus'; Pattern = [regex]::Escape('WizardForm.ActiveControl := GPortEdit'); Note = 'фокус на поле порта при ошибке' },
+    @{ Name = 'static:precheck-function'; Pattern = [regex]::Escape('function CheckServerEnvironment'); Note = 'единая предпроверка окружения' },
+    @{ Name = 'static:free-space'; Pattern = [regex]::Escape('GetSpaceOnDisk64'); Note = 'проверка свободного места' },
+    @{ Name = 'static:precheck-before-changes'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions;'); Note = 'предпроверки до замены файлов' },
+    @{ Name = 'static:service-template-subst'; Pattern = [regex]::Escape('function InstallServiceConfig'); Note = 'подстановка шаблона службы' },
+    @{ Name = 'static:service-placeholder-data'; Pattern = [regex]::Escape("StringChangeEx(Text, '{{DATA_DIR}}'"); Note = 'плейсхолдер {{DATA_DIR}}' },
+    @{ Name = 'static:service-placeholder-port'; Pattern = [regex]::Escape("StringChangeEx(Text, '{{PORT}}'"); Note = 'плейсхолдер {{PORT}}' },
+    @{ Name = 'static:service-placeholder-host'; Pattern = [regex]::Escape("StringChangeEx(Text, '{{HOST}}'"); Note = 'плейсхолдер {{HOST}}' },
+    @{ Name = 'static:service-log-dir'; Pattern = [regex]::Escape("GDataDir + '\logs\service'"); Note = 'каталог журнала службы создаёт установщик' },
+    @{ Name = 'static:firewall-add'; Pattern = [regex]::Escape('advfirewall firewall add rule'); Note = 'правило брандмауэра создаётся' },
+    @{ Name = 'static:firewall-delete'; Pattern = [regex]::Escape('advfirewall firewall delete rule'); Note = 'правило удаляется' },
+    @{ Name = 'static:firewall-profiles'; Pattern = [regex]::Escape("FIREWALL_PROFILES = 'domain,private'"); Note = 'публичные сети не открываются' },
+    @{ Name = 'static:firewall-checkbox'; Pattern = [regex]::Escape('Разрешить подключения с других компьютеров'); Note = 'чекбокс согласия' },
+    @{ Name = 'static:firewall-uninstall'; Pattern = [regex]::Escape('CurUninstallStepChanged'); Note = 'правило удаляется при удалении программы' },
+    @{ Name = 'static:display-name-validation'; Pattern = [regex]::Escape('function ValidDisplayName'); Note = 'display_name из /PARAMS проверяется (дефект 6)' },
+    @{ Name = 'static:reason-file'; Pattern = [regex]::Escape('reason_file='); Note = 'причина отказа предусловия — родителю' }
 )
 foreach ($check in $staticChecks) {
-    $present = $issText.Contains($check.Text)
-    $markText = if ($present) { 'OK  ' } else { 'FAIL' }
-    $script:results.Add([pscustomobject]@{ Scenario = $check.Name; Expected = 1; Actual = [int]$present; Ok = $present; Note = $check.Note })
-    Write-Host ("{0}  {1,-28} {2}" -f $markText, $check.Name, $check.Note)
+    Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
 }
+# Поля выбора каталога данных быть не должно (ADR 144bcdb0): проверка на
+# отсутствие страницы, а не на наличие.
+Add-StaticResult -Name 'static:no-datadir-choice' `
+    -Ok (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('CreateInputDirPage')))) `
+    -Note 'нет страницы выбора каталога данных'
 # Замечание 3: тестовый хук health-check не должен попадать в продуктовую сборку.
 $hookUnderIfdef = [regex]::IsMatch($issText, '#ifdef\s+TestMode\s*\r?\n\s*if GTestHealth')
-$script:results.Add([pscustomobject]@{ Scenario = 'static:health-hook-ifdef'; Expected = 1; Actual = [int]$hookUnderIfdef; Ok = $hookUnderIfdef; Note = 'хук /TESTHEALTH под #ifdef TestMode' })
-Write-Host ("{0}  {1,-28} {2}" -f $(if ($hookUnderIfdef) { 'OK  ' } else { 'FAIL' }), 'static:health-hook-ifdef', 'хук /TESTHEALTH под #ifdef TestMode')
+Add-StaticResult -Name 'static:health-hook-ifdef' -Ok $hookUnderIfdef -Note 'хук /TESTHEALTH под #ifdef TestMode'
+
+# --- Сторож свежести payload в build.ps1 (дефект 3) --------------------------
+# Продуктовая сборка (без -TestMode) обязана отказаться от устаревшей поставки
+# до компиляции: иначе exe собирается, а падает уже на etn init --key-out.
+Write-Host '=== Сторож свежести payload (дефект 3) ==='
+$stalePayload = Join-Path $workRoot 'stale-payload'
+foreach ($dir in @('node', 'service', 'server\dist', 'server\node_modules\better-sqlite3')) {
+    New-Item -ItemType Directory -Path (Join-Path $stalePayload $dir) -Force | Out-Null
+}
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'node\node.exe'), 'stub')
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'service\etn-service.exe'), 'stub')
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'service\etn-service.xml'), '<service><id>ETN</id></service>')
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\package.json'), '{"name":"@etn/server","version":"0.0.1"}')
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\dist\index.js'), '// stub')
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\dist\cli.js'), '// старая сборка без --key-out')
+[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\node_modules\better-sqlite3\package.json'),
+    '{"name":"better-sqlite3","version":"11.1.2"}')
+$psExeForBuild = (Get-Process -Id $PID).Path
+$staleOut = & $psExeForBuild -NoProfile -ExecutionPolicy Bypass -File $buildScript `
+    -PayloadRoot $stalePayload -OutputDir (Join-Path $workRoot 'stale-out') 2>&1 | Out-String
+$staleFailed = ($LASTEXITCODE -ne 0)
+Add-StaticResult -Name 'build:stale-payload-fails' -Ok $staleFailed `
+    -Note 'сборка без -TestMode не собирает exe из устаревшей поставки'
+Add-StaticResult -Name 'build:stale-payload-message' -Ok ($staleOut -match 'Обновите payload') `
+    -Note 'сообщение указывает на fetch-payload.ps1'
 
 # --- Сборка тестового установщика -------------------------------------------
 Write-Host '=== Сборка тестового установщика ==='
@@ -507,14 +611,242 @@ Add-Result -Name 'params-shared:code' -Expected 0 -Actual $code
 $paramsPath = Get-LogLine -Pattern 'TESTPARAMS path=(\S+) scope='
 $paramsScope = Get-LogLine -Pattern 'TESTPARAMS path=\S+ scope=(\S+)'
 $paramsDeleted = Get-LogLine -Pattern 'TESTPARAMS deleted=(\d)'
-$sharedPathOk = $paramsPath -match '\\\.install\\params-.*\.json$'
-Add-Result -Name 'params-shared:path' -Expected 1 -Actual ([int][bool]$sharedPathOk) -Note $paramsPath
+# Клиенту «для всех» каталог данных не нужен: .install в %ProgramData% не
+# создаётся (иначе установка клиента оставляет серверный след). Путь — общий
+# каталог (%PUBLIC%) или %TEMP%; оба проверены пробой записи.
+$publicDir = [System.Environment]::GetEnvironmentVariable('PUBLIC')
+$tempDir = [System.IO.Path]::GetTempPath().TrimEnd('\')
+$sharedDirOk = $false
+if ($paramsPath) {
+    $paramsDir = Split-Path -Parent $paramsPath
+    $sharedDirOk = ($paramsDir -notmatch '\\\.install$') -and
+        (($paramsDir -eq $publicDir) -or ($paramsDir -eq $tempDir))
+}
+Add-Result -Name 'params-shared:path' -Expected 1 -Actual ([int]$sharedDirOk) -Note ("" + $paramsPath + " (клиент: не .install)")
 Add-Result -Name 'params-shared:scope-machine' -Expected 1 -Actual ([int]($paramsScope -eq 'machine')) -Note ("scope=" + $paramsScope)
 Add-Result -Name 'params-shared:deleted' -Expected 1 -Actual ([int]($paramsDeleted -eq '1')) -Note ("deleted=" + $paramsDeleted)
+# Серверная установка: файл параметров — в %ProgramData%\ETN\.install (в
+# тестовой сборке каталог данных подменён на .tmp\installer-tests\data).
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPARAMS=1', '/TESTSELECT=server'))
+Add-Result -Name 'params-server-install:code' -Expected 0 -Actual $code
+$serverParamsPath = Get-LogLine -Pattern 'TESTPARAMS path=(\S+) scope='
+$serverInstallOk = $serverParamsPath -and
+    ($serverParamsPath -match '\\\.install\\params-.*\.json$') -and
+    ($serverParamsPath.StartsWith($dataDir, [System.StringComparison]::OrdinalIgnoreCase))
+Add-Result -Name 'params-server-install:path' -Expected 1 -Actual ([int][bool]$serverInstallOk) -Note $serverParamsPath
 Reset-State
 $code = Invoke-Setup -Arguments ($silent + @('/TESTPARAMS=1', '/TESTSELECT=client-user'))
 $paramsScopeUser = Get-LogLine -Pattern 'TESTPARAMS path=\S+ scope=(\S+)'
 Add-Result -Name 'params-shared:scope-user' -Expected 1 -Actual ([int]($paramsScopeUser -eq 'user')) -Note ("scope=" + $paramsScopeUser)
+
+# ============================================================================
+# 9b310991: параметры сервера, предпроверки, подстановка шаблона, брандмауэр.
+# ============================================================================
+Write-Host '=== 9b310991: параметры сервера и предпроверки ==='
+$precheckResult = Join-Path $workRoot 'precheck-reason.txt'
+
+function Reset-PrecheckResult {
+    Remove-Item -LiteralPath $precheckResult -Force -ErrorAction SilentlyContinue
+}
+
+function Get-PrecheckResult {
+    # Установщик пишет причину в UTF-8 (9b310991); пустой файл = успех.
+    if (-not (Test-Path -LiteralPath $precheckResult)) { return '' }
+    $text = [System.IO.File]::ReadAllText($precheckResult, [System.Text.Encoding]::UTF8)
+    return $text.Trim()
+}
+
+# Порт, занятый другим приложением: предпроверка возвращает 20 и понятную
+# причину; журнал фиксирует результат той же функции, что вызывают экран
+# параметров сервера и привилегированная фаза.
+Reset-State
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+$busyListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
+$busyListener.Start()
+$busyPort = ([System.Net.IPEndPoint]$busyListener.LocalEndpoint).Port
+try {
+    Reset-PrecheckResult
+    $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+        "/TESTPORT=$busyPort", "/TESTRESULT=`"$precheckResult`""))
+} finally {
+    $busyListener.Stop()
+}
+Add-Result -Name 'precheck:port-busy-code' -Expected 20 -Actual $code
+$busyReason = Get-PrecheckResult
+$busyReasonOk = $busyReason -match ('порт ' + $busyPort + ' занят другим приложением')
+Add-Result -Name 'precheck:port-busy-reason' -Expected 1 -Actual ([int]$busyReasonOk) -Note $busyReason
+$busyLog = Get-LogLine -Pattern 'TESTPRECHECK result=([^\r\n]+)'
+Add-Result -Name 'precheck:port-busy-log' -Expected 1 -Actual ([int]([bool]$busyLog)) -Note $busyLog
+
+# Некорректный порт.
+Reset-State
+Reset-PrecheckResult
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', '/TESTPORT=70000',
+    "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:port-invalid-code' -Expected 20 -Actual $code
+$invalidReason = Get-PrecheckResult
+$invalidReasonOk = $invalidReason -match 'некорректный порт "70000"'
+Add-Result -Name 'precheck:port-invalid-reason' -Expected 1 -Actual ([int]$invalidReasonOk) -Note $invalidReason
+
+# Свободный порт и достаточно места: предпроверка проходит (причина пуста).
+Reset-State
+Reset-PrecheckResult
+$freePort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', "/TESTPORT=$freePort",
+    "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:ok-code' -Expected 0 -Actual $code
+Add-Result -Name 'precheck:ok-reason' -Expected 1 -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'причина пуста'
+
+# Путь каталога данных занят файлом — ошибка и без прав администратора.
+Reset-State
+Reset-PrecheckResult
+$blockedPath = Join-Path $workRoot 'blocked-data-dir'
+[System.IO.File]::WriteAllText($blockedPath, 'not a directory')
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', "/TESTPORT=$freePort",
+    "/TESTDATADIR=`"$blockedPath`"", "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:datadir-file-code' -Expected 20 -Actual $code
+$blockedReason = Get-PrecheckResult
+$blockedReasonOk = $blockedReason -match 'путь каталога данных занят файлом'
+Add-Result -Name 'precheck:datadir-file-reason' -Expected 1 -Actual ([int]$blockedReasonOk) -Note $blockedReason
+Remove-Item -LiteralPath $blockedPath -Force -ErrorAction SilentlyContinue
+
+# Недостаток свободного места: порог подменён тестовым хуком.
+Reset-State
+Reset-PrecheckResult
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', "/TESTPORT=$freePort",
+    '/TESTMINFREE=900000000000000', "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:free-space-code' -Expected 20 -Actual $code
+$spaceReason = Get-PrecheckResult
+$spaceReasonOk = $spaceReason -match 'недостаточно свободного места для каталога данных'
+Add-Result -Name 'precheck:free-space-reason' -Expected 1 -Actual ([int]$spaceReasonOk) -Note $spaceReason
+
+Write-Host '=== 9b310991: подстановка шаблона службы и брандмауэр ==='
+
+# Серверная установка с включённым брандмауэром: шаблон службы подставлен,
+# каталоги данных созданы, правило «разрешено» (netsh подменён тестовым хуком).
+Reset-State
+$serverPort = Get-FreeTcpPort
+$privParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Port $serverPort `
+    -Firewall 1 -DisplayName 'ETN Server' -Name 'server-fw.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"",
+    '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+Add-Result -Name 'server-fw:code' -Expected 0 -Actual $code
+
+$serviceXmlPath = Join-Path $appDir 'service\etn-service.xml'
+$serviceXmlOk = $false
+$serviceNoPlaceholders = $false
+$serviceValuesOk = $false
+$serviceDescription = ''
+if (Test-Path -LiteralPath $serviceXmlPath) {
+    $serviceText = [System.IO.File]::ReadAllText($serviceXmlPath, [System.Text.Encoding]::UTF8)
+    $serviceNoPlaceholders = -not $serviceText.Contains('{{')
+    try {
+        $serviceXml = [xml]$serviceText
+        $envNodes = @($serviceXml.SelectNodes('/service/env'))
+        $dataEnv = ($envNodes | Where-Object { $_.name -eq 'ETN_DATA_DIR' } | Select-Object -First 1).value
+        $portEnv = ($envNodes | Where-Object { $_.name -eq 'ETN_PORT' } | Select-Object -First 1).value
+        $hostEnv = ($envNodes | Where-Object { $_.name -eq 'ETN_HOST' } | Select-Object -First 1).value
+        $logPath = [string]$serviceXml.service.logpath
+        $serviceDescription = [string]$serviceXml.service.description
+        $serviceValuesOk = ($dataEnv -eq $dataDir) -and ($portEnv -eq [string]$serverPort) -and
+            ($hostEnv -eq '0.0.0.0') -and ($logPath -eq (Join-Path $dataDir 'logs\service'))
+        $serviceXmlOk = $true
+    } catch {
+        Write-Host ("      etn-service.xml не разобран как XML: {0}" -f $_.Exception.Message)
+    }
+}
+Add-Result -Name 'server-fw:xml-parsed' -Expected 1 -Actual ([int]$serviceXmlOk)
+Add-Result -Name 'server-fw:no-placeholders' -Expected 1 -Actual ([int]$serviceNoPlaceholders)
+Add-Result -Name 'server-fw:env-values' -Expected 1 -Actual ([int]$serviceValuesOk) -Note ('данные/порт/хост/журнал; ' + $serviceDescription)
+Add-Result -Name 'server-fw:description-utf8' -Expected 1 `
+    -Actual ([int]($serviceDescription -eq 'ETN — сервер графовых баз знаний')) -Note $serviceDescription
+
+$serviceDirsOk = (Test-Path -LiteralPath (Join-Path $dataDir 'logs\service')) -and
+    (Test-Path -LiteralPath (Join-Path $dataDir 'backups'))
+Add-Result -Name 'server-fw:data-dirs' -Expected 1 -Actual ([int]$serviceDirsOk) -Note 'logs\service и backups созданы установщиком'
+
+$fwAddLog = Get-LogLine -Pattern 'Правило брандмауэра создано: TCP ([0-9]+)'
+Add-Result -Name 'server-fw:rule-created' -Expected 1 -Actual ([int]($fwAddLog -eq [string]$serverPort)) -Note ("TCP " + $fwAddLog)
+$fwProfiles = Get-LogLine -Pattern 'Правило брандмауэра создано: TCP [0-9]+, профили ([a-z,]+)'
+Add-Result -Name 'server-fw:profiles' -Expected 1 -Actual ([int]($fwProfiles -eq 'domain,private')) -Note $fwProfiles
+$fwAddCmd = Get-LogLine -Pattern 'FIREWALL \(тестовый режим, без изменений\): netsh advfirewall firewall add rule name="ETN Server" dir=in action=allow protocol=TCP localport=([0-9]+)'
+Add-Result -Name 'server-fw:netsh-add' -Expected 1 -Actual ([int]($fwAddCmd -eq [string]$serverPort)) -Note ("localport=" + $fwAddCmd)
+$jsonFw = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+$jsonFwOk = ($jsonFw -match ('"port":' + $serverPort + ',')) -and
+    ($jsonFw -match '"host":"0\.0\.0\.0"') -and ($jsonFw -match '"firewall":true') -and
+    ($jsonFw -match '"mode":"service"')
+Add-Result -Name 'server-fw:install-json' -Expected 1 -Actual ([int]$jsonFwOk) -Note 'port/host/firewall/mode'
+
+# Брандмауэр выключен: правило удаляется, новое не создаётся, ETN_HOST=127.0.0.1.
+Reset-State
+$serverPort2 = Get-FreeTcpPort
+$privParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Port $serverPort2 `
+    -Firewall 0 -Name 'server-nofw.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"",
+    '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+Add-Result -Name 'server-nofw:code' -Expected 0 -Actual $code
+$nofwAdd = Get-LogLine -Pattern 'FIREWALL \(тестовый режим, без изменений\): netsh advfirewall firewall add rule'
+Add-Result -Name 'server-nofw:no-add' -Expected 1 -Actual ([int]($nofwAdd -eq '')) -Note 'правило не создаётся'
+$nofwDelete = Get-LogLine -Pattern '(FIREWALL \(тестовый режим, без изменений\): netsh advfirewall firewall delete rule name="ETN Server")'
+Add-Result -Name 'server-nofw:delete-first' -Expected 1 -Actual ([int]($nofwDelete -ne '')) -Note 'старое правило удаляется'
+$nofwMsg = Get-LogLine -Pattern 'подключения с других компьютеров запрещены \(порт ([0-9]+)'
+Add-Result -Name 'server-nofw:log' -Expected 1 -Actual ([int]($nofwMsg -eq [string]$serverPort2)) -Note ("порт " + $nofwMsg)
+$nofwXml = [System.IO.File]::ReadAllText((Join-Path $appDir 'service\etn-service.xml'), [System.Text.Encoding]::UTF8)
+$nofwHostOk = $nofwXml -match 'name="ETN_HOST" value="127\.0\.0\.1"'
+Add-Result -Name 'server-nofw:host-local' -Expected 1 -Actual ([int]$nofwHostOk) -Note 'ETN_HOST=127.0.0.1'
+
+# Отказ предпроверки в привилегированной фазе: код 20, причина — в файле,
+# изменения не выполнялись (нет файлов сервера и install.json).
+Reset-State
+$busyListener2 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
+$busyListener2.Start()
+$busyPort2 = ([System.Net.IPEndPoint]$busyListener2.LocalEndpoint).Port
+$privReason = Join-Path $workRoot 'priv-reason.txt'
+Remove-Item -LiteralPath $privReason -Force -ErrorAction SilentlyContinue
+$privParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Port $busyPort2 `
+    -ReasonFile $privReason -Name 'server-busy.ini'
+try {
+    $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"",
+        '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+} finally {
+    $busyListener2.Stop()
+}
+Add-Result -Name 'priv-precheck:code' -Expected 20 -Actual $code
+$privReasonText = ''
+if (Test-Path -LiteralPath $privReason) {
+    $privReasonText = ([System.IO.File]::ReadAllText($privReason, [System.Text.Encoding]::UTF8)).Trim()
+}
+Add-Result -Name 'priv-precheck:reason-file' -Expected 1 `
+    -Actual ([int]($privReasonText -match ('порт ' + $busyPort2 + ' занят другим приложением'))) -Note $privReasonText
+$privNoChanges = (-not (Test-Path -LiteralPath (Join-Path $appDir 'server\dist\index.js'))) -and
+    (-not (Test-Path -LiteralPath (Join-Path $appDir 'service'))) -and
+    (-not (Test-Path -LiteralPath (Join-Path $dataDir 'install.json')))
+Add-Result -Name 'priv-precheck:no-changes' -Expected 1 -Actual ([int]$privNoChanges) -Note 'файлы и install.json не созданы'
+
+# Установка только клиента «для всех»: серверных каталогов и конфигурации
+# службы не появляется (каталог данных задан отдельно — журнал в песочницу не
+# пишется, чтобы проверка была про установку, а не про тестовый движок).
+Reset-State
+$clientOnlyData = Join-Path $workRoot 'client-only-data'
+if (Test-Path -LiteralPath $clientOnlyData) { Remove-Item -LiteralPath $clientOnlyData -Recurse -Force }
+$privParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-only.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"",
+    '/TESTELEVATED=1', '/TESTHEALTH=ok', "/TESTDATADIR=`"$clientOnlyData`""))
+Add-Result -Name 'client-only:code' -Expected 0 -Actual $code
+$clientNoServerDirs = (-not (Test-Path -LiteralPath (Join-Path $clientOnlyData 'logs\service'))) -and
+    (-not (Test-Path -LiteralPath (Join-Path $clientOnlyData 'backups'))) -and
+    (-not (Test-Path -LiteralPath (Join-Path $appDir 'service\etn-service.xml')))
+Add-Result -Name 'client-only:no-server-dirs' -Expected 1 -Actual ([int]$clientNoServerDirs) -Note 'нет logs\service, backups и etn-service.xml'
+$clientOnlyJson = ''
+if (Test-Path -LiteralPath (Join-Path $clientOnlyData 'install.json')) {
+    $clientOnlyJson = Get-Content -LiteralPath (Join-Path $clientOnlyData 'install.json') -Raw
+}
+$clientOnlyJsonOk = ($clientOnlyJson -match '"mode":"client"') -and
+    ($clientOnlyJson -match '"client_scope":"machine"')
+Add-Result -Name 'client-only:install-json' -Expected 1 -Actual ([int]$clientOnlyJsonOk) `
+    -Note 'mode=client, client_scope=machine'
+
 
 # --- B1: привилегированная фаза на чистой машине ----------------------------
 Write-Host '=== Привилегированная фаза (B1, B4) ==='
