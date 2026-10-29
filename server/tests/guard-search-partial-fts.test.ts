@@ -89,7 +89,9 @@ function capturePartialStatements(ndb: NetworkDb, query: string): CapturedPartia
     return stmt;
   }) as typeof ndb.prepare;
   try {
-    findDuplicates(ndb, query);
+    // Сторож проверяет partial-тир live-поиска (0.4.5); строгий dedupe
+    // (0.14.1, ошибка 11f14a81) пост-фильтрует его выдачу — см. mode.
+    findDuplicates(ndb, query, [], [], { mode: 'search' });
   } finally {
     ndb.prepare = original;
   }

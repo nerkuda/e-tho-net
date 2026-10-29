@@ -47,6 +47,9 @@ function shimDom(): void {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: { style: docElementStyle },
+    // Отказ чтения свойств показывает тост из словаря (ошибки d720265c и
+    // f803afb6) — `noticeStack` вставляет его в `document.body`.
+    body: new ShimElement('body'),
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
     dispatchEvent: () => undefined,

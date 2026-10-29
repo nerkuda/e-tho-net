@@ -1,0 +1,55 @@
+{
+  "name": "50fe8807-disconnect-during-types",
+  "description": "Официальный GUI-гейт ошибки 50fe8807 (renderer-половина, окно «а»): стенд запускается с --delay-seed-ms 3000 --delay-seed-path thought-types — GET /networks/<A>/thought-types задержан. Клик по сети A запускает openNetwork и застревает в запросе типов; через 800 мс пользователь отключается UI-путём (кнопка «Отключиться» → «Подтвердить») и оказывается на онбординге. Поздний ответ типов не должен опубликовать сеть и вернуть рабочую область поверх онбординга. До фикса (эпоха не двигалась) openNetwork доходит до showScreen('workspace'); после — возвращается на проверке актуальности.",
+  "timeout": 400000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 150000,
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{networkName}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "let-types-request-start",
+      "eval": "(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); return 'waited'; })()"
+    },
+    {
+      "name": "ui-disconnect-during-types",
+      "probe": "(async () => { const logout = [...document.querySelectorAll('.ui-btn')].find((b) => (b.textContent || '').trim() === 'Отключиться'); if (logout === undefined) return 'no-logout'; logout.click(); await new Promise((resolve) => setTimeout(resolve, 300)); const confirm = [...document.querySelectorAll('.dialog-footer button')].find((b) => (b.textContent || '').trim() === 'Подтвердить'); if (confirm === undefined) return 'no-confirm'; confirm.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "onboarding-after-disconnect",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.screen-onboarding') !== null"
+    },
+    {
+      "name": "wait-late-types-answer",
+      "eval": "(async () => { await new Promise((resolve) => setTimeout(resolve, 4000)); return 'waited'; })()"
+    },
+    {
+      "name": "workspace-not-mounted-over-onboarding",
+      "probe": "document.querySelector('.workspace') === null",
+      "expect": true
+    },
+    {
+      "name": "onboarding-still-visible",
+      "probe": "document.querySelector('.screen-onboarding') !== null",
+      "expect": true
+    }
+  ]
+}

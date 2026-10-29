@@ -71,4 +71,21 @@ describe('сторож общего списка свойств (задача 6e
       assert.ok(src.includes('buildPropertyList({'), `${file} собирает список общим компонентом`);
     }
   });
+
+  it('исключение присутствующих — новый ОПЦИОНАЛЬНЫЙ параметр списка (626b29bd)', () => {
+    const lib = readFileSync(resolve(RENDERER_ROOT, 'lib', 'property-list.ts'), 'utf8');
+    // Параметр объявлен в опциях компонента и применяется ко ВСЕЙ выдаче.
+    assert.match(lib, /excludeRow\?:\s*\(row: PropertyListRow\)\s*=>\s*boolean/, 'опция excludeRow в API');
+    assert.match(
+      lib,
+      /sortPropertyListRows\(excludePropertyListRows\(allRows, opts\.excludeRow\)\)/,
+      'исключение до сортировки/фильтра',
+    );
+    assert.match(lib, /const isExcluded = \(row: PropertyListRow\): boolean => opts\.excludeRow\?\.\(row\) === true;/, 'предикат потребителя');
+    // Существующие потребители не передают опцию — их поведение не изменилось.
+    for (const file of ['screens/property-manager.ts', 'screens/type-manager.ts']) {
+      const src = readFileSync(resolve(RENDERER_ROOT, file), 'utf8');
+      assert.ok(!src.includes('excludeRow'), `${file} не использует исключение — прежнее поведение`);
+    }
+  });
 });

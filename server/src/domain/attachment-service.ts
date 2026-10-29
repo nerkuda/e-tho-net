@@ -1810,7 +1810,9 @@ export function searchAttachmentsByAst(
  * workplan L25). `q` is required and uses the same mini-syntax as the thought
  * search (§6.10): AND of include-words, `-word` exclusion, `*` infix wildcard;
  * every include word must match somewhere in the union of `title`,
- * `description`, `url`, `file_path` (case-insensitive LIKE).
+ * `description`, `url`, `file_path` (case-insensitive LIKE over the
+ * `unicode_lower` runtime function — built-in `LOWER()` folds ASCII only, so
+ * Cyrillic query words missed capitalised text, bug 44c27255).
  *
  * Used by the editor's «Найти существующее» dialog tab to suggest attachments
  * the user can reuse instead of uploading a fresh copy. The `exclude_owner_*`
@@ -1838,8 +1840,13 @@ export function searchAttachments(
 
   const where: string[] = [];
   const params: unknown[] = [];
+  // `unicode_lower` — рантайм-функция соединения (`db/network-db.ts`), а не
+  // встроенный `LOWER()`: тот сворачивает регистр только ASCII (ошибка
+  // 44c27255 — кириллический запрос не находил «Проба вложение»). Шаблон
+  // запроса приводится к нижнему регистру в JS (`buildLikePattern(...)
+  // .toLowerCase()`), поэтому обе стороны LIKE нормализованы одинаково.
   const fieldConcat =
-    "LOWER(COALESCE(title, '') || '\n' || COALESCE(description, '') || '\n' || COALESCE(url, '') || '\n' || COALESCE(file_path, ''))";
+    "unicode_lower(COALESCE(title, '') || '\n' || COALESCE(description, '') || '\n' || COALESCE(url, '') || '\n' || COALESCE(file_path, ''))";
   for (const word of keywords.include) {
     const pattern = buildLikePattern(word).toLowerCase();
     where.push(`${fieldConcat} LIKE ? ESCAPE '\\'`);

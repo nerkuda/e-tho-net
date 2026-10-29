@@ -312,7 +312,13 @@ export function filterValueRegistryEntry(
   return undefined;
 }
 
-/** Определение свойства для общего редактора (сужено до используемых полей). */
+/**
+ * Определение свойства для общего редактора (сужено до используемых полей).
+ * Условие отбора адресует свойство без стороны (`side: null`): какую таблицу
+ * привязок считать противоположной — неизвестно, поэтому ограничение типов
+ * значения не задаётся. `config.allowed_*_type_ids` здесь не читается
+ * (спека «properties», модель 0.8.2: единственный источник — привязки).
+ */
 function registryDefinition(entry: {
   value_type: PropertyValueType;
   config: unknown;
@@ -488,8 +494,9 @@ function filterValuePayloadValue(
  * старым содержимым — модель и сервер новые, DOM старый (блокер проверки этапа
  * 3). Виджеты `entity` перекрывают этот приёмник своим и обновляют разметку
  * сами (чипы/комбо). Несовместимый бросок модель не меняет и объясняет причину
- * тостом; в приёмник панели «Структур» он не проваливается — ближайший
- * зарегистрированный предок (`walkDropField`) остаётся этим.
+ * в зоне сообщений статус-бара (рутинная валидация, задача 28d22b8a); в
+ * приёмник панели «Структур» он не проваливается — ближайший зарегистрированный
+ * предок (`walkDropField`) остаётся этим.
  */
 function acceptFilterValueDrop(
   leaf: FilterTreeLeaf,
@@ -498,7 +505,7 @@ function acceptFilterValueDrop(
   payload: ThoughtDropPayload,
 ): boolean {
   if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
-    notice(filterValueDropRejectionText(payload), 'warning');
+    notice(filterValueDropRejectionText(payload));
     return false;
   }
   const value = filterValuePayloadValue(leaf, payload);
@@ -1647,25 +1654,17 @@ async function thoughtAvailable(networkId: string, id: string): Promise<boolean>
  */
 export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
   lazily(async () => {
-    const { showThoughtMenuUnder, resolveSiblingParentId } =
-      await import('../canvas/context-menu.js');
-    // Родитель для «налево (родственник)» и доступность мысли — параллельно.
-    const [siblingParentId, available] = await Promise.all([
-      resolveSiblingParentId(opts.networkId, opts.id),
-      thoughtAvailable(opts.networkId, opts.id),
-    ]);
+    // Доступность мысли (урезанный набор `unresolvable`) не зависит от фасада:
+    // запрос стартует параллельно ленивой загрузке общего конструктора.
+    const availability = thoughtAvailable(opts.networkId, opts.id);
+    const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+    const available = await availability;
     wireFilterCloudInvalidation();
-    showThoughtMenuUnder(
-      opts.anchor,
-      {
-        id: opts.id,
-        title: opts.title,
-        dir: 'siblings',
-        // Чип не живёт в зоне холста — родителя резолвим запросом (как чипы
-        // редактора: value-editor).
-        siblingParentId,
-        trashed: opts.trashed === true,
-      },
+    // Чип не живёт в зоне холста — родителя «налево (родственник)» и сверку
+    // сети держит фасад меню вне холста (ошибки 2baa78fb/89964a9b).
+    await showOutOfCanvasThoughtMenu(
+      { anchor: opts.anchor },
+      { id: opts.id, title: opts.title, dir: 'siblings', trashed: opts.trashed === true },
       {
         openLabel: 'Открыть в редакторе',
         openHandler: (id) => openThoughtInEditorById(id),
@@ -2027,7 +2026,7 @@ function entityOperandControl(
   // перерисовка чипов), второго способа записи значения нет.
   const acceptEntityPayload = (payload: ThoughtDropPayload): boolean => {
     if (!filterValueAcceptsPayload(leaf, ctx, payload)) {
-      notice(filterValueDropRejectionText(payload), 'warning');
+      notice(filterValueDropRejectionText(payload));
       return false;
     }
     const id = payload.kind === 'thought' || payload.kind === 'type' ? payload.id : null;
@@ -2141,7 +2140,7 @@ async function thoughtsSearch(ctx: FilterValueContext, query: string): Promise<E
   const needle = query.trim();
   if (needle === '' || ctx.networkId === '') return [];
   try {
-    const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], []);
+    const hits = await etn.thoughts.findDuplicates(ctx.networkId, needle, [], [], 'search');
     return hits.map((hit) => ({ id: hit.id, title: hit.title, cloud: { ...hit } }));
   } catch {
     return [];

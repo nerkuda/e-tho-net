@@ -1,0 +1,108 @@
+{
+  "name": "a6866689-type-presence",
+  "description": "Ошибка a6866689: условие «Тип мысли» — «заполнено»/«не заполнено». Стенд засевает два типа и три мысли (с типом A, с типом B, без типа); в «Структурах» строит условие «Тип», проверяет наличие пунктов «заполнено»/«не заполнено» в списке операторов и их подписи, применяет «не заполнено» (в выдаче только мысль без типа), затем «заполнено» (в выдаче мысли с типом, без типа нет). Клики — in-page .click() и ожидание по условию (скрытое окно, грабли 03e33360). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.a6866689-type-presence.scenario.json --out .tmp/etn-a6866689/out",
+  "timeout": 240000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "open-network",
+      "timeout": 40000,
+      "probe": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item === null) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tabs-panel-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
+
+    {
+      "name": "seed-types-and-thoughts",
+      "probe": "(() => { const N='{{networkId}}'; const et=window.etn; return (async () => { const a=await et.types.createThoughtType(N,{ name:'Тип A A686' }); const b=await et.types.createThoughtType(N,{ name:'Тип B A686' }); const mk=async(t,type)=>{ const r=await et.thoughts.create(N,{ title:t, type_id:type }); return r.id; }; window.__a686={ a:a.id, b:b.id, t1:await mk('A686 — с типом A', a.id), t2:await mk('A686 — с типом B', b.id), t3:await mk('A686 — без типа', null) }; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+
+    { "name": "open-structures", "eval": "(() => { const b=document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if(!b) return 'no-tab'; b.click(); return 'ok'; })()" },
+    {
+      "name": "structures-editor",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    { "name": "add-condition", "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "condition-row-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 1"
+    },
+    { "name": "open-operand-picker", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "operand-menu",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') !== null"
+    },
+    { "name": "pick-type", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"type\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    {
+      "name": "operand-is-type",
+      "timeout": 20000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what')?.textContent ?? '').includes('Тип')"
+    },
+
+    { "name": "open-op-presence", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__op'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "presence-choices",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"is_empty\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"not_empty\"]') !== null"
+    },
+    {
+      "name": "presence-labels",
+      "probe": "(() => { const vis=(k)=>{ const e=[...document.querySelectorAll('.ft-choice__item[data-key=\"'+k+'\"]')].find((x)=>x.getBoundingClientRect().width > 0); return (e?.textContent ?? '').trim(); }; return { empty: vis('is_empty'), filled: vis('not_empty') }; })()",
+      "expect": { "empty": "не заполнено", "filled": "заполнено" }
+    },
+    { "name": "pick-is-empty", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"is_empty\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    { "name": "settle-after-is-empty", "eval": "(async () => { await new Promise((r)=>setTimeout(r,400)); return 'ok'; })()" },
+    {
+      "name": "is-empty-no-value-cell",
+      "probe": "(() => { const row=document.querySelectorAll('.st-filter .ft-row')[0]; return { valueCell: (row?.querySelector('.ft-row__value')?.textContent ?? '').trim(), issue: (row?.querySelector('.ft-issue__text')?.textContent ?? '').trim() }; })()",
+      "expect": { "valueCell": "", "issue": "" }
+    },
+
+    { "name": "apply-is-empty", "eval": "(() => { const b=document.querySelector('.st-filter .ff-apply'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    { "name": "settle-apply-is-empty", "eval": "(async () => { await new Promise((r)=>setTimeout(r,1200)); return 'ok'; })()" },
+    {
+      "name": "is-empty-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__a686; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return has(f.t3) && !has(f.t1) && !has(f.t2); })()"
+    },
+    {
+      "name": "is-empty-probe",
+      "probe": "(() => { const f=window.__a686; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return { typedA: has(f.t1), typedB: has(f.t2), typeless: has(f.t3) }; })()",
+      "expect": { "typedA": false, "typedB": false, "typeless": true }
+    },
+
+    { "name": "switch-op-not-empty", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__op'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "not-empty-choice",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"not_empty\"]') !== null"
+    },
+    { "name": "pick-not-empty", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"not_empty\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    { "name": "apply-not-empty", "eval": "(() => { const b=document.querySelector('.st-filter .ff-apply'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    { "name": "settle-apply-not-empty", "eval": "(async () => { await new Promise((r)=>setTimeout(r,1200)); return 'ok'; })()" },
+    {
+      "name": "not-empty-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__a686; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return has(f.t1) && has(f.t2) && !has(f.t3); })()"
+    },
+    {
+      "name": "not-empty-probe",
+      "probe": "(() => { const f=window.__a686; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return { typedA: has(f.t1), typedB: has(f.t2), typeless: has(f.t3) }; })()",
+      "expect": { "typedA": true, "typedB": true, "typeless": false }
+    }
+  ]
+}

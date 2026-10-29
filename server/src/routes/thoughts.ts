@@ -800,7 +800,14 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const cleared = clearThoughtRefUsages(ndb, id);
+        // Умное удаление цели (0.14.1, ADR a967d865) может отказать 422 на
+        // ребре, удерживаемом живой тенью слоя (S13). Очистка обязана быть
+        // атомарной: без транзакции ранее удалённые рёбра остались бы
+        // удалёнными при отказе на одном из следующих. События/журнал — по
+        // прежнему не эмитятся (решение оркестратора для usage_clear).
+        const cleared = runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
+          result: clearThoughtRefUsages(ndb, id),
+        }));
         sendSuccess(reply, { cleared } satisfies UsageClearResult);
       },
     );
@@ -824,6 +831,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const typeIds = ((input.type_ids as string[] | undefined) ?? []).flatMap((value) =>
           value.split(','),
         );
+        // Семантика (ошибка 11f14a81): по умолчанию `dedupe`; живой поиск
+        // диалога/пикеров передаёт `mode=search` явно.
+        const mode = input.mode;
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         // Парсер repeatable кладёт `[]` при отсутствии параметра — поэтому
         // проверяем по длине, а не по наличию ключа.
@@ -861,6 +871,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             title,
             synonyms,
             typeIds,
+            mode,
           });
           sendSuccess(
             reply,
@@ -874,7 +885,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           return;
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const hits = await findDuplicatesAsync(ndb, title, synonyms, typeIds);
+        const hits = await findDuplicatesAsync(ndb, title, synonyms, typeIds, { mode });
         sendList(reply, hits, hits.length, 0, hits.length);
       },
     );

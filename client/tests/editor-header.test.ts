@@ -106,8 +106,13 @@ describe('editor thought header — placeholder preserves three-row geometry (8a
     assert.ok(start >= 0, 'openThoughtActionsMenu must be defined');
     const body = editorSrc.slice(start, editorSrc.indexOf('\n}\n', start));
     assert.ok(
-      body.includes("'../canvas/context-menu.js'") && body.includes('showThoughtMenuUnder('),
-      '«Действия ▾» must delegate to the shared thought menu builder',
+      body.includes("'../canvas/context-menu.js'") &&
+        body.includes('showOutOfCanvasThoughtMenu('),
+      '«Действия ▾» must delegate to the shared out-of-canvas menu facade',
+    );
+    assert.ok(
+      !body.includes('resolveSiblingParent') && !body.includes('showThoughtMenuUnder('),
+      '«Действия ▾» must not keep a local copy of the sibling-parent chain (task d8941b76)',
     );
     assert.ok(
       body.includes('hideOpenCommand: true'),

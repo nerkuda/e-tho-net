@@ -13,18 +13,21 @@
 
 import type { Thought } from '@etn/shared';
 
-import { closeDialog, errorDialog, hasOpenDialog } from './lib/dialog.js';
-import { hasTextSelection } from './lib/dom.js';
+import type { TabDto } from '../main/ipc/contract.js';
+import { errorDialog, hasOpenDialog } from './lib/dialog.js';
+import { errText, hasTextSelection } from './lib/dom.js';
+import { describeConnectFailure } from './lib/connect-failure.js';
 import { etn } from './lib/etn.js';
 import {
   activateFocusQuery,
+  beginFocusOp,
   deactivateFocusQuery,
   findRootThought,
+  isFocusOpCurrent,
   refreshFocusOrNull,
   resetFocusToHome,
   publishFocusResponse,
 } from './lib/layer-resync.js';
-import { closeMenu } from './lib/menu.js';
 import {
   GLOBAL_CONTEXT_ID,
   defineKeyContext,
@@ -64,16 +67,18 @@ import {
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
-import { initRealtime, setRealtimeEffects } from './realtime.js';
+import { initRealtime, refreshRealtimeStatuses, setRealtimeEffects } from './realtime.js';
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
+import { initLockReconnect } from './lib/lock-guard.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
+import { invalidateStripContextCaches } from './canvas/focus-filter-strip.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
@@ -82,7 +87,12 @@ import {
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
-import { store, type WorkspaceView } from './state.js';
+import {
+  currentScreenPair,
+  findOpenTargetTab,
+  isCurrentScreenPair,
+} from './screens/tabs/tab-state.js';
+import { serverLabelOf, store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
 
 /** Debounce for coalescing realtime-triggered refreshes, ms. */
@@ -119,6 +129,23 @@ function runFallbackRefresh(): void {
 export { findRootThought } from './lib/layer-resync.js';
 
 /**
+ * Номер последнего запуска `openNetwork` (ошибка 58c55bb9).
+ *
+ * `openNetwork` — длинная цепочка ожиданий (сеть, предпочтения, L4, вкладки,
+ * слой, фокус). Если пользователь за это время открыл другую сеть/вкладку,
+ * запоздавший ответ прежнего запуска не должен публиковать СВОЁ состояние
+ * поверх уже открытого: иначе последний клик проигрывает медленному ответу, и
+ * экран/активная вкладка откатываются к прежней сети. Каждый запуск снимает
+ * номер на входе и сверяет его перед каждой публикацией/побочным шагом.
+ */
+let openNetworkSeq = 0;
+
+/** Актуален ли ещё запуск `openNetwork` с этим номером. */
+function isCurrentOpenNetwork(seq: number): boolean {
+  return seq === openNetworkSeq;
+}
+
+/**
  * Opens a network (H3): loads L2 meta, L3 preferences and L4 ui_state, picks
  * the initial focus (stored focus → HOME) and mounts the workspace.
  *
@@ -128,6 +155,7 @@ export { findRootThought } from './lib/layer-resync.js';
  * workspace restores the right focus / view.
  */
 export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
+  const seq = ++openNetworkSeq;
   // The cursor lives on a cloud from the previously open network — drop it
   // before anything else, otherwise a quick Ctrl+V in the new network would
   // target an id that no longer exists on the map.
@@ -135,8 +163,19 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // Слой данных (G2): снимаем подписку прошлой окрестности — иначе её
   // слушатель писал бы фокус закрытой сети в store.
   deactivateFocusQuery();
+  // Открытие сети — уничтожение прежнего контекста фокуса (ошибка 1656ef58):
+  // запоздавший ответ прежней установки фокуса не публикует свою мысль в
+  // уже открытую сеть. Свою загрузку фокуса этот запуск проводит под этим же
+  // номером — любая более новая пользовательская операция его отменяет.
+  const focusSeq = beginFocusOp();
   const network = await etn.networks.open(networkId);
+  if (!isCurrentOpenNetwork(seq)) return;
+  // The pool was created lazily by `networks.open`; refresh the per-network
+  // status snapshot so the indicator does not wait for the next broadcast
+  // (defect de34b35b, verify remark 4).
+  void refreshRealtimeStatuses();
   const prefs = await etn.networks.getPreferences(networkId);
+  if (!isCurrentOpenNetwork(seq)) return;
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
@@ -166,6 +205,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
       etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
       etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
     ]);
+  if (!isCurrentOpenNetwork(seq)) return;
 
   const editorPosition = (
     ['left', 'right', 'top', 'bottom', 'hidden'].includes(posRaw ?? '') ? posRaw : 'right'
@@ -191,6 +231,63 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     etn.types.listLinkTypes(networkId),
     etn.types.listThoughtTypes(networkId),
   ]);
+  if (!isCurrentOpenNetwork(seq)) return;
+
+  // Q3: целевая вкладка разрешается ДО публикации новой сети. Стор обязан
+  // переключиться на «новая сеть + её вкладка» ОДНИМ обновлением: между
+  // отдельными обновлениями тик стора показывал новую сеть со старым
+  // `activeTabId`, и экран «Структур» применял снимок вкладки прежней сети к
+  // новой — отбор уходил запросом в чужую сеть и получал 422 «Тип … удалён из
+  // сети» (ошибка 58c55bb9, гонка в логах: query и 422 разошлись на 1 мс).
+  //
+  // Вкладка принадлежит своей сети: `tabId` чужой сети не переиспользуется
+  // (иначе её пер-вкладочные снимки и подпись относились бы к чужой сети) —
+  // открывается новая вкладка. `tabId` своей сети wins, как и раньше.
+  let tabs: TabDto[] = store.state.tabs;
+  let activeTabId: string | null = null;
+  let activeTabView: WorkspaceView | null = null;
+  let activeTabFocusId: string | null = null;
+  let activeTabLayerId: string | null = null;
+  try {
+    tabs = await etn.tabs.list();
+    if (!isCurrentOpenNetwork(seq)) return;
+    let target = findOpenTargetTab(tabs, tabId, networkId);
+    // No matching tab of THIS network? The networks screen entry opens without
+    // a tab — create one so the strip populates. Duplicates are explicit and
+    // re-openings of the same network still create a fresh tab.
+    if (target === null) {
+      const fresh = await etn.tabs.open(networkId);
+      if (!isCurrentOpenNetwork(seq)) return;
+      tabs = await etn.tabs.list();
+      if (!isCurrentOpenNetwork(seq)) return;
+      target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? null;
+    }
+    activeTabId = target?.tab_id ?? null;
+    activeTabView = target?.view_mode ?? null;
+    activeTabFocusId = target?.focus_id ?? null;
+    activeTabLayerId = target?.layer_id ?? null;
+  } catch {
+    // ignore — workspace still usable without tab strip state; сеть всё равно
+    // публикуется без активной вкладки, поэтому чужой снимок не прочитается.
+  }
+
+  // Q-bugfix: per-tab view_mode takes priority over the legacy L4 key, so
+  // switching tabs inside a network actually swaps the view (not just the
+  // highlighted tab).
+  const viewFromTab = activeTabView;
+  const knownView = (value: string | null): value is WorkspaceView =>
+    value === 'structures' || value === 'chronicle' || value === 'publications';
+  const resolvedView: WorkspaceView =
+    knownView(viewFromTab)
+      ? viewFromTab
+      : knownView(activeViewRaw)
+        ? activeViewRaw
+        : 'map';
+
+  // Публикация сети/вкладки/экрана — только если этот запуск ещё актуален:
+  // запоздавший ответ прежней сети не откатывает уже открытую (ошибка
+  // 58c55bb9, поздний ответ openNetwork).
+  if (!isCurrentOpenNetwork(seq)) return;
 
   store.update({
     network,
@@ -219,6 +316,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     structuresActiveThoughtId: null,
     structuresActiveThought: null,
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
+    // Сеть, вкладка и экран публикуются вместе — переход атомарен для подписок
+    // экранов (ошибка 58c55bb9).
+    tabs,
+    activeTabId,
+    activeView: resolvedView,
   });
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
   setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
@@ -232,65 +334,17 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // (ошибка cb9b466f): читается один раз на сеть/пользователя, best-effort.
   ensureUserNamesLoaded();
 
-  // Q3: refresh tab list and activate the right entry. When the caller
-  // supplies `tabId` (the picker / tab activation), that exact tab wins —
-  // duplicate opens of the same network don't collapse onto the first
-  // existing tab.
-  let activeTabId: string | null = null;
-  let activeTabView: WorkspaceView | null = null;
-  let activeTabFocusId: string | null = null;
-  let activeTabLayerId: string | null = null;
-  try {
-    let tabs = await etn.tabs.list();
-    let target: { tab_id: string } | null = null;
-    if (tabId !== undefined) {
-      target = tabs.find((t) => t.tab_id === tabId) ?? null;
-    }
-    // No matching tab yet? The networks screen entry opens without a tab —
-    // create one so the strip populates. Duplicates are explicit and
-    // re-openings of the same network still create a fresh tab.
-    if (target === null) {
-      const fresh = await etn.tabs.open(networkId);
-      tabs = await etn.tabs.list();
-      target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? { tab_id: fresh.tab_id };
-    }
-    const fullTarget = tabs.find((t) => t.tab_id === target!.tab_id) ?? null;
-    activeTabId = fullTarget?.tab_id ?? target!.tab_id;
-    activeTabView = fullTarget?.view_mode ?? null;
-    activeTabFocusId = fullTarget?.focus_id ?? null;
-    activeTabLayerId = fullTarget?.layer_id ?? null;
-    store.update({
-      tabs,
-      activeTabId,
-    });
-  } catch {
-    // ignore — workspace still usable without tab strip state
-  }
-
   // S11 (13-layers.md §10.3): the layer is a property of the TAB. Align the
   // server-side session to the tab's layer BEFORE the focus loads — the focus
   // (and every later read/write) must resolve in this tab's layer, not in
   // whatever layer the previous tab left behind. Failures keep the base layer
   // and an empty layer list; the menu recovers on the next open.
   try {
-    await syncLayersForTab(networkId, activeTabLayerId);
+    await syncLayersForTab(networkId, activeTabLayerId, () => isCurrentOpenNetwork(seq));
   } catch {
     // offline / layer deleted elsewhere — the workspace stays usable
   }
-
-  // Q-bugfix: per-tab view_mode takes priority over the legacy L4 key, so
-  // switching tabs inside a network actually swaps the view (not just the
-  // highlighted tab).
-  const viewFromTab = activeTabView;
-  const knownView = (value: string | null): value is WorkspaceView =>
-    value === 'structures' || value === 'chronicle' || value === 'publications';
-  const resolvedView: WorkspaceView =
-    knownView(viewFromTab)
-      ? viewFromTab
-      : knownView(activeViewRaw)
-        ? activeViewRaw
-        : 'map';
-  store.update({ activeView: resolvedView });
+  if (!isCurrentOpenNetwork(seq)) return;
 
   showScreen('workspace');
 
@@ -306,13 +360,22 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     } catch {
       initial = null; // stored focus vanished — fall through to HOME
     }
+    if (!isCurrentOpenNetwork(seq)) return;
   }
   if (initial !== null) {
-    await loadFocusForTab(initial.id, networkId, activeTabId);
+    await loadFocusForTab(
+      initial.id,
+      networkId,
+      activeTabId,
+      () => isCurrentOpenNetwork(seq),
+      focusSeq,
+    );
   } else {
     const root = await findRootThought(networkId);
-    await loadFocusForTab(root.id, networkId, activeTabId);
+    if (!isCurrentOpenNetwork(seq)) return;
+    await loadFocusForTab(root.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq), focusSeq);
   }
+  if (!isCurrentOpenNetwork(seq)) return;
 
   // 8efd5cf8 (Q5): `store.tabs` is only populated HERE — the accessibility
   // pass fired right after `server.connect` (boot / restoreSession) runs
@@ -336,12 +399,20 @@ export async function loadFocusForTab(
   thoughtId: string,
   networkId: string,
   tabId: string | null,
+  isCurrent?: () => boolean,
+  focusSeq?: number,
 ): Promise<void> {
   try {
     const response = await etn.thoughts.focus(networkId, thoughtId);
+    // Запуск перекрыт более новым открытием сети/вкладки — ответ не публикуем
+    // (ошибка 58c55bb9, поздний ответ openNetwork).
+    if (isCurrent !== undefined && !isCurrent()) return;
+    // Пока грузился фокус, пользователь начал собственную установку фокуса —
+    // его выбор новее, поздний ответ этого запуска не публикуем (1656ef58).
+    if (focusSeq !== undefined && !isFocusOpCurrent(focusSeq)) return;
     // Слой данных (G2): свежий ответ идёт в кэш `focus:@id`, активная
     // окрестность подписывается на него — холст рисует из кэша.
-    publishFocusResponse(response);
+    publishFocusResponse(response, focusSeq);
     activateFocusQuery(networkId, thoughtId);
     store.update({ editorTarget: null, selectedLinkId: null });
   } catch {
@@ -351,6 +422,8 @@ export async function loadFocusForTab(
     // `openNetwork` when this returns no focus at all.
     return;
   }
+  if (isCurrent !== undefined && !isCurrent()) return;
+  if (focusSeq !== undefined && !isFocusOpCurrent(focusSeq)) return;
   // Defensive: if the persisted focus_id on the tab row got lost somehow,
   // restore it now — better than a workspace that opens on a stale HOME
   // after every restart.
@@ -383,17 +456,32 @@ export async function setFocus(id: string): Promise<void> {
   const startedAt = Date.now();
   const networkId = requireNetworkId();
   const tabId = store.state.activeTabId;
+  // Поколение пользовательской операции + пара «сеть + вкладка» — на момент
+  // клика. Поздний ответ этой установки не имеет права ни публиковать фокус,
+  // ни писать историю, если пользователь уже выбрал другую мысль, сменил
+  // сеть/вкладку (ошибка 1656ef58: поздний ответ A перезаписывал более новый B
+  // и дерево фокуса показывало прежнюю мысль с её детьми).
+  const focusSeq = beginFocusOp();
+  const pair = currentScreenPair();
   const response = await etn.thoughts.focus(networkId, id);
+  // Проверка ДО истории: иначе запоздавший клик писал бы поворот истории в
+  // чужую (более новую) вкладку/сеть.
+  if (!isFocusOpCurrent(focusSeq)) return;
+  if (pair === null || !isCurrentScreenPair(pair)) return;
   // Unified visit history (0.5.5): records whatever thought was current a
   // moment ago (the previous focus, or a thought/link open in the editor
   // without moving the focus) — not necessarily the old focus. Must run
   // before the store update below (same reasoning as before: the history bar
   // re-renders from store changes, so this needs to land first).
   await noteThoughtWillOpen(id);
+  // `noteThoughtWillOpen` тоже ждёт сеть/запись — за это время операция могла
+  // устареть. Повторная сверка перед публикацией.
+  if (!isFocusOpCurrent(focusSeq)) return;
+  if (pair === null || !isCurrentScreenPair(pair)) return;
   // Слой данных (G2): ответ фокуса кладётся в кэш `focus:@id` (мутатор-путь),
   // активная окрестность подписывается на ключ. Ручного перечитывания
   // окрестности нет — холст перерисовывается из кэша.
-  publishFocusResponse(response);
+  publishFocusResponse(response, focusSeq);
   activateFocusQuery(networkId, id);
   store.update({
     editorTarget: null,
@@ -412,6 +500,26 @@ export async function setFocus(id: string): Promise<void> {
     void etn.tabs.updateState(tabId, { focus_id: id }).catch(() => undefined);
   } else {
     void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+  }
+}
+
+/**
+ * UI-вход установки фокуса (клик/двойной клик, клавиатура, панели, ссылки).
+ *
+ * Единственная точка обратной связи для установки фокуса: отказ
+ * `thoughts.focus` не теряется (необработанный отказ выглядел как «зависший
+ * интерфейс» — ошибка 1656ef58), а показывается тостом по правилам `notice`.
+ *
+ * Промис НЕ отклоняется никогда: синхронные обработчики зовут без ожидания,
+ * async-пути (deep-link, wiki-ссылки, «В фокус») могут `await` — чтобы
+ * сохранить порядок успешного пути (ожидание прежнего фокуса), не получая
+ * unhandled rejection и не дублируя тост.
+ */
+export async function focusFromUi(id: string): Promise<void> {
+  try {
+    await setFocus(id);
+  } catch (error) {
+    notice(errText(error), 'error');
   }
 }
 
@@ -495,6 +603,12 @@ export function scheduleRefresh(cause?: InvalidationCause): void {
 export async function resyncAfterLayerSwitch(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // Полоса отборов фокуса прочитала эффективный набор и результат прогона в
+  // ПРЕЖНЕМ слое: `thought_custom_views.layer_id` ветвит отборы по слоям, а
+  // типовой результат мог ссылаться на мысли, которых в новом слое нет.
+  // Гасим кэши полосы до перечитывания фокуса (замечание верификатора круга 2
+  // к ошибке 6d78ccab).
+  invalidateStripContextCaches();
   // Cloud metadata (trash mark, active, colors) and the indicator counts were
   // resolved in the previous layer's context — drop them so the re-read below
   // re-resolves everything through the new layer chain (13-layers.md §12).
@@ -530,10 +644,17 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
 
 /** Returns to the network list (e.g. after `network-lost`). */
 export function backToNetworks(): void {
+  // Выход из сети — уничтожение контекста: эпоха сдвигается синхронно, чтобы
+  // поздний ответ `openNetwork` не опубликовал сеть/рабочую область поверх
+  // списка сетей (ошибка 50fe8807 — тот же класс, что разрыв соединения).
+  openNetworkSeq += 1;
   // Смена сети — уничтожение контекста: отложенные fallback-перечитывания
   // окрестности старой сети не должны сработать после перехода.
   clearRefreshTimers();
   deactivateFocusQuery();
+  // Поздний ответ установки фокуса прежней сети не публикуется в список
+  // сетей (ошибка 1656ef58 — тот же класс, что поздний openNetwork).
+  beginFocusOp();
   store.resetNetwork();
   showScreen('networks');
 }
@@ -576,6 +697,15 @@ export async function restoreSession(): Promise<void> {
 
 /** Disconnects the profile and returns to onboarding (H18 user menu). */
 export async function disconnect(): Promise<void> {
+  // Разрыв соединения — такое же основание отменить поздний ответ openNetwork,
+  // как смена сети (ошибка 50fe8807). Эпоха двигается ДО первого await:
+  // иначе континуация в полёте успеет опубликовать сеть/вкладку/экран уже
+  // после ухода на онбординг.
+  openNetworkSeq += 1;
+  // Разрыв соединения — тоже уничтожение контекста фокуса: поколение
+  // двигается ДО первого await, чтобы ответ установки фокуса, ждавший сеть,
+  // не опубликовался на онбординг (ошибка 1656ef58).
+  beginFocusOp();
   await etn.server.disconnect();
   clearRefreshTimers();
   deactivateFocusQuery();
@@ -686,6 +816,23 @@ async function pickFocusAfterDeletion(
 }
 
 /**
+ * Сообщение о неудаче автоподключения при запуске (ошибка 390e9746). Экран
+ * подключения забирает его один раз и показывает у списка сохранённых
+ * серверов: раньше отказ молча переключал на онбординг.
+ */
+let bootConnectFailure: string | null = null;
+
+/**
+ * Забрать (и погасить) сообщение об отказе автоподключения при запуске.
+ * `null` — отказа не было.
+ */
+export function takeBootConnectFailure(): string | null {
+  const message = bootConnectFailure;
+  bootConnectFailure = null;
+  return message;
+}
+
+/**
  * Boot: initialise realtime plumbing, then route to onboarding (no active
  * profile) or to the last-active tab (Q-bugfix) — when the user has
  * previously opened tabs, drop them straight into the workspace; otherwise
@@ -703,6 +850,10 @@ export async function boot(): Promise<void> {
   // its colours or the theme change.
   initLayerTheme();
   initLockCache();
+  // Захваты живут только вместе с realtime-сессией: после переподключения
+  // кэш перечитывается с сервера, а захваты открытых редакторов берутся
+  // заново (ошибка 0702efb6).
+  initLockReconnect();
   // Центральная инвалидация кэша источников трансклюзий по событиям `comment.*`
   // (задача a4f4113d): правка постоянного комментария-источника любой веткой —
   // своя или чужая — сбрасывает закэшированное тело, чтобы отрисовка блока не
@@ -710,7 +861,12 @@ export async function boot(): Promise<void> {
   initTransclusionSourceCache();
   initRealtime();
   setRealtimeEffects({
-    onStale: () => scheduleRefresh(REALTIME_CONTROL_CAUSE),
+    // Full visible resync, not just a focus refresh (defect de34b35b):
+    // `resume.stale` means the event window was exceeded — the editor and the
+    // structures/chronicle snapshots are just as stale as the focus.
+    onStale: () => {
+      void resyncAfterLayerSwitch();
+    },
     onFocusLost: () => {
       // Another user deleted our focused thought — same recovery as the
       // local delete: previous from the history, else HOME.
@@ -736,21 +892,32 @@ export async function boot(): Promise<void> {
   const profiles = await etn.server.listProfiles();
   const active = profiles.find((p) => p.isActive);
   if (active !== undefined) {
+    // The status tooltip names the server; resolve it before the first
+    // connect attempt so even «Подключение…» has a name (de34b35b, GUI review).
+    const serverLabel = serverLabelOf(active);
     try {
       const me = await etn.server.connect(active.id);
-      store.update({ profileId: active.id, me });
+      store.update({ profileId: active.id, serverLabel, me });
+      // The realtime pool now exists: pull the per-network status snapshot
+      // (defect de34b35b, verify remark 4).
+      void refreshRealtimeStatuses();
       // Q-bugfix: restore the previous session — saved tabs go straight to
       // the most recently active one, no forced re-pick from the network list.
       await restoreSession();
       return;
-    } catch {
-      // Connection failed (server down, key revoked) — onboarding offers a retry.
-      store.update({ profileId: active.id, me: null });
+    } catch (err) {
+      // Connection failed (server down, key revoked) — onboarding offers a retry
+      // and names the actual cause with the server address (ошибка 390e9746).
+      store.update({ profileId: active.id, serverLabel, me: null });
+      bootConnectFailure = describeConnectFailure(err, {
+        label: active.label,
+        baseUrl: active.baseUrl,
+      });
       showScreen('onboarding');
       return;
     }
   }
-  store.update({ profileId: null, me: null });
+  store.update({ profileId: null, serverLabel: null, me: null });
   showScreen('onboarding');
 }
 
@@ -790,17 +957,6 @@ function globalKeyBindings(): KeyBindingDef[] {
       bindings.push(when === undefined ? { command, chord, run } : { command, chord, run, when });
     }
   };
-
-  bind('app.closeOverlay', ['Escape'], (event) => {
-    // A dialog that consumed the press (the top dialog's capture handler
-    // calls preventDefault) already closed itself — closing again here
-    // would pop the dialog below it (L21 fix). Key auto-repeat is ignored
-    // for the same reason: a held Escape would otherwise walk the stack down.
-    if (event.defaultPrevented || event.repeat) return false;
-    closeMenu();
-    closeDialog();
-    return true;
-  });
 
   // Copy / paste of thoughts (workplan L26). Only fire when the focus is
   // *not* inside an editable surface — there the native Ctrl+C/V must run
@@ -965,10 +1121,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   if (targetId === null) {
-    notice(
-      'Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.',
-      'error',
-    );
+    notice('Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.');
     return;
   }
   const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
@@ -990,10 +1143,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
  *  With multiple thoughts selected we fall back to the canvas focus. */
 async function globalPaste(targetId: string | null): Promise<void> {
   if (targetId === null) {
-    notice(
-      'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
-      'error',
-    );
+    notice('Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.');
     return;
   }
   const networkId = store.state.networkId;
@@ -1020,10 +1170,7 @@ async function globalPaste(targetId: string | null): Promise<void> {
   } catch (err) {
     // Clipboard read denied or unavailable — surface the error so the user
     // isn't left wondering why nothing happened.
-    notice(
-      `Не удалось прочитать системный буфер: ${err instanceof Error ? err.message : String(err)}`,
-      'error',
-    );
+    notice(`Не удалось прочитать системный буфер: ${errText(err)}`, 'error');
   }
 }
 

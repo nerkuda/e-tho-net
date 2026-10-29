@@ -700,6 +700,24 @@ describe('дерево условий: сгруппированные списк
       'у свойства-даты равенство есть (набор PROPERTY_OPERATOR_SETS)',
     );
 
+    // Свойства-ссылки «кросс-сетевая ссылка» и «публикация»: наличие значения
+    // (ошибка 0e976df4, класс a6866689) — секция «Состояние» из того же реестра,
+    // подписи общего словаря AST («заполнено» | «не заполнено»). До исправления
+    // секции не было: реестр объявлял только eq/ne/наборы.
+    for (const valueType of ['cross_network_ref', 'publication'] as const) {
+      const menu = mod.filterTreeOperatorMenu('thoughts', 'property', valueType);
+      const state = menu.find((s: any) => s.key === 'state');
+      assert.ok(state !== undefined, `${valueType}: секция «Состояние» предложена`);
+      assert.deepEqual(
+        (state as any).rows[0].cells.map((c: any) => [c.op, c.label]),
+        [
+          ['not_empty', 'заполнено'],
+          ['is_empty', 'не заполнено'],
+        ],
+        `${valueType}: «заполнено»/«не заполнено» — пара утверждение | отрицание`,
+      );
+    }
+
     // Датовые операнды хроники и событий тянут равенство из того же реестра
     // (ошибка 03db4cb0, паритет e219112e): «равно|не равно» первыми в «Сравнении»,
     // редактор не имеет своего мнения об операторах.
@@ -728,6 +746,18 @@ describe('дерево условий: сгруппированные списк
     const typeOps = type.flatMap((s: any) => s.rows.flatMap((r: any) => r.cells.map((c: any) => c.op)));
     assert.ok(typeOps.includes('in_hierarchy') && typeOps.includes('has'));
     assert.ok(!typeOps.includes('all_of'), '«все в выборке» в списке UI отсутствует (п.7)');
+    // «Заполнено»/«не заполнено» по типу мысли (ошибка a6866689): секция
+    // «Состояние», подписи — словарь конструктора (не заполнено | заполнено).
+    const typeState = type.find((s: any) => s.key === 'state');
+    assert.ok(typeState !== undefined, 'тип: секция «Состояние» предложена');
+    assert.deepEqual(
+      typeState!.rows[0]!.cells.map((c: any) => [c.op, c.label]),
+      [
+        ['not_empty', 'заполнено'],
+        ['is_empty', 'не заполнено'],
+      ],
+      'тип: «заполнено»/«не заполнено» — пара «утверждение | отрицание»',
+    );
 
     // Профиль хроники — свои операнды и свой набор. У текстовых операндов
     // записи «Найти слова» из списка убран (ошибка 609deba0 п.5): условие строит
@@ -1401,7 +1431,7 @@ describe('список: клавиатурная навигация многок
     press('ArrowDown');
     assert.equal(cursorIndex(), 4, '↓ в конце столбца не перескакивает в другой столбец');
 
-    // →/← — между столбцами.
+    // →/← — к соседу В СВОЁМ ряду.
     press('ArrowRight');
     assert.equal(cursorIndex(), 5, '→ переводит в правый столбец той же строки');
     press('ArrowUp');
@@ -1419,6 +1449,83 @@ describe('список: клавиатурная навигация многок
     assert.ok(cursorIndex() > 0, 'PgDn сдвигает выделение на страницу, а не оставляет на месте');
     press('PageUp');
     assert.equal(cursorIndex(), 0, 'PgUp возвращает выделение к началу');
+  });
+
+  it('←/→ — только сосед своего ряда: у края ряда событие не гасится (решение 2026-10-25)', async () => {
+    const mod = await import('../src/renderer/lib/filter-tree.js');
+    const body = mod.buildChoiceMenuBody({
+      title: 'Что',
+      groups: [
+        {
+          label: '',
+          columns: 2,
+          items: Array.from({ length: 5 }, (_v, i) => ({ key: `k${i}`, label: `пункт ${i}` })),
+        },
+      ],
+      onPick: () => undefined,
+    });
+    const root = body.root as unknown as ShimElement;
+    const items = exact(root, 'ft-choice__item');
+    const cursorIndex = (): number =>
+      items.findIndex((item) => item.classList.contains('ft-choice__item--cursor'));
+    let prevented = false;
+    const press = (key: string): boolean => {
+      prevented = false;
+      root.emit('keydown', {
+        key,
+        preventDefault: () => {
+          prevented = true;
+        },
+      });
+      return prevented;
+    };
+
+    // Без курсора соседа нет: ←/→ не гасим и курсор не ставим.
+    assert.equal(press('ArrowRight'), false, '→ без курсора не перехвачена');
+    assert.equal(press('ArrowLeft'), false, '← без курсора не перехвачена');
+    assert.equal(cursorIndex(), -1, 'курсор не появился');
+    press('ArrowDown'); // пункт 0
+    assert.equal(cursorIndex(), 0);
+    assert.equal(press('ArrowRight'), true, '→ в правый столбец своего ряда');
+    assert.equal(cursorIndex(), 1);
+    // Правая колонка: справа соседа нет — не гасим, курсор не прыгает на строку ниже.
+    assert.equal(press('ArrowRight'), false, 'край ряда: → не перехвачена');
+    assert.equal(cursorIndex(), 1, 'курсор остался в правой колонке');
+    // Левая колонка: слева соседа нет.
+    press('ArrowDown'); // 3 (правый столбец второй строки) — ↓ внутри столбца
+    assert.equal(cursorIndex(), 3);
+    press('Home'); // 0
+    assert.equal(press('ArrowLeft'), false, 'левая колонка: ← не перехвачена');
+    assert.equal(cursorIndex(), 0);
+    // Прыжок через ряд вверх-вправо/вниз-влево запрещён.
+    press('ArrowDown'); // 2
+    assert.equal(cursorIndex(), 2);
+    assert.equal(press('ArrowLeft'), false, '← со второго ряда не уходит в первый');
+    assert.equal(cursorIndex(), 2);
+    // Одноколоночный раздел: горизонтальных соседей нет вообще.
+    const single = mod.buildChoiceMenuBody({
+      title: 'Что',
+      groups: [{ label: '', items: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }] }],
+      onPick: () => undefined,
+    });
+    const singleRoot = single.root as unknown as ShimElement;
+    const singleItems = exact(singleRoot, 'ft-choice__item');
+    let singlePrevented = false;
+    const pressSingle = (key: string): boolean => {
+      singlePrevented = false;
+      singleRoot.emit('keydown', {
+        key,
+        preventDefault: () => {
+          singlePrevented = true;
+        },
+      });
+      return singlePrevented;
+    };
+    pressSingle('ArrowDown');
+    assert.ok(singleItems[0]?.classList.contains('ft-choice__item--cursor'));
+    assert.equal(pressSingle('ArrowRight'), false, 'одна колонка: → не перехвачена');
+    assert.equal(pressSingle('ArrowLeft'), false, 'одна колонка: ← не перехвачена');
+    assert.ok(singleItems[0]?.classList.contains('ft-choice__item--cursor'), 'курсор не сдвинулся');
   });
 });
 

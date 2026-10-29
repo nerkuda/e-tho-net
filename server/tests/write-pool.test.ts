@@ -95,12 +95,19 @@ function countByPrefix(ndb: NetworkDb, prefix: string): number {
   return row.n;
 }
 
-/** Дождаться условия (ожидание по состоянию, не по кадрам). */
+/**
+ * Настоящий `setTimeout`, снятый до подмены mock-таймерами (тест «поздний
+ * коммит» держит таймеры ПУЛА под управлением теста). Ожидание реального
+ * состояния обязано идти по реальным часам и не зависеть от тиков мока.
+ */
+const realSetTimeout = setTimeout;
+
+/** Дождаться условия (ожидание по состоянию, не по кадрам; таймер всегда настоящий). */
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => realSetTimeout(resolve, 5));
   }
   return predicate();
 }
@@ -241,14 +248,23 @@ describe(
       }
     });
 
-    it('простаивающая привязка не блокирует допуск: очередь допуска будится таймером', async () => {
+    it('простаивающая привязка не блокирует допуск: очередь допуска будится таймером', async (t) => {
       // Регресс ошибки 79c64f3f. Задача новой сети встаёт в очередь допуска,
       // когда все воркеры закреплены, а привязка-владелец УЖЕ простаивает (её
       // последнее событие — прошлая задача). Будить допуск нечем: простаивающая
       // привязка событий не даёт, а `taskTimeoutMs` взводится только при передаче
       // задачи воркеру (`dispatchPin`). Пока `route` не звал `admit`, таймер
-      // допуска не взводился вовсе — задача висела вечно. Пороги конфигурируемы:
-      // реальные 30 с `idleEvictionMs` ждать нельзя.
+      // допуска не взводился вовсе — задача висела вечно.
+      //
+      // Синхронизация — по тикам, не по настенным часам (ошибка 96c43ee6). Раньше
+      // тест ждал исполнения в фиксированном окне 3 с: под нагрузкой подъём
+      // воркера новой сети (tsx-загрузчик + открытие соединения) в него не
+      // укладывался, и тест падал не по делу. Здесь таймеры пула (допуск, WARN,
+      // тайм-аут задачи) и его часы (`Date.now` для порога простоя) —
+      // mock-таймеры node:test: тик переводит время ровно к порогу
+      // `idleEvictionMs`, поэтому вытеснение простаивающей привязки наступает по
+      // тику, а не по реальному простою. Ожидание исполнения (`await runB`) идёт
+      // по реальным часам и не ограничено окном: подъём воркера может быть долгим.
       const other = secondNetwork();
       const warns: Array<{ msg: string; fields: Record<string, unknown> }> = [];
       const logger = {
@@ -261,37 +277,41 @@ describe(
         NonNullable<ConstructorParameters<typeof WritePool>[0]>['logger']
       >;
 
+      const idleEvictionMs = 1_000;
+      const queueWaitWarnMs = 100;
+      t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
       const pool = new WritePool({
         size: 1,
         taskTimeoutMs: 30_000,
-        idleEvictionMs: 300,
-        queueWaitWarnMs: 40,
+        idleEvictionMs,
+        queueWaitWarnMs,
         logger,
       });
       try {
         // Сеть A занимает единственный воркер и отпускает его, задача исполнена.
-        await pool.run(batchTask(context, ['idle-holder']));
+        // Подъём воркера A — реальное ожидание: mock-таймеры его не ускоряют.
+        // Допуск обслуживается синхронно из `route`, поэтому воркер обязан быть
+        // поднят уже к возврату из `run`: без `admit()` в `route` задача первой
+        // сети не уйдёт воркеру вовсе — это видно сразу, явной диагностикой.
+        const runA = pool.run(batchTask(context, ['idle-holder']));
+        runA.catch(() => {});
+        assert.equal(pool.stats().spawns, 1, 'route обязан поднять воркер сети A (admit в route)');
+        await runA;
         assert.equal(pool.stats().busyWorkers, 0, 'воркер сети A освободился');
         assert.deepEqual(pool.stats().pinnedNetworks, [networkId], 'воркер закреплён за A');
 
         // Сеть B: воркера нет, а привязка A ещё не простояла порог вытеснения —
-        // задача обязана исполниться по таймеру допуска, а не висеть вечно.
-        const outcome = await Promise.race([
-          pool.run(batchTask(other.context, ['idle-second'])).then(
-            () => 'executed' as const,
-            () => 'failed' as const,
-          ),
-          new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 3_000)),
-        ]);
-        assert.equal(
-          outcome,
-          'executed',
-          'задача новой сети обязана дождаться вытеснения простаивающей привязки',
-        );
-        assert.equal(countByPrefix(other.ndb, 'idle-second'), 1, 'новая сеть записана');
-        assert.equal(pool.stats().evicted, 1, 'простаивающая привязка вытеснена по простою');
+        // задача встаёт в допуск, и таймер обязан взвестись из `route`.
+        const runB = pool.run(batchTask(other.context, ['idle-second']));
+        // Если ассерт ниже упадёт, задачи в допуске отклонит `close()`; без этого
+        // обработчика отказ остался бы необработанным и замаскировал причину.
+        runB.catch(() => {});
+        assert.equal(pool.stats().waitingAdmission, 1, 'задача новой сети ждёт допуска');
+        assert.equal(pool.stats().evicted, 0, 'порог простоя ещё не достигнут');
+
         // Аномально долгое ожидание допуска обязано быть видно в логах (WARN),
         // а не только в статистике: иначе зависание в допуске остаётся немым.
+        t.mock.timers.tick(queueWaitWarnMs);
         const admissionWarn = warns.find(
           (w) => w.msg === 'write pool: задача долго ждёт допуска',
         );
@@ -300,7 +320,27 @@ describe(
           `ожидание допуска обязано логироваться WARN; получено: ${warns.map((w) => w.msg).join(' | ')}`,
         );
         assert.equal(admissionWarn!.fields.waitingAdmission, 1, 'WARN видит задачу в допуске');
+        assert.equal(pool.stats().evicted, 0, 'WARN не вытесняет привязку раньше порога');
+
+        // Порог простоя истёк: таймер допуска обязан проснуться и вытеснить
+        // привязку A, а задаче B — достать воркер. Без `admit()` в `route`
+        // таймер не взведён, тик ничего не будит, задача остаётся в допуске.
+        t.mock.timers.tick(idleEvictionMs - queueWaitWarnMs);
+        assert.equal(pool.stats().evicted, 1, 'простаивающая привязка вытеснена по простою');
+        assert.equal(pool.stats().waitingAdmission, 0, 'очередь допуска разбужена таймером');
+        assert.deepEqual(
+          pool.stats().pinnedNetworks,
+          [other.context.networkId],
+          'воркер выдан сети B',
+        );
+
+        // Исполнение — реальное: таймер задачи не тикаем, ждём ответ воркера.
+        await runB;
+        assert.equal(countByPrefix(other.ndb, 'idle-second'), 1, 'новая сеть записана');
       } finally {
+        // Сначала вернуть настоящие таймеры: `close()` ждёт `exit` воркера с
+        // реальным потолком, а не мок-таймером, который никто не тикает.
+        t.mock.timers.reset();
         await pool.close();
       }
     });
@@ -601,7 +641,7 @@ describe(
       }
     });
 
-    it('поздний коммит после тайм-аута: результат помечается неизвестным', async () => {
+    it('поздний коммит после тайм-аута: результат помечается неизвестным', async (t) => {
       // Задача воркера ЗАСТРЕВАЕТ ПОСРЕДИ ТРАНЗАКЦИИ: соединение главного потока
       // держит разделяемую блокировку чтения, а `COMMIT` воркера не может взять
       // исключительную и ждёт в busy-обработчике. `terminate()` не прерывает
@@ -614,19 +654,52 @@ describe(
       // «чтение → запись» не вызывается), и «зависнуть в транзакции» там нельзя —
       // а именно этот случай и надо воспроизвести. В откатном журнале `COMMIT`
       // ждёт освобождения разделяемой блокировки, что и даёт зависание.
+      //
+      // Синхронизация — по состоянию, не по таймингам (ошибка cc0f69f4). Раньше
+      // тест рассчитывал, что за 1.5 с тайм-аута воркер успеет подняться и войти
+      // в `COMMIT`. Под нагрузкой подъём воркера (tsx-загрузчик, открытие
+      // соединения) и сама запись занимают больше: тайм-аут срабатывал ДО
+      // `COMMIT`, воркер снимался до коммита, позднего коммита не было — тест
+      // падал не по делу. Здесь тайм-аут пула взводится вручную ровно тогда,
+      // когда проба увидела `COMMIT` в полёте.
       ndb.exec('PRAGMA journal_mode = DELETE');
       let readTxn = false;
       ndb.exec('BEGIN');
       readTxn = true;
       ndb.prepare('SELECT COUNT(*) AS n FROM thoughts').get(); // взять разделяемую блокировку
 
+      // Пробное соединение — детектор состояния «воркер в COMMIT». Чтение через
+      // него получает `SQLITE_BUSY` ровно тогда, когда воркер взял PENDING/
+      // EXCLUSIVE (идёт коммит), а на фазе записи RESERVED чтению не мешает.
+      const probe = new DatabaseConstructor(ndb.dbPath);
+      probe.pragma('busy_timeout = 0');
+      const commitInFlight = (): boolean => {
+        try {
+          probe.exec('BEGIN');
+          probe.prepare('SELECT COUNT(*) AS n FROM thoughts').get();
+          probe.exec('ROLLBACK');
+          return false;
+        } catch (err) {
+          try {
+            probe.exec('ROLLBACK');
+          } catch {
+            /* транзакции уже нет */
+          }
+          if ((err as { code?: string }).code !== 'SQLITE_BUSY') throw err;
+          return true;
+        }
+      };
+
+      // Таймер задачи — под управлением теста: `setTimeout` подменён mock-
+      // таймерами node:test, поэтому тайм-аут пула срабатывает ровно в точке
+      // «COMMIT в полёте», а не по настенным часам. `waitFor` ждёт состояние по
+      // реальному времени (см. `realSetTimeout`), тики мока его не двигают.
+      t.mock.timers.enable({ apis: ['setTimeout'] });
       const titles0 = titles('late', BATCH);
-      // Тайм-аут заведомо больше подъёма воркера (иначе он не успеет начать
-      // запись) и заведомо меньше busy_timeout (5 с) — коммит ещё впереди.
       const pool = new WritePool({ size: 1, taskTimeoutMs: 1_500 });
       try {
         let rejected: EtnError | null = null;
-        await pool.run(batchTask(context, titles0)).then(
+        const run = pool.run(batchTask(context, titles0)).then(
           () => {
             throw new Error('задача обязана быть снята по тайм-ауту');
           },
@@ -635,6 +708,16 @@ describe(
             rejected = err;
           },
         );
+        assert.ok(
+          await waitFor(commitInFlight),
+          'воркер дошёл до COMMIT: поздний коммит в полёте (иначе тайм-аут снял бы его раньше)',
+        );
+        // Тайм-аут пула — точно в состоянии «COMMIT ждёт нашу блокировку».
+        t.mock.timers.tick(pool.taskTimeoutMs);
+        // Потолок ожидания `exit` в `terminate()` (TERMINATE_AWAIT_MS, 2 с):
+        // нативный вызов не прерывается, ответ клиенту уходит до позднего коммита.
+        t.mock.timers.tick(2_000);
+        await run;
         assert.match(rejected!.message, /timed out/);
         assert.equal(
           (rejected!.details as { resultUnknown?: boolean }).resultUnknown,
@@ -661,7 +744,11 @@ describe(
             /* транзакции уже нет */
           }
         }
+        // Сначала вернуть настоящие таймеры: `close()` ждёт `exit` воркера с
+        // реальным потолком, а не мок-таймером, который никто не тикает.
+        t.mock.timers.reset();
         await pool.close();
+        probe.close();
       }
 
       // Повтор того же батча дублей не создаёт: гейт дубликатов отвергает его

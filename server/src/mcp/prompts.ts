@@ -6,9 +6,19 @@
  * text prompt describing the workflow in terms of the server's own tools and
  * `etn://` resources, so the host LLM can execute it end-to-end. Prompts are
  * pure text — they perform no data access and need no membership checks.
+ *
+ * Контракт аргументов (ошибка b2223e98): протокол `prompts/get` передаёт
+ * аргументы как `Record<string, string>` — клиентский SDK проверяет их как
+ * словарь строк, серверный парсит zod-схему ИЗ СТРОК. Массив или число в
+ * `argsSchema` недостижимы по проводу ни с клиента, ни с сервера, поэтому
+ * `seed_ids` и `radius` объявлены строками, а разбор (JSON-массив,
+ * разделители, диапазон) делает обработчик. Прямой вызов production-
+ * регистрации в обход провода по-прежнему принимает прежние массив/число —
+ * ради обратной совместимости.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { GetPromptResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
@@ -18,6 +28,170 @@ import { writeBatchHowToText } from './how-to.js';
 /** Wrap prompt text into a single user-role message result. */
 function promptResult(text: string): GetPromptResult {
   return { messages: [{ role: 'user', content: { type: 'text', text } }] };
+}
+
+/** Предел числа ядер подграфа в `etn.generate_report` (было и остаётся 1..20). */
+export const MAX_PROMPT_SEED_IDS = 20;
+
+/** Диапазон `radius` промптов `etn.detect_duplicates` / `etn.generate_report`. */
+export const PROMPT_RADIUS_MIN = 1;
+export const PROMPT_RADIUS_MAX = 5;
+export const PROMPT_RADIUS_DEFAULT = 2;
+
+/**
+ * Ввод `seed_ids`: по протоколу MCP — строка; массив допустим только при
+ * прямом вызове production-регистрации в обход провода (обратная совместимость).
+ */
+export type SeedIdsInput = string | readonly string[];
+
+/** Ошибка валидации аргумента промпта: код `-32602`, сообщение — что не так. */
+function invalidArg(message: string): McpError {
+  return new McpError(ErrorCode.InvalidParams, message);
+}
+
+/**
+ * Разобрать `seed_ids` в список id. Принимает JSON-массив строк
+ * (`["id1","id2"]`), список через запятую/пробелы/переводы строк и смесь
+ * обоих видов в одной строке. Пробелы обрезаются, пустые значения и
+ * дубликаты отбрасываются с сохранением порядка; после разбора — 1..20 id.
+ */
+export function parseSeedIds(input: SeedIdsInput): string[] {
+  if (typeof input !== 'string' && !Array.isArray(input)) {
+    throw invalidArg(`seed_ids: ожидается строка или массив строк, получено ${jsonType(input)}`);
+  }
+  const tokens = typeof input === 'string' ? splitSeedIds(input) : [...input];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, token] of tokens.entries()) {
+    if (typeof token !== 'string') {
+      throw invalidArg(`seed_ids[${index}]: ожидается строковый id, получено ${jsonType(token)}`);
+    }
+    const id = token.trim();
+    if (id === '' || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  if (ids.length === 0) {
+    throw invalidArg('seed_ids: пустой список — передайте хотя бы один id');
+  }
+  if (ids.length > MAX_PROMPT_SEED_IDS) {
+    throw invalidArg(`seed_ids: ${ids.length} id — предел ${MAX_PROMPT_SEED_IDS}`);
+  }
+  return ids;
+}
+
+/**
+ * Разобрать `radius`: целое 1..5. Строка — проводной вид, число — прежний
+ * прямой вызов регистрации; `undefined` — дефолт 2.
+ */
+export function parseRadiusArg(input: string | number | undefined): number {
+  if (input === undefined) return PROMPT_RADIUS_DEFAULT;
+  const range = `${PROMPT_RADIUS_MIN}..${PROMPT_RADIUS_MAX}`;
+  let value: number;
+  if (typeof input === 'number') {
+    value = input;
+  } else if (/^[+-]?\d+$/u.test(input.trim())) {
+    value = Number(input.trim());
+  } else {
+    value = Number.NaN;
+  }
+  if (!Number.isInteger(value)) {
+    throw invalidArg(`radius: ожидается целое число ${range}, получено ${JSON.stringify(input)}`);
+  }
+  if (value < PROMPT_RADIUS_MIN || value > PROMPT_RADIUS_MAX) {
+    throw invalidArg(`radius: ${value} — вне диапазона ${range}`);
+  }
+  return value;
+}
+
+/** Токены `seed_ids`: JSON-массивы разворачиваются, остальное — литеральные id. */
+function splitSeedIds(raw: string): string[] {
+  const tokens: string[] = [];
+  for (const fragment of splitSeedFragments(raw)) {
+    if (!fragment.startsWith('[')) {
+      tokens.push(fragment);
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fragment);
+    } catch (err) {
+      throw invalidArg(
+        `seed_ids: битый JSON-массив «${shorten(fragment)}»: ${(err as Error).message}` +
+          ' — id должны быть строками в двойных кавычках',
+      );
+    }
+    for (const [index, element] of (parsed as unknown[]).entries()) {
+      if (typeof element !== 'string') {
+        throw invalidArg(`seed_ids[${index}]: ожидается строковый id, получено ${jsonType(element)}`);
+      }
+      tokens.push(element);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Фрагменты строки `seed_ids`: разделители — запятая и пробельные символы, но
+ * только ВНЕ JSON-массивов (скобки и кавычки учитываются), поэтому
+ * `[ "id1" , "id2" ] id3` даёт фрагменты `[ "id1" , "id2" ]` и `id3`.
+ */
+function splitSeedFragments(raw: string): string[] {
+  const fragments: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (const char of raw) {
+    if (inString) {
+      current += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      current += char;
+      continue;
+    }
+    if (char === '[') {
+      depth += 1;
+      current += char;
+      continue;
+    }
+    if (char === ']') {
+      depth -= 1;
+      if (depth < 0) throw invalidArg('seed_ids: лишняя закрывающая скобка «]»');
+      current += char;
+      continue;
+    }
+    if (depth === 0 && (char === ',' || /\s/u.test(char))) {
+      if (current.trim() !== '') fragments.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (depth !== 0) throw invalidArg('seed_ids: незакрытый JSON-массив — нет закрывающей «]»');
+  if (inString) throw invalidArg('seed_ids: незакрытая двойная кавычка');
+  if (current.trim() !== '') fragments.push(current.trim());
+  return fragments;
+}
+
+/** Тип значения по-русски — для сообщений о неверном вводе. */
+function jsonType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'массив';
+  if (typeof value === 'number') return 'число';
+  if (typeof value === 'boolean') return 'логическое значение';
+  if (typeof value === 'object') return 'объект';
+  return typeof value;
+}
+
+/** Укоротить фрагмент ввода для сообщения об ошибке. */
+function shorten(text: string): string {
+  return text.length > 60 ? `${text.slice(0, 57)}…` : text;
 }
 
 /**
@@ -96,11 +270,14 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       argsSchema: {
         network_id: z.string().min(1),
         seed_thought_id: z.string().min(1),
-        radius: z.number().int().min(1).max(5).optional(),
+        radius: z
+          .string()
+          .optional()
+          .describe('радиус подграфа: целое число 1..5 строкой (по умолчанию 2)'),
       },
     },
     (args) => {
-      const radius = args.radius ?? 2;
+      const radius = parseRadiusArg(args.radius);
       return promptResult(
         [
           `Найди кандидатов на слияние (дубликаты) в подграфе сети ETN.`,
@@ -126,18 +303,26 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       argsSchema: {
         network_id: z.string().min(1),
         topic: z.string().min(1),
-        seed_ids: z.array(z.string().min(1)).min(1).max(20),
-        radius: z.number().int().min(1).max(5).optional(),
+        seed_ids: z
+          .string()
+          .describe(
+            'id ядер подграфа строкой: JSON-массив (["id1","id2"]) или список через запятую/пробелы; 1..20',
+          ),
+        radius: z
+          .string()
+          .optional()
+          .describe('радиус подграфа: целое число 1..5 строкой (по умолчанию 2)'),
       },
     },
     (args) => {
-      const radius = args.radius ?? 2;
+      const radius = parseRadiusArg(args.radius);
+      const seedIds = parseSeedIds(args.seed_ids);
       return promptResult(
         [
           `Собери Markdown-отчёт по теме «${args.topic}» на основе данных сети ETN.`,
           ``,
           `Сделай следующее:`,
-          `1. Собери контекст: \`etn.thoughts.subgraph\` с seed_ids=[${args.seed_ids
+          `1. Собери контекст: \`etn.thoughts.subgraph\` с seed_ids=[${seedIds
             .map((id) => JSON.stringify(id))
             .join(', ')}], radius=${radius}, include_comments=true.`,
           `2. При необходимости дополни контекст поиском \`etn.thoughts.search\` и ресурсами типов: \`etn://networks/${args.network_id}/thought-types\`, \`etn://networks/${args.network_id}/link-types\`.`,
@@ -159,7 +344,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_merge_partial',
     {
-      title: 'Как делать частичное слияние слоя (etn.layers.merge с tables)',
+      title: 'Как делать частичное слияние слоя (etn.ops, action layers.merge)',
       description:
         'Пошаговая инструкция: замкнутость выборки tables, конфликты base_version, reserve-слой для отката.',
       argsSchema: {
@@ -171,12 +356,12 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       const layerRef = args.layer_id ?? '<layer_id>';
       return promptResult(
         [
-          `Как слить слой в родителя целиком или частично (etn.layers.merge, сеть ${args.network_id}).`,
+          `Как слить слой в родителя целиком или частично (\`etn.ops { action: "layers.merge" }\`, сеть ${args.network_id}).`,
           ``,
           `1. Осмотрись: \`etn.layers.list\` — возьми layer_id и убедись, что у слоя есть родитель (основу и служебные слои слить нельзя).`,
-          `2. Посмотри, что в слое: \`etn.layers.diff { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} }\` — структурная разница (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — физические строки слоя). Текстовую разницу даст \`etn.layers.diff_doc\` — используй обе.`,
-          `3. Полное слияние: \`etn.layers.merge { network_id, layer_id }\` — без tables переносятся все изменения слоя.`,
-          `4. Частичное слияние: добавь \`tables: { "<таблица>": ["<id строк>"] }\`. Таблицы ветвимы: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Ключи — ЛОГИЧЕСКИЕ id строк (те же, что в diff.override и в обычных инструментах).`,
+          `2. Посмотри, что в слое: \`etn.ops { action: "layers.diff", params: { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} } }\` — структурная разница (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — физические строки слоя). Текстовую разницу даст \`etn.ops { action: "layers.diff_doc", params: { network_id, layer_id } }\` — используй обе.`,
+          `3. Полное слияние: \`etn.ops { action: "layers.merge", params: { network_id, layer_id }, confirm: true }\` — без tables переносятся все изменения слоя.`,
+          `4. Частичное слияние: добавь в params \`tables: { "<таблица>": ["<id строк>"] }\`. Таблицы ветвимы: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Ключи — ЛОГИЧЕСКИЕ id строк (те же, что в diff.override и в обычных инструментах).`,
           ``,
           `Замкнутость (missing_closure): если выбранная строка ссылается на другую строку (связь — на мысль, комментарий — на владельца и т.п.), ссылка должна быть либо тоже выбрана, либо уже существовать в родителе. Ошибка перечисляет недостающие ссылки в details.missing_closure — добавь их в tables и повтори.`,
           ``,
@@ -184,7 +369,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           ``,
           `Reserve-слой: если слияние что-то перезаписывает или удаляет, сервер автоматически создаёт служебный резервный слой с состоянием до слияния (reserve_layer_id в ответе). Откат ручной: скопируй нужное из резерва, затем удали резерв. Вставки-only слияние резерва не создаёт.`,
           `Успешный ответ: { applied, skipped, reorder_collapsed, reserve_layer_id, purged }. skipped — связи, чей конец исчез физически (§6.4): слияние всё равно успешно.`,
-          `После слияния проверь остаток: повторный \`etn.layers.diff\` покажет, что ещё не слито; пустой слой можно удалить \`etn.layers.delete\`.`,
+          `После слияния проверь остаток: повторный \`etn.ops { action: "layers.diff" }\` покажет, что ещё не слито; пустой слой можно удалить \`etn.ops { action: "layers.delete", params: { network_id, layer_id }, confirm: true }\`.`,
         ].join('\n'),
       );
     },
@@ -193,7 +378,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_purge',
     {
-      title: 'Как удалять двухфазно (trash → deletion_check → purge)',
+      title: 'Как удалять двухфазно (trash → проверка блокировок → purge)',
       description:
         'Пошаговая инструкция двухфазного удаления: пометка в корзину, проверка блокировок, физическая чистка.',
       argsSchema: {
@@ -207,7 +392,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           ``,
           `Фаза 1 — пометка (обратима):`,
           `1. \`etn.ops { action: "thoughts.trash", params: { network_id, thought_id, trashed: true } }\` — мысль уходит в корзину, исчезая из обычных выборок, но физически остаётся. Вернуть: тот же action с \`trashed: false\`.`,
-          `2. Посмотри корзину целиком: \`etn.ops { action: "trash.list", params: { network_id } }\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельных вызовов deletion_check.`,
+          `2. Посмотри корзину целиком: \`etn.ops { action: "trash.list", params: { network_id } }\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельной проверки блокировок.`,
           ``,
           `Что блокирует физическое удаление:`,
           `- использование мысли как цели свойства-связи другой мысли (снять: \`etn.ops { action: "usage_clear", params: { network_id, thought_id } }\` или убрать связь у владельца);`,

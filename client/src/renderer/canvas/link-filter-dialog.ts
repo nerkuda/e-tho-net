@@ -135,7 +135,7 @@ async function applyFilter(networkId: string, checked: ReadonlySet<string>): Pro
   // is rejected by the server as an invalid `link_filter` (see requirement
   // «Дефолт и хранение фильтра типов связей на карте»).
   if (checked.size === 0) {
-    notice('Оставьте хотя бы один тип связи.', 'error');
+    notice('Оставьте хотя бы один тип связи.');
     return;
   }
   const includeStructural = checked.has(STRUCTURAL_ROW_ID);

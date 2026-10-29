@@ -109,7 +109,14 @@ export interface MdEditor {
   /** The editor's DOM node (paste listener target). */
   readonly dom: HTMLElement;
   getValue(): string;
-  setValue(md: string): void;
+  /**
+   * Replaces the document. `silent` suppresses the owner's `onInput`: the new
+   * text came from the server or from a rollback, NOT from the user, so it must
+   * not be mirrored into a draft (ошибка 5726744b — the Esc rollback used to
+   * schedule a «dead» draft of the saved text that resurfaced later as a
+   * `comment version mismatch`).
+   */
+  setValue(md: string, silent?: boolean): void;
   /** Inserts markdown at the caret (newline-separated when mid-line). */
   insertAtCaret(text: string): void;
   /**
@@ -478,12 +485,21 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
   const listeners = new Set<() => void>();
   /** Редактор уничтожен (например, поле вышло из правки) — правки игнорируем. */
   let alive = true;
+  // Программная замена документа (серверный текст, откат по Esc) не должна
+  // выглядеть как набор пользователя и попадать в черновики (ошибка 5726744b).
+  let suppressInput = false;
+  const guardedCb: MdEditorCallbacks = {
+    ...cb,
+    onInput: (md) => {
+      if (!suppressInput) cb.onInput?.(md);
+    },
+  };
   const view = new EditorView({
     state: EditorState.create({
       doc: initial,
       // Стек расширений общий для поля-контейнера и вложенных редакторов;
       // каждый инстанс получает СВОЙ вызов (по-инстансные кэши расширений).
-      extensions: mdEditorExtensions(cb, listeners),
+      extensions: mdEditorExtensions(guardedCb, listeners),
     }),
   });
 
@@ -494,12 +510,17 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
   return {
     dom: view.dom,
     getValue: () => view.state.doc.toString(),
-    setValue: (md: string) => {
+    setValue: (md: string, silent = false) => {
       const len = view.state.doc.length;
-      view.dispatch({
-        changes: { from: 0, to: len, insert: md },
-        selection: { anchor: Math.min(view.state.selection.main.head, md.length) },
-      });
+      suppressInput = silent;
+      try {
+        view.dispatch({
+          changes: { from: 0, to: len, insert: md },
+          selection: { anchor: Math.min(view.state.selection.main.head, md.length) },
+        });
+      } finally {
+        suppressInput = false;
+      }
     },
     insertAtCaret: (text: string) => {
       const { state } = view;

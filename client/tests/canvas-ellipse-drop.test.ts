@@ -121,6 +121,8 @@ describe('эллипсы холста несут мысль и имя своей
   it('openAddDialog прокидывает имя якоря в диалог, не теряя его', () => {
     const src = readText(ADD_DIALOG_TS);
     assert.match(src, /anchorTitle\?: string;/);
-    assert.match(src, /anchorTitle: ctx\.anchorTitle,/);
+    // Имя доезжает до `pickThoughtsDialog` в любом виде: переданное
+    // вызывающим либо прочитанное по id якоря (89964a9b, без отката на фокус).
+    assert.match(src, /anchorTitle,/);
   });
 });

@@ -1,0 +1,66 @@
+{
+  "name": "da7bbb53-clear-row",
+  "description": "Ошибка da7bbb53, круги 4–5: КРАСНЫЙ GUI-гейт «Очистить» через меню строки при придержанном ответе properties.get (обратный порядок ответов). Фикстура --scenario-seed ui-probe.ddcb8e84-p1p2p1-seed.mjs готовит P1 (Tags='срочно', Outside='старое') и P2 ('Person 2 ddcb8e84', Tags='прочее', Outside='второе'). Фаза 1 — открыть P2 и «Свойства», дождаться её значений. Фаза 2 — открыть P1: перепривязка панели запускает чтение P1, ответ properties.get придержан 5 с (--delay-seed-response-rule '5000:thoughts/{{thoughtId}}/properties' --delay-seed-response-limit 1) — на экране ещё строки P2. Придержано РОВНО одно чтение: типовое и внетиповое чтения идут одним URL и склеиваются дедупом RestClient в один GET; при limit 2 в слот попадало свежее чтение после мутации, его пустой ответ приходил позже придержанного снимка и перекрывал воскрешение — гейт вырождался в вакуумный (проверено, 27/27 на дофиксовой сборке в круге 4). Фаза 3 — ПКМ по ячейке имени «Tags-ddcb8e84» и «Очистить»: действие берёт ЖИВОГО владельца панели (P1), поэтому удаляется значение P1, хотя на экране ещё строки P2. Ожидание: пустые чипы Tags (не 'срочно' и не 'прочее'), Outside='старое'; придержанный снимок P1 ('срочно'), доехавший последним, не воскрешает значение; на сервере Tags отсутствует. ГЕЙТ ДЕРЖИТСЯ НА ДВУХ ФЛАГАХ: (1) --mute-ws-event property-value.deleted — стенд подавляет realtime-эхо своей мутации, иначе эхо двигает поколение чтения и маскирует гонку (без него 27/27 зелёных на дефекте); (2) --delay-seed-response-limit 1 — придержано ровно одно ДО-мутационное чтение (без него/при limit 2 придерживается свежее чтение после мутации, и гейт вакуумный). Флаг --delay-seed-response-method GET НЕ обязателен: при limit 1 слот задержки занят первым GET, ответ DELETE не задерживается; без method-флага гейт остаётся красным на 3a4ccdc4 (проверено 2/2 в круге 4). Он лишь страхует от задержки DELETE при ином limit/порядке запросов. На дофиксовой сборке 3a4ccdc4 (своя мутация строки поколение не двигает) придержанный снимок воскрешает 'срочно': panel-after-stale красный — «срочно / старое» вместо « / старое» (3/3 прогона; после первого падения прогон останавливается, chips-stay-empty не исполняется); на исправленной c987786e — 27/27 зелёные. ВРЕМЯ — ПО УСЛОВИЯМ: фиксированных пауз нет. Шаг retarget-reads-in-flight и защита в начале clear-tags-menu проверяют, что панель ещё показывает значения P2 ('прочее / второе') при открытом P1 — это признак, что придержанный ответ P1 ЕЩЁ НЕ ДОСТАВЛЕН (5-секундное окно); при ином состоянии шаг падает 'not-in-flight', а не кликает вслепую. clear-tags-menu запоминает window.__clearAt. Шаг stale-window-closed опрашивает чипы и возвращает 'ghost', как только воскрешение появилось (на дефекте — сразу), иначе 'quiet' по достижении __clearAt + 6500 мс: это ВЕРХНЯЯ ГРАНИЦА правила задержки 5000 мс + 1,5 с запаса, а не пауза «на успевание»; доказать ОТСУТСТВИЕ воскрешения иначе нельзя, а запас страхует от медленного ответа сервера (реестр стенда проверяет, что правило задержки сработало). Глушится только WS-кадр с этим типом события; HTTP-задержки и прочие realtime-события не тронуты. Запуск (method-флаг — страховка, не обязателен): node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.da7bbb53-clear-row.scenario.json --scenario-seed client/scripts/ui-probe.ddcb8e84-p1p2p1-seed.mjs --delay-seed-response-rule '5000:thoughts/{{thoughtId}}/properties' --delay-seed-response-method GET --delay-seed-response-limit 1 --mute-ws-event property-value.deleted --out .tmp/etn-da7bbb53-r5/clear-row",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+
+    {
+      "name": "clouds-both",
+      "waitFor": "(() => { const p1=document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); const p2=[...document.querySelectorAll('.cloud')].find((n)=>n.textContent.includes('Person 2 ddcb8e84')); if(!p1 || !p2) return false; window.__p2=p2.getAttribute('data-id'); return typeof window.__p2 === 'string' && window.__p2 !== ''; })()",
+      "timeout": 20000
+    },
+
+    { "name": "open-p2", "probe": "(() => { const c=document.querySelector('.cloud[data-id=\"'+window.__p2+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "p2-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Person 2 ddcb8e84'", "timeout": 20000 },
+    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    {
+      "name": "p2-panel-settled",
+      "waitFor": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); return chips.includes('прочее') && ext !== null && ext.value === 'второе'; })()",
+      "timeout": 20000
+    },
+
+    { "name": "open-p1", "probe": "(() => { const c=document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "p1-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Проба стенда'", "timeout": 20000 },
+    {
+      "name": "retarget-reads-in-flight",
+      "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); const state=chips.join('|') + ' / ' + (ext ? ext.value : 'null'); return state === 'прочее / второе' ? 'in-flight' : 'applied: ' + state; })()",
+      "expect": "in-flight"
+    },
+
+    {
+      "name": "clear-tags-menu",
+      "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); const state=chips.join('|') + ' / ' + (ext ? ext.value : 'null'); if (state !== 'прочее / второе') return 'not-in-flight: ' + state; window.__clearAt=Date.now(); const cell=[...document.querySelectorAll('.properties-type-body .prop-name-cell')].find((n)=>n.textContent.includes('Tags-ddcb8e84')); if(!cell) return 'no-cell'; cell.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 })); const item=[...document.querySelectorAll('.menu-item')].find((n)=>n.textContent.trim() === 'Очистить'); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    { "name": "typed-chips-empty", "waitFor": "document.querySelectorAll('.properties-type-body .value-chips-field .prc-title').length === 0", "timeout": 20000 },
+    { "name": "outside-staroje", "waitFor": "(() => { const i=document.querySelector('.properties-outside-body input.prop-editor'); return i !== null && i.value === 'старое'; })()", "timeout": 20000 },
+    { "name": "tags-row-still-present", "waitFor": "[...document.querySelectorAll('.properties-type-body .prop-name-cell')].some((n)=>n.textContent.includes('Tags-ddcb8e84'))", "timeout": 20000 },
+    {
+      "name": "server-after-clear",
+      "api": { "name": "server-after-clear", "method": "GET", "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties", "expression": "(() => { const tags=data.find((v)=>v.property_name==='Tags-ddcb8e84'); const ext=data.find((v)=>v.property_name==='Outside-ddcb8e84'); return (tags ? 'present' : 'absent') + ' / ' + (ext ? ext.value : 'null'); })()" },
+      "expect": "absent / старое"
+    },
+    { "name": "panel-before-stale", "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); return chips.join('|') + ' / ' + (ext ? ext.value : 'null'); })()", "expect": " / старое" },
+    {
+      "name": "stale-window-closed",
+      "probe": "(async () => { const t0=window.__clearAt || Date.now(); const deadline=t0+6500; const chips=()=>[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); for (;;) { if (chips().includes('срочно')) return 'ghost'; if (Date.now() >= deadline) return 'quiet'; await new Promise((r)=>setTimeout(r,50)); } })()",
+      "timeout": 15000
+    },
+    { "name": "panel-after-stale", "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); return chips.join('|') + ' / ' + (ext ? ext.value : 'null'); })()", "expect": " / старое" },
+    { "name": "chips-stay-empty", "waitFor": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); return chips.length === 0; })()", "timeout": 20000 },
+    { "name": "outside-stays-staroje", "waitFor": "(() => { const i=document.querySelector('.properties-outside-body input.prop-editor'); return i !== null && i.value === 'старое'; })()", "timeout": 20000 },
+    {
+      "name": "server-still-clear",
+      "api": { "name": "server-still-clear", "method": "GET", "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties", "expression": "(() => { const tags=data.find((v)=>v.property_name==='Tags-ddcb8e84'); return tags ? 'present' : 'absent'; })()" },
+      "expect": "absent"
+    }
+  ]
+}

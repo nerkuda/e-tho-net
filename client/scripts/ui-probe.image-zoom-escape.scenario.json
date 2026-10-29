@@ -1,0 +1,94 @@
+{
+  "name": "image-zoom-escape-over-dirty-dialog",
+  "description": "Лупа изображения (lib/image-zoom.ts) — всплывающий слой поверх «грязного» диалога (ошибка 9ff6b606, замечание приёмки). В открытый диалог внетипового отбора добавляется условие (диалог «грязный») и картинка; Ctrl+наведение показывает лупу, Escape обязан закрыть ТОЛЬКО лупу — диалог остаётся один, подтверждения нет; следующее Escape зовёт подтверждение уже у диалога. Кнопки группы фильтров («+ условие») видны и кликабельны только при наведении на группу, поэтому перед кликом — hover группы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.image-zoom-escape.scenario.json.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "focus-cloud",
+      "click": { "selector": "[data-id=\"{{thoughtId}}\"].cloud", "count": 2 }
+    },
+    {
+      "name": "filter-strip-visible",
+      "waitFor": "(() => { const b = document.querySelector('.canvas-filter-strip-add'); return b !== null && !b.closest('.canvas-filter-strip').classList.contains('hidden'); })()"
+    },
+    { "name": "open-view-dialog", "click": ".canvas-filter-strip-add" },
+    {
+      "name": "view-dialog-open",
+      "waitFor": "document.querySelector('.view-editor-dialog .ft-add-condition') !== null && document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "reveal-group-actions",
+      "hover": { "selector": ".view-editor-dialog .ft-group[data-path=\"\"]", "at": [4, 4] }
+    },
+    { "name": "add-condition", "click": ".view-editor-dialog .ft-add-condition" },
+    {
+      "name": "dialog-dirty",
+      "waitFor": "document.querySelector('.view-editor-dialog .ft-row__what') !== null"
+    },
+    {
+      "name": "inject-image",
+      "eval": "(() => { const old=document.getElementById('zz-zoom-probe'); if (old) old.remove(); const img=document.createElement('img'); img.id='zz-zoom-probe'; img.style.cssText='position:fixed;left:20px;top:20px;width:40px;height:40px;z-index:99999'; img.src=\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%2300aa00'/%3E%3C/svg%3E\"; document.body.append(img); return true; })()"
+    },
+    {
+      "name": "image-loaded",
+      "waitFor": "(() => { const i=document.getElementById('zz-zoom-probe'); return i !== null && i.naturalWidth === 200 && i.width === 40; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "ctrl-hover",
+      "eval": "(() => { const i=document.getElementById('zz-zoom-probe'); i.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true })); return true; })()"
+    },
+    {
+      "name": "magnifier-visible",
+      "waitFor": "(() => { const p=document.querySelector('.image-zoom-popup'); return p !== null && !p.classList.contains('hidden'); })()",
+      "timeout": 15000
+    },
+    {
+      "name": "magnifier-before-escape",
+      "probe": "(() => { const p=document.querySelector('.image-zoom-popup'); return p !== null && !p.classList.contains('hidden'); })()",
+      "expect": true
+    },
+    { "name": "escape-first", "key": "Escape" },
+    {
+      "name": "magnifier-closed",
+      "waitFor": "document.querySelector('.image-zoom-popup')?.classList.contains('hidden') === true"
+    },
+    {
+      "name": "only-one-dialog",
+      "probe": "document.querySelectorAll('.dialog-box').length",
+      "expect": 1
+    },
+    {
+      "name": "no-confirmation",
+      "probe": "document.body.textContent.includes('Данные изменены. Сохранить изменения?')",
+      "expect": false
+    },
+    {
+      "name": "cleanup-image",
+      "eval": "document.getElementById('zz-zoom-probe')?.remove() ?? true"
+    },
+    { "name": "escape-second", "key": "Escape" },
+    {
+      "name": "confirmation-open",
+      "waitFor": "document.querySelectorAll('.dialog-box').length === 2 && document.body.textContent.includes('Данные изменены. Сохранить изменения?')"
+    }
+  ]
+}

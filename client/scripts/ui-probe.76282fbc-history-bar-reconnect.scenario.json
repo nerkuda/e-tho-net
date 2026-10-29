@@ -1,0 +1,174 @@
+{
+  "name": "history-bar-reconnect-76282fbc",
+  "description": "Ключевой пользовательский сценарий ошибки 76282fbc: при запуске клиента соединение сначала НЕ устанавливается (первая попытка уходит на закрытый порт — «проблема с установкой соединения»), затем разрешается подключением к рабочему серверу стенда. Полоса истории при этом остаётся пустой; уже ПОСЛЕ открытия сети сценарий воспроизводит саму механику дефекта: связь обрывается, в локальную историю вкладки попадает мысль, которой на полосе ещё не было (кэш-холодный id), а затем связь восстанавливается. На дофиксовом коде полоса не перечитывает историю после обрыва (подпись входов без rt-статуса снята до чтения) и продолжает оставаться без этой мысли; исправленная полоса после восстановления связи показывает её заголовок — без перезапуска клиента. Шаги «before» фиксируют, что до восстановления связи заголовка на полосе нет; шаг «history-bar-recovers» ждёт его появления. Самодостаточно: подстановки {{…}} даёт стенд (node client/scripts/ui-probe-stand.mjs --scenario <этот файл>).",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-dead-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "inject-dead-url",
+      "text": "http://127.0.0.1:9"
+    },
+    {
+      "name": "fill-first-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "first-api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect-to-dead-server",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "startup-connection-failed",
+      "waitFor": "document.querySelector('.onboarding-card .error-text')?.textContent?.trim().length > 0",
+      "timeout": 30000
+    },
+    {
+      "name": "startup-failure-text",
+      "probe": "document.querySelector('.onboarding-card .error-text')?.textContent?.trim() ?? null"
+    },
+    {
+      "name": "replace-with-real-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "select-url",
+      "key": "a",
+      "modifiers": [
+        "ctrl"
+      ]
+    },
+    {
+      "name": "real-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "url-value",
+      "probe": "document.querySelector(\"input[placeholder^='http']\")?.value ?? null",
+      "expect": "{{serverUrl}}"
+    },
+    {
+      "name": "replace-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "select-key",
+      "key": "a",
+      "modifiers": [
+        "ctrl"
+      ]
+    },
+    {
+      "name": "real-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect-after-recovery",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0",
+      "timeout": 30000
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace",
+      "waitFor": "document.querySelector('.history-bar') !== null"
+    },
+    {
+      "name": "clouds-ready",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "history-bar-before-text",
+      "probe": "document.querySelector('.history-bar')?.textContent ?? null"
+    },
+    {
+      "name": "history-chips-before-outage",
+      "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
+    },
+    {
+      "name": "break-connection-and-seed-history",
+      "timeout": 30000,
+      "eval": "(async () => { const profiles = await window.etn.server.listProfiles(); const profile = profiles.find((item) => item.isActive) ?? profiles[0]; if (profile === undefined) throw new Error('нет сохранённого профиля сервера'); const tab = document.querySelector('.tab.tab-active[data-tab-id]') ?? document.querySelector('.tab[data-tab-id]'); const tabId = tab?.dataset?.tabId ?? null; if (tabId === null) throw new Error('нет активной вкладки'); await window.etn.server.disconnect(); await window.etn.history.push(profile.id, '{{networkId}}', tabId, '{{thoughtId}}'); document.body.dataset['coldThoughtId'] = '{{thoughtId}}'; return true; })()"
+    },
+    {
+      "name": "connection-is-down",
+      "waitFor": "window.etn.server.getStatus().then((status) => status !== 'connected')",
+      "timeout": 30000
+    },
+    {
+      "name": "history-bar-no-seed-title-before-reconnect",
+      "probe": "document.querySelector('.history-bar')?.textContent?.includes('{{seedTitle}}') === true",
+      "expect": false
+    },
+    {
+      "name": "history-bar-before-reconnect-text",
+      "probe": "document.querySelector('.history-bar')?.textContent ?? null"
+    },
+    {
+      "name": "history-chips-before-reconnect",
+      "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
+    },
+    {
+      "name": "restore-connection",
+      "timeout": 30000,
+      "eval": "(async () => { const profiles = await window.etn.server.listProfiles(); const profile = profiles.find((item) => item.isActive) ?? profiles[0]; if (profile === undefined) throw new Error('нет сохранённого профиля сервера'); await window.etn.server.connect(profile.id); await window.etn.networks.open('{{networkId}}'); return true; })()"
+    },
+    {
+      "name": "connection-restored",
+      "waitFor": "window.etn.server.getStatus().then((status) => status === 'connected')",
+      "timeout": 30000
+    },
+    {
+      "name": "history-bar-recovers",
+      "waitFor": "document.querySelector('.history-bar')?.textContent?.includes('{{seedTitle}}') === true",
+      "timeout": 30000
+    },
+    {
+      "name": "history-chips-after-reconnect",
+      "probe": "document.querySelectorAll('.history-bar .history-cloud').length"
+    },
+    {
+      "name": "history-bar-after-reconnect-text",
+      "probe": "document.querySelector('.history-bar')?.textContent ?? null"
+    },
+    {
+      "name": "seed-title-in-bar",
+      "probe": "document.querySelector(\".history-bar\")?.textContent?.includes(\"{{seedTitle}}\") === true",
+      "expect": true
+    },
+    {
+      "name": "history-bar-painted",
+      "assert": {
+        "name": "history-bar-painted",
+        "region": ".history-bar",
+        "checks": [
+          {
+            "kind": "notBlank",
+            "minRatio": 0.02
+          },
+          {
+            "kind": "distinct",
+            "minColors": 3
+          }
+        ],
+        "evidence": false
+      }
+    }
+  ]
+}

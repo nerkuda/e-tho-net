@@ -29,6 +29,7 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createSecondNetwork,
   nativeAvailable,
   toolJson,
   toolText,
@@ -47,7 +48,10 @@ async function buildPair(): Promise<{
   closeAll(): Promise<void>;
 }> {
   const src = await buildMcpContext();
-  const dst = await buildMcpContext();
+  // Один мир на пару: источник и получатель в общем `systemDb`/`dataDir`
+  // (production-модель). Разные миры дали бы NOT_FOUND на существующем
+  // источнике после проверки доступа к нему (ошибка 6613839f).
+  const dst = await createSecondNetwork(src);
   const handle = await connectMcpClient(dst, dst.adminKey);
   return {
     src,
@@ -55,7 +59,8 @@ async function buildPair(): Promise<{
     handle,
     async closeAll() {
       await handle.close();
-      await closeMcpContext(dst);
+      // `dst` делит `sys`/`dataDir` с `src` — чистит мир `closeMcpContext(src)`.
+      await closeMcpContext(dst, { systemDb: src.sys, dataDir: src.dataDir });
       await closeMcpContext(src);
     },
   };

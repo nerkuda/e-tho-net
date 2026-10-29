@@ -19,7 +19,7 @@ import {
   type ThoughtQueryRequest as CanonicalQueryRequest,
   type ThoughtQueryResult,
 } from '../src/domain/query-service.js';
-import { EtnError, type ThoughtQueryRequest, typeNameKey } from '@etn/shared';
+import { EtnError, FILTER_AST_VERSION, type FilterAstNode, type ThoughtQueryRequest, typeNameKey } from '@etn/shared';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -360,6 +360,25 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     const contains = run(ndb, { properties: [{ property_id: statusDef, operator: 'contains', value: 'clos' }] });
     assert.deepEqual(contains.hits.map((h) => h.title), ['Задача 2']);
 
+    // `contains` — только строка (ошибка 9420a34c). Движок — вторая линия
+    // после фасадов: прямой вызов (AST-лист, домен) тоже не stringify-ит
+    // массив через запятую, а даёт явную VALIDATION_ERROR с теми же details.
+    for (const bad of [['alpha'], ['al', 'pha'], 5] as const) {
+      assert.throws(
+        () =>
+          run(ndb, {
+            properties: [
+              { property_id: statusDef, operator: 'contains', value: bad as string | number | string[] },
+            ],
+          }),
+        (e: unknown) =>
+          e instanceof EtnError &&
+          e.code === 'VALIDATION_ERROR' &&
+          (e.details as { operator?: string }).operator === 'contains',
+        `contains ${JSON.stringify(bad)} обязан падать в движке`,
+      );
+    }
+
     const undone = run(ndb, { properties: [{ property_id: doneDef, operator: 'eq', value: false }] });
     assert.deepEqual(undone.hits.map((h) => h.title), ['Задача 1']);
 
@@ -381,6 +400,65 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
       properties: [{ property_id: priorityDef, operator: 'lt', value: 5 }],
     });
     assert.deepEqual(combined.hits.map((h) => h.title), ['Задача 1']);
+  });
+
+  it('AST not_contains с не-строкой: details.operator = "not_contains" (9420a34c)', () => {
+    const ndb = createInMemoryNetworkDb();
+    const statusDef = seedPropertyDefinition(ndb, 'status', 'text');
+    const open = seedThought(ndb, 'Задача 1');
+    seedPropertyValue(ndb, open, statusDef, 'text', 'open');
+
+    // `not_contains` исполняется как отрицание `contains`, но диагностика
+    // обязана называть ФАКТИЧЕСКИЙ оператор: проверка формы value стоит до
+    // делегата (замечание верификатора круга 2). До правки `String(value)`
+    // молча склеивал массив, а `details.operator` был "contains".
+    const astLeaf = (value?: unknown): CanonicalQueryRequest => ({
+      sort: 'alpha',
+      order: 'asc',
+      limit: 50,
+      offset: 0,
+      count: true,
+      ast: {
+        version: FILTER_AST_VERSION,
+        filter: {
+          entity: { kind: 'property', property_id: statusDef },
+          operator: 'not_contains',
+          // Отсутствие ключа — отдельная форма от `value: null`.
+          ...(value === undefined ? {} : { value }),
+        } as FilterAstNode,
+      },
+    });
+    for (const bad of [['alpha'], ['al', 'pha'], [], 5, true, null] as const) {
+      assert.throws(
+        () => queryThoughts(ndb, 'u', astLeaf(bad), { emptyFilterMode: 'all', maxLimit: 100 }),
+        (e: unknown) =>
+          e instanceof EtnError &&
+          e.code === 'VALIDATION_ERROR' &&
+          (e.details as { operator?: string }).operator === 'not_contains',
+        `AST not_contains ${JSON.stringify(bad)}: details.operator обязан быть "not_contains"`,
+      );
+    }
+
+    // Отсутствие `value` — тоже не-строка: проверка формы стоит ДО делегата
+    // `contains`, поэтому диагностика называет фактический оператор (в
+    // фасадах `value` обязателен для сравнений, но движок страхует прямых
+    // вызывающих — AST-лист приходит без `value`).
+    assert.throws(
+      () => queryThoughts(ndb, 'u', astLeaf(), { emptyFilterMode: 'all', maxLimit: 100 }),
+      (e: unknown) =>
+        e instanceof EtnError &&
+        e.code === 'VALIDATION_ERROR' &&
+        (e.details as { operator?: string }).operator === 'not_contains',
+      'AST not_contains без value: details.operator обязан быть "not_contains"',
+    );
+
+    // Штатный `not_contains` строкой продолжает работать: «Задача 1» (open)
+    // не содержит «clos».
+    const hits = queryThoughts(ndb, 'u', astLeaf('clos'), {
+      emptyFilterMode: 'all',
+      maxLimit: 100,
+    });
+    assert.deepEqual(hits.items.map((t) => t.title), ['Задача 1']);
   });
 
   it('a property condition addressed by registry NAME equals the same addressed by property_id (ошибка 090d0242, 0.12.1)', () => {

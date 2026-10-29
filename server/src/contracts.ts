@@ -41,6 +41,9 @@ import {
   EXPORT_FORMATS,
   EtnError,
   ETNX_SUBTREE_DEPTH_MAX,
+  FLAT_PROPERTY_CONTAINS_VALUE_DETAILS,
+  FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+  FLAT_PROPERTY_OPS,
   SORT_KINDS,
   STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_SORTS,
@@ -51,6 +54,7 @@ import {
   LAYER_DIFF_MAX_LIMIT,
   LAYER_DIFF_SECTIONS,
   LAYER_THOUGHT_MERGE_MODES,
+  LINK_PROPERTY_SIDES,
   LINK_STYLES,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
@@ -69,6 +73,7 @@ import {
   TYPE_OWNER_TYPES,
   type EtnErrorCode,
   type CommentOwnerType,
+  type DuplicateSearchMode,
   type FocusDir,
   type FocusNeighbor,
   type LinkTypeFilterInput,
@@ -252,6 +257,9 @@ export interface ZodIssueLike {
   values?: unknown[];
   keys?: unknown[];
   errors?: Array<Array<ZodIssueLike>>;
+  /** Произвольные детали custom-issue (zod 4 `ctx.addIssue({ params })`).
+   *  Переносятся в `details` ошибки — так MCP и REST отвечают одинаково. */
+  params?: Record<string, unknown>;
   message: string;
 }
 
@@ -593,7 +601,8 @@ export function parseRest<S extends z.ZodObject>(
   if (!res.success) {
     const issue = firstIssue(res.error);
     if (issue.code === 'custom') {
-      throw new EtnError('VALIDATION_ERROR', issue.message, undefined, requestId);
+      // Симметрично MCP: `params` custom-issue уходят в `details`.
+      throw new EtnError('VALIDATION_ERROR', issue.message, issue.params, requestId);
     }
     const fieldKey = issueKey('', issue);
     const spec = contract.rest[fieldKey];
@@ -620,7 +629,11 @@ export function mcpValidationError(contract: OperationContract, args: unknown): 
   }
   const issue = firstIssue(res.error);
   if (issue.code === 'custom') {
-    return new EtnError('VALIDATION_ERROR', issue.message);
+    // `params` custom-issue (zod 4) — машинные детали правила; их же отдаёт
+    // REST-парсер в `details` (например, форма `value` у `contains`,
+    // ошибка 9420a34c). Без переноса MCP терял бы `details`, и паритет
+    // фасадов ломался бы на тексте, а не на контракте.
+    return new EtnError('VALIDATION_ERROR', issue.message, issue.params);
   }
   const fieldKey = issueKey('', issue);
   const spec = contract.rest[fieldKey];
@@ -982,23 +995,55 @@ export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields
 /** Допустимые поля одного условия отбора по свойству (контракт `etn.thoughts.query`). */
 const QUERY_PROPERTY_CONDITION_KEYS = ['property_id', 'property', 'operator', 'value'] as const;
 
+/**
+ * Строгая форма `value` для операторов, которым значение НУЖНО (всё, кроме
+ * пары наличия) — по ней идёт refine ниже.
+ */
+const QUERY_PROPERTY_VALUE = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string().min(1)).min(1),
+]);
+
+/**
+ * Полная форма `value` для `inputSchema` (стандарт 75f38020 §2: схема —
+ * контракт вызова, ради бюджета не урезается; замечание верификатора круга 3
+ * по ошибке 40c76144). Помимо значений сравнений принимает presence-формы
+ * `null`, объект и любой массив: `is_empty`/`not_empty` значение игнорируют
+ * (паритет с REST), и схема не должна отвергать шумовой `value` до refine.
+ * Для сравнений допустимость проверяет {@link QUERY_PROPERTY_VALUE}.
+ */
+const QUERY_PROPERTY_VALUE_SCHEMA = z
+  .union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(z.unknown()),
+    z.object({}),
+    z.null(),
+  ])
+  .describe('presence игнорирует');
+
 const QueryPropertyFields = z
   .object({
     property_id: z.string().min(1).optional(),
     property: z.string().min(1).optional(),
-    operator: z.enum([
-      'eq',
-      'ne',
-      'contains',
-      'gt',
-      'gte',
-      'lt',
-      'lte',
-      'any_of',
-      'all_of',
-      'none_of',
-    ]),
-    value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string().min(1)).min(1)]),
+    // Канон плоской формы — один источник `FLAT_PROPERTY_OPS` (задача
+    // 40c76144, требование 00eb824b): состав операторов совпадает с REST
+    // `STRUCTURE_PROPERTY_OPS`, паритет держит сторож
+    // `guard-flat-property-operators.test.ts`. Применимость оператора к
+    // природе свойства проверяет движок (`OPS_BY_VALUE_TYPE`) — одинаково
+    // для MCP и REST.
+    operator: z.enum(FLAT_PROPERTY_OPS),
+    // Форма `value` описана схемой (QUERY_PROPERTY_VALUE_SCHEMA): читаемый
+    // union + presence-формы. Для пары наличия (`is_empty`/`not_empty`)
+    // значение НЕ НУЖНО, и любая переданная форма — включая `null` и объект —
+    // молча игнорируется (REST-разбор `parsePropertyCondition` ведёт себя так
+    // же). Строгая форма для остальных операторов проверяется отдельным
+    // refine ниже — контракт не ослаблен, но и presence не отвергается из-за
+    // шумового `value`.
+    value: QUERY_PROPERTY_VALUE_SCHEMA.optional(),
   })
   // `.passthrough()` до refine (ошибка f4580fff, 0.12.1): zod по умолчанию
   // ВЫРЕЗАЕТ неизвестные ключи ещё до проверок, поэтому refine по `Object.keys`
@@ -1036,7 +1081,45 @@ const QueryPropertyFields = z
   // `VALIDATION_ERROR`.
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
     message: 'Укажите property_id или property в условии свойства.',
-  });
+  })
+  // `contains` принимает ТОЛЬКО строку (ошибка 9420a34c): массив молча
+  // stringify-ился (`String(['al','pha'])` → `"al,pha"`) и отбор давал пустой
+  // результат, а `['alpha']` проходил случайно. Число/объект/`null` — та же
+  // явная ошибка. Проверка стоит ДО refine «value обязателен», чтобы и
+  // отсутствующее значение получало общий с REST текст. Детали (`params`)
+  // переносятся в `details` в {@link mcpValidationError} — MCP и REST отвечают
+  // одинаково. Presence-пару правило не затрагивает: её `value` игнорируется.
+  .superRefine((v, ctx) => {
+    if (v.operator !== 'contains' || typeof v.value === 'string') return;
+    ctx.addIssue({
+      code: 'custom',
+      path: ['value'],
+      message: FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+      params: { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS },
+    });
+  })
+  // Значение обязательно для всех операторов, кроме пары наличия (задача
+  // 40c76144): `is_empty`/`not_empty` решают по строке значения, `value` им
+  // не нужен (переданное игнорируется). Без этого refine отсутствие значения
+  // у сравнения давало бы ошибку позже и с менее понятным текстом.
+  .refine(
+    (v) => v.operator === 'is_empty' || v.operator === 'not_empty' || v.value !== undefined,
+    { message: 'Укажите value условия свойства (кроме операторов is_empty/not_empty).' },
+  )
+  // Форма значения для сравнений — прежний контракт (скаляр или непустой
+  // массив строк). Presence сюда не входит: `is_empty`/`not_empty` принимают
+  // `value` любой формы (включая `null`/объект) и игнорируют его — паритет с
+  // REST-разбором, где для пары наличия значение тоже не читается.
+  .refine(
+    (v) =>
+      v.operator === 'is_empty' ||
+      v.operator === 'not_empty' ||
+      QUERY_PROPERTY_VALUE.safeParse(v.value).success,
+    {
+      message:
+        'value должен быть строкой, числом, логическим или непустым массивом строк.',
+    },
+  );
 /**
  * Старые критерии выборки, с которыми `ast` несовместим (требование 91983c20,
  * задача cb78315b): отбор выражается ЛИБО деревом `ast`, ЛИБО плоскими полями,
@@ -1332,6 +1415,12 @@ export const PropertiesAdd = defineContract(
     key: z.string().min(1),
     value: z.string().min(1),
     comment: z.string().min(1).optional(),
+    /**
+     * Адрес стороны свойства-связи (0.14.1, спека 906a29c9): нужен, когда имя
+     * адресует обе стороны симметричного типа связи и/или требуется создать
+     * отсутствующую у мысли сторону. Совпадает с `side` REST PUT.
+     */
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
   }),
   {},
 );
@@ -1344,6 +1433,12 @@ export const PropertiesRemove = defineContract(
     owner_id: z.string().min(1),
     key: z.string().min(1),
     value: z.string().min(1),
+    /**
+     * Адрес стороны (0.14.1, правка по верификации Z1): нужен, когда одна и
+     * та же цель соединена рёбрами обеих сторон симметричного типа связи.
+     * Без `side` направление задаёт живое ребро к конкретной цели.
+     */
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
   }),
   {},
 );
@@ -1835,6 +1930,77 @@ export const ViewsRun = defineContract(
   {},
 );
 
+/**
+ * `etn.custom_views.write` (0.14.1, задача 769fde88; операция 97d1a0d3, ADR
+ * 2a758041): батч-запись ВНЕТИПОВЫХ отборов одной мысли. Владелец — мысль,
+ * поэтому инструмент отдельный от `etn.ontology.write` (реестр сети) и
+ * `etn.thoughts.write` (единицы знания).
+ *
+ * Элемент — явный дискриминатор `action`:
+ *   * `create` — `ref?` (локальная ссылка батча), `name`, `description?`,
+ *     `definition` (JSON-строка, как в REST), `position?`, `is_default?`,
+ *     `on_duplicate?` (`fail|reuse|update`);
+ *   * `update` — `id` (полный id живого отбора ЭТОЙ мысли) XOR `ref`,
+ *     `expected_version?`, частичный патч (`name?`/`description?`/
+ *     `definition?`/`position?`/`is_default?`);
+ *   * `delete` — `id` XOR `ref`, БЕЗ `expected_version` (осознанная асимметрия
+ *     с REST If-Match, спека операции).
+ *
+ * XOR `id`/`ref` и непустота патча проверяются доменом (в zod-схеме это
+ * `superRefine` на элементе, а `discriminatedUnion` принимает только объекты);
+ * неизвестный ключ элемента отвергает `.strict()` и каноническая валидация
+ * MCP с `VALIDATION_ERROR`.
+ */
+const CustomViewsWriteCreateFields = z
+  .object({
+    action: z.literal('create'),
+    ref: z.string().min(1).optional(),
+    name: z.string().min(1),
+    description: z.string().nullable().optional(),
+    definition: z.string().min(1),
+    position: z.number().int().min(0).optional(),
+    is_default: z.boolean().optional(),
+    on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
+  })
+  .strict();
+const CustomViewsWriteUpdateFields = z
+  .object({
+    action: z.literal('update'),
+    id: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
+    expected_version: z.number().int().min(1).optional(),
+    name: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+    definition: z.string().min(1).optional(),
+    position: z.number().int().min(0).optional(),
+    is_default: z.boolean().optional(),
+  })
+  .strict();
+const CustomViewsWriteDeleteFields = z
+  .object({
+    action: z.literal('delete'),
+    id: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
+  })
+  .strict();
+const CustomViewsWriteItemFields = z.discriminatedUnion('action', [
+  CustomViewsWriteCreateFields,
+  CustomViewsWriteUpdateFields,
+  CustomViewsWriteDeleteFields,
+]);
+export const CustomViewsWrite = defineContract(
+  'etn.custom_views.write',
+  z
+    .object({
+      network_id: NetworkId,
+      // Единственный владелец вызова: все элементы адресуют отборы этой мысли.
+      thought_id: ThoughtId,
+      views: z.array(CustomViewsWriteItemFields).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+    })
+    .strict(),
+  {},
+);
+
 export const ActivityList = defineContract(
   'etn.activity.list',
   z.object({
@@ -2266,7 +2432,13 @@ export const RestPropertyList = defineContract(
 /** PUT …/properties/:key — upsert значения (REST-сообщения прежние). */
 export const RestPropertyPut = defineContract(
   'rest:properties.put',
-  z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
+  z.object({
+    network_id: NetworkId,
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+    /** Адрес стороны свойства-связи (0.14.1, спека 906a29c9). */
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     owner_id: { from: { kind: 'param', name: 'id' } },
@@ -2280,17 +2452,55 @@ export const RestPropertyPut = defineContract(
       req: true,
       msg: 'Поле value обязательно.',
     },
+    side: { from: { kind: 'body' } },
   },
 );
 
-/** DELETE …/properties/:key — удаление значения. */
+/** DELETE …/properties/:key — удаление значения; `?side=` адресует сторону связи. */
 export const RestPropertyDelete = defineContract(
   'rest:properties.delete',
-  z.object({ network_id: NetworkId, owner_id: z.string().min(1), key: z.string().min(1) }),
+  z.object({
+    network_id: NetworkId,
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+    side: z.enum(LINK_PROPERTY_SIDES).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     owner_id: { from: { kind: 'param', name: 'id' } },
     key: { from: { kind: 'param' } },
+    side: { from: { kind: 'query' } },
+  },
+);
+
+/**
+ * PUT …/thoughts/{id}/properties/order — полный набор порядка внетиповых
+ * свойств (0.14.1, задача 3948af62; контракт 27ed2b39). Тело
+ * `{ items: [{ property_id, side?, position }] }`; отсутствующие строки
+ * удаляются, позиции нормализуются в `0..n-1`. `side` обязателен только когда
+ * у владельца живы обе стороны одного типа связи; сервер выводит и сверяет
+ * сторону из живых рёбер.
+ */
+export const RestThoughtPropertiesOrder = defineContract(
+  'rest:thoughts.properties.order',
+  z.object({
+    network_id: NetworkId,
+    owner_id: z.string().min(1),
+    items: z
+      .array(
+        z
+          .object({
+            property_id: z.string().min(1),
+            side: z.enum(LINK_PROPERTY_SIDES).optional(),
+            position: z.number().min(0),
+          })
+          .strict(),
+      ),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    owner_id: { from: { kind: 'param', name: 'id' } },
+    items: { from: { kind: 'body' } },
   },
 );
 
@@ -3201,6 +3411,9 @@ export const RestThoughtDuplicates = defineContract(
       // принимаются (роут склеивает).
       synonyms: z.array(z.string().min(1)).optional(),
       type_ids: z.array(z.string().min(1)).optional(),
+      // Семантика сопоставления (ошибка 11f14a81): `dedupe` по умолчанию,
+      // `search` — живой поиск диалога/пикеров.
+      mode: z.enum(['dedupe', 'search']).optional(),
     }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -3211,6 +3424,7 @@ export const RestThoughtDuplicates = defineContract(
     title: { from: { kind: 'query' }, req: true, msg: 'title обязателен.' },
     synonyms: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
     type_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
+    mode: { from: { kind: 'query' }, t: z.enum(['dedupe', 'search']).optional() },
   },
 );
 
@@ -3912,6 +4126,26 @@ export const RestViewUpdateBody = defineContract(
 );
 
 /**
+ * Тело POST /thought-types/{id}/views/{viewId}/move-to-thought — адрес мысли,
+ * которой достанется отбор (0.14.1, операция 85414fbd). Полный id или
+ * однозначный префикс (как всюду в REST); резолвит домен через `getThought`.
+ */
+export const RestViewMoveToThoughtBody = defineContract(
+  'rest:views.move-to-thought-body',
+  z
+    .object({
+      target_thought_id: z.string().min(1),
+    })
+    .strict(),
+  {
+    target_thought_id: {
+      from: { kind: 'body' },
+      msg: 'target_thought_id обязателен — id мысли-получателя.',
+    },
+  },
+);
+
+/**
  * Тело POST /thoughts/{id}/views/{view}/run — переопределения сортировки.
  * `.strict()` (задача 0e7e89f5): прежде схема не была строгой и ошибочно
  * присланное `ast` молча срезалось zod-ом — вызов «успешно» исполнял
@@ -4381,6 +4615,10 @@ export interface ReaderFindDuplicatesPayload {
   title: string;
   synonyms: string[];
   typeIds: string[];
+  /** Режим сопоставления (ошибка 11f14a81); по умолчанию `dedupe`. */
+  mode?: DuplicateSearchMode;
+  /** Тип предлагаемой мысли — отсекает partial чужого типа в `dedupe`. */
+  typeId?: string | null;
 }
 
 /** Payload `comments.list` — комментарии владельца. */

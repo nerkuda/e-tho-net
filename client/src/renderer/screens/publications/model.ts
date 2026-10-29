@@ -867,22 +867,11 @@ export function tocSignature(line: TocLine): string {
 // предикаты вынесены сюда: их проверяют юнит-тесты без DOM.
 // ---------------------------------------------------------------------------
 
-/**
- * Совпадает ли запись значения-связи с выбранным свойством-строкой.
- *
- * Для свойства-связи ВНЕ цепочки типа владельца серверная проекция «ребро →
- * свойство» отдаёт `property_id: ''` (см. `listThoughtLinkProperties`): по
- * одному id такое значение не находится, и аддитивное добавление затирало
- * список (блокер 2/3 верификации ea1b5f14). Поэтому сверяем и по
- * отображаемому имени стороны — оно же `key` записи `properties.set`.
- */
-export function linkEntryMatchesPick(
-  entry: { property_id: string; property_name: string },
-  pick: { propertyId: string; key: string },
-): boolean {
-  if (entry.property_id !== '' && entry.property_id === pick.propertyId) return true;
-  return entry.property_name === pick.key;
-}
+// Сопоставление значения-связи со строкой свойства (id + сторона, ошибка
+// 45248206) живёт в общем `lib/link-entry-match.ts`: его делят публикации,
+// запись значения с карты/дропа и снятие рёбер. Реэкспорт сохраняет прежний
+// путь импорта для тестов модели.
+export { linkEntryMatchesPick } from '../../lib/link-entry-match.js';
 
 /**
  * Поддерево id: сам корень и все его потомки по `parentId` (замыкание).

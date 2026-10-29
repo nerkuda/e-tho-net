@@ -24,10 +24,12 @@
 import { THOUGHT_RESOLVE_MAX_IDS } from '@etn/shared';
 import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/shared';
 
-import { scheduleRefresh, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
-import { clear, div, el, setTooltip, span } from '../lib/dom.js';
+import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { errorState, loadingState } from '../lib/ui/empty-state.js';
+import { t } from '../lib/i18n.js';
 import { resolveEffectiveCanvasLinkFilter } from '../lib/effective-link-filter.js';
 import { takeFocusOrigin } from '../lib/focus-origin.js';
 import { etn } from '../lib/etn.js';
@@ -101,7 +103,11 @@ import {
   prefersReducedMotion,
 } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
-import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
+import {
+  showOutOfCanvasThoughtMenu,
+  showThoughtContextMenu,
+  showZoneContextMenu,
+} from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
 import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
@@ -109,6 +115,8 @@ import { splitterElement } from '../lib/ui/splitter.js';
 import {
   activeViewUsesKeywords,
   getActiveMode as getStripActiveMode,
+  getViewRunError,
+  getViewRunStatus,
   hasMoreViewResult,
   invalidateViewResultForRealtime,
   isThoughtInViewResult,
@@ -125,6 +133,11 @@ import { queryKeys } from '../lib/live/query-keys.js';
 import { onQueryInvalidated } from '../lib/live/query-registry.js';
 import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import { openThoughtDeleteDialog } from '../trash.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+  type ScreenPair,
+} from '../screens/tabs/tab-state.js';
 
 // Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6): облачка
 // холста (фокус и зоны) собирает `createThoughtCloud`; здесь остаётся только
@@ -744,8 +757,46 @@ function scheduleRender(): void {
   renderScheduled = true;
   queueMicrotask(() => {
     renderScheduled = false;
-    void render();
+    void render().catch((error) => {
+      // Отказ render() НЕ должен теряться (ошибка 1656ef58): прежде `void
+      // render()` оставлял исключение необработанным отказом, и сбой выглядел
+      // как «зависание» без реакции. Логируем и повторяем расклад целиком.
+      console.error('[canvas] рендер прерван — повтор на следующем тике', error);
+      rebuildFailures += 1;
+      scheduleRebuildRetry();
+    });
   });
+}
+
+/**
+ * Полная пересборка DOM расклада — одна синхронная задача (дефект 1 задачи
+ * e9f0af94). Если она бросила исключение на середине, карта осталась
+ * полуразобранной: фокус уже новый, а зоны — прежние (или наоборот). Это и
+ * есть «неверное дерево» ошибки 1656ef58, поэтому такая пересборка не
+ * считается применённой: следующий тик повторяет render() ЦЕЛИКОМ.
+ *
+ * Число повторов ограничено: постоянный сбой (например, недоступный DOM)
+ * не должен крутить микротаски бесконечно — следующий внешний триггер
+ * (уведомление стора, resize, realtime) снова попробует расклад.
+ * `REBUILD_RETRY_LIMIT = 3` — это число ПОВТОРОВ после первой неудачной
+ * пересборки: итого до 4 входов в render() — сама попытка + 3 повтора.
+ */
+const REBUILD_RETRY_LIMIT = 3;
+/** Сколько подряд пересборок упало — сбрасывается успешной. */
+let rebuildFailures = 0;
+/** Повтор уже стоит в очереди — не плодим таймеры одной пачки триггеров. */
+let rebuildRetryScheduled = false;
+
+function scheduleRebuildRetry(): void {
+  if (rebuildRetryScheduled || rebuildFailures > REBUILD_RETRY_LIMIT) return;
+  rebuildRetryScheduled = true;
+  // Следующий тик, а не микротаска: источник сбоя (гонка с пересборкой
+  // разметки редактора) получает шанс завершиться, а не спорить в той же
+  // задаче. `scheduleRender` сам коалессирует повтор с прочими триггерами.
+  window.setTimeout(() => {
+    rebuildRetryScheduled = false;
+    scheduleRender();
+  }, 0);
 }
 
 /**
@@ -773,6 +824,10 @@ async function render(): Promise<void> {
   finishFocusTransition();
   applyCanvasScaleVars(host);
   const focus = store.state.focus;
+  // Пара «сеть + вкладка» снимается ВМЕСТЕ с фокусом (один синхронный тик):
+  // ниже идут ожидания (`enrichRefs`, запросы полосы), за время которых сеть
+  // может смениться, а `focus` останется от прежней (ошибка ff5efa1a).
+  const pair = currentScreenPair();
   // Смена мыслесети (спека «Проявление карты при смене мыслесети», задача
   // 70a99f09): прежнее содержимое убирается одномоментно, а новый расклад
   // проявляется одним общим fade-in — не хореографией смены фокуса.
@@ -822,7 +877,7 @@ async function render(): Promise<void> {
   refCache.set(focus.focused.id, focus.focused);
 
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
-  await enrichRefs(focus);
+  await enrichRefs(focus, pair);
   relatedTitles = visibleRelatedTitles(focus);
   // Resolve the filter strip and any active view result BEFORE rebuilding the
   // DOM. The rebuild and the focus transition MUST share one synchronous task
@@ -832,42 +887,77 @@ async function render(): Promise<void> {
   // old focus "returns" as the held overlay. Hoisting every await above the
   // rebuild means the first painted frame of the new state already holds the
   // old content. `guard-focus-animation` guards the invariant.
-  await renderFilterStrip(focus);
+  await renderFilterStrip(focus, { pair });
+  // Пока шёл запрос набора отборов, более свежий рендер мог выиграть гонку:
+  // дорисовка устаревшего не должна ни красить загрузку, ни запускать прогон.
+  if (generation !== renderGeneration) return;
   const stripMode = getStripActiveMode();
   let viewResult: ViewResult | null = null;
   if (stripMode.kind !== 'children') {
+    // Нижняя зона при активном прогоне показывает загрузку, а не содержимое
+    // прежнего вида и не ложное «Подчинённых мыслей нет» (ошибка 6d78ccab).
+    // Свежий результат этого фокуса/отбора красится без перерисовки загрузки.
+    const cached = takeViewResult();
+    const cachedFresh =
+      cached !== null && cached.focusId === focus.focused.id && cached.viewId === stripMode.viewId;
+    if (!cachedFresh) paintChildrenZonePhase('loading');
     // Run the view against the focused thought (no-op if already cached).
     // The mode change listener also calls `render()`; this call may execute
-    // repeatedly during a mode toggle, and the strip's run cancellation keeps
-    // stale responses from overwriting fresh ones.
-    viewResult = await runActiveViewIfNeeded(focus.focused.id);
+    // repeatedly during a mode toggle, and the strip's run de-duplication and
+    // cancellation keep stale responses from overwriting fresh ones.
+    viewResult = await runActiveViewIfNeeded(focus.focused.id, pair);
   }
 
   // --- Rebuild + transition: one synchronous task, one paint --------------
   // Проиграл гонку — уступил более свежему рендеру: DOM не трогаем вовсе
   // (иначе две дорисовки пересобирали бы расклад по очереди и облачка мелькали).
   if (generation !== renderGeneration) return;
-  renderFocusRow(focus);
-  updateFocusBand();
-  renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
-  renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
-  // Lower zone: the strip's active mode decides whether it shows real children
-  // or a view's run result. View results share the children-zone DOM (same
-  // virtualization, same cloud shape) but the gestures that imply a
-  // parent/child link to the focus (manual order, double-click-to-add) are
-  // gated on `viewResultActive`.
-  if (stripMode.kind === 'children') {
-    renderZone('children', groupByThought(zoneNeighbors('children', focus)));
-    setZoneAsViewResult(false, null);
-  } else {
-    renderZone('children', viewResultToZoneEntries(viewResult, focus));
-    setZoneAsViewResult(true, viewResult);
+  try {
+    // Смена фокуса: прежняя позиция прокрутки принадлежит прежнему набору
+    // соседей. Без сброса окно виртуализации считается по старому `scrollTop`
+    // (`renderZoneContent`) и показывает не тот участок нового дерева —
+    // «неверный рендер дерева фокуса» ошибки 1656ef58.
+    if (focusChanged) resetZoneScroll();
+    renderFocusRow(focus);
+    updateFocusBand();
+    renderZone('parents', groupByThought(zoneNeighbors('parents', focus)));
+    renderZone('siblings', groupByThought(zoneNeighbors('siblings', focus)));
+    // Lower zone: the strip's active mode decides whether it shows real children
+    // or a view's run result. View results share the children-zone DOM (same
+    // virtualization, same cloud shape) but the gestures that imply a
+    // parent/child link to the focus (manual order, double-click-to-add) are
+    // gated on `viewResultActive`.
+    if (stripMode.kind === 'children') {
+      childrenZonePhase = 'idle';
+      // Dataset снимается ДО отрисовки зоны: иначе пустая зона потомков
+      // показала бы «Ничего не найдено» от прошлого результата отбора.
+      setZoneAsViewResult(false, null);
+      renderZone('children', groupByThought(zoneNeighbors('children', focus)));
+    } else {
+      // Ошибка прогона — отдельная фаза; `null` без ошибки значит «ещё не
+      // пришёл свежий результат» (прогон отменён/идёт следующий).
+      childrenZonePhase =
+        viewResult !== null ? 'idle' : getViewRunStatus() === 'error' ? 'error' : 'loading';
+      setZoneAsViewResult(true, viewResult);
+      renderZone('children', viewResultToZoneEntries(viewResult, focus));
+    }
+    lastFocusId = focus.focused.id;
+    lastNetworkId = store.state.networkId;
+    // The response is now on screen: a further store notification with the SAME
+    // object is a layout/selection re-render, not fresh neighbourhood data.
+    lastFocusResponse = focus;
+    // Расклад применён целиком — счётчик сбоев подряд обнуляется.
+    rebuildFailures = 0;
+  } catch (error) {
+    // Исключение на середине пересборки оставило карту полуразобранной:
+    // «применённым» этот расклад не считаем (lastFocusId/lastFocusResponse не
+    // двигаем), следующий тик повторяет render() целиком. Без этого фокус
+    // оставался новым, а зоны — прежними до следующего внешнего триггера.
+    console.error('[canvas] пересборка расклада прервана — повтор целиком', error);
+    rebuildFailures += 1;
+    scheduleRebuildRetry();
+    return;
   }
-  lastFocusId = focus.focused.id;
-  lastNetworkId = store.state.networkId;
-  // The response is now on screen: a further store notification with the SAME
-  // object is a layout/selection re-render, not fresh neighbourhood data.
-  lastFocusResponse = focus;
   // Totals for the count indicators (async) — a fresh focus seeds every
   // sector's counters; a fresh response for the SAME focus is reconciled by
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
@@ -918,6 +1008,29 @@ function setZoneAsViewResult(active: boolean, result: ViewResult | null): void {
     delete zone.dataset['viewResult'];
     delete zone.dataset['unresolved'];
   }
+}
+
+/**
+ * Немедленно красит нижнюю зону состоянием прогона отбора (ошибка 6d78ccab)
+ * ДО ожидания ответа: пока прогон в полёте, пользователь видит «Загрузка…»
+ * (или состояние ошибки), а не содержимое прежнего вида и не ложное
+ * «Подчинённых мыслей нет. Двойной клик для добавления».
+ *
+ * Зона очищается от прежних облачков: они описывают другой отбор/детей фокуса
+ * и были бы неверной картинкой происходящего. Полная пересборка расклада
+ * после ответа заменит фазу обычным содержимым.
+ */
+function paintChildrenZonePhase(phase: 'loading' | 'error'): void {
+  if (zones === null) return;
+  childrenZonePhase = phase;
+  // Нижняя зона показывает именно прогон отбора: жесты «только для потомков»
+  // и счётчик зоны обязаны вести себя как в режиме отбора.
+  zones['children'].classList.add('zone-children-view-result');
+  zoneData.set('children', []);
+  renderZoneContent('children');
+  // Облачка нижней зоны убраны — у линий к ним больше нет целей.
+  redrawLinks?.();
+  paintZoneIndicators();
 }
 
 /** Builds ZoneEntry rows for the children zone from a view run result. The
@@ -1447,6 +1560,10 @@ async function readZoneTotal(
  */
 function syncZoneTotalsWithFreshFocus(): void {
   const focus = store.state.focus;
+  // Пара снимается ВМЕСТЕ с focus — до первого await: поздний ответ
+  // `reconcileZoneTotals` не должен перечитывать рёбра сети, которую уже
+  // сменили (принцип фикса ff5efa1a, замечание верификатора).
+  const pair = currentScreenPair();
   if (focus === null || focus === lastFocusResponse) return;
   if (focus.focused.id !== lastFocusId) return;
   lastFocusResponse = focus;
@@ -1459,7 +1576,7 @@ function syncZoneTotalsWithFreshFocus(): void {
   // ошибка c02ff7dc). Общие рёбра фокуса чинятся самим `edgeSource` — снимок их
   // не хранит.
   void reconcileZoneTotals(focus).then(() => {
-    if (hasSupplementalEdges()) void refreshZoneEdges(focus);
+    if (hasSupplementalEdges()) void refreshZoneEdges(focus, pair);
   });
 }
 
@@ -1592,7 +1709,10 @@ async function maybeLoadMoreViewResult(zone: HTMLElement): Promise<void> {
   }
   const focus = store.state.focus;
   if (focus === null) return;
-  const result = await loadMoreViewResult(focus.focused.id);
+  // Пара — вместе с фокусом: догрузка не должна уйти в сеть, которая уже
+  // сменилась, пока нижняя зона листалась (ошибка ff5efa1a).
+  const pair = currentScreenPair();
+  const result = await loadMoreViewResult(focus.focused.id, pair);
   if (result === null) return;
   renderZone('children', viewResultToZoneEntries(result, focus));
   paintZoneIndicators();
@@ -1614,6 +1734,9 @@ async function appendNextZonePage(
   const focus = store.state.focus;
   const networkId = store.state.networkId;
   if (focus === null || networkId === null) return;
+  // Пара — вместе с фокусом: догрузка сектора не должна адресовать сменившуюся
+  // сеть (запросы идут снятой сетью, ответ отбрасывает zonePagingToken).
+  const pair = currentScreenPair();
   const token = zonePagingToken;
   counters.loading = true;
   try {
@@ -1666,7 +1789,7 @@ async function appendNextZonePage(
         if (token !== zonePagingToken) return;
         renderZone(dir, groupByThought(zoneNeighbors(dir, focus)));
       });
-      void refreshZoneEdges(focus);
+      void refreshZoneEdges(focus, pair);
     }
   } catch {
     // Best effort: the next scroll of the sector retries.
@@ -1683,9 +1806,14 @@ async function appendNextZonePage(
  * already in `focus.edges` are dropped from the snapshot so the overlay renders
  * shared edges from the live focus response (ошибка c02ff7dc).
  */
-async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+async function refreshZoneEdges(
+  focus: FocusResponse,
+  pair: ScreenPair | null,
+): Promise<void> {
+  // Сеть — из пары, снятой вместе с фокусом; устаревший вызов не адресует
+  // мысли прежней сети в новой (ошибка ff5efa1a).
+  if (pair === null || !isCurrentScreenPair(pair)) return;
+  const networkId = pair.networkId;
   const token = zonePagingToken;
   const ids = [...zoneVisibleIds];
   try {
@@ -1693,13 +1821,14 @@ async function refreshZoneEdges(focus: FocusResponse): Promise<void> {
     // фокусу и порциям секторов (ошибка a617b4c6); иначе на холст вернутся
     // рёбра отфильтрованных типов.
     const linkFilter = await resolveEffectiveCanvasLinkFilter(networkId).catch(() => undefined);
+    if (!isCurrentScreenPair(pair)) return;
     const edges = await etn.structures.edges(
       networkId,
       ids,
       store.state.showInactive,
       linkFilter,
     );
-    if (token !== zonePagingToken) return;
+    if (token !== zonePagingToken || !isCurrentScreenPair(pair)) return;
     setSupplementalEdges(edges, focus.edges ?? []);
     redrawLinks?.();
   } catch {
@@ -1822,9 +1951,14 @@ export function visibleRelatedTitles(focus: {
 }
 
 /** Fetches missing refs for all neighbours of a focus response. */
-async function enrichRefs(focus: FocusResponse): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+async function enrichRefs(
+  focus: FocusResponse,
+  pair: ScreenPair | null,
+): Promise<void> {
+  // Сеть — из пары, снятой вместе с фокусом: рендер, начавшийся до смены сети,
+  // не должен резолвить мысли прежней сети в новой (ошибка ff5efa1a).
+  if (pair === null || !isCurrentScreenPair(pair)) return;
+  const networkId = pair.networkId;
   const ids = [...focus.parents, ...focus.children, ...focus.siblings]
     .map((n) => n.id)
     .filter((id) => !refCache.has(id));
@@ -1832,6 +1966,7 @@ async function enrichRefs(focus: FocusResponse): Promise<void> {
   if (unique.length === 0) return;
   try {
     const resolved = await resolveThoughtRefs(networkId, unique);
+    if (!isCurrentScreenPair(pair)) return;
     for (const ref of resolved) refCache.set(ref.id, ref);
   } catch {
     // Enrichment is best-effort: clouds render with default styling.
@@ -1862,6 +1997,15 @@ const ZONE_EMPTY_LABELS: Record<'parents' | 'siblings' | 'children', string> = {
   siblings: 'Родственных мыслей нет',
   children: 'Подчинённых мыслей нет. Двойной клик для добавления',
 };
+
+/**
+ * Фаза нижней зоны в режиме отбора (ошибка 6d78ccab): `loading` — прогон
+ * отбора в полёте, `error` — прогон отказал, `idle` — показывать обычное
+ * содержимое (пусто/неразрешённый токен/строки результата). Ложное
+ * «Подчинённых мыслей нет» при активном прогоне — дефект, который эта фаза
+ * закрывает: «результата нет» больше не означает «отбор пуст».
+ */
+let childrenZonePhase: 'idle' | 'loading' | 'error' = 'idle';
 
 /** Builds a grid zone with scroll → virtualization wiring. */
 function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
@@ -1968,6 +2112,22 @@ const ZONE_DIRS: readonly ('parents' | 'siblings' | 'children')[] = [
 ];
 
 /**
+ * Сбрасывает прокрутку зон к началу при смене фокуса (ошибка 1656ef58).
+ *
+ * Позиция прокрутки принадлежит прежнему набору соседей: окно виртуализации
+ * `renderZoneContent` считается по `scrollTop` ДО обновления высоты spacer'а,
+ * поэтому новый (меньший) набор рисовался бы со «сдвинутого» окна — пустые
+ * места и не те мысли на экране.
+ */
+function resetZoneScroll(): void {
+  if (zones === null) return;
+  for (const dir of ZONE_DIRS) {
+    const zone = zones[dir];
+    if (zone.scrollTop !== 0) zone.scrollTop = 0;
+  }
+}
+
+/**
  * Порционная подгрузка секторов (задача c8fa74ba). Серверный ответ фокуса
  * отдаёт первые {@link ZONE_PAGE_SIZE} мыслей каждого сектора; при скролле
  * сектора следующие порции догружаются в фоне через
@@ -2051,13 +2211,25 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     // Drop the previous render's content width: a leftover box would keep the
     // empty zone horizontally scrollable (ошибка 1deced69).
     grid.style.width = '';
-    // The children zone carries a view-result empty state when the active
-    // strip mode is a view (spec 9984aa98). Distinguish three cases:
+    // The children zone carries a view-result state when the active strip mode
+    // is a view (spec 9984aa98). Distinguish four cases:
+    //   * "loading" — прогон отбора ещё в полёте: единое состояние загрузки
+    //     lib/ui (`loadingState`), а НЕ ложное «Подчинённых мыслей нет»
+    //     (ошибка 6d78ccab);
+    //   * "error" — прогон отказал: `errorState` с текстом отказа;
     //   * "unresolved" — the filter referenced a token that did not bind;
     //     surface the reason instead of the generic «Ничего не найдено».
     //   * "empty" — the filter ran and returned nothing.
     //   * otherwise — render the children zone's default hint.
     if (dir === 'children') {
+      if (childrenZonePhase === 'loading') {
+        empty.replaceChildren(loadingState());
+        return;
+      }
+      if (childrenZonePhase === 'error') {
+        empty.replaceChildren(errorState(getViewRunError() ?? t('strip.runFailed')));
+        return;
+      }
       const viewResult = zone.dataset['viewResult'];
       if (viewResult === 'unresolved') {
         const raw = zone.dataset['unresolved'];
@@ -2087,6 +2259,10 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     return;
   }
   empty.classList.add('hidden');
+  // Скрытое пустое состояние не должно хранить разметку прежнего состояния
+  // (например, `loadingState`): при следующем показе его содержание задаётся
+  // заново — текстом или заменой узлов.
+  empty.replaceChildren();
 
   const gridInfo = zoneGridOf(dir);
   if (gridInfo === null) return;
@@ -2110,6 +2286,14 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     prefix[i + 1] = top;
   }
 
+  // Высоту spacer'а обновляем ДО чтения scrollTop: набор соседей мог
+  // уменьшиться, и старый scrollTop уже за пределами нового содержимого —
+  // окно виртуализации нарисовало бы пустоту вместо последних строк
+  // (ошибка 1656ef58). Браузер клампит scrollTop только после смены высоты,
+  // поэтому клампим сами и считаем окно от фактической позиции.
+  spacer.style.height = `${prefix[rows]!}px`;
+  const maxScrollTop = Math.max(0, prefix[rows]! - zone.clientHeight);
+  if (zone.scrollTop > maxScrollTop) zone.scrollTop = maxScrollTop;
   let startRow = 0;
   while (startRow + 1 < rows && prefix[startRow + 1]! <= zone.scrollTop) startRow++;
   let endRow = startRow;
@@ -2118,7 +2302,6 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   startRow = Math.max(0, startRow - OVERSCAN_ROWS);
   endRow = Math.min(rows, endRow + OVERSCAN_ROWS);
 
-  spacer.style.height = `${prefix[rows]!}px`;
   // Anchor the grid inside the zone's content box (task f45ffc8a): the zones
   // pull towards the focus row (parents/siblings — bottom edge, children — top
   // edge), so the clouds read as one cluster instead of scattered corners. The
@@ -2268,7 +2451,7 @@ function buildCloud(
           setCursor(id);
           openThoughtInEditor(id);
         },
-        onDoubleClick: (id) => void setFocus(id),
+        onDoubleClick: (id) => focusFromUi(id),
         onCtrlClick: (id) => selectionHooks?.onCloudClick(id),
         onContextMenu: (event, id) => {
           event.stopPropagation();
@@ -2391,13 +2574,44 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
       },
       onDoubleClick: (id) => {
         closeHoverPreview();
-        void setFocus(id);
+        focusFromUi(id);
+      },
+      // Правый клик по строке соседа — то же общее меню мысли, что у облачков
+      // холста (ошибка ffc173c9): строка рисуется фабрикой вне зоны, поэтому
+      // жест подключается здесь. «Открыть редактор» повторяет клик по строке
+      // (открыть в редакторе и закрыть превью), а не двигает фокус холста.
+      onContextMenu: (event, id) => {
+        event.stopPropagation();
+        void openNeighborPreviewThoughtMenu(event, id, ref.title);
       },
     },
   });
   row.classList.add('link-group-item');
   markThoughtCommentPreview(row, ref.id, ref.title);
   return row;
+}
+
+/**
+ * Общее меню мысли для строки соседа в Ctrl-hover попапе (вне зон холста) —
+ * тонкая обёртка фасада меню вне холста: попап живёт вне холста, поэтому
+ * родителя «налево» резолвит фасад (ошибка 2baa78fb), а открытие закрывает
+ * превью и не двигает фокус карты.
+ */
+async function openNeighborPreviewThoughtMenu(
+  event: MouseEvent,
+  id: string,
+  title: string,
+): Promise<void> {
+  await showOutOfCanvasThoughtMenu(
+    { event },
+    { id, title, dir: 'siblings' },
+    {
+      openHandler: (openId) => {
+        closeHoverPreview();
+        openThoughtInEditor(openId);
+      },
+    },
+  );
 }
 
 /** Builds the `neighbors` popup content: incoming/outgoing links of the
@@ -2744,7 +2958,7 @@ function onDragEnd(_event: MouseEvent): void {
       direction: outcome.direction,
     });
   } else {
-    notice('Диалог добавления мыслей ещё не готов.', 'error');
+    notice('Диалог добавления мыслей ещё не готов.');
   }
 }
 
@@ -2783,9 +2997,6 @@ async function createLinkFromDrop(
     scheduleRefresh();
     notice('Связь создана.', 'success');
   } catch (err) {
-    notice(
-      `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,
-      'error',
-    );
+    notice(`Не удалось создать связь: ${errText(err)}`, 'error');
   }
 }

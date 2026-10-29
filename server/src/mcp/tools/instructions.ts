@@ -45,12 +45,23 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
     'etn.instructions',
     {
       title: 'Витрина инструкций сети',
+      // 0.14.1 (ошибка feb520de): «ROOT only (no untyped parent link)» читалось
+      // как «нет структурного родителя вовсе». Фактическое правило
+      // (`rootInstructionClause`, instructions-service.ts): корневая — та, среди
+      // структурных родителей которой нет ДРУГОЙ инструкции; инструкции под
+      // разделами/каталогами показываются в корневом перечне.
+      // 0.14.1 (задача 54573522): keywords-режим корневой фильтр не применяет
+      // (`instructions-service.ts`: `rootsOnly = … && keywords === undefined`) —
+      // под-инструкции находятся `keywords` или `scope: "all"`. Клауза в
+      // описании; проза сжата под бюджет tools/list без потери смысла.
       description:
-        'Read the network\'s instructions. `instruction_id` accepts a full UUID or an unambiguous hex ' +
-        'prefix (≥ 4 chars), as in `etn.thoughts.get`. Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` ' +
-        '→ cards (title, synonyms, preview ≤ 300) in request order, unresolved in `missing`; `{ keywords }` ' +
-        '→ filter by title+synonyms (whitespace-AND, `-word`); `{ network_id }` → active, default ROOT only ' +
-        '(no untyped parent link), `scope: "all"` adds sub-instructions. No role → ' +
+        'Read network instructions. `instruction_id` — full UUID or unambiguous hex prefix (≥ 4). ' +
+        'Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` → cards (title, synonyms, ' +
+        'preview ≤ 300) in order; unresolved → `missing`; `{ keywords }` → filter over title+synonyms ' +
+        'of ALL instructions incl. sub-instructions (whitespace-AND, `-word`; plain word also matches ' +
+        'a stored `*`-synonym word: `задач*` → «задачи»; root filter off); `{ network_id }` → active, ' +
+        'default ROOT only (no other INSTRUCTION among structural parents; sections/catalogues ' +
+        'children count as root), `scope: "all"` adds sub-instructions. No role → ' +
         '`{ has_instructions: false, instructions: [] }`.',
       inputSchema: Instructions.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],

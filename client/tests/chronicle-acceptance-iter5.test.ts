@@ -388,8 +388,11 @@ describe('приёмка №5, п.1: компоновка карточки за�
       assert.ok(at > last, `строка полей в порядке: ${token}`);
       last = at;
     }
-    // Экран привязывает к строке чипсы и «бутерброд» меню записи.
-    assert.match(CHRONICLE, /chips: buildChipsRow\(row\)/, 'оболочка привязок карточки');
+    // Экран привязывает к строке чипсы и «бутерброд» меню записи. Контейнер
+    // облачков собирает компонент шапки (`createRecordChips`) — с перерисовкой
+    // на месте, чтобы добавленная мысль была видна сразу (ошибка 78d600c9).
+    assert.match(CHRONICLE, /chips: chips\.box/, 'оболочка привязок карточки');
+    assert.match(CHRONICLE, /createRecordChips\(\{ row, homeId: \(\) => homeId, buildChip \}\)/);
     assert.match(CHRONICLE, /class: 'diary-record-actions'/, '«бутерброд» меню записи');
     assert.match(
       read('styles/screens/chronicle.css'),

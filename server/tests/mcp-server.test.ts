@@ -5,6 +5,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
@@ -521,10 +524,41 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // состоянию 0.8.3 (задача d379e091): 25 инструментов, аннотированы 23
         // (`etn.ops` — диспетчер без тул-уровневых подсказок; `comments.update`
         // исторически без аннотации): 17 readOnly, 0 destructive, 4 idempotent.
-        assert.equal(annotated, 23);
+        // 0.14.1 (задача 769fde88): `etn.custom_views.write` — батч внетиповых
+        // отборов мысли (ADR 2a758041), `destructiveHint: false` +
+        // `idempotentHint: true` (прецедент `etn.ontology.write` с его
+        // `type_views[].action: delete`): 26 инструментов, аннотированы 24,
+        // 17 readOnly, 0 destructive, 5 idempotent.
+        assert.equal(annotated, 24);
         assert.equal(hintReadOnly, 17);
         assert.equal(hintDestructive, 0);
-        assert.equal(hintIdempotent, 4);
+        assert.equal(hintIdempotent, 5);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('несуществующий network_id в MCP — NOT_FOUND, БД фантомной сети не создаётся (0.14.1, 2c3a42cd)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const unknown = randomUUID();
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Администратор — именно тот путь, что раньше молча «открывал» любую
+        // сеть: пустая страница + созданная `networks/<uuid>/data.db`.
+        const res = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: unknown, limit: 1 },
+        });
+        assert.equal(res.isError, true, toolText(res));
+        assert.match(toolText(res), /NOT_FOUND/);
+        assert.match(toolText(res), new RegExp(unknown));
+
+        // БД и каталоги не созданы — говорят файлы, а не только ответ.
+        assert.equal(fs.existsSync(path.join(ctx.dataDir, 'networks', unknown)), false);
       } finally {
         await handle.close();
       }

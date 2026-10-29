@@ -1,0 +1,287 @@
+{
+  "name": "a65d27d9-or-root-wrapper",
+  "description": "GUI-сценарий ошибки a65d27d9: служебное условие «Помечено на удаление = нет» при корне «ИЛИ» оборачивает корень, а не расширяет отбор. Путь пользователя: полоса отборов на карте → «+» → редактор внетипового отбора (мысль без типа) → два условия «Найти слова» (альфа, бета) → коннектор корня «ИЛИ» → Сохранить. Проверки: сохранённое определение = ((альфа ИЛИ бета) И (trashed eq false service:true)); выдача отбора содержит живые «альфа» и «бета», но НЕ содержит живую «гамма» (до фикса ИЛИ-группа расширялась до всех живых) и НЕ содержит «альфа в корзине»; при переоткрытии редактор показывает корень «ИЛИ», оба условия и НЕ показывает служебный лист строкой. Мысли заводятся шагом probe через window.etn; отбор исполняется по имени через шаг api. Все шаги редактора ограничены ВЕРХНИМ диалогом. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.a65d27d9-or-root-wrapper.scenario.json --out .tmp/etn-a65d27d9/or-wrapper",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-thought-cloud",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "install-dialog-helper",
+      "eval": "(() => { window.__dlg = () => [...document.querySelectorAll('.dialog-backdrop')].at(-1) ?? null; return 'ok'; })()"
+    },
+    {
+      "name": "seed-thoughts",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const mk=async(t)=>{ const r=await et.thoughts.create(N,{title:t,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; window.__orSeed={ alpha: await mk('альфа проба'), beta: await mk('бета проба'), other: await mk('гамма проба') }; const tr=await mk('альфа в корзине'); const got=await et.thoughts.get(N,tr); await et.thoughts.update(N,tr,{marked_for_deletion:true},got.version); return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-seeded-thought",
+      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "seeded-thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'",
+      "timeout": 30000
+    },
+    {
+      "name": "strip-add-visible",
+      "waitFor": "document.querySelector('.canvas-filter-strip-add') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "click-add-view",
+      "click": ".canvas-filter-strip-add"
+    },
+    {
+      "name": "view-editor-opened",
+      "waitFor": "(() => { const d=window.__dlg(); return d !== null && d.querySelector('.ff-name__input') !== null; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "add-condition-1",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "condition-row-1-visible",
+      "waitFor": "(() => (window.__dlg()?.querySelectorAll('.ft-row').length ?? 0) === 1)()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-operand-picker-1",
+      "eval": "(() => { const b=window.__dlg()?.querySelectorAll('.ft-row')[0]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "operand-menu-1",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"keywords\"]') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "pick-keywords-1",
+      "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"keywords\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "keyword-control-1",
+      "waitFor": "(() => (window.__dlg()?.querySelectorAll('.ft-row')[0]?.querySelectorAll('input[data-input=\"keywords\"]').length ?? 0) === 1)()",
+      "timeout": 20000
+    },
+    {
+      "name": "focus-keyword-1",
+      "eval": "(() => { const row=window.__dlg()?.querySelectorAll('.ft-row')[0]; const i=row?.querySelector('input[data-input=\"keywords\"]'); if(!i) return 'no-input'; i.click(); i.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "type-keyword-1",
+      "text": "альфа"
+    },
+    {
+      "name": "commit-keyword-1",
+      "eval": "(() => { const row=window.__dlg()?.querySelectorAll('.ft-row')[0]; const i=row?.querySelector('input[data-input=\"keywords\"]'); if(!i) return 'no-input'; i.dispatchEvent(new Event('change',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "keyword-1-value",
+      "probe": "window.__dlg()?.querySelectorAll('.ft-row')[0]?.querySelector('input[data-input=\"keywords\"]')?.value ?? null",
+      "expect": "альфа"
+    },
+    {
+      "name": "add-condition-2",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "condition-row-2-visible",
+      "waitFor": "(() => (window.__dlg()?.querySelectorAll('.ft-row').length ?? 0) === 2)()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-operand-picker-2",
+      "eval": "(() => { const b=window.__dlg()?.querySelectorAll('.ft-row')[1]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "operand-menu-2",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"keywords\"]') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "pick-keywords-2",
+      "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"keywords\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "keyword-control-2",
+      "waitFor": "(() => (window.__dlg()?.querySelectorAll('.ft-row')[1]?.querySelectorAll('input[data-input=\"keywords\"]').length ?? 0) === 1)()",
+      "timeout": 20000
+    },
+    {
+      "name": "focus-keyword-2",
+      "eval": "(() => { const row=window.__dlg()?.querySelectorAll('.ft-row')[1]; const i=row?.querySelector('input[data-input=\"keywords\"]'); if(!i) return 'no-input'; i.click(); i.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "type-keyword-2",
+      "text": "бета"
+    },
+    {
+      "name": "commit-keyword-2",
+      "eval": "(() => { const row=window.__dlg()?.querySelectorAll('.ft-row')[1]; const i=row?.querySelector('input[data-input=\"keywords\"]'); if(!i) return 'no-input'; i.dispatchEvent(new Event('change',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "keyword-2-value",
+      "probe": "window.__dlg()?.querySelectorAll('.ft-row')[1]?.querySelector('input[data-input=\"keywords\"]')?.value ?? null",
+      "expect": "бета"
+    },
+    {
+      "name": "root-connector-is-and",
+      "probe": "window.__dlg()?.querySelector('.ft-group__connector-label')?.textContent ?? null",
+      "expect": "все условия (И)"
+    },
+    {
+      "name": "open-root-connector",
+      "eval": "(() => { const c=window.__dlg()?.querySelector('.ft-group__connector'); if(!c) return 'no-connector'; c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "connector-menu",
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"or\"]') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "pick-or",
+      "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"or\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "root-is-or",
+      "waitFor": "(() => (window.__dlg()?.querySelector('.ft-group__connector-label')?.textContent ?? '').includes('ИЛИ'))()",
+      "timeout": 20000
+    },
+    {
+      "name": "fill-view-name",
+      "eval": "(() => { const inp=window.__dlg()?.querySelector('.ff-name__input'); if(!inp) return 'no-input'; inp.click(); inp.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "view-name-typed",
+      "text": "or-wrapper"
+    },
+    {
+      "name": "view-name-value",
+      "probe": "window.__dlg()?.querySelector('.ff-name__input')?.value ?? null",
+      "expect": "or-wrapper"
+    },
+    {
+      "name": "save-view",
+      "eval": "(() => { const b=window.__dlg()?.querySelector('.dialog-footer .ui-btn--primary'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "view-editor-closed",
+      "waitFor": "window.__dlg() === null",
+      "timeout": 20000
+    },
+    {
+      "name": "stored-definition-wraps-or-root",
+      "api": {
+        "name": "stored-definition-wraps-or-root",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/views",
+        "expression": "(() => { const rows=(Array.isArray(data)?data:data.items); const row=rows.find((v)=>v.name==='or-wrapper'); if(!row) return { missing: true }; const ast=JSON.parse(row.definition); const f=ast.filter; return { rootOp: f.op, kids: f.children.map((c)=> c.op ? c.op : (c.entity.kind + (c.service ? ':service' : ''))) }; })()"
+      },
+      "expect": {
+        "rootOp": "and",
+        "kids": [
+          "or",
+          "trashed:service"
+        ]
+      }
+    },
+    {
+      "name": "run-view-narrows-to-user-conditions",
+      "api": {
+        "name": "run-view-narrows-to-user-conditions",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/views/or-wrapper/run",
+        "body": {},
+        "expression": "(() => { const list=(Array.isArray(data)?data:data.items); const has=(t)=>list.some((x)=>x.title===t); return { alpha: has('альфа проба'), beta: has('бета проба'), other: has('гамма проба'), trashed: has('альфа в корзине') }; })()"
+      },
+      "expect": {
+        "alpha": true,
+        "beta": true,
+        "other": false,
+        "trashed": false
+      }
+    },
+    {
+      "name": "strip-view-button",
+      "waitFor": "(() => [...document.querySelectorAll('.canvas-filter-strip-btn[data-view-id]')].some((b)=>b.textContent.trim()==='or-wrapper'))()",
+      "timeout": 30000
+    },
+    {
+      "name": "reopen-editor",
+      "eval": "(() => { const b=[...document.querySelectorAll('.canvas-filter-strip-btn[data-view-id]')].find((x)=>x.textContent.trim()==='or-wrapper'); if(!b) return 'no-button'; b.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:240,clientY:240})); return 'ok'; })()"
+    },
+    {
+      "name": "view-menu",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "click-edit-view",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Изменить отбор')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "editor-reopened",
+      "waitFor": "(() => { const d=window.__dlg(); return d !== null && d.querySelector('.ff-name__input') !== null; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "roundtrip-root-or-without-service-row",
+      "probe": "(() => { const d=window.__dlg(); const rows=[...(d?.querySelectorAll('.ft-row') ?? [])]; return { label: d?.querySelector('.ft-group__connector-label')?.textContent ?? null, rows: rows.length, hasTrashed: rows.some((r)=>(r.textContent ?? '').includes('Помечено на удаление')), values: rows.map((r)=>r.querySelector('input[data-input=\"keywords\"]')?.value ?? null) }; })()",
+      "expect": {
+        "label": "любое из условий (ИЛИ)",
+        "rows": 2,
+        "hasTrashed": false,
+        "values": [
+          "альфа",
+          "бета"
+        ]
+      }
+    },
+    {
+      "name": "cancel-editor",
+      "eval": "(() => { const b=[...(window.__dlg()?.querySelectorAll('.dialog-footer .ui-btn') ?? [])].find((x)=>x.textContent.trim()==='Отмена'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "editor-closed",
+      "waitFor": "window.__dlg() === null",
+      "timeout": 20000
+    }
+  ]
+}

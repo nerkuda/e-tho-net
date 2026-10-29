@@ -30,7 +30,7 @@
  * the zone drop handlers create thoughts with an attachment.
  */
 
-import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 // Строки кандидатов-дублей рисует общая выпадашка подсказок (общая сборка
@@ -45,7 +45,7 @@ import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { addLinkPropertyValue } from '../lib/link-property-write.js';
-import { notice } from '../lib/notice.js';
+import { notice, noticePartial } from '../lib/notice.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdLookupQuery, isNotFoundError } from '../lib/pure.js';
 import { buildEntityCombo, loadCrossNetworkCandidates, type LinkPropertyPick } from '../lib/entity-picker.js';
@@ -243,9 +243,10 @@ export function mountAddDialog(): void {
  * `anchorTitle` is the anchor's OWN name: the dialog's «вверх/вниз к …» suffix
  * names the call owner (08-ui-spec.md §4.1–4.2), which for an ellipse drag is
  * the thought whose ellipse was dragged — passing nothing used to make the
- * suffix name the FOCUSED thought instead (ошибка c8bd4676). Callers that do
- * not know the anchor's name still get the focus fallback of
- * {@link pickThoughtsDialog}.
+ * suffix name the FOCUSED thought instead (ошибка c8bd4676). Out-of-canvas
+ * callers that only know the anchor id (the sibling parent of «налево») get
+ * the name read from the thought itself; if that read fails the suffix names
+ * the id — never the focused thought (ошибка 89964a9b).
  */
 export async function openAddDialog(ctx: {
   anchorId: string | null;
@@ -264,10 +265,19 @@ export async function openAddDialog(ctx: {
   } catch {
     propertyRows = [];
   }
+  // Якорь вне холста приходит одним id (родитель «налево»): имя читаем у самой
+  // мысли, и только при неудаче подписываем якорь его id. Подставлять имя
+  // мысли в фокусе запрещено — диалог назвал бы не того родителя (89964a9b).
+  let anchorTitle = ctx.anchorTitle;
+  if (ctx.anchorId !== null && anchorTitle === undefined) {
+    anchorTitle = (await readThoughtTitle(networkId, ctx.anchorId)) ?? ctx.anchorId;
+    // Поздний ответ не должен открыть диалог для мысли прежней сети (класс a3151e33).
+    if (store.state.networkId !== networkId) return;
+  }
   const result = await pickThoughtsDialog({
     networkId,
     anchor: ctx.anchorId !== null ? { id: ctx.anchorId, direction: ctx.direction } : null,
-    anchorTitle: ctx.anchorTitle,
+    anchorTitle,
     allowCreate: true,
     allowLinkType: false,
     linkProperty: { rows: propertyRows },
@@ -275,6 +285,19 @@ export async function openAddDialog(ctx: {
   });
   if (result === null) return;
   await insertIntoCanvas(networkId, ctx, result);
+}
+
+/**
+ * Имя мысли по id для подписи якоря диалога. Ошибка чтения — `null`:
+ * вызывающий подпишет якорь его id, но НЕ именем мысли в фокусе (89964a9b).
+ */
+async function readThoughtTitle(networkId: string, id: string): Promise<string | null> {
+  try {
+    const thought = await etn.thoughts.get(networkId, id);
+    return thought.title;
+  } catch {
+    return null;
+  }
 }
 
 /** Creates/links every picked item (the old insertAll flow, L19 focus). */
@@ -343,8 +366,10 @@ async function insertIntoCanvas(
       failed++;
     }
   }
-  if (failed > 0) notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
-  else notice(`Готово: ${created}.`);
+  noticePartial(
+    failed > 0 ? `Создано/связано: ${created}, ошибок: ${failed}` : `Готово: ${created}.`,
+    failed,
+  );
   // Диалог добавления связи с карты пишет РЕБРО (в т.ч. типизированное, которое
   // видно значением свойства-связи фокуса). Своего realtime-эха у клиента нет,
   // а сверка окрестности замечает не всякую правку: второе ребро другого типа к
@@ -353,7 +378,7 @@ async function insertIntoCanvas(
   // записи; перечитывание идемпотентно.
   if (ctx.anchorId !== null && created > 0) notifyPropertyValuesRefreshed();
   scheduleRefresh();
-  if (result.focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
+  if (result.focusFirst && firstAddedId !== null) focusFromUi(firstAddedId);
 }
 
 /** Счётчик диалогов добавления: уникальные id контекстов диспетчера. */
@@ -618,6 +643,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                     parsed.title,
                     parsed.synonyms,
                     searchFilter,
+                    'search',
                   );
             acceptCandidates(
               hits.filter(

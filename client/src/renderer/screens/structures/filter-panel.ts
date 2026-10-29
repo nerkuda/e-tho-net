@@ -53,7 +53,6 @@ import {
   filterTreeToAst,
   parseFilterAstState,
   parseFilterDefinitionTree,
-  withReverseLinkPropertySides,
   type FilterCriteriaState,
   type FilterTreeLeaf,
   type FilterTreeNode,
@@ -72,6 +71,7 @@ import { resolveFirstDayOfWeek } from '../../lib/dates.js';
 import type { FilterFooterButtonSpec } from '../../lib/filter-footer.js';
 import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, onQueryInvalidated, queryKeys } from '../../lib/live/index.js';
+import { propertyCatalogueWithSides, reloadPropertyCatalogue } from '../../lib/property-catalogue.js';
 import {
   predefinedFilterIds,
   predefinedFiltersToCreate,
@@ -83,7 +83,7 @@ import {
   type SavedFilterRow,
 } from '../../lib/saved-filter-controller.js';
 import { registerThoughtDropField } from '../../lib/thought-drop.js';
-import { store } from '../../state.js';
+import { getRtStatus, store } from '../../state.js';
 
 /** Filter-panel width limits, px (the splitter drag clamps to this range). */
 export const FILTER_W_MIN = 230;
@@ -155,10 +155,20 @@ let savedFilterName: string | null = null;
 let savedDefinition: unknown = null;
 /** Записи диагностики от сервера (выборка/ошибка) — показываются в строках. */
 let serverIssues: readonly FilterIssue[] = [];
-/** Property registry: id → registry row (0.6.5: one property, one id). */
-const propertyDefs = new Map<string, NetworkProperty>();
-/** Signature of the catalogues the panel depends on (rebuild on change). */
+/** Подпись каталогов, от которых зависит чтение реестра свойств (повтор при смене). */
 let catalogueSignature = '';
+
+/**
+ * Подпись входа чтения реестра свойств: сеть, каталоги типов, видимость и
+ * rt-статус. Одна функция на оба места чтения — подписку и начальную загрузку
+ * монтирования: у начальной загрузки тоже есть «неотработанный» вход, и
+ * разошедшиеся формулы дали бы тихое расхождение подписей (ошибка 76282fbc).
+ * Статус соединения — вход: после обрыва каталог свойств ОБЯЗАН перечитаться,
+ * иначе конструктор условий живёт с пустым реестром до перезапуска.
+ */
+function catalogueSignatureNow(): string {
+  return `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}|${getRtStatus(store.state)}`;
+}
 /** Последний увиденный первый день недели сети (пересборка на смене). */
 let firstDayOfWeekSeen = 1;
 /** Отписка store-подписки панели (teardown вида, ошибка b5278f9a). */
@@ -171,6 +181,22 @@ let unsubscribeStore: (() => void) | null = null;
 /** Current filter state (source of truth for the query). */
 export function getFilterState(): FilterState {
   return state;
+}
+
+/**
+ * Сброс состояния панели к дефолтному (пустой отбор). Зовётся при
+ * инициализации экрана на НОВОЙ паре «сеть + вкладка»: панель — модульный
+ * синглтон и переживает перемонтирование, поэтому без сброса отбор прежней
+ * сети попал бы в запрос новой (ошибка 58c55bb9). Сохранённый отбор и
+ * серверная диагностика прежней сети не переживают смену пары.
+ */
+export function resetFilterState(): void {
+  state = defaultState();
+  filterName = '';
+  savedFilterName = null;
+  savedDefinition = null;
+  serverIssues = [];
+  renderPanel();
 }
 
 /** Replaces the state (L4 restore / saved filter applied) and rebuilds the DOM. */
@@ -407,9 +433,21 @@ function applyLegacyTraversalMode(node: FilterTreeNode): void {
   for (const child of node.children) applyLegacyTraversalMode(child);
 }
 
-/** Загрузить реестр свойств сети ДО разбора снимка/сохранённого отбора. */
-export async function preloadFilterRegistry(): Promise<void> {
-  await loadPropertyDefs();
+/**
+ * Загрузить реестр свойств сети ДО разбора снимка/сохранённого отбора.
+ *
+ * `false` — чтение не удалось: вход НЕ отработан. Подпись каталога сбрасывается
+ * тем же правилом, что и у чтения по подписке (76282fbc), поэтому следующий тик
+ * store повторит чтение. Результат возвращается вызывающему: разбор снимка без
+ * реестра теряет условия по свойствам, и он обязан отложить переразбор
+ * (ошибка cdeb62f1 — прежде отказ здесь глотался).
+ */
+export async function preloadFilterRegistry(): Promise<boolean> {
+  const signature = catalogueSignatureNow();
+  const ok = await loadPropertyDefs();
+  // Чужую, более новую подпись не трогаем — тот же сторож, что у подписки.
+  if (!ok && catalogueSignature === signature) catalogueSignature = '';
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +478,18 @@ function treeUsesKind(node: FilterTreeNode | null | undefined, kind: FilterAstEn
  * настройка сети «Показывать неактуальные мысли и связи» снимает дефолт по
  * `active` — как снимал его плоский `show_inactive`. Так дерево из редактора
  * даёт тот же результат, что прежняя плоская панель, и не расширяется молча.
+ *
+ * Дефолты видимости ВСЕГДА СУЖАЮТ выдачу (ошибка 7f55e8ac; тот же класс, что
+ * a65d27d9 у отбора типа мысли), поэтому место впекания зависит от операции
+ * корня: группа «И» впитывает их, а корень «ИЛИ»/«НЕ» и одиночное условие
+ * оборачиваются — `(A ИЛИ B) И (active eq true) И (trashed eq false)`. Внутри
+ * «ИЛИ» дефолты расширили бы выдачу до всех живых мыслей, внутри «НЕ» сломали
+ * бы аричность (ровно один ребёнок).
+ *
+ * Здесь, в отличие от сохранённого определения отбора типа мысли, дефолты не
+ * персистятся: это политика МЕСТА на время запроса (видимость — настройка
+ * сети), поэтому метка `service` и разворачивание обёртки при чтении не нужны —
+ * дерево панели дефолтов не содержит.
  */
 export function withVisibilityDefaults(
   filter: FilterAstNode,
@@ -454,7 +504,9 @@ export function withVisibilityDefaults(
     extra.push({ entity: { kind: 'trashed' }, operator: 'eq', value: false });
   }
   if (extra.length === 0) return filter;
-  if ('children' in filter) return { ...filter, children: [...filter.children, ...extra] };
+  if ('children' in filter && filter.op === 'and') {
+    return { ...filter, children: [...filter.children, ...extra] };
+  }
   return { op: 'and', children: [filter, ...extra] };
 }
 
@@ -567,13 +619,32 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
       firstDayOfWeekSeen = firstDayOfWeek;
       renderPanel();
     }
-    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}|${store.state.showTrash ? 1 : 0}`;
+    // Статус соединения — вход чтения реестра свойств: после обрыва каталог
+    // свойств ОБЯЗАН перечитаться, иначе конструктор условий живёт с пустым
+    // реестром до перезапуска (ошибка 76282fbc — класс «подпись рендера, снятая
+    // до чтения, без rt-статуса»).
+    const signature = catalogueSignatureNow();
     if (signature !== catalogueSignature) {
       catalogueSignature = signature;
-      void loadPropertyDefs().then(() => renderPanel());
+      void loadPropertyDefs().then((ok) => {
+        // Отказ чтения — подпись не считается отработанной: следующий тик store
+        // (в первую очередь переход в `connected`) повторит чтение. Чужую,
+        // более новую подпись не трогаем.
+        if (!ok && catalogueSignature === signature) catalogueSignature = '';
+        renderPanel();
+      });
     }
   });
-  void loadPropertyDefs().then(() => renderPanel());
+  // Начальная загрузка реестра — такой же вход чтения: её отказ обязан
+  // оставить подпись «неотработанной» (`''`), иначе устаревшая подпись от
+  // прошлого монтирования совпадёт с текущей и следующий тик store не повторит
+  // чтение (ошибка 76282fbc, замечание верификатора 2026-10-24). Успех
+  // фиксирует подпись — тот же вход подписка повторно не перечитывает.
+  const initialSignature = catalogueSignatureNow();
+  void loadPropertyDefs().then((ok) => {
+    catalogueSignature = ok ? initialSignature : '';
+    renderPanel();
+  });
 }
 
 /**
@@ -589,6 +660,10 @@ export function unmountFilterPanel(): void {
   unsubscribeStore = null;
   host = null;
   callbacks = null;
+  // Подпись принадлежит смонтированной панели: после unmount она
+  // недействительна, и близкое монтирование обязано прочитать реестр заново
+  // (ошибка 76282fbc: иначе отказ чтения при совпавшей подписи не повторился бы).
+  catalogueSignature = '';
 }
 
 /**
@@ -639,27 +714,31 @@ function isHierarchyRootsLeaf(node: FilterTreeNode): boolean {
 
 /**
  * Loads the property registry of the network (0.6.5 — task 171a438e): one
- * REST call replaces the per-type walk the panel used to do.
+ * REST call replaces the per-type walk the panel used to use.
+ * Returns `false` when the server read failed — the caller must not treat the
+ * panel's catalogue signature as worked out then (76282fbc).
+ *
+ * Само чтение и кэш — общий живой справочник (`lib/property-catalogue.ts`,
+ * ошибка 6d25c224): его карту читают все места монтажа конструктора условий,
+ * поэтому изменение реестра видно и в уже открытой панели.
  */
-async function loadPropertyDefs(): Promise<void> {
+async function loadPropertyDefs(): Promise<boolean> {
   const networkId = store.state.networkId;
-  if (networkId === null) return;
-  propertyDefs.clear();
-  try {
-    const rows = await etn.propertyRegistry.list(networkId);
-    for (const row of rows) propertyDefs.set(row.id, row);
-  } catch {
-    // Network read failed — the panel falls back to the empty registry.
-  }
+  if (networkId === null) return true;
+  // `fresh` — путь «отказ не отработан»: следующий тик store повторяет чтение,
+  // не дожидаясь зависшего запроса (ошибка 76282fbc).
+  return reloadPropertyCatalogue(networkId, { fresh: true });
 }
 
 /**
  * Реестр свойств для конструктора условий: к загруженному реестру добавлены
  * обратные стороны свойств-связей (задача df992826) — тот же хелпер, что и в
  * диалоге отбора типа мысли: оба места — применения одного конструктора (S4).
+ * Карта — ЖИВАЯ (общий справочник): редактор видит её обновления без пересборки.
  */
 function registryWithSides(): Map<string, NetworkProperty> {
-  return withReverseLinkPropertySides(propertyDefs, store.state.linkTypes);
+  const networkId = store.state.networkId;
+  return networkId === null ? new Map() : propertyCatalogueWithSides(networkId);
 }
 
 // ---------------------------------------------------------------------------

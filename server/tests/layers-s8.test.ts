@@ -301,6 +301,63 @@ describe(
       }
     });
 
+    it('partial merge: a type view drags its owning type into the closed set (0.14.1, d66c45a2)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const layer = await createLayer(ctx, 'Отборы типа в слое');
+        await selectLayer(ctx, layer.id, WORKER);
+
+        const typeRes = await call(
+          ctx,
+          'POST',
+          '/thought-types',
+          { name: 'Тип в слое' },
+          { clientId: WORKER },
+        );
+        assert.equal(typeRes.statusCode, 201, typeRes.body?.toString());
+        const typeId = (typeRes.json().data as { id: string }).id;
+
+        const viewRes = await call(
+          ctx,
+          'POST',
+          `/thought-types/${typeId}/views`,
+          { name: 'Отбор в слое', definition: JSON.stringify({}) },
+          { clientId: WORKER },
+        );
+        assert.equal(viewRes.statusCode, 201, viewRes.body?.toString());
+        const viewId = (viewRes.json().data as { id: string }).id;
+
+        // Отбор без типа-владельца — висячая ссылка: набор не замкнут.
+        const broken = await merge(ctx, layer.id, { thought_type_views: [viewId] });
+        assert.equal(broken.statusCode, 422);
+        const missing = broken.json().error.details.missing_closure as Array<{
+          table: string;
+          id: string;
+          referenced_by: { table: string; id: string };
+        }>;
+        assert.deepEqual(missing, [
+          {
+            table: 'thought_types',
+            id: typeId,
+            referenced_by: { table: 'thought_type_views', id: viewId },
+          },
+        ]);
+
+        // Тип в наборе — слияние проходит, висячих ссылок нет.
+        const ok = await merge(ctx, layer.id, {
+          thought_type_views: [viewId],
+          thought_types: [typeId],
+        });
+        assert.equal(ok.statusCode, 200, JSON.stringify(ok.json()));
+        assert.equal(layerRows(ctx, 'thought_type_views', layer.id), 0);
+        assert.equal(layerRows(ctx, 'thought_types', layer.id), 0);
+        assert.equal(rowCount(ctx, 'thought_type_views', viewId), 1);
+        assert.equal(rowCount(ctx, 'thought_types', typeId), 1);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('full merge passes when a layer-edited value holds a MULTIPLE thought_ref array (0.6.5 fix)', async () => {
       const ctx = await buildRestContext();
       try {

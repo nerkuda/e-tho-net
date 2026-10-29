@@ -16,6 +16,13 @@
  * Grid (`table.ts`), у списка — общий компонент `list.ts`. Ядро лишь отдаёт
  * адаптеру решение «какой индекс/сущность становится текущей».
  *
+ * **Роли стрелок (решение пользователя 2026-10-25, стандарт b6b2821d, задача
+ * 15236418).** ←/→ — переход к соседнему элементу слева/справа в
+ * многоколоночном наборе (`left`/`right`); в наборе с одной колонкой соседей
+ * нет, и клавиша не перехватывается. Сворачивание/разворачивание узла (группы,
+ * полки, свёртываемого блока) — `Ctrl+↑` (`collapse`) и `Ctrl+↓` (`expand`);
+ * прежняя роль ←/→ перешла к ним.
+ *
  * Модуль чистый: ни DOM-узлов, ни слушателей, ни побочных эффектов (кроме
  * безопасного чтения свойств узла в {@link isEditingTarget}).
  */
@@ -24,11 +31,17 @@
 export type NavAction =
   | 'up'
   | 'down'
+  /** ← — к соседнему элементу слева (многоколоночный набор). */
+  | 'left'
+  /** → — к соседнему элементу справа. */
+  | 'right'
   | 'home'
   | 'end'
   | 'pageUp'
   | 'pageDown'
+  /** Ctrl+↑ — свернуть узел/группу (прежняя роль ←). */
   | 'collapse'
+  /** Ctrl+↓ — развернуть узел/группу (прежняя роль →). */
   | 'expand'
   | 'activate'
   /** Alt+↑ — сдвинуть текущую сущность на соседа вверх (порядок, не курсор). */
@@ -43,6 +56,15 @@ export interface NavKeyModifiers {
    * (жадный перебор соседей в группе) и глушит прочие стрелки навигации.
    */
   altKey?: boolean;
+  /**
+   * Удерживается Ctrl: ↑/↓ становятся «свернуть/развернуть узел»
+   * (`collapse`/`expand`). Ctrl+Home/End остаются границами списка.
+   */
+  ctrlKey?: boolean;
+  /** Удерживается Meta (раскладка macOS) — для передачи в представления. */
+  metaKey?: boolean;
+  /** Удерживается Shift — для передачи в представления. */
+  shiftKey?: boolean;
 }
 
 /**
@@ -53,12 +75,12 @@ export interface NavKeyModifiers {
 export const NAV_KEY_ACTIONS: Readonly<Record<string, NavAction>> = {
   ArrowUp: 'up',
   ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
   Home: 'home',
   End: 'end',
   PageUp: 'pageUp',
   PageDown: 'pageDown',
-  ArrowLeft: 'collapse',
-  ArrowRight: 'expand',
   Enter: 'activate',
 };
 
@@ -68,12 +90,19 @@ export const NAV_KEY_ACTIONS: Readonly<Record<string, NavAction>> = {
  * С Alt карта меняется: `Alt+↑/↓` — это «сдвинуть порядок» (действия
  * `moveUp`/`moveDown`), а не перемещение курсора, поэтому обычная навигация
  * по стрелкам с Alt молчит. Прочие стрелки с Alt навигацией не управляют.
+ *
+ * С Ctrl верх/низ переключают свёрнутость узла (`collapse`/`expand`) —
+ * стандарт b6b2821d; Ctrl+Home/End остаются границами списка.
  */
 export function resolveNavAction(key: string, modifiers: NavKeyModifiers = {}): NavAction | null {
   if (modifiers.altKey === true) {
     if (key === 'ArrowUp') return 'moveUp';
     if (key === 'ArrowDown') return 'moveDown';
     return null;
+  }
+  if (modifiers.ctrlKey === true) {
+    if (key === 'ArrowUp') return 'collapse';
+    if (key === 'ArrowDown') return 'expand';
   }
   const action = NAV_KEY_ACTIONS[key];
   return action ?? null;
@@ -132,12 +161,15 @@ export function nextNavIndex(
       return Math.min(last, current + step);
     case 'pageUp':
       return Math.max(0, current - step);
+    case 'left':
+    case 'right':
     case 'collapse':
     case 'expand':
     case 'activate':
     case 'moveUp':
     case 'moveDown':
-      // Перестановка порядка не двигает курсор — им распоряжается потребитель.
+      // Перестановка порядка, свёрнутость и переход по колонкам не двигают
+      // строку — ими распоряжается потребитель/адаптер.
       return current;
   }
 }
@@ -192,6 +224,16 @@ export type SpatialLateral = 'center' | 'overlap';
 export interface SpatialPickOptions {
   /** Метрика бокового смещения (см. {@link SpatialLateral}); по умолчанию `center`. */
   lateral?: SpatialLateral;
+  /**
+   * Горизонтальный шаг — только в СВОЁМ ряду: цель обязана пересекаться с
+   * текущей по вертикали. Без этого с карточки неполного последнего ряда → в
+   * предыдущем (полном) ряду находится цель «справа-сверху», и ←/→ прыгают
+   * через ряд — не «сосед», а произвольная карточка (решение пользователя
+   * 2026-10-25: ←/→ ходят к соседу слева/справа, нет соседа — не
+   * перехватывать). Нужен сеточным спискам («Полки»); карте не подходит —
+   * облачка-точки стоят произвольно, и «ряд» у них не определён.
+   */
+  sameRowOnly?: boolean;
 }
 
 /** Зазор между отрезками `[a0,a1]` и `[b0,b1]` (0 при перекрытии). */
@@ -235,6 +277,14 @@ export function pickSpatialTarget<T extends NavBox>(
   let bestScore = Number.POSITIVE_INFINITY;
   for (const item of items) {
     if (keyOf(item) === currentKey) continue;
+    // Горизонтальный шаг вне своего ряда — не сосед (см. SpatialPickOptions.sameRowOnly).
+    if (
+      options.sameRowOnly === true &&
+      dx !== 0 &&
+      intervalGap(current.y, current.y + current.h, item.y, item.y + item.h) > 0
+    ) {
+      continue;
+    }
     const vx = item.x + item.w / 2 - cx;
     const vy = item.y + item.h / 2 - cy;
     const forward = vx * dx + vy * dy;

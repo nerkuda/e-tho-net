@@ -84,8 +84,12 @@ export function existsInBaseLayer(ndb: NetworkDb, table: BranchableTable, id: st
   );
 }
 
-/** Touch `layers.last_activity_at` of the current layer (docs/13-layers.md §2.2). */
-function touchLayerActivity(ndb: NetworkDb): void {
+/**
+ * Touch `layers.last_activity_at` of the current layer (docs/13-layers.md §2.2).
+ * Exported for слоёных операций, которые пишут строку не через
+ * `materializeShadow` (перенос владельца отбора — операция 85414fbd).
+ */
+export function touchLayerActivity(ndb: NetworkDb): void {
   ndb
     .prepare('UPDATE layers SET last_activity_at = ? WHERE id = ?')
     .run(new Date().toISOString(), ndb.layerId);

@@ -22,10 +22,12 @@ export type StructurePropertyValue = string | number | boolean;
 
 /**
  * One property condition of a filter. `value` is a scalar for scalar
- * operations and an array for `in`/`not_in` (OR inside the list).
- * Allowed ops per property `value_type` (03-server-api.md §6.10):
- * text/url — contains|eq|in|not_in; number/date — eq|gt|lt; bool — eq.
- * Свойства-связи отбора не имеют (значения — рёбра).
+ * operations and an array for `in`/`not_in` (OR inside the list); для пары
+ * наличия (`is_empty`/`not_empty`) значение не нужно и игнорируется.
+ * Набор операторов — канон `FLAT_PROPERTY_OPS` (14); применимость по
+ * `value_type` проверяет движок (`OPS_BY_VALUE_TYPE`, требование 00eb824b).
+ * Свойства-связи отбираются по рёбрам (`links_v`): наличие — живое ребро,
+ * а не строка `property_values`.
  */
 export interface StructurePropertyCondition {
   property_id: string;

@@ -21,7 +21,7 @@
  * rebuilds the clouds), and the cursor resets when the focus changes.
  */
 
-import { setFocus } from '../app.js';
+import { focusFromUi } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { currentThoughtId } from '../history.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
@@ -374,7 +374,7 @@ function openCursorInEditor(): void {
 function focusCursor(): void {
   const id = cursorId;
   if (id === null || id === store.state.focus?.focused.id) return;
-  void setFocus(id);
+  focusFromUi(id);
 }
 
 /** Ctrl+Shift+Up/Down: move the cursor thought one slot inside its zone —

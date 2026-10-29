@@ -16,6 +16,7 @@ import {
   splitCompoundTitle,
   splitMentionWords,
   synonymPatternToRegex,
+  synonymWordPatternMatch,
 } from '../src/mentions.js';
 
 describe('splitCompoundTitle (08-ui-spec §2.2.3)', () => {
@@ -195,5 +196,41 @@ describe('mentionPrefilterMarkers + mentionPrefilterPass', () => {
       assert.ok(re.test(text), `regex must match: ${synonym} in ${text}`);
       assert.ok(pass(synonym, text), `prefilter must pass a matching pair: ${synonym} in ${text}`);
     }
+  });
+});
+
+describe('synonymWordPatternMatch — сценарий «поиск» (требование 35218826)', () => {
+  it('слово запроса совпадает с ОДНИМ словом `*`-синонима по границам слова', () => {
+    // DoD задачи f0b06700: словоформа длиннее паттерна совпадает.
+    assert.ok(synonymWordPatternMatch('проектирование', 'проектиров* функциональност*'));
+    assert.ok(synonymWordPatternMatch('функциональности', 'проектиров* функциональност*'));
+    assert.ok(synonymWordPatternMatch('новая', 'дизайн* нов* фич*'));
+    assert.ok(synonymWordPatternMatch('функциональность', 'дизайн* нов* фич*') === false);
+    // Паттерн не пересекает границу слова: хвост чужого слова не подходит.
+    assert.equal(synonymWordPatternMatch('ектир', 'проектиров*'), false);
+    assert.equal(synonymWordPatternMatch('проектирование', 'тиров*'), false);
+    // `\S*` не пересекает пробел: многословный синоним — это набор отдельных
+    // слов-паттернов, каждое слово запроса матчится независимо.
+    assert.equal(synonymWordPatternMatch('проектиров функциональност', 'проектиров* функциональност*'), false);
+  });
+
+  it('`*` в конце/середине и пустые чанки', () => {
+    assert.ok(synonymWordPatternMatch('ёжик', 'ёж*'));
+    assert.ok(synonymWordPatternMatch('новость', 'нов*ть'));
+    assert.ok(synonymWordPatternMatch('счетчик', 'сч*т*к'));
+    // Одиночная `*` соответствует любому одному слову.
+    assert.ok(synonymWordPatternMatch('чтоугодно', '*'));
+  });
+
+  it('синоним без `*` не матчится — литеральную ветку держит вызывающий', () => {
+    assert.equal(synonymWordPatternMatch('roadmap', 'roadmap'), false);
+    assert.equal(synonymWordPatternMatch('', 'нов*'), false);
+    assert.equal(synonymWordPatternMatch('нов', ''), false);
+  });
+
+  it('нормализация NFC+lowercase с обеих сторон (D6)', () => {
+    assert.ok(synonymWordPatternMatch('ПРОЕКТИРОВАНИЕ', 'проектиров*'));
+    assert.ok(synonymWordPatternMatch('проектирование'.normalize('NFD'), 'проектиров*'));
+    assert.ok(synonymWordPatternMatch('ёжик', 'ЁЖ*'.normalize('NFC').toLowerCase()));
   });
 });

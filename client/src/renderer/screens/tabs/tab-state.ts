@@ -43,6 +43,83 @@ export function getActiveNetworkId(): string | null {
   return getActiveTab()?.network_id ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Пер-вкладочные снимки экранов принадлежат СЕТИ вкладки (ошибка 58c55bb9)
+// ---------------------------------------------------------------------------
+//
+// `structures_state`/`chronicle_state`/`activity_state` — состояние ЭКРАНА в
+// конкретной сети. Панель отбора одной сети, применённая к другой, отправляет
+// на сервер чужие типы/свойства и получает 422 «Тип … удалён из сети».
+// Поэтому «чей это снимок» решается ОДНИМ помощником для всех экранов и
+// отложенных повторов, а не проверкой `tab.network_id` в каждом месте.
+
+/** Поля строки вкладки, несущие снимки экранов (пер-вкладочное состояние). */
+export const TAB_SCREEN_STATE_FIELDS = [
+  'structures_state',
+  'chronicle_state',
+  'activity_state',
+] as const;
+export type TabScreenStateField = (typeof TAB_SCREEN_STATE_FIELDS)[number];
+
+/** Пара «сеть + вкладка», которой принадлежит состояние экрана. */
+export interface ScreenPair {
+  networkId: string;
+  tabId: string | null;
+}
+
+/** Текущая пара «сеть + вкладка» из store (`null` — сеть не открыта). */
+export function currentScreenPair(): ScreenPair | null {
+  const networkId = store.state.networkId;
+  if (networkId === null) return null;
+  return { networkId, tabId: store.state.activeTabId };
+}
+
+/** Совпадает ли пара с текущей (сеть И вкладка) — сторож отложенных путей. */
+export function isCurrentScreenPair(pair: ScreenPair): boolean {
+  return store.state.networkId === pair.networkId && store.state.activeTabId === pair.tabId;
+}
+
+/**
+ * Относится ли вкладка к этой сети. Снимки экранов адресуются парой
+ * «сеть + вкладка»: и чтение, и запись снимка обязаны сверять сеть вкладки
+ * (ошибка 58c55bb9).
+ */
+export function tabBelongsToNetwork(networkId: string, tabId: string | null): boolean {
+  if (tabId === null) return false;
+  return getTabById(tabId)?.network_id === networkId;
+}
+
+/**
+ * Снимок экрана из строки вкладки — только если вкладка относится к ЭТОЙ сети.
+ * Вкладка чужой сети (окно переключения в `openNetwork`, «осиротевшая» пара)
+ * снимка не даёт: применять его к текущей сети нельзя (ошибка 58c55bb9).
+ */
+export function readTabScreenState(
+  networkId: string,
+  tabId: string | null,
+  field: TabScreenStateField,
+): string | null {
+  if (!tabBelongsToNetwork(networkId, tabId)) return null;
+  if (tabId === null) return null;
+  return getTabById(tabId)?.[field] ?? null;
+}
+
+/**
+ * Вкладка, в которую разрешено открыть сеть: только вкладка ЭТОЙ сети.
+ * Вкладка другой сети не переиспользуется — иначе её пер-вкладочные снимки
+ * (и подпись на полосе) принадлежали бы чужой сети (ошибка 58c55bb9);
+ * вызывающий открывает новую вкладку.
+ */
+export function findOpenTargetTab(
+  tabs: TabDto[],
+  tabId: string | undefined,
+  networkId: string,
+): TabDto | null {
+  if (tabId === undefined) return null;
+  const target = tabs.find((t) => t.tab_id === tabId) ?? null;
+  return target !== null && target.network_id === networkId ? target : null;
+}
+
 /** Replaces the tab list (after `etn.tabs.list` or any tab mutation). */
 export function setTabs(tabs: TabDto[]): void {
   store.update({ tabs });

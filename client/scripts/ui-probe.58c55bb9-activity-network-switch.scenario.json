@@ -1,0 +1,160 @@
+{
+  "name": "58c55bb9-activity-network-switch",
+  "description": "Официальный GUI-сценарий ошибки 58c55bb9 для «Событий»: снимок вкладки сети A содержит условие «Сущность = Проба стенда». После переключений A→B→A→B панель B обязана перерисоваться под фактическое (пустое) состояние: ни подписи, ни id условия прежней сети, строк условий 0. Запрос B при этом уходит без условий A. Красный гейт — b-panel-reset: до фикса панель показывает чужое условие.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"События\"]') !== null"
+    },
+    {
+      "name": "create-network-b",
+      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B 58c55bb9 activity'); window.__netB = n.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 activity'))"
+    },
+    {
+      "name": "open-network-b-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B 58c55bb9 activity')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 activity'))"
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('button.view-tab[title=\"События\"]') !== null"
+    },
+    {
+      "name": "inject-a-snapshot",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const tab = tabs.find((t) => t.network_id === '{{networkId}}'); if (tab === undefined) return 'no-tab'; const state = { filter: { version: 1, filter: { entity: { kind: 'entity_id' }, operator: 'eq', value: '{{thoughtId}}', labels: { value: '{{seedTitle}}' } } }, offset: 0, savedFilterId: null }; await window.etn.tabs.updateState(tab.tab_id, { activity_state: JSON.stringify(state) }); const fresh = (await window.etn.tabs.list()).find((t) => t.tab_id === tab.tab_id); return typeof fresh.activity_state === 'string' && fresh.activity_state.includes('{{thoughtId}}') ? 'ok' : 'not-persisted'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "refresh-tabs-via-b",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9 activity')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-refresh",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 activity'))"
+    },
+    {
+      "name": "back-to-tab-a-fresh",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-fresh",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('button.view-tab[title=\"События\"]') !== null"
+    },
+    {
+      "name": "open-activity-a",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"События\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "a-panel-applied",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 50; i += 1) { const area = document.querySelector('.activity-filter'); if (document.querySelectorAll('.activity-filter .ft-row').length > 0 && area !== null && (area.textContent || '').includes('{{seedTitle}}')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "switch-to-b-first",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9 activity')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-again",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 activity'))"
+    },
+    {
+      "name": "back-to-tab-a-second",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-second",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelectorAll('.activity-filter .ft-row').length > 0"
+    },
+    {
+      "name": "switch-to-b-final",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 58c55bb9 activity')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-final",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 58c55bb9 activity'))"
+    },
+    {
+      "name": "open-activity-b",
+      "eval": "(() => { const b = document.querySelector('button.view-tab[title=\"События\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "b-panel-reset",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 60; i += 1) { const area = document.querySelector('.activity-filter'); const rows = document.querySelectorAll('.activity-filter .ft-row').length; const text = area === null ? '' : (area.textContent || ''); const foreign = text.includes('{{thoughtId}}') || text.includes('{{seedTitle}}'); const issues = document.querySelectorAll('.activity-filter .ft-issue').length; if (rows === 0 && !foreign && issues === 0) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "b-tab-snapshot-has-no-foreign",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === window.__netB); return t === undefined ? 'no-tab' : (t.activity_state === null || !t.activity_state.includes('{{thoughtId}}')); })()",
+      "expect": true
+    }
+  ]
+}

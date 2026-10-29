@@ -56,8 +56,11 @@ export type EditorTarget =
   | { kind: 'link'; id: string; link: Link }
   | { kind: 'publication'; id: string; publication?: Publication };
 
-/** Realtime connection status as reported by the main process. */
-export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
+/** Realtime connection status as reported by the main process (de34b35b). */
+export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspect';
+
+/** Visual qualifier of a realtime status (`server-restart` → «Сервер перезапускается…»). */
+export type RtStatusDetail = 'server-restart';
 
 /** UI theme (L5 `client_meta.theme`, L10). */
 export type Theme = 'light' | 'dark';
@@ -67,6 +70,11 @@ export interface AppState {
   screen: Screen;
   /** Active server profile id (L5), null before onboarding finishes. */
   profileId: string | null;
+  /** Human name of the active server for the status tooltip (замечания
+   *  заказчика после проверки GUI): the profile label, falling back to the
+   *  host of its `baseUrl`. Filled on every successful profile connect and
+   *  kept across network/tab switches (the server does not change). */
+  serverLabel: string | null;
   /** Current user (`GET /me`). */
   me: CurrentUser | null;
   /** Opened network meta (L2). */
@@ -138,6 +146,9 @@ export interface AppState {
    *  `networkId` открытой сети. Активный статус берётся по
    *  {@link AppState.networkId}; fallback — {@link AppState.rtStatus}. */
   rtStatusByNetwork: Record<string, RtStatus>;
+  /** Visual qualifiers per network (de34b35b): e.g. `server-restart` while a
+   *  planned restart is in progress. Absent key = plain status. */
+  rtStatusDetailByNetwork: Record<string, RtStatusDetail>;
   /** UI theme applied to the document root (L5 `client_meta.theme`, L10). */
   theme: Theme;
   /** Last realtime event description for the status bar (auto-hides). */
@@ -210,6 +221,7 @@ export interface AppState {
 const initial: AppState = {
   screen: 'onboarding',
   profileId: null,
+  serverLabel: null,
   me: null,
   network: null,
   networkId: null,
@@ -239,6 +251,7 @@ const initial: AppState = {
   thoughtTypes: [],
   rtStatus: 'idle',
   rtStatusByNetwork: {},
+  rtStatusDetailByNetwork: {},
   theme: 'light',
   lastEvent: null,
   editorTarget: null,
@@ -329,12 +342,86 @@ class Store {
       layerOverrides: { thought_ids: [], link_ids: [] },
       lockCache: {},
       lockCacheTick: 0,
+      // Connection state belongs to the networks that were open; dropping it
+      // prevents a stale green/red dot after reconnecting (de34b35b).
+      rtStatus: 'idle',
+      rtStatusByNetwork: {},
+      rtStatusDetailByNetwork: {},
     });
   }
 }
 
 /** The single renderer store instance. */
 export const store = new Store();
+
+/**
+ * Effective realtime status of the ACTIVE network (defect de34b35b). Statuses
+ * are per network; switching a tab must show that network's status, not the
+ * last event's. Falls back to the flat `rtStatus` for network-less states.
+ */
+export function getRtStatus(state: AppState): RtStatus {
+  const networkId = state.networkId;
+  if (networkId !== null) {
+    // No per-network entry yet (tab just opened / snapshot not pulled) — show
+    // a neutral «Подключение…», never the flat status of another network.
+    return state.rtStatusByNetwork[networkId] ?? 'connecting';
+  }
+  return state.rtStatus;
+}
+
+/** Effective visual qualifier of the ACTIVE network's status, or `null`. */
+export function getRtStatusDetail(state: AppState): RtStatusDetail | null {
+  const networkId = state.networkId;
+  if (networkId === null) return null;
+  return state.rtStatusDetailByNetwork[networkId] ?? null;
+}
+
+/**
+ * Subscribes to "the active network is connected again" and calls `retry`
+ * once, then unsubscribes (defect de34b35b, GUI review remark: an outage must
+ * not leave an editor tab stuck on an error until it is rebuilt).
+ *
+ * There is deliberately NO DOM-liveness check: the editor keeps only the
+ * active pane in the DOM and detaches the others while caching them — a
+ * detached pane is still alive and must reload after reconnect (verifier
+ * blocker: inactive tabs stayed on the error). Lifecycle is explicit now:
+ * the owner disposes the subscription when the pane is really evicted,
+ * rebuilt, or the user switches networks (network check below).
+ *
+ * Returns the unsubscribe function for the caller's own teardown paths.
+ */
+export function onReconnected(networkId: string | null, retry: () => void): () => void {
+  const unsubscribe = store.subscribe(() => {
+    if (store.state.networkId !== networkId) {
+      unsubscribe();
+      return;
+    }
+    if (getRtStatus(store.state) !== 'connected') return;
+    unsubscribe();
+    retry();
+  });
+  return unsubscribe;
+}
+
+/**
+ * Human server name for the realtime tooltip (замечания заказчика после
+ * проверки GUI): the profile label, falling back to the host of `baseUrl`.
+ * `null` when neither is usable — the tooltip then uses the generic wording
+ * («Подключено к серверу»).
+ */
+export function serverLabelOf(
+  profile: { label?: string | null; baseUrl?: string | null } | null | undefined,
+): string | null {
+  const label = profile?.label?.trim() ?? '';
+  if (label !== '') return label;
+  const baseUrl = profile?.baseUrl?.trim() ?? '';
+  if (baseUrl === '') return null;
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
+}
 
 /**
  * Applies an updated link to the focus edges so the canvas repaints the line

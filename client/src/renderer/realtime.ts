@@ -21,7 +21,12 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { etn } from './lib/etn.js';
 import { routeRealtimeEvent } from './lib/live/event-router.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
-import { store, type RtStatus } from './state.js';
+import {
+  getRtStatus,
+  store,
+  type RtStatus,
+  type RtStatusDetail,
+} from './state.js';
 import { markTabDirty } from './screens/tabs/tab-state.js';
 import { onNetworkLost } from './screens/tabs/tab-accessibility.js';
 
@@ -56,6 +61,8 @@ const effects: RealtimeEffects = {
 
 let initialized = false;
 let hideTimer: number | null = null;
+/** Networks whose `resume.stale` arrived while they were not active. */
+const staleNetworks = new Set<string>();
 
 /** How long the "last event" text stays in the status bar, ms (08-ui-spec.md §11). */
 const EVENT_TEXT_TTL_MS = 5_000;
@@ -66,6 +73,43 @@ const EVENT_TEXT_TTL_MS = 5_000;
  */
 export function setRealtimeEffects(next: Partial<RealtimeEffects>): void {
   Object.assign(effects, next);
+}
+
+/**
+ * Pulls the per-network status snapshot and merges it into the store
+ * (defect de34b35b). Called at init, again after the profile is connected
+ * (the pool appears only then, so the cold-start snapshot is empty) and after
+ * a network is opened. Missing `getStatuses` (partial test bridges) is a no-op.
+ */
+export async function refreshRealtimeStatuses(): Promise<void> {
+  const getStatuses = etn.realtime.getStatuses;
+  if (typeof getStatuses !== 'function') return;
+  try {
+    const snapshot = await getStatuses.call(etn.realtime);
+    const valid: RtStatus[] = [
+      'idle',
+      'connecting',
+      'connected',
+      'reconnecting',
+      'offline',
+      'suspect',
+    ];
+    const map = { ...store.state.rtStatusByNetwork };
+    const details = { ...store.state.rtStatusDetailByNetwork };
+    for (const entry of snapshot) {
+      if (!valid.includes(entry.status as RtStatus)) continue;
+      map[entry.networkId] = entry.status as RtStatus;
+      if (entry.detail === 'server-restart') details[entry.networkId] = 'server-restart';
+      else delete details[entry.networkId];
+    }
+    store.update({
+      rtStatusByNetwork: map,
+      rtStatusDetailByNetwork: details,
+      rtStatus: getRtStatus({ ...store.state, rtStatusByNetwork: map }),
+    });
+  } catch {
+    // Snapshot is best-effort: broadcast statuses still fill the map.
+  }
 }
 
 /** Connects the realtime bridge. Called once at boot. */
@@ -79,21 +123,61 @@ export function initRealtime(): void {
   // fires (~100 s) or forever, if no close frame ever arrives.
   window.addEventListener('online', () => etn.realtime.notifyOnline());
 
+  // Status is per network (defect de34b35b): keep the full map + the visual
+  // detail, and recompute the ACTIVE network's status on every change and on
+  // every tab switch (subscription below).
   etn.realtime.onStatusChange((payload) => {
-    // Q2: payload is `{networkId, status}` from TabRealtimePool.
-    const valid: RtStatus[] = ['idle', 'connecting', 'connected', 'reconnecting', 'offline'];
-    const obj = payload as { networkId?: unknown; status?: unknown };
+    const valid: RtStatus[] = [
+      'idle',
+      'connecting',
+      'connected',
+      'reconnecting',
+      'offline',
+      'suspect',
+    ];
+    const obj = payload as { networkId?: unknown; status?: unknown; detail?: unknown };
     const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
     const statusStr = typeof obj.status === 'string' ? obj.status : null;
     if (networkId === null || statusStr === null) return;
-    const next: RtStatus = valid.includes(statusStr as RtStatus)
-      ? (statusStr as RtStatus)
-      : 'offline';
+    // Unknown status is ignored (the previous value stays) — never silently
+    // converted into a red «Нет связи» (de34b35b).
+    if (!valid.includes(statusStr as RtStatus)) return;
+    const next = statusStr as RtStatus;
     const map = { ...store.state.rtStatusByNetwork, [networkId]: next };
-    const active = store.state.networkId;
-    const activeStatus =
-      active !== null && map[active] !== undefined ? map[active]! : next;
-    store.update({ rtStatusByNetwork: map, rtStatus: activeStatus });
+    const details = { ...store.state.rtStatusDetailByNetwork };
+    if (obj.detail === 'server-restart') details[networkId] = obj.detail as RtStatusDetail;
+    else delete details[networkId];
+    store.update({
+      rtStatusByNetwork: map,
+      rtStatusDetailByNetwork: details,
+      rtStatus: getRtStatus({ ...store.state, rtStatusByNetwork: map }),
+    });
+  });
+
+  // Initial pull (the snapshot is empty at cold start because the pool is
+  // created later, after `etn.server.connect`; `refreshRealtimeStatuses()` is
+  // called again right after connecting / opening a network).
+  void refreshRealtimeStatuses();
+
+  // Tab switch → recompute the active status from the per-network map. The
+  // guard against rewriting the same network makes the subscription
+  // non-recursive.
+  let lastNetworkId = store.state.networkId;
+  store.subscribe(() => {
+    const networkId = store.state.networkId;
+    if (networkId !== lastNetworkId) {
+      lastNetworkId = networkId;
+      const next = getRtStatus(store.state);
+      if (next !== store.state.rtStatus) store.update({ rtStatus: next });
+      // A stale event for this network arrived while it was inactive — the
+      // event is not lost, the visible state is re-read on activation.
+      if (networkId !== null && staleNetworks.delete(networkId)) effects.onStale();
+      return;
+    }
+    // Even without a switch, another network's event may have moved the
+    // effective status (fallback path uses `rtStatus`).
+    const derived = getRtStatus(store.state);
+    if (derived !== store.state.rtStatus) store.update({ rtStatus: derived });
   });
 
   etn.realtime.onStale((payload) => {
@@ -101,10 +185,17 @@ export function initRealtime(): void {
     const obj = payload as { networkId?: unknown; lastSeq?: unknown };
     const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
     if (networkId === null) return;
-    // UI-wide "stale" applies to the active network — non-active tabs lose
-    // access silently (Q3/Q5 will surface them with the dirty marker).
-    if (networkId !== store.state.networkId) return;
-    effects.onStale();
+    if (networkId === store.state.networkId) {
+      // Active network: full visible resync (defect de34b35b).
+      effects.onStale();
+      return;
+    }
+    // Inactive network: do not lose the event. Mark its tabs as needing a
+    // refresh and re-read on activation.
+    staleNetworks.add(networkId);
+    for (const tab of store.state.tabs) {
+      if (tab.network_id === networkId) markTabDirty(tab.tab_id);
+    }
   });
 
   // Q5: realtime WS closed with 4401 (unauthorized) or 4404 (not-found) for a
@@ -179,7 +270,7 @@ function scheduleEventHide(): void {
   }, EVENT_TEXT_TTL_MS);
 }
 
-/** True when the realtime connection is up (H19: saves allowed). */
+/** True when the ACTIVE network's realtime connection is up (H19: saves allowed). */
 export function isConnected(): boolean {
-  return store.state.rtStatus === 'connected';
+  return getRtStatus(store.state) === 'connected';
 }

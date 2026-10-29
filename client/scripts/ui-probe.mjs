@@ -33,6 +33,12 @@ import {
   parseScenario,
 } from './ui-probe-scenario.mjs';
 import { decodePng, runRegionChecks } from './ui-probe-image.mjs';
+import {
+  POINT_CHECK_ATTEMPTS,
+  hitExpression,
+  mismatchMessage,
+  pointCheckText,
+} from './ui-probe-point.mjs';
 
 /** Ошибки вызова/подключения — код возврата 2 (в отличие от провала шага, 1). */
 class UsageError extends Error {
@@ -60,12 +66,41 @@ const HELP = `ui-probe — сценарный прогон UI клиента ETN
       --api <url>        Базовый URL REST стенда для шагов api.
       --api-key <key>    API-key для шагов api (заголовок Authorization).
       --no-wake          Не «будить» страницу через CDP перед прогоном.
+      --no-warmup        Не ждать готовности клиента (первый экран) перед
+                         прогоном. По умолчанию раннер ждёт, пока документ
+                         загрузится и приложение покажет экран, — это прогревает
+                         холодный клиент (стенд поднимает его заново на каждый
+                         прогон) и снимает гонку с первым рендером.
+      --cold-start       Пометить прогон как холодный старт клиента (стенд
+                         ставит флаг всегда: клиент поднимается с нуля на
+                         изолированном профиле). Подсказка «холодный старт»
+                         добавляется к таймаутам только при ДОКАЗАННОМ медленном
+                         старте — если прогрев занял больше порога (1 с) или сам
+                         прогрев не дождался экрана; при быстром прогреве условие
+                         падает по своей причине, и подсказка не подмешивается.
+                         С --no-warmup старт не измеряется, поэтому подсказка НЕ
+                         добавляется (недоказанную гипотезу в таймаут не кладём).
   -h, --help             Эта справка.
 
 Перед прогоном раннер по умолчанию «будит» скрытое окно обёртки через CDP
 (Page.bringToFront, Emulation.setFocusEmulationEnabled,
 Page.setWebLifecycleState('active')) — иначе rAF/layout заморожены и условия
 не наступают (грабли 03e33360). Отключить: --no-wake.
+
+Шаг «click» сверяет попадание точки с целью через «document.elementFromPoint»
+непосредственно перед нажатием (грабли 7c521541): если разметка сдвинулась
+между измерением прямоугольника и нажатием (первый рендер холодного клиента,
+загрузка картинки, смена размера окна), точка перемеряется — «потерянный» клик
+не превращается в молчаливый таймаут следующего «waitFor». Если попадания нет
+и после перемеров, шаг ПАДАЕТ, а нажатие не выполняется. Клик по точке вне
+элемента-якоря (особая точка холста, смещение за границы) разрешается явно:
+{ "click": { "selector": ".canvas", "at": [300, 40], "allowMismatch": true } }
+— только с этим флагом промах не валит шаг и виден в отчёте как разрешённый.
+
+Той же сверкой защищены «hover» (точка наведения) и начало «drag» (drag.from):
+промах валит шаг, и событие НЕ отправляется — ни mouseMoved, ни mousePressed.
+Флага allowMismatch у них нет: наведение и захват обязаны попадать в свой
+элемент (холст наводится на сам элемент холста, поэтому исключения не нужны).
 
 Код возврата: 0 — все шаги прошли; 1 — провал/таймаут шага или несошедшееся
 ожидание; 2 — ошибка вызова, сценария или подключения к CDP.
@@ -88,6 +123,8 @@ function parseArgs(argv) {
     api: null,
     apiKey: null,
     wake: true,
+    warmup: true,
+    coldStart: false,
     help: false,
   };
   const need = (value, flag) => {
@@ -154,6 +191,12 @@ function parseArgs(argv) {
         break;
       case '--no-wake':
         opts.wake = false;
+        break;
+      case '--no-warmup':
+        opts.warmup = false;
+        break;
+      case '--cold-start':
+        opts.coldStart = true;
         break;
       default:
         throw new UsageError(`неизвестный аргумент «${arg}» (справка: --help)`);
@@ -305,7 +348,7 @@ function waitFrames(cdp, frames) {
 }
 
 /** Поллинг выражения до истины или таймаута (ожидание по условию). */
-async function waitForExpression(cdp, expression, timeout) {
+async function waitForExpression(cdp, expression, timeout, coldStart = false) {
   const deadline = Date.now() + timeout;
   let lastError = null;
   for (;;) {
@@ -318,10 +361,52 @@ async function waitForExpression(cdp, expression, timeout) {
     if (truthy) return;
     if (Date.now() >= deadline) {
       const suffix = lastError === null ? '' : ` (последняя ошибка: ${lastError.message})`;
-      throw new Error(`таймаут ${timeout} мс: условие не стало истинным${suffix}`);
+      throw new Error(
+        `таймаут ${timeout} мс: условие не стало истинным${suffix}${coldStartHint(coldStart)}`,
+      );
     }
     await sleep(50);
   }
+}
+
+/** Хвост диагностики «холодный старт» добавляется только при доказанном медленном старте. */
+function coldStartHint(coldStart) {
+  return coldStart
+    ? ' — холодный старт клиента: стенд поднимает его заново; прогрейте и повторите прогон или увеличьте timeout'
+    : '';
+}
+
+/** Порог прогрева, после которого старт считается действительно медленным, мс. */
+const COLD_START_WARMUP_MS = 1000;
+
+/**
+ * Готовность клиента: документ загружен и приложение показывает ЭКРАН.
+ *
+ * `showScreen` (screens/screens.ts) очищает `#app` и вставляет ровно один
+ * корневой контейнер, поэтому экранные корни перечислены явно:
+ *   - `.screen`    — онбординг и список сетей (screens/onboarding.ts,
+ *                    screens/networks.ts), а также аварийная заглушка boot;
+ *   - `.workspace` — рабочий экран (screens/workspace.ts); «Структуры»,
+ *                    «Хроника», «Публикации» и редактор — его внутренние виды,
+ *                    собственного корня в `#app` у них нет.
+ * Ждать `#app .screen` нельзя: после любого сценария, дошедшего до рабочего
+ * экрана, повторный прогон на том же клиенте упирался в таймаут (блокер
+ * проверки `af96d388`). Новый экранный корень в `showScreen` — добавь сюда.
+ */
+const SCREEN_CONTAINERS = '#app > .screen, #app > .workspace';
+const READY_EXPRESSION = `document.readyState === 'complete' && document.querySelector(${JSON.stringify(SCREEN_CONTAINERS)}) !== null`;
+
+async function warmupPage(cdp, timeout, coldStart) {
+  const started = Date.now();
+  try {
+    await waitForExpression(cdp, READY_EXPRESSION, timeout, coldStart);
+  } catch (err) {
+    // Не дождались экрана — старт действительно медленный: подсказка уместна
+    // независимо от порога.
+    throw new Error(`прогрев: клиент не показал экран (${err.message})`);
+  }
+  await waitFrames(cdp, 2);
+  return Date.now() - started;
 }
 
 /**
@@ -496,14 +581,38 @@ async function resolvePoint(cdp, spec) {
   return { px: Math.round(spec.x), py: Math.round(spec.y) };
 }
 
-/** Навести курсор (только `mouseMoved`) — включает CSS `:hover` без клика. */
+/**
+ * Навести курсор (только `mouseMoved`) — включает CSS `:hover` без клика.
+ *
+ * Точка наведения сверяется с целью тем же механизмом, что точка клика:
+ * `elementFromPoint` + `closest(selector)` непосредственно перед отправкой
+ * события. Промах валит шаг, `mouseMoved` НЕ отправляется — иначе наведение
+ * молча уходило в пустоту и «ok» подтверждал несуществующий hover (блокер
+ * проверки af96d388). `allowMismatch` у hover намеренно НЕТ: во всех сценариях
+ * стенда наведение целится в сам элемент (включая холст — селектор `.canvas`
+ * совпадает с элементом под указателем), «наведение по пустой точке» не нужно.
+ * Без `selector` (чистые координаты) сверять нечего — событие отправляется.
+ */
 async function doHover(cdp, spec) {
-  const { px, py } = await resolvePoint(cdp, spec);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
+  const point = await resolveCheckedPoint(cdp, spec);
+  if (point.mismatched === true) return point;
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.px,
+    y: point.py,
+    button: 'none',
+    buttons: 0,
+  });
+  return point;
 }
 
 async function doClick(cdp, spec) {
-  const { px, py } = await resolvePoint(cdp, spec);
+  const point = await resolveCheckedPoint(cdp, spec);
+  // Промах без явного разрешения: нажатия НЕТ, шаг падает (решение — в runStep,
+  // чтобы диагностика попала в запись отчёта). Молчаливый клик по чужому
+  // элементу запрещён (грабли 7c521541).
+  if (point.mismatched === true && spec.allowMismatch !== true) return point;
+  const { px, py } = point;
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none', buttons: 0 });
   // `count` последовательных нажатий: со второго браузер отдаёт `click` с
   // `detail = 2` — так прогоняется настоящий двойной клик (шаг `click`).
@@ -526,23 +635,56 @@ async function doClick(cdp, spec) {
       clickCount: i,
     });
   }
+  return point;
 }
 
 /**
- * Выражение проверки попадания: что лежит в точке и совпадает ли элемент (или
- * его предок) с ожидаемым селектором. Промах координат должен быть виден
- * текстом, а не молчаливым «ok» (грабли 7c521541).
+ * Точка ввода с проверкой попадания НЕПОСРЕДСТВЕННО перед событием — общая для
+ * `click`, `hover` и `drag.from` (проверка обязана быть одна, иначе класс
+ * «точка не сверена с целью» остаётся открытым на соседнем шаге, af96d388).
+ *
+ * Прямоугольник элемента и координаты события разнесены по времени (hover,
+ * постановка кадра); за это время разметка может сдвинуться — первый рендер
+ * холодного клиента, загрузка картинки, смена размера окна. Событие в устаревшую
+ * точку браузер доставит соседнему элементу, и действие молча пропадёт (симптом
+ * `af96d388`: таймаут следующего `waitFor` без единого запроса на сервере).
+ * Поэтому `elementFromPoint` сверяется с целью, при промахе прямоугольник
+ * перемеряется (до {@link POINT_CHECK_ATTEMPTS} раз). Если попадания так и нет,
+ * событие ПО УМОЛЧАНИЮ НЕ ВЫПОЛНЯЕТСЯ, а шаг падает: промах — дефект сценария
+ * или разметки, а не повод кликнуть в чужой элемент. Точечное исключение —
+ * только у `click` (`allowMismatch: true` в описании клика, грабли 7c521541).
  */
-function hitExpression(px, py, selector) {
-  return (
-    '(() => { const el = document.elementFromPoint(' +
-    `${px}, ${py}); ` +
-    'if (el === null) return { matched: false, element: null }; ' +
-    `const target = el.closest(${JSON.stringify(selector)}); ` +
-    "const cls = el.getAttribute('class') || ''; " +
-    'return { matched: target !== null, ' +
-    "element: { tag: el.tagName, className: cls, text: (el.textContent || '').slice(0, 80) } }; })()"
-  );
+async function resolveCheckedPoint(cdp, spec) {
+  let point = await resolvePoint(cdp, spec);
+  if (spec.selector === null) return { ...point, hit: null };
+  let last = null;
+  for (let attempt = 0; attempt < POINT_CHECK_ATTEMPTS; attempt += 1) {
+    last = await hitAt(cdp, point.px, point.py, spec.selector);
+    if (last !== null && last.matched === true) {
+      return { ...point, retries: attempt, hit: last.element };
+    }
+    if (attempt + 1 < POINT_CHECK_ATTEMPTS) {
+      await waitFrames(cdp, 1);
+      point = await resolvePoint(cdp, spec);
+    }
+  }
+  return {
+    ...point,
+    retries: POINT_CHECK_ATTEMPTS - 1,
+    hit: last === null ? null : last.element,
+    mismatched: true,
+  };
+}
+
+/** Диагностика точки для записи отчёта (JSON). */
+function pointDiagnostics(point) {
+  return {
+    x: point.px,
+    y: point.py,
+    retries: point.retries ?? 0,
+    mismatched: point.mismatched === true,
+    under: point.hit,
+  };
 }
 
 /** Факт попадания в точке (без ожидания). */
@@ -578,9 +720,17 @@ async function waitForHit(cdp, px, py, selector, timeout) {
  * Составной шаг `drag`: pointerdown в источнике, `steps` промежуточных
  * `mouseMoved`, ожидание целевого селектора под указателем и pointerup.
  * `modifiers` (битовая маска CDP) доносят Shift — копирование.
+ *
+ * Источник (`from`) сверяется с целью ДО первого события: промах возвращает
+ * `aborted` — нажатия и перемещений НЕТ, шаг падает в runStep. Иначе захват
+ * уходил бы в чужой элемент и жест молча ломался (блокер проверки af96d388).
+ * Цель (`to`) уже проверялась перед отпусканием (`waitForHit`); теперь
+ * проверяется и её попадание после отпускания.
  */
 async function doDrag(cdp, spec) {
-  const from = await resolvePoint(cdp, spec.from);
+  const from = await resolveCheckedPoint(cdp, spec.from);
+  const fromCheck = from.retries > 0 || from.mismatched === true ? pointDiagnostics(from) : null;
+  if (from.mismatched === true) return { aborted: true, from: pointDiagnostics(from) };
   const to = await resolvePoint(cdp, spec.to);
   const modifiers = spec.modifiers;
   const send = (params) => cdp.send('Input.dispatchMouseEvent', { modifiers, ...params });
@@ -625,6 +775,7 @@ async function doDrag(cdp, spec) {
     modifiers,
     expect: spec.expect,
     hit: hit.element,
+    fromCheck,
   };
 }
 
@@ -662,24 +813,67 @@ async function runStep(cdp, step, outDir, entry, report, context) {
       await doKey(cdp, step.key);
       await waitFrames(cdp, 2);
       break;
-    case 'click':
-      await doClick(cdp, step.click);
+    case 'click': {
+      const point = await doClick(cdp, step.click);
+      // Диагностика сдвига разметки: сколько раз точку пришлось перемерить,
+      // чтобы попасть в цель (и попали ли вообще) — видно в отчёте.
+      if (point.retries > 0 || point.mismatched === true) {
+        entry.click = {
+          ...pointDiagnostics(point),
+          allowed: point.mismatched === true && step.click.allowMismatch === true,
+        };
+      }
+      if (point.mismatched === true && step.click.allowMismatch !== true) {
+        // Нажатие уже не отправлено (doClick вышел до dispatch) — шаг падает.
+        throw new Error(mismatchMessage('клик не выполнен', step.click.selector, point));
+      }
       await waitFrames(cdp, 2);
       break;
-    case 'hover':
-      await doHover(cdp, step.hover);
+    }
+    case 'hover': {
+      const point = await doHover(cdp, step.hover);
+      if (point.retries > 0 || point.mismatched === true) {
+        entry.hover = pointDiagnostics(point);
+      }
+      if (point.mismatched === true) {
+        // mouseMoved не отправлен — шаг падает (af96d388).
+        throw new Error(mismatchMessage('наведение не выполнено', step.hover.selector, point));
+      }
       await waitFrames(cdp, 2);
       break;
-    case 'drag':
-      entry.drag = await doDrag(cdp, step.drag);
+    }
+    case 'drag': {
+      const result = await doDrag(cdp, step.drag);
+      if (result.aborted === true) {
+        // Ни нажатия, ни перемещений: источник не под указателем (af96d388).
+        entry.drag = {
+          fromCheck: result.from,
+          steps: step.drag.steps,
+          expect: step.drag.expect,
+        };
+        throw new Error(
+          mismatchMessage(
+            'перетаскивание не начато',
+            step.drag.from.selector,
+            {
+              px: result.from.x,
+              py: result.from.y,
+              retries: result.from.retries,
+              hit: result.from.under,
+            },
+          ),
+        );
+      }
+      entry.drag = result;
       break;
+    }
     case 'text':
       await cdp.send('Input.insertText', { text: step.text });
       await waitFrames(cdp, 2);
       break;
     case 'waitFor':
       if (step.waitFor.expression !== null) {
-        await waitForExpression(cdp, step.waitFor.expression, step.timeout);
+        await waitForExpression(cdp, step.waitFor.expression, step.timeout, context.coldStart);
       }
       if (step.waitFor.frames > 0) {
         await waitFrames(cdp, step.waitFor.frames);
@@ -753,10 +947,13 @@ async function runStep(cdp, step, outDir, entry, report, context) {
   }
 }
 
-function withTimeout(timeout, promise, label) {
+function withTimeout(timeout, promise, label, coldStart = false) {
   let timer;
   const guard = new Promise((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`таймаут шага ${timeout} мс (${label})`)), timeout);
+    timer = setTimeout(
+      () => reject(new Error(`таймаут шага ${timeout} мс (${label})${coldStartHint(coldStart)}`)),
+      timeout,
+    );
   });
   return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
 }
@@ -771,9 +968,11 @@ function formatStep(entry) {
       detail += entry.expectFrom === undefined ? ')' : ` — снимок шага «${entry.expectFrom}»)`;
     }
   } else if (entry.drag !== undefined) {
-    detail =
-      ` ${describeValue(entry.drag.from)} → ${describeValue(entry.drag.to)}` +
-      ` (цель «${entry.drag.expect}», шагов ${entry.drag.steps})`;
+    detail = entry.drag.from === undefined ? '' : ` ${describeValue(entry.drag.from)}`;
+    if (entry.drag.to !== undefined) detail += ` → ${describeValue(entry.drag.to)}`;
+    if (entry.drag.expect !== undefined) {
+      detail += ` (цель «${entry.drag.expect}», шагов ${entry.drag.steps})`;
+    }
   } else if (entry.assert !== undefined) {
     const checks = entry.assert.checks
       .map((check) => `${check.ok ? '✓' : '✗'} ${check.name}: ${check.fact} — ожидание ${check.expect}`)
@@ -790,6 +989,15 @@ function formatStep(entry) {
   } else if (entry.eval !== undefined) {
     detail = ` ${entry.eval.name}`;
   }
+  if (entry.click !== undefined) {
+    detail += pointCheckText(entry.click, entry.click.allowed === true);
+  }
+  if (entry.hover !== undefined) {
+    detail += pointCheckText(entry.hover, false);
+  }
+  if (entry.drag !== undefined && entry.drag.fromCheck !== null && entry.drag.fromCheck !== undefined) {
+    detail += pointCheckText(entry.drag.fromCheck, false);
+  }
   if (entry.error !== undefined) detail += ` — ${entry.error}`;
   return `${status} ${String(entry.index + 1).padStart(2)} ${entry.kind.padEnd(7)} ${entry.name}${detail} (${entry.ms} мс)`;
 }
@@ -801,6 +1009,13 @@ function renderTextReport(report) {
     `ui-probe: сценарий «${report.scenario}» через ${report.cdp}`,
     `итог: ${report.ok ? 'OK' : 'ПРОВАЛ'} — шагов ${report.steps.length}, провалено ${failed}, ${report.durationMs} мс`,
   ];
+  // Время прогрева — в текстовом отчёте: по нему видно, был ли старт медленным
+  // (и потому уместна ли подсказка «холодный старт» в таймаутах).
+  if (typeof report.warmupMs === 'number') {
+    lines.push(`прогрев: клиент готов за ${report.warmupMs} мс`);
+  } else {
+    lines.push('прогрев: отключён (--no-warmup)');
+  }
   for (const entry of report.steps) lines.push(formatStep(entry));
   if (report.shots.length > 0) {
     lines.push(`PNG (доказательства, не для модели): ${report.shots.join(', ')}`);
@@ -829,7 +1044,12 @@ async function runScenario(cdp, scenario, outDir, base, context) {
     try {
       // Every step — including `waitFor` by frames — is bounded by the step
       // deadline, so a stalled frame supply cannot hang the run.
-      await withTimeout(step.timeout, runStep(cdp, step, outDir, entry, report, context), step.name);
+      await withTimeout(
+        step.timeout,
+        runStep(cdp, step, outDir, entry, report, context),
+        step.name,
+        context.coldStart,
+      );
     } catch (err) {
       entry.status = 'failed';
       entry.error = err instanceof Error ? err.message : String(err);
@@ -874,16 +1094,35 @@ async function main(argv) {
   const base = opts.cdp ?? `http://${opts.host}:${opts.port}`;
   const target = await resolvePageTarget(base, opts.target);
   const cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
-  const context = { api: { base: opts.api, key: opts.apiKey }, values: new Map() };
+  const context = { api: { base: opts.api, key: opts.apiKey }, values: new Map(), coldStart: false };
   let report;
+  let warmupMs = null;
   try {
     await cdp.send('Runtime.enable');
     await cdp.send('Page.enable');
     if (opts.wake) await wakePage(cdp);
+    if (opts.warmup) {
+      warmupMs = await warmupPage(cdp, 15000, opts.coldStart);
+      // Подсказка «холодный старт» — только при ДОКАЗАННОМ медленном старте:
+      // прогрев дольше порога. Быстрый прогрев значит, что клиент готов, и
+      // таймаут условия — его собственная причина (блокер проверки af96d388).
+      context.coldStart = opts.coldStart && warmupMs >= COLD_START_WARMUP_MS;
+      process.stdout.write(
+        `ui-probe: прогрев — клиент готов за ${warmupMs} мс` +
+          (context.coldStart ? ' (медленный старт)' : '') +
+          '\n',
+      );
+    } else {
+      // Прогрев отключён: измерить старт нечем, а подсказка «холодный старт» —
+      // утверждение о ПРИЧИНЕ таймаута. Недоказанную гипотезу в текст таймаута
+      // не кладём (замечание проверки af96d388): в этом режиме подсказки нет.
+      context.coldStart = false;
+    }
     report = await runScenario(cdp, scenario, outDir, base, context);
   } finally {
     cdp.close();
   }
+  if (warmupMs !== null) report.warmupMs = warmupMs;
 
   const reportPath = path.join(outDir, 'report.json');
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);

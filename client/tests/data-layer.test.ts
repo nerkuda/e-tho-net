@@ -599,6 +599,7 @@ describe('паритет: поток событий сети гасит ровн
       queryKeys.indicators('other'),
       queryKeys.attachments('thought', 't1'),
       queryKeys.layerOverrides(),
+      queryKeys.thoughtViews('t1'),
     ]);
 
     // publication.updated — патч публикации + список/карточка/документ.
@@ -675,6 +676,7 @@ describe('паритет: поток событий сети гасит ровн
         'focus:@other',
         'layer-overrides',
         'structures-page',
+        'thought-views:@t1',
       ].sort(),
     );
   });

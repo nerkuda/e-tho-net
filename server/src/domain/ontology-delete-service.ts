@@ -34,9 +34,9 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getRootTypeId } from './type-hierarchy.js';
 import { deleteTypeProperty } from './property-service.js';
-import { deleteThoughtType } from './thought-type-service.js';
+import { deleteThoughtTypeWithViews } from './thought-type-delete-service.js';
 import { deleteLinkType } from './link-type-service.js';
-import { deleteThoughtTypeView, listThoughtTypeViewsByType } from './thought-type-views-service.js';
+import { deleteThoughtTypeView } from './thought-type-views-service.js';
 
 export {
   EtnError,
@@ -145,15 +145,17 @@ export function deleteOntologyEntity(
   ndb.transaction(() => {
     switch (params.kind) {
       case 'thought_type': {
-        deleteThoughtType(ndb, params.id, undefined, { force, actorUserId });
-        // Каскад отборов типа (задача c1fa71d4). Делается всегда — отборы
-        // не переживают удаление владеющего типа даже без `force` (тип-то
-        // уже удалён/скрыт в слое), а в базе каскад обязателен.
-        const viewIds = listThoughtTypeViewsByType(ndb, params.id).map((v) => v.id);
-        for (const viewId of viewIds) {
-          deleteThoughtTypeView(ndb, viewId);
-        }
-        usage.type_views_count = viewIds.length;
+        // Единая точка удаления типа (0.14.1, ошибка 1242f78d): каскад
+        // отборов и снапшоты ДО удаления — общая с REST DELETE. Прежде каскад
+        // жил только здесь и выполнялся ПОСЛЕ удаления типа, поэтому
+        // `listThoughtTypeViewsByType` возвращал пусто, а события каскада не
+        // эмитились. Отборы не переживают удаление владеющего типа даже без
+        // `force` (тип-то уже удалён/скрыт в слое).
+        const deleted = deleteThoughtTypeWithViews(ndb, params.id, undefined, {
+          force,
+          actorUserId,
+        });
+        usage.type_views_count = deleted.views.length;
         break;
       }
       case 'link_type':

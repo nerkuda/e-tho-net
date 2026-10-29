@@ -1,0 +1,661 @@
+{
+  "name": "f8f8fa49-link-target-type-restriction",
+  "description": "Ключевой GUI-сценарий ошибки f8f8fa49: пикер целей свойства-связи ограничен типами ПРОТИВОПОЛОЖНОГО КОНЦА привязок (не config.allowed_*). Пример заказчика: свойство «Место работы» с привязкой source к типу «Персона» и target к типу «Организация». В массовом диалоге, типовых и внетиповых строках карточки прямое имя предлагает организации, обратное имя «Сотрудники» — персоны; «Кандидат без типа» не предлагается при любом ограничении. Самодостаточно: онтология и мысли заводятся probe-шагом через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f8f8fa49-link-target-type-restriction.scenario.json --out .tmp/etn-f8f8fa49/out",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "seed-ontology-and-thoughts",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const person=await et.types.createThoughtType(N,{name:'Персона'}); const org=await et.types.createThoughtType(N,{name:'Организация'}); const prop=await et.propertyRegistry.create(N,{name:'Место работы',value_type:'link',name_forward:'Место работы',name_reverse:'Сотрудники'}); await et.types.createTypeProperty(N,'thought_type',person.id,{mode:'attach',property_id:prop.id,required:false,position:0,side:'source'}); await et.types.createTypeProperty(N,'thought_type',org.id,{mode:'attach',property_id:prop.id,required:false,position:0,side:'target'}); const mk=async(title,type)=>{ const r=await et.thoughts.create(N,{title,type_id:type,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; const P1=await mk('Персона Иванов',person.id); const O1=await mk('Организация Ромашка',org.id); const U1=await mk('Внетиповая персона',null); const U2=await mk('Внетиповой сотрудник',null); const C1=await mk('Кандидат персона',person.id); const C2=await mk('Кандидат организация',org.id); const C3=await mk('Кандидат без типа',null); await et.properties.set(N,'thought',P1,'Место работы',[O1],'source'); await et.properties.set(N,'thought',O1,'Сотрудники',[P1],'target'); await et.properties.set(N,'thought',U1,'Место работы',[O1],'source'); await et.properties.set(N,'thought',U2,'Сотрудники',[P1],'target'); window.__lx={person:person.id,org:org.id,prop:prop.id,P1,O1,U1,U2,C1,C2,C3}; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-clouds",
+      "waitFor": "(() => { const b=window.__lx; return b !== undefined && [b.P1,b.O1,b.U1,b.U2].every((id)=>document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null); })()",
+      "timeout": 30000
+    },
+    {
+      "name": "select-p1-and-o1",
+      "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__lx; return { P1:click(b.P1), O1:click(b.O1) }; })()",
+      "expect": {
+        "P1": true,
+        "O1": true
+      }
+    },
+    {
+      "name": "selection-panel-visible",
+      "waitFor": "(() => { const panel=document.querySelector('.selection-panel'); return panel !== null && !panel.classList.contains('hidden') && panel.querySelectorAll('.selection-item').length === 2; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-selection-properties",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "selection-properties-menu",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "open-property-values-dialog",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-dialog",
+      "waitFor": "document.querySelector('.prop-bulk-table') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "bulk-source-row",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Место работы\"])') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-source-check",
+      "click": "input[type=checkbox][aria-label=\"Место работы\"]"
+    },
+    {
+      "name": "bulk-source-row-active",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Место работы\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-source-focus",
+      "click": "tr:has(input[aria-label=\"Место работы\"]) .link-value-add"
+    },
+    {
+      "name": "bulk-source-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "bulk-source-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-source-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "bulk-source-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "bulk-source-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-source-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-source-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); const rows=[...document.querySelectorAll('.link-value-add')]; for(const r of rows) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-source-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-target-row",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Сотрудники\"])') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-target-check",
+      "click": "input[type=checkbox][aria-label=\"Сотрудники\"]"
+    },
+    {
+      "name": "bulk-target-row-active",
+      "waitFor": "document.querySelector('tr:has(input[aria-label=\"Сотрудники\"]) .prop-bulk-value')?.classList.contains('prop-bulk-value-off') === false",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-target-focus",
+      "click": "tr:has(input[aria-label=\"Сотрудники\"]) .link-value-add"
+    },
+    {
+      "name": "bulk-target-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "bulk-target-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-target-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "bulk-target-has-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": true
+    },
+    {
+      "name": "bulk-target-no-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-target-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-target-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); const rows=[...document.querySelectorAll('.link-value-add')]; for(const r of rows) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-target-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-close-dialog",
+      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-dialog-closed",
+      "waitFor": "document.querySelector('.prop-bulk-table') === null",
+      "timeout": 10000
+    },
+    {
+      "name": "open-typed-source-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.P1)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-source-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона Иванов'",
+      "timeout": 30000
+    },
+    {
+      "name": "typed-source-tabs",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-source-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-source-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('Место работы')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-source-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-source-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "typed-source-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-source-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "typed-source-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "typed-source-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "typed-source-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "open-typed-target-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.O1)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-target-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Организация Ромашка'",
+      "timeout": 30000
+    },
+    {
+      "name": "typed-target-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-target-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('Сотрудники')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-target-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('Сотрудники')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "typed-target-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "typed-target-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "typed-target-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "typed-target-has-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": true
+    },
+    {
+      "name": "typed-target-no-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": false
+    },
+    {
+      "name": "typed-target-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "open-outside-source-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.U1)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-source-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Внетиповая персона'",
+      "timeout": 30000
+    },
+    {
+      "name": "outside-source-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-source-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-outside-body tr')].some((r)=>(r.textContent ?? '').includes('Место работы')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-source-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,800)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-source-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-source-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "outside-source-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-source-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "outside-source-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "outside-source-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "outside-source-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "open-outside-target-thought",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"'+(window.__lx.U2)+'\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-target-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Внетиповой сотрудник'",
+      "timeout": 30000
+    },
+    {
+      "name": "outside-target-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-target-link-row",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-outside-body tr')].some((r)=>(r.textContent ?? '').includes('Сотрудники')))()",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-target-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,800)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-target-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Сотрудники')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-target-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "outside-target-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "outside-target-titles",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].map((e)=>e.textContent.trim()))()"
+    },
+    {
+      "name": "outside-target-has-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": true
+    },
+    {
+      "name": "outside-target-no-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": false
+    },
+    {
+      "name": "outside-target-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-add-clear",
+      "probe": "(() => { const btn=document.querySelector('.selection-header .ui-btn'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-cleared",
+      "waitFor": "document.querySelectorAll('.selection-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-add-select-c1-c2",
+      "probe": "(() => { const click=(id)=>{ const el=document.querySelector('.cloud[data-id=\"'+id+'\"]'); if(el===null) return false; el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true})); return true; }; const b=window.__lx; return { C1:click(b.C1), C2:click(b.C2) }; })()",
+      "expect": {
+        "C1": true,
+        "C2": true
+      }
+    },
+    {
+      "name": "bulk-add-panel",
+      "waitFor": "(() => { const p=document.querySelector('.selection-panel'); return p !== null && !p.classList.contains('hidden') && p.querySelectorAll('.selection-item').length >= 2; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-open-menu",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-menu",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-open-dialog",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-table",
+      "waitFor": "document.querySelector('.prop-bulk-toolbar') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "bulk-add-click",
+      "eval": "(() => { const b=document.querySelector('.prop-bulk-toolbar .ui-btn'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-picker",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-filter-focus",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.focus(); i.click(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-filter-typed",
+      "text": "Место работы"
+    },
+    {
+      "name": "bulk-add-filter-input",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-two-sides",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].side === 'source' && items[0].name === 'Место работы'; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-focus-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "bulk-add-arrow",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "bulk-add-enter",
+      "key": "Enter"
+    },
+    {
+      "name": "bulk-add-row",
+      "waitFor": "(() => [...document.querySelectorAll('.prop-bulk-table tr')].some((r)=>(r.textContent ?? '').includes('Место работы')) && document.querySelector('.prop-bulk-table .link-value-add') !== null)()",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,500)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bulk-add-value-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.prop-bulk-table tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-value-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "bulk-add-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "bulk-add-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "bulk-add-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-add-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "bulk-add-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); for(const r of document.querySelectorAll('.link-value-add')) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "bulk-add-close",
+      "eval": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()"
+    },
+    {
+      "name": "bulk-add-closed",
+      "waitFor": "document.querySelector('.prop-bulk-table') === null",
+      "timeout": 10000
+    },
+    {
+      "name": "draft-open-c3",
+      "eval": "(() => { const el=document.querySelector('.cloud[data-id=\"' + (window.__lx.C3) + '\"]'); if(!el) return 'no-cloud'; el.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Кандидат без типа'",
+      "timeout": 30000
+    },
+    {
+      "name": "draft-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-outside-visible",
+      "waitFor": "document.querySelector('.prop-outside-add') !== null && document.querySelector('.properties-outside-body') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-open-picker",
+      "eval": "(() => { const b=[...document.querySelectorAll('.prop-outside-add')].find((x)=>x.offsetParent!==null); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-picker-visible",
+      "waitFor": "document.querySelector('.property-list vaadin-grid')?.items !== undefined",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-filter-focus",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.focus(); i.click(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-filter-typed",
+      "text": "Место работы"
+    },
+    {
+      "name": "draft-filter-input",
+      "eval": "(() => { const i=document.querySelector('.property-list-search'); if(!i) return 'no-input'; i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()"
+    },
+    {
+      "name": "draft-two-sides",
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].side === 'source' && items[0].name === 'Место работы'; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-focus-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "draft-select-source",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "draft-choose-source",
+      "key": "Enter"
+    },
+    {
+      "name": "draft-row",
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('Место работы') === true",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-settle",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "draft-value-focus",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Место работы')); const input=row?.querySelector('.link-value-add'); if(!input) return 'no-input'; input.click(); input.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-value-query",
+      "text": "Кандидат"
+    },
+    {
+      "name": "draft-suggestions",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length > 0",
+      "timeout": 20000
+    },
+    {
+      "name": "draft-has-org",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат организация'))()",
+      "expect": true
+    },
+    {
+      "name": "draft-no-person",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат персона'))()",
+      "expect": false
+    },
+    {
+      "name": "draft-no-untyped",
+      "probe": "(() => [...document.querySelectorAll('.type-combo-item')].some((e)=>e.textContent.trim()==='Кандидат без типа'))()",
+      "expect": false
+    },
+    {
+      "name": "draft-blur",
+      "eval": "(() => { const input=document.activeElement; if(input && typeof input.blur==='function') input.blur(); for(const r of document.querySelectorAll('.link-value-add')) r.blur(); return 'ok'; })()"
+    },
+    {
+      "name": "draft-dropdown-closed",
+      "waitFor": "document.querySelectorAll('.type-combo-item').length === 0",
+      "timeout": 10000
+    }
+  ]
+}

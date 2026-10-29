@@ -1,0 +1,89 @@
+{
+  "name": "d19c57b7-pinned-sibling",
+  "description": "Сторож d19c57b7: «Добавить → налево» из ПАНЕЛИ ЗАКРЕПЛЁННЫХ создаёт мысль под родителем КЛИКНУТОЙ закреплённой мысли, а не мысли в фокусе карты. Посев: T — ребёнок P1 (в фокусе карты), M — ребёнок P2 (закреплена). ПКМ по чипу M → «Добавить» → «налево (родственник)»: заголовок диалога называет P2, созданная мысль попадает в детей P2 и не попадает в детей P1. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d19c57b7-pinned-sibling.scenario.json --out .tmp/etn-d19c57b7-pinned/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed",
+      "eval": "(async () => { const nid='{{networkId}}'; const p1=await window.etn.thoughts.create(nid,{title:'Девятнашка Родитель Фокуса'}); const p2=await window.etn.thoughts.create(nid,{title:'Девятнашка Родитель Закрепа'}); const t=await window.etn.thoughts.create(nid,{title:'Девятнашка Цель Фокуса', create_link:{direction:'parent',target_thought_id:p1.id}}); const m=await window.etn.thoughts.create(nid,{title:'Девятнашка Закреп', create_link:{direction:'parent',target_thought_id:p2.id}}); await window.etn.pins.set(nid,[m.id]); window.__d19p={nid,p1:p1.id,p2:p2.id,t:t.id,m:m.id,p2title:'Девятнашка Родитель Закрепа',ttitle:'Девятнашка Цель Фокуса'}; return JSON.stringify(window.__d19p); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    {
+      "name": "seed-layout-correct",
+      "probe": "(async () => { const {nid,t,m,p1,p2}=window.__d19p; const tp=await window.etn.thoughts.neighbors(nid,t,'parents'); const mp=await window.etn.thoughts.neighbors(nid,m,'parents'); return tp.some((x)=>x.id===p1) && mp.some((x)=>x.id===p2) && p1 !== p2; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-target",
+      "eval": "(() => { const i=document.querySelector('.search-input'); i.focus(); i.value='Девятнашка Цель Фокуса'; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "target-hit-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__d19p.t+'\"]') !== null"
+    },
+    {
+      "name": "click-target-hit",
+      "eval": "(() => { const c=document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__d19p.t+'\"]'); c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "focus-is-target",
+      "timeout": 15000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((x)=>x.network_id===window.__d19p.nid); return tab?.focus_id === window.__d19p.t; })()"
+    },
+    {
+      "name": "pinned-chip-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.pinned-chip[data-id=\"'+window.__d19p.m+'\"]') !== null"
+    },
+    {
+      "name": "right-click-pinned",
+      "eval": "(() => { const c=document.querySelector('.pinned-chip[data-id=\"'+window.__d19p.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    { "name": "pinned-menu-open", "timeout": 10000, "waitFor": "document.querySelector('.menu') !== null" },
+    {
+      "name": "open-pinned-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    { "name": "pinned-submenu-ready", "timeout": 10000, "waitFor": "document.querySelector('.menu > .menu-sub') !== null" },
+    {
+      "name": "click-pinned-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('menu-item-disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    { "name": "pinned-dialog-ready", "timeout": 15000, "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
+    {
+      "name": "pinned-dialog-title-text",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null)"
+    },
+    {
+      "name": "pinned-title-names-parent",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '') === 'Добавить мысль (вниз к «' + window.__d19p.p2title + '»)'",
+      "expect": true
+    },
+    {
+      "name": "pinned-title-not-focus",
+      "probe": "!(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '').includes(window.__d19p.ttitle)",
+      "expect": true
+    },
+    {
+      "name": "pinned-type-title",
+      "eval": "(() => { const ta=document.querySelector('.dialog-backdrop textarea'); if(!ta) return 'no-input'; ta.focus(); ta.value='Девятнашка Сосед Закрепа'; ta.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    { "name": "pinned-apply", "modifiers": ["ctrl"], "key": "Enter" },
+    { "name": "pinned-dialog-closed", "timeout": 20000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    {
+      "name": "pinned-created-under-p2",
+      "probe": "(async () => { const {nid,p1,p2}=window.__d19p; const c1=await window.etn.thoughts.neighbors(nid,p1,'children'); const c2=await window.etn.thoughts.neighbors(nid,p2,'children'); return c2.some((x)=>x.title==='Девятнашка Сосед Закрепа') && !c1.some((x)=>x.title==='Девятнашка Сосед Закрепа'); })()",
+      "expect": true
+    }
+  ]
+}

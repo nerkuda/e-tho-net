@@ -15,25 +15,33 @@ import type { Link, LinkType } from '@etn/shared';
 
 import {
   EDGE_LANE_GAP,
+  GRAPH_LINK_FIELDS,
   MASS_LINK_THRESHOLD,
   PERIPHERY_CAP,
   TRASHED_EDGE_DASH,
   UNTYPED_LINK_LABEL,
   assignEdgeLanes,
   computeGraphStats,
-  computeMassLinks,
   edgeTooltip,
   edgeTypeName,
+  graphEventAffects,
   graphStatEntries,
   isTrashedEdge,
+  linkChangeAffectsGraph,
+  linkPatchAffectsGraph,
+  massChipTooltip,
   neutralEdgeVisual,
   orientLink,
+  planGraphEdges,
   resolveEdgeVisual,
   shiftEdgeByLane,
+  thoughtChangesAffectGraph,
 } from '../src/renderer/editor/mini-graph-model.js';
 
 const CENTER = 'thought-center';
 const OTHER = 'thought-other';
+const THIRD = 'thought-third';
+const HIDDEN = 'thought-hidden';
 
 function link(over: Partial<Link> = {}): Link {
   return {
@@ -253,48 +261,207 @@ describe('mini-graph-model — оформление линии из типа с�
   });
 });
 
-describe('mini-graph-model — массовые связи (п.6)', () => {
-  it('прячет все рёбра пары, кроме одного, начиная с порога', () => {
-    const type = linkType({ id: 't-mass', name_forward: 'связано с', name_reverse: 'связано с' });
-    const links = Array.from({ length: MASS_LINK_THRESHOLD + 2 }, (_, i) =>
-      link({ id: `m${i}`, type_id: 't-mass' }),
+describe('mini-graph-model — массовые связи (п.6, ошибка 42a7c0a1)', () => {
+  const type = linkType({ id: 't-mass', name_forward: 'связано с', name_reverse: 'связано с' });
+  const visible = [OTHER];
+
+  /** Рёбра «центр → сосед» (по умолчанию к OTHER). */
+  const outgoing = (n: number, typeId: string | null = type.id, prefix = 'out'): Link[] =>
+    Array.from({ length: n }, (_, i) =>
+      link({ id: `${prefix}${i}`, source_id: CENTER, target_id: OTHER, type_id: typeId }),
     );
-    const mass = computeMassLinks(links, CENTER, [type]);
-    assert.equal(mass.get(OTHER)?.hidden, MASS_LINK_THRESHOLD + 1);
-    assert.equal(mass.get(OTHER)?.label, 'связано с');
+  /** Встречные рёбра «сосед → центр». */
+  const incoming = (n: number, typeId: string | null = type.id, prefix = 'in'): Link[] =>
+    Array.from({ length: n }, (_, i) =>
+      link({ id: `${prefix}${i}`, source_id: OTHER, target_id: CENTER, type_id: typeId }),
+    );
+  /** Краткая форма результата: линии, скрытые и разбивка чипа по сторонам. */
+  const brief = (
+    plan: ReturnType<typeof planGraphEdges>,
+    otherId = OTHER,
+  ): { drawn: number; hidden: number; sides: string[] } => ({
+    drawn: plan.drawnIds.size,
+    hidden: plan.hidden,
+    sides: (plan.massByNeighbour.get(otherId)?.pairs ?? []).map(
+      (pair) => `${pair.side}:${pair.hidden}`,
+    ),
   });
 
-  it('ниже порога ничего не скрывает', () => {
-    const type = linkType({ id: 't-few' });
-    const links = Array.from({ length: MASS_LINK_THRESHOLD - 1 }, (_, i) =>
-      link({ id: `f${i}`, type_id: 't-few' }),
-    );
-    assert.equal(computeMassLinks(links, CENTER, [type]).size, 0);
+  it('ниже порога — все рёбра линиями, чипа нет (4 исходящих + 5 входящих)', () => {
+    const links = [...outgoing(4), ...incoming(5)];
+    const plan = planGraphEdges(links, CENTER, visible, [type]);
+    assert.deepEqual(brief(plan), { drawn: 9, hidden: 0, sides: [] });
+    assert.equal(plan.massByNeighbour.size, 0);
   });
 
-  it('имя типа в чипе — по направлению от центра, для связи без типа — «связь»', () => {
-    const type = linkType({ id: 't-dir', name_forward: 'вперёд', name_reverse: 'назад' });
-    const incoming = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
-      link({ id: `in${i}`, source_id: OTHER, target_id: CENTER, type_id: 't-dir' }),
-    );
-    assert.equal(computeMassLinks(incoming, CENTER, [type]).get(OTHER)?.label, 'назад');
-
-    const untyped = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
-      link({ id: `u${i}`, type_id: null }),
-    );
-    assert.equal(computeMassLinks(untyped, CENTER, []).get(OTHER)?.label, UNTYPED_LINK_LABEL);
+  it('12 исходящих → 1 линия, 11 скрытых', () => {
+    const links = outgoing(12);
+    const plan = planGraphEdges(links, CENTER, visible, [type]);
+    assert.deepEqual(brief(plan), { drawn: 1, hidden: 11, sides: ['out:11'] });
+    assert.ok(plan.drawnIds.has(links[0]!.id), 'линия — первое живое ребро пары');
+    const mass = plan.massByNeighbour.get(OTHER)!;
+    assert.deepEqual(mass.pairs, [{ label: 'связано с', side: 'out', hidden: 11, trashed: 0 }]);
+    assert.equal(mass.label, 'связано с');
   });
 
-  it('считает разные типы к одному соседу раздельно, а хранит суммарно по соседу', () => {
-    const a = linkType({ id: 't-a' });
-    const b = linkType({ id: 't-b' });
+  it('5 исходящих + 5 входящих → 2 линии, 8 скрытых (порог по СУММЕ сторон)', () => {
+    const plan = planGraphEdges([...outgoing(5), ...incoming(5)], CENTER, visible, [type]);
+    assert.deepEqual(brief(plan), { drawn: 2, hidden: 8, sides: ['out:4', 'in:4'] });
+  });
+
+  it('12 исходящих + 5 входящих → 2 линии, 15 скрытых', () => {
+    const plan = planGraphEdges([...outgoing(12), ...incoming(5)], CENTER, visible, [type]);
+    assert.deepEqual(brief(plan), { drawn: 2, hidden: 15, sides: ['out:11', 'in:4'] });
+  });
+
+  it('разные типы между одной парой — разные пары и отдельные пороги', () => {
+    const a = linkType({ id: 't-a', name_forward: 'тип а', name_reverse: 'тип а' });
+    const b = linkType({ id: 't-b', name_forward: 'тип б', name_reverse: 'тип б' });
     const links = [
       ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) => link({ id: `a${i}`, type_id: 't-a' })),
       ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) => link({ id: `b${i}`, type_id: 't-b' })),
     ];
-    const mass = computeMassLinks(links, CENTER, [a, b]);
-    assert.equal(mass.size, 1, 'one chip per neighbour');
-    assert.equal(mass.get(OTHER)?.hidden, 2 * (MASS_LINK_THRESHOLD - 1));
+    const plan = planGraphEdges(links, CENTER, visible, [a, b]);
+    assert.equal(plan.drawnIds.size, 2, 'по одной линии на тип');
+    assert.equal(plan.hidden, 2 * (MASS_LINK_THRESHOLD - 1));
+    const mass = plan.massByNeighbour.get(OTHER);
+    assert.equal(mass?.pairs.length, 2);
+    assert.equal(mass?.label, 'тип а, тип б');
+  });
+
+  it('встречные рёбра одного направленного типа: обе линии, свои имена сторон', () => {
+    const directed = linkType({
+      id: 't-directed',
+      name_forward: 'версия',
+      name_reverse: 'работы версии',
+    });
+    const plan = planGraphEdges(
+      [
+        ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+          link({ id: `out${i}`, source_id: CENTER, target_id: OTHER, type_id: directed.id }),
+        ),
+        ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+          link({ id: `in${i}`, source_id: OTHER, target_id: CENTER, type_id: directed.id }),
+        ),
+      ],
+      CENTER,
+      visible,
+      [directed],
+    );
+    assert.equal(plan.drawnIds.size, 2, 'прямая и встречная линии сохраняются обе');
+    assert.equal(plan.hidden, 2 * (MASS_LINK_THRESHOLD - 1));
+    const mass = plan.massByNeighbour.get(OTHER);
+    assert.deepEqual(
+      mass?.pairs.map((pair) => [pair.side, pair.label]),
+      [
+        ['out', 'версия'],
+        ['in', 'работы версии'],
+      ],
+    );
+  });
+
+  it('связь без типа подписана «связь» и сворачивается своей парой', () => {
+    const plan = planGraphEdges(outgoing(MASS_LINK_THRESHOLD, null, 'u'), CENTER, visible, []);
+    assert.equal(plan.drawnIds.size, 1);
+    assert.equal(plan.hidden, MASS_LINK_THRESHOLD - 1);
+    assert.equal(plan.massByNeighbour.get(OTHER)?.label, UNTYPED_LINK_LABEL);
+  });
+
+  it('план ограничен нарисованными соседями: у соседа без чипа нет и «скрытых»', () => {
+    const links = [
+      ...outgoing(MASS_LINK_THRESHOLD, type.id, 'v'),
+      ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+        link({ id: `h${i}`, target_id: THIRD, type_id: type.id }),
+      ),
+    ];
+    const plan = planGraphEdges(links, CENTER, visible, [type]);
+    assert.equal(plan.drawnIds.size, 1, 'линия только у видимого соседа');
+    assert.equal(plan.hidden, MASS_LINK_THRESHOLD - 1, 'рёбра невидимого соседа не считаются');
+    assert.equal(plan.massByNeighbour.has(THIRD), false);
+  });
+
+  it('сумма линий и чисел на чипах сходится с числом рёбер видимых соседей', () => {
+    const links = [
+      ...outgoing(MASS_LINK_THRESHOLD + 2, type.id, 'v'),
+      ...incoming(3, type.id, 'in'),
+      ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+        link({ id: `t${i}`, target_id: THIRD, type_id: type.id }),
+      ),
+      ...Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+        link({ id: `h${i}`, target_id: HIDDEN, type_id: type.id }),
+      ),
+    ];
+    const plan = planGraphEdges(links, CENTER, [OTHER, THIRD], [type]);
+    const chipTotal = [...plan.massByNeighbour.values()].reduce((sum, mass) => sum + mass.hidden, 0);
+    assert.equal(chipTotal, plan.hidden, 'счётчик шапки равен сумме чисел на чипах');
+    assert.equal(
+      plan.drawnIds.size + plan.hidden,
+      2 * MASS_LINK_THRESHOLD + 5,
+      'линии + чипы = рёбра видимых соседей',
+    );
+    // У OTHER: 12 прямых + 3 встречных = массовая пара (порог по сумме):
+    // 2 линии (out+in), скрыто 11 + 2.
+    assert.deepEqual(brief(plan), { drawn: 3, hidden: 22, sides: ['out:11', 'in:2'] });
+    // У THIRD: 10 рёбер (массовая, 1 линия).
+    assert.equal(plan.massByNeighbour.get(THIRD)?.hidden, MASS_LINK_THRESHOLD - 1);
+  });
+
+  it('представитель стороны — живое ребро; скрытые в корзине попадают в подсказку', () => {
+    const links = Array.from({ length: MASS_LINK_THRESHOLD }, (_, i) =>
+      link({ id: `m${i}`, type_id: type.id, marked_for_deletion: i === 0 }),
+    );
+    const plan = planGraphEdges(links, CENTER, visible, [type]);
+    const drawn = links.filter((item) => plan.drawnIds.has(item.id));
+    assert.equal(drawn.length, 1);
+    assert.equal(drawn[0]!.marked_for_deletion, false, 'линия пары не выглядит «в корзине»');
+    const mass = plan.massByNeighbour.get(OTHER)!;
+    assert.equal(mass.trashed, 1);
+    const tip = massChipTooltip(mass);
+    assert.ok(tip.includes('в корзине: 1'), tip);
+    assert.ok(tip.includes('метка корзины у чипа'), tip);
+    // Помеченные рёбра из значений свойства не приходят — «Свойства» дают
+    // полный список только ЖИВЫХ связей (проверено GUI-пробой: 11 из 12).
+    assert.ok(tip.includes('Полный список живых связей'), tip);
+  });
+
+  it('подсказка чипа: тип, число скрытых и реальная вкладка «Свойства»', () => {
+    const mass = planGraphEdges(outgoing(MASS_LINK_THRESHOLD), CENTER, visible, [type])
+      .massByNeighbour.get(OTHER)!;
+    assert.equal(
+      massChipTooltip(mass),
+      'связано с: ещё 9 связей. Полный список — на вкладке «Свойства».',
+    );
+  });
+
+  it('подсказка склоняет «связь» (21 → «связь», не «связей»)', () => {
+    const mass = planGraphEdges(outgoing(22), CENTER, visible, [type]).massByNeighbour.get(OTHER)!;
+    assert.equal(mass.hidden, 21);
+    assert.equal(
+      massChipTooltip(mass),
+      'связано с: ещё 21 связь. Полный список — на вкладке «Свойства».',
+    );
+  });
+
+  it('подсказка различает стороны, когда имена типа совпадают', () => {
+    // Нетипизированная пара с обеими сторонами: обе записи называются «связь»,
+    // без пометки стороны они неразличимы.
+    const mass = planGraphEdges(
+      [...outgoing(MASS_LINK_THRESHOLD, null, 'o'), ...incoming(MASS_LINK_THRESHOLD, null, 'i')],
+      CENTER,
+      visible,
+      [],
+    ).massByNeighbour.get(OTHER)!;
+    assert.equal(
+      massChipTooltip(mass),
+      'связь (исходящие): 9; связь (входящие): 9. Полный список — на вкладке «Свойства».',
+    );
+  });
+
+  it('порог настраивается (тест на границу, не только дефолт)', () => {
+    const links = [link({ id: 'x1', type_id: type.id }), link({ id: 'x2', type_id: type.id })];
+    const plan = planGraphEdges(links, CENTER, visible, [type], 2);
+    assert.equal(plan.drawnIds.size, 1);
+    assert.equal(plan.hidden, 1);
   });
 });
 
@@ -325,13 +492,181 @@ describe('mini-graph-model — показатели шапки (п.6)', () => {
     }
     const massTooltip = entries[1]!.tooltip;
     assert.ok(massTooltip.includes(String(MASS_LINK_THRESHOLD)), 'explains the mass threshold');
-    assert.ok(massTooltip.includes('«Связи»'), 'explains where to see the hidden links');
-    assert.ok(entries[2]!.tooltip.includes('«Связи»'), 'points to the full neighbour list');
+    // Полный список прямых связей живёт на вкладке «Свойства»; вкладки
+    // «Связи» в клиенте нет (ошибка 42a7c0a1, круг 2).
+    assert.ok(massTooltip.includes('«Свойства»'), 'explains where to see the hidden links');
+    assert.ok(!massTooltip.includes('«Связи»'), 'does not point at a nonexistent tab');
+    assert.ok(entries[2]!.tooltip.includes('«Свойства»'), 'points to the full neighbour list');
   });
 
   it('не показывает нулевые показатели', () => {
     const entries = graphStatEntries(computeGraphStats(4, 0));
     assert.equal(entries.length, 1);
     assert.ok(entries[0]!.text.startsWith('Соседей:'));
+  });
+});
+
+describe('mini-graph-model — что требует пересборки графа (ошибка 42a7c0a1, круг 3)', () => {
+  const base = link({ id: 'link-1', type_id: 'type-1' });
+
+  it('GRAPH_LINK_FIELDS покрывает концы, тип, оформление, активность и корзину', () => {
+    assert.deepEqual(
+      [...GRAPH_LINK_FIELDS].sort(),
+      ['active', 'color', 'marked_for_deletion', 'source_id', 'style', 'target_id', 'type_id', 'width'].sort(),
+    );
+  });
+
+  it('обновление связи значимо, если изменилось видимое на графе поле', () => {
+    assert.equal(linkChangeAffectsGraph(base, { ...base, marked_for_deletion: true }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, marked_for_deletion: false }), false);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, type_id: null }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, active: false }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, color: '#f00' }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, style: 'dashed' }), true);
+    assert.equal(linkChangeAffectsGraph(base, { ...base, width: 3 }), true);
+    assert.equal(linkChangeAffectsGraph(base, base), false);
+  });
+
+  it('без прежнего состояния изменение считается значимым (restore мимо кэша)', () => {
+    assert.equal(linkChangeAffectsGraph(undefined, base), true);
+  });
+
+  it('PATCH связи значим только по реально изменённому видимому полю', () => {
+    assert.equal(linkPatchAffectsGraph(base, { marked_for_deletion: true }), true);
+    assert.equal(linkPatchAffectsGraph({ ...base, marked_for_deletion: true }, { marked_for_deletion: true }), false);
+    assert.equal(linkPatchAffectsGraph(base, { type_id: 'type-1' }), false);
+    assert.equal(linkPatchAffectsGraph(base, { active: false }), true);
+    assert.equal(linkPatchAffectsGraph(base, {}), false);
+  });
+
+  it('правка мысли пересобирает граф только по видимым полям', () => {
+    assert.equal(thoughtChangesAffectGraph({ title: 'Новое' }), true);
+    assert.equal(thoughtChangesAffectGraph({ marked_for_deletion: true }), true);
+    assert.equal(thoughtChangesAffectGraph({ active: false }), true);
+    assert.equal(thoughtChangesAffectGraph({ fg_color: '#123456' }), true);
+    assert.equal(thoughtChangesAffectGraph({ synonyms: ['x'] }), false);
+    assert.equal(thoughtChangesAffectGraph({ comment: 'текст' }), false);
+    assert.equal(thoughtChangesAffectGraph({ version: 2 }), false);
+  });
+
+  const context = {
+    ownerId: CENTER,
+    linkIds: new Set(['link-1', 'link-2']),
+    neighbourIds: new Set([OTHER, THIRD]),
+  };
+
+  it('события связей: создание/обновление/удаление касательно центра', () => {
+    assert.equal(
+      graphEventAffects({ type: 'link.created', data: { link: link({ id: 'new' }) } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'link.created', data: { link: link({ id: 'other-link', source_id: THIRD, target_id: HIDDEN }) } },
+        context,
+      ),
+      false,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'link.updated', data: { id: 'link-1', changes: { marked_for_deletion: false } } },
+        context,
+      ),
+      true,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'link.updated', data: { id: 'link-1', changes: { width: 2 } } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'link.updated', data: { id: 'link-1', changes: {} } }, context),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'link.updated', data: { id: 'postoronniy', changes: { active: false } } }, context),
+      false,
+    );
+    assert.equal(graphEventAffects({ type: 'link.deleted', data: { id: 'link-1' } }, context), true);
+    assert.equal(graphEventAffects({ type: 'link.deleted', data: { id: 'postoronniy' } }, context), false);
+  });
+
+  it('значения свойств граф не пересобирают — рёбра приходят отдельными link.* событиями', () => {
+    // Свойство-связь — проекция рёбер: сервер публикует по нему link.created/
+    // link.deleted/link.updated (routes/properties.ts). Скалярная правка рёбер
+    // не меняет — пересборка на property-value.* была бы миганием (круг 3, п.3).
+    assert.equal(
+      graphEventAffects(
+        { type: 'property-value.set', data: { owner_type: 'thought', owner_id: CENTER } },
+        context,
+      ),
+      false,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'property-value.deleted', data: { owner_type: 'thought', owner_id: THIRD } },
+        context,
+      ),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'property-value.set', data: { owner_type: 'link', owner_id: 'link-1' } }, context),
+      false,
+    );
+  });
+
+  it('сосед: обновление видимых полей или удаление пересобирают граф', () => {
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: OTHER, changes: { marked_for_deletion: true } } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: OTHER, changes: { comment: 'x' } } }, context),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: HIDDEN, changes: { title: 'x' } } }, context),
+      false,
+    );
+    assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: THIRD } }, context), true);
+    assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: HIDDEN } }, context), false);
+  });
+
+  it('центральная мысль — такая же пилюля: её правка и удаление пересобирают граф', () => {
+    // Центра нет в `neighbourIds`, но его подпись/вид рисуются на графе
+    // (замечание 1 круга 4): realtime-переименование из другого клиента
+    // обязано обновить центральную пилюлю.
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: CENTER, changes: { title: 'x' } } }, context),
+      true,
+    );
+    assert.equal(
+      graphEventAffects(
+        { type: 'thought.updated', data: { id: CENTER, changes: { marked_for_deletion: true } } },
+        context,
+      ),
+      true,
+    );
+    // Несвязанное поле центра граф не пересобирает — как и у соседа.
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: CENTER, changes: { comment: 'x' } } }, context),
+      false,
+    );
+    assert.equal(
+      graphEventAffects({ type: 'thought.updated', data: { id: CENTER, changes: { synonyms: ['x'] } } }, context),
+      false,
+    );
+    assert.equal(graphEventAffects({ type: 'thought.deleted', data: { id: CENTER } }, context), true);
+  });
+
+  it('типы связей и мыслей меняют оформление — граф пересобирается', () => {
+    for (const type of [
+      'link-type.updated',
+      'link-type.deleted',
+      'thought-type.updated',
+      'thought-type.deleted',
+    ]) {
+      assert.equal(graphEventAffects({ type, data: {} }, context), true, type);
+    }
+    assert.equal(graphEventAffects({ type: 'comment.updated', data: {} }, context), false);
   });
 });

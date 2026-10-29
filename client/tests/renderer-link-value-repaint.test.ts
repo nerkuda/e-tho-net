@@ -355,28 +355,34 @@ describe('проводка пересчёта окрестности из ред
       'редактор свойств гасит ключи mutator-слоем',
     );
     // Сам помощник: пересчёт только для видимого владельца, через слой
-    // (focus + «Структуры» + лента «Дневника», G3).
+    // (focus + «Структуры» + лента «Дневника», G3). Перед гейтом — пересборка
+    // «Графа»: граф редактора не зависит от фокуса карты, а ребро свойства
+    // меняет его состав (ошибка 42a7c0a1, круг 3).
     assert.ok(
-      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;[\s\S]{0,500}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
+      /function repaintAfterLinkValueWrite\(ownerType: 'thought' \| 'link', ownerId: string\): void \{[\s\S]{0,700}?invalidateGraphTab\(\);\s*if \(!inFocusNeighbourhood\(ownerType, ownerId\)\) return;[\s\S]{0,500}?invalidateAfterMutation\(\[[\s\S]{0,200}?queryKeys\.focusAll\(\),[\s\S]{0,200}?queryKeys\.structuresPageAll\(\),[\s\S]{0,200}?queryKeys\.chronicleFeedAll\(\),?[\s\S]{0,50}?\]\);/.test(
         properties,
       ),
-      'пересчёт окрестности выполняется только для владельца, видимого на карте',
+      'граф пересобирается всегда, окрестность — только для владельца, видимого на карте',
     );
     // Типовое свойство-связь («Родители»/«Потомки» и типизированные): вызов
     // стоит после успешной записи и только для вида «связь». Внутри ветки
     // допустимы и другие локальные обновления (обновление счётчика строки,
-    // ошибка 9ee8e608) — проверяем сам факт вызова в ветке `link`.
+    // ошибка 9ee8e608; сигнал состава публикации) — проверяем сам факт вызова
+    // в ветке `link`.
     assert.ok(
-      /await etn\.properties\.(set|remove)\([\s\S]{0,600}?if \(definition\.value_type === 'link'\) \{\s*repaintAfterLinkValueWrite\(ownerType, ownerId\);/.test(
+      /await etn\.properties\.(set|remove)\([\s\S]{0,1400}?if \(definition\.value_type === 'link'\) \{\s*repaintAfterLinkValueWrite\(ownerType, ownerId\);/.test(
         properties,
       ),
       'типовое свойство-связь пересчитывает окрестность после записи',
     );
-    // Внетиповое свойство-связь: и запись значения, и очистка «×».
+    // Внетиповое свойство-связь: с 0.14.1 (задача 626b29bd) реестровая
+    // внетиповая строка идёт через ТОТ ЖЕ `buildEditorCell`, что и типовая,
+    // поэтому локальных производителей два — общий редактор и legacy-ячейка
+    // рёбер без реестрового свойства.
     const outsideCalls = properties.match(/repaintAfterLinkValueWrite\(ownerType, ownerId\);/g) ?? [];
     assert.ok(
-      outsideCalls.length >= 3,
-      'все три локальных производителя (типовое, внетиповое, очистка внетипового) пересчитывают окрестность',
+      outsideCalls.length >= 2,
+      'оба локальных производителя (типовой редактор и legacy-ячейка) пересчитывают окрестность',
     );
   });
 });

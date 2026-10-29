@@ -141,23 +141,28 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
   ],
   // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81):
   // отбор по хранимому адресу. eq/ne — точное совпадение; для наборов —
-  // any_of/all_of/none_of (как у `url`). is_empty/not_empty не нужны:
-  // адрес либо точно совпал, либо нет.
+  // any_of/all_of/none_of (как у `url`); «заполнено»/«не заполнено» —
+  // адрес задан/не задан (ошибка 0e976df4: значение необязательное, пустую
+  // ссылку иначе не отобрать — NULL не «не равно»).
   cross_network_ref: [
     { op: 'eq', label: 'равно' },
     { op: 'ne', label: 'не равно' },
     { op: 'any_of', label: 'содержит любой из' },
     { op: 'all_of', label: 'содержит все из' },
     { op: 'none_of', label: 'не содержит ни одного из' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
   // Ссылка на публикацию (0.11.1, задача f37b468d): отбор по id — та же
-  // матрица, что у cross_network_ref.
+  // матрица, что у cross_network_ref, включая наличие значения (0e976df4).
   publication: [
     { op: 'eq', label: 'равно' },
     { op: 'ne', label: 'не равно' },
     { op: 'any_of', label: 'содержит любой из' },
     { op: 'all_of', label: 'содержит все из' },
     { op: 'none_of', label: 'не содержит ни одного из' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
 };
 
@@ -1729,6 +1734,15 @@ export interface FilterTreeLeaf {
   labels?: FilterAstLabels;
   /** Режим обхода «в иерархии» (`structural` по умолчанию). */
   mode?: FilterAstHierarchyMode;
+  /**
+   * Служебный лист МЕСТА применения (wire `FilterAstLeaf.service`): впечён
+   * редактором при сохранении, а не набран пользователем (дефолт «Помечено на
+   * удаление = нет» у отбора типа мысли). Читатель AST снимает помеченные
+   * листья с КОРНЯ — в редакторе они не показываются условиями и не
+   * удовлетворяют запрету пустого отбора (ошибка 9ddc488e). Исполнение отбора
+   * учитывает лист как обычное условие.
+   */
+  service?: true;
 }
 
 /** Группа дерева: `И`/`ИЛИ` (один и более детей) / `НЕ` (ровно один ребёнок). */
@@ -1829,16 +1843,76 @@ export function normalizeFilterTreeRoot(node: FilterTreeNode): FilterTreeGroup {
  * такой лист лишь с КОРНЯ одиночным — лист рядом с настоящими условиями в группе
  * остаётся, иначе определение расширилось бы молча: в AST неявных дефолтов нет —
  * `query-service`, поле `ast`).
+ *
+ * `options.unmarked` — требовать ОТСУТСТВИЕ метки `service: true`: такую форму
+ * дописывает компилятор плоской формы, и её снимает плоский путь чтения
+ * (`stripViewDefaults`, отбор типа мысли). Помеченный лист AST снимает общий
+ * читатель (`stripServiceLeavesAtRoot`), непомеченный AST-лист — условие
+ * пользователя (ошибка 9ddc488e). Один предикат на оба случая — близнецы
+ * `isServiceTrashedDefaultLeaf`/`isTrashedDefaultLeaf` с разным поведением
+ * удалены как ловушка переиспользования (задача d3a30c3e).
  */
-export function isServiceTrashedDefaultLeaf(node: FilterTreeNode): boolean {
-  return (
+export function isTrashedDefaultLeaf(
+  node: FilterTreeNode,
+  options: { unmarked?: boolean } = {},
+): boolean {
+  const shape =
     node.kind === 'leaf' &&
     node.entity.kind === 'trashed' &&
     node.operator === 'eq' &&
     node.value.kind === 'scalar' &&
     node.value.value === false &&
-    node.mode === undefined
+    node.mode === undefined;
+  if (!shape) return false;
+  return options.unmarked !== true || node.service === undefined;
+}
+
+/**
+ * Снять с КОРНЕВОГО уровня дерева листья, помеченные местом применения как
+ * служебные (`service: true`, wire `FilterAstLeaf.service`): это дефолт МЕСТА,
+ * а не условие пользователя — в редакторе он строкой не показывается и не
+ * должен удовлетворять запрету пустого отбора (ошибка 9ddc488e). Метку ставит
+ * место применения при СОХРАНЕНИИ (у отбора типа мысли — `withViewDefaults`),
+ * поэтому порядок «впечь → сохранить → переоткрыть» служебную строку не
+ * показывает. Лист, вложенный в группу, не трогаем: пользователь собрал его
+ * осознанно, а метку туда никто не ставит. Метка — единственный признак:
+ * непомеченный лист «Помечено на удаление = нет» остаётся условием пользователя
+ * ({@link isTrashedDefaultLeaf} с `unmarked: true` описывает такую ФОРМУ и
+ * применяется исключительно к плоскому пути чтения).
+ *
+ * Вместе с листом снимается и ОБЁРТКА места: при корне пользователя не-«И»
+ * `withViewDefaults` печатает `(корень) И живые`, и после снятия листа группа
+ * «И» с единственным ребёнком-группой разворачивается обратно — редактор
+ * показывает исходный корень «ИЛИ»/«НЕ», а не лишний уровень (ошибка a65d27d9).
+ *
+ * Разворачивается ТОЛЬКО обёртка — группа «И» ровно из двух детей
+ * `[группа, служебный лист]`, и лист стоит ВТОРЫМ (так его печатает
+ * `withViewDefaults`: `children: [корень, лист]`). Группу «И» с единственной
+ * подгруппой, но без служебного листа на втором месте НЕ разворачиваем:
+ * пользователь выбрал корень «И» осознанно, и показывать ему «ИЛИ» подгруппы
+ * нельзя (ошибка ff11075a). Запись «И»-корня с единственной подгруппой
+ * `withViewDefaults` поэтому оборачивает (см. `filter-dialog-pure.ts`) — иначе
+ * обёртка и пользовательский корень неотличимы.
+ */
+export function stripServiceLeavesAtRoot(tree: FilterTreeNode): FilterTreeNode {
+  if (tree.kind !== 'group') return tree;
+  const children = tree.children.filter(
+    (child) => !(child.kind === 'leaf' && child.service === true),
   );
+  if (children.length === tree.children.length) return tree;
+  // Обёртка места применения: `(корень пользователя) И живые` (ошибка
+  // a65d27d9). Форма обёртки строгая — ровно два ребёнка, служебный лист
+  // вторым; любая другая группа со служебным листом остаётся группой «И» со
+  // снятым листом (ошибка ff11075a).
+  const [first, second] = tree.children;
+  const isWrapper =
+    tree.op === 'and' &&
+    tree.children.length === 2 &&
+    first!.kind === 'group' &&
+    second!.kind === 'leaf' &&
+    second!.service === true;
+  if (isWrapper) return first!;
+  return { ...tree, children };
 }
 
 /**
@@ -2228,6 +2302,7 @@ export function filterTreeToAst(node: FilterTreeNode): FilterAstNode {
   if (value !== undefined) leaf.value = value;
   if (node.labels !== undefined) leaf.labels = node.labels;
   if (node.mode !== undefined) leaf.mode = node.mode;
+  if (node.service === true) leaf.service = true;
   return leaf;
 }
 
@@ -2271,6 +2346,10 @@ export function filterAstToTree(node: unknown): FilterTreeNode | null {
   const labels = parseFilterAstLabels(rec['labels']);
   if (labels !== undefined) leaf.labels = labels;
   if (isFilterAstHierarchyMode(rec['mode'])) leaf.mode = rec['mode'];
+  // Метка служебного листа читается строго как `true`: любое другое значение
+  // меткой не является (сервер такую форму отвергает, читатель сохранённого
+  // определения не должен на ней падать).
+  if (rec['service'] === true) leaf.service = true;
   return leaf;
 }
 
@@ -2553,12 +2632,12 @@ export function compileFlatCriteriaToAst(
   if (keywords !== null) children.push(keywords);
 
   if (state.typeIds.length > 0) children.push(flatAstLeaf({ kind: 'type' }, 'in_hierarchy', flatAstList(state.typeIds)));
-  // Тип связи: серверный компилятор плоской формы раскрывает `link_type_ids` в
-  // поддерево типов связей и отдаёт `link_type in [раскрытые]`; движок AST для
-  // этого операнда раскрывает поддерево САМ и для `in`, и для `in_hierarchy`
-  // (`expandTypeIdsToSubtree`, query-service) — поэтому `in` с исходными корнями
-  // даёт тот же набор, что и серверная форма (раскрытие на момент запроса).
-  if (state.linkTypeIds.length > 0) children.push(flatAstLeaf({ kind: 'link_type' }, 'in', flatAstList(state.linkTypeIds)));
+  // Тип связи плоской формы — наследие выборки «тип + подтипы»: поддерево
+  // `link_types` раскрывает ТОЛЬКО иерархический оператор (ADR 9a356460,
+  // ошибка aa98f3f9). Наборные `in`/`not_in` сравнивают тип точно, поэтому
+  // плоский `link_type_ids` компилируется в `in_hierarchy` — как у серверного
+  // компилятора плоской формы и `link_filter` (`linkFilterToAst`).
+  if (state.linkTypeIds.length > 0) children.push(flatAstLeaf({ kind: 'link_type' }, 'in_hierarchy', flatAstList(state.linkTypeIds)));
   // Прежние «родительские мысли» — фасадный обход поддерева с `include_roots`
   // (корни ВХОДЯТ в результат). Лист «Родители в иерархии» матчит только
   // ПОТОМКОВ, поэтому фасад переводится честно: `ИЛИ(id в [корни], родители в
@@ -2716,7 +2795,13 @@ export function readFilterDefinitionDetailed(
   if (isFilterAstWire(def)) {
     const readTree = state.tree;
     if (readTree !== null && readTree !== undefined) {
-      state.tree = normalizeFilterTreeRoot(readTree);
+      // Служебные листья места применения (`service: true`), впечённые при
+      // сохранении, — не условия пользователя: снимаем их с корня, иначе
+      // служебный дефолт показывался бы строкой и удовлетворял запрету пустого
+      // отбора (ошибка 9ddc488e). Непомеченный лист «Помечено на удаление = нет»
+      // остаётся условием пользователя — именно его сохранение чинил коммит
+      // 46befcd4 (roundtrip условия).
+      state.tree = stripServiceLeavesAtRoot(normalizeFilterTreeRoot(readTree));
       return { state, lost: [] };
     }
     state.tree = defaultFilterTreeGroup('and');
@@ -2727,12 +2812,12 @@ export function readFilterDefinitionDetailed(
   const ast = compileFlatCriteriaToAst(state, registry, opts);
   // Служебный дефолт места («Помечено на удаление = нет»), добавленный компилятором
   // плоской формы на КОРНЕВОЙ уровень, — не условие пользователя: снимаем его,
-  // как это делает место «Отбор типа мысли» ({@link isServiceTrashedDefaultLeaf},
+  // как это делает место «Отбор типа мысли» ({@link isTrashedDefaultLeaf},
   // ADR 30ff83bb). Иначе определение без критериев (пара `sort`/`order` и
   // видимость) читалось бы «с условием» и панель «Структур» ушла бы с контракта
   // «нет критериев → HOME + сироты» (§15.3) на ветку `ast` (ошибка ca864656).
   const compiled = ast === undefined ? null : filterAstToTree(ast.filter);
-  const tree = compiled !== null && isServiceTrashedDefaultLeaf(compiled) ? null : compiled;
+  const tree = compiled !== null && isTrashedDefaultLeaf(compiled) ? null : compiled;
   state.tree = tree === null ? defaultFilterTreeGroup('and') : normalizeFilterTreeRoot(tree);
   if (tree !== null) applyLegacyHierarchyTraversal(tree);
   if (ast?.sort !== undefined && (state.sortKeys ?? []).length === 0) {

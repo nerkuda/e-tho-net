@@ -79,8 +79,14 @@ describe('переименование «Хроника» → «Дневник»
     const start = workspace.indexOf('const chronicleViewButton = iconButton({');
     assert.ok(start >= 0, 'кнопка экрана найдена');
     const block = workspace.slice(start, workspace.indexOf('});', start));
-    assert.ok(block.includes("title: 'Дневник'"), 'кнопка вида подписана «Дневник»');
-    assert.ok(!block.includes("title: 'Хроника'"), 'прежняя подпись «Хроника» убрана');
+    // Подпись берётся из словаря (требование 0e5ff1c6, de34b35b).
+    assert.ok(
+      block.includes("t('workspace.view.chronicle')"),
+      'кнопка вида берёт подпись из словаря',
+    );
+    const ru = read('lib/locales/ru.ts');
+    assert.match(ru, /'workspace\.view\.chronicle': 'Дневник'/, 'подпись — «Дневник»');
+    assert.ok(!ru.includes("'workspace.view.chronicle': 'Хроника'"), 'прежняя подпись «Хроника» убрана');
     assert.ok(block.includes("svgIcon('calendar-month')"), 'иконка календаря сохранена');
   });
 

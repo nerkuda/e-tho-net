@@ -284,6 +284,27 @@ function collectMergedRows(
       { unknown },
     );
   }
+  // Мягкое замыкание пары переноса отбора (0.14.1, задача a28d444b):
+  // внетиповой отбор и отбор типа при переносе — одна логическая запись с
+  // общим id. Частичное слияние, тянущее одну сторону пары, обязано увезти и
+  // вторую (например, надгробие thought_type_views), но ТОЛЬКО если она
+  // физически есть в этом слое: отсутствие пары — норма и не даёт
+  // missing_closure (rowReferences на пару намеренно не ставится).
+  for (const [from, to] of TRANSFER_PAIRS) {
+    const ids = merged.filter((m) => m.table === from).map((m) => m.row.id as string);
+    const already = new Set(merged.filter((m) => m.table === to).map((m) => m.row.id as string));
+    const missing = ids.filter((id) => !already.has(id));
+    if (missing.length === 0) continue;
+    const rows = ndb
+      .prepare(
+        `SELECT t.*, t.rowid AS rowid FROM ${to} t
+         WHERE t.layer_id = ? AND t.id IN (${missing.map(() => '?').join(', ')})`,
+      )
+      .all(layerId, ...missing) as AnyRow[];
+    for (const row of rows) {
+      merged.push({ table: to, row, winner: resolveRow(ndb, to, row.id as string) });
+    }
+  }
   return merged;
 }
 
@@ -512,6 +533,14 @@ function ref(table: BranchableTable, id: unknown): { table: BranchableTable; id:
   return typeof id === 'string' && id.length > 0 ? { table, id } : null;
 }
 
+/** Пары «одна логическая запись в двух таблицах»: перенос отбора типа в
+ * внетиповой сохраняет id. Замыкание пары — только по физическому наличию
+ * соседней строки в том же слое (задача a28d444b). */
+const TRANSFER_PAIRS: ReadonlyArray<readonly [BranchableTable, BranchableTable]> = [
+  ['thought_custom_views', 'thought_type_views'],
+  ['thought_type_views', 'thought_custom_views'],
+];
+
 /** Table owning a polymorphic `(owner_type, owner_id)` pair. */
 function ownerTableOf(ownerType: unknown): BranchableTable {
   if (ownerType === 'link') return 'links';
@@ -539,6 +568,13 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
       return compact([ref('link_types', r.type_id)]);
     case 'thought_types':
       return compact([ref('thought_types', r.parent_id)]);
+    // Отбор типа (0.14.1, ошибка d66c45a2): строка без живого типа-владельца
+    // бессмысленна — в основу она уехала бы висячей ссылкой. Замыкание тянет
+    // тип в набор частичного слияния — как `thought_property_order` → `thoughts`.
+    // Пару переноса (`thought_custom_views` с тем же id) сюда НЕ ставим:
+    // отсутствие пары — норма, мягкое замыкание делает collectMergedRows.
+    case 'thought_type_views':
+      return compact([ref('thought_types', r.thought_type_id)]);
     case 'link_types':
       return compact([ref('link_types', r.parent_id)]);
     case 'type_properties':
@@ -556,6 +592,19 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
         ref(ownerTableOf(r.owner_type), r.owner_id),
         ref('properties', r.property_id), // 0.6.5: значение ссылается на справочник, не на привязку
       ]);
+    // Порядок внетиповых свойств (0.14.1, задача 3948af62): строка без живой
+    // мысли-владельца бессмысленна. `property_id` намеренно НЕ замыкается:
+    // по ADR 75a79109 позиции переживают перенос свойства в типы/из типов, а
+    // исчезнувшее свойство оставляет безвредный хвост.
+    case 'thought_property_order':
+      return compact([ref('thoughts', r.thought_id)]);
+    // Внетиповой отбор (0.14.1, задача a28d444b): строка без живой мысли
+    // бессмысленна. Пару переноса (тот же id в thought_type_views) сюда НЕ
+    // ставим: отсутствие пары — норма, а неразрешённый ref дал бы
+    // missing_closure 422 и сломал бы слияние отбора без пары. Мягкое
+    // замыкание пары делает набор строк (collectMergedRows/collectThoughtLayerRows).
+    case 'thought_custom_views':
+      return compact([ref('thoughts', r.thought_id)]);
     case 'comments':
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
     case 'comment_targets':
@@ -1151,6 +1200,39 @@ export function collectThoughtLayerRows(
     'property_values',
     layerIds(ndb, 'property_values', layerId, "owner_type = 'thought' AND owner_id = ?", thoughtId),
   );
+  // Пер-мысленный порядок внетиповых свойств (0.14.1, задача 3948af62;
+  // ошибка a0e2b2df): строки порядка принадлежат мысли так же, как её значения,
+  // и обязаны уезжать из слоя и отбрасываться вместе с ней. Раньше таблица
+  // отсутствовала в наборе — слияние одной мысли теряло перестановку, а
+  // «отказаться от изменений» оставляло строки в слое.
+  push(
+    'thought_property_order',
+    layerIds(ndb, 'thought_property_order', layerId, 'thought_id = ?', thoughtId),
+  );
+  // Внетиповые отборы мысли (0.14.1, задача a28d444b) — часть «всего про
+  // мысль». Пару переноса (тот же id в thought_type_views) добавляем только
+  // если строка соседней таблицы физически есть в этом слое: отсутствие пары
+  // не должно давать missing_closure.
+  const customViewIds = layerIds(
+    ndb,
+    'thought_custom_views',
+    layerId,
+    'thought_id = ?',
+    thoughtId,
+  );
+  push('thought_custom_views', customViewIds);
+  if (customViewIds.length > 0) {
+    push(
+      'thought_type_views',
+      layerIds(
+        ndb,
+        'thought_type_views',
+        layerId,
+        `id IN (${customViewIds.map(() => '?').join(', ')})`,
+        ...customViewIds,
+      ),
+    );
+  }
   // Вложения мысли — ОБА источника, переходный период (ADR 9f90b010; снимется
   // задачей домена 7678876a): строки владений `attachment_owners` (целевая
   // модель) и вложения по owner-колонкам `attachments` (пока домен пишет их —

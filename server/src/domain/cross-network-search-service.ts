@@ -32,7 +32,7 @@ import { search } from './search-service.js';
 import { findDuplicatesAsync, queryThoughtsAsync } from './heavy-read.js';
 import type { AstTokenContext, ThoughtQueryRequest } from './query-service.js';
 import { BASE_LAYER_ID } from '@etn/shared';
-import type { CrossNetworkSearchResponse, CrossNetworkTokenIssue, DuplicateHit, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
+import type { CrossNetworkSearchResponse, CrossNetworkTokenIssue, DuplicateHit, DuplicateSearchMode, FilterProfileId, NetworksCatalog, NetworkRef, SearchResponse, ThoughtQueryResponse } from '@etn/shared';
 
 /** Максимум сетей в одном веерном вызове. Запросы сверх лимита — ошибка
  *  (агенту нужен явный сигнал, а не молчаливая обрезка). */
@@ -397,6 +397,8 @@ export interface CrossNetworkFindDuplicatesArgs {
   title: string;
   synonyms?: string[];
   typeIds?: string[];
+  /** Режим сопоставления (ошибка 11f14a81); по умолчанию `dedupe`. */
+  mode?: DuplicateSearchMode;
   /** Потолок суммарной выдачи; по умолчанию {@link CROSS_NETWORK_MAX_HITS}. */
   maxHits?: number;
 }
@@ -431,7 +433,9 @@ export async function fanOutFindDuplicates(
         net.id,
         access.logger,
       );
-      return findDuplicatesAsync(ndb, args.title, args.synonyms ?? [], args.typeIds ?? []);
+      return findDuplicatesAsync(ndb, args.title, args.synonyms ?? [], args.typeIds ?? [], {
+        mode: args.mode,
+      });
     }),
   );
   for (const [index, local] of locals.entries()) {

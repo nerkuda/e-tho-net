@@ -56,8 +56,11 @@ export function setActiveView(view: WorkspaceView): void {
 export async function focusThoughtOnMap(id: string): Promise<void> {
   setActiveView('map');
   // Ленивый импорт: статический замкнул бы цикл app → … → active-view.
-  const { setFocus } = await import('../app.js');
-  await setFocus(id);
+  // `focusFromUi` — единый UI-вход установки фокуса: отказ показывается
+  // тостом и НЕ отклоняет промис, поэтому `void focusThoughtOnMap(...)` в
+  // обработчиках не даёт unhandled rejection (ошибка 1656ef58).
+  const { focusFromUi } = await import('../app.js');
+  await focusFromUi(id);
 }
 
 /**

@@ -79,11 +79,14 @@ function leaves(node: any, out: any[] = []): any[] {
   return out;
 }
 
-/** Concatenated text of a subtree (the shim keeps text per node). */
+/** Текст поддерева через пробел: так запрещённая фраза, разложенная по разным
+ *  узлам, тоже ловится. `textContent` элемента уже агрегирует потомков, поэтому
+ *  берём его у КАЖДОГО ребёнка по отдельности (без двойного счёта). */
 function textOf(node: ShimElement): string {
-  let out = node.textContent;
-  for (const child of node.children) out += ` ${textOf(child)}`;
-  return out.trim();
+  const parts = node.childNodes.map((child) =>
+    child.isTextNode ? child.textContent : textOf(child),
+  );
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 before(async () => {

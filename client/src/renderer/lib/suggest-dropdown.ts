@@ -23,12 +23,14 @@
  * и пропустить фокус дальше по порядку полей (нажатие не гасится),
  * потеря фокуса — закрыть.
  *
- * Защита диалога от Esc: capture-слушатель
- * на `window` регистрируется в момент подключения — раньше, чем `showDialog`
- * добавит свой capture-обработчик Esc, — поэтому `stopImmediatePropagation`
- * гасит нажатие до диалога (на одном узле capture-слушатели выполняются в
- * порядке регистрации). Повторы Esc тоже гасятся: зажатый Esc не должен
- * закрыть список и тут же диалог.
+ * Защита диалога от Esc: пока список открыт, выпадашка держит слой в реестре
+ * всплывающих слоёв общеклиентского диспетчера (`pushKeyOverlay`,
+ * `lib/keymap.ts`; ADR `b420b08c`). `Escape` разрешается диспетчером: верхний
+ * слой (список, меню, поповер) получает нажатие первым, каркас диалога под ним
+ * уступает — поэтому одного Esc достаточно, чтобы закрыть только список
+ * (ошибка 9ff6b606). Дополнительно выпадашка ставит оконный capture-слушатель
+ * `keydown`: он опережает редактор CM6 под списком, но чьё это нажатие, решает
+ * слой через `handleEscape` — не-верхний слой нажатие не трогает и не глушит.
  *
  * Модуль не подключает себя к полям — подключение делает веха 4 (задача
  * 77e7cafd). Потолок истории «10 значений» — дело источника
@@ -48,6 +50,7 @@
 import type { LinkStyle } from '@etn/shared';
 
 import { div, el, positionBodyDropdown, span } from './dom.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from './keymap.js';
 import { choiceControl } from './ui/choice-row.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
@@ -402,6 +405,15 @@ export function buildSuggestRow(entry: SuggestEntry, options: SuggestRowOptions 
  */
 export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): SuggestHandle {
   let list: HTMLDivElement | null = null;
+  /**
+   * Слой `Escape` открытой выпадашки (ошибка 9ff6b606): каркас диалога, внутри
+   * которого живёт поле, уступает `Escape` списку — иначе одно нажатие закрывало
+   * бы список и звало подтверждение несохранённых изменений диалога. Приоритет
+   * слоёв решает диспетчер (`lib/keymap.ts`); оконный capture-слушатель ниже
+   * опережает редактор CM6, но обрабатывает нажатие только как верхний слой
+   * (`handleEscape`).
+   */
+  let escapeOverlay: KeyOverlayHandle | null = null;
   /** Строки в порядке отображения (заголовки групп не считаются). */
   let rows: HTMLElement[] = [];
   /** Вариант каждой строки — параллельно {@link rows}. */
@@ -468,6 +480,8 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       list.remove();
       list = null;
     }
+    escapeOverlay?.release();
+    escapeOverlay = null;
     rows = [];
     rowEntries = [];
     cursor = null;
@@ -594,6 +608,21 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
       openLists.add(box);
       document.body.append(box);
       positionBodyDropdown(box, input, 320, opts.minWidth ?? 0);
+      escapeOverlay ??= pushKeyOverlay({
+        id: 'suggest',
+        onEscape: () => {
+          // Поле выпало из документа (перерисованный редактор, закрытый диалог,
+          // отключённая панель кэшированной вкладки): снимаем слой и список, а
+          // не держим `Escape` за мёртвым виджетом.
+          if (!input.isConnected) {
+            unwireWindow();
+            close();
+            return true;
+          }
+          close();
+          return true;
+        },
+      });
     } else {
       box.scrollTop = prevScroll;
     }
@@ -694,21 +723,35 @@ export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): 
     close();
   };
 
-  /** Esc: пока список открыт, нажатие принадлежит списку, не диалогу. */
+  /**
+   * Esc: пока список открыт и выше него нет другого слоя, нажатие принадлежит
+   * списку. Приоритет решает диспетчер: `escapeOverlay.handleEscape` вернёт
+   * `false`, если над списком открыт поповер/меню, — тогда нажатие не глушится.
+   * Capture-фаза нужна, чтобы опередить редактор CM6 под выпадашкой.
+   */
   const onWinKey = (event: KeyboardEvent): void => {
     if (!input.isConnected) {
+      // Поле выпало из DOM при открытом списке (перерисованный редактор,
+      // закрытый диалог, отключённая панель кэшированной вкладки): мёртвый
+      // список закрываем и `Escape` поглощаем сами. Иначе то же нажатие
+      // обработает диалог, зарегистрированный позже, — двойное действие
+      // (ошибка 9ff6b606). `handleEscape` делает это, когда выпадашка ещё
+      // верхний слой; если над ней уже диалог, снимаем мёртвый слой и гасим
+      // событие явно. Открытого списка нет (`escapeOverlay === null`) — нажатие
+      // не наше: не поглощаем, оно достанется диалогу или меню.
+      if (event.key === 'Escape' && !event.repeat && escapeOverlay !== null) {
+        if (escapeOverlay.handleEscape(event) !== true) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }
       unwireWindow();
       close();
       return;
     }
-    if (event.key !== 'Escape') return;
-    if (list !== null || event.repeat) {
-      // Регистрация при подключении ставит этот capture-слушатель раньше
-      // диалогового — диалог до события не дойдёт.
-      event.stopImmediatePropagation();
-      event.preventDefault();
-      if (list !== null) close();
-    }
+    if (event.key !== 'Escape' || event.repeat) return;
+    if (escapeOverlay === null || !escapeOverlay.handleEscape(event)) return;
+    event.stopImmediatePropagation();
   };
 
   const onFocus = (): void => {

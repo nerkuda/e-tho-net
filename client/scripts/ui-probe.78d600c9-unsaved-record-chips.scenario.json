@@ -1,0 +1,189 @@
+{
+  "name": "diary-unsaved-record-chips",
+  "description": "Ошибка 78d600c9: у только что созданной дневниковой записи (карточка в единой правке, заголовок набран, запись ещё НЕ сохранена) добавление мысли через «+ мысль» обязано сразу показать её чипс в строке привязок. Красный прогон до фикса: чипс появляется только после сохранения. Затем запись сохраняется — прежнее поведение (чипс на месте, заголовок в просмотре). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.78d600c9-unsaved-record-chips.scenario.json. Без скриншотов: доказательства — DOM-пробы и контроль целей записи через шаг api.",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "open-diary",
+      "click": ".view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "wait-add-bar",
+      "waitFor": "document.querySelector('.diary-add-btn') !== null"
+    },
+    {
+      "name": "click-add-record",
+      "click": ".diary-add-btn"
+    },
+    {
+      "name": "wait-unsaved-record",
+      "waitFor": "document.querySelector('.diary-record .diary-record-title-input') !== null"
+    },
+    {
+      "name": "focus-title",
+      "probe": {
+        "name": "titleFocused",
+        "expression": "(() => { const i = document.querySelector('.diary-record .diary-record-title-input'); if (i === null) return false; i.focus(); i.click(); return document.activeElement === i; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "type-title",
+      "text": "Несохранённая запись 78d600c9"
+    },
+    {
+      "name": "title-input-event",
+      "eval": "(() => { const i = document.querySelector('.diary-record .diary-record-title-input'); if (i === null) return false; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "title-typed",
+      "probe": {
+        "name": "typedTitle",
+        "expression": "document.querySelector('.diary-record .diary-record-title-input')?.value ?? ''"
+      },
+      "expect": "Несохранённая запись 78d600c9"
+    },
+    {
+      "name": "record-still-unsaved",
+      "probe": {
+        "name": "editingBeforeAttach",
+        "expression": "document.querySelector('.diary-record .diary-record-title-input') !== null"
+      },
+      "expect": true
+    },
+    {
+      "name": "click-add-thought",
+      "click": ".diary-record .diary-chip-add"
+    },
+    {
+      "name": "wait-add-dialog",
+      "waitFor": "document.querySelector('.add-mode-row') !== null"
+    },
+    {
+      "name": "focus-thought-title",
+      "probe": {
+        "name": "dialogInputFocused",
+        "expression": "(() => { const i = document.querySelector('.add-search-row textarea'); if (i === null) return false; i.focus(); i.click(); return document.activeElement === i; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "type-thought-title",
+      "text": "Мысль к несохранённой записи"
+    },
+    {
+      "name": "thought-input-event",
+      "eval": "(() => { const i = document.querySelector('.add-search-row textarea'); if (i === null) return false; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "submit-new-thought",
+      "key": "Enter"
+    },
+    {
+      "name": "wait-dialog-closed",
+      "waitFor": "document.querySelector('.add-mode-row') === null"
+    },
+    {
+      "name": "record-still-editing-after-attach",
+      "probe": {
+        "name": "editingAfterAttach",
+        "expression": "document.querySelector('.diary-record .diary-record-title-input') !== null"
+      },
+      "expect": true
+    },
+    {
+      "name": "chips-immediately",
+      "timeout": 5000,
+      "waitFor": "document.querySelector('.diary-record .diary-record-chips')?.textContent?.includes('Мысль к несохранённой записи') === true"
+    },
+    {
+      "name": "chips-immediately-value",
+      "probe": {
+        "name": "chipVisibleBeforeSave",
+        "expression": "document.querySelector('.diary-record .diary-record-chips')?.textContent?.includes('Мысль к несохранённой записи') ?? false"
+      },
+      "expect": true
+    },
+    {
+      "name": "target-attached-in-db",
+      "api": {
+        "name": "recordTargets",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "expression": "((Array.isArray(data) ? data : (data.items ?? [])).filter((c) => c.kind === 'chronological').sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]?.targets ?? []).filter((t) => t.owner_type === 'thought').length"
+      },
+      "expect": 2
+    },
+    {
+      "name": "focus-title-for-save",
+      "probe": {
+        "name": "titleFocusedForSave",
+        "expression": "(() => { const i = document.querySelector('.diary-record .diary-record-title-input'); if (i === null) return false; i.focus(); return document.activeElement === i; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "save-record",
+      "key": "Enter",
+      "modifiers": [
+        "ctrl"
+      ]
+    },
+    {
+      "name": "wait-record-saved",
+      "waitFor": "document.querySelector('.diary-record .diary-record-title-input') === null"
+    },
+    {
+      "name": "title-after-save",
+      "probe": {
+        "name": "titleViewAfterSave",
+        "expression": "document.querySelector('.diary-record .diary-record-title')?.textContent?.includes('Несохранённая запись 78d600c9') ?? false"
+      },
+      "expect": true
+    },
+    {
+      "name": "chips-after-save",
+      "probe": {
+        "name": "chipVisibleAfterSave",
+        "expression": "document.querySelector('.diary-record .diary-record-chips')?.textContent?.includes('Мысль к несохранённой записи') ?? false"
+      },
+      "expect": true
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "diary-period-monthstart-c4343d63",
-  "description": "Ошибка c4343d63: в «Дневнике» период «с» = $monthStart, «по» = 12.10 подсвечивает и льёт записи с 27.09 (первый день недели, содержащей 1-е число). Сценарий: fdw=7 → клик по дню 12.10 (обе границы $today-4d) → смена опоры «с» на $monthStart → проверка нижней границы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.diary-period-monthstart-c4343d63.scenario.json --out .tmp/etn-c4343d63/out",
+  "description": "Ошибка c4343d63: в «Дневнике» период «с» = $monthStart, «по» = 12-е число подсвечивает и льёт записи с первого дня недели, содержащей 1-е число. Сценарий: fdw=7 → клик по 12-му числу текущего месяца → смена опоры «с» на $monthStart → проверка нижней границы. Даты НЕ зашиты: сид и ожидания вычисляются от текущего дня прогона (ошибка 42b7c183), проверяется текущий месяц. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.diary-period-monthstart-c4343d63.scenario.json --out .tmp/etn-c4343d63/out",
   "timeout": 180000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -21,13 +21,17 @@
     { "name": "diary-panel", "timeout": 15000, "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null" },
 
     {
+      "name": "prepare-dates",
+      "eval": "(() => { const pad = (n) => String(n).padStart(2, '0'); const now = new Date(); const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; const utc = (day) => new Date(day + 'T00:00:00Z'); const add = (day, n) => new Date(utc(day).getTime() + n * 86400000).toISOString().slice(0, 10); const fdw = 7; const monthFirst = today.slice(0, 7) + '-01'; const lead = (utc(monthFirst).getUTCDay() - (fdw % 7) + 7) % 7; const weekStart = add(monthFirst, -lead); const clickDay = add(monthFirst, 11); const leadSeed = weekStart < monthFirst ? weekStart : add(monthFirst, -1); window.__monthDates = { today, monthFirst, clickDay, weekStart, leadSeed }; return { today, monthFirst, clickDay, weekStart, leadSeed, lead }; })()"
+    },
+    {
       "name": "seed-days",
-      "eval": "(async () => { const nid = '{{networkId}}'; const seed = '{{thoughtId}}'; const mk = async (title, day) => { const t = new Date(day + 'T12:00:00').toISOString(); return window.etn.comments.create(nid, 'thought', seed, { kind: 'chronological', title, body_md: 'запись ' + day, valid_from: t, valid_to: t }); }; for (const d of ['2026-09-27','2026-10-01','2026-10-12']) { await mk('Д ' + d, d); } return true; })()"
+      "eval": "(async () => { const nid = '{{networkId}}'; const seed = '{{thoughtId}}'; const days = [window.__monthDates.leadSeed, window.__monthDates.monthFirst, window.__monthDates.clickDay]; const mk = async (title, day) => { const t = new Date(day + 'T12:00:00').toISOString(); return window.etn.comments.create(nid, 'thought', seed, { kind: 'chronological', title, body_md: 'запись ' + day, valid_from: t, valid_to: t }); }; for (const d of days) { await mk('Д ' + d, d); } return days.length; })()"
     },
     { "name": "goto-today", "click": ".cal-today" },
     { "name": "today-shown", "timeout": 10000, "waitFor": "document.querySelector('.chron-filter') !== null" },
 
-    { "name": "click-day-1012", "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-day')).find((e) => e.getAttribute('title') === '2026-10-12'); if (!b) throw new Error('нет дня 2026-10-12'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
+    { "name": "click-day", "eval": "(() => { const b = Array.from(document.querySelectorAll('.chron-cal .cal-day')).find((e) => e.getAttribute('title') === window.__monthDates.clickDay); if (!b) throw new Error('нет дня ' + window.__monthDates.clickDay); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
     { "name": "day-applied", "timeout": 10000, "waitFor": "document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__shift') !== null" },
     { "name": "day-state", "probe": "({ from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null, fromShift: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__shift')?.value ?? null })" },
 
@@ -36,11 +40,12 @@
     { "name": "from-model-token", "probe": "document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__hint')?.textContent ?? null", "expect": "начало месяца" },
 
     { "name": "press-apply", "eval": "(() => { const b = document.querySelector('.chron-filter .ff-apply'); b.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); b.dispatchEvent(new MouseEvent('click',{bubbles:true})); return true; })()" },
-    { "name": "feed-day-first", "timeout": 15000, "waitFor": "document.querySelector('.chron-feed .diary-day[data-day=\"2026-10-01\"]') !== null" },
-    { "name": "highlight-from", "timeout": 15000, "waitFor": "document.querySelector('.chron-cal .cal-day.is-selected[title=\"2026-10-01\"]') !== null" },
+    { "name": "feed-day-first", "timeout": 15000, "waitFor": "document.querySelector('.chron-feed .diary-day[data-day=\"' + window.__monthDates.monthFirst + '\"]') !== null" },
+    { "name": "highlight-from", "timeout": 15000, "waitFor": "document.querySelector('.chron-cal .cal-day.is-selected[title=\"' + window.__monthDates.monthFirst + '\"]') !== null" },
     { "name": "state-after-apply", "probe": "({ selectedDays: Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).sort(), feedDays: Array.from(document.querySelectorAll('.chron-feed .diary-day')).map((e) => e.dataset.day).sort(), from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, fromHint: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] .fv-date__hint')?.textContent ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null })" },
-    { "name": "min-selected-day", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).sort()[0] ?? null", "expect": "2026-10-01" },
-    { "name": "selected-days-count-1012", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).filter((d) => d >= '2026-10-01' && d <= '2026-10-12').length", "expect": 12 },
-    { "name": "feed-first-day", "probe": "Array.from(document.querySelectorAll('.chron-feed .diary-day')).map((e) => e.dataset.day).sort()[0] ?? null", "expect": "2026-10-01" }
+    { "name": "expected-month-first", "probe": "window.__monthDates.monthFirst" },
+    { "name": "min-selected-day", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).sort()[0] ?? null", "expectFrom": "expected-month-first" },
+    { "name": "selected-days-count", "probe": "Array.from(document.querySelectorAll('.chron-cal .cal-day.is-selected')).map((e) => e.getAttribute('title')).filter((d) => d >= window.__monthDates.monthFirst && d <= window.__monthDates.clickDay).length", "expect": 12 },
+    { "name": "feed-first-day", "probe": "Array.from(document.querySelectorAll('.chron-feed .diary-day')).map((e) => e.dataset.day).sort()[0] ?? null", "expectFrom": "expected-month-first" }
   ]
 }

@@ -46,6 +46,7 @@
 import { type Link, type ThoughtLinksGrouped } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
+import { errText } from '../lib/dom.js';
 import { closeMenu } from '../lib/menu.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
@@ -884,6 +885,5 @@ export async function reorderZone(draggedId: string, dir: OrderableDir, insertIn
 
 /** Surfaces a failure as a transient notice. */
 function noticeErr(prefix: string, err: unknown): void {
-  const msg = err instanceof Error ? err.message : String(err);
-  notice(`${prefix}: ${msg}`, 'error');
+  notice(`${prefix}: ${errText(err)}`, 'error');
 }

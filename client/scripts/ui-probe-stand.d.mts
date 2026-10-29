@@ -1,11 +1,17 @@
 /**
  * Типы для `ui-probe-stand.mjs` (подъём изолированного GUI-стенда, задача
- * 38ef87cc). Нужны юнит-тесту `tests/ui-probe-stand.test.ts`: проверяются
- * чистые функции разбора аргументов и извлечения ключа.
+ * 38ef87cc; фикстура сценария, прокси задержки и проверка правил серверного
+ * лога — ошибка 58c55bb9). Нужны юнит-тестам `tests/ui-probe-stand.test.ts`:
+ * проверяются чистые функции разбора аргументов, извлечения ключа, правил
+ * лога и отбора задерживаемых запросов.
  */
 
 export interface StandOptions {
   scenario: string | null;
+  /** Фикстура сценария: модуль, готовящий данные до запуска клиента. */
+  scenarioSeed: string | null;
+  /** Дополнительные аргументы фикстуры (`--scenario-seed-arg a=b`). */
+  scenarioSeedArgs: string[];
   dataFrom: string | null;
   apiKey: string | null;
   serverPort: number;
@@ -16,12 +22,65 @@ export interface StandOptions {
   seedName: string;
   seedTitle: string;
   seedComment: string;
+  /** Задержка HTTP-ответов засеянной сети, мс (0 — прокси не поднимается). */
+  delaySeedMs: number;
+  /** Сузить задержку до путей, содержащих подстроку ('' — вся сеть). */
+  delaySeedPath: string;
+  /** Повторяемые правила `<ms>:<путь>`: разным путям — разная задержка. */
+  delaySeedRules: { delayMs: number; path: string }[];
+  /**
+   * Правила задержки ОТВЕТА `<ms>:<путь>`: запрос уходит сразу, клиент получает
+   * ответ позже (дедупликация in-flight GET, задача ddcb8e84).
+   */
+  responseSeedRules: { delayMs: number; path: string }[];
+  /**
+   * Сколько первых совпавших ответов `responseSeedRules` придержать (0 — все;
+   * ошибка da7bbb53, круг 3): свежее чтение после мутации проходит сразу.
+   */
+  responseSeedLimit: number;
+  /**
+   * HTTP-метод для правил `responseSeedRules` ('' — любой): задержка ОТВЕТА
+   * придерживает чтения, но не собственную мутацию сценария — иначе ответ
+   * DELETE придержан и мутация завершается после снимка, гейт вакуумный
+   * (ошибка da7bbb53, круг 4).
+   */
+  responseSeedMethod: string;
+  /**
+   * Подстрока текста серверного WebSocket-сообщения, которое НЕ доставляется
+   * клиенту: подавление realtime-эха своей мутации для красного GUI-гейта
+   * (ошибка da7bbb53, круг 4). `''` — realtime без фильтра.
+   */
+  muteWsEvent: string;
+  /**
+   * Режим «форвард + подмена статуса»: подстрока пути засеянной сети; такие
+   * запросы получают статус `failSeedStatus` ('' — режим выключен; ошибка
+   * b213cf60).
+   */
+  failSeedPath: string;
+  /**
+   * Статус подмены для `failSeedPath` (400..599, по умолчанию 404). 500 —
+   * сетевой/серверный отказ, не являющийся stale-хитом (ошибка 53d21e82).
+   */
+  failSeedStatus: number;
   keep: boolean;
   help: boolean;
 }
 
 export declare function parseArgs(argv: string[]): StandOptions;
 export declare function parseInitKey(log: string): string;
+
+/** Разобрать `--delay-seed-rule <ms>:<путь>` (путь обязателен). */
+export declare function parseDelaySeedRule(value: string): { delayMs: number; path: string };
+
+/**
+ * Подставить id засеянных сущностей (`{{networkId}}`, `{{thoughtId}}`,
+ * `{{homeId}}`) в путь задержки: сценарий знает мысль только как seed-id
+ * (гонка фокуса одной мысли, ошибка 1656ef58).
+ */
+export declare function resolveDelaySeedPath(
+  filter: string,
+  seed: StandSeed | null,
+): string;
 
 /** Порты/адреса стенда для сборки команды прогона. */
 export interface StandPorts {
@@ -48,3 +107,32 @@ export declare function buildProbeArgs(
   seed: StandSeed | null,
   key: string,
 ): string[];
+
+/** Верхняя граница числа совпадений шаблона в серверном логе. */
+export interface ServerLogAtMostRule {
+  pattern: string;
+  max: number;
+}
+
+/** Правила серверного лога из сценария (`serverLog`). */
+export interface ServerLogRules {
+  /** Шаблоны, которых в логе быть НЕ ДОЛЖНО. */
+  absent?: string[];
+  /** Шаблоны, которые в логе ОБЯЗАНЫ быть. */
+  present?: string[];
+  /** Шаблоны с верхней границей числа совпадений (например, «нет цикла»). */
+  atMost?: ServerLogAtMostRule[];
+}
+
+/** Нарушение правил лога: вид, шаблон, число строк и первые совпадения. */
+export interface ServerLogViolation {
+  kind: 'absent' | 'present' | 'atMost';
+  pattern: string;
+  /** Предел `atMost` (только у нарушения этого вида). */
+  max?: number;
+  count: number;
+  matches: string[];
+}
+
+export declare function readScenarioLogRules(file: string): ServerLogRules | null;
+export declare function serverLogViolations(log: string, rules: ServerLogRules): ServerLogViolation[];

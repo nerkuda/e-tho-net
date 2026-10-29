@@ -47,20 +47,28 @@
  *   corner (default off) and remembered in L4 `ui_state`
  *   (`search_settings_open`), like `search_state`;
  * - clicking a thought hit focuses it; clicking a link hit focuses its source
- *   and opens the link in the editor (spec §3.1).
+ *   and opens the link in the editor (spec §3.1);
+ * - right-click on a thought hit — and `Shift+F10`/`ContextMenu` on the focused
+ *   cloud — opens the SHARED thought menu (`canvas/context-menu.ts`), the same
+ *   command set as on the canvas; opening the menu neither moves the canvas
+ *   focus nor closes the search panel (ошибка ffc173c9).
  */
 
-import { setFocus } from '../app.js';
+import { focusFromUi, setFocus } from '../app.js';
 // Хиты-мысли в результатах поиска рисует общая фабрика облачка (профиль
 // `tree`): значок, цвета, начертание и бледность — как на холсте (§2.2, §6.7).
-import { createThoughtCloud } from '../lib/thought-cloud.js';
+import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-cloud.js';
+// Тип места меню берётся у фасада вне холста: сам фасад импортируется лениво
+// (статический импорт дал бы цикл `app → search → canvas/context-menu → app`),
+// а type-only импорт стирается при сборке и цикла не создаёт.
+import type { ThoughtMenuPlace } from '../canvas/context-menu.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
 } from '../editor/wiki-link-resolver.js';
 import { resolveFirstDayOfWeek } from '../lib/dates.js';
-import { div, el, renderHtml, span } from '../lib/dom.js';
+import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { isInsideDialog } from '../lib/dialog.js';
@@ -97,6 +105,7 @@ import { notice } from '../lib/notice.js';
 import { t } from '../lib/i18n.js';
 import {
   UI_STATE_KEY,
+  type Link,
   type SearchResponse,
   type SearchScope,
   type Thought,
@@ -435,6 +444,22 @@ export function mountSearch(next: SearchChrome): () => void {
           }
           return true;
         },
+      },
+      // Меню мысли с клавиатуры (спецификация «Контекстное меню мысли»,
+      // ошибка ffc173c9): `Shift+F10` и клавиша `ContextMenu` на облачке
+      // результата открывают то же общее меню, что и правый клик. Локального
+      // `keydown` у панели нет — только привязки общего диспетчера
+      // (`lib/keymap.ts`, ADR b420b08c). Фокус не на облачке — `false`, событие
+      // уходит по стеку контекстов ниже.
+      {
+        command: 'search.cloud.menu',
+        chord: 'Shift+F10',
+        run: openFocusedResultCloudMenu,
+      },
+      {
+        command: 'search.cloud.menu',
+        chord: 'ContextMenu',
+        run: openFocusedResultCloudMenu,
       },
     ],
   });
@@ -859,7 +884,7 @@ function renderIdResult(thought: Thought | null): void {
     // factory-built cloud as the canvas (08-ui-spec.md §2.2) with the id as
     // the snippet.
     // Клик и Enter выполняют одну и ту же активацию строки (задача a1766c7d).
-    const activate = activateHit(key, () => void setFocus(thought.id));
+    const activate = activateHit(key, () => focusFromUi(thought.id));
     rowActivations.set(row, activate);
     row.append(
       createThoughtCloud(thought, {
@@ -868,7 +893,7 @@ function renderIdResult(thought: Thought | null): void {
         // многоточием по списку, а не по холстовым 200px.
         width: 'container',
         highlightTerms: currentHighlightTerms(),
-        actions: { onClick: activate, onCtrlClick: activate },
+        actions: searchCloudActions(activate, thought.title),
       }),
     );
     const info = div('search-hit-info');
@@ -914,6 +939,79 @@ function activateHit(key: string, open: () => void): () => void {
  */
 function currentHighlightTerms(): string[] {
   return chrome === null ? [] : searchHighlightTerms(chrome.input.value);
+}
+
+/**
+ * Действия облачка-хита поиска: клик и Ctrl+клик — активация строки (та же
+ * функция обслуживает Enter, задача a1766c7d), правый клик — ОБЩЕЕ меню мысли.
+ * Меню — тот же фасад, что у холста и чипов (`canvas/context-menu.ts`):
+ * своего списка команд поиск не заводит (правило «меню одинаково везде»,
+ * ошибка f072db61). Фасад импортируется лениво в обработчике: статический
+ * импорт дал бы цикл `app → search → canvas/context-menu → app`.
+ */
+function searchCloudActions(activate: () => void, title: string): ThoughtCloudActions {
+  return {
+    onClick: activate,
+    onCtrlClick: activate,
+    onContextMenu: (event, id) => {
+      // Меню — отдельный слой: правый клик по облачку не должен открывать
+      // меню зоны/экрана под результатами.
+      event.stopPropagation();
+      openSearchThoughtMenu(id, title, { event });
+    },
+  };
+}
+
+/**
+ * Открывает общее меню мысли для облачка результата поиска: точка правого
+ * клика или край облачка при открытии с клавиатуры — место передаётся фасаду,
+ * он же резолвит родителя «налево» и сверяет сеть после ожидания
+ * (ошибки 2baa78fb/89964a9b, класс a3151e33). Фасад импортируется лениво:
+ * статический импорт дал бы цикл `app → search → canvas/context-menu → app`.
+ */
+function openSearchThoughtMenu(id: string, title: string, place: ThoughtMenuPlace): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void (async () => {
+    try {
+      const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+      // Пока шёл ленивый импорт, сеть могла смениться: поздний вход не должен
+      // открыть меню для мысли прежней сети (класс a3151e33).
+      if (store.state.networkId !== networkId) return;
+      await showOutOfCanvasThoughtMenu(place, { id, title, dir: 'siblings' });
+    } catch (err) {
+      notice(errText(err), 'error');
+    }
+  })();
+}
+
+/**
+ * Облачко результата под клавиатурным фокусом — якорь меню для `Shift+F10` и
+ * клавиши `ContextMenu` (привязки — в контексте панели ниже; локальный
+ * `keydown` запрещён сторожем `guard-keymap-single-point`).
+ */
+function focusedResultCloud(): { id: string; title: string; anchor: HTMLElement } | null {
+  if (chrome === null) return null;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const cloud = active.closest<HTMLElement>('.search-hit .cloud');
+  if (cloud === null || !chrome.host.contains(cloud)) return null;
+  const id = cloud.dataset['id'];
+  if (id === undefined) return null;
+  const titleNode = cloud.querySelector<HTMLElement>('.cloud-title');
+  return {
+    id,
+    title: titleNode?.title ?? titleNode?.textContent ?? id,
+    anchor: cloud,
+  };
+}
+
+/** `Shift+F10`/`ContextMenu` на облачке результата: `false` — меню не открыто. */
+function openFocusedResultCloudMenu(): boolean {
+  const target = focusedResultCloud();
+  if (target === null) return false;
+  openSearchThoughtMenu(target.id, target.title, { anchor: target.anchor });
+  return true;
 }
 
 /**
@@ -989,7 +1087,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
       title: 'Найдено по именам',
       hits: response.by_names.map((hit) => {
         const key = `thought:${hit.thought_id}`;
-        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        const activate = activateHit(key, () => focusFromUi(hit.thought_id));
         return {
           lead: createThoughtCloud(
             { ...hit, id: hit.thought_id },
@@ -999,7 +1097,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
               // многоточием по списку, а не по холстовым 200px.
               width: 'container',
               highlightTerms,
-              actions: { onClick: activate, onCtrlClick: activate },
+              actions: searchCloudActions(activate, hit.title),
             },
           ),
           isThought: true,
@@ -1015,7 +1113,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
       title: 'Найдено по текстам',
       hits: response.by_texts.map((hit) => {
         const key = `thought:${hit.thought_id}`;
-        const activate = activateHit(key, () => void setFocus(hit.thought_id));
+        const activate = activateHit(key, () => focusFromUi(hit.thought_id));
         return {
           lead: createThoughtCloud(
             { ...hit, id: hit.thought_id },
@@ -1027,7 +1125,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
               // Совпадение только в тексте — название остаётся без подсветки,
               // если запроса в нём нет.
               highlightTerms,
-              actions: { onClick: activate, onCtrlClick: activate },
+              actions: searchCloudActions(activate, hit.title),
             },
           ),
           isThought: true,
@@ -1136,30 +1234,82 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
   applySelection(lastSelectedKey, false);
 }
 
-/** Opens a link hit: focuses the source thought, opens the link editor. */
+/**
+ * Порт хитового перехода (тестовый шов, как `setCommentThoughtInsertPort`):
+ * связь, установка фокуса и открытие редактора. Боевой порт — системные
+ * функции; подмена позволяет проверить классификацию отказов (stale 404
+ * молчит, сетевой отказ — тост) без живого сервера и DOM редактора
+ * (ошибка 53d21e82).
+ */
+export interface SearchHitPort {
+  /** Связь по id; 404 — хит устарел (связь удалили после поиска). */
+  getLink(networkId: string, linkId: string): Promise<Link>;
+  /** Установка фокуса карты; 404 — мысль-источник удалена (тоже stale). */
+  setFocus(thoughtId: string): Promise<void>;
+  /** Открыть связь в редакторе — только после успешной установки фокуса. */
+  openLinkInEditor(link: Link): void;
+}
+
+let hitPort: SearchHitPort | null = null;
+
+/** Подменяет порт хитового перехода (тестовый шов); `null` — системный порт. */
+export function setSearchHitPort(port: SearchHitPort | null): void {
+  hitPort = port;
+}
+
+/** Действующий порт хитового перехода: системные функции по умолчанию. */
+function searchHitPort(): SearchHitPort {
+  return (
+    hitPort ?? {
+      getLink: (networkId, linkId) => etn.links.get(networkId, linkId),
+      setFocus,
+      openLinkInEditor,
+    }
+  );
+}
+
+/**
+ * Отказ открытия хита связи. Stale-хит (404/неразрешённый) — тишина: связь
+ * или её источник удалили после поиска, шуметь не о чем. Любой другой отказ
+ * (сеть, сервер) — тост из словаря: иначе клик по строке не даёт видимого
+ * результата и выглядит «зависшим» (ошибка 53d21e82).
+ */
+function reportHitFailure(error: unknown): void {
+  if (isNotFoundError(error)) return;
+  notice(t('search.hitOpenFailed', errText(error)), 'error');
+}
+
+/**
+ * Opens a link hit: focuses the source thought, opens the link editor.
+ *
+ * Stale-хит и сетевой отказ различаются (ошибка 53d21e82): прежний общий
+ * `catch {}` глотал оба, и при недоступном сервере пользователь не получал
+ * ни фокуса, ни редактора, ни сообщения. `openLinkInEditor` выполняется
+ * только после успешной установки фокуса — при любом отказе он не нужен.
+ */
 async function openLinkHit(linkId: string): Promise<void> {
-  const networkId = requireNetworkId();
   try {
-    const link = await etn.links.get(networkId, linkId);
-    await setFocus(link.source_id);
-    openLinkInEditor(link);
-  } catch {
-    // stale hit
+    const port = searchHitPort();
+    const link = await port.getLink(requireNetworkId(), linkId);
+    await port.setFocus(link.source_id);
+    port.openLinkInEditor(link);
+  } catch (error) {
+    reportHitFailure(error);
   }
 }
 
 /** Opens a chronology hit on its owner (thought → focus, link → editor). */
 async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promise<void> {
-  const networkId = requireNetworkId();
   if (owner === 'thought') {
-    void setFocus(ownerId);
+    focusFromUi(ownerId);
     return;
   }
   try {
-    const link = await etn.links.get(networkId, ownerId);
-    openLinkInEditor(link);
-  } catch {
-    // stale hit
+    const port = searchHitPort();
+    const link = await port.getLink(requireNetworkId(), ownerId);
+    port.openLinkInEditor(link);
+  } catch (error) {
+    reportHitFailure(error);
   }
 }
 
@@ -1313,7 +1463,7 @@ function runQuickCommand(
   command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed',
 ): void {
   if (command === 'parentInFocus' && (store.state.focus?.focused.id ?? null) === null) {
-    notice(t('search.focusRequired'), 'warning');
+    notice(t('search.focusRequired'));
     return;
   }
   const next = addSearchQuickCondition(options.tree ?? null, SEARCH_QUICK_CONDITIONS[command]());
@@ -1340,4 +1490,6 @@ export const searchInternals = {
   parseThoughtIdLookupQuery,
   MIN_QUERY_LENGTH,
   nextNavIndex,
+  openLinkHit,
+  openChronoHit,
 };

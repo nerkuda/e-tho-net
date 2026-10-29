@@ -1,0 +1,108 @@
+{
+  "name": "0702efb6-lock-reconnect",
+  "description": "Ключевой GUI-сценарий ошибки 0702efb6: замочек редактируемой мысли обязан отражать реальный захват. Онбординг → сеть → мысль → вход в правку постоянного комментария (захват ставится на сервере), затем РЕАЛЬНЫЙ обрыв соединения через window.etn.server.disconnect(): сервер снимает захваты при закрытии WS, клиент обязан после восстановления связи (server.connect) перечитать кэш и заново взять захват, пока редактор открыт. Сохранение комментария завершает правку — замочек и серверный захват снимаются. Проверки — по серверу (шаг api GET /locks) и облачку карты (.cloud-lock-badge.own), DOM страницы не видит HTTP main-процесса (грабли aa5cf162). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.0702efb6-lock-reconnect.scenario.json --out .tmp/etn-0702efb6/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-thought-cloud",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null",
+      "timeout": 30000
+    },
+    { "name": "open-thought", "click": ".cloud[data-id=\"{{thoughtId}}\"]" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'",
+      "timeout": 30000
+    },
+    {
+      "name": "comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('{{seedComment}}') === true",
+      "timeout": 30000
+    },
+    { "name": "enter-comment-edit", "click": ".ui-comment [data-action=\"edit\"]" },
+    { "name": "comment-edit-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null", "timeout": 20000 },
+
+    {
+      "name": "lock-acquired-on-server",
+      "api": {
+        "name": "lock-acquired-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "({ count: data.length, own: data.some((r)=>r.entity_type==='thought' && r.entity_id==='{{thoughtId}}') })"
+      },
+      "expect": { "count": 1, "own": true }
+    },
+    {
+      "name": "own-badge-before-outage",
+      "probe": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge.own') !== null",
+      "expect": true
+    },
+
+    {
+      "name": "disconnect-and-watch-status",
+      "probe": "(() => { const et=window.etn; return (async () => { const p=(await et.server.listProfiles()).find((x)=>x.isActive); if(!p) return 'no-profile'; window.__profileId=p.id; window.__rt=[]; et.realtime.onStatusChange((e)=>window.__rt.push(e.status)); await et.server.disconnect(); return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    { "name": "status-idle", "waitFor": "Array.isArray(window.__rt) && window.__rt.includes('idle')", "timeout": 20000 },
+    { "name": "settle-after-close", "probe": "(async () => { await new Promise((r)=>setTimeout(r,500)); return 'ok'; })()", "expect": "ok" },
+    {
+      "name": "server-cleared-lock-on-disconnect",
+      "api": {
+        "name": "server-cleared-lock-on-disconnect",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "data.length"
+      },
+      "expect": 0
+    },
+
+    {
+      "name": "reconnect",
+      "probe": "(() => window.etn.server.connect(window.__profileId).then(()=> 'ok'))()",
+      "expect": "ok"
+    },
+    { "name": "status-connected", "waitFor": "Array.isArray(window.__rt) && window.__rt.includes('connected')", "timeout": 30000 },
+    {
+      "name": "own-badge-restored",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge.own') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "lock-reacquired-on-server",
+      "api": {
+        "name": "lock-reacquired-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "({ count: data.length, own: data.some((r)=>r.entity_type==='thought' && r.entity_id==='{{thoughtId}}') })"
+      },
+      "expect": { "count": 1, "own": true }
+    },
+    { "name": "editor-still-editing", "probe": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null", "expect": true },
+
+    { "name": "save-comment", "click": ".ui-comment [data-action=\"save\"]" },
+    { "name": "comment-view-mode", "waitFor": "document.querySelector(\".ui-comment[data-mode='view']\") !== null", "timeout": 20000 },
+    {
+      "name": "badge-gone-after-release",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge') === null",
+      "timeout": 20000
+    },
+    {
+      "name": "lock-released-on-server",
+      "api": {
+        "name": "lock-released-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "data.length"
+      },
+      "expect": 0
+    }
+  ]
+}

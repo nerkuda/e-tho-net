@@ -36,6 +36,7 @@ import {
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
   UI_STATE_KEY,
+  type ChronicleFilterDefinition,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -48,7 +49,7 @@ import {
 
 import { findRootThought, requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { showThoughtContextMenu } from '../../canvas/context-menu.js';
+import { showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
 import {
@@ -130,7 +131,6 @@ import {
   resolvePeriodDay,
   rowDays,
   todayLocal,
-  visibleChips,
   weekPeriod,
 } from './diary.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
@@ -141,6 +141,7 @@ import {
   chroniclePeriod,
   chronicleQueryDefinition,
   clearFilter,
+  type ChronicleFilterState,
   filterIssuesFromQueryError,
   filterIssuesFromQueryResult,
   getFilterState,
@@ -148,6 +149,8 @@ import {
   mountChronicleFilterPanel,
   preloadFilterRegistry,
   readFilterDefinition,
+  registryWithSides,
+  resetFilterState,
   setChroniclePeriod,
   setFilterServerIssues,
   setFilterState,
@@ -155,6 +158,13 @@ import {
   unmountChronicleFilterPanel,
   wireChronicleApplyShortcut,
 } from './filter-panel.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+  readTabScreenState,
+  tabBelongsToNetwork,
+  type ScreenPair,
+} from '../tabs/tab-state.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
 import {
@@ -166,7 +176,7 @@ import {
   type RecordGroupLabels,
 } from './record-groups.js';
 import { type RecordTitleHandle } from './record-title.js';
-import { buildRecordHead } from './record-head.js';
+import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import { renderRecordView } from './record-body.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
@@ -187,6 +197,24 @@ const CAL_COUNTS_MAX_PAGES = 20;
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}`. */
 let networkIdSeen: string | null = null;
+/**
+ * Пара «сеть + вкладка», для которой инициализирован ТЕКУЩИЙ модульный отбор.
+ * Снимок отбора и пара снимаются вместе (ошибка 58c55bb9): в окне `openNetwork`
+ * сеть в store уже новая, а отбор панели — ещё прежней пары; запрос с чужим
+ * типом уходил бы в новую сеть и получал 422 «Тип … удалён из сети».
+ */
+let filterPair: ScreenPair | null = null;
+
+/**
+ * Отбор модуля принадлежит текущей паре «сеть + вкладка»? Запросы ленты,
+ * «+50», счётчиков календаря и запись снимка идут только при `true`: иначе
+ * определение отбора (`chronicleQueryDefinition`) относится к прежней паре, а
+ * сеть запроса была бы новой (ошибка 58c55bb9).
+ */
+function chronicleFilterIsCurrent(pair: ScreenPair | null = currentScreenPair()): boolean {
+  if (pair === null || filterPair === null) return false;
+  return filterPair.networkId === pair.networkId && filterPair.tabId === pair.tabId;
+}
 
 // ---------------------------------------------------------------------------
 // Feed state
@@ -236,6 +264,13 @@ interface CardEditor {
   openTitle(): void;
   /** Войти в правку с фокусом в теле. */
   openBody(): void;
+  /**
+   * Синхронизировать ШАПКУ карточки со свежей строкой модели (дата/период и
+   * облачка привязок), не пересобирая карточку и не отсоединяя живой редактор.
+   * Привязки не входят в поля единой правки: добавленная к несохранённой записи
+   * мысль обязана появиться сразу (ошибка 78d600c9).
+   */
+  syncHead(next: ChronicleRow): void;
 }
 
 const cardEditors = new WeakMap<HTMLElement, CardEditor>();
@@ -434,6 +469,118 @@ function setDayRecordsCollapsed(day: string, collapsed: boolean): void {
 // Mount / init
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Разбор снимка отбора с реестром свойств (ошибка ad063c2f)
+// ---------------------------------------------------------------------------
+//
+// Точка класса «чтение реестра/справочника без учёта отказа» (закрыт в
+// 77f18626 для «Структур», 6400d261 для панели): конвертер определения
+// выбрасывает условия по свойствам, которых нет в реестре, а перечитывание
+// реестра само по себе уже разобранное дерево не пересобирает. Отказ чтения
+// при разборе снимка оставляет снимок в ожидании, а штатный тик store (в т.ч.
+// переход в `connected` после обрыва связи) повторяет чтение и ПЕРЕРАЗБИРАЕТ
+// снимок.
+
+/**
+ * Сырой снимок отбора, не разобранный из-за отказа чтения реестра. Пара
+ * «сеть + вкладка» — часть снимка: отложенный путь применяется только там, где
+ * снимок снят (ошибка 58c55bb9).
+ */
+interface PendingFilterSnapshot {
+  raw: string;
+  pair: ScreenPair;
+  /** Подпись панели, разобранной БЕЗ реестра: правка пользователя её меняет. */
+  signature: string;
+}
+let pendingFilterSnapshot: PendingFilterSnapshot | null = null;
+/** Сторож гонки: повтор уже идёт (тики store чаще, чем чтение реестра). */
+let filterSnapshotRetryInFlight = false;
+
+/** Подпись критериев панели (дерево, ключи сортировки, направление ленты). */
+function signatureOfFilterState(state: ChronicleFilterState): string {
+  return `${JSON.stringify(state.tree ?? null)}|${JSON.stringify(state.sortKeys ?? [])}|${state.order}`;
+}
+
+/** Подпись текущего состояния панели — для решения «снимок не перетёрт». */
+function filterStateSignature(): string {
+  return signatureOfFilterState(getFilterState());
+}
+
+/**
+ * Разобрать снимок отбора с реестром свойств. Отказ чтения реестра —
+ * состояние собирается из того, что есть (видимый набор не теряется целиком),
+ * а СЫРОЙ снимок остаётся в ожидании переразбора на следующем тике store:
+ * нормализация wire-определения тоже компилирует условия свойств под-выборки
+ * целей и без реестра их выбрасывает, поэтому повтор разбирает снимок заново.
+ */
+async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> {
+  pendingFilterSnapshot = null;
+  const ok = await preloadFilterRegistry();
+  // Пара сменилась, пока читали реестр: снимок принадлежит прежней сети/вкладке
+  // и в текущую применяться не должен (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
+  const parsed = parseChronicleState(raw, registryWithSides());
+  setFilterState(readFilterDefinition(parsed.filter));
+  setSavedFilterId(parsed.savedFilterId);
+  if (parsed.month !== null) month = parsed.month;
+  if (ok) return;
+  pendingFilterSnapshot = { raw, pair, signature: filterStateSignature() };
+}
+
+/**
+ * Повтор разбора отложенного снимка отбора: снова читает реестр свойств и при
+ * успехе ПЕРЕРАЗБИРАЕТ снимок — дерево условий получает свойства, а лента
+ * перезапрашивается с восстановленными условиями. Отказ оставляет ожидание до
+ * следующего тика store (подпись каталога панели при отказе тоже сброшена).
+ */
+async function retryPendingFilterSnapshot(): Promise<void> {
+  const pending = pendingFilterSnapshot;
+  if (pending === null || filterSnapshotRetryInFlight) return;
+  // Экран уже в другой паре «сеть + вкладка» — ожидание недействительно
+  // (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pending.pair)) {
+    pendingFilterSnapshot = null;
+    return;
+  }
+  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
+  if (pending.signature !== filterStateSignature()) {
+    pendingFilterSnapshot = null;
+    return;
+  }
+  filterSnapshotRetryInFlight = true;
+  try {
+    const ok = await preloadFilterRegistry();
+    // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
+    // чтения — переразбирать нечего.
+    if (!ok || pendingFilterSnapshot !== pending) return;
+    // Пара сменилась, ПОКА шло чтение реестра: снимок прежней пары к текущей
+    // не применяется (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pending.pair)) {
+      pendingFilterSnapshot = null;
+      return;
+    }
+    // Пользователь правил отбор, ПОКА шло чтение реестра: его правка приоритетна
+    // (ошибка b177ae40, та же гонка, что f76a3ef9 в «Структурах»). Подпись
+    // сверена и на входе, но между ней и чтением прошёл IPC-запрос: без
+    // повторной сверки снимок перетёр бы правку.
+    if (pending.signature !== filterStateSignature()) {
+      pendingFilterSnapshot = null;
+      return;
+    }
+    pendingFilterSnapshot = null;
+    const next = readFilterDefinition(
+      parseChronicleState(pending.raw, registryWithSides()).filter,
+    );
+    // Переразбор без изменений (снимок новой модели реестра не требует) —
+    // лишний сетевой перезапрос ленты не гоним.
+    if (signatureOfFilterState(next) === filterStateSignature()) return;
+    setFilterState(next);
+    await reload();
+  } finally {
+    filterSnapshotRetryInFlight = false;
+  }
+}
+
 /** Switches to the diary view — lazily loads persisted state (L4). */
 export async function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
@@ -460,39 +607,56 @@ export async function ensureChronicleInitialised(): Promise<void> {
   homeId = null;
   homeNetworkId = null;
   homePromise = null;
+  // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
+  // снимается вместе с остальным состоянием. Панель — модульный синглтон,
+  // поэтому её отбор сбрасывается ДО чтения нового снимка (ошибка 58c55bb9).
+  pendingFilterSnapshot = null;
+  resetFilterState();
+  // Пара этого запуска: любой await ниже может пережить смену сети/вкладки.
+  const pair: ScreenPair = { networkId, tabId };
+  // Сброшенный (и далее прочитанный из снимка) отбор принадлежит ЭТОЙ паре:
+  // до следующей инициализации запросы идут только при её совпадении с парой
+  // store (ошибка 58c55bb9).
+  filterPair = pair;
 
   try {
-    let raw: string | null = null;
-    if (tabId !== null) {
-      const tab = store.state.tabs.find((tb) => tb.tab_id === tabId);
-      raw = tab?.chronicle_state ?? null;
-    }
+    // Снимок вкладки ЧУЖОЙ сети не применяется (ошибка 58c55bb9).
+    let raw = readTabScreenState(networkId, tabId, 'chronicle_state');
     if (raw === null) {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
+      if (!isCurrentScreenPair(pair)) return;
     }
     if (raw !== null && raw !== '') {
-      const parsed = parseChronicleState(raw);
       // Реестр свойств нужен конвертеру определения (условия под-выборки целей
       // и свойств) — прежний плоский снимок иначе терял бы часть условий.
-      await preloadFilterRegistry();
-      setFilterState(readFilterDefinition(parsed.filter));
-      setSavedFilterId(parsed.savedFilterId);
-      if (parsed.month !== null) month = parsed.month;
+      // Отказ чтения не теряется: снимок остаётся в ожидании переразбора.
+      await loadFilterSnapshot(raw, pair);
+      if (!isCurrentScreenPair(pair)) return;
     }
   } catch {
     // Fall back to the empty filter.
   }
   await getHome().catch(() => undefined);
+  if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
   await loadCollapsedRecords();
+  if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
 }
 
-/** Persists the current filter + month to L4 (per-tab). */
+/** Persists the current filter + month to L4 (per-tab). Запись адресуется
+ *  паре «сеть + вкладка»: снимок экрана текущей сети не ложится в строку
+ *  вкладки чужой сети (ошибка 58c55bb9). */
 function persistState(): void {
   const tabId = store.state.activeTabId;
-  if (tabId === null) return;
+  const networkId = store.state.networkId;
+  if (tabId === null || networkId === null) return;
+  if (!tabBelongsToNetwork(networkId, tabId)) return;
+  // Снимок пишется только от отбора ЭТОЙ пары: в окне `openNetwork` вкладка уже
+  // новой сети, а модульный отбор — ещё прежней, и чужой фильтр лёг бы в
+  // состояние вкладки новой сети (ошибка 58c55bb9).
+  if (!chronicleFilterIsCurrent({ networkId, tabId })) return;
   void etn.tabs
     .updateState(tabId, {
       chronicle_state: JSON.stringify({
@@ -558,7 +722,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     onMonthChange: (year, monthNo) => {
       month = { year, month: monthNo };
       persistState();
-      void refreshCalendarCounts();
+      void refreshCalendarCounts(calendarCountsSnapshot());
     },
   });
   calWrap.append(calendar.root);
@@ -628,7 +792,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   });
 
   main.append(addBar, feedWrap);
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(calendarCountsSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
   bindChronicleFeed();
@@ -651,6 +815,16 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     ) {
       void ensureChronicleInitialised();
     }
+    // Снимок отбора разобран без реестра свойств и ждёт переразбора: тик store —
+    // штатный повтор чтения реестра (ошибка ad063c2f), в том числе переход в
+    // `connected` после обрыва связи.
+    if (
+      pendingFilterSnapshot !== null &&
+      networkId !== null &&
+      store.state.activeView === 'chronicle'
+    ) {
+      void retryPendingFilterSnapshot();
+    }
     // Смена первого дня недели сети (настройки мыслесети, требование
     // 1b77decd) перестраивает раскладку календаря сразу и пересчитывает
     // границы периода: сетка, подписи столбцов и неделя `$weekStart`/
@@ -661,7 +835,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       calendar?.setFirstDayOfWeek(firstDayOfWeek);
       syncCalendar();
       scheduleChronicleFeedRefresh();
-      if (store.state.activeView === 'chronicle') void refreshCalendarCounts();
+      if (store.state.activeView === 'chronicle') {
+        void refreshCalendarCounts(calendarCountsSnapshot());
+      }
     }
     // Показ скрытого вида снимает отложенную пометку одним перезапросом
     // (ошибка 8e702d8c) — событий копилось сколько угодно, запрос один.
@@ -686,16 +862,24 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
 
 /** Applies the current filter from scratch (the «Применить» path). */
 async function applyFilter(): Promise<void> {
+  // Пара и отбор снимаются ДО ожиданий: после `await` текущая сеть может быть
+  // уже другой (окно openNetwork), и счётчики ушли бы чужим отбором в неё
+  // (ошибка 58c55bb9).
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const counts = calendarCountsSnapshot();
   // Ручное применение снимает подсветку перехода.
   jumpHighlightId = null;
   persistState();
   await getHome().catch(() => undefined);
+  if (!isCurrentScreenPair(pair)) return;
   await reload();
   // Смена отбора показывает ленту с начала: reload пересобирает её с якорем,
   // поэтому позицию сбрасываем явно поверх.
   if (feedWrap !== null) feedWrap.scrollTop = 0;
+  if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(counts);
 }
 
 /**
@@ -711,6 +895,14 @@ async function applyFilter(): Promise<void> {
 async function reload(preserveDepth = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || feedList === null) return;
+  // Ответ адресуется паре на старте: после смены сети/вкладки запись ленты
+  // перетёрла бы состояние новой пары (ошибка 58c55bb9). Запрос ушёл в СВОЮ
+  // сеть, поэтому 422 не даёт, но строки чужой сети до перезапроса
+  // показывались бы как лента текущей.
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
+  // Отбор запроса — только от ЭТОЙ пары: в окне `openNetwork` сеть уже новая,
+  // а отбор ещё прежней, и запрос с чужим типом получал 422 (ошибка 58c55bb9).
+  if (!chronicleFilterIsCurrent(pair)) return;
   // Отбор — часть ключа запроса слоя: смена критериев/периода переносит снимок
   // на новый ключ (инвалидации роутера адресуют актуальный ключ).
   retargetChronicleFeed();
@@ -731,6 +923,7 @@ async function reload(preserveDepth = false): Promise<void> {
         }),
     );
     if (seq !== querySeq) return;
+    if (!isCurrentScreenPair(pair)) return;
     rows = result.rows;
     total = result.total;
     pendingReconcile = false;
@@ -741,6 +934,9 @@ async function reload(preserveDepth = false): Promise<void> {
     publishChronicleSnapshot();
   } catch (err) {
     if (seq !== querySeq) return;
+    // Ошибка запроса прежней пары не относится к текущей сети/вкладке
+    // (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
     renderStatus('error', err);
@@ -762,6 +958,11 @@ async function reloadKeepingDepth(): Promise<void> {
 async function loadMore(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || loadingMore || rows.length >= total) return;
+  // Догруженная страница принадлежит паре на старте (ошибка 58c55bb9).
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
+  // Отбор дозагрузки — тоже отбор ЭТОЙ пары (окно `openNetwork`: сеть новая,
+  // отбор прежней пары — 422 «Тип … удалён из сети»).
+  if (!chronicleFilterIsCurrent(pair)) return;
   // После локальной вставки offset-страница сдвинулась бы: подтягиваем первую
   // страницу заново (данные важнее экономии запроса); прокрутку держит renderFeed.
   // Глубину сохраняем — иначе перезапрос усекает ленту до одной страницы и
@@ -779,6 +980,9 @@ async function loadMore(): Promise<void> {
       offset: rows.length,
     });
     if (seq !== querySeq) return;
+    // Пара сменилась, пока шло чтение: страница прежней пары в ленту не
+    // дописывается (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     rows = [...rows, ...result.rows];
     total = result.total;
     // Дозагрузка «+50» дописывает страницу — прокрутка не должна прыгать вверх.
@@ -901,9 +1105,15 @@ async function refreshFeedAndCalendar(): Promise<void> {
     window.clearTimeout(feedRefreshTimer);
     feedRefreshTimer = null;
   }
+  // Отбор и пара — на входе: перезапрос, переживший смену сети/вкладки, не
+  // должен посчитать календарь новой сети чужим отбором (ошибка 58c55bb9).
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const counts = calendarCountsSnapshot();
   await reloadKeepingDepth();
+  if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(counts);
 }
 
 /** Опубликовать снимок ленты в кэш слоя (наблюдатели/диагностика). */
@@ -1091,7 +1301,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   renderFeed();
   publishChronicleSnapshot();
   syncCalendar();
-  void refreshCalendarCounts();
+  void refreshCalendarCounts(calendarCountsSnapshot());
   feedNav?.refresh();
 }
 
@@ -1253,11 +1463,21 @@ function buildRecordCard(row: ChronicleRow, day: string): HTMLElement {
  * Обновление существующей карточки при keyed-сверке: перерисовывается ТОЛЬКО
  * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
  * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
- * Карточка В ЕДИНОЙ ПРАВКЕ не трогается: пересборка отсоединила бы живой
- * редактор и потеряла несохранённый текст — обновление ждёт выхода из правки.
+ * Карточка В ЕДИНОЙ ПРАВКЕ не пересобирается: пересборка отсоединила бы живой
+ * редактор и потеряла несохранённый текст. При этом шапка (дата/период и
+ * облачка привязок) — не поля правки, её обновляет `syncHead` (78d600c9).
  */
 function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
-  if (cardEditors.get(card)?.editing() === true) return;
+  const editor = cardEditors.get(card);
+  // Карточка в единой правке: живой редактор (заголовок/тело) не пересобираем —
+  // иначе отсоединится поле и потеряется набранный текст. Но дата/период и
+  // облачка привязок — НЕ поля правки, а часть модели записи: шапка
+  // синхронизируется сразу. Без этого добавленная к несохранённой записи мысль
+  // появлялась в шапке только после сохранения (ошибка 78d600c9).
+  if (editor !== undefined && editor.editing()) {
+    editor.syncHead(row);
+    return;
+  }
   fillRecordCard(card, row, day);
 }
 
@@ -1504,19 +1724,17 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     editing = false;
   };
 
-  const editor: CardEditor = {
-    row,
-    editing: () => editing,
-    // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
-    openTitle: () => title?.beginEdit(true),
-    openBody: () => void enterBodyEdit('body'),
-  };
+  // Облачка привязок — контейнер с перерисовкой НА МЕСТЕ: привязки не входят в
+  // единую правку, поэтому их состав догоняет модель сразу, даже пока карточка в
+  // правке (ошибка 78d600c9: мысль, добавленная к несохранённой записи, была
+  // видна только после её сохранения).
+  const chips = createRecordChips({ row, homeId: () => homeId, buildChip });
 
   const head = buildRecordHead({
     dayLabel: recordDateLabel(row),
     onDateClick: () => void editRecordDates(row),
     dateTitle: 'Период дневниковой записи',
-    chips: buildChipsRow(row),
+    chips: chips.box,
     onAddThought: () => void pickAndAttach(row.id),
     trailing: iconButton({
       icon: svgIcon('menu', 16),
@@ -1553,6 +1771,25 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     },
   });
   title = head.title;
+
+  const editor: CardEditor = {
+    row,
+    editing: () => editing,
+    // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
+    openTitle: () => title?.beginEdit(true),
+    openBody: () => void enterBodyEdit('body'),
+    // Шапка вне правки: свежая строка модели обновляет дату/период и облачка
+    // привязок НА МЕСТЕ (карточка не пересобирается — живой редактор цел).
+    syncHead: (next: ChronicleRow): void => {
+      row.targets = next.targets;
+      row.valid_from = next.valid_from;
+      row.valid_to = next.valid_to;
+      row.use_time = next.use_time;
+      chips.sync(row);
+      head.setDayLabel(recordDateLabel(row));
+    },
+  };
+
   // Производный заголовок записи может нести сырую ID-форму wiki-ссылки
   // (`[[#<id>]]`, ошибка 6b4e402a): синхронную подстановку из кеша уже сделал
   // `recordTitleLabel` (`derivedTitleLabel`), здесь дорезолвиваем имена мыслей
@@ -1731,25 +1968,20 @@ async function copyRecord(id: string): Promise<void> {
     // Локальная мутация — через слой: гасим ключ ленты (единственный путь, G3).
     invalidateQueries(queryKeys.chronicleFeedAll());
   } catch (err) {
-    notice(t('diary.copyFailed', [errText(err)]), 'error');
+    // Дублирование записи — серверная операция (comments.get + createMulti):
+    // сбой создания дубля важен, показываем тостом (спека ea50cc5e).
+    notice(t('diary.duplicateFailed', [errText(err)]), 'error');
   }
 }
 
 // ---------------------------------------------------------------------------
 // Chips (attachments)
 // ---------------------------------------------------------------------------
-
-function buildChipsRow(row: ChronicleRow): HTMLElement {
-  const box = div('diary-record-chips');
-  repaintChips(box, row);
-  return box;
-}
-
-function repaintChips(box: HTMLElement, row: ChronicleRow): void {
-  box.replaceChildren();
-  const chips = visibleChips(row.targets, homeId);
-  for (const target of chips) box.append(buildChip(target, row.id));
-}
+//
+// Контейнер облачков и его перерисовка НА МЕСТЕ живут в компоненте шапки
+// (`record-head.ts`: `createRecordChips`): состав привязок — модель записи, а не
+// поля единой правки, поэтому он обновляется и во время правки. Здесь остаётся
+// только доменное облачко привязки (мысль/связь) с её меню и командами записи.
 
 function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
   const chip = target.kind === 'thought' ? thoughtChip(target.thought) : linkChip(target.link);
@@ -1767,8 +1999,11 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
     event.preventDefault();
     event.stopPropagation();
     if (target.kind === 'thought') {
-      showThoughtContextMenu(
-        event,
+      // Чип записи — облачко вне холста: родителя для «налево» резолвит общий
+      // помощник меню вне холста ДО открытия и сверяет сеть после ответа
+      // (ошибка 2baa78fb), а не конструктор по фокусу карты.
+      void showOutOfCanvasThoughtMenu(
+        { event },
         { id: target.thought.id, title: target.thought.title, dir: 'siblings' },
         {
           // Открытие из дневника — в редактор, фокус холста не двигаем.
@@ -1779,9 +2014,13 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
           // а не пара «setActiveView + setFocus» копией. Импорт ленивый:
           // active-view статически тянет chronicle — замкнул бы цикл.
           focusHandler: () => {
-            void import('../active-view.js').then(({ focusThoughtOnMap }) =>
-              focusThoughtOnMap(target.thought.id),
-            );
+            // Отказ фокуса показывает тостом `focusThoughtOnMap`; здесь гасим
+            // только отказ ленивого импорта (ошибка 1656ef58).
+            void import('../active-view.js')
+              .then(({ focusThoughtOnMap }) => focusThoughtOnMap(target.thought.id))
+              .catch((error) => {
+                console.error('[chronicle] не удалось открыть карту мыслей', error);
+              });
           },
           extraItems: [
             menuAction(t('chrono.menu.detach'), () => void detachChip(rowId, target)),
@@ -2021,41 +2260,90 @@ function showRecordDayInCalendar(day: string): void {
 }
 
 /**
+ * Снимок для счётчиков календаря: пара «сеть + вкладка» и отбор месяца
+ * снимаются ВМЕСТЕ, в одной точке. Иначе запрос уходит с сетью текущего тика и
+ * отбором прежней пары: окно `openNetwork` между публикацией новой сети и
+ * переинициализацией скрытого экрана (ошибка 58c55bb9) — 422 «Тип … удалён из
+ * сети» на `POST /networks/<B>/chronicle/query` с чужим отбором.
+ */
+interface CalendarCountsSnapshot {
+  pair: ScreenPair;
+  definition: ChronicleFilterDefinition;
+  /** Границы месяца для разбора длительности записей (`rowDays`). */
+  first: string;
+  last: string;
+}
+
+/** Снять пару и отбор месяца в текущей точке; `null` — считать нечего. */
+function calendarCountsSnapshot(): CalendarCountsSnapshot | null {
+  const pair = currentScreenPair();
+  if (pair === null || calendar === null) return null;
+  // Счётчики считаются отбором ТОЛЬКО своей пары: в окне `openNetwork` сеть
+  // уже новая, а отбор — ещё прежней пары; такой снимок не снимается вовсе
+  // (ошибка 58c55bb9 — 422 «Тип … удалён из сети» на счётчиках календаря).
+  if (!chronicleFilterIsCurrent(pair)) return null;
+  const { year, month: monthNo } = calendar.getMonth();
+  const first = `${year}-${pad2(monthNo)}-01`;
+  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
+  // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
+  // сервере = сутки UTC (469d8d69), и запись у локальной полуночи первого/1-го
+  // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
+  // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
+  // плоские границы вместе сервер отвергает.
+  return {
+    pair,
+    first,
+    last,
+    definition: chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last)),
+  };
+}
+
+/**
  * Счётчики записей по дням ОТОБРАЖАЕМОГО месяца (0.10.1, элемент 55b07702):
  * отдельный запрос по границам месяца с текущими критериями, БЕЗ периода —
  * поэтому счётчик виден и на выделенной, и на невыделенной дате. Числа дней
  * считаются тем же разбором длительности записи, что и лента (`rowDays`).
+ *
+ * Пара и отбор — из {@link CalendarCountsSnapshot}: смена пары после любого
+ * `await` отменяет запрос (чужие типы/период в новой сети не применяются),
+ * ошибка текущей пары показывается штатной диагностикой отбора, а не тишиной.
  */
-async function refreshCalendarCounts(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null || calendar === null) return;
-  const { year, month: monthNo } = calendar.getMonth();
-  const first = `${year}-${pad2(monthNo)}-01`;
-  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
+async function refreshCalendarCounts(snapshot: CalendarCountsSnapshot | null): Promise<void> {
+  if (snapshot === null || calendar === null) return;
+  const { pair, definition, first, last } = snapshot;
+  if (!isCurrentScreenPair(pair)) return;
   const tally = new Map<string, number>();
   try {
-    // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
-    // сервере = сутки UTC (469d8d69) и запись у локальной полуночи первого/1-го
-    // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
-    // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
-    // плоские границы вместе сервер отвергает.
-    const def = chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last));
     let offset = 0;
     for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
-      const res = await etn.chronicle.query(networkId, {
-        ...def,
+      const res = await etn.chronicle.query(pair.networkId, {
+        ...definition,
         limit: CHRONICLE_QUERY_MAX_LIMIT,
         offset,
       });
+      // Пара сменилась, пока шла страница: её строки принадлежат прежнему
+      // отбору и не считаются (ошибка 58c55bb9).
+      if (!isCurrentScreenPair(pair)) return;
       for (const row of res.rows) {
         for (const day of rowDays(row, first, last)) tally.set(day, (tally.get(day) ?? 0) + 1);
       }
       offset += res.rows.length;
       if (res.rows.length === 0 || offset >= res.total) break;
     }
-  } catch {
-    return; // сеть недоступна — оставляем прежние счётчики
+  } catch (err) {
+    // Сбой текущей пары не глотаем: красная диагностика ядра — в строки
+    // редактора (штатный канал, как у запроса ленты). Ошибка прежней пары к
+    // новой не относится — молча выходим.
+    if (!isCurrentScreenPair(pair)) return;
+    const issues = filterIssuesFromQueryError(err);
+    if (issues.length > 0) {
+      setFilterServerIssues(issues);
+    } else {
+      notice(`${t('diary.countsFailed', [errText(err)])}`, 'error');
+    }
+    return; // прежние счётчики остаются на месте
   }
+  if (!isCurrentScreenPair(pair)) return;
   dayCounts.clear();
   for (const [day, count] of tally) dayCounts.set(day, count);
   const period = chroniclePeriod();

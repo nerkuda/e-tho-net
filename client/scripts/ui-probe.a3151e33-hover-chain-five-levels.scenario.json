@@ -1,0 +1,186 @@
+{
+  "name": "a3151e33-hover-chain-five-levels",
+  "description": "Регресс круга 3 ошибки a3151e33: подписка движка на смену пары не должна ломать штатную цепочку Ctrl-предпросмотров и таймер закрытия 300 мс. Цепочка строится по wiki-ссылкам: клик по облачку открывает карточку с просмотром постоянного комментария, где ссылка размечена data-hp-kind=wiki-thought; Ctrl+наведение на неё даёт попап 1, дальнейшие наведения — на последний попап — дают уровни 2..5 (MAX_DEPTH=5). Проба chain-depth фиксирует ровно 5 попапов, после наведения на ссылку пятого (хотел бы шестой уровень) их остаётся 5 — ограничение глубины целое. Затем смена пары клавиатурой (focus + Space на вкладке B, без mousemove) обязана закрыть ВСЕ пять сразу и через 3 с. Финальная фаза — таймер: попап после ухода курсора жив на 150 мс и закрыт на 550 мс (CLOSE_DELAY_MS = 300). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.a3151e33-hover-chain-five-levels.scenario.json.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "prepare-chain",
+      "timeout": 60000,
+      "probe": "(async () => { const nid = '{{networkId}}'; const make = async (title, body) => (await window.etn.thoughts.create(nid, { title, comment: { body_md: body } })).id; const t7 = await make('Цепь 7', 'конец цепочки'); const t6 = await make('Цепь 6', 'ссылка на [[#' + t7 + '|седьмой]]'); const t5 = await make('Цепь 5', 'ссылка на [[#' + t6 + '|шестой]]'); const t4 = await make('Цепь 4', 'ссылка на [[#' + t5 + '|пятый]]'); const t3 = await make('Цепь 3', 'ссылка на [[#' + t4 + '|четвёртый]]'); const t2 = await make('Цепь 2', 'ссылка на [[#' + t3 + '|третий]]'); window.__chain = { t2, t3, t4, t5, t6, t7 }; const comments = await window.etn.comments.list(nid, 'thought', '{{thoughtId}}'); const perm = comments.find((c) => c.kind === 'permanent'); if (perm === undefined) return 'no-permanent'; await window.etn.comments.update(nid, perm.id, { body_md: 'ссылка на [[#' + t2 + '|второй]]' }, perm.version); const netB = await window.etn.networks.create('Сеть B a3151e33 chain'); window.__netB = netB.id; const created = await window.etn.tabs.open(netB.id); window.__tabB = created.tab_id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 90000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "click-cloud-opens-card",
+      "probe": "(() => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-cloud'; cloud.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "editor-link-ready",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.comment-view .wiki-link[data-hp-kind=\"wiki-thought\"]') !== null"
+    },
+    {
+      "name": "hover-editor-link",
+      "probe": "(() => { const link = document.querySelector('.comment-view .wiki-link[data-hp-kind=\"wiki-thought\"]'); if (link === null) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-chain-1",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "hover-popover-link-1",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('.wiki-link[data-hp-kind]'); if (link === null || link === undefined) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-chain-2",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 2"
+    },
+    {
+      "name": "hover-popover-link-2",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('.wiki-link[data-hp-kind]'); if (link === null || link === undefined) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-chain-3",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 3"
+    },
+    {
+      "name": "hover-popover-link-3",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('.wiki-link[data-hp-kind]'); if (link === null || link === undefined) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-chain-4",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 4"
+    },
+    {
+      "name": "hover-popover-link-4",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('.wiki-link[data-hp-kind]'); if (link === null || link === undefined) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-chain-5",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 5"
+    },
+    {
+      "name": "chain-depth",
+      "probe": {
+        "name": "chainDepth",
+        "expression": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const deepest = pops[pops.length - 1]; return { pops: pops.length, deepestHasSeventh: deepest !== undefined && (deepest.textContent || '').includes('седьмой'), titles: pops.map((p) => (p.querySelector('.ui-popover-head')?.textContent || '').trim()) }; })()"
+      },
+      "expect": {
+        "pops": 5,
+        "deepestHasSeventh": true,
+        "titles": ["второй", "третий", "четвёртый", "пятый", "шестой"]
+      }
+    },
+    {
+      "name": "hover-deepest-link",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('.wiki-link[data-hp-kind]'); if (link === null || link === undefined) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "depth-cap-holds",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 1500)); return document.querySelectorAll('.ui-popover').length; })()",
+      "expect": 5
+    },
+    {
+      "name": "focus-tab-b",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B a3151e33 chain')); if (tab === undefined) return 'no-tab-b'; tab.focus(); return document.activeElement === tab ? 'ok' : 'not-focused'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "activate-tab-b-by-keyboard",
+      "key": "Space"
+    },
+    {
+      "name": "pair-switched-by-keyboard",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B a3151e33 chain'))"
+    },
+    {
+      "name": "pops-after-chain-switch",
+      "probe": {
+        "name": "popsAfterChainSwitch",
+        "expression": "[...document.querySelectorAll('.ui-popover')].length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "pops-after-chain-switch-late",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 3000)); return [...document.querySelectorAll('.ui-popover')].length; })()",
+      "expect": 0
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab-a'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-back",
+      "timeout": 90000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}')) && document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-ind .ind') !== null"
+    },
+    {
+      "name": "hover-indicator-for-close-timer",
+      "probe": "(() => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-cloud'; const ind = cloud.querySelector('.cloud-ind .ind'); if (ind === null) return 'no-ind'; const r = ind.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; ind.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); ind.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-single-popover",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "close-timer-300ms",
+      "probe": "(async () => { document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: false, clientX: 1, clientY: 1 })); await new Promise((r) => setTimeout(r, 150)); const after150 = document.querySelectorAll('.ui-popover').length; await new Promise((r) => setTimeout(r, 400)); const after550 = document.querySelectorAll('.ui-popover').length; return { after150, after550 }; })()",
+      "expect": { "after150": 1, "after550": 0 }
+    }
+  ]
+}

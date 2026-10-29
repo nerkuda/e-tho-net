@@ -173,14 +173,19 @@ export function getThoughtMeta(
     .get(thoughtId) as { id: string; type_id: string | null } | undefined;
   const views = thoughtRow === undefined
     ? []
-    : getEffectiveViewsForThought(ndb, { type_id: thoughtRow.type_id }).map((v) => ({
+    : getEffectiveViewsForThought(ndb, {
+        id: thoughtRow.id,
+        type_id: thoughtRow.type_id,
+      }).map((v) => ({
         id: v.id,
         name: v.name,
         name_key: v.name_key,
         description: v.description,
         defined_on: v.defined_on,
+        scope: v.scope,
         inherited: v.inherited,
         is_default: v.is_default,
+        own_default: v.own_default,
       }));
   return { ...counters, permanent, link_stats, views };
 }

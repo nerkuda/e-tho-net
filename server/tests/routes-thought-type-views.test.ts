@@ -323,6 +323,266 @@ describe(
         }
       });
 
+      // Ошибка 1cd2b6db: PATCH/DELETE (и GET one) не сверяли владельца —
+      // отбор чужого типа правился/удалялся по прямому id, а событие несло
+      // `thought_type_id` из пути вместо фактического владельца.
+      it('чужой :viewId в GET/PATCH/DELETE — 404 с defined_on; событие несёт фактического владельца', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeA = await createThoughtType(ctx, 'owner-a');
+          const typeB = await createThoughtType(ctx, 'owner-b');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+
+          const created = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views`,
+            headers: h,
+            payload: { name: 'Отбор A', definition },
+          });
+          assert.equal(created.statusCode, 201, created.body?.toString());
+          const viewId = (created.json().data as ViewDto).id;
+
+          const foreignBase =
+            `/api/v1/networks/${ctx.networkId}/thought-types/${typeB}/views/${viewId}`;
+
+          // GET one чужого типа — 404 и фактический владелец в details.
+          const foreignGet = await ctx.app.inject({
+            method: 'GET',
+            url: foreignBase,
+            headers: h,
+          });
+          assert.equal(foreignGet.statusCode, 404, foreignGet.body?.toString());
+          assert.equal(foreignGet.json().error.code, 'NOT_FOUND');
+          assert.equal(
+            (foreignGet.json().error.details as { defined_on?: string }).defined_on,
+            typeA,
+            'details.defined_on — фактический владелец отбора',
+          );
+
+          // PATCH чужого типа — 404, строка не изменилась.
+          const foreignPatch = await ctx.app.inject({
+            method: 'PATCH',
+            url: foreignBase,
+            headers: { ...h, 'if-match': '1' },
+            payload: { name: 'Захвачено' },
+          });
+          assert.equal(foreignPatch.statusCode, 404, foreignPatch.body?.toString());
+
+          const afterPatch = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views/${viewId}`,
+            headers: h,
+          });
+          assert.equal(afterPatch.statusCode, 200);
+          assert.equal((afterPatch.json().data as ViewDto).name, 'Отбор A');
+          assert.equal((afterPatch.json().data as ViewDto).version, 1);
+
+          // DELETE чужого типа — 404, строка жива.
+          const foreignDelete = await ctx.app.inject({
+            method: 'DELETE',
+            url: foreignBase,
+            headers: { ...h, 'if-match': '1' },
+          });
+          assert.equal(foreignDelete.statusCode, 404, foreignDelete.body?.toString());
+          assert.equal(
+            (
+              await ctx.app.inject({
+                method: 'GET',
+                url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views/${viewId}`,
+                headers: h,
+              })
+            ).statusCode,
+            200,
+          );
+
+          // Событие правки СВОЕГО отбора несёт фактического владельца (typeA):
+          // путь теперь обязан совпадать с ним.
+          const pubsub = ctx.app.pubsub;
+          const received: AnyRealtimeEvent[] = [];
+          const unsubscribe = pubsub.subscribe(
+            ctx.networkId,
+            (event: AnyRealtimeEvent) => received.push(event),
+          );
+          try {
+            const ownPatch = await ctx.app.inject({
+              method: 'PATCH',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeA}/views/${viewId}`,
+              headers: { ...h, 'if-match': '1' },
+              payload: { description: 'своя правка' },
+            });
+            assert.equal(ownPatch.statusCode, 200, ownPatch.body?.toString());
+            await new Promise((r) => setImmediate(r));
+            const updatedEvent = received.find((e) => e.type === 'thought-type-view.updated');
+            assert.ok(updatedEvent, 'событие updated должно быть доставлено');
+            const data = updatedEvent!.data as { thought_type_id: string; view_id: string };
+            assert.equal(data.thought_type_id, typeA);
+            assert.equal(data.view_id, viewId);
+          } finally {
+            unsubscribe();
+          }
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      // Ошибка 2dc32e85: снятие прежнего дефолта материализует тень предковой
+      // строки, а её имя уже занято живой строкой слоя → сырой SQLITE_CONSTRAINT
+      // (500) вместо доменного 409.
+      it('репро 2dc32e85: дефолт в слое при живой одноимённой строке слоя — 409, не 500', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'shadow-default');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+
+          const layerRes = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers`,
+            headers: h,
+            payload: { title: 'Слой коллизии дефолта' },
+          });
+          assert.equal(layerRes.statusCode, 201, layerRes.body?.toString());
+          const layerId = (layerRes.json().data as { id: string }).id;
+          const layerHeaders = { ...h, 'client-id': 'type-default-collision' };
+          const select = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
+            headers: layerHeaders,
+            payload: {},
+          });
+          assert.equal(select.statusCode, 200, select.body?.toString());
+
+          // (3) В слое L создаём «A».
+          const layerView = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+            payload: { name: 'A', definition },
+          });
+          assert.equal(layerView.statusCode, 201, layerView.body?.toString());
+          const layerViewId = (layerView.json().data as ViewDto).id;
+
+          // (4) В основе независимо создаём «A» с is_default (слой её не видит).
+          const baseDefault = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: h,
+            payload: { name: 'A', definition, is_default: true },
+          });
+          assert.equal(baseDefault.statusCode, 201, baseDefault.body?.toString());
+
+          // (5) В слое создаём «B» с is_default: снятие дефолта основы
+          // материализует её тень в слой и упирается в живое имя «A».
+          const collision = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+            payload: { name: 'B', definition, is_default: true },
+          });
+          assert.equal(collision.statusCode, 409, collision.body?.toString());
+          assert.equal(collision.json().error.code, 'DUPLICATE');
+          assert.equal(
+            (collision.json().error.details as { existing_id?: string }).existing_id,
+            layerViewId,
+            'details.existing_id — строка слоя, занявшая имя',
+          );
+
+          // Транзакция откатилась: «B» не создан, в слое по-прежнему только «A».
+          const list = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+          });
+          assert.deepEqual(
+            (list.json().data as ViewDto[]).map((v) => v.name),
+            ['A'],
+          );
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      // Ошибка 2dc32e85, вторая половина: UNIQUE 037 не имеет `WHERE deleted=0`,
+      // поэтому надгробие слоя (удалённый или перенесённый отбор) занимает имя
+      // до слияния. CREATE/PATCH по такому имени обязан давать 409 с
+      // диагностикой, а не 500.
+      it('надгробие отбора типа в слое занимает имя до слияния — 409, не 500', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'tombstone-name');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+
+          const layerRes = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers`,
+            headers: h,
+            payload: { title: 'Слой надгробия' },
+          });
+          assert.equal(layerRes.statusCode, 201);
+          const layerId = (layerRes.json().data as { id: string }).id;
+          const layerHeaders = { ...h, 'client-id': 'type-tombstone-name' };
+          await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
+            headers: layerHeaders,
+            payload: {},
+          });
+
+          const createInLayer = async (name: string): Promise<{ id: string }> => {
+            const res = await ctx.app.inject({
+              method: 'POST',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+              headers: layerHeaders,
+              payload: { name, definition },
+            });
+            assert.equal(res.statusCode, 201, res.body?.toString());
+            return res.json().data as { id: string };
+          };
+
+          const doomed = await createInLayer('Занято');
+          const other = await createInLayer('Другой');
+
+          const del = await ctx.app.inject({
+            method: 'DELETE',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views/${doomed.id}`,
+            headers: { ...layerHeaders, 'if-match': '1' },
+          });
+          assert.equal(del.statusCode, 204, del.body?.toString());
+
+          // CREATE того же имени: `*_v` надгробие не видит, физический слой — видит.
+          const recreate = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: layerHeaders,
+            payload: { name: 'Занято', definition },
+          });
+          assert.equal(recreate.statusCode, 409, recreate.body?.toString());
+          assert.equal(recreate.json().error.code, 'DUPLICATE');
+          assert.equal(
+            (recreate.json().error.details as { existing_id?: string }).existing_id,
+            doomed.id,
+          );
+
+          // PATCH на имя надгробия — тот же 409.
+          const rename = await ctx.app.inject({
+            method: 'PATCH',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views/${other.id}`,
+            headers: { ...layerHeaders, 'if-match': '1' },
+            payload: { name: 'занято' },
+          });
+          assert.equal(rename.statusCode, 409, rename.body?.toString());
+          assert.equal(rename.json().error.code, 'DUPLICATE');
+          assert.equal(
+            (rename.json().error.details as { existing_id?: string }).existing_id,
+            doomed.id,
+          );
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
       it('создание без position нумерует отборы в конец списка (0,1,2…)', async () => {
         // Регрессия a62190d1: дефолт position=0 у всех отборов типа, заведённых
         // без явной позиции (так создаёт отборы клиент), делал перестановку
@@ -1067,6 +1327,113 @@ describe(
             assert.ok(types.includes('thought-type-view.updated'), types.join(','));
             assert.ok(types.includes('thought-type-view.run'), types.join(','));
             assert.ok(types.includes('thought-type-view.deleted'), types.join(','));
+
+            // 0.14.1, ошибка 69aa355c: deleted несёт полную карточку —
+            // снапшот ДО удаления, как `thought-custom-view.deleted`
+            // (контракт c643fd7b). `view_id` остаётся для слоевой видимости.
+            const deleted = received.find((e) => e.type === 'thought-type-view.deleted');
+            const deletedData = deleted!.data as {
+              thought_type_id: string;
+              view_id: string;
+              view: {
+                id: string;
+                name: string;
+                thought_type_id: string;
+                defined_on: string;
+                inherited: boolean;
+                position: number;
+                is_default: boolean;
+                version: number;
+              };
+            };
+            assert.equal(deletedData.thought_type_id, typeId);
+            assert.equal(deletedData.view_id, viewId);
+            assert.equal(deletedData.view.id, viewId);
+            assert.equal(deletedData.view.name, 'Полный цикл 2');
+            assert.equal(deletedData.view.thought_type_id, typeId);
+            assert.equal(deletedData.view.defined_on, typeId);
+            assert.equal(deletedData.view.inherited, false);
+            assert.equal(deletedData.view.version, 2);
+          } finally {
+            unsubscribe();
+          }
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
+      it('DELETE /thought-types/{id} каскадно удаляет отборы и эмитит deleted с карточкой (0.14.1, 1242f78d)', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'task');
+          const definition = JSON.stringify({ sort: 'alpha', order: 'asc' });
+          const createView = async (name: string): Promise<string> => {
+            const res = await ctx.app.inject({
+              method: 'POST',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+              headers: h,
+              payload: { name, definition },
+            });
+            assert.equal(res.statusCode, 201, res.body?.toString());
+            return (res.json().data as ViewDto).id;
+          };
+          const first = await createView('Первый');
+          const second = await createView('Второй');
+
+          const received: AnyRealtimeEvent[] = [];
+          const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (event: AnyRealtimeEvent) =>
+            received.push(event),
+          );
+          try {
+            const del = await ctx.app.inject({
+              method: 'DELETE',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}`,
+              headers: h,
+            });
+            assert.equal(del.statusCode, 204, del.body?.toString());
+            await new Promise((r) => setImmediate(r));
+
+            const deletedViews = received.filter(
+              (e) => e.type === 'thought-type-view.deleted',
+            );
+            assert.deepEqual(
+              deletedViews.map((e) => (e.data as { view_id: string }).view_id).sort(),
+              [first, second].sort(),
+            );
+            for (const event of deletedViews) {
+              const data = event.data as {
+                thought_type_id: string;
+                view_id: string;
+                view: {
+                  id: string;
+                  thought_type_id: string;
+                  defined_on: string;
+                  inherited: boolean;
+                };
+              };
+              assert.equal(data.thought_type_id, typeId, 'корректный тип-владелец');
+              assert.equal(data.view.id, data.view_id);
+              assert.equal(data.view.thought_type_id, typeId);
+              assert.equal(data.view.defined_on, typeId);
+              assert.equal(data.view.inherited, false);
+            }
+            assert.ok(
+              received.some((e) => e.type === 'thought-type.deleted'),
+              'событие удаления типа тоже уходит',
+            );
+
+            // Сирот в БД нет, тип удалён.
+            const orphanRows = ctx.ndb
+              .prepare(
+                'SELECT id FROM thought_type_views WHERE thought_type_id = ? -- layers:physical-read',
+              )
+              .all(typeId);
+            assert.deepEqual(orphanRows, []);
+            assert.equal(
+              ctx.ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(typeId),
+              undefined,
+            );
           } finally {
             unsubscribe();
           }

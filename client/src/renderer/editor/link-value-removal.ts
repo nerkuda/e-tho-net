@@ -31,10 +31,11 @@
  * никого не блокируют, их удаление остаётся как было (без корзины).
  */
 
-import type { LinkPropertyValues } from '@etn/shared';
+import type { LinkPropertySide, LinkPropertyValues } from '@etn/shared';
 
 import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { linkEntryMatchesPick } from '../lib/link-entry-match.js';
 import { notice } from '../lib/notice.js';
 
 /**
@@ -60,6 +61,8 @@ export interface LinkValueRemovalOptions {
   propertyKey: string;
   /** Id реестрового свойства; пусто/`undefined` — внетиповой ключ по имени. */
   propertyId?: string | undefined;
+  /** Сторона свойства: у двухстороннего id общий (ошибка 45248206). */
+  side?: LinkPropertySide | null;
   /** Снимаемые цели: по их рёбрам ищется физическое удаление. */
   removedTargetIds: readonly string[];
   /** Способ снятия: авто-выбор или принудительная корзина. */
@@ -94,7 +97,11 @@ function isLinkValues(v: unknown): v is LinkPropertyValues {
  */
 export function pickRemovedLinkIds(
   values: ReadonlyArray<unknown>,
-  match: { propertyKey: string; propertyId?: string | undefined },
+  match: {
+    propertyKey: string;
+    propertyId?: string | undefined;
+    side?: LinkPropertySide | null;
+  },
   removedTargetIds: readonly string[],
 ): string[] {
   const wanted = new Set(removedTargetIds);
@@ -102,10 +109,12 @@ export function pickRemovedLinkIds(
   const seen = new Set<string>();
   for (const entry of values) {
     if (!isLinkValues(entry)) continue;
-    const matches =
-      match.propertyId !== undefined && match.propertyId !== ''
-        ? entry.property_id === match.propertyId
-        : entry.property_name === match.propertyKey;
+    // id + сторона (ошибка 45248206); пустой id — легаси-ребро по имени.
+    const matches = linkEntryMatchesPick(entry, {
+      propertyId: match.propertyId ?? '',
+      key: match.propertyKey,
+      side: match.side,
+    });
     if (!matches) continue;
     for (const edge of entry.values) {
       if (!wanted.has(edge.target_id)) continue;
@@ -123,7 +132,7 @@ async function readRemovedLinkIds(opts: LinkValueRemovalOptions): Promise<string
     const values = await etn.properties.get(opts.networkId, opts.ownerType, opts.ownerId);
     return pickRemovedLinkIds(
       values,
-      { propertyKey: opts.propertyKey, propertyId: opts.propertyId },
+      { propertyKey: opts.propertyKey, propertyId: opts.propertyId, side: opts.side },
       opts.removedTargetIds,
     );
   } catch {
@@ -168,7 +177,7 @@ export async function removeLinkValueEdges(opts: LinkValueRemovalOptions): Promi
       try {
         const { purged } = await etn.trash.purge(opts.networkId, linkIds);
         if (purged < linkIds.length) {
-          notice('Часть связей заблокирована и осталась в корзине.', 'error');
+          notice('Часть связей заблокирована и осталась в корзине.', 'warning');
           return true;
         }
       } catch (err) {

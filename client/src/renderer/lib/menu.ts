@@ -20,6 +20,7 @@
 
 import { div, el, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
+import { pushKeyOverlay } from './keymap.js';
 
 /** A menu entry: leaf with `onClick` or a parent with `submenu`.
  *  `dragId` marks a row as a drag source for a thought (the history dropdown)
@@ -264,19 +265,34 @@ export function showMenuAt(x: number, y: number, items: MenuItem[]): HTMLElement
   root.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 4))}px`;
   root.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 4))}px`;
 
-  const onKey = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') closeMenu();
-  };
   const onDown = (event: MouseEvent): void => {
     if (!root.contains(event.target as Node)) closeMenu();
   };
   const onResize = (): void => closeMenu();
+  // Меню — всплывающий слой: пока оно открыто и выше него нет другого слоя,
+  // `Escape` принадлежит ему. Приоритет решает диспетчер (`lib/keymap.ts`,
+  // ошибка 9ff6b606): `handleEscape` ответит `false`, если над меню открыт
+  // поповер/другая панель, — тогда меню нажатие не трогает и не глушит.
+  // Capture-фаза нужна, чтобы опередить редактор под меню (CM6 гасит `Escape`
+  // раньше bubble-диспетчера).
+  const escapeOverlay = pushKeyOverlay({ id: 'menu', onEscape: () => closeMenu() });
+  const onKey = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape' || event.repeat) return;
+    if (!escapeOverlay.handleEscape(event)) return;
+    event.stopImmediatePropagation();
+  };
   window.addEventListener('keydown', onKey, true);
   window.addEventListener('mousedown', onDown, true);
+  // Клик по строке списка начинается с `pointerdown`; фасад перетаскивания
+  // гасит его (`preventDefault`), и совместимый `mousedown` Chromium уже не
+  // шлёт — без этого «клик вне» не закрывал меню строки свойства (50d57b19).
+  window.addEventListener('pointerdown', onDown as EventListener, true);
   window.addEventListener('resize', onResize);
   dismissers.push(() => {
+    escapeOverlay.release();
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('mousedown', onDown, true);
+    window.removeEventListener('pointerdown', onDown as EventListener, true);
     window.removeEventListener('resize', onResize);
   });
   return root;

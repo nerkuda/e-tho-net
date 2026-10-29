@@ -306,6 +306,7 @@ describe(
           publication_exclusions: 0,
           shelves: 0,
           shelf_items: 0,
+          thought_property_order: 0,
         };
         for (const [table, count] of Object.entries(expectedNewTables)) {
           assert.equal(after[table], count, `неверное число строк в ${table}`);

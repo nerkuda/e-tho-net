@@ -1,0 +1,274 @@
+{
+  "name": "1425457f-type-binding-order",
+  "description": "Z8: таблица привязок редактора типа на row-reorder — ▲/▼ нет, порядок DnD/Alt/меню (включая привязку стороны «назначение»), черновик до «Применить и закрыть», порядок переживает переоткрытие; навигация ↑/↓/Enter.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "open-network-again",
+      "probe": "(() => { const item=document.querySelector('.networks-list .network-item'); if(item !== null) item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-z8",
+      "probe": "(async () => { const nid='{{networkId}}'; const type=await window.etn.types.createThoughtType(nid,{ name:'Тип Z8' }); const ids=[]; for (const name of ['Альфа','Бета','Гамма']) { const p=await window.etn.propertyRegistry.create(nid,{ name, value_type:'text' }); const b=await window.etn.types.createTypeProperty(nid,'thought_type',type.id,{ mode:'attach', property_id:p.id, required:false, position:undefined }); ids.push(b.id); } const lp=await window.etn.propertyRegistry.create(nid,{ name:'Зет-связь', value_type:'link', name_forward:'исходит от', name_reverse:'ведёт к' }); const tb=await window.etn.types.createTypeProperty(nid,'thought_type',type.id,{ mode:'attach', property_id:lp.id, required:false, position:undefined, side:'target' }); ids.push(tb.id); window.__z8={ typeId:type.id, initial:ids, linkProperty:lp.id }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-net-menu",
+      "expect": "ok",
+      "probe": "(() => { const b=[...document.querySelectorAll('button')].find((x)=>x.title==='Меню мыслесети'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "menu-visible",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null"
+    },
+    {
+      "name": "open-thought-types",
+      "expect": "ok",
+      "probe": "(() => { const it=[...document.querySelectorAll('.menu .menu-item')].find((x)=>(x.textContent||'').includes('Типы мыслей')); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "catalogue-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.ui-tree-row').length > 0"
+    },
+    {
+      "name": "open-z8-editor",
+      "expect": "ok",
+      "probe": "(() => { const row=[...document.querySelectorAll('.ui-tree-row')].find((r)=>(r.textContent||'').includes('Тип Z8')); if(!row) return 'no-row'; row.setAttribute('data-z8-row','1'); return 'ok'; })()"
+    },
+    {
+      "name": "dblclick-z8-row",
+      "click": {
+        "selector": "[data-z8-row=\"1\"]",
+        "count": 2
+      }
+    },
+    {
+      "name": "editor-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop').length >= 2"
+    },
+    {
+      "name": "open-properties-tab",
+      "expect": "ok",
+      "probe": "(() => { const top=[...document.querySelectorAll('.dialog-backdrop')].pop(); const b=[...(top?.querySelectorAll('.ui-tablist button') ?? [])].find((x)=>(x.textContent||'').includes('Свойства')); if(!b) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "four-binding-rows",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.te-split tr[data-row-id]').length === 4"
+    },
+    {
+      "name": "install-helpers",
+      "expect": "ok",
+      "probe": "(() => { window.__z8ui={ top:()=>[...document.querySelectorAll('.dialog-backdrop')].pop(), rows:()=>[...(window.__z8ui.top()?.querySelectorAll('.te-split tr[data-row-id]') ?? [])], ids:()=>window.__z8ui.rows().map((r)=>r.getAttribute('data-row-id')), nameCell:(n)=>window.__z8ui.top().querySelector('.te-split tr[data-row-id]:nth-child('+n+') td') }; return 'ok'; })()"
+    },
+    {
+      "name": "collapse-inherited-group",
+      "probe": "(() => { const h=[...document.querySelectorAll('.te-split .group-header')].find((x)=>(x.textContent||'').includes('унаследованные')); if(!h) return 'no-header'; h.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "own-table-fits-without-scroll",
+      "timeout": 10000,
+      "waitFor": "(() => { const wraps=[...document.querySelectorAll('.te-split .admin-table-wrap')]; const own=wraps[wraps.length-1]; return own !== undefined && own.scrollHeight <= own.clientHeight + 2; })()"
+    },
+    {
+      "name": "no-arrow-buttons",
+      "probe": "(() => { const top=window.__z8ui.top(); const buttons=[...(top?.querySelectorAll('.te-split button') ?? [])].filter((b)=>['▲','▼'].includes((b.textContent||'').trim())); return buttons.length; })()",
+      "expect": 0
+    },
+    {
+      "name": "initial-ui-order",
+      "probe": "window.__z8ui.ids().join(',') === window.__z8.initial.join(',')",
+      "expect": true
+    },
+    {
+      "name": "initial-server-order",
+      "probe": "(async () => { const own=(await window.etn.types.listTypeProperties('{{networkId}}','thought_type',window.__z8.typeId)).filter((x)=>!x.inherited).map((x)=>x.id); return own.join(',') === window.__z8.initial.join(','); })()",
+      "expect": true
+    },
+    {
+      "name": "row-controls-still-clickable",
+      "click": ".te-split tr[data-row-id]:nth-child(1) input[type=checkbox]"
+    },
+    {
+      "name": "checkbox-toggled",
+      "probe": "(() => { const r=window.__z8ui.rows()[0]; return r?.querySelector('input[type=checkbox]')?.checked ?? null; })()",
+      "expect": true
+    },
+    {
+      "name": "click-row-1-name",
+      "click": ".te-split tr[data-row-id]:nth-child(1) td:first-child"
+    },
+    {
+      "name": "enter-activates-default",
+      "key": "Enter"
+    },
+    {
+      "name": "enter-focused-default-editor",
+      "probe": "(() => { const r=window.__z8ui.rows()[0]; const cell=r?.querySelector('.prop-default-cell'); return cell !== undefined && cell !== null && cell.contains(document.activeElement); })()",
+      "expect": true
+    },
+    {
+      "name": "click-row-1-name-again",
+      "click": ".te-split tr[data-row-id]:nth-child(1) td:first-child"
+    },
+    {
+      "name": "arrow-down",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "current-is-row-2",
+      "probe": "(() => { const cur=window.__z8ui.top()?.querySelector('.te-split tr.prop-row-current'); return cur?.getAttribute('data-row-id') === window.__z8.initial[1]; })()",
+      "expect": true
+    },
+    {
+      "name": "click-row-1-name-before-alt",
+      "click": ".te-split tr[data-row-id]:nth-child(1) td:first-child"
+    },
+    {
+      "name": "alt-arrow-down",
+      "key": "ArrowDown",
+      "modifiers": [
+        "alt"
+      ]
+    },
+    {
+      "name": "order-after-alt",
+      "timeout": 10000,
+      "waitFor": "window.__z8ui.ids().join(',') === [window.__z8.initial[1],window.__z8.initial[0],window.__z8.initial[2],window.__z8.initial[3]].join(',')"
+    },
+    {
+      "name": "drag-third-to-top",
+      "probe": "(() => { const rows=window.__z8ui.rows(); const src=rows[2]; const tgt=rows[0]; const cell=src.querySelector(\"td\"); const a=cell.getBoundingClientRect(); const b=tgt.getBoundingClientRect(); const fromX=Math.round(a.left+20); const fromY=Math.round(a.top+a.height/2); const toX=Math.round(b.left+80); const toY=Math.round(b.top+4); cell.dispatchEvent(new PointerEvent(\"pointerdown\",{bubbles:true,cancelable:true,button:0,clientX:fromX,clientY:fromY,pointerId:7})); for (let i=1;i<=10;i+=1) { const y=Math.round(fromY+(toY-fromY)*i/10); src.dispatchEvent(new PointerEvent(\"pointermove\",{bubbles:true,cancelable:true,button:0,clientX:toX,clientY:y,pointerId:7})); } src.dispatchEvent(new PointerEvent(\"pointerup\",{bubbles:true,cancelable:true,button:0,clientX:toX,clientY:toY,pointerId:7})); return \"ok\"; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "order-after-dnd",
+      "timeout": 10000,
+      "waitFor": "[window.__z8.initial[2],window.__z8.initial[1],window.__z8.initial[0],window.__z8.initial[3]]"
+    },
+    {
+      "name": "open-row-4-menu",
+      "expect": "ok",
+      "probe": "(() => { const cell=window.__z8ui.nameCell(4); if(!cell) return 'no-cell'; const r=cell.getBoundingClientRect(); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:Math.round(r.left+20),clientY:Math.round(r.top+6)})); return 'ok'; })()"
+    },
+    {
+      "name": "row-menu-visible",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null"
+    },
+    {
+      "name": "row-menu-items",
+      "probe": "[...document.querySelectorAll('.menu .menu-item')].map((x)=>(x.textContent||'').trim()).filter((x)=>x!==''&&x!=='—')",
+      "expect": [
+        "Переместить выше",
+        "Переместить ниже"
+      ]
+    },
+    {
+      "name": "menu-move-up",
+      "expect": "ok",
+      "probe": "(() => { const it=[...document.querySelectorAll('.menu .menu-item')].find((x)=>(x.textContent||'').trim()==='Переместить выше'); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
+    },
+    {
+      "name": "order-after-menu-target-side",
+      "timeout": 10000,
+      "waitFor": "[window.__z8.initial[2],window.__z8.initial[1],window.__z8.initial[3],window.__z8.initial[0]]"
+    },
+    {
+      "name": "server-still-initial-before-apply",
+      "probe": "(async () => { const own=(await window.etn.types.listTypeProperties('{{networkId}}','thought_type',window.__z8.typeId)).filter((x)=>!x.inherited).map((x)=>x.id); return own.join(',') === window.__z8.initial.join(','); })()",
+      "expect": true
+    },
+    {
+      "name": "apply-and-close",
+      "expect": "ok",
+      "probe": "(() => { const top=window.__z8ui.top(); const b=[...(top?.querySelectorAll('button') ?? [])].find((x)=>(x.textContent||'').trim()==='Применить и закрыть'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "editor-closed",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.te-split') === null"
+    },
+    {
+      "name": "server-order-after-apply",
+      "probe": "(async () => { const own=(await window.etn.types.listTypeProperties('{{networkId}}','thought_type',window.__z8.typeId)).filter((x)=>!x.inherited).map((x)=>x.id); return own.join(',') === [window.__z8.initial[2],window.__z8.initial[1],window.__z8.initial[3],window.__z8.initial[0]].join(','); })()",
+      "expect": true
+    },
+    {
+      "name": "reopen-z8-editor",
+      "expect": "ok",
+      "probe": "(() => { const row=[...document.querySelectorAll('.ui-tree-row')].find((r)=>(r.textContent||'').includes('Тип Z8')); if(!row) return 'no-row'; row.setAttribute('data-z8-row','1'); return 'ok'; })()"
+    },
+    {
+      "name": "dblclick-z8-row-again",
+      "click": {
+        "selector": "[data-z8-row=\"1\"]",
+        "count": 2
+      }
+    },
+    {
+      "name": "editor-visible-again",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop').length >= 2"
+    },
+    {
+      "name": "open-properties-tab-again",
+      "expect": "ok",
+      "probe": "(() => { const top=[...document.querySelectorAll('.dialog-backdrop')].pop(); const b=[...(top?.querySelectorAll('.ui-tablist button') ?? [])].find((x)=>(x.textContent||'').includes('Свойства')); if(!b) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "four-binding-rows-again",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.te-split tr[data-row-id]').length === 4"
+    },
+    {
+      "name": "order-survives-reopen",
+      "probe": "(() => { const top=[...document.querySelectorAll('.dialog-backdrop')].pop(); const ids=[...(top?.querySelectorAll('.te-split tr[data-row-id]') ?? [])].map((r)=>r.getAttribute('data-row-id')); return ids.join(',') === [window.__z8.initial[2],window.__z8.initial[1],window.__z8.initial[3],window.__z8.initial[0]].join(','); })()",
+      "expect": true
+    },
+    {
+      "name": "cancel-editor",
+      "expect": "ok",
+      "probe": "(() => { const top=[...document.querySelectorAll('.dialog-backdrop')].pop(); const b=[...(top?.querySelectorAll('button') ?? [])].find((x)=>(x.textContent||'').trim()==='Отмена'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    }
+  ]
+}

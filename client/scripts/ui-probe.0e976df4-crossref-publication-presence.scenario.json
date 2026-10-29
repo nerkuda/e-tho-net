@@ -1,0 +1,251 @@
+{
+  "name": "0e976df4-property-presence",
+  "description": "Ошибка 0e976df4: свойства видов cross_network_ref и publication — «заполнено»/«не заполнено». Стенд засевает публикацию, чужую сеть с мыслью (для живого адреса cross_network_ref), два свойства и две мысли (со значениями и без). В панели «Структур» строится условие на свойство-кросс-ссылку, проверяется секция «Состояние» (подписи «заполнено»/«не заполнено»), выбор «не заполнено» формирует условие и фильтрует выдачу, «заполнено» — обратную. Затем условие сохраняется личным отбором, проверяется определение на сервере, панель очищается и сохранённый отбор открывается снова (кнопка «Отборы…») — условие «не заполнено» на месте. Вторая часть — то же меню у свойства-публикации и применение условия. Клики — in-page .click(), ожидания по условию (скрытое окно, грабли 03e33360). Запуск: node client/scripts/ui-probe-stand.mjs --scenario .tmp/verify/0e976df4/scenario.json --out .tmp/verify/0e976df4/out",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    {
+      "name": "seed-cross-ref-property",
+      "api": {
+        "name": "seedCrossRefProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": { "name": "Ссылка 0e976", "value_type": "cross_network_ref" },
+        "expression": "data.value_type"
+      },
+      "expect": "cross_network_ref"
+    },
+    {
+      "name": "seed-publication-property",
+      "api": {
+        "name": "seedPublicationProperty",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": { "name": "Публикация 0e976", "value_type": "publication" },
+        "expression": "data.value_type"
+      },
+      "expect": "publication"
+    },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "open-network",
+      "timeout": 40000,
+      "probe": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item === null) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tabs-panel-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
+
+    {
+      "name": "seed-properties-thoughts",
+      "timeout": 60000,
+      "probe": "(() => { const N='{{networkId}}'; const et=window.etn; return (async () => { const pub=await et.publications.create(N,{ title:'0e976 Публикация' }); const foreign=await et.networks.create('0e976 чужая сеть',''); const target=await et.thoughts.create(foreign.id,{ title:'0e976 цель' }); const filled=await et.thoughts.create(N,{ title:'0e976 — со значением' }); const empty=await et.thoughts.create(N,{ title:'0e976 — без значения' }); const address='n:'+foreign.id+'#'+target.id; await et.properties.set(N,'thought',filled.id,'Ссылка 0e976',address); await et.properties.set(N,'thought',filled.id,'Публикация 0e976',pub.id); window.__p={ filled:filled.id, empty:empty.id }; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+
+    { "name": "open-structures", "eval": "(() => { const b=document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if(!b) return 'no-tab'; b.click(); return 'ok'; })()" },
+    {
+      "name": "structures-editor",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    { "name": "add-condition", "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "condition-row-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 1"
+    },
+    { "name": "open-what", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "cross-ref-operand-item",
+      "timeout": 20000,
+      "waitFor": "[...document.querySelectorAll('.ft-choice__item')].some((e)=>e.getBoundingClientRect().width>0 && (e.textContent||'').includes('Ссылка 0e976'))"
+    },
+    { "name": "pick-cross-ref", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item')].find((e)=>e.getBoundingClientRect().width>0 && (e.textContent||'').includes('Ссылка 0e976')); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    {
+      "name": "operand-is-cross-ref",
+      "timeout": 20000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what')?.textContent ?? '').includes('Ссылка 0e976')"
+    },
+
+    { "name": "open-op-menu", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__op'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "cross-ref-presence-choices",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"is_empty\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"not_empty\"]') !== null"
+    },
+    {
+      "name": "cross-ref-menu-probe",
+      "probe": "(() => { const vis=(sel)=>[...document.querySelectorAll(sel)].filter((e)=>e.getBoundingClientRect().width>0); const groups=vis('.ft-choice__group').map((e)=>(e.textContent||'').trim()); const label=(k)=>{ const e=vis('.ft-choice__item[data-key=\"'+k+'\"]')[0]; return (e?.textContent??'').trim(); }; return { groups, empty: label('is_empty'), filled: label('not_empty') }; })()",
+      "expect": { "groups": ["Сравнение", "Состояние"], "empty": "не заполнено", "filled": "заполнено" }
+    },
+    { "name": "pick-cross-ref-is-empty", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"is_empty\"]')].find((e)=>e.getBoundingClientRect().width>0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    { "name": "settle-after-pick", "eval": "(async () => { await new Promise((r)=>setTimeout(r,400)); return 'ok'; })()" },
+    {
+      "name": "cross-ref-is-empty-condition",
+      "probe": "(() => { const row=document.querySelectorAll('.st-filter .ft-row')[0]; const what=(row?.querySelector('.ft-row__what')?.textContent ?? '').trim(); const op=(row?.querySelector('.ft-row__op')?.textContent ?? '').trim(); const value=(row?.querySelector('.ft-row__value')?.textContent ?? '').trim(); const issue=(row?.querySelector('.ft-issue__text')?.textContent ?? '').trim(); return { whatHasProp: what.includes('Ссылка 0e976'), opHasEmpty: op.includes('не заполнено'), value, issue }; })()",
+      "expect": { "whatHasProp": true, "opHasEmpty": true, "value": "", "issue": "" }
+    },
+
+    { "name": "apply-cross-ref-is-empty", "eval": "(() => { const b=document.querySelector('.st-filter .ff-apply'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "cross-ref-is-empty-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); return has('0e976 — без значения') && !has('0e976 — со значением'); })()"
+    },
+    {
+      "name": "cross-ref-is-empty-probe",
+      "probe": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); return { filled: has('0e976 — со значением'), empty: has('0e976 — без значения'), issue: (document.querySelector('.st-filter .ft-issue__text')?.textContent ?? '').trim() }; })()",
+      "expect": { "filled": false, "empty": true, "issue": "" }
+    },
+
+    { "name": "switch-to-not-empty", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__op'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "not-empty-choice-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"not_empty\"]') !== null"
+    },
+    { "name": "pick-cross-ref-not-empty", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"not_empty\"]')].find((e)=>e.getBoundingClientRect().width>0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    { "name": "apply-cross-ref-not-empty", "eval": "(() => { const b=document.querySelector('.st-filter .ff-apply'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "cross-ref-not-empty-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); return has('0e976 — со значением') && !has('0e976 — без значения'); })()"
+    },
+    {
+      "name": "cross-ref-not-empty-probe",
+      "probe": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); return { filled: has('0e976 — со значением'), empty: has('0e976 — без значения') }; })()",
+      "expect": { "filled": true, "empty": false }
+    },
+
+    { "name": "back-to-is-empty", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__op'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    { "name": "is-empty-choice-visible", "timeout": 20000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"is_empty\"]') !== null" },
+    { "name": "pick-is-empty-again", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"is_empty\"]')].find((e)=>e.getBoundingClientRect().width>0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    { "name": "apply-before-save", "eval": "(() => { const b=document.querySelector('.st-filter .ff-apply'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+
+    { "name": "fill-saved-name", "click": ".st-filter .ff-name__input" },
+    { "name": "saved-name-typed", "text": "0e976 проба" },
+    { "name": "save-filter", "eval": "(() => { const b=document.querySelector('.st-filter .ff-save'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "saved-notice",
+      "timeout": 20000,
+      "waitFor": "[...document.querySelectorAll('.notice .notice-text')].some((e)=>(e.textContent||'').includes('сохранён'))"
+    },
+    {
+      "name": "saved-definition-api",
+      "api": {
+        "name": "saved-definition",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/saved-filters?view=structures",
+        "expression": "(() => { const rows = Array.isArray(data) ? data : (data.items ?? []); const row = rows.find((r) => String(r.name).includes('0e976 проба')); if (row === undefined) return 'no-row'; const s = JSON.stringify(row.definition); return { hasIsEmpty: s.includes('is_empty'), hasProperty: s.includes('property_id'), hasOperatorKey: s.includes('\"operator\"') }; })()"
+      },
+      "expect": { "hasIsEmpty": true, "hasProperty": true, "hasOperatorKey": true }
+    },
+
+    { "name": "clear-filter", "eval": "(() => { const b=document.querySelector('.st-filter .ff-clear'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "filter-cleared",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 0"
+    },
+    { "name": "open-saved-picker", "eval": "(() => { const b=document.querySelector('.st-filter .ff-extra--saved'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "saved-picker-open",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.sfd') !== null"
+    },
+    {
+      "name": "saved-picker-search",
+      "eval": "(() => { const i=document.querySelector('.sfd-search'); if(!i) return 'no-search'; i.value='0e976 проба'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"
+    },
+    {
+      "name": "saved-picker-diagnostic",
+      "timeout": 30000,
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,1200)); const sfd=document.querySelector('.sfd'); if(!sfd) return 'no-sfd'; const search=document.querySelector('.sfd-search'); const text=(sfd.textContent||''); return { searchValue: search ? search.value : null, hasName: text.includes('0e976 проба') }; })()"
+    },
+    {
+      "name": "saved-picker-row-present",
+      "timeout": 20000,
+      "waitFor": "(() => { const sfd=document.querySelector('.sfd'); return sfd !== null && (sfd.textContent||'').includes('0e976 проба'); })()"
+    },
+    { "name": "focus-saved-search", "click": ".sfd-search" },
+    { "name": "saved-row-down", "key": "ArrowDown" },
+    { "name": "saved-row-enter", "key": "Enter" },
+    {
+      "name": "saved-picker-closed",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.sfd') === null"
+    },
+    {
+      "name": "reopened-condition-row",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 1 && ((document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__op')?.textContent ?? '').includes('не заполнено'))"
+    },
+    {
+      "name": "reopened-condition-probe",
+      "probe": "(() => { const row=document.querySelectorAll('.st-filter .ft-row')[0]; const what=(row?.querySelector('.ft-row__what')?.textContent ?? '').trim(); const op=(row?.querySelector('.ft-row__op')?.textContent ?? '').trim(); const value=(row?.querySelector('.ft-row__value')?.textContent ?? '').trim(); return { whatHasProp: what.includes('Ссылка 0e976'), opHasEmpty: op.includes('не заполнено'), value }; })()",
+      "expect": { "whatHasProp": true, "opHasEmpty": true, "value": "" }
+    },
+    {
+      "name": "reopened-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); return has('0e976 — без значения') && !has('0e976 — со значением'); })()"
+    },
+
+    { "name": "add-publication-condition", "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "second-row-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 2"
+    },
+    { "name": "open-what-second", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[1]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "publication-operand-item",
+      "timeout": 20000,
+      "waitFor": "[...document.querySelectorAll('.ft-choice__item')].some((e)=>e.getBoundingClientRect().width>0 && (e.textContent||'').includes('Публикация 0e976'))"
+    },
+    { "name": "pick-publication", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item')].find((e)=>e.getBoundingClientRect().width>0 && (e.textContent||'').includes('Публикация 0e976')); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    {
+      "name": "operand-is-publication",
+      "timeout": 20000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[1]?.querySelector('.ft-row__what')?.textContent ?? '').includes('Публикация 0e976')"
+    },
+    { "name": "open-op-menu-second", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[1]?.querySelector('.ft-row__op'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "publication-presence-choices",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"is_empty\"]') !== null && document.querySelector('.ft-choice__item[data-key=\"not_empty\"]') !== null"
+    },
+    {
+      "name": "publication-menu-probe",
+      "probe": "(() => { const vis=(sel)=>[...document.querySelectorAll(sel)].filter((e)=>e.getBoundingClientRect().width>0); const groups=vis('.ft-choice__group').map((e)=>(e.textContent||'').trim()); const label=(k)=>{ const e=vis('.ft-choice__item[data-key=\"'+k+'\"]')[0]; return (e?.textContent??'').trim(); }; return { groups, empty: label('is_empty'), filled: label('not_empty') }; })()",
+      "expect": { "groups": ["Сравнение", "Состояние"], "empty": "не заполнено", "filled": "заполнено" }
+    },
+    { "name": "pick-publication-is-empty", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"is_empty\"]')].find((e)=>e.getBoundingClientRect().width>0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    { "name": "settle-publication", "eval": "(async () => { await new Promise((r)=>setTimeout(r,400)); return 'ok'; })()" },
+    {
+      "name": "publication-condition-probe",
+      "probe": "(() => { const row=document.querySelectorAll('.st-filter .ft-row')[1]; const what=(row?.querySelector('.ft-row__what')?.textContent ?? '').trim(); const op=(row?.querySelector('.ft-row__op')?.textContent ?? '').trim(); const value=(row?.querySelector('.ft-row__value')?.textContent ?? '').trim(); const issue=(row?.querySelector('.ft-issue__text')?.textContent ?? '').trim(); return { whatHasProp: what.includes('Публикация 0e976'), opHasEmpty: op.includes('не заполнено'), value, issue }; })()",
+      "expect": { "whatHasProp": true, "opHasEmpty": true, "value": "", "issue": "" }
+    },
+    { "name": "apply-publication", "eval": "(() => { const b=document.querySelector('.st-filter .ff-apply'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "publication-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); const issues=[...document.querySelectorAll('.st-filter .ft-issue__text')].map((e)=>(e.textContent||'').trim()).filter((t)=>t!==''); return has('0e976 — без значения') && !has('0e976 — со значением') && issues.length === 0; })()"
+    },
+    {
+      "name": "publication-result-probe",
+      "probe": "(() => { const texts=[...document.querySelectorAll('.st-results .st-row')].map((r)=>r.textContent||''); const has=(t)=>texts.some((x)=>x.includes(t)); const issues=[...document.querySelectorAll('.st-filter .ft-issue__text')].map((e)=>(e.textContent||'').trim()).filter((t)=>t!==''); return { filled: has('0e976 — со значением'), empty: has('0e976 — без значения'), issues }; })()",
+      "expect": { "filled": false, "empty": true, "issues": [] }
+    }
+  ]
+}

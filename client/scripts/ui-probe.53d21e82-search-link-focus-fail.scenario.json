@@ -1,0 +1,63 @@
+{
+  "name": "53d21e82-search-link-focus-fail",
+  "description": "Ошибка 53d21e82: клик по хиту-связи в результатах поиска молча глотал сетевой отказ фокуса (openLinkInEditor не выполнялся, пользователь не видел ни фокуса, ни редактора, ни сообщения). Сценарий сам засеивает связь с комментарием (хит группы «Найдено связей»), стенд поднимается с прокси, который отвечает 500 на /thoughts/{{thoughtId}}/focus: клик по строке связи обязан дать тост «Не удалось открыть связь», фокус вкладки и редактор остаются прежними. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.53d21e82-search-link-focus-fail.scenario.json --fail-seed-path 'thoughts/{{thoughtId}}/focus' --fail-seed-status 500 --out .tmp/etn-53d21e82/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed-link-hit",
+      "eval": "(async () => { const nid='{{networkId}}'; const target=await window.etn.thoughts.create(nid,{title:'Цель ссылки 53d21e82', create_link:{direction:'parent', target_thought_id:'{{thoughtId}}'}}); const grouped=await window.etn.links.listByThought(nid,'{{thoughtId}}',false); const items=[...(grouped.by_type ?? []).flatMap((g)=>g.items ?? []), ...(grouped.untyped_parents ?? []), ...(grouped.untyped_children ?? [])]; const hit=items.find((it)=>it.link && it.target_thought && it.target_thought.id===target.id); if (!hit) return 'no-link'; await window.etn.comments.create(nid,'link',hit.link.id,{kind:'permanent',body_md:'В этой связи есть Маркер53 для поиска.'}); window.__probe53={targetId:target.id,linkId:hit.link.id}; return JSON.stringify(window.__probe53); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { window.__probe53 = window.__probe53 ?? {}; window.__probe53.groupTitle=(prefix)=>{ const groups=[...document.querySelectorAll('.search-results .search-group')]; const g=groups.find((x)=>(x.querySelector('.group-title')?.textContent||'').trim().startsWith(prefix)); return g?(g.querySelector('.group-title')?.textContent||'').trim():null; }; window.__probe53.linkRow=()=>document.querySelector('.search-results .search-hit[data-key^=\"link:\"]'); window.__probe53.setQuery=(q)=>{ const i=document.querySelector('.search-input'); if(!i) return 'no-input'; i.focus(); i.value=q; i.dispatchEvent(new Event('input',{bubbles:true})); return i.value; }; window.__probe53.errorToastText=()=>[...document.querySelectorAll('.notice-stack .notice.error .notice-text')].map((e)=>(e.textContent||'').trim()).join('|'); window.__probe53.focusId=async()=>{ const tabs=await window.etn.tabs.list(); const t=tabs.find((x)=>x.network_id==='{{networkId}}'); return t?.focus_id ?? null; }; return 'ok'; })()"
+    },
+    { "name": "focus-before", "probe": "(async () => await window.__probe53.focusId())()" },
+    {
+      "name": "focus-search",
+      "eval": "(() => { const i=document.querySelector('.search-input'); if(!i) return 'no-input'; i.focus(); return 'ok'; })()"
+    },
+    {
+      "name": "panel-open",
+      "timeout": 15000,
+      "waitFor": "(() => { const p=document.querySelector('.search-panel'); return p !== null && !p.classList.contains('hidden'); })()"
+    },
+    { "name": "query-typed", "eval": "window.__probe53.setQuery('Маркер53')" },
+    {
+      "name": "links-group-ready",
+      "timeout": 25000,
+      "waitFor": "window.__probe53.groupTitle('Найдено связей') === 'Найдено связей (1)'"
+    },
+    { "name": "link-row-present", "probe": "window.__probe53.linkRow() !== null", "expect": true },
+    {
+      "name": "no-toast-before-click",
+      "probe": "window.__probe53.errorToastText() === ''",
+      "expect": true
+    },
+    { "name": "click-link-hit", "eval": "(() => { const r=window.__probe53.linkRow(); if(!r) return 'no-row'; r.click(); return 'ok'; })()" },
+    {
+      "name": "failure-toast-visible",
+      "timeout": 20000,
+      "waitFor": "window.__probe53.errorToastText().includes('Не удалось открыть связь')"
+    },
+    {
+      "name": "failure-toast-text",
+      "probe": "window.__probe53.errorToastText().startsWith('Не удалось открыть связь')",
+      "expect": true
+    },
+    {
+      "name": "focus-unchanged",
+      "probe": "(async () => await window.__probe53.focusId())()",
+      "expectFrom": "focus-before"
+    }
+  ]
+}

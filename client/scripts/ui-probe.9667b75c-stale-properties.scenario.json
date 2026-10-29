@@ -1,0 +1,39 @@
+{
+  "name": "9667b75c-stale-properties",
+  "description": "Ошибка 9667b75c: панель «Свойства» показывает устаревшее значение после возврата на мысль. Seed: тип Т1 с типовым свойством «Теги» (text + config.multiple, чипы) и внетиповое скалярное свойство «Внешнее»; у мысли P1 значения «срочно» и «старое». Фаза 1 — открыть «Свойства», запомнить показанные значения. Фаза 2 — уйти на «Комментарий» (панель отцеплена) и внешней записью `window.etn.properties.set` изменить оба значения; контроль `server-before-return` подтверждает, что сервер уже новый, а показанного обновления нет. Фаза 3 — вернуться на «Свойства»: чип «смена» и внетиповое «новое» обязаны появиться БЕЗ переоткрытия мысли, серверное чтение подтверждает. На дофиксовом HEAD фаза 3 красная (чип остаётся «срочно»).",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const pTags=await et.propertyRegistry.create(N,{name:'Теги',value_type:'text',config:{multiple:true}}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:pTags.id,required:false,position:0}); const pExt=await et.propertyRegistry.create(N,{name:'Внешнее',value_type:'text'}); const P1=(await et.thoughts.create(N,{title:'Персона 1',type_id:t1.id,create_link:{direction:'parent',target_thought_id:H}})).id; await et.properties.set(N,'thought',P1,'Теги','срочно',null); await et.properties.set(N,'thought',P1,'Внешнее','старое',null); window.__repro={t1:t1.id,tags:pTags.id,ext:pExt.id,P1}; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "thoughts-on-canvas", "waitFor": "(() => { const b=window.__repro; return b !== undefined && document.querySelector('.cloud[data-id=\"'+b.P1+'\"]') !== null; })()", "timeout": 20000 },
+
+    { "name": "open-p1", "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "p1-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'", "timeout": 20000 },
+    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "chip-serious", "waitFor": "[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].some((n)=>n.textContent==='срочно')", "timeout": 20000 },
+    { "name": "outside-old", "waitFor": "(() => { const i=document.querySelector('.properties-outside-body input.prop-editor'); return i !== null && i.value === 'старое'; })()", "timeout": 20000 },
+    { "name": "panel-values-before", "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); return chips.join('|') + ' / ' + (ext ? ext.value : 'null'); })()", "expect": "срочно / старое" },
+
+    { "name": "hide-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Комментарий')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "properties-hidden", "waitFor": "document.querySelector('.properties-tab') === null", "timeout": 20000 },
+    { "name": "external-write", "probe": "(async () => { const N='{{networkId}}', b=window.__repro; await window.etn.properties.set(N,'thought',b.P1,'Теги','срочно, смена',null); await window.etn.properties.set(N,'thought',b.P1,'Внешнее','новое',null); await new Promise((r)=>setTimeout(r,600)); return 'ok'; })()", "expect": "ok" },
+    { "name": "server-before-return", "probe": "(async () => { const N='{{networkId}}', b=window.__repro; const vs=await window.etn.properties.get(N,'thought',b.P1); const tags=vs.find((x)=>x.property_name==='Теги'); const ext=vs.find((x)=>x.property_name==='Внешнее'); return (tags ? tags.value : 'null') + ' / ' + (ext ? ext.value : 'null'); })()", "expect": "срочно, смена / новое" },
+
+    { "name": "return-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "chip-smena-after-return", "waitFor": "[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].some((n)=>n.textContent==='смена')", "timeout": 20000 },
+    { "name": "outside-new-after-return", "waitFor": "(() => { const i=document.querySelector('.properties-outside-body input.prop-editor'); return i !== null && i.value === 'новое'; })()", "timeout": 20000 },
+    { "name": "panel-values-after", "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); return chips.join('|') + ' / ' + (ext ? ext.value : 'null'); })()", "expect": "срочно|смена / новое" },
+    { "name": "server-after-return", "probe": "(async () => { const N='{{networkId}}', b=window.__repro; const vs=await window.etn.properties.get(N,'thought',b.P1); const tags=vs.find((x)=>x.property_name==='Теги'); const ext=vs.find((x)=>x.property_name==='Внешнее'); return (tags ? tags.value : 'null') + ' / ' + (ext ? ext.value : 'null'); })()", "expect": "срочно, смена / новое" }
+  ]
+}

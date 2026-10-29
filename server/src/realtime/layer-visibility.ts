@@ -152,6 +152,18 @@ function extractRowRef(event: AnyRealtimeEvent): RowRef | null {
       // счётчик «обновлено N мс назад» рядом с кнопкой отбора, чтобы не
       // путать отсутствие активности с лагом синхронизации.
       return null;
+    // Внетиповые отборы мысли (0.14.1, задача a28d444b) — ветвимая строка
+    // thought_custom_views, видимость та же, что у типовых отборов.
+    case 'thought-custom-view.created':
+      return byId(
+        'thought_custom_views',
+        (data.view as { id?: unknown } | undefined)?.id,
+      );
+    case 'thought-custom-view.updated':
+    case 'thought-custom-view.deleted':
+      return byId('thought_custom_views', data.view_id);
+    case 'thought-custom-view.run':
+      return null;
     // Publications & shelves (0.11.1, задача c59ce742; каталог 67b8748e).
     // Событие описывает ветвимую строку подсистемы «Публикации», поэтому
     // видимость считается по её ближайшей строке в цепочке слоёв.

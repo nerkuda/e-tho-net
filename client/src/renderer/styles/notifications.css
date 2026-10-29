@@ -2,12 +2,27 @@
  * Notifications / transient notices
  * ------------------------------------------------------------------------- */
 
-.notice {
+/* Стек тостов (задача 28d22b8a, решение заказчика 2026-10-25): не более пяти
+ * одновременно, растёт СНИЗУ ВВЕРХ. Позиция и z-index принадлежат контейнеру,
+ * а не тосту: отдельный fixed-тост с той же точкой накладывался на соседей.
+ * `column-reverse` кладёт ПЕРВЫЙ ребёнок вниз (новый тост вставляется первым —
+ * `lib/notice.ts`), а показанные раньше поднимаются вверх; шестой вытесняет
+ * верхний (самый старый). `pointer-events: none` — промежутки между тостами не
+ * перехватывают клики у интерфейса под ними; сами тосты кликабельны. */
+.notice-stack {
   position: fixed;
   right: 14px;
   bottom: calc(var(--statusbar-h) + 12px);
   z-index: 800;
-  max-width: 360px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.notice {
+  max-width: min(360px, calc(100vw - 28px));
   padding: 10px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -17,14 +32,16 @@
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  pointer-events: auto;
 }
 
 .notice.error {
   border-left-color: var(--danger);
 }
 
-/* Виды тоста (задача e20761c2): успех — зелёный токен, внимание — жёлтый;
- * info остаётся акцентной полосой по умолчанию. */
+/* Виды тоста (задача e20761c2): успех — зелёный токен, внимание — жёлтый.
+ * После 28d22b8a в стеке бывают только важные виды (success/warning/error);
+ * акцентная кромка базы — резерв, если вид не задан. */
 .notice.success {
   border-left-color: var(--ok);
 }
@@ -42,4 +59,3 @@
   color: var(--text-dim);
   font-size: 14px;
 }
-

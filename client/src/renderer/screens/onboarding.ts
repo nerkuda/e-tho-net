@@ -11,13 +11,14 @@
  *  - understandable errors (bad key / unreachable server / version mismatch).
  */
 
-import { restoreSession } from '../app.js';
+import { restoreSession, takeBootConnectFailure } from '../app.js';
 import { t } from '../lib/i18n.js';
 import { confirmDialog } from '../lib/dialog.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el, span } from '../lib/dom.js';
+import { describeConnectFailure } from '../lib/connect-failure.js';
 import { errorLine } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
-import { store } from '../state.js';
+import { serverLabelOf, store } from '../state.js';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput } from '../lib/ui/field.js';
 import { fieldRow } from '../lib/ui/field.js';
@@ -84,19 +85,41 @@ export function buildOnboarding(): HTMLElement {
 
   root.append(card);
 
+  // Автоматическое подключение при запуске могло не удаться (ошибка 390e9746):
+  // показываем причину у списка сохранённых серверов — иначе экран молча
+  // предлагал повтор, не объясняя, что случилось с активным сервером.
+  const bootFailure = takeBootConnectFailure();
+  if (bootFailure !== null) {
+    connectError.textContent = bootFailure;
+    connectError.hidden = false;
+  }
+
   /** Connects a saved profile; on success restores the saved session (bug
    *  be430215): a previously used server reopens its last tab instead of
    *  offering a network re-pick. A first-time connect has no saved tabs and
    *  still lands on the network list. */
-  async function connectProfile(profileId: string): Promise<void> {
+  async function connectProfile(profile: {
+    id: string;
+    label: string;
+    baseUrl: string;
+  }): Promise<void> {
     connectError.hidden = true;
     submit.disabled = true;
     try {
-      const me = await etn.server.connect(profileId);
-      store.update({ profileId, me });
+      // The status tooltip names the server (de34b35b, GUI review); the row
+      // already carries label/baseUrl, no extra IPC needed.
+      const serverLabel = serverLabelOf(profile);
+      const me = await etn.server.connect(profile.id);
+      store.update({ profileId: profile.id, serverLabel, me });
       await restoreSession();
     } catch (err) {
-      connectError.textContent = errText(err);
+      // Причина отказа, а не «затычка» (ошибка 390e9746): адрес сохранённого
+      // сервера + то, что реально известно об отказе (соединение отклонено,
+      // таймаут, отклонённый ключ…).
+      connectError.textContent = describeConnectFailure(err, {
+        label: profile.label,
+        baseUrl: profile.baseUrl,
+      });
       connectError.hidden = false;
     } finally {
       submit.disabled = false;
@@ -125,7 +148,7 @@ export function buildOnboarding(): HTMLElement {
       removeBtn.addEventListener('click', (ev) => ev.stopPropagation());
       item.append(info, removeBtn);
       item.addEventListener('click', () => {
-        void connectProfile(p.id);
+        void connectProfile(p);
       });
       profileList.append(item);
     }
@@ -155,7 +178,7 @@ export function buildOnboarding(): HTMLElement {
       // there is no need (and no point) to call `showScreen('onboarding')` —
       // that would tear down `root` mid-function and orphan the rest of this
       // code path.
-      store.update({ profileId: null, me: null });
+      store.update({ profileId: null, serverLabel: null, me: null });
     }
     await loadProfiles();
   }
@@ -182,12 +205,22 @@ export function buildOnboarding(): HTMLElement {
       });
       const profiles = await etn.server.listProfiles();
       const active = profiles.find((p) => p.isActive);
-      store.update({ profileId: active?.id ?? null, me });
+      store.update({
+        profileId: active?.id ?? null,
+        serverLabel: serverLabelOf(active ?? { label: labelInput.value, baseUrl }),
+        me,
+      });
       // New profile → no saved tabs → `restoreSession` shows the network
       // list, same as before (H3 first-connect flow).
       await restoreSession();
     } catch (err) {
-      formError.textContent = errText(err);
+      // Форма уже прошла локальную валидацию (пустой/некорректный адрес сюда не
+      // доходит) — значит, отказ получен от сервера или транспорта: показываем
+      // адрес и фактическую причину (ошибка 390e9746).
+      formError.textContent = describeConnectFailure(err, {
+        label: labelInput.value.trim(),
+        baseUrl,
+      });
     } finally {
       submit.disabled = false;
     }

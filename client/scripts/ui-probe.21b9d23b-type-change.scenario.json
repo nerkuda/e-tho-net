@@ -1,0 +1,171 @@
+{
+  "name": "21b9d23b-type-change-personal-properties",
+  "description": "P2 сценария 21b9d23b: смена типа мысли с личными (внетиповыми) свойствами — скаляр и свойство-связь остаются в группе «Свойства вне типа» на типе без привязки, переезжают в типовые при типе с привязкой, у мысли без типа вкладка работает, «Перенести в типовые» скрыт, (+) открывает полный справочник.",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "open-network-again",
+      "probe": "(() => { const item=document.querySelector('.networks-list .network-item'); if(item !== null) item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-p2",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const etn=window.etn; const tag=String(Date.now()).slice(-6); const a=await etn.types.createThoughtType(nid,{ name:'P2 Тип А '+tag }); const b=await etn.types.createThoughtType(nid,{ name:'P2 Тип Б '+tag }); const c=await etn.types.createThoughtType(nid,{ name:'P2 Тип В '+tag }); const p=await etn.propertyRegistry.create(nid,{ name:'Период проживания', value_type:'text' }); await etn.types.createTypeProperty(nid,'thought_type',c.id,{ mode:'attach', property_id:p.id, required:false, position:undefined }); await etn.propertyRegistry.create(nid,{ name:'Свободное свойство', value_type:'text' }); const lp=await etn.propertyRegistry.create(nid,{ name:'Связано', value_type:'link', name_forward:'связано с', name_reverse:'связано с' }); const target=await etn.thoughts.create(nid,{ title:'Цель связи P2' }); const t=await etn.thoughts.get(nid,tid); await etn.thoughts.update(nid,tid,{ type_id:a.id },t.version); await etn.properties.set(nid,'thought',tid,'Период проживания','2010–2019'); await etn.properties.set(nid,'thought',tid,'связано с',target.id,'source'); window.__p2={ a:a.id, b:b.id, c:c.id, link:lp.id, target:target.id, nameA:'P2 Тип А '+tag, nameB:'P2 Тип Б '+tag, nameC:'P2 Тип В '+tag }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-properties-tab",
+      "expect": "ok",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-rows-initial",
+      "timeout": 20000,
+      "waitFor": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const text=(r)=>((r.querySelector('.prop-name-cell')?.textContent) ?? ''); return rows.some((r)=>text(r).includes('Период проживания')) && rows.some((r)=>text(r).includes('связано с')); })()"
+    },
+    {
+      "name": "install-helpers",
+      "expect": "ok",
+      "probe": "(() => { window.__p2ui={ outsideNames:()=>[...document.querySelectorAll('.properties-outside-body tr')].map((r)=>((r.querySelector('.prop-name-cell')?.textContent) ?? '').trim()), typedNames:()=>[...document.querySelectorAll('.properties-tab table.prop-table tr')].map((r)=>((r.querySelector('td')?.textContent) ?? '').trim()), typeId:()=>window.__p2 && document.querySelector('.editor-title-input') ? 'ok' : 'ok', changeType: async (id) => { const nid='{{networkId}}', tid='{{thoughtId}}'; const t=await window.etn.thoughts.get(nid,tid); await window.etn.thoughts.update(nid,tid,{ type_id:id },t.version); return 'ok'; } }; return 'ok'; })()"
+    },
+    {
+      "name": "open-type-picker-b",
+      "click": ".editor-header-row .entity-combo-pick"
+    },
+    {
+      "name": "type-picker-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-f-picker-list .ui-tree-row') !== null"
+    },
+    {
+      "name": "pick-type-b",
+      "probe": "(() => { const row=[...document.querySelectorAll('.st-f-picker-list .ui-tree-row')].find((r)=>(r.textContent||'').includes(window.__p2.nameB)); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "type-b-applied",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=document.querySelector('.editor-header-row .entity-combo'); return c !== null && (c.textContent||'').includes(window.__p2.nameB) && document.querySelector('.st-f-picker-list') === null && document.querySelector('.editor-header-row .entity-combo-pick:not([disabled])') !== null; })()"
+    },
+    {
+      "name": "still-outside-on-type-b",
+      "timeout": 20000,
+      "waitFor": "(() => { const names=window.__p2ui.outsideNames(); return names.some((n)=>n.includes('Период проживания')) && names.some((n)=>n.includes('связано с')); })()"
+    },
+    {
+      "name": "open-type-picker-c",
+      "click": ".editor-header-row .entity-combo-pick"
+    },
+    {
+      "name": "type-picker-visible-c",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-f-picker-list .ui-tree-row') !== null"
+    },
+    {
+      "name": "pick-type-c",
+      "probe": "(() => { const row=[...document.querySelectorAll('.st-f-picker-list .ui-tree-row')].find((r)=>(r.textContent||'').includes(window.__p2.nameC)); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "type-c-applied",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=document.querySelector('.editor-header-row .entity-combo'); return c !== null && (c.textContent||'').includes(window.__p2.nameC) && document.querySelector('.st-f-picker-list') === null && document.querySelector('.editor-header-row .entity-combo-pick:not([disabled])') !== null; })()"
+    },
+    {
+      "name": "scalar-moved-to-typed",
+      "timeout": 20000,
+      "waitFor": "window.__p2ui.typedNames().some((n)=>n.includes('Период проживания'))"
+    },
+    {
+      "name": "link-still-outside",
+      "probe": "window.__p2ui.outsideNames().some((n)=>n.includes('связано с'))",
+      "expect": true
+    },
+    {
+      "name": "clear-type-chip",
+      "probe": "(() => { const btn=document.querySelector('.editor-header-row .entity-combo [title=\"Убрать из значения\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "type-cleared",
+      "timeout": 20000,
+      "waitFor": "(() => { const c=document.querySelector('.editor-header-row .entity-combo'); return c !== null && !c.classList.contains('entity-combo-filled'); })()"
+    },
+    {
+      "name": "scalar-outside-again",
+      "timeout": 20000,
+      "waitFor": "window.__p2ui.outsideNames().some((n)=>n.includes('Период проживания'))"
+    },
+    {
+      "name": "open-row-menu-no-type",
+      "expect": "ok",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>((r.querySelector('.prop-name-cell')?.textContent) ?? '').includes('Период проживания')); if(!row) return 'no-row'; const cell=row.querySelector('td'); const r=cell.getBoundingClientRect(); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:Math.round(r.left+20),clientY:Math.round(r.top+6)})); return 'ok'; })()"
+    },
+    {
+      "name": "menu-visible",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null"
+    },
+    {
+      "name": "no-promote-item-without-type",
+      "probe": "[...document.querySelectorAll('.menu .menu-item')].map((x)=>(x.textContent||'').trim()).filter((x)=>x.includes('Перенести в типовые'))",
+      "expect": []
+    },
+    {
+      "name": "close-menu",
+      "key": "Escape"
+    },
+    {
+      "name": "open-picker-without-type",
+      "click": ".prop-outside-add"
+    },
+    {
+      "name": "full-registry-in-picker",
+      "timeout": 20000,
+      "waitFor": "(() => { const g=document.querySelector('.property-list vaadin-grid'); return g !== null && g.items?.some((r)=>r.name==='Свободное свойство'); })()"
+    }
+  ]
+}

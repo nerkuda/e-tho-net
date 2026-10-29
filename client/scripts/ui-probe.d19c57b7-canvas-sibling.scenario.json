@@ -1,0 +1,98 @@
+{
+  "name": "d19c57b7-canvas-sibling",
+  "description": "Сторож d19c57b7: «Добавить → налево» из строки соседа в Ctrl-hover попапе ХОЛСТА создаёт мысль под родителем КЛИКНУТОЙ строки, а не мысли в фокусе карты. Посев: GGP → GP → P1 → T (фокус карты). В зоне «Родители» у P1 открываем Ctrl-наведением список родителей (строка GP), ПКМ по строке → «Добавить» → «налево»: заголовок диалога называет GGP, созданная мысль попадает в детей GGP и не попадает в детей P1. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d19c57b7-canvas-sibling.scenario.json --out .tmp/etn-d19c57b7-canvas/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed",
+      "eval": "(async () => { const nid='{{networkId}}'; const ggp=await window.etn.thoughts.create(nid,{title:'Девятнашка Прабабушка'}); const gp=await window.etn.thoughts.create(nid,{title:'Девятнашка Бабушка', create_link:{direction:'parent',target_thought_id:ggp.id}}); const p1=await window.etn.thoughts.create(nid,{title:'Девятнашка Родитель Фокуса', create_link:{direction:'parent',target_thought_id:gp.id}}); const t=await window.etn.thoughts.create(nid,{title:'Девятнашка Цель Фокуса', create_link:{direction:'parent',target_thought_id:p1.id}}); window.__d19c={nid,ggp:ggp.id,gp:gp.id,p1:p1.id,t:t.id,ggptitle:'Девятнашка Прабабушка',p1title:'Девятнашка Родитель Фокуса',ttitle:'Девятнашка Цель Фокуса'}; return JSON.stringify(window.__d19c); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    {
+      "name": "seed-layout-correct",
+      "probe": "(async () => { const {nid,ggp,gp,p1,t}=window.__d19c; const tp=await window.etn.thoughts.neighbors(nid,t,'parents'); const pp=await window.etn.thoughts.neighbors(nid,p1,'parents'); const gpParents=await window.etn.thoughts.neighbors(nid,gp,'parents'); return tp.some((x)=>x.id===p1) && pp.some((x)=>x.id===gp) && gpParents.some((x)=>x.id===ggp) && new Set([ggp,gp,p1,t]).size===4; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-target",
+      "eval": "(() => { const i=document.querySelector('.search-input'); i.focus(); i.value='Девятнашка Цель Фокуса'; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "target-hit-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__d19c.t+'\"]') !== null"
+    },
+    {
+      "name": "click-target-hit",
+      "eval": "(() => { const c=document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__d19c.t+'\"]'); c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "focus-is-target",
+      "timeout": 15000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((x)=>x.network_id===window.__d19c.nid); return tab?.focus_id === window.__d19c.t; })()"
+    },
+    {
+      "name": "parent-cloud-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.zone-parents .cloud[data-id=\"'+window.__d19c.p1+'\"] .ellipse-top') !== null"
+    },
+    {
+      "name": "ctrl-hover-parents",
+      "eval": "(() => { const c=document.querySelector('.zone-parents .cloud[data-id=\"'+window.__d19c.p1+'\"]'); const e=c.querySelector('.ellipse-top'); const r=e.getBoundingClientRect(); e.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,cancelable:true,ctrlKey:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2}); })()"
+    },
+    {
+      "name": "neighbors-popup-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.ui-popover .link-group-item[data-id=\"'+window.__d19c.gp+'\"]') !== null"
+    },
+    {
+      "name": "right-click-neighbor-row",
+      "eval": "(() => { const c=document.querySelector('.ui-popover .link-group-item[data-id=\"'+window.__d19c.gp+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    { "name": "canvas-menu-open", "timeout": 10000, "waitFor": "document.querySelector('.menu') !== null" },
+    {
+      "name": "open-canvas-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    { "name": "canvas-submenu-ready", "timeout": 10000, "waitFor": "document.querySelector('.menu > .menu-sub') !== null" },
+    {
+      "name": "click-canvas-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('menu-item-disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    { "name": "canvas-dialog-ready", "timeout": 15000, "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
+    {
+      "name": "canvas-dialog-title-text",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null)"
+    },
+    {
+      "name": "canvas-title-names-parent",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '') === 'Добавить мысль (вниз к «' + window.__d19c.ggptitle + '»)'",
+      "expect": true
+    },
+    {
+      "name": "canvas-title-not-focus",
+      "probe": "!(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '').includes(window.__d19c.ttitle)",
+      "expect": true
+    },
+    {
+      "name": "canvas-type-title",
+      "eval": "(() => { const ta=document.querySelector('.dialog-backdrop textarea'); if(!ta) return 'no-input'; ta.focus(); ta.value='Девятнашка Сосед Холста'; ta.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    { "name": "canvas-apply", "modifiers": ["ctrl"], "key": "Enter" },
+    { "name": "canvas-dialog-closed", "timeout": 20000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    {
+      "name": "canvas-created-under-ggp",
+      "probe": "(async () => { const {nid,ggp,p1}=window.__d19c; const c1=await window.etn.thoughts.neighbors(nid,p1,'children'); const cggp=await window.etn.thoughts.neighbors(nid,ggp,'children'); return cggp.some((x)=>x.title==='Девятнашка Сосед Холста') && !c1.some((x)=>x.title==='Девятнашка Сосед Холста'); })()",
+      "expect": true
+    }
+  ]
+}

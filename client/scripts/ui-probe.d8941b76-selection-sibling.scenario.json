@@ -1,0 +1,112 @@
+{
+  "name": "d8941b76-selection-sibling",
+  "description": "Сторож d8941b76 (блокер верификатора к 245a1992): «Добавить → налево» из ПАНЕЛИ ВЫДЕЛЕНИЯ создаёт мысль под родителем КЛИКНУТОЙ строки, а не мысли в фокусе карты. Посев: GP → P → M. Фокус карты — P (его родитель GP), M — ребёнок P и виден в зоне «Дети»; Ctrl+клик по M кладёт мысль в выделение, фокус не меняется. ПКМ по строке M в панели выделения → «Добавить» → «налево (родственник)»: заголовок диалога называет P, созданная мысль попадает в детей P и не попадает в детей GP (на дофиксовой сборке уходит под GP — родителя фокуса). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d8941b76-selection-sibling.scenario.json --out .tmp/etn-d8941b76-selection/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed",
+      "eval": "(async () => { const nid='{{networkId}}'; const gp=await window.etn.thoughts.create(nid,{title:'Дэ Прародитель Мысли'}); const p=await window.etn.thoughts.create(nid,{title:'Дэ Родитель Мысли', create_link:{direction:'parent',target_thought_id:gp.id}}); const m=await window.etn.thoughts.create(nid,{title:'Дэ Мысль Выделенная', create_link:{direction:'parent',target_thought_id:p.id}}); window.__d894={nid,gp:gp.id,p:p.id,m:m.id,gptitle:'Дэ Прародитель Мысли',ptitle:'Дэ Родитель Мысли'}; return JSON.stringify(window.__d894); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    {
+      "name": "seed-layout-correct",
+      "probe": "(async () => { const {nid,gp,p,m}=window.__d894; const pp=await window.etn.thoughts.neighbors(nid,p,'parents'); const pc=await window.etn.thoughts.neighbors(nid,p,'children'); return pp.some((x)=>x.id===gp) && pc.some((x)=>x.id===m) && new Set([gp,p,m]).size===3; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-parent",
+      "eval": "(() => { const i=document.querySelector('.search-input'); i.focus(); i.value='Дэ Родитель Мысли'; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "parent-hit-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__d894.p+'\"]') !== null"
+    },
+    {
+      "name": "click-parent-hit",
+      "eval": "(() => { const c=document.querySelector('.search-hit.search-hit-cloud .cloud[data-id=\"'+window.__d894.p+'\"]'); c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "focus-is-parent",
+      "timeout": 15000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((x)=>x.network_id===window.__d894.nid); return tab?.focus_id === window.__d894.p; })()"
+    },
+    {
+      "name": "child-cloud-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.zone-children .cloud[data-id=\"'+window.__d894.m+'\"]') !== null"
+    },
+    {
+      "name": "ctrl-click-child",
+      "eval": "(() => { const c=document.querySelector('.zone-children .cloud[data-id=\"'+window.__d894.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    {
+      "name": "selection-row-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.selection-panel:not(.hidden) .selection-item[data-id=\"'+window.__d894.m+'\"]') !== null"
+    },
+    {
+      "name": "focus-unchanged-by-selection",
+      "probe": "(async () => { const tabs=await window.etn.tabs.list(); const tab=tabs.find((x)=>x.network_id===window.__d894.nid); return tab?.focus_id === window.__d894.p && tab?.focus_id !== window.__d894.m; })()",
+      "expect": true
+    },
+    {
+      "name": "right-click-selection-row",
+      "eval": "(() => { const c=document.querySelector('.selection-panel .selection-item[data-id=\"'+window.__d894.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    { "name": "selection-menu-open", "timeout": 10000, "waitFor": "document.querySelector('.menu') !== null" },
+    {
+      "name": "menu-without-selection-command",
+      "probe": "(() => { const t=document.querySelector('.menu')?.textContent ?? ''; return !t.includes('Добавить к выделению') && !t.includes('Убрать из выделенных'); })()",
+      "expect": true
+    },
+    {
+      "name": "open-selection-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    { "name": "selection-submenu-ready", "timeout": 10000, "waitFor": "document.querySelector('.menu > .menu-sub') !== null" },
+    {
+      "name": "click-selection-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('menu-item-disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    { "name": "selection-dialog-ready", "timeout": 15000, "waitFor": "document.querySelector('.dialog-backdrop') !== null" },
+    {
+      "name": "selection-dialog-title-text",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null)"
+    },
+    {
+      "name": "selection-title-names-parent",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '') === 'Добавить мысль (вниз к «' + window.__d894.ptitle + '»)'",
+      "expect": true
+    },
+    {
+      "name": "selection-title-not-grandparent",
+      "probe": "!(document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? '').includes(window.__d894.gptitle)",
+      "expect": true
+    },
+    {
+      "name": "selection-type-title",
+      "eval": "(() => { const ta=document.querySelector('.dialog-backdrop textarea'); if(!ta) return 'no-input'; ta.focus(); ta.value='Дэ Сосед Выделения'; ta.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    { "name": "selection-apply", "modifiers": ["ctrl"], "key": "Enter" },
+    { "name": "selection-dialog-closed", "timeout": 20000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    {
+      "name": "selection-created-under-parent",
+      "probe": "(async () => { const {nid,gp,p}=window.__d894; const cgp=await window.etn.thoughts.neighbors(nid,gp,'children'); const cp=await window.etn.thoughts.neighbors(nid,p,'children'); return cp.some((x)=>x.title==='Дэ Сосед Выделения') && !cgp.some((x)=>x.title==='Дэ Сосед Выделения'); })()",
+      "expect": true
+    },
+    {
+      "name": "final-parents",
+      "probe": "(async () => { const {nid,gp,p}=window.__d894; const cgp=await window.etn.thoughts.neighbors(nid,gp,'children'); const cp=await window.etn.thoughts.neighbors(nid,p,'children'); return JSON.stringify({gpChildren:cgp.map((x)=>x.title), pChildren:cp.map((x)=>x.title)}); })()"
+    }
+  ]
+}

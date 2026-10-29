@@ -18,10 +18,20 @@
  * на DOM-шиме и убедиться, что узел заголовка — РЕАЛЬНО узел компонента
  * `createRecordTitle`, а не результат локальной сборки (сторож
  * `guard-chronicle-record-title`).
+ *
+ * **Шапка вне правки.** Дата/период и облачка привязок не входят в единую
+ * правку записи (в ней только заголовок и тело), поэтому при обновлении строки
+ * их можно синхронизировать, не пересобирая карточку и не отсоединяя живой
+ * редактор: {@link RecordHead.setDayLabel} и {@link createRecordChips}. Без
+ * этого добавленная к несохранённой записи мысль появлялась в облачках только
+ * после сохранения (ошибка 78d600c9).
  */
+
+import type { ChronicleRow, ChronicleTarget } from '@etn/shared';
 
 import { div, el } from '../../lib/dom.js';
 import { uiButton } from '../../lib/ui/button.js';
+import { visibleChips } from './diary.js';
 import {
   createRecordTitle,
   type RecordTitleHandle,
@@ -52,8 +62,60 @@ export interface RecordHead {
   root: HTMLElement;
   /** Строка полей: дата, привязки, «+ мысль», завершающий элемент. */
   row: HTMLElement;
+  /** Узел даты/периода: подпись обновляется без пересборки строки. */
+  date: HTMLElement;
+  /**
+   * Задать подпись даты/периода. Дата — не поле единой правки, поэтому её
+   * значение синхронизируется сразу, в том числе пока карточка в правке
+   * (иначе смена периода не видна до сохранения текста).
+   */
+  setDayLabel(label: string): void;
   /** Дескриптор заголовка-компонента (правка/значение). */
   title: RecordTitleHandle;
+}
+
+/** Опции контейнера облачков привязок записи. */
+export interface RecordChipsOptions {
+  /** Строка записи на момент сборки. */
+  row: ChronicleRow;
+  /**
+   * HOME сети — служебная первичная привязка, в облачках не показывается
+   * (требование c81964c7). Геттер: к моменту перерисовки HOME может
+   * разрешиться позже сборки карточки.
+   */
+  homeId: () => string | null;
+  /** Конструктор облачка привязки — доменные правила экрана (мысль/связь). */
+  buildChip: (target: ChronicleTarget, rowId: string) => HTMLElement;
+}
+
+/** Контейнер облачков привязок записи с перерисовкой НА МЕСТЕ. */
+export interface RecordChips {
+  /** Узел контейнера (`.diary-record-chips`) для строки полей шапки. */
+  box: HTMLElement;
+  /**
+   * Перерисовать облачка по СВЕЖИМ привязкам, не пересобирая контейнер и
+   * карточку: добавленная к несохранённой записи мысль видна сразу, а не после
+   * сохранения (ошибка 78d600c9).
+   */
+  sync(row: ChronicleRow): void;
+}
+
+/**
+ * Создать контейнер облачков привязок записи. Привязки — часть МОДЕЛИ записи,
+ * а не полей единой правки: их состав может измениться, пока карточка в правке
+ * (прикрепили мысль, пришло realtime-событие), и отображение обязано догнать
+ * модель без пересборки карточки.
+ */
+export function createRecordChips(opts: RecordChipsOptions): RecordChips {
+  const box = div('diary-record-chips');
+  const paint = (row: ChronicleRow): void => {
+    box.replaceChildren();
+    for (const target of visibleChips(row.targets, opts.homeId())) {
+      box.append(opts.buildChip(target, row.id));
+    }
+  };
+  paint(opts.row);
+  return { box, sync: paint };
 }
 
 /** Собрать шапку записи: строка полей (дата, привязки, «+ мысль», завершение) и заголовок. */
@@ -94,5 +156,15 @@ export function buildRecordHead(hooks: RecordHeadHooks): RecordHead {
   // правки «просмотр ↔ правка» в обоих состояниях.
   const title = createRecordTitle(hooks.title);
   root.append(row, title.node());
-  return { root, row, title };
+  return {
+    root,
+    row,
+    date,
+    setDayLabel: (label: string) => {
+      // У кнопки/подписи надпись — единственное содержимое: textContent
+      // сохраняет класс и обработчик клика.
+      date.textContent = label;
+    },
+    title,
+  };
 }

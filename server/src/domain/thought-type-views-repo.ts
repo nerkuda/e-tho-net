@@ -37,6 +37,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
   materializeShadow,
+  touchLayerActivity,
   type BranchableTable,
 } from '../db/layer-write.js';
 
@@ -143,6 +144,8 @@ export function getThoughtTypeView(ndb: NetworkDb, id: string): ThoughtTypeViewR
  *     подтягивания отборов предков-слоёв. Это контракт REST
  *     `GET /thought-types/{id}/views` (контракт b90bb6e6: «GET отдаёт
  *     собственные отборы типа»); унаследованные показывает `meta.effective`.
+ *     `deleted = 0` обязателен (ошибка eb26f491): надгробие слоя — это
+ *     удалённый/перенесённый отбор, а не живой собственный.
  */
 export function listThoughtTypeViewsByType(
   ndb: NetworkDb,
@@ -153,7 +156,7 @@ export function listThoughtTypeViewsByType(
     return ndb
       .prepare(
         `SELECT ${COLUMNS} FROM thought_type_views
-          WHERE layer_id = ? AND thought_type_id = ?
+          WHERE layer_id = ? AND thought_type_id = ? AND deleted = 0
           ORDER BY position, name`,
       )
       .all(ndb.layerId, thoughtTypeId) as ThoughtTypeViewRow[];
@@ -333,6 +336,131 @@ export function deleteThoughtTypeView(ndb: NetworkDb, id: string): boolean {
   return true;
 }
 
+/** Итог переноса строки в таблицу отборов типа (операция 85414fbd). */
+export type ThoughtTypeViewTransferOutcome = 'inserted' | 'revived' | 'occupied';
+
+/** Данные переносимой строки: поля источника, дословно (ADR 6021918b). */
+export interface TransferThoughtTypeViewInput {
+  id: string;
+  thought_type_id: string;
+  name: string;
+  name_key: string;
+  description: string | null;
+  definition: string;
+  is_default: boolean;
+  created_at: string;
+  created_by: string;
+}
+
+/**
+ * Принять переносимую строку в `thought_type_views` (новая владелец-тип):
+ * upsert по `(id, layer_id)` — операции 85414fbd.
+ *
+ *   * строки нет — INSERT с явным id, `layer_id`, `base_version = 0`,
+ *     `version = 1`;
+ *   * надгробие (`deleted = 1`) — оживление: владелец/имя/definition/
+ *     description/created_at/created_by из источника, `updated_at` — сейчас,
+ *     `version = 1`, **`base_version` сохраняется** (сброс дал бы ложный
+ *     конфликт слияния);
+ *   * живая строка с этим id — `'occupied'` (домен отдаёт 409 DUPLICATE;
+ *     ветка практически недостижима — пара переноса замыкается).
+ *
+ * `position` — в конец получателя (MAX+1 среди видимых отборов типа).
+ * `is_default` переносится, только если у получателя нет **видимого
+ * собственного** дефолта: читаем `thought_type_views_v` — он видит и строки
+ * Основы (проверка раунда 2, S16: физический фильтр `layer_id` их пропускал),
+ * но не унаследованные от типа-предка (фильтр по `thought_type_id`).
+ * `definition` не перевалидируется — копируется дословно.
+ */
+export function transferThoughtTypeViewRow(
+  ndb: NetworkDb,
+  input: TransferThoughtTypeViewInput,
+): ThoughtTypeViewTransferOutcome {
+  // layers:physical-read — upsert адресован собственной строке слоя.
+  const own = ndb
+    .prepare(
+      'SELECT deleted FROM thought_type_views WHERE id = ? AND layer_id = ? LIMIT 1',
+    )
+    .get(input.id, ndb.layerId) as { deleted: number } | undefined;
+  if (own && own.deleted === 0) {
+    return 'occupied';
+  }
+
+  const position = (
+    ndb
+      .prepare(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM thought_type_views_v WHERE thought_type_id = ?',
+      )
+      .get(input.thought_type_id) as { p: number }
+  ).p;
+  // Видимый собственный дефолт получателя (`*_v` — включая Основу; строки
+  // предка типа отсекает `thought_type_id`). Физический слой видел только
+  // свои строки и пропускал дефолт из Основы → после слияния два is_default
+  // (проверка раунда 2, S16, требование 7263e565).
+  const ownDefault = ndb
+    .prepare(
+      `SELECT 1 FROM thought_type_views_v
+        WHERE thought_type_id = ? AND is_default = 1 AND id <> ?
+        LIMIT 1`,
+    )
+    .get(input.thought_type_id, input.id) !== undefined;
+  const isDefault = input.is_default && !ownDefault;
+  const now = new Date().toISOString();
+
+  if (own) {
+    // Оживление надгробия: base_version НЕ трогаем (сохраняем версию предка).
+    ndb
+      .prepare(
+        `UPDATE thought_type_views
+            SET deleted = 0, thought_type_id = ?, name = ?, name_key = ?,
+                description = ?, definition = ?, position = ?, is_default = ?,
+                version = 1, updated_at = ?, created_at = ?, created_by = ?
+          WHERE id = ? AND layer_id = ?`,
+      )
+      .run(
+        input.thought_type_id,
+        input.name,
+        input.name_key,
+        input.description,
+        input.definition,
+        position,
+        isDefault ? 1 : 0,
+        now,
+        input.created_at,
+        input.created_by,
+        input.id,
+        ndb.layerId,
+      );
+    touchLayerActivity(ndb);
+    return 'revived';
+  }
+
+  ndb
+    .prepare(
+      `INSERT INTO thought_type_views
+         (id, layer_id, deleted, base_version, thought_type_id, name, name_key,
+          description, definition, position, is_default, version,
+          created_at, updated_at, created_by)
+       VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    )
+    .run(
+      input.id,
+      ndb.layerId,
+      input.thought_type_id,
+      input.name,
+      input.name_key,
+      input.description,
+      input.definition,
+      position,
+      isDefault ? 1 : 0,
+      input.created_at,
+      now,
+      input.created_by,
+    );
+  touchLayerActivity(ndb);
+  return 'inserted';
+}
+
 /**
  * Найти отбор по паре `(thought_type_id, name_key)`. Используется доменным
  * слоем (задача 17eb741e) для проверки уникальности имени в пределах типа
@@ -367,6 +495,61 @@ export function findThoughtTypeViewByTypeAndNameKey(
 }
 
 /**
+ * Коллизия натурального ключа имени в пределах типа в текущем слое: физическая
+ * строка слоя — живая ИЛИ надгробие — уже занимает `name_key`. UNIQUE
+ * `(thought_type_id, name_key, layer_id)` миграции 037 не имеет предиката
+ * `WHERE deleted = 0`, поэтому надгробие занимает имя до слияния; без
+ * типизированной ошибки `materializeShadow`/INSERT отдавали наружу сырой
+ * `SQLITE_CONSTRAINT_UNIQUE` (ошибка 2dc32e85).
+ */
+export class ThoughtTypeViewNameCollisionError extends Error {
+  constructor(
+    readonly thoughtTypeId: string,
+    readonly nameKey: string,
+    readonly existingId: string,
+    readonly existingName: string,
+  ) {
+    super(
+      `thought_type_view ${existingId} уже занимает имя "${existingName}" в текущем слое`,
+    );
+    this.name = 'ThoughtTypeViewNameCollisionError';
+  }
+}
+
+/**
+ * Физическая строка слоя, занимающая натуральный ключ `(тип, name_key)`.
+ *
+ * В отличие от {@link findThoughtTypeViewByTypeAndNameKey} (читает `*_v` и
+ * видит только живые строки) учитывает надгробия: UNIQUE 037 их не различает.
+ * Нужен перед вставкой/материализацией тени, чтобы отдать доменный
+ * `409 DUPLICATE` с `existing_id`/`existing_name`, а не сырой constraint
+ * (ошибка 2dc32e85).
+ *
+ * `exceptId` исключает саму правимую/оживляемую строку.
+ */
+export function findThoughtTypeViewNameOccupancy(
+  ndb: NetworkDb,
+  thoughtTypeId: string,
+  nameKey: string,
+  exceptId?: string,
+): { id: string; name: string; deleted: number } | null {
+  // layers:physical-read — вопрос о собственной строке слоя и UNIQUE-ключе.
+  const row = ndb
+    .prepare(
+      `SELECT id, name, deleted FROM thought_type_views
+        WHERE layer_id = ? AND thought_type_id = ? AND name_key = ?
+          ${exceptId ? 'AND id <> ?' : ''}
+        LIMIT 1`,
+    )
+    .get(
+      ...(exceptId
+        ? [ndb.layerId, thoughtTypeId, nameKey, exceptId]
+        : [ndb.layerId, thoughtTypeId, nameKey]),
+    ) as { id: string; name: string; deleted: number } | undefined;
+  return row ?? null;
+}
+
+/**
  * Снять пометку «по умолчанию» со ВСЕХ живых отборов данного типа в текущем
  * слое, кроме `exceptId` (если указан). Используется доменным слоем для
  * переноса пометки (требование 7263e565 «У типа не более одного отбора по
@@ -388,16 +571,38 @@ export function clearDefaultForThoughtType(
 ): number {
   const rows = ndb
     .prepare(
-      `SELECT id FROM thought_type_views_v
+      `SELECT id, name, name_key FROM thought_type_views_v
         WHERE thought_type_id = ? AND is_default = 1
           ${exceptId ? 'AND id <> ?' : ''}`,
     )
-    .all(...(exceptId ? [thoughtTypeId, exceptId] : [thoughtTypeId])) as Array<{ id: string }>;
+    .all(...(exceptId ? [thoughtTypeId, exceptId] : [thoughtTypeId])) as Array<{
+    id: string;
+    name: string;
+    name_key: string;
+  }>;
 
   if (rows.length === 0) return 0;
 
   ndb.transaction(() => {
     for (const row of rows) {
+      // Материализация тени предкового дефолта упирается в натуральный ключ,
+      // если в слое уже есть одноимённая строка (живая или надгробие) с другим
+      // id. Проверяем ДО materializeShadow, чтобы отдать доменную коллизию, а
+      // не сырой `SQLITE_CONSTRAINT_UNIQUE` (ошибка 2dc32e85).
+      const clash = findThoughtTypeViewNameOccupancy(
+        ndb,
+        thoughtTypeId,
+        row.name_key,
+        row.id,
+      );
+      if (clash) {
+        throw new ThoughtTypeViewNameCollisionError(
+          thoughtTypeId,
+          row.name_key,
+          clash.id,
+          clash.name,
+        );
+      }
       materializeShadow(ndb, 'thought_type_views' as ThoughtTypeViewsTable, row.id);
     }
     ndb

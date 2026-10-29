@@ -1,0 +1,180 @@
+{
+  "name": "d9bc6012-card-reverse-side",
+  "description": "Официальный GUI-сценарий ошибки d9bc6012, карточка одной мысли: запись ОБРАТНОЙ стороны свойства-связи через «Свойства вне типа». Стенд: свойство-связь «версия»/«работы версии» (в реестре, к типу не привязано), карточка мысли {{thoughtId}}. Пользователь: (+) «Добавить свойство» → пикер → строка «работы версии» (side=target) → ввод значения «Версия 0.14.1 d9» → выбор из подсказок. Проверка: сервер отдаёт пару «имя обратной стороны + сторона» (property_name=работы версии, side=target, direction=in) с одной целью, у мысли-версии — прямую строку «версия»/source. Путь карточки уже передавал согласованную пару имя+сторона (реестровое имя он не использовал), поэтому до фикса сценарий зелёный — это регрессионный гейт пары после правки bulk-диалога и серверного приоритета side.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "seed-link-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "версия",
+          "value_type": "link",
+          "name_forward": "версия",
+          "name_reverse": "работы версии"
+        },
+        "expression": "data.name"
+      },
+      "expect": "версия"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "seed-version-thought",
+      "timeout": 60000,
+      "probe": "(async () => { const N='{{networkId}}', H='{{homeId}}'; const v=await window.etn.thoughts.create(N,{title:'Версия 0.14.1 d9',create_link:{direction:'parent',target_thought_id:H}}); window.__d9c={version:v.id}; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 90000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-opened",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-group-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.prop-outside-add') !== null && document.querySelector('.properties-outside-body') !== null"
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const btn=document.querySelector('.prop-outside-add'); if(!btn) return 'no-btn'; btn.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-both-sides",
+      "timeout": 20000,
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.some((r)=>r.name==='версия' && r.side==='source') && items.some((r)=>r.name==='работы версии' && r.side==='target'); })()"
+    },
+    {
+      "name": "filter-reverse-side",
+      "click": ".property-list-search"
+    },
+    {
+      "name": "type-reverse-side",
+      "text": "работы версии"
+    },
+    {
+      "name": "dispatch-filter",
+      "eval": "(() => { document.querySelector('.property-list-search')?.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "both-sides-filtered",
+      "timeout": 20000,
+      "waitFor": "(() => { const items=document.querySelector('.property-list vaadin-grid')?.items ?? []; return items.length === 2 && items[0].name === 'версия' && items[0].side === 'source' && items[1].name === 'работы версии' && items[1].side === 'target'; })()"
+    },
+    {
+      "name": "focus-picker-grid",
+      "probe": "(() => { const table=document.querySelector('.property-list .ui-table'); table?.focus(); return document.activeElement === table; })()",
+      "expect": true
+    },
+    {
+      "name": "select-forward-row",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "select-reverse-row",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choose-row",
+      "key": "Enter"
+    },
+    {
+      "name": "reverse-row-in-card",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('работы версии') === true"
+    },
+    {
+      "name": "reverse-side-icon-up",
+      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const row=rows.find((r)=>r.textContent.includes('работы версии')); return row ? row.querySelector('.property-list-link-icon')?.getAttribute('data-direction') ?? null : 'no-row'; })()",
+      "expect": "up"
+    },
+    {
+      "name": "focus-link-field",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('работы версии')); const input=row?.querySelector('input'); if(!input) return 'no-input'; input.focus(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "type-version",
+      "eval": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('работы версии')); const input=row?.querySelector('.link-value-add') ?? row?.querySelector('input'); if(!input) return 'no-input'; input.focus(); input.value='Версия 0.14.1 d9'; input.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "suggestions-visible",
+      "timeout": 20000,
+      "waitFor": "(() => { const items=[...document.querySelectorAll('.type-combo-item')]; return items.some((e)=>e.textContent.includes('Версия 0.14.1 d9')); })()"
+    },
+    {
+      "name": "pick-version",
+      "probe": "(() => { const item=[...document.querySelectorAll('.type-combo-item')].find((e)=>e.textContent.includes('Версия 0.14.1 d9')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "value-in-card",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.properties-outside-body')?.textContent?.includes('Версия 0.14.1 d9') === true"
+    },
+    {
+      "name": "reverse-edge-on-server",
+      "probe": "(async () => { const N='{{networkId}}'; const v=window.__d9c.version; const vs=await window.etn.properties.get(N,'thought','{{thoughtId}}'); const e=vs.find((x)=>Array.isArray(x.values) && x.side==='target'); return { name: e?.property_name ?? null, side: e?.side ?? null, direction: e?.direction ?? null, match: e ? e.values.length===1 && e.values[0].target_id===v : false }; })()",
+      "expect": {
+        "name": "работы версии",
+        "side": "target",
+        "direction": "in",
+        "match": true
+      }
+    },
+    {
+      "name": "version-thought-sees-forward-name",
+      "probe": "(async () => { const N='{{networkId}}'; const v=window.__d9c.version; const vs=await window.etn.properties.get(N,'thought',v); const e=vs.find((x)=>Array.isArray(x.values) && x.property_name==='версия'); return { name: e?.property_name ?? null, side: e?.side ?? null, count: e?.values.length ?? 0 }; })()",
+      "expect": {
+        "name": "версия",
+        "side": "source",
+        "count": 1
+      }
+    }
+  ]
+}

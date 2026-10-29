@@ -30,7 +30,14 @@ import {
 } from '@etn/markdown';
 
 import { requireNetworkId } from '../app.js';
-import { canSave, clearSourceDrafts, findSourceDraft, offlineNotice, saveSourceDraft } from '../drafts.js';
+import {
+  canSave,
+  clearSourceDrafts,
+  createSourceDraftMirror,
+  findSourceDraft,
+  offlineNotice,
+  type DraftMirror,
+} from '../drafts.js';
 import { invalidateQueries, onRoutedRealtimeEvent, queryKeys } from '../lib/live/index.js';
 import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
@@ -38,6 +45,7 @@ import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
 import { isInsidePopover, watchOutsideTap } from '../lib/ui/popover.js';
 import { isInsideSuggestDropdown } from '../lib/suggest-dropdown.js';
@@ -145,6 +153,14 @@ interface MarkdownFieldHandle {
    * поля.
    */
   insertMentionLink(thought: MentionsScanThought, matchedText: string): void;
+  /**
+   * Поле снимается с документа вместе с панелью/вкладкой: отпускает
+   * ГЛОБАЛЬНЫЕ слушатели поля (нажатие вне). Без этого правка, оставшаяся
+   * открытой после сбоя записи, коммитила бы на КАЖДОЕ нажатие по интерфейсу
+   * уже снятого поля — вечный цикл ошибки «a permanent comment already exists»
+   * (ошибка ecdb2e7a).
+   */
+  dispose(): void;
 }
 
 /**
@@ -818,6 +834,15 @@ export function createMarkdownField(opts: {
   /** Поле сейчас в режиме правки (для контекста сочетаний команд). */
   let editing = false;
   /**
+   * Слой `Escape` режима правки (ошибка 9ff6b606, замечание приёмки): пока поле
+   * правится, `Escape` отменяет правку — это штатное поведение CM6-редактора
+   * (`mdEditorExtensions`), но каркас диалога-хозяина перехватывает `Escape`
+   * раньше поля. Слой в реестре диспетчера (`lib/keymap.ts`) возвращает нажатие
+   * полю: диалог под ним уступает, правка отменяется, подтверждения
+   * несохранённых изменений нет. Снимается при выходе из правки.
+   */
+  let editEscapeOverlay: KeyOverlayHandle | null = null;
+  /**
    * Узел ГРУППЫ правки (`opts.editGroup`), удерживающий единую правку записи:
    * фокус/нажатие внутри группы не считаются выходом из поля. `null` — группа
    * не задана (поле одиночное).
@@ -1078,7 +1103,6 @@ export function createMarkdownField(opts: {
     if (idx === -1) {
       notice(
         `Не удалось вставить ссылку: текст «${matchedText}» не найден в исходнике (изменён форматированием).`,
-        'error',
       );
       return;
     }
@@ -1251,6 +1275,8 @@ export function createMarkdownField(opts: {
     void sourceLocks?.release();
     sourceLocks = null;
     editing = false;
+    editEscapeOverlay?.release();
+    editEscapeOverlay = null;
     deactivateFieldKeys();
     root.classList.remove('md-field--editing');
     modeActions.setEditing(false);
@@ -1262,52 +1288,56 @@ export function createMarkdownField(opts: {
   };
 
   /**
-   * Отложенная (debounce) запись черновиков правок источников трансклюзий
-   * (задача `6a085e01`): «грязный» блок зеркалится в локальное хранилище
-   * черновиков тем же механизмом, что и правка окружения (`drafts.ts`), и
-   * переживает перезапуск. Ключ — владелец поля + источник + раздел.
+   * Debounce-запись черновиков правок источников трансклюзий (задача
+   * `6a085e01`, ошибка `1b5446af`): «грязный» блок зеркалится в локальное
+   * хранилище черновиков тем же механизмом, что и правка комментария/заголовка
+   * (`createDraftMirror`, `drafts.ts`), и переживает перезапуск. Ключ — владелец
+   * поля + источник + раздел. Зеркало на блок: `settle` гасит поколение
+   * (опоздавшая запись удалит себя, а не воскреснет после записи/отмены),
+   * `flush` пишет финальный текст после начатых записей.
    */
-  const sourceDraftTimers = new Map<string, number>();
-  const scheduleSourceDraft = (key: string): void => {
-    if (draftOwnerKey === undefined) return;
-    const ownerKey = draftOwnerKey;
-    const pending = sourceDraftTimers.get(key);
-    if (pending !== undefined) window.clearTimeout(pending);
-    sourceDraftTimers.set(
-      key,
-      window.setTimeout(() => {
-        sourceDraftTimers.delete(key);
-        const text = nestedStore?.text(key);
-        if (text === null || text === undefined) return;
-        const { sourceId, section } = parseBlockEditorKey(key);
-        // Лучшее усилие: сбой локального хранилища не должен ломать правку.
-        void saveSourceDraft({ networkId, ownerKey, sourceId, section, value: text }).catch(
-          () => undefined,
-        );
-      }, 800),
-    );
+  const sourceDraftMirrors = new Map<string, DraftMirror>();
+  const sourceDraftMirror = (key: string): DraftMirror => {
+    const existing = sourceDraftMirrors.get(key);
+    if (existing !== undefined) return existing;
+    const { sourceId, section } = parseBlockEditorKey(key);
+    const mirror = createSourceDraftMirror({
+      networkId,
+      ownerKey: () => draftOwnerKey,
+      sourceId,
+      section,
+      // Текст читается в момент записи: сигнал «блок грязный» приходит без
+      // текста, а до срабатывания debounce пользователь мог напечатать ещё.
+      read: () => nestedStore?.text(key) ?? null,
+    });
+    sourceDraftMirrors.set(key, mirror);
+    return mirror;
   };
-  /** Снимает отложенные записи черновиков (запись/отмена гасят debounce). */
-  const cancelSourceDraftTimers = (): void => {
-    for (const timer of sourceDraftTimers.values()) window.clearTimeout(timer);
-    sourceDraftTimers.clear();
+  const scheduleSourceDraft = (key: string): void => {
+    sourceDraftMirror(key).schedule();
+  };
+  /**
+   * Гасит отложенные записи черновиков (запись/отмена). Уже начавшиеся записи
+   * сами удалят свою строку по возвращении id — черновик не воскреснет.
+   */
+  const settleSourceDraftMirrors = (): void => {
+    for (const mirror of sourceDraftMirrors.values()) mirror.settle();
   };
   /** Немедленно сохраняет черновики переданных «грязных» блоков (офлайн-уход). */
   const flushSourceDrafts = (saves: readonly TransclusionBlockSave[]): void => {
-    if (draftOwnerKey === undefined) return;
-    const ownerKey = draftOwnerKey;
-    for (const save of saves) {
-      void saveSourceDraft({
-        networkId,
-        ownerKey,
-        sourceId: save.sourceId,
-        section: save.section,
-        value: save.text,
-      }).catch(() => undefined);
-    }
+    for (const save of saves) void sourceDraftMirror(save.key).flush(save.text);
   };
 
   const commitOrRevert = (): void => {
+    // Поле уже снято с документа (панель пересобрана на другую сущность, а
+    // правка осталась открытой после сбоя записи): коммитить некуда — выходим,
+    // НЕ отпуская слушатель. Без этого «клик вне» зависшего поля пытался
+    // записать правку на КАЖДОЕ нажатие по интерфейсу, в том числе по другой
+    // мысли: каждое сохранение давало «a permanent comment already exists»
+    // (ошибка ecdb2e7a). Слушатель отпускает `dispose` при реальном демонтаже
+    // панели; пока поле лишь отсоединено (вкладка кэширована и не показана),
+    // оно вернётся в документ и продолжит работать как обычно.
+    if (root.isConnected === false) return;
     // Поле не в правке — коммитить нечего (идемпотентность: после выхода в
     // просмотр поздний `focusout`/повторный жест не запускают вторую запись).
     if (!editing || mounting || editor === null || commitPending) return;
@@ -1319,10 +1349,15 @@ export function createMarkdownField(opts: {
       // `showView`). Esc-отмена едина для всего поля (задача `e9dfc2df`).
       if (md !== currentMd) opts.onCancel?.();
       store?.rollbackAll();
-      editor.setValue(currentMd);
+      // Откат к сохранённому тексту — не набор пользователя: `silent`, иначе
+      // `onInput` запускает debounce и пишет «мёртвый» черновик уже
+      // сохранённого текста (ошибка 5726744b — источник вечного
+      // `comment version mismatch` после Esc).
+      editor.setValue(currentMd, true);
       // Отменённая правка не должна воскреснуть из черновиков источников
-      // (задача `6a085e01`): debounce гасится, строки владельца удаляются.
-      cancelSourceDraftTimers();
+      // (задачи `6a085e01`, ошибка `1b5446af`): debounce гасится поколением,
+      // строки владельца удаляются, опоздавшая запись удалит себя сама.
+      settleSourceDraftMirrors();
       if (draftOwnerKey !== undefined) void clearSourceDrafts(networkId, draftOwnerKey);
       showView();
       return;
@@ -1346,7 +1381,7 @@ export function createMarkdownField(opts: {
     // немедленно) и восстановятся при следующем входе в правку.
     if (saves.length > 0 && !canSave()) {
       offlineNotice();
-      cancelSourceDraftTimers();
+      settleSourceDraftMirrors();
       flushSourceDrafts(saves);
       showView();
       return;
@@ -1354,14 +1389,14 @@ export function createMarkdownField(opts: {
     const onSave = opts.onSave;
     if (envChanged && onSave === undefined) {
       // No autosave: without a client renderer we cannot preview unsaved md.
-      editor.setValue(currentMd);
+      editor.setValue(currentMd, true);
       showView();
       return;
     }
     // Флаг ставится СИНХРОННО: пока запись не разрешилась, `editing` ещё true,
     // и повторный коммит (см. `commitPending`) надо отсечь.
     commitPending = true;
-    cancelSourceDraftTimers();
+    settleSourceDraftMirrors();
     const writeEnv = envChanged && onSave !== undefined ? () => onSave(md) : null;
     // Гарантируем, что все «грязные» блоки уже в черновиках (debounce мог не
     // сработать), и только затем пишем: успех чистит черновики уже после их
@@ -1369,17 +1404,9 @@ export function createMarkdownField(opts: {
     const flush =
       draftOwnerKey === undefined || saves.length === 0
         ? Promise.resolve()
-        : Promise.all(
-            saves.map((save) =>
-              saveSourceDraft({
-                networkId,
-                ownerKey: draftOwnerKey,
-                sourceId: save.sourceId,
-                section: save.section,
-                value: save.text,
-              }).catch(() => undefined),
-            ),
-          ).then(() => undefined);
+        : Promise.all(saves.map((save) => sourceDraftMirror(save.key).flush(save.text))).then(
+            () => undefined,
+          );
     void flush
       .then(() => commitTransclusionEdit({ networkId, saves, writeEnv }))
       .then((result) => {
@@ -1429,8 +1456,9 @@ export function createMarkdownField(opts: {
     // предыдущей сборке поля.
     nestedStore?.dispose();
     nestedStore = new NestedEditorStore();
-    // Отложенные записи черновиков источников прошлой сборки неактуальны.
-    cancelSourceDraftTimers();
+    // Отложенные записи черновиков источников прошлой сборки неактуальны
+    // (поколение гасит их; опоздавшие удалят себя сами, ошибка `1b5446af`).
+    settleSourceDraftMirrors();
     const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
@@ -1669,6 +1697,12 @@ export function createMarkdownField(opts: {
     view.classList.add('hidden');
     area.classList.remove('hidden');
     editing = true;
+    // `Escape` принадлежит правке: верхний слой реестра диспетчера отменяет её
+    // (то же, что делает CM6, когда фокус доходит до поля).
+    editEscapeOverlay ??= pushKeyOverlay({
+      id: 'markdown-edit',
+      onEscape: () => finishEdit(true),
+    });
     root.classList.add('md-field--editing');
     modeActions.setEditing(true);
     mountEditor(locate, enterBlockAt);
@@ -1779,7 +1813,8 @@ export function createMarkdownField(opts: {
       currentHtml = html;
       renderView();
       if (editor !== null && !area.classList.contains('hidden')) {
-        editor.setValue(md);
+        // Внешнее (серверное) обновление текста — не правка пользователя.
+        editor.setValue(md, true);
       }
       search.refresh();
     },
@@ -1812,6 +1847,13 @@ export function createMarkdownField(opts: {
       }
       editor.setCaret(0);
       editor.focus();
+    },
+    dispose: () => {
+      detachOutsidePointer();
+      // Поле снимают вместе с экраном/диалогом — слой `Escape` правки не должен
+      // пережить его и отнимать нажатие у следующего диалога.
+      editEscapeOverlay?.release();
+      editEscapeOverlay = null;
     },
   });
 
@@ -1883,6 +1925,17 @@ export function focusMarkdownFieldStart(root: HTMLElement): void {
 /** Updates an already-built field's content (e.g. after an external change). */
 export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
   handles.get(root)?.set(md, html);
+}
+
+/**
+ * Освобождает поле перед снятием с документа (жизненный цикл вкладки/панели):
+ * отпускает глобальные слушатели поля — «нажатие вне». Иначе правка,
+ * оставшаяся открытой после сбоя записи, продолжала бы получать нажатия по
+ * интерфейсу уже снятого поля и повторять запись (ошибка ecdb2e7a).
+ * Идемпотентно; для узла, не являющегося полем, — no-op.
+ */
+export function disposeMarkdownField(root: HTMLElement): void {
+  handles.get(root)?.dispose();
 }
 
 /**
@@ -2037,7 +2090,7 @@ async function insertResourceAt(
     }
     case 'file': {
       if (owner === undefined) {
-        notice('Не удалось вставить картинку: у поля нет владельца.', 'error');
+        notice('Не удалось вставить картинку: у поля нет владельца.');
         return;
       }
       const source = result.source;

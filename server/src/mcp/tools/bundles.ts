@@ -222,7 +222,11 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         'item-level (вместе с `thought` — `VALIDATION_ERROR`; `synonyms` ЗАМЕНЯЮТ набор, ' +
         'item-level `active` — в обоих случаях). `links[].target_id` XOR `target_ref`; ' +
         'свойства-связи в `properties` тоже принимают `ref`; `on_duplicate`: ' +
-        '`fail`/`reuse`/`update`. ВНИМАНИЕ: item-level `title` ПЕРЕИМЕНОВЫВАЕТ мысль; ' +
+        '`fail`/`reuse`/`update`. `properties` принимает ЛЮБОЕ свойство справочника, не только ' +
+        'привязанное к типу: значение создаётся как внетиповое (`outside_type: true` в чтении). ' +
+        'Для свойства-связи ключ адресует сторону по её имени; при неоднозначном (симметричном) ' +
+        'имени сторону задаёт `etn.properties.add` с `side`. ' +
+        'ВНИМАНИЕ: item-level `title` ПЕРЕИМЕНОВЫВАЕТ мысль; ' +
         'заголовок записи — `chronicle[].title`. ' +
         'Один write-бюджет и одна строка `audit_log` на вызов; ' +
         '`warnings` — по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +

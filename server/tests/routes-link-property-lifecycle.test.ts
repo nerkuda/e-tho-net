@@ -167,11 +167,40 @@ describe(
           types_count: number;
           types_source_count?: number;
           types_target_count?: number;
+          binding_source_type_ids?: string[];
+          binding_target_type_ids?: string[];
           values_count: number;
         };
         assert.equal(detail.types_count, 2, 'оба типа подключили свойство');
         assert.equal(detail.types_source_count, 2, 'оба со стороны source');
         assert.equal(detail.types_target_count, 0, 'никто со стороны target');
+        assert.deepEqual(
+          new Set(detail.binding_source_type_ids),
+          new Set([person, company]),
+          'detail: id типов привязок стороны источника',
+        );
+        assert.deepEqual(detail.binding_target_type_ids, [], 'detail: сторона назначения пуста');
+
+        // Список справочника несёт те же производные типы привязок (из них
+        // внетиповая строка и массовый диалог строят ограничение значения).
+        const listRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+        });
+        assert.equal(listRes.statusCode, 200);
+        const listEntry = (listRes.json().data as Array<{
+          id: string;
+          binding_source_type_ids?: string[];
+          binding_target_type_ids?: string[];
+        }>).find((p) => p.id === created.id);
+        assert.ok(listEntry, 'свойство есть в списке справочника');
+        assert.deepEqual(
+          new Set(listEntry.binding_source_type_ids),
+          new Set([person, company]),
+          'list: id типов привязок стороны источника',
+        );
+        assert.deepEqual(listEntry.binding_target_type_ids, [], 'list: сторона назначения пуста');
 
         // Отвязываем свойство от обоих типов, чтобы DELETE прошёл. Маршрут
         // DELETE …/properties/:propertyId адресует привязку (binding id), не
@@ -224,6 +253,105 @@ describe(
           linkTypeId
         ] ?? 0;
         assert.equal(ltCountAfter, 0, 'ребро обнулило type_id');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('справочник отдаёт типы привязок по сторонам — источник и назначение (f8f8fa49)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const createRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'Место работы',
+            value_type: 'link',
+            name_forward: 'Место работы',
+            name_reverse: 'Сотрудники',
+          },
+        });
+        assert.equal(createRes.statusCode, 201, createRes.body?.toString());
+        const property = createRes.json().data as { id: string };
+
+        const mkType = async (name: string): Promise<string> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/thought-types`,
+            headers: h,
+            payload: { name },
+          });
+          assert.equal(res.statusCode, 201, res.body?.toString());
+          return (res.json().data as { id: string }).id;
+        };
+        const person = await mkType('Персона');
+        const org = await mkType('Организация');
+
+        for (const [typeId, side] of [
+          [person, 'source'],
+          [org, 'target'],
+        ] as const) {
+          const attach = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/thought-types/${typeId}/properties`,
+            headers: h,
+            payload: { property_id: property.id, required: false, side },
+          });
+          assert.equal(attach.statusCode, 201, attach.body?.toString());
+        }
+
+        const listRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+        });
+        assert.equal(listRes.statusCode, 200);
+        const entry = (listRes.json().data as Array<{
+          id: string;
+          binding_source_type_ids?: string[];
+          binding_target_type_ids?: string[];
+        }>).find((p) => p.id === property.id);
+        assert.ok(entry, 'свойство есть в списке');
+        assert.deepEqual(entry.binding_source_type_ids, [person], 'источник — Персона');
+        assert.deepEqual(entry.binding_target_type_ids, [org], 'назначение — Организация');
+
+        const detailRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties/${property.id}`,
+          headers: h,
+        });
+        assert.equal(detailRes.statusCode, 200);
+        const detail = detailRes.json().data as {
+          binding_source_type_ids?: string[];
+          binding_target_type_ids?: string[];
+        };
+        assert.deepEqual(detail.binding_source_type_ids, [person]);
+        assert.deepEqual(detail.binding_target_type_ids, [org]);
+
+        // Скалярные свойства производных полей не несут.
+        const scalarRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: { name: 'Заметка', value_type: 'text' },
+        });
+        assert.equal(scalarRes.statusCode, 201);
+        const scalarId = (scalarRes.json().data as { id: string }).id;
+        const scalarList = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+        });
+        const scalarEntry = (scalarList.json().data as Array<Record<string, unknown>>).find(
+          (p) => p['id'] === scalarId,
+        );
+        assert.ok(scalarEntry);
+        assert.equal('binding_source_type_ids' in scalarEntry, false);
+        assert.equal('binding_target_type_ids' in scalarEntry, false);
       } finally {
         await closeRestContext(ctx);
       }

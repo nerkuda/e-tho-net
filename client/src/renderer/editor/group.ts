@@ -51,6 +51,12 @@ export interface GroupSpec {
   compact?: boolean;
   /** Extra header buttons (right side). */
   actions?: HTMLElement[];
+  /**
+   * Зовётся перед снятием построенного тела с экрана (сворачивание/пересборка):
+   * потребитель фиксирует недописанные значения — удалённый из документа
+   * сфокусированный узел blur не получает (ошибка bfe1bc24).
+   */
+  onBeforeHide?(): void;
   /** Builds the body content; may be async (loading placeholders inside). */
   buildBody(): HTMLElement | Promise<HTMLElement>;
 }
@@ -75,6 +81,7 @@ export function groupSection(spec: GroupSpec): HTMLElement {
       return saved === undefined ? spec.defaultCollapsed === true : saved;
     },
     onToggle: (collapsed) => collapseChange?.(spec.id, collapsed),
+    ...(spec.onBeforeHide !== undefined ? { onBeforeHide: spec.onBeforeHide } : {}),
     classes: {
       root: 'group',
       header: 'group-header',

@@ -140,12 +140,14 @@ describe('диалог выбора сохранённого отбора (за�
     assert.match(bar, /createTable<SavedFilterEntry>\(\{/, 'список собирает фасад lib/ui/table.ts');
     assert.match(bar, /rowKey: \(entry\) => entry\.id/, 'строка адресуется стабильным id');
     assert.match(bar, /onActivate: \(entry\) => pick\(entry\)/, 'Enter применяет текущую строку (решение)');
-    // Клавиатура — от фасада: стрелки/Enter из поля поиска перенаправляются
-    // таблице, чтобы текущая строка была видна.
+    // Клавиатура — от фасада: ↑/↓/Enter и Ctrl+↑/↓ из поля поиска исполняет
+    // штатный обработчик таблицы общим мостом `lib/ui/search-nav` (ошибка
+    // 58981cf5); модификаторы идут в тот же обработчик (иначе Ctrl+↓ читался бы
+    // как обычная ↓), второго разбора стрелок нет.
     assert.match(
       bar,
-      /table\.element\.dispatchEvent\(new KeyboardEvent\('keydown', \{ key: event\.key, bubbles: true \}\)\)/,
-      'клавиатура поля поиска перенаправляется таблице',
+      /bindSearchNav\(search, \{ handleKey: \(key, modifiers\) => table\.handleKey\(key, modifiers\) \}\)/,
+      'клавиатура поля поиска перенаправляется таблице с модификаторами',
     );
     assert.match(bar, /table\.setRows\(visible\)/, 'перерисовка списка по фильтру');
   });

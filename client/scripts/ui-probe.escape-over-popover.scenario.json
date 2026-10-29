@@ -1,0 +1,95 @@
+{
+  "name": "escape-over-filter-popover-in-dirty-dialog",
+  "description": "Честный красный GUI-гейт ошибки 9ff6b606: поповер открыт ПОСЛЕ показа «грязного» диалога действием внутри него. Двойной клик по облачку на карте — фокус мысли (полоса отборов), «+» — диалог внетипового отбора, «+ условие» делает диалог грязным, клик по ячейке «Что» — поповер lib/ui. Первый Escape обязан закрыть ТОЛЬКО поповер: диалог остаётся один, подтверждения нет. На до-фиксной сборке диалог получает Escape первым и зовёт подтверждение, поповер остаётся открытым. Кнопки группы фильтров («+ условие») видны и кликабельны только при наведении на группу, поэтому перед кликом — hover группы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.escape-over-popover.scenario.json.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "focus-cloud",
+      "click": { "selector": "[data-id=\"{{thoughtId}}\"].cloud", "count": 2 }
+    },
+    {
+      "name": "filter-strip-visible",
+      "waitFor": "(() => { const b = document.querySelector('.canvas-filter-strip-add'); return b !== null && !b.closest('.canvas-filter-strip').classList.contains('hidden'); })()"
+    },
+    { "name": "open-view-dialog", "click": ".canvas-filter-strip-add" },
+    {
+      "name": "view-dialog-open",
+      "waitFor": "document.querySelector('.view-editor-dialog .ft-add-condition') !== null && document.querySelectorAll('.dialog-backdrop').length === 1"
+    },
+    {
+      "name": "reveal-group-actions",
+      "hover": { "selector": ".view-editor-dialog .ft-group[data-path=\"\"]", "at": [4, 4] }
+    },
+    { "name": "add-condition", "click": ".view-editor-dialog .ft-add-condition" },
+    {
+      "name": "condition-row-visible",
+      "waitFor": "document.querySelector('.view-editor-dialog .ft-row__what') !== null"
+    },
+    {
+      "name": "dialog-dirty",
+      "probe": "document.querySelector('.view-editor-dialog .ft-row__what') !== null",
+      "expect": true
+    },
+    { "name": "open-what-popover", "click": ".view-editor-dialog .ft-row__what" },
+    {
+      "name": "popover-open",
+      "waitFor": "document.querySelector('.ft-choice-popover') !== null"
+    },
+    {
+      "name": "popover-before-escape",
+      "probe": "document.querySelectorAll('.ft-choice-popover').length",
+      "expect": 1
+    },
+    {
+      "name": "dialogs-before-escape",
+      "probe": "document.querySelectorAll('.dialog-box').length",
+      "expect": 1
+    },
+
+    { "name": "escape-first", "key": "Escape" },
+    {
+      "name": "popover-closed",
+      "waitFor": "document.querySelector('.ft-choice-popover') === null"
+    },
+    {
+      "name": "only-one-dialog",
+      "probe": "document.querySelectorAll('.dialog-box').length",
+      "expect": 1
+    },
+    {
+      "name": "no-confirmation",
+      "probe": "document.body.textContent.includes('Данные изменены. Сохранить изменения?')",
+      "expect": false
+    },
+
+    { "name": "escape-second", "key": "Escape" },
+    {
+      "name": "confirmation-open",
+      "waitFor": "document.querySelectorAll('.dialog-box').length === 2 && document.body.textContent.includes('Данные изменены. Сохранить изменения?')"
+    },
+    {
+      "name": "dialog-still-open",
+      "probe": "document.querySelectorAll('.dialog-backdrop').length",
+      "expect": 2
+    }
+  ]
+}

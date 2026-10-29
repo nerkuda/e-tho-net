@@ -56,7 +56,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
-import { buildThoughtIdSelect, compileThoughtQueryToAst, diaryKeywordClause, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
+import { buildThoughtIdSelect, buildKeywordWordClause, compileThoughtQueryToAst, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { collectHierarchySubtree } from './graph-traversal.js';
 import { normaliseInstant } from './dates.js';
@@ -544,73 +544,19 @@ function collectRootAndSubtreeIds(
 }
 
 /**
- * Keywords condition for one word against a thought: the thought's own title,
- * its synonyms, its **permanent** comment and the comment texts of its incident
- * links on both sides.
- *
- * Хронологические комментарии мысли здесь НЕ ищутся (0.10.1, T7): совпадение в
- * теле записи должно отбирать саму запись, а не её цель. Иначе для записи дня
- * (единственная цель — HOME) слово в теле выбирало бы корень и возвращало все
- * его записи. Поиск по телам/заголовкам записей делает {@link recordMatchesClause}
- * через операнды `record_body`/`record_title`.
- *
- * Область (`keyword_scope`) сужает набор сравнений (0.10.1): `comment` —
- * постоянный комментарий мысли и комментарии её связей; `diary` — дневниковые
- * записи самой мысли (тело/заголовок её хроно-записи, 0.13.1, ошибка 2bc251de).
- * Отсутствие области — ИСТОРИЧЕСКОЕ множество областей
+ * Разрешённый набор областей keywords для плоского тела хроники: явный
+ * `keyword_scope`; отсутствие — ИСТОРИЧЕСКОЕ множество
  * ({@link CHRONICLE_LEGACY_KEYWORD_SCOPES} — title/synonyms/comment, поведение
  * до 0.10.1): новые области включаются только явным набором, иначе старый отбор
  * молча расширил бы выборку.
  */
-function thoughtKeywordCond(scope: StructureKeywordScope[] | undefined): {
-  sql: string;
-  argCount: number;
-} {
-  const legacyAll = scope === undefined || scope.length === 0;
-  const enabled = (name: StructureKeywordScope): boolean =>
-    legacyAll
-      ? (CHRONICLE_LEGACY_KEYWORD_SCOPES as readonly string[]).includes(name)
-      : scope.includes(name);
-  const parts: string[] = [];
-  let argCount = 0;
-  if (enabled('title')) {
-    parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
-    argCount += 1;
-  }
-  if (enabled('synonyms')) {
-    parts.push(`EXISTS (
-  SELECT 1 FROM thought_synonyms_v ts
-  WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
-)`);
-    argCount += 1;
-  }
-  if (enabled('comment')) {
-    parts.push(`EXISTS (
-  SELECT 1 FROM comments_v c1
-  JOIN comment_targets_v ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
-  WHERE ct1.owner_id = t.id AND c1.kind = 'permanent' AND unicode_lower(c1.body_md) LIKE ? ESCAPE '\\'
-)`);
-    parts.push(`EXISTS (
-  SELECT 1 FROM comments_v c2
-  JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
-  JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
-  WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\'
-)`);
-    argCount += 2;
-  }
-  if (enabled('diary')) {
-    // Дневниковые записи мысли (ошибка 2bc251de, требование 0882f8d5): предикат —
-    // ОБЩИЙ с листом AST «Найти слова» (`diaryKeywordClause`), иначе области
-    // разъехались бы между плоским телом и AST-путём.
-    const diary = diaryKeywordClause('t');
-    parts.push(diary.sql);
-    argCount += diary.paramCount;
-  }
-  if (parts.length === 0) {
-    parts.push(`t.title_norm LIKE ? ESCAPE '\\'`);
-    argCount += 1;
-  }
-  return { sql: `(${parts.join(' OR ')})`, argCount };
+function resolveChronicleKeywordScope(scope: StructureKeywordScope[] | undefined): Set<StructureKeywordScope> {
+  const enabled = scope === undefined || scope.length === 0 ? CHRONICLE_LEGACY_KEYWORD_SCOPES : scope;
+  const set = new Set<StructureKeywordScope>(enabled);
+  // Пустой набор (недостижим для валидного scope, но защищает SQL от `()`) —
+  // прежнее поведение плоского движка: сравнение по заголовку.
+  if (set.size === 0) set.add('title');
+  return set;
 }
 
 /**
@@ -642,20 +588,20 @@ function selectThoughts(
       args.push(...expanded);
     }
   }
-  const cond = thoughtKeywordCond(scope);
+  // Предикат — ОБЩИЙ с листом AST «Найти слова» (`buildKeywordWordClause`):
+  // область `comment` ищет и комментарии связей (контекст хроники), правило
+  // аналогов и класс расхождения fc97548d. `*`-синонимы раскрываются тем же
+  // словом-паттерном (задача f0b06700, требование 35218826).
+  const keywordScope = resolveChronicleKeywordScope(scope);
   for (const word of includeWords) {
-    // `toLowerCase()` — LIKE в SQLite регистронезависим только для ASCII, а
-    // `title_norm`/`synonym_norm`/`unicode_lower(body_md)` уже в нижнем
-    // регистре: без нормализации слова кириллица в другом регистре не
-    // матчилась (ошибка 2f27f244). Тот же приём, что в query-service.
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(cond.sql);
-    for (let i = 0; i < cond.argCount; i += 1) args.push(pattern);
+    const clause = buildKeywordWordClause(keywordScope, word, { commentIncludesLinkComments: true });
+    where.push(clause.sql);
+    args.push(...clause.params);
   }
   for (const word of excludeWords) {
-    const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${cond.sql}`);
-    for (let i = 0; i < cond.argCount; i += 1) args.push(pattern);
+    const clause = buildKeywordWordClause(keywordScope, word, { commentIncludesLinkComments: true });
+    where.push(`NOT ${clause.sql}`);
+    args.push(...clause.params);
   }
   const sql = `SELECT t.id FROM thoughts_v t ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}`;
   const rows = ndb.prepare(sql).all(...args) as Array<{ id: string }>;

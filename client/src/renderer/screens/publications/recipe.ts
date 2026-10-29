@@ -31,7 +31,6 @@ import {
   defaultFilterCriteriaState,
   defaultFilterTreeGroup,
   readFilterDefinitionDetailed,
-  withReverseLinkPropertySides,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
 import { lostConditionIssues, type FilterIssue } from '../../lib/filter-diagnostics.js';
@@ -60,26 +59,25 @@ export interface RecipeBuilder {
   destroy: () => void;
 }
 
-/** Реестр свойств сети в виде строк общего списка (для пикера свойств). */
-export async function loadPropertyRows(networkId: string): Promise<PropertyRegistryRow[]> {
-  const registry = await etn.propertyRegistry.list(networkId).catch(() => []);
+/**
+ * Реестр свойств сети в виде строк общего списка (для пикера свойств).
+ *
+ * `null` — чтение не удалось: отказ ОТЛИЧАЕТСЯ от пустого реестра (ошибка
+ * 3bf62fd7). Рецепт, построенный с пустым реестром, теряет условия по
+ * свойствам и выдаёт их за удалённые — вызывающий обязан повторить чтение, а
+ * не подставлять `[]`.
+ */
+export async function loadPropertyRows(
+  networkId: string,
+): Promise<PropertyRegistryRow[] | null> {
+  let registry: PropertyRegistryRow[];
+  try {
+    registry = await etn.propertyRegistry.list(networkId);
+  } catch {
+    return null;
+  }
   await ensurePropertyLinkTypes(networkId, registry).catch(() => undefined);
   return registry;
-}
-
-/**
- * Загружает реестр свойств сети как карту `id → строка реестра` с обратными
- * сторонами связей — так же, как панель «Структур» (общий конвертер ожидает
- * именно эту форму).
- */
-export async function loadPropertyRegistry(
-  networkId: string,
-): Promise<Map<string, NetworkProperty>> {
-  const list = await loadPropertyRows(networkId);
-  const base = new Map<string, NetworkProperty>(
-    list.map((row): [string, NetworkProperty] => [row.id, row]),
-  );
-  return withReverseLinkPropertySides(base, store.state.linkTypes);
 }
 
 /**

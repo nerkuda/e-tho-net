@@ -31,8 +31,10 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import {
   createThoughtType,
   getRootThoughtType,
+  getThoughtType,
 } from '../src/domain/thought-type-service.js';
 import { createNetworkProperty, createTypeProperty } from '../src/domain/property-service.js';
+import { deleteThoughtTypeWithViews } from '../src/domain/thought-type-delete-service.js';
 import {
   createThoughtTypeView,
   deleteThoughtTypeView,
@@ -982,6 +984,39 @@ describe(
         }
       });
 
+      it('own_default: собственная пометка строки видна отдельно от наследования и эффективного дефолта', () => {
+        const { ndb, taskId, projectId } = setupChain();
+        try {
+          seedThought(ndb, { title: 'P', type_id: projectId });
+          createThoughtTypeView(
+            ndb,
+            taskId,
+            { name: 'ИзПредка', definition: DEFINITION, is_default: true },
+            USER,
+          );
+          createThoughtTypeView(
+            ndb,
+            projectId,
+            { name: 'ИзПотомка', definition: DEFINITION },
+            USER,
+          );
+          const eff = getEffectiveViewsForThought(ndb, { type_id: projectId });
+          const inherited = eff.find((v) => v.name === 'ИзПредка');
+          assert.ok(inherited !== undefined);
+          // Эффективный дефолт наследуется, собственная пометка — у строки
+          // предка (0.14.1, дельта раунда 2).
+          assert.equal(inherited!.is_default, true);
+          assert.equal(inherited!.own_default, true);
+          const own = eff.find((v) => v.name === 'ИзПотомка');
+          assert.ok(own !== undefined);
+          assert.equal(own!.inherited, false);
+          assert.equal(own!.is_default, false);
+          assert.equal(own!.own_default, false);
+        } finally {
+          ndb.close();
+        }
+      });
+
       it('мысль без типа: набор корневого типа (требование 23e0f78e)', () => {
         const { ndb, rootId } = setupChain();
         try {
@@ -1002,6 +1037,52 @@ describe(
           assert.equal(eff[0]!.name, 'ОтКорня');
           assert.equal(eff[0]!.defined_on, rootId);
           assert.equal(eff[0]!.is_default, true);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('каскадное удаление типа (0.14.1, ошибка 1242f78d)', () => {
+      it('удаляет отборы вместе с типом и возвращает их снапшоты ДО удаления', () => {
+        const { ndb, typeId } = setup();
+        try {
+          const first = createThoughtTypeView(
+            ndb,
+            typeId,
+            { name: 'Первый', definition: DEFINITION },
+            USER,
+          );
+          const second = createThoughtTypeView(
+            ndb,
+            typeId,
+            { name: 'Второй', definition: DEFINITION, is_default: true },
+            USER,
+          );
+
+          const deleted = deleteThoughtTypeWithViews(ndb, typeId, undefined, {
+            actorUserId: USER,
+          });
+
+          // Карточка типа — снапшот до удаления; отборы — оба, полными
+          // карточками эффективного набора.
+          assert.equal(deleted.type?.id, typeId);
+          assert.deepEqual(
+            deleted.views.map((v) => v.id).sort(),
+            [first.id, second.id].sort(),
+          );
+          for (const view of deleted.views) {
+            assert.equal(view.thought_type_id, typeId);
+            assert.equal(view.defined_on, typeId);
+            assert.equal(view.inherited, false);
+            assert.equal(typeof view.name, 'string');
+            assert.equal(view.version, 1);
+          }
+          assert.equal(deleted.views.find((v) => v.id === second.id)?.own_default, true);
+
+          // Тип и его отборы в БД больше не видны — сирот не осталось.
+          assert.equal(getThoughtType(ndb, typeId), null);
+          assert.deepEqual(listThoughtTypeViewsByType(ndb, typeId), []);
         } finally {
           ndb.close();
         }

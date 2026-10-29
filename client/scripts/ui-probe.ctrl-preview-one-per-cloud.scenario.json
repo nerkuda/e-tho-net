@@ -1,0 +1,253 @@
+{
+  "description": "Регресс ошибки d0338c48: у облачка мысли с иконкой-вложением и заполненным постоянным комментарием Ctrl+наведение показывает РОВНО ОДНО превью — над иконкой лупу, над остальной частью облачка панель комментария; два одновременно невозможны, при движении внутри облачка превью переключается, уход из облачка закрывает всё. Стенд: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ctrl-preview-one-per-cloud.scenario.json. На пре-фикс сборке шаг popovers-icon краснеет (факт 1 ≠ ожидание 0).",
+  "name": "ctrl-preview-one-per-cloud",
+  "timeout": 20000,
+  "steps": [
+    {
+      "name": "seed-icon-attachment",
+      "api": {
+        "name": "seedIconAttachment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/attachments/file",
+        "body": {
+          "title": "icon.png",
+          "mime_type": "image/png",
+          "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAJQklEQVR42u3VwQkAMAgEQUu0dt95W0e6SBDnmAoE2ehTMF3+mLMzXTgBAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIgMsjACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAuAKCIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgAC6PAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACAAAgACgAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAIAAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAgAAiAACIArIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACIAAgAAiAAIAAIAACAAKAAAgACAACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAoAACAAIAAIgACAACIAAgAAgAAIAAoAACAAIAAIgAAgACIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACIAAgAAgAAIAAoAACAAIAAIgACAACIAAgAAgAAKAAIAACAACAAIgAAgACIAAIAAgAAKAAIAAODsCAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACgAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAgAAiAACAAIgACwLwBpZmYrJwBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGYmAGZmJgBmZiYAZmYmAGZmJgBmZiYAZmYmAGZmJgBmZiYAZmYmAGZmJgBmZiYAZmYmAGZmJgBmZvYgAH0KpvvyPM7OdAKAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgAC4OwIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAIgACAACIAAgAAgAAIAAoAACAAIAAIgACAACIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgAAKAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAgAAIAAoAACAAIAAIgACAACIAAgAAgAAKAADgBAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIgMsjACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAuAKCIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgAC6PAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACAAAgACgAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAIAAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAgAAiAACIArIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACIAAgAAiAAIAAIAACAAKAAAgACAACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAoAACAAIAAIgACAACIAAgAAgAAIAAoAACAAIAAIgAKx2AVTJW6ufUHqzAAAAAElFTkSuQmCC"
+        },
+        "expression": "data.id"
+      }
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "patch-attachment-icon",
+      "eval": "(async () => { const net=\"{{networkId}}\", id=\"{{thoughtId}}\"; const list=await window.etn.attachments.list(net,\"thought\",id); const att=list.find((a)=>a.title===\"icon.png\"); if(!att) return {error:\"attachment not found\", count:list.length}; const t=await window.etn.thoughts.get(net,id); await window.etn.thoughts.update(net,id,{icon:\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAJQklEQVR42u3VwQkAMAgEQUu0dt95W0e6SBDnmAoE2ehTMF3+mLMzXTgBAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIgMsjACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAuAKCIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgAC6PAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACAAAgACgAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAIAAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAgAAiAACIArIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACIAAgAAiAAIAAIAACAAKAAAgACAACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAoAACAAIAAIgACAACIAAgAAgAAIAAoAACAAIAAIgAAgACIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACIAAgAAgAAIAAoAACAAIAAIgACAACIAAgAAgAAKAAIAACAACAAIgAAgACIAAIAAgAAKAAIAAODsCAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACgAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAgAAiAACAAIgACwLwBpZmYrJwBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGZmAmBmZgJgZmYCYGYmAGZmJgBmZiYAZmYmAGZmJgBmZiYAZmYmAGZmJgBmZiYAZmYmAGZmJgBmZiYAZmYmAGZmJgBmZvYgAH0KpvvyPM7OdAKAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgAC4OwIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAIgACAACIAAgAAgAAIAAoAACAAIAAIgACAACIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgAAKAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAgAAIAAoAACAAIAAIgACAACIAAgAAgAAKAADgBAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIgMsjACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAuAKCIAAIAAgAAKAAIAACAACAAIgAAgACIAAIAAgAC6PAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACAAAgACgAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAIAAiAACAAIgAAgACAAAoAAgAAIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIgACAACAAAgACgAAIAAgAAiAACIArIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACAAKAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAACIAAgAAiAAIAAIAACAAKAAAgACAACIAAIAAiAACAAIAACgACAAAgAAgACIAAIAAiAACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgAAiAAIAAIAACAAKAAAgACAACIAAgAAiAAIAAIAACgACAAAgAAgACIAAIAAiAACAAIAACgACAAAgAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAgACAAIAAoAACAAIAAIgACAACIAAgAAgAAIAAoAACAAIAAIgAKx2AVTJW6ufUHqzAAAAAElFTkSuQmCC\",icon_kind:\"image\",icon_attachment_id:att.id},t.version); return {attachment:att.id,version:t.version}; })()"
+    },
+    {
+      "name": "set-search",
+      "eval": "(() => { const input=document.querySelector('.search-input'); input.value='Проба'; input.dispatchEvent(new Event('input',{bubbles:true})); return true; })()"
+    },
+    {
+      "name": "wait-results",
+      "waitFor": "document.querySelector('.search-hit-cloud .cloud-icon img[data-zoom-attachment]') !== null",
+      "timeout": 8000
+    },
+    {
+      "name": "icon-metrics",
+      "probe": {
+        "name": "iconMetrics",
+        "expression": "(() => { const img=document.querySelector('.search-hit-cloud .cloud-icon img'); return {naturalWidth:img.naturalWidth,width:img.width,complete:img.complete,zoomAttachment:img.dataset.zoomAttachment??null}; })()"
+      }
+    },
+    {
+      "name": "ctrl-hover-icon",
+      "eval": "(() => { const icon=document.querySelector('.search-hit-cloud .cloud-icon img'); const r=icon.getBoundingClientRect(); const x=r.left+r.width/2, y=r.top+r.height/2; icon.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); icon.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); return {x,y,zoomAttachment:icon.dataset.zoomAttachment??null}; })()"
+    },
+    {
+      "name": "wait-icon",
+      "eval": "new Promise((r) => setTimeout(r, 900))"
+    },
+    {
+      "name": "popovers-icon",
+      "probe": {
+        "name": "popoversIcon",
+        "expression": "document.querySelectorAll('.ui-popover').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "zoom-icon",
+      "probe": {
+        "name": "zoomIcon",
+        "expression": "document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false"
+      },
+      "expect": true
+    },
+    {
+      "name": "one-preview-icon",
+      "probe": {
+        "name": "onePreviewIcon",
+        "expression": "(() => document.querySelectorAll('.ui-popover').length + (document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false ? 1 : 0))()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "head-icon",
+      "probe": {
+        "name": "headIcon",
+        "expression": "document.querySelector('.ui-popover .ui-popover-head')?.textContent ?? null"
+      },
+      "expect": null
+    },
+    {
+      "name": "ctrl-hover-text",
+      "eval": "(() => { const t=document.querySelector('.search-hit-cloud .cloud-title'); const r=t.getBoundingClientRect(); const x=r.left+2, y=r.top+r.height/2; t.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); t.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); return {x,y}; })()"
+    },
+    {
+      "name": "wait-text",
+      "eval": "new Promise((r) => setTimeout(r, 900))"
+    },
+    {
+      "name": "popovers-text",
+      "probe": {
+        "name": "popoversText",
+        "expression": "document.querySelectorAll('.ui-popover').length"
+      },
+      "expect": 1
+    },
+    {
+      "name": "zoom-text-hidden",
+      "probe": {
+        "name": "zoomTextHidden",
+        "expression": "document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === true"
+      },
+      "expect": true
+    },
+    {
+      "name": "one-preview-text",
+      "probe": {
+        "name": "onePreviewText",
+        "expression": "(() => document.querySelectorAll('.ui-popover').length + (document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false ? 1 : 0))()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "head-text",
+      "probe": {
+        "name": "headText",
+        "expression": "document.querySelector('.ui-popover .ui-popover-head')?.textContent ?? null"
+      },
+      "expect": "Проба стенда"
+    },
+    {
+      "name": "ctrl-hover-icon-2",
+      "eval": "(() => { const icon=document.querySelector('.search-hit-cloud .cloud-icon img'); const r=icon.getBoundingClientRect(); const x=r.left+r.width/2, y=r.top+r.height/2; icon.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); icon.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); return {x,y,zoomAttachment:icon.dataset.zoomAttachment??null}; })()"
+    },
+    {
+      "name": "wait-icon-2",
+      "eval": "new Promise((r) => setTimeout(r, 900))"
+    },
+    {
+      "name": "popovers-icon-2",
+      "probe": {
+        "name": "popoversIcon2",
+        "expression": "document.querySelectorAll('.ui-popover').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "zoom-icon-2",
+      "probe": {
+        "name": "zoomIcon2",
+        "expression": "document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false"
+      },
+      "expect": true
+    },
+    {
+      "name": "one-preview-icon-2",
+      "probe": {
+        "name": "onePreviewIcon2",
+        "expression": "(() => document.querySelectorAll('.ui-popover').length + (document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false ? 1 : 0))()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "ctrl-hover-text-fast",
+      "eval": "(() => { const t=document.querySelector('.search-hit-cloud .cloud-title'); const r=t.getBoundingClientRect(); const x=r.left+2, y=r.top+r.height/2; t.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); t.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); return {x,y}; })()"
+    },
+    {
+      "name": "wait-fast",
+      "eval": "new Promise((r) => setTimeout(r, 80))"
+    },
+    {
+      "name": "ctrl-hover-icon-3",
+      "eval": "(() => { const icon=document.querySelector('.search-hit-cloud .cloud-icon img'); const r=icon.getBoundingClientRect(); const x=r.left+r.width/2, y=r.top+r.height/2; icon.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); icon.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); return {x,y,zoomAttachment:icon.dataset.zoomAttachment??null}; })()"
+    },
+    {
+      "name": "wait-icon-3",
+      "eval": "new Promise((r) => setTimeout(r, 900))"
+    },
+    {
+      "name": "popovers-icon-3",
+      "probe": {
+        "name": "popoversIcon3",
+        "expression": "document.querySelectorAll('.ui-popover').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "zoom-icon-3",
+      "probe": {
+        "name": "zoomIcon3",
+        "expression": "document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false"
+      },
+      "expect": true
+    },
+    {
+      "name": "one-preview-icon-3",
+      "probe": {
+        "name": "onePreviewIcon3",
+        "expression": "(() => document.querySelectorAll('.ui-popover').length + (document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === false ? 1 : 0))()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "leave-cloud",
+      "eval": "(() => { const i=document.querySelector('.search-input'); const r=i.getBoundingClientRect(); const x=r.left+3, y=r.top+r.height/2; i.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); i.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,ctrlKey:true,clientX:x,clientY:y})); return {x,y}; })()"
+    },
+    {
+      "name": "wait-leave",
+      "eval": "new Promise((r) => setTimeout(r, 900))"
+    },
+    {
+      "name": "popovers-after-leave",
+      "probe": {
+        "name": "popoversAfterLeave",
+        "expression": "document.querySelectorAll('.ui-popover').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "zoom-after-leave-hidden",
+      "probe": {
+        "name": "zoomAfterLeaveHidden",
+        "expression": "document.querySelector('img.image-zoom-popup')?.classList.contains('hidden') === true"
+      },
+      "expect": true
+    }
+  ]
+}

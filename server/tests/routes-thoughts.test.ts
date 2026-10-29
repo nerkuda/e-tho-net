@@ -5,8 +5,12 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { getOpenNetworkDb } from '../src/db/network-db.js';
 import {
   authHeaders,
   buildRestContext,
@@ -39,6 +43,29 @@ describe(
   '/thoughts routes',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
+    it('несуществующий network_id — 404 NOT_FOUND, БД фантомной сети не создаётся (0.14.1, 2c3a42cd)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const unknown = randomUUID();
+        // Администратор проходит все прочие проверки — именно его путь раньше
+        // открывал (и создавал) `networks/<uuid>/data.db` по опечатке.
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${unknown}/thoughts/${randomUUID()}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 404, res.body?.toString());
+        assert.equal(res.json().error.code, 'NOT_FOUND');
+        assert.deepEqual(res.json().error.details, { entity: 'network', id: unknown });
+
+        // БД не создана, фантомного соединения в реестре нет.
+        assert.equal(fs.existsSync(path.join(ctx.dataDir, 'networks', unknown)), false);
+        assert.equal(getOpenNetworkDb(unknown), undefined);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('create with comment: мысль и постоянный комментарий одной транзакцией (0.12.1, aa79c82d)', async () => {
       const ctx = await buildRestContext();
       try {
@@ -867,10 +894,20 @@ describe(
           'synonym',
         );
 
-        // 0.4.5: partial matches a whole word of the title…
-        const partial = await ctx.app.inject({
+        // 0.14.1 (ошибка 11f14a81): по умолчанию строгий dedupe — слово из
+        // середины названия кандидатом не считается.
+        const strict = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механика')}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(strict.statusCode, 200);
+        assert.deepEqual(strict.json().data, []);
+
+        // 0.4.5: partial matches a whole word of the title (live-поиск, mode=search)…
+        const partial = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механика')}&mode=search`,
           headers: authHeaders(ctx),
         });
         assert.equal(partial.statusCode, 200);
@@ -883,7 +920,7 @@ describe(
         // «Квантовая механика» as a weak partial candidate (never as a duplicate).
         const infix = await ctx.app.inject({
           method: 'GET',
-          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}`,
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}&mode=search`,
           headers: authHeaders(ctx),
         });
         assert.equal(infix.statusCode, 200);

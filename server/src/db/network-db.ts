@@ -29,7 +29,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
 
-import { BASE_LAYER_ID } from '@etn/shared';
+import { BASE_LAYER_ID, synonymWordPatternMatch } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
@@ -393,6 +393,20 @@ export function registerQueryFunctions(db: Database.Database): void {
     typeof value === 'string' ? value.toLowerCase() : value,
   );
   db.function('gen_uuid', () => randomUUID());
+  // Совпадение слова запроса с ОДНИМ словом `*`-синонима по границам слова
+  // (задача f0b06700, требование 35218826, сценарий «поиск»): точный предикат
+  // живёт в SQL, чтобы `total`/`has_more`/keyset считались ДО LIMIT (D7).
+  // Детерминирована по аргументам — SQLite вправе кэшировать результат на
+  // строку; регистрация обязательна на всех соединениях (главное, reader- и
+  // write-воркеры) — грабли 883267ea «no such function».
+  db.function(
+    'synonym_word_pattern_match',
+    { deterministic: true },
+    (word: unknown, synonym: unknown) =>
+      typeof word === 'string' && typeof synonym === 'string' && synonymWordPatternMatch(word, synonym)
+        ? 1
+        : 0,
+  );
 }
 
 /**

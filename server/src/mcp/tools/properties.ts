@@ -38,8 +38,10 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Добавить цель в свойство-связь',
       description:
         'Add one target (thought id) to a link property by key — idempotent: an already-live edge is a ' +
-        'no-op. Accepts an optional `comment` explaining «why this link». Direction comes from the property ' +
-        'definition, never from the call. Returns { link_id, created }.',
+        'no-op. Accepts an optional `comment` explaining «why this link» and an optional `side` ' +
+        '(`source` | `target`): it addresses the side when one symmetric name maps to both, or creates ' +
+        'the side that is still missing on the thought. Otherwise direction comes from the property ' +
+        'definition. Returns { link_id, created }.',
       inputSchema: PropertiesAdd.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.add'],
     },
@@ -58,6 +60,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
             args.value,
             args.comment ?? null,
             rt.deps.auth.userId,
+            args.side ?? null,
           );
           const createdLink = result.created ? getLink(ndb, result.link_id) : null;
           return {

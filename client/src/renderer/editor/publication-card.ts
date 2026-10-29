@@ -36,7 +36,7 @@ import { commentShell } from '../lib/ui/comment.js';
 import { createThoughtCloud, type ThoughtCloudInput } from '../lib/thought-cloud.js';
 import { createPublicationCloud } from '../lib/ui/publication-cloud.js';
 import { renderMarkdown } from '@etn/markdown';
-import { div, span } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { etn } from '../lib/etn.js';
@@ -75,7 +75,12 @@ import {
   type EntityOption,
 } from '../lib/entity-picker.js';
 import { buildMetadataBlock } from '../lib/metadata.js';
+import type { PropertyRegistryRow } from '../lib/property-list.js';
 import { store } from '../state.js';
+import {
+  currentScreenPair,
+  isCurrentScreenPair,
+} from '../screens/tabs/tab-state.js';
 import { buildCover } from '../screens/publications/cover.js';
 import {
   assemblyDateLabel,
@@ -83,12 +88,16 @@ import {
 } from '../screens/publications/model.js';
 import {
   buildRecipeBuilder,
-  loadPropertyRegistry,
   loadPropertyRows,
   propertyChipTitles,
   propertyEntityOptions,
   type RecipeBuilder,
 } from '../screens/publications/recipe.js';
+import {
+  propertyCatalogueRevision,
+  propertyCatalogueWithSides,
+  putPropertyCatalogueRows,
+} from '../lib/property-catalogue.js';
 
 /**
  * Тестовый шов: фабрика markdown-редактора, фабрика/запись поля резюме и
@@ -544,7 +553,7 @@ async function copyPublicationLink(): Promise<void> {
     await navigator.clipboard.writeText(`[[#pub:${id}]]`);
     notice(t('publication.copy.linkDone'));
   } catch {
-    notice(t('publication.copy.failed'), 'error');
+    notice(t('publication.copy.failed'));
   }
 }
 
@@ -556,7 +565,7 @@ async function copyPublicationId(): Promise<void> {
     await navigator.clipboard.writeText(id);
     notice(t('publication.copy.idDone'));
   } catch {
-    notice(t('publication.copy.failed'), 'error');
+    notice(t('publication.copy.failed'));
   }
 }
 
@@ -698,9 +707,21 @@ function buildRecipePane(): HTMLElement {
   pane.append(textsGroup.root, extrasGroup.root);
 
   let builder: RecipeBuilder | null = null;
+  /** Отказ чтения реестра свойств — причина видна, рецепт ждёт повтора. */
+  const registryPending = span(t('publication.recipe.registryPending'), 'muted');
+  registryPending.classList.add('pub-card-recipe-pending');
+  /** Смена цели/закрытие карточки: повтор чтения реестра больше не нужен. */
+  let disposed = false;
+  /** Подписка на тики store — повтор чтения реестра (ошибка 3bf62fd7). */
+  let registryUnsub: (() => void) | null = null;
+  /** Сторож гонки: тики store чаще, чем чтение реестра. */
+  let registryLoadInFlight = false;
   // Карточку закрывают удалением DOM (события remove в Chromium нет) —
   // размонтируем редактор отбора по явному сигналу смены цели.
   recipeHost.addEventListener('etn:recipe-dispose', () => {
+    disposed = true;
+    registryUnsub?.();
+    registryUnsub = null;
     builder?.destroy();
     builder = null;
   });
@@ -731,54 +752,90 @@ function buildRecipePane(): HTMLElement {
     extrasError.classList.toggle('hidden', !invalid);
   };
 
-  if (networkId !== null) {
-    void Promise.all([loadPropertyRows(networkId), loadPropertyRegistry(networkId)]).then(
-      ([rows, loadedRegistry]) => {
-        registry = loadedRegistry;
-        const choices: EntityOption[] = propertyEntityOptions(rows);
-        // Облачко чипа показывает КАНОНИЧЕСКОЕ (прямое) имя свойства, хотя в
-        // выпадашке каждая сторона — отдельная строка (задача 7cfaba7c, п.3).
-        const chipTitles = propertyChipTitles(choices);
-        const cloudOf = (value: string): ThoughtCloudInput => ({
-          id: value,
-          title: chipTitles.get(value) ?? value,
-        });
-        textsField = buildEntityChipField({
-          getValues: () => textSources,
-          onChange: (values) => {
-            textSources = values;
-            checkOverlap();
-            queueSave({ text_sources: textSources });
-          },
-          loadOptions: (query) => filterEntityOptions(choices, query),
-          initialOptions: choices,
-          cloudOf,
-          optionsHeader: t('publication.field.texts'),
-          placeholder: t('typeEditor.addProperty'),
-          addPlaceholder: t('typeEditor.addProperty'),
-          reorderable: true,
-        });
-        extrasField = buildEntityChipField({
-          getValues: () => extraProperties,
-          onChange: (values) => {
-            extraProperties = values;
-            checkOverlap();
-            queueSave({ extra_properties: extraProperties });
-          },
-          loadOptions: (query) => filterEntityOptions(choices, query),
-          initialOptions: choices,
-          cloudOf,
-          optionsHeader: t('publication.field.extras'),
-          placeholder: t('typeEditor.addProperty'),
-          addPlaceholder: t('typeEditor.addProperty'),
-          reorderable: true,
-        });
-        textsHost.append(textsField.root);
-        extrasHost.append(extrasField.root);
-        if (instance?.publication != null) apply(instance.publication);
+  /** Построить чип-поля и запомнить реестр (рецепт пересобирается тем же `apply`). */
+  const applyRegistry = (
+    rows: PropertyRegistryRow[],
+    loaded: Map<string, NetworkProperty>,
+  ): void => {
+    registry = loaded;
+    const choices: EntityOption[] = propertyEntityOptions(rows);
+    // Облачко чипа показывает КАНОНИЧЕСКОЕ (прямое) имя свойства, хотя в
+    // выпадашке каждая сторона — отдельная строка (задача 7cfaba7c, п.3).
+    const chipTitles = propertyChipTitles(choices);
+    const cloudOf = (value: string): ThoughtCloudInput => ({
+      id: value,
+      title: chipTitles.get(value) ?? value,
+    });
+    textsField = buildEntityChipField({
+      getValues: () => textSources,
+      onChange: (values) => {
+        textSources = values;
+        checkOverlap();
+        queueSave({ text_sources: textSources });
       },
-    );
-  }
+      loadOptions: (query) => filterEntityOptions(choices, query),
+      initialOptions: choices,
+      cloudOf,
+      optionsHeader: t('publication.field.texts'),
+      placeholder: t('typeEditor.addProperty'),
+      addPlaceholder: t('typeEditor.addProperty'),
+      reorderable: true,
+    });
+    extrasField = buildEntityChipField({
+      getValues: () => extraProperties,
+      onChange: (values) => {
+        extraProperties = values;
+        checkOverlap();
+        queueSave({ extra_properties: extraProperties });
+      },
+      loadOptions: (query) => filterEntityOptions(choices, query),
+      initialOptions: choices,
+      cloudOf,
+      optionsHeader: t('publication.field.extras'),
+      placeholder: t('typeEditor.addProperty'),
+      addPlaceholder: t('typeEditor.addProperty'),
+      reorderable: true,
+    });
+    textsHost.append(textsField.root);
+    extrasHost.append(extrasField.root);
+    if (instance?.publication != null) apply(instance.publication);
+  };
+
+  /**
+   * Чтение реестра свойств. Отказ — НЕ пустой реестр (ошибка 3bf62fd7):
+   * рецепт с пустым реестром теряет условия по свойствам и выдаёт их за
+   * «свойства больше нет в сети». Поэтому причина видна, билдер не строится, а
+   * следующий тик store (в т.ч. восстановление связи) повторяет чтение и
+   * пересобирает рецепт с настоящим реестром.
+   */
+  const loadRegistry = (): void => {
+    if (networkId === null || disposed || registryLoadInFlight) return;
+    registryLoadInFlight = true;
+    // Ревизия справочника на момент СТАРТА своего чтения: если за время запроса
+    // справочник успеет обновиться (realtime-событие реестра), пришедшие строки
+    // устарели и не должны затирать более свежие данные (ошибка 6d25c224).
+    const sinceRevision = propertyCatalogueRevision(networkId);
+    void loadPropertyRows(networkId).then((rows) => {
+      registryLoadInFlight = false;
+      if (disposed) return;
+      if (rows === null) {
+        if (!recipeHost.contains(registryPending)) recipeHost.append(registryPending);
+        registryUnsub ??= store.subscribe(loadRegistry);
+        return;
+      }
+      registryUnsub?.();
+      registryUnsub = null;
+      registryPending.remove();
+      // Справочник свойств — ОБЩИЙ живой срез (ошибка 6d25c224): рецепт держит
+      // его карту, поэтому создание/переименование/удаление свойства видно в уже
+      // открытом рецепте без пересборки карточки. Своё чтение (строки для
+      // чип-полей) передаём справочнику, второго сетевого вызова нет; устаревший
+      // ответ (`false`) отброшен — карта уже свежее.
+      putPropertyCatalogueRows(networkId, rows, sinceRevision);
+      applyRegistry(rows, propertyCatalogueWithSides(networkId));
+    });
+  };
+  loadRegistry();
 
   updaters.push((p) => {
     fromInput.value = p.numbering_from === null ? '' : String(p.numbering_from);
@@ -939,7 +996,11 @@ function openSettingsDialog(): void {
   settingsShelvesHost = shelvesHost;
   body.append(fieldRow({ label: t('publication.settings.shelves'), control: shelvesHost }));
 
+  // Список полок принадлежит паре, открывшей диалог: ответ снятой пары не
+  // подменяет кэш и не рисуется в чужой сети (ошибка 5768f479).
+  const pair = currentScreenPair();
   void loadShelves().then((list) => {
+    if (pair === null || !isCurrentScreenPair(pair)) return;
     allShelvesCache = list;
     renderShelfCheckboxes(shelvesHost, publication.id);
   });
@@ -1018,8 +1079,9 @@ async function moveWithinShelf(
   publicationId: string,
   direction: -1 | 1,
 ): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   const shelf = allShelvesCache.find((s) => s.id === shelfId);
   if (shelf === undefined) return;
   const updates = shelfSwapUpdates(shelf.items, publicationId, direction);
@@ -1028,10 +1090,14 @@ async function moveWithinShelf(
     for (const update of updates) {
       await etn.publications.addShelfItem(networkId, shelfId, update.publication_id, update.position);
     }
+    // Перечитывание и перерисовка — только на своей паре: ответ/кэш прежней
+    // сети в новую не попадает (ошибка 5768f479).
+    if (!isCurrentScreenPair(pair)) return;
     allShelvesCache = await loadShelves();
+    if (!isCurrentScreenPair(pair)) return;
     reopenSettingsHost(publicationId);
   } catch (err) {
-    errorDialog(t('publication.error'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publication.error'), err);
   }
 }
 
@@ -1049,15 +1115,18 @@ async function toggleShelfMembership(
   shelfId: string,
   on: boolean,
 ): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const networkId = pair.networkId;
   try {
     if (on) await etn.publications.addShelfItem(networkId, shelfId, publicationId);
     else await etn.publications.removeShelfItem(networkId, shelfId, publicationId);
+    if (!isCurrentScreenPair(pair)) return;
     allShelvesCache = await loadShelves();
+    if (!isCurrentScreenPair(pair)) return;
     reopenSettingsHost(publicationId);
   } catch (err) {
-    errorDialog(t('publication.error'), err);
+    if (isCurrentScreenPair(pair)) errorDialog(t('publication.error'), err);
   }
 }
 
@@ -1285,11 +1354,62 @@ async function openCoverDialog(): Promise<void> {
             icon: '🔗',
             icon_kind: 'emoji' as const,
           };
+    const isThoughtOwner = owner.owner_type === 'thought';
     return createThoughtCloud(input, {
       profile: 'chip',
       width: 'container',
-      actions: { onRemove: () => void removeOwner(row, owner, refresh) },
+      actions: {
+        onRemove: () => void removeOwner(row, owner, refresh),
+        // Владелец-МЫСЛЬ получает общее меню мысли, как её облачко в любом
+        // другом месте (ошибка ffc173c9); владельцу-связи меню мысли не
+        // применимо — у него остаётся крестик снятия, а системное меню больше
+        // не подавляется впустую (фабрика гасит его только при своём меню).
+        ...(isThoughtOwner
+          ? {
+              onContextMenu: (event: MouseEvent, id: string) => {
+                event.stopPropagation();
+                void openOwnerThoughtMenu(event, id, owner, row, refresh).catch((err: unknown) =>
+                  notice(errText(err), 'error'),
+                );
+              },
+            }
+          : {}),
+      },
     });
+  }
+
+  /**
+   * Общее меню мысли для облачка-владельца в карточке публикации: фасад меню
+   * вне холста (тот же конструктор, что у холста/редактора) плюс команда
+   * контекста «Убрать из владельцев» (аналог крестика). Фасад импортируется
+   * лениво: статический импорт замкнул бы цикл
+   * `canvas/context-menu → editor/editor → publication-card`. Родителя
+   * «налево» и сверку сети после ожидания держит фасад (2baa78fb, 89964a9b).
+   */
+  async function openOwnerThoughtMenu(
+    event: MouseEvent,
+    id: string,
+    owner: AttachmentOwnerRef,
+    row: AttachmentPickerRow,
+    refresh: () => void,
+  ): Promise<void> {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+    // Пока шёл ленивый импорт, сеть могла смениться: поздний вход не должен
+    // открыть меню для мысли прежней сети (класс a3151e33).
+    if (store.state.networkId !== networkId) return;
+    await showOutOfCanvasThoughtMenu(
+      { event },
+      { id, title: owner.title ?? id, dir: 'siblings' },
+      {
+        extraItems: [
+          menuAction(t('publication.cover.ownerRemove'), () =>
+            void removeOwner(row, owner, refresh),
+          ),
+        ],
+      },
+    );
   }
 
   /** Заполняет строку облачками владельцев (мысли/публикации/связи). */
@@ -1369,7 +1489,7 @@ async function openCoverDialog(): Promise<void> {
       });
     } catch (err) {
       // 409 ATTACHMENT_OWNER_IS_ICON — вложение держит сама публикация как
-      // обложку: внятное сообщение вместо технической ошибки.
+      // обложку: отказ сервера на изменяющей операции — важное, тостом.
       if (isIconOwnerBlock(err)) {
         notice(t('publication.cover.removeOwnerBlocked'), 'error');
         return;

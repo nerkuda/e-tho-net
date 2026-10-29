@@ -101,10 +101,10 @@ function buildApi(): EtnBridgeApi {
       usage: (networkId, id) => invoke('thoughts.usage', networkId, id),
       deletionCheck: (networkId, ids) => invoke('thoughts.deletionCheck', networkId, ids),
       usageClear: (networkId, id) => invoke('thoughts.usageClear', networkId, id),
-      findDuplicates: (networkId, title, synonyms, typeIds) =>
-        invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
+      findDuplicates: (networkId, title, synonyms, typeIds, mode) =>
+        invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds, mode),
       // Задача eb1a3f43: кросс-сетевой охват диалога выбора мысли.
-      findDuplicatesAcrossNetworks: (networkId, networkIds, title, synonyms, typeIds) =>
+      findDuplicatesAcrossNetworks: (networkId, networkIds, title, synonyms, typeIds, mode) =>
         invoke(
           'thoughts.findDuplicatesAcrossNetworks',
           networkId,
@@ -112,6 +112,7 @@ function buildApi(): EtnBridgeApi {
           title,
           synonyms,
           typeIds,
+          mode,
         ),
       searchAcrossNetworks: (networkId, networkIds, request) =>
         invoke('thoughts.searchAcrossNetworks', networkId, networkIds, request),
@@ -261,16 +262,38 @@ function buildApi(): EtnBridgeApi {
         invoke('thoughtTypeViews.update', networkId, thoughtTypeId, viewId, input, expectedVersion),
       remove: (networkId, thoughtTypeId, viewId, expectedVersion) =>
         invoke('thoughtTypeViews.remove', networkId, thoughtTypeId, viewId, expectedVersion),
-      run: (networkId, thoughtId, viewName, opts) =>
-        invoke('thoughtTypeViews.run', networkId, thoughtId, viewName, opts),
+      run: (networkId, thoughtId, viewName, opts, requestId) =>
+        invokeCancellable('thoughtTypeViews.run', [networkId, thoughtId, viewName, opts], requestId),
+      moveToThought: (networkId, thoughtTypeId, viewId, targetThoughtId) =>
+        invoke('thoughtTypeViews.moveToThought', networkId, thoughtTypeId, viewId, targetThoughtId),
+    },
+    thoughtCustomViews: {
+      list: (networkId, thoughtId, opts) =>
+        invoke('thoughtCustomViews.list', networkId, thoughtId, opts),
+      create: (networkId, thoughtId, input) =>
+        invoke('thoughtCustomViews.create', networkId, thoughtId, input),
+      update: (networkId, thoughtId, viewId, input, expectedVersion) =>
+        invoke('thoughtCustomViews.update', networkId, thoughtId, viewId, input, expectedVersion),
+      remove: (networkId, thoughtId, viewId, expectedVersion) =>
+        invoke('thoughtCustomViews.remove', networkId, thoughtId, viewId, expectedVersion),
+      moveToType: (networkId, thoughtId, viewId) =>
+        invoke('thoughtCustomViews.moveToType', networkId, thoughtId, viewId),
     },
     properties: {
       get: (networkId, ownerType, ownerId) =>
         invoke('properties.get', networkId, ownerType, ownerId),
-      set: (networkId, ownerType, ownerId, key, value) =>
-        invoke('properties.set', networkId, ownerType, ownerId, key, value),
-      remove: (networkId, ownerType, ownerId, key) =>
-        invoke('properties.remove', networkId, ownerType, ownerId, key),
+      // `side` — адрес стороны свойства-связи (0.14.1, требование 87039bc8).
+      // Без его проброса main получал 5 аргументов, REST уходил без стороны,
+      // и запись/удаление адресовали сторону по живым рёбрам/привязке —
+      // у симметричного имени это чужая сторона (ошибка 45248206).
+      set: (networkId, ownerType, ownerId, key, value, side) =>
+        invoke('properties.set', networkId, ownerType, ownerId, key, value, side),
+      remove: (networkId, ownerType, ownerId, key, side) =>
+        invoke('properties.remove', networkId, ownerType, ownerId, key, side),
+      // Полный набор пер-мысленного порядка внетиповых свойств (0.14.1,
+      // контракт 27ed2b39): адресуется только мысль-владелец.
+      reorder: (networkId, thoughtId, items) =>
+        invoke('properties.reorder', networkId, thoughtId, items),
       // Кросс-сетевой резолв (задача 7849008a): см. EtnApi.properties.crossResolve.
       crossResolve: (networkId, ownerId, key) =>
         invoke('properties.crossResolve', networkId, ownerId, key),
@@ -359,10 +382,11 @@ function buildApi(): EtnBridgeApi {
       },
       onStatusChange(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
-          cb(payload as { networkId: string; status: string });
+          cb(payload as { networkId: string; status: string; detail?: string });
         ipcRenderer.on('realtime:status', listener);
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
+      getStatuses: () => invoke('realtime.getStatuses'),
       onStale(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
           cb(payload as { networkId: string; lastSeq: number });
@@ -411,8 +435,9 @@ function buildApi(): EtnBridgeApi {
       getState: (networkId, key) => invoke('ui.getState', networkId, key),
       setState: (networkId, key, value) => invoke('ui.setState', networkId, key, value),
       draftSave: (input) => invoke('ui.draftSave', input),
-      draftList: (networkId) => invoke('ui.draftList', networkId),
+      draftList: (networkId, filter) => invoke('ui.draftList', networkId, filter),
       draftDelete: (id) => invoke('ui.draftDelete', id),
+      draftSetStatus: (id, status) => invoke('ui.draftSetStatus', id, status),
     },
     deepLink: {
       /**

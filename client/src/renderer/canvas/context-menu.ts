@@ -14,17 +14,23 @@
  * Registration happens through canvas hooks (`setCloudContextMenuHandler`,
  * `setZoneContextMenuHandler`, `setCloudDragHandlers`).
  *
- * The thought menu lives here, but it is not canvas-only: `showThoughtMenuUnder`
- * + `ThoughtMenuOptions` let the editor (property-value chips, the local graph
- * and the «Действия» button) show the very same command set — a second
- * hand-rolled menu in the editor always drifts away from the canvas one
- * (спецификация «Контекстное меню мысли»).
+ * The thought menu lives here, but it is not canvas-only: the single entry for
+ * the FULL menu outside the canvas is `showOutOfCanvasThoughtMenu` (context
+ * differences travel in `ThoughtMenuOptions`). It resolves the sibling parent
+ * before opening the menu and re-checks the network after the `await`. The one
+ * exception is the publication screen: its block menu embeds a SUBSET of the
+ * thought commands built directly by `buildThoughtMenuItems`, with the mandatory
+ * `hideAddCommand: true` and therefore no «налево (родственник)» — that exact
+ * shape is held by `guard-out-of-canvas-menu` (задача c7d5b9d4). A second
+ * hand-rolled menu — or a copy of that chain — outside the canvas always drifts
+ * away from the canvas one (спецификация «Контекстное меню мысли», задачи
+ * d8941b76/c7d5b9d4).
  */
 
 import type { FocusDir, Link } from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
-import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { getActiveMode as getStripActiveMode } from './focus-filter-strip.js';
 import { openAddDialog } from './add-dialog.js';
 import {
@@ -34,7 +40,7 @@ import {
   type SnapshotDeps,
 } from './clipboard.js';
 import { getRef, invalidateRef, requestZoneAnimation } from './canvas.js';
-import { patchFocusEdge, store } from '../state.js';
+import { store } from '../state.js';
 import { errorDialog, promptDialog } from '../lib/dialog.js';
 import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
@@ -48,7 +54,7 @@ import {
 } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
-import { reflectThoughtUpdate } from '../editor/editor.js';
+import { reflectLinkUpdate, reflectThoughtUpdate } from '../editor/editor.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
@@ -145,19 +151,28 @@ async function pollJob(jobId: string): Promise<{ status: string }> {
 type ZoneDir = 'parents' | 'siblings' | 'children';
 
 /** Entry shown in a cloud menu. */
-interface CloudMenuTarget {
+export interface CloudMenuTarget {
   id: string;
   title: string;
   dir: ZoneDir;
   /**
    * Родитель мысли — якорь команды «налево (родственник)»: новая мысль
    * создаётся ребёнком того же родителя. На холсте родитель уже есть в ответе
-   * фокуса (`focus.parents[0]`, зона «Родственники»); чипы и кнопка «Действия»
-   * в редакторе задают его сами, потому что в зоне холста не живут. Поле не
-   * задано — работает прежнее поведение (родитель фокуса); `null` — родителя
-   * нет, команда неактивна.
+   * фокуса (`focus.parents[0]`, зона «Родственники»). Вне холста поле задаёт
+   * единственный вне-холстовый вход `showOutOfCanvasThoughtMenu` — он резолвит
+   * родителя ДО меню и сверяет сеть после `await`; вызывающий потребитель это
+   * поле не заполняет. Поле не задано — работает холстовое поведение (родитель
+   * фокуса); `null` — родителя нет, команда неактивна.
    */
   siblingParentId?: string | null;
+  /**
+   * Имя родителя-якоря «налево (родственник)»: диалог добавления обязан
+   * назвать фактического родителя, а не мысль в фокусе карты (ошибка
+   * 89964a9b). Вне холста имя приходит вместе с id из резолва фасада; на
+   * холсте берётся из ответа фокуса. Не задано вместе с явным `siblingParentId`
+   * — диалог подпишет якорь его id, но НЕ именем фокуса.
+   */
+  siblingParentTitle?: string;
   /**
    * Мысль помечена на удаление — подпись «Удалить/восстановить» (S13). На холсте
    * флаг берётся из фокуса/кеша облачков, вне холста кеш пуст — передаёт
@@ -224,9 +239,9 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
       link.version,
     );
     // Repaint at once (B1: own event arrives asynchronously);
-    // the debounced refresh reconciles the neighbour zones.
-    patchFocusEdge(updated);
-    scheduleRefresh();
+    // общий путь отражения связи пересобирает окрестность И вкладку «Граф»
+    // (активность влияет на состав рёбер — ошибка 42a7c0a1, круг 3).
+    reflectLinkUpdate(updated);
   } catch (err) {
     errorDialog('Изменить актуальность', err);
   }
@@ -249,17 +264,14 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
     // Own event arrives asynchronously (B1) — patch locally for instant feedback. Both
     // store updates render synchronously BEFORE the animation flag is armed,
     // so the flag is consumed by the debounced zone-reconciling refresh only.
-    patchFocusEdge(updated);
-    const target = store.state.editorTarget;
-    if (target !== null && target.kind === 'link' && target.id === linkId) {
-      store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
-    }
+    // Общий путь также пересобирает вкладку «Граф»: инверсия меняет концы
+    // рёбер, видимые на графе (ошибка 42a7c0a1, круг 3).
+    reflectLinkUpdate(updated);
     requestZoneAnimation();
-    scheduleRefresh();
     notice('Связь инвертирована.');
   } catch (err) {
     if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
-      notice('В обратном направлении такая связь уже существует.', 'error');
+      notice('В обратном направлении такая связь уже существует.');
       return;
     }
     errorDialog('Инвертировать связь', err);
@@ -284,6 +296,10 @@ export async function deleteLink(networkId: string, linkId: string): Promise<voi
  * расходятся (см. спецификацию «Контекстное меню мысли»).
  */
 export interface ThoughtMenuOptions {
+  /**
+   * Спрятать «Добавить к выделению / Убрать из выделенных»: панель выделения —
+   * запись уже выделена, команда была бы бессмысленной (08-ui-spec.md §5.1).
+   */
   hideSelectionCommand?: boolean;
   /** Куда открывать мысль вне холста. Без обработчика — фокус холста. */
   openHandler?: (id: string) => void;
@@ -348,37 +364,86 @@ export function showThoughtMenuUnder(
   showMenuAt(rect.left, rect.bottom + 2, buildThoughtMenuItems(networkId, target, opts));
 }
 
+/** Родитель-якорь «налево (родственник)»: id и имя для подписи диалога. */
+export interface SiblingParent {
+  id: string;
+  title: string;
+}
+
 /**
  * Родитель мысли — якорь команды «налево (родственник)» — для меню вне холста:
  * мини-облачко чипа и пилюля мини-графа не живут в зоне холста, где родитель
- * приходит с ответом фокуса, поэтому его спрашивают у сервера. Неудача —
- * `null`: команда просто неактивна (меню важнее, чем её один пункт).
+ * приходит с ответом фокуса, поэтому его спрашивают у сервера. Возвращается
+ * вместе с именем: диалог добавления обязан назвать фактического родителя, а
+ * не мысль в фокусе карты (ошибка 89964a9b) — второй запрос за именем не нужен,
+ * `neighbors` уже отдаёт `ThoughtRef`. Неудача — `null`: команда просто
+ * неактивна (меню важнее, чем её один пункт).
  */
-export async function resolveSiblingParentId(
+export async function resolveSiblingParent(
   networkId: string,
   id: string,
-): Promise<string | null> {
+): Promise<SiblingParent | null> {
   try {
     const parents = await etn.thoughts.neighbors(networkId, id, 'parents', 1);
-    return parents[0]?.id ?? null;
+    const parent = parents[0];
+    return parent === undefined ? null : { id: parent.id, title: parent.title };
   } catch {
     return null;
   }
 }
 
 /**
- * Opens the thought context menu for a selection-list entry (08-ui-spec.md
- * §5.1): the same commands as on the canvas, except the add/remove-selection
- * toggle — the entry is already selected.
+ * Место открытия меню мысли вне холста: точка правого клика (как у холста) или
+ * якорный элемент (чип, строка списка, кнопка «Действия ▾») — тот же выбор,
+ * что делают всплывающие меню в остальном клиенте. Фасад сам решает, каким
+ * входом конструктора открыть меню.
  */
-export function showSelectionThoughtContextMenu(event: MouseEvent, target: CloudMenuTarget): void {
+export type ThoughtMenuPlace = { event: MouseEvent } | { anchor: Element };
+
+/**
+ * ЕДИНСТВЕННЫЙ вход ПОЛНОГО меню мысли ВНЕ холста (полоса истории и панель
+ * закреплённых, панель выделения, лента «Дневника», «Структуры», панель
+ * использования, поиск, чипы редактора, локальный граф, вкладка «Связи»,
+ * карточка публикации, условия отбора, попап соседей холста):
+ * родитель для «налево (родственник)» — родитель САМОЙ мысли, а не мысли в
+ * фокусе карты (спецификация «Контекстное меню мысли»). На холсте его знает
+ * ответ фокуса; вне зон холста его приходится спрашивать у сервера ДО открытия
+ * меню — конструктор без `siblingParentId` молча берёт родителя фокуса
+ * (`focus.parents[0]`) и «налево» создаёт мысль не под тем родителем
+ * (ошибка 2baa78fb), а без имени родителя диалог подписывает якорь именем
+ * фокуса (ошибка 89964a9b). После ожидания сверяется сеть — поздний ответ не
+ * должен открыть меню для мысли прежней сети (класс a3151e33).
+ *
+ * «Единственный» — про ПОЛНЫЙ набор команд. Оговорка: экран публикации вставляет
+ * в меню блока ПОДМНОЖЕСТВО команд мысли, собранное напрямую
+ * `buildThoughtMenuItems` (`screens/publications/workspace.ts`), — без подменю
+ * «Добавить» (значит, и без «налево»), с обязательным `hideAddCommand: true`
+ * (структурой разделов управляют команды «В публикации», задача 7cfaba7c п.4).
+ * Эту форму держит сторож `guard-out-of-canvas-menu` (задача c7d5b9d4).
+ *
+ * Вызывающий отдаёт только цель (id/имя/контекст), место и опции меню; сеть,
+ * резолв родителя, сверка и открытие меню живут здесь. Копия цепочки в
+ * модуле-потребителе запрещена сторожем `guard-out-of-canvas-menu`
+ * (задача d8941b76): места без холста не должны расползаться расходящимися
+ * копиями правил «налево».
+ */
+export async function showOutOfCanvasThoughtMenu(
+  place: ThoughtMenuPlace,
+  target: Omit<CloudMenuTarget, 'siblingParentId' | 'siblingParentTitle'>,
+  opts: ThoughtMenuOptions = {},
+): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  showMenuAt(
-    event.clientX,
-    event.clientY,
-    buildThoughtMenuItems(networkId, target, { hideSelectionCommand: true }),
-  );
+  const siblingParent = await resolveSiblingParent(networkId, target.id);
+  // Сверка ПОСЛЕ await: поздний ответ прежней сети не открывает меню (a3151e33).
+  if (store.state.networkId !== networkId) return;
+  const full: CloudMenuTarget = {
+    ...target,
+    siblingParentId: siblingParent?.id ?? null,
+    siblingParentTitle: siblingParent?.title,
+  };
+  if ('event' in place) showThoughtContextMenu(place.event, full, opts);
+  else showThoughtMenuUnder(place.anchor, full, opts);
 }
 
 /**
@@ -386,6 +451,13 @@ export function showSelectionThoughtContextMenu(event: MouseEvent, target: Cloud
  * «Контекстное меню мысли»). Единственный конструктор меню мысли: холст,
  * панель выделения, дерево «Структур», чипы редактора и кнопка «Действия»
  * зовут его же — отличия контекста передаются `ThoughtMenuOptions`.
+ *
+ * Прямой вызов вне этого файла разрешён только экрану публикации
+ * (`screens/publications/workspace.ts`): там в меню блока вставляется
+ * подмножество команд мысли — ОБЯЗАТЕЛЬНО с `hideAddCommand: true`: подменю
+ * «Добавить» (вместе с «налево», которому вне холста нужен явный родитель)
+ * в публикациях не показывается (задача 7cfaba7c п.4). Форму держит сторож
+ * `guard-out-of-canvas-menu` (задача c7d5b9d4).
  */
 export function buildThoughtMenuItems(
   networkId: string,
@@ -397,7 +469,7 @@ export function buildThoughtMenuItems(
     menuAction('Копировать ID', () => {
       void navigator.clipboard.writeText(target.id).then(
         () => notice('ID мысли скопирован.'),
-        () => notice('Не удалось скопировать ID.', 'error'),
+        () => notice('Не удалось скопировать ID.'),
       );
     });
   // Мысль недоступна в сети (значение условия осталось по снапшоту имени):
@@ -411,15 +483,19 @@ export function buildThoughtMenuItems(
   }
   const focus = store.state.focus;
   // «налево (родственник)»: на холсте — родитель фокуса (зона «Родственники»),
-  // вне холста — родитель самой мысли, который резолвит вызывающий.
-  const siblingParentId =
-    target.siblingParentId !== undefined ? target.siblingParentId : (focus?.parents[0]?.id ?? null);
+  // вне холста — родитель самой мысли, который резолвит вызывающий вместе с
+  // именем (`resolveSiblingParent`).
+  const siblingParentExplicit = target.siblingParentId !== undefined;
+  const siblingParentId: string | null = siblingParentExplicit
+    ? (target.siblingParentId ?? null)
+    : (focus?.parents[0]?.id ?? null);
   // Якорь диалога «Добавить» — владелец вызова (08-ui-spec.md §4.1–4.2), а не
-  // мысль в фокусе: диалог обязан назвать именно его (ошибка c8bd4676). Имя
-  // родителя-родственника известно только в холстовом случае — вне холста
-  // `siblingParentId` приходит от вызывающего без имени.
-  const siblingParentTitle =
-    target.siblingParentId === undefined ? focus?.parents[0]?.title : undefined;
+  // мысль в фокусе: диалог обязан назвать именно его (ошибка c8bd4676), а для
+  // «налево» — фактического родителя (ошибка 89964a9b). Имени нет — подписываем
+  // якорь его id; подставлять имя фокуса нельзя ни при каком раскладе.
+  const siblingParentTitle = siblingParentExplicit
+    ? (target.siblingParentTitle ?? target.siblingParentId ?? undefined)
+    : focus?.parents[0]?.title;
   const canAddSibling = siblingParentId !== null;
   const inSelection = store.state.selection.includes(target.id);
   // Задача f5c363a3: команда «слить в основу» — только для мысли, изменённой в
@@ -534,7 +610,7 @@ export function buildThoughtMenuItems(
     menuAction('Добавить вложение', () => {
       if (opts.attachmentHandler !== undefined) opts.attachmentHandler(target.id);
       else if (opts.openHandler !== undefined) opts.openHandler(target.id);
-      else void setFocus(target.id);
+      else focusFromUi(target.id);
     }),
     MENU_SEPARATOR,
     ...(opts.hideOpenCommand === true
@@ -542,7 +618,7 @@ export function buildThoughtMenuItems(
       : [
           menuAction(opts.openLabel ?? 'Открыть редактор', () => {
             if (opts.openHandler !== undefined) opts.openHandler(target.id);
-            else void setFocus(target.id);
+            else focusFromUi(target.id);
           }),
         ]),
     ...(opts.focusHandler !== undefined
@@ -647,7 +723,7 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
   try {
     const thought = await etn.thoughts.get(networkId, id);
     if (thought.is_protected && thought.is_root) {
-      notice('HOME-мысль нельзя деактивировать.', 'error');
+      notice('HOME-мысль нельзя деактивировать.');
       return;
     }
     await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);

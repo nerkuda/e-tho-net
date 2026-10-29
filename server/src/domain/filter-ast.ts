@@ -45,7 +45,7 @@ const ROOT_KEYS = ['version', 'filter', 'sort'] as const;
 /** Допустимые ключи группы. */
 const GROUP_KEYS = ['op', 'children'] as const;
 /** Допустимые ключи условия-листа. */
-const LEAF_KEYS = ['entity', 'operator', 'value', 'labels', 'mode'] as const;
+const LEAF_KEYS = ['entity', 'operator', 'value', 'labels', 'mode', 'service'] as const;
 /** Допустимые ключи снапшотов подписей. */
 const LABELS_KEYS = ['entity', 'value', 'values'] as const;
 /** Допустимые ключи ключа сортировки. */
@@ -292,6 +292,20 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
     }
     leaf.mode = mode as FilterAstHierarchyMode;
   }
+  // Служебная метка листа (ошибка 9ddc488e): «впечён местом применения, не
+  // пользователем». Единственное допустимое значение — `true`; `false`/иное —
+  // ошибка формы, а не молчаливый игнор. Семантику метки решает место
+  // применения (редактор отбора снимает её при переоткрытии); исполнение
+  // отбора учитывает помеченный лист как обычное условие.
+  if (input['service'] !== undefined) {
+    if (input['service'] !== true) {
+      fail(`${path}.service: служебная метка листа допускает только true.`, {
+        field: `${path}.service`,
+        value: input['service'],
+      }, requestId);
+    }
+    leaf.service = true;
+  }
   return leaf;
 }
 
@@ -300,7 +314,11 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
     fail(`${path}: операнд должен быть объектом.`, { field: path }, requestId);
   }
   const kind = input['kind'];
-  if (typeof kind !== 'string' || !(kind in ENTITY_KEYS)) {
+  // Только СОБСТВЕННЫЕ ключи справочника: `in` пропускал унаследованные от
+  // Object.prototype имена (`toString`, `constructor`, `__proto__`, …), после
+  // чего `ENTITY_KEYS[kind]` давал функцию вместо массива и валидация падала
+  // TypeError вместо VALIDATION_ERROR.
+  if (typeof kind !== 'string' || !Object.hasOwn(ENTITY_KEYS, kind)) {
     fail(`${path}.kind: неизвестный операнд.`, {
       field: `${path}.kind`,
       allowed: Object.keys(ENTITY_KEYS),

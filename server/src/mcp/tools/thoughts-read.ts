@@ -12,8 +12,8 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpRuntime } from '../context.js';
-import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS } from '@etn/shared';
-import type { McpViewMode } from '@etn/shared';
+import { EtnError, MCP_TOOL_ANNOTATIONS, SUBGRAPH_PERMANENT_PREVIEW_CHARS, parseLinkTypeFilterValue } from '@etn/shared';
+import type { EffectiveThoughtView, FlatPropertyOp, McpViewMode, PropertyQueryCondition } from '@etn/shared';
 import { getThoughtOrThrow } from '../../domain/thought-service.js';
 import { ThoughtsFindDuplicates, ThoughtsGet, ThoughtsNeighbors, ThoughtsQuery, ThoughtsResolve, ThoughtsSearch, ThoughtsSubgraph, ThoughtsUsage } from '../../contracts.js';
 import { getLinkFillingFlags } from '../../domain/link-service.js';
@@ -81,6 +81,29 @@ function buildCrossNetworkAccess(
   };
 }
 
+/**
+ * Приведение условия `properties[]` из MCP-контракта к канону домена
+ * (`PropertyQueryCondition`). Схема принимает `value` любой читаемой формы
+ * (строка/число/логическое/массив/объект/`null`): пара наличия
+ * (`is_empty`/`not_empty`) значение ЛЮБОЙ формы игнорирует — паритет с REST,
+ * а для операторов сравнения допустимую форму уже проверил refine контракта
+ * (`QUERY_PROPERTY_VALUE`). Presence-пара приводится к `''` ниже.
+ */
+function toDomainPropertyCondition(cond: {
+  property_id?: string;
+  property?: string;
+  operator: FlatPropertyOp;
+  value?: unknown;
+}): PropertyQueryCondition {
+  return {
+    ...cond,
+    value:
+      cond.operator === 'is_empty' || cond.operator === 'not_empty'
+        ? ''
+        : (cond.value as PropertyQueryCondition['value']),
+  };
+}
+
 export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.thoughts.search',
@@ -91,6 +114,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
         'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
+        '`query` — мини-синтаксис §6.10: слова через AND, `*` — подстановка, `-слово` — исключение; ' +
+        'в группе `by_names` слово запроса без `*` совпадает и со СЛОВОМ хранимого `*`-синонима ' +
+        'по границам слова (`проектиров*` находит «проектирование»), слова запроса независимы. ' +
         'Принимает и `ast` — мыслевые настройки отбора (профиль `thoughts`: подкорень, типы мыслей, ' +
         '«показывать неактуальные», «корзина»); валидируется профилем, `VALIDATION_ERROR` вне профиля; ' +
         '`ast` XOR плоские мыслевые параметры. `focus_thought_id` — мысль-фокус карты: ' +
@@ -239,17 +265,32 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
     'etn.thoughts.query',
     {
       title: 'Структурная выборка мыслей',
+      // 0.14.1 (ошибка 6ff9749f): «пустая страница и unresolved» — семантика
+      // СОХРАНЁННЫХ отборов (`etn.views.run`), не этого инструмента. Для плоских
+      // полей неизвестное имя типа/свойства — `NOT_FOUND`; значения `ast`-листьев
+      // — только id: имена не резолвятся и молча не совпадают (решение
+      // оркестратора: документировать поведение как есть, резолв не добавлять).
+      // 0.14.1 (задача 54573522): неразрешимый `ast`-токен (проба: `$thought.id`)
+      // ДАЁТ пустую страницу + `unresolved` — клауза добавлена с привязкой к
+      // ast-токенам, чтобы не смешать с плоскими именами (`NOT_FOUND`).
+      // 0.14.1 (ошибка 40c76144): плоская форма `properties[]` принимает канон
+      // `FLAT_PROPERTY_OPS` (14 операторов) — в `in`/`not_in`/`is_empty`/
+      // `not_empty` паритет с REST; пара наличия обходится без `value`.
+      // Прирост прозы уложен сжатием тех же описаний (бюджет `tools/list`).
       description:
-        'Структурная выборка мыслей без текстового запроса; фильтры комбинируются по AND: ' +
-        '`in_subtree_of`(+`max_depth`), `type_id[]` (или имена `type[]`), `active`/`trashed`, ' +
-        '`keywords` (мини-синтаксис по названию и синонимам), `properties[]` (операторы ' +
-        'eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of), диапазоны `created_*`/`updated_*`, ' +
-        '`author_id`/`editor_id`, `link_filter` (совместим с `ast` — пред-сужение ' +
-        'поверх дерева). Принимает и `ast` — дерево условий ' +
-        '(грамматика — `etn.guide { topic: "thoughts.query" }`), несовместимое со старыми ' +
-        'критериями. Ответ несёт справочник `thought_types` и эхо ' +
-        '`resolved_types`/`resolved_properties` для входов по имени; неразрешимый токен — пустая ' +
-        'страница и `unresolved`, удалённая сущность условия — `VALIDATION_ERROR` ' +
+        'Структурная выборка (без текста), AND: ' +
+        '`in_subtree_of`(+`max_depth`), `type_id[]` (либо `type[]`), `active`/`trashed`, ' +
+        '`keywords` (мини-синтаксис по названию/синонимам; слово без `*` совпадает и с ' +
+        '`*`-синонимом: `проектиров*` → «проектирование»), `properties[]` (канон ' +
+        'eq/ne/contains/gt/gte/lt/lte/in/not_in/is_empty/not_empty/any_of/all_of/none_of; ' +
+        '`is_empty`/`not_empty` — без `value`), `created_*`/`updated_*`, ' +
+        '`author_id`/`editor_id`, `link_filter` (с `ast`: пред-сужение поверх дерева). ' +
+        'Или `ast` — дерево условий ' +
+        '(грамматика — `etn.guide { topic: "thoughts.query" }`), XOR с плоскими критериями. ' +
+        'Ответ: `thought_types`, эхо `resolved_types`/`resolved_properties` для имён; ' +
+        'неизвестное имя в плоских полях — `NOT_FOUND`; значения `ast`-листьев — только id (имена ' +
+        'не резолвятся и молча не совпадают); неразрешимый `ast`-токен → пустая страница и ' +
+        '`unresolved`; удалённая сущность — `VALIDATION_ERROR` ' +
         '(`details.diagnostics`).',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
@@ -260,6 +301,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // поля любого уровня, версия формы и согласованность оператора листа с
         // под-выборкой → `VALIDATION_ERROR` (не молчаливый игнор).
         const ast = args.ast === undefined ? undefined : parseFilterAst(args.ast);
+        // 0.14.1 (ошибка 35c8f16e): строгая валидация `link_filter` тем же
+        // парсером, что REST (`parseLinkTypeFilterValue`): присутствующий, но
+        // пустой фильтр — `VALIDATION_ERROR`, а не «без фильтра». До правки
+        // `linkFilterToAst` превращал пустой набор в `undefined` и обход молча
+        // расширялся до всех рёбер.
+        const linkFilter = parseLinkTypeFilterValue(args.link_filter);
         // Задача eb1a3f43, требование c98d5d19: веерный режим.
         if (args.network_ids !== undefined) {
           const access = buildCrossNetworkAccess(rt, args.network_ids);
@@ -290,10 +337,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           // сети будут фильтроваться по тому же `property_id` — если свойства
           // нет, фильтр вернёт пусто, что корректно.
           let resolvedProperties: Array<{ input: string; id: string; name: string }> | undefined;
-          let domainProperties = args.properties;
+          let domainProperties: PropertyQueryCondition[] | undefined;
           if (args.properties !== undefined) {
             const firstNdb = openMemberNetwork(rt, access.networks[0]!.id);
-            const out: NonNullable<typeof args.properties> = [];
+            const out: PropertyQueryCondition[] = [];
             let resolved: Array<{ input: string; id: string; name: string }> | null = null;
             for (const cond of args.properties) {
               if (cond.property !== undefined) {
@@ -308,7 +355,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   });
                 }
                 const propName = getNetworkProperty(firstNdb, ref.propertyId)?.name;
-                out.push({ ...cond, property_id: cond.property });
+                out.push(toDomainPropertyCondition({ ...cond, property_id: cond.property }));
                 if (resolved === null) resolved = [];
                 resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
                 continue;
@@ -323,7 +370,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   property_id: cond.property_id,
                 });
               }
-              out.push(cond);
+              out.push(toDomainPropertyCondition(cond));
             }
             domainProperties = out;
             if (resolved !== null) resolvedProperties = resolved;
@@ -338,6 +385,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 // Разобранное AST-тело (сырое `...args.ast` перекрыто
                 // типизированным) — веер тоже принимает `ast`, паритет с REST.
                 ast,
+                // Валидированный фильтр (ошибка 35c8f16e) — сырое поле `...args`
+                // перекрыто нормализованным.
+                link_filter: linkFilter,
                 type_id: args.type_id ?? resolvedTypeIds,
                 type: undefined,
                 properties: domainProperties,
@@ -392,9 +442,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         let resolvedProperties:
           | Array<{ input: string; id: string; name: string }>
           | undefined;
-        let domainProperties = args.properties;
+        let domainProperties: PropertyQueryCondition[] | undefined;
         if (args.properties !== undefined) {
-          const out: NonNullable<typeof args.properties> = [];
+          const out: PropertyQueryCondition[] = [];
           let resolved: Array<{ input: string; id: string; name: string }> | null = null;
           for (const cond of args.properties) {
             if (cond.property !== undefined) {
@@ -410,7 +460,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 });
               }
               const propName = getNetworkProperty(ndb, ref.propertyId)?.name;
-              out.push({ ...cond, property_id: cond.property });
+              out.push(toDomainPropertyCondition({ ...cond, property_id: cond.property }));
               if (resolved === null) resolved = [];
               resolved.push({ input: cond.property, id: ref.propertyId, name: propName ?? cond.property });
               continue;
@@ -424,7 +474,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                 property_id: cond.property_id,
               });
             }
-            out.push(cond);
+            out.push(toDomainPropertyCondition(cond));
           }
           domainProperties = out;
           if (resolved !== null) resolvedProperties = resolved;
@@ -440,6 +490,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               ...args,
               // Разобранное AST-тело (сырое `...args.ast` перекрыто типизированным).
               ast,
+              // Валидированный фильтр (ошибка 35c8f16e).
+              link_filter: linkFilter,
               // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
               // XOR-схема соблюдена и обе формы не приходят одновременно).
               type_id:
@@ -492,13 +544,16 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       title: 'Мысль (полная)',
       description:
         'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
-        'значения свойств (`outside_type: true` — свойство не на цепочке типа владельца, карточка не ' +
-        'пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
+        'значения свойств: вне-типовые — в эффективном пер-мысленном порядке, типовые — в порядке ' +
+        'выборки (порядок задают привязки типа, см. ' +
+        '`GET …/types/{id}/properties`); `outside_type: true` — свойство не на цепочке типа ' +
+        'владельца, карточка не пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
         '`meta.deletion_blocks` — блокировки удаления. ' +
         '`meta.permanent` — полный текст постоянного комментария (полностью — `etn.comments.get`). ' +
         '`meta.link_stats` — счётчики активных связей по `(link_type_id, direction)` с именами типа. ' +
-        '`meta.views` — эффективные отборы мысли (имя, описание); исполняются через ' +
-        '`etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
+        '`meta.views` — эффективные отборы мысли: типовые (`scope: "type"`), затем внетиповые ' +
+        '(`scope: "thought"`), `defined_on` — владелец; ' +
+        'исполняются через `etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -569,7 +624,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'свойства (без структурных «Родители»/«Потомки» — их числа в `meta`), `meta.link_stats` ' +
         '(счётчики с именами типов связей), ' +
         'полнотекстовый `comment_preview` и `meta.views` — ' +
-        'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
+        'эффективный набор отборов для каждой мысли (типовые + внетиповые со `scope`). ' +
         'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
         '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
         'Лимит — 100 id за вызов.',
@@ -648,11 +703,14 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const ndb = openMemberNetwork(rt, args.network_id);
         const depth = args.depth ?? 1;
         const view: McpViewMode = args.view ?? 'compact';
+        // 0.14.1 (ошибка 35c8f16e): та же строгая валидация, что в REST —
+        // присутствующий пустой `link_filter` не означает «без фильтра».
+        const linkFilter = parseLinkTypeFilterValue(args.link_filter);
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
           const neighborOpts = {
             userId: rt.deps.auth.userId,
-            linkFilter: args.link_filter,
+            linkFilter,
             showInactive: args.show_inactive,
           };
           // `dir: "both"` (0.7.2) — both directions in one call. The domain
@@ -768,7 +826,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         const walk = await traverseAsync(ndb, [args.thought_id], direction, {
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
-          linkFilter: args.link_filter,
+          linkFilter,
           showInactive: args.show_inactive,
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
@@ -805,8 +863,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
         '`link_marked_for_deletion` — ребро помечено на удаление (корзина). ' +
-        '`meta.views` для seed-узлов — эффективный набор отборов, ' +
-        'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
+        '`nodes[].views` — эффективный набор отборов только у seed-узлов (типовые и внетиповые со ' +
+        '`scope`); у прочих `views: []` (в `compact` поле снимается проекцией), исполняется через ' +
+        '`etn.views.run { view_name }`. ' +
+        '`link_filter` — { type_ids?, include_structural? } ' +
         'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',
       inputSchema: ThoughtsSubgraph.schema,
@@ -821,21 +881,23 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         );
         const result = await subgraphAsync(ndb, args.seed_ids, args.radius, {
           maxNodes: effectiveMax,
-          linkFilter: args.link_filter,
+          // 0.14.1 (ошибка 35c8f16e): присутствующий пустой `link_filter` —
+          // `VALIDATION_ERROR`, как в REST (парсер `parseLinkTypeFilterValue`).
+          linkFilter: parseLinkTypeFilterValue(args.link_filter),
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
         // subgraphs cannot leak inline `data:` icon URLs either.
         const nodes = result.nodes.map((id) => withSanitizedIcon(getThoughtOrThrow(ndb, id)));
-        // `meta.views` (задача c1fa71d4) — эффективный набор отборов только
+        // `nodes[].views` (задача c1fa71d4) — эффективный набор отборов только
         // для seed-узлов: для остальных узлов агент может прочитать карточку
         // через `etn.thoughts.get` отдельно.
-        const seedViews = new Map<string, ReturnType<typeof getEffectiveViewsForThought>>();
+        const seedViews = new Map<string, EffectiveThoughtView[]>();
         for (const seedId of args.seed_ids) {
           const seed = nodes.find((n) => n.id === seedId);
           if (seed === undefined) continue;
           seedViews.set(
             seedId,
-            getEffectiveViewsForThought(ndb, { type_id: seed.type_id }),
+            getEffectiveViewsForThought(ndb, { id: seed.id, type_id: seed.type_id }),
           );
         }
         // MCP-выдача подграфа отдаёт превью с развёрнутыми трансклюзиями
@@ -893,7 +955,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // would only hide that fact behind a softer reason. Surface the
         // `max_nodes` reason verbatim in that case and skip budget trimming.
         const thoughtTypes = thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id));
-        // `meta.views` (задача c1fa71d4) — отборы для seed-узлов. Для
+        // `nodes[].views` (задача c1fa71d4) — отборы для seed-узлов. Для
         // остальных узлов поле пустое (агент может прочитать их карточку
         // отдельно через `etn.thoughts.get`).
         const nodesWithViews = nodes.map((n) => {
@@ -909,8 +971,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
               name_key: v.name_key,
               description: v.description,
               defined_on: v.defined_on,
+              scope: v.scope,
               inherited: v.inherited,
               is_default: v.is_default,
+              own_default: v.own_default,
             })),
           };
         });
@@ -1032,11 +1096,19 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
     'etn.thoughts.find_duplicates',
     {
       title: 'Поиск дубликатов',
+      // 0.14.1 (ошибка 1eaf36df): четвёртый тир — stored `*`-синоним матчит
+      // входной термин ЦЕЛИКОМ (anchored regex, границы слов, порядок слов
+      // значим; `wildSynRows` + `anchoredWildcardFor`/`mentionPrefilterPass`,
+      // search-service.ts). Виден через `matched_on: "synonym"`/`matched_synonym`.
+      // Ошибка 11f14a81: строгий режим dedupe по умолчанию — `*` это короткое
+      // окончание словоформы, partial начинается с начала названия, чужой тип
+      // отсекается. Детали вынесены в тему гайда (бюджет tools/list).
       description:
-        'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, partial). ' +
-        'A partial match requires the typed fragments to occur inside CONSECUTIVE words of the title or of ' +
-        'one synonym, in the typed order («исправ ошиб» finds «Исправленные ошибки», but not «исправить ' +
-        'старую ошибку»); `-word` excludes. Always call before creating a thought (`etn.thoughts.write`).',
+        'Find existing thoughts matching a proposed title/synonyms BEFORE `etn.thoughts.write`. Exact ' +
+        'title/synonym first; then a stored `*`-synonym matched against the WHOLE term (`*` = short ' +
+        'wordform ending, no hyphen/space crossing; word boundaries, order matters; `matched_on: ' +
+        '"synonym"`/`matched_synonym`); then a weak partial (input word sequence must START a ' +
+        'title/literal synonym; foreign type dropped). Details: etn.guide { topic: "find_duplicates" }.',
       inputSchema: ThoughtsFindDuplicates.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },

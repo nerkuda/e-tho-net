@@ -22,6 +22,7 @@ import {
   buildMcpContext,
   closeMcpContext,
   connectMcpClient,
+  createSecondNetwork,
   nativeAvailable,
   toolJson,
   toolText,
@@ -55,8 +56,12 @@ interface Worlds {
 }
 
 async function buildPair(): Promise<Worlds> {
+  // Один мир на пару: сеть-источник и сеть-получатель живут в ОДНОМ
+  // `systemDb`/`dataDir` (production-модель). Разные миры давали бы
+  // `NOT_FOUND` на существующей сети-источнике теперь, когда `copy_subtree`
+  // проверяет доступ к ней (ошибка 6613839f).
   const src = await buildMcpContext();
-  const dst = await buildMcpContext();
+  const dst = await createSecondNetwork(src);
   const handle = await connectMcpClient(dst, dst.adminKey);
   const srcHandle = await connectMcpClient(src, src.adminKey);
   return {
@@ -67,7 +72,9 @@ async function buildPair(): Promise<Worlds> {
     async closeAll() {
       await srcHandle.close();
       await handle.close();
-      await closeMcpContext(dst);
+      // `dst` делит `sys`/`dataDir` с `src` — закрываем только его соединение,
+      // очистку мира делает `closeMcpContext(src)`.
+      await closeMcpContext(dst, { systemDb: src.sys, dataDir: src.dataDir });
       await closeMcpContext(src);
     },
   };
@@ -161,6 +168,31 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
     }
   });
 
+  it('неизвестная сеть-источник — NOT_FOUND, БД фантомной сети не создаётся (6613839f)', async () => {
+    const w = await buildPair();
+    try {
+      const phantom = randomUUID();
+      const phantomDir = path.join(w.dst.dataDir, 'networks', phantom);
+      assert.equal(existsSync(phantomDir), false, 'до вызова каталога нет');
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: phantom,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [w.dst.homeId],
+        duplicate_policy: 'create_always',
+      });
+      assert.ok(result.isError, 'вызов обязан отвергнуться');
+      assert.ok(toolText(result).includes('NOT_FOUND'), toolText(result));
+      assert.equal(
+        existsSync(phantomDir),
+        false,
+        'каталог и data.db несуществующей сети не создаются',
+      );
+      assert.equal(countThoughts(w.dst), 0, 'в получателе ничего не создано');
+    } finally {
+      await w.closeAll();
+    }
+  });
+
   it('duplicate_policy=reuse переиспользует существующую мысль', async () => {
     const w = await buildPair();
     try {
@@ -207,6 +239,81 @@ describe('etn.thoughts.copy_subtree (0.7.2 P3)', { skip: !nativeAvailable() }, (
       assert.equal(data.thoughts_reused, 1, 'одна мысль reuse');
       assert.equal(data.thoughts_created, 1, 'одна мысль создана (дочерняя)');
       assert.equal(data.thought_id_map[srcRoot.id], dstPre.id, 'reuse-id указывает на существующую мысль в dst');
+    } finally {
+      await w.closeAll();
+    }
+  });
+
+  // Ошибка 11f14a81: `duplicate_policy` — защита от дублей при копировании,
+  // а не живой поиск. Слово из середины чужого названия не делает мысли
+  // дублями; иначе `reuse`/`skip`/`fail` срабатывали бы на другой сущности.
+  it('reuse: partial из середины чужого названия не переиспользуется (dedupe)', async () => {
+    const w = await buildPair();
+    try {
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+      const srcRoot = createThought(ndbSrc, { title: 'Владимир' }, w.src.adminId).id;
+      const dstPerson = createThought(
+        ndbDst,
+        { title: 'Беберашвили Владимир' },
+        w.dst.adminId,
+      ).id;
+
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 1,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(result.isError, undefined, toolText(result));
+      const data = toolJson<{
+        thoughts_created: number;
+        thoughts_reused: number;
+        thought_id_map: Record<string, string>;
+      }>(result);
+      assert.equal(data.thoughts_reused, 0, 'слово из середины чужого названия — не дубль');
+      assert.equal(data.thoughts_created, 1, 'копия создана');
+      assert.notEqual(data.thought_id_map[srcRoot], dstPerson, 'копия не связана с персоной');
+      assert.equal(countThoughts(w.dst), 2, 'в целевой сети две разные мысли');
+    } finally {
+      await w.closeAll();
+    }
+  });
+
+  // Ошибка 11f14a81: в dedupe частичный кандидат чужого типа отбрасывается —
+  // копия без типа не должна «прилипать» к типизированному городу с похожим
+  // названием. Точное совпадение названия по-прежнему остаётся конфликтом.
+  it('reuse: partial чужого типа не переиспользуется (typeId в dedupe)', async () => {
+    const w = await buildPair();
+    try {
+      const ndbSrc = openNetworkDb(w.src.dataDir, w.src.networkId);
+      const ndbDst = openNetworkDb(w.dst.dataDir, w.dst.networkId);
+      const srcRoot = createThought(ndbSrc, { title: 'Владимир' }, w.src.adminId).id;
+      const placeType = makeType(w.dst, 'место');
+      const dstCity = createThought(
+        ndbDst,
+        { title: 'Владимир (город)', type_id: placeType },
+        w.dst.adminId,
+      ).id;
+
+      const result = await callOp(w.handle.client, 'thoughts.copy_subtree', {
+        source_network_id: w.src.networkId,
+        target_network_id: w.dst.networkId,
+        root_thought_ids: [srcRoot],
+        max_depth: 1,
+        duplicate_policy: 'reuse',
+      });
+      assert.equal(result.isError, undefined, toolText(result));
+      const data = toolJson<{
+        thoughts_created: number;
+        thoughts_reused: number;
+        thought_id_map: Record<string, string>;
+      }>(result);
+      assert.equal(data.thoughts_reused, 0, 'partial чужого типа отброшен');
+      assert.equal(data.thoughts_created, 1, 'копия создана');
+      assert.notEqual(data.thought_id_map[srcRoot], dstCity, 'копия не связана с городом');
+      assert.equal(countThoughts(w.dst), 2, 'город и копия — разные мысли');
     } finally {
       await w.closeAll();
     }

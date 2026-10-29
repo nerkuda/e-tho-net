@@ -122,8 +122,13 @@ describe('вкладка «Граф» — мини-граф на всю высо
     assert.ok(graphSrc.includes("registerTabContent('graph'"), 'graph tab content registered');
     assert.ok(graphSrc.includes('fillHeight: true'), 'mini-graph fills the tab');
     // Резолв соседей до полных карточек переехал сюда из links-tab.
+    // С круга 4 ошибки 42a7c0a1 в том же батче резолвится ЦЕНТР (свежая
+    // подпись после чужого realtime-переименования), поэтому соседи занимают
+    // 99 слотов из 100.
     assert.ok(
-      /etn\.thoughts\.resolve\(\s*networkId,\s*neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\b/.test(graphSrc),
+      /etn\.thoughts\.resolve\(\s*networkId,\s*\[\s*ctx\.ownerId,\s*\.\.\.neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\s*-\s*1\)/.test(
+        graphSrc,
+      ),
       'neighbours are batch-resolved in graph-tab',
     );
   });
@@ -423,6 +428,28 @@ describe('набор вкладок зависит от сущности (0.8.1,
     );
     assert.ok(/if \(shownTab !== 'main'\)/.test(src), 'focusEditorComment reads shownTab');
   });
+
+  it('повторный показ вкладки зовёт lifecycle.onShow только после отцепления', () => {
+    const src = readText(SRC.editor);
+    // Хук «показана» рядом с onDispose (ошибка 9667b75c): скрытая вкладка
+    // помечает изменённого владельца и дочитывает его при возврате.
+    assert.match(
+      src,
+      /export interface TabPaneLifecycle[\s\S]*?onShow\(callback: \(\) => void\): void/,
+      'TabPaneLifecycle exposes onShow next to onDispose',
+    );
+    assert.match(
+      src,
+      /const reattached = cached !== undefined && paneParentOf\(pane\) !== paneHostEl/,
+      'displayTab detects a re-attached cached pane (not a first build)',
+    );
+    assert.match(
+      src,
+      /if \(reattached && !rebuilt\) notifyPaneShown\(id\)/,
+      'onShow fires only on re-attach, never after a stale rebuild',
+    );
+    assert.match(src, /paneShowCallbacks\.delete\(id\)/, 'eviction drops the shown hooks');
+  });
 });
 
 describe('вкладка «Мысли» редактора связи — облачка концов (0.8.1, задача 95775cfd)', () => {
@@ -449,9 +476,11 @@ describe('вкладка «Мысли» редактора связи — обл
       "profile: 'tree'",
       'markThoughtCommentPreview(cloud',
       'openThoughtInEditor(',
-      'setFocus(',
+      'focusFromUi(',
       'toggleSelection(',
-      'showThoughtContextMenu(',
+      // Меню мысли вне холста — через единый фасад (задача d8941b76): он же
+      // резолвит родителя «налево» и сверяет сеть после ответа.
+      'showOutOfCanvasThoughtMenu(',
     ]) {
       assert.ok(src.includes(anchor), `cloud behaviour anchor missing: ${anchor}`);
     }

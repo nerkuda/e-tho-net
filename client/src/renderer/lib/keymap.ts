@@ -4,7 +4,7 @@
  * lib/keymap.ts», `b420b08c`; задача e7bf87e3, ТП1 «Команды редактирования
  * комментария»).
  *
- * Модуль владеет четырьмя вещами:
+ * Модуль владеет пятью вещами:
  *  1. **Реестр контекстов и привязок** «команда — сочетание — контекст»
  *     ({@link defineKeyContext}). Диспетчер не знает о содержимом команд — он
  *     лишь исполняет зарегистрированные обработчики.
@@ -13,10 +13,16 @@
  *     контекст возвращённой функцией; диалог кладёт свой контекст поверх, и его
  *     сочетания выигрывают у нижележащих (в т.ч. у поля внутри диалога —
  *     поле-вершина перекрывает контекст диалога-хозяина).
- *  3. **Разрешение пользовательских переопределений** сочетаний
+ *  3. **Реестр всплывающих слоёв, которым принадлежит `Escape`**
+ *     ({@link pushKeyOverlay}, {@link resolveEscapeOverlay}). Диалоги, меню,
+ *     поповер, выпадашка, лупа и панель поиска регистрируются здесь при
+ *     открытии и образуют ОДИН стек по порядку открытия: закрыть `Escape` может
+ *     только верхний слой (ошибка 9ff6b606). Второго механизма приоритетов
+ *     нет — ADR `b420b08c`.
+ *  4. **Разрешение пользовательских переопределений сочетаний**
  *     ({@link setKeymapOverrides}): значения приходят от слоя настроек, сам
  *     модуль их не хранит.
- *  4. **Единственную точку перехвата `keydown`** ({@link installKeymap}).
+ *  5. **Единственную точку перехвата `keydown`** ({@link installKeymap}).
  *     Локальный перехват и сравнение сочетаний в экранах и модулях в обход
  *     диспетчера запрещены (ADR `b420b08c`).
  *
@@ -296,6 +302,111 @@ const contexts = new Map<string, KeyContextDef>();
 const stack: StackEntry[] = [];
 let overrides: KeymapOverrides = {};
 
+/* ------------------------------------------------------------------ *
+ * Реестр всплывающих слоёв, которым принадлежит `Escape`.
+ *
+ * **Проблема.** Каркас диалога (`lib/dialog.ts`) — самый ранний перехватчик
+ * `Escape` в capture-фазе на `window`: слой, открытый ПОЗЖЕ диалога, до него
+ * своим слушателем уже не дотягивается. Без общего реестра диалог закрывался
+ * (или звал подтверждение несохранённых изменений) тем же нажатием, которым
+ * должен был закрыться верхний слой, — и наоборот, меню глушило `Escape`,
+ * не сверяясь с панелью над ним (ошибка 9ff6b606).
+ *
+ * **Решение.** Открываясь, слой регистрирует здесь свой обработчик `Escape`;
+ * диспетчер спрашивает ВЕРХНИЙ слой ({@link resolveEscapeOverlay}) и гасит
+ * событие. Диалог — такой же слой: он регистрируется при показе и снимается при
+ * закрытии, поэтому порядок открытия однозначен для всех участников. Стек
+ * строгий (LIFO): слой, открытый ПОЗЖЕ, всегда выше открытого раньше — диалог,
+ * открытый поверх меню, получает `Escape` первым, а меню под ним не трогается.
+ * Слои с ранним capture-перехватом (меню, выпадашка, лупа, сам диалог) решают
+ * чьё это нажатие через {@link KeyOverlayHandle.handleEscape}, а не порядком
+ * собственных слушателей.
+ *
+ * Регистрировать слой обязаны только те, кто ГАРАНТИРОВАННО закрывается по
+ * `Escape` (поповер с `closeOnEsc: false` — не регистрируется): иначе диалог
+ * уступил бы нажатие слою, который его проигнорирует.
+ * ------------------------------------------------------------------ */
+
+/** Обработчик `Escape` всплывающего слоя. `false` — слой нажатие не принял. */
+export type KeyOverlayEscapeHandler = (event: KeyboardEvent) => boolean | void;
+
+/** Всплывающий слой, регистрирующий свой `Escape` в диспетчере. */
+export interface KeyOverlayDef {
+  /** Имя слоя для отладки и тестов: `dialog`, `menu`, `popover`, `suggest`, `image-zoom`, … */
+  id: string;
+  /**
+   * Закрытие слоя по `Escape`. Диспетчер зовёт его, только когда слой —
+   * верхний из открытых. `false` — слой нажатие не принял.
+   */
+  onEscape: KeyOverlayEscapeHandler;
+}
+
+/** Дескриптор зарегистрированного слоя. */
+export interface KeyOverlayHandle {
+  /** Идентификатор слоя ({@link KeyOverlayDef.id}). */
+  readonly id: string;
+  /** Снимает слой с реестра; повторный вызов — no-op. */
+  release(): void;
+  /** Лежит ли слой на вершине реестра — выше никто не открыт. */
+  isTop(): boolean;
+  /**
+   * Обрабатывает `Escape`, только если слой верхний. `true` — нажатие принято
+   * (событие помечено `defaultPrevented`); `false` — нажатие принадлежит слою
+   * выше либо слоёв нет.
+   *
+   * Нужен слоям с ранним capture-перехватом (меню, выпадашка, лупа): они
+   * по-прежнему должны опередить редактор/диалог, но решает, чьё это нажатие,
+   * реестр диспетчера, а не порядок их собственных слушателей.
+   */
+  handleEscape(event: KeyboardEvent): boolean;
+}
+
+interface OverlayEntry {
+  id: string;
+  token: symbol;
+  onEscape: KeyOverlayEscapeHandler;
+}
+
+/** Открытые слои в порядке открытия (вершина — последняя). */
+const overlays: OverlayEntry[] = [];
+
+/** Регистрирует открытый всплывающий слой; {@link KeyOverlayHandle.release} — при закрытии. */
+export function pushKeyOverlay(def: KeyOverlayDef): KeyOverlayHandle {
+  const token = Symbol(def.id);
+  overlays.push({ id: def.id, token, onEscape: def.onEscape });
+  let released = false;
+  const isTop = (): boolean => !released && overlays[overlays.length - 1]?.token === token;
+  return {
+    id: def.id,
+    release: () => {
+      if (released) return;
+      released = true;
+      const index = overlays.findIndex((entry) => entry.token === token);
+      if (index >= 0) overlays.splice(index, 1);
+    },
+    isTop,
+    handleEscape: (event) => {
+      if (!isTop()) return false;
+      if (def.onEscape(event) === false) return false;
+      event.preventDefault();
+      return true;
+    },
+  };
+}
+
+/**
+ * Единственная точка разрешения приоритета всплывающих слоёв: отдаёт `Escape`
+ * верхнему из них. `true` — слой принял нажатие (событие помечено
+ * `defaultPrevented`); `false` — слоёв нет или верхний отказался.
+ */
+export function resolveEscapeOverlay(event: KeyboardEvent): boolean {
+  const top = overlays[overlays.length - 1];
+  if (top === undefined) return false;
+  if (top.onEscape(event) === false) return false;
+  event.preventDefault();
+  return true;
+}
+
 function isKnownContext(id: string): boolean {
   return id === GLOBAL_CONTEXT_ID || contexts.has(id);
 }
@@ -407,6 +518,10 @@ function resolutionOrder(): KeyContextDef[] {
  * без DOM — тестовый слой для {@link installKeymap}.
  */
 export function dispatchKeyEvent(event: KeyboardEvent): boolean {
+  // `Escape` принадлежит верхнему всплывающему слою (меню, поповер, выпадашка,
+  // лупа, панель поиска) — реестр слоёв решает приоритет ДО контекстов
+  // (ошибка 9ff6b606): иначе закрытие панели доставалось диалогу под ней.
+  if (event.key === 'Escape' && !event.repeat && resolveEscapeOverlay(event)) return true;
   const candidates = new Set(eventChordCandidates(event));
   if (candidates.size === 0) return false;
   for (const context of resolutionOrder()) {
@@ -459,6 +574,7 @@ export const keymapInternals = {
   reset(): void {
     contexts.clear();
     stack.length = 0;
+    overlays.length = 0;
     overrides = {};
   },
   /** Разбор сочетания — для проверок нормализации. */
@@ -467,5 +583,9 @@ export const keymapInternals = {
   /** Идентификаторы объявленных контекстов — для проверок утечки объявлений. */
   contextIds(): string[] {
     return [...contexts.keys()];
+  },
+  /** Идентификаторы открытых слоёв — для проверок регистрации/снятия. */
+  overlayIds(): string[] {
+    return overlays.map((entry) => entry.id);
   },
 };

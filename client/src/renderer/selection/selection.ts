@@ -15,11 +15,11 @@
  *   per-entity calls (style, "only parent", property values).
  */
 
-import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { focusFromUi, scheduleRefresh, requireNetworkId } from '../app.js';
 import { t } from '../lib/i18n.js';
 import {
   setAddToSelectionHook,
-  showSelectionThoughtContextMenu,
+  showOutOfCanvasThoughtMenu,
 } from '../canvas/context-menu.js';
 import { buildMultiThoughtSnapshot, type SnapshotDeps } from '../canvas/clipboard.js';
 import { getRef, invalidateRef, onThoughtRefInvalidated, setSelectionClickHooks } from '../canvas/canvas.js';
@@ -63,12 +63,40 @@ let rowOrder: string[] = [];
 const refCache = new Map<string, ThoughtRef>();
 /** Last known non-empty title per id — shown while a re-resolve is in flight. */
 const labelCache = new Map<string, string>();
-/** Ids whose resolve is in flight — guards against duplicate requests. */
-const resolving = new Set<string>();
+/**
+ * Поколение контекста резолва (ошибка b213cf60). Растёт на каждой внешней
+ * инвалидации: монтирование панели, `invalidateAllRefs` (смена слоя),
+ * точечный сброс ref-а, смена сети. Ответ прежнего поколения не публикуется —
+ * иначе поздний ответ старого слоя/сети заполнил бы уже очищенный кэш.
+ */
+let resolveGeneration = 0;
+/**
+ * id → поколение запроса в полёте. Именно поколение, а не флаг: `finally`
+ * старого запроса не должен снимать метку нового, иначе на один id придёт
+ * второй параллельный запрос (ошибка b213cf60).
+ */
+const resolving = new Map<string, number>();
+/**
+ * id, по которым запрос в текущем поколении уже был. Отсутствие ref в
+ * успешном ответе — нормальный ответ контракта (`thoughts.resolve` возвращает
+ * только найденные), поэтому повторять запрос нельзя: панель крутила
+ * `render → resolveRows → render` бесконечно (ошибка b213cf60).
+ */
+const attempted = new Set<string>();
+/**
+ * id, подтверждённо отсутствующие в текущем контексте (успешный ответ без
+ * ref). Строка показывает «недоступна» и не переспрашивается до внешней
+ * инвалидации. Отказ запроса сюда НЕ попадает: absence не подтверждено.
+ */
+const unavailable = new Set<string>();
+/** Последняя сеть отрисовки: смена сети гасит кэши и поколение резолва. */
+let renderedNetworkId: string | null = null;
 /** Unsubscribe of the canvas ref-invalidation signal (re-wired on remount). */
 let unsubRefInvalidation: (() => void) | null = null;
 /** Coalesces multiple invalidation signals into one row repaint. */
 let renderPending = false;
+/** Test seam: number of entered `render()` calls (guard-selection-resolve-loop). */
+let renderCount = 0;
 
 /** One rendered selection row: its element plus the ref/title it was built from. */
 interface SelectionRowEntry {
@@ -114,6 +142,10 @@ export function mountSelection(selectionHost: HTMLElement): () => void {
   refCache.clear();
   labelCache.clear();
   resolving.clear();
+  attempted.clear();
+  unavailable.clear();
+  resolveGeneration += 1;
+  renderedNetworkId = store.state.networkId;
 
   // Ctrl+click wiring (spec §5.1) and list drag-n-drop (§5.5): rows drag onto
   // canvas clouds/zones, and canvas drags can be dropped into the list.
@@ -133,11 +165,20 @@ export function mountSelection(selectionHost: HTMLElement): () => void {
     if (id === null) {
       refCache.clear();
       labelCache.clear();
+      // Смена слоя/полный сброс: разрешённое заново — в новом контексте и
+      // новом поколении; подтверждённые отсутствия больше не действуют.
+      attempted.clear();
+      unavailable.clear();
+      resolveGeneration += 1;
       scheduleRender();
       return;
     }
     if (!store.state.selection.includes(id)) return;
     refCache.delete(id);
+    attempted.delete(id);
+    unavailable.delete(id);
+    // Поздний ответ прежнего поколения не должен вернуть старую метку.
+    resolveGeneration += 1;
     scheduleRender();
   });
 
@@ -183,11 +224,27 @@ function scheduleRender(): void {
 /** Refreshes the panel visibility and rows from the current selection. */
 function render(): void {
   if (host === null || listHost === null) return;
+  renderCount += 1;
+  const networkId = store.state.networkId;
+  if (networkId !== renderedNetworkId) {
+    // Смена сети: прежние ref-ы и подтверждённые отсутствия относятся к её
+    // контексту — гасим их вместе с поколением полётных запросов.
+    renderedNetworkId = networkId;
+    refCache.clear();
+    labelCache.clear();
+    attempted.clear();
+    unavailable.clear();
+    resolveGeneration += 1;
+  }
   const ids = store.state.selection;
   host.classList.toggle('hidden', ids.length === 0);
   if (ids.length === 0) {
     listHost.replaceChildren();
     rows.clear();
+    // Пустое выделение — все прежние попытки резолва больше не актуальны:
+    // повторное добавление id должно получить новую попытку (b213cf60,
+    // замечание верификатора).
+    forgetResolveAttempts(rowOrder);
     rowOrder = [];
     return;
   }
@@ -202,8 +259,11 @@ function render(): void {
   for (const id of plan.removed) {
     rows.get(id)?.el.remove();
     rows.delete(id);
+    // Снятая с выделения мысль при возврате получает новую попытку resolve:
+    // иначе после отказа строка оставалась пустой навсегда (b213cf60).
+    forgetResolveAttempts([id]);
   }
-  const titles = selectionRowTitles(ids, refCache, labelCache);
+  const titles = selectionRowTitles(ids, refCache, labelCache, unavailable);
   for (const id of plan.order) {
     const ref = refCache.get(id) ?? null;
     const text = titles.get(id) ?? '';
@@ -233,8 +293,15 @@ function render(): void {
 export function refreshSelectionPanel(): void {
   if (host?.isConnected !== true) return;
   // Сброс кэша: render() пересоберёт строки по разнице (ref отличается) и
-  // заново разрешит свежие метки корзины/актуальности.
-  for (const id of store.state.selection) refCache.delete(id);
+  // заново разрешит свежие метки корзины/актуальности. Поколение сдвигается,
+  // чтобы поздний ответ прежнего запроса не вернул старые метки, а сброшенные
+  // id снова получили ровно одну попытку.
+  for (const id of store.state.selection) {
+    refCache.delete(id);
+    attempted.delete(id);
+    unavailable.delete(id);
+  }
+  resolveGeneration += 1;
   render();
 }
 
@@ -253,14 +320,22 @@ function buildRow(id: string, ref: ThoughtRef | null, title: string): HTMLElemen
       actions: {
         onClick: (targetId) => {
           // Click on the row focuses the thought (canvas + editor repaint);
-          // it stays in the selection.
-          void setFocus(targetId).catch(() => undefined);
+          // it stays in the selection. Отказ установки фокуса показывается
+          // тостом единым UI-входом (ошибка 1656ef58).
+          focusFromUi(targetId);
         },
         onContextMenu: (event) => {
           event.stopPropagation();
-          // Same context menu as a canvas cloud, minus the selection toggle
-          // (§5.1). Unresolved — an empty title, never the id.
-          showSelectionThoughtContextMenu(event, { id, title, dir: 'siblings' });
+          // Та же композиция команд, что у облачка холста, без команды
+          // выделения (§5.1): запись уже выделена. Строка панели — вне холста,
+          // поэтому «налево» создаёт под родителем САМОЙ мысли: родителя и
+          // сверку сети после ответа держит фасад (ошибка 2baa78fb).
+          // Неразрешённое имя — пустая строка, никогда не id.
+          void showOutOfCanvasThoughtMenu(
+            { event },
+            { id, title, dir: 'siblings' },
+            { hideSelectionCommand: true },
+          );
         },
       },
     },
@@ -290,33 +365,95 @@ function buildRow(id: string, ref: ThoughtRef | null, title: string): HTMLElemen
  * rows that got a new name. Chunked (`resolve` caps at 100 ids per call) and
  * best-effort: a failed resolve leaves the previous label in place — the id is
  * never shown as a name (ошибка 3a64e680).
+ *
+ * Единственный вход — `render()`. Обратного ребра «resolve → render» НЕТ
+ * (ошибка b213cf60): ответ применяется точечно к строкам (`applyResolvedRows`),
+ * а повторный запрос для уже спрошенных id запрещён (`attempted`). Успешный
+ * ответ без ref — подтверждённое отсутствие: строка «недоступна» и больше не
+ * переспрашивается; отказ запроса отсутствие не подтверждает и в «недоступна»
+ * не попадает.
  */
 async function resolveRows(ids: readonly string[]): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const missing = ids.filter((id) => !refCache.has(id) && !resolving.has(id));
+  const generation = resolveGeneration;
+  const missing = ids.filter(
+    (id) => !refCache.has(id) && !attempted.has(id) && resolving.get(id) !== generation,
+  );
   if (missing.length === 0) return;
-  for (const id of missing) resolving.add(id);
+  for (const id of missing) {
+    attempted.add(id);
+    resolving.set(id, generation);
+  }
   try {
-    const resolved: ThoughtRef[] = [];
     for (let i = 0; i < missing.length; i += THOUGHT_RESOLVE_MAX_IDS) {
-      const chunk = await etn.thoughts.resolve(
-        networkId,
-        missing.slice(i, i + THOUGHT_RESOLVE_MAX_IDS),
-      );
-      resolved.push(...chunk);
-    }
-    for (const ref of resolved) {
-      refCache.set(ref.id, ref);
-      if (ref.title !== '') labelCache.set(ref.id, ref.title);
+      const chunkIds = missing.slice(i, i + THOUGHT_RESOLVE_MAX_IDS);
+      const chunk = await etn.thoughts.resolve(networkId, chunkIds);
+      if (generation !== resolveGeneration || networkId !== store.state.networkId) {
+        // Поздний ответ прежнего контекста (сеть/слой): не публикуем. Свои
+        // метки снимаем только там, где новый запрос не успел их занять, —
+        // иначе его `resolving` обнулился бы и пошёл дубль. Если отброшенный
+        // id остался в выделении, для него нужен один компенсирующий запрос:
+        // иначе строка навсегда останется без имени (замечание верификатора:
+        // инвалидация ДРУГОГО id при полётном resolve).
+        let retry = false;
+        for (const id of chunkIds) {
+          if (resolving.get(id) === generation) {
+            resolving.delete(id);
+            attempted.delete(id);
+            if (store.state.selection.includes(id)) retry = true;
+          }
+        }
+        if (retry && host !== null) void resolveRows(store.state.selection);
+        return;
+      }
+      // Публикуем пачки по мере получения: отказ следующей не теряет уже
+      // разрешённые имена. Отсутствие ref в успешной пачке — подтверждённое
+      // «недоступна», а не повод спросить ещё раз.
+      const returned = new Set<string>();
+      for (const ref of chunk) {
+        returned.add(ref.id);
+        refCache.set(ref.id, ref);
+        if (ref.title !== '') labelCache.set(ref.id, ref.title);
+        unavailable.delete(ref.id);
+      }
+      for (const id of chunkIds) {
+        if (!returned.has(id)) unavailable.add(id);
+      }
+      applyResolvedRows();
     }
   } catch {
-    // Имена остаются прежними (или пустыми) — на id не подменяем.
+    // Имена остаются прежними (или пустыми) — на id не подменяем. Отказ не
+    // подтверждает отсутствие мысли: «недоступна» не ставим. Одна попытка на
+    // поколение (`attempted` остаётся) — сетевого шторма при недоступном
+    // сервере нет.
   } finally {
-    for (const id of missing) resolving.delete(id);
+    for (const id of missing) {
+      if (resolving.get(id) === generation) resolving.delete(id);
+    }
   }
-  // Применить разрешённые имена точечно (render сама считает разницу).
-  render();
+}
+
+/**
+ * Точечно применяет разрешённые имена к УЖЕ отрисованным строкам: без
+ * видимости/заголовка панели и без вызова `render()` — ребро «resolve →
+ * render» и было источником бесконечного цикла (ошибка b213cf60). Порядок
+ * строк не меняется; пересобираются только изменившиеся записи.
+ */
+function applyResolvedRows(): void {
+  if (host === null || listHost === null) return;
+  const ids = store.state.selection;
+  const titles = selectionRowTitles(ids, refCache, labelCache, unavailable);
+  for (const id of ids) {
+    const entry = rows.get(id);
+    if (entry === undefined) continue;
+    const ref = refCache.get(id) ?? null;
+    const text = titles.get(id) ?? '';
+    if (entry.ref === ref && entry.title === text) continue;
+    const el = buildRow(id, ref, text);
+    entry.el.replaceWith(el);
+    rows.set(id, { el, ref, title: text });
+  }
 }
 
 /**
@@ -329,12 +466,17 @@ async function resolveRows(ids: readonly string[]): Promise<void> {
 export function invalidateSelectionThought(thoughtId: string): void {
   if (!store.state.selection.includes(thoughtId)) return;
   refCache.delete(thoughtId);
+  attempted.delete(thoughtId);
+  unavailable.delete(thoughtId);
+  // Поздний ответ прежнего поколения не должен вернуть устаревшее имя.
+  resolveGeneration += 1;
   scheduleRender();
 }
 
 /** Toggles the given ids in the selection (adds when missing, else removes). */
 export function toggleSelection(ids: string[]): void {
-  const current = new Set(store.state.selection);
+  const previous = store.state.selection;
+  const current = new Set(previous);
   let changed = false;
   for (const id of ids) {
     if (current.has(id)) {
@@ -344,6 +486,8 @@ export function toggleSelection(ids: string[]): void {
     }
     changed = true;
   }
+  const removed = previous.filter((id) => !current.has(id));
+  if (removed.length > 0) forgetResolveAttempts(removed);
   if (changed) store.update({ selection: [...current] });
 }
 
@@ -368,12 +512,30 @@ export function removeFromSelection(ids: string[]): void {
   if (ids.length === 0) return;
   const drop = new Set(ids);
   const kept = store.state.selection.filter((id) => !drop.has(id));
-  if (kept.length !== store.state.selection.length) store.update({ selection: kept });
+  if (kept.length !== store.state.selection.length) {
+    forgetResolveAttempts(store.state.selection.filter((id) => drop.has(id)));
+    store.update({ selection: kept });
+  }
 }
 
 /** Clears the selection list (the panel hides itself on empty). */
 function clearSelection(): void {
+  forgetResolveAttempts(store.state.selection);
   store.update({ selection: [] });
+}
+
+/**
+ * Забывает попытки резолва для id, покинувших выделение (ошибка b213cf60,
+ * замечание верификатора). Снятие и повторное добавление — новое намерение
+ * пользователя: id снова получает ровно одну попытку, иначе после отказа
+ * запроса строка навсегда оставалась без имени. Имя в `refCache`/`labelCache`
+ * не трогаем — известная подпись показывается сразу.
+ */
+function forgetResolveAttempts(ids: Iterable<string>): void {
+  for (const id of ids) {
+    attempted.delete(id);
+    unavailable.delete(id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,7 +1171,7 @@ async function runImport(): Promise<void> {
   const focus = store.state.focus;
   const parentId = focus?.focused.id;
   if (parentId === undefined) {
-    notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.', 'error');
+    notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.');
     return;
   }
   let picked: Awaited<ReturnType<typeof etn.system.pickArchiveFile>>;
@@ -1050,3 +1212,12 @@ async function runImport(): Promise<void> {
 
 /** Internals for unit tests: the «Действия» item list. */
 export const selectionMenuInternals = { buildActionsMenu };
+
+/**
+ * Тестовые швы панели выделенных: счётчик входов в `render()` — по нему
+ * сторож `guard-selection-resolve-loop` доказывает, что ответ resolve не
+ * запускает повторную отрисовку (ошибка b213cf60).
+ */
+export const selectionInternals = {
+  renderCount: () => renderCount,
+};

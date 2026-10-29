@@ -42,6 +42,11 @@ describe('сторож: meta ответа RestClient привязана к св�
     assert.match(src, /interface ResponseEnvelope<T>/);
     assert.match(src, /requestEnvelope<T>/);
     // `parseResponse` возвращает конверт, а не пишет в состояние класса.
-    assert.match(src, /parseResponse<T>\(res: Response\): Promise<ResponseEnvelope<T>>/);
+    // Необязательный сигнал вызывающего (ошибка 69790006) — параметр метода,
+    // а не общий слот состояния; смысл проверки не меняется.
+    assert.match(
+      src,
+      /parseResponse<T>\(\s*res: Response,\s*callerSignal\?: AbortSignal,?\s*\): Promise<ResponseEnvelope<T>>/,
+    );
   });
 });

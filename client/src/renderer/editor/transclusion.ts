@@ -1805,7 +1805,7 @@ async function copyTransclusionText(text: string, okMessage: string): Promise<vo
     await navigator.clipboard.writeText(text);
     notice(okMessage);
   } catch {
-    notice(t('comment.transclusion.menu.copyError'), 'error');
+    notice(t('comment.transclusion.menu.copyError'));
   }
 }
 
@@ -1824,7 +1824,14 @@ export function transclusionNavHandlers(
       void import('./editor.js').then((m) => m.openThoughtInEditor(sourceId));
     },
     'transclusion.focusSource': () => {
-      void import('../screens/active-view.js').then((m) => m.focusThoughtOnMap(sourceId));
+      // Ленивый импорт может отказать (сбой загрузки чанка) — это не отказ
+      // фокуса: собственный отказ фокуса показывает тостом `focusThoughtOnMap`
+      // (ошибка 1656ef58), здесь только журнал без второго тоста.
+      void import('../screens/active-view.js')
+        .then((m) => m.focusThoughtOnMap(sourceId))
+        .catch((error) => {
+          console.error('[transclusion] не удалось открыть карту мыслей', error);
+        });
     },
     'transclusion.copyLink': () => {
       void copyTransclusionText(raw, t('comment.transclusion.menu.copied'));
@@ -2122,7 +2129,13 @@ export function openTransclusionLinkPopover(
     }),
     commandButton('focus', t('comment.transclusion.menu.focus'), () => {
       close();
-      void import('../screens/active-view.js').then((m) => m.focusThoughtOnMap(currentSourceId));
+      // См. `transclusion.focusSource`: отказ фокуса — тостом внутри
+      // `focusThoughtOnMap`, здесь ловим только отказ импорта.
+      void import('../screens/active-view.js')
+        .then((m) => m.focusThoughtOnMap(currentSourceId))
+        .catch((error) => {
+          console.error('[transclusion] не удалось открыть карту мыслей', error);
+        });
     }),
     commandButton('copy', t('comment.transclusion.menu.copy'), () => {
       const raw = currentRaw();

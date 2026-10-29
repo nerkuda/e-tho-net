@@ -32,15 +32,26 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.views.run',
     {
-      title: 'Исполнить отбор типа относительно мысли',
+      title: 'Исполнить отбор относительно мысли',
+      // 0.14.1 (ошибка 8a87586d): отбор относительно мысли показывает
+      // СОСЕДЕЙ, а не саму мысль — `thought-type-views-service.ts` отбрасывает
+      // якорь (`items.filter(i => i.id !== thoughtId)`) и корректирует `total`.
+      // Поведение осознанное, но описание о нём молчало.
+      // 0.14.1 (задача 54573522): `total` корректируется ТОЛЬКО когда якорь
+      // попал на страницу (`result.items.length > items.length`) — оговорка
+      // выровнена с REST-спекой c989a4e2; проза сжата под бюджет tools/list.
       description:
-        'Run a thought-type view for one thought. `view_name` — имя отбора из `meta.views` ' +
-        'карточки мысли (нормализованное сравнение, регистр не важен) или его `id`; либо ' +
-        'готовое `ast`-тело (грамматика — `etn.guide { topic: "thoughts.query" }`) — ровно одно ' +
-        'из двух. Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
-        'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен; при `ast` — ' +
-        '`meta.ast: true`) и `meta.unresolved` (не пусто, если встретился неразрешимый на ' +
-        'момент исполнения токен — тогда `data` пустая). Удалённая сущность условия — ' +
+        'Run a view for one thought from `meta.views` ' +
+        '(`scope: "type" | "thought"`, `defined_on` — владелец). `view_name` — имя ' +
+        '(нормализовано) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
+        '`etn.guide { topic: "thoughts.query" }`) — ровно одно из двух. `limit`/`offset` — страница, ' +
+        '`order` — направление сортировки. Якорная мысль `thought_id` исключается из выдачи и `total` ' +
+        '— но `total` уменьшается, только если якорь попал на страницу ' +
+        '(сама мысль — `etn.thoughts.get`). Read-only: без бюджета записи и `audit_log`. ' +
+        'Возвращает страницу; при `view_name` — карточку отбора в top-level `view` ' +
+        '(id, имя, `scope`, `defined_on`, `inherited`), при `ast` поля `view` нет — `meta.ast: true`; ' +
+        '`meta.unresolved` (неразрешённый токен — `data` пустая). Не найден — `NOT_FOUND` ' +
+        'с `details.available_views`. Удалённая сущность условия — ' +
         '`VALIDATION_ERROR` (`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
@@ -115,7 +126,10 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
         // Резолв отбора по эффективному набору мысли. Схема гарантирует ровно
         // одно из `view_name`/`ast`, поэтому здесь `view_name` задан.
         const viewName = args.view_name as string;
-        const effective = getEffectiveViewsForThought(ndb, thought);
+        const effective = getEffectiveViewsForThought(ndb, {
+          id: thought.id,
+          type_id: thought.type_id,
+        });
         // Сравнение по `name_key` (trim+lowercase) — соответствует правилу
         // сравнения дублей в `findThoughtTypeViewByTypeAndNameKey`. Если
         // в `view_name` пришёл uuid отбора (id), тоже сматчим — иначе
@@ -143,6 +157,8 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
                 name: v.name,
                 name_key: v.name_key,
                 is_default: v.is_default,
+                scope: v.scope,
+                defined_on: v.defined_on,
               })),
             },
           );
@@ -194,6 +210,7 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             name_key: matched.name_key,
             description: matched.description,
             defined_on: matched.defined_on,
+            scope: matched.scope,
             inherited: matched.inherited,
           },
           data: pageItems,

@@ -46,6 +46,8 @@ import {
   type RealtimeEventType,
 } from '@etn/shared';
 
+import { t } from './i18n.js';
+
 // ---------------------------------------------------------------------------
 // Cloud geometry (11-settings-and-state.md §2.4)
 // ---------------------------------------------------------------------------
@@ -447,10 +449,18 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
       const eNum = typeof eRaw === 'number' ? eRaw : Number(eRaw);
       // The window-width-relative cap (30 %) cannot be applied here because
       // the window width is unknown at parse time; `clampEventAreaW` is run
-      // by the renderer right after the value lands in the store.
+      // by the renderer right after the value lands in the store. A finite
+      // saved width BELOW the new minimum (legacy profiles defaulted to
+      // 150–200 px) is clamped UP to `EVENT_AREA_W_MIN` — resetting it to the
+      // default would throw the user's setting away (verifier remark,
+      // defect de34b35b). Missing/garbage values yield `null` → default.
       const e =
-        Number.isFinite(eNum) && eNum >= EVENT_AREA_W_MIN
-          ? Math.round(eNum)
+        typeof eRaw !== 'undefined' &&
+        eRaw !== null &&
+        eRaw !== '' &&
+        Number.isFinite(eNum) &&
+        eNum > 0
+          ? Math.max(EVENT_AREA_W_MIN, Math.round(eNum))
           : null;
       return {
         w: Number.isFinite(wNum) ? clip(Math.round(wNum), EDITOR_W_MIN, EDITOR_W_MAX) : fallback.w,
@@ -910,6 +920,7 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'thought.updated': 'изменена мысль',
   'thought.deleted': 'удалена мысль',
   'thought.reordered': 'изменён порядок мыслей',
+  'thought.properties.reordered': 'изменён порядок свойств',
   'link.created': 'создана связь',
   'link.updated': 'изменена связь',
   'link.deleted': 'удалена связь',
@@ -965,6 +976,11 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'thought-type-view.updated': 'изменён отбор типа',
   'thought-type-view.deleted': 'удалён отбор типа',
   'thought-type-view.run': 'исполнен отбор',
+  // Внетиповые отборы мысли (0.14.1, задача a28d444b) — те же правила.
+  'thought-custom-view.created': 'добавлен отбор мысли',
+  'thought-custom-view.updated': 'изменён отбор мысли',
+  'thought-custom-view.deleted': 'удалён отбор мысли',
+  'thought-custom-view.run': 'исполнен отбор',
   // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
   'publication.updated': 'изменена публикация',
   'publication.order.reordered': 'изменён порядок публикации',
@@ -1707,20 +1723,48 @@ export function planSelectionRows(
   return { removed, order: [...next] };
 }
 
+/** Ключ словаря для подписи подтверждённо отсутствующей мысли. */
+export const SELECTION_UNAVAILABLE_TITLE_KEY = 'selection.unavailable';
+
 /**
- * Подписи строк панели выделенных: имя разрешённой мысли, для неразрешённой —
- * ПРЕЖНЯЯ подпись, а при её отсутствии пустая строка. Идентификатор мысли в
- * интерфейсе не показывается никогда (ошибка 3a64e680: пока ref-кэш
- * переразрешался, панель на несколько секунд подменяла имена их id).
+ * Подпись строки панели выделенных для подтверждённо отсутствующей мысли
+ * (значение на момент импорта — для сравнений и тестов). В отрисовке берётся
+ * `t(SELECTION_UNAVAILABLE_TITLE_KEY)`, чтобы смена языка подхватывалась
+ * следующей перерисовкой. Текст — из словаря, не литерал (требование
+ * 0e5ff1c6, замечание верификатора к b213cf60).
+ */
+export const SELECTION_UNAVAILABLE_TITLE = t(SELECTION_UNAVAILABLE_TITLE_KEY);
+
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Подписи строк панели выделенных: имя разрешённой мысли, для подтверждённо
+ * отсутствующей — «недоступна», для ещё не разрешённой — ПРЕЖНЯЯ подпись, а
+ * при её отсутствии пустая строка. Идентификатор мысли в интерфейсе не
+ * показывается никогда (ошибка 3a64e680: пока ref-кэш переразрешался, панель
+ * на несколько секунд подменяла имена их id).
+ *
+ * `unavailable` — id, по которым успешный `thoughts.resolve` не вернул ref
+ * (удалена, не видна в текущем слое): такой id не переспрашивается, а строка
+ * честно говорит «недоступна» (ошибка b213cf60). Необязательный параметр:
+ * существующие вызовы и тесты сохраняют прежнюю семантику.
  */
 export function selectionRowTitles(
   ids: readonly string[],
   resolved: ReadonlyMap<string, { title: string }>,
   previous: ReadonlyMap<string, string>,
+  unavailable: ReadonlySet<string> = EMPTY_IDS,
 ): Map<string, string> {
   const titles = new Map<string, string>();
   for (const id of ids) {
-    titles.set(id, resolved.get(id)?.title ?? previous.get(id) ?? '');
+    const found = resolved.get(id)?.title;
+    if (found !== undefined) {
+      titles.set(id, found);
+    } else if (unavailable.has(id)) {
+      titles.set(id, t(SELECTION_UNAVAILABLE_TITLE_KEY));
+    } else {
+      titles.set(id, previous.get(id) ?? '');
+    }
   }
   return titles;
 }

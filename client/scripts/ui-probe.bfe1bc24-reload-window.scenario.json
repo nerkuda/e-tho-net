@@ -1,0 +1,104 @@
+{
+  "name": "bfe1bc24-reload-window",
+  "description": "Ошибка bfe1bc24, круг 4: набранное чип-поле теряется, если перечитывание строки уже началось до ввода. Запускать ТОЛЬКО с задержками: --delay-seed-path thought-types --delay-seed-ms 1500 --delay-seed-response-rule '800:properties' (путь без id: P1 создаётся шагом seed, его id стенду неизвестен; фильтр ограничен засеянной сетью). Seed: тип Т1 с типовым свойством «Теги» (text + config.multiple), у P1 значение «срочно». Открываем P1 → «Свойства» (в поле чип «срочно»), затем внешней записью добавляем P1 значение «смена»: приходит realtime-событие, клиент заводит окно склейки 250 мс и по его закрытию начинает перечитывание; чтение определений типа задержано прокси. Шаг reload-started ждёт СТАРТ перечитывания по условию, а не паузой: группа «Свойства вне типа» перечитывается тем же flush'ом и показывает плейсхолдер «Загрузка…», а старое поле типовой строки ещё в документе — значит чтение уже пошло, но данные ещё не применены. Ответ properties придержан 800 мс именно затем, чтобы этот признак жил, а не был мгновенным. Затем в показанное поле ставится текст «окно» БЕЗ blur. Когда отложенное чтение завершается, пришедший набор «срочно, смена» меняет строку, и reconcileKeyed её пересобирает: повторный flush перед сверкой обязан сохранить «окно» (window-server содержит «окно»; локальный набор при этом оптимистично перезаписывает внешнюю правку — «срочно, окно»). На дофиксовой сборке 09ccd6e7 flush есть только в начале reload, до ввода: строка пересобирается, поле с «окно» снимается без blur, значение гибнет (window-server = «срочно, смена», без «окно»). Запись шага window-set-value отправляется БЕЗ ожидания ответа: ответ POST тоже придержан 800 мс, и сценарий обязан увидеть окно перечитывания до его доставки — иначе на дофиксовой сборке признак старта истекает раньше проверки. Результат записи проверяет window-server.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "seed",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const t1=await et.types.createThoughtType(N,{name:'Т1'}); const pTags=await et.propertyRegistry.create(N,{name:'Теги',value_type:'text',config:{multiple:true}}); await et.types.createTypeProperty(N,'thought_type',t1.id,{mode:'attach',property_id:pTags.id,required:false,position:0}); const r=await et.thoughts.create(N,{title:'Персона 1',type_id:t1.id,create_link:{direction:'parent',target_thought_id:H}}); await et.properties.set(N,'thought',r.id,'Теги','срочно',null); window.__repro={t1:t1.id,tags:pTags.id,P1:r.id}; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "thoughts-on-canvas",
+      "waitFor": "(() => { const b=window.__repro; return b !== undefined && document.querySelector('.cloud[data-id=\"'+b.P1+'\"]') !== null; })()",
+      "timeout": 20000
+    },
+    {
+      "name": "open-p1",
+      "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "p1-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'",
+      "timeout": 20000
+    },
+    {
+      "name": "open-properties-tab",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "p1-chip-visible",
+      "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const t=[...body.querySelectorAll('.prc-title')].map(n=>n.textContent); return t.includes('срочно'); })()",
+      "timeout": 20000
+    },
+    {
+      "name": "window-set-value",
+      "probe": "(async () => { const b=window.__repro; const before=document.querySelector('.properties-type-body .value-chips-input'); window.__windowField=before; window.__windowWrite=window.etn.properties.set('{{networkId}}','thought',b.P1,'Теги','срочно, смена',null).then(()=>'ok',(err)=>{ window.__windowWriteError=String(err); return 'fail'; }); return before !== null ? 'ok' : 'no-input'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "reload-started",
+      "waitFor": "(() => { const body=document.querySelector('.properties-outside-body'); if (body === null) return false; const reading=[...body.querySelectorAll('.prop-wrap span.muted')].some((n)=>n.textContent.trim() === 'Загрузка…'); const field=window.__windowField; return reading && field !== null && field.isConnected; })()",
+      "timeout": 5000
+    },
+    {
+      "name": "window-mark-set",
+      "probe": "(() => { const i=window.__windowField; if(!i || !i.isConnected) return 'stale-input'; i.setAttribute('data-probe','x'); i.value='окно'; i.dispatchEvent(new Event('input')); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-typed",
+      "probe": "(() => { const i=window.__windowField; return i && i.value === 'окно' && i.isConnected ? 'ok' : 'bad'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-settled-rebuild",
+      "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const t=[...body.querySelectorAll('.prc-title')].map(n=>n.textContent); return t.includes('смена'); })()",
+      "timeout": 15000
+    },
+    {
+      "name": "window-old-field-gone",
+      "probe": "(() => { const i=window.__windowField; return i !== null && i.isConnected === false ? 'ok' : 'still-connected'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "window-server",
+      "probe": "(async () => { if (window.__windowWrite) { const w=await window.__windowWrite; if (w !== 'ok') return 'write-fail' + (window.__windowWriteError ? ': '+window.__windowWriteError : ''); } await new Promise((r)=>setTimeout(r,600)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()",
+      "expect": "срочно, окно"
+    }
+  ]
+}

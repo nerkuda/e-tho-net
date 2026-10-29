@@ -2791,8 +2791,11 @@ export function buildChoiceMenuBody(
   }
 
   // Клавиатура списка (п.4): ↑/↓ — по вертикали ВНУТРИ столбца (колонка не
-  // меняется), ←/→ — между столбцами, Home/End — начало/конец, PgUp/PgDn —
-  // выделение на страницу (а не прокрутка без выделения), Enter — выбор.
+  // меняется), ←/→ — к соседу слева/справа В СВОЁМ ряду (стандарт b6b2821d,
+  // решение пользователя 2026-10-25: у крайней колонки соседа нет — событие
+  // не гасим и курсор не перескакивает на соседнюю строку), Home/End —
+  // начало/конец, PgUp/PgDn — выделение на страницу (а не прокрутка без
+  // выделения), Enter — выбор.
   const onKeydown = (event: KeyboardEvent): void => {
     const key = event.key;
     const count = renderedButtons.length;
@@ -2815,14 +2818,17 @@ export function buildChoiceMenuBody(
       setCursor(cursor < 0 ? origin(true) : vertical(cursor, -1));
       return;
     }
-    if (key === 'ArrowRight') {
+    if (horizontal) {
+      // Соседа нет (нет курсора, край ряда, одноколоночный раздел) — событие
+      // остаётся необработанным: каретка/скролл владельца не ломаются.
+      if (cursor < 0) return;
+      const pos = layout[cursor];
+      if (pos === undefined) return;
+      const rowStart = Math.floor(pos.i / pos.cols) * pos.cols;
+      const next = key === 'ArrowRight' ? pos.i + 1 : pos.i - 1;
+      if (next < rowStart || next >= rowStart + pos.cols || next >= groupSizes[pos.g]!) return;
       event.preventDefault?.();
-      setCursor(cursor < 0 ? origin(false) : Math.min(count - 1, cursor + 1));
-      return;
-    }
-    if (key === 'ArrowLeft') {
-      event.preventDefault?.();
-      setCursor(cursor < 0 ? origin(false) : Math.max(0, cursor - 1));
+      setCursor(flatOf(pos.g, next));
       return;
     }
     if (key === 'Home') {

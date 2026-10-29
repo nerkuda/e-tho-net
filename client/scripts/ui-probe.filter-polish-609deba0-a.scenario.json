@@ -1,6 +1,6 @@
 {
   "name": "filter-polish-609deba0-a",
-  "description": "Полировка, часть 4 (ошибка 609deba0), группа A + C1. Онбординг → карта (C1: диалог отбора из «+» зоны фокуса — создание и правка) → «Структуры мыслей» (A1 нет «Выборки» у типа, A2 отмена возвращает «Список», A3 неявное значение триады, A4 двойной клик по дате в календаре). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-609deba0-a.scenario.json --out .tmp/etn-609deba0-a/out",
+  "description": "Полировка, часть 4 (ошибка 609deba0), группа A + C1. Онбординг → карта (C1: у типизированной мысли «+» зоны фокуса открывает МЕНЮ «Новый отбор типа мысли» / «Новый отбор вне типа» (спека df84de22), затем диалог отбора — создание и правка) → «Структуры мыслей» (A1 нет «Выборки» у типа, A2 отмена возвращает «Список», A3 неявное значение триады, A4 двойной клик по дате в календаре). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.filter-polish-609deba0-a.scenario.json --out .tmp/etn-609deba0-a/out",
   "timeout": 300000,
   "steps": [
     {
@@ -75,6 +75,15 @@
     {
       "name": "c1-click-add",
       "click": ".canvas-filter-strip-add"
+    },
+    {
+      "name": "c1-add-menu",
+      "timeout": 15000,
+      "waitFor": "(() => [...document.querySelectorAll('.menu-item')].some((e)=>(e.textContent||'').includes('Новый отбор типа мысли')))()"
+    },
+    {
+      "name": "c1-pick-type-view",
+      "eval": "(() => { const it=[...document.querySelectorAll('.menu-item')].find(e=>(e.textContent||'').includes('Новый отбор типа мысли')); if(!it) return 'no-item'; it.click(); return 'ok'; })()"
     },
     {
       "name": "c1-create-dialog",

@@ -10,6 +10,7 @@
 import type { EtnErrorCode } from '../errors.js';
 import type { FocusDir, IconKind, LinkStyle, SortKind, SortOrder } from '../enums.js';
 import type { HoldingLayerRef } from './trash.js';
+import type { ThoughtViewScope } from './thought-type-view.js';
 
 /** A thought entity (02-data-model.md §3.1, 03-server-api.md §6.1). */
 export interface Thought {
@@ -518,12 +519,22 @@ export interface ThoughtMetaView {
   name_key: string;
   /** Описание отбора; `null`, если его нет. */
   description: string | null;
-  /** Id типа мысли, на котором отбор определён (свой или унаследованный). */
+  /** Id типа мысли или мысли-владельца, на котором отбор определён. */
   defined_on: string;
+  /** Владелец отбора: тип мысли или сама мысль (внетиповой, 0.14.1). */
+  scope: ThoughtViewScope;
   /** `true` — отбор унаследован от типа-предка. */
   inherited: boolean;
   /** `true` — отбор открывается сам при переводе мысли в фокус. */
   is_default: boolean;
+  /**
+   * Собственная пометка «по умолчанию» строки владельца — без учёта
+   * наследования и перекрытия внетиповым дефолтом мысли. Агент, решающий,
+   * что произойдёт при переносе, обязан смотреть сюда: сервер снимает пометку
+   * по собственной, а эффективный {@link is_default} бывает занулён
+   * перекрытием (0.14.1).
+   */
+  own_default: boolean;
 }
 
 /** Превью постоянного комментария (task N2). */

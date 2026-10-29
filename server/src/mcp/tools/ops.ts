@@ -23,7 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, validateTypeRoles } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, MCP_TOOL_ANNOTATIONS, TRAVERSAL_DEFAULTS, parseLinkTypeFilterValue, validateTypeRoles } from '@etn/shared';
 import type { ExportFormat, LayerMergeReport, McpChangeEntry, McpMutationResult, Network, OntologyDeleteParams, OntologyDeleteResult } from '@etn/shared';
 
 import { closeNetworkDb, openNetworkDb } from '../../db/network-db.js';
@@ -122,7 +122,11 @@ import { clearThoughtRefUsages, crossResolvePropertyValue, getNetworkProperty, r
 import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { getLinkType } from '../../domain/link-type-service.js';
-import { listThoughtTypeViewsByType } from '../../domain/thought-type-views-service.js';
+import {
+  getThoughtTypeView,
+  listOwnEffectiveTypeViews,
+  toEffectiveTypeView,
+} from '../../domain/thought-type-views-service.js';
 import type { CrossNetworkAccessContext } from '../../domain/cross-network-ref-service.js';
 import { updateNetwork } from '../../domain/network-write-service.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../../domain/layer-service.js';
@@ -132,6 +136,7 @@ import { projectLinkRow, projectThoughtRows } from '../../domain/response-projec
 import { thoughtTypeCatalog, withSanitizedIcon } from '../catalogs.js';
 import type { AnyWriteEvent, WriteActivityEntry } from '../../domain/write-wrapper.js';
 import {
+  assertNetworkAccess,
   auditAgentCall,
   etnErrorText,
   mcpLayerClientId,
@@ -905,7 +910,11 @@ const HANDLERS: Record<string, OpHandler> = {
     const a = p as unknown as z.infer<typeof ThoughtsPath.schema>;
     return runTool(async () => {
       const ndb = openMemberNetwork(rt, a.network_id);
-      const path = findPath(ndb, a.from_id, a.to_id, a.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, a.link_filter);
+      // 0.14.1 (ошибка 35c8f16e, правило аналогов): MCP-путь тоже валидирует
+      // `link_filter` строго — присутствующий пустой фильтр не означает «без
+      // фильтра» (`parseLinkTypeFilterValue`, паритет с neighbors/query/subgraph).
+      const linkFilter = parseLinkTypeFilterValue(a.link_filter);
+      const path = findPath(ndb, a.from_id, a.to_id, a.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH, linkFilter);
       const thoughts =
         path === null
           ? undefined
@@ -973,6 +982,11 @@ const HANDLERS: Record<string, OpHandler> = {
     return runWriteTool(rt, a.target_network_id, () => {
       requireWritable(rt);
       requireWriteBudget(rt);
+      // Сеть-ИСТОЧНИК проверяется до открытия: `openNetworkDb` создаёт
+      // каталог и `data.db`, поэтому неизвестный/недоступный id оставлял в
+      // каталоге данных фантомную сеть (ошибка 6613839f). Тот же guard, что у
+      // сети-получателя (`openMemberNetwork`) и корневой проверки 2c3a42cd.
+      assertNetworkAccess(rt, a.source_network_id);
       const sourceNdb = openNetworkDb(rt.deps.dataDir, a.source_network_id);
       const targetNdb = openMemberNetwork(rt, a.target_network_id);
       const fx = mcpWriteFx(rt, a.target_network_id, extra.requestId);
@@ -1702,8 +1716,28 @@ const HANDLERS: Record<string, OpHandler> = {
           a.key,
           a.value,
           rt.deps.auth.userId,
+          a.side ?? null,
         );
         const marked = result.link_id !== null ? getLink(ndb, result.link_id) : null;
+        const audit = {
+          action: 'etn.properties.remove',
+          targetType: a.owner_type,
+          targetId: a.owner_id,
+          details: { key: a.key, value: a.value },
+        };
+        // Умное удаление (0.14.1, ADR a967d865): основа/свежее ребро слоя —
+        // физически (`link.deleted`); ребро из основы в слое — корзина
+        // (`link.updated`). Уже помеченное — no-op без события.
+        if (result.action === 'deleted' && result.link_id !== null) {
+          return {
+            result,
+            events: [{ type: 'link.deleted' as const, data: { id: result.link_id } }],
+            ...(result.link === null
+              ? {}
+              : { activity: [{ kind: 'link' as const, action: 'deleted' as const, link: result.link }] }),
+            audit,
+          };
+        }
         return {
           result,
           ...(marked === null
@@ -1721,12 +1755,7 @@ const HANDLERS: Record<string, OpHandler> = {
                 ],
                 activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
               }),
-          audit: {
-            action: 'etn.properties.remove',
-            targetType: a.owner_type,
-            targetId: a.owner_id,
-            details: { key: a.key, value: a.value },
-          },
+          audit,
         };
       });
       return { link_id: res.link_id, request_id: String(extra.requestId) };
@@ -1766,15 +1795,25 @@ const HANDLERS: Record<string, OpHandler> = {
       };
       const result: OntologyDeleteResult = runWrite(ndb, fx, () => {
         // Pre-fetch snapshots BEFORE the mutation, to record accurate
-        // activity rows (mirror REST).
+        // activity rows (mirror REST) and events. Каскад отборов типа снимаем
+        // ДО удаления: после удаления типа `listOwnEffectiveTypeViews` уже
+        // пуст, и события `thought-type-view.deleted` не уходили (0.14.1,
+        // ошибка 1242f78d). Отдельный `type_view` тоже читаем до удаления —
+        // иначе событие несло `thought_type_id: ''` (ошибка 1242f78d, п. в).
         let snapshot: unknown = null;
+        let cascadedViews: ReturnType<typeof listOwnEffectiveTypeViews> = [];
+        let removedView: ReturnType<typeof toEffectiveTypeView> | null = null;
         try {
           if (a.kind === 'thought_type') {
             snapshot = getThoughtType(ndb, a.id);
+            cascadedViews = listOwnEffectiveTypeViews(ndb, a.id);
           } else if (a.kind === 'link_type') {
             snapshot = getLinkType(ndb, a.id);
           } else if (a.kind === 'property') {
             snapshot = getNetworkProperty(ndb, a.id);
+          } else if (a.kind === 'type_view') {
+            const view = getThoughtTypeView(ndb, a.id);
+            removedView = view === null ? null : toEffectiveTypeView(view);
           }
         } catch {
           snapshot = null;
@@ -1788,35 +1827,35 @@ const HANDLERS: Record<string, OpHandler> = {
           if (a.kind === 'thought_type') {
             events.push({ type: 'thought-type.deleted', data: { id: a.id } });
             // Каскад отборов (задача c1fa71d4): отдельное событие
-            // `thought-type-view.deleted` на каждый каскадно удалённый отбор.
-            const cascadedViews =
-              (removed.affected_counts.type_views_count ?? 0) > 0
-                ? listThoughtTypeViewsByType(ndb, a.id).map((v) => ({ id: v.id }))
-                : [];
+            // `thought-type-view.deleted` на каждый удалённый отбор — с полной
+            // карточкой-снапшотом (0.14.1, ошибки 69aa355c/1242f78d).
             for (const view of cascadedViews) {
               events.push({
                 type: 'thought-type-view.deleted',
-                data: { thought_type_id: a.id, view_id: view.id },
+                data: {
+                  thought_type_id: view.thought_type_id,
+                  view_id: view.id,
+                  view,
+                },
               });
             }
           } else if (a.kind === 'link_type') {
             events.push({ type: 'link-type.deleted', data: { id: a.id } });
           } else if (a.kind === 'property') {
             events.push({ type: 'property-registry.deleted', data: { id: a.id } });
-          } else if (a.kind === 'type_view') {
-            // Отбор удаляется без snapshot (rich-DTO для эха нет), событие
-            // шлём всегда.
-            events.push({
-              type: 'thought-type-view.deleted',
-              data: { thought_type_id: '', view_id: a.id },
-            });
           }
-        } else if (a.kind === 'type_view') {
-          // snapshot null (отбор уже удалили раньше или не было): всё равно
-          // шлём событие, чтобы подписчики узнали об удалении.
+        }
+        // Отдельный отбор: событие — только если строку реально нашли до
+        // удаления (иначе это повторный delete, менять нечего и адресовать
+        // событие нечем — 0.14.1, ошибка 1242f78d).
+        if (a.kind === 'type_view' && removedView !== null) {
           events.push({
             type: 'thought-type-view.deleted',
-            data: { thought_type_id: '', view_id: a.id },
+            data: {
+              thought_type_id: removedView.thought_type_id,
+              view_id: removedView.id,
+              view: removedView,
+            },
           });
         }
 
@@ -1903,7 +1942,8 @@ function renderTopic(entry: OpEntry): string {
     '',
     entry.when,
     '',
-    `Группа: ${entry.group}. Инструмент до слияния: \`${entry.tool}\`.`,
+    `Группа: ${entry.group}. Снят из постоянного набора: \`${entry.tool}\`.`,
+    `Вызов — только через \`etn.ops { action: "${entry.action}" }\`.`,
     `Деструктивна: ${entry.destructive ? 'да — требуется `confirm: true` на верхнем уровне `etn.ops`' : 'нет'}.`,
     `Read-only: ${entry.readOnly ? 'да' : 'нет'}.`,
     '',

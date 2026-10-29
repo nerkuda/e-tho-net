@@ -55,17 +55,24 @@ export const EDITOR_H_MAX = 700;
 /** Default editor height for a fresh client installation. */
 export const EDITOR_H_DEFAULT = 300;
 
-/** Minimum event-area width in the status bar (08-ui-spec §11: «последнее
- *  событие»). The value is stored in the L4 `window_layout.e` slot and is
- *  clamped at drag time against the upper bound (a fraction of the client
- *  window width) so the area never steals more than a third of the screen. */
-export const EVENT_AREA_W_MIN = 150;
+/** Minimum event-area width in the status bar (08-ui-spec §11). The area now
+ *  starts with the connection indicator (dot + caption, 106 px) and also
+ *  holds the thought counts and the last event text, so the lower bound is
+ *  measured against that content: 320 px keeps the caption and the counts
+ *  visible with a readable tail of the event text (was 150 px when the
+ *  indicator lived outside). The value is stored in the L4 `window_layout.e`
+ *  slot and is clamped at drag time against the upper bound (a fraction of
+ *  the client window width) so the area never steals more than a third of
+ *  the screen. */
+export const EVENT_AREA_W_MIN = 320;
 /** Upper bound for the event-area width as a fraction of the client window
  *  width (08-ui-spec §11: 30 %). Used by the drag-resize clamp so the value
  *  survives window resizes proportionally without re-reading the layout. */
 export const EVENT_AREA_W_MAX_RATIO = 0.3;
-/** Floor of the default event-area width (08-ui-spec §11: `max(200px, 18%)`). */
-export const EVENT_AREA_W_DEFAULT_PX = 200;
+/** Floor of the default event-area width (08-ui-spec §11: `max(360px, 18%)`).
+ *  360 px is the measured comfortable width: indicator + counts + a full
+ *  short event text without ellipsis. */
+export const EVENT_AREA_W_DEFAULT_PX = 360;
 /** Share of the client window width used as the lower bound of the default
  *  event-area width (08-ui-spec §11: 18 %). */
 export const EVENT_AREA_W_DEFAULT_RATIO = 0.18;

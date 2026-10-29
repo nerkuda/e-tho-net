@@ -175,6 +175,54 @@ describe('drag-list: перетаскивание указателем (d13fd645
     assert.deepEqual(calls, [{ group: 'g', keys: ['a', 'c', 'b'] }]);
   });
 
+  it('нижняя половина непосредственно предыдущей строки — no-op, не конец списка', () => {
+    // Регресс общего фасада (задача 223f7d50): `before` совпадал с ключом
+    // самой перетаскиваемой строки, и она уезжала в конец.
+    const a = makeItem('a');
+    const b = makeItem('b');
+    const c = makeItem('c');
+    a.element.getBoundingClientRect = () => rect(0, 20);
+    b.element.getBoundingClientRect = () => rect(20, 40);
+    c.element.getBoundingClientRect = () => rect(40, 60);
+    const { calls } = setup([a, b, c], null);
+    drag(b.handle, 25, [15]);
+    assert.deepEqual(calls, [], 'порядок не меняется');
+  });
+
+  it('верхняя половина непосредственно следующей строки — no-op', () => {
+    const a = makeItem('a');
+    const b = makeItem('b');
+    const c = makeItem('c');
+    a.element.getBoundingClientRect = () => rect(0, 20);
+    b.element.getBoundingClientRect = () => rect(20, 40);
+    c.element.getBoundingClientRect = () => rect(40, 60);
+    const { calls } = setup([a, b, c], null);
+    drag(b.handle, 25, [45]);
+    assert.deepEqual(calls, [], 'порядок не меняется');
+  });
+
+  it('жесты через строку по-прежнему переставляют (вниз и вверх)', () => {
+    const makeThree = (): ShimItem[] => {
+      const a = makeItem('a');
+      const b = makeItem('b');
+      const c = makeItem('c');
+      a.element.getBoundingClientRect = () => rect(0, 20);
+      b.element.getBoundingClientRect = () => rect(20, 40);
+      c.element.getBoundingClientRect = () => rect(40, 60);
+      return [a, b, c];
+    };
+
+    const down = makeThree();
+    const downSetup = setup(down, null);
+    drag(down[0]!.handle, 5, [35]);
+    assert.deepEqual(downSetup.calls, [{ group: 'g', keys: ['b', 'a', 'c'] }]);
+
+    const up = makeThree();
+    const upSetup = setup(up, null);
+    drag(up[2]!.handle, 55, [5]);
+    assert.deepEqual(upSetup.calls, [{ group: 'g', keys: ['c', 'a', 'b'] }]);
+  });
+
   it('до порога перетаскивание не начинается (клик не меняет порядок)', () => {
     const a = makeItem('a');
     const b = makeItem('b');
@@ -209,6 +257,36 @@ describe('drag-list: перетаскивание указателем (d13fd645
     const { calls } = setup([a, b, c], null);
     drag(a.handle, 5, [35]);
     assert.deepEqual(calls, [{ group: 'g', keys: ['B', 'A', 'C'] }]);
+  });
+
+  it('pointerdown на контрол внутри строки-грипа не начинает жест и не гасит click', () => {
+    // Потребитель с захватом ВСЕЙ строки (таблица привязок редактора типа,
+    // задача 1425457f): чекбокс/кнопка внутри строки обязаны оставаться
+    // кликабельными — `preventDefault` на pointerdown погасил бы их click.
+    const a = makeItem('a');
+    const button = new ShimElement('button');
+    a.element.append(button);
+    a.item.handle = a.element as unknown as HTMLElement;
+    const b = makeItem('b');
+    a.element.getBoundingClientRect = () => rect(0, 20);
+    b.element.getBoundingClientRect = () => rect(20, 40);
+    const { calls } = setup([a, b], null);
+    let prevented = false;
+    a.element.emit('pointerdown', {
+      button: 0,
+      clientY: 5,
+      clientX: 0,
+      pointerId: 1,
+      target: button,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    a.element.emit('pointermove', { clientY: 45, clientX: 0, pointerId: 1 });
+    a.element.emit('pointerup', { pointerId: 1 });
+    assert.equal(prevented, false, 'click контрола не отменяется');
+    assert.deepEqual(calls, [], 'перетаскивание не началось');
+    assert.equal(a.element.classList.contains(DRAG_ACTIVE_CLASS), false);
   });
 
   it('идентичность строки и node_key разведены (повтор вхождения)', () => {

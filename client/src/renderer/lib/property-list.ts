@@ -39,6 +39,12 @@
  * подключённые имена этой стороны заблокированы и помечены, второе имя той же
  * связи остаётся доступным.
  *
+ * **Исключение присутствующих (0.14.1, задача 626b29bd, требование 87039bc8).**
+ * Пикер вкладки «Свойства» передаёт `excludeRow`: строки, уже присутствующие
+ * у мысли (обе группы, по стороне), просто ОТСУТСТВУЮТ в выдаче — без
+ * блокировки и пометок. Второй режим блокировки не отменяет: без предиката
+ * список ведёт себя как раньше (оба существующих потребителя).
+ *
  * Модуль самодостаточен: модель строк, форматирование ячеек, фильтр и поиск
  * живут здесь — параллельных списков свойств в экранах нет (сторож
  * `guard-property-list.test.ts`).
@@ -56,16 +62,22 @@ import { store } from '../state.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { createTable } from './ui/table.js';
+import { bindSearchNav } from './ui/search-nav.js';
 
 /** Строка реестра свойств сети (`GET /networks/{nid}/properties`) со
  *  счётчиками. Свойство-связь несёт счётчики каждой стороны
  *  (`types_source_count` / `types_target_count`) — их и показывает колонка
- *  «Кол-во типов» у соответствующего конца. */
+ *  «Кол-во типов» у соответствующего конца. `binding_source_type_ids` /
+ *  `binding_target_type_ids` — те же привязки по сторонам в виде id типов:
+ *  из них строится ограничение значения внетиповой строки и массового
+ *  диалога (ошибка f8f8fa49). */
 export interface PropertyRegistryRow extends NetworkProperty {
   types_count: number;
   values_count: number;
   types_source_count?: number;
   types_target_count?: number;
+  binding_source_type_ids?: string[];
+  binding_target_type_ids?: string[];
 }
 
 /** Человекочитаемые подписи видов значения. */
@@ -221,6 +233,20 @@ export function propertyListColumns(): readonly string[] {
  *  (скаляры и концы связей). Не мутирует вход. Чистая — юнит-тест. */
 export function sortPropertyListRows(rows: readonly PropertyListRow[]): PropertyListRow[] {
   return [...rows].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+}
+
+/**
+ * Исключение строк предикатом потребителя (пикер вкладки «Свойства», 0.14.1,
+ * требование 87039bc8): строки, для которых предикат истинен, отсутствуют в
+ * выдаче ЦЕЛИКОМ — без пометок-блокировок. Без предиката возвращается копия
+ * входа (прежнее поведение менеджера и пикера редактора типа). Чистая —
+ * юнит-тест.
+ */
+export function excludePropertyListRows(
+  rows: readonly PropertyListRow[],
+  excludeRow?: (row: PropertyListRow) => boolean,
+): PropertyListRow[] {
+  return excludeRow === undefined ? [...rows] : rows.filter((row) => !excludeRow(row));
 }
 
 /**
@@ -413,6 +439,27 @@ export function valueTypeIconName(valueType: PropertyValueType): IconName | null
   return VALUE_TYPE_ICONS[valueType] ?? null;
 }
 
+/**
+ * Знак перед именем свойства: значок вида значения у скаляра либо единый
+ * значок конца связи (требование 4). Один способ для эталонного списка
+ * свойств, таблиц вкладки «Свойства» и строк-черновиков (ошибки 9717157f,
+ * 8d78fada): второй разметки значка в клиенте не заводить.
+ */
+export function buildPropertyValueMark(
+  valueType: PropertyValueType,
+  link: { side: LinkPropertySide | null; visual: ResolvedLinkVisual | null } = {
+    side: null,
+    visual: null,
+  },
+): Element | null {
+  if (valueType === 'link') return buildLinkEndIcon(linkEndIconSpec(link.side, link.visual));
+  const iconName = valueTypeIconName(valueType);
+  if (iconName === null) return null;
+  const icon = svgIcon(iconName, 14);
+  icon.classList.add('property-list-icon');
+  return icon;
+}
+
 /** Описание свойства для ⓘ: непустой обрезанный текст, иначе `null` (тогда
  *  символа нет — требование 5). Чистая — юнит-тест. */
 export function propertyDescriptionHint(row: PropertyListRow): string | null {
@@ -469,8 +516,9 @@ export interface PropertyListCallbacks {
   /** Активация строки (Enter или двойной клик): менеджер — редактор свойства,
    *  пикер — выбор строки. Заблокированные и структурные строки не активируются. */
   onActivate: (row: PropertyListRow) => void;
-  /** Контекстное меню «Изменить» — редактор свойства. */
-  onEdit: (row: PropertyListRow) => void;
+  /** Контекстное меню «Изменить» — редактор свойства. Не задан — пункта меню
+   *  нет (пикеру массового изменения свойств править определение незачем). */
+  onEdit?: (row: PropertyListRow) => void;
   /** Контекстное меню «Удалить» (только режим менеджера) — подтверждение и
    *  запрос живут у потребителя, список лишь передаёт строку. */
   onDelete?: (row: PropertyListRow) => void;
@@ -515,6 +563,16 @@ export function buildPropertyList(opts: {
   searchPlaceholder?: string;
   emptyText?: string;
   emptyHint?: string;
+  /**
+   * Пикер: строки, для которых предикат истинен, ИСКЛЮЧАЮТСЯ из выдачи
+   * целиком — без пометки-блокировки (требование 87039bc8, задача 626b29bd:
+   * «свойства, уже присутствующие у мысли», обе группы, по стороне).
+   * Потребитель сам знает, что считается присутствующим у его владельца;
+   * компонент лишь убирает такие строки из списка, поиска и выбора.
+   * Не задан — прежнее поведение (менеджер свойств, пикер редактора типа:
+   * подключённые имена блокируются через {@link PropertyListCallbacks.rowBlocked}).
+   */
+  excludeRow?: (row: PropertyListRow) => boolean;
 }): PropertyListHandle {
   const { mode, callbacks } = opts;
 
@@ -550,7 +608,7 @@ export function buildPropertyList(opts: {
         disabled: true,
         onClick: () => {
           const row = selected();
-          if (row !== null && !row.structural) callbacks.onEdit(row);
+          if (row !== null && !row.structural) callbacks.onEdit?.(row);
         },
       })),
       (deleteBtn = uiButton({
@@ -589,12 +647,20 @@ export function buildPropertyList(opts: {
   const blockReason = (row: PropertyListRow): string | null =>
     row.structural ? null : callbacks.rowBlocked?.(row) ?? null;
 
+  /** Исключена ли строка предикатом потребителя (её просто нет в выдаче). */
+  const isExcluded = (row: PropertyListRow): boolean => opts.excludeRow?.(row) === true;
+
   const visibleRows = (): PropertyListRow[] =>
-    filterPropertyListRows(sortPropertyListRows(allRows), query);
+    filterPropertyListRows(
+      sortPropertyListRows(excludePropertyListRows(allRows, opts.excludeRow)),
+      query,
+    );
 
   /** Текущая строка списка (правило 5 требования 11ddd910). */
   function selected(): PropertyListRow | null {
-    return selectedId === null ? null : allRows.find((r) => r.id === selectedId) ?? null;
+    if (selectedId === null) return null;
+    const row = allRows.find((r) => r.id === selectedId) ?? null;
+    return row !== null && !isExcluded(row) ? row : null;
   }
 
   /** Копирует текущую строку в буфер обмена (TSV фасада `lib/ui/table`). */
@@ -626,13 +692,16 @@ export function buildPropertyList(opts: {
    *  менеджеру (правило 8 требования 11ddd910). */
   function rowMenu(row: PropertyListRow): MenuItem[] {
     if (row.structural) return [];
-    const items: MenuItem[] = [
-      menuAction(t('propertyList.menu.edit'), () => callbacks.onEdit(row)),
+    const items: MenuItem[] = [];
+    if (callbacks.onEdit !== undefined) {
+      items.push(menuAction(t('propertyList.menu.edit'), () => callbacks.onEdit?.(row)));
+    }
+    items.push(
       menuAction(t('listActions.copy'), () => {
         table.setCurrent(row.id);
         copyCurrent();
       }),
-    ];
+    );
     if (mode === 'manager' && callbacks.onDelete !== undefined) {
       items.push(
         menuAction(t('actions.delete'), () => callbacks.onDelete?.(row), { danger: true }),
@@ -646,14 +715,7 @@ export function buildPropertyList(opts: {
    *  (требование 4). */
   function buildNameMark(row: PropertyListRow): Element | null {
     if (row.structural) return null;
-    if (row.valueType === 'link') {
-      return buildLinkEndIcon(linkEndIconSpec(row.side, row.visual));
-    }
-    const iconName = valueTypeIconName(row.valueType);
-    if (iconName === null) return null;
-    const icon = svgIcon(iconName, 14);
-    icon.classList.add('property-list-icon');
-    return icon;
+    return buildPropertyValueMark(row.valueType, { side: row.side, visual: row.visual });
   }
 
   /** Ячейка «Имя»: знак + имя, у структурных/заблокированных — пометка и
@@ -775,11 +837,20 @@ export function buildPropertyList(opts: {
     refresh();
   });
 
+  // Поиск — первая строка списка (правило 1 требования 11ddd910): ↓/↑/Enter из
+  // него исполняет штатную навигацию таблицы (ядро nav-core), оставаясь в поле —
+  // набор запроса продолжается, выделение и прокрутка списка видны. Второго
+  // разбора клавиш нет (ошибка 58981cf5, стандарт b6b2821d).
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
+
   return {
     root,
     setRows: (rows: readonly PropertyListRow[]) => {
       allRows = rows;
-      if (selectedId !== null && !rows.some((r) => r.id === selectedId)) {
+      if (
+        selectedId !== null &&
+        !rows.some((r) => r.id === selectedId && !isExcluded(r))
+      ) {
         selectedId = null;
         table.setCurrent(null);
       }
@@ -789,7 +860,7 @@ export function buildPropertyList(opts: {
     selected,
     selectRow: (id: string) => {
       const row = allRows.find((r) => r.id === id) ?? null;
-      if (row === null || row.structural || blockReason(row) !== null) return;
+      if (row === null || row.structural || isExcluded(row) || blockReason(row) !== null) return;
       selectedId = id;
       table.setCurrent(id);
       updateButtons();

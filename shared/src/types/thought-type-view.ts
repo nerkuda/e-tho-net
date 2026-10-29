@@ -82,6 +82,80 @@ export interface ThoughtTypeViewUpdateInput {
 }
 
 /**
+ * Владелец отбора в эффективном наборе мысли (требование 045f539a,
+ * 0.14.1): отбор типа (`type`) или внетиповой отбор самой мысли (`thought`).
+ */
+export type ThoughtViewScope = 'type' | 'thought';
+
+/**
+ * Внетиповой отбор мысли — строка ветвимой таблицы `thought_custom_views`
+ * (миграция 052; сущность 52d34fed, ADR 6021918b). Форма повторяет
+ * {@link ThoughtTypeView} с заменой владельца на мысль.
+ */
+export interface ThoughtCustomView {
+  id: string;
+  /** Логический id мысли-владельца (`thought_id` в таблице). */
+  thought_id: string;
+  /** Видимое имя (1..200 символов). */
+  name: string;
+  /** Нормализованное имя (trim + lowercase) — ключ дубля и перекрытия. */
+  name_key: string;
+  description: string | null;
+  /** JSON-строка определения отбора (тот же формат, что у отбора типа). */
+  definition: string;
+  /** Порядок кнопки среди внетиповых отборов мысли. */
+  position: number;
+  /** `true` — отбор открывается сам при переводе мысли в фокус. */
+  is_default: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+/** Тело запроса создания внетипового отбора (`POST /thoughts/{id}/views`). */
+export interface ThoughtCustomViewInput {
+  name: string;
+  description?: string | null;
+  definition: string;
+  position?: number;
+  is_default?: boolean;
+}
+
+/** Тело запроса правки внетипового отбора (`PATCH /thoughts/{id}/views/{view_id}`). */
+export type ThoughtCustomViewUpdateInput = ThoughtTypeViewUpdateInput;
+
+/**
+ * Внетиповой отбор в эффективном наборе мысли. Отличается от собственной
+ * строки отсутствием `thought_id` (владелец уже выражен через `defined_on`) и
+ * пометками `scope`/`inherited` (у внетипового `inherited` всегда `false`).
+ */
+export interface EffectiveThoughtCustomView extends Omit<ThoughtCustomView, 'thought_id'> {
+  scope: 'thought';
+  /** Id мысли-владельца: отбор действует только на ней. */
+  defined_on: string;
+  inherited: false;
+  /**
+   * Собственная пометка «по умолчанию» строки мысли — без учёта схлопывания
+   * нескольких внетиповых дефолтов после слияния слоёв (в отличие от
+   * эффективного {@link ThoughtCustomView.is_default}). Нужна переносам:
+   * сервер снимает пометку по собственной, а не по эффективной (0.14.1).
+   */
+  own_default: boolean;
+}
+
+/** Типовой отбор в форме, пригодной для смешанного эффективного набора. */
+export interface EffectiveScopedThoughtTypeView extends EffectiveThoughtTypeView {
+  scope: 'type';
+}
+
+/**
+ * Запись смешанного эффективного набора мысли (требование 045f539a): типовые
+ * отборы (по цепочке) и внетиповые. Дискриминатор — `scope`.
+ */
+export type EffectiveThoughtView = EffectiveScopedThoughtTypeView | EffectiveThoughtCustomView;
+
+/**
  * Распарсенное определение отбора (`definition` после `JSON.parse`).
  *
  * Синоним {@link SavedFilterDefinition} — формат таблицы унаследован от
@@ -107,4 +181,13 @@ export interface EffectiveThoughtTypeView extends ThoughtTypeView {
    * от типа-предка. Симметрия с {@link EffectiveTypeProperty.inherited}.
    */
   inherited: boolean;
+  /**
+   * Собственная пометка «по умолчанию» строки — без учёта наследования и
+   * перекрытия внетиповым дефолтом мысли. В отличие от эффективного
+   * {@link ThoughtTypeView.is_default}, который зануляется, пока у мысли есть
+   * внетиповой дефолт. Сервер снимает пометку при переносе именно по
+   * собственной, поэтому клиент строит предупреждение о дефолте получателя
+   * по `own_default`, а не по `is_default` (0.14.1, дельта раунда 2).
+   */
+  own_default: boolean;
 }

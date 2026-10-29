@@ -2,31 +2,49 @@
  * Markdown-секции для частичной правки комментариев (задача d28abe04, версия
  * 0.7.2, спека 154df95d «etn.comments.edit — правка комментария частями»).
  *
- * «Секция» — заголовок любого уровня `#`…`######` и всё до следующего
- * заголовка того же или более высокого уровня (вложенные подразделы входят
- * в секцию). Тексты без единого `#` трактуются как одна виртуальная секция,
- * заголовком которой становится первая непустая строка, обрезанная до
- * 255 символов — это адресация, а не правка форматирования, поэтому сам
- * текст при этом не меняется и `#` в тело не вставляется.
+ * «Секция» — заголовок верхнего уровня (ATX `#`…`######` или setext) и всё до
+ * следующего заголовка верхнего уровня; вложенные подразделы — отдельные
+ * секции (модель плоская). Тексты без единого заголовка трактуются как одна
+ * виртуальная секция, заголовком которой становится первая непустая строка,
+ * обрезанная до 255 символов — это адресация, а не правка форматирования,
+ * поэтому сам текст при этом не меняется и `#` в тело не вставляется.
  *
  * Вводный абзац перед первым `#`-заголовком тоже адресуем: он становится
  * первой виртуальной секцией (ошибка a39046d9). До правки такой текст не
  * попадал ни в одну секцию, был невидим в `sections[]` и недоступен
  * `replace_section`/`delete_section`.
  *
+ * `replace_section` меняет только тело адресованной секции, её заголовок
+ * сохраняется (ошибка f15f389e): заголовок в `text` допустим лишь как эхо
+ * того же текста (уровень игнорируется) либо как подраздел более низкого
+ * уровня; заголовок того же/более высокого уровня с другим текстом даёт
+ * `VALIDATION_ERROR` — иначе в теле оставался пустой старый заголовок и
+ * рядом появлялся второй.
+ *
  * Файл держит только парсер секций и применение ops к строкам; запись в БД
  * делает `comment-service.ts::editComment` поверх `updateComment` — так
  * версионирование, теневые строки и журнал активности остаются единой
  * точкой прохода.
+ *
+ * Заголовки распознаёт {@link extractHeadings} из `@etn/markdown` (block-токены
+ * markdown-it): разбор markdown-блоков живёт только в пакете рендерера
+ * (ADR 01ec1467). Поэтому секциями считаются ровно те заголовки, что рендерер
+ * показывает как `<h1>`…`<h6>` верхнего уровня: fence внутри списка/цитаты,
+ * indented-код, закрывающие решётки `## X ##` и setext-подчёркивания трактуются
+ * одинаково при разборе и рендере (ошибка f15f389e, круги 1–2).
+ *
+ * При пересборке тела заголовок печатает {@link formatHeading}: ATX — в
+ * ATX-форме (закрывающие решётки снимаются), однострочный setext нормализуется
+ * в ATX, а многострочный setext сохраняется setext-блоком. Иначе `## Внимание`
+ * + абзац «Это важно» терял строки заголовка и правил чужую секцию (ошибка
+ * f15f389e, круг 3).
  */
 
+import { extractHeadings, formatHeading, type MarkdownHeading } from '@etn/markdown';
 import { EtnError } from '@etn/shared';
 
 /** Максимальная длина виртуального заголовка для текстов без `#`. */
 const VIRTUAL_HEADING_MAX_CHARS = 255;
-
-/** Регулярка заголовка уровня 1–6: `#` … `######`, потом пробел и текст. */
-const HEADING_RE = /^(#{1,6})\s+(.+?)\s*$/;
 
 /** Регулярка пустой строки (любые пробельные символы). */
 const BLANK_RE = /^\s*$/;
@@ -42,7 +60,8 @@ export type EditOp =
 interface Section {
   /** 1–6 для реальных заголовков; для текста без `#` — 1 (виртуальная). */
   level: number;
-  /** Текст заголовка без решёток (для виртуальной — первая строка). */
+  /** Текст заголовка без решёток (для виртуальной — первая строка). У
+   *  многострочного setext содержит `\n` — строки заголовка. */
   heading: string;
   /** Содержимое секции без заголовка (для текста без `#` — весь текст,
    *  чтобы сохранить содержимое дословно при обратной склейке). */
@@ -67,38 +86,23 @@ function virtualHeading(body: string): string {
   return trimmed.trim().slice(0, VIRTUAL_HEADING_MAX_CHARS);
 }
 
-/** Пара (уровень, заголовок) одной строки `#`-заголовка в теле. */
-interface HeadingHit {
-  level: number;
-  heading: string;
-  line: number;
-}
-
 /**
- * Пройтись по строкам и собрать все `#`-заголовки в порядке появления.
- * Используется и {@link parseSections}, и {@link validateSections}.
+ * Заголовки ВЕРХНЕГО уровня документа (они и есть секции). Заголовок внутри
+ * списка или цитаты (`tokenLevel > 0`) принадлежит контейнеру: пересборка
+ * тела по строкам вынесла бы его из контейнера, поэтому секцией он не
+ * считается (ошибка f15f389e, круг 2).
  */
-function collectHeadings(body: string): HeadingHit[] {
-  const lines = body.split('\n');
-  const out: HeadingHit[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const m = HEADING_RE.exec(line);
-    if (!m) continue;
-    const hashes = m[1] ?? '';
-    const text = m[2] ?? '';
-    out.push({ level: hashes.length, heading: text.trim(), line: i });
-  }
-  return out;
+function collectHeadings(body: string): MarkdownHeading[] {
+  return extractHeadings(body).filter((h) => h.tokenLevel === 0);
 }
 
 /**
  * Разобрать тело комментария на секции. Если в тексте есть хотя бы один
- * `#` заголовок — возвращаются они; иначе возвращается одна виртуальная
- * секция с первой непустой строкой в роли заголовка и полным телом в роли
- * содержимого (дословно — без вставки `#`). Непустой вводный текст до
- * первого заголовка тоже становится первой виртуальной секцией (ошибка
- * a39046d9) — иначе он не адресуем и молча пропадает из `sections[]`.
+ * заголовок верхнего уровня — возвращаются они; иначе возвращается одна
+ * виртуальная секция с первой непустой строкой в роли заголовка и полным
+ * телом в роли содержимого (дословно — без вставки `#`). Непустой вводный
+ * текст до первого заголовка тоже становится первой виртуальной секцией
+ * (ошибка a39046d9) — иначе он не адресуем и молча пропадает из `sections[]`.
  * Пустое тело — пустой массив секций: адресовать нечего, и `sections[]`
  * в ответе будет пустым.
  */
@@ -112,7 +116,7 @@ function parseSections(body: string): Section[] {
   }
   const lines = body.split('\n');
   const sections: Section[] = [];
-  // Вводный абзац (всё до первого `#`-заголовка) — виртуальная секция, если
+  // Вводный абзац (всё до первого заголовка) — виртуальная секция, если
   // в нём есть хоть одна непустая строка. Пустой/пробельный префикс не
   // порождает секции.
   const firstHeadingLine = headings[0]!.line;
@@ -128,10 +132,10 @@ function parseSections(body: string): Section[] {
   for (let i = 0; i < headings.length; i++) {
     const start = headings[i]!;
     const endLine = i + 1 < headings.length ? headings[i + 1]!.line : lines.length;
-    const contentLines = lines.slice(start.line + 1, endLine);
+    const contentLines = lines.slice(start.contentLine, endLine);
     sections.push({
       level: start.level,
-      heading: start.heading,
+      heading: start.text,
       content: contentLines.join('\n'),
       virtual: false,
     });
@@ -140,15 +144,17 @@ function parseSections(body: string): Section[] {
 }
 
 /**
- * Собрать секции обратно в тело. Реальные секции дают `## heading\ncontent`,
- * между секциями — `\n\n`. Виртуальная секция (нет `#`-заголовка) даёт
- * только `content` без префикса. Контент не трогаем (нормализацию выполнит
- * вызывающий), но схлопываем тройные `\n` в `\n\n` по всему телу.
+ * Собрать секции обратно в тело. Реальные секции дают заголовок (в форме,
+ * которую выберет {@link formatHeading}: ATX или setext для многострочного
+ * текста) и `\ncontent`, между секциями — `\n\n`. Виртуальная секция (нет
+ * `#`-заголовка) даёт только `content` без префикса. Контент не трогаем
+ * (нормализацию выполнит вызывающий), но схлопываем тройные `\n` в `\n\n` по
+ * всему телу.
  */
 function joinSections(sections: Section[]): string {
   const blocks = sections.map((s) => {
     if (s.virtual) return s.content;
-    const header = '#'.repeat(s.level) + ' ' + s.heading;
+    const header = formatHeading(s.level, s.heading);
     if (s.content === '') return header;
     return header + '\n' + s.content;
   });
@@ -172,11 +178,11 @@ export function listSections(body: string): string[] {
  */
 export function validateSections(body: string): void {
   const counts = new Map<string, { level: number; heading: string; n: number }>();
-  for (const { level, heading } of collectHeadings(body)) {
-    const key = `${level}\u0000${heading}`;
+  for (const { level, text } of collectHeadings(body)) {
+    const key = `${level}\u0000${text}`;
     const prev = counts.get(key);
     if (prev === undefined) {
-      counts.set(key, { level, heading, n: 1 });
+      counts.set(key, { level, heading: text, n: 1 });
     } else {
       prev.n += 1;
     }
@@ -193,39 +199,60 @@ export function validateSections(body: string): void {
 }
 
 /**
- * Развернуть переданный текст замены в полное тело секции. Если секция
- * реальная — заголовок уровня `level` добавляется автоматически, когда
- * `text` его не несёт; для виртуальной секции заголовок не вставляется,
- * текст замены остаётся дословным содержимым.
+ * Развернуть переданный текст замены в полное тело реальной секции.
+ *
+ * `replace_section` заменяет только ТЕЛО адресованной секции — её заголовок
+ * сохраняется. Поэтому заголовок в `text` необязателен и трактуется так
+ * (ошибка f15f389e — задвоение заголовка):
+ *   * эхо адресованного заголовка — первый заголовок ВЕРХНЕГО уровня в `text`
+ *     с тем же текстом, уровень не важен (агент скопировал заголовок из
+ *     другого места или сменил уровень) — строки заголовка отбрасываются,
+ *     остаётся исходный заголовок; вводный текст перед эхом сохраняется
+ *     (ошибка f15f389e, круг 3);
+ *   * заголовок более низкого уровня (подраздел) — это содержимое, он
+ *     остаётся в теле;
+ *   * заголовок того же или более высокого уровня с другим текстом в самом
+ *     начале `text` — попытка переименовать/подменить секцию:
+ *     `VALIDATION_ERROR`. Иначе в теле оставался пустой старый заголовок и
+ *     появлялся второй (грабля 0.8.3).
+ *
+ * Ведущие пустые строки снимаются до проверки, чтобы `\n## Заголовок` не
+ * прятал эхо от распознавания. Заголовком считается только блок ВЕРХНЕГО
+ * уровня: `- ## X`, `> ## X` и код-блоки — это тело, а не эхо (ошибка
+ * f15f389e, круг 2).
  */
-function buildReplacement(
-  level: number,
-  heading: string,
-  text: string,
-  virtual: boolean,
-): string {
-  if (virtual) {
-    // Виртуальная секция: исходного `#`-заголовка не было — вставлять его
-    // ради замены нельзя, иначе сломается «Сам текст при этом НЕ меняется»
-    // (спека 154df95d, раздел «Страховка для текстов без заголовков»).
-    return text;
+function buildReplacement(level: number, heading: string, text: string): string {
+  const headLine = formatHeading(level, heading);
+  const body = text.replace(/^\n+/, '');
+  if (body === '') return headLine;
+  const lead = extractHeadings(body).find((h) => h.tokenLevel === 0);
+  if (lead !== undefined && lead.text === heading.trim()) {
+    // Эхо адресованного заголовка: исходный заголовок уже будет в теле,
+    // строки заголовочного блока из `text` не дублируем. Уровень игнорируется;
+    // текст до эха (вводный абзац) и после него сохраняется.
+    const lines = body.split('\n');
+    lines.splice(lead.line, lead.contentLine - lead.line);
+    const rest = collapseBlankRuns(lines.join('\n'))
+      .replace(/^\n+/, '')
+      .replace(/\n+$/, '');
+    return rest === '' ? headLine : headLine + '\n' + rest;
   }
-  const headLine = '#'.repeat(level) + ' ' + heading;
-  const firstLine = text.split('\n', 1)[0] ?? '';
-  const m = HEADING_RE.exec(firstLine);
-  if (m !== null) {
-    const hashes = m[1] ?? '';
-    const headingText = (m[2] ?? '').trim();
-    if (hashes.length === level && headingText === heading.trim()) {
-      // Дублирующийся заголовок убираем — иначе после замены окажется, что
-      // одна и та же строка повторяется, и validateSections зарубит правку.
-      const rest = text.slice(firstLine.length).replace(/^\n/, '');
-      if (rest === '') return headLine;
-      return headLine + '\n' + rest;
-    }
+  if (lead !== undefined && lead.line === 0 && lead.level <= level) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'replace_section text must not start with a heading of the same or higher level: ' +
+        'the section heading is preserved automatically — pass only the section body',
+      {
+        section: heading,
+        level,
+        text_heading: lead.text,
+        text_level: lead.level,
+      },
+    );
   }
-  if (text === '') return headLine;
-  return headLine + '\n' + text;
+  // Более низкий уровень или вводный текст перед заголовком — это тело;
+  // заголовок секции нужен.
+  return headLine + '\n' + body;
 }
 
 /**
@@ -302,7 +329,7 @@ function replaceSection(body: string, section: string, text: string): string {
     const next = sections.slice(0, idx).concat([replacement], sections.slice(idx + 1));
     return collapseBlankRuns(joinSections(next));
   }
-  const replacement = buildReplacement(found.level, found.heading, text, false);
+  const replacement = buildReplacement(found.level, found.heading, text);
   // Разбираем replacement обратно в секции, чтобы подтянуть вложенные
   // заголовки внутрь (если `text` сам содержит подразделы) — это сохраняет
   // иерархию и позволяет `replace_section` менять сразу несколько уровней.

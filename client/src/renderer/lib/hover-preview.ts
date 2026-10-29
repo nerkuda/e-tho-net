@@ -50,8 +50,9 @@
  *    closed it, and changing that would be a UX change, not a refactor.
  *
  * NOTE on dependency direction: this module intentionally imports only from
- * `lib/*`, `state.ts`, shared types, `@etn/markdown` (constants only) and
- * `editor/wiki-link-resolver.ts` (which itself has no further renderer
+ * `lib/*`, `state.ts`, `screens/tabs/tab-state.ts` (пара «сеть + вкладка» —
+ * страж открытия, ошибка a3151e33), shared types, `@etn/markdown` (constants
+ * only) and `editor/wiki-link-resolver.ts` (which itself has no further renderer
  * dependencies). It must NOT import from `editor/markdown-field.ts`,
  * `editor/chrono-tab.ts` or `editor/attachments.ts` — those already import
  * `canvas/canvas.ts`, and `canvas.ts` imports this module to wire its
@@ -77,7 +78,9 @@ import { createDelayedOpen, CTRL_PREVIEW_OPEN_DELAY_MS } from './preview-open-de
 import { commentShell } from './ui/comment.js';
 import { openPopover, watchOutsideTap, type PopoverHandle } from './ui/popover.js';
 import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
+import { currentScreenPair, isCurrentScreenPair, type ScreenPair } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
+import { imageOwnsCtrlPreview } from './zoom-anchor.js';
 
 /** Grace delay before closing the whole chain once the cursor leaves it, ms
  *  (task requirement: exactly 0.3 s — gives time to move the cursor into the
@@ -270,6 +273,10 @@ async function resolveCommentContent(trigger: HTMLElement): Promise<HoverPreview
   if (permanent === undefined || permanent.body_html.trim() === '') return null;
   const view = div('comment-view');
   renderHtml(view, permanent.body_html);
+  // Links inside the preview must themselves be Ctrl+hover triggers (nested
+  // previews, карточка e08159c1) — same marking pass as the comment view and
+  // the other body_html-rendering resolvers below.
+  wireCommentLinksInDom(view);
   void resolveWikiLinksInDom(view, networkId);
   return { title: trigger.dataset['hpTitle'] ?? '—', body: commentPreviewBody(view) };
 }
@@ -762,10 +769,75 @@ let openGeneration = 0;
 let mouseX = 0;
 let mouseY = 0;
 
+/**
+ * Снимок «стража» открытия: поколение открытий и пара «сеть + вкладка» на
+ * момент триггера. Сетевые резолверы читают данные ТЕКУЩЕЙ сети, поэтому
+ * содержимое, разрешённое для одной пары, не показывается в другой (ошибка
+ * a3151e33: попап с комментарием мысли сети A поверх вкладки сети B).
+ */
+interface OpenGuard {
+  generation: number;
+  pair: ScreenPair | null;
+}
+
+/**
+ * Можно ли показывать контент, разрешённый для `guard` — ОДИН страж на все
+ * kind резолверов (`comment`, `chrono`, `attachments`, wiki-ссылки, файлы):
+ *  - поколение не перекрыто более новым открытием/отменой;
+ *  - пара «сеть + вкладка», в которой снят триггер, всё ещё текущая;
+ *  - триггер ещё в документе: переключение сети пересоздаёт DOM рабочего
+ *    пространства (`teardownWorkspace` + `clear(root)`), и попап, открытый
+ *    якорем к откреплённому узлу, повисает в чужом экране.
+ * Чистая функция (без DOM и store) — юнит-тесты `hover-preview-network-switch.test.ts`.
+ */
+function isOpenGuardValid(
+  guard: OpenGuard,
+  current: { generation: number; pairIsCurrent: boolean; attached: boolean },
+): boolean {
+  if (guard.generation !== current.generation) return false;
+  if (guard.pair === null || !current.pairIsCurrent) return false;
+  return current.attached;
+}
+
+/** Ключ пары «сеть + вкладка» для сравнения «та же пара?» без объектов. */
+function screenPairKey(pair: ScreenPair | null): string {
+  return pair === null ? '' : `${pair.networkId}\u0000${pair.tabId ?? ''}`;
+}
+
+/**
+ * Подписка движка на смену пары «сеть + вкладка»: `onChange` вызывается ровно
+ * один раз на каждый переход (обычные обновления store той же пары — тишина).
+ * Вынесено из {@link initHoverPreview} ради юнит-теста. Панель предпросмотра
+ * монтируется в `document.body` (`lib/ui/popover.ts`) и переживает
+ * `teardownWorkspace()` + `clear(root)` при смене сети, поэтому уже открытая
+ * цепочка обязана закрыться здесь — страж `isOpenGuardValid` отсекает только
+ * НОВЫЕ открытия (ошибка a3151e33, круг 3). Возвращает отписку.
+ */
+function watchScreenPairChange(onChange: () => void): () => void {
+  let key = screenPairKey(currentScreenPair());
+  return store.subscribe(() => {
+    const next = screenPairKey(currentScreenPair());
+    if (next === key) return;
+    key = next;
+    onChange();
+  });
+}
+
 /** Отменяет ещё не открывшийся предпросмотр (сработавший таймер общей задержки
  *  или отменённый до его истечения). Уже открытая цепочка не трогается. */
 function cancelPendingOpen(): void {
   openScheduler.cancel();
+}
+
+/**
+ * Отменяет предпросмотр вместе с уже идущим асинхронным резолвером: результат
+ * `doOpen`, пришедший после ухода курсора на картинку, которой владеет лупа,
+ * не должен открыть попап (ошибка d0338c48 — иначе превью комментария
+ * появится над иконкой и будет сосуществовать с лупой).
+ */
+function abandonPendingOpen(): void {
+  cancelPendingOpen();
+  openGeneration++;
 }
 
 function cancelEntryCloseTimer(entry: ChainEntry): void {
@@ -823,6 +895,21 @@ function closeChain(): void {
 }
 
 /**
+ * Картинка, которой владеет лупа (`image-zoom.ts`) и которая лежит внутри
+ * root-триггера открытой цепочки, забирает точку у превью: попап постоянного
+ * комментария облачка должен закрыться, а не оставаться «наведённым» только
+ * потому, что иконка — часть того же облачка (ошибка d0338c48). Чистая
+ * функция: тестируется моками контейнеров, как {@link isChainEntryAlive}.
+ */
+function pictureTakesOverPoint(
+  pictureOwnsPoint: boolean,
+  root: ContainerLike | null,
+  node: Node | null,
+): boolean {
+  return pictureOwnsPoint && root !== null && node !== null && root.contains(node);
+}
+
+/**
  * Closes the whole open popup chain on demand. Used by a row rendered inside
  * a popup that navigates away on click (e.g. the neighbours-preview list —
  * "open in editor" / "focus") — the popup must not linger once its content is
@@ -874,20 +961,34 @@ function isAlreadyOpenAt(candidate: HTMLElement, depth: number): boolean {
 
 async function doOpen(candidate: HTMLElement, depth: number): Promise<void> {
   if (depth > MAX_DEPTH) return;
+  // Триггер откреплён ещё до старта резолвера (сменилась сеть/вкладка, список
+  // перерисован): запрос в текущую сеть за сущностью прошлого экрана не нужен.
+  if (!candidate.isConnected) return;
   const kind = candidate.dataset['hpKind'];
   if (kind === undefined) return;
   const resolver = resolvers.get(kind);
   if (resolver === undefined) return;
 
-  const gen = ++openGeneration;
+  // Пара снимается ВМЕСТЕ с триггером, до первого await (ошибка a3151e33):
+  // резолвер адресует данные текущей сети, а после ответа попап обязан
+  // показываться только в той же паре и у живого триггера.
+  const guard: OpenGuard = { generation: ++openGeneration, pair: currentScreenPair() };
   let content: HoverPreviewContent | null;
   try {
     content = await resolver(candidate);
   } catch {
     content = null;
   }
-  if (gen !== openGeneration) return; // superseded by a newer open/close
   if (content === null) return; // e.g. no permanent comment — show nothing
+  if (
+    !isOpenGuardValid(guard, {
+      generation: openGeneration,
+      pairIsCurrent: guard.pair !== null && isCurrentScreenPair(guard.pair),
+      attached: candidate.isConnected,
+    })
+  ) {
+    return; // пара/триггер устарели, пока шёл резолвер — содержимое не показываем
+  }
 
   if (depth === 1) {
     closeChain();
@@ -939,24 +1040,54 @@ export function initHoverPreview(): void {
   if (initialized) return;
   initialized = true;
 
+  // Панель предпросмотра живёт в `document.body` и переживает пересоздание
+  // рабочего пространства при смене сети/вкладки. Содержимое открытой цепочки
+  // относится к прежней паре «сеть + вкладка», поэтому смена пары закрывает её
+  // и гасит резолвер в полёте (ошибка a3151e33: открытый попап висел поверх
+  // чужой сети; страж `isOpenGuardValid` отсекает только новые открытия).
+  // Обычные обновления store той же пары попап не трогают.
+  watchScreenPairChange(() => {
+    abandonPendingOpen();
+    closeChain();
+  });
+
   document.addEventListener('mousemove', (event) => {
     mouseX = event.clientX;
     mouseY = event.clientY;
     const target = event.target instanceof Element ? event.target : null;
+    // Картинка под курсором при зажатом Ctrl принадлежит лупе: у облачка с
+    // иконкой-вложением и постоянным комментарием превью комментария обязано
+    // уступить точке (ошибка d0338c48). Решение принимает общий предикат
+    // `zoom-anchor.ts`, чтобы движки не разошлись в том, покажет ли лупа
+    // картинку.
+    const pictureOwnsPoint = event.ctrlKey && imageOwnsCtrlPreview(target);
+    const rootYielded = pictureTakesOverPoint(pictureOwnsPoint, rootTrigger, target);
 
     // Each open popup decides independently whether it is still "hovered"
     // (task fix, ETN 420a1f7e): a shallower popup stays alive while the
     // cursor sits over ANY deeper popup opened from inside it, but moving the
     // cursor back onto it (or away entirely) starts ITS OWN close timer —
     // it no longer waits for every popup in the chain to be left at once.
+    // Картинка-иконка внутри root-триггера не считается «наведением» на
+    // облачко: root-попап получает свой таймер закрытия (300 мс < задержка
+    // лупы 500 мс, поэтому два превью не показываются одновременно).
     for (let i = 0; i < chain.length; i++) {
       const entry = chain[i]!;
-      if (isChainEntryAlive(chain, i, rootTrigger, target)) cancelEntryCloseTimer(entry);
+      const alive =
+        isChainEntryAlive(chain, i, rootTrigger, target) && !(rootYielded && i === 0);
+      if (alive) cancelEntryCloseTimer(entry);
       else scheduleEntryClose(entry);
     }
 
     if (!event.ctrlKey) {
       cancelPendingOpen();
+      return;
+    }
+    // Над картинкой второго предпросмотра нет — лупа покажет её сама.
+    // `abandonPendingOpen` гасит и уже идущий резолвер: его результат не
+    // должен открыть попап после ухода курсора на картинку.
+    if (pictureOwnsPoint) {
+      abandonPendingOpen();
       return;
     }
     const candidate = target?.closest<HTMLElement>('[data-hp-kind]') ?? null;
@@ -979,6 +1110,15 @@ export function initHoverPreview(): void {
     }
     if (event.key !== 'Control') return;
     const at = document.elementFromPoint(mouseX, mouseY);
+    // Курсор уже лежит на картинке-иконке облачка — mousemove не сработает.
+    // Точку забирает лупа, поэтому превью комментария закрывается сразу:
+    // отложенное закрытие отменил бы следующий mousemove без Ctrl, и лупа
+    // открылась бы поверх облачного попапа (ошибка d0338c48).
+    if (imageOwnsCtrlPreview(at)) {
+      abandonPendingOpen();
+      if (pictureTakesOverPoint(true, rootTrigger, at)) closeChain();
+      return;
+    }
     const candidate = at instanceof Element ? at.closest<HTMLElement>('[data-hp-kind]') : null;
     if (candidate !== null) tryScheduleOpen(candidate);
   });
@@ -1016,6 +1156,10 @@ export const hoverPreviewInternals = {
   depthFor,
   isAlreadyOpenAt,
   isChainEntryAlive,
+  isOpenGuardValid,
+  screenPairKey,
+  watchScreenPairChange,
+  pictureTakesOverPoint,
   MAX_DEPTH,
   CTRL_PREVIEW_OPEN_DELAY_MS,
   CLOSE_DELAY_MS,

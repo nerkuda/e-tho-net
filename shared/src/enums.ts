@@ -150,14 +150,27 @@ export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed', 'updated'] as cons
 export type StructureSort = (typeof STRUCTURE_SORTS)[number];
 
 /**
- * Comparison ops of a structures property condition (03-server-api.md §6.10).
+ * Канон операторов ПЛОСКОГО условия по свойству (задача 40c76144,
+ * требование 00eb824b). Единственный источник: из него берутся wire-enum
+ * REST `properties[].op` ({@link STRUCTURE_PROPERTY_OPS}), zod-контракт
+ * `etn.thoughts.query { properties[].operator }` и справка `etn.guide` —
+ * паритет держит сторож `server/tests/guard-flat-property-operators.test.ts`.
  *
- * `is_empty` / `not_empty` test for the presence of a property value at all:
- * `is_empty` — the thought has no row in `property_values` for this property
- * (or the row's value column is NULL/empty array — see spec); `not_empty` —
- * the inverse. Available for every value type EXCEPT `bool`, because for
- * `bool` the same intent is covered by `eq true` / `eq false`. The
- * `value` payload is ignored for these operators.
+ * Enum описывает ФОРМУ входа, а не применимость к природе свойства:
+ * допустимость по `value_type` проверяет исполнитель — гейт
+ * `OPS_BY_VALUE_TYPE` (`server/src/domain/query-service.ts`), таблица
+ * требования 00eb824b. Так одинаково невалидная пара «оператор × тип»
+ * даёт `VALIDATION_ERROR` на обоих фасадах.
+ *
+ * `is_empty` / `not_empty` — наличие значения: `is_empty` — значения нет
+ * (нет строки в `property_values` с непустой колонкой; у свойства-связи —
+ * нет живого ребра `links_v`), `not_empty` — есть. `value` для пары не
+ * требуется (переданное любой формы игнорируется). Для `bool`
+ * пара запрещена — тот же смысл дают `eq true` / `eq false` (требование
+ * 9bdddad6).
+ *
+ * `in` / `not_in` принимают непустой массив значений (OR внутри списка);
+ * пустой массив — `VALIDATION_ERROR` (не молчаливое «нечего исключать»).
  *
  * `any_of` / `all_of` / `none_of` (задача 7849008a, требование 586ebe81) —
  * операторы для наборов значений (multiple-свойства и кросс-сетевые ссылки):
@@ -166,12 +179,14 @@ export type StructureSort = (typeof STRUCTURE_SORTS)[number];
  * содержит ни одного. Семантика пересечения множеств, без учёта порядка и
  * дубликатов.
  */
-export const STRUCTURE_PROPERTY_OPS = [
+export const FLAT_PROPERTY_OPS = [
   'eq',
   'ne',
   'contains',
   'gt',
+  'gte',
   'lt',
+  'lte',
   'in',
   'not_in',
   'is_empty',
@@ -180,7 +195,38 @@ export const STRUCTURE_PROPERTY_OPS = [
   'all_of',
   'none_of',
 ] as const;
-export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
+export type FlatPropertyOp = (typeof FLAT_PROPERTY_OPS)[number];
+
+/**
+ * Форма `value` оператора `contains` (ошибка 9420a34c): только строка.
+ * Массив, объект, `null` и число отвергаются `VALIDATION_ERROR` с одинаковыми
+ * кодом и `details` на обоих фасадах — MCP `etn.thoughts.query` (refine
+ * контракта `server/src/contracts.ts`) и REST `POST /thoughts/query`
+ * (`parsePropertyCondition`, `server/src/domain/structure-service.ts`).
+ * Движок (`query-service.ts`) повторяет проверку второй линией.
+ *
+ * До исправления массив молча stringify-ился (`String(['al','pha'])` →
+ * `"al,pha"`), и отбор давал пустой результат; `['alpha']` проходил случайно.
+ * Presence-операторы (`is_empty`/`not_empty`) правило не затрагивает: они
+ * по-прежнему игнорируют `value` любой формы.
+ */
+export const FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE =
+  'Для операции contains value должен быть строкой.';
+/** Детали ошибки формы `value` у `contains` — одни для MCP и REST. */
+export const FLAT_PROPERTY_CONTAINS_VALUE_DETAILS = {
+  field: 'value',
+  operator: 'contains',
+  expected: 'string',
+} as const;
+
+/**
+ * Wire-enum `op` плоского условия REST `POST /thoughts/query`
+ * (03-server-api.md §6.10) — ровно {@link FLAT_PROPERTY_OPS}. История:
+ * до 0.14.1 здесь не было `gte`/`lte`, из-за чего REST отвергал сравнения,
+ * разрешённые спекой 00eb824b для number/date (ошибка 40c76144).
+ */
+export const STRUCTURE_PROPERTY_OPS = FLAT_PROPERTY_OPS;
+export type StructurePropertyOp = FlatPropertyOp;
 
 /**
  * Where the structures `keywords` mini-syntax searches (03-server-api.md

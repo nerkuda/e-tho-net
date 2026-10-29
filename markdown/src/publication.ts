@@ -273,7 +273,9 @@ function publicationPlugin(md: MarkdownIt): void {
 
   md.renderer.rules.heading_open = (tokens, idx, options, _env, self) => {
     const meta = tokens[idx]!.meta as HeadingOpenMeta | null;
-    if (meta?.pubHeading.decapitated === true) return '<p><strong>';
+    // `meta` may belong to another core rule (the source-map plugin stamps
+    // `{ mdRange }` on the same token), so `pubHeading` is checked too.
+    if (meta?.pubHeading?.decapitated === true) return '<p><strong>';
     return self.renderToken(tokens, idx, options);
   };
 

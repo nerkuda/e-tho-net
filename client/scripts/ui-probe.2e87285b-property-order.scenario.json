@@ -1,0 +1,321 @@
+{
+  "name": "2e87285b-property-order",
+  "description": "Порядок и навигация таблицы свойств (Z7): DnD за имя, Alt+↑/↓, меню, событие порядка (запись мимо UI = второй участник), навигация ↑/↓, сохранение порядка при смене сущности.",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "open-network-again",
+      "probe": "(() => { const item=document.querySelector('.networks-list .network-item'); if(item !== null) item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-lifecycle",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const parent = await window.etn.types.createThoughtType(nid, { name: 'недвижимость' }); const child = await window.etn.types.createThoughtType(nid, { name: 'квартира', parent_id: parent.id }); const prop = await window.etn.propertyRegistry.create(nid, { name: 'Период проживания', value_type: 'text' }); const thought = await window.etn.thoughts.get(nid, tid); await window.etn.thoughts.update(nid, tid, { type_id: child.id }, thought.version); await window.etn.properties.set(nid, 'thought', tid, 'Период проживания', '2020-01-01'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "editor-tabs-visible",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0"
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "seed-order-properties",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; for (const [i,name] of ['Альфа','Бета','Гамма'].entries()) { const p=await window.etn.propertyRegistry.create(nid,{ name, value_type:'text' }); await window.etn.properties.set(nid,'thought',tid,name,String(i+1)); } const second=await window.etn.thoughts.create(nid,{ title:'Сосед-карточка' }); window.__z7={ second: second.id }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "switch-tab-and-back",
+      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const own=tabs.find((b)=>b.textContent.includes('Свойства')); if(own) own.click(); return 'ok'; })()"
+    },
+    {
+      "name": "three-outside-rows",
+      "waitFor": "(() => (() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))().length === 3)()"
+    },
+    {
+      "name": "initial-order",
+      "probe": "(() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()",
+      "expect": [
+        "Альфа",
+        "Бета",
+        "Гамма"
+      ]
+    },
+    {
+      "name": "server-initial-order",
+      "api": {
+        "name": "server-initial-order",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; return arr.filter((x)=>['Альфа','Бета','Гамма'].includes(x.property_name)).map((x)=>x.property_name); })()"
+      },
+      "expect": [
+        "Альфа",
+        "Бета",
+        "Гамма"
+      ]
+    },
+    {
+      "name": "collapse-type-group",
+      "probe": "(() => { const h=[...document.querySelectorAll('.group-header')].find((x)=>(x.textContent ?? '').includes('Свойства типа')); if(h === undefined) return 'no-header'; h.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-group-collapsed",
+      "waitFor": "document.querySelector('.properties-tab table.prop-table') === null"
+    },
+    {
+      "name": "drag-first-below-second",
+      "drag": {
+        "from": ".properties-outside-body tr:nth-child(2) .prop-name-cell",
+        "to": {
+          "selector": ".properties-outside-body tr:nth-child(3)",
+          "at": [
+            60,
+            35
+          ]
+        },
+        "expect": ".properties-outside-body tr:nth-child(3)",
+        "steps": 10,
+        "duration": 200
+      }
+    },
+    {
+      "name": "order-after-drag-down",
+      "waitFor": "(() => JSON.stringify((() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()) === JSON.stringify(['Бета','Альфа','Гамма']))()"
+    },
+    {
+      "name": "server-after-drag-down",
+      "api": {
+        "name": "server-after-drag-down",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; return arr.filter((x)=>['Альфа','Бета','Гамма'].includes(x.property_name)).map((x)=>x.property_name); })()"
+      },
+      "expect": [
+        "Бета",
+        "Альфа",
+        "Гамма"
+      ]
+    },
+    {
+      "name": "drag-third-above-first",
+      "drag": {
+        "from": ".properties-outside-body tr:nth-child(4) .prop-name-cell",
+        "to": {
+          "selector": ".properties-outside-body tr:nth-child(2)",
+          "at": [
+            60,
+            2
+          ]
+        },
+        "expect": ".properties-outside-body tr:nth-child(2)",
+        "steps": 10,
+        "duration": 200
+      }
+    },
+    {
+      "name": "order-after-drag-up",
+      "waitFor": "(() => JSON.stringify((() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()) === JSON.stringify(['Гамма','Бета','Альфа']))()"
+    },
+    {
+      "name": "server-after-drag-up",
+      "api": {
+        "name": "server-after-drag-up",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; return arr.filter((x)=>['Альфа','Бета','Гамма'].includes(x.property_name)).map((x)=>x.property_name); })()"
+      },
+      "expect": [
+        "Гамма",
+        "Бета",
+        "Альфа"
+      ]
+    },
+    {
+      "name": "select-second-row",
+      "click": ".properties-outside-body tr:nth-child(3) .prop-name-cell"
+    },
+    {
+      "name": "alt-down-moves-row",
+      "key": {
+        "key": "ArrowDown",
+        "modifiers": [
+          "alt"
+        ]
+      }
+    },
+    {
+      "name": "order-after-alt-down",
+      "waitFor": "(() => JSON.stringify((() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()) === JSON.stringify(['Гамма','Альфа','Бета']))()"
+    },
+    {
+      "name": "server-after-alt-down",
+      "api": {
+        "name": "server-after-alt-down",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; return arr.filter((x)=>['Альфа','Бета','Гамма'].includes(x.property_name)).map((x)=>x.property_name); })()"
+      },
+      "expect": [
+        "Гамма",
+        "Альфа",
+        "Бета"
+      ]
+    },
+    {
+      "name": "menu-order-items",
+      "probe": "(() => { const row=document.querySelector('.properties-outside-body tr:nth-child(2)'); if(row === null) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:160,clientY:160})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent).filter((t)=>t.startsWith('Переместить')); })()",
+      "expect": [
+        "Переместить выше",
+        "Переместить ниже"
+      ]
+    },
+    {
+      "name": "menu-move-down",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Переместить ниже')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "order-after-menu",
+      "waitFor": "(() => JSON.stringify((() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()) === JSON.stringify(['Альфа','Гамма','Бета']))()"
+    },
+    {
+      "name": "server-after-menu",
+      "api": {
+        "name": "server-after-menu",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; return arr.filter((x)=>['Альфа','Бета','Гамма'].includes(x.property_name)).map((x)=>x.property_name); })()"
+      },
+      "expect": [
+        "Альфа",
+        "Гамма",
+        "Бета"
+      ]
+    },
+    {
+      "name": "remote-session-reorder",
+      "probe": "(async () => { await window.etn.properties.reorder('{{networkId}}','{{thoughtId}}',[{property_id:(await window.etn.propertyRegistry.list('{{networkId}}')).find((p)=>p.name==='Альфа').id,position:0},{property_id:(await window.etn.propertyRegistry.list('{{networkId}}')).find((p)=>p.name==='Бета').id,position:1},{property_id:(await window.etn.propertyRegistry.list('{{networkId}}')).find((p)=>p.name==='Гамма').id,position:2}]); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "order-applied-by-event",
+      "waitFor": "(() => JSON.stringify((() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()) === JSON.stringify(['Альфа','Бета','Гамма']))()"
+    },
+    {
+      "name": "seed-link-for-switch",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const lp=await window.etn.propertyRegistry.create(nid,{ name:'Связано', value_type:'link', name_forward:'связано с', name_reverse:'связано с' }); await window.etn.properties.set(nid,'thought',tid,'связано с',window.__z7.second,'source'); window.__z7.linkProperty=lp.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "link-row-visible",
+      "waitFor": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); return row !== undefined && [...row.querySelectorAll('.cloud-profile-chip')].some((c)=>c.getAttribute('aria-label')==='Сосед-карточка'); })()"
+    },
+    {
+      "name": "open-second-thought",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const chip=[...row.querySelectorAll('.cloud-profile-chip')].find((c)=>c.getAttribute('aria-label')==='Сосед-карточка'); if(chip === undefined) return 'no-chip'; chip.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "second-thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Сосед-карточка'"
+    },
+    {
+      "name": "open-properties-second",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "reverse-link-row-visible",
+      "waitFor": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); return row !== undefined && [...row.querySelectorAll('.cloud-profile-chip')].some((c)=>c.getAttribute('aria-label')==='{{seedTitle}}'); })()"
+    },
+    {
+      "name": "back-to-first-thought",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const chip=[...row.querySelectorAll('.cloud-profile-chip')].find((c)=>c.getAttribute('aria-label')==='{{seedTitle}}'); if(chip === undefined) return 'no-chip'; chip.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "first-thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-properties-again",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "order-survives-entity-switch",
+      "waitFor": "(() => JSON.stringify((() => [...document.querySelectorAll('.properties-outside-body tr')].map((r)=>(r.querySelector('.prop-name-cell')?.textContent ?? '').replace(/ (.*)$/,'')).filter((n)=>['Альфа','Бета','Гамма'].includes(n)))()) === JSON.stringify(['Альфа','Бета','Гамма']))()"
+    },
+    {
+      "name": "expand-type-group",
+      "probe": "(() => { const h=[...document.querySelectorAll('.group-header')].find((x)=>(x.textContent ?? '').includes('Свойства типа')); if(h === undefined) return 'no-header'; h.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-group-expanded",
+      "waitFor": "document.querySelector('.properties-tab table.prop-table') !== null"
+    },
+    {
+      "name": "typed-nav-select",
+      "click": ".properties-tab table.prop-table tbody tr:first-child .prop-name-cell"
+    },
+    {
+      "name": "typed-nav-down",
+      "key": {
+        "key": "ArrowDown"
+      }
+    },
+    {
+      "name": "typed-row-current",
+      "waitFor": "[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.classList.contains('prop-row-current'))"
+    }
+  ]
+}

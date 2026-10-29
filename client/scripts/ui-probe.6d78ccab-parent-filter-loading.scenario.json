@@ -1,0 +1,124 @@
+{
+  "name": "6d78ccab-parent-filter-loading",
+  "description": "GUI-сценарий ошибки 6d78ccab «Отбор по родителю выполняется слишком долго» (клиентская часть). Фикстура даёт фокусу крупную ветку (60 детей) и три внетиповых отбора: ParentsOf6d78ccab (дети фокуса), ChildrenOf6d78ccab (родители фокуса — HOME, другой набор строк) и «Сломанный отбор 6d78ccab» (условие по удалённому свойству → 422). Стенд задерживает прогоны правилами: A=6000 мс, B=1500 мс (--delay-seed-rule), поэтому B отвечает РАНЬШЕ A — сценарий воспроизводит гонку «поздний A» (круг 2). Проверки: (1) во время прогона A нижняя зона показывает единое состояние загрузки lib/ui (.ui-state-loading), а НЕ ложное «Подчинённых мыслей нет» и НЕ строки прежнего вида; (2) переключение на B до ответа A гасит A, B рисует HOME, а поздний ответ A не перезаписывает B (settle после 6000 мс); (3) отказ прогона (422) показывает .ui-state-error с текстом «Не удалось исполнить отбор». До фикса сценарий красный на шаге загрузки: зона держит прежние облачка детей, состояния загрузки нет.",
+  "timeout": 300000,
+  "serverLog": {
+    "present": [
+      "\"url\":\"[^\"]*/views/[^\"]+/run\",\"status\":200",
+      "\"url\":\"[^\"]*/views/[^\"]+/run\",\"status\":422"
+    ],
+    "absent": ["\"url\":\"[^\"]*/views/[^\"]+/run\",\"status\":5"]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "map-ready",
+      "timeout": 60000,
+      "waitFor": "(() => { const focus = document.querySelector('.canvas-focus-row .focus-cloud'); if (focus === null) return false; return document.querySelector('.zone-children .cloud[data-id=\"{{thoughtId}}\"]') !== null; })()"
+    },
+    {
+      "name": "dblclick-focus-thought",
+      "timeout": 30000,
+      "click": {
+        "selector": ".zone-children .cloud[data-id=\"{{thoughtId}}\"]",
+        "count": 2
+      }
+    },
+    {
+      "name": "focus-seeded",
+      "timeout": 60000,
+      "waitFor": "(() => { const cloud = document.querySelector('.canvas-focus-row .focus-cloud'); return cloud !== null && cloud.dataset.id === '{{thoughtId}}'; })()"
+    },
+    {
+      "name": "strip-ready",
+      "timeout": 30000,
+      "waitFor": "(() => { const texts = [...document.querySelectorAll('.canvas-filter-strip-btn')].map((e) => (e.textContent || '').trim()); return texts.includes('ParentsOf6d78ccab') && texts.includes('ChildrenOf6d78ccab') && texts.includes('Сломанный отбор 6d78ccab'); })()"
+    },
+    {
+      "name": "click-view-a",
+      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'ParentsOf6d78ccab'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "loading-during-run-a",
+      "timeout": 30000,
+      "probe": "(async () => { let loading = false; let falseHint = false; let staleRows = false; const t0 = Date.now(); while (Date.now() - t0 < 2500) { const zone = document.querySelector('.zone-children'); if (zone !== null) { const empty = zone.querySelector('.zone-empty'); const text = (empty !== null ? empty.textContent || '' : '').trim(); if (text.includes('Подчинённых мыслей нет')) falseHint = true; if (empty !== null && !empty.classList.contains('hidden') && empty.querySelector('.ui-state-loading') !== null) loading = true; const titles = [...zone.querySelectorAll('.cloud-title')].map((e) => (e.textContent || '').trim()); if (titles.some((t) => t.startsWith('Ребёнок 6d78ccab'))) staleRows = true; } await new Promise((r) => setTimeout(r, 40)); } return { loading, falseHint, staleRows }; })()",
+      "expect": { "loading": true, "falseHint": false, "staleRows": false }
+    },
+    {
+      "name": "click-view-b-while-a-inflight",
+      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'ChildrenOf6d78ccab'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "loading-during-run-b",
+      "timeout": 30000,
+      "probe": "(async () => { const t0 = Date.now(); while (Date.now() - t0 < 2000) { const zone = document.querySelector('.zone-children'); const empty = zone !== null ? zone.querySelector('.zone-empty') : null; if (empty !== null && !empty.classList.contains('hidden') && empty.querySelector('.ui-state-loading') !== null) return true; await new Promise((r) => setTimeout(r, 40)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "view-b-result",
+      "timeout": 60000,
+      "waitFor": "(() => { const zone = document.querySelector('.zone-children'); if (zone === null || zone.dataset.viewResult !== 'normal') return false; return zone.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null; })()"
+    },
+    {
+      "name": "cancelled-a-not-painted",
+      "probe": "(() => { const zone = document.querySelector('.zone-children'); if (zone === null) return 'no-zone'; const titles = [...zone.querySelectorAll('.cloud-title')].map((e) => (e.textContent || '').trim()); return titles.some((t) => t.startsWith('Ребёнок 6d78ccab')) ? 'a-painted' : 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "settle-after-a-late-answer",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 3000)); const zone = document.querySelector('.zone-children'); if (zone === null) return 'no-zone'; const hasHome = zone.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null; const titles = [...zone.querySelectorAll('.cloud-title')].map((e) => (e.textContent || '').trim()); return hasHome && !titles.some((t) => t.startsWith('Ребёнок 6d78ccab')) ? 'ok' : 'stale-overwrite'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "click-broken-view",
+      "probe": "(() => { const btn = [...document.querySelectorAll('.canvas-filter-strip-btn')].find((e) => (e.textContent || '').trim() === 'Сломанный отбор 6d78ccab'); if (btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "error-state-after-failed-run",
+      "timeout": 30000,
+      "probe": "(async () => { const t0 = Date.now(); while (Date.now() - t0 < 20000) { const zone = document.querySelector('.zone-children'); const empty = zone !== null ? zone.querySelector('.zone-empty') : null; if (empty !== null && !empty.classList.contains('hidden') && empty.querySelector('.ui-state-error') !== null) { const text = (empty.textContent || '').trim(); return { error: true, failed: text.includes('Не удалось исполнить отбор') }; } await new Promise((r) => setTimeout(r, 60)); } return { error: false, failed: false }; })()",
+      "expect": { "error": true, "failed": true }
+    }
+  ]
+}

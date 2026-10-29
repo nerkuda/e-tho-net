@@ -1,8 +1,9 @@
 /**
  * DOM-тесты единой клавиатурной навигации библиотеки публикаций (0.11.1,
  * задача 55ee3c85): ↑/↓ по видимой последовательности (полка/публикация),
- * Home/End, ←/→ сворачивание полки, Enter на полке — правка имени, Enter на
- * публикации — открытие в панели редактора, выделение переживает перерисовку.
+ * Home/End, ←/→ ход по соседям ряда в «Полках», Ctrl+↑/↓ сворачивание полки,
+ * Enter на полке — правка имени, Enter на публикации — открытие в панели
+ * редактора, выделение переживает перерисовку.
  *
  * Проверяется ИНТЕРАКЦИОННО — на контроллере `library-nav.ts` через DOM-шим:
  * симуляция keydown, проверка выделения и колбэков. Контроллер вынесен из
@@ -187,18 +188,48 @@ describe('навигация библиотеки: видимая последо
     assert.deepEqual(currentKeys(root), ['p1']);
     nav.destroy();
   });
+
+  it('handleKey: навигация исполняется из моста поиска, без фокуса на библиотеке', () => {
+    // Мост `lib/ui/search-nav` передаёт ↑/↓/Enter библиотеке, пока фокус стоит
+    // в поле поиска (ошибка be095da7): нажатие синтетическое, отсечка поля
+    // правки не должна глушить навигацию.
+    const { root, nav, spy } = mount([group('s1', ['p1'])]);
+    assert.equal(nav.handleKey('ArrowDown'), true, '↓ обработан');
+    assert.deepEqual(nav.current(), { kind: 'shelf', key: 's1' });
+    assert.equal(nav.handleKey('ArrowDown'), true);
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'p1' });
+    assert.deepEqual(currentKeys(root), ['p1'], 'выделение видно в разметке');
+    assert.equal(nav.handleKey('Enter'), true, 'Enter открывает текущую публикацию');
+    assert.deepEqual(spy.opened, ['p1']);
+    nav.destroy();
+  });
 });
 
-describe('навигация библиотеки: ←/→ и Enter (55ee3c85)', () => {
-  it('←/→ сообщают о сворачивании/разворачивании текущей полки', () => {
+describe('навигация библиотеки: Ctrl+↑/↓ и Enter (55ee3c85)', () => {
+  it('Ctrl+↑/↓ сообщают о сворачивании/разворачивании текущей полки; ←/→ — нет', () => {
     const { root, nav, spy } = mount([group('s1', ['p1'])]);
     press(root, 'ArrowDown');
-    press(root, 'ArrowLeft');
-    press(root, 'ArrowRight');
+    press(root, 'ArrowUp', undefined, true); // Ctrl+↑ — свернуть
+    press(root, 'ArrowDown', undefined, true); // Ctrl+↓ — развернуть
     assert.deepEqual(spy.toggled, [
       { shelfId: 's1', collapsed: true },
       { shelfId: 's1', collapsed: false },
     ]);
+    // В виде «Список» геометрии нет — одной колонке ←/→ соседей не имеют:
+    // прежняя роль ←/→ ушла к Ctrl+↑/↓ (решение пользователя 2026-10-25).
+    assert.equal(nav.handleKey('ArrowLeft'), false, '← в одной колонке не перехватывается');
+    assert.equal(nav.handleKey('ArrowRight'), false, '→ в одной колонке не перехватывается');
+    assert.equal(spy.toggled.length, 2, '←/→ полку не сворачивают');
+    nav.destroy();
+  });
+
+  it('Ctrl+↑/↓ на публикации — лист: событие не перехватывается', () => {
+    const { root, nav, spy } = mount([group('s1', ['p1'])]);
+    press(root, 'ArrowDown');
+    press(root, 'ArrowDown'); // публикация p1
+    assert.equal(nav.handleKey('ArrowUp', { ctrlKey: true }), false, 'Ctrl+↑ на публикации не наш');
+    assert.equal(nav.handleKey('ArrowDown', { ctrlKey: true }), false, 'Ctrl+↓ на публикации не наш');
+    assert.deepEqual(spy.toggled, [], 'полка не переключилась');
     nav.destroy();
   });
 
@@ -336,21 +367,49 @@ describe('навигация «Полок»: геометрия книжек (43
     nav.destroy();
   });
 
-  it('←/→ на ЗАГОЛОВКЕ сворачивают полку, на КНИЖКЕ — перемещают', () => {
+  it('Ctrl+↑/↓ на ЗАГОЛОВКЕ сворачивают полку; ←/→ на заголовке и на книжке — ход по соседям', () => {
     const root = geoRoot([{ id: 's1', rows: [['a1', 'a2']] }]);
     const { nav, spy } = attach(root, { isShelvesView: () => true });
     press(root, 'ArrowDown'); // заголовок s1
-    press(root, 'ArrowLeft');
-    press(root, 'ArrowRight');
+    press(root, 'ArrowUp', undefined, true); // Ctrl+↑
+    press(root, 'ArrowDown', undefined, true); // Ctrl+↓
     assert.deepEqual(spy.toggled, [
       { shelfId: 's1', collapsed: true },
       { shelfId: 's1', collapsed: false },
     ]);
-    // На книжке ←/→ сворачивание НЕ переключают.
+    // Заголовок во всю ширину: соседей в своём ряду нет — ←/→ не перехвачены
+    // и полку НЕ сворачивают (прежняя роль ушла к Ctrl+↑/↓).
+    assert.equal(nav.handleKey('ArrowLeft'), false, 'заголовок: ← не перехвачен');
+    assert.equal(nav.handleKey('ArrowRight'), false, 'заголовок: → не перехвачен');
+    assert.deepEqual(spy.toggled.length, 2, 'заголовок ←/→ не сворачивают');
+    // На книжке ←/→ ходят по ряду, свёрнутость не трогают.
     press(root, 'ArrowDown'); // a1
-    press(root, 'ArrowLeft');
+    assert.equal(nav.handleKey('ArrowRight'), true, 'книжка: → к соседу');
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'a2' });
+    assert.equal(nav.handleKey('ArrowRight'), false, 'край ряда: → не перехвачен');
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'a2' }, 'у границы ряда — без движения');
     assert.deepEqual(spy.toggled.length, 2, 'книжка не сворачивает полку');
-    assert.deepEqual(nav.current(), { kind: 'publication', key: 'a1' }, 'у границы ряда — без движения');
+    nav.destroy();
+  });
+
+  it('ряд полки: ←/→ ходят только по публикациям своего ряда, неполный ряд не прыгает вверх', () => {
+    // Три колонки; второй ряд неполный (только b1).
+    const root = geoRoot([{ id: 's1', rows: [['a1', 'a2', 'a3'], ['b1']] }]);
+    const { nav } = attach(root, { isShelvesView: () => true });
+    press(root, 'ArrowDown'); // заголовок s1
+    press(root, 'ArrowDown'); // a1
+    assert.equal(nav.handleKey('ArrowRight'), true);
+    assert.equal(nav.handleKey('ArrowRight'), true);
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'a3' }, '→ по ряду: a1 → a2 → a3');
+    assert.equal(nav.handleKey('ArrowRight'), false, 'правая колонка: → не перехвачен');
+    assert.equal(nav.handleKey('ArrowLeft'), true);
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'a2' }, '← по ряду');
+    // Неполный ряд: справа пусто; карточка «справа-сверху» (a2) — не сосед.
+    press(root, 'ArrowDown'); // b1
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'b1' });
+    assert.equal(nav.handleKey('ArrowRight'), false, 'неполный ряд: → не перехвачен');
+    assert.equal(nav.handleKey('ArrowLeft'), false, 'левая колонка: ← не перехвачен');
+    assert.deepEqual(nav.current(), { kind: 'publication', key: 'b1' }, 'выделение не сдвинулось');
     nav.destroy();
   });
 

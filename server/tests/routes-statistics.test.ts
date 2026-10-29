@@ -229,8 +229,25 @@ describe(
         );
 
         // --- Связи: одна актуальная, одна в корзине ------------------------
-        await setDescendants(ctx, ctx.homeId, [activeThought, inactiveThought]);
         await setDescendants(ctx, ctx.homeId, [activeThought]);
+        // 0.14.1: пустой набор в основе удаляет физически (умное удаление,
+        // ADR a967d865), поэтому корзинную строку создаём явной вставкой —
+        // статистика обязана учитывать trashed-ребро.
+        rawExec(
+          ctx,
+          `INSERT INTO links (id, layer_id, source_id, target_id, type_id, active,
+             marked_for_deletion, version, created_at, updated_at, created_by, updated_by,
+             created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, NULL, 1, 1, 1, ?, ?, 'u', 'u', ?, ?)`,
+          randomUUID(),
+          BASE_LAYER_ID,
+          ctx.homeId,
+          inactiveThought,
+          now,
+          now,
+          Date.parse(now),
+          Date.parse(now),
+        );
 
         // --- Вложения: одна ссылка и один файл на 1500 байт ----------------
         rawExec(

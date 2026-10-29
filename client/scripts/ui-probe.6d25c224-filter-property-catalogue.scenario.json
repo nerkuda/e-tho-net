@@ -1,0 +1,105 @@
+{
+  "name": "6d25c224-filter-property-catalogue",
+  "description": "Ошибка 6d25c224: справочник свойств в условиях AST панели «Структур» обновляется на УЖЕ ОТКРЫТОЙ панели по realtime-событиям реестра. Панель открывается, создаётся условие; затем в живом клиенте (in-page window.etn) создаётся свойство — оно обязано появиться в списке «Что» без перезапуска/смены экрана, переименованное — показать новое имя в уже построенном условии, удалённое — исчезнуть из списка, не сломав условие. Шаги с self-healing списком переоткрывают поповер, пока не придёт realtime-событие. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.6d25c224-filter-property-catalogue.scenario.json --out .tmp/verify/6d25c224/out",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "open-network",
+      "timeout": 40000,
+      "probe": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item === null) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tabs-panel-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
+    {
+      "name": "open-structures",
+      "eval": "(() => { const b=document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if(!b) return 'no-tab'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "structures-editor",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    {
+      "name": "add-condition",
+      "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "condition-row-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 1"
+    },
+    {
+      "name": "open-what",
+      "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()"
+    },
+    {
+      "name": "operand-list-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice-popover') !== null && document.querySelectorAll('.ft-choice__item').length > 0"
+    },
+    {
+      "name": "property-absent-before",
+      "probe": "(() => [...document.querySelectorAll('.ft-choice__item')].some((e) => (e.textContent || '').includes('Свойство 6d25c224')))()",
+      "expect": false
+    },
+    {
+      "name": "pick-mind-operand",
+      "eval": "(() => { const item=document.querySelector('.ft-choice__item[data-key=\"id\"]'); if(!item) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "create-property",
+      "probe": "(async () => { const created = await window.etn.propertyRegistry.create('{{networkId}}', { name: 'Свойство 6d25c224', value_type: 'text' }); window.__prop6d = created.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "new-property-in-open-panel",
+      "timeout": 25000,
+      "waitFor": "(() => { const NAME='Свойство 6d25c224'; const has=() => [...document.querySelectorAll('.ft-choice__item')].some((e) => (e.textContent || '').includes(NAME)); if (has()) return true; document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); const what=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if(!what) return false; what.click(); return has(); })()"
+    },
+    {
+      "name": "pick-new-property",
+      "eval": "(() => { const item=document.querySelector('.ft-choice__item[data-key=\"property:'+window.__prop6d+'\"]'); if(!item) return 'no-item'; item.click(); return 'ok'; })()"
+    },
+    {
+      "name": "condition-uses-property",
+      "timeout": 20000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what')?.textContent ?? '').includes('Свойство 6d25c224')"
+    },
+    {
+      "name": "rename-property",
+      "probe": "(async () => { await window.etn.propertyRegistry.update('{{networkId}}', window.__prop6d, { name: 'Свойство 6d25c224 (переименовано)' }); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "renamed-in-built-condition",
+      "timeout": 25000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what')?.textContent ?? '').includes('Свойство 6d25c224 (переименовано)')"
+    },
+    {
+      "name": "delete-property",
+      "probe": "(async () => { await window.etn.propertyRegistry.remove('{{networkId}}', window.__prop6d); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "deleted-property-gone",
+      "timeout": 25000,
+      "waitFor": "(() => { const NAME='Свойство 6d25c224'; const pop=document.querySelector('.ft-choice-popover'); const has=() => [...document.querySelectorAll('.ft-choice__item')].some((e) => (e.textContent || '').includes(NAME)); if (pop !== null && !has()) return true; if (pop !== null) document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); const what=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if(!what) return false; what.click(); return !has(); })()"
+    },
+    {
+      "name": "condition-survives-deletion",
+      "probe": "(() => { const rows=document.querySelectorAll('.st-filter .ft-row'); const what=(rows[0]?.querySelector('.ft-row__what')?.textContent ?? '').trim(); return { rows: rows.length, labelNonEmpty: what.length > 0 }; })()",
+      "expect": { "rows": 1, "labelNonEmpty": true }
+    }
+  ]
+}

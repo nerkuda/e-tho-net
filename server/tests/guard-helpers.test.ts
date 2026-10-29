@@ -61,6 +61,15 @@ describe('guard-helpers: скан источников на запрещённы
     assert.ok(!hits.some((v) => v.file.startsWith('sub/')), 'многострочный импорт построчно не виден');
   });
 
+  it('сопоставляет расширения без учёта регистра', () => {
+    const dir = makeFixture();
+    // `.TS` — тот же исходник, что `.ts`: регистр не должен прятать файл.
+    fs.writeFileSync(path.join(dir, 'upper.TS'), "import { ipcRenderer } from 'electron';\n");
+    const hits = collectViolations(dir, [RULE_LINE]);
+    const upper = hits.filter((v) => v.file === 'upper.TS');
+    assert.equal(upper.length, 1, 'файл .TS обязан сканироваться');
+  });
+
   it('находит многострочный импорт через filePattern', () => {
     const dir = makeFixture();
     const hits = collectViolations(dir, [RULE_FILE]);

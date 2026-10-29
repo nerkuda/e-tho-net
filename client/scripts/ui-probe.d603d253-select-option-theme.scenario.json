@@ -1,0 +1,57 @@
+{
+  "name": "d603d253-select-option-theme",
+  "description": "GUI-гейт ошибки d603d253: цвета опций/optgroup нативного <select> в обеих темах. Онбординг → «Структуры» → условие «Дата создания ≥» → реальный селект опор даты (.fv-date__anchor с optgroup «ОТНОСИТЕЛЬНЫЕ ДАТЫ»). Проверяется ИМЕННО backgroundColor (color в тёмной теме уже верен из-за color: inherit — по нему гейт был бы ложно-зелёным): dark — rgb(22, 27, 35)/rgb(230, 233, 240), light — rgb(255, 255, 255)/rgb(32, 36, 45). Дополнительно синтетический option:disabled (в реальном дереве отключённые опции есть только в редакторе свойства) — цвет --text-faint. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d603d253-select-option-theme.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 20000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 15000, "waitFor": "document.querySelector('.st-filter .fe') !== null" },
+    { "name": "widen-window", "eval": "(() => { window.resizeTo(1900, 1000); return window.innerWidth; })()" },
+    { "name": "widen-ready", "timeout": 8000, "waitFor": "window.innerWidth >= 1400 && document.querySelector('.st-filter') !== null" },
+    { "name": "panel-to-max", "eval": "(() => { const s = document.querySelector('.st-filter + .fp-splitter') || document.querySelector('.fp-splitter'); if (!s) return 'no-splitter'; s.focus(); s.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })); return true; })()" },
+    { "name": "panel-max-ready", "timeout": 8000, "waitFor": "(document.querySelector('.st-filter')?.getBoundingClientRect().width ?? 0) >= 300" },
+    { "name": "add-nested-group", "eval": "(() => { const g0 = document.querySelector('.st-filter .ft-group[data-path=\"\"]'); const btn = g0 ? g0.querySelector('.ft-add-group') : null; if (btn) { btn.click(); return 'clicked'; } return 'no-button'; })()" },
+    { "name": "row-exists", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row') !== null" },
+
+    { "name": "open-what", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__what').click(); return true; })()" },
+    { "name": "what-menu", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"created_at\"]') !== null" },
+    { "name": "pick-created-at", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"created_at\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "created-at-picked", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what').textContent.includes('Дата создания')" },
+    { "name": "open-op", "eval": "(() => { document.querySelector('.st-filter .ft-row .ft-row__op').click(); return true; })()" },
+    { "name": "op-menu", "timeout": 8000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"gte\"]') !== null" },
+    { "name": "pick-gte", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"gte\"]'); if (it) { it.click(); return true; } return false; })()" },
+    { "name": "date-widget", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-date__anchor optgroup') !== null" },
+
+    { "name": "set-dark", "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()" },
+    { "name": "theme-dark", "probe": "(() => document.documentElement.dataset.theme)()", "expect": "dark" },
+    {
+      "name": "dark-facts",
+      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return 'no-select'; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const read = (el) => { if (!el) return null; const cs = getComputedStyle(el); return { tag: el.tagName, bg: cs.getPropertyValue('background-color'), color: cs.getPropertyValue('color') }; }; const probe = document.createElement('select'); const opt = document.createElement('option'); opt.disabled = true; opt.textContent = 'disabled'; probe.append(opt); document.body.append(probe); const disabledColor = getComputedStyle(opt).getPropertyValue('color'); probe.remove(); return JSON.stringify({ theme: document.documentElement.dataset.theme, groupLabel: group ? group.label : null, outside: read(outside), inside: read(inside), group: read(group), disabledColor }); })()"
+    },
+    {
+      "name": "dark-assert",
+      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return false; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const ok = (el) => !!el && getComputedStyle(el).getPropertyValue('background-color') === 'rgb(22, 27, 35)' && getComputedStyle(el).getPropertyValue('color') === 'rgb(230, 233, 240)'; return !!group && ok(outside) && ok(inside) && ok(group); })()",
+      "expect": true
+    },
+
+    { "name": "set-light", "eval": "(() => { document.documentElement.dataset.theme = 'light'; return document.documentElement.dataset.theme; })()" },
+    { "name": "theme-light", "probe": "(() => document.documentElement.dataset.theme)()", "expect": "light" },
+    {
+      "name": "light-facts",
+      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return 'no-select'; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const read = (el) => { if (!el) return null; const cs = getComputedStyle(el); return { tag: el.tagName, bg: cs.getPropertyValue('background-color'), color: cs.getPropertyValue('color') }; }; const probe = document.createElement('select'); const opt = document.createElement('option'); opt.disabled = true; opt.textContent = 'disabled'; probe.append(opt); document.body.append(probe); const disabledColor = getComputedStyle(opt).getPropertyValue('color'); probe.remove(); return JSON.stringify({ theme: document.documentElement.dataset.theme, outside: read(outside), inside: read(inside), group: read(group), disabledColor }); })()"
+    },
+    {
+      "name": "light-assert",
+      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return false; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const ok = (el) => !!el && getComputedStyle(el).getPropertyValue('background-color') === 'rgb(255, 255, 255)' && getComputedStyle(el).getPropertyValue('color') === 'rgb(32, 36, 45)'; return !!group && ok(outside) && ok(inside) && ok(group); })()",
+      "expect": true
+    }
+  ]
+}

@@ -51,9 +51,10 @@ export function findLinkTripleRow(
 }
 
 /**
- * Снять пометку на удаление (зеркало `markLinkForDeletion` в
- * `property-service`): постоянный комментарий ребра сохраняется. Слой-осознанно:
- * в рабочем слое сначала материализуется тень, затем правится строка слоя.
+ * Снять пометку на удаление (обратная операция к умному удалению цели в
+ * `link-target-removal`/`property-service`): постоянный комментарий ребра
+ * сохраняется. Слой-осознанно: в рабочем слое сначала материализуется тень,
+ * затем правится строка слоя.
  */
 export function restoreLinkRow(ndb: NetworkDb, linkId: string, actorUserId: string): void {
   materializeShadow(ndb, 'links', linkId);

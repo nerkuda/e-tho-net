@@ -70,6 +70,12 @@ import {
   type ActionFilter,
   type ActivityFilterState,
 } from './state.js';
+import {
+  isCurrentScreenPair,
+  readTabScreenState,
+  tabBelongsToNetwork,
+  type ScreenPair,
+} from '../tabs/tab-state.js';
 
 const PAGE_SIZE = 50;
 
@@ -141,8 +147,10 @@ let savedFiltersWired = false;
  * Запрос перехода из меню мысли «что происходило с этой сущностью»
  * (сценарий 7a1a354b, шаг 3): лента по `entity_id`. Живёт до инициализации
  * вида — иначе первое чтение сохранённого отбора перезаписало бы его.
+ * `networkId` — сеть, в которой переход запрошен: после смены сети отложенный
+ * переход прежней сети не применяется к новой (ошибка 58c55bb9).
  */
-let pendingEntity: { id: string; title: string | null } | null = null;
+let pendingEntity: { id: string; title: string | null; networkId: string } | null = null;
 let rows: ActivityRow[] = [];
 let total = 0;
 let offset = 0;
@@ -212,6 +220,9 @@ export async function ensureActivityInitialised(): Promise<void> {
   const key = `${networkId}:${tabId ?? ''}`;
   if (networkIdSeen === key) return;
   networkIdSeen = key;
+  // Пара принадлежит этому запуску: любой await ниже может пережить смену
+  // сети/вкладки (окно openNetwork), и его результат тогда устаревший.
+  const pair: ScreenPair = { networkId, tabId };
 
   rows = [];
   total = 0;
@@ -228,16 +239,14 @@ export async function ensureActivityInitialised(): Promise<void> {
   savedDefinition = null;
 
   try {
-    let raw: string | null = null;
-    if (tabId !== null) {
-      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
-      raw = tab?.activity_state ?? null;
-    }
+    // Снимок вкладки ЧУЖОЙ сети не применяется (ошибка 58c55bb9).
+    let raw = readTabScreenState(networkId, tabId, 'activity_state');
     if (raw === null && tabId !== null) {
       // Legacy migration: views persisted to the network-level `ui_state`
       // before per-tab snapshots (Q4) keep working until the user saves
       // again — at which point `persistState` writes to the tab.
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.ACTIVITY_STATE);
+      if (!isCurrentScreenPair(pair)) return;
     }
     if (raw !== null && raw !== '') {
       const parsed = parseActivityState(raw);
@@ -248,25 +257,31 @@ export async function ensureActivityInitialised(): Promise<void> {
       // Потеря миграции (например, автор «не заполнено») видна жёлтой
       // диагностикой футера — до первого касания отбора пользователем.
       migrationDropped = parsed.dropped;
-      // Восстановленный отбор редактор рисует сам из состояния (`refresh`);
-      // футер пересчитывает фразу-превью и диагностику.
-      filterEditor?.refresh();
-      // Миграционное значение прежнего снимка подхватывает каркас панели.
-      activityFrame?.apply();
     }
   } catch {
     // Fall back to the empty filter.
   }
+  // Панель обязана соответствовать ФАКТИЧЕСКОЙ модели, а не прошлой: при
+  // null-снимке (новая сеть/вкладка) модель уже сброшена выше, но без явной
+  // перерисовки DOM остаётся от прежней пары — «Сущность = <мысль A>» в сети B
+  // при пустом AST запроса (ошибка 58c55bb9). Перерисовка — ВНЕ ветки снимка.
+  filterEditor?.refresh();
+  // Миграционное значение прежнего снимка подхватывает каркас панели.
+  activityFrame?.apply();
   // Идентичность сохранённого отбора восстанавливается ПО id: список личных
   // отборов перечитывается, имя и baseline берутся из найденной строки. Отбор
   // исчез (удалён другим клиентом) — идентичность снимается, условия остаются.
-  await resolveSavedFilterIdentity();
+  await resolveSavedFilterIdentity(pair);
+  // Пара могла смениться, пока читался список отборов: отложенный переход и
+  // лента принадлежат паре на старте (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
   // Переход из меню мысли сильнее сохранённого снимка: лента открывается
   // отбором «Сущность = id» (сценарий 7a1a354b, шаг 3).
-  applyPendingEntityFilter();
+  applyPendingEntityFilter(pair);
   // `EnsureLoaded` triggers an async `users` fetch; rows rendered before it
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
+  if (!isCurrentScreenPair(pair)) return;
   await applyQuery();
 }
 
@@ -276,9 +291,12 @@ export async function ensureActivityInitialised(): Promise<void> {
  * из найденной строки имя и baseline (маркер ●). Отбор не найден — идентичность
  * очищается, условия снимка остаются как есть.
  */
-async function resolveSavedFilterIdentity(): Promise<void> {
+async function resolveSavedFilterIdentity(pair: ScreenPair): Promise<void> {
   if (savedFilterId === null || savedFilters === null) return;
   await savedFilters.reload();
+  // Список перечитан, но пара могла смениться: имя/baseline прежней пары в
+  // новую не переносятся (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
   const row = savedFilters.rows().find((entry) => entry.id === savedFilterId);
   if (row === undefined) {
     savedFilterId = null;
@@ -299,19 +317,24 @@ async function resolveSavedFilterIdentity(): Promise<void> {
  * (lazy import active-view), а фильтр ждёт инициализации в `pendingEntity`.
  */
 export function showActivityForEntity(entityId: string, title?: string): void {
-  pendingEntity = { id: entityId, title: title ?? null };
   const networkId = store.state.networkId;
+  if (networkId === null) return;
+  pendingEntity = { id: entityId, title: title ?? null, networkId };
   const tabId = store.state.activeTabId;
-  if (host !== null && networkId !== null && networkIdSeen === `${networkId}:${tabId ?? ''}`) {
-    applyPendingEntityFilter();
+  if (host !== null && networkIdSeen === `${networkId}:${tabId ?? ''}`) {
+    applyPendingEntityFilter({ networkId, tabId });
     persistState();
     void applyQuery();
   }
 }
 
 /** Применить отложенный переход к сущности к модели отбора (до запроса). */
-function applyPendingEntityFilter(): void {
+function applyPendingEntityFilter(pair: ScreenPair): void {
   if (pendingEntity === null) return;
+  // Переход запрошен в другой сети — к этой паре он не относится (ошибка
+  // 58c55bb9); ждёт своей сети, чтобы примениться при возврате в неё.
+  if (pendingEntity.networkId !== pair.networkId) return;
+  if (!isCurrentScreenPair(pair)) return;
   const { id, title } = pendingEntity;
   pendingEntity = null;
   const ast = {
@@ -343,10 +366,14 @@ function applyPendingEntityFilter(): void {
 }
 
 /** Persists filter + page to L4 (per-tab snapshot, Q4). В снимок уходит
- *  AST-определение единого конструктора: его читает `parseActivityCriteriaTree`. */
+ *  AST-определение единого конструктора: его читает `parseActivityCriteriaTree`.
+ *  Запись адресуется паре «сеть + вкладка»: снимок экрана текущей сети не
+ *  ложится в строку вкладки чужой сети (ошибка 58c55bb9). */
 function persistState(): void {
   const tabId = store.state.activeTabId;
-  if (tabId === null) return;
+  const networkId = store.state.networkId;
+  if (tabId === null || networkId === null) return;
+  if (!tabBelongsToNetwork(networkId, tabId)) return;
   void etn.tabs
     .updateState(tabId, {
       activity_state: JSON.stringify({
@@ -721,6 +748,11 @@ function dateToMs(value: string, endOfDay: boolean): number | null {
 async function applyQuery(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || tableWrap === null) return;
+  // Ответ адресуется паре на старте: после смены сети/вкладки запись строк
+  // перетёрла бы состояние новой пары (ошибка 58c55bb9). Запрос ушёл в СВОЮ
+  // сеть, поэтому 422 не даёт, но события чужой сети до перезапроса
+  // показывались бы как лента текущей.
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
   persistState();
   const seq = ++querySeq;
   renderLoading();
@@ -735,6 +767,9 @@ async function applyQuery(): Promise<void> {
     const ast = buildFilterAst(filter, { profile: 'events', sort: false });
     const result = await etn.activity.list(networkId, { ast, limit: PAGE_SIZE, offset });
     if (seq !== querySeq) return;
+    // Пара сменилась, а новая инициализация ещё ждёт чтений: ответ прежней
+    // пары в кэши экрана не пишем (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     // Успешный запрос снимает красную диагностику прежнего (битого) отбора
     // (требование 44d61c8a): строки редактора очищаются вместе с ошибкой.
     if (serverIssues.length > 0) {
@@ -750,12 +785,16 @@ async function applyQuery(): Promise<void> {
     refreshTypeNames();
     void refreshLayerTitles(networkId).then(() => {
       if (seq !== querySeq) return;
+      if (!isCurrentScreenPair(pair)) return;
       renderTable();
     });
     void resolveMissingThoughtTitles(page, networkId, seq);
     renderTable();
   } catch (err) {
     if (seq !== querySeq) return;
+    // Ошибка запроса прежней пары не относится к текущей сети/вкладке
+    // (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     // Красная диагностика ядра (`VALIDATION_ERROR` → `details.diagnostics`) —
     // в строки редактора: битая строка подсвечена, применение запрещено
     // (требования 44d61c8a, 0fd1dc5d). Таблицу заменяет сообщение об ошибке.

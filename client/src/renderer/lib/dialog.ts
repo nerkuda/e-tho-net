@@ -29,6 +29,7 @@ import { fieldInput, fieldRow } from './ui/field.js';
 import { isFooterErrorLine, type ErrorAddress } from './ui/messages.js';
 import { uiTabs, type TabsHandle } from './ui/tabs.js';
 import { FOCUS_ANCHOR_ATTR, FOCUS_ANCHOR_SELECTOR } from './ui/focus-anchor.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from './keymap.js';
 
 /**
  * Роль размера диалога (требование 13464c39 «Стабильные размеры диалога:
@@ -48,14 +49,35 @@ export interface DialogTab {
 
 
 /**
+ * Метки подтверждения закрытия «грязного» диалога (ошибка ed299fa0). Не
+ * заданы — действуют общие «Сохранить изменения?» / «Сохранить» /
+ * «Не сохранять» (требование b58f6aad). Диалог, у которого семантика не
+ * «сохранить», а «применить» (массовые значения свойств выделения), задаёт
+ * свои: вопрос «Применить изменения?», кнопки «Применить» / «Не применять» /
+ * «Отменить закрытие». Порядок кнопок неизменен — остаются те же три решения.
+ */
+export interface DialogDirtyLabels {
+  /** Заголовок подтверждения (по умолчанию — «Несохранённые изменения»). */
+  title?: string;
+  /** Вопрос подтверждения (по умолчанию — «Данные изменены. Сохранить изменения?»). */
+  message?: string;
+  /** Кнопка «записать и закрыть» (по умолчанию — «Сохранить»). */
+  save?: string;
+  /** Кнопка «закрыть без записи» (по умолчанию — «Не сохранять»). */
+  discard?: string;
+  /** Кнопка «остаться» (по умолчанию — «Отменить закрытие»). */
+  stay?: string;
+}
+
+/**
  * Признак «есть несохранённые изменения» и команда записи диалога-редактора
  * (требование b58f6aad «Закрытие диалога-редактора с изменениями требует
  * подтверждения»). Форма объявляет грязность сама: каркас не знает её полей.
  * Если {@link isDirty} вернула `true`, закрытие диалога по Esc или крестику
  * перехватывается — вместо закрытия показывается подтверждение
  * «Данные изменены. Сохранить изменения?» с кнопками «Сохранить» /
- * «Не сохранять» / «Отменить закрытие». Явные кнопки футера (в т.ч. «Отмена»)
- * закрывают диалог молча, как и раньше.
+ * «Не сохранять» / «Отменить закрытие» (либо метки {@link labels} диалога).
+ * Явные кнопки футера (в т.ч. «Отмена») закрывают диалог молча, как и раньше.
  */
 export interface DialogDirtyGuard {
   /** Есть ли расхождение текущих значений формы с загруженными. */
@@ -67,6 +89,12 @@ export interface DialogDirtyGuard {
    * подтверждения закрывается в любом случае).
    */
   save: (close: () => void) => void;
+  /**
+   * Метки подтверждения закрытия, если у диалога своя семантика записи
+   * («применить» вместо «сохранить»). Не заданы — общие метки требования
+   * b58f6aad, поэтому редакторы с сохранением ничего не меняют.
+   */
+  labels?: DialogDirtyLabels;
 }
 
 /** A dialog footer button. */
@@ -185,13 +213,14 @@ export interface DialogOptions {
     ctrlShiftEnter?: () => void;
   };
   /**
-   * Слои Escape (задача d23279f6): спрашивается capture-обработчиком ДО
-   * {@link requestClose}. `true` — нажатие обработано вызывающим, диалог
-   * остаётся открытым (корзина закрывает док-панель, а не себя); `false`/
-   * отсутствие — обычное закрытие. Вызывается только у верхнего диалога стека
-   * и только на неавтоповторный `Escape`. Так внешний обработчик видит Esc
-   * раньше диспетчера сочетаний (`lib/keymap.ts`, bubble-фаза) и может,
-   * например, отменить клавиатурную сессию сплиттера.
+   * Слои Escape (задача d23279f6): спрашивается слоем диалога в реестре
+   * диспетчера ДО {@link requestClose}. `true` — нажатие обработано
+   * вызывающим, диалог остаётся открытым (корзина закрывает док-панель, а не
+   * себя); `false`/отсутствие — обычное закрытие. Вызывается только когда
+   * диалог — верхний слой реестра и только на неавтоповторный `Escape`. Так
+   * внешний обработчик видит Esc раньше диспетчера сочетаний
+   * (`lib/keymap.ts`, bubble-фаза) и может, например, отменить клавиатурную
+   * сессию сплиттера.
    */
   onEscape?: () => boolean;
   /** Called after the dialog is mounted (focus management, etc.). */
@@ -686,6 +715,8 @@ export function showDialog(opts: DialogOptions): () => void {
     box.append(footer);
   }
 
+  /** Слой `Escape` этого диалога в реестре диспетчера (ошибка 9ff6b606). */
+  let escapeOverlay: KeyOverlayHandle | null = null;
   /**
    * Единственная точка закрытия диалога: снимает его со стопки, отписывает
    * слушатели, возвращает фокус и зовёт `onClose`, затем убирает подложку из
@@ -700,6 +731,10 @@ export function showDialog(opts: DialogOptions): () => void {
   const close = (): void => {
     if (teardowns.get(backdrop) === undefined) return;
     teardowns.delete(backdrop);
+    // Диалог — такой же слой, как меню/поповер: со снятием с реестра `Escape`
+    // переходит следующему открытому слою или диалогу под ним.
+    escapeOverlay?.release();
+    escapeOverlay = null;
     const index = stack.indexOf(backdrop);
     if (index >= 0) stack.splice(index, 1);
     dialogKeys.delete(backdrop);
@@ -721,22 +756,25 @@ export function showDialog(opts: DialogOptions): () => void {
   /**
    * Показать подтверждение закрытия «грязного» редактора (требование
    * b58f6aad): три решения — «Сохранить» (записать и закрыть), «Не сохранять»
-   * (закрыть без записи), «Отменить закрытие» (ничего не делать). Отдельный
-   * диалог поверх редактора; его собственное закрытие (Esc/крестик) означает
+   * (закрыть без записи), «Отменить закрытие» (ничего не делать). Подписи —
+   * общие метки требования либо {@link DialogDirtyLabels} диалога, если у него
+   * своя семантика записи («применить», ошибка ed299fa0). Отдельный диалог
+   * поверх редактора; его собственное закрытие (Esc/крестик) означает
    * «Отменить закрытие» — редактор остаётся открытым.
    */
   const confirmDirtyClose = (): void => {
+    const labels = opts.dirty?.labels;
     showDialog({
-      title: t('dialog.unsaved.title'),
+      title: labels?.title ?? t('dialog.unsaved.title'),
       size: 's',
-      body: el('p', 'dialog-text', t('dialog.unsaved.message')),
+      body: el('p', 'dialog-text', labels?.message ?? t('dialog.unsaved.message')),
       // Порядок: «отказ от закрытия» → «закрыть без записи» → «записать и
       // закрыть» (главное действие справа, как в остальных футерах).
       buttons: [
-        { label: t('dialog.unsaved.stay') },
-        { label: t('dialog.unsaved.discard'), onClick: () => close() },
+        { label: labels?.stay ?? t('dialog.unsaved.stay') },
+        { label: labels?.discard ?? t('dialog.unsaved.discard'), onClick: () => close() },
         {
-          label: t('dialog.unsaved.save'),
+          label: labels?.save ?? t('dialog.unsaved.save'),
           primary: true,
           confirm: true,
           onClick: () => opts.dirty?.save(close),
@@ -757,22 +795,33 @@ export function showDialog(opts: DialogOptions): () => void {
     }
     close();
   };
-  const onKey = (event: KeyboardEvent): void => {
-    // Lower dialogs ignore Escape even though they see the event too —
-    // same-target capture listeners run in registration order.
-    if (event.key === 'Escape' && !event.repeat && stack[stack.length - 1] === backdrop) {
-      // preventDefault marks the press as consumed: the global Escape handler
-      // (app.initKeyboard, bubble phase) must not close the dialog *below*
-      // the one just closed here (L21 fix — Escape over a stacked dialog
-      // closed the whole stack). Key auto-repeat is ignored for the same
-      // reason: a held Escape would otherwise walk the stack down.
-      event.preventDefault();
+  // Диалог входит в тот же реестр слоёв, что меню и поповер: порядок открытия
+  // однозначно задаёт приоритет `Escape` (ошибка 9ff6b606). Верхний диалог
+  // обрабатывает нажатие сам; если над ним открыт другой слой, `handleEscape`
+  // вернёт `false` — нажатие останется верхнему слою.
+  escapeOverlay = pushKeyOverlay({
+    id: 'dialog',
+    onEscape: () => {
       // Слои Escape (задача d23279f6): вызывающий может обработать нажатие
       // сам (закрыть док-панель, отменить клавиатурный драг сплиттера) и
       // оставить диалог открытым.
       if (opts.onEscape?.() === true) return;
       requestClose();
-    }
+    },
+  });
+  const onKey = (event: KeyboardEvent): void => {
+    // Lower dialogs ignore Escape even though they see the event too —
+    // same-target capture listeners run in registration order. The topmost
+    // dialog is not necessarily the last listener: menus opened in between
+    // register their layers too, so the registry decides whose press it is.
+    if (event.key !== 'Escape' || event.repeat) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    if (escapeOverlay?.handleEscape(event) !== true) return;
+    // preventDefault marks the press as consumed: the global Escape handler
+    // (app.initKeyboard, bubble phase) must not close the dialog *below*
+    // the one just closed here (L21 fix — Escape over a stacked dialog
+    // closed the whole stack). Key auto-repeat is ignored for the same
+    // reason: a held Escape would otherwise walk the stack down.
   };
   window.addEventListener('keydown', onKey, true);
   const onConfirm = (event: KeyboardEvent): void => {

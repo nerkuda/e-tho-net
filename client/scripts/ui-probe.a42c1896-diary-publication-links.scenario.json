@@ -1,0 +1,239 @@
+{
+  "name": "a42c1896-diary-publication-links",
+  "description": "Гейт ошибки a42c1896: ссылки в статичном markdown-просмотре «Дневника» и «Публикаций» обязаны открывать Ctrl+наведение-предпросмотр. Дневник: тело записи рендерит серверный body_html (span.wiki-link[data-wiki-id]); до фикса у ссылки нет data-hp-kind и попап не открывается. Проба строит ЦЕПОЧКУ: тело записи → цель (постоянный комментарий цели тоже содержит wiki-ссылку) → глубина; Ctrl+наведение на ссылку тела даёт 1 попап, на ссылку ВНУТРИ него — 2 (вложенный предпросмотр), уход закрывает цепочку. Публикации: серверная сборка публикации резолвит wiki-ссылки в текст/якоря (renderPublicationFragment + resolveLink), поэтому единственный предпросматриваемый класс ссылок там — обычные <a href> (внешние URL). До фикса у них нет data-hp-kind ни в тексте, ни в предисловии, ни в резюме; после — data-hp-kind=link и Ctrl+наведение даёт 1 попап с URL (вложенность в попапе URL невозможна — в нём нет ссылок; вложенная цепочка покрыта дневниковой частью). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.a42c1896-diary-publication-links.scenario.json",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "prepare",
+      "timeout": 90000,
+      "probe": "(async () => { const nid = '{{networkId}}'; const now = new Date().toISOString(); const deep = await window.etn.thoughts.create(nid, { title: 'Глубина a42c1896', comment: { body_md: 'постоянный комментарий глубины a42c1896' } }); const target = await window.etn.thoughts.create(nid, { title: 'Цель a42c1896', comment: { body_md: 'постоянный комментарий цели a42c1896. Вложенная ссылка: [[#' + deep.id + '|глубина a42c1896]].' } }); await window.etn.comments.create(nid, 'thought', '{{thoughtId}}', { kind: 'chronological', title: 'Запись a42c1896', body_md: 'Дневник: [[#' + target.id + '|цель-дневник]] в теле записи.', valid_from: now, valid_to: now }); const prop = await window.etn.propertyRegistry.create(nid, { name: 'Связь текстов a42c1896', value_type: 'link', name_forward: 'содержит', name_reverse: 'входит в' }); const section = await window.etn.thoughts.create(nid, { title: 'Раздел a42c1896', comment: { body_md: 'Предисловие: [внешняя-предисловие](https://example.com/a42c1896-preamble).' } }); const text = await window.etn.thoughts.create(nid, { title: 'Текст a42c1896', comment: { body_md: 'Текст публикации: [внешняя-текст](https://example.com/a42c1896-text).' } }); await window.etn.properties.set(nid, 'thought', section.id, prop.name, text.id, 'source'); const pub = await window.etn.publications.create(nid, { title: 'Публикация a42c1896', summary_md: 'Резюме: [внешняя-резюме](https://example.com/a42c1896-summary).', title_recipe: { keywords: 'Раздел a42c1896', keyword_scope: ['title'], sort: 'alpha', order: 'asc' }, text_sources: [prop.id] }); window.__a42 = { deep: deep.id, target: target.id, section: section.id, text: text.id, pub: pub.id }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+
+    {
+      "name": "open-diary",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null"
+    },
+    {
+      "name": "goto-today",
+      "click": ".cal-today"
+    },
+    {
+      "name": "record-with-link",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.diary-record-body span.wiki-link[data-wiki-id]') !== null"
+    },
+    {
+      "name": "diary-markers",
+      "probe": "(() => { const link = document.querySelector('.diary-record-body span.wiki-link[data-wiki-id]'); if (link === null) return 'no-link'; return { hpKind: link.dataset.hpKind ?? null, text: (link.textContent || '').trim(), idMatches: link.getAttribute('data-wiki-id') === window.__a42.target, popsBefore: document.querySelectorAll('.ui-popover').length }; })()",
+      "expect": {
+        "hpKind": "wiki-thought",
+        "text": "цель-дневник",
+        "idMatches": true,
+        "popsBefore": 0
+      }
+    },
+    {
+      "name": "diary-hover",
+      "probe": "(() => { const link = document.querySelector('.diary-record-body span.wiki-link[data-wiki-id]'); if (link === null) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "diary-popup",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "diary-popup-content",
+      "probe": "(() => { const pop = document.querySelector('.ui-popover'); if (pop === null) return 'no-popover'; return { pops: document.querySelectorAll('.ui-popover').length, head: (pop.querySelector('.ui-popover-head')?.textContent ?? '').trim(), hasTargetComment: (pop.textContent || '').includes('постоянный комментарий цели a42c1896'), nestedKind: pop.querySelector('span.wiki-link[data-wiki-id]')?.dataset?.hpKind ?? null }; })()",
+      "expect": {
+        "pops": 1,
+        "head": "цель-дневник",
+        "hasTargetComment": true,
+        "nestedKind": "wiki-thought"
+      }
+    },
+    {
+      "name": "diary-hover-nested",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('span.wiki-link[data-wiki-id]'); if (link === null) return 'no-marked-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "diary-nested-popup",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 2"
+    },
+    {
+      "name": "diary-nested-content",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; return { pops: pops.length, head: (last.querySelector('.ui-popover-head')?.textContent ?? '').trim(), hasDeepComment: (last.textContent || '').includes('постоянный комментарий глубины a42c1896') }; })()",
+      "expect": {
+        "pops": 2,
+        "head": "глубина a42c1896",
+        "hasDeepComment": true
+      }
+    },
+    {
+      "name": "diary-leave-chain",
+      "probe": "(async () => { document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: false, clientX: 1, clientY: 1 })); await new Promise((r) => setTimeout(r, 150)); const after150 = document.querySelectorAll('.ui-popover').length; await new Promise((r) => setTimeout(r, 400)); const after550 = document.querySelectorAll('.ui-popover').length; return { after150, after550 }; })()",
+      "expect": { "after150": 2, "after550": 0 }
+    },
+    {
+      "name": "diary-click-link",
+      "probe": "(() => { const link = document.querySelector('.diary-record-body span.wiki-link[data-wiki-id]'); if (link === null) return 'no-link'; link.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "diary-editor-opened",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.editor-title-input')].some((e) => e.value === 'Цель a42c1896')"
+    },
+
+    {
+      "name": "open-publications",
+      "click": "button.view-tab[title=\"Публикации\"]"
+    },
+    {
+      "name": "publication-in-library",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.pub-entry, .pub-card')].some((e) => (e.textContent || '').includes('Публикация a42c1896'))"
+    },
+    {
+      "name": "open-publication-workspace",
+      "probe": "(() => { const entry = [...document.querySelectorAll('.pub-entry, .pub-card')].find((e) => (e.textContent || '').includes('Публикация a42c1896')); if (entry === undefined) return 'no-entry'; entry.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "doc-blocks-ready",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.pub-doc-summary') !== null && document.querySelector('.pub-doc-preamble') !== null && document.querySelector('.pub-doc-text') !== null"
+    },
+    {
+      "name": "pub-markers",
+      "probe": "(() => { const pick = (sel) => document.querySelector(sel); const summary = pick('.pub-doc-summary a[href=\"https://example.com/a42c1896-summary\"]'); const preamble = pick('.pub-doc-preamble a[href=\"https://example.com/a42c1896-preamble\"]'); const text = pick('.pub-doc-text a[href=\"https://example.com/a42c1896-text\"]'); return { summaryKind: summary?.dataset?.hpKind ?? null, preambleKind: preamble?.dataset?.hpKind ?? null, textKind: text?.dataset?.hpKind ?? null, summaryText: (summary?.textContent ?? '').trim(), popsBefore: document.querySelectorAll('.ui-popover').length }; })()",
+      "expect": {
+        "summaryKind": "link",
+        "preambleKind": "link",
+        "textKind": "link",
+        "summaryText": "внешняя-резюме",
+        "popsBefore": 0
+      }
+    },
+    {
+      "name": "hover-summary-link",
+      "probe": "(() => { const link = document.querySelector('.pub-doc-summary a[href=\"https://example.com/a42c1896-summary\"]'); if (link === null) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "summary-popup",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "summary-popup-content",
+      "probe": "(() => { const pop = document.querySelector('.ui-popover'); if (pop === null) return 'no-popover'; return { pops: document.querySelectorAll('.ui-popover').length, head: (pop.querySelector('.ui-popover-head')?.textContent ?? '').trim(), hasUrl: (pop.textContent || '').includes('https://example.com/a42c1896-summary') }; })()",
+      "expect": { "pops": 1, "head": "внешняя-резюме", "hasUrl": true }
+    },
+    {
+      "name": "leave-summary",
+      "probe": "(async () => { document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: false, clientX: 1, clientY: 1 })); await new Promise((r) => setTimeout(r, 500)); return document.querySelectorAll('.ui-popover').length; })()",
+      "expect": 0
+    },
+    {
+      "name": "hover-preamble-link",
+      "probe": "(() => { const link = document.querySelector('.pub-doc-preamble a[href=\"https://example.com/a42c1896-preamble\"]'); if (link === null) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "preamble-popup",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "preamble-popup-content",
+      "probe": "(() => { const pop = document.querySelector('.ui-popover'); if (pop === null) return 'no-popover'; return { head: (pop.querySelector('.ui-popover-head')?.textContent ?? '').trim(), hasUrl: (pop.textContent || '').includes('https://example.com/a42c1896-preamble') }; })()",
+      "expect": { "head": "внешняя-предисловие", "hasUrl": true }
+    },
+    {
+      "name": "leave-preamble",
+      "probe": "(async () => { document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: false, clientX: 1, clientY: 1 })); await new Promise((r) => setTimeout(r, 500)); return document.querySelectorAll('.ui-popover').length; })()",
+      "expect": 0
+    },
+    {
+      "name": "hover-text-link",
+      "probe": "(() => { const link = document.querySelector('.pub-doc-text a[href=\"https://example.com/a42c1896-text\"]'); if (link === null) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "text-popup",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "text-popup-content",
+      "probe": "(() => { const pop = document.querySelector('.ui-popover'); if (pop === null) return 'no-popover'; return { head: (pop.querySelector('.ui-popover-head')?.textContent ?? '').trim(), hasUrl: (pop.textContent || '').includes('https://example.com/a42c1896-text') }; })()",
+      "expect": { "head": "внешняя-текст", "hasUrl": true }
+    },
+    {
+      "name": "leave-text",
+      "probe": "(async () => { document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: false, clientX: 1, clientY: 1 })); await new Promise((r) => setTimeout(r, 500)); return document.querySelectorAll('.ui-popover').length; })()",
+      "expect": 0
+    },
+    {
+      "name": "click-outside-keeps-popup-contract",
+      "probe": "(() => { const link = document.querySelector('.pub-doc-summary a[href=\"https://example.com/a42c1896-summary\"]'); if (link === null) return 'no-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "click-outside-wait",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "click-outside-keeps-popup",
+      "probe": "(async () => { const pop = document.querySelector('.ui-popover'); if (pop === null) return 'no-popover'; document.querySelector('.pub-doc-titleblock')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 5, clientY: 5 })); document.querySelector('.pub-doc-titleblock')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 5, clientY: 5 })); await new Promise((r) => setTimeout(r, 100)); return document.querySelectorAll('.ui-popover').length; })()",
+      "expect": 1
+    }
+  ]
+}

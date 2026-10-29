@@ -23,7 +23,61 @@
  *   Chromium/Electron `Element.remove()` события не даёт — ошибка 0c45bce8);
  *   очистку потребители зовут напрямую;
  * - `emit`/`dispatch`/`fire` — один и тот же тестовый драйвер событий.
+ *
+ * Текст — как в браузере (ошибка cca54310): собственного текста у элемента нет,
+ * текст живёт ТЕКСТОВЫМ УЗЛОМ-ребёнком (`#text`, `isTextNode`). Поэтому
+ * `textContent = …` снимает детей и кладёт один текстовый узел, геттер
+ * агрегирует текст потомков, `replaceChildren`, `appendChild`/`removeChild` и
+ * `childElementCount` пересчитываются из детей, а `flatText()` — ровно то, что
+ * в браузере отдаёт `textContent` узла. Прежняя форма держала `textContent`
+ * отдельным полем рядом с `children` и маскировала дефекты порядка
+ * «`textContent = …; replaceChildren()`» (ложно-зелёный контракт текстовой
+ * деградации `filter-footer`, задача 58f77990).
+ *
+ * Методы вставки/удаления — как у `Node`/`ParentNode`/`ChildNode` браузера
+ * (круг 2 cca54310): `append`/`prepend`/`replaceChildren`/`replaceWith`
+ * принимают и строки, и узлы (строка становится текстовым узлом);
+ * `appendChild`/`insertBefore`/`replaceChild` возвращают узел,
+ * `removeChild`/`replaceChild` на чужом узле и `insertBefore` с якорем из
+ * другого родителя бросают `DOMException` с именем `NotFoundError`;
+ * `cloneNode()` по умолчанию неглубокий, как в DOM.
+ *
+ * `children`/`childNodes` — ЖИВЫЕ коллекции: ссылка, взятая до мутации, видит
+ * актуальный состав (`length`, индексы, итерация), как `HTMLCollection`/
+ * `NodeList`. Мутирующих методов массива (`push`/`pop`/`splice`) у них нет —
+ * состав меняется только методами узла. Для удобства тестов коллекции дают
+ * читающие array-методы (`find`/`filter`/`map`/`forEach`/…); это осознанное
+ * расширение шима, браузерных мутаторов оно не возвращает.
+ *
+ * Намеренные расхождения остаются у `innerHTML`: это строковое поле (HTML не
+ * разбирается на узлы), поэтому разметка, положенная через `innerHTML`, в
+ * `textContent`/`flatText()` не попадает — потребители об этом знают.
+ *
+ * `querySelectorAll`/`querySelector` понимают ведущий `:scope` с дочерними
+ * комбинаторами (`:scope > .menu-item`, `:scope > .cloud-main > .cloud-title`):
+ * продукт ищет так прямых детей (меню, облачка, группы редактора), а шим без
+ * этой формы молча не находил строки и жесты на них не подключались.
+ * Селекторы без `:scope` по-прежнему ищут по всем потомкам.
+ * `parentNode` не заведён отдельным полем — `parent` того же назначения;
+ * объекты-заглушки (не `ShimElement`) методы вставки принимают как узлы —
+ * этого требует несколько существующих тестов.
  */
+
+/** Тег текстового узла шима (`Node.TEXT_NODE`): собственные данные — `textData`. */
+const TEXT_NODE_TAG = '#text';
+
+/**
+ * Шаги scoped-селектора после ведущего `:scope`: `:scope > .a > .b` →
+ * `['.a', '.b']`. `null` — селектор не scoped (обычный поиск по потомкам).
+ */
+function parseScopedSelector(selector: string): string[] | null {
+  const parts = selector
+    .trim()
+    .split('>')
+    .map((part) => part.trim());
+  if (parts[0] !== ':scope') return null;
+  return parts.slice(1).filter((part) => part !== '');
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -65,6 +119,169 @@ function createStyle(): ShimStyle {
     },
   };
   return style;
+}
+
+/**
+ * Ошибка браузера «узел не является ребёнком этого родителя». Имя
+ * (`NotFoundError`) — то, что проверяют тесты и продукт; текст — как у
+ * Chromium, чтобы сообщение было узнаваемым.
+ */
+function notFoundError(operation: string): DOMException {
+  return new DOMException(
+    `Failed to execute '${operation}' on 'Node': The node to be removed is not a child of this node.`,
+    'NotFoundError',
+  );
+}
+
+/** Аргумент метода вставки: узел шима или строка (в DOM строка тоже допустима
+ *  и превращается в текстовый узел). */
+export type ShimInsertable = ShimElement | string;
+
+/**
+ * Живая коллекция детей (`HTMLCollection`/`NodeList`-подобный `item()` +
+ * индексы/итерация). Объявлена наследником массива ради существующих тестов,
+ * которые читают её array-методами и сравнивают `deepEqual`; мутаторы
+ * (`push`/`pop`/…) на уровне типов видны, но в рантайме отсутствуют — как у
+ * браузерных коллекций.
+ */
+export interface ShimCollection extends Array<ShimElement> {
+  item(index: number): ShimElement | null;
+}
+
+/** Примитив там, где DOM ждёт `Node`: методы с таким аргументом бросают
+ *  `TypeError`, как браузер. Объекты-заглушки (не `ShimElement`) при этом
+ *  принимаются — этого требуют существующие тесты. */
+function isPrimitive(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value !== 'object' && typeof value !== 'function');
+}
+
+/**
+ * Живая коллекция детей: `length`, индексы и итерация вычисляются из текущего
+ * состава при КАЖДОМ обращении, поэтому ссылка, взятая до мутации, видит новый
+ * состав (как `HTMLCollection`/`NodeList`). Мутаторов массива нет.
+ *
+ * Читающие array-методы (`find`, `filter`, `map`, …) — осознанное расширение:
+ * на них держатся сотни существующих тестов; они работают по снимку на момент
+ * вызова, но сам снимок берётся из живого состава.
+ */
+function createLiveCollection(resolve: () => ShimElement[]): ShimCollection {
+  const readMethods = new Set([
+    'at',
+    'concat',
+    'every',
+    'filter',
+    'find',
+    'findIndex',
+    'flatMap',
+    'forEach',
+    'includes',
+    'indexOf',
+    'join',
+    'lastIndexOf',
+    'map',
+    'reduce',
+    'reduceRight',
+    'slice',
+    'some',
+    'toLocaleString',
+    'toString',
+  ]);
+  // Мутаторы массива браузерным коллекциям не принадлежат. Цель прокси —
+  // массив (нужен для `Array.isArray` и `assert.deepEqual` существующих
+  // тестов), поэтому его прототипные мутаторы приходится явно скрывать.
+  const blockedMethods = new Set([
+    'copyWithin',
+    'fill',
+    'pop',
+    'push',
+    'reverse',
+    'shift',
+    'sort',
+    'splice',
+    'unshift',
+  ]);
+  // Итераторы читают живой состав на КАЖДОМ шаге: итератор, сохранённый до
+  // мутации, обязан видеть актуальные узлы (в браузере `NodeList.values()`
+  // и `[Symbol.iterator]()` живые; снимок «замерзал» — замечание круга 3).
+  function* liveValues(): Generator<ShimElement> {
+    let index = 0;
+    while (index < resolve().length) {
+      yield resolve()[index]!;
+      index += 1;
+    }
+  }
+  function* liveKeys(): Generator<number> {
+    let index = 0;
+    while (index < resolve().length) {
+      yield index;
+      index += 1;
+    }
+  }
+  function* liveEntries(): Generator<[number, ShimElement]> {
+    let index = 0;
+    while (index < resolve().length) {
+      yield [index, resolve()[index]!];
+      index += 1;
+    }
+  }
+  const handler: ProxyHandler<Record<string | symbol, unknown>> = {
+    get(target, property) {
+      if (property === 'length') return resolve().length;
+      if (property === 'item') {
+        return (index: number): ShimElement | null => resolve()[index] ?? null;
+      }
+      if (property === Symbol.iterator || property === 'values') return liveValues;
+      if (property === 'keys') return liveKeys;
+      if (property === 'entries') return liveEntries;
+      if (typeof property === 'string' && /^\d+$/.test(property)) {
+        return resolve()[Number(property)];
+      }
+      if (typeof property === 'string' && blockedMethods.has(property)) return undefined;
+      if (typeof property === 'string' && readMethods.has(property)) {
+        return (...args: unknown[]): unknown => {
+          // Снимок живого состава на момент вызова: мутации во время самого
+          // вызова (например, `forEach` с удалением) ведут себя как у массива.
+          const snapshot = resolve() as unknown as Record<string, (...params: unknown[]) => unknown>;
+          return snapshot[property]!.apply(resolve(), args);
+        };
+      }
+      return Reflect.get(target, property);
+    },
+    has(target, property) {
+      if (property === 'length') return true;
+      if (typeof property === 'string' && /^\d+$/.test(property)) {
+        return Number(property) < resolve().length;
+      }
+      return Reflect.has(target, property);
+    },
+    ownKeys() {
+      // `length` — неконфигурируемое собственное свойство цели-массива:
+      // прокси обязан его перечислить.
+      return [...resolve().map((_node, index) => String(index)), 'length'];
+    },
+    getOwnPropertyDescriptor(target, property) {
+      if (property === 'length') {
+        return { value: resolve().length, writable: true, enumerable: false, configurable: false };
+      }
+      if (typeof property === 'string' && /^\d+$/.test(property)) {
+        const nodes = resolve();
+        const index = Number(property);
+        if (index < nodes.length) {
+          return { value: nodes[index], enumerable: true, configurable: true, writable: false };
+        }
+        return undefined;
+      }
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+    set(target, property, value) {
+      // У HTMLCollection/NodeList нет записи: состав меняют методы узла.
+      if (property === 'length' || (typeof property === 'string' && /^\d+$/.test(property))) {
+        throw new TypeError('Collection is read-only: mutate children through node methods');
+      }
+      return Reflect.set(target, property, value);
+    },
+  };
+  return new Proxy([] as unknown as Record<string | symbol, unknown>, handler) as unknown as ShimCollection;
 }
 
 /**
@@ -145,16 +362,15 @@ export class ShimElement {
   static uppercaseTagNames = false;
 
   tagName: string;
-  /** `Node.ELEMENT_NODE` — код под тестами проверяет «это DOM-узел». */
+  /** `Node.ELEMENT_NODE` (1) для элемента, `Node.TEXT_NODE` (3) для текстового
+   *  узла — как в браузере: код под тестами различает узлы по `nodeType`. */
   nodeType = 1;
   className = '';
-  children: ShimElement[] = [];
   parent: ShimElement | null = null;
   style: ShimStyle = createStyle();
   dataset: Record<string, string> = {};
   attributes: Record<string, string> = {};
   innerHTML = '';
-  textContent = '';
   value = '';
   valueAsNumber = 0;
   type = '';
@@ -201,19 +417,82 @@ export class ShimElement {
 
   constructor(tag: string, className?: string, text?: string) {
     this.tagName = ShimElement.uppercaseTagNames ? tag.toUpperCase() : tag;
+    this.nodeType = this.isTextNode ? 3 : 1;
     this.classList.attach(this);
     if (className !== undefined && className !== '') this.className = className;
     if (text !== undefined) this.textContent = text;
-    // Ссылки на родителя/класс-лист/слушателей/стили делают дерево циклическим:
-    // тесты умеют сериализовать элемент (`JSON.stringify`) как текстовый стог,
-    // поэтому служебные поля-связи не перечисляемы.
-    for (const key of ['parent', 'classList', 'listeners', 'style'] as const) {
+    // Ссылки на родителя/класс-лист/слушателей/стили делают дерево
+    // циклическим: тесты умеют сериализовать элемент (`JSON.stringify`) как
+    // текстовый стог, поэтому служебные поля-связи не перечисляемы. Список
+    // узлов (`nodes`) и данные текстового узла (`textData`) намеренно ОСТАЮТСЯ
+    // перечисляемыми — по ним `JSON.stringify` элемента и видит текст и классы
+    // потомков (тестовый «стог текста», например сверка read-only строк
+    // свойств).
+    for (const key of [
+      'parent',
+      'classList',
+      'listeners',
+      'style',
+      'childNodesView',
+      'childrenView',
+    ] as const) {
       Object.defineProperty(this, key, {
         value: this[key],
         enumerable: false,
         writable: true,
         configurable: true,
       });
+    }
+  }
+
+  /** Упорядоченный список ВСЕХ дочерних узлов: элементы и текстовые узлы. */
+  private nodes: ShimElement[] = [];
+
+  /** Кэш живых коллекций: одна и та же ссылка на элемент (как в DOM). */
+  private childNodesView: ShimCollection | null = null;
+  private childrenView: ShimCollection | null = null;
+
+  /** Данные текстового узла (`#text`); у элемента всегда пусто. */
+  private textData = '';
+
+  /** Текстовый узел (в браузере `nodeType === Node.TEXT_NODE`). */
+  get isTextNode(): boolean {
+    // Сравнение без регистра: `uppercaseTagNames` (thought-cloud) поднимает тег
+    // в верхний регистр, а вид узла от этого не меняется.
+    return this.tagName.toLowerCase() === TEXT_NODE_TAG;
+  }
+
+  /**
+   * `textContent` с семантикой браузера (ошибка cca54310):
+   *   • элемент — КОНКАТЕНАЦИЯ текста всех узлов-потомков (собственного текста
+   *     у элемента нет, текст живёт текстовыми узлами);
+   *   • текстовый узел — собственные данные;
+   *   • запись снимает ВСЕХ детей и кладёт один текстовый узел (пустая строка —
+   *     детей не остаётся), как `Node.textContent = …` в DOM. Поэтому дефект
+   *     порядка «`textContent = …; replaceChildren()`» виден тесту: пустой
+   *     `replaceChildren()` снимает только что вставленный текст.
+   */
+  get textContent(): string {
+    if (this.isTextNode) return this.textData;
+    let out = '';
+    for (const child of this.nodes) out += child.textContent;
+    return out;
+  }
+
+  set textContent(value: string) {
+    const text = value === null || value === undefined ? '' : String(value);
+    if (this.isTextNode) {
+      this.textData = text;
+      return;
+    }
+    for (const child of this.nodes) child.parent = null;
+    // Массив детей меняется НА МЕСТЕ: ссылка на `childNodes`, взятая до этой
+    // записи, обязана увидеть новый состав (живая коллекция).
+    this.nodes.length = 0;
+    if (text !== '') {
+      const node = new ShimElement(TEXT_NODE_TAG, undefined, text);
+      node.parent = this;
+      this.nodes.push(node);
     }
   }
 
@@ -232,23 +511,36 @@ export class ShimElement {
   }
 
   get firstChild(): ShimElement | null {
-    return this.children[0] ?? null;
+    return this.nodes[0] ?? null;
   }
 
   /** Первый дочерний УЗЕЛ-элемент (текстовые узлы пропускаются, как в DOM). */
   get firstElementChild(): ShimElement | null {
-    return this.children.find((child) => child.tagName !== '#text') ?? null;
+    return this.nodes.find((child) => !child.isTextNode) ?? null;
   }
 
-  /** Число дочерних УЗЛОВ-элементов (как у настоящего DOM; текстовые узлы,
-   *  которыми `append` из строки заворачивает строку в `#text`, тоже
-   *  считаются — вызывающие из продукта им не пользуются). */
+  /** Дочерние ЭЛЕМЕНТЫ (как `Element.children` в DOM): текстовых узлов нет.
+   *  Текст, положенный `textContent = …`/`append('…')`/`replaceChildren('…')`,
+   *  живёт в {@link childNodes} — как в браузере. Коллекция ЖИВАЯ: ссылка,
+   *  взятая до мутации, видит актуальный состав. */
+  get children(): ShimCollection {
+    return (this.childrenView ??= createLiveCollection(() =>
+      this.nodes.filter((child) => !child.isTextNode),
+    ));
+  }
+
+  /** Число дочерних ЭЛЕМЕНТОВ (как `Element.childElementCount` в DOM):
+   *  текстовые узлы, которыми `textContent = …`/`append('…')` кладут текст,
+   *  не считаются. */
   get childElementCount(): number {
-    return this.children.filter((child) => child.tagName !== '#text').length;
+    return this.nodes.filter((child) => !child.isTextNode).length;
   }
 
-  get childNodes(): ShimElement[] {
-    return this.children;
+  /** Все дочерние УЗЛЫ (элементы и текстовые), как `Node.childNodes`.
+   *  Коллекция ЖИВАЯ: ссылка, взятая до мутации, видит актуальный состав.
+   *  Мутаторов массива (`push`/`pop`) нет — как у `NodeList`. */
+  get childNodes(): ShimCollection {
+    return (this.childNodesView ??= createLiveCollection(() => this.nodes));
   }
 
   /** Добавляет класс, не трогая остальные (совместимость со старыми копиями). */
@@ -256,97 +548,195 @@ export class ShimElement {
     this.classList.add(...names);
   }
 
-  append(...nodes: Array<ShimElement | string>): void {
-    for (const node of nodes) {
-      const element = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
-      // `parent` может быть `undefined` у самодельных заглушек-объектов (тесты
-      // подставляют вместо элемента простой литерал) — такое тоже принимаем.
-      if (element.parent != null) {
-        const index = element.parent.children.indexOf(element);
-        if (index >= 0) element.parent.children.splice(index, 1);
-      }
-      element.parent = this;
-      this.children.push(element);
-    }
+  /** Строка в методе вставки превращается в текстовый узел (как DOMString в
+   *  `append`/`prepend`/`replaceWith`/`replaceChildren`). */
+  private toNode(node: ShimInsertable): ShimElement {
+    return typeof node === 'string' ? new ShimElement(TEXT_NODE_TAG, undefined, node) : node;
+  }
+
+  /** Снимает узел с текущего родителя (если он там есть), не трогая прочее. */
+  private detach(node: ShimElement): void {
+    const parent = node.parent;
+    if (parent == null) return;
+    const index = parent.nodes.indexOf(node);
+    if (index >= 0) parent.nodes.splice(index, 1);
+    node.parent = null;
+  }
+
+  /** `ParentNode.append`: узлы и строки (строка — текстовый узел), порядок
+   *  аргументов сохраняется, уже подключённый узел ПЕРЕМЕЩАЕТСЯ. */
+  append(...nodes: ShimInsertable[]): void {
+    for (const node of nodes) this.appendChild(this.toNode(node));
   }
 
   appendChild(node: ShimElement): ShimElement {
-    this.append(node);
+    // В DOM `appendChild('x')` — TypeError (параметр обязан быть Node).
+    // Объекты-заглушки (не ShimElement) принимаем: этого требуют существующие
+    // тесты, подставляющие вместо элемента простой литерал.
+    if (isPrimitive(node)) {
+      throw new TypeError("Failed to execute 'appendChild' on 'Node': parameter 1 is not of type 'Node'.");
+    }
+    this.detach(node);
+    node.parent = this;
+    this.nodes.push(node);
     return node;
   }
 
-  prepend(...nodes: ShimElement[]): void {
-    for (const node of nodes) {
-      if (node.parent != null) {
-        const index = node.parent.children.indexOf(node);
-        if (index >= 0) node.parent.children.splice(index, 1);
-      }
-      node.parent = this;
-    }
-    this.children.unshift(...nodes);
+  /** `ParentNode.prepend`: как `append`, но в начало (в порядке аргументов). */
+  prepend(...nodes: ShimInsertable[]): void {
+    const first = this.nodes[0] ?? null;
+    for (const node of nodes) this.insertBefore(this.toNode(node), first);
   }
 
-  insertBefore(node: ShimElement, before: ShimElement | null): void {
+  insertBefore(node: ShimElement, before: ShimElement | null): ShimElement {
     // Реальная семантика DOM: insertBefore ПЕРЕМЕЩАЕТ уже подключённый узел
     // (сначала снимает его с прежнего места), а не клонирует. Без этого
     // keyed-reconcile давал бы дубли узлов на шиме.
-    if (node.parent !== null) {
-      const oldIndex = node.parent.children.indexOf(node);
-      if (oldIndex >= 0) node.parent.children.splice(oldIndex, 1);
+    if (isPrimitive(node)) {
+      throw new TypeError("Failed to execute 'insertBefore' on 'Node': parameter 1 is not of type 'Node'.");
     }
+    if (before !== null && isPrimitive(before)) {
+      throw new TypeError("Failed to execute 'insertBefore' on 'Node': parameter 2 is not of type 'Node'.");
+    }
+    // Якорь обязан быть ребёнком этого родителя: в браузере иначе NotFoundError.
+    if (before !== null && before.parent !== this) {
+      throw notFoundError('insertBefore');
+    }
+    // Вставка узла перед самим собой — no-op, узел остаётся на месте.
+    if (node === before) return node;
+    this.detach(node);
     node.parent = this;
     if (before === null) {
-      this.children.push(node);
-      return;
+      this.nodes.push(node);
+      return node;
     }
-    const index = this.children.indexOf(before);
-    if (index < 0) this.children.push(node);
-    else this.children.splice(index, 0, node);
+    const index = this.nodes.indexOf(before);
+    this.nodes.splice(index, 0, node);
+    return node;
   }
 
-  insertAdjacentElement(where: string, node: ShimElement): void {
-    if (where === 'afterend' && this.parent !== null) {
-      const index = this.parent.children.indexOf(this);
-      if (index >= 0) this.parent.children.splice(index + 1, 0, node);
-      else this.parent.children.push(node);
-      node.parent = this.parent;
+  insertAdjacentElement(where: string, node: ShimElement): ShimElement | null {
+    if (isPrimitive(node)) {
+      throw new TypeError("Failed to execute 'insertAdjacentElement' on 'Element': parameter 2 is not of type 'Element'.");
+    }
+    // Позиция в DOM сравнивается без учёта регистра: `beforeBegin`, `beforebegin`
+    // и `BEFOREBEGIN` равнозначны (круг 3 cca54310).
+    switch (String(where).toLowerCase()) {
+      case 'beforebegin':
+        return this.parent === null ? null : this.parent.insertBefore(node, this);
+      case 'afterbegin':
+        return this.insertBefore(node, this.nodes[0] ?? null);
+      case 'beforeend':
+        return this.appendChild(node);
+      case 'afterend': {
+        const parent = this.parent;
+        if (parent === null) return null;
+        const index = parent.nodes.indexOf(this);
+        const next = index >= 0 ? (parent.nodes[index + 1] ?? null) : null;
+        return parent.insertBefore(node, next);
+      }
+      default:
+        throw new DOMException(
+          `Failed to execute 'insertAdjacentElement' on 'Element': The value provided ('${where}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
+          'SyntaxError',
+        );
     }
   }
 
   removeChild(node: ShimElement): ShimElement {
-    const index = this.children.indexOf(node);
-    if (index >= 0) this.children.splice(index, 1);
-    node.parent = null;
+    if (isPrimitive(node)) {
+      throw new TypeError("Failed to execute 'removeChild' on 'Node': parameter 1 is not of type 'Node'.");
+    }
+    // В браузере удаление чужого узла — NotFoundError, а не молчаливый no-op.
+    if (node.parent !== this) throw notFoundError('removeChild');
+    this.detach(node);
     return node;
   }
 
-  replaceChild(node: ShimElement, old: ShimElement): void {
-    const index = this.children.indexOf(old);
-    if (index === -1) return;
-    this.children[index] = node;
+  replaceChild(node: ShimElement, old: ShimElement): ShimElement {
+    if (isPrimitive(node)) {
+      throw new TypeError("Failed to execute 'replaceChild' on 'Node': parameter 1 is not of type 'Node'.");
+    }
+    if (isPrimitive(old)) {
+      throw new TypeError("Failed to execute 'replaceChild' on 'Node': parameter 2 is not of type 'Node'.");
+    }
+    if (old.parent !== this) throw notFoundError('replaceChild');
+    // Замена узла им же самим — no-op, возвращается тот же узел.
+    if (node === old) return old;
+    this.detach(node);
+    const index = this.nodes.indexOf(old);
     node.parent = this;
+    this.nodes[index] = node;
     old.parent = null;
+    return old;
   }
 
-  replaceWith(node: ShimElement): void {
-    if (this.parent === null) return;
-    const index = this.parent.children.indexOf(this);
+  /** `ChildNode.replaceWith`: строки становятся текстовыми узлами, аргументов
+   *  может быть несколько; detached-узел — no-op. Возврата нет.
+   *
+   *  Порядок — как в спецификации DOM (круг 3 cca54310):
+   *  1) якорь `viableNextSibling` — первый следующий брат, которого НЕТ среди
+   *     аргументов (аргументы-братья при «преобразовании во фрагмент» уедут со
+   *     своих мест, и якорь по ним поплывёт);
+   *  2) аргументы по порядку снимаются со старых мест (как append в
+   *     DocumentFragment; повторный аргумент переезжает в конец);
+   *  3) если `this` ещё в родителе — штатная замена (якорь — следующий брат
+   *     ПОСЛЕ снятия аргументов), иначе pre-insert перед `viableNextSibling`. */
+  replaceWith(...nodes: ShimInsertable[]): void {
+    const parent = this.parent;
+    if (parent === null) return;
+    const index = parent.nodes.indexOf(this);
     if (index === -1) return;
-    this.parent.children[index] = node;
-    node.parent = this.parent;
-    this.parent = null;
+
+    // 1. Аргументы → узлы; строки становятся новыми текстовыми узлами.
+    const args = nodes.map((node) => this.toNode(node));
+
+    // 2. `viableNextSibling` — первый следующий брат не из аргументов.
+    let viableNextSibling: ShimElement | null = null;
+    for (let cursor = index + 1; cursor < parent.nodes.length; cursor += 1) {
+      const sibling = parent.nodes[cursor]!;
+      if (!args.includes(sibling)) {
+        viableNextSibling = sibling;
+        break;
+      }
+    }
+
+    // 3. «Преобразование во фрагмент»: снятие каждого узла со старого места.
+    const fragment: ShimElement[] = [];
+    for (const node of args) {
+      const duplicate = fragment.indexOf(node);
+      if (duplicate >= 0) fragment.splice(duplicate, 1);
+      this.detach(node);
+      fragment.push(node);
+    }
+
+    // 4. Штатная замена (this ещё в parent) либо pre-insert перед
+    //    viableNextSibling (this сам был аргументом и уже отвязан).
+    const stillAttached = this.parent === parent;
+    const anchor = stillAttached
+      ? (parent.nodes[parent.nodes.indexOf(this) + 1] ?? null)
+      : viableNextSibling;
+    if (stillAttached) {
+      parent.nodes.splice(parent.nodes.indexOf(this), 1);
+      this.parent = null;
+    }
+    let at = anchor === null ? parent.nodes.length : parent.nodes.indexOf(anchor);
+    for (const node of fragment) {
+      node.parent = parent;
+      parent.nodes.splice(at, 0, node);
+      at += 1;
+    }
   }
 
-  replaceChildren(...nodes: Array<ShimElement | string>): void {
-    for (const child of this.children) child.parent = null;
-    this.children = [];
-    // `textContent` в шиме хранится ОТДЕЛЬНЫМ полем, а в настоящем DOM текст —
-    // это текстовый ребёнок, поэтому `replaceChildren` его снимает. Без этой
-    // очистки шим маскировал ошибку порядка «textContent = …; replaceChildren()»
-    // (пустой `replaceChildren` в жизни стирает только что вставленный текст, а
-    // шим оставлял его — ложно-зелёный тест деградации фразы, задача 58f77990).
-    this.textContent = '';
-    this.append(...nodes);
+  replaceChildren(...nodes: ShimInsertable[]): void {
+    for (const child of this.nodes) child.parent = null;
+    // Массив детей меняется НА МЕСТЕ — живая `childNodes` видит новый состав.
+    this.nodes.length = 0;
+    // Текст в шиме — ТЕКСТОВЫЙ УЗЕЛ-ребёнок (как в DOM), поэтому очистка
+    // списка узлов выше снимает и текст; отдельный сброс `textContent` не нужен.
+    // `textContent` пересчитывается из детей, а не хранится полем (ошибка
+    // cca54310): `replaceChildren(a, b)` обязан отдать текст «ab», а не пусто.
+    for (const node of nodes) this.appendChild(this.toNode(node));
   }
 
   /**
@@ -358,9 +748,7 @@ export class ShimElement {
    */
   remove(): void {
     if (this.parent === null) return;
-    const index = this.parent.children.indexOf(this);
-    if (index >= 0) this.parent.children.splice(index, 1);
-    this.parent = null;
+    this.detach(this);
   }
 
   contains(node: ShimElement | null): boolean {
@@ -495,8 +883,27 @@ export class ShimElement {
   }
 
   querySelectorAll(selector: string): ShimElement[] {
+    // `:scope > .a > .b` — обход ровно по прямым детям на каждом шаге.
+    // Разбор дочерних комбинаторов честный: `>` внутри значения атрибута
+    // продукт в scoped-селекторах не использует (там только классы).
+    const scoped = parseScopedSelector(selector);
+    if (scoped !== null) {
+      let current: ShimElement[] = [this];
+      for (const part of scoped) {
+        const next: ShimElement[] = [];
+        for (const parent of current) {
+          for (const child of parent.children) {
+            if (child.matchesSelector(part)) next.push(child);
+          }
+        }
+        current = next;
+        if (current.length === 0) break;
+      }
+      return current;
+    }
     const hits: ShimElement[] = [];
     const walk = (node: ShimElement): void => {
+      // Как `Element.querySelectorAll`: селектор матчит только элементы.
       for (const child of node.children) {
         if (child.matchesSelector(selector)) hits.push(child);
         walk(child);
@@ -514,7 +921,7 @@ export class ShimElement {
   findAll(match: ShimMatch): ShimElement[] {
     const hits: ShimElement[] = [];
     const walk = (node: ShimElement): void => {
-      for (const child of node.children) {
+      for (const child of node.nodes) {
         const hit = typeof match === 'string' ? child.className.includes(match) : match(child);
         if (hit) hits.push(child);
         walk(child);
@@ -566,8 +973,15 @@ export class ShimElement {
     return [name, camel, short];
   }
 
-  cloneNode(deep = true): ShimElement {
-    const clone = new ShimElement(this.tagName, this.className, this.textContent);
+  cloneNode(deep = false): ShimElement {
+    // Текст узла копируется ОДИН раз: у текстового узла — его данные, у
+    // элемента — только дети (иначе текст потомков удвоился бы: и полем, и
+    // глубокой копией детей).
+    const clone = new ShimElement(
+      this.tagName,
+      this.className,
+      this.isTextNode ? this.textData : undefined,
+    );
     clone.value = this.value;
     clone.type = this.type;
     clone.checked = this.checked;
@@ -577,7 +991,7 @@ export class ShimElement {
     clone.placeholder = this.placeholder;
     clone.dataset = { ...this.dataset };
     clone.attributes = { ...this.attributes };
-    if (deep) for (const child of this.children) clone.append(child.cloneNode(true));
+    if (deep) for (const child of this.nodes) clone.append(child.cloneNode(true));
     return clone;
   }
 
@@ -589,10 +1003,10 @@ export class ShimElement {
     /* без движка раскладки не нужен */
   }
 
-  /** Плоская склейка текста узла и потомков (assert-помощник тестов). */
+  /** Плоский текст узла — ровно то, что в браузере отдаёт `textContent` этого
+   *  узла: текст потомков подряд, включая пробелы и переносы. Отдельного
+   *  «своего» текста у элемента нет (ошибка cca54310). */
   flatText(): string {
-    let out = this.textContent;
-    for (const child of this.children) out += child.flatText();
-    return out;
+    return this.textContent;
   }
 }

@@ -40,7 +40,7 @@ import {
   type MenuItem,
 } from '../lib/menu.js';
 import { errorDialog, showDialog } from '../lib/dialog.js';
-import { div, span } from '../lib/dom.js';
+import { div, errText, span } from '../lib/dom.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { colorField } from '../lib/ui/color-field.js';
@@ -65,9 +65,19 @@ import { lineDiff } from '../lib/diff.js';
  * Called on every tab activation (app.openNetwork) and after every layer
  * mutation. `tabLayerId` may be stale (the layer was deleted from another
  * session) — the list check falls back to the base and repairs the tab row.
+ *
+ * `isCurrent` — сторож актуальности запуска (передаёт `openNetwork`): ответ
+ * прежнего, уже перекрытого запуска не публикует слои и не чинит вкладку
+ * (ошибка 58c55bb9, поздний ответ openNetwork).
  */
-export async function syncLayersForTab(networkId: string, tabLayerId: string | null): Promise<void> {
+export async function syncLayersForTab(
+  networkId: string,
+  tabLayerId: string | null,
+  isCurrent?: () => boolean,
+): Promise<void> {
+  const stale = (): boolean => isCurrent !== undefined && !isCurrent();
   const layers = await etn.layers.list(networkId);
+  if (stale()) return;
   const base = layers.find((l) => l.is_base);
   if (base === undefined) {
     store.update({ layers, currentLayer: null, layerOverrides: { thought_ids: [], link_ids: [] } });
@@ -78,6 +88,7 @@ export async function syncLayersForTab(networkId: string, tabLayerId: string | n
 
   if (current.id !== wanted.id) {
     const echo = await etn.layers.select(networkId, wanted.id);
+    if (stale()) return;
     wanted = { ...wanted, id: echo.id, title: echo.title };
   }
 
@@ -87,9 +98,11 @@ export async function syncLayersForTab(networkId: string, tabLayerId: string | n
   };
   if (!wanted.is_base) {
     const diff = await etn.layers.diff(networkId, wanted.id);
+    if (stale()) return;
     overrides = { thought_ids: diff.overridden.thought_ids, link_ids: diff.overridden.link_ids };
   }
 
+  if (stale()) return;
   store.update({
     layers,
     currentLayer: { id: wanted.id, title: wanted.title },
@@ -100,10 +113,11 @@ export async function syncLayersForTab(networkId: string, tabLayerId: string | n
   if (wanted.id !== tabLayerId && tabLayerId !== null) {
     const tab = store.state.tabs.find((t) => t.network_id === networkId);
     if (tab !== undefined) {
-      await etn.tabs
-        .updateState(tab.tab_id, { layer_id: null })
-        .then(() => etn.tabs.list())
-        .then((tabs) => store.update({ tabs }));
+      await etn.tabs.updateState(tab.tab_id, { layer_id: null });
+      if (stale()) return;
+      const tabs = await etn.tabs.list();
+      if (stale()) return;
+      store.update({ tabs });
     }
   }
 }
@@ -781,8 +795,8 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
       setState(
         errorState(
           rows.length === 0
-            ? `Не удалось загрузить отличия: ${String(err)}`
-            : `Не удалось догрузить отличия: ${String(err)}`,
+            ? `Не удалось загрузить отличия: ${errText(err)}`
+            : `Не удалось догрузить отличия: ${errText(err)}`,
           { label: 'Повторить', onClick: () => void loadNext() },
         ),
       );
@@ -1034,7 +1048,7 @@ function openThoughtDiffDialog(
       host.replaceChildren(renderThoughtDiff(diff));
     } catch (err) {
       host.replaceChildren(
-        errorState(`Не удалось загрузить текстовый дифф: ${String(err)}`, {
+        errorState(`Не удалось загрузить текстовый дифф: ${errText(err)}`, {
           label: 'Повторить',
           onClick: () => void load(),
         }),

@@ -56,14 +56,14 @@ function key(name: string, mods: Record<string, boolean> = {}): any {
       this.defaultPrevented = true;
     },
     stopPropagation(): void {},
-    // Общая выпадашка подсказок гасит Esc через `stopImmediatePropagation`;
-    // шим считает это no-op — диалог всё равно получает Esc и закрывается.
+    // Esc выпадашки разрешает реестр слоёв диспетчера (`lib/keymap.ts`):
+    // нажатие достаётся списку, диалог под ним уступает (ошибка 9ff6b606).
     stopImmediatePropagation(): void {},
   };
 }
 
 /** Duplicate-search calls received by the fake `window.etn`. */
-const dupQueries: Array<{ title: string; synonyms: string[] }> = [];
+const dupQueries: Array<{ title: string; synonyms: string[]; mode?: string }> = [];
 
 /** Кросс-сетевые поисковые вызовы (`findDuplicatesAcrossNetworks`). */
 const crossQueries: Array<{ title: string; networkIds: string[] }> = [];
@@ -115,8 +115,20 @@ function installShim(): void {
     },
     etn: {
       thoughts: {
-        findDuplicates: async (_networkId: string, title: string, synonyms: string[]) => {
-          dupQueries.push({ title, synonyms });
+        // Якорь вне холста приходит в `openAddDialog` одним id: диалог
+        // обязан прочитать его имя сам и НЕ подставлять имя фокуса (89964a9b).
+        get: async (_networkId: string, id: string) => {
+          if (id === 'GONE') throw new Error('thought not found');
+          return { id, title: `Имя ${id}` };
+        },
+        findDuplicates: async (
+          _networkId: string,
+          title: string,
+          synonyms: string[],
+          _typeIds?: string[],
+          mode?: string,
+        ) => {
+          dupQueries.push({ title, synonyms, mode });
           return [];
         },
         findDuplicatesAcrossNetworks: async (
@@ -330,6 +342,51 @@ describe('заголовок диалога называет якорь, а не
     store.update({ networkId: null, focus: null });
   });
 
+  it('openAddDialog без имени якоря читает имя якоря, а не берёт имя фокуса (89964a9b)', async () => {
+    const mod = await loadDialog();
+    store.update({ networkId: 'n1', focus: focusWith('Мысль в фокусе') });
+    const done = mod.openAddDialog({ anchorId: 'P2', direction: 'child' });
+    await settle();
+    const body = (globalThis as any).document.body as ShimElement;
+    const box = body.children.find((c) => c.className === 'dialog-backdrop')?.children[0];
+    const title = box?.querySelector('.dialog-title')?.textContent ?? '';
+    // Гасим диалог до проверки: красный кейс не оставляет висящий промис.
+    const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+    footer?.children
+      .find((c) => isUiButton(c) && !c.className.split(/\s+/).includes('ui-btn--primary'))
+      ?.click();
+    assert.equal(await done, undefined);
+    store.update({ networkId: null, focus: null });
+    assert.equal(
+      title,
+      'Добавить мысль (вниз к «Имя P2»)',
+      'заголовок называет имя фактического якоря, прочитанное по id',
+    );
+    assert.ok(!title.includes('Мысль в фокусе'), 'имя фокуса не подставлено');
+  });
+
+  it('openAddDialog с недоступным якорем показывает id, а не имя фокуса (89964a9b)', async () => {
+    const mod = await loadDialog();
+    store.update({ networkId: 'n1', focus: focusWith('Мысль в фокусе') });
+    const done = mod.openAddDialog({ anchorId: 'GONE', direction: 'child' });
+    await settle();
+    const body = (globalThis as any).document.body as ShimElement;
+    const box = body.children.find((c) => c.className === 'dialog-backdrop')?.children[0];
+    const title = box?.querySelector('.dialog-title')?.textContent ?? '';
+    const footer = box?.children.find((c) => c.className.split(/\s+/).includes('dialog-footer'));
+    footer?.children
+      .find((c) => isUiButton(c) && !c.className.split(/\s+/).includes('ui-btn--primary'))
+      ?.click();
+    assert.equal(await done, undefined);
+    store.update({ networkId: null, focus: null });
+    assert.equal(
+      title,
+      'Добавить мысль (вниз к «GONE»)',
+      'неизвестное имя якоря подписывается его id, а не именем фокуса',
+    );
+    assert.ok(!title.includes('Мысль в фокусе'), 'имя фокуса не подставлено');
+  });
+
   it('направление берётся из эллипса: верхний даёт «вверх к якорю»', async () => {
     store.update({ focus: focusWith('Мысль в фокусе') });
     const ui = await openDialog({
@@ -424,6 +481,9 @@ describe('pickThoughtsDialog: охват поиска — только теку�
     await settle();
     assert.equal(dupQueries.length, 1, 'поиск ушёл в источник текущей сети');
     assert.equal(dupQueries[0]?.title, 'Кандидат', 'запрос ушёл в findDuplicates');
+    // Ошибка 11f14a81: диалог — живой поиск, режим передаётся ЯВНО. Без этого
+    // серверный дефолт `dedupe` отсекает инфиксные/wildcard-кандидаты 0.4.5.
+    assert.equal(dupQueries[0]?.mode, 'search', 'диалог запрашивает mode=search');
     assert.equal(crossQueries.length, 0, 'веерный кросс-источник не задействован');
     ui.cancelBtn.click();
     assert.equal(await ui.promise, null);
@@ -960,6 +1020,9 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       propertyCombo(formStack).querySelector('.entity-combo-pick') !== null,
       'у поля «Свойство связи» есть кнопка «…» — тот же паттерн, что у поля типа мысли (ошибка a7abe50e)',
     );
+    // Список подсказок открыт: первый Esc закрывает его (слой диспетчера),
+    // второй — диалог (ошибка 9ff6b606).
+    pressEscape();
     pressEscape();
     await done;
   });
@@ -991,6 +1054,8 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       'список свойства связи — та же ширина 560px',
     );
 
+    // Список открыт: первый Esc закрывает его, второй — диалог.
+    pressEscape();
     pressEscape();
     await done;
   });
@@ -1032,8 +1097,8 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await done;
     assert.deepEqual(
       writes,
-      [['n1', 'thought', 'new1', SIDE_FORWARD, ['A']]],
-      'свойство записано добавляемой мысли ключом-именем стороны со значением якоря',
+      [['n1', 'thought', 'new1', SIDE_FORWARD, ['A'], 'source']],
+      'свойство записано добавляемой мысли ключом-именем стороны + side',
     );
     assert.equal(batches.length, 0, 'бестиповая пакетная связь не создаётся — ребро даёт свойство');
     assert.equal(creates[0]?.create_link, undefined, 'новая мысль создана без create_link');
@@ -1047,7 +1112,7 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     input.value = 'Задача';
     press(input, key('Enter'));
     await done;
-    assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A']]]);
+    assert.deepEqual(writes, [['n1', 'thought', 'new1', SIDE_REVERSE, ['A'], 'target']]);
   });
 
   it('без выбора свойства — прежняя бестиповая связь в направлении диалога', async () => {
@@ -1107,8 +1172,8 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
     await done;
     assert.deepEqual(
       writes,
-      [['n1', 'thought', 'E1', SIDE_FORWARD, ['A']]],
-      'свойство записано существующей мысли',
+      [['n1', 'thought', 'E1', SIDE_FORWARD, ['A'], 'source']],
+      'свойство записано существующей мысли (ключ-имя стороны + side)',
     );
     assert.equal(creates.length, 0, 'новая мысль не создаётся');
   });
@@ -1157,6 +1222,10 @@ describe('openAddDialog: поле «Свойство связи» (ошибка 
       .find((b) => b.textContent === 'Добавить')!
       .click();
     await done;
-    assert.deepEqual(writes, [['n1', 'thought', 'E1', SIDE_FORWARD, ['X', 'A']]], 'якорь добавлен к существующему набору');
+    assert.deepEqual(
+      writes,
+      [['n1', 'thought', 'E1', SIDE_FORWARD, ['X', 'A'], 'source']],
+      'якорь добавлен к существующему набору (ключ-имя стороны + side)',
+    );
   });
 });

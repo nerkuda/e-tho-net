@@ -27,17 +27,43 @@ import { describe, it } from 'node:test';
 import { listSourceFiles } from './guard-helpers.js';
 
 const RENDERER = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
-const SCREENS = path.join(RENDERER, 'screens');
 
 function read(...parts: string[]): string {
   return fs.readFileSync(path.join(RENDERER, ...parts), 'utf8');
 }
 
 /**
- * Навигации вне плоского списка (собственные обработчики стрелок допустимы):
- * дерево-облако «Структуры мыслей» и форма-грид вкладки отборов типа.
+ * Навигации вне плоского списка (собственные обработчики стрелок допустимы).
+ * Путь — от `renderer/`; охват расширен с `screens/**` на `lib/**` и `editor/**`
+ * (ошибка 58981cf5: пикер свойств живёт в `lib/property-list.ts` и прежним
+ * охватом не проверялся).
  */
-const NON_LIST_NAV_ALLOW = new Set(['structures/kbd-nav.ts', 'thought-type/views-tab.ts']);
+const NON_LIST_NAV_ALLOW = new Map<string, string>([
+  [
+    'screens/structures/kbd-nav.ts',
+    'дерево-облако «Структуры мыслей»: пространственная навигация по облачкам, не плоский список.',
+  ],
+  [
+    'screens/thought-type/views-tab.ts',
+    'форма-грид вкладки отборов типа: сетка полей, а не список.',
+  ],
+  [
+    'lib/dialog.ts',
+    'каркас модального диалога: capture-Escape стопки, фокус-ловушка Tab, стрелки по кнопкам футера — механизм, не список.',
+  ],
+  [
+    'lib/keymap.ts',
+    'сам общеклиентский диспетчер сочетаний — единственная точка перехвата keydown (ADR b420b08c).',
+  ],
+  [
+    'lib/suggest-dropdown.ts',
+    'механизм выпадающих подсказок полей (стрелки/Enter по подсказкам) — не списковый экран.',
+  ],
+  [
+    'lib/filter-tree.ts',
+    'единый список выбора `openChoiceMenu`: клавиатура обрабатывается контейнером, в который входит и его поле поиска (↑/↓ из поиска работают) — второго разбора стрелок у экранов нет.',
+  ],
+]);
 
 /**
  * Файл — рукописный контроллер навигации списка? Признак: слушатель `keydown`
@@ -50,11 +76,72 @@ function isHandWrittenListNav(rel: string, source: string): boolean {
   return !/lib\/ui\/(?:list|nav-core)\.js/.test(source);
 }
 
-/** Найти рукописные контроллеры списка в каталоге (рекурсивно). */
-function findHandWrittenListNav(screensDir: string): string[] {
+/**
+ * Списки и пикеры С ПОЛЕМ ПОИСКА: ↑/↓/Enter из первой строки поиска обязаны
+ * исполнять штатную навигацию списка общим мостом `lib/ui/search-nav`
+ * (стандарт b6b2821d, ошибка 58981cf5). Перечень фиксирует всех потребителей
+ * явно — в т.ч. те, чьё поле поиска не имеет класса `*-search`
+ * (`screens/type-manager.ts`).
+ */
+const SEARCH_LIST_CONSUMERS = [
+  'lib/property-list.ts',
+  'lib/saved-filter-bar.ts',
+  'lib/entity-picker.ts',
+  'screens/publications/publications.ts',
+  'editor/attachment-picker.ts',
+  'editor/attachments.ts',
+  'trash.ts',
+  'admin/admin.ts',
+  'screens/type-manager.ts',
+  'screens/property-manager.ts',
+] as const;
+
+/**
+ * Долги класса «список с поиском без моста». Введён под ошибку be095da7
+ * (`lib/ui/list.ts` не имел своего входа `handleKey`, мост не подключался к
+ * библиотеке «Публикаций» и пикеру вложений). Оба долга закрыты — карта пуста;
+ * механизм оставлен для будущих списков, которые нельзя перевести сразу
+ * (запись обязывает содержать признак поля поиска; закрытие долга — удаление
+ * записи вместе с ошибкой).
+ * Самодельный список результатов поиска вложений (`editor/attachments.ts`) этим
+ * признаком не ловится — там нет спискового фасада (ошибка 6452ea94).
+ */
+const SEARCH_LIST_DEBT: ReadonlyMap<string, { error: string; reason: string }> = new Map();
+
+/**
+ * Признаки спискового компонента в исходнике. `attachLibraryNav` — адаптер
+ * библиотеки «Публикаций»: список живёт в `library-nav.ts`, экран подключает
+ * его дескриптором (ошибка be095da7), поэтому это тоже списковый фасад.
+ */
+const LIST_MARKERS = [/createTable</, /createTree</, /createListNav</, /attachLibraryNav\(/];
+
+/** Признак поля поиска: класс с `search` (`extraClass: 'x-search'`, `el('input', '…-search')`). */
+const SEARCH_FIELD_MARKER =
+  /(?:extraClass:\s*'[^']*search[^']*')|(?:el\(\s*'input',\s*'[^']*search[^']*'\))/;
+
+/** Список с полем поиска без моста навигации — нарушение стандарта b6b2821d. */
+function isMissingSearchNav(rel: string, source: string): boolean {
+  if (SEARCH_LIST_DEBT.has(rel)) return false;
+  if (!LIST_MARKERS.some((marker) => marker.test(source))) return false;
+  if (!SEARCH_FIELD_MARKER.test(source)) return false;
+  return !/bindSearchNav\(/.test(source);
+}
+
+/** Найти списки с поиском без моста в каталоге (рекурсивно). */
+function findMissingSearchNav(dir: string): string[] {
   const out: string[] = [];
-  for (const file of listSourceFiles(screensDir, { extensions: ['.ts'] })) {
-    const rel = path.relative(screensDir, file).replace(/\\/g, '/');
+  for (const file of listSourceFiles(dir, { extensions: ['.ts'] })) {
+    const rel = path.relative(dir, file).replace(/\\/g, '/');
+    if (isMissingSearchNav(rel, fs.readFileSync(file, 'utf8'))) out.push(rel);
+  }
+  return out.sort();
+}
+
+/** Найти рукописные контроллеры списка в каталоге (рекурсивно). */
+function findHandWrittenListNav(rootDir: string): string[] {
+  const out: string[] = [];
+  for (const file of listSourceFiles(rootDir, { extensions: ['.ts'] })) {
+    const rel = path.relative(rootDir, file).replace(/\\/g, '/');
     if (isHandWrittenListNav(rel, fs.readFileSync(file, 'utf8'))) out.push(rel);
   }
   return out.sort();
@@ -92,12 +179,13 @@ describe('guard: общее ядро навигации и компонент с
     assert.match(TABLE, /nextNavIndex\(/, 'расчёт индекса строки — из ядра, а не свой');
   });
 
-  it('в экранах нет рукописных контроллеров навигации списка', () => {
-    const found = findHandWrittenListNav(SCREENS);
+  it('во всём рендерере нет рукописных контроллеров навигации списка', () => {
+    const found = findHandWrittenListNav(RENDERER);
     assert.deepEqual(
       found,
       [],
-      `Рукописные контроллеры навигации списка в screens/**: ${found.join(', ')}. ` +
+      `Рукописные контроллеры навигации списка в renderer/** (кроме объявленных ` +
+        `исключений): ${found.join(', ')}. ` +
         'Навигация списка — только через общий компонент `lib/ui/list.ts` и ядро ' +
         '`lib/ui/nav-core.ts` (ADR fadf99e0).',
     );
@@ -129,6 +217,84 @@ describe('guard: общее ядро навигации и компонент с
         'utf8',
       );
       assert.deepEqual(findHandWrittenListNav(dir), ['fresh/new-list.ts']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('guard: поле поиска списка ведёт навигацию (58981cf5, стандарт b6b2821d)', () => {
+  it('каждый список с поиском подключён к общему мосту `lib/ui/search-nav`', () => {
+    for (const rel of SEARCH_LIST_CONSUMERS) {
+      const source = read(...rel.split('/'));
+      assert.ok(
+        LIST_MARKERS.some((marker) => marker.test(source)),
+        `${rel}: перечень обязан ссылаться на списковый компонент (устаревшая запись?)`,
+      );
+      assert.match(
+        source,
+        /bindSearchNav\(/,
+        `${rel}: ↑/↓/Enter из поля поиска обязаны исполнять навигацию списка общим ` +
+          'мостом `lib/ui/search-nav` (ошибка 58981cf5).',
+      );
+    }
+  });
+
+  it('новый список с полем поиска без моста — нарушение (долг зафиксирован ошибками)', () => {
+    const found = findMissingSearchNav(RENDERER);
+    assert.deepEqual(
+      found,
+      [],
+      `Списки с полем поиска без моста навигации: ${found.join(', ')}. ` +
+        'Подключи `bindSearchNav` (lib/ui/search-nav) или заведи ошибку и внеси ' +
+        'файл в SEARCH_LIST_DEBT с её id.',
+    );
+  });
+
+  it('записи известного долга адресуют реальные файлы с полем поиска', () => {
+    for (const [rel, debt] of SEARCH_LIST_DEBT) {
+      const source = read(...rel.split('/'));
+      assert.match(source, /search/i, `${rel}: долг ${debt.error} — файл без поля поиска?`);
+    }
+  });
+
+  it('результаты «Найти существующее» — строки общего списка с навигацией (6452ea94)', () => {
+    const source = read('editor', 'attachments.ts');
+    assert.match(source, /createListNav</, 'результаты поиска — общий компонент списка');
+    assert.match(source, /searchRowEls\.set\(attachment\.id, item\)/, 'строка отдана навигации списка');
+    assert.match(
+      source,
+      /onActivate: \(attachment\) => void reuseAttachment\(attachment\)/,
+      'Enter выбирает текущее вложение',
+    );
+    assert.doesNotMatch(
+      source,
+      /item\.addEventListener\('click', \(\) => void reuseAttachment\(attachment\)\)/,
+      'самодельная строка без состояния текущей не вернулась',
+    );
+  });
+
+  it('правило краснеет на новом списке с поиском без моста', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-search-nav-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'fresh'));
+      // Список + поле поиска без моста — нарушение.
+      fs.writeFileSync(
+        path.join(dir, 'fresh', 'new-dialog.ts'),
+        "const input = fieldInput({ extraClass: 'new-search' });\n" +
+          'const table = createTable<Row>({ columns: [] });\n',
+        'utf8',
+      );
+      assert.deepEqual(findMissingSearchNav(dir), ['fresh/new-dialog.ts']);
+      // Тот же список с мостом — нарушением не считается.
+      fs.writeFileSync(
+        path.join(dir, 'fresh', 'bridged.ts'),
+        "const input = fieldInput({ extraClass: 'new-search' });\n" +
+          'const table = createTable<Row>({ columns: [] });\n' +
+          'bindSearchNav(input, { handleKey: (key) => table.handleKey(key) });\n',
+        'utf8',
+      );
+      assert.deepEqual(findMissingSearchNav(dir), ['fresh/new-dialog.ts']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

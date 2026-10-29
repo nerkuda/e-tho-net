@@ -25,6 +25,7 @@ import { PREF_KEY, parseStoredCanvasLinkFilter, type AnyRealtimeEvent } from '@e
 
 import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
 import { invalidateRef } from './canvas/canvas.js';
+import { invalidateStripContextCaches } from './canvas/focus-filter-strip.js';
 import { inFocusNeighbourhood, inNeighbourhood } from './lib/focus-neighbourhood.js';
 import { reloadTypeCatalogues } from './lib/type-catalogues.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
@@ -86,6 +87,16 @@ export function applyDerivedRealtime(evt: AnyRealtimeEvent): void {
 
     case 'thought.updated':
       invalidateRef(evt.data.id, true);
+      // Смена типа ФОКУСНОЙ мысли меняет её эффективный набор отборов
+      // (типовые наследуются по цепочке типа). Кэш полосы снят в прежнем
+      // контексте — гасим, не дожидаясь события отбора (замечание
+      // верификатора круга 2 к ошибке 6d78ccab).
+      if (
+        store.state.focus?.focused.id === evt.data.id &&
+        evt.data.changes['type_id'] !== undefined
+      ) {
+        invalidateStripContextCaches();
+      }
       if (inNeighbourhood(evt.data.id)) scheduleRefresh(evt);
       break;
 

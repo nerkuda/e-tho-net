@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
+import { mountStatusMessage } from '../src/renderer/lib/status-message.js';
 
 interface Call {
   method: string;
@@ -62,11 +63,18 @@ function fakeEtn(opts: {
 }
 
 function installShim(): void {
+  const body = new ShimElement('body');
+  // Рутинные подтверждения (0.14.1, задача 28d22b8a) больше не тосты: они
+  // показываются в зоне сообщений статус-бара. Тест монтирует её, чтобы
+  // проверять текст итога — канал сообщения сменился, обязательство «итог
+  // виден пользователю» осталось.
+  const statusHost = new ShimElement('span', 'sb-item sb-message');
+  body.append(statusHost);
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: new ShimElement('html'),
-    body: new ShimElement('body'),
+    body,
   };
   (globalThis as any).window = {
     innerWidth: 1200,
@@ -79,6 +87,7 @@ function installShim(): void {
     },
     clearTimeout: () => undefined,
   };
+  mountStatusMessage(statusHost);
 }
 
 installShim();
@@ -91,13 +100,20 @@ function body(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
 }
 
-/** Тексты показанных всплывашек (все `.notice .notice-text`). */
+/**
+ * Тексты сообщений итога операции. С 0.14.1 (задача 28d22b8a) рутинные
+ * подтверждения идут в зону сообщений статус-бара, а не в тосты; пустая зона —
+ * «сообщения нет».
+ */
 function notices(): string[] {
   const out: string[] = [];
-  for (const box of body().children) {
-    if (!box.classList.contains('notice')) continue;
-    for (const span of box.children) {
-      if (span.classList.contains('notice-text')) out.push(span.textContent ?? '');
+  const message = body().querySelector('.sb-message')?.textContent ?? '';
+  if (message !== '') out.push(message);
+  const stack = body().querySelector('.notice-stack');
+  if (stack !== null) {
+    for (const box of stack.children) {
+      const text = box.children.find((child) => child.classList.contains('notice-text'));
+      if (text !== undefined) out.push(text.textContent ?? '');
     }
   }
   return out;
@@ -108,10 +124,12 @@ function linkEntry(
   propertyId: string,
   propertyName: string,
   edges: Array<[string, string]>,
+  side?: 'source' | 'target',
 ): unknown {
   return {
     property_id: propertyId,
     property_name: propertyName,
+    ...(side !== undefined ? { side } : {}),
     count: edges.length,
     values: edges.map(([target_id, link_id]) => ({ target_id, link_id })),
   };
@@ -173,6 +191,27 @@ describe('pickRemovedLinkIds (96d27fc0)', () => {
   it('не трогает цели, которых нет в списке снятия', () => {
     const values = [linkEntry('p', 'A', [['t1', 'l1'], ['t5', 'l5']])];
     assert.deepEqual(pickRemovedLinkIds(values, { propertyKey: 'A', propertyId: 'p' }, ['t1']), ['l1']);
+  });
+
+  it('двухстороннее свойство: снятие target берёт рёбра target, а не source (45248206)', () => {
+    const values = [
+      linkEntry('p', 'Содержит', [['t1', 'l-src']], 'source'),
+      linkEntry('p', 'Содержится в', [['t1', 'l-tgt']], 'target'),
+    ];
+    assert.deepEqual(
+      pickRemovedLinkIds(
+        values,
+        { propertyKey: 'Содержится в', propertyId: 'p', side: 'target' },
+        ['t1'],
+      ),
+      ['l-tgt'],
+      'id общий у сторон — сторону различает side',
+    );
+    assert.deepEqual(
+      pickRemovedLinkIds(values, { propertyKey: 'Содержит', propertyId: 'p', side: 'source' }, ['t1']),
+      ['l-src'],
+      'обратная сторона снимает своё ребро',
+    );
   });
 });
 

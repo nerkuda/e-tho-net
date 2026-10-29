@@ -28,7 +28,7 @@ import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
-import { notice } from '../lib/notice.js';
+import { notice, noticePartial } from '../lib/notice.js';
 import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wiki-create-context.js';
 
 /**
@@ -139,10 +139,11 @@ export async function tryCreateThoughtFromLegacyLink(
       failed++;
     }
   }
-  if (failed > 0) {
-    notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
-  } else if (created > 0) {
-    notice(`Готово: ${created}.`);
+  if (failed > 0 || created > 0) {
+    noticePartial(
+      failed > 0 ? `Создано/связано: ${created}, ошибок: ${failed}` : `Готово: ${created}.`,
+      failed,
+    );
   }
   // Новая мысль появляется на холсте без ручной перезагрузки; открытие
   // (просмотр) или замена в буфере (правка) — за вызывающим.

@@ -26,8 +26,9 @@
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
+import { mountStatusMessage, unmountStatusMessage } from '../lib/status-message.js';
 import { svgIcon } from '../lib/ui/icon.js';
-import { store, type RtStatus } from '../state.js';
+import { store, getRtStatus, getRtStatusDetail, type RtStatus, type RtStatusDetail } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
@@ -149,17 +150,69 @@ export function getWorkspace(): WorkspaceHandles | null {
   return current;
 }
 
-/** Status indicator colour class + tooltip per realtime status (§11, L13). */
-export function statusGlyph(status: RtStatus): { cls: string; text: string } {
+/** Visible status glyph: colour class, short caption and the tooltip. */
+export interface StatusGlyph {
+  cls: string;
+  text: string;
+  title: string;
+}
+
+/**
+ * Status indicator colour class, visible caption and tooltip per realtime
+ * status (§11, L13, defect de34b35b; замечания заказчика после проверки GUI).
+ *
+ * The caption is deliberately short — the server name lives in the tooltip
+ * (`serverLabel` = label of the active profile, fallback host). Yellow covers
+ * every "link is not usable right now" state (`connecting`, `suspect`,
+ * `reconnecting`, planned restart), red is the 60 s `offline`, neutral is
+ * `idle` (no network open — not a failure).
+ */
+export function statusGlyph(
+  status: RtStatus,
+  detail?: RtStatusDetail | null,
+  serverLabel?: string | null,
+): StatusGlyph {
+  const label = serverLabel?.trim() ?? '';
+  const named = label !== '';
   switch (status) {
     case 'connected':
-      return { cls: 'ok', text: 'Подключено' };
+      return {
+        cls: 'ok',
+        text: t('realtime.status.connected'),
+        title: named ? t('realtime.tip.connected', label) : t('realtime.tip.connectedGeneric'),
+      };
     case 'connecting':
-      return { cls: 'warn', text: 'Подключение…' };
+      return {
+        cls: 'warn',
+        text: t('realtime.status.connecting'),
+        title: named ? t('realtime.tip.connecting', label) : t('realtime.tip.connectingGeneric'),
+      };
+    case 'suspect':
+      return {
+        cls: 'warn',
+        text: t('realtime.status.suspect'),
+        title: named ? t('realtime.tip.recovering', label) : t('realtime.tip.recoveringGeneric'),
+      };
     case 'reconnecting':
-      return { cls: 'warn', text: 'Переподключение…' };
+      return {
+        cls: 'warn',
+        // Planned server restart shares the caption; the tooltip is the same
+        // «try to restore» wording (customer wording table).
+        text:
+          detail === 'server-restart'
+            ? t('realtime.status.serverRestart')
+            : t('realtime.status.reconnecting'),
+        title: named ? t('realtime.tip.recovering', label) : t('realtime.tip.recoveringGeneric'),
+      };
+    case 'offline':
+      return {
+        cls: 'bad',
+        text: t('realtime.status.offline'),
+        title: t('realtime.tip.offline'),
+      };
     default:
-      return { cls: 'bad', text: 'Нет соединения' };
+      // `idle` — no open network is a neutral state, not a failure.
+      return { cls: '', text: t('realtime.status.idle'), title: t('realtime.tip.idle') };
   }
 }
 
@@ -180,10 +233,10 @@ export function buildWorkspace(): HTMLElement {
   // ПРАВОМУ краю строки меню мыслесети (полоса закреплённых мыслей растягивается
   // и оттесняет его вправо). Метка фиксирована («Мыслесеть») — имя открытой
   // мыслесети показывает активная вкладка.
-  const netMenuButton = uiButton({ role: 'ghost', title: 'Меню мыслесети' });
+  const netMenuButton = uiButton({ role: 'ghost', title: t('workspace.netMenu.title') });
   netMenuButton.append(
     svgIcon('network'),
-    span('Мыслесеть', 'tb-label'),
+    span(t('workspace.networkLabel'), 'tb-label'),
     svgIcon('chevron-down', 12),
   );
 
@@ -210,7 +263,7 @@ export function buildWorkspace(): HTMLElement {
   // а не в воздухе.
   const mapViewButton = iconButton({
     icon: svgIcon('mindmap'),
-    title: 'Карта мыслей',
+    title: t('workspace.view.map'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('map'),
@@ -218,7 +271,7 @@ export function buildWorkspace(): HTMLElement {
 
   const structuresViewButton = iconButton({
     icon: svgIcon('tree'),
-    title: 'Структуры мыслей',
+    title: t('workspace.view.structures'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('structures'),
@@ -226,7 +279,7 @@ export function buildWorkspace(): HTMLElement {
 
   const chronicleViewButton = iconButton({
     icon: svgIcon('calendar-month'),
-    title: 'Дневник',
+    title: t('workspace.view.chronicle'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('chronicle'),
@@ -236,7 +289,7 @@ export function buildWorkspace(): HTMLElement {
   // showing the network's `activity_log` (lenta from `GET /activity`).
   const activityViewButton = iconButton({
     icon: svgIcon('activity'),
-    title: 'События',
+    title: t('workspace.view.activity'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('activity'),
@@ -247,7 +300,7 @@ export function buildWorkspace(): HTMLElement {
   // (`value-publication`, lucide book-open) — тот же смысл «публикации/документ».
   const publicationsViewButton = iconButton({
     icon: svgIcon('value-publication'),
-    title: 'Публикации',
+    title: t('workspace.view.publications'),
     role: 'ghost',
     class: 'view-tab',
     onClick: () => setActiveView('publications'),
@@ -269,14 +322,14 @@ export function buildWorkspace(): HTMLElement {
   // Глобальный поиск вызывается по Ctrl+Shift+F (0.12.1, задача 045f98db,
   // требование 778e13f4): Ctrl+F закреплён за поиском внутри текстового поля.
   searchInput.placeholder = t('actions.searchShortcut', 'Ctrl+Shift+F');
-  setTooltip(searchInput, 'Поиск по сети');
+  setTooltip(searchInput, t('workspace.searchPlaceholder'));
 
   // The drop-panel settings gear used to sit here (задача a3247f84, 0.8.2);
   // it moved into the panel as the funnel toggle in its top corner.
   const searchRow = div('search-row');
   searchRow.append(searchInput);
 
-  const userMenuButton = uiButton({ role: 'ghost', title: 'Меню пользователя' });
+  const userMenuButton = uiButton({ role: 'ghost', title: t('workspace.userMenu.title') });
   const userMenuLabel = span('—', 'tb-label');
   userMenuButton.append(svgIcon('user'), userMenuLabel, svgIcon('chevron-down', 12));
 
@@ -367,6 +420,18 @@ export function buildWorkspace(): HTMLElement {
   const statusbar = div('statusbar');
 
   const statusLeft = span('', 'status-light');
+  // Visible status caption (defect de34b35b; замечания заказчика после
+  // проверки GUI). The dot and the caption form ONE unit `.sb-status` and
+  // live in the right `event-area`, immediately after the splitter, pinned
+  // to its left edge. The caption width is reserved in CSS so the counts and
+  // the event text do not shift when the status text changes.
+  const statusText = span('', 'sb-status-text');
+  const sbStatus = div('sb-status');
+  sbStatus.append(statusLeft, statusText);
+  // Зона сообщений статусной строки (задача 28d22b8a): рутинные подтверждения
+  // клиента («сохранено», «скопировано») справа от индикации сервера. Одно
+  // сообщение — новое заменяет предыдущее, TTL — `lib/status-message.ts`.
+  const sbMessage = span('', 'sb-item sb-message');
   // Zoom indicator (08-ui-spec §11): sits to the LEFT of the history strip,
   // immediately after the connection dot — the old position next to the
   // event area invited the layout to repaint the history chips every time
@@ -380,23 +445,25 @@ export function buildWorkspace(): HTMLElement {
   // status bar. Cursor is set by `.event-area-resizer` so the affordance is
   // visible without JS on every render.
   const eventAreaResizer = splitterElement('event-area-resizer');
-  setTooltip(eventAreaResizer, 'Изменить ширину области событий');
-  // Fixed-width region of the status bar. The history strip and the
-  // status-light live OUTSIDE this container so they no longer repaint when
-  // a realtime event arrives and the event text reflows.
+  setTooltip(eventAreaResizer, t('workspace.eventArea.resize'));
+  // Fixed-width region of the status bar: connection indicator (dot +
+  // caption), thought counts and the last realtime event text. The history
+  // strip lives OUTSIDE this container so it no longer repaints when a
+  // realtime event arrives and the event text reflows.
   const eventArea = div('event-area');
   const countsLabel = span('', 'sb-item sb-counts');
   const eventLabel = span('', 'sb-item sb-event');
-  eventArea.append(countsLabel, eventLabel);
+  eventArea.append(sbStatus, sbMessage, countsLabel, eventLabel);
   const conflictHost = div('sb-conflict hidden');
-  const conflictText = span('изменено другим пользователем');
+  const conflictText = span(t('workspace.conflict.changed'));
   conflictHost.append(svgIcon('alert', 14), conflictText);
-  const showConflictButton = el('button', 'link-btn', 'показать');
+  const showConflictButton = el('button', 'link-btn', t('workspace.conflict.show'));
   showConflictButton.type = 'button';
   conflictHost.append(showConflictButton);
 
+  // Status-bar order (замечания заказчика после проверки GUI): zoom, history,
+  // splitter, event area (indicator + caption first, flush left), conflict.
   statusbar.append(
-    statusLeft,
     zoomLabel,
     historyHost,
     eventAreaResizer,
@@ -453,6 +520,10 @@ export function buildWorkspace(): HTMLElement {
   mountSelectionResizer(selectionResizer, body);
   mountUsageResizer(usageResizer, body);
   mountEventAreaResizer(eventAreaResizer, statusbar);
+  // Зона сообщений статусной строки живёт ровно столько, сколько статус-бар:
+  // teardown отпускает узел и гасит таймер TTL (задача 28d22b8a).
+  mountStatusMessage(sbMessage);
+  onWorkspaceTeardown(unmountStatusMessage);
   onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));
   onWorkspaceTeardown(mountSelection(selectionHost));
   onWorkspaceTeardown(mountUsagePanel(usageHost, usageResizer));
@@ -472,9 +543,12 @@ export function buildWorkspace(): HTMLElement {
     // carries the full layer name (even when the label is not truncated).
     layerMenuLabel.textContent = truncateLayerMenuLabel(st.currentLayer?.title);
     setTooltip(layerMenuButton, layerMenuTooltip(st.currentLayer?.title));
-    const glyph = statusGlyph(st.rtStatus);
-    statusLeft.className = `status-light ${glyph.cls}`;
-    setTooltip(statusLeft, glyph.text);
+    const rtStatus = getRtStatus(st);
+    const glyph = statusGlyph(rtStatus, getRtStatusDetail(st), st.serverLabel);
+    statusLeft.className = `status-light ${glyph.cls}`.trimEnd();
+    // One tooltip for the whole indicator block (dot + caption).
+    setTooltip(sbStatus, glyph.title);
+    statusText.textContent = glyph.text;
     applyEditorPosition(body, st.editorPosition);
     const editorHidden = st.editorPosition === 'hidden';
     editorHost.classList.toggle('hidden', editorHidden);
@@ -542,7 +616,7 @@ export function buildWorkspace(): HTMLElement {
  * whenever the active tab becomes inaccessible (Q5, 08-ui-spec.md §1.1).
  */
 function mountInaccessiblePlaceholder(host: HTMLElement): void {
-  const closeBtn = uiButton({ label: 'Закрыть таб', role: 'primary' });
+  const closeBtn = uiButton({ label: t('workspace.tab.close'), role: 'primary' });
   closeBtn.addEventListener('click', () => {
     const id = store.state.activeTabId;
     if (id === null) return;
@@ -551,11 +625,10 @@ function mountInaccessiblePlaceholder(host: HTMLElement): void {
   });
   const text = document.createElement('div');
   text.className = 'placeholder-text';
-  text.textContent = 'Нет доступа к сети';
+  text.textContent = t('workspace.tab.noAccess');
   const hint = document.createElement('div');
   hint.className = 'placeholder-hint';
-  hint.textContent =
-    'Сеть, открытая в этом табе, больше не доступна (вы исключены из участников или сеть удалена).';
+  hint.textContent = t('workspace.tab.inaccessible');
   host.append(text, hint, closeBtn);
 
   const update = (): void => {
@@ -567,8 +640,8 @@ function mountInaccessiblePlaceholder(host: HTMLElement): void {
       const tab = store.state.tabs.find((t) => t.tab_id === id);
       text.textContent =
         tab !== undefined
-          ? `Нет доступа к сети ${shortNetworkId(tab.network_id)}`
-          : 'Нет доступа к сети';
+          ? t('workspace.tab.noAccessWithId', shortNetworkId(tab.network_id))
+          : t('workspace.tab.noAccess');
     }
   };
 

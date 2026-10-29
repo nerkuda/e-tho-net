@@ -107,18 +107,22 @@ export interface RecordTitleHandle {
 }
 
 /**
- * Обновить надпись кнопки-заголовка, сохранив индикатор-стрелку (первый узел):
- * `textContent` затирает дочерние узлы вместе с `svg`, поэтому содержимое
- * собирается заново — индикатор, затем новый текст (задача 472457bf,
- * d586f340).
+ * Обновить надпись кнопки-заголовка. Индикатор-шеврон передаётся ЯВНО: у
+ * несворачиваемой группы его нет (`null`), и помощник не угадывает иконку по
+ * позиции узла — первый child при `collapsible: false` это ТЕКСТ надписи, и
+ * прежняя эвристика (`view.firstChild`) оставляла его в дереве: `setContent`
+ * давал «AB», выход из правки — «AA» (ошибка dbdb8b9f). `textContent` затирает
+ * дочерние узлы вместе с `svg`, поэтому содержимое собирается заново:
+ * индикатор (если он есть), затем новый текст (задача 472457bf, d586f340).
+ * Необязательный узел подставляется ТОЛЬКО через массив —
+ * `replaceChildren(null, label)` недопустим (null стал бы отдельным аргументом).
  */
-export function setRecordTitleLabel(view: HTMLElement, label: string): void {
-  const icon = view.firstChild;
-  if (icon === null) {
-    view.textContent = label;
-    return;
-  }
-  view.replaceChildren(icon, label);
+export function setRecordTitleLabel(
+  view: HTMLElement,
+  label: string,
+  icon: Node | null = null,
+): void {
+  view.replaceChildren(...(icon !== null ? [icon] : []), label);
 }
 
 /** Счётчик правок заголовка записи: уникальный id контекста клавиатуры. */
@@ -128,6 +132,10 @@ let recordTitleEditSeq = 0;
 export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
   const collapsible = opts.collapsible !== false;
   const maxLength = opts.maxLength ?? 200;
+  // Индикатор-шеврон известен при создании и живёт в замыкании: помощник
+  // получает его явно, а не выводит из позиции узла (ошибка dbdb8b9f). У
+  // несворачиваемой группы индикатора нет вовсе.
+  const icon = collapsible ? svgIcon('chevron-down', 18) : null;
   let value = opts.value ?? '';
   let label = opts.label;
   let field: HTMLInputElement | null = null;
@@ -149,7 +157,7 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
         });
       },
     });
-    if (collapsible) view.prepend(svgIcon('chevron-down', 18));
+    if (icon !== null) view.prepend(icon);
     view.addEventListener('dblclick', (event) => {
       event.preventDefault();
       pendingClick?.cancel();
@@ -166,7 +174,7 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
   let node: HTMLElement = view;
 
   function showView(refocus: boolean): void {
-    setRecordTitleLabel(view, label);
+    setRecordTitleLabel(view, label, icon);
     if (node !== view) {
       node.replaceWith(view);
       node = view;
@@ -266,7 +274,7 @@ export function createRecordTitle(opts: RecordTitleOptions): RecordTitleHandle {
     value = nextValue;
     label = nextLabel ?? nextValue;
     if (field !== null) field.value = value;
-    else setRecordTitleLabel(view, label);
+    else setRecordTitleLabel(view, label, icon);
   }
 
   return {

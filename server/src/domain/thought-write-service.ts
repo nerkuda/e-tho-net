@@ -57,9 +57,11 @@ import { listComments } from './comment-service.js';
 import {
   computeThoughtCardWarnings,
   getPropertyValues,
+  linkRemovalsOf,
   resolveDefinition,
   setPropertyValue,
 } from './property-service.js';
+import type { LinkRemoval } from './link-target-removal.js';
 
 export { EtnError, MCP_MAX_THOUGHTS_PER_WRITE };
 
@@ -81,6 +83,12 @@ export interface ThoughtWriteResult {
   link_count: number;
   /** Total thought count actually affected (created + updated). */
   thought_count: number;
+  /**
+   * Рёбра, удалённые set-записью свойств-связей батча (0.14.1, задача
+   * 58b598d5). Внутренний канал для фасада: по нему публикуются
+   * `link.deleted`/`link.updated`; в MCP-ответ не проецируется.
+   */
+  link_removals?: LinkRemoval[];
 }
 
 /** Validate the batch envelope before any work happens (cheap). */
@@ -451,6 +459,7 @@ export function writeThoughts(
     const items: ThoughtWriteItemResult[] = [];
     let linkCount = 0;
     const warnings: MutationWarning[] = [];
+    const linkRemovals: LinkRemoval[] = [];
     /** Spec links per item, indexed by batch position. Filled during phase 2
      *  and consumed by phase 3 — needs to be in a closure-scoped array so
      *  the link-writing pass can walk it AFTER phase 2 has populated refToId. */
@@ -481,6 +490,7 @@ export function writeThoughts(
       };
 
       const result = upsertThoughtBundle(ndb, bundleInput, actorUserId, crossNetworkAccess);
+      linkRemovals.push(...(result.link_removals ?? []));
 
       // Fill the ref map AFTER creation so a later batch item can target_ref
       // this one.
@@ -596,6 +606,7 @@ export function writeThoughts(
           actorUserId,
           crossNetworkAccess,
         );
+        linkRemovals.push(...linkRemovalsOf(pv));
         // Merge into the item echo with the same projection phase 2 uses, so
         // `link_ids` still feed `link.created` publication in the facade.
         itemResult.properties = {
@@ -730,7 +741,13 @@ export function writeThoughts(
       0,
     );
 
-    return { items, warnings, link_count: linkCount, thought_count: thoughtCount };
+    return {
+      items,
+      warnings,
+      link_count: linkCount,
+      thought_count: thoughtCount,
+      ...(linkRemovals.length > 0 ? { link_removals: linkRemovals } : {}),
+    };
   });
 }
 

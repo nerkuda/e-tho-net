@@ -26,6 +26,7 @@ import { describe, it } from 'node:test';
 import { BASE_LAYER_ID } from '@etn/shared';
 
 import { openNetworkDb } from '../src/db/network-db.js';
+import { updateLink } from '../src/domain/link-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
 import {
@@ -304,11 +305,39 @@ describe(
               value: targetId,
             });
           assert.equal(removed.isError, undefined, toolText(removed));
+
+          // 0.14.1: удаление цели в основе физическое (ADR a967d865) — журнал
+          // получает `created` и `deleted` со снимком до удаления.
+          assert.deepEqual(
+            rowsOf(ctx, 'link', linkId).map((r) => r.action),
+            ['created', 'deleted'],
+          );
+
+          // Восстановление из корзины (links.restore) — отдельное ребро:
+          // корзину создаём явной командой корзины, минуя умное удаление.
+          const secondRes = await handle.client.callTool({
+            name: 'etn.properties.add',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: sourceId,
+              key: 'Потомки',
+              value: targetId,
+            },
+          });
+          assert.equal(secondRes.isError, undefined, toolText(secondRes));
+          const secondLinkId = toolJson<{ link_id: string }>(secondRes).link_id;
+          const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+          updateLink(ndb, secondLinkId, { marked_for_deletion: true }, undefined, ctx.adminId);
           const restored = await callOp(handle.client, 'links.restore', {
             network_id: ctx.networkId,
-            link_id: linkId,
+            link_id: secondLinkId,
           });
           assert.equal(restored.isError, undefined, toolText(restored));
+          assert.deepEqual(
+            rowsOf(ctx, 'link', secondLinkId).map((r) => r.action),
+            ['created', 'restored'],
+          );
 
           const attRes = await callOp(handle.client, 'attachments.add', {
               network_id: ctx.networkId,
@@ -332,13 +361,11 @@ describe(
           // владельцем той же строки стал целевой объект (задача 7678876a).
           assert.deepEqual(toolJson<unknown[]>(copyRes), []);
 
-          const linkRows = rowsOf(ctx, 'link', linkId);
-          assert.deepEqual(
-            linkRows.map((r) => r.action),
-            ['created', 'trashed', 'restored'],
-          );
           // Снимок связи — концы в формате REST («связь <id> → <id>»).
-          for (const row of linkRows) {
+          for (const row of [
+            ...rowsOf(ctx, 'link', linkId),
+            ...rowsOf(ctx, 'link', secondLinkId),
+          ]) {
             assert.match(row.entity_title, new RegExp(`связь ${sourceId} → ${targetId}`));
           }
 

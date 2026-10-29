@@ -22,6 +22,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
+import type { FocusResponse } from '@etn/shared';
+
+import { ShimElement } from './dom-shim.js';
+
 const SRC = {
   historyBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'history-bar.ts'),
   pinnedBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'pinned-bar.ts'),
@@ -34,6 +38,35 @@ const SRC = {
     'chronicle',
     'chronicle.ts',
   ),
+  search: resolve(import.meta.dirname, '..', 'src', 'renderer', 'search', 'search.ts'),
+  linksTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'links-tab.ts'),
+  publicationCard: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'editor',
+    'publication-card.ts',
+  ),
+  canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
+  contextMenu: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'canvas',
+    'context-menu.ts',
+  ),
+  structures: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'screens',
+    'structures',
+    'structures.ts',
+  ),
+  usagePanel: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'usage-panel.ts'),
 };
 
 function readText(path: string): string {
@@ -54,20 +87,30 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.historyBar);
     assert.match(
       src,
-      /import\s*\{[^}]*showThoughtContextMenu[^}]*\}\s*from\s*'\.\.\/canvas\/context-menu\.js'/,
-      'панель истории обязана импортировать общий конструктор меню мысли',
+      /import\s*\{[^}]*showOutOfCanvasThoughtMenu[^}]*\}\s*from\s*'\.\.\/canvas\/context-menu\.js'/,
+      'панель истории обязана импортировать общий фасад меню вне холста',
     );
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
-      chip.includes('onContextMenu') && chip.includes('showThoughtContextMenu('),
+      chip.includes('onContextMenu') && chip.includes('showOutOfCanvasThoughtMenu('),
       'чип полосы истории обязан вешать общее меню мысли на правый клик',
+    );
+    // «Налево (родственник)» вне холста цепляет родителя САМОЙ мысли: фасад
+    // резолвит его явно до открытия меню (ошибка 2baa78fb).
+    assert.ok(
+      chip.includes("dir: 'siblings'") && chip.includes('openHandler'),
+      'чип истории передаёт контекст меню (открытие — путём чипа)',
     );
     // Строки дропдауна строит `showMenuAt` — их меню вешается отдельно.
     const dropdown = functionBody(src, 'function openHistoryMenu(');
     assert.ok(
-      dropdown.includes('showThoughtContextMenu(') ||
-        dropdown.includes('wireHistoryContextMenu('),
+      dropdown.includes('wireHistoryContextMenu('),
       'строка дропдауна истории обязана получать то же меню мысли',
+    );
+    const wire = functionBody(src, 'function wireHistoryContextMenu(');
+    assert.ok(
+      wire.includes('showOutOfCanvasThoughtMenu('),
+      'меню строки дропдауна — общий фасад вне холста (резолв родителя до открытия)',
     );
   });
 
@@ -75,7 +118,7 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.pinnedBar);
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
-      chip.includes('showThoughtContextMenu('),
+      chip.includes('openPinnedThoughtMenu('),
       'чип закреплённых обязан вешать общее меню мысли',
     );
   });
@@ -84,8 +127,8 @@ describe('контекстное меню облачка — общий конс
     const src = readText(SRC.chronicle);
     assert.match(
       src,
-      /import\s*\{[^}]*showThoughtContextMenu[^}]*\}\s*from\s*'\.\.\/\.\.\/canvas\/context-menu\.js'/,
-      'лента дневника обязана импортировать общий конструктор меню мысли',
+      /import\s*\{[^}]*showOutOfCanvasThoughtMenu[^}]*\}\s*from\s*'\.\.\/\.\.\/canvas\/context-menu\.js'/,
+      'лента дневника обязана импортировать общий фасад меню вне холста',
     );
     const chip = functionBody(src, 'function buildChip(');
     assert.ok(
@@ -93,7 +136,7 @@ describe('контекстное меню облачка — общий конс
       'buildChip дневника обязан перехватывать правый клик',
     );
     assert.ok(
-      chip.includes('showThoughtContextMenu('),
+      chip.includes('showOutOfCanvasThoughtMenu('),
       'облачко мысли в ленте дневника обязано открывать общее меню мысли',
     );
     // Операции контекста записи передаются опцией, а не вторым списком команд.
@@ -107,5 +150,355 @@ describe('контекстное меню облачка — общий конс
       src.includes('function showDiaryLinkMenu('),
       'чип связи в ленте обязан иметь своё короткое меню (общее меню мысли к связи неприменимо)',
     );
+  });
+
+  it('три облачка результатов поиска: общее меню мысли через ленивый импорт фасада', () => {
+    const src = readText(SRC.search);
+    // Статический импорт замкнул бы цикл `app → search → context-menu → app`.
+    assert.ok(
+      !/import\s*\{[^}]*showThoughtContextMenu/.test(src),
+      'search.ts не импортирует фасад меню статически (цикл импортов)',
+    );
+    assert.match(
+      src,
+      /await import\('\.\.\/canvas\/context-menu\.js'\)/,
+      'фасад меню подключается ленивым import()',
+    );
+    const actions = functionBody(src, 'function searchCloudActions(');
+    assert.ok(
+      actions.includes('onContextMenu') && actions.includes('openSearchThoughtMenu('),
+      'действия облачка-хита обязаны вешать общее меню мысли на правый клик',
+    );
+    assert.equal(
+      (src.match(/actions: searchCloudActions\(activate, /g) ?? []).length,
+      3,
+      'меню получают все три облачка: «Мысль по ID», имена и тексты',
+    );
+    const menu = functionBody(src, 'function openSearchThoughtMenu(');
+    assert.ok(
+      menu.includes('showOutOfCanvasThoughtMenu('),
+      'меню открывается общим фасадом вне холста (родитель и сверка сети — внутри)',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent(') && !menu.includes('showThoughtContextMenu('),
+      'своей копии цепочки «резолв родителя → меню» в поиске нет (задача d8941b76)',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await ленивого импорта сверяется сеть (класс a3151e33)',
+    );
+    // Клавиатурный путь — только привязки общего диспетчера.
+    assert.ok(
+      src.includes("chord: 'Shift+F10'") && src.includes("chord: 'ContextMenu'"),
+      'Shift+F10/ContextMenu — привязки lib/keymap.ts',
+    );
+  });
+
+  it('строки дропдауна закреплённых зовут общее меню мысли (ошибка ffc173c9)', () => {
+    const src = readText(SRC.pinnedBar);
+    const overflow = functionBody(src, 'function openOverflowMenu(');
+    assert.ok(
+      overflow.includes('wirePinnedContextMenu('),
+      'каждая строка overflow-дропдауна получает меню мысли',
+    );
+    const wire = functionBody(src, 'function wirePinnedContextMenu(');
+    assert.ok(
+      wire.includes('openPinnedThoughtMenu('),
+      'меню строки — общий конструктор, открытие идёт путём строки',
+    );
+    // «Налево (родственник)» вне холста цепляет родителя САМОЙ мысли: его
+    // резолвит фасад, а панель только отдаёт цель и контекст меню (d8941b76).
+    const menu = functionBody(src, 'async function openPinnedThoughtMenu(');
+    assert.ok(
+      menu.includes('showOutOfCanvasThoughtMenu(') && menu.includes("dir: 'siblings'"),
+      'строка закреплённых зовёт фасад меню вне холста с контекстом «родственник»',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtContextMenu('),
+      'локальной копии цепочки в панели закреплённых нет (задача d8941b76)',
+    );
+    // Тот же дефект был у видимого чипа панели: он тоже идёт через общий резолв.
+    const chip = functionBody(src, 'function buildChip(');
+    assert.ok(
+      chip.includes('openPinnedThoughtMenu('),
+      'видимый чип закреплённых резолвит родителя так же, как строка дропдауна',
+    );
+  });
+
+  it('упоминания в связях: облачко-мысль зовёт общее меню (ошибка ffc173c9)', () => {
+    const src = readText(SRC.linksTab);
+    const actions = functionBody(src, 'function mentionCloudActions(');
+    assert.ok(
+      actions.includes('onContextMenu') && actions.includes('showOutOfCanvasThoughtMenu('),
+      'чип упоминания обязан открывать общее меню мысли',
+    );
+    // Цепочку «резолв родителя → сверка сети → меню» держит фасад: своей
+    // копии в вкладке «Связи» нет (задача d8941b76).
+    assert.ok(
+      !src.includes('resolveSiblingParent') && !src.includes('showThoughtContextMenu('),
+      'вкладка «Связи» зовёт только фасад меню вне холста',
+    );
+    // Второе место того же файла — облачко конца связи во вкладке «Мысли».
+    const endpoint = functionBody(src, 'function buildThoughtCloud(');
+    assert.ok(
+      endpoint.includes('showOutOfCanvasThoughtMenu('),
+      'облачко конца связи открывает меню тем же фасадом',
+    );
+    assert.equal(
+      (src.match(/actions: mentionCloudActions\(\(\) => void open\(hit\), /g) ?? []).length,
+      2,
+      'обе группы упоминаний (ссылки и тексты) получают меню',
+    );
+  });
+
+  it('владелец-мысль в карточке публикации: меню + «Убрать из владельцев» (ffc173c9)', () => {
+    const src = readText(SRC.publicationCard);
+    const cloud = functionBody(src, 'function buildOwnerCloud(');
+    assert.ok(
+      cloud.includes('onContextMenu') && cloud.includes('isThoughtOwner'),
+      'меню вешается только владельцу-МЫСЛИ (связи меню мысли не применимо)',
+    );
+    const menu = functionBody(src, 'function openOwnerThoughtMenu(');
+    assert.ok(
+      menu.includes('showOutOfCanvasThoughtMenu(') &&
+        menu.includes('extraItems') &&
+        menu.includes("t('publication.cover.ownerRemove')"),
+      'фасад меню вне холста + команда контекста «Убрать из владельцев»',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtContextMenu('),
+      'родителя «налево» и сверку сети держит фасад, а не копия в карточке (d8941b76)',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'после await ленивого импорта сверяется сеть (класс a3151e33)',
+    );
+  });
+
+  it('общий фасад меню вне холста: резолв родителя до открытия и сверка сети (2baa78fb)', () => {
+    const src = readText(SRC.contextMenu);
+    const helper = functionBody(src, 'export async function showOutOfCanvasThoughtMenu(');
+    assert.ok(
+      helper.includes('resolveSiblingParent(') &&
+        helper.includes('siblingParentId') &&
+        helper.includes('siblingParentTitle'),
+      'родитель «налево» резолвится ДО открытия меню и передаётся с именем',
+    );
+    assert.ok(
+      helper.includes('store.state.networkId !== networkId'),
+      'после await резолва сверяется сеть (класс a3151e33)',
+    );
+    // Один фасад на оба места открытия: точка клика и якорный элемент.
+    assert.ok(
+      helper.includes("'event' in place") &&
+        helper.includes('showThoughtContextMenu(place.event') &&
+        helper.includes('showThoughtMenuUnder(place.anchor'),
+      'фасад открывает меню и по событию, и под якорем — второго входа нет',
+    );
+  });
+
+  it('облачко дерева «Структур» зовёт общий фасад меню вне холста (2baa78fb)', () => {
+    const src = readText(SRC.structures);
+    assert.match(
+      src,
+      /import\s*\{[^}]*showOutOfCanvasThoughtMenu[^}]*\}\s*from\s*'\.\.\/\.\.\/canvas\/context-menu\.js'/,
+      'дерево структур обязано импортировать общий фасад меню вне холста',
+    );
+    const cloud = functionBody(src, 'function buildCloud(');
+    assert.ok(
+      cloud.includes('onContextMenu') && cloud.includes('showOutOfCanvasThoughtMenu('),
+      'облачко узла дерева обязано открывать общее меню мысли с родителем САМОЙ мысли',
+    );
+    // «Найти на карте мыслей» — отличие контекста дерева, оно остаётся.
+    assert.ok(
+      cloud.includes('findOnMapHandler'),
+      'команда «Найти на карте мыслей» передаётся опцией контекста',
+    );
+  });
+
+  it('панель использования: меню строки резолвит родителя и сверяет сеть (2baa78fb)', () => {
+    const src = readText(SRC.usagePanel);
+    const menu = functionBody(src, 'async function openRowMenu(');
+    assert.ok(
+      menu.includes('showOutOfCanvasThoughtMenu('),
+      'строка панели открывает общее меню мысли вне холста',
+    );
+    assert.ok(
+      menu.includes('store.state.networkId !== networkId'),
+      'поздний ленивый импорт не открывает меню для мысли прежней сети',
+    );
+    assert.ok(
+      menu.includes('extraItems'),
+      'команда контекста «Очистить свойство» остаётся блоком extraItems',
+    );
+  });
+
+  it('строка соседа в Ctrl-hover попапе холста: общее меню (ffc173c9)', () => {
+    const src = readText(SRC.canvas);
+    const row = functionBody(src, 'function neighborPreviewRow(');
+    assert.ok(
+      row.includes('onContextMenu') &&
+        row.includes('openNeighborPreviewThoughtMenu(') &&
+        row.includes('closeHoverPreview()'),
+      'строка соседа открывает меню мысли и закрывает превью при открытии',
+    );
+    const menu = functionBody(src, 'async function openNeighborPreviewThoughtMenu(');
+    assert.ok(
+      menu.includes('showOutOfCanvasThoughtMenu(') && menu.includes("dir: 'siblings'"),
+      'строка соседа открывает общее меню вне холста (родитель «налево» — внутри фасада)',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtContextMenu('),
+      'в холсте нет локальной копии цепочки меню вне холста (задача d8941b76)',
+    );
+  });
+});
+
+/**
+ * Поведенческий кейс блокера круга 2: правый клик по строке облачка ВНЕ холста
+ * обязан спросить родителя САМОЙ мысли (`thoughts.neighbors`), а не взять
+ * родителя мысли в фокусе. На дофиксовом `25ada42f` строка overflow-дропдауна
+ * закреплённых открывала меню без резолва — счётчик обращений остаётся нулевым
+ * (кейс красный).
+ */
+type Dict = Record<string, unknown>;
+
+function installShims(bridge: Dict): void {
+  (globalThis as Dict).HTMLElement = ShimElement;
+  (globalThis as Dict).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    body: new ShimElement('body'),
+    documentElement: { style: {} },
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => undefined,
+    querySelector: () => null,
+    activeElement: null,
+    getSelection: () => null,
+  } satisfies Dict;
+  const win = ((globalThis as Dict).window ?? ((globalThis as Dict).window = {})) as Dict;
+  win.setTimeout = setTimeout;
+  win.clearTimeout = clearTimeout;
+  win.etn = bridge;
+  win.addEventListener = () => undefined;
+  win.removeEventListener = () => undefined;
+  win.dispatchEvent = () => undefined;
+  win.innerWidth = 1024;
+  win.innerHeight = 768;
+  (globalThis as Dict).ResizeObserver = class {
+    observe(): void {
+      /* шим */
+    }
+    unobserve(): void {
+      /* шим */
+    }
+    disconnect(): void {
+      /* шим */
+    }
+  };
+}
+
+let activeUnmount: (() => void) | null = null;
+
+async function mountPinnedForMenu(options: {
+  pins: string[];
+  focusParents: string[];
+  parentsOf: (id: string) => Promise<Dict[]>;
+}): Promise<{
+  host: ShimElement;
+  body: ShimElement;
+  store: typeof import('../src/renderer/state.js').store;
+  neighborCalls: { id: string; dir: string; depth: number }[];
+  flush: () => Promise<void>;
+  unmount: () => void;
+}> {
+  activeUnmount?.();
+  activeUnmount = null;
+  const neighborCalls: { id: string; dir: string; depth: number }[] = [];
+  const bridge: Dict = {
+    pins: {
+      list: () => Promise.resolve(options.pins.map((id) => ({ thought_id: id, position: 0 }))),
+    },
+    thoughts: {
+      resolve: (_networkId: string, ids: string[]) =>
+        Promise.resolve(ids.map((id) => ({ id, title: `t-${id}`, active: true }))),
+      neighbors: (_networkId: string, id: string, dir: string, depth: number) => {
+        neighborCalls.push({ id, dir, depth });
+        return options.parentsOf(id);
+      },
+    },
+  };
+  installShims(bridge);
+  const { store } = await import('../src/renderer/state.js');
+  const { setQueryData, queryKeys } = await import('../src/renderer/lib/live/index.js');
+  const { mountPinnedBar } = await import('../src/renderer/screens/pinned-bar.js');
+  const focus = {
+    focused: { id: 'T' },
+    parents: options.focusParents.map((id) => ({ id })),
+    sorts: {
+      parents: { sort: 'alpha', order: 'asc' },
+      children: { sort: 'alpha', order: 'asc' },
+      siblings: { sort: 'alpha', order: 'asc' },
+    },
+  } as unknown as FocusResponse;
+  store.update({
+    profileId: 'profile-1',
+    networkId: 'network-1',
+    activeTabId: 'tab-A',
+    activeView: 'map',
+    screen: 'workspace',
+    editorTarget: null,
+    focus,
+    showInactive: false,
+    showTrash: true,
+    rtStatusByNetwork: { 'network-1': 'connected' },
+  });
+  setQueryData(queryKeys.pins(), options.pins);
+  const host = new ShimElement('div', 'pinned-bar');
+  // Раскладки в шиме нет — заставляем панель перенести второй чип в дропдаун.
+  (host as unknown as { scrollWidth: number }).scrollWidth = 100;
+  (host as unknown as { clientWidth: number }).clientWidth = 10;
+  const unmount = mountPinnedBar(host as unknown as HTMLElement);
+  activeUnmount = unmount;
+  return {
+    host,
+    body: ((globalThis as Dict).document as { body: ShimElement }).body,
+    store,
+    neighborCalls,
+    flush: async (): Promise<void> => {
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+      }
+    },
+    unmount,
+  };
+}
+
+describe('меню вне холста: родитель «налево» — родитель самой мысли (ffc173c9)', () => {
+  it('строка overflow-дропдауна закреплённых резолвит родителя M, а не фокуса T', async () => {
+    const harness = await mountPinnedForMenu({
+      pins: ['T', 'M'],
+      // Фокус — T (ребёнок P1); кликаем по M (ребёнок P2).
+      focusParents: ['P1'],
+      parentsOf: async (id) => [{ id: id === 'M' ? 'P2' : 'P1' }],
+    });
+    await harness.flush();
+    const more = harness.host.querySelector('.pinned-more');
+    assert.ok(more !== null, 'второй закреплённый ушёл в overflow-дропдаун');
+    more.click();
+    const row = harness.body
+      .findAll('menu-item')
+      .find((element) => element.dataset['dragId'] === 'M');
+    assert.ok(row !== undefined, 'строка мысли M есть в дропдауне');
+    row.dispatchContextMenu();
+    await harness.flush();
+    assert.deepEqual(
+      harness.neighborCalls,
+      [{ id: 'M', dir: 'parents', depth: 1 }],
+      'родитель запрошен для САМОЙ мысли M, а не для мысли в фокусе T',
+    );
+    assert.equal(harness.body.querySelectorAll('.menu').length, 1, 'меню мысли открылось');
+    harness.unmount();
   });
 });

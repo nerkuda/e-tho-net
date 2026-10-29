@@ -170,6 +170,25 @@ function structuresFacade(bridge: EtnBridgeApi): EtnApi['structures'] {
   };
 }
 
+/**
+ * Строит renderer-фасад внетиповых/типовых отборов: `run` получает сигнал
+ * отмены (ошибка 6d78ccab) — тот же адаптер, что у «Структур»
+ * ({@link callCancellable}), остальные методы идут через восстановление
+ * `EtnError`.
+ */
+function thoughtTypeViewsFacade(bridge: EtnBridgeApi): EtnApi['thoughtTypeViews'] {
+  const base = withIpcErrorRevival(bridge.thoughtTypeViews);
+  return {
+    ...base,
+    run: (networkId, thoughtId, viewName, opts, options) =>
+      callCancellable(
+        (requestId) => bridge.thoughtTypeViews.run(networkId, thoughtId, viewName, opts, requestId),
+        (requestId) => bridge.cancelRequest(requestId),
+        options?.signal,
+      ).then(unwrapIpcResult),
+  };
+}
+
 export const etn: EtnApi = new Proxy(
   // The target is never actually read — every access forwards to `window.etn`.
   {} as EtnApi,
@@ -184,6 +203,7 @@ export const etn: EtnApi = new Proxy(
         );
       }
       if (prop === 'structures') return withIpcErrorRevival(structuresFacade(api));
+      if (prop === 'thoughtTypeViews') return thoughtTypeViewsFacade(api);
       const value = (api as unknown as Record<string, unknown>)[prop];
       // Неймспейсы оборачиваем, чтобы их методы восстанавливали `EtnError`
       // из конверта ошибки (f14962ca); скаляры/промисы без обёртки отдаём как есть.

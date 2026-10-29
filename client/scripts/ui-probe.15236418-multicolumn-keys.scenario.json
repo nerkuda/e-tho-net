@@ -1,0 +1,232 @@
+{
+  "name": "multicolumn-keyboard-15236418",
+  "description": "Клавиатура многоколоночных наборов (задача 15236418, стандарт b6b2821d): ←/→ в «Полках» публикаций ходят к соседу своего ряда (у края ряда — не перехватываются и не прыгают через ряд), Ctrl+↑/↓ сворачивают/разворачивают полку (прежняя роль ←/→), Ctrl+↑/↓ работают из поля поиска, в виде «Список» ←/→ полку не сворачивают. Честный красный гейт: на дофиксной сборке ←/→ на ЗАГОЛОВКЕ полки ещё сворачивают её (прежняя роль), Ctrl+↑/↓ полку не сворачивают (Ctrl+↑ читается как обычная ↑), в «Списке» ← на заголовке сворачивает полку. Засев: 14 публикаций через API (свежая сеть имеет пустую полку по умолчанию и группу «Без полки»; карточки — в несколько колонок, несколько рядов). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.15236418-multicolumn-keys.scenario.json.",
+  "timeout": 120000,
+  "steps": [
+    { "name": "seed-pub-01", "api": { "name": "seedPub01", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 01" }, "expression": "data.id" } },
+    { "name": "seed-pub-02", "api": { "name": "seedPub02", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 02" }, "expression": "data.id" } },
+    { "name": "seed-pub-03", "api": { "name": "seedPub03", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 03" }, "expression": "data.id" } },
+    { "name": "seed-pub-04", "api": { "name": "seedPub04", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 04" }, "expression": "data.id" } },
+    { "name": "seed-pub-05", "api": { "name": "seedPub05", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 05" }, "expression": "data.id" } },
+    { "name": "seed-pub-06", "api": { "name": "seedPub06", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 06" }, "expression": "data.id" } },
+    { "name": "seed-pub-07", "api": { "name": "seedPub07", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 07" }, "expression": "data.id" } },
+    { "name": "seed-pub-08", "api": { "name": "seedPub08", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 08" }, "expression": "data.id" } },
+    { "name": "seed-pub-09", "api": { "name": "seedPub09", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 09" }, "expression": "data.id" } },
+    { "name": "seed-pub-10", "api": { "name": "seedPub10", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 10" }, "expression": "data.id" } },
+    { "name": "seed-pub-11", "api": { "name": "seedPub11", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 11" }, "expression": "data.id" } },
+    { "name": "seed-pub-12", "api": { "name": "seedPub12", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 12" }, "expression": "data.id" } },
+    { "name": "seed-pub-13", "api": { "name": "seedPub13", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 13" }, "expression": "data.id" } },
+    { "name": "seed-pub-14", "api": { "name": "seedPub14", "method": "POST", "path": "/networks/{{networkId}}/publications", "body": { "title": "Набор 14" }, "expression": "data.id" } },
+
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "open-publications-view", "click": "[title=\"Публикации\"]" },
+    { "name": "library-cards-visible", "waitFor": "document.querySelectorAll('.pub-card').length >= 14" },
+
+    {
+      "name": "cards-in-multiple-columns",
+      "probe": "(() => { const cards = [...document.querySelectorAll('.pub-card')]; if (cards.length < 2) return false; const top = Math.round(cards[0].getBoundingClientRect().top); return cards.filter((c) => Math.round(c.getBoundingClientRect().top) === top).length >= 2; })()",
+      "expect": true
+    },
+    {
+      "name": "cards-in-several-rows",
+      "probe": "(() => { const cards = [...document.querySelectorAll('.pub-card')]; const rows = new Set(cards.map((c) => Math.round(c.getBoundingClientRect().top))); return rows.size >= 2; })()",
+      "expect": true
+    },
+
+    {
+      "name": "focus-first-card",
+      "eval": "(() => { const card = document.querySelector('.pub-card'); if (card === null) return false; card.focus(); return document.activeElement === card; })()"
+    },
+    {
+      "name": "first-card-focused",
+      "probe": "document.activeElement !== null && document.activeElement.classList.contains('pub-card')",
+      "expect": true
+    },
+    {
+      "name": "first-card",
+      "probe": "document.querySelector('.pub-card')?.getAttribute('data-pub-key') ?? null"
+    },
+    { "name": "down-to-first-shelf-head", "key": "ArrowDown" },
+    {
+      "name": "first-shelf-head-is-current",
+      "probe": "document.querySelector('.pub-current')?.classList.contains('pub-group-head') === true",
+      "expect": true
+    },
+    { "name": "down-to-second-shelf-head", "key": "ArrowDown" },
+    {
+      "name": "second-shelf-head-is-current",
+      "probe": "document.querySelector('.pub-current')?.classList.contains('pub-group-head') === true",
+      "expect": true
+    },
+    { "name": "down-to-first-card", "key": "ArrowDown" },
+    {
+      "name": "first-card-is-current",
+      "probe": "document.querySelector('.pub-current')?.getAttribute('data-pub-key') ?? null",
+      "expectFrom": "first-card"
+    },
+
+    { "name": "right-to-neighbour", "key": "ArrowRight" },
+    {
+      "name": "right-moved-to-same-row-neighbour",
+      "probe": "(() => { const first = document.querySelector('.pub-card'); const cur = document.querySelector('.pub-current'); if (first === null || cur === null || cur === first) return false; return Math.round(cur.getBoundingClientRect().top) === Math.round(first.getBoundingClientRect().top); })()",
+      "expect": true
+    },
+
+    { "name": "right-step-2", "key": "ArrowRight" },
+    { "name": "right-step-3", "key": "ArrowRight" },
+    { "name": "right-step-4", "key": "ArrowRight" },
+    { "name": "right-step-5", "key": "ArrowRight" },
+    { "name": "right-step-6", "key": "ArrowRight" },
+    {
+      "name": "right-edge-stays-in-first-row",
+      "probe": "(() => { const first = document.querySelector('.pub-card'); const cur = document.querySelector('.pub-current'); if (first === null || cur === null) return false; return Math.round(cur.getBoundingClientRect().top) === Math.round(first.getBoundingClientRect().top) && cur.getBoundingClientRect().left > first.getBoundingClientRect().left; })()",
+      "expect": true
+    },
+
+    { "name": "left-step-1", "key": "ArrowLeft" },
+    { "name": "left-step-2", "key": "ArrowLeft" },
+    { "name": "left-step-3", "key": "ArrowLeft" },
+    { "name": "left-step-4", "key": "ArrowLeft" },
+    { "name": "left-step-5", "key": "ArrowLeft" },
+    { "name": "left-step-6", "key": "ArrowLeft" },
+    { "name": "left-step-7", "key": "ArrowLeft" },
+    {
+      "name": "left-edge-returns-to-first-card",
+      "probe": "document.querySelector('.pub-current') === document.querySelector('.pub-card')",
+      "expect": true
+    },
+
+    { "name": "up-to-shelf-head", "key": "ArrowUp" },
+    {
+      "name": "head-is-current-before-ctrl",
+      "probe": "document.querySelector('.pub-current')?.classList.contains('pub-group-head') === true",
+      "expect": true
+    },
+    { "name": "left-on-head", "key": "ArrowLeft" },
+    {
+      "name": "head-left-does-not-collapse-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    { "name": "ctrl-up-collapse", "key": "ArrowUp", "modifiers": ["ctrl"] },
+    {
+      "name": "shelf-collapsed-by-ctrl-up",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    {
+      "name": "shelf-head-still-current-after-collapse",
+      "probe": "document.querySelector('.pub-current')?.classList.contains('pub-group-head') === true",
+      "expect": true
+    },
+    { "name": "ctrl-down-expand", "key": "ArrowDown", "modifiers": ["ctrl"] },
+    {
+      "name": "shelf-expanded-by-ctrl-down",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+
+    { "name": "down-to-card-again", "key": "ArrowDown" },
+    {
+      "name": "card-is-current-again",
+      "probe": "document.querySelector('.pub-current')?.getAttribute('data-pub-key') ?? null",
+      "expectFrom": "first-card"
+    },
+    { "name": "ctrl-up-on-card", "key": "ArrowUp", "modifiers": ["ctrl"] },
+    {
+      "name": "card-does-not-collapse-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    {
+      "name": "card-stays-current-after-ctrl-up",
+      "probe": "document.querySelector('.pub-current')?.getAttribute('data-pub-key') ?? null",
+      "expectFrom": "first-card"
+    },
+
+    { "name": "up-to-head-for-search", "key": "ArrowUp" },
+    {
+      "name": "head-is-current-before-search",
+      "probe": "document.querySelector('.pub-current')?.classList.contains('pub-group-head') === true",
+      "expect": true
+    },
+    { "name": "focus-search", "click": ".pub-search" },
+    {
+      "name": "search-focused",
+      "probe": "document.activeElement !== null && document.activeElement.classList.contains('pub-search')",
+      "expect": true
+    },
+    { "name": "search-ctrl-up-collapse", "key": "ArrowUp", "modifiers": ["ctrl"] },
+    {
+      "name": "search-ctrl-up-collapses-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    { "name": "search-left-is-caret", "key": "ArrowLeft" },
+    {
+      "name": "search-left-does-not-change-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null || !cur.classList.contains('pub-group-head')) return false; const section = cur.closest('.pub-group'); return section !== null && section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    { "name": "search-ctrl-down-expand", "key": "ArrowDown", "modifiers": ["ctrl"] },
+    {
+      "name": "search-ctrl-down-expands-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+
+    {
+      "name": "switch-to-list-view",
+      "eval": "(() => { const btn = [...document.querySelectorAll('.ui-segmented button')].find((b) => b.textContent.trim() === 'Список'); if (btn === undefined) return false; btn.click(); return true; })()"
+    },
+    { "name": "list-view-visible", "waitFor": "document.querySelectorAll('.pub-entry').length >= 14" },
+    {
+      "name": "focus-first-entry",
+      "eval": "(() => { const entry = document.querySelector('.pub-entry'); if (entry === null) return false; entry.focus(); return document.activeElement === entry; })()"
+    },
+    { "name": "home-in-list-view", "key": "Home" },
+    {
+      "name": "list-head-is-current",
+      "probe": "document.querySelector('.pub-current')?.classList.contains('pub-group-head') === true",
+      "expect": true
+    },
+    { "name": "list-left-on-head", "key": "ArrowLeft" },
+    {
+      "name": "list-left-does-not-collapse-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    { "name": "list-right-on-head", "key": "ArrowRight" },
+    {
+      "name": "list-right-does-not-collapse-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    { "name": "list-ctrl-up-collapse", "key": "ArrowUp", "modifiers": ["ctrl"] },
+    {
+      "name": "list-ctrl-up-collapses-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+    { "name": "list-ctrl-down-expand", "key": "ArrowDown", "modifiers": ["ctrl"] },
+    {
+      "name": "list-ctrl-down-expands-shelf",
+      "probe": "(() => { const cur = document.querySelector('.pub-current'); if (cur === null) return false; const section = cur.closest('.pub-group'); return section !== null && !section.classList.contains('pub-group-collapsed'); })()",
+      "expect": true
+    },
+
+    {
+      "name": "no-error-banner",
+      "probe": "document.querySelectorAll('.error-line:not(.hidden), .footer-error:not(.hidden)').length",
+      "expect": 0
+    }
+  ]
+}

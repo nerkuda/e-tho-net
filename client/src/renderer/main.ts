@@ -15,6 +15,9 @@ import { div, el } from './lib/dom.js';
 import { initEtnimgLinkNavigation } from './lib/etnimg-link.js';
 import { initHoverPreview } from './lib/hover-preview.js';
 import { initImageZoom } from './lib/image-zoom.js';
+// Демо-стенд row-reorder (0.14.1, задача 223f7d50): активен только по хэшу
+// `#row-reorder-demo`, в обычной работе приложения инертен.
+import { installRowReorderDemo } from './lib/row-reorder-demo.js';
 // Дизайн-система: регистрация вендорских Web Components (Web Awesome Core,
 // MIT) и маппинг токенов ETN → --wa-* (задача 95dd50b9).
 import './lib/ui/index.js';
@@ -27,6 +30,7 @@ if (!(appRoot instanceof HTMLElement)) {
 
 initScreens(appRoot);
 initKeyboard();
+installRowReorderDemo();
 initDrafts();
 initImageZoom();
 initHoverPreview();

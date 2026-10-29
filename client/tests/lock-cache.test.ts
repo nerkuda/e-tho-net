@@ -23,6 +23,7 @@ import {
   lockKey,
   otherHolder,
   parseLockKey,
+  refresh,
   subscribeLockCache,
 } from '../src/renderer/lib/lock-cache.js';
 
@@ -128,6 +129,62 @@ describe('lock-cache: otherHolder / holderNameByUserId', () => {
   it('otherHolder returns null when nobody holds the lock', () => {
     __resetForTests();
     assert.equal(otherHolder('thought', 'no-such'), null);
+  });
+});
+
+describe('lock-cache: refresh — серверная правда после переподключения (0702efb6)', () => {
+  /** Кладёт дублёр моста; fake.list — ответ `GET /locks`. */
+  function installList(rows: LockRow[] | (() => Promise<LockRow[]>)): void {
+    const list =
+      typeof rows === 'function'
+        ? rows
+        : async (): Promise<LockRow[]> => rows;
+    const bridge = { locks: { list } };
+    (globalThis as unknown as { etn: unknown }).etn = bridge;
+    const win = (globalThis as unknown as { window?: { etn: unknown } }).window;
+    if (win !== undefined) win.etn = bridge;
+  }
+
+  it('успешный refresh заменяет кэш серверным снимком и возвращает true', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    store.update({ networkId: 'net-1' });
+    installList([row({ id: 'lock-server', entity_id: 'b' })]);
+    __setForTests([row({ id: 'lock-stale', entity_id: 'a', user_id: 'me' })]);
+
+    assert.equal(await refresh(), true);
+    assert.deepEqual(
+      listLocks().map((r) => r.id),
+      ['lock-server'],
+      'фантомная строка прошлой сессии сброшена',
+    );
+  });
+
+  it('неудачный refresh возвращает false и не трогает кэш', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    store.update({ networkId: 'net-1' });
+    installList(async () => {
+      throw new Error('network down');
+    });
+    __setForTests([row({ id: 'lock-stale', entity_id: 'a', user_id: 'me' })]);
+
+    assert.equal(await refresh(), false);
+    assert.equal(listLocks()[0]?.id, 'lock-stale', 'устаревшая картина не выдаётся за снимок');
+  });
+
+  it('refresh без открытой сети — false, без сетевого вызова', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    store.update({ networkId: null });
+    let calls = 0;
+    installList(async () => {
+      calls += 1;
+      return [];
+    });
+
+    assert.equal(await refresh(), false);
+    assert.equal(calls, 0);
   });
 });
 

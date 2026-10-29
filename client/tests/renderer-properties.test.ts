@@ -9,8 +9,13 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
+
+import * as keymap from '../src/renderer/lib/keymap.js';
+import { invalidateQueries } from '../src/renderer/lib/live/query-registry.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -647,6 +652,17 @@ describe('editor properties — «Свойства вне типа» group (0.6.
       'no outside-type root when there are no outside-type values',
     );
   });
+
+  it('типовой скаляр несёт значок вида значения, как в эталонном списке (8d78fada)', async () => {
+    const box = await renderWithOutsideType([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const nameCells = box.findAll((node) => node.className.includes('prop-name-cell'));
+    assert.ok(nameCells.length > 0, 'типовая таблица построена');
+    const icon = nameCells[0]!.findAll((node) =>
+      node.className.includes('property-list-icon'),
+    )[0];
+    assert.ok(icon !== undefined, 'у имени типового скаляра есть значок вида значения');
+  });
 });
 
 describe('editor properties — внетиповые свойства-связи в «Свойства вне типа» (e5cfacb9)', () => {
@@ -706,7 +722,8 @@ describe('editor properties — внетиповые свойства-связи
     const json = JSON.stringify(table);
     // Обе строки таблицы: скаляр вне типа и свойство-связь вне типа.
     assert.ok(json.includes('Отвалившееся'), 'scalar outside-type row is rendered');
-    assert.ok(json.includes('Сотрудники (связь)'), 'outside-type link row is rendered');
+    assert.ok(json.includes('Сотрудники'), 'outside-type link row is rendered');
+    assert.ok(!json.includes('Сотрудники (связь)'), 'подписи типа в скобках у имени нет (9717157f)');
     assert.ok(json.includes('Иванов'), 'edge target chip #1');
     assert.ok(json.includes('Петров'), 'edge target chip #2');
     // Read-only для рёбер без ключа реестра: нет маркеров редактора-поля
@@ -716,11 +733,17 @@ describe('editor properties — внетиповые свойства-связи
       false,
       'registry-less link chips must not carry editor corner buttons',
     );
-    // Ошибка 748b80fd: у внетипового ребра появился крестик очистки набора
-    // (ключ записи — display-имя стороны связи), поэтому крестиков теперь два —
-    // у скаляра и у набора рёбер.
+    // 0.14.1 (задача 626b29bd): скаляр вне типа — полноценная редактируемая
+    // строка общего редактора значения, а не read-only подпись.
+    assert.ok(
+      (table as unknown as ShimElement).querySelectorAll('input').length > 0,
+      'скаляр вне типа редактируется общим редактором значения',
+    );
+    // Ошибка 748b80fd: у внетипового ребра без реестрового свойства остался
+    // крестик очистки набора (ключ записи — display-имя стороны связи);
+    // у скаляра теперь штатный крестик поля редактора, а не `prop-outside-remove`.
     const clearButtons = json.split('prop-outside-remove').length - 1;
-    assert.equal(clearButtons, 2, '748b80fd: outside-type link set gained a clear button');
+    assert.equal(clearButtons, 1, '748b80fd: outside-type link set keeps its clear button');
   });
 
   /**
@@ -762,7 +785,7 @@ describe('editor properties — внетиповые свойства-связи
     const { store } = await import('../src/renderer/state.js');
     store.update({ networkId: 'n1' } as any);
 
-    const target = { ownerType: 'thought' as const, ownerId: 't1', typeId: null };
+    const target = { ownerType: 'thought' as const, ownerId: 't1', typeId: null, hasOwnType: false };
     const body = propertiesInternals.buildOutsidePropertiesBody(target) as unknown as ShimElement;
     (globalThis as any).document.body.append(body);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -773,6 +796,16 @@ describe('editor properties — внетиповые свойства-связи
     assert.equal(tbody.children.length, 2, 'обе строки вне типа построены');
     const row1 = tbody.children.find((r) => r.getAttribute('data-key') === 'po1')!;
     const row2 = tbody.children.find((r) => r.getAttribute('data-key') === 'po2')!;
+    // 8d78fada: у скаляров в группе «Свойства вне типа» есть значок вида
+    // значения — как в типовой строке и эталонном списке свойств.
+    for (const row of [row1, row2]) {
+      const nameCell = row.children[0]!;
+      assert.equal(
+        nameCell.findAll((node) => node.className.includes('property-list-icon')).length,
+        1,
+        `у строки «${nameCell.flatText()}» ровно один значок вида значения`,
+      );
+    }
     const row2Name = row2.children[0];
 
     // Realtime property-value.set: меняется значение po1, соседняя строка po2
@@ -859,6 +892,958 @@ describe('editor properties — внетиповые свойства-связи
     const json = JSON.stringify(table);
     assert.ok(json.includes('связано с'), 'display-имя отрисовано');
     assert.ok(json.includes('p1') && json.includes('p2'), 'обе строки несут своё ребро');
+  });
+});
+
+describe('внетиповые строки: сторона и исключение присутствующих (626b29bd)', () => {
+  /** Модуль строится поверх шимов (DOM нужен для констант модуля). */
+  async function internals(): Promise<any> {
+    if (loadedModule === null) {
+      shimDocument();
+      (globalThis as any).window = {
+        etn: {},
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+      loadedModule = await import('../src/renderer/editor/properties.js');
+    }
+    return loadedModule.propertiesInternals;
+  }
+
+  function linkValue(
+    propertyId: string,
+    side: 'source' | 'target',
+    direction: 'out' | 'in',
+    propertyName: string,
+  ): any {
+    return {
+      property_id: propertyId,
+      property_name: propertyName,
+      value_type: 'link',
+      outside_type: true,
+      direction,
+      side,
+      link_type_id: 'lt1',
+      structural: false,
+      count: 1,
+      values: [],
+    };
+  }
+
+  it('симметричные стороны одного свойства — разные ключи строк', async () => {
+    const { outsideRowKey } = await internals();
+    const source = outsideRowKey(linkValue('p-sym', 'source', 'out', 'см. также'));
+    const target = outsideRowKey(linkValue('p-sym', 'target', 'in', 'см. также'));
+    assert.notEqual(source, target, 'стороны одного property_id не схлопываются');
+  });
+
+  it('определение внетиповой двухсторонней строки несёт сторону из значения (45248206)', async () => {
+    const { outsideLinkDefinition } = await internals();
+    // Именно этот объект `buildOutsideLinkCell` передаёт в `buildEditorCell`
+    // → `buildValueEditor`; снятие рёбер читает `definition.side`. Тест не
+    // передаёт сторону мимо пути построения — только серверную проекцию.
+    const target = outsideLinkDefinition(
+      linkValue('p-sym', 'target', 'in', 'Содержится в B'),
+      'thought',
+    );
+    assert.equal(target.side, 'target', 'сторона строки попала в определение');
+    assert.equal(target.key, 'Содержится в B');
+    assert.deepEqual(target.config, { link_type_id: 'lt1', direction: 'in' });
+
+    const source = outsideLinkDefinition(
+      linkValue('p-sym', 'source', 'out', 'Содержит A'),
+      'thought',
+    );
+    assert.equal(source.side, 'source');
+    assert.deepEqual(source.config, { link_type_id: 'lt1', direction: 'out' });
+  });
+
+  it('ограничение типов значения внетиповой строки — из привязок реестра по стороне (f8f8fa49)', async () => {
+    const { outsideLinkDefinition, pendingOutsideDefinition } = await internals();
+    // Конфиг реестра намеренно содержит запрещённый legacy-ключ: редактор
+    // значения его не читает, ограничение — только по привязкам.
+    const registry = {
+      id: 'p-org',
+      name: 'Место работы',
+      value_type: 'link',
+      config: {
+        link_type_id: 'lt1',
+        allowed_target_type_ids: ['tt-forbidden'],
+        show_on_map: true,
+      },
+      description: null,
+      binding_source_type_ids: ['tt-person'],
+      binding_target_type_ids: ['tt-org'],
+    };
+    const source = outsideLinkDefinition(
+      linkValue('p-org', 'source', 'out', 'Место работы'),
+      'thought',
+      registry,
+    );
+    assert.deepEqual(
+      source.config,
+      { link_type_id: 'lt1', direction: 'out' },
+      'config реестра целиком в определение не переносится',
+    );
+    assert.deepEqual(
+      source.allowed_opposite_type_ids,
+      ['tt-org'],
+      'прямое имя: допустимые цели — типы привязок стороны назначения',
+    );
+
+    const target = outsideLinkDefinition(
+      linkValue('p-org', 'target', 'in', 'Сотрудники'),
+      'thought',
+      registry,
+    );
+    assert.deepEqual(
+      target.allowed_opposite_type_ids,
+      ['tt-person'],
+      'обратное имя: допустимые источники — типы привязок стороны источника',
+    );
+
+    const noRegistry = outsideLinkDefinition(
+      linkValue('p-out', 'source', 'out', 'Без реестра'),
+      'thought',
+    );
+    assert.deepEqual(noRegistry.allowed_opposite_type_ids, [], 'нет реестра — нет ограничения');
+
+    // Строка-черновик «+ свойство»: определение собирается из того же снимка
+    // реестра и несёт тот же набор (сторона — выбранный конец связи).
+    const pending = pendingOutsideDefinition(
+      {
+        propertyId: 'p-org',
+        property: registry,
+        name: 'Сотрудники',
+        side: 'target',
+        linkTypeId: 'lt1',
+        focus: false,
+      },
+      'thought',
+    );
+    assert.deepEqual(pending.allowed_opposite_type_ids, ['tt-person']);
+    assert.equal('allowed_target_type_ids' in (pending.config ?? {}), false);
+  });
+
+  it('уникальность по стороне сохраняется и у рёбер без реестрового свойства', async () => {
+    const { outsideRowKey } = await internals();
+    assert.equal(
+      outsideRowKey(linkValue('', 'source', 'out', 'одно имя')),
+      'link:lt1|out',
+      'legacy-ключ — тип связи + направление',
+    );
+  });
+
+  it('присутствующие: типовая группа (определения) + внетиповые значения по стороне', async () => {    const { presentPropertyRowIds } = await internals();
+    const ids = presentPropertyRowIds(
+      [
+        linkValue('p-out', 'source', 'out', 'вперёд'),
+        {
+          id: 'v1',
+          property_id: 'p-scalar-out',
+          property_name: 'Личное',
+          value_type: 'text',
+          value: 'x',
+          outside_type: true,
+          owner_type: 'thought',
+          owner_id: 't1',
+          updated_at: '2026',
+        },
+      ],
+      [
+        {
+          property_id: 'p-scalar-typed',
+          value_type: 'text',
+          config: null,
+          side: null,
+        },
+        {
+          property_id: 'p-link-typed',
+          value_type: 'link',
+          config: { link_type_id: 'lt2' },
+          side: 'target',
+        },
+        // Структурные «Родители»/«Потомки» в пикер не попадают вовсе.
+        {
+          property_id: 'p-structural',
+          value_type: 'link',
+          config: { structural: true, link_type_id: null },
+          side: null,
+        },
+      ],
+      [],
+    );
+    assert.ok(ids.has('p-scalar-typed'), 'типовой скаляр присутствует');
+    assert.ok(ids.has('p-link-typed:target'), 'типовая сторона связи присутствует по стороне');
+    assert.ok(!ids.has('p-link-typed:source'), 'вторая сторона не исключается');
+    assert.ok(ids.has('p-out:source'), 'внетиповое значение по стороне');
+    assert.ok(ids.has('p-scalar-out'), 'внетиповой скаляр');
+    assert.ok(!ids.has('p-structural'), 'системное структурное свойство не считается');
+  });
+
+  it('обе группы «Свойства» развёрнуты по умолчанию; сохранённые свёртости не трогаются', () => {
+    const src = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+      'utf8',
+    );
+    assert.match(
+      src,
+      /id: 'properties\.type',[\s\S]{0,120}?defaultCollapsed: false/,
+      '«Свойства типа» развёрнута по умолчанию',
+    );
+    assert.match(
+      src,
+      /id: 'properties\.outside',[\s\S]{0,120}?defaultCollapsed: false/,
+      '«Свойства вне типа» развёрнута по умолчанию (было true)',
+    );
+    // Дефолт применяется только без сохранённого значения: `groupSection`
+    // читает `collapsedGroups[groupId]` раньше `defaultCollapsed`.
+    const group = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'group.ts'),
+      'utf8',
+    );
+    assert.match(
+      group,
+      /const saved = store\.state\.collapsedGroups\[spec\.id\];\s*return saved === undefined \? spec\.defaultCollapsed === true : saved;/,
+      'сохранённая свёрнутость пользователя сильнее дефолта',
+    );
+  });
+});
+
+describe('типовая строка связи и значение чужой стороны (45248206, повтор Z6)', () => {
+  /**
+   * Состояние из репро верификатора: у одного симметричного свойства
+   * привязана типовая сторона (`source`), а значение ДРУГОЙ стороны
+   * (`target`) лежит внетиповым. До правки обе записи несли один непустой
+   * `property_id`, и типовая строка получала последнюю запись из `values` —
+   * обычно внетиповую: показывала чужие цели, а «×» на видимом чипе трогал
+   * невидимое пользователю значение.
+   */
+  const edge = (linkId: string, targetId: string, title: string): Record<string, unknown> => ({
+    link_id: linkId,
+    target_id: targetId,
+    target_title: title,
+    target_type_id: null,
+    comment: null,
+  });
+
+  const definitions = [
+    {
+      id: 'lk1',
+      property_id: 'p-sym',
+      owner_type: 'thought_type',
+      owner_id: 'ty1',
+      key: 'Содержит A',
+      value_type: 'link',
+      config: { link_type_id: 'lt1', direction: 'out' },
+      required: false,
+      position: 0,
+      side: 'source',
+    },
+  ];
+  const values = [
+    {
+      property_id: 'p-sym',
+      property_name: 'Содержит A',
+      value_type: 'link',
+      outside_type: false,
+      direction: 'out',
+      side: 'source',
+      link_type_id: 'lt1',
+      structural: false,
+      count: 2,
+      values: [edge('l-typed-1', 'typed-1', 'Цель SOURCE'), edge('l-typed-2', 'typed-2', 'Цель SOURCE 2')],
+    },
+    {
+      property_id: 'p-sym',
+      property_name: 'Содержится в B',
+      value_type: 'link',
+      outside_type: true,
+      direction: 'in',
+      side: 'target',
+      link_type_id: 'lt1',
+      structural: false,
+      count: 2,
+      values: [edge('l-out-1', 'outside-1', 'Цель TARGET'), edge('l-out-2', 'outside-2', 'Цель TARGET 2')],
+    },
+  ];
+
+  interface MixedSideFixture {
+    typedRow: ShimElement;
+    outsideRow: ShimElement;
+    saves: unknown[][];
+  }
+
+  async function buildMixedSides(): Promise<MixedSideFixture> {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const saves: unknown[][] = [];
+    etnApi['types'] = { listTypeProperties: async () => definitions };
+    etnApi['properties'] = {
+      get: async () => values,
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+    };
+    etnApi['thoughts'] = {
+      findDuplicates: async () => [],
+      resolve: async (_n: string, ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          title: id,
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        })),
+    };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const typedTbody = box.children[0]!.children[0]!.children[0]!.children[0]!;
+    const typedRow = typedTbody.children[0]!;
+    const outsideRoot = propertiesInternals.buildOutsideTypeTable(
+      (values as any[]).filter((v) => v.outside_type === true),
+      'n1',
+      'thought',
+      't1',
+      () => undefined,
+    ) as unknown as ShimElement;
+    const outsideRow = outsideRoot.children[0]!.children[0]!.children[0]!;
+    return { typedRow, outsideRow, saves };
+  }
+
+  function chipIds(row: ShimElement): string[] {
+    return row
+      .findAll((e) => e.dataset['id'] !== undefined && e.className.includes('cloud-profile-chip'))
+      .map((e) => e.dataset['id']!);
+  }
+
+  it('типовая строка показывает чипы своей стороны, внетиповая — своей', async () => {
+    const { typedRow, outsideRow } = await buildMixedSides();
+    assert.deepEqual(chipIds(typedRow).sort(), ['typed-1', 'typed-2'], 'типовая — свои цели');
+    assert.deepEqual(chipIds(outsideRow).sort(), ['outside-1', 'outside-2'], 'внетиповая — свои цели');
+  });
+
+  it('«×» на типовой строке снимает только типовое значение', async () => {
+    const { typedRow, saves } = await buildMixedSides();
+    const chip = typedRow.findAll((e) => e.dataset['id'] === 'typed-1')[0];
+    assert.ok(chip !== undefined, 'виден чип типовой цели');
+    const btn = chip!.findAll((e) => e.className.includes('st-f-clear-inline'))[0];
+    assert.ok(btn !== undefined, 'у чипа есть «×»');
+    btn!.fire('click', {
+      shiftKey: true,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Содержит A', ['typed-2'], 'source']],
+      'записана типовая сторона без снятой типовой цели',
+    );
+  });
+
+  it('«×» на внетиповой строке снимает только внетиповое значение', async () => {
+    const { outsideRow, saves } = await buildMixedSides();
+    const chip = outsideRow.findAll((e) => e.dataset['id'] === 'outside-1')[0];
+    assert.ok(chip !== undefined, 'виден чип внетиповой цели');
+    const btn = chip!.findAll((e) => e.className.includes('st-f-clear-inline'))[0];
+    assert.ok(btn !== undefined, 'у чипа есть «×»');
+    btn!.fire('click', {
+      shiftKey: true,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Содержится в B', ['outside-2'], 'target']],
+      'записана внетиповая сторона без снятой внетиповой цели',
+    );
+  });
+
+  it('типовая строка ОБРАТНОЙ стороны пишет пару «имя стороны + сторона» (d9bc6012)', async () => {
+    // Карточка мысли: свойство-связь привязано стороной target, и сервер
+    // отдаёт эффективным ключом имя ЭТОЙ стороны («Содержится в B»). Запись
+    // обязана уйти той же парой; реестровое имя адресовало бы source, и
+    // пользователь сохранял бы значение не под тем именем (ошибка d9bc6012).
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const saves: unknown[][] = [];
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'lk-rev',
+          property_id: 'p-rev',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Содержится в B',
+          value_type: 'link',
+          config: { link_type_id: 'lt1', direction: 'in' },
+          required: false,
+          position: 0,
+          side: 'target',
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [
+        {
+          property_id: 'p-rev',
+          property_name: 'Содержится в B',
+          value_type: 'link',
+          outside_type: false,
+          direction: 'in',
+          side: 'target',
+          link_type_id: 'lt1',
+          structural: false,
+          count: 2,
+          values: [
+            edge('rev-1', 'rev-target-1', 'Цель 1'),
+            edge('rev-2', 'rev-target-2', 'Цель 2'),
+          ],
+        },
+      ],
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+    };
+    etnApi['thoughts'] = { findDuplicates: async () => [], resolve: async () => [] };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildPropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    } as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const row = box.children[0]!.children[0]!.children[0]!.children[0]!.children[0]!;
+    const chip = row.findAll((e) => e.dataset['id'] === 'rev-target-1')[0];
+    assert.ok(chip !== undefined, 'виден чип обратной стороны');
+    const btn = chip!.findAll((e) => e.className.includes('st-f-clear-inline'))[0];
+    assert.ok(btn !== undefined, 'у чипа есть «×»');
+    btn!.fire('click', {
+      shiftKey: true,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Содержится в B', ['rev-target-2'], 'target']],
+      'ключ записи — имя обратной стороны, сторона — target',
+    );
+  });
+
+  it('definitionValueKey: property_id + сторона у связи, property_id у скаляра', async () => {
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const key = propertiesInternals.definitionValueKey as unknown as (
+      d: Record<string, unknown>,
+    ) => string;
+    assert.equal(key({ property_id: 'p-sym', value_type: 'link', side: 'target' }), 'p-sym:target');
+    assert.equal(key({ property_id: 'p-sym', value_type: 'link', side: 'source' }), 'p-sym:source');
+    assert.equal(key({ property_id: 'p-text', value_type: 'text' }), 'p-text');
+  });
+
+  it('элемент набора порядка: у связи сторона строки, у скаляра — без side', async () => {
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const toOrderItem = propertiesInternals.toOrderItem as unknown as (
+      v: unknown,
+      position: number,
+    ) => Record<string, unknown>;
+    assert.deepEqual(
+      toOrderItem(
+        { property_id: 'p-sym', value_type: 'link', side: 'target', direction: 'in', count: 1, values: [] },
+        2,
+      ),
+      { property_id: 'p-sym', side: 'target', position: 2 },
+    );
+    assert.deepEqual(
+      toOrderItem({ property_id: 'p-text', value_type: 'text', value: 'x' }, 0),
+      { property_id: 'p-text', position: 0 },
+    );
+  });
+
+  it('черновик и легаси-ребро не входят в набор порядка и не сдвигают слоты', async () => {
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const slots = propertiesInternals.reorderableOutsideSlots as unknown as (
+      rows: readonly { pending: unknown; value: Record<string, unknown> | null }[],
+    ) => number[];
+    // Серверная A, черновик, легаси-ребро без реестрового id, серверная B.
+    const rows = [
+      { pending: null, value: { property_id: 'p-a', value_type: 'text', value: '1' } },
+      { pending: { property_id: 'p-draft', property_name: 'Черновик' }, value: null },
+      { pending: null, value: { property_id: '', value_type: 'link', values: [] } },
+      { pending: null, value: { property_id: 'p-b', value_type: 'text', value: '2' } },
+    ];
+    assert.deepEqual(
+      slots(rows),
+      [0, 3],
+      'в набор порядка входят только серверные строки с реестровым свойством',
+    );
+  });
+});
+
+describe('порядок и клавиатурная навигация таблицы свойств (2e87285b)', () => {
+  function outsideValue(
+    propertyId: string,
+    name: string,
+    value: string,
+  ): Record<string, unknown> {
+    return {
+      id: `v-${propertyId}`,
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: propertyId,
+      outside_type: true,
+      property_name: name,
+      value_type: 'text',
+      value,
+      updated_at: '2026',
+    };
+  }
+
+  /** Шимы + `window.etn`; `reorderCalls` собирает аргументы операции порядка. */
+  function setUpEtn(
+    values: unknown[],
+    reorderCalls: unknown[][],
+    definitions: unknown[] = [],
+  ): { getCount: () => number } {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    let reads = 0;
+    etnApi['types'] = { listTypeProperties: async () => definitions };
+    etnApi['properties'] = {
+      get: async () => {
+        reads += 1;
+        return values;
+      },
+      set: async () => undefined,
+      remove: async () => undefined,
+      reorder: async (...args: unknown[]) => {
+        reorderCalls.push(args);
+        return [];
+      },
+    };
+    etnApi['propertyRegistry'] = { list: async () => [] };
+    etnApi['thoughts'] = {
+      findDuplicates: async () => [],
+      resolve: async (_n: string, ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          title: id,
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        })),
+    };
+    etnApi['system'] = { openExternal: async () => '' };
+    return { getCount: () => reads };
+  }
+
+  async function buildOutside(
+    values: unknown[],
+    calls: unknown[][],
+    registryRows: unknown[] = [],
+  ): Promise<{ box: ShimElement; getCount: () => number }> {
+    const counter = setUpEtn(values, calls);
+    (globalThis as any).window.etn.propertyRegistry.list = async () => registryRows;
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildOutsidePropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      typeId: 'ty1',
+      hasOwnType: true,
+    }) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, getCount: counter.getCount };
+  }
+
+  function outsideTbody(box: ShimElement): ShimElement {
+    return box.children[0]!.children[0]!.children[0]!;
+  }
+
+  function rowNames(tbody: ShimElement): string[] {
+    return tbody.children.map(
+      (row) => row.querySelector('.prop-name-cell')?.flatText() ?? '',
+    );
+  }
+
+  function menuItem(text: string): ShimElement | undefined {
+    const body = (globalThis as any).document.body as ShimElement;
+    return body
+      .findAll((e) => e.className.includes('menu-item'))
+      .find((row) =>
+        row
+          .findAll((e) => e.className.includes('menu-item-label'))
+          .some((label) => label.textContent === text),
+      );
+  }
+
+  function reorderedCause(
+    thoughtId: string,
+    items: Array<{ property_id: string; side: null; position: number }>,
+  ): unknown {
+    return {
+      type: 'thought.properties.reordered',
+      network_id: 'n1',
+      seq: 1,
+      data: { thought_id: thoughtId, items },
+    };
+  }
+
+  it('меню: «Переместить ниже» сразу меняет порядок и шлёт полный набор', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box } = await buildOutside(
+      [
+        outsideValue('p-a', 'Альфа', '1'),
+        outsideValue('p-b', 'Бета', '2'),
+        outsideValue('p-c', 'Гамма', '3'),
+      ],
+      calls,
+    );
+    const tbody = outsideTbody(box);
+    assert.deepEqual(rowNames(tbody), [
+      'Альфа',
+      'Бета',
+      'Гамма',
+    ]);
+
+    const nameCell = tbody.children[0]!.querySelector('.prop-name-cell')!;
+    nameCell.fire('contextmenu', {
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+      clientX: 10,
+      clientY: 10,
+    });
+    const up = menuItem('Переместить выше');
+    const down = menuItem('Переместить ниже');
+    assert.ok(up !== undefined && down !== undefined, 'пункты порядка в меню строки');
+    assert.equal(up!.className.includes('menu-item-disabled'), true, 'первая — выше disabled');
+
+    down!.fire('click', { stopPropagation: () => undefined });
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа', 'Гамма']);
+
+    // Позиция в меню вычисляется при ОТКРЫТИИ: после перестановки та же
+    // строка стала второй, и «ниже» обязано двигать её дальше, а не молчать
+    // из-за устаревшего индекса (задача 2e87285b).
+    const movedCell = tbody.children[1]!.querySelector('.prop-name-cell')!;
+    movedCell.fire('contextmenu', {
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+      clientX: 10,
+      clientY: 10,
+    });
+    menuItem('Переместить ниже')!.fire('click', { stopPropagation: () => undefined });
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Гамма', 'Альфа']);
+
+    assert.deepEqual(calls, [
+      [
+        'n1',
+        't1',
+        [
+          { property_id: 'p-b', position: 0 },
+          { property_id: 'p-a', position: 1 },
+          { property_id: 'p-c', position: 2 },
+        ],
+      ],
+      [
+        'n1',
+        't1',
+        [
+          { property_id: 'p-b', position: 0 },
+          { property_id: 'p-c', position: 1 },
+          { property_id: 'p-a', position: 2 },
+        ],
+      ],
+    ], 'полный набор позиций, сторона у скаляра не передаётся');
+  });
+
+  it('Alt+↓ двигает текущую строку через общий drag-фасад', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box } = await buildOutside(
+      [outsideValue('p-a', 'Альфа', '1'), outsideValue('p-b', 'Бета', '2')],
+      calls,
+    );
+    const tbody = outsideTbody(box);
+    const nameCell = tbody.children[0]!.querySelector('.prop-name-cell')!;
+    // Текущая строка — клик; затем фокус внутри списка взводит контексты
+    // навигации и drag-фасада (в реальном DOM focusin всплывает).
+    box.emit('click', { target: nameCell });
+    // 21f4465f: мышиное выделение обязано ставить фокус в ячейку имени —
+    // только тогда `focusin` поднимает контексты навигации и drag-фасада,
+    // без которых Alt+↑/↓ молчит в живом клиенте.
+    assert.equal(nameCell.focused, true, 'клик по имени взводит фокус списка');
+    tbody.emit('focusin', {});
+    box.emit('focusin', {});
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      altKey: true,
+      target: tbody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+
+    assert.equal(calls.length, 1, 'та же операция порядка, что DnD и меню');
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа']);
+    // Граница: последняя строка дальше вниз не двигается.
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      altKey: true,
+      target: tbody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    assert.equal(calls.length, 1, 'у нижнего края операции нет');
+  });
+
+  it('внетиповая строка с описанием свойства несёт ⓘ (9717157f)', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box } = await buildOutside(
+      [outsideValue('p-a', 'Альфа', '1'), outsideValue('p-b', 'Бета', '2')],
+      calls,
+      [
+        {
+          id: 'p-a',
+          name: 'Альфа',
+          value_type: 'text',
+          description: 'Что означает Альфа',
+        },
+        {
+          id: 'p-b',
+          name: 'Бета',
+          value_type: 'text',
+          description: '  ',
+        },
+      ],
+    );
+    const tbody = outsideTbody(box);
+    const first = tbody.children[0]!.querySelector('.prop-name-cell')!;
+    const second = tbody.children[1]!.querySelector('.prop-name-cell')!;
+    const hint = first.findAll((node) => node.className.includes('prop-hint'))[0];
+    assert.ok(hint !== undefined, 'у строки с описанием есть ⓘ');
+    assert.equal(hint!.title, 'Что означает Альфа', 'ⓘ несёт описание из справочника');
+    assert.equal(
+      second.findAll((node) => node.className.includes('prop-hint')).length,
+      0,
+      'пустое/пробельное описание ⓘ не создаёт',
+    );
+  });
+
+  it('событие reordered применяет порядок без перечитывания и не трогает ввод', async () => {
+    keymap.keymapInternals.reset();
+    const calls: unknown[][] = [];
+    const { box, getCount } = await buildOutside(
+      [outsideValue('p-a', 'Альфа', '1'), outsideValue('p-b', 'Бета', '2')],
+      calls,
+    );
+    const tbody = outsideTbody(box);
+    const readsBefore = getCount();
+
+    invalidateQueries(
+      'focus:@t1',
+      reorderedCause('t1', [
+        { property_id: 'p-b', side: null, position: 0 },
+        { property_id: 'p-a', side: null, position: 1 },
+      ]) as never,
+    );
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа']);
+    assert.equal(getCount(), readsBefore, 'вкладка не перечитывается — порядок применён к строкам');
+
+    // Строка, в которой идёт ввод пользователя, не двигается.
+    const input = tbody.children[0]!.querySelector('input')!;
+    (globalThis as any).document.activeElement = input;
+    invalidateQueries(
+      'focus:@t1',
+      reorderedCause('t1', [
+        { property_id: 'p-a', side: null, position: 0 },
+        { property_id: 'p-b', side: null, position: 1 },
+      ]) as never,
+    );
+    assert.deepEqual(rowNames(tbody), ['Бета', 'Альфа'], 'ввод не потревожен');
+    (globalThis as any).document.activeElement = null;
+  });
+
+  it('↑/↓ выделяют строку типовой таблицы, Enter ставит курсор в редактор', async () => {
+    keymap.keymapInternals.reset();
+    setUpEtn(
+      [
+        {
+          id: 'v1',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'p1',
+          outside_type: false,
+          property_name: 'Первый',
+          value_type: 'text',
+          value: 'один',
+          updated_at: '2026',
+        },
+        {
+          id: 'v2',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'p2',
+          outside_type: false,
+          property_name: 'Второй',
+          value_type: 'text',
+          value: 'два',
+          updated_at: '2026',
+        },
+      ],
+      [],
+      [
+        {
+          id: 'b1',
+          property_id: 'p1',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Первый',
+          value_type: 'text',
+          config: null,
+          required: false,
+          position: 0,
+        },
+        {
+          id: 'b2',
+          property_id: 'p2',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Второй',
+          value_type: 'text',
+          config: null,
+          required: false,
+          position: 1,
+        },
+      ],
+    );
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildPropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      thought: { id: 't1', type_id: 'ty1' },
+    } as never) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const tbody = box.children[0]!.children[0]!.children[0]!.children[0]!;
+    assert.equal(tbody.children.length, 2);
+    const typeBody = box.children[0]!;
+
+    typeBody.emit('focusin', {});
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      target: typeBody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    assert.equal(
+      tbody.children[0]!.className.includes('prop-row-current'),
+      true,
+      'первая строка выделена',
+    );
+    keymap.dispatchKeyEvent({
+      key: 'ArrowDown',
+      target: typeBody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    assert.equal(tbody.children[1]!.className.includes('prop-row-current'), true);
+    assert.equal(tbody.children[0]!.className.includes('prop-row-current'), false);
+
+    keymap.dispatchKeyEvent({
+      key: 'Enter',
+      target: typeBody,
+      preventDefault: () => undefined,
+    } as unknown as KeyboardEvent);
+    const field = tbody.children[1]!.querySelector('input') as ShimElement | null;
+    assert.equal(field?.focused, true, 'Enter активирует строку — курсор в редакторе значения');
   });
 });
 
@@ -1454,6 +2439,496 @@ describe('buildValueEditor — множественный url чипами (ве
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.deepEqual(saved, [null], 'an empty list clears the property');
+  });
+
+  it('registerPendingCommit фиксирует набранный без Enter текст (bba5a7ce)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    let pending: (() => Promise<void>) | null = null;
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+      registerPendingCommit: (commit: () => Promise<void>) => {
+        pending = commit;
+      },
+    }) as unknown as ShimElement;
+
+    const addInput = editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+    addInput.value = 'https://b.test';
+    assert.equal(saved.length, 0, 'набранное без Enter в save не уходит');
+    assert.ok(pending !== null, 'хост получил функцию фиксации');
+    await (pending as () => Promise<void>)();
+
+    assert.deepEqual(saved, [['https://a.test', 'https://b.test']], 'набранное стало значением');
+    assert.equal(findChips(editor).length, 2, 'чип появился');
+    assert.equal(
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!.value,
+      '',
+      'поле ввода очищено после фиксации',
+    );
+  });
+
+  it('черновик (`change`): уход из поля фиксирует набранное, уход внутрь поля — нет (bba5a7ce)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      commitOn: 'change',
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const inputOf = (): ShimElement =>
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+
+    // Уход ВНУТРЬ поля (каретка ▾ открывает список вариантов) — не значение.
+    inputOf().value = 'https://inside.test';
+    inputOf().dispatch('blur', { relatedTarget: inputOf() });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [], 'уход внутрь поля набранное не фиксирует');
+
+    // Уход ИЗ поля (любая кнопка диалога) — фиксирует.
+    inputOf().dispatch('blur', { relatedTarget: null });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      saved,
+      [['https://a.test', 'https://inside.test']],
+      'уход из поля сохраняет набранное значение',
+    );
+  });
+
+  it('карточка (`blur`): уход из чип-поля фиксирует набранное без Enter (bfe1bc24)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      // `commitOn` НЕ задан — режим карточки мысли `'blur'` (умолчание).
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const inputOf = (): ShimElement =>
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+
+    // Уход ВНУТРЬ поля (каретка ▾ открывает список вариантов) — не значение.
+    inputOf().value = 'https://inside.test';
+    inputOf().dispatch('blur', { relatedTarget: inputOf() });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [], 'уход внутрь поля набранное не фиксирует');
+
+    // Уход ИЗ поля — набранное становится значением, как у скаляров режима
+    // `'blur'`; раньше чип-поле молча теряло текст (ошибка bfe1bc24).
+    inputOf().dispatch('blur', { relatedTarget: null });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      saved,
+      [['https://a.test', 'https://inside.test']],
+      'уход из поля сохраняет набранное значение',
+    );
+    assert.equal(findChips(editor).length, 2, 'чип появился');
+    assert.equal(inputOf().value, '', 'поле ввода очищено');
+
+    // Пустое поле при повторном blur — записи нет (no-op, без шторма).
+    inputOf().dispatch('blur', { relatedTarget: null });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [['https://a.test', 'https://inside.test']], 'пустой blur не пишет');
+  });
+
+  it('карточка (`blur`): «✕» другого чипа фиксирует набранное, а не теряет (bfe1bc24, круг 2)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test'],
+      // `commitOn` НЕ задан — режим карточки мысли `'blur'` (умолчание).
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const inputOf = (): ShimElement =>
+      editor.children.find((c) => hasClass(c, 'value-chips-input'))!;
+    const removeBtnOf = (): ShimElement =>
+      findChips(editor)[0]!.children.find((c) => hasClass(c, 'st-f-clear-inline'))!;
+
+    // Клик по «✕» — уход ВНУТРЬ корня: blur пропускается, затем onRemove
+    // перерисовывает поле. Набранное обязано стать значением до перерисовки.
+    inputOf().value = 'https://b.test';
+    const removeBtn = removeBtnOf();
+    inputOf().dispatch('blur', { relatedTarget: removeBtn });
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(
+      saved,
+      [['https://b.test']],
+      'конечное состояние: удалён выбранный чип, набранное добавлено',
+    );
+    assert.equal(findChips(editor).length, 1, 'остался один чип');
+    assert.equal(inputOf().value, '', 'поле добавления очищено');
+  });
+
+  it('карточка (`blur`): «✕» при пустом вводе даёт одну запись удаления (bfe1bc24, круг 2)', async () => {
+    const { buildValueEditor } = await loadModule();
+    const saved: unknown[] = [];
+    const editor = buildValueEditor({
+      networkId: 'n1',
+      definition: urlDefinition(),
+      value: ['https://a.test', 'https://b.test'],
+      save: async (next: unknown) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const removeBtn = findChips(editor)[0]!.children.find((c) => hasClass(c, 'st-f-clear-inline'))!;
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(saved, [['https://b.test']], 'ровно одна запись — остаток набора');
+  });
+});
+
+/**
+ * Ошибка bfe1bc24: строка карточки пересобирается (`reconcileKeyed` →
+ * `fillRow` → `replaceChildren`) без события `blur` у снятого узла. Набранный
+ * без Enter текст чип-поля обязан быть зафиксирован ДО перечитывания/сверки —
+ * иначе он гибнет при первой же пересборке (смена мысли, realtime-правка,
+ * сворачивание группы, закрытие карточки).
+ */
+describe('editor properties — flush недописанного значения перед пересборкой (bfe1bc24)', () => {
+  /**
+   * Контекст редактора для владельца `ownerId` (тип один — `ty1`): вкладка
+   * «Свойства» перепривязывается к другому владельцу ТОГО ЖЕ типа.
+   */
+  function ctxOf(ownerId: string): Record<string, unknown> {
+    return {
+      ownerType: 'thought',
+      ownerId,
+      thought: {
+        id: ownerId,
+        title: ownerId,
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+  }
+
+  /**
+   * Таблица «Свойства типа» с одним multiple-text свойством (чип-поле) и
+   * записанными вызовами `etn.properties.set`. `asTab` — строить вкладку
+   * целиком (две группы; даёт retarget при смене владельца), `getValues` —
+   * подменить чтение значений (управляемые/отложенные ответы для окна гонки).
+   */
+  async function buildMultipleTextBody(
+    asTab = false,
+    getValues: () => Promise<unknown[]> = async () => [],
+  ): Promise<{ box: ShimElement; saves: unknown[][] }> {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const saves: unknown[][] = [];
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'pTags',
+          property_id: 'pTags',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Теги',
+          value_type: 'text',
+          config: { multiple: true },
+          required: false,
+          position: 0,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: getValues,
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+      remove: async () => undefined,
+    };
+    etnApi['thoughts'] = { resolve: async () => [] };
+    etnApi['propertyRegistry'] = { list: async () => [] };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = (
+      asTab
+        ? propertiesInternals.buildPropertiesTab(ctxOf('t1') as any, {
+            onDispose: () => undefined,
+            onShow: () => undefined,
+          })
+        : propertiesInternals.buildPropertiesBody(ctxOf('t1') as any)
+    ) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, saves };
+  }
+
+  function chipInputOf(box: ShimElement): ShimElement | undefined {
+    return box.findAll((e) => e.className.split(' ').includes('value-chips-input'))[0];
+  }
+
+  it('перечитывание таблицы фиксирует набранное до сверки строк', async () => {
+    const { box, saves } = await buildMultipleTextBody();
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено');
+    input!.value = 'срочно';
+    assert.deepEqual(saves, [], 'до blur/пересборки записи нет');
+
+    // Любое перечитывание вкладки (здесь — канал локальной правки значений)
+    // сверяет строки и может их пересобрать; недописанное фиксируется заранее.
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное записано до пересборки строки (ключ, значение, сторона null)',
+    );
+    assert.equal(chipInputOf(box)?.value, '', 'поле очищено — значение стало чипом');
+  });
+
+  it('смена мысли сохраняет набранное за ПРЕЖНИМ владельцем (retarget)', async () => {
+    const { box, saves } = await buildMultipleTextBody(true);
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено во вкладке');
+    input!.value = 'срочно';
+
+    // Перепривязка вкладки к другой мысли того же типа: строки сверяются по
+    // ключам и пересобираются для нового владельца; недописанное значение
+    // обязано уйти СТАРОМУ владельцу (ошибка bfe1bc24).
+    const { retargetPropertiesTab } = await import('../src/renderer/editor/properties.js');
+    retargetPropertiesTab(ctxOf('t2') as any);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное записано владельцу, у которого оно было набрано',
+    );
+  });
+
+  it('пустое перечитывание не снимает регистрацию: следующее фиксирует набранное', async () => {
+    const { box, saves } = await buildMultipleTextBody();
+
+    // Перечитывание при пустом поле: коммитов нет, строки не изменились —
+    // `reconcileKeyed` их не пересобирает, редактор не перерегистрируется.
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(saves, [], 'до ввода записей нет');
+
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено');
+    input!.value = 'срочно';
+
+    // Следующее перечитывание обязано зафиксировать набранное: регистрация
+    // редактора неизменённой строки не потеряна (bfe1bc24, круг 2).
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное записано после пустого перечитывания',
+    );
+    assert.equal(chipInputOf(box)?.value, '', 'поле очищено — значение стало чипом');
+  });
+
+  it('окно гонки: набрано во время перечитывания — фиксируется перед сверкой строк', async () => {
+    // Перечитывание уже идёт (ответ `properties.get` отложен), и только ПОСЛЕ
+    // начала чтения пользователь набирает текст. Flush в начале reload к этому
+    // моменту уже отработал: без второго flush перед `reconcileKeyed` пришедшее
+    // значение пересобирает изменившуюся строку и снимает поле с набранным
+    // (bfe1bc24, круг 3).
+    let releaseSecondRead: (() => void) | null = null;
+    let reads = 0;
+    const getValues = async (): Promise<unknown[]> => {
+      reads += 1;
+      if (reads === 1) return [];
+      return new Promise<unknown[]>((resolve) => {
+        releaseSecondRead = () =>
+          resolve([
+            {
+              id: 'vTags',
+              owner_type: 'thought',
+              owner_id: 't1',
+              property_id: 'pTags',
+              property_name: 'Теги',
+              value_type: 'text',
+              value: ['срочно'],
+              outside_type: false,
+              updated_at: '2026',
+            },
+          ]);
+      });
+    };
+    const { box, saves } = await buildMultipleTextBody(false, getValues);
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено');
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(releaseSecondRead !== null, 'второе чтение запрошено и ещё не завершено');
+    input!.value = 'окно';
+    assert.deepEqual(saves, [], 'чтение ещё идёт — записи нет');
+
+    (releaseSecondRead as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'окно', null]],
+      'набранное сохранено ДО пересборки изменившейся строки',
+    );
+  });
+
+  it('окно гонки (внетиповая таблица): набранное фиксируется перед сверкой строк', async () => {
+    // Та же гонка для группы «Свойства вне типа»: скаляр перечитывается с
+    // изменённым значением уже после ввода — строка пересобирается, и без
+    // второго flush перед сверкой набранное гибнет (bfe1bc24, круг 3).
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    ensureWindowShims(sharedWindow);
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    etnApi['system'] = { openExternal: async () => '' };
+    const saves: unknown[][] = [];
+    const scalar = (value: string): Record<string, unknown> => ({
+      id: 'v1',
+      owner_type: 'thought',
+      owner_id: 't1',
+      property_id: 'po1',
+      property_name: 'Отвалившееся',
+      value_type: 'text',
+      value,
+      outside_type: true,
+      updated_at: '2026',
+    });
+    let reads = 0;
+    let releaseSecondRead: (() => void) | null = null;
+    etnApi['properties'] = {
+      get: async (): Promise<unknown[]> => {
+        reads += 1;
+        if (reads === 1) return [scalar('A')];
+        return new Promise<unknown[]>((resolve) => {
+          releaseSecondRead = () => resolve([scalar('A2')]);
+        });
+      },
+      set: async (...args: unknown[]) => {
+        saves.push(args);
+      },
+      remove: async () => undefined,
+    };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+    const box = propertiesInternals.buildOutsidePropertiesBody({
+      ownerType: 'thought',
+      ownerId: 't1',
+      typeId: null,
+      hasOwnType: false,
+    }) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const input = box.findAll(
+      (e) => e.className.split(' ').includes('prop-editor'),
+    )[0];
+    assert.ok(input !== undefined, 'поле внетиповой строки построено');
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(releaseSecondRead !== null, 'второе чтение запрошено и ещё не завершено');
+    input!.value = 'B2';
+    assert.deepEqual(saves, [], 'чтение ещё идёт — записи нет');
+
+    (releaseSecondRead as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Отвалившееся', 'B2', null]],
+      'набранное сохранено ДО пересборки изменившейся внетиповой строки',
+    );
+  });
+
+  it('смена мысли после пустого перечитывания фиксирует набранное прежнему владельцу', async () => {
+    const { box, saves } = await buildMultipleTextBody(true);
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(saves, [], 'до ввода записей нет');
+
+    const input = chipInputOf(box);
+    assert.ok(input !== undefined, 'чип-поле построено во вкладке');
+    input!.value = 'срочно';
+
+    const { retargetPropertiesTab } = await import('../src/renderer/editor/properties.js');
+    retargetPropertiesTab(ctxOf('t2') as any);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'набранное ушло прежнему владельцу t1',
+    );
+  });
+
+  it('повторный flush без нового ввода не дублирует запись', async () => {
+    const { box, saves } = await buildMultipleTextBody();
+    chipInputOf(box)!.value = 'срочно';
+
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Реестр не очищается намеренно (bfe1bc24, круг 2); коммит чипа после
+    // успешной записи видит пустой ввод и не пишет второй раз.
+    dispatchDocumentEvent('etn:property-values-refreshed', undefined);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.deepEqual(
+      saves,
+      [['n1', 'thought', 't1', 'Теги', 'срочно', null]],
+      'ровно одна запись',
+    );
   });
 });
 

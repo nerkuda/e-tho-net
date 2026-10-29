@@ -1,0 +1,116 @@
+{
+  "name": "7f55e8ac-or-root-panel",
+  "description": "GUI-сценарий ошибки 7f55e8ac: панель «Структур» — дефолты видимости (актуальные, не помеченные на удаление) ВСЕГДА сужают отбор. Путь пользователя: панель «Структур» → два условия «Найти слова» (альфа, бета) → коннектор корня «ИЛИ» → Применить. Проверки: в выдаче есть живые «альфа проба» и «бета проба», но НЕТ живой «гамма проба» (до фикса ИЛИ-корень расширялся до всех живых мыслей сети). Мысли заводятся шагом probe через window.etn; заголовки читаются из строк дерева результатов (.st-row .st-cloud). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.7f55e8ac-or-root-panel.scenario.json --out .tmp/etn-7f55e8ac/out. Холодный старт (сразу после сборки): open-network кликается прямым .click() из страницы — CDP-клик по координатам изредка не доходит до обработчика (нет запроса networks.open), а эффект открытия сети ждёт tabs-panel-ready (.view-switch + закладка «Структуры мыслей»).",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "open-network",
+      "timeout": 40000,
+      "probe": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item === null) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tabs-panel-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('button.view-tab[title=\"Структуры мыслей\"]') !== null"
+    },
+    {
+      "name": "seed-thoughts",
+      "probe": "(() => { const N='{{networkId}}', H='{{homeId}}'; const et=window.etn; return (async () => { const mk=async(t)=>{ const r=await et.thoughts.create(N,{title:t,create_link:{direction:'parent',target_thought_id:H}}); return r.id; }; window.__visSeed={ alpha: await mk('альфа проба'), beta: await mk('бета проба'), other: await mk('гамма проба') }; return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    {
+      "name": "structures-editor",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.st-filter .fe .ff-name__input') !== null"
+    },
+    { "name": "add-condition-1", "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "condition-row-1-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 1"
+    },
+    { "name": "open-operand-picker-1", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "operand-menu-1",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"keywords\"]') !== null"
+    },
+    { "name": "pick-keywords-1", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"keywords\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    {
+      "name": "keyword-control-1",
+      "timeout": 20000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[0]?.querySelectorAll('input[data-input=\"keywords\"]').length ?? 0) === 1"
+    },
+    { "name": "focus-keyword-1", "click": ".st-filter .ft-row input[data-input=\"keywords\"]" },
+    { "name": "type-keyword-1", "text": "альфа" },
+    { "name": "blur-keyword-1", "key": "Tab" },
+    {
+      "name": "keyword-1-value",
+      "probe": "document.querySelectorAll('.st-filter .ft-row')[0]?.querySelector('input[data-input=\"keywords\"]')?.value ?? null",
+      "expect": "альфа"
+    },
+    { "name": "add-condition-2", "eval": "(() => { const b=document.querySelector('.st-filter .ft-add-condition'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "condition-row-2-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.st-filter .ft-row').length === 2"
+    },
+    { "name": "open-operand-picker-2", "eval": "(() => { const b=document.querySelectorAll('.st-filter .ft-row')[1]?.querySelector('.ft-row__what'); if(!b) return 'no-button'; b.click(); return 'ok'; })()" },
+    {
+      "name": "operand-menu-2",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"keywords\"]') !== null"
+    },
+    { "name": "pick-keywords-2", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"keywords\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    {
+      "name": "keyword-control-2",
+      "timeout": 20000,
+      "waitFor": "(document.querySelectorAll('.st-filter .ft-row')[1]?.querySelectorAll('input[data-input=\"keywords\"]').length ?? 0) === 1"
+    },
+    { "name": "focus-keyword-2", "eval": "(() => { const i=document.querySelectorAll('.st-filter .ft-row')[1]?.querySelector('input[data-input=\"keywords\"]'); if(!i) return 'no-input'; i.click(); i.focus(); return 'ok'; })()" },
+    { "name": "type-keyword-2", "text": "бета" },
+    { "name": "blur-keyword-2", "key": "Tab" },
+    {
+      "name": "keyword-2-value",
+      "probe": "document.querySelectorAll('.st-filter .ft-row')[1]?.querySelector('input[data-input=\"keywords\"]')?.value ?? null",
+      "expect": "бета"
+    },
+    {
+      "name": "root-connector-is-and",
+      "probe": "document.querySelector('.st-filter .ft-group__connector-label')?.textContent ?? null",
+      "expect": "все условия (И)"
+    },
+    { "name": "open-root-connector", "eval": "(() => { const c=document.querySelector('.st-filter .ft-group__connector'); if(!c) return 'no-connector'; c.click(); return 'ok'; })()" },
+    {
+      "name": "connector-menu",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ft-choice__item[data-key=\"or\"]') !== null"
+    },
+    { "name": "pick-or", "eval": "(() => { const item=[...document.querySelectorAll('.ft-choice__item[data-key=\"or\"]')].find((e)=>e.getBoundingClientRect().width > 0); if(!item) return 'no-item'; item.click(); return 'ok'; })()" },
+    {
+      "name": "root-is-or",
+      "timeout": 20000,
+      "waitFor": "(document.querySelector('.st-filter .ft-group__connector-label')?.textContent ?? '').includes('ИЛИ')"
+    },
+    { "name": "apply-filter", "click": ".st-filter .ff-apply" },
+    {
+      "name": "results-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.st-row .st-cloud').length >= 2"
+    },
+    {
+      "name": "result-titles",
+      "probe": "(() => { const titles=[...document.querySelectorAll('.st-row .st-cloud')].map((c)=> (c.textContent || '').trim()); const has=(t)=>titles.some((x)=>x.includes(t)); return { alpha: has('альфа проба'), beta: has('бета проба'), gamma: has('гамма проба') }; })()",
+      "expect": { "alpha": true, "beta": true, "gamma": false }
+    }
+  ]
+}

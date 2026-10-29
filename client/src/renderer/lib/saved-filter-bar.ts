@@ -32,13 +32,12 @@
 import { confirmDialog, errorDialog, promptDialog, showDialog } from './dialog.js';
 import { t } from './i18n.js';
 import { div, el, span } from './dom.js';
-import { defineKeyContext, pushKeyContext } from './keymap.js';
-import { modifierChordVariants } from './keymap-chords.js';
 import { svgIcon } from './ui/icon.js';
 import { menuAction, type MenuItem } from './menu.js';
 import { notice } from './notice.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { badge } from './ui/badge.js';
+import { bindSearchNav } from './ui/search-nav.js';
 import { createTable } from './ui/table.js';
 import { duplicateFilterName, filterSavedByName } from './pure.js';
 
@@ -286,8 +285,6 @@ interface SavedFilterDialogOptions {
  * требования 11ddd910), контекстное меню строки. Остаётся открытым после
  * переименования/копирования/удаления — список перерисовывается на месте.
  */
-/** Счётчик диалогов сохранённых отборов: у каждого свой контекст поля поиска. */
-let savedFilterSearchSeq = 0;
 
 export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
   const body = div('sfd list-dialog-body');
@@ -462,42 +459,12 @@ export function openSavedFilterDialog(opts: SavedFilterDialogOptions): void {
     updateButtons();
   };
 
-  // Ввод в поле поиска фильтрует список; стрелки/Enter перенаправляем таблице,
-  // чтобы клавиатура оставалась от фасада (текущая строка и подсветка видны).
+  // Ввод в поле поиска фильтрует список; ↑/↓/Enter из поиска исполняет
+  // штатную навигацию таблицы общим мостом `lib/ui/search-nav` (ошибка
+  // 58981cf5): клавиатура остаётся от фасада (текущая строка, подсветка,
+  // прокрутка), фокус — в поле, набор запроса продолжается.
   search.addEventListener('input', () => render());
-  // Клавиатура поля — через общеклиентский диспетчер (ADR b420b08c, задача
-  // fd3d84f4): пока фокус в поиске, его контекст на вершине стека.
-  const searchContextId = `saved-filter-search-${(savedFilterSearchSeq += 1)}`;
-  const handleSearchKey = (event: KeyboardEvent): boolean => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return false;
-    table.focus();
-    table.element.dispatchEvent(new KeyboardEvent('keydown', { key: event.key, bubbles: true }));
-    return true;
-  };
-  defineKeyContext({
-    id: searchContextId,
-    bindings: [
-      { command: 'savedFilter.search.down', chord: 'ArrowDown', run: handleSearchKey },
-      { command: 'savedFilter.search.up', chord: 'ArrowUp', run: handleSearchKey },
-      // Прежний обработчик срабатывал на Enter независимо от модификаторов —
-      // нажатие выражено привязкой на каждое подмножество (`lib/keymap-chords.ts`).
-      ...modifierChordVariants('Enter').map((chord) => ({
-        command: 'savedFilter.search.enter',
-        chord,
-        run: handleSearchKey,
-      })),
-    ],
-  });
-  let releaseSearchContext: (() => void) | null = null;
-  const onSearchFocusIn = (): void => {
-    releaseSearchContext ??= pushKeyContext(searchContextId);
-  };
-  const onSearchFocusOut = (): void => {
-    releaseSearchContext?.();
-    releaseSearchContext = null;
-  };
-  search.addEventListener('focusin', onSearchFocusIn as EventListener);
-  search.addEventListener('focusout', onSearchFocusOut as EventListener);
+  bindSearchNav(search, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   close = showDialog({
     title: t('savedFilters.title'),

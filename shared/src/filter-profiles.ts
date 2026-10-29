@@ -270,8 +270,8 @@ const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
  *   * ссылочные (связь, legacy `thought_ref`) — списки и наборы
  *     (`any_of`/`all_of`/`none_of`), «количество» (`gt/gte/lt/lte/between`),
  *     «в иерархии» — только у свойства-связи (требование aa7a2aea);
- *   * кросс-сетевая ссылка и публикация — только точное совпадение и наборы
- *     (адрес либо совпал, либо нет).
+ *   * кросс-сетевая ссылка и публикация — точное совпадение, наборы и наличие
+ *     значения (адрес/id задан или не задан — «заполнено»/«не заполнено»).
  *
  * Серверный гейт плоской формы `OPS_BY_VALUE_TYPE` — подмножество этих наборов:
  * AST-эра добавила `not_contains`, сравнения/«между» скаляров и «в иерархии»
@@ -344,8 +344,11 @@ export const PROPERTY_OPERATOR_SETS: Readonly<
     'not_empty',
   ],
   thought_ref: ['eq', 'ne', 'in', 'not_in', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
-  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
-  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  // Наличие значения: адрес задан / не задан (ошибка 0e976df4). «Адрес либо
+  // совпал, либо нет» относится к СРАВНЕНИЮ, а не к заполненности ссылки:
+  // найти мысль с незаполненной ссылкой иначе невозможно (NULL не «не равно»).
+  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
+  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
 };
 
 /**
@@ -405,6 +408,12 @@ const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[
     'not_in',
     'in_hierarchy',
     'not_in_hierarchy',
+    // «Заполнено»/«не заполнено»: у мысли есть любой тип / мысли без типа
+    // (`thoughts.type_id IS NOT NULL` / `IS NULL`). Ошибка a6866689: до этого
+    // набора мысль без типа нельзя было найти условием, а отрицательные
+    // операторы молча её отсекали.
+    'is_empty',
+    'not_empty',
     // «Имеет свойство»/«не имеет» на операнде «Тип» (требование bd0348b3).
     'has',
     'not_has',

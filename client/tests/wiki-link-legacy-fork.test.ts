@@ -173,7 +173,12 @@ describe('ветка «создать»: просмотр не отказыва�
           ui: { setState: async () => undefined },
         },
       };
-      store.update({ networkId: 'n1', rtStatus: 'connected' });
+      store.update({
+        networkId: 'n1',
+        rtStatus: 'connected',
+        // Per-network status is the source of truth (de34b35b, verify remark 3).
+        rtStatusByNetwork: { n1: 'connected' },
+      });
 
       const mod = (await import('../src/renderer/editor/wiki-link-create.js')) as {
         tryCreateThoughtFromLegacyLink: (
@@ -329,18 +334,52 @@ describe('resolveLegacyWikiCandidates: источник кандидатов (wi
     (globalThis as any).window = originalWindow;
   });
 
+  /** Режим последнего вызова `findDuplicates` — резолвер обязан просить `search`. */
+  let lastDuplicateMode: string | undefined;
+
   /** Заглушка IPC: findDuplicates + resolve с картой актуальности. */
   function stubEtn(dupHits: DuplicateHit[], activeById: Record<string, boolean>): void {
+    lastDuplicateMode = undefined;
     (globalThis as any).window = {
       etn: {
         thoughts: {
-          findDuplicates: async (_networkId: string, _title: string) => dupHits,
+          findDuplicates: async (
+            _networkId: string,
+            _title: string,
+            _synonyms?: string[],
+            _typeIds?: string[],
+            mode?: string,
+          ) => {
+            lastDuplicateMode = mode;
+            return dupHits;
+          },
           resolve: async (_networkId: string, ids: string[]) =>
             ids.map((id) => ({ id, active: activeById[id] !== false })),
         },
       },
     };
   }
+
+  it('запрашивает живой поиск (mode=search): иначе теряет *-синонимы словоформ', async () => {
+    // Сценарий блокера: легаси-ссылка «Исправленные ошибки», у мысли «Багфикс»
+    // синоним «исправ* ошиб*». В dedupe (REST-дефолт после 11f14a81) сервер
+    // такой словоформы не найдёт, и клик ушёл бы в ветку «создать».
+    stubEtn(
+      [
+        hit({
+          id: 'c0000000-0000-4000-8000-000000000003',
+          title: 'Багфикс',
+          synonyms: ['исправ* ошиб*'],
+          matched_on: 'synonym',
+          matched_synonym: 'исправ* ошиб*',
+        }),
+      ],
+      {},
+    );
+    const out = await resolveLegacyWikiCandidates('net', 'Исправленные ошибки');
+    assert.equal(lastDuplicateMode, 'search', 'резолвер обязан передать mode=search');
+    assert.deepEqual(out.map((h) => h.title), ['Багфикс'], 'кандидат не потерян');
+  });
 
   it('оставляет только точные совпадения (partial отсеивается)', async () => {
     stubEtn(

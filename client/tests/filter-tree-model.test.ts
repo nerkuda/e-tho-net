@@ -232,6 +232,25 @@ describe('весь словарь ядра выражается моделью �
     }
   });
 
+  it('«Тип — заполнено/не заполнено»: лист без значения собирается и читается (a6866689)', () => {
+    for (const operator of ['is_empty', 'not_empty'] as const) {
+      const ast = buildFilterAst(
+        treeState(group('and', [leaf({ kind: 'type' }, operator, { kind: 'none' })])),
+        { profile: 'thoughts' },
+      );
+      assert.deepEqual(
+        ast.filter,
+        { op: 'and', children: [{ entity: { kind: 'type' }, operator }] },
+        `${operator}: значение в wire не пишется`,
+      );
+      assert.deepEqual(
+        buildFilterAst(parseFilterAstState(ast), { profile: 'thoughts' }),
+        ast,
+        `${operator}: форма читается обратно без потерь`,
+      );
+    }
+  });
+
   it('значения: пусто/скаляр/список (в т.ч. из одного)/токен/под-выборка различаются', () => {
     const cases: Array<{ value: FilterTreeLeaf['value']; expected: unknown }> = [
       { value: { kind: 'none' }, expected: undefined },

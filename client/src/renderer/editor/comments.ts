@@ -17,12 +17,14 @@ import type { AnyRealtimeEvent, Comment } from '@etn/shared';
 import {
   clearDraft,
   clearDraftsFor,
-  findDraft,
-  saveDraft,
+  createDraftMirror,
+  findDrafts,
   type DraftKind,
 } from '../drafts.js';
 import { commentShell } from '../lib/ui/comment.js';
+import { isConnectionLostError } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { createOrAdoptPermanentComment } from '../lib/permanent-comment.js';
 import {
   asRealtimeCause,
   invalidateQueries,
@@ -39,9 +41,9 @@ import {
 } from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
-import { store } from '../state.js';
-import { registerMainSection, type EditorContext } from './editor.js';
-import { createMarkdownField, cancelMarkdownFieldEdit, setMarkdownField } from './markdown-field.js';
+import { onReconnected, store } from '../state.js';
+import { registerMainSection, type EditorContext, type TabPaneLifecycle } from './editor.js';
+import { createMarkdownField, cancelMarkdownFieldEdit, disposeMarkdownField, setMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
 
 /** Reference to the currently mounted permanent-comment field, if any. */
@@ -135,17 +137,17 @@ function wireCommentRealtime(): void {
 
 /** Registers the permanent-comment section and the «Дневник» tab (L7). */
 export function registerCommentSections(): void {
-  registerMainSection((ctx) => ({
+  registerMainSection((ctx, lifecycle) => ({
     id: 'permanent',
     title: 'Комментарий',
-    buildBody: () => buildPermanentBody(ctx),
+    buildBody: () => buildPermanentBody(ctx, lifecycle),
   }));
   registerChronoTab();
   wireCommentRealtime();
 }
 
 /** Builds the permanent-comment group body (HTML view ↔ markdown edit). */
-function buildPermanentBody(ctx: EditorContext): HTMLElement {
+function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   const networkId = requireNetworkId();
   const startedAt = Date.now();
   const shell = commentShell({ variant: 'fill', scroll: true, state: { kind: 'loading' } });
@@ -194,65 +196,119 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
 
   // Draft mirroring (H19): the in-progress markdown is saved locally and
   // cleared after a successful send; an existing draft re-opens the editor.
+  // The mirror owns the debounce AND invalidation of late writes: a write that
+  // lands after a confirmed save/cancel deletes its own row (ошибка 5726744b —
+  // such a leftover used to return as an eternal `comment version mismatch`).
   let draftId: string | null = null;
-  let draftTimer: number | null = null;
   let draftKind: DraftKind = 'comment-new';
 
-  const scheduleDraft = (md: string): void => {
-    if (draftTimer !== null) window.clearTimeout(draftTimer);
-    draftTimer = window.setTimeout(() => {
-      void (async () => {
-        const value =
-          draftKind === 'comment-new'
-            ? JSON.stringify({ ownerType: ctx.ownerType, ownerId: ctx.ownerId, bodyMd: md })
-            : md;
-        draftId = await saveDraft({
-          networkId,
-          entityType: draftKind,
-          entityId: draftKind === 'comment-new' ? ctx.ownerId : (permanent?.id ?? ctx.ownerId),
-          field: 'body_md',
-          value,
-          baseVersion: permanent?.version ?? null,
-        });
-      })();
-    }, 800);
-  };
+  const draftMirror = createDraftMirror({
+    target: () => ({
+      networkId,
+      entityType: draftKind,
+      entityId: draftKind === 'comment-new' ? ctx.ownerId : (permanent?.id ?? ctx.ownerId),
+      field: 'body_md',
+      baseVersion: permanent?.version ?? null,
+    }),
+    encode: (md) =>
+      draftKind === 'comment-new'
+        ? JSON.stringify({ ownerType: ctx.ownerType, ownerId: ctx.ownerId, bodyMd: md })
+        : md,
+    onWritten: (id) => {
+      draftId = id;
+    },
+  });
 
   /**
    * Drops stale drafts whose text already matches the saved value — they are
    * left behind when the debounced draft save fires after the blur save (the
    * field is rebuilt by then, so the draft is never cleared). Real drafts are
    * left alone: they are re-sent by the retry loop on reconnect (H19).
+   * Conflict drafts are checked too: one whose text equals the saved body is
+   * dead (the server already has it) and is removed, while a real conflict
+   * text stays untouched (ошибка 5726744b).
    * The editor never forces edit mode for a newly opened entity — the comment
    * always opens in view mode (08-ui-spec.md §6.4), editing starts on a
    * double-click only.
    */
   async function cleanupStaleDrafts(): Promise<void> {
     if (field === null) return;
-    const update = await findDraft(networkId, 'comment', permanent?.id ?? ctx.ownerId);
-    const created = await findDraft(networkId, 'comment-new', ctx.ownerId);
-    if (update !== null && permanent !== null && update.value === permanent.body_md) {
-      await clearDraft(update.id);
+    if (permanent === null) return;
+    const updateRows = await findDrafts(networkId, 'comment', permanent.id, 'all');
+    const createdRows = await findDrafts(networkId, 'comment-new', ctx.ownerId, 'all');
+    for (const draft of updateRows) {
+      if (draft.value === permanent.body_md) await clearDraft(draft.id);
     }
-    if (created !== null && permanent !== null && safeParseBody(created.value) === permanent.body_md) {
-      await clearDraft(created.id);
+    for (const draft of createdRows) {
+      if (draft.value !== null && safeParseBody(draft.value) === permanent.body_md) {
+        await clearDraft(draft.id);
+      }
     }
   }
 
-  /** Cancels the pending draft mirror (save/cancel paths must not fire it). */
-  const cancelDraftTimer = (): void => {
-    if (draftTimer !== null) window.clearTimeout(draftTimer);
-    draftTimer = null;
+  let inFlight = false;
+  let retryUnsubscribe: (() => void) | null = null;
+  let disposed = false;
+
+  /** Drops the reconnect watch (successful load, pane disposed, network switch). */
+  const stopRetryWatch = (): void => {
+    if (retryUnsubscribe !== null) {
+      retryUnsubscribe();
+      retryUnsubscribe = null;
+    }
   };
 
-  void (async () => {
+  // The pane is detached from the DOM while another tab is active — it is
+  // still alive and MUST reload after reconnect. Real eviction/rebuild is
+  // signalled by the editor through the lifecycle (verifier blocker).
+  lifecycle.onDispose(() => {
+    disposed = true;
+    stopRetryWatch();
+    // Поле уезжает из документа вместе с панелью: отпускаем его глобальные
+    // слушатели, иначе правка, оставшаяся открытой после сбоя записи,
+    // коммитила бы на каждое нажатие вне уже снятого поля (ошибка ecdb2e7a).
+    if (field !== null) disposeMarkdownField(field);
+    // Text typed but not yet mirrored must survive pane eviction: flush the
+    // pending debounce instead of dropping it (ошибка 5726744b).
+    draftMirror.dispose();
+  });
+
+  /**
+   * Waits for the network to report `connected` again and retries the load
+   * (defect de34b35b, GUI review remark: an outage must not leave the tab
+   * stuck on «Невозможно загрузить: нет соединения с сервером»). The watch
+   * survives tab switches (the pane is cached, only detached) and is dropped
+   * by the pane lifecycle or a network switch; every retry starts with
+   * `{kind:'loading'}` so the user sees the attempt.
+   */
+  function watchForReconnect(): void {
+    stopRetryWatch();
+    retryUnsubscribe = onReconnected(networkId, () => void loadPermanent());
+  }
+
+  /**
+   * Loads the permanent comment. Repeatable by design: a `connection-lost`
+   * failure leaves the error visible and arms {@link watchForReconnect}; a
+   * successful retry builds the field and renders the comment. Business
+   * errors (validation, 404) are terminal — retrying them would not help.
+   */
+  async function loadPermanent(): Promise<void> {
+    if (inFlight || disposed) return;
+    inFlight = true;
+    stopRetryWatch();
+    shell.setState({ kind: 'loading' });
     let comments: Comment[];
     try {
       comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
     } catch (err) {
+      inFlight = false;
+      if (disposed) return;
       shell.setState({ kind: 'error', error: err });
+      if (isConnectionLostError(err)) watchForReconnect();
       return;
     }
+    inFlight = false;
+    if (disposed) return;
     permanent = comments.find((c) => c.kind === 'permanent') ?? null;
     draftKind = permanent === null ? 'comment-new' : 'comment';
 
@@ -300,20 +356,24 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         setEditing(editing);
         shell.setMode(editing ? 'edit' : 'view');
       },
-      onInput: (md) => scheduleDraft(md),
+      onInput: (md) => draftMirror.schedule(md),
       onSave: async (md) => {
-        // The blur save settles the edit — the pending debounce must not
-        // mirror it into a stale draft afterwards.
-        cancelDraftTimer();
+        // The save settles the edit — the pending debounce must not mirror it
+        // into a stale draft afterwards, and an in-flight write must drop its
+        // row when it returns (ошибка 5726744b).
+        draftMirror.settle();
         let html: string;
         if (permanent === null) {
           if (md.trim() === '') {
             html = '';
           } else {
-            const created = await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
-              kind: 'permanent',
-              body_md: md,
-            });
+            // Создание с усыновлением (ошибка ecdb2e7a): комментарий мог быть
+            // создан за клиента досылом черновика после обрыва связи (H19) —
+            // повторный `create` давал DUPLICATE и вечный цикл ошибок.
+            const created = await createOrAdoptPermanentComment(
+              { networkId, ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+              md,
+            );
             permanent = created;
             draftKind = 'comment';
             html = created.body_html;
@@ -342,8 +402,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       },
       onCancel: () => {
         // Esc: the edit is dropped — neither the pending timer nor the saved
-        // draft mirror of the cancelled text is wanted.
-        cancelDraftTimer();
+        // draft mirror of the cancelled text is wanted. `settle` also makes an
+        // in-flight write delete its own row (ошибка 5726744b).
+        draftMirror.settle();
         if (draftId !== null) {
           void clearDraft(draftId);
           draftId = null;
@@ -365,7 +426,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       hasComment: permanent !== null,
     });
     await cleanupStaleDrafts();
-  })();
+  }
+
+  void loadPermanent();
 
   return box;
 }

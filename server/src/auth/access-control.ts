@@ -101,6 +101,20 @@ export function createAccessControl(members: NetworkMembersService): AccessContr
         );
         return;
       }
+      // Неизвестная сеть — 404, а не «пустая сеть» (0.14.1, ошибка 2c3a42cd):
+      // прежде администратор проходил гвард, а `openRouteNetworkDb` создавал
+      // `networks/<uuid>/data.db` по опечатке в id. Проверка — до admin-ветки
+      // и до кэша членства (не засорять его парами с несуществующей сетью).
+      if (!members.networkExists(networkId)) {
+        sendEtnError(
+          reply,
+          'NOT_FOUND',
+          'Сеть не найдена.',
+          { entity: 'network', id: networkId },
+          req.id,
+        );
+        return;
+      }
       const role = members.getMemberRole(auth.user.id, networkId);
       // A global admin has owner-equivalent access to every network, whether
       // or not they hold an explicit membership row (06-auth.md §4.1).

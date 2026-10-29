@@ -79,6 +79,13 @@ export interface CollapsibleSpec {
    * тот же узел). Нужно формам, наполняющим тело заранее (`filter-form`).
    */
   body?: HTMLElement;
+  /**
+   * Зовётся ПЕРЕД снятием построенного тела с экрана (сворачивание, пересборка).
+   * Потребитель фиксирует в нём недописанные значения полей: удалённый из
+   * документа сфокусированный узел события `blur` не получает, и набранное
+   * терялось бы молча (ошибка bfe1bc24).
+   */
+  onBeforeHide?(): void;
   /** Имя события переключения (по умолчанию `etn:toggled`). */
   toggleEventName?: string;
 }
@@ -183,6 +190,11 @@ export function collapsibleSection(spec: CollapsibleSpec): CollapsibleSection {
     });
   };
   if (!lazy) updateCount();
+  // Ленивый счётчик при РАЗВЁРНУТОЙ по умолчанию группе: она уже показана
+  // пользователю, поэтому «первое раскрытие» наступило сразу — бейдж не должен
+  // висеть на «…» до ручного сворачивания/раскрытия (0.14.1, группа
+  // «Свойства вне типа», задача 626b29bd).
+  if (lazy && !collapsed) updateCount();
   root.addEventListener('etn:refresh-count', updateCount);
   root.addEventListener('etn:set-count', (event) => {
     const detail = (event as CustomEvent<string>).detail;
@@ -198,7 +210,11 @@ export function collapsibleSection(spec: CollapsibleSpec): CollapsibleSection {
   const apply = (): void => {
     caret.classList.toggle('collapsed', collapsed);
     if (triangle) caret.textContent = collapsed ? '▸' : '▾';
-    if (body !== null) body.remove();
+    if (body !== null) {
+      // Тело уходит с экрана: поля сообщают хосту о недописанном до снятия.
+      spec.onBeforeHide?.();
+      body.remove();
+    }
     body = null;
     if (collapsed || !built) return;
     // Готовое тело потребителя: показываем тот же узел (состояние формы цело).

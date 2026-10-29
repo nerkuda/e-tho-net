@@ -305,7 +305,7 @@ describe('проводка обновления списка вложений (�
       'refreshAttachments гасит ключ слоя владельца',
     );
     assert.ok(
-      /async function reload\(\): Promise<void> \{[\s\S]{0,900}?onCountChange\?\.\(\)/.test(
+      /async function reload\(\): Promise<void> \{[\s\S]{0,1800}?onCountChange\?\.\(\)/.test(
         attachments,
       ),
       'reload() обновляет счётчик вкладки',

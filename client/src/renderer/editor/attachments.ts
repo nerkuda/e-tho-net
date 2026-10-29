@@ -17,7 +17,13 @@
  */
 
 import { EtnError } from '@etn/shared';
-import type { Attachment, AttachmentOwnerType, Thought, ThoughtUpdateInput } from '@etn/shared';
+import type {
+  Attachment,
+  AttachmentCreateInput,
+  AttachmentOwnerType,
+  Thought,
+  ThoughtUpdateInput,
+} from '@etn/shared';
 import { t } from '../lib/i18n.js';
 
 import {
@@ -28,7 +34,7 @@ import {
   registerQuery,
 } from '../lib/live/index.js';
 import { closeDialog, confirmDialog, showDialog } from '../lib/dialog.js';
-import { div, el, errText, isHttpUrl, span } from '../lib/dom.js';
+import { div, el, errText, isConnectionLostError, isHttpUrl, span } from '../lib/dom.js';
 import { radioRow } from '../lib/ui/choice-row.js';
 import { fieldInput, fieldRow } from '../lib/ui/field.js';
 import { filePathField } from '../lib/ui/file-path-field.js';
@@ -40,6 +46,7 @@ import { notice } from '../lib/notice.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
 import { requireNetworkId } from '../app.js';
+import { onReconnected } from '../state.js';
 import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { etnimgUrl, createMarkdownField, guessMimeFromName } from './markdown-field.js';
 import {
@@ -48,11 +55,14 @@ import {
   registerTabContent,
   registerTabCount,
   type EditorContext,
+  type TabPaneLifecycle,
 } from './editor.js';
 import { rowSplitter } from './splitter.js';
 import { badge } from '../lib/ui/badge.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import { svgIcon } from '../lib/ui/icon.js';
+import { createListNav } from '../lib/ui/list.js';
+import { bindSearchNav } from '../lib/ui/search-nav.js';
 
 /** Registers the attachments tab content and its badge counter (L7). */
 export function registerAttachmentsTab(): void {
@@ -120,6 +130,27 @@ export async function assignDataIconToThought(
   const updated = await etn.thoughts.update(networkId, thought.id, patch, thought.version);
   reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   return updated;
+}
+
+/**
+ * Тело `POST …/{id}/attachments` при переиспользовании найденного вложения
+ * («Найти существующее», ошибка 1b4cc172). Необязательные поля со значением
+ * `null` НЕ отправляются: у URL-вложения `file_size === null`, а контракт
+ * `RestAttachmentCreate` (`server/src/contracts.ts`) принимает `file_size`
+ * только целым числом — `null` давал 422 «значение должно быть числом.».
+ * Остальные nullable-поля (`url`, `file_path`, `mime_type`, `title`,
+ * `description`) контракт допускает явно, поэтому передаются как есть.
+ */
+export function reuseAttachmentInput(a: Attachment): AttachmentCreateInput {
+  return {
+    kind: a.kind,
+    url: a.kind === 'url' ? a.url : null,
+    file_path: a.kind === 'file' ? a.file_path : null,
+    ...(a.file_size !== null ? { file_size: a.file_size } : {}),
+    mime_type: a.mime_type,
+    title: a.title,
+    description: a.description,
+  };
 }
 
 /**
@@ -279,15 +310,18 @@ export interface AttachmentsPaneOptions {
   extraMenuItems?: (attachment: Attachment) => MenuItem[];
   /** Уведомление о смене числа вложений (бейдж вкладки панели мысли). */
   onCountChange?: () => void;
+  /** Жизненный цикл панели редактора (вкладка «Вложения»); у публикации — нет. */
+  lifecycle?: TabPaneLifecycle;
 }
 
 /** Вкладка «Вложения» панели мысли: общая панель над владельцем-мыслью/связью. */
-function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
+function buildAttachmentsTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
   return buildAttachmentsPane({
     ownerType: ctx.ownerType,
     ownerId: ctx.ownerId,
     thought: ctx.thought,
     onCountChange: () => refreshTabCount('attachments'),
+    lifecycle,
   });
 }
 
@@ -304,6 +338,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
   const thought = opts.thought ?? null;
   const extraMenuItems = opts.extraMenuItems;
   const onCountChange = opts.onCountChange;
+  const lifecycle = opts.lifecycle;
   const networkId = requireNetworkId();
   const root = div('attachments-tab');
   /**
@@ -427,11 +462,17 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       return;
     }
     // Nothing was recognised — say so instead of failing silently.
-    notice(
-      'Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.',
-      'error',
-    );
+    notice('Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.');
   }
+
+  /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
+  let retryStop: (() => void) | null = null;
+  let disposed = false;
+  lifecycle?.onDispose(() => {
+    disposed = true;
+    retryStop?.();
+    retryStop = null;
+  });
 
   /** Renders the attachment list. */
   async function reload(): Promise<void> {
@@ -440,9 +481,19 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     try {
       attachments = await etn.attachments.list(networkId, ownerType, ownerId);
     } catch (err) {
+      if (disposed) return;
       list.replaceChildren(operationError(err));
+      // The pane may be detached (another tab is active) — that is not a
+      // disposal; keep listening and reload once the network is back.
+      if (isConnectionLostError(err)) {
+        retryStop?.();
+        retryStop = onReconnected(networkId, () => void reload());
+      }
       return;
     }
+    retryStop?.();
+    retryStop = null;
+    if (disposed) return;
     // Записи вложений — в нормализованный кэш слоя: по ним роутер разрешает
     // владельца событий `attachment.updated/deleted`, несущих только id.
     for (const attachment of attachments) commitEntity('attachment', attachment.id, attachment);
@@ -859,6 +910,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       });
     } catch (err) {
       if (isIconOwnerBlock(err)) {
+        // Отказ сервера (409): операция не выполнена — важное, тостом.
         notice(t('attachments.move.iconBlocked'), 'error');
       } else {
         notice(`${t('attachments.move.removeFailed')}: ${errText(err)}`, 'error');
@@ -938,6 +990,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       refreshAttachments();
     } catch (err) {
       if (isIconOwnerBlock(err)) {
+        // Отказ сервера (409): операция не выполнена — важное, тостом.
         notice(t('attachments.remove.iconBlocked'), 'error');
         return;
       }
@@ -1047,6 +1100,35 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     searchResults.append(searchHint);
     const searchError = panelErrorLine();
 
+    /**
+     * Результаты поиска — строки общего списка `lib/ui/list` (ошибка 6452ea94):
+     * ↑/↓ двигают текущую строку с прокруткой, Enter выбирает вложение — теми
+     * же правилами ядра `nav-core`, что и прочие списки клиента (стандарт
+     * b6b2821d). Раньше здесь были самодельные кликабельные `div`: с клавиатуры
+     * по ним было не пройти.
+     */
+    let searchHits: Attachment[] = [];
+    const searchRowEls = new Map<string, HTMLElement>();
+    const searchNav = createListNav<Attachment>(searchResults, {
+      entries: () => searchHits,
+      tokenOf: (attachment) => attachment.id,
+      elementOf: (attachment) => searchRowEls.get(attachment.id) ?? null,
+      applyHighlight: (attachment) => {
+        for (const [id, row] of searchRowEls) {
+          row.classList.toggle(
+            'att-search-result-current',
+            attachment !== null && id === attachment.id,
+          );
+        }
+      },
+      onActivate: (attachment) => void reuseAttachment(attachment),
+    });
+    // Поиск — первая строка панели: ↑/↓/Enter из поля исполняют штатную
+    // навигацию списка общим мостом, фокус остаётся в поле (стандарт b6b2821d).
+    const unbindSearchNav = bindSearchNav(searchInput, {
+      handleKey: (key, modifiers) => searchNav.handleKey(key, modifiers),
+    });
+
     const searchPanel = div('att-tab-panel hidden');
     searchPanel.append(
       fieldRow({ label: 'Поиск', control: searchInput }),
@@ -1083,22 +1165,35 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       } catch (err) {
         if (seq !== searchSeq) return;
         searchError.textContent = errText(err);
+        searchHits = [];
+        searchRowEls.clear();
         searchResults.replaceChildren();
+        searchNav.refresh();
       }
     }
     function renderSearchResults(hits: Attachment[]): void {
       searchError.textContent = '';
+      searchHits = hits;
+      searchRowEls.clear();
       searchResults.replaceChildren();
       if (hits.length === 0) {
         searchResults.append(el('p', 'muted', 'Ничего не найдено.'));
+        searchNav.refresh();
         return;
       }
       for (const attachment of hits) {
         const item = buildAttachmentItem(attachment);
         item.classList.add('att-search-result');
-        item.addEventListener('click', () => void reuseAttachment(attachment));
+        // Клик делает строку текущей (выделение) и сразу переиспользует
+        // вложение — прежнее поведение; клавиатура идёт общим списком.
+        item.addEventListener('click', () => {
+          searchNav.setCurrent(attachment);
+          void reuseAttachment(attachment);
+        });
+        searchRowEls.set(attachment.id, item);
         searchResults.append(item);
       }
+      searchNav.refresh();
     }
     /**
      * Reuses the chosen attachment: creates a new row for the current owner
@@ -1107,15 +1202,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
      */
     async function reuseAttachment(attachment: Attachment): Promise<void> {
       try {
-        await etn.attachments.add(networkId, ownerType, ownerId, {
-          kind: attachment.kind,
-          url: attachment.kind === 'url' ? attachment.url : null,
-          file_path: attachment.kind === 'file' ? attachment.file_path : null,
-          file_size: attachment.file_size,
-          mime_type: attachment.mime_type,
-          title: attachment.title,
-          description: attachment.description,
-        });
+        await etn.attachments.add(
+          networkId,
+          ownerType,
+          ownerId,
+          reuseAttachmentInput(attachment),
+        );
         invalidateQueries(queryKeys.indicators(ownerId));
         closeDialog();
         refreshAttachments();
@@ -1189,6 +1281,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       title: 'Добавить вложение',
       body,
       size: 'm',
+      // Навигация результатов и мост поиска живут ровно столько, сколько
+      // открыт диалог: снимаем слушатели и клавиатурный контекст на закрытии.
+      onClose: () => {
+        unbindSearchNav();
+        searchNav.destroy();
+      },
       // Ошибка добавления — в панели кнопок, видимой на обеих вкладках
       // (ошибка add8d09d); на вкладке «Найти существующее» своя строка
       // `searchError` для ошибок поиска (локальная операция вкладки).

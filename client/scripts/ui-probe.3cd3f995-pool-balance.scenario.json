@@ -1,0 +1,89 @@
+{
+  "name": "diag-3cd3f995-pool-balance",
+  "description": "Диагностика пула: после закрытия последнего таба сеть уходит из realtime.getStatuses (сокет закрыт).",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "open-network-again",
+      "probe": "(() => { const item=document.querySelector('.networks-list .network-item'); if(item !== null) item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "tab-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.tab-close') !== null"
+    },
+    {
+      "name": "pool-has-network-after-open",
+      "probe": "(async () => { const s=await window.etn.realtime.getStatuses(); return s.map((x)=>x.networkId).includes('{{networkId}}'); })()",
+      "expect": true
+    },
+    {
+      "name": "close-first-tab",
+      "probe": "(() => { const b=document.querySelector('.tab-close'); if(!b) return 'no-button'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "one-tab-left",
+      "timeout": 20000,
+      "waitFor": "(async () => { const list=await window.etn.tabs.list(); return list.length === 1; })()"
+    },
+    {
+      "name": "pool-alive-while-tab-open",
+      "probe": "(async () => { const s=await window.etn.realtime.getStatuses(); return s.some((x)=>x.networkId==='{{networkId}}'); })()",
+      "expect": true
+    },
+    {
+      "name": "close-last-tab",
+      "probe": "(() => { const b=document.querySelector('.tab-close'); if(!b) return 'no-button'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tabs-empty",
+      "timeout": 20000,
+      "waitFor": "(async () => { const list=await window.etn.tabs.list(); return list.length === 0; })()"
+    },
+    {
+      "name": "pool-released-after-close",
+      "timeout": 20000,
+      "waitFor": "(async () => { const s=await window.etn.realtime.getStatuses(); return !s.some((x)=>x.networkId==='{{networkId}}'); })()"
+    }
+  ]
+}

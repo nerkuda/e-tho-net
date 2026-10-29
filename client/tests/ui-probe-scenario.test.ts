@@ -52,9 +52,30 @@ test('parseScenario: сценарий со всеми действиями ра�
     ['key', 'click', 'click', 'click', 'hover', 'hover', 'text', 'waitFor', 'probe', 'shot', 'eval'],
   );
   assert.equal(scenario.steps[0]?.key?.code, 'ArrowDown');
-  assert.deepEqual(scenario.steps[1]?.click, { selector: '#feed', at: null, x: null, y: null, count: 1 });
-  assert.deepEqual(scenario.steps[2]?.click, { selector: '.card', at: [4, 6], x: null, y: null, count: 1 });
-  assert.deepEqual(scenario.steps[3]?.click, { selector: null, at: null, x: 640, y: 400, count: 1 });
+  assert.deepEqual(scenario.steps[1]?.click, {
+    selector: '#feed',
+    at: null,
+    x: null,
+    y: null,
+    count: 1,
+    allowMismatch: false,
+  });
+  assert.deepEqual(scenario.steps[2]?.click, {
+    selector: '.card',
+    at: [4, 6],
+    x: null,
+    y: null,
+    count: 1,
+    allowMismatch: false,
+  });
+  assert.deepEqual(scenario.steps[3]?.click, {
+    selector: null,
+    at: null,
+    x: 640,
+    y: 400,
+    count: 1,
+    allowMismatch: false,
+  });
   assert.deepEqual(scenario.steps[4]?.hover, { selector: '#card', at: null, x: null, y: null });
   assert.deepEqual(scenario.steps[5]?.hover, { selector: '.row', at: [2, 3], x: null, y: null });
   assert.equal(scenario.steps[6]?.text, 'привет');
@@ -90,6 +111,19 @@ test('validateScenario: неизвестные поля сценария и ша
     () => validateScenario({ steps: [{ key: 'Tab', bogus: 1 }] }),
     ScenarioError,
   );
+});
+
+test('validateScenario: serverLog — допустимое верхнее поле (проверяет стенд)', () => {
+  // Правила лога исполняет стенд (`ui-probe-stand.mjs`), но в файле сценария
+  // это законное поле: без него раннер отвергал бы сценарий с гейтом по логу
+  // (ошибка 58c55bb9).
+  const scenario = validateScenario({
+    name: 'log-gate',
+    serverLog: { absent: ['"status":422'], present: ['"status":200'] },
+    steps: [{ key: 'Tab' }],
+  });
+  assert.equal(scenario.name, 'log-gate');
+  assert.equal(scenario.steps.length, 1);
 });
 
 test('stepKind: ровно одно действие на шаг', () => {
@@ -222,6 +256,54 @@ test('click.count: двойной клик; ноль/дробь/нечисло �
   // У наведения `count` — неизвестное поле (наведение не кликает).
   assert.throws(
     () => validateScenario(scenarioFrom([{ hover: { selector: '#x', count: 2 } }])),
+    ScenarioError,
+  );
+});
+
+test('click.allowMismatch: по умолчанию false; true только с selector; у hover и drag поля нет', () => {
+  // По умолчанию промах после перемеров ВАЛИТ шаг (блокер af96d388): флаг
+  // обязан быть явным, а значение по умолчанию — false.
+  const byDefault = validateScenario(scenarioFrom([{ click: { selector: '.canvas', at: [300, 40] } }]));
+  assert.equal(byDefault.steps[0]?.click?.allowMismatch, false, 'по умолчанию промах запрещён');
+
+  const allowed = validateScenario(
+    scenarioFrom([{ click: { selector: '.canvas', at: [300, 40], allowMismatch: true } }]),
+  );
+  assert.equal(allowed.steps[0]?.click?.allowMismatch, true, 'явное разрешение сохраняется');
+
+  // Без селектора попадание не проверяется — разрешать нечего.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { x: 10, y: 20, allowMismatch: true } }])),
+    ScenarioError,
+  );
+  // Не булево — ошибка валидации, а не «истинно всё, что не false».
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ click: { selector: '#x', allowMismatch: 'yes' } }])),
+    ScenarioError,
+  );
+  // У наведения флага нет: точка наведения сверяется с целью, и промах всегда
+  // валит шаг — «наведение по пустой точке» стенду не нужно (af96d388).
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ hover: { selector: '#x', allowMismatch: true } }])),
+    ScenarioError,
+  );
+  // У точек drag флага тоже нет: источник и цель обязаны попадать в свой элемент.
+  assert.throws(
+    () =>
+      validateScenario(
+        scenarioFrom([
+          { drag: { from: { selector: '#handle', allowMismatch: true }, to: '#row', expect: '#row' } },
+        ]),
+      ),
+    ScenarioError,
+  );
+  assert.throws(
+    () =>
+      validateScenario(
+        scenarioFrom([
+          { drag: { from: '#handle', to: { selector: '#row', allowMismatch: true }, expect: '#row' } },
+        ]),
+      ),
     ScenarioError,
   );
 });
@@ -432,6 +514,18 @@ test('expect: допустим только у probe и api', () => {
   assert.equal(ok.steps[0]?.expect, 2);
   assert.throws(() => validateScenario(scenarioFrom([{ key: 'Tab', expect: 1 }])), ScenarioError);
   assert.throws(() => validateScenario(scenarioFrom([{ shot: 'a.png', expect: 1 }])), ScenarioError);
+  // `expect` — СОСЕД действия, а не поле внутри объекта `probe`/`api`:
+  // вложенная форма отвергается как неизвестное поле действия.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ probe: { expression: '1 + 1', expect: 2 } }])),
+    ScenarioError,
+    'expect внутри probe — неизвестное поле probe',
+  );
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ api: { path: '/x', expect: 1 } }])),
+    ScenarioError,
+    'expect внутри api — неизвестное поле api',
+  );
 });
 
 test('expectFrom: ожидание — снимок ранее выполненного шага (делает сценарий самопроверяемым)', () => {

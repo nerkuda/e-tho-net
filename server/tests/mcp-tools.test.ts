@@ -2411,12 +2411,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('etn.properties.set returns VALIDATION_ERROR with property_id when the key is not attached to the owner type (f14cd5f1)', async () => {
+  it('etn.thoughts.write пишет внетиповое свойство мысли (0.14.1, ADR cb95fb4e)', async () => {
     const ctx = await buildMcpContext();
     try {
       // Registry has two properties: `priority` attached to `Issue`, `note`
-      // attached to `Memo`. A thought of type `Issue` cannot have `note` set —
-      // the error must name the registry property id so the agent can pivot.
+      // attached to `Memo`. 0.14.1: запись `note` у мысли типа `Issue`
+      // разрешена — значение вне типа штатно.
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const issueType = createThoughtType(ndb, { name: 'Issue-prop' }, ctx.adminId);
       const memoType = createThoughtType(ndb, { name: 'Memo-prop' }, ctx.adminId);
@@ -2437,7 +2437,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         const thoughtId = created.id;
 
-        // Single-form: clear error, names the registry id, suggests attaching first.
+        // Single-form: значение вне типа пишется и читается с outside_type.
         const single = await handle.client.callTool({
           name: 'etn.thoughts.write',
           arguments: {
@@ -2445,37 +2445,31 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             thoughts: [{ thought_id: thoughtId, properties: { note: 'это лишнее' } }],
           },
         });
-        assert.equal(single.isError, true, 'unattached property must be rejected');
-        const errText = toolText(single);
-        assert.match(errText, /not attached/i);
-        assert.match(errText, /attach it first/);
+        assert.notEqual(single.isError, true, 'внетиповое свойство должно записываться');
 
-        // Bulk form: same rollback guarantee — one bad key rejects the whole batch.
-        const bulk = await handle.client.callTool({
-          name: 'etn.thoughts.write',
-          arguments: {
-            network_id: ctx.networkId,
-            thoughts: [
-              { thought_id: thoughtId, properties: { priority: 'high', note: 'попытка' } },
-            ],
-          },
-        });
-        assert.equal(bulk.isError, true, 'bulk write with unattached key must fail entirely');
-        assert.match(toolText(bulk), /not attached/i);
-
-        // The good key was NOT written: the failure rolled back the whole map.
         const got = await handle.client.callTool({
           name: 'etn.thoughts.get',
           arguments: { network_id: ctx.networkId, thought_id: thoughtId },
         });
-        const card = toolJson<{ properties: Array<{ property_id: string; value: unknown }> }>(got);
-        assert.equal(
-          card.properties.find((p) => p.property_id === noteProp.property_id),
-          undefined,
-          'no value should be written when the bulk set is rolled back',
-        );
+        const card = toolJson<{
+          properties: Array<{ property_id: string; value: unknown; outside_type?: boolean }>;
+        }>(got);
+        const noteValue = card.properties.find((p) => p.property_id === noteProp.property_id);
+        assert.ok(noteValue !== undefined, 'значение вне типа видно в карточке');
+        assert.equal(noteValue.value, 'это лишнее');
+        assert.equal(noteValue.outside_type, true);
 
-        // Sanity: a missing-from-registry property is NOT_FOUND, not VALIDATION.
+        // Правка внетипового значения разрешена.
+        const edited = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought_id: thoughtId, properties: { note: 'исправлено' } }],
+          },
+        });
+        assert.notEqual(edited.isError, true);
+
+        // Свойства нет в справочнике — 422 VALIDATION_ERROR, неявного создания нет.
         const missing = await handle.client.callTool({
           name: 'etn.thoughts.write',
           arguments: {
@@ -2484,7 +2478,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           },
         });
         assert.equal(missing.isError, true);
-        assert.match(toolText(missing), /does not exist in this network/);
+        assert.match(toolText(missing), /нет в справочнике сети/);
       } finally {
         await handle.close();
       }

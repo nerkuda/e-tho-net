@@ -1,0 +1,92 @@
+{
+  "name": "223f7d50-row-reorder-demo",
+  "description": "Визуальный срез компоненты row-reorder (0.14.1, задача 223f7d50): открывает прототип-список по хэшу #row-reorder-demo, перетаскивает третью строку за имя выше первой, затем двигает строку клавиатурой (↓, Alt+↑). Потребители (таблица свойств, редактор типа) не задействованы. Прогон: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.223f7d50-row-reorder.scenario.json --out .tmp/223f7d50",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "app-loaded",
+      "waitFor": "document.querySelector('#app') !== null"
+    },
+    {
+      "name": "open-demo",
+      "eval": "(() => { location.hash = '#row-reorder-demo'; return true; })()"
+    },
+    {
+      "name": "demo-mounted",
+      "waitFor": "document.querySelectorAll('.row-reorder-demo-row').length === 6"
+    },
+    {
+      "name": "order-before-drag",
+      "probe": "[...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)",
+      "expect": ["Альфа", "Бета", "Гамма", "Дельта", "Эпсилон", "Дзета"]
+    },
+    {
+      "name": "drag-second-onto-lower-half-first-noop",
+      "drag": {
+        "from": ".row-reorder-demo-row:nth-child(2) .row-reorder-demo-name",
+        "to": { "selector": ".row-reorder-demo-row:nth-child(1)", "at": [40, 24] },
+        "expect": ".row-reorder-demo-row:nth-child(1)",
+        "steps": 8,
+        "duration": 160
+      }
+    },
+    {
+      "name": "order-after-adjacent-drop",
+      "probe": "[...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)",
+      "expect": ["Альфа", "Бета", "Гамма", "Дельта", "Эпсилон", "Дзета"]
+    },
+    {
+      "name": "drag-third-above-first",
+      "drag": {
+        "from": ".row-reorder-demo-row:nth-child(3) .row-reorder-demo-name",
+        "to": { "selector": ".row-reorder-demo-row:nth-child(1)", "at": [12, 2] },
+        "expect": ".row-reorder-demo-row:nth-child(1)",
+        "steps": 10,
+        "duration": 200
+      }
+    },
+    {
+      "name": "drag-leftovers",
+      "probe": "({ ghost: document.querySelectorAll('.ui-drag-ghost').length, active: document.querySelectorAll('.ui-drag-active').length, marks: document.querySelectorAll('.ui-drag-over-before,.ui-drag-over-after').length })"
+    },
+    {
+      "name": "order-after-drag-status",
+      "probe": "document.querySelector('.row-reorder-demo-status')?.textContent"
+    },
+    {
+      "name": "order-after-drag-actual",
+      "probe": "[...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)"
+    },
+    {
+      "name": "order-after-drag-visible",
+      "timeout": 5000,
+      "waitFor": "JSON.stringify([...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)) === JSON.stringify(['Гамма', 'Альфа', 'Бета', 'Дельта', 'Эпсилон', 'Дзета'])"
+    },
+    {
+      "name": "order-after-drag",
+      "probe": "[...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)",
+      "expect": ["Гамма", "Альфа", "Бета", "Дельта", "Эпсилон", "Дзета"]
+    },
+    {
+      "name": "select-first-row",
+      "click": ".row-reorder-demo-row:nth-child(1) .row-reorder-demo-name"
+    },
+    {
+      "name": "move-selection-down",
+      "key": { "key": "ArrowDown" }
+    },
+    {
+      "name": "move-row-up-with-alt",
+      "key": { "key": "ArrowUp", "modifiers": ["alt"] }
+    },
+    {
+      "name": "order-after-keyboard-visible",
+      "waitFor": "JSON.stringify([...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)) === JSON.stringify(['Альфа', 'Гамма', 'Бета', 'Дельта', 'Эпсилон', 'Дзета'])"
+    },
+    {
+      "name": "order-after-keyboard",
+      "probe": "[...document.querySelectorAll('.row-reorder-demo-name')].map((e) => e.textContent)",
+      "expect": ["Альфа", "Гамма", "Бета", "Дельта", "Эпсилон", "Дзета"]
+    }
+  ]
+}

@@ -35,6 +35,7 @@ import { registerBundleTools } from './tools/bundles.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerInstructionsTool } from './tools/instructions.js';
 import { registerOntologyTools } from './tools/ontology.js';
+import { registerCustomViewsWriteTool } from './tools/custom-views.js';
 import { registerGuideTools } from './tools/ops.js';
 
 /**
@@ -59,6 +60,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   registerActivityTools(mcp, rt);
   registerInstructionsTool(mcp, rt);
   registerOntologyTools(mcp, rt);
+  // 0.14.1 (задача 769fde88): батч внетиповых отборов мысли — отдельный
+  // инструмент, владелец — мысль, а не реестр сети (ADR 2a758041).
+  registerCustomViewsWriteTool(mcp, rt);
   // 0.11.1 (задача 094653b6): публикации и полки свёрнуты в `etn.guide` +
   // `etn.ops` (ADR b2eebf8b/8358eea9); их обработчики — в tools/publications.ts,
   // регистраций собственных инструментов больше нет.

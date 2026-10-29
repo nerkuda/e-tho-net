@@ -6,9 +6,9 @@
  * Содержимое прежней группы «Локальный граф» с вкладки «Связи» переехало
  * сюда целиком: центр = редактируемая мысль, вокруг — все прямые соседи
  * (структурные родители/потомки + типизированные связи в обе стороны).
- * Массовые связи (≥10 одинакового типа к одной цели) скрываются за
- * чипом «+N». Граф строится при первом открытии вкладки (ленивая
- * активация панели редактора).
+ * Свёртку массовых связей (одна линия пары, остальные — числом в чипе «+N»)
+ * считает чистая модель внутри `buildMiniGraph`. Граф строится при первом
+ * открытии вкладки (ленивая активация панели редактора).
  *
  * Здесь нет сворачиваемой группы: вкладка одна, мини-граф заполняет всё
  * доступное место (`fillHeight: true`).
@@ -18,21 +18,74 @@ import type { Link, ThoughtRef } from '@etn/shared';
 import { requireNetworkId } from '../app.js';
 import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { store } from '../state.js';
-import { registerTabContent, type EditorContext } from './editor.js';
-import { buildMiniGraph } from './mini-graph.js';
-import { computeMassLinks } from './mini-graph-model.js';
+import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
+import { queryKeys } from '../lib/live/query-keys.js';
+import {
+  invalidateGraphTab,
+  registerTabContent,
+  type EditorContext,
+  type TabPaneLifecycle,
+} from './editor.js';
+import { buildMiniGraph, readMiniGraphView, type MiniGraphView } from './mini-graph.js';
+import { graphEventAffects } from './mini-graph-model.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
 
+/**
+ * Состояние открытой панели «Граф» (одна на редактор): центр, снимок рёбер и
+ * соседей для фильтра realtime-событий, перезагрузка и корень панели.
+ * Заполняется после загрузки данных, сбрасывается при уничтожении панели.
+ */
+interface GraphPaneState {
+  root: HTMLElement;
+  ownerId: string;
+  linkIds: Set<string>;
+  neighbourIds: Set<string>;
+  reload: () => void;
+  /**
+   * Номер текущей сборки панели. Своя мутация и её realtime-эхо дают ДВА
+   * пересбора подряд; без счётчика устаревшая сборка дописывала свой граф
+   * вторым телом (`host.replaceChildren` стоит ДО ожидания данных) — на
+   * панели оказывались два канваса, числа линий и чипов расходились
+   * (поймано GUI-сценарием круга 3).
+   */
+  renderToken: number;
+}
+
+let current: GraphPaneState | null = null;
+
+/**
+ * Вид графа (зум/панорама + позиции узлов), переживающий пересборку панели.
+ * Обновление состава рёбер инвалидирует вкладку (ошибка 42a7c0a1, круг 3) —
+ * без снимка пересборка сбрасывала бы вид в стартовый.
+ */
+let savedView: { ownerId: string; view: MiniGraphView } | null = null;
+
+let wired = false;
+
 /** Registers the graph tab content (a single mini-graph that fills the pane). */
 export function registerGraphTab(): void {
   registerTabContent('graph', buildGraphTab);
+  if (wired) return;
+  wired = true;
+  // Realtime-путь и свои мутации, погасившие focus-ключи (корзина, правка
+  // свойств-связей, удаление цели из другой вкладки): событие шины решает по
+  // снимку панели, касается ли оно графа, — посторонние правки не мигают.
+  // Префикс `focus:@id` нужен отдельно: роутер гасит его на `thought.updated`
+  // (подпись/вид соседа) и на адресные концы `link.created`.
+  onQueryInvalidated((prefix, _keys, cause) => {
+    if (prefix !== queryKeys.focusAll() && !prefix.startsWith('focus:@')) return;
+    const evt = asRealtimeCause(cause);
+    const state = current;
+    if (evt === null || state === null) return;
+    if (!graphEventAffects(evt, state)) return;
+    state.reload();
+  });
 }
 
 /** Builds the whole «Граф» tab pane content for the entity. */
-function buildGraphTab(ctx: EditorContext): HTMLElement {
+function buildGraphTab(ctx: EditorContext, lifecycle?: TabPaneLifecycle): HTMLElement {
   const root = div('graph-tab');
   // Инлайн-стили дублируют CSS-правила `.graph-tab`. Vite в dev-режиме
   // кеширует styles.css между рестартами Electron, и без этой страховки
@@ -42,13 +95,54 @@ function buildGraphTab(ctx: EditorContext): HTMLElement {
   root.style.flex = '1 1 auto';
   root.style.minHeight = '0';
   root.append(el('div', 'graph-tab-body', 'Загрузка графа…'));
-  void renderGraph(root, ctx);
+
+  const state: GraphPaneState = {
+    root,
+    ownerId: ctx.ownerId,
+    linkIds: new Set(),
+    neighbourIds: new Set(),
+    reload: () => undefined,
+    renderToken: 0,
+  };
+  const view = savedView !== null && savedView.ownerId === ctx.ownerId ? savedView.view : undefined;
+  state.reload = () => {
+    if (!root.isConnected) {
+      // Вкладка не показана: пересобирать отсоединённую панель некому, а кэш
+      // с устаревшим снимком вернулся бы при переключении (блокер круга 4).
+      // Помечаем панель устаревшей — `displayTab` соберёт её заново один раз
+      // при возврате. Повторные события уже не дойдут: disposePane очищает
+      // `current`, а `invalidatePanes` идемпотентен.
+      invalidateGraphTab();
+      return;
+    }
+    // Свежий снимок вида перед пересборкой: пользователь мог изменить зум.
+    const next = readMiniGraphView(root) ?? view;
+    if (next !== undefined) savedView = { ownerId: ctx.ownerId, view: next };
+    void renderGraph(root, ctx, state, next);
+  };
+  current = state;
+  lifecycle?.onDispose(() => {
+    if (current === state) current = null;
+    const snapshot = readMiniGraphView(root);
+    if (snapshot !== null) savedView = { ownerId: ctx.ownerId, view: snapshot };
+  });
+
+  void renderGraph(root, ctx, state, view);
   return root;
 }
 
-async function renderGraph(host: HTMLElement, ctx: EditorContext): Promise<void> {
-  host.replaceChildren();
-  host.append(await buildGraphBody(ctx));
+async function renderGraph(
+  host: HTMLElement,
+  ctx: EditorContext,
+  state: GraphPaneState,
+  view?: MiniGraphView,
+): Promise<void> {
+  const token = (state.renderToken += 1);
+  const body = await buildGraphBody(ctx, state, view, token);
+  // Пока грузились данные, могла стартовать следующая сборка (своя мутация +
+  // её realtime-эхо) — устаревшее тело не дописываем вторым графом.
+  if (token !== state.renderToken) return;
+  host.replaceChildren(body);
 }
 
 /**
@@ -56,7 +150,12 @@ async function renderGraph(host: HTMLElement, ctx: EditorContext): Promise<void>
  * «Родители»/«Потомки» + типизированные связи в обе стороны) и рисует
  * мини-канвас, занимающий всю высоту родителя.
  */
-async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
+async function buildGraphBody(
+  ctx: EditorContext,
+  state: GraphPaneState,
+  view: MiniGraphView | undefined,
+  token: number,
+): Promise<HTMLElement> {
   const networkId = requireNetworkId();
   // `links-local-graph--fill` включает flex-растяжение по высоте для всей
   // цепочки `.tab-pane.fixed → .links-local-graph → .mini-graph → viewport`,
@@ -66,6 +165,8 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
   const root = div('links-local-graph links-local-graph--fill');
   root.style.flex = '1 1 auto';
   root.style.minHeight = '0';
+  state.linkIds.clear();
+  state.neighbourIds.clear();
   if (ctx.thought === null) {
     root.append(el('p', 'muted', 'Граф недоступен — мысль ещё загружается.'));
     return root;
@@ -103,14 +204,22 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
       ...grouped.untyped_parents.map((u) => u.link),
       ...grouped.untyped_children.map((u) => u.link),
     ];
+    // Снимок для фильтра realtime-событий: событие о посторонней связи или
+    // посторонней мысли не должно пересобирать открытый граф. Пишет только
+    // актуальная сборка: устаревшая (её тело уже не попадёт в DOM) не должна
+    // подменить снимок свежей.
+    if (state.renderToken === token) {
+      for (const link of links) state.linkIds.add(link.id);
+      for (const nb of neighbours) state.neighbourIds.add(nb.id);
+    }
   } catch (err) {
     root.append(el('p', 'muted', `Не удалось загрузить граф: ${errText(err)}`));
     return root;
   }
 
-  // Массовые связи: ≥ MASS_LINK_THRESHOLD рёбер одного типа к одному соседу —
-  // лишние прячутся за чипом «+N» (единственный источник правила — модель).
-  const massMap = computeMassLinks(links, ctx.ownerId, store.state.linkTypes);
+  // План рёбер (одна линия на пару, скрытые массовые — в чипы «+N» и счётчик
+  // шапки) строит чистая модель внутри buildMiniGraph: там же, где рисуются
+  // линии, поэтому числа на чипах и счётчике не могут разойтись с DOM.
 
   if (neighbours.length === 0) {
     root.append(el('p', 'muted', 'У мысли нет прямых связей.'));
@@ -122,6 +231,12 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
   // карточка из id/title. Сервер отдаёт только собственные поля мысли
   // (`null`, если значение задано на типе), поэтому вид типа разрешает сам
   // мини-граф общими хелперами канваса — руками здесь ничего не достраиваем.
+  //
+  // Центр резолвится В ТОМ ЖЕ батче: `ctx.thought` — снимок момента открытия
+  // редактора, поэтому после realtime-переименования из другого клиента
+  // пересборка нарисовала бы старую подпись (замечание 1 круга 4). Лимит
+  // сервера — 100 id за вызов, центр занимает первый слот, соседи — 99.
+  let centerRef: ThoughtRef = ctx.thought;
   let graphRefs: ThoughtRef[] = neighbours.map((nb) => ({
     id: nb.id,
     title: nb.title,
@@ -140,23 +255,24 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
     font_strike: null,
   }));
   try {
-    const resolved = await etn.thoughts.resolve(
-      networkId,
-      neighbours.slice(0, RESOLVE_BATCH).map((nb) => nb.id),
-    );
+    const resolved = await etn.thoughts.resolve(networkId, [
+      ctx.ownerId,
+      ...neighbours.slice(0, RESOLVE_BATCH - 1).map((nb) => nb.id),
+    ]);
     const byId = new Map(resolved.map((r) => [r.id, r]));
     graphRefs = graphRefs.map((r) => byId.get(r.id) ?? r);
+    centerRef = byId.get(ctx.ownerId) ?? centerRef;
   } catch {
     // Оффлайн-мигание — граф рисуется с нейтральными пилюлями.
   }
 
   root.append(
     buildMiniGraph({
-      thought: ctx.thought,
+      thought: centerRef,
       neighbours: graphRefs,
       links,
-      mass: massMap,
       fillHeight: true,
+      ...(view !== undefined ? { view } : {}),
     }),
   );
   return root;

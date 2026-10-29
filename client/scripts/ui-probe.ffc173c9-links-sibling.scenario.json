@@ -1,0 +1,144 @@
+{
+  "name": "ffc173c9-links-sibling",
+  "description": "Блокер круга 2 ошибки ffc173c9: меню вне холста должно передавать родителя САМОЙ мысли, а не родителя фокуса. Посев: цель T — ребёнок P1, упоминающая мысль M — ребёнок P2; фокус ставится на T (открытием из поиска). Во вкладке «Упоминания» ПКМ по чипу M → «Добавить» → «налево (родственник)»: созданная мысль обязана попасть в детей P2, а не P1. На коммите 25ada42f (до фикса) кейс красный: созданная мысль уходит в p1Children. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ffc173c9-links-sibling.scenario.json --out .tmp/etn-ffc173c9-links/out",
+  "timeout": 180000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    {
+      "name": "seed-parents",
+      "eval": "(async () => { const nid='{{networkId}}'; const p1=await window.etn.thoughts.create(nid,{title:'ФфцРодитель Цели'}); const p2=await window.etn.thoughts.create(nid,{title:'ФфцРодитель Меншена'}); const target=await window.etn.thoughts.create(nid,{title:'ФфцЦель Связи', create_link:{direction:'parent',target_thought_id:p1.id}}); const m=await window.etn.thoughts.create(nid,{title:'ФфцИсточник Текста', comment:{body_md:'Упоминание ФфцЦель Связи в тексте.'}, create_link:{direction:'parent',target_thought_id:p2.id}}); window.__ffcB={nid,p1:p1.id,p2:p2.id,target:target.id,m:m.id}; return JSON.stringify(window.__ffcB); })()"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "seeded-parents-check",
+      "probe": "(async () => { const {nid,target,m,p1,p2}=window.__ffcB; const t=await window.etn.thoughts.neighbors(nid,target,'parents'); const q=await window.etn.thoughts.neighbors(nid,m,'parents'); return JSON.stringify({targetParents:t.map(x=>x.id), mentionParents:q.map(x=>x.id), p1, p2}); })()"
+    },
+    {
+      "name": "seed-layout-correct",
+      "probe": "(async () => { const {nid,target,m,p1,p2}=window.__ffcB; const t=await window.etn.thoughts.neighbors(nid,target,'parents'); const q=await window.etn.thoughts.neighbors(nid,m,'parents'); return t.some((x)=>x.id===p1) && q.some((x)=>x.id===p2) && p1 !== p2; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-target",
+      "eval": "(() => { const i=document.querySelector('.search-input'); i.focus(); i.value='ФфцЦель Связи'; i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    {
+      "name": "names-hit-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.search-hit.search-hit-cloud .cloud') !== null"
+    },
+    {
+      "name": "click-target-hit",
+      "eval": "(() => { const c=document.querySelector('.search-hit.search-hit-cloud .cloud'); c.click(); return 'ok'; })()"
+    },
+    {
+      "name": "editor-open",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.editor-tabs .editor-tab') !== null"
+    },
+    {
+      "name": "editor-on-target",
+      "timeout": 15000,
+      "waitFor": "(async () => { const tabs=await window.etn.tabs.list(); return tabs.some((x)=>x.focus_id===window.__ffcB.target); })()"
+    },
+    {
+      "name": "focus-is-target-not-mention",
+      "probe": "(async () => { const tabs=await window.etn.tabs.list(); const t=tabs.find((x)=>x.network_id===window.__ffcB.nid); return t?.focus_id === window.__ffcB.target && t?.focus_id !== window.__ffcB.m; })()",
+      "expect": true
+    },
+    {
+      "name": "open-links-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tabs .editor-tab')].find((e)=>(e.textContent||'').trim().startsWith('Упоминания')); tab?.click(); return tab ? 'ok' : 'no-tab'; })()"
+    },
+    {
+      "name": "links-tab-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.links-tab') !== null"
+    },
+    {
+      "name": "expand-mentions",
+      "eval": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find((x)=>(x.querySelector(':scope > .group-header .group-title')?.textContent||'').trim().startsWith('Упоминания в текстах')); if(!g) return 'no-group'; const h=g.querySelector(':scope > .group-header'); if(!g.querySelector('.group-body')) h.click(); return 'ok'; })()"
+    },
+    {
+      "name": "mention-cloud-ready",
+      "timeout": 20000,
+      "waitFor": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find((x)=>(x.querySelector(':scope > .group-header .group-title')?.textContent||'').trim().startsWith('Упоминания в текстах')); return g ? g.querySelector('.group-body .mention-item .prop-ref-cloud[data-id=\"'+window.__ffcB.m+'\"]') !== null : false; })()"
+    },
+    {
+      "name": "right-click-mention",
+      "eval": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find((x)=>(x.querySelector(':scope > .group-header .group-title')?.textContent||'').trim().startsWith('Упоминания в текстах')); const c=g.querySelector('.group-body .mention-item .prop-ref-cloud[data-id=\"'+window.__ffcB.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+    },
+    {
+      "name": "menu-open",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "menu-opened-for-mention",
+      "probe": "(() => { const m=[...document.querySelectorAll('.menu')].pop(); return m !== null && [...m.querySelectorAll('.menu-item')].some((e)=>(e.textContent||'').trim().startsWith('Добавить')); })()",
+      "expect": true
+    },
+    {
+      "name": "open-add-submenu",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+    },
+    {
+      "name": "submenu-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu > .menu-sub') !== null"
+    },
+    {
+      "name": "submenu-items",
+      "probe": "JSON.stringify([...document.querySelectorAll('.menu > .menu-sub > .menu-item')].map((e)=>(e.textContent||'').trim()))"
+    },
+    {
+      "name": "sibling-item-enabled",
+      "probe": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); return row !== undefined && !row.classList.contains('disabled'); })()",
+      "expect": true
+    },
+    {
+      "name": "click-sibling",
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "dialog-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .dialog-box') !== null"
+    },
+    {
+      "name": "dialog-title",
+      "probe": "(document.querySelector('.dialog-backdrop .dialog-title')?.textContent||'')"
+    },
+    {
+      "name": "type-new-title",
+      "eval": "(() => { const ta=document.querySelector('.dialog-backdrop textarea'); if(!ta) return 'no-input'; ta.focus(); ta.value='ФфцНовый Сосед'; ta.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()"
+    },
+    { "name": "apply", "modifiers": ["ctrl"], "key": "Enter" },
+    {
+      "name": "dialog-closed",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.dialog-backdrop .dialog-box') === null"
+    },
+    {
+      "name": "new-thought-parents",
+      "probe": "(async () => { const {nid,p1,p2}=window.__ffcB; const c1=await window.etn.thoughts.neighbors(nid,p1,'children'); const c2=await window.etn.thoughts.neighbors(nid,p2,'children'); return JSON.stringify({p1Children:c1.map(x=>({id:x.id,title:x.title})), p2Children:c2.map(x=>({id:x.id,title:x.title})), p1, p2}); })()"
+    },
+    {
+      "name": "sibling-created-under-mention-parent",
+      "probe": "(async () => { const {nid,p1,p2}=window.__ffcB; const c1=await window.etn.thoughts.neighbors(nid,p1,'children'); const c2=await window.etn.thoughts.neighbors(nid,p2,'children'); const inP2=c2.some((x)=>x.title==='ФфцНовый Сосед'); const inP1=c1.some((x)=>x.title==='ФфцНовый Сосед'); return inP2 && !inP1; })()",
+      "expect": true
+    }
+  ]
+}

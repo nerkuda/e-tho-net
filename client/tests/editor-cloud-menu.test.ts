@@ -68,7 +68,7 @@ describe('меню облачка в редакторе — единый кон�
     // Родителя для «налево (родственник)» вне холста резолвит один общий
     // помощник (иначе он расползётся копиями по editor-модулям).
     assert.ok(
-      src.includes('export async function resolveSiblingParentId('),
+      src.includes('export async function resolveSiblingParent('),
       'the sibling-parent lookup must live here, not in the editor',
     );
   });
@@ -90,11 +90,11 @@ describe('меню облачка в редакторе — единый кон�
     const helper = functionBody(src, 'async function openThoughtCloudMenu(');
     assert.ok(
       helper.includes("'../canvas/context-menu.js'") && helper.includes('await import('),
-      'the editor menu must be built by the canvas builder (lazy import: no canvas↔editor cycle)',
+      'the editor menu must come from the canvas facade (lazy import: no canvas↔editor cycle)',
     );
     assert.ok(
-      helper.includes('showThoughtMenuUnder('),
-      'the canvas builder must actually open the editor menu',
+      helper.includes('showOutOfCanvasThoughtMenu('),
+      'the editor chip opens the out-of-canvas facade (parent + network check inside)',
     );
     assert.ok(
       helper.includes("openLabel: 'Открыть в редакторе'"),
@@ -102,8 +102,8 @@ describe('меню облачка в редакторе — единый кон�
     );
     assert.ok(helper.includes('focusHandler'), '«В фокус» comes from the shared builder');
     assert.ok(
-      helper.includes('resolveSiblingParentId'),
-      'the chip is not in a canvas zone — its parent is resolved explicitly',
+      !helper.includes('resolveSiblingParent') && !helper.includes('showThoughtMenuUnder('),
+      'the chip keeps no local copy of the sibling-parent chain (task d8941b76)',
     );
     // Своего списка команд и своей копии резолвера родителя у чипа больше нет.
     for (const label of ['Копировать ID', 'Открепить мысль', 'Закрепить мысль']) {
@@ -139,12 +139,16 @@ describe('меню облачка в редакторе — единый кон�
     const src = readText(SRC.miniGraph);
     const menu = functionBody(src, 'async function showCloudContextMenu(');
     assert.ok(
-      menu.includes('showThoughtMenuUnder('),
-      'the local-graph pill menu must be the shared thought menu',
+      menu.includes('showOutOfCanvasThoughtMenu('),
+      'the local-graph pill menu must be the shared out-of-canvas facade',
     );
     assert.ok(
       menu.includes('await import(') && menu.includes("'../canvas/context-menu.js'"),
       'the canvas menu module must be imported lazily (no canvas↔editor cycle)',
+    );
+    assert.ok(
+      !menu.includes('resolveSiblingParent') && !menu.includes('showThoughtMenuUnder('),
+      'no local copy of the sibling-parent chain in the local graph (task d8941b76)',
     );
     assert.ok(
       menu.includes("openLabel: 'Открыть в редакторе'"),

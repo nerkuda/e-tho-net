@@ -470,7 +470,8 @@ describe('view result compound name (08-ui-spec §2.2.3, ace5e73b)', () => {
     return {
       viewId: 'v',
       viewName: 'Работы версии',
-      viewTypeId: 'vt',
+      scope: 'type',
+      definedOn: 'vt',
       focusId: 'focus',
       items,
       directions: Object.fromEntries(

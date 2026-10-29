@@ -472,8 +472,8 @@ describe('edgeSource: живые рёбра фокуса + подгруженн�
     const src = readFileSync(CANVAS_SRC, 'utf8');
     assert.match(
       src,
-      /reconcileZoneTotals\(focus\)\.then\(\(\) => \{[\s\S]*?if \(hasSupplementalEdges\(\)\) void refreshZoneEdges\(focus\)/,
-      'снимок перечитывается ПОСЛЕ сверки секторов и только когда он есть',
+      /function syncZoneTotalsWithFreshFocus\(\): void \{[\s\S]*?const pair = currentScreenPair\(\);[\s\S]*?reconcileZoneTotals\(focus\)\.then\(\(\) => \{[\s\S]*?if \(hasSupplementalEdges\(\)\) void refreshZoneEdges\(focus, pair\)/,
+      'пара снимается вместе с focus, снимок перечитывается ПОСЛЕ сверки секторов и только когда он есть',
     );
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "activity-ast",
-  "description": "Лента «События» на едином редакторе (задача 16899243, сценарий 1e54706c): онбординг → вид «События» → панель собрана общей фабрикой (футер без строки имени, свои кнопки применения) → строки дерева «Тип действия» и «Время события» → значения заданы через ячейки (флажки словаря; границы диапазона с токенами $now-1h/$now) → «Применить» уходит телом отбора, лента отрисована без ошибок. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.activity-ast.scenario.json",
+  "description": "Лента «События» на едином редакторе (задача 16899243, сценарий 1e54706c): онбординг → вид «События» → панель собрана общей фабрикой (стандартный футер lib/filter-footer.ts: «Применить»/«Очистить» и строка имени с «Сохранить»/«Отборы…» — личные сохранённые отборы места «События», 0.13.3 задача c0c7b834) → строки дерева «Тип действия» и «Время события» → значения заданы через ячейки (флажки словаря; границы диапазона с токенами $now-1h/$now) → «Применить» уходит телом отбора, лента отрисована без ошибок. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.activity-ast.scenario.json",
   "timeout": 90000,
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
@@ -26,22 +26,27 @@
     { "name": "editor-mounted", "waitFor": "document.querySelector('.activity-filter .fe .ft-group') !== null" },
     {
       "name": "footer-apply-button",
-      "probe": "document.querySelector('.activity-filter .fe-foot .ff-extra--apply')?.textContent ?? null",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-apply')?.textContent ?? null",
       "expect": "Применить"
     },
     {
       "name": "footer-clear-button",
-      "probe": "document.querySelector('.activity-filter .fe-foot .ff-extra--clear') !== null",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-clear') !== null",
       "expect": true
     },
     {
-      "name": "footer-has-no-saved-name-row",
-      "probe": "document.querySelector('.activity-filter .fe-foot .ff-name') === null",
+      "name": "footer-has-saved-name-row",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-name') !== null",
       "expect": true
     },
     {
-      "name": "footer-has-no-save-button",
-      "probe": "document.querySelector('.activity-filter .fe-foot .ff-save') === null",
+      "name": "footer-has-save-button",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-name .ff-save') !== null",
+      "expect": true
+    },
+    {
+      "name": "footer-has-saved-picker",
+      "probe": "document.querySelector('.activity-filter .fe-foot .ff-extra--saved') !== null",
       "expect": true
     },
 
@@ -62,23 +67,23 @@
     { "name": "open-operator-picker", "click": ".activity-filter .ft-row__op" },
     { "name": "operator-choice-open", "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in\"]') !== null" },
     { "name": "pick-in-operator", "click": ".ft-choice__item[data-key=\"in\"]" },
-    { "name": "enum-field-ready", "waitFor": "document.querySelector('.activity-filter .fv-enum .ui-chip-list-add--checklist') !== null" },
-    { "name": "open-enum-checklist", "eval": "(() => { const b=document.querySelector('.activity-filter .fv-enum .ui-chip-list-add--checklist'); if(!b) return 'no-btn'; b.click(); return 'ok'; })()" },
-    { "name": "enum-checklist-open", "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover .ui-chip-checklist-grid') !== null" },
-    { "name": "pick-created", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='created'); if(!inp) return 'no-created'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
-    { "name": "pick-updated", "eval": "(async () => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=[...p.querySelectorAll('input')].find((i)=>i.value==='updated'); if(!inp) return 'no-updated'; inp.checked=true; inp.dispatchEvent(new Event('change',{bubbles:true})); await new Promise((r)=>setTimeout(r,60)); return 'ok'; })()" },
+    { "name": "enum-field-ready", "waitFor": "document.querySelector('.activity-filter .fv-enum .entity-chip-field .entity-chip-input') !== null" },
+    { "name": "open-enum-checklist", "eval": "(() => { const b=document.querySelector('.activity-filter .fv-enum .entity-chip-input'); if(!b) return 'no-input'; b.focus(); b.click(); return 'ok'; })()" },
+    { "name": "enum-checklist-open", "waitFor": "document.querySelectorAll('.type-combo-list .type-combo-item').length > 0" },
+    { "name": "pick-created", "eval": "(async () => { const row=[...document.querySelectorAll('.type-combo-list .type-combo-item')].find((r)=>(r.textContent||'').includes('создал')); if(!row) return 'no-created'; row.click(); await new Promise((r)=>setTimeout(r,80)); return 'ok'; })()" },
+    { "name": "pick-updated", "eval": "(async () => { const row=[...document.querySelectorAll('.type-combo-list .type-combo-item')].find((r)=>(r.textContent||'').includes('изменил')); if(!row) return 'no-updated'; row.click(); await new Promise((r)=>setTimeout(r,80)); return 'ok'; })()" },
     {
       "name": "checkboxes-reflect-filter",
-      "probe": "(() => { const codes=[...document.querySelectorAll('.activity-filter .fv-enum .ui-chip')].map((c)=>c.textContent); return codes.length === 2; })()",
+      "probe": "(() => { const chips=[...document.querySelectorAll('.activity-filter .fv-enum .entity-chip-field .prop-ref-cloud')].map((c)=>c.textContent); return chips.length === 2; })()",
       "expect": true
     },
     {
       "name": "unchecked-choice-stays-off",
-      "probe": "(() => { const p=document.querySelector('.ui-popover.ui-chip-checklist-popover'); const inp=p && [...p.querySelectorAll('input')].find((i)=>i.value==='deleted'); return inp ? inp.checked : false; })()",
+      "probe": "(() => { const row=[...document.querySelectorAll('.type-combo-list .type-combo-item')].find((r)=>(r.textContent||'').includes('удалил')); const inp=row && row.querySelector('.type-combo-check'); return inp ? inp.checked : false; })()",
       "expect": false
     },
     { "name": "close-enum-checklist", "key": "Escape" },
-    { "name": "enum-checklist-closed", "timeout": 8000, "waitFor": "document.querySelector('.ui-popover.ui-chip-checklist-popover') === null" },
+    { "name": "enum-checklist-closed", "timeout": 8000, "waitFor": "document.querySelector('.type-combo-list') === null" },
 
     { "name": "add-period-row", "click": ".activity-filter .ft-add-condition" },
     { "name": "two-rows", "waitFor": "document.querySelectorAll('.activity-filter .ft-row').length === 2" },
@@ -144,7 +149,7 @@
       "expect": true
     },
 
-    { "name": "apply-filter", "click": ".activity-filter .ff-extra--apply" },
+    { "name": "apply-filter", "click": ".activity-filter .ff-apply" },
     {
       "name": "feed-rendered",
       "waitFor": "document.querySelector('.activity-pager .muted')?.textContent?.trim() !== ''"

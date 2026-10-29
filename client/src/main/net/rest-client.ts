@@ -37,6 +37,7 @@ import {
   type ApiSuccess,
   type AuditListResult,
   type DuplicateHit,
+  type DuplicateSearchMode,
   type EtnErrorBody,
   type EtnErrorCode,
   type ExportJobStartResult,
@@ -68,6 +69,7 @@ import {
 } from '@etn/shared';
 
 import { getClientLog } from '../log/client-log.js';
+import type { ConnectFailureDetails, ConnectFailureReason } from '../ipc/contract.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -80,6 +82,43 @@ const RETRY_MAX_DELAY_MS = 5_000;
 
 /** Response timeout applied to every request, in milliseconds (03-server-api.md §4.1). */
 const RESPONSE_TIMEOUT_MS = 30_000;
+
+/**
+ * Network id embedded in an API path (`/networks/<uuid>/...`). Link-down
+ * tracking is per network (defect de34b35b): one network can be unreachable
+ * while another still answers.
+ */
+const NETWORK_PATH_RE =
+  /\/networks\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i;
+
+/** Extracts the network id from an API path, or `null` for network-less routes. */
+export function networkIdFromApiPath(path: string): string | null {
+  return NETWORK_PATH_RE.exec(path)?.[1]?.toLowerCase() ?? null;
+}
+
+/** Abort reason used when a network is marked as unreachable (de34b35b). */
+interface ConnectionLostReason {
+  kind: 'connection-lost';
+  networkId: string;
+}
+
+/** Error thrown instead of sending/retrying while the network is unreachable. */
+function connectionLostError(networkId: string | null, message: string): EtnError {
+  return new EtnError(
+    'INTERNAL',
+    message,
+    networkId === null
+      ? { kind: 'connection-lost' }
+      : { kind: 'connection-lost', networkId },
+  );
+}
+
+/** `true` when `reason` is OUR link-down abort for `networkId`. */
+function isConnectionLostReason(reason: unknown, networkId: string): boolean {
+  if (typeof reason !== 'object' || reason === null) return false;
+  const r = reason as Partial<ConnectionLostReason>;
+  return r.kind === 'connection-lost' && r.networkId === networkId;
+}
 
 /**
  * Префикс курсора-заглушки для сервера старше этапа 4 (нет `count`/`cursor` в
@@ -155,6 +194,13 @@ export interface RestClientOptions {
   fetchImpl?: typeof fetch;
   /** Optional override of a random jitter function (for deterministic tests). */
   random?: () => number;
+  /**
+   * Returns `true` when the server is considered unreachable for requests that
+   * carry no `/networks/<uuid>/` context (`me.*`, `networks.create`, …)
+   * (defect de34b35b, verify remark 1). The pool-wide rule lives in
+   * `register.ts`: at least one known network and none `connected`.
+   */
+  isServerDown?: () => boolean;
 }
 
 /** Extra per-call options accepted by mutating endpoints. */
@@ -184,6 +230,17 @@ interface ResponseEnvelope<T> {
 }
 
 /**
+ * One in-flight READ of a dedup lane (plain GET or read-only idempotent POST):
+ * the read epoch it was started in and the shared promise. A read joins it only
+ * within the same epoch — see {@link RestClient.invalidateInFlightReads}
+ * (ошибка da7bbb53).
+ */
+interface InflightRead {
+  epoch: number;
+  promise: Promise<ResponseEnvelope<unknown>>;
+}
+
+/**
  * Strongly-typed ETN REST client. Construct one per active server profile and reuse
  * it for the lifetime of the connection (see `NetContext`, task G7).
  *
@@ -203,26 +260,40 @@ export class RestClient {
   private readonly getClientId: () => string;
   private readonly fetchImpl: typeof fetch;
   private readonly random: () => number;
+  private readonly isServerDown: () => boolean;
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
-   * GETs racing each other share one fetch. Cleared in a `finally` — completed
-   * responses are never cached, so sequential identical GETs fetch again and
-   * realtime freshness is preserved.
+   * GETs of the SAME read epoch share one fetch. Cleared in a `finally` —
+   * completed responses are never cached, so sequential identical GETs fetch
+   * again and realtime freshness is preserved.
    */
-  private readonly inflightGets = new Map<string, Promise<ResponseEnvelope<unknown>>>();
+  private readonly inflightGets = new Map<string, InflightRead>();
+
+  /**
+   * Read epoch (ошибка da7bbb53). Every data-change boundary the client knows
+   * about advances it: its own mutations ({@link performRequest}) and realtime
+   * data events ({@link invalidateInFlightReads}, called by the main-process
+   * realtime layer). A GET started in an older epoch is never reused by a read
+   * issued after the boundary: its response may have been computed against
+   * pre-change data. The requests themselves are NOT aborted — their callers
+   * still get an answer; the epoch only stops that answer from posing as fresh.
+   */
+  private readEpoch = 0;
 
   /**
    * In-flight idempotent POSTs by method+URL+body (see {@link requestEnvelope}):
-   * identical posts racing each other share one fetch. Only routes that opt in
-   * via `idempotentPost` land here — non-idempotent POSTs must never be
+   * identical posts of the SAME read epoch share one fetch. Only routes that opt
+   * in via `idempotentPost` land here — non-idempotent POSTs must never be
    * collapsed, and this map is deliberately separate from {@link inflightGets}
    * (a GET and a POST never share a slot). Cleared in a `finally` — responses
    * are never cached, so sequential posts fetch again and a retry AFTER a
    * failure is a fresh request (the attempt loop inside one call still runs
-   * normally for every joiner).
+   * normally for every joiner). Reads through this lane follow the read epoch
+   * too: a view run computed before a data change is not handed to a run
+   * issued after it (тот же класс, что и GET, ошибка da7bbb53).
    */
-  private readonly inflightIdempotentPosts = new Map<string, Promise<ResponseEnvelope<unknown>>>();
+  private readonly inflightIdempotentPosts = new Map<string, InflightRead>();
 
   /**
    * Сервер не знает полей `count`/`cursor` запроса выборки (старше этапа 4,
@@ -232,12 +303,90 @@ export class RestClient {
    */
   private legacyStructureQuery = false;
 
+  /**
+   * Networks currently marked unreachable by the realtime layer (de34b35b).
+   * While a network is down, mutating requests for it are not sent and
+   * in-flight requests are aborted without the usual 3 retries.
+   */
+  private readonly downNetworks = new Set<string>();
+
+  /**
+   * In-flight abort controllers per network id: `abortInflight(networkId)`
+   * cancels exactly the requests of the network whose link dropped.
+   */
+  private readonly activeControllers = new Map<string, Set<AbortController>>();
+
   public constructor(opts: RestClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
     this.getApiKey = opts.getApiKey;
     this.getClientId = opts.getClientId;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.random = opts.random ?? Math.random;
+    this.isServerDown = opts.isServerDown ?? (() => false);
+  }
+
+  /**
+   * Marks `networkId` as unreachable (`down: true`) or reachable again
+   * (de34b35b). Going down aborts every in-flight request of that network
+   * unless `abortInflight` is `false`; those aborts are recognised as
+   * connection-loss and never retried.
+   *
+   * `suspect` marks the network down with `abortInflight: false`: new
+   * mutations are already blocked, but a hung user action must survive the 3 s
+   * probe window and continue if the pong proves the connection alive.
+   */
+  public setLinkDown(networkId: string, down: boolean, abortInflight = true): void {
+    if (down) {
+      this.downNetworks.add(networkId);
+      if (abortInflight) this.abortInflight(networkId);
+      return;
+    }
+    this.downNetworks.delete(networkId);
+  }
+
+  /** Aborts every in-flight request of `networkId` (de34b35b). */
+  public abortInflight(networkId: string): void {
+    const controllers = this.activeControllers.get(networkId);
+    if (controllers === undefined) return;
+    const reason: ConnectionLostReason = { kind: 'connection-lost', networkId };
+    for (const controller of controllers) {
+      try {
+        controller.abort(reason);
+      } catch {
+        // Already aborted / settled — nothing to do.
+      }
+    }
+    this.activeControllers.delete(networkId);
+  }
+
+  /**
+   * Marks a data-change boundary for in-flight read dedup (ошибка da7bbb53):
+   * advances the read epoch so no read issued from now on joins a GET started
+   * before the change. Called by the main-process realtime layer for every
+   * applied DATA event (`isDataChangingEvent` in `realtime/applier.ts`); own
+   * mutations do it automatically in {@link performRequest}.
+   *
+   * Deliberately does not abort those in-flight requests: their callers still
+   * receive the answer they asked for — the epoch only prevents that answer
+   * from being reused as a fresh read after the boundary.
+   */
+  public invalidateInFlightReads(): void {
+    this.readEpoch += 1;
+  }
+
+  /** Registers an attempt's controller under its network. */
+  private trackController(networkId: string, controller: AbortController): void {
+    const set = this.activeControllers.get(networkId) ?? new Set<AbortController>();
+    set.add(controller);
+    this.activeControllers.set(networkId, set);
+  }
+
+  /** Drops a settled attempt's controller. */
+  private untrackController(networkId: string, controller: AbortController): void {
+    const set = this.activeControllers.get(networkId);
+    if (set === undefined) return;
+    set.delete(controller);
+    if (set.size === 0) this.activeControllers.delete(networkId);
   }
 
   // -------------------------------------------------------------------------
@@ -295,6 +444,10 @@ export class RestClient {
    * `idempotentPost`. A POST carrying `requestOptions` bypasses its lane, same
    * as a GET (per-caller state must not leak); non-idempotent POSTs never opt
    * in, so they are never collapsed.
+   *
+   * Both read lanes are epoch-scoped (ошибка da7bbb53): joiners share a fetch
+   * only inside the read epoch it was started in, so a slow response computed
+   * before a data change is never handed to a read issued after that change.
    */
   private async requestEnvelope<T>(
     method: string,
@@ -313,24 +466,47 @@ export class RestClient {
   ): Promise<ResponseEnvelope<T>> {
     if (method === 'GET' && opts.requestOptions === undefined) {
       const url = this.buildUrl(path, opts.query);
+      const epoch = this.readEpoch;
       const inflight = this.inflightGets.get(url);
-      if (inflight !== undefined) return inflight as Promise<ResponseEnvelope<T>>;
-      const promise = this.performRequest<T>(method, path, opts).finally(() => {
-        this.inflightGets.delete(url);
+      // Join only a fetch of the CURRENT epoch (ошибка da7bbb53): a GET that
+      // started before a data-change boundary may carry a snapshot computed
+      // before that change, so a read issued after the boundary must not take
+      // its answer. Within one epoch identical parallel GETs still collapse.
+      if (inflight !== undefined && inflight.epoch === epoch) {
+        return inflight.promise as Promise<ResponseEnvelope<T>>;
+      }
+      const entry: InflightRead = {
+        epoch,
+        promise: this.performRequest<T>(method, path, opts),
+      };
+      entry.promise = entry.promise.finally(() => {
+        // Identity check: an older-epoch entry may already be superseded by a
+        // newer fetch of the same URL — its own settle must not drop that one.
+        if (this.inflightGets.get(url) === entry) this.inflightGets.delete(url);
       });
-      this.inflightGets.set(url, promise);
-      return promise;
+      this.inflightGets.set(url, entry);
+      return entry.promise as Promise<ResponseEnvelope<T>>;
     }
     if (method === 'POST' && opts.idempotentPost === true && opts.requestOptions === undefined) {
       const url = this.buildUrl(path, opts.query);
       const key = `POST ${url}\n${stableBodyKey(opts.body)}`;
+      const epoch = this.readEpoch;
       const inflight = this.inflightIdempotentPosts.get(key);
-      if (inflight !== undefined) return inflight as Promise<ResponseEnvelope<T>>;
-      const promise = this.performRequest<T>(method, path, opts).finally(() => {
-        this.inflightIdempotentPosts.delete(key);
+      // Same epoch gate as the GET lane (ошибка da7bbb53): a read-only POST is
+      // still a READ, and a run computed before a data change must not be
+      // handed to a run issued after it.
+      if (inflight !== undefined && inflight.epoch === epoch) {
+        return inflight.promise as Promise<ResponseEnvelope<T>>;
+      }
+      const entry: InflightRead = {
+        epoch,
+        promise: this.performRequest<T>(method, path, opts),
+      };
+      entry.promise = entry.promise.finally(() => {
+        if (this.inflightIdempotentPosts.get(key) === entry) this.inflightIdempotentPosts.delete(key);
       });
-      this.inflightIdempotentPosts.set(key, promise);
-      return promise;
+      this.inflightIdempotentPosts.set(key, entry);
+      return entry.promise as Promise<ResponseEnvelope<T>>;
     }
     return this.performRequest<T>(method, path, opts);
   }
@@ -346,13 +522,40 @@ export class RestClient {
       query?: QueryRecord;
       body?: unknown;
       requestOptions?: RequestOptions;
+      /**
+       * Read-only route opt-in of the idempotent POST dedup lane (passed
+       * through from {@link requestEnvelope}). Such a POST does NOT change
+       * data and hence must not advance the read epoch.
+       */
+      idempotentPost?: boolean;
     } = {},
   ): Promise<ResponseEnvelope<T>> {
     const url = this.buildUrl(path, opts.query);
     const ro = opts.requestOptions ?? {};
+    const networkId = networkIdFromApiPath(path);
+    const mutating = method !== 'GET' && method !== 'HEAD';
+    // Data-change boundary (ошибка da7bbb53). A write invalidates every GET
+    // already in flight: its response may predate the write. Idempotent POSTs
+    // are read-only routes that explicitly opted into the dedup lane, so they
+    // are not writes and keep the epoch stable.
+    const dataChanging = mutating && opts.idempotentPost !== true;
+    if (dataChanging) this.invalidateInFlightReads();
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Link gate (de34b35b): a mutating request for an unreachable network is
+      // never sent — not even as a retry after the link dropped mid-flight.
+      // Requests without a network context (`me.*`, `networks.create`, …) are
+      // gated by the pool-wide health callback: at least one known network and
+      // none `connected` (verify remark 1).
+      const linkDown =
+        networkId !== null ? this.downNetworks.has(networkId) : this.isServerDown();
+      if (mutating && linkDown) {
+        throw connectionLostError(
+          networkId,
+          'Нет соединения с сервером. Действие не выполнено — повторите после восстановления.',
+        );
+      }
       // Compose headers per attempt: the API-key is resolved lazily so a key
       // rotation mid-session is picked up without rebuilding the client.
       const headers: Record<string, string> = {
@@ -373,6 +576,7 @@ export class RestClient {
       // Compose the abort signal: internal response timeout, merged with any
       // caller-supplied signal. AbortController that triggers on whichever fires.
       const controller = new AbortController();
+      if (networkId !== null) this.trackController(networkId, controller);
       const timeout = setTimeout(
         () => controller.abort(new Error('ETN response timeout')),
         RESPONSE_TIMEOUT_MS,
@@ -399,6 +603,7 @@ export class RestClient {
         });
       } catch (err: unknown) {
         clearTimeout(timeout);
+        if (networkId !== null) this.untrackController(networkId, controller);
         getClientLog()?.info('rest', 'request attempt failed', {
           method,
           path,
@@ -406,15 +611,37 @@ export class RestClient {
           duration_ms: Date.now() - attemptStarted,
           error: errTextShort(err),
         });
+        // Caller abort keeps its original error (and is never retried).
+        if (ro.signal?.aborted) throw err;
+        // Link-down abort (de34b35b): the network (or the whole server for a
+        // network-less route) is unreachable — do NOT run the 3 × 30 s retry
+        // cycle, surface a typed connection-lost error.
+        const linkDown =
+          networkId !== null
+            ? this.downNetworks.has(networkId) ||
+              isConnectionLostReason(controller.signal.reason, networkId)
+            : this.isServerDown();
+        if (linkDown) {
+          getClientLog()?.warn('rest', 'request aborted: network link down', {
+            method,
+            path,
+            networkId: networkId ?? '',
+            attempt,
+          });
+          throw connectionLostError(
+            networkId,
+            'Нет соединения с сервером. Действие не выполнено — повторите после восстановления.',
+          );
+        }
         // Network-level failure (DNS, connection refused, timeout abort, etc.).
         // Retryable unless the caller aborted the request themselves.
-        if (ro.signal?.aborted) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
         if (attempt < MAX_ATTEMPTS) {
           await this.backoff(method, path, attempt, classifyRetryReason(lastError));
           continue;
         }
         const message = `Сетевая ошибка: ${lastError.message}`;
+        const reason = classifyConnectFailure(lastError);
         getClientLog()?.error('rest', 'request failed', {
           method,
           path,
@@ -422,9 +649,16 @@ export class RestClient {
           reason: classifyRetryReason(lastError),
           error: message,
         });
-        throw new EtnError('INTERNAL', message);
+        // Причина отказа едет в `details` структурно (ошибка 390e9746):
+        // диалог подключения показывает её по-человечески и с адресом сервера,
+        // не разбирая технический текст исключения.
+        throw new EtnError('INTERNAL', message, {
+          kind: 'connect-failed',
+          reason,
+        } satisfies ConnectFailureDetails);
       }
       clearTimeout(timeout);
+      if (networkId !== null) this.untrackController(networkId, controller);
 
       // Retry transient server errors (5xx) once more.
       if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {
@@ -440,7 +674,12 @@ export class RestClient {
         duration_ms: Date.now() - attemptStarted,
         status: res.status,
       });
-      return await this.parseResponse<T>(res);
+      const envelope = await this.parseResponse<T>(res, ro.signal);
+      // Completion boundary (ошибка da7bbb53): a GET started while this write
+      // was in flight could have been computed by the server BEFORE its commit
+      // and delivered after it, so it must not be reused by later reads either.
+      if (dataChanging) this.invalidateInFlightReads();
+      return envelope;
     }
 
     // Loop exited without returning — exhausted retries.
@@ -453,15 +692,26 @@ export class RestClient {
       attempts: MAX_ATTEMPTS,
       ...(lastError === undefined ? {} : { error: lastError.message }),
     });
-    throw new EtnError('INTERNAL', message);
+    const details: ConnectFailureDetails | undefined =
+      lastError === undefined
+        ? undefined
+        : { kind: 'connect-failed', reason: classifyConnectFailure(lastError) };
+    throw new EtnError('INTERNAL', message, details);
   }
 
   /**
    * Parses a fetch `Response` into its typed success envelope (`data` + the
    * `meta` of THIS response) and converts error envelopes into {@link EtnError}.
+   *
+   * Тело читается через {@link readResponseBody}: обрыв уже начатого ответа
+   * (заголовки получены, сокет закрыт) нормализуется в `EtnError` с причиной
+   * (ошибка 69790006), а не уходит сырым `TypeError: terminated`.
    */
-  private async parseResponse<T>(res: Response): Promise<ResponseEnvelope<T>> {
-    const text = await res.text();
+  private async parseResponse<T>(
+    res: Response,
+    callerSignal?: AbortSignal,
+  ): Promise<ResponseEnvelope<T>> {
+    const text = await readResponseBody(() => res.text(), callerSignal);
     const empty = text.length === 0;
     let payload: unknown = undefined;
     if (!empty) {
@@ -1460,7 +1710,8 @@ export class RestClient {
       limit?: number;
       offset?: number;
       directions?: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
-      view?: { id: string; name: string; type_id: string };
+      /** Владелец прогона: `scope`/`defined_on` (0.14.1), `type_id` — только типовой. */
+      view?: import('@etn/shared').RunThoughtTypeViewMeta['view'];
       sort?: string;
       order?: string;
       unresolved?: Array<{ token: string; reason: string; message: string }>;
@@ -1472,12 +1723,121 @@ export class RestClient {
         limit: meta?.limit ?? data.length,
         offset: meta?.offset ?? 0,
         directions: meta?.directions ?? {},
-        view: meta?.view ?? { id: '', name: viewName, type_id: '' },
+        view: meta?.view ?? { id: '', name: viewName, scope: 'type', defined_on: '' },
         ...(meta?.sort !== undefined ? { sort: meta.sort } : {}),
         ...(meta?.order !== undefined ? { order: meta.order } : {}),
         ...(meta?.unresolved !== undefined ? { unresolved: meta.unresolved } : {}),
       },
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // §8c Thought-custom views (внетиповые отборы мысли, 0.14.1, операция
+  // 5e55b7bb; перенос владельца — операция 85414fbd)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/views` — собственные внетиповые отборы
+   * мысли (`data`). `includeEffective: true` (по умолчанию) добавляет полный
+   * эффективный набор мысли (`meta.effective`: типовые по цепочке + внетиповые,
+   * со `scope`/`defined_on` и перекрытием) — ЕДИНСТВЕННЫЙ источник полосы
+   * отборов (требование 045f539a). Обе части берутся из ОДНОГО конверта
+   * (`requestEnvelope`), как у `listThoughtTypeViews` (ошибка 90811979).
+   */
+  public async listThoughtCustomViews(
+    networkId: string,
+    thoughtId: string,
+    opts?: { includeEffective?: boolean },
+  ): Promise<import('@etn/shared').ThoughtViewsResult> {
+    const includeEffective = opts?.includeEffective !== false;
+    const { data, meta } = await this.requestEnvelope<import('@etn/shared').ThoughtCustomView[]>(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views`,
+      { query: includeEffective ? { include_effective: 'true' } : undefined },
+    );
+    const effective = meta as
+      | { effective?: import('@etn/shared').EffectiveThoughtView[] }
+      | undefined;
+    return { data, meta: { effective: effective?.effective ?? [] } };
+  }
+
+  /** `POST /networks/{nid}/thoughts/{id}/views` — create a custom view. */
+  public async createThoughtCustomView(
+    networkId: string,
+    thoughtId: string,
+    input: import('@etn/shared').ThoughtCustomViewInput,
+  ): Promise<import('@etn/shared').ThoughtCustomView> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views`,
+      { body: input },
+    );
+  }
+
+  /** `PATCH /networks/{nid}/thoughts/{id}/views/{viewId}` — partial update
+   *  with `If-Match: <expectedVersion>`. */
+  public async updateThoughtCustomView(
+    networkId: string,
+    thoughtId: string,
+    viewId: string,
+    input: import('@etn/shared').ThoughtCustomViewUpdateInput,
+    expectedVersion: number,
+  ): Promise<import('@etn/shared').ThoughtCustomView> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewId)}`,
+      { body: input, requestOptions: { expectedVersion } },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/thoughts/{id}/views/{viewId}` — optimistic
+   *  concurrency required. */
+  public async deleteThoughtCustomView(
+    networkId: string,
+    thoughtId: string,
+    viewId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewId)}`,
+      { requestOptions: { expectedVersion } },
+    );
+  }
+
+  /**
+   * `POST /networks/{nid}/thoughts/{id}/views/{viewId}/move-to-type` —
+   * перенос владельца «вне типа → тип» (0.14.1, операция 85414fbd). Ответ —
+   * карточка у нового владельца-типа (id сохраняется, `version` — заново).
+   */
+  public async moveThoughtCustomViewToType(
+    networkId: string,
+    thoughtId: string,
+    viewId: string,
+  ): Promise<import('@etn/shared').CustomViewMoveToTypeResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewId)}/move-to-type`,
+    );
+  }
+
+  /**
+   * `POST /networks/{nid}/thought-types/{id}/views/{viewId}/move-to-thought` —
+   * перенос владельца «тип → вне» (0.14.1, операция 85414fbd). `typeId` —
+   * `defined_on` отбора (для унаследованного — тип-владелец, не тип фокуса).
+   * Ответ — внетиповая карточка у мысли-получателя.
+   */
+  public async moveThoughtTypeViewToThought(
+    networkId: string,
+    typeId: string,
+    viewId: string,
+    targetThoughtId: string,
+  ): Promise<import('@etn/shared').TypeViewMoveToThoughtResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(typeId)}/views/${encodeURIComponent(viewId)}/move-to-thought`,
+      { body: { target_thought_id: targetThoughtId } },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1587,18 +1947,36 @@ export class RestClient {
     );
   }
 
+  /**
+   * `PUT /networks/{nid}/thoughts/{id}/properties/order` — полный набор
+   * пер-мысленного порядка внетиповых свойств (0.14.1, контракт 27ed2b39).
+   */
+  public async reorderThoughtProperties(
+    networkId: string,
+    thoughtId: string,
+    items: import('@etn/shared').ThoughtPropertyOrderInput[],
+  ): Promise<import('@etn/shared').ThoughtPropertiesReorderedItem[]> {
+    const res = (await this.request(
+      'PUT',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/order`,
+      { body: { items } },
+    )) as { items?: import('@etn/shared').ThoughtPropertiesReorderedItem[] };
+    return res.items ?? [];
+  }
+
   /** `PUT /networks/{nid}/thoughts/{id}/properties/{key}`. */
   public async setThoughtProperty(
     networkId: string,
     thoughtId: string,
     key: string,
     value: import('@etn/shared').PropertyValueValue,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyValue> {
     return this.request(
       'PUT',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}`,
-      { body: { value }, requestOptions: opts },
+      { body: side == null ? { value } : { value, side }, requestOptions: opts },
     );
   }
 
@@ -1607,12 +1985,13 @@ export class RestClient {
     networkId: string,
     thoughtId: string,
     key: string,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<void> {
     await this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/properties/${encodeURIComponent(key)}`,
-      { requestOptions: opts },
+      { query: side == null ? undefined : { side }, requestOptions: opts },
     );
   }
 
@@ -1651,12 +2030,13 @@ export class RestClient {
     linkId: string,
     key: string,
     value: import('@etn/shared').PropertyValueValue,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyValue> {
     return this.request(
       'PUT',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(linkId)}/properties/${encodeURIComponent(key)}`,
-      { body: { value }, requestOptions: opts },
+      { body: side == null ? { value } : { value, side }, requestOptions: opts },
     );
   }
 
@@ -1665,12 +2045,13 @@ export class RestClient {
     networkId: string,
     linkId: string,
     key: string,
+    side?: 'source' | 'target' | null,
     opts?: RequestOptions,
   ): Promise<void> {
     await this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(linkId)}/properties/${encodeURIComponent(key)}`,
-      { requestOptions: opts },
+      { query: side == null ? undefined : { side }, requestOptions: opts },
     );
   }
 
@@ -2081,7 +2462,7 @@ export class RestClient {
       );
     }
     const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
-    return { contentType, body: Buffer.from(await res.arrayBuffer()) };
+    return { contentType, body: Buffer.from(await readResponseBody(() => res.arrayBuffer())) };
   }
 
   /**
@@ -2463,10 +2844,12 @@ export class RestClient {
     title: string,
     synonyms: string[] = [],
     typeIds: string[] = [],
+    mode?: DuplicateSearchMode,
   ): Promise<DuplicateHit[]> {
     const q: QueryRecord = { title };
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
+    if (mode !== undefined) q['mode'] = mode;
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
       query: q,
     });
@@ -2486,11 +2869,13 @@ export class RestClient {
     title: string,
     synonyms: string[] = [],
     typeIds: string[] = [],
+    mode?: DuplicateSearchMode,
   ): Promise<import('@etn/shared').CrossNetworkDuplicateResponse> {
     const q: QueryRecord = { title };
     if (networkIds.length > 0) q['network_ids'] = networkIds;
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
+    if (mode !== undefined) q['mode'] = mode;
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`,
@@ -3062,7 +3447,7 @@ export class RestClient {
       const text = await res.text().catch(() => '');
       throw new Error(`download failed: HTTP ${res.status} ${text.slice(0, 200)}`);
     }
-    const arrayBuffer = await res.arrayBuffer();
+    const arrayBuffer = await readResponseBody(() => res.arrayBuffer());
     const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
     return { contentType, body: Buffer.from(arrayBuffer) };
   }
@@ -3120,7 +3505,7 @@ export class RestClient {
       );
     }
     const contentType = res.headers.get('content-type') ?? 'text/plain; charset=utf-8';
-    return { contentType, body: Buffer.from(await res.arrayBuffer()) };
+    return { contentType, body: Buffer.from(await readResponseBody(() => res.arrayBuffer())) };
   }
 
   /**
@@ -3593,7 +3978,10 @@ export class RestClient {
         `publication print failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
       );
     }
-    return { html: await res.text(), slug: res.headers.get('x-publication-slug') ?? '' };
+    return {
+      html: await readResponseBody(() => res.text()),
+      slug: res.headers.get('x-publication-slug') ?? '',
+    };
   }
 
   /** `GET /networks/{nid}/shelves` — полки библиотеки с составом. */
@@ -3757,4 +4145,134 @@ function errTextShort(err: unknown): string {
 /** Retry reason classification for the journal (timeout / network / 5xx). */
 function classifyRetryReason(err: Error): string {
   return /timeout/i.test(err.message) ? 'timeout' : 'network';
+}
+
+/**
+ * Коды ОС/undici, по которым причина сетевого отказа РАЗЛИЧИМА (ошибка
+ * 390e9746). Значение — причина для UI; всё остальное честно уходит в `other`.
+ *
+ * `ECONNRESET` — однозначный сброс соединения другой стороной. `UND_ERR_SOCKET`
+ * здесь НАМЕРЕННО нет: undici бросает этот код не только при сбросе
+ * соединения (`bad response`, `bad upgrade`, закрытие клиента), поэтому
+ * причину решает текст ошибки ({@link SOCKET_RESET_MESSAGE}), а не один код
+ * (ошибки 2edf8494, 390e9746).
+ */
+const CONNECT_FAILURE_CODES: Readonly<Record<string, ConnectFailureReason>> = {
+  ECONNREFUSED: 'refused',
+  ETIMEDOUT: 'timeout',
+  UND_ERR_CONNECT_TIMEOUT: 'timeout',
+  UND_ERR_HEADERS_TIMEOUT: 'timeout',
+  UND_ERR_BODY_TIMEOUT: 'timeout',
+  ENOTFOUND: 'dns',
+  EAI_AGAIN: 'dns',
+  ENETUNREACH: 'unreachable',
+  EHOSTUNREACH: 'unreachable',
+  ECONNRESET: 'reset',
+  // Тело уже начатого ответа оборвано раньше объявленного Content-Length или
+  // chunked-потока (ошибка 69790006): другая сторона закрыла соединение,
+  // недослав тело. Для пользователя это тот же сброс соединения, а не «other».
+  UND_ERR_RES_CONTENT_LENGTH_MISMATCH: 'reset',
+  HPE_INVALID_EOF_STATE: 'reset',
+};
+
+/**
+ * Признак сброса установленного соединения в сообщении `UND_ERR_SOCKET`:
+ * undici пишет «other side closed» (сокет закрыт/разрушен другой стороной),
+ * Node — «socket hang up», ОС может отдать ECONNRESET. Остальные сокетные
+ * сбои этим кодом (`bad response`, `bad upgrade`) честно остаются `other`.
+ */
+const SOCKET_RESET_MESSAGE = /other side closed|socket hang up|ECONNRESET/i;
+
+/** Код ошибки из структуры (`code`), если это строка. */
+function errorCodeOf(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' && code !== '' ? code : null;
+}
+
+/**
+ * Причина сетевого отказа по цепочке `cause` (undici заворачивает системную
+ * ошибку в `TypeError: fetch failed`). Наш собственный таймаут приходит
+ * причиной отмены (`ETN response timeout`) без кода — ловим по тексту.
+ */
+export function classifyConnectFailure(err: unknown): ConnectFailureReason {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
+    const code = errorCodeOf(current);
+    // `Object.hasOwn` — только собственные ключи карты: `code` приходит из
+    // чужих ошибок, и унаследованный ключ (`toString` и т.п.) не должен
+    // превращаться в «причину» (тот же класс, что 2edf8494 в UI).
+    const reason =
+      code === null || !Object.hasOwn(CONNECT_FAILURE_CODES, code)
+        ? undefined
+        : CONNECT_FAILURE_CODES[code];
+    if (reason !== undefined) return reason;
+    // UND_ERR_SOCKET — «сокет закрыт другой стороной»: для установленного
+    // соединения это сброс/обрыв, а не недоступность сети. Код не только про
+    // reset, поэтому решает текст причины (ошибки 2edf8494, 390e9746).
+    if (code === 'UND_ERR_SOCKET' && SOCKET_RESET_MESSAGE.test(errTextShort(current))) {
+      return 'reset';
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  const message = errTextShort(err);
+  return /timeout|timed out/i.test(message) ? 'timeout' : 'other';
+}
+
+/**
+ * Русские формулировки причин отказа для ТЕКСТА ошибки транспорта. Диалог
+ * подключения берёт текст из `details` и своего словаря ru (`connect.reason.*`,
+ * ошибка 390e9746); здесь — сообщение для журнала и путей, показывающих
+ * `EtnError.message` напрямую. Технические огрызки (`terminated`,
+ * `other side closed`) сюда попадать не должны (ошибка 69790006).
+ */
+const CONNECT_FAILURE_REASON_TEXT: Readonly<Record<ConnectFailureReason, string>> = {
+  refused: 'соединение отклонено — сервер не запущен или порт закрыт',
+  timeout: 'сервер не ответил за отведённое время',
+  dns: 'адрес не найден — проверьте имя хоста',
+  unreachable: 'сервер недоступен по сети — проверьте подключение',
+  reset: 'соединение сброшено сервером',
+  other: 'не удалось определить причину отказа',
+};
+
+/**
+ * Обрыв тела УЖЕ начатого ответа (ошибка 69790006): заголовки получены,
+ * `fetch` вернул `Response`, но чтение тела упало — `TypeError: terminated`
+ * (cause `UND_ERR_SOCKET` «other side closed»,
+ * `UND_ERR_RES_CONTENT_LENGTH_MISMATCH` и т.п.). Раньше ошибка уходила наружу
+ * сырой, и GUI показывал «Не удалось подключиться к серверу <адрес>:
+ * terminated».
+ *
+ * Нормализация — той же схемой, что у отказа подключения (390e9746):
+ * {@link classifyConnectFailure} проходит cause-цепочку, причина едет в
+ * `details { kind: 'connect-failed', reason }`, текст — человеческий.
+ * `kind` остаётся `connect-failed`: для потребителей это транспортный отказ с
+ * причиной, и все три пути подключения рендерят её из `details`, не разбирая
+ * текст исключения; новый `kind` потребовал бы синхронных правок всех
+ * потребителей без выигрыша в смысле.
+ */
+function responseBodyFailure(err: unknown): EtnError {
+  const reason = classifyConnectFailure(err);
+  return new EtnError(
+    'INTERNAL',
+    `Сетевая ошибка: ${CONNECT_FAILURE_REASON_TEXT[reason]}`,
+    { kind: 'connect-failed', reason } satisfies ConnectFailureDetails,
+  );
+}
+
+/**
+ * Читает тело ответа, нормализуя транспортный обрыв (ошибка 69790006).
+ * Отмена ВЫЗЫВАЮЩИМ сохраняет исходную ошибку — как и на этапе установки
+ * соединения, где `ro.signal?.aborted` пробрасывает её без обёртки.
+ */
+async function readResponseBody<T>(
+  read: () => Promise<T>,
+  callerSignal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await read();
+  } catch (err) {
+    if (callerSignal?.aborted === true) throw callerSignal.reason ?? err;
+    throw responseBodyFailure(err);
+  }
 }

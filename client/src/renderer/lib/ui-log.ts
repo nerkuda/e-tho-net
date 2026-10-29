@@ -21,6 +21,10 @@ import type { EtnBridgeApi } from '../../main/ipc/contract.js';
 export type UiEventName =
   | 'ui.cloud.click'
   | 'ui.focus.applied'
+  // Клик по мысли, которая УЖЕ в фокусе и уже открыта в редакторе: намеренный
+  // no-op (ошибка 1656ef58). Без метки такой клик в журнале выглядел как
+  // «клик без реакции» — неотличимо от зависания.
+  | 'ui.focus.noop'
   | 'ui.editor.opened'
   | 'ui.editor.comment.loaded'
   | 'ui.editor.props.loaded'

@@ -7,19 +7,31 @@
  * - on successful send the draft is deleted;
  * - while the realtime connection is down the UI blocks saves (the edit stays
  *   a draft, the status bar shows 🔴);
- * - on reconnect, pending drafts are re-sent automatically (idempotent
+ * - on (re)connect, pending drafts are re-sent automatically (idempotent
  *   `Client-Request-Id` machinery on the server prevents double-applies);
- *   version conflicts keep the draft and notify the user.
+ *   version conflicts keep the draft, mark it `conflict` and notify the user
+ *   ONCE — a conflicting draft is never retried on later connects until the
+ *   entity is edited again (ошибка 5726744b).
  */
 
-import { errText } from './lib/dom.js';
+import { EtnError } from '@etn/shared';
+
+import { errText, isConnectionLostError, isDuplicateError } from './lib/dom.js';
 import { etn } from './lib/etn.js';
-import { notice } from './lib/notice.js';
+import { findPermanentComment } from './lib/permanent-comment.js';
+import { t } from './lib/i18n.js';
+import { notice, toast } from './lib/notice.js';
 import { isConnected } from './realtime.js';
-import { store } from './state.js';
+import { getRtStatus, store, type RtStatus } from './state.js';
 
 /** Draft entity types supported by the retry loop. */
 export type DraftKind = 'comment' | 'comment-new' | 'thought' | 'transclusion';
+
+/** Stored draft lifecycle (mirrors the main-process `DraftStatus`). */
+export type DraftStatus = 'pending' | 'conflict' | 'sent' | 'failed';
+
+/** Which stored drafts to read (mirrors {@link DraftListFilter}). */
+export type DraftListFilter = 'pending' | 'conflict' | 'all';
 
 /** A pending draft as returned by `ui.draftList`. */
 export interface DraftRecord {
@@ -30,26 +42,74 @@ export interface DraftRecord {
   field: string;
   value: string | null;
   baseVersion: number | null;
-  status: string;
+  status: DraftStatus;
   createdAt: string;
 }
 
+/** Outcome of sending one draft through the retry loop. */
+export type DraftSendOutcome = 'sent' | 'skipped' | 'conflict';
+
 let lastConnected = false;
 let initialized = false;
+/** `true` once the active network was connected at least once this session. */
+let hadConnection = false;
+/** Previous per-network statuses (draft retries are per network, de34b35b). */
+let prevByNetwork: Record<string, RtStatus> = {};
+
+/** Status-specific warning shown when the active connection drops (de34b35b). */
+function linkLossMessage(status: RtStatus): string {
+  switch (status) {
+    case 'suspect':
+      return t('realtime.link.lostSuspect');
+    case 'reconnecting':
+      return t('realtime.link.lostReconnecting');
+    case 'offline':
+      return t('realtime.link.lostOffline');
+    default:
+      return t('realtime.link.lost');
+  }
+}
 
 /** Initializes the offline detection + retry loop. Called once at boot. */
 export function initDrafts(): void {
   if (initialized) return;
   initialized = true;
   lastConnected = isConnected();
+  hadConnection = lastConnected;
+  prevByNetwork = { ...store.state.rtStatusByNetwork };
   store.subscribe(() => {
+    // Per-network recovery (de34b35b): drafts of EVERY network are re-sent,
+    // not just the active one. The first connect of a session counts too — a
+    // draft left from the previous run must be flushed (H19). A draft that hit
+    // VERSION_CONFLICT is marked `conflict` after that first attempt and is
+    // therefore absent from later `pending` lists: no per-launch loop
+    // (ошибка 5726744b).
+    const map = store.state.rtStatusByNetwork;
+    for (const [nid, status] of Object.entries(map)) {
+      // The very first `connected` of a session also flushes: a draft left by
+      // the previous run must be sent on launch (H19). Repeated snapshots with
+      // the same status are no-ops (`prev` is already `connected`).
+      if (status === 'connected' && prevByNetwork[nid] !== 'connected') {
+        void retryPendingDrafts(nid);
+      }
+    }
+    prevByNetwork = { ...map };
+
     const connected = isConnected();
     if (connected && !lastConnected) {
-      notice('Соединение восстановлено.', 'success');
-      void retryPendingDrafts();
-    } else if (!connected && lastConnected && store.state.rtStatus === 'offline') {
-      notice('Соединение потеряно — правки сохраняются как черновики.', 'warning');
+      // Recovery notice only after a real loss: the very first connect must
+      // not claim «Соединение восстановлено» (de34b35b).
+      // Восстановление связи — важное сообщение (доступность сервера), поэтому
+      // тост, а не рутинная строка статус-бара (задача 28d22b8a).
+      if (hadConnection) toast(t('realtime.link.recovered'), 'success');
+      hadConnection = true;
+    } else if (!connected && lastConnected) {
+      // One notice per connected → not-connected transition; the status text
+      // follows the CURRENT state, so suspect→reconnecting→offline does not
+      // spam the user.
+      notice(linkLossMessage(getRtStatus(store.state)), 'warning');
     }
+    if (connected) hadConnection = true;
     lastConnected = connected;
   });
 }
@@ -86,10 +146,23 @@ export async function clearDraft(draftId: string | null): Promise<void> {
 }
 
 /**
- * Removes every draft of an edit target (all fields). Used after a successful
- * save: the tracked draft id may be null (a debounce that resolved after the
- * blur) or point at a row the upsert replaced — deleting by key sweeps whatever
- * actually exists.
+ * Lists stored drafts of a network. `filter` defaults to `pending` — the
+ * auto-retry queue; `all` also returns conflict drafts (they are kept but not
+ * retried).
+ */
+export async function listDrafts(
+  networkId: string,
+  filter: DraftListFilter = 'pending',
+): Promise<DraftRecord[]> {
+  return (await etn.ui.draftList(networkId, filter)) as DraftRecord[];
+}
+
+/**
+ * Removes every draft of an edit target (all fields, all statuses). Used after
+ * a successful save: the tracked draft id may be null (a debounce that resolved
+ * after the blur) or point at a row the upsert replaced — deleting by key
+ * sweeps whatever actually exists. Conflict drafts of the field are superseded
+ * by an explicit save too (ошибка 5726744b), so they are swept as well.
  */
 export async function clearDraftsFor(
   networkId: string,
@@ -98,7 +171,7 @@ export async function clearDraftsFor(
 ): Promise<void> {
   let drafts: DraftRecord[];
   try {
-    drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
+    drafts = await listDrafts(networkId, 'all');
   } catch {
     return;
   }
@@ -110,24 +183,40 @@ export async function clearDraftsFor(
 }
 
 /**
+ * All drafts of a specific edit target, newest last. `filter` defaults to
+ * `pending`; `all` is used by the "dead draft" cleanup at editor open.
+ */
+export async function findDrafts(
+  networkId: string,
+  entityType: DraftKind,
+  entityId: string,
+  filter: DraftListFilter = 'pending',
+): Promise<DraftRecord[]> {
+  let drafts: DraftRecord[];
+  try {
+    drafts = await listDrafts(networkId, filter);
+  } catch {
+    return [];
+  }
+  return drafts.filter(
+    (d) => d.entityType === entityType && d.entityId === entityId && d.value !== null,
+  );
+}
+
+/**
  * Finds the draft for a specific edit target, or null. Returns the newest
  * matching row together with the version it was based on, so callers can tell
- * a pending edit (base version still current) from a stale one.
+ * a pending edit (base version still current) from a stale one. Only `pending`
+ * rows are eligible: a conflict draft must not be restored into a field (its
+ * text lost against the server version) — it is kept in storage for a future
+ * edit (ошибка 5726744b).
  */
 export async function findDraft(
   networkId: string,
   entityType: DraftKind,
   entityId: string,
 ): Promise<{ id: string; value: string; baseVersion: number | null } | null> {
-  let drafts: DraftRecord[];
-  try {
-    drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
-  } catch {
-    return null;
-  }
-  const hits = drafts.filter(
-    (d) => d.entityType === entityType && d.entityId === entityId && d.value !== null,
-  );
+  const hits = await findDrafts(networkId, entityType, entityId, 'pending');
   const hit = hits.at(-1);
   if (hit === undefined || hit.value === null) return null;
   return { id: hit.id, value: hit.value, baseVersion: hit.baseVersion };
@@ -254,46 +343,107 @@ export async function clearSourceDrafts(
 
 /** Blocks a save while offline: notifies and keeps the draft. */
 export function offlineNotice(): void {
-  notice(
-    'Нет соединения — правка сохранена как черновик и отправится после восстановления связи.',
-    'warning',
-  );
+  const status = getRtStatus(store.state);
+  const key =
+    status === 'suspect'
+      ? 'drafts.offline.suspect'
+      : status === 'reconnecting'
+        ? 'drafts.offline.reconnecting'
+        : status === 'offline'
+          ? 'drafts.offline.offline'
+          : 'drafts.offline.default';
+  notice(t(key), 'warning');
 }
 
-/** Re-sends every pending draft of the open network. */
-export async function retryPendingDrafts(): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
+/**
+ * Re-sends pending drafts of `networkId` (default: the active network) after a
+ * connection recovery (de34b35b). Per-network: a background tab that came back
+ * online must flush its own drafts, not only the visible one.
+ *
+ * A draft whose send hits `VERSION_CONFLICT` is marked `conflict` on the FIRST
+ * attempt and therefore disappears from the `pending` queue: later connects do
+ * not retry it and do not repeat the notice. The user gets ONE clear message;
+ * the text stays intact until the entity is edited again (then the draft is
+ * re-based by the next `saveDraft` upsert). That breaks the «comment version
+ * mismatch» loop at client start (ошибка 5726744b).
+ */
+export async function retryPendingDrafts(networkId?: string): Promise<void> {
+  const target = networkId ?? store.state.networkId;
+  if (target === null) return;
   let drafts: DraftRecord[];
   try {
-    drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
+    drafts = await listDrafts(target, 'pending');
   } catch {
     return;
   }
   if (drafts.length === 0) return;
+  let conflicts = 0;
   for (const draft of drafts) {
     try {
-      await sendDraft(draft);
+      if ((await sendDraft(draft)) === 'conflict') conflicts += 1;
     } catch (err) {
-      notice(`Черновик не отправлен: ${errText(err)}`, 'error');
+      notice(t('drafts.retry.failed', errText(err)), 'error');
+      // Соединение оборвалось посреди досылки: остальные строки отправлять
+      // бессмысленно, они уйдут на следующем восстановлении связи.
+      if (isConnectionLostError(err)) return;
     }
+  }
+  if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
+}
+
+/** True when the failure is an `If-Match` version conflict. */
+function isVersionConflict(err: unknown): boolean {
+  if (err instanceof EtnError && err.code === 'VERSION_CONFLICT') return true;
+  // Structural fallback: тесты и частичные мосты отдают не EtnError, а объект
+  // с `code` (тот же контракт конверта IPC).
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'VERSION_CONFLICT';
+}
+
+/**
+ * Stops auto-retrying a draft after a version conflict. The text is NOT
+ * deleted — решением оркестратора текст пользователя не теряем.
+ */
+async function markDraftConflict(draftId: string): Promise<void> {
+  try {
+    await etn.ui.draftSetStatus(draftId, 'conflict');
+  } catch {
+    // best-effort: не отметили — следующий connect попробует ещё раз
   }
 }
 
 /** Sends one draft according to its entity type; deletes it on success. */
-async function sendDraft(draft: DraftRecord): Promise<void> {
+async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
   const networkId = draft.networkId;
   const value = draft.value;
   if (value === null) {
     await etn.ui.draftDelete(draft.id);
-    return;
+    return 'skipped';
   }
+  /** Runs a write that has no `If-Match` alternative: a conflict is final. */
+  const writeFile = async (write: () => Promise<unknown>): Promise<DraftSendOutcome> => {
+    try {
+      await write();
+    } catch (err) {
+      if (isVersionConflict(err)) {
+        await markDraftConflict(draft.id);
+        return 'conflict';
+      }
+      throw err;
+    }
+    await etn.ui.draftDelete(draft.id);
+    return 'sent';
+  };
   switch (draft.entityType) {
     case 'comment': {
-      if (draft.baseVersion === null) return; // cannot If-Match without a version
-      await etn.comments.update(networkId, draft.entityId, { body_md: value }, draft.baseVersion);
-      await etn.ui.draftDelete(draft.id);
-      break;
+      // Без версии-основы `If-Match` отправить нельзя: черновик не станет
+      // отправляемым сам, поэтому сразу помечается конфликтным (текст цел).
+      if (draft.baseVersion === null) {
+        await markDraftConflict(draft.id);
+        return 'conflict';
+      }
+      return writeFile(() =>
+        etn.comments.update(networkId, draft.entityId, { body_md: value }, draft.baseVersion as number),
+      );
     }
     case 'comment-new': {
       const parsed = JSON.parse(value) as {
@@ -301,18 +451,48 @@ async function sendDraft(draft: DraftRecord): Promise<void> {
         ownerId: string;
         bodyMd: string;
       };
-      await etn.comments.create(networkId, parsed.ownerType, parsed.ownerId, {
-        kind: 'permanent',
-        body_md: parsed.bodyMd,
-      });
-      await etn.ui.draftDelete(draft.id);
-      break;
+      try {
+        return await writeFile(() =>
+          etn.comments.create(networkId, parsed.ownerType, parsed.ownerId, {
+            kind: 'permanent',
+            body_md: parsed.bodyMd,
+          }),
+        );
+      } catch (err) {
+        if (!isDuplicateError(err)) throw err;
+        // Постоянный комментарий уже создан: первая попытка дошла до сервера,
+        // а её ответ потерялся в обрыве связи (или запись сделал другой клиент).
+        // Повторять create на каждом переподключении и уведомлять о сбое
+        // нельзя — сверяем текст (ошибка ecdb2e7a).
+        const existing = await findPermanentComment({
+          networkId,
+          ownerType: parsed.ownerType,
+          ownerId: parsed.ownerId,
+        });
+        // Отказ есть, а комментарий не читается (гонка со снятием, чужой
+        // слой): показываем исходную ошибку, текст черновика цел.
+        if (existing === null) throw err;
+        if (existing.body_md === parsed.bodyMd) {
+          // Сервер уже хранит ровно этот текст — черновик выполнен.
+          await etn.ui.draftDelete(draft.id);
+          return 'sent';
+        }
+        // Серверный текст другой: не затираем его молча — черновик остаётся
+        // конфликтным (как при VERSION_CONFLICT): пользователь получит одно
+        // уведомление и сам решит, чей текст нужен.
+        await markDraftConflict(draft.id);
+        return 'conflict';
+      }
     }
     case 'thought': {
-      if (draft.field !== 'title' || draft.baseVersion === null) return;
-      await etn.thoughts.update(networkId, draft.entityId, { title: value }, draft.baseVersion);
-      await etn.ui.draftDelete(draft.id);
-      break;
+      if (draft.field !== 'title') return 'skipped';
+      if (draft.baseVersion === null) {
+        await markDraftConflict(draft.id);
+        return 'conflict';
+      }
+      return writeFile(() =>
+        etn.thoughts.update(networkId, draft.entityId, { title: value }, draft.baseVersion as number),
+      );
     }
     case 'transclusion':
       // Черновики правок источников трансклюзий НЕ переотправляются этим
@@ -321,12 +501,12 @@ async function sendDraft(draft: DraftRecord): Promise<void> {
       // `commitTransclusionEdit`). Строка остаётся в хранилище и
       // восстанавливается при следующем входе в правку поля; удаляется там же —
       // после успешной единой записи (или по `Esc`).
-      break;
+      return 'skipped';
     default:
       // Неизвестный тип черновика: не игнорировать молча — неизвестная строка
       // не отправлена, и это должно быть видно (явная ветка `transclusion`
       // выше обязана существовать: её нейтрализация уводит сюда и краснит тест).
-      throw new Error(`Неизвестный тип черновика: ${String(draft.entityType)}`);
+      throw new Error(t('drafts.unknownType', String(draft.entityType)));
   }
 }
 
@@ -336,6 +516,216 @@ async function sendDraft(draft: DraftRecord): Promise<void> {
  * реального цикла: удаление этой ветки обязано красить тест.
  */
 export const draftsInternals = { sendDraft };
+
+/* ------------------------------------------------------------------ *
+ * Debounce-зеркало правки поля (ошибки 5726744b, 1b5446af)
+ *
+ * Раньше каждый редактор держал свой `setTimeout` и `draftId`. Таймер не
+ * отменял уже начавшуюся асинхронную запись, поэтому строка, пришедшая ПОСЛЕ
+ * сохранения/отмены, оставалась «вечным» черновиком с устаревшей
+ * `baseVersion` — источник цикла `comment version mismatch`. Здесь:
+ * `settle()` увеличивает поколение, и запись, начатая до него, удаляет свою
+ * строку по возвращении id; `dispose()` досылает несохранённый текст, а не
+ * теряет его; `flush()` пишет финальный текст (перед «Единой записью» или
+ * офлайн-уходом) строго после начатых записей — опоздавшая запись не может
+ * лечь поверх более новой.
+ * ------------------------------------------------------------------ */
+
+/** Поле правки, которое зеркалится в черновики. */
+export interface DraftMirrorTarget {
+  networkId: string;
+  entityType: DraftKind;
+  entityId: string;
+  field: string;
+  baseVersion: number | null;
+}
+
+/** Параметры {@link createDraftMirror}. */
+export interface DraftMirrorOptions {
+  /** Цель правки читается В МОМЕНТ записи: id/версия могут смениться. */
+  target: () => DraftMirrorTarget | null;
+  /** Кодирование текста поля в значение черновика (`comment-new` — JSON). */
+  encode?: (raw: string) => string;
+  /**
+   * Текст читается В МОМЕНТ записи, а не в `schedule`: потоку, который
+   * сигналит «поле изменилось» без текста (блоки трансклюзий), нужен последний
+   * текст документа, набранный после сигнала.
+   */
+  read?: () => string | null;
+  /** Задержка зеркалирования, мс (по умолчанию 800). */
+  delayMs?: number;
+  /** Идентификатор записанной строки (для адресной очистки после отправки). */
+  onWritten?: (id: string) => void;
+}
+
+/** Рукоятка зеркала правки поля. */
+export interface DraftMirror {
+  /**
+   * Отложить запись текста (очередная правка перепланирует таймер). Текст
+   * обязателен, если у зеркала нет `read`.
+   */
+  schedule(raw?: string): void;
+  /**
+   * Правка подтверждена (сохранена) или отменена: отложенная запись гасится,
+   * уже начавшаяся — удалит свою строку по возвращении id.
+   */
+  settle(): void;
+  /**
+   * Записать текст немедленно и дождаться записи. Финальный текст (перед
+   * «Единой записью»/офлайн-уходом) встаёт в очередь ПОСЛЕ начатых записей,
+   * поэтому опоздавшая запись не перетрёт его. Без аргумента берётся `read`
+   * (или отложенный текст).
+   */
+  flush(raw?: string): Promise<void>;
+  /** Редактор выгружается: отложенный текст дописывается, а не теряется. */
+  dispose(): void;
+}
+
+/**
+ * Удаляет опоздавшую строку черновика, только если она всё ещё хранит ЗНАЧЕНИЕ
+ * этой записи. Upsert идёт по ключу поля и НЕ меняет id строки, поэтому слепое
+ * удаление по id снесло бы более новое значение, записанное после (замечание
+ * верификатора к ошибке 1b5446af).
+ */
+async function dropDraftIfOwn(networkId: string, id: string, value: string): Promise<void> {
+  let rows: DraftRecord[];
+  try {
+    rows = await listDrafts(networkId, 'all');
+  } catch {
+    return;
+  }
+  const row = rows.find((d) => d.id === id);
+  if (row === undefined || row.value !== value) return;
+  await clearDraft(id);
+}
+
+/** Создаёт debounce-зеркало текста поля в таблицу черновиков. */
+export function createDraftMirror(opts: DraftMirrorOptions): DraftMirror {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: string | null = null;
+  let generation = 0;
+  // Записи одного зеркала идут строго по очереди: опоздавшая запись не может
+  // лечь поверх более новой (flush) — она завершится до её старта.
+  let chain: Promise<void> = Promise.resolve();
+  const run = (task: () => Promise<void>): Promise<void> => {
+    const next = chain.then(task, task);
+    chain = next.catch(() => undefined);
+    return next;
+  };
+
+  /** Текущий текст: явно переданный либо прочитанный из источника в момент вызова. */
+  const currentText = (raw: string | undefined): string | null =>
+    raw ?? (opts.read === undefined ? pending : opts.read());
+
+  const write = async (generationAtSchedule: number | null, raw: string): Promise<void> => {
+    const target = opts.target();
+    if (target === null) return;
+    let value: string;
+    let id: string;
+    try {
+      value = opts.encode === undefined ? raw : opts.encode(raw);
+      id = await saveDraft({ ...target, value });
+    } catch {
+      // Локальное хранилище недоступно — правка не должна ломать поле.
+      return;
+    }
+    if (generationAtSchedule !== null && generationAtSchedule !== generation) {
+      // Правка уже сохранена/отменена — строка опоздала, это мусор с
+      // устаревшей baseVersion (источник вечного конфликта). Удаляем только
+      // свою строку: более новое значение того же ключа остаётся.
+      await dropDraftIfOwn(target.networkId, id, value);
+      return;
+    }
+    opts.onWritten?.(id);
+  };
+
+  return {
+    schedule(raw?: string): void {
+      if (opts.read === undefined) {
+        if (raw === undefined) return;
+        pending = raw;
+      }
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const value = opts.read === undefined ? pending : opts.read();
+        pending = null;
+        if (value === null) return;
+        // Поколение фиксируется В МОМЕНТ срабатывания: задача пойдёт в очередь
+        // и может стартовать уже после `settle`/`flush`.
+        const generationAtFire = generation;
+        void run(() => write(generationAtFire, value));
+      }, opts.delayMs ?? 800);
+    },
+    settle(): void {
+      generation += 1;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      pending = null;
+    },
+    async flush(raw?: string): Promise<void> {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      const value = currentText(raw);
+      pending = null;
+      // Начатые записи стали неактуальны: они удалят свои строки, а финальный
+      // текст встанет в очередь после них и не будет перетёрт.
+      generation += 1;
+      if (value === null) {
+        await chain;
+        return;
+      }
+      await run(() => write(null, value));
+    },
+    dispose(): void {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+      const value = currentText(undefined);
+      pending = null;
+      if (value !== null) {
+        const generationAtDispose = generation;
+        void run(() => write(generationAtDispose, value));
+      }
+    },
+  };
+}
+
+/**
+ * Зеркало черновика текста источника трансклюзии (задача `6a085e01`, ошибка
+ * `1b5446af`). Одно место, где строится ключ черновика: `entityType` =
+ * `'transclusion'`, `entityId` = владелец-сущность поля (без id комментария,
+ * ошибка `6d4d60ef`), `field` = `sourceId#section`.
+ *
+ * `read` читает последний текст блока в момент записи (сигнал «блок грязный»
+ * приходит без текста); `flush` — финальный текст перед «Единой записью» или
+ * офлайн-уходом.
+ */
+export function createSourceDraftMirror(opts: {
+  networkId: string;
+  /** Владелец-сущность поля; `undefined` — ключа нет, зеркало не пишет. */
+  ownerKey: () => string | undefined;
+  sourceId: string;
+  section: string | null;
+  read: () => string | null;
+  delayMs?: number;
+}): DraftMirror {
+  return createDraftMirror({
+    target: () => {
+      const ownerKey = opts.ownerKey();
+      if (ownerKey === undefined) return null;
+      return {
+        networkId: opts.networkId,
+        entityType: 'transclusion',
+        entityId: ownerKey,
+        field: sourceDraftField(opts.sourceId, opts.section),
+        baseVersion: null,
+      };
+    },
+    read: opts.read,
+    delayMs: opts.delayMs,
+  });
+}
 
 /** Convenience import for tests without DOM usage. */
 export function draftsEnabled(): boolean {

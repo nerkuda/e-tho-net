@@ -62,8 +62,8 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         "Switch the calling API key's current session layer: every later call of this key — reads and " +
         "writes alike — runs in the new layer's context. A service (reserve) layer cannot be selected; " +
-        'selecting the current layer again is a no-op. `etn.changes.list` forces a full resync once ' +
-        '`since_seq` predates this switch.',
+        'selecting the current layer again is a no-op. `etn.ops { action: "changes.list" }` forces ' +
+        'a full resync once `since_seq` predates it.',
       inputSchema: LayersSelect.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.select'],
     },

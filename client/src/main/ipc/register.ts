@@ -6,13 +6,14 @@
  * map from `handlers.ts`. All state lives here — `handlers.ts` stays pure.
  *
  * С фазой Q один `RealtimeClient` заменён пулом (`TabRealtimePool`) — по сокету
- * на каждую открытую сеть; refcount растёт при `etn.tabs.open`/снижается при
- * `etn.tabs.close`.
+ * на каждую открытую сеть. Владение — сетью: `etn.networks.open` и
+ * `etn.tabs.open` делят одну ссылку (повторный acquire её не копит), а
+ * `etn.tabs.close` последнего таба сети опускает счётчик до нуля.
  */
 
 import { randomUUID } from 'node:crypto';
 import { ipcMain, type BrowserWindow } from 'electron';
-import { UI_STATE_KEY, type CurrentUser, type Network } from '@etn/shared';
+import { UI_STATE_KEY, type CurrentUser } from '@etn/shared';
 
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog, truncateForLog } from '../log/client-log.js';
@@ -20,13 +21,28 @@ import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
 import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
-import { createHandlers, selfMutationNetwork } from './handlers.js';
+import {
+  actionProbeNetwork,
+  blockedMutationNetwork,
+  connectionLostIpcError,
+  createHandlers,
+  selfMutationNetwork,
+} from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
+import { ConnectionLifecycle } from './connection-lifecycle.js';
 import { toIpcErrorEnvelope } from './contract.js';
 import type { IpcCallContext, IpcInvokePayload } from './contract.js';
 
 /** IPC calls slower than this are journaled as WARN instead of INFO (f051bf95 §3). */
 const IPC_SLOW_MS = 500;
+
+/**
+ * A user action that has not settled within this window triggers an on-demand
+ * liveness probe of its network (defect de34b35b): a live connection returns
+ * to `connected` on the first frame, a dead one is force-reconnected instead
+ * of hanging for the REST retry cycle.
+ */
+const ACTION_PROBE_DELAY_MS = 3_000;
 
 /** Options for {@link registerIpc}. */
 export interface RegisterIpcOptions {
@@ -57,11 +73,13 @@ export interface IpcHandle {
  * `etnimg` protocol fallback that downloads server-stored attachment files.
  */
 export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
-  let rest: RestClient | null = null;
-  let pool: TabRealtimePool | null = null;
-  let profile: ServerProfileRow | null = null;
-  let currentNetworkId: string | null = null;
-  let currentUser: CurrentUser | null = null;
+  // Connection state and the `openNetwork` epoch live in an Electron-free
+  // module so the «late answer after disconnect» race is unit-testable
+  // (defect 50fe8807; precedent — `connect-active-profile.ts`).
+  const conn = new ConnectionLifecycle<RestClient, TabRealtimePool, ServerProfileRow, CurrentUser>({
+    setUiState: (profileId, networkId, key, value) =>
+      opts.localDb.setUiState(profileId, networkId, key, value),
+  });
   /** G8 applier state: in-memory thought/link cache. */
   const rtState = new RealtimeState();
   /**
@@ -89,6 +107,16 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       baseUrl: p.base_url,
       getApiKey: keyResolver(p),
       getClientId: () => opts.clientId,
+      // Pool-wide health for network-less mutating routes (`me.*`,
+      // `networks.create`, …), verify remark 1 (de34b35b): the server counts
+      // as down when the pool knows at least one network and NONE is
+      // `connected`. An empty pool (startup / no open tabs) never blocks.
+      isServerDown: () => {
+        const p2 = conn.getPool();
+        if (p2 === null) return false;
+        const ids = p2.activeNetworkIds();
+        return ids.length > 0 && ids.every((id) => p2.getStatus(id) !== 'connected');
+      },
     });
     // key check before anything else; only a successful check persists the
     // profile as active (defect «клиент не запоминает сервер»: previously
@@ -104,7 +132,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       getApiKey: keyResolver(p),
       localDb: opts.localDb,
       rtState,
-      getCurrentUserId: () => currentUser?.id ?? p.user_id ?? null,
+      getCurrentUserId: () => conn.getCurrentUser()?.id ?? p.user_id ?? null,
       removeFromFocusHistoryEverywhere: (thoughtId: string) => {
         // The unified visit history (11 §2.3.1, 0.5.5). Pool only carries one
         // active network at a time per applier invocation; we sweep every
@@ -116,24 +144,52 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         }
       },
       getCurrentFocusId: (nid: string) => {
-        if (!profile) return null;
+        const currentProfile = conn.getProfile();
+        if (currentProfile === null) return null;
         // Walk active tabs to find the focus for the requested network — this
         // is a per-network query, used by the applier when echoing back.
-        for (const tab of opts.localDb.listTabs(profile.id)) {
+        for (const tab of opts.localDb.listTabs(currentProfile.id)) {
           if (tab.network_id !== nid) continue;
-          const focusId = opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, tab.tab_id);
+          const focusId = opts.localDb.getUiState(currentProfile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, tab.tab_id);
           if (focusId !== null) return focusId;
         }
         // Legacy fallback: tab-less rows (migration 001–004).
-        return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
+        return opts.localDb.getUiState(currentProfile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
       },
       broadcast,
+      // Read-epoch boundary for the REST in-flight GET dedup (ошибка da7bbb53):
+      // an applied DATA event makes every GET started before it non-shareable —
+      // its snapshot may predate the change. The renderer's follow-up reads are
+      // issued after this hook (broadcast comes second), so they fetch fresh.
+      onDataChange: () => {
+        restClient.invalidateInFlightReads();
+      },
+      // Link-down tracking per network (defect de34b35b): while the socket is
+      // not `connected`, mutating REST calls for that network are rejected
+      // before they leave main, and in-flight requests are aborted without
+      // retries. `idle` (no tab) and `connecting` (first attempt) are not
+      // outages.
+      onStatus: (networkId, status) => {
+        if (status === 'connected') {
+          restClient.setLinkDown(networkId, false);
+        } else if (status === 'suspect') {
+          // Probe in flight: new mutations are blocked, but the hung request
+          // that triggered the check must keep running — if the pong arrives
+          // the action continues (de34b35b).
+          restClient.setLinkDown(networkId, true, false);
+        } else if (status === 'reconnecting' || status === 'offline') {
+          // The probe failed / the link is down: cancel in-flight requests so
+          // the user does not wait for the 30 s × 3 REST retry cycle.
+          restClient.setLinkDown(networkId, true);
+        }
+      },
     });
 
-    rest = restClient;
-    pool = rtPool;
-    profile = p;
-    currentUser = me;
+    // Only a successful key-check reaches this point (`connectAndActivate`
+    // above throws on failure). `activate` bumps the `openNetwork` epoch and
+    // tears down the previous pool: an open request already in flight against
+    // the OLD server must not publish into this profile (defect 50fe8807).
+    conn.activate({ rest: restClient, pool: rtPool, profile: p, currentUser: me });
 
     // Q2: re-acquire realtime sockets for every previously open tab so non-
     // active tabs still receive events (dirty-marker «*» requirement).
@@ -173,16 +229,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   };
 
   const disconnect = (): void => {
-    try {
-      pool?.shutdown();
-    } catch {
-      // best-effort: dropping the reference below is the real teardown
-    }
-    pool = null;
-    rest = null;
-    profile = null;
-    currentNetworkId = null;
-    currentUser = null;
+    conn.disconnect();
   };
 
   /**
@@ -192,8 +239,8 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
    * would race against the DB sweep.
    */
   const removeProfile = async (profileId: string): Promise<void> => {
-    if (profile !== null && profile.id === profileId) {
-      disconnect();
+    if (conn.getProfile()?.id === profileId) {
+      conn.disconnect();
     }
     opts.localDb.deleteProfile(profileId);
   };
@@ -203,41 +250,25 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
    * system resume (powerMonitor, index.ts) and on the renderer `online` event
    * (forwarded here as `etn:realtime:online` from the preload bridge): a socket
    * that lived through a sleep or a network switch is often half-open, so we
-   * proactively re-establish instead of waiting for the idle watchdog.
+   * proactively re-establish instead of waiting for the idle watchdog. This is
+   * a resume of the SAME connection — the `openNetwork` epoch must not move
+   * (defect 50fe8807).
    */
   const forceReconnectRealtime = (): void => {
-    try {
-      pool?.forceReconnectAll();
-    } catch {
-      // best-effort — individual clients also swallow their own errors
-    }
-  };
-
-  const openNetwork = async (networkId: string): Promise<Network> => {
-    if (!rest) throw new Error('Not connected: call etn.server.connect first');
-    const network = await rest.getNetwork(networkId);
-    currentNetworkId = networkId;
-    if (profile) {
-      opts.localDb.setUiState(profile.id, networkId, UI_STATE_KEY.CURRENT_NETWORK_ID, networkId);
-    }
-    // Q2: explicit acquire via pool. The picker creates its own tab via
-    // `etn.tabs.open` (which also acquires, refcount-style); the legacy
-    // `etn.networks.open` path stays idempotent for tab state.
-    pool?.acquire(networkId);
-    return network;
+    conn.forceReconnectRealtime();
   };
 
   const handlers = createHandlers({
     localDb: opts.localDb,
-    getRest: () => rest,
-    getRealtimePool: () => pool,
-    getProfile: () => profile,
+    getRest: () => conn.getRest(),
+    getRealtimePool: () => conn.getPool(),
+    getProfile: () => conn.getProfile(),
     connectProfile,
     addProfile,
     removeProfile,
     disconnect,
-    getCurrentNetworkId: () => currentNetworkId,
-    openNetwork,
+    getCurrentNetworkId: () => conn.getCurrentNetworkId(),
+    openNetwork: (networkId) => conn.openNetwork(networkId),
     broadcastRealtimeEvent: (event) => broadcast('realtime:event', event),
     broadcastRealtimeStatus: (status) => broadcast('realtime:status', status),
   });
@@ -247,6 +278,27 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     if (!handler) {
       getClientLog()?.error('ipc', 'unknown method', { method: payload.method });
       throw new Error(`Unknown IPC method: ${payload.method}`);
+    }
+    const args = payload.args ?? [];
+    // Centralised mutation gate (defect de34b35b): while the call's network is
+    // not `connected`, mutating channels are rejected HERE, before the handler
+    // reaches REST. Reads, `server.*` and `ui.*` are never blocked.
+    const pool = conn.getPool();
+    const blockedNetwork =
+      pool === null
+        ? null
+        : blockedMutationNetwork(
+            payload.method,
+            args,
+            (networkId) => pool?.has(networkId) ?? false,
+            (networkId) => pool?.getStatus(networkId) ?? 'idle',
+          );
+    if (blockedNetwork !== null) {
+      getClientLog()?.warn('ipc', 'mutation blocked: network link down', {
+        method: payload.method,
+        networkId: blockedNetwork,
+      });
+      return toIpcErrorEnvelope(connectionLostIpcError(blockedNetwork));
     }
     // Journal instrumentation (task f051bf95 §3): method + duration per call,
     // slow calls (>IPC_SLOW_MS) as WARN, failures as ERROR (always written).
@@ -259,9 +311,21 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     const controller = new AbortController();
     if (requestId !== null) inflight.set(requestId, controller);
     const callCtx: IpcCallContext = { signal: controller.signal };
+    // Liveness probe on a hung action (defect de34b35b): 3 s without a result
+    // asks the pool to check the connection instead of letting the user wait
+    // for the REST timeout. Cleared as soon as the call settles.
+    const probeNetwork = actionProbeNetwork(payload.method, args, conn.getCurrentNetworkId());
+    let probeTimer: NodeJS.Timeout | null = null;
+    if (probeNetwork !== null && pool !== null) {
+      probeTimer = setTimeout(() => {
+        probeTimer = null;
+        pool?.probeLiveness(probeNetwork);
+      }, ACTION_PROBE_DELAY_MS);
+      probeTimer.unref?.();
+    }
     let result: unknown;
     try {
-      result = await handler(payload.args ?? [], callCtx);
+      result = await handler(args, callCtx);
     } catch (err) {
       getClientLog()?.error('ipc', 'ipc call failed', {
         method: payload.method,
@@ -275,6 +339,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // `VERSION_CONFLICT`), восстанавливают `EtnError` в renderer из конверта.
       return toIpcErrorEnvelope(err);
     } finally {
+      if (probeTimer !== null) clearTimeout(probeTimer);
       if (requestId !== null) inflight.delete(requestId);
     }
     const durationMs = Date.now() - startedAt;
@@ -335,7 +400,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     },
     /** Force-reconnect every pooled realtime socket (resume/online, 7f4cef31). */
     forceReconnectRealtime,
-    getRest: () => rest,
-    getCurrentNetworkId: () => currentNetworkId,
+    getRest: () => conn.getRest(),
+    getCurrentNetworkId: () => conn.getCurrentNetworkId(),
   };
 }

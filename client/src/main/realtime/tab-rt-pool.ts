@@ -22,16 +22,27 @@ import type { ServerProfileRow } from '../db/local-db.js';
 import {
   RealtimeClient,
   normaliseWsUrl,
+  type LivenessProbeTrigger,
   type RealtimeStatus,
+  type RealtimeStatusDetail,
 } from '../net/ws-client.js';
-import { RealtimeState, applyRealtimeEvent } from './applier.js';
+import { RealtimeState, applyRealtimeEvent, isDataChangingEvent } from './applier.js';
 
 const NO_USER: string | null = null;
 
-/** Payload of the per-network `realtime:status` broadcast (Q2). */
+/** Payload of the per-network `realtime:status` broadcast (Q2, de34b35b). */
 export interface RealtimeStatusPayload {
   networkId: string;
   status: RealtimeStatus;
+  /** Visual qualifier (e.g. `server-restart`), absent for a plain status. */
+  detail?: RealtimeStatusDetail;
+}
+
+/** One entry of the per-network status snapshot (`realtime.getStatuses`). */
+export interface RealtimeStatusSnapshot {
+  networkId: string;
+  status: RealtimeStatus;
+  detail?: RealtimeStatusDetail;
 }
 
 /** Payload of the per-network `realtime:networkLost` broadcast (Q5). */
@@ -66,18 +77,44 @@ export interface TabRealtimePoolOptions {
   getCurrentFocusId: (networkId: string) => string | null;
   /** Broadcasts an IPC event to the renderer (window may be null/destroyed). */
   broadcast: (channel: string, payload: unknown) => void;
+  /**
+   * Optional main-process side-channel for DATA events (ошибка da7bbb53): an
+   * applied event that changes network data marks a read boundary, so the REST
+   * client can stop reusing in-flight GETs started before it. Ephemeral
+   * families (`presence.*`, `edit.*`) are not reported — see
+   * {@link isDataChangingEvent}. Called BEFORE the renderer broadcast, so any
+   * read the renderer issues in response already belongs to the new epoch.
+   */
+  onDataChange?: (event: AnyRealtimeEvent) => void;
+  /**
+   * Optional main-process side-channel for status transitions (defect
+   * de34b35b): the REST client raises `setLinkDown` per network. Broadcast to
+   * the renderer still happens on the same tick.
+   */
+  onStatus?: (networkId: string, status: RealtimeStatus, detail?: RealtimeStatusDetail) => void;
 }
 
 /** One pooled network entry. */
 interface PoolEntry {
   client: RealtimeClient;
+  /**
+   * Число владельцев сети. Сеть — единица владения сокетом: табы одной сети
+   * делят ОДИН сокет, повторное `acquire` (открытие сети, второй таб,
+   * восстановление профиля) не добавляет ссылку. Поле остаётся для
+   * диагностики и инварианта «0 или 1» (ошибка 3cd3f995).
+   */
   refCount: number;
 }
 
 /**
- * Reference-counted pool of `RealtimeClient`s. Construct on profile connect
- * (one pool per active server profile) and call {@link shutdown} when the
- * profile disconnects.
+ * Pool of `RealtimeClient`s, ONE socket per network. Construct on profile
+ * connect (one pool per active server profile) and call {@link shutdown} when
+ * the profile disconnects.
+ *
+ * Владение — сетью, не табом (ошибка 3cd3f995): `acquire` идемпотентен, потому
+ * что `tabs.open` (ровно один вызов на таб) и `networks.open` (ровно один на
+ * открытие сети) описывают ОДНО соединение. `release` зовётся, когда закрыт
+ * последний таб сети, и закрывает сокет.
  */
 export class TabRealtimePool {
   private readonly entries = new Map<string, PoolEntry>();
@@ -88,14 +125,21 @@ export class TabRealtimePool {
   }
 
   /**
-   * Acquires a socket for `networkId`, opening it lazily on first call. Each
-   * subsequent call for the same id increments the refcount and returns the
-   * same client. Safe to call when the socket is already connecting.
+   * Ensures a socket for `networkId`, opening it lazily on first call.
+   * Idempotent: repeated calls for the same network (another tab, network
+   * re-open, profile restore) return the same client and keep ONE reference.
+   * Safe to call when the socket is already connecting.
    */
   public acquire(networkId: string): RealtimeClient {
     const existing = this.entries.get(networkId);
     if (existing !== undefined) {
-      existing.refCount += 1;
+      // Инвариант «сеть = одна ссылка»: повторное открытие не копит владельцев,
+      // иначе `tabs.close` последнего таба не опускает счётчик до нуля.
+      existing.refCount = 1;
+      // Re-acquire (tab restored/activated) pushes the CURRENT status to the
+      // renderer: without it the indicator keeps the status of whichever
+      // network reported last (defect de34b35b, «зелёный не там»).
+      this.broadcastStatus(networkId, existing.client);
       return existing.client;
     }
     const client = new RealtimeClient({
@@ -114,17 +158,21 @@ export class TabRealtimePool {
   }
 
   /**
-   * Releases a reference for `networkId`. When the refcount drops to zero the
-   * socket is closed and removed from the pool. No-op if `networkId` is not
-   * tracked.
+   * Releases the network's single reference (last tab closed): drops the count
+   * to zero, closes the socket and removes it from the pool. No-op if
+   * `networkId` is not tracked.
    */
   public release(networkId: string): void {
     const entry = this.entries.get(networkId);
     if (entry === undefined) return;
-    entry.refCount -= 1;
-    if (entry.refCount > 0) return;
+    entry.refCount = 0;
     entry.client.disconnect();
     this.entries.delete(networkId);
+  }
+
+  /** Reference count of `networkId` (0 или 1) — диагностика и регресс-тесты. */
+  public refCount(networkId: string): number {
+    return this.entries.get(networkId)?.refCount ?? 0;
   }
 
   /** Returns `true` when the pool currently holds a socket for `networkId`. */
@@ -145,6 +193,46 @@ export class TabRealtimePool {
     const entry = this.entries.get(networkId);
     if (entry === undefined) return 'idle';
     return entry.client.getStatus();
+  }
+
+  /**
+   * Snapshot of every pooled network's status (defect de34b35b): the renderer
+   * pulls it once at boot so per-tab indicators start from the real state
+   * instead of waiting for the next transition.
+   */
+  public statusSnapshot(): RealtimeStatusSnapshot[] {
+    const out: RealtimeStatusSnapshot[] = [];
+    for (const [networkId, entry] of this.entries) {
+      const detail = entry.client.getStatusDetail();
+      out.push({
+        networkId,
+        status: entry.client.getStatus(),
+        ...(detail === null ? {} : { detail }),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Runs the on-demand liveness probe of `networkId` (defect de34b35b). Used
+   * by the IPC layer when a user action hangs: a live connection returns to
+   * `connected` on the first frame, a dead one reconnects without waiting for
+   * the 37 s silence threshold. No-op for an unknown network.
+   */
+  public probeLiveness(networkId: string, trigger: LivenessProbeTrigger = 'action'): void {
+    this.entries.get(networkId)?.client.probeLiveness(trigger);
+  }
+
+  /** Broadcasts one client's current status to the renderer and `onStatus`. */
+  private broadcastStatus(networkId: string, client: RealtimeClient): void {
+    const detail = client.getStatusDetail();
+    const payload: RealtimeStatusPayload = {
+      networkId,
+      status: client.getStatus(),
+      ...(detail === null ? {} : { detail }),
+    };
+    this.opts.broadcast('realtime:status', payload);
+    this.opts.onStatus?.(networkId, payload.status, payload.detail);
   }
 
   /** Tear down every socket — called on profile disconnect / app shutdown. */
@@ -201,11 +289,22 @@ export class TabRealtimePool {
         },
         event,
       );
-      if (result.applied) this.opts.broadcast('realtime:event', event);
+      if (result.applied) {
+        // Read boundary BEFORE the renderer sees the event (ошибка da7bbb53):
+        // any GET started before this data change must not be reused by the
+        // reads the renderer issues in response to it.
+        if (isDataChangingEvent(event.type)) this.opts.onDataChange?.(event);
+        this.opts.broadcast('realtime:event', event);
+      }
     });
-    client.onTyped('status', (status: RealtimeStatus) => {
-      const payload: RealtimeStatusPayload = { networkId, status };
+    client.onTyped('status', (status: RealtimeStatus, detail?: RealtimeStatusDetail) => {
+      const payload: RealtimeStatusPayload = {
+        networkId,
+        status,
+        ...(detail === undefined ? {} : { detail }),
+      };
       this.opts.broadcast('realtime:status', payload);
+      this.opts.onStatus?.(networkId, status, detail);
     });
     client.onTyped('stale', (lastSeq: number) => {
       const payload: RealtimeStalePayload = { networkId, lastSeq };

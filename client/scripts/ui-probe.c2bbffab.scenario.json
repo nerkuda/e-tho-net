@@ -1,0 +1,388 @@
+{
+  "name": "c2bbffab-custom-views-strip",
+  "description": "GUI-сценарий задачи c2bbffab «Внетиповые отборы на полосе и в диалоге — клиент» (0.14.1): С1 (МЛИ-инструменты: порядок/курсив/дефолт/сохранённый выбор/результат), подтверждения С2 (перекрытие имени — одна курсивная кнопка) и П2 (переносы: тексты подтверждений; x6 — третий элемент о занятом собственном дефолте получателя при внетиповом дефолте мысли, перекрывающем типовой), П1 (безтиповая мысль: «+» сразу редактор), П3 (назначение типа сохраняет внетиповые), realtime-переименование и перенос активного чипа. Раунд 3: overlay-репро w6 (собственный дефолт типа скрыт одноимённым внетиповым — третий элемент есть, после переноса дефолтного отбора пометка снята). Данные заводятся через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c2bbffab.scenario.json --out .tmp/etn-c2bbffab/out",
+  "timeout": 300000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+
+    {
+      "name": "seed-custom-views",
+      "eval": "(async () => { const nid='{{networkId}}', home='{{homeId}}'; const def=(v)=>JSON.stringify({version:1, filter:{entity:{kind:'id'}, operator:'eq', value:v}}); const TP=await window.etn.types.createThoughtType(nid,{name:'Инструмент-предок'}); const TPv=await window.etn.thoughtTypeViews.create(nid,TP.id,{name:'Наследуемый', definition:def(home)}); const T1=await window.etn.types.createThoughtType(nid,{name:'МЛИ-инструмент', parent_id:TP.id}); const T2=await window.etn.types.createThoughtType(nid,{name:'Каталог-дубль'}); const tv=await window.etn.thoughtTypeViews.create(nid,T1.id,{name:'Работы типа', definition:def(home), is_default:true}); const tv2=await window.etn.thoughtTypeViews.create(nid,T2.id,{name:'Кому одолжил', definition:def(home)}); const A=await window.etn.thoughts.create(nid,{title:'МЛИ-инструменты', type_id:T1.id, create_link:{direction:'parent',target_thought_id:home}}); const c1=await window.etn.thoughtCustomViews.create(nid,A.id,{name:'Кому одолжил', definition:def(home)}); const c2=await window.etn.thoughtCustomViews.create(nid,A.id,{name:'В гараже', definition:def(home), is_default:true}); const B=await window.etn.thoughts.create(nid,{title:'Каталог Б дубль', type_id:T2.id, create_link:{direction:'parent',target_thought_id:A.id}}); const cb=await window.etn.thoughtCustomViews.create(nid,B.id,{name:'Кому одолжил', definition:def(home)}); const C=await window.etn.thoughts.create(nid,{title:'Развлечения без типа', create_link:{direction:'parent',target_thought_id:A.id}}); const cc=await window.etn.thoughtCustomViews.create(nid,C.id,{name:'Для всей семьи', definition:def(home)}); const D=await window.etn.thoughts.create(nid,{title:'Каталог В того же типа', type_id:T1.id, create_link:{direction:'parent',target_thought_id:A.id}}); const E=await window.etn.thoughts.create(nid,{title:'МЛИ-оверлей', type_id:T1.id, create_link:{direction:'parent',target_thought_id:A.id}}); const eOverlay=await window.etn.thoughtCustomViews.create(nid,E.id,{name:'Работы типа', definition:def(home)}); const eDefault=await window.etn.thoughtCustomViews.create(nid,E.id,{name:'В гараже', definition:def(home), is_default:true}); window.__v4={ ids:{A:A.id,TP:TP.id,T1:T1.id,T2:T2.id,TPv:TPv.id,tv:tv.id,tv2:tv2.id,c1:c1.id,c1Version:c1.version,c2:c2.id,B:B.id,cb:cb.id,C:C.id,cc:cc.id,D:D.id,E:E.id,eOverlay:eOverlay.id,eDefault:eDefault.id} }; return JSON.stringify(window.__v4.ids); })()"
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { const q=(s)=>document.querySelector(s); window.__v4.chips=()=>[...document.querySelectorAll('.canvas-filter-strip-btn[data-view-id]')].map((b)=>{ const cs=getComputedStyle(b); return { text:(b.textContent||'').trim(), scope:b.dataset.viewScope||null, fontStyle:cs.fontStyle, opacity:cs.opacity, active:b.classList.contains('active') }; }); window.__v4.chip=(text)=>[...document.querySelectorAll('.canvas-filter-strip-btn[data-view-id]')].find((b)=>(b.textContent||'').trim()===text)||null; window.__v4.clickChip=(text)=>{ const b=window.__v4.chip(text); if(!b) return 'no-chip'; b.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return 'ok'; }; window.__v4.menuChip=(text)=>{ const b=window.__v4.chip(text); if(!b) return 'no-chip'; const r=b.getBoundingClientRect(); b.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.left+5,clientY:r.top+5})); return 'ok'; }; window.__v4.menu=()=>{ const m=[...document.querySelectorAll('.menu')]; return m[m.length-1]||null; }; window.__v4.menuLabels=()=>{ const m=window.__v4.menu(); if(!m) return []; return [...m.querySelectorAll('.menu-item')].map((e)=>(e.textContent||'').trim()).filter((x)=>x!==''&&x!=='—'); }; window.__v4.clickMenu=(label)=>{ const m=window.__v4.menu(); if(!m) return 'no-menu'; const row=[...m.querySelectorAll('.menu-item')].find((e)=>(e.textContent||'').includes(label)); if(!row) return 'no-item'; row.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true})); row.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return 'ok'; }; window.__v4.dialog=()=>{ const d=[...document.querySelectorAll('.dialog-backdrop')]; return d[d.length-1]||null; }; window.__v4.dialogTitle=()=>{ const d=window.__v4.dialog(); return d ? (d.querySelector('.dialog-title')?.textContent||'') : null; }; window.__v4.dialogText=()=>{ const d=window.__v4.dialog(); return d ? (d.textContent||'') : null; }; window.__v4.clickDialog=(label)=>{ const d=window.__v4.dialog(); if(!d) return 'no-dialog'; const b=[...d.querySelectorAll('.dialog-footer button')].find((e)=>(e.textContent||'').trim()===label); if(!b) return 'no-button'; b.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return 'ok'; }; window.__v4.focus=(id)=>{ const el=q('.cloud[data-id=\"'+id+'\"]')||q('[data-id=\"'+id+'\"] .cloud')||q('[data-id=\"'+id+'\"]'); if(!el) return 'no-cloud'; el.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true})); return 'ok'; }; window.__v4.zoneText=()=>(q('.zone-children')?.textContent||''); window.__v4.active=()=>{ const a=q('.canvas-filter-strip-btn.active'); return a ? { text:(a.textContent||'').trim(), scope:a.dataset.viewScope||null, mode:a.dataset.mode||null } : null; }; window.__v4.add=()=>{ const b=q('.canvas-filter-strip-add'); if(!b) return 'no-add'; b.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); return 'ok'; }; window.__v4.childrenBtn=()=>{ const b=[...document.querySelectorAll('.canvas-filter-strip-btn')].find((e)=>(e.textContent||'').trim()==='Потомки'); if(!b) return 'no-children'; b.click(); return 'ok'; }; window.__v4.clearPersist=async()=>{ await window.etn.ui.setState('{{networkId}}','focus_filter_strip','{}'); return 'ok'; }; return 'ok'; })()"
+    },
+
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "map-ready", "timeout": 30000, "waitFor": "document.querySelector('[data-id]') !== null" },
+    {
+      "name": "canvas-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas-filter-strip') !== null && document.querySelector('.canvas-focus-row .cloud') !== null"
+    },
+    {
+      "name": "seed-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "(() => { const id=window.__v4.ids.A; return document.querySelector('.cloud[data-id=\"'+id+'\"]') !== null; })()"
+    },
+    {
+      "name": "focus-seed",
+      "probe": "window.__v4.focus(window.__v4.ids.A)",
+      "expect": "ok"
+    },
+    {
+      "name": "strip-ready",
+      "timeout": 30000,
+      "waitFor": "(() => { const c=window.__v4.chips(); return c.length >= 4 && c.some((x)=>x.text==='Наследуемый') && c.some((x)=>x.text==='Кому одолжил'); })()"
+    },
+
+    {
+      "name": "c1-chips-order-and-styles",
+      "probe": "window.__v4.chips()",
+      "expect": [
+        { "text": "Наследуемый", "scope": "type", "fontStyle": "normal", "opacity": "0.85", "active": false },
+        { "text": "Работы типа", "scope": "type", "fontStyle": "normal", "opacity": "1", "active": false },
+        { "text": "Кому одолжил", "scope": "thought", "fontStyle": "italic", "opacity": "1", "active": false },
+        { "text": "В гараже", "scope": "thought", "fontStyle": "italic", "opacity": "1", "active": true }
+      ]
+    },
+    {
+      "name": "c1-custom-default-wins",
+      "probe": "window.__v4.active()",
+      "expect": { "text": "В гараже", "scope": "thought", "mode": null }
+    },
+    { "name": "c1-open-children", "eval": "window.__v4.childrenBtn()" },
+    {
+      "name": "c1-click-custom",
+      "eval": "window.__v4.clickChip('Кому одолжил')"
+    },
+    {
+      "name": "c1-custom-active",
+      "timeout": 15000,
+      "waitFor": "window.__v4.active()?.text === 'Кому одолжил'"
+    },
+    {
+      "name": "c1-custom-run-result",
+      "timeout": 20000,
+      "waitFor": "window.__v4.zoneText().includes('HOME')"
+    },
+
+    { "name": "c1-plus-menu", "eval": "window.__v4.add()" },
+    {
+      "name": "c1-plus-menu-labels",
+      "probe": "window.__v4.menuLabels()",
+      "expect": ["Новый отбор типа мысли", "Новый отбор вне типа"]
+    },
+    { "name": "c1-open-create-thought-view", "eval": "window.__v4.clickMenu('Новый отбор вне типа')" },
+    {
+      "name": "c1-thought-dialog-open",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.view-editor-body') !== null"
+    },
+    {
+      "name": "c1-thought-dialog-title",
+      "probe": "window.__v4.dialogTitle()",
+      "expect": "Создать отбор мысли «МЛИ-инструменты»"
+    },
+    {
+      "name": "c1-thought-dialog-warning",
+      "probe": "window.__v4.dialogText().includes('действует только у этой мысли')",
+      "expect": true
+    },
+    { "name": "c1-close-thought-dialog", "eval": "window.__v4.clickDialog('Отмена')" },
+    {
+      "name": "c1-thought-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() === null"
+    },
+
+    { "name": "c1-plus-menu-again", "eval": "window.__v4.add()" },
+    { "name": "c1-open-create-type-view", "eval": "window.__v4.clickMenu('Новый отбор типа мысли')" },
+    {
+      "name": "c1-type-dialog-open",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.view-editor-body') !== null"
+    },
+    {
+      "name": "c1-type-dialog-title",
+      "probe": "window.__v4.dialogTitle()",
+      "expect": "Создать отбор типа «МЛИ-инструмент»"
+    },
+    {
+      "name": "c1-type-dialog-warning",
+      "probe": "window.__v4.dialogText().includes('всех мыслях этого типа')",
+      "expect": true
+    },
+    { "name": "c1-close-type-dialog", "eval": "window.__v4.clickDialog('Отмена')" },
+    {
+      "name": "c1-type-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() === null"
+    },
+
+    { "name": "focus-B", "eval": "window.__v4.focus(window.__v4.ids.B)" },
+    {
+      "name": "c2-overlap-ready",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().length > 0"
+    },
+    {
+      "name": "c2-single-italic-chip",
+      "probe": "(() => { const c=window.__v4.chips().filter((x)=>x.text==='Кому одолжил'); return { count:c.length, scope:c[0]?.scope ?? null, fontStyle:c[0]?.fontStyle ?? null }; })()",
+      "expect": { "count": 1, "scope": "thought", "fontStyle": "italic" }
+    },
+    { "name": "c2-click-overlap-chip", "eval": "window.__v4.clickChip('Кому одолжил')" },
+    {
+      "name": "c2-overlap-chip-active",
+      "timeout": 15000,
+      "waitFor": "window.__v4.active()?.text === 'Кому одолжил'"
+    },
+
+    { "name": "focus-A-again", "eval": "window.__v4.focus(window.__v4.ids.A)" },
+    {
+      "name": "c1-persisted-choice-restored",
+      "timeout": 30000,
+      "waitFor": "window.__v4.active()?.text === 'Кому одолжил'"
+    },
+
+    { "name": "p2-custom-menu", "eval": "window.__v4.menuChip('В гараже')" },
+    {
+      "name": "p2-custom-menu-items",
+      "probe": "window.__v4.menuLabels()",
+      "expect": [
+        "Изменить отбор",
+        "Снять «по умолчанию»",
+        "Перенести отбор в отборы типа",
+        "Удалить отбор"
+      ]
+    },
+    { "name": "p2-open-transfer-to-type", "eval": "window.__v4.clickMenu('Перенести отбор в отборы типа')" },
+    {
+      "name": "p2-transfer-to-type-dialog",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('его увидят все мысли этого типа')"
+    },
+    {
+      "name": "x6-transfer-default-note",
+      "probe": "window.__v4.dialogText().includes('У получателя уже есть отбор по умолчанию — перенесённый отбор останется без этой пометки.')",
+      "expect": true
+    },
+    {
+      "name": "p2-transfer-to-type-title",
+      "probe": "window.__v4.dialogTitle()",
+      "expect": "Перенести отбор в отборы типа"
+    },
+    { "name": "p2-cancel-transfer", "eval": "window.__v4.clickDialog('Отмена')" },
+
+    { "name": "p2-type-menu", "eval": "window.__v4.menuChip('Работы типа')" },
+    { "name": "p2-open-transfer-to-thought", "eval": "window.__v4.clickMenu('Исключить отбор из отборов типа')" },
+    {
+      "name": "p2-transfer-to-thought-dialog",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('исчезнет у всех мыслей типа «МЛИ-инструмент»')"
+    },
+    { "name": "p2-cancel-transfer-back", "eval": "window.__v4.clickDialog('Отмена')" },
+
+    { "name": "p2-custom-delete-menu", "eval": "window.__v4.menuChip('В гараже')" },
+    { "name": "p2-open-delete-thought-view", "eval": "window.__v4.clickMenu('Удалить отбор')" },
+    {
+      "name": "p2-delete-thought-confirm",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('Удалить отбор «В гараже» мысли «МЛИ-инструменты»')"
+    },
+    { "name": "p2-cancel-delete-thought", "eval": "window.__v4.clickDialog('Отмена')" },
+
+    { "name": "p2-type-delete-menu", "eval": "window.__v4.menuChip('Работы типа')" },
+    { "name": "p2-open-delete-type-view", "eval": "window.__v4.clickMenu('Удалить отбор')" },
+    {
+      "name": "p2-delete-type-confirm",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('Удалить отбор «Работы типа» типа «МЛИ-инструмент»')"
+    },
+    { "name": "p2-cancel-delete-type", "eval": "window.__v4.clickDialog('Отмена')" },
+
+    {
+      "name": "p1-open-children",
+      "probe": "(async () => { const b=[...document.querySelectorAll('.canvas-filter-strip-btn')].find((e)=>(e.textContent||'').trim()==='Потомки'); if(!b) return { error:'no-children' }; b.click(); await new Promise((r)=>setTimeout(r,600)); const a=window.__v4.active(); return { mode:a?.mode ?? null, text:a?.text ?? null }; })()",
+      "expect": { "mode": "children", "text": "Потомки" }
+    },
+    {
+      "name": "p1-typeless-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"'+window.__v4.ids.C+'\"]') !== null"
+    },
+    {
+      "name": "p1-focus-typeless",
+      "probe": "window.__v4.focus(window.__v4.ids.C)",
+      "expect": "ok"
+    },
+    {
+      "name": "p1-typeless-chip",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().some((x)=>x.text==='Для всей семьи' && x.scope==='thought')"
+    },
+    {
+      "name": "p1-typeless-chip-italic",
+      "probe": "(() => { const c=window.__v4.chip('Для всей семьи'); return c ? getComputedStyle(c).fontStyle : null; })()",
+      "expect": "italic"
+    },
+    { "name": "p1-typeless-add", "eval": "window.__v4.add()" },
+    {
+      "name": "p1-add-opens-dialog-directly",
+      "timeout": 20000,
+      "waitFor": "window.__v4.dialog() !== null && document.querySelector('.view-editor-body') !== null"
+    },
+    {
+      "name": "p1-no-owner-menu",
+      "probe": "window.__v4.menu() === null",
+      "expect": true
+    },
+    {
+      "name": "p1-typeless-dialog-title",
+      "probe": "window.__v4.dialogTitle()",
+      "expect": "Создать отбор мысли «Развлечения без типа»"
+    },
+    { "name": "p1-close-dialog", "eval": "window.__v4.clickDialog('Отмена')" },
+
+    {
+      "name": "p3-assign-type",
+      "eval": "(async () => { const nid='{{networkId}}', C=window.__v4.ids.C, T1=window.__v4.ids.T1; const cur=await window.etn.thoughts.get(nid,C); await window.etn.thoughts.update(nid,C,{type_id:T1},cur.version); return 'ok'; })()"
+    },
+    {
+      "name": "p3-custom-survives-type-change",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().some((x)=>x.text==='Для всей семьи' && x.scope==='thought')"
+    },
+    {
+      "name": "p3-type-chips-appear",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().some((x)=>x.scope==='type' && x.text==='Работы типа')"
+    },
+    {
+      "name": "p3-settle-after-type-change",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,1500)); return window.__v4.chips(); })()"
+    },
+    { "name": "p3-add-menu", "eval": "window.__v4.add()" },
+    {
+      "name": "p3-add-menu-two-items",
+      "probe": "window.__v4.menuLabels()",
+      "expect": ["Новый отбор типа мысли", "Новый отбор вне типа"]
+    },
+    { "name": "p3-close-menu", "eval": "window.__v4.clickMenu('Новый отбор вне типа')" },
+    {
+      "name": "p3-dialog-open",
+      "timeout": 20000,
+      "waitFor": "window.__v4.dialog() !== null"
+    },
+    { "name": "p3-close-dialog", "eval": "window.__v4.clickDialog('Отмена')" },
+
+    { "name": "focus-D", "eval": "window.__v4.focus(window.__v4.ids.D)" },
+    {
+      "name": "c1-same-type-no-custom-chips",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().length > 0 && window.__v4.chips().every((x)=>x.scope==='type')"
+    },
+
+    {
+      "name": "rt-a-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"'+window.__v4.ids.A+'\"]') !== null"
+    },
+    {
+      "name": "rt-focus-A",
+      "probe": "window.__v4.focus(window.__v4.ids.A)",
+      "expect": "ok"
+    },
+    {
+      "name": "rt-strip-ready",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().some((x)=>x.text==='Кому одолжил')"
+    },
+    {
+      "name": "rt-activate-custom",
+      "probe": "window.__v4.clickChip('Кому одолжил')",
+      "expect": "ok"
+    },
+    {
+      "name": "rt-active-custom",
+      "timeout": 20000,
+      "waitFor": "(() => { const a=window.__v4.active(); return a !== null && a.scope === 'thought' && a.text === 'Кому одолжил'; })()"
+    },
+    { "name": "rt-rename-active", "eval": "(async () => { const r=await window.etn.thoughtCustomViews.update('{{networkId}}', window.__v4.ids.A, window.__v4.ids.c1, {name:'Кому одолжил (новое)'}, window.__v4.ids.c1Version); window.__v4.ids.c1Version=r.version; return 'ok'; })()" },
+    {
+      "name": "rt-rename-keeps-active",
+      "timeout": 30000,
+      "waitFor": "window.__v4.active()?.text === 'Кому одолжил (новое)' && window.__v4.active()?.scope === 'thought'"
+    },
+    { "name": "rt-move-active-to-type", "eval": "(async () => { await window.etn.thoughtCustomViews.moveToType('{{networkId}}', window.__v4.ids.A, window.__v4.ids.c1); return 'ok'; })()" },
+    {
+      "name": "rt-moved-chip-normal-and-active",
+      "timeout": 30000,
+      "waitFor": "(() => { const b=window.__v4.chip('Кому одолжил (новое)'); if(!b) return false; return b.dataset.viewScope === 'type' && getComputedStyle(b).fontStyle === 'normal' && b.classList.contains('active'); })()"
+    },
+
+    {
+      "name": "w6-overlay-back-to-children",
+      "probe": "(async () => { const b=[...document.querySelectorAll('.canvas-filter-strip-btn')].find((e)=>(e.textContent||'').trim()==='Потомки'); if(!b) return { error:'no-children' }; b.click(); await new Promise((r)=>setTimeout(r,600)); const a=window.__v4.active(); return { mode:a?.mode ?? null, text:a?.text ?? null }; })()",
+      "expect": { "mode": "children", "text": "Потомки" }
+    },
+    {
+      "name": "w6-overlay-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"'+window.__v4.ids.E+'\"]') !== null"
+    },
+    {
+      "name": "w6-overlay-focus-E",
+      "probe": "window.__v4.focus(window.__v4.ids.E)",
+      "expect": "ok"
+    },
+    {
+      "name": "w6-overlay-strip-ready",
+      "timeout": 30000,
+      "waitFor": "window.__v4.chips().some((x)=>x.text==='В гараже' && x.active) && window.__v4.chips().some((x)=>x.text==='Работы типа' && x.scope==='thought' && x.fontStyle==='italic')"
+    },
+    {
+      "name": "w6-overlay-before",
+      "probe": "(async () => { const eff=await window.etn.thoughtCustomViews.list('{{networkId}}', window.__v4.ids.E, {includeEffective:true}); const rows=(eff.meta&&eff.meta.effective)||[]; const typeRow=rows.find((v)=>v.name==='Работы типа'&&v.scope==='type')||null; const overlay=rows.find((v)=>v.name==='Работы типа'&&v.scope==='thought')||null; const moved=rows.find((v)=>v.name==='В гараже')||null; return { typeRowInEffective: typeRow, overlay: overlay?{scope:overlay.scope,is_default:overlay.is_default}:null, movedBefore: moved?{scope:moved.scope,is_default:moved.is_default,own_default:moved.own_default}:null }; })()",
+      "expect": {
+        "typeRowInEffective": null,
+        "overlay": { "scope": "thought", "is_default": false },
+        "movedBefore": { "scope": "thought", "is_default": true, "own_default": true }
+      }
+    },
+    { "name": "w6-overlay-menu", "eval": "window.__v4.menuChip('В гараже')" },
+    { "name": "w6-overlay-click-transfer", "eval": "window.__v4.clickMenu('Перенести отбор в отборы типа')" },
+    {
+      "name": "w6-overlay-dialog",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() !== null && window.__v4.dialogText().includes('его увидят все мысли этого типа')"
+    },
+    {
+      "name": "w6-overlay-dialog-note",
+      "probe": "window.__v4.dialogText().includes('У получателя уже есть отбор по умолчанию — перенесённый отбор останется без этой пометки.')",
+      "expect": true
+    },
+    { "name": "w6-overlay-confirm", "eval": "window.__v4.clickDialog('Подтвердить')" },
+    {
+      "name": "w6-overlay-dialog-closed",
+      "timeout": 15000,
+      "waitFor": "window.__v4.dialog() === null"
+    },
+    {
+      "name": "w6-overlay-after",
+      "probe": "(async () => { await new Promise((r)=>setTimeout(r,600)); const own=await window.etn.thoughtTypeViews.list('{{networkId}}', window.__v4.ids.T1, {includeEffective:false}); const list=own.data||[]; const moved=list.find((v)=>v.name==='В гараже')||null; const typeDefault=list.find((v)=>v.name==='Работы типа')||null; const eff=await window.etn.thoughtCustomViews.list('{{networkId}}', window.__v4.ids.E, {includeEffective:true}); const rows=(eff.meta&&eff.meta.effective)||[]; const movedEff=rows.find((v)=>v.name==='В гараже')||null; return { movedType: moved?{is_default:moved.is_default}:null, typeDefault: typeDefault?{is_default:typeDefault.is_default}:null, movedEffective: movedEff?{scope:movedEff.scope,is_default:movedEff.is_default,own_default:movedEff.own_default}:null }; })()",
+      "expect": {
+        "movedType": { "is_default": false },
+        "typeDefault": { "is_default": true },
+        "movedEffective": { "scope": "type", "is_default": false, "own_default": false }
+      }
+    }
+  ]
+}

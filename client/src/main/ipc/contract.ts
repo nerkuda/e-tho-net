@@ -43,8 +43,11 @@ import type {
   CrossNetworkDuplicateResponse,
   CrossNetworkStructureQueryResponse,
   PropertyCrossResolveResult,
+  ThoughtPropertiesReorderedItem,
+  ThoughtPropertyOrderInput,
   DuplicateHit,
   DuplicateMatchKind,
+  DuplicateSearchMode,
   EtnErrorCode,
   ExportJob,
   ExportRequest,
@@ -197,6 +200,46 @@ export interface IpcErrorEnvelope {
     details?: unknown;
     request_id?: string;
   };
+}
+
+/**
+ * Фактическая причина сетевого отказа транспорта (ошибка 390e9746). Main
+ * кладёт её в `details` ошибки запроса из того, что реально видно в отказе
+ * (`fetch failed` + цепочка `cause`, коды ОС, наш таймаут); renderer
+ * переводит причину в человеческий текст. Причины не выдумываются: всё, что
+ * не распознано, — `other`.
+ *
+ *  - `refused` — соединение отклонено (ECONNREFUSED): сервер не запущен/порт закрыт;
+ *  - `timeout` — ответ не пришёл за отведённое время;
+ *  - `dns` — адрес не разрешился (ENOTFOUND/EAI_AGAIN);
+ *  - `unreachable` — сеть/хост недоступны (ENETUNREACH/EHOSTUNREACH);
+ *  - `reset` — установленное соединение сброшено другой стороной
+ *    (ECONNRESET, undici `UND_ERR_SOCKET` «other side closed»);
+ *  - `other` — прочий сетевой сбой без различимой причины.
+ */
+export type ConnectFailureReason =
+  | 'refused'
+  | 'timeout'
+  | 'dns'
+  | 'unreachable'
+  | 'reset'
+  | 'other';
+
+/** `details` транспортного отказа запроса — контракт main → renderer. */
+export interface ConnectFailureDetails {
+  kind: 'connect-failed';
+  reason: ConnectFailureReason;
+}
+
+/**
+ * Per-network realtime status as delivered by `realtime.getStatuses`
+ * (defect de34b35b). `status` is one of `RtStatus`; `detail` qualifies it
+ * (`server-restart` → «Сервер перезапускается…»).
+ */
+export interface RealtimeStatusSnapshotDto {
+  networkId: string;
+  status: string;
+  detail?: string;
 }
 
 /**
@@ -380,6 +423,9 @@ export interface DraftRecord {
   createdAt: string;
 }
 
+/** Which stored drafts {@link EtnApi.ui.draftList} returns (default `pending`). */
+export type DraftListFilter = 'pending' | 'conflict' | 'all';
+
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
 export interface EtnApi {
   server: {
@@ -497,6 +543,8 @@ export interface EtnApi {
       synonyms?: string[],
       /** Optional thought-type filter (link-property pickers). */
       typeIds?: string[],
+      /** `dedupe` (default, strict duplicates) vs `search` (live search, 0.4.5). */
+      mode?: DuplicateSearchMode,
     ): Promise<DuplicateHit[]>;
     /**
      * Кросс-сетевой поиск дублей (задача eb1a3f43): веером по списку сетей
@@ -511,6 +559,7 @@ export interface EtnApi {
       title: string,
       synonyms?: string[],
       typeIds?: string[],
+      mode?: DuplicateSearchMode,
     ): Promise<CrossNetworkDuplicateResponse>;
     /**
      * Кросс-сетевой поиск (задача eb1a3f43, требование c98d5d19). Возвращает
@@ -944,13 +993,79 @@ export interface EtnApi {
      *  (case-insensitive); the server matches it in the effective chain
      *  and substitutes `$thought.*` tokens before executing the filter.
      *  When the resolver cannot bind a token, `meta.unresolved` explains
-     *  why and the lower zone reads from there (spec `9984aa98`). */
+     *  why and the lower zone reads from there (spec `9984aa98`).
+     *
+     *  `options.signal` отменяет устаревший прогон (ошибка 6d78ccab):
+     *  быстрый перебор отборов не оставляет конкурирующие запросы, а ответ
+     *  отменённого прогона не публикуется в нижней зоне. */
     run(
       networkId: string,
       thoughtId: string,
       viewName: string,
       opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+      options?: { signal?: AbortSignal },
     ): Promise<RunThoughtTypeViewResult>;
+    /**
+     * `POST /thought-types/{id}/views/{viewId}/move-to-thought` — перенос
+     * владельца «тип → вне» (0.14.1, операция 85414fbd): отбор становится
+     * внетиповым у указанной мысли и исчезает у прочих мыслей типа.
+     * `thoughtTypeId` — `defined_on` отбора (для унаследованного — тип-владелец).
+     */
+    moveToThought(
+      networkId: string,
+      thoughtTypeId: string,
+      viewId: string,
+      targetThoughtId: string,
+    ): Promise<import('@etn/shared').TypeViewMoveToThoughtResult>;
+  };
+  /**
+   * Внетиповые отборы мысли (0.14.1, операция 5e55b7bb): CRUD + перенос
+   * владельца «вне типа → тип» (операция 85414fbd).
+   */
+  thoughtCustomViews: {
+    /**
+     * `GET /thoughts/{id}/views` — собственные внетиповые отборы мысли.
+     * `includeEffective: true` (по умолчанию) добавляет полный эффективный
+     * набор (`meta.effective`: типовые по цепочке + внетиповые) — источник
+     * полосы отборов (требование 045f539a).
+     */
+    list(
+      networkId: string,
+      thoughtId: string,
+      opts?: { includeEffective?: boolean },
+    ): Promise<import('@etn/shared').ThoughtViewsResult>;
+    /** `POST /thoughts/{id}/views` — create a custom view of the thought. */
+    create(
+      networkId: string,
+      thoughtId: string,
+      input: import('@etn/shared').ThoughtCustomViewInput,
+    ): Promise<import('@etn/shared').ThoughtCustomView>;
+    /** `PATCH /thoughts/{id}/views/{viewId}` — partial update with
+     *  optimistic concurrency (`expectedVersion` → `If-Match`). */
+    update(
+      networkId: string,
+      thoughtId: string,
+      viewId: string,
+      input: import('@etn/shared').ThoughtCustomViewUpdateInput,
+      expectedVersion: number,
+    ): Promise<import('@etn/shared').ThoughtCustomView>;
+    /** `DELETE /thoughts/{id}/views/{viewId}` — optimistic concurrency. */
+    remove(
+      networkId: string,
+      thoughtId: string,
+      viewId: string,
+      expectedVersion: number,
+    ): Promise<void>;
+    /**
+     * `POST /thoughts/{id}/views/{viewId}/move-to-type` — перенос владельца
+     * «вне типа → тип» (0.14.1, операция 85414fbd). Ответ — карточка отбора у
+     * нового владельца-типа.
+     */
+    moveToType(
+      networkId: string,
+      thoughtId: string,
+      viewId: string,
+    ): Promise<import('@etn/shared').CustomViewMoveToTypeResult>;
   };
   properties: {
     /**
@@ -970,13 +1085,32 @@ export interface EtnApi {
       ownerId: string,
       key: string,
       value: unknown,
+      /**
+       * Сторона свойства-связи (0.14.1, требование 87039bc8): у симметричного
+       * типа связи display-имя одинаково у обеих сторон — без стороны сервер
+       * не может различить адрес записи.
+       */
+      side?: 'source' | 'target' | null,
     ): Promise<void>;
     remove(
       networkId: string,
       ownerType: 'thought' | 'link',
       ownerId: string,
       key: string,
+      /** Сторона свойства-связи — см. {@link set}. */
+      side?: 'source' | 'target' | null,
     ): Promise<void>;
+    /**
+     * `PUT /thoughts/{id}/properties/order` — полный набор пер-мысленного
+     * порядка внетиповых свойств (0.14.1, контракт 27ed2b39). Запрос приводит
+     * таблицу к переданному массиву; ответ — нормализованный набор с
+     * вычисленными сервером сторонами.
+     */
+    reorder(
+      networkId: string,
+      thoughtId: string,
+      items: ThoughtPropertyOrderInput[],
+    ): Promise<ThoughtPropertiesReorderedItem[]>;
     /**
      * Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a).
      * REST `POST …/thoughts|links/{id}/properties/{key}/cross-resolve`.
@@ -1223,10 +1357,19 @@ export interface EtnApi {
   realtime: {
     onEvent(cb: (event: unknown) => void): () => void;
     /**
-     * Per-network status change (Q2). Payload: `{networkId, status}` where
-     * `status` is one of `'idle'|'connecting'|'connected'|'reconnecting'|'offline'`.
+     * Per-network status change (Q2, de34b35b). Payload:
+     * `{networkId, status, detail?}` where `status` is one of
+     * `'idle'|'connecting'|'connected'|'reconnecting'|'offline'|'suspect'`.
      */
-    onStatusChange(cb: (payload: { networkId: string; status: string }) => void): () => void;
+    onStatusChange(
+      cb: (payload: { networkId: string; status: string; detail?: string }) => void,
+    ): () => void;
+    /**
+     * Snapshot of every pooled network's status (defect de34b35b). The
+     * renderer pulls it once at boot so tab switches show the right indicator
+     * instead of the status of whichever network reported last.
+     */
+    getStatuses(): Promise<RealtimeStatusSnapshotDto[]>;
     /**
      * `resume.stale` per network (Q2). Payload: `{networkId, lastSeq}` — the
      * UI must fully re-focus the network whose event-log window was exceeded.
@@ -1282,10 +1425,22 @@ export interface EtnApi {
     setState(networkId: string, key: string, value: string, tabId?: string | null): Promise<void>;
     /** Saves an edit draft in the local DB; returns the draft id (H19). */
     draftSave(input: DraftSaveInput): Promise<string>;
-    /** Lists drafts of the active profile for a network (H19 retry). */
-    draftList(networkId: string): Promise<DraftRecord[]>;
+    /**
+     * Lists drafts of the active profile for a network (H19 retry).
+     *
+     * `filter` defaults to `pending` — the auto-retry queue. `conflict` returns
+     * drafts excluded from retries (version mismatch, kept intact), `all` —
+     * every stored row of the network (ошибка 5726744b).
+     */
+    draftList(networkId: string, filter?: DraftListFilter): Promise<DraftRecord[]>;
     /** Deletes a draft (H19 — on successful send). */
     draftDelete(id: string): Promise<void>;
+    /**
+     * Changes the lifecycle status of a draft. Used to mark a draft
+     * `conflict` after the first `VERSION_CONFLICT` so it stops being retried
+     * on every connect (ошибка 5726744b).
+     */
+    draftSetStatus(id: string, status: DraftStatus): Promise<void>;
   };
   meta: {
     /**
@@ -1622,13 +1777,31 @@ export type EtnBridgeStructures = Omit<EtnApi['structures'], 'query' | 'queryIds
 };
 
 /**
+ * Мост-форма отменяемого прогона отбора (ошибка 6d78ccab): тот же приём, что
+ * у «Структур». `AbortSignal` — host-объект и не переживает сериализацию
+ * `contextBridge`, поэтому за мост уходит только `requestId`, а слушатель
+ * `abort` живёт в renderer-фасаде {@link EtnApi['thoughtTypeViews'].run}.
+ */
+export type EtnBridgeThoughtTypeViews = Omit<EtnApi['thoughtTypeViews'], 'run'> & {
+  /** `POST /thoughts/{thoughtId}/views/{view}/run` с отменяемым `requestId`. */
+  run(
+    networkId: string,
+    thoughtId: string,
+    viewName: string,
+    opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+    requestId?: string,
+  ): Promise<RunThoughtTypeViewResult>;
+};
+
+/**
  * Сырая поверхность, которую preload выставляет в renderer через
  * `contextBridge.exposeInMainWorld('etn', …)` — то, чем реально является
  * `window.etn`. Renderer-код работает с ней через фасад `renderer/lib/etn.ts`,
  * типизированный публичной {@link EtnApi} (сигнатура с `AbortSignal`).
  */
-export type EtnBridgeApi = Omit<EtnApi, 'structures'> & {
+export type EtnBridgeApi = Omit<EtnApi, 'structures' | 'thoughtTypeViews'> & {
   structures: EtnBridgeStructures;
+  thoughtTypeViews: EtnBridgeThoughtTypeViews;
   /**
    * Fire-and-forget отмена вызова по `requestId` (требование ebed4980): шлёт
    * `etn:cancel` в main, ответа не ждёт. Вызывается renderer-фасадом из

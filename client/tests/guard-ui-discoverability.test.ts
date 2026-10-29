@@ -16,10 +16,22 @@
  * 2. **Hover-only поведение компонента (`lib/ui`).** Компонент словаря не
  *    вешает функцию на `mouseenter`/`mouseover` — это делает её недостижимой
  *    без мыши (тач, клавиатура).
- * 3. **Хоткей без мышиного пути (`lib/ui`).** Модуль словаря, обрабатывающий
- *    горячую клавишу (`ctrlKey`/`metaKey`), обязан иметь и мышиный путь
+ * 3. **Хоткей без мышиного пути (`lib/ui`).** Модуль словаря, который сам
+ *    вешает DOM-слушатели (`addEventListener(`) и обрабатывает горячую клавишу
+ *    (`ctrlKey`/`metaKey`), обязан иметь и мышиный путь
  *    (`pointerdown`/`mousedown`/`click`) в том же модуле — горячая клавиша
  *    лишь ускоритель, не единственный путь.
+ *
+ *    Чистые модули правил (`lib/ui/nav-core.ts` и подобные), которые не вешают
+ *    слушателей, а только раскладывают клавишу в действие и считают индекс,
+ *    осознанно пропускаются: хоткея в них нет — есть таблица соответствий.
+ *    **Граница проверки.** Условие «вешает слушатели» — не лазейка для снятия
+ *    `addEventListener`, а граница области: модуль, который перестал вешать
+ *    слушатели, выходит из-под проверки молча. Поэтому снятие слушателя из
+ *    модуля, который раньше им пользовался, требует ревью: хоткей без
+ *    слушателя — либо мёртвый код (удаляй вместе с клавишей), либо переезд
+ *    обработки в другой модуль (проверяй новый). Сторож этого не поймает — он
+ *    проверяет только модули, которые сами объявляют DOM-слушатели.
  *
  * Карта хоткеев всего клиента (08-ui-spec) — вне словаря и проверяется
  * выборочно при переводе экрана (см. отчёт задачи e45ca252).
@@ -39,6 +51,31 @@ import { ShimElement } from './dom-shim.js';
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 const UI_ROOT = path.join(RENDERER_ROOT, 'lib', 'ui');
+
+/**
+ * Нарушения правила «хоткей без мышиного пути» в наборе модулей.
+ *
+ * Проверяются модули, которые САМИ вешают DOM-слушатели (`addEventListener(`):
+ * у них обработка горячей клавиши (`ctrlKey`/`metaKey`) обязана иметь
+ * клавиатурно-независимый путь (`pointerdown`/`mousedown`/`click`/`dblclick`).
+ * Чистые модули правил (`nav-core.ts` и подобные) осознанно пропускаются —
+ * граница области описана в шапке файла. Функция отделена от обхода каталога,
+ * чтобы самопроверка могла подать фикстуры без файловой системы.
+ */
+export function hotkeyOffenders(
+  files: ReadonlyArray<{ name: string; source: string }>,
+): string[] {
+  const offenders: string[] = [];
+  for (const { name, source } of files) {
+    // Чистое правило без единого DOM-слушателя не может сделать действие
+    // «только клавиатурным»: хоткей и мышиный путь ему навешивает фасад.
+    if (!/addEventListener\(/.test(source)) continue;
+    if (!/(?:ctrlKey|metaKey)/.test(source)) continue;
+    const pointerPath = /addEventListener\(\s*['"](?:pointerdown|mousedown|click|dblclick)['"]/.test(source);
+    if (!pointerPath) offenders.push(name);
+  }
+  return offenders;
+}
 
 /**
  * DOM/window-шим для поведенческой проверки сборки дерева: сторож проверяет
@@ -209,14 +246,12 @@ describe('guard: обнаружимость действий (e45ca252, стан
   });
 
   it('хоткей в lib/ui имеет мышиный путь в том же модуле', () => {
-    const offenders: string[] = [];
-    for (const file of fs.readdirSync(UI_ROOT).filter((f) => f.endsWith('.ts'))) {
-      const src = fs.readFileSync(path.join(UI_ROOT, file), 'utf8');
-      const hotkey = /(?:ctrlKey|metaKey)/.test(src);
-      if (!hotkey) continue;
-      const pointerPath = /addEventListener\(\s*['"](?:pointerdown|mousedown|click|dblclick)['"]/.test(src);
-      if (!pointerPath) offenders.push(`  • lib/ui/${file}`);
-    }
+    const offenders = hotkeyOffenders(
+      fs
+        .readdirSync(UI_ROOT)
+        .filter((f) => f.endsWith('.ts'))
+        .map((file) => ({ name: `lib/ui/${file}`, source: fs.readFileSync(path.join(UI_ROOT, file), 'utf8') })),
+    );
     if (offenders.length > 0) {
       throw new Error(
         `Хоткей без мышиного пути (${offenders.length}):\n${offenders.join('\n')}\n\n` +
@@ -224,6 +259,42 @@ describe('guard: обнаружимость действий (e45ca252, стан
           'обязан быть pointer/click-путь (стандарт 1b5f6200).',
       );
     }
+  });
+
+  it('анализ хоткеев краснеет на модуле-слушателе без мышиного пути', () => {
+    // Нарушение: модуль сам вешает слушатель и знает Ctrl, а мышиного пути нет.
+    assert.deepEqual(
+      hotkeyOffenders([
+        {
+          name: 'bad.ts',
+          source:
+            "root.addEventListener('keydown', (e) => { if (e.ctrlKey) go(); });\n",
+        },
+      ]),
+      ['bad.ts'],
+      'хоткей без pointer/click-пути обязан распознаваться',
+    );
+    // Мышиный путь в том же модуле снимает нарушение.
+    assert.deepEqual(
+      hotkeyOffenders([
+        {
+          name: 'ok.ts',
+          source:
+            "root.addEventListener('keydown', (e) => { if (e.ctrlKey) go(); });\n" +
+            "root.addEventListener('click', () => go());\n",
+        },
+      ]),
+      [],
+    );
+    // Граница из шапки: чистый модуль правил слушателей не вешает — вне проверки,
+    // хотя литерал `ctrlKey` в нём есть.
+    assert.deepEqual(
+      hotkeyOffenders([
+        { name: 'pure-rules.ts', source: "const actions = { 'Ctrl+ArrowUp': 'collapse' }; e.ctrlKey;\n" },
+      ]),
+      [],
+      'модуль без addEventListener осознанно пропускается (граница в шапке)',
+    );
   });
 
   it('анализ hover-only краснеет на умышленном нарушении', () => {

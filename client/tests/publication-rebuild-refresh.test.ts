@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import type { Publication, PublicationUpdateInput } from '@etn/shared';
 
 import { ShimElement } from './dom-shim.js';
+import { mountStatusMessage } from '../src/renderer/lib/status-message.js';
 import type { MdEditor } from '../src/renderer/editor/md-editor.js';
 import { store } from '../src/renderer/state.js';
 import {
@@ -109,6 +110,11 @@ function installShim(seed: Publication[]): void {
   });
 
   bodyEl = new ShimElement('body');
+  // С 0.14.1 (задача 28d22b8a) подтверждение пересборки — рутинное сообщение
+  // статус-бара, а не тост: монтируем зону, чтобы видеть текст.
+  const statusHost = new ShimElement('span', 'sb-item sb-message');
+  bodyEl.append(statusHost);
+  mountStatusMessage(statusHost);
   (globalThis as any).HTMLElement = ShimElement;
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
@@ -294,7 +300,7 @@ describe('пересборка публикации из карточки (ош�
         'рабочая область оповещена ключом сборки (pub-assembly)',
       );
       assert.ok(
-        bodyEl.findAll('notice').some((n) => n.flatText().includes('Документ пересобран')),
+        (bodyEl.querySelector('.sb-message')?.flatText() ?? '').includes('Документ пересобран'),
         'видно подтверждение пересборки',
       );
       assert.equal(

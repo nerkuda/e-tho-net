@@ -260,7 +260,9 @@ describe('под-выборки как значения — квантифика
 
     const set = leaf({ kind: 'type' }, 'in', [v]);
     assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'type' }, 'in', sub(set, 'in')))), ['tv']);
-    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'type' }, 'not_in', sub(set, 'not_in')))), ['tnull', 'tu']);
+    // Листовая семантика отрицательного ссылочного оператора (ошибка a6866689):
+    // мысль без типа НЕ проходит «не в» — «значения нет» выражает «не заполнено».
+    assert.deepEqual(runAst(ndb, ast(leaf({ kind: 'type' }, 'not_in', sub(set, 'not_in')))), ['tu']);
     assert.ok(
       expectEtnError(() => runAst(ndb, ast(leaf({ kind: 'type' }, 'all_of', sub(set, 'all_in'))))),
       '«все в (выборке)» на одиночном «Тип» — ошибка валидации',

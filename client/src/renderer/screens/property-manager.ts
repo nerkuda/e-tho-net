@@ -113,6 +113,7 @@ import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { createTree, TREE_LABEL_CLASS, type TreeItem } from '../lib/ui/tree.js';
+import { bindSearchNav } from '../lib/ui/search-nav.js';
 import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
 import { queryKeys } from '../lib/live/query-keys.js';
 import { invalidateAfterMutation } from '../lib/live/mutator.js';
@@ -2432,7 +2433,10 @@ function buildUsagePanel(
         size: 's',
         class: 'link-btn',
         title: 'Открыть тип',
-        onClick: () => openTypeEditorByUsage(b),
+        // Промис обработчика ожидается: отказ чтения реестра обрабатывается
+        // внутри (errorDialog), необработанного отказа в renderer нет
+        // (ошибка b55fedb6).
+        onClick: () => void openTypeEditorByUsage(b),
       });
       nameCell.append(link);
       const countCell = el('td', 'muted', String(b.values_in_type_count));
@@ -2452,19 +2456,26 @@ function buildUsagePanel(
    *  редактор типа связи упразднён, единственная точка редактирования —
    *  свойство-связь). */
   async function openTypeEditorByUsage(row: PropertyUsageRow): Promise<void> {
-    if (row.owner_type === 'thought_type') {
-      const t = store.state.thoughtTypes.find((tt) => tt.id === row.owner_id);
-      if (t !== undefined) {
-        const { showThoughtTypeEditor } = await import('./type-manager.js');
-        showThoughtTypeEditor(t, () => void reload());
+    try {
+      if (row.owner_type === 'thought_type') {
+        const t = store.state.thoughtTypes.find((tt) => tt.id === row.owner_id);
+        if (t !== undefined) {
+          const { showThoughtTypeEditor } = await import('./type-manager.js');
+          showThoughtTypeEditor(t, () => void reload());
+        }
+      } else {
+        // link_type: открываем свойство-связь.
+        const regRows = await etn.propertyRegistry.list(networkId);
+        const prop = regRows.find((p) => p.value_type === 'link' && p.config?.link_type_id === row.owner_id);
+        if (prop !== undefined) {
+          openPropertyManagerEditor(prop, onChanged);
+        }
       }
-    } else {
-      // link_type: открываем свойство-связь.
-      const regRows = await etn.propertyRegistry.list(networkId);
-      const prop = regRows.find((p) => p.value_type === 'link' && p.config?.link_type_id === row.owner_id);
-      if (prop !== undefined) {
-        openPropertyManagerEditor(prop, onChanged);
-      }
+    } catch (err) {
+      // Отказ чтения реестра (связь/сеть) — видимая ошибка, как у соседних
+      // действий менеджера; молчаливого «кнопка не работает» больше нет
+      // (ошибка b55fedb6).
+      errorDialog('Открыть тип', err);
     }
   }
 
@@ -2817,6 +2828,10 @@ export function buildLinkTypesPanel(): CataloguePanel {
     // Фильтр и автораскрытие ветвей — состояние общего компонента.
     tree.setFilter(searchQuery);
   });
+  // Поиск — первая строка диалога-списка (правило 1 требования 11ddd910):
+  // ↑/↓/Enter из него исполняет штатную навигацию дерева общим мостом, фокус
+  // остаётся в поле (ошибка 58981cf5, стандарт b6b2821d).
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => tree.handleKey(key, modifiers) });
 
   // Realtime через слой (G5): `link-type.*`/`property-registry.*` гасят
   // `types-catalog` (роутер), причина — само событие. Клик открывает свойство,

@@ -1,0 +1,254 @@
+{
+  "name": "ecdb2e7a-comment-reconnect-duplicate",
+  "description": "Ключевой GUI-сценарий ошибки ecdb2e7a: правка постоянного комментария мысли, у которой его ещё НЕТ (HOME), обрыв соединения и возврат. Досыл черновика (H19) создаёт комментарий на сервере, пока редактор ещё в правке; клик по ДРУГОЙ мысли не должен давать тоста «a permanent comment already exists for this owner» и не должен повторять ошибку на каждый клик — набранный текст обязан сохраниться (усыновление существующего комментария). Заодно проверяется крестик уведомления (ошибка 90ef5cfa): нажатие закрывает конкретный тост, счётчик узлов стека не растёт, автозакрытие по таймеру работает. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ecdb2e7a-comment-reconnect.scenario.json --out .tmp/etn-ecdb2e7a/out",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "timeout": 40000,
+      "probe": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item === null) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "canvas-ready",
+      "waitFor": "document.querySelector('.canvas-focus-row') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "home-cloud",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "seeded-cloud",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "open-home",
+      "click": ".cloud[data-id=\"{{homeId}}\"]"
+    },
+    {
+      "name": "home-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'",
+      "timeout": 30000
+    },
+    {
+      "name": "home-has-no-comment",
+      "api": {
+        "name": "home-has-no-comment",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "expression": "(Array.isArray(data)?data:data.items).filter((c)=>c.kind===\"permanent\").length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "enter-comment-edit",
+      "click": ".ui-comment [data-action=\"edit\"]"
+    },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "type-a",
+      "key": "a"
+    },
+    {
+      "name": "type-b",
+      "key": "b"
+    },
+    {
+      "name": "type-c",
+      "key": "c"
+    },
+    {
+      "name": "cm-has-text",
+      "probe": "document.querySelector('.md-field--editing .cm-content')?.textContent ?? ''",
+      "expect": "abc"
+    },
+    {
+      "name": "draft-debounce",
+      "eval": "new Promise((r)=>setTimeout(()=>r('ok'), 1600))"
+    },
+    {
+      "name": "draft-mirrored",
+      "probe": "(async () => { const rows = await window.etn.ui.draftList('{{networkId}}', 'all'); return rows.filter((d) => d.entityType === 'comment-new' && d.entityId === '{{homeId}}').map((d) => d.value); })()"
+    },
+    {
+      "name": "disconnect",
+      "probe": "(() => { const et=window.etn; return (async () => { const p=(await et.server.listProfiles()).find((x)=>x.isActive); if(!p) return 'no-profile'; window.__profileId=p.id; window.__rt=[]; et.realtime.onStatusChange((e)=>window.__rt.push(e.status)); await et.server.disconnect(); return 'ok'; })(); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "status-idle",
+      "waitFor": "Array.isArray(window.__rt) && window.__rt.includes('idle')",
+      "timeout": 20000
+    },
+    {
+      "name": "settle-after-close",
+      "eval": "new Promise((r)=>setTimeout(()=>r('ok'), 600))"
+    },
+    {
+      "name": "reconnect",
+      "probe": "(() => window.etn.server.connect(window.__profileId).then(()=> 'ok'))()",
+      "expect": "ok"
+    },
+    {
+      "name": "status-connected",
+      "waitFor": "Array.isArray(window.__rt) && window.__rt.includes('connected')",
+      "timeout": 30000
+    },
+    {
+      "name": "draft-retry-settled",
+      "eval": "new Promise((r)=>setTimeout(()=>r('ok'), 2200))"
+    },
+    {
+      "name": "server-got-comment",
+      "api": {
+        "name": "server-got-comment",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "expression": "(Array.isArray(data) ? data : data.items).filter((c) => c.kind === 'permanent').map((c) => c.body_md)"
+      },
+      "expect": [
+        "abc"
+      ]
+    },
+    {
+      "name": "editor-still-stale",
+      "probe": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null",
+      "expect": true
+    },
+    {
+      "name": "click-other-thought",
+      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "first-switch-settled",
+      "eval": "new Promise((r)=>setTimeout(()=>r('ok'), 1600))"
+    },
+    {
+      "name": "notice-texts",
+      "probe": "[...document.querySelectorAll('.notice .notice-text')].map((n)=>n.textContent)"
+    },
+    {
+      "name": "notice-count-before-close",
+      "probe": "(() => { const n = document.querySelectorAll('.notice').length; window.__noticeCount = n; return n; })()"
+    },
+    {
+      "name": "press-close-one",
+      "eval": "(() => { const b=document.querySelector('.notice .notice-close'); if(b===null) return 'none'; b.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); return 'pressed'; })()"
+    },
+    {
+      "name": "close-settled",
+      "eval": "new Promise((r)=>setTimeout(()=>r('ok'), 1200))"
+    },
+    {
+      "name": "notice-count-after-close",
+      "probe": "(() => document.querySelectorAll('.notice').length === window.__noticeCount - 1)()",
+      "expect": true
+    },
+    {
+      "name": "no-duplicate-toast",
+      "probe": "[...document.querySelectorAll('.notice .notice-text')].filter((n)=>(n.textContent ?? '').includes('permanent comment already exists')).length",
+      "expect": 0
+    },
+    {
+      "name": "open-home-again",
+      "click": ".cloud[data-id=\"{{homeId}}\"]"
+    },
+    {
+      "name": "home-comment-saved",
+      "waitFor": "document.querySelector('.ui-comment[data-mode=\"view\"] .md-field-view')?.textContent?.includes('abc') === true",
+      "timeout": 25000
+    },
+    {
+      "name": "still-no-duplicate",
+      "probe": "[...document.querySelectorAll('.notice .notice-text')].filter((n)=>(n.textContent ?? '').includes('permanent comment already exists')).length",
+      "expect": 0
+    },
+    {
+      "name": "click-other-again",
+      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "repeat-switch-settled",
+      "eval": "new Promise((r)=>setTimeout(()=>r('ok'), 1200))"
+    },
+    {
+      "name": "repeat-switch-clean",
+      "probe": "[...document.querySelectorAll('.notice .notice-text')].filter((n)=>(n.textContent ?? '').includes('permanent comment already exists')).length",
+      "expect": 0
+    },
+    {
+      "name": "notices-expired",
+      "waitFor": "document.querySelectorAll('.notice').length === 0",
+      "timeout": 15000
+    },
+    {
+      "name": "disconnect-for-toast",
+      "probe": "(() => window.etn.server.disconnect().then(()=> 'ok'))()",
+      "expect": "ok"
+    },
+    {
+      "name": "toast-visible",
+      "waitFor": "document.querySelectorAll('.notice').length === 1",
+      "timeout": 20000
+    },
+    {
+      "name": "click-toast-close",
+      "click": ".notice .notice-close"
+    },
+    {
+      "name": "toast-closed",
+      "waitFor": "document.querySelectorAll('.notice').length === 0",
+      "timeout": 10000
+    },
+    {
+      "name": "reconnect-for-toast",
+      "probe": "(() => window.etn.server.connect(window.__profileId).then(()=> 'ok'))()",
+      "expect": "ok"
+    },
+    {
+      "name": "recovered-toast-shown",
+      "waitFor": "[...document.querySelectorAll('.notice .notice-text')].some((n)=>(n.textContent ?? '').includes('Соединение восстановлено'))",
+      "timeout": 30000
+    },
+    {
+      "name": "toast-auto-dismissed",
+      "waitFor": "document.querySelectorAll('.notice').length === 0",
+      "timeout": 15000
+    }
+  ]
+}

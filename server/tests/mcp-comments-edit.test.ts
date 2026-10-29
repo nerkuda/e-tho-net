@@ -25,6 +25,7 @@ import {
   toolText,
   upsertPermanentViaWrite,
 } from './mcp-helpers.js';
+import { renderMarkdown } from '@etn/markdown';
 import { openNetworkDb } from '../src/db/network-db.js';
 
 interface EditResult {
@@ -712,3 +713,919 @@ describe('etn.comments.edit (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 });
+
+/**
+ * Ошибка f15f389e: `replace_section` по секции документа с вводным текстом
+ * до первого заголовка задваивал заголовок (исходный `##` + заголовок из
+ * replacement другого уровня) и дублировал имя секции в `sections[]`.
+ * Вводный блок при этом терялся (вторая часть уже закрыта ошибкой a39046d9 —
+ * вводный абзац адресуется как виртуальная секция).
+ *
+ * Принятое поведение: `replace_section` заменяет ТОЛЬКО тело адресованной
+ * секции. Заголовок в `text` — необязательная эхо-строка: если её текст
+ * совпадает с адресованным заголовком (уровень игнорируется), строка
+ * отбрасывается и сохраняется исходный заголовок. Заголовок того же или
+ * более высокого уровня с ДРУГИМ текстом (попытка переименования или
+ * подмены секции) — `VALIDATION_ERROR`: молча оставлять пустой старый
+ * заголовок (грабля 0.8.3) нельзя. Заголовок более низкого уровня — это
+ * подраздел внутри тела, он допустим.
+ */
+describe('etn.comments.edit replace_section — заголовок и вводный блок (f15f389e)', { skip: !nativeAvailable() }, () => {
+  /** Документ карточки: вводный абзац + две реальные секции. */
+  const CARD_BODY = [
+    'Вводный абзац до первого заголовка.',
+    'Вторая строка вводного абзаца.',
+    '',
+    '## Заголовок A',
+    'Старый контент A.',
+    '',
+    '## Заголовок B',
+    'Контент B.',
+  ].join('\n');
+
+  it('кейс карточки: заголовок из replacement не задваивается, вводный блок цел', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-card-case', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, CARD_BODY);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              // Реальный вызов из карточки: заголовок того же текста, но `###`.
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок A',
+                  text: '### Заголовок A\n\nНовый контент A.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.equal(result.version, 2);
+        // Имя секции не дублируется в ответе.
+        assert.deepEqual(result.sections, [
+          'Вводный абзац до первого заголовка.',
+          'Заголовок A',
+          'Заголовок B',
+        ]);
+        assert.equal(new Set(result.sections).size, result.sections.length);
+        const body = readBody(ndb, upserted.id).body_md;
+        assert.equal(
+          body,
+          [
+            'Вводный абзац до первого заголовка.',
+            'Вторая строка вводного абзаца.',
+            '',
+            '## Заголовок A',
+            'Новый контент A.',
+            '',
+            '## Заголовок B',
+            'Контент B.',
+          ].join('\n'),
+        );
+        // Исходный заголовок ровно один, заголовка из replacement нет.
+        assert.equal(body.match(/Заголовок A/g)?.length, 1, body);
+        assert.ok(!body.includes('### Заголовок A'), body);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('replace_section не первой секции: вводный блок и соседи не тронуты', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-middle-section', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, CARD_BODY);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок B',
+                  text: '### Заголовок B\n\nНовый контент B.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, [
+          'Вводный абзац до первого заголовка.',
+          'Заголовок A',
+          'Заголовок B',
+        ]);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          [
+            'Вводный абзац до первого заголовка.',
+            'Вторая строка вводного абзаца.',
+            '',
+            '## Заголовок A',
+            'Старый контент A.',
+            '',
+            '## Заголовок B',
+            'Новый контент B.',
+          ].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('документ без вводного текста: заголовок первой секции не задваивается', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-no-preamble', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          ['## Секция', 'Старое.', '', '## Хвост', 'Хвост.'].join('\n'),
+        );
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                { op: 'replace_section', section: 'Секция', text: '### Секция\n\nНовое.' },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Секция', 'Хвост']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Секция', 'Новое.', '', '## Хвост', 'Хвост.'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('документ только из вводного текста: замена виртуальной секции', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-only-preamble', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          'Только вводный текст без заголовков.',
+        );
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Только вводный текст без заголовков.',
+                  text: 'Совершенно новый текст.',
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Совершенно новый текст.']);
+        assert.equal(readBody(ndb, upserted.id).body_md, 'Совершенно новый текст.');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('заголовок другого текста того же уровня → VALIDATION_ERROR, тело не меняется', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-rename-rejected', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = ['## Старое имя', 'Старое тело.', '', '## Хвост', 'Хвост.'].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const err = await handle.client.callTool({
+          name: 'etn.comments.edit',
+          arguments: {
+            network_id: ctx.networkId,
+            comment_id: upserted.id,
+            ops: [
+              { op: 'replace_section', section: 'Старое имя', text: '## Новое имя\nНовое тело.' },
+            ],
+          },
+        });
+        assert.equal(err.isError, true);
+        const text = toolText(err);
+        assert.match(text, /VALIDATION_ERROR/);
+        // Сообщение объясняет правило, а не просто «нельзя».
+        assert.match(text, /heading/i);
+        assert.match(text, /body/i);
+        const after = readBody(ndb, upserted.id);
+        assert.equal(after.body_md, initial);
+        assert.equal(after.version, 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('заголовок более низкого уровня в начале text — допустимый подраздел', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-subsection', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Секция\nСтарое.');
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                { op: 'replace_section', section: 'Секция', text: '### Подраздел\nТекст подраздела.' },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Секция', 'Подраздел']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Секция', '', '### Подраздел', 'Текст подраздела.'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('эхо заголовка с 1–3 ведущими пробелами снимается (круг 1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-indented-echo', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          ['## Заголовок A', 'Старое.', '', '## Заголовок B', 'Хвост.'].join('\n'),
+        );
+        // markdown-it считает заголовком строку с 1–3 ведущими пробелами —
+        // эхо обязано сниматься так же, как без отступа.
+        for (const spaces of [1, 2, 3]) {
+          const result = toolJson<EditResult>(
+            await handle.client.callTool({
+              name: 'etn.comments.edit',
+              arguments: {
+                network_id: ctx.networkId,
+                comment_id: upserted.id,
+                ops: [
+                  {
+                    op: 'replace_section',
+                    section: 'Заголовок A',
+                    text: `${' '.repeat(spaces)}## Заголовок A\nНовое ${spaces}.`,
+                  },
+                ],
+              },
+            }),
+          );
+          assert.deepEqual(result.sections, ['Заголовок A', 'Заголовок B']);
+          const body = readBody(ndb, upserted.id).body_md;
+          assert.equal(
+            body,
+            ['## Заголовок A', `Новое ${spaces}.`, '', '## Заголовок B', 'Хвост.'].join('\n'),
+          );
+          assert.equal(body.match(/^## Заголовок A$/gm)?.length, 1, body);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('4+ ведущих пробела — блок кода, а не заголовок: тело остаётся как есть', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-indented-code', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, '## Заголовок A\nСтарое.');
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок A',
+                  text: '    ## Заголовок A\nНовое.',
+                },
+              ],
+            },
+          }),
+        );
+        // Строка с четырьмя пробелами рендерится как код, а не как второй h2:
+        // это тело секции, отступ не снимается.
+        assert.deepEqual(result.sections, ['Заголовок A']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Заголовок A', '    ## Заголовок A', 'Новое.'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('fenced-блок не даёт секций и не рвётся при правке (круг 1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-fence', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Внутри fence — заголовки (в том числе повторяющий адресованный и с
+        // отступами): секциями они не считаются, validateSections молчит.
+        const initial = [
+          '## Секция',
+          'Текст.',
+          '',
+          '```',
+          '## Секция',
+          '  ## поддельный',
+          '   # тоже',
+          '```',
+          '',
+          '## Хвост',
+          'Хвост.',
+        ].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Секция', 'Хвост']);
+        // Fence целиком сохранён — ни заголовков, ни пустых строк не добавилось.
+        assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
+/**
+ * Ошибка f15f389e, круг 2: fence и заголовки внутри контейнеров (список,
+ * цитата). Круг 1 распознавал заголовки строчной регуляркой и не учитывал
+ * префиксы контейнеров: fence, открытый в элементе списка, не считался кодом,
+ * `## поддельный` внутри него становился секцией, и правка рвала документ
+ * (`delete_section` терял закрывающий fence, реальный `## Хвост` и хвост).
+ *
+ * Решение: заголовки даёт `extractHeadings` из `@etn/markdown` по block-токенам
+ * markdown-it — тот же разбор, что у рендерера (ADR 01ec1467). Секции —
+ * только заголовки верхнего уровня (`tokenLevel === 0`); закрывающие решётки
+ * `## X ##` нормализуются в `X`, как в рендере.
+ */
+describe('etn.comments.edit — контейнеры и fence (f15f389e, круг 2)', { skip: !nativeAvailable() }, () => {
+  /** Документ блокера: fence открыт в элементе списка. */
+  const LIST_FENCE = ['- ```', '  ## поддельный', '  ```', '## Хвост', 'хвост'].join('\n');
+
+  it('fence в `- ` и `1. `: секции только реальные, тело не рвётся', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const orderedFence = ['1. ```', '   ## поддельный', '   ```', '## Хвост', 'хвост'].join('\n');
+        const cases = [
+          ['edit-list-fence', LIST_FENCE, '- ```'],
+          ['edit-ordered-fence', orderedFence, '1. ```'],
+        ] as const;
+        for (const [title, initial, firstSection] of cases) {
+          const thoughtId = makeThought(ndb, title, ctx.adminId);
+          const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+          const result = toolJson<EditResult>(
+            await handle.client.callTool({
+              name: 'etn.comments.edit',
+              arguments: {
+                network_id: ctx.networkId,
+                comment_id: upserted.id,
+                ops: [{ op: 'append', text: 'Добавка' }],
+              },
+            }),
+          );
+          assert.deepEqual(result.sections, [firstSection, 'Хвост'], title);
+          assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`, title);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('закрывающий fence с отступом 4 пробела внутри списка закрывает блок', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-list-close-indent', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = ['- пример:', '  ```', '    ## поддельный', '    ```', '## Хвост', 'хвост'].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['- пример:', 'Хвост']);
+        assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('delete_section не находит «поддельный» и не теряет «Хвост» (документ блокера)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-list-fence-delete', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, LIST_FENCE);
+        const err = await handle.client.callTool({
+          name: 'etn.comments.edit',
+          arguments: {
+            network_id: ctx.networkId,
+            comment_id: upserted.id,
+            ops: [{ op: 'delete_section', section: 'поддельный' }],
+          },
+        });
+        assert.equal(err.isError, true);
+        const text = toolText(err);
+        assert.match(text, /NOT_FOUND/);
+        assert.match(text, /Хвост/);
+        // Тело и версия не изменились: удалять было нечего.
+        const after = readBody(ndb, upserted.id);
+        assert.equal(after.body_md, LIST_FENCE);
+        assert.equal(after.version, 1);
+        // Реальная секция «Хвост» адресуема, документ цел.
+        const replaced = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'replace_section', section: 'Хвост', text: 'новый хвост' }],
+            },
+          }),
+        );
+        assert.deepEqual(replaced.sections, ['- ```', 'Хвост']);
+        // Пересборка тела разделяет блоки пустой строкой (нормализация
+        // joinSections); fence и реальный заголовок целы.
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['- ```', '  ## поддельный', '  ```', '', '## Хвост', 'новый хвост'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('`~~~`-fence не даёт секций', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-tilde-fence', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = ['~~~', '## поддельный', '~~~', '## Хвост', 'хвост'].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['~~~', 'Хвост']);
+        assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('закрывающие решётки `## X ##` нормализуются в `X` (как у рендерера)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-closing-hashes', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = ['## Заголовок A ##', 'Старое.', '', '## B', 'Хвост.'].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const appended = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        // Имя секции — без закрывающей последовательности, как в `<h2>`.
+        assert.deepEqual(appended.sections, ['Заголовок A', 'B']);
+        // append текст не пересобирает: исходная строка заголовка как есть.
+        assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`);
+        // Адресация по нормализованному имени работает; пересборка тела
+        // выдаёт заголовок в ATX-форме без закрывающих решёток.
+        const replaced = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'replace_section', section: 'Заголовок A', text: 'Новое.' }],
+            },
+          }),
+        );
+        assert.deepEqual(replaced.sections, ['Заголовок A', 'B']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Заголовок A', 'Новое.', '', '## B', 'Хвост.', '', 'Добавка'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('вложенный список и цитата с fence: «поддельный» не секция', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const cases = [
+          ['edit-quote-fence', ['> ```', '> ## поддельный', '> ```', '## Хвост', 'хвост'].join('\n'), '> ```'],
+          [
+            'edit-nested-list-fence',
+            ['- пункт', '  - ```', '    ## поддельный', '    ```', '## Хвост', 'хвост'].join('\n'),
+            '- пункт',
+          ],
+        ] as const;
+        for (const [title, initial, firstSection] of cases) {
+          const thoughtId = makeThought(ndb, title, ctx.adminId);
+          const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+          const result = toolJson<EditResult>(
+            await handle.client.callTool({
+              name: 'etn.comments.edit',
+              arguments: {
+                network_id: ctx.networkId,
+                comment_id: upserted.id,
+                ops: [{ op: 'append', text: 'Добавка' }],
+              },
+            }),
+          );
+          assert.deepEqual(result.sections, [firstSection, 'Хвост'], title);
+          assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`, title);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+
+/**
+ * Ошибка f15f389e, круг 3: форма заголовка при пересборке тела.
+ *
+ * `joinSections` печатал любой заголовок как ATX `#`×level + пробел + текст.
+ * Для многострочного setext-заголовка (`Внимание\nЭто важно` + `---`) это
+ * давало `## Внимание` и отдельный абзац «Это важно»: строки заголовка
+ * терялись, и правка СОСЕДНЕЙ секции меняла чужую (регресс круга 2). Форму
+ * теперь задаёт `formatHeading` из `@etn/markdown`: ATX печатается в
+ * ATX-форме (закрывающие решётки снимаются), однострочный setext
+ * нормализуется в ATX, многострочный остаётся setext-блоком — в ATX он
+ * невыразим.
+ */
+describe('etn.comments.edit — форма заголовков при пересборке (f15f389e, круг 3)', { skip: !nativeAvailable() }, () => {
+  /** Документ блокера круга 3: многострочный setext + соседняя секция. */
+  const SETEXT_DOC = ['Внимание', 'Это важно', '---', 'тело', '', '## Другая', 'её тело'].join('\n');
+
+  it('многострочный setext переживает replace_section и delete_section соседней секции', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-setext-multiline', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, SETEXT_DOC);
+        const replaced = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'replace_section', section: 'Другая', text: 'новое тело' }],
+            },
+          }),
+        );
+        assert.deepEqual(replaced.sections, ['Внимание\nЭто важно', 'Другая']);
+        const afterReplace = readBody(ndb, upserted.id).body_md;
+        // Блок заголовка воспроизведён дословно (подчёркивание — минимум три
+        // дефиса), текст «Это важно» не стал отдельным абзацем.
+        assert.match(afterReplace, /^Внимание\nЭто важно\n-{3,}\nтело\n\n## Другая\nновое тело$/);
+        const html = renderMarkdown(afterReplace);
+        const headingHtml = html.slice(html.indexOf('<h2>'), html.indexOf('</h2>') + '</h2>'.length);
+        assert.ok(headingHtml.includes('Внимание'), headingHtml);
+        assert.ok(headingHtml.includes('Это важно'), headingHtml);
+        assert.ok(!html.includes('<p>Это важно</p>'), html);
+
+        const deleted = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'delete_section', section: 'Другая' }],
+            },
+          }),
+        );
+        assert.deepEqual(deleted.sections, ['Внимание\nЭто важно']);
+        assert.match(readBody(ndb, upserted.id).body_md, /^Внимание\nЭто важно\n-{3,}\nтело\n?$/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('одиночный setext при пересборке нормализуется в ATX', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-setext-single', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const initial = ['Внимание', '---', 'тело', '', '## Другая', 'её тело'].join('\n');
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+        const replaced = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'replace_section', section: 'Другая', text: 'новое тело' }],
+            },
+          }),
+        );
+        assert.deepEqual(replaced.sections, ['Внимание', 'Другая']);
+        assert.equal(
+          readBody(ndb, upserted.id).body_md,
+          ['## Внимание', 'тело', '', '## Другая', 'новое тело'].join('\n'),
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('append/prepend не пересобирают тело: setext-заголовки остаются дословно', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const thoughtId = makeThought(ndb, 'edit-setext-append', ctx.adminId);
+        const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, SETEXT_DOC);
+        const appended = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        assert.deepEqual(appended.sections, ['Внимание\nЭто важно', 'Другая']);
+        assert.equal(readBody(ndb, upserted.id).body_md, `${SETEXT_DOC}\n\nДобавка`);
+        const prepended = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'prepend', text: 'Вставка' }],
+            },
+          }),
+        );
+        // «Вставка» перед первым заголовком — виртуальная секция-преамбула.
+        assert.deepEqual(prepended.sections, ['Вставка', 'Внимание\nЭто важно', 'Другая']);
+        assert.equal(readBody(ndb, upserted.id).body_md, `Вставка\n\n${SETEXT_DOC}\n\nДобавка`);
+
+        // Одиночный setext — то же: append не нормализует форму заголовка.
+        const singleId = makeThought(ndb, 'edit-setext-single-append', ctx.adminId);
+        const single = ['Внимание', '---', 'тело'].join('\n');
+        const singleUpserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, singleId, single);
+        toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: singleUpserted.id,
+              ops: [{ op: 'append', text: 'Добавка' }],
+            },
+          }),
+        );
+        assert.equal(readBody(ndb, singleUpserted.id).body_md, `${single}\n\nДобавка`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('реальный заголовок в списке/цитате не секция: sections[] без него, delete → NOT_FOUND', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const cases = [
+          [
+            'edit-list-real-heading',
+            ['- ## X', '  продолжение', '', '## Хвост', 'тело'].join('\n'),
+            '- ## X',
+          ],
+          [
+            'edit-quote-real-heading',
+            ['> ## X', '> текст', '', '## Хвост', 'тело'].join('\n'),
+            '> ## X',
+          ],
+        ] as const;
+        for (const [title, initial, firstSection] of cases) {
+          const thoughtId = makeThought(ndb, title, ctx.adminId);
+          const upserted = await upsertPermanentViaWrite(handle.client, ctx.networkId, thoughtId, initial);
+          const appended = toolJson<EditResult>(
+            await handle.client.callTool({
+              name: 'etn.comments.edit',
+              arguments: {
+                network_id: ctx.networkId,
+                comment_id: upserted.id,
+                ops: [{ op: 'append', text: 'Добавка' }],
+              },
+            }),
+          );
+          // Фильтр tokenLevel === 0: «X» принадлежит списку/цитате и секцией
+          // не считается. Без фильтра здесь был бы ['X', 'Хвост'].
+          assert.deepEqual(appended.sections, [firstSection, 'Хвост'], title);
+          assert.equal(readBody(ndb, upserted.id).body_md, `${initial}\n\nДобавка`, title);
+          const before = readBody(ndb, upserted.id);
+          const err = await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [{ op: 'delete_section', section: 'X' }],
+            },
+          });
+          assert.equal(err.isError, true, title);
+          assert.match(toolText(err), /NOT_FOUND/, title);
+          const after = readBody(ndb, upserted.id);
+          assert.equal(after.body_md, before.body_md, title);
+          assert.equal(after.version, before.version, title);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('эхо-заголовок после вводного текста: вводный текст сохраняется, дубля нет', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtId = makeThought(ndb, 'edit-echo-after-preamble', ctx.adminId);
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const upserted = await upsertPermanentViaWrite(
+          handle.client,
+          ctx.networkId,
+          thoughtId,
+          '## Заголовок A\nстарое',
+        );
+        const result = toolJson<EditResult>(
+          await handle.client.callTool({
+            name: 'etn.comments.edit',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: upserted.id,
+              ops: [
+                {
+                  op: 'replace_section',
+                  section: 'Заголовок A',
+                  text: 'вводный текст\n\n## Заголовок A\n\nновое',
+                },
+              ],
+            },
+          }),
+        );
+        assert.deepEqual(result.sections, ['Заголовок A']);
+        const body = readBody(ndb, upserted.id).body_md;
+        assert.equal(body, '## Заголовок A\nвводный текст\n\nновое');
+        assert.equal(body.match(/^## Заголовок A$/gm)?.length, 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+});
+

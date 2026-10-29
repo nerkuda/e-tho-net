@@ -120,6 +120,96 @@ const isEditorPlace = (rel: string): boolean =>
 /** Тонкие обёртки-делегаты диалога отбора типа мысли (логики в них нет). */
 const DELEGATING_WRAPPERS = new Set(['screens/thought-type/filter-dialog-pure.ts']);
 
+/**
+ * Места монтажа редактора, профиль которых НЕ отбирает по свойствам: живой
+ * справочник свойств им не нужен, допустима пустая карта.
+ */
+const EMPTY_REGISTRY_PLACES: ReadonlyMap<string, string> = new Map([
+  ['screens/activity/activity.ts', 'профиль «события» не отбирает по свойствам'],
+  ['search/search.ts', 'строка поиска не отбирает по свойствам'],
+]);
+
+/**
+ * Место получает справочник параметром (`opts.registry`) — живой источник
+ * проверяется у его владельца, карточки публикации.
+ */
+const REGISTRY_FROM_OPTIONS = 'screens/publications/recipe.ts';
+
+/**
+ * Нарушения требования «места монтажа читают живой справочник свойств»
+ * (ошибка 6d25c224): источник `data.registry`, отсутствие собственного чтения
+ * реестра, живой источник у рецепта публикации (карточка) и подписка конструктора
+ * на изменение живой карты.
+ *
+ * `readLibFile` — чтение модуля `lib/` (в фикстуре самопроверки его может не
+ * быть: `null` — проверки модуля пропускаются).
+ */
+function liveCatalogueViolations(
+  root: string,
+  places: ReadonlySet<string>,
+  readLibFile: (file: string) => string | null,
+): string[] {
+  const violations: string[] = [];
+  for (const rel of [...places].sort()) {
+    const src = fs.readFileSync(path.join(root, rel), 'utf8');
+    if (EMPTY_REGISTRY_PLACES.has(rel)) {
+      if (!/registry:\s*new Map\(\)/.test(src)) {
+        violations.push(`${rel}: ожидался явный пустой реестр (место без операндов-свойств)`);
+      }
+      continue;
+    }
+    if (rel === REGISTRY_FROM_OPTIONS) {
+      if (!/registry:\s*opts\.registry/.test(src)) {
+        violations.push(`${rel}: справочник обязан приходить параметром opts.registry`);
+      }
+      continue;
+    }
+    if (!/propertyCatalogue(?:Rows|WithSides)\s*\(/.test(src)) {
+      violations.push(`${rel}: data.registry не из общего живого справочника lib/property-catalogue.ts`);
+    }
+    if (/etn\.propertyRegistry\.list\s*\(/.test(src)) {
+      violations.push(`${rel}: собственное чтение реестра свойств — снимок вместо живого справочника`);
+    }
+  }
+  // Живой источник справочника для рецепта публикации — карточка публикации:
+  // она же передаёт прочитанные строки общему справочнику, снимая РЕВИЗИЮ
+  // СТАРТА своего чтения (без неё поздний ответ затрёт свежие данные, а при
+  // наполненном справочнике приём будет отклонён — оговорка верификатора).
+  const cardPath = path.join(root, 'editor/publication-card.ts');
+  if (!fs.existsSync(cardPath)) {
+    violations.push('editor/publication-card.ts: карточка публикации не найдена');
+  } else {
+    const card = fs.readFileSync(cardPath, 'utf8');
+    if (!/propertyCatalogueWithSides\s*\(/.test(card)) {
+      violations.push('editor/publication-card.ts: рецепт не получает живой справочник');
+    }
+    if (!/propertyCatalogueRevision\s*\(\s*networkId\s*\)/.test(card)) {
+      violations.push(
+        'editor/publication-card.ts: ревизия справочника на старте чтения не снимается ' +
+          '(`propertyCatalogueRevision(networkId)`) — поздний ответ затрёт свежие данные',
+      );
+    }
+    if (!/putPropertyCatalogueRows\(\s*networkId\s*,\s*rows\s*,\s*sinceRevision\s*\)/.test(card)) {
+      violations.push(
+        'editor/publication-card.ts: putPropertyCatalogueRows обязан получать sinceRevision ' +
+          '(ревизию старта чтения)',
+      );
+    }
+  }
+  // Конструктор обязан подписываться на изменение живой карты — иначе
+  // обновления справочника невидимы в уже смонтированных условиях.
+  const editor = readLibFile('filter-editor.ts');
+  if (editor !== null) {
+    if (!/isLivePropertyCatalogue\(data\.registry\)/.test(editor)) {
+      violations.push('lib/filter-editor.ts: нет проверки живого справочника у data.registry');
+    }
+    if (!/subscribePropertyCatalogue\(opts\.networkId/.test(editor)) {
+      violations.push('lib/filter-editor.ts: нет подписки на изменения общего справочника');
+    }
+  }
+  return violations;
+}
+
 /** Признак собственной модели критериев отбора. */
 const OWN_MODEL_NAMES =
   /^(?:export\s+)?interface\s+(?:ChronicleFilterState|ActivityFilterState|SearchOptions|DialogCriteriaState|FilterCriteriaState|FilterState)\s*(?:extends\b|\{)/;
@@ -293,31 +383,46 @@ const NO_SECOND_PHRASE_BUILDER = {
 };
 
 /**
- * Точки СБОРКИ фразы — вызов любого экспорта композера, собирающего фразу
- * (строка, токены раскраски, определение отбора):
+ * Признак точки СБОРКИ фразы — вызов любого экспорта композера, собирающего
+ * фразу (строка, токены раскраски, определение отбора) либо её узел/лист:
  *   • `composeFilterPhrase` / `composeFilterPhraseFromDefinition` — текстовая фраза;
  *   • `filterPhraseTokens` / `filterPhraseTokensFromDefinition` — токены (задача 58f77990);
- *   • `filterPhraseNodeTokens` — токены узла дерева.
- * Вспомогательные экспорты композера (`filterPhraseToken`, `filterPhraseValue`,
- * `filterPhraseThoughtIds` — подписи значений и сбор id) сюда НЕ входят: их
- * зовут и виджеты значения (`lib/filter-value.ts`), это не сборка фразы.
+ *   • `filterPhraseNodeTokens` — токены узла дерева;
+ *   • `filterPhraseNode` / `filterPhraseLeaf` — текст узла/листа (экспортированные
+ *     фрагменты; ошибка cca54310: вызов `filterPhraseNode()` с постороннего
+ *     модуля оставлял сторож зелёным, хотя `filterPhraseNodeTokens()` в том же
+ *     месте краснил — «вторая сборка фразы» проходила через фрагмент).
+ * Вспомогательные экспорты сюда НЕ входят — это не сборка фразы:
+ * `filterPhraseToken`/`filterPhraseValue` (подписи значений, их зовут виджеты
+ * `lib/filter-value.ts`), `filterPhraseThoughtIds` (сбор id для догрузки имён),
+ * `filterPhraseLeafCount` (счётчик условий в под-выборке),
+ * `filterPhraseKeywordScopes`/`filterKeywordScopeLabel` (подписи областей),
+ * `truncateFilterPhrase`/`truncateFilterName` (обрезка текста).
  */
 const PHRASE_BUILDER_CALL =
-  /(?:composeFilterPhrase|filterPhraseTokens|filterPhraseNodeTokens)\w*\s*\(/;
+  /(?:composeFilterPhrase|filterPhraseTokens|filterPhraseNodeTokens|filterPhraseNode(?![A-Za-z])|filterPhraseLeaf(?![A-Za-z]))\w*\s*\(/;
 
 /**
- * Потребители композера — файлы, собирающие фразу вызовом композера
- * ({@link PHRASE_BUILDER_CALL}). Их ровно два: фабрика редактора и футер. Новое
- * место обязано звать композер, а не строить фразу само (ошибка d17a8bfd).
+ * Потребители композера в заданном корне — файлы, собирающие фразу вызовом
+ * композера ({@link PHRASE_BUILDER_CALL}); сам модуль-композер исключён (его
+ * внутренние вызовы фрагментов нарушением не считаются). В рабочем дереве их
+ * ровно два: фабрика редактора и футер. Новое место обязано звать композер, а
+ * не строить фразу само (ошибка d17a8bfd). Корень — параметр для
+ * самопроверки на фикстурах.
  */
-function phraseComposerCallers(): string[] {
+function phraseComposerCallersAt(root: string): string[] {
   const out: string[] = [];
-  for (const abs of listSourceFiles(RENDERER_ROOT)) {
-    const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
+  for (const abs of listSourceFiles(root)) {
+    const rel = path.relative(root, abs).replace(/\\/g, '/');
     if (rel === PHRASE_MODULE) continue;
     if (PHRASE_BUILDER_CALL.test(fs.readFileSync(abs, 'utf8'))) out.push(rel);
   }
   return out.sort();
+}
+
+/** Потребители композера в рабочем дереве рендерера. */
+function phraseComposerCallers(): string[] {
+  return phraseComposerCallersAt(RENDERER_ROOT);
 }
 
 /** Читает модуль общего каркаса редактора. */
@@ -444,6 +549,21 @@ describe('guard: условия отбора строятся только об�
     );
   });
 
+  it('места монтажа редактора читают живой справочник свойств (6d25c224)', () => {
+    // Источник `data.registry` у каждого места обязан быть ЖИВЫМ справочником
+    // (`lib/property-catalogue.ts`), а не собственным снимком реестра: иначе
+    // создание/переименование/удаление свойства сети не видно в уже открытой
+    // панели до перезапуска клиента (ошибка 6d25c224). Пустая карта допустима
+    // только там, где профиль места не отбирает по свойствам; новое место
+    // обязано либо читать общий справочник, либо быть вписано с обоснованием.
+    const violations = liveCatalogueViolations(
+      RENDERER_ROOT,
+      DISCOVERED_PLACES,
+      (file) => fs.readFileSync(path.join(RENDERER_ROOT, 'lib', file), 'utf8'),
+    );
+    assert.deepEqual(violations, [], violations.join('\n'));
+  });
+
   it('каркас редактора собирает дерево, сортировку, футер и диагностику из общих модулей', () => {
     // Положительная сторона: общий каркас обязан нести все части редактора —
     // иначе место соберёт свою разметку или потеряет переход «исправить» молча
@@ -561,6 +681,61 @@ describe('guard: условия отбора строятся только об�
     assert.deepEqual(phraseComposerCallers(), ['lib/filter-editor.ts', 'lib/filter-footer.ts']);
   });
 
+  it('самопроверка: вызов фрагмента фразы с чужого модуля — точка сборки (cca54310)', () => {
+    // Фикстура: законный потребитель (зовёт композер целиком) — зелёный;
+    // вызов ЭКСПОРТА-ФРАГМЕНТА `filterPhraseNode`/`filterPhraseLeaf` с
+    // постороннего модуля — красный (попадает в список потребителей, и точное
+    // равенство выше падает). Вспомогательные экспорты (`filterPhraseValue`,
+    // `filterPhraseLeafCount`) сборкой фразы не считаются.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-phrase-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'screens', 'fake'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'lib', 'filter-phrase.ts'),
+        [
+          'export function filterPhraseLeaf(node) { return String(node); }',
+          'export function filterPhraseNode(node) { return filterPhraseLeaf(node); }',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'footer.ts'),
+        'composeFilterPhrase(state, ctx);\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'own-phrase.ts'),
+        'filterPhraseNode(node, ctx);\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'own-leaf.ts'),
+        'filterPhraseLeaf(leaf, ctx);\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'value-widget.ts'),
+        ['filterPhraseValue(leaf, ctx);', 'filterPhraseLeafCount(tree);'].join('\n'),
+        'utf8',
+      );
+      assert.deepEqual(
+        phraseComposerCallersAt(dir),
+        ['screens/fake/footer.ts', 'screens/fake/own-leaf.ts', 'screens/fake/own-phrase.ts'],
+        'законный вызов — в списке; вызовы фрагментов — тоже (для рабочего дерева это красный); ' +
+          'вспомогательные экспорты — нет',
+      );
+      // Сам композер исключён: его внутренний вызов фрагмента — не нарушение.
+      assert.equal(
+        phraseComposerCallersAt(dir).includes('lib/filter-phrase.ts'),
+        false,
+        'внутренние вызовы композера нарушением не считаются',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('правила краснеют на умышленном нарушении', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-filter-'));
     try {
@@ -617,6 +792,48 @@ describe('guard: условия отбора строятся только об�
           'return readSavedSort(value); // чтение сортировки у исполнителя',
         ].join('\n'),
         'utf8',
+      );
+      // Место со снимком реестра (без живого справочника) и карточка без
+      // ревизии старта чтения — правило 6d25c224 обязано их поймать.
+      fs.writeFileSync(
+        path.join(dir, 'screens', 'fake', 'snapshot-panel.ts'),
+        [
+          'const registry = await etn.propertyRegistry.list(networkId);',
+          'buildFilterEditor({ data: { registry } });',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(dir, 'editor'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'editor', 'publication-card.ts'),
+        [
+          'const rows = await loadPropertyRows(networkId);',
+          'putPropertyCatalogueRows(networkId, rows);',
+        ].join('\n'),
+        'utf8',
+      );
+      const registryViolations = liveCatalogueViolations(
+        dir,
+        new Set(['screens/fake/snapshot-panel.ts']),
+        () => null,
+      );
+      assert.ok(
+        registryViolations.some(
+          (v) => v.includes('snapshot-panel.ts') && v.includes('живого справочника'),
+        ),
+        'снимок реестра в месте монтажа обязан попадать в нарушение',
+      );
+      assert.ok(
+        registryViolations.some((v) => v.includes('собственное чтение реестра')),
+        'собственное чтение реестра местом обязано попадать в нарушение',
+      );
+      assert.ok(
+        registryViolations.some((v) => v.includes('ревизия справочника на старте')),
+        'карточка без ревизии старта чтения обязана попадать в нарушение',
+      );
+      assert.ok(
+        registryViolations.some((v) => v.includes('sinceRevision')),
+        'приём строк без ревизии старта чтения обязан попадать в нарушение',
       );
       const names = new Set(collectViolations(dir, rules).map((v) => v.rule));
       assert.ok(names.has('no-second-criteria-model'), 'своя модель обязана попадать в нарушение');

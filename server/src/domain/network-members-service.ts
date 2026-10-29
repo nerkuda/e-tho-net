@@ -61,6 +61,19 @@ export class NetworkMembersService {
   }
 
   /**
+   * Существует ли сеть в реестре `_system.db` (0.14.1, ошибка 2c3a42cd).
+   *
+   * Нужен гварду `requireNetworkMember`: без проверки существования глобальный
+   * администратор проходил на любой `:networkId`, и `openRouteNetworkDb`
+   * создавал `networks/<uuid>/data.db` для опечатки. Не кэшируется: решение
+   * «сеть существует» меняется при создании/удалении и не имеет сигнала
+   * инвалидации; чтение по первичному ключу дешёвое.
+   */
+  networkExists(networkId: string): boolean {
+    return this.systemDb.getNetworkById(networkId) !== null;
+  }
+
+  /**
    * Drop cached entries after a membership change.
    *
    * @param userId - when given, invalidate only that user's entries; otherwise

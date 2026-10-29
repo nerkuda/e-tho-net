@@ -705,5 +705,20 @@ describe(
         running.sys.close();
       }
     });
+
+    it('planned shutdown sends 1001 server shutdown before the WS plugin closes sockets (de34b35b)', async () => {
+      const app = await buildApp();
+      running = app;
+      const ws = connect(app, app.networkId, app.owner.key, 'shutdown-client');
+      await waitForOpen(ws);
+      const closed = waitForClose(ws);
+
+      await app.app.close();
+      running = undefined;
+      const info = await closed;
+      assert.equal(info.code, 1001);
+      assert.equal(info.reason, 'server shutdown');
+      app.sys.close();
+    });
   },
 );

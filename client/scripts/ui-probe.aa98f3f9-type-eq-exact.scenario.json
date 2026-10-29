@@ -1,0 +1,131 @@
+{
+  "name": "aa98f3f9-type-eq-exact",
+  "description": "Ошибка aa98f3f9: условие «Тип мысли равно» по типу-группе «Коллекция» возвращает ТОЛЬКО точный тип, без подчинённых; поддерево — только у «в иерархии»/«не в иерархии». Стенд засевает группу «Коллекция», её подтип и чужой тип + по мысли каждого уровня; в «Структурах» строит условие «Тип равно Коллекция», применяет и сверяет набор по data-id, затем переключает оператор (в иерархии / равно / не равно / не в иерархии). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.aa98f3f9-type-eq-exact.scenario.json --out .tmp/etn-aa98f3f9/out",
+  "timeout": 240000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 30000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    {
+      "name": "seed-types-and-thoughts",
+      "eval": "(async () => { const nid='{{networkId}}'; const parent=await window.etn.types.createThoughtType(nid,{ name:'Коллекция' }); const child=await window.etn.types.createThoughtType(nid,{ name:'Коллекция — подтип AA98', parent_id: parent.id }); const other=await window.etn.types.createThoughtType(nid,{ name:'Ошибка AA98' }); const t1=await window.etn.thoughts.create(nid,{ title:'AA98 — Коллекция', type_id: parent.id }); const t2=await window.etn.thoughts.create(nid,{ title:'AA98 — подтип', type_id: child.id }); const t3=await window.etn.thoughts.create(nid,{ title:'AA98 — ошибка', type_id: other.id }); window.__aa={ parent: parent.id, child: child.id, other: other.id, t1: t1.id, t2: t2.id, t3: t3.id }; return 'ok'; })()"
+    },
+
+    { "name": "open-structures", "click": "button.view-tab[title=\"Структуры мыслей\"]" },
+    { "name": "structures-editor", "timeout": 20000, "waitFor": "document.querySelector('.st-filter .fe') !== null" },
+    { "name": "add-condition", "click": ".st-filter .ft-add-condition" },
+    { "name": "row-exists", "timeout": 10000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what') !== null" },
+
+    { "name": "open-what", "click": ".st-filter .ft-row .ft-row__what" },
+    { "name": "type-choice", "timeout": 10000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"type\"]') !== null" },
+    { "name": "pick-type", "click": ".ft-choice__item[data-key=\"type\"]" },
+    { "name": "operand-type", "timeout": 10000, "waitFor": "document.querySelector('.st-filter .ft-row .ft-row__what')?.textContent?.includes('Тип') === true" },
+
+    { "name": "open-op-eq", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "eq-choice", "timeout": 10000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"eq\"]') !== null" },
+    { "name": "pick-eq", "click": ".ft-choice__item[data-key=\"eq\"]" },
+    { "name": "settle-after-op", "eval": "(async () => { await new Promise((r)=>setTimeout(r,400)); return 'ok'; })()" },
+    { "name": "op-eq-probe", "probe": "JSON.stringify({ op: document.querySelector('.st-filter .ft-row .ft-row__op')?.textContent?.trim() ?? null, opKey: document.querySelector('.st-filter .ft-row .ft-row__op')?.getAttribute('data-key') ?? null })" },
+
+    { "name": "focus-value", "click": ".st-filter .ft-row .fv[data-editor=\"entity\"] input.entity-combo-input" },
+    { "name": "settle-focus", "eval": "(async () => { await new Promise((r)=>setTimeout(r,700)); return 'ok'; })()" },
+    { "name": "list-after-focus", "probe": "JSON.stringify({ open: document.querySelector('.type-combo-list') !== null, rows: [...document.querySelectorAll('.type-combo-list .type-combo-item')].map((r) => ({ text: (r.textContent ?? '').trim(), html: r.outerHTML.slice(0, 260) })) })" },
+    { "name": "pick-value", "eval": "(() => { const norm=(t)=>(t ?? '').replace(/[▸▾]/g,'').trim(); const rows=[...document.querySelectorAll('.type-combo-list .type-combo-item')]; const row=rows.find((r)=>norm(r.textContent) === 'Коллекция'); if (!row) return 'no-row'; (row.querySelector('.prop-ref-cloud') ?? row).click(); return 'ok'; })()" },
+    { "name": "settle-picked", "eval": "(async () => { await new Promise((r)=>setTimeout(r,600)); return 'ok'; })()" },
+    { "name": "value-after-pick", "probe": "JSON.stringify({ value: (document.querySelector('.st-filter .ft-row .ft-row__value')?.textContent ?? '').trim(), issue: (document.querySelector('.st-filter .ft-row .ft-issue__text')?.textContent ?? '').trim(), listOpen: document.querySelector('.type-combo-list') !== null })" },
+    {
+      "name": "value-set",
+      "timeout": 10000,
+      "waitFor": "(document.querySelector('.st-filter .ft-row .ft-row__value')?.textContent ?? '').includes('Коллекция')"
+    },
+
+    { "name": "apply-eq", "click": ".st-filter .ff-apply" },
+    { "name": "settle-apply-eq", "eval": "(async () => { await new Promise((r)=>setTimeout(r,1200)); return 'ok'; })()" },
+    {
+      "name": "eq-actual",
+      "probe": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return JSON.stringify({ exact: has(f.t1), child: has(f.t2), other: has(f.t3) }); })()"
+    },
+    {
+      "name": "eq-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return has(f.t1) && !has(f.t2) && !has(f.t3); })()"
+    },
+    {
+      "name": "eq-probe",
+      "probe": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return JSON.stringify({ exact: has(f.t1), child: has(f.t2), other: has(f.t3) }); })()",
+      "expect": "{\"exact\":true,\"child\":false,\"other\":false}"
+    },
+
+    { "name": "switch-op-hierarchy", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "hierarchy-choice", "timeout": 10000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"in_hierarchy\"]') !== null" },
+    { "name": "pick-hierarchy", "click": ".ft-choice__item[data-key=\"in_hierarchy\"]" },
+    {
+      "name": "hierarchy-value-kept",
+      "timeout": 10000,
+      "waitFor": "(document.querySelector('.st-filter .ft-row .ft-row__value')?.textContent ?? '').includes('Коллекция')"
+    },
+    { "name": "apply-hierarchy", "click": ".st-filter .ff-apply" },
+    {
+      "name": "hierarchy-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return has(f.t1) && has(f.t2) && !has(f.t3); })()"
+    },
+    {
+      "name": "hierarchy-probe",
+      "probe": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return JSON.stringify({ exact: has(f.t1), child: has(f.t2), other: has(f.t3) }); })()",
+      "expect": "{\"exact\":true,\"child\":true,\"other\":false}"
+    },
+
+    { "name": "switch-op-eq-2", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "eq-choice-2", "timeout": 10000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"eq\"]') !== null" },
+    { "name": "pick-eq-2", "click": ".ft-choice__item[data-key=\"eq\"]" },
+    { "name": "apply-eq-2", "click": ".st-filter .ff-apply" },
+    {
+      "name": "eq-result-2",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return has(f.t1) && !has(f.t2) && !has(f.t3); })()"
+    },
+    {
+      "name": "eq-probe-2",
+      "probe": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return JSON.stringify({ exact: has(f.t1), child: has(f.t2), other: has(f.t3) }); })()",
+      "expect": "{\"exact\":true,\"child\":false,\"other\":false}"
+    },
+
+    { "name": "switch-op-ne", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "ne-choice", "timeout": 10000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"ne\"]') !== null" },
+    { "name": "pick-ne", "click": ".ft-choice__item[data-key=\"ne\"]" },
+    { "name": "apply-ne", "click": ".st-filter .ff-apply" },
+    {
+      "name": "ne-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return !has(f.t1) && has(f.t2) && has(f.t3); })()"
+    },
+    {
+      "name": "ne-probe",
+      "probe": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return JSON.stringify({ exact: has(f.t1), child: has(f.t2), other: has(f.t3) }); })()",
+      "expect": "{\"exact\":false,\"child\":true,\"other\":true}"
+    },
+
+    { "name": "switch-op-not-hierarchy", "click": ".st-filter .ft-row .ft-row__op" },
+    { "name": "not-hierarchy-choice", "timeout": 10000, "waitFor": "document.querySelector('.ft-choice__item[data-key=\"not_in_hierarchy\"]') !== null" },
+    { "name": "pick-not-hierarchy", "click": ".ft-choice__item[data-key=\"not_in_hierarchy\"]" },
+    { "name": "apply-not-hierarchy", "click": ".st-filter .ff-apply" },
+    {
+      "name": "not-hierarchy-result",
+      "timeout": 30000,
+      "waitFor": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return !has(f.t1) && !has(f.t2) && has(f.t3); })()"
+    },
+    {
+      "name": "not-hierarchy-probe",
+      "probe": "(() => { const f=window.__aa; const has=(id)=>document.querySelector('.st-results .st-row[data-id=\"'+id+'\"]')!==null; return JSON.stringify({ exact: has(f.t1), child: has(f.t2), other: has(f.t3) }); })()",
+      "expect": "{\"exact\":false,\"child\":false,\"other\":true}"
+    }
+  ]
+}

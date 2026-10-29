@@ -16,6 +16,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import {
   computeThoughtCardWarnings,
+  createNetworkProperty,
   createTypeProperty,
   deleteTypeProperty,
   getNetworkProperty,
@@ -282,6 +283,51 @@ describe(
         // Legacy-список целей синхронизирован: тип-назначение из него убран.
         const prop = getNetworkProperty(ndb, sourceBinding.property_id);
         assert.deepEqual(prop?.config?.allowed_target_type_ids ?? [], []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('внетиповая проекция свойства-связи несёт реестровый property_id (45248206)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const prop = createNetworkProperty(
+          ndb,
+          {
+            name: 'depends-on-outside',
+            value_type: 'link',
+            name_forward: 'Depends on',
+            name_reverse: 'Depended by',
+          },
+          USER,
+        );
+        const owner = createThought(ndb, { title: 'Владелец без типа' }, USER);
+        const target = createThought(ndb, { title: 'Цель без типа' }, USER);
+        setPropertyValue(ndb, 'thought', owner.id, 'Depends on', target.id, USER);
+
+        // GET-проекция (getPropertyValuesWithLinks — то же, что отдаёт
+        // GET /thoughts/{id}/properties): у владельца свойство вне типа.
+        const ownerProjection = getPropertyValuesWithLinks(ndb, 'thought', owner.id).find(
+          (value) => value.value_type === 'link' && value.property_name === 'Depends on',
+        );
+        assert.ok(ownerProjection !== undefined && ownerProjection.value_type === 'link');
+        assert.equal(ownerProjection.property_id, prop.id, 'реестровый id у внетиповой проекции');
+        assert.equal(ownerProjection.outside_type, true);
+
+        // Обратная сторона у цели: id тоже резолвится (fallback по типу связи).
+        const targetProjection = getPropertyValuesWithLinks(ndb, 'thought', target.id).find(
+          (value) => value.value_type === 'link' && value.property_name === 'Depended by',
+        );
+        assert.ok(targetProjection !== undefined && targetProjection.value_type === 'link');
+        assert.equal(targetProjection.property_id, prop.id);
+
+        // Resolved-проекция карточки — тот же id.
+        const resolved = getPropertyValuesResolved(ndb, 'thought', owner.id).find(
+          (value): value is ResolvedLinkProperty =>
+            value.value_type === 'link' && value.property_name === 'Depends on',
+        );
+        assert.ok(resolved !== undefined);
+        assert.equal(resolved.property_id, prop.id);
       } finally {
         ndb.close();
       }

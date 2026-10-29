@@ -106,6 +106,53 @@ describe('parseChronicleState', () => {
     assert.equal(parsed.savedFilterId, 'f1');
   });
 
+  it('оставляет вложенный AST-снимок панели и снимает служебный лист (ad063c2f, L4)', () => {
+    // Собственная форма панели: `{ ast, order }`. Плоский конвертер её не
+    // понимает и терял дерево; state.ts обязан читать вложенный ast.
+    const propertyId = '00000000-0000-4000-8000-0000000000bb';
+    const parsed = parseChronicleState(
+      JSON.stringify({
+        filter: {
+          order: 'desc',
+          ast: {
+            version: 1,
+            filter: {
+              op: 'and',
+              children: [
+                {
+                  entity: { kind: 'targets' },
+                  operator: 'in',
+                  value: {
+                    query: {
+                      op: 'and',
+                      children: [
+                        {
+                          entity: { kind: 'property', property: propertyId },
+                          operator: 'eq',
+                          value: '2.0',
+                        },
+                      ],
+                    },
+                    operator: 'in',
+                  },
+                },
+                // Служебный дефолт места применения — не условие пользователя.
+                { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: true },
+              ],
+            },
+          },
+        },
+      }),
+    );
+    const filter = parsed.filter as unknown as Record<string, unknown>;
+    assert.equal(filter['order'], 'desc', 'направление ленты сохранено');
+    const ast = filter['ast'] as Record<string, unknown>;
+    assert.equal(ast['version'], 1, 'AST-форма не заменена плоской');
+    const wire = JSON.stringify(ast);
+    assert.equal(wire.includes(propertyId), true, 'условие по свойству сохранено');
+    assert.equal(wire.includes('"service":true'), false, 'служебный лист снят');
+  });
+
   it('falls back to empty on garbage or missing fields', () => {
     const garbage = parseChronicleState('not-json{');
     assert.equal(garbage.month, null);

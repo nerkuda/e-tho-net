@@ -13,13 +13,22 @@
  *  - `connect()` opens the socket with `Authorization`/`Client-Id` headers;
  *  - the server closes with `4401` (unauthorized) or `4404` (network not found) —
  *    these are terminal and re-emitted as `unauthorized`/`not-found`;
- *  - any other close/error triggers exponential backoff reconnect with full jitter
- *    (1 s → 30 s), capped, and a fresh `resume` on the next `open`;
- *  - receive-idle watchdog (defect 7f4cef31): when no frame of any kind arrives
- *    for ~100 s (3 server ping intervals + slack, 04-realtime.md §2.1) the
- *    socket is presumed half-open (OS sleep / network switch) and terminated,
- *    routing into the same backoff + `resume` path; `forceReconnect()` does the
- *    same immediately for system resume/online events;
+ *  - any other close/error triggers a fast reconnect: frequent attempts
+ *    (0.5–1 s) for the first ~10 s, then the 2 → 4 → 8 → 15 s ladder with
+ *    jitter; the attempt limit is gone — after ~60 s the status turns
+ *    `offline`, but attempts keep going (defect de34b35b);
+ *  - liveness (defect de34b35b): every inbound frame (event, WS ping, WS pong)
+ *    stamps `lastFrameAt`. After 37 s of silence the client raises `suspect`
+ *    and sends exactly one application `{type:'ping'}`; any frame within 3 s
+ *    returns to `connected`, otherwise the socket is force-reconnected. The
+ *    same probe runs when a user action hangs for 3 s (IPC layer). No periodic
+ *    polling — the probe is on demand only;
+ *  - receive-idle watchdog (defect 7f4cef31) stays as the last safety net:
+ *    ~100 s without frames means half-open (OS sleep / network switch) and the
+ *    socket is terminated;
+ *  - close `1001` + reason `server shutdown` raises status detail
+ *    `server-restart` («Сервер перезапускается…») and reconnects immediately;
+ *    `1001` + `pong timeout` reconnects normally (the server is alive);
  *  - `resume.stale` (event-log window exceeded) is re-emitted as `stale` so the UI
  *    can trigger a full re-focus (04-realtime.md §6).
  *
@@ -40,12 +49,32 @@ import type { LocalDb } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
 import { TypedEmitter, type EventMap } from './typed-emitter.js';
 
-/** Reconnect backoff base, in milliseconds (04-realtime.md §2.2). */
-const RECONNECT_BASE_DELAY_MS = 1_000;
-/** Reconnect backoff cap, in milliseconds (04-realtime.md §2.2). */
-const RECONNECT_MAX_DELAY_MS = 30_000;
-/** Maximum reconnect attempts before giving up (safety valve). */
-const RECONNECT_MAX_ATTEMPTS = 50;
+/**
+ * Fast reconnect window and ladder (defect de34b35b). The first ~10 s after a
+ * drop use frequent 0.5–1 s attempts (a restarted server comes back quickly);
+ * afterwards the delay grows 2 → 4 → 8 → 15 s with jitter.
+ */
+const FAST_RECONNECT_WINDOW_MS = 10_000;
+/** Lower bound of a fast-window reconnect delay, ms. */
+const FAST_RECONNECT_MIN_DELAY_MS = 500;
+/** Upper bound of a fast-window reconnect delay, ms. */
+const FAST_RECONNECT_MAX_DELAY_MS = 1_000;
+/** Slow reconnect ladder, ms (applied with 50–100 % jitter). */
+const RECONNECT_LADDER_MS = [2_000, 4_000, 8_000, 15_000] as const;
+/** After this much unsuccessful outage the status becomes `offline` (red). */
+const OFFLINE_AFTER_MS = 60_000;
+/**
+ * Silence threshold, ms (defect de34b35b). The server pings every 30 s, so
+ * 37 s of silence means the ping was lost — raise `suspect` and probe.
+ */
+const SILENCE_THRESHOLD_MS = 37_000;
+/** How long the liveness probe waits for any inbound frame, ms. */
+const PROBE_DEADLINE_MS = 3_000;
+/**
+ * WebSocket handshake deadline, ms (defect de34b35b). `ws` has no handshake
+ * timeout by default, so a hung TCP/upgrade would sit forever.
+ */
+const HANDSHAKE_TIMEOUT_MS = 5_000;
 /**
  * Receive-idle watchdog, in milliseconds (defect 7f4cef31). The server pings
  * every 30 s (04-realtime.md §2.1), so a healthy connection is never silent
@@ -53,19 +82,29 @@ const RECONNECT_MAX_ATTEMPTS = 50;
  * intervals + slack, the socket is presumed half-open (typical after OS sleep
  * or a network switch: the server already closed its side after the pong
  * timeout, but the FIN/RST never reached the client) and gets hard-terminated
- * so the regular close → backoff-reconnect → `resume` path takes over.
+ * so the regular close → reconnect → `resume` path takes over.
  */
 const RECV_IDLE_TIMEOUT_MS = 100_000;
 
-/** Connection status surfaced to the UI (07-client-electron.md §5.1). */
-export type RealtimeStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
+/** Connection status surfaced to the UI (07-client-electron.md §5.1; de34b35b). */
+export type RealtimeStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspect';
+
+/**
+ * Extra status qualifier shown to the user next to the status text (de34b35b).
+ * A detail is not a separate status: `reconnecting` + `server-restart` renders
+ * as «Сервер перезапускается…».
+ */
+export type RealtimeStatusDetail = 'server-restart';
+
+/** Trigger of a liveness probe (de34b35b). */
+export type LivenessProbeTrigger = 'silence' | 'action';
 
 /** Typed event catalogue emitted by {@link RealtimeClient}. */
 export interface RealtimeClientEvents extends EventMap {
   /** A real-time event received from the server (after parsing + last_seq update). */
   event: [event: AnyRealtimeEvent];
-  /** Connection status changed. */
-  status: [status: RealtimeStatus];
+  /** Connection status changed (with an optional visual qualifier). */
+  status: [status: RealtimeStatus, detail?: RealtimeStatusDetail];
   /** `resume.stale` — event-log window exceeded; caller must do a full re-focus. */
   stale: [lastSeq: number];
   /**
@@ -108,11 +147,25 @@ export interface RealtimeClientOptions {
   random?: () => number;
   /** Optional scheduler override (for deterministic tests). */
   setTimeout?: typeof setTimeout;
+  /** Optional timer-cancel override paired with {@link setTimeout}. */
+  clearTimeout?: typeof clearTimeout;
+  /** Optional clock override (for deterministic tests of the reconnect window). */
+  now?: () => number;
   /**
    * Receive-idle watchdog timeout override, in milliseconds (defect 7f4cef31).
    * Defaults to {@link RECV_IDLE_TIMEOUT_MS}; tests use short values.
    */
   idleTimeoutMs?: number;
+  /** Silence threshold before the liveness probe, ms (de34b35b). */
+  silenceThresholdMs?: number;
+  /** Liveness-probe deadline waiting for any frame, ms (de34b35b). */
+  probeDeadlineMs?: number;
+  /** WebSocket handshake deadline, ms (de34b35b). */
+  handshakeTimeoutMs?: number;
+  /** Time after which the status becomes `offline`, ms (de34b35b). */
+  offlineAfterMs?: number;
+  /** Duration of the fast 0.5–1 s reconnect window, ms (de34b35b). */
+  fastReconnectWindowMs?: number;
 }
 
 /**
@@ -135,22 +188,43 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private readonly WebSocketCtor: typeof WebSocket;
   private readonly random: () => number;
   private readonly setTimeoutFn: typeof setTimeout;
+  private readonly clearTimeoutFn: typeof clearTimeout;
+  private readonly now: () => number;
   private readonly idleTimeoutMs: number;
+  private readonly silenceThresholdMs: number;
+  private readonly probeDeadlineMs: number;
+  private readonly handshakeTimeoutMs: number;
+  private readonly offlineAfterMs: number;
+  private readonly fastReconnectWindowMs: number;
 
   /** Active socket, or `null` when closed. */
   private socket: WebSocket | null = null;
   /** Current connection status. */
   private status: RealtimeStatus = 'idle';
+  /** Visual qualifier of the current status (e.g. `server-restart`). */
+  private statusDetail: RealtimeStatusDetail | null = null;
   /** Reconnect attempt counter (reset on a clean open). */
   private reconnectAttempts = 0;
+  /** Attempts made after the fast window — index into the slow ladder. */
+  private slowReconnectAttempts = 0;
+  /** Start of the current outage, used for the fast window and `offline`. */
+  private reconnectStartedAt: number | null = null;
+  /** `true` once the current connection reached `open` (status naming). */
+  private everOpened = false;
   /** Pending reconnect timer handle, or `null`. */
   private reconnectTimer: NodeJS.Timeout | null = null;
   /** `true` while a user-initiated `disconnect()` is in progress (suppress reconnect). */
   private manualClose = false;
   /** Pending receive-idle watchdog timer, or `null` (defect 7f4cef31). */
   private idleTimer: NodeJS.Timeout | null = null;
+  /** Pending silence-probe timer, or `null` (defect de34b35b). */
+  private silenceTimer: NodeJS.Timeout | null = null;
+  /** Pending probe-deadline timer, or `null` (defect de34b35b). */
+  private probeTimer: NodeJS.Timeout | null = null;
   /** `true` after a terminal close (4401/4404) — suppresses forceReconnect. */
   private terminalClosed = false;
+  /** Wall-clock time of the last inbound frame of any kind (de34b35b). */
+  private lastFrameAt = 0;
 
   public constructor(opts: RealtimeClientOptions) {
     super();
@@ -162,12 +236,25 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.WebSocketCtor = opts.WebSocketCtor ?? WebSocket;
     this.random = opts.random ?? Math.random;
     this.setTimeoutFn = opts.setTimeout ?? setTimeout;
+    this.clearTimeoutFn = opts.clearTimeout ?? clearTimeout;
+    this.now = opts.now ?? Date.now;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? RECV_IDLE_TIMEOUT_MS;
+    this.silenceThresholdMs = opts.silenceThresholdMs ?? SILENCE_THRESHOLD_MS;
+    this.probeDeadlineMs = opts.probeDeadlineMs ?? PROBE_DEADLINE_MS;
+    this.handshakeTimeoutMs = opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
+    this.offlineAfterMs = opts.offlineAfterMs ?? OFFLINE_AFTER_MS;
+    this.fastReconnectWindowMs = opts.fastReconnectWindowMs ?? FAST_RECONNECT_WINDOW_MS;
+    this.lastFrameAt = this.now();
   }
 
   /** Returns the current connection status. */
   public getStatus(): RealtimeStatus {
     return this.status;
+  }
+
+  /** Returns the current status qualifier, or `null` (de34b35b). */
+  public getStatusDetail(): RealtimeStatusDetail | null {
+    return this.statusDetail;
   }
 
   /**
@@ -185,6 +272,11 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     }
     this.manualClose = false;
     this.terminalClosed = false;
+    this.everOpened = false;
+    this.reconnectStartedAt = null;
+    this.reconnectAttempts = 0;
+    this.slowReconnectAttempts = 0;
+    this.statusDetail = null;
     this.openSocket(networkId);
   }
 
@@ -197,6 +289,8 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.manualClose = true;
     this.clearReconnectTimer();
     this.clearIdleWatchdog();
+    this.clearSilenceTimer();
+    this.clearProbeTimer();
     const socket = this.socket;
     this.socket = null;
     if (socket !== null) {
@@ -216,19 +310,23 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
         }
       }
     }
+    this.everOpened = false;
+    this.reconnectAttempts = 0;
+    this.slowReconnectAttempts = 0;
+    this.reconnectStartedAt = null;
+    this.statusDetail = null;
     this.setStatus('idle');
   }
 
   /**
    * Forces an immediate reconnect: drops the current socket (even one that
-   * still looks healthy) and reconnects without the backoff delay (defect
-   * 7f4cef31). Called on system resume / network-online because a socket that
-   * lived through a sleep is often half-open — no `close`/`error` will ever
-   * arrive, so passive detection alone is too slow. Resets the attempt counter
-   * (each system event grants a fresh reconnect budget). No-op when the client
-   * was torn down by the user (`disconnect`) or terminally rejected
-   * (4401/4404 — membership/auth lost, reconnecting is pointless until the
-   * user re-opens the network).
+   * still looks healthy) and reconnects without the backoff delay (defects
+   * 7f4cef31, de34b35b). Called on system resume / network-online because a
+   * socket that lived through a sleep is often half-open — no `close`/`error`
+   * will ever arrive. Also called when a liveness probe gets no frame within
+   * its deadline. Resets the outage window (each explicit trigger grants a
+   * fresh fast-reconnect budget). No-op when the client was torn down by the
+   * user (`disconnect`) or terminally rejected (4401/4404).
    */
   public forceReconnect(): void {
     if (this.manualClose || this.terminalClosed) return;
@@ -236,7 +334,12 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     if (networkId === null) return;
     this.clearReconnectTimer();
     this.clearIdleWatchdog();
+    this.clearSilenceTimer();
+    this.clearProbeTimer();
     this.reconnectAttempts = 0;
+    this.slowReconnectAttempts = 0;
+    this.reconnectStartedAt = this.now();
+    this.statusDetail = null;
     const stale = this.socket;
     this.socket = null;
     if (stale !== null) {
@@ -248,7 +351,36 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
         // best effort — the guard makes the outcome irrelevant
       }
     }
-    void this.openSocket(networkId);
+    // Immediate attempt, still announced as `reconnecting` (never a second
+    // `connecting` after the first successful open).
+    this.scheduleReconnect(0);
+  }
+
+  /**
+   * Liveness probe (defect de34b35b). Sends exactly one application-level
+   * `{type:'ping'}` and waits up to the probe deadline for ANY inbound frame;
+   * a frame returns the status to `connected`, silence forces a reconnect.
+   * No-op when the socket is not OPEN or the client is torn down; only one
+   * probe runs at a time.
+   */
+  public probeLiveness(trigger: LivenessProbeTrigger): void {
+    if (this.manualClose || this.terminalClosed) return;
+    const socket = this.socket;
+    if (socket === null || socket.readyState !== WebSocket.OPEN) return;
+    if (this.probeTimer !== null) return; // one probe at a time
+
+    getClientLog()?.info('ws', 'liveness probe', {
+      network: this.getNetworkId() ?? '',
+      trigger,
+      silent_ms: this.now() - this.lastFrameAt,
+    });
+    this.setStatus('suspect');
+    this.sendRaw(JSON.stringify({ type: 'ping' }));
+    this.probeTimer = this.setTimeoutFn(() => {
+      this.probeTimer = null;
+      this.onProbeTimeout();
+    }, this.probeDeadlineMs);
+    this.probeTimer.unref?.();
   }
 
   // -------------------------------------------------------------------------
@@ -296,7 +428,10 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
 
   /** Creates and wires a new WebSocket for `networkId`. */
   private async openSocket(networkId: string): Promise<void> {
-    this.setStatus(this.reconnectAttempts === 0 ? 'connecting' : 'reconnecting');
+    // `connecting` is reserved for the very first attempt of a session; after
+    // a drop, a probe failure or a system trigger the user sees
+    // «Переподключение…» (defect de34b35b).
+    this.setStatus(this.everOpened ? 'reconnecting' : 'connecting', this.statusDetail ?? undefined);
     const url = `${this.baseUrl}/api/v1/realtime?network_id=${encodeURIComponent(networkId)}`;
     const clientId = this.getClientId();
     // Client-Id is sent both as a header (04-realtime.md §2) and as a query param
@@ -314,6 +449,9 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
         Authorization: `Bearer ${apiKey}`,
         'Client-Id': clientId,
       },
+      // `ws` has no handshake deadline by default: a hung TCP/upgrade would
+      // sit until the OS timeout (defect de34b35b).
+      handshakeTimeout: this.handshakeTimeoutMs,
     });
     // Re-check after construction: another disconnect could have raced.
     if (this.manualClose) {
@@ -343,11 +481,13 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
 
   /** Called when the socket completes the handshake. Sends `resume`. */
   private onOpen(networkId: string): void {
+    this.everOpened = true;
     this.reconnectAttempts = 0;
+    this.slowReconnectAttempts = 0;
+    this.reconnectStartedAt = null;
     this.setStatus('connected');
-    // Arm the receive-idle watchdog: a healthy server pings every 30 s, so
-    // prolonged silence after `open` means the socket is half-open.
-    this.armIdleWatchdog();
+    // Start the liveness clock: the first server ping is expected within 30 s.
+    this.noteFrame();
     const lastSeq = this.getLastSeq(networkId);
     this.sendRaw(JSON.stringify({ type: 'resume', last_seq: lastSeq }));
   }
@@ -358,9 +498,9 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
    * real-time event: parsed, re-emitted, and `last_seq` advanced.
    */
   private onMessage(data: WebSocket.RawData): void {
-    // Any inbound frame proves liveness — re-arm the idle watchdog before
-    // even trying to parse (malformed frames count too, defect 7f4cef31).
-    this.armIdleWatchdog();
+    // Any inbound frame proves liveness — stamp the clock and close a pending
+    // probe before even trying to parse (malformed frames count too).
+    this.noteFrame();
     let payload: unknown;
     try {
       payload = JSON.parse(data.toString());
@@ -427,57 +567,107 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
    * proves liveness — defect 7f4cef31).
    */
   private onWsPing(_data: Buffer): void {
-    this.armIdleWatchdog();
+    this.noteFrame();
   }
 
-  /** WS-level `pong` from the server — re-arms the idle watchdog (7f4cef31). */
+  /** WS-level `pong` from the server — proves liveness (7f4cef31, de34b35b). */
   private onWsPong(): void {
+    this.noteFrame();
+  }
+
+  /**
+   * Stamps the liveness clock on ANY inbound frame and re-arms the silence /
+   * idle timers. A frame that lands while a probe is awaiting a pong proves
+   * the connection is alive: the probe is cancelled and `suspect` returns to
+   * `connected` without a reconnect (defect de34b35b).
+   */
+  private noteFrame(): void {
+    this.lastFrameAt = this.now();
+    if (this.probeTimer !== null) {
+      this.clearProbeTimer();
+      if (this.status === 'suspect' && this.socket !== null) this.setStatus('connected');
+    }
+    this.armSilenceTimer();
     this.armIdleWatchdog();
   }
 
   /** Handles a socket close — terminal codes vs reconnectable. */
-  private onClose(code: number, _reason: Buffer): void {
+  private onClose(code: number, reason: Buffer): void {
     this.socket = null;
     this.clearIdleWatchdog();
+    this.clearSilenceTimer();
+    this.clearProbeTimer();
     if (this.manualClose) return; // user asked to leave; do not reconnect.
 
     if (code === REALTIME_CLOSE_CODES.UNAUTHORIZED) {
       this.terminalClosed = true;
+      this.statusDetail = null;
       this.setStatus('offline');
       this.emitTyped('unauthorized');
       return;
     }
     if (code === REALTIME_CLOSE_CODES.NOT_FOUND) {
       this.terminalClosed = true;
+      this.statusDetail = null;
       this.setStatus('offline');
       this.emitTyped('not-found');
       return;
     }
-    // Reconnectable close.
+    const reasonText = reason.toString();
+    if (code === 1001 && reasonText === 'server shutdown') {
+      // Planned server restart: tell the UI «Сервер перезапускается…» and
+      // reconnect immediately instead of waiting for the silence threshold
+      // (defect de34b35b).
+      this.statusDetail = 'server-restart';
+      this.reconnectStartedAt = this.now();
+      this.reconnectAttempts = 0;
+      this.slowReconnectAttempts = 0;
+      this.scheduleReconnect(0);
+      return;
+    }
+    // 1001 + `pong timeout` (the server is alive) and every unexpected close
+    // take the normal reconnect path — no `server-restart` detail.
     this.scheduleReconnect();
   }
 
-  /** Schedules the next reconnect attempt with capped exponential full-jitter. */
-  private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
-      this.setStatus('offline');
-      getClientLog()?.error('ws', 'reconnect budget exhausted', {
-        network: this.getNetworkId() ?? '',
-      });
-      this.emitTyped('error', new Error('Превышен лимит попыток реконнекта real-time.'));
-      return;
-    }
-    this.setStatus('reconnecting');
-    this.reconnectAttempts++;
-    const ceiling = Math.min(
-      RECONNECT_MAX_DELAY_MS,
-      RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1),
+  /**
+   * Schedules the next reconnect attempt (defect de34b35b): 0.5–1 s during the
+   * first ~10 s of outage, then the 2 → 4 → 8 → 15 s ladder with jitter.
+   * Attempts are unlimited; after {@link offlineAfterMs} the status is
+   * `offline`, but the loop keeps retrying. `delayOverride` (0 from
+   * `forceReconnect` / a planned server restart) skips the wait.
+   */
+  private scheduleReconnect(delayOverride?: number): void {
+    const nowMs = this.now();
+    if (this.reconnectStartedAt === null) this.reconnectStartedAt = nowMs;
+    const since = nowMs - this.reconnectStartedAt;
+    const offline = since >= this.offlineAfterMs;
+    this.setStatus(
+      offline ? 'offline' : 'reconnecting',
+      offline ? undefined : (this.statusDetail ?? undefined),
     );
-    const delay = Math.floor(this.random() * ceiling);
+    this.reconnectAttempts++;
+
+    let delay: number;
+    if (delayOverride !== undefined) {
+      delay = delayOverride;
+    } else if (since < this.fastReconnectWindowMs) {
+      delay =
+        FAST_RECONNECT_MIN_DELAY_MS +
+        Math.floor(this.random() * (FAST_RECONNECT_MAX_DELAY_MS - FAST_RECONNECT_MIN_DELAY_MS + 1));
+    } else {
+      this.slowReconnectAttempts++;
+      const ceiling =
+        RECONNECT_LADDER_MS[Math.min(this.slowReconnectAttempts - 1, RECONNECT_LADDER_MS.length - 1)]!;
+      // Jitter 50–100 % of the step so clients do not stampede after a restart.
+      delay = Math.floor(ceiling * (0.5 + this.random() * 0.5));
+    }
+
     // Journal: reconnect with backoff (task f051bf95 §3) — INFO, flag-gated.
     getClientLog()?.info('ws', 'reconnect scheduled', {
       network: this.getNetworkId() ?? '',
       attempt: this.reconnectAttempts,
+      since_outage_ms: since,
       backoff_ms: delay,
     });
     this.clearReconnectTimer();
@@ -492,6 +682,8 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
         void this.openSocket(networkId);
       }
     }, delay);
+    // Never hold the process (or the test runner) alive on its own.
+    this.reconnectTimer.unref?.();
   }
 
   /** Sends a raw string frame, guarded against a dead socket. */
@@ -506,9 +698,50 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   /** Cancels any pending reconnect timer. */
   private clearReconnectTimer(): void {
     if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
+      this.clearTimeoutFn(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  }
+
+  /**
+   * (Re-)arms the silence probe (defect de34b35b): 37 s without any frame
+   * raises `suspect` and sends a single application ping. Re-armed by every
+   * inbound frame via {@link noteFrame}.
+   */
+  private armSilenceTimer(): void {
+    this.clearSilenceTimer();
+    this.silenceTimer = this.setTimeoutFn(() => {
+      this.silenceTimer = null;
+      this.probeLiveness('silence');
+    }, this.silenceThresholdMs);
+    this.silenceTimer.unref?.();
+  }
+
+  /** Cancels the silence probe timer, if armed. */
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer !== null) {
+      this.clearTimeoutFn(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  /** Cancels the probe-deadline timer, if armed. */
+  private clearProbeTimer(): void {
+    if (this.probeTimer !== null) {
+      this.clearTimeoutFn(this.probeTimer);
+      this.probeTimer = null;
+    }
+  }
+
+  /** No frame within the probe deadline — the socket is dead; reconnect. */
+  private onProbeTimeout(): void {
+    if (this.manualClose || this.terminalClosed) return;
+    if (this.socket === null) return;
+    getClientLog()?.warn('ws', 'liveness probe timeout', {
+      network: this.getNetworkId() ?? '',
+      silent_ms: this.now() - this.lastFrameAt,
+    });
+    this.forceReconnect();
   }
 
   /**
@@ -516,8 +749,8 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
    * — app-level or protocol-level — calls this; a single deadline timer then
    * covers the gap until the next frame. When it fires, the socket is presumed
    * half-open (OS sleep / network switch swallowed the server's close) and is
-   * hard-terminated, routing into the standard close → backoff-reconnect →
-   * `resume` path.
+   * hard-terminated, routing into the standard close → reconnect → `resume`
+   * path. It stays the last safety net behind the 37 s probe.
    */
   private armIdleWatchdog(): void {
     this.clearIdleWatchdog();
@@ -532,7 +765,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   /** Cancels the receive-idle watchdog, if armed. */
   private clearIdleWatchdog(): void {
     if (this.idleTimer !== null) {
-      clearTimeout(this.idleTimer);
+      this.clearTimeoutFn(this.idleTimer);
       this.idleTimer = null;
     }
   }
@@ -562,16 +795,19 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     }
   }
 
-  /** Updates status and re-emits when it actually changes. */
-  private setStatus(status: RealtimeStatus): void {
-    if (this.status === status) return;
+  /** Updates status (and its visual detail) and re-emits when either changed. */
+  private setStatus(status: RealtimeStatus, detail?: RealtimeStatusDetail): void {
+    const nextDetail = detail ?? null;
+    if (this.status === status && this.statusDetail === nextDetail) return;
     this.status = status;
+    this.statusDetail = nextDetail;
     // Journal: every status transition (task f051bf95 §3) — INFO, flag-gated.
     getClientLog()?.info('ws', 'status changed', {
       network: this.getNetworkId() ?? '',
       status,
+      ...(nextDetail === null ? {} : { detail: nextDetail }),
     });
-    this.emitTyped('status', status);
+    this.emitTyped('status', status, nextDetail ?? undefined);
   }
 
   /**

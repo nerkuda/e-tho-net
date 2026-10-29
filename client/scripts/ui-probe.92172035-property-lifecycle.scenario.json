@@ -1,0 +1,557 @@
+{
+  "name": "92172035-property-lifecycle",
+  "description": "Сценарий 479d530a (С3) — жизненный цикл «личное ↔ типовое» через контекстное меню имени свойства (0.14.1, задача 92172035, требование 53701739). Тип «квартира» (потомок «недвижимости»), у мысли внетиповое «Период проживания». Проверяются состав меню по состояниям строки, «Перенести в типовые», «Исключить из типовых» (источник в подписи), вариант с иерархией (привязка на родителе) и сохранность значения на каждом шаге.",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "open-network-again",
+      "probe": "(() => { const item=document.querySelector('.networks-list .network-item'); if(item !== null) item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-lifecycle",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const parent = await window.etn.types.createThoughtType(nid, { name: 'недвижимость' }); const child = await window.etn.types.createThoughtType(nid, { name: 'квартира', parent_id: parent.id }); const prop = await window.etn.propertyRegistry.create(nid, { name: 'Период проживания', value_type: 'text' }); const thought = await window.etn.thoughts.get(nid, tid); await window.etn.thoughts.update(nid, tid, { type_id: child.id }, thought.version); await window.etn.properties.set(nid, 'thought', tid, 'Период проживания', '2020-01-01'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-thought",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "editor-tabs-visible",
+      "waitFor": "document.querySelectorAll('.editor-tab').length > 0"
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-row-visible",
+      "waitFor": "(() => { const t=document.querySelector('.properties-outside-body')?.textContent ?? ''; return t.includes('Период проживания'); })()"
+    },
+    {
+      "name": "outside-menu-open",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
+        "Очистить",
+        "Перенести в типовые свойства",
+        "Удалить"
+      ]
+    },
+    {
+      "name": "outside-menu-promote",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Перенести в типовые свойства')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "row-moved-to-typed",
+      "waitFor": "(() => { const typed=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.textContent.includes('Период проживания')); const outside=(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания'); return typed && !outside; })()"
+    },
+    {
+      "name": "server-after-promote",
+      "api": {
+        "name": "server-after-promote",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='Период проживания'); return v === undefined ? null : { outside: v.outside_type, value: v.value }; })()"
+      },
+      "expect": {
+        "outside": false,
+        "value": "2020-01-01"
+      }
+    },
+    {
+      "name": "typed-menu-open",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Очистить",
+        "Исключить из типовых свойств"
+      ]
+    },
+    {
+      "name": "typed-menu-exclude",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Исключить из типовых свойств')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "row-back-outside",
+      "waitFor": "(() => { const outside=(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания'); const typed=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.textContent.includes('Период проживания')); return outside && !typed; })()"
+    },
+    {
+      "name": "server-after-exclude",
+      "api": {
+        "name": "server-after-exclude",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='Период проживания'); return v === undefined ? null : { outside: v.outside_type, value: v.value }; })()"
+      },
+      "expect": {
+        "outside": true,
+        "value": "2020-01-01"
+      }
+    },
+    {
+      "name": "seed-parent-binding",
+      "probe": "(async () => { const nid='{{networkId}}'; const types=await window.etn.types.listThoughtTypes(nid); const parent=types.find((t)=>t.name==='недвижимость'); if(parent === undefined) return 'no-parent'; const props=await window.etn.propertyRegistry.list(nid); const prop=props.find((p)=>p.name==='Период проживания'); if(prop === undefined) return 'no-prop'; await window.etn.types.createTypeProperty(nid,'thought_type',parent.id,{ mode:'attach', property_id:prop.id, required:false }); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-row-inherited",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.textContent.includes('Период проживания')))()"
+    },
+    {
+      "name": "inherited-menu-open",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Очистить",
+        "Исключить из типовых свойств"
+      ]
+    },
+    {
+      "name": "inherited-menu-exclude",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Исключить из типовых свойств')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "row-back-outside-after-hierarchy",
+      "waitFor": "(() => { const outside=(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания'); const typed=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.textContent.includes('Период проживания')); return outside && !typed; })()"
+    },
+    {
+      "name": "server-after-hierarchy",
+      "api": {
+        "name": "server-after-hierarchy",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='Период проживания'); return v === undefined ? null : { outside: v.outside_type, value: v.value }; })()"
+      },
+      "expect": {
+        "outside": true,
+        "value": "2020-01-01"
+      }
+    },
+    {
+      "name": "seed-child-binding",
+      "probe": "(async () => { const nid='{{networkId}}'; const types=await window.etn.types.listThoughtTypes(nid); const child=types.find((t)=>t.name==='квартира'); if(child === undefined) return 'no-type'; const props=await window.etn.propertyRegistry.list(nid); const prop=props.find((p)=>p.name==='Период проживания'); if(prop === undefined) return 'no-prop'; await window.etn.types.createTypeProperty(nid,'thought_type',child.id,{ mode:'attach', property_id:prop.id, required:false }); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-row-before-type-editor",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.textContent.includes('Период проживания')))()"
+    },
+    {
+      "name": "open-net-menu",
+      "probe": "(() => { const btn=document.querySelector('button[title=\"Меню мыслесети\"]'); if(btn === null) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "net-menu-visible",
+      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((b)=>(b.textContent ?? '').includes('Типы мыслей')))()"
+    },
+    {
+      "name": "open-thought-types",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Типы мыслей')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "types-dialog-visible",
+      "waitFor": "document.querySelector('[role=\"treeitem\"]') !== null"
+    },
+    {
+      "name": "parent-type-row-visible",
+      "waitFor": "(() => [...document.querySelectorAll('[role=\"treeitem\"]')].some((r)=>(r.textContent ?? '').includes('недвижимость')))()"
+    },
+    {
+      "name": "expand-parent-type",
+      "probe": "(() => { const row=[...document.querySelectorAll('[role=\"treeitem\"]')].find((r)=>(r.textContent ?? '').includes('недвижимость')); if(row === undefined) return 'no-row'; const caret=row.querySelector('.ui-tree-caret'); if(caret === null) return 'no-caret'; caret.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "child-type-row-visible",
+      "waitFor": "(() => [...document.querySelectorAll('[role=\"treeitem\"]')].some((r)=>(r.textContent ?? '').includes('квартира')))()"
+    },
+    {
+      "name": "open-child-type-editor",
+      "probe": "(() => { const row=[...document.querySelectorAll('[role=\"treeitem\"]')].find((r)=>(r.textContent ?? '').includes('квартира')); if(row === undefined) return 'no-row'; row.click(); row.dispatchEvent(new MouseEvent('dblclick',{bubbles:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "type-editor-properties-tab",
+      "waitFor": "(() => [...document.querySelectorAll('.dialog-backdrop .ui-tab, .dialog-backdrop [role=\"tab\"]')].some((t)=>(t.textContent ?? '').trim() === 'Свойства'))()"
+    },
+    {
+      "name": "open-type-properties-tab",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.dialog-backdrop .ui-tab, .dialog-backdrop [role=\"tab\"]')].find((t)=>(t.textContent ?? '').trim() === 'Свойства'); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "own-binding-row-visible",
+      "waitFor": "(() => { const btn=document.querySelector('button[title=\"Снять привязку свойства — значения не удаляются\"]'); if(btn === null) return false; const row=btn.closest('tr'); return row !== null && (row.textContent ?? '').includes('Период проживания'); })()"
+    },
+    {
+      "name": "unbind-in-type-editor",
+      "probe": "(() => { const btn=document.querySelector('button[title=\"Снять привязку свойства — значения не удаляются\"]'); if(btn === null) return 'no-btn'; const row=btn.closest('tr'); if(row === null || !(row.textContent ?? '').includes('Период проживания')) return 'no-row'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "confirm-unbind",
+      "waitFor": "(() => [...document.querySelectorAll('.dialog-backdrop .ui-btn')].some((b)=>(b.textContent ?? '').trim() === 'Подтвердить'))()"
+    },
+    {
+      "name": "confirm-unbind-click",
+      "probe": "(() => { const dialogs=[...document.querySelectorAll('.dialog-backdrop')]; const dlg=dialogs[dialogs.length-1]; const btn=[...dlg.querySelectorAll('.ui-btn')].find((b)=>(b.textContent ?? '').trim() === 'Подтвердить'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "apply-and-close-type-editor",
+      "probe": "(() => { const dialogs=[...document.querySelectorAll('.dialog-backdrop')]; const btn=[...dialogs.flatMap((d)=>[...d.querySelectorAll('.ui-btn')])].find((b)=>(b.textContent ?? '').includes('Применить и закрыть')); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "catalogue-close",
+      "probe": "(() => { for (let i=0;i<3;i+=1) window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,bubbles:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "dialogs-closed",
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "refresh-properties-tab",
+      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const props=tabs.find((b)=>b.textContent.includes('Свойства')); if(props) props.click(); return 'ok'; })()"
+    },
+    {
+      "name": "row-back-outside-after-type-editor",
+      "waitFor": "(() => { const outside=(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания'); const typed=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>r.textContent.includes('Период проживания')); return outside && !typed; })()"
+    },
+    {
+      "name": "server-after-type-editor",
+      "api": {
+        "name": "server-after-type-editor",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='Период проживания'); return v === undefined ? null : { outside: v.outside_type, value: v.value }; })()"
+      },
+      "expect": {
+        "outside": true,
+        "value": "2020-01-01"
+      }
+    },
+    {
+      "name": "outside-menu-edit-open",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
+        "Очистить",
+        "Перенести в типовые свойства",
+        "Удалить"
+      ]
+    },
+    {
+      "name": "outside-menu-edit-click",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Изменить свойство')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "property-editor-visible",
+      "waitFor": "document.querySelector('.dialog-backdrop') !== null"
+    },
+    {
+      "name": "close-property-editor",
+      "probe": "(() => { window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,bubbles:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "property-editor-closed",
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "outside-menu-delete",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
+        "Очистить",
+        "Перенести в типовые свойства",
+        "Удалить"
+      ]
+    },
+    {
+      "name": "outside-delete-click",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Удалить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-row-gone-after-delete",
+      "waitFor": "!(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания')"
+    },
+    {
+      "name": "server-after-delete",
+      "api": {
+        "name": "server-after-delete",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='Период проживания'); return v === undefined ? 'none' : 'present'; })()"
+      },
+      "expect": "none"
+    },
+    {
+      "name": "reseed-scalar",
+      "probe": "(async () => { await window.etn.properties.set('{{networkId}}','thought','{{thoughtId}}','Период проживания','2021-02-02'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-row-again",
+      "waitFor": "(() => (document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания'))()"
+    },
+    {
+      "name": "outside-menu-clear",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
+        "Очистить",
+        "Перенести в типовые свойства",
+        "Удалить"
+      ]
+    },
+    {
+      "name": "outside-clear-click",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Очистить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-row-gone-after-clear",
+      "waitFor": "!(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('Период проживания')"
+    },
+    {
+      "name": "server-after-clear",
+      "api": {
+        "name": "server-after-clear",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='Период проживания'); return v === undefined ? 'none' : 'present'; })()"
+      },
+      "expect": "none"
+    },
+    {
+      "name": "reseed-scalar-final",
+      "probe": "(async () => { await window.etn.properties.set('{{networkId}}','thought','{{thoughtId}}','Период проживания','2022-03-03'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "seed-link-property",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const props=await window.etn.propertyRegistry.list(nid); let lp=props.find((p)=>p.name==='Связано'); if(lp === undefined) lp=await window.etn.propertyRegistry.create(nid,{ name:'Связано', value_type:'link', name_forward:'связано с', name_reverse:'связано с' }); const other=await window.etn.thoughts.create(nid,{ title:'Сосед-связь' }); await window.etn.properties.set(nid,'thought',tid,'связано с', other.id, 'source'); const types=await window.etn.types.listThoughtTypes(nid); const child=types.find((t)=>t.name==='квартира'); await window.etn.types.createTypeProperty(nid,'thought_type',child.id,{ mode:'attach', property_id:lp.id, required:false, side:'source' }); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-link-row-visible",
+      "waitFor": "(() => [...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('связано с')))()"
+    },
+    {
+      "name": "mark-link-edge",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const vals=await window.etn.properties.get(nid,'thought',tid); const entry=vals.find((v)=>v.property_name==='связано с'); if(entry === undefined || !('values' in entry) || entry.values.length === 0) return 'no-entry'; const linkId=entry.values[0].link_id; const link=await window.etn.links.get(nid,linkId); await window.etn.links.update(nid,linkId,{marked_for_deletion:true},link.version); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "server-link-marked",
+      "api": {
+        "name": "server-link-marked",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='связано с'); return v === undefined ? 'none' : (v.values ?? []).length; })()"
+      },
+      "expect": 0
+    },
+    {
+      "name": "typed-link-menu",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Очистить",
+        "Исключить из типовых свойств"
+      ]
+    },
+    {
+      "name": "typed-link-clear-click",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Очистить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "server-link-restored-wait",
+      "waitFor": "(async () => { const vals=await window.etn.properties.get('{{networkId}}','thought','{{thoughtId}}'); const e=vals.find((v)=>v.property_name==='связано с'); return e !== undefined && (e.values ?? []).length === 1; })()"
+    },
+    {
+      "name": "server-link-restored",
+      "api": {
+        "name": "server-link-restored",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='связано с'); return v === undefined ? 'none' : (v.values ?? []).length; })()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "seed-mixed-sides",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const vals=await window.etn.properties.get(nid,'thought',tid); const entry=vals.find((v)=>v.property_name==='связано с' && v.side==='source'); if(entry === undefined || !('values' in entry) || entry.values.length === 0) return 'no-source'; const a=entry.values[0].target_id; const other=await window.etn.thoughts.create(nid,{ title:'Сосед-обратный' }); await window.etn.properties.set(nid,'thought',tid,'связано с', other.id, 'target'); window.__z6={ a, b: other.id }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "refresh-after-mixed-seed",
+      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const own=tabs.find((b)=>b.textContent.includes('Свойства')); if(own) own.click(); return 'ok'; })()"
+    },
+    {
+      "name": "mixed-rows-visible",
+      "waitFor": "(() => { const typed=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].some((r)=>(r.textContent ?? '').includes('связано с')); const outside=(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('связано с'); return typed && outside; })()"
+    },
+    {
+      "name": "mixed-sides-chips",
+      "probe": "(() => { const typedRow=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); const outsideRow=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(typedRow === undefined || outsideRow === undefined) return 'no-row'; const labels=(row)=>[...row.querySelectorAll('.cloud-profile-chip')].map((c)=>c.getAttribute('aria-label')); return { typed: labels(typedRow), outside: labels(outsideRow) }; })()",
+      "expect": {
+        "typed": [
+          "Сосед-связь"
+        ],
+        "outside": [
+          "Сосед-обратный"
+        ]
+      }
+    },
+    {
+      "name": "outside-side-chip-clear",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const chip=[...row.querySelectorAll('.cloud-profile-chip')].find((c)=>c.getAttribute('aria-label')==='Сосед-обратный'); if(chip === undefined) return 'no-chip'; const btn=chip.querySelector('.st-f-clear-inline'); if(btn === null) return 'no-btn'; btn.dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "server-after-outside-side-clear",
+      "api": {
+        "name": "server-after-outside-side-clear",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; const side=(s)=>arr.filter((x)=>x.property_name==='связано с' && x.value_type==='link' && x.side===s).reduce((n,x)=>n+((x.values ?? []).length),0); return { source: side('source'), target: side('target') }; })()"
+      },
+      "expect": {
+        "source": 1,
+        "target": 0
+      }
+    },
+    {
+      "name": "typed-side-only-left",
+      "waitFor": "(() => { const typedRow=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(typedRow === undefined) return false; const labels=[...typedRow.querySelectorAll('.cloud-profile-chip')].map((c)=>c.getAttribute('aria-label')); return labels.length === 1 && labels[0] === 'Сосед-связь' && !(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('связано с'); })()"
+    },
+    {
+      "name": "typed-side-chip-clear",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const chip=[...row.querySelectorAll('.cloud-profile-chip')].find((c)=>c.getAttribute('aria-label')==='Сосед-связь'); if(chip === undefined) return 'no-chip'; const btn=chip.querySelector('.st-f-clear-inline'); if(btn === null) return 'no-btn'; btn.dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true})); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "server-after-typed-side-clear",
+      "api": {
+        "name": "server-after-typed-side-clear",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const arr=Array.isArray(data)?data:data.items; const side=(s)=>arr.filter((x)=>x.property_name==='связано с' && x.value_type==='link' && x.side===s).reduce((n,x)=>n+((x.values ?? []).length),0); return { source: side('source'), target: side('target') }; })()"
+      },
+      "expect": {
+        "source": 0,
+        "target": 0
+      }
+    },
+    {
+      "name": "restore-typed-side",
+      "probe": "(async () => { await window.etn.properties.set('{{networkId}}','thought','{{thoughtId}}','связано с', window.__z6.a, 'source'); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "typed-row-restored-again",
+      "waitFor": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return false; const labels=[...row.querySelectorAll('.cloud-profile-chip')].map((c)=>c.getAttribute('aria-label')); return labels.length === 1 && labels[0] === 'Сосед-связь'; })()"
+    },
+    {
+      "name": "detach-link-binding",
+      "probe": "(async () => { const nid='{{networkId}}'; const types=await window.etn.types.listThoughtTypes(nid); const child=types.find((t)=>t.name==='квартира'); if(child === undefined) return 'no-type'; const defs=await window.etn.types.listTypeProperties(nid,'thought_type',child.id); const def=defs.find((d)=>d.value_type==='link' && d.key==='связано с'); if(def === undefined) return 'no-def'; await window.etn.types.removeTypeProperty(nid,'thought_type',def.defined_on,def.id); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-link-row-visible",
+      "waitFor": "(() => (document.querySelector('.properties-outside-body')?.textContent ?? '').includes('связано с'))()"
+    },
+    {
+      "name": "outside-link-menu",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
+      "expect": [
+        "Изменить свойство",
+        "Переместить выше",
+        "Переместить ниже",
+        "Очистить",
+        "Перенести в типовые свойства",
+        "Удалить"
+      ]
+    },
+    {
+      "name": "outside-link-delete-click",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Удалить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "outside-link-row-gone",
+      "waitFor": "!(document.querySelector('.properties-outside-body')?.textContent ?? '').includes('связано с')"
+    },
+    {
+      "name": "server-link-deleted",
+      "api": {
+        "name": "server-link-deleted",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/properties",
+        "expression": "(() => { const v=(Array.isArray(data)?data:data.items).find((x)=>x.property_name==='связано с'); return v === undefined ? 'none' : (v.values ?? []).length; })()"
+      },
+      "expect": "none"
+    }
+  ]
+}

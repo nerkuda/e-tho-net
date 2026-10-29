@@ -38,8 +38,11 @@
  * Правила рёбер и счётчиков шапки живут в чистой модели
  * `mini-graph-model.ts` (направление/имя типа/тултип, оформление линии,
  * массовые связи, показатели) — здесь только отрисовка. Массовые связи
- * (≥10 одинакового типа к одному соседу) скрываются за чипом «+N»; лишние
- * соседи сверх порога — счётчиком «Ещё не поместилось».
+ * (≥10 рёбер одного типа к одному соседу, считая обе стороны) дают по одной
+ * линии на каждую присутствующую сторону пары, остальные видны числом в чипе
+ * «+N»; лишние соседи сверх порога — счётчиком «Ещё не поместилось». План
+ * рёбер и число на чипе строит одна функция {@link planGraphEdges} — линии и
+ * счётчики не могут разойтись.
  */
 
 import type { Link, Thought, ThoughtRef } from '@etn/shared';
@@ -55,7 +58,7 @@ import {
   type SimulationNodeDatum,
 } from 'd3-force';
 import { select } from 'd3-selection';
-import { zoom, type D3ZoomEvent } from 'd3-zoom';
+import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent } from 'd3-zoom';
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/ui/icon.js';
@@ -74,8 +77,10 @@ import {
   edgeTypeName,
   graphStatEntries,
   isTrashedEdge,
+  massChipTooltip,
   neutralEdgeVisual,
   orientLink,
+  planGraphEdges,
   resolveEdgeVisual,
   shiftEdgeByLane,
   type EdgeVisual,
@@ -92,25 +97,49 @@ const ARROW_W = 7;
 /** Сторона метки корзины на помеченном ребре, px (мир графа). */
 const TRASH_BADGE_SIZE = 18;
 /**
+ * Смещение метки корзины у массового чипа «+N» вверх, px (над текстом чипа):
+ * справа и под чипом метка попадала под foreignObject облачка соседа —
+ * точку клика перехватывал `cloud-title`, кнопка была недостижима.
+ */
+const MASS_TRASH_OFFSET_Y = 22;
+/**
  * Где на ребре живёт метка корзины (доля от начала): не в середине — там
  * постоянная подпись типа связи и чип «+N» (ошибка 355319d4).
  */
 const TRASH_BADGE_T = 0.3;
 
+/**
+ * Снимок вида мини-графа, переживающий пересборку панели (ошибка 42a7c0a1,
+ * круг 3): обновление состава рёбер инвалидирует вкладку, и без снимка
+ * сбрасывались бы зум/панорама и раскладка узлов.
+ */
+export interface MiniGraphView {
+  /** Текущий зум/панорама (d3 transform мира). */
+  zoom: { k: number; x: number; y: number };
+  /** Позиции узлов в мировых координатах (по id мысли). */
+  positions: Record<string, { x: number; y: number }>;
+}
+
 export interface MiniGraphOptions {
-  /** Текущая редактируемая мысль (центр). */
-  thought: Thought;
+  /**
+   * Центр графа: полная карточка или лёгкий `ThoughtRef`. Рисунку нужны
+   * только название и вид (значок/цвета/шрифт/пометки), поэтому панель может
+   * передать свежий ref из батч-резолва — иначе realtime-переименование
+   * центральной мысли из другого клиента не дошло бы до пилюли (замечание 1
+   * круга 4).
+   */
+  thought: ThoughtRef;
   /** Прямые соседи — полные карточки (значок/цвета/шрифт/пометки). */
   neighbours: ThoughtRef[];
   /** Связи текущей мысли (тип ребра и направление от центра). */
   links: Link[];
-  /** Соседи с массовыми связями: id цели → { hidden: number, label: string }. */
-  mass: Map<string, { hidden: number; label: string }>;
   /**
    * Занять всю доступную высоту родителя (вкладка «Граф»). По умолчанию
    * `false` — фиксированные 280 px, как в группе «Локальный граф».
    */
   fillHeight?: boolean;
+  /** Восстановить зум/панораму и стартовые позиции узлов после пересборки. */
+  view?: MiniGraphView;
 }
 
 /** Узел симуляции: пилюля-облачко. */
@@ -192,37 +221,57 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   document.body.append(probeHost);
 
   const nodes: GNode[] = [];
+  // Позиции из снимка вида (пересборка панели не должна «прыгать» узлами):
+  // для новых/незнакомых узлов остаются стартовые координаты по кругу.
+  const savedPositions = opts.view?.positions ?? {};
+  const centerSaved = savedPositions[center.id];
   nodes.push({
     id: center.id,
     title: center.title,
     ref: center,
     w: measureCloudWidth(probeHost, center),
     center: true,
-    x: 0,
-    y: 0,
+    x: centerSaved?.x ?? 0,
+    y: centerSaved?.y ?? 0,
   });
   // Стартовые позиции по кругу — физике легче расходиться.
   visibleNeighbours.forEach((nb, i) => {
     const angle = (2 * Math.PI * i) / Math.max(visibleNeighbours.length, 1);
+    const saved = savedPositions[nb.id];
     nodes.push({
       id: nb.id,
       title: nb.title,
       ref: nb,
       w: measureCloudWidth(probeHost, nb),
       center: false,
-      x: 120 * Math.cos(angle),
-      y: 90 * Math.sin(angle),
+      x: saved?.x ?? 120 * Math.cos(angle),
+      y: saved?.y ?? 90 * Math.sin(angle),
     });
   });
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Рёбра: для каждого видимого соседа возьмём все связи с ним. Направление и
-  // имя типа берём у САМОЙ связи (фактический источник → цель), а не «от
-  // центра»: входящая связь рисуется стрелкой в центр (задача 6811d5e7, п.1).
-  const edges: GEdge[] = [];
+  // План рёбер: одна линия на пару (тип, сосед); в массовой паре — по одной
+  // на каждую присутствующую сторону, лишние рёбра — только числом в чипе
+  // «+N» и счётчике шапки (ошибка 42a7c0a1). План ограничен НАРИСОВАННЫМИ
+  // соседями: у соседа за PERIPHERY_CAP чипа нет, поэтому его рёбра не должны
+  // попадать в «скрыто массовых».
   const linkTypes = store.state.linkTypes;
+  const plan = planGraphEdges(
+    opts.links,
+    center.id,
+    visibleNeighbours.map((nb) => nb.id),
+    linkTypes,
+  );
+
+  // Рёбра: для каждого видимого соседа возьмём только те связи, которым план
+  // оставил линию. Направление и имя типа берём у САМОЙ связи (фактический
+  // источник → цель), а не «от центра»: входящая связь рисуется стрелкой в
+  // центр (задача 6811d5e7, п.1).
+  const edges: GEdge[] = [];
   for (const nb of visibleNeighbours) {
-    const between = opts.links.filter((l) => l.target_id === nb.id || l.source_id === nb.id);
+    const between = opts.links
+      .filter((l) => l.target_id === nb.id || l.source_id === nb.id)
+      .filter((l) => plan.drawnIds.has(l.id));
     if (between.length === 0) {
       // Сосед без записи связи (структурное ребро вне списка) — нейтральная
       // линия от центра, без типа.
@@ -406,6 +455,9 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   for (const node of nodes) {
     const g = svgEl('g');
     g.setAttribute('class', node.center ? 'mini-node mini-node-center' : 'mini-node');
+    // id мысли на группе узла — для снятия снимка вида при пересборке панели
+    // (`readMiniGraphView`) и адресных DOM-проб.
+    g.setAttribute('data-thought-id', node.id);
 
     // Пилюля — HTML-облачко общей фабрики (профиль `graph`), положенное в SVG
     // через <foreignObject>: значок, цвета, начертание, бледность, метка
@@ -480,22 +532,54 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     nodesG.append(g);
   }
   probeHost.remove();
-  // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick.
-  const massChips: Array<{ g: SVGGElement; node: GNode }> = [];
+  // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick. Число на
+  // чипе и подсказка строятся из того же плана, что и линии, — сумма линий и
+  // чипов сходится с фактическим числом рёбер нарисованных соседей. Если в
+  // скрытой части пары есть рёбра в корзине, у чипа появляется общая метка
+  // корзины (`.link-trash-badge`): клик открывает корзину — путь к
+  // восстановлению скрытых рёбер, иначе с графа до них не добраться.
+  const massChips: Array<{
+    g: SVGGElement;
+    node: GNode;
+    trash: SVGForeignObjectElement | null;
+  }> = [];
   for (const nb of visibleNeighbours) {
-    const mass = opts.mass.get(nb.id);
+    const mass = plan.massByNeighbour.get(nb.id);
     const entry = byId.get(nb.id);
     if (mass === undefined || entry === undefined) continue;
     const chip = svgEl('g');
     chip.setAttribute('class', 'mini-graph-mass-chip');
     const chipTitle = svgEl('title');
-    chipTitle.textContent = `${mass.label}: ещё ${mass.hidden} связей`;
+    chipTitle.textContent = massChipTooltip(mass);
     chip.append(chipTitle);
     const chipText = svgEl('text');
     chipText.textContent = `+${mass.hidden}`;
     chip.append(chipText);
     edgesG.append(chip);
-    massChips.push({ g: chip, node: entry.node });
+    let trash: SVGForeignObjectElement | null = null;
+    if (mass.trashed > 0) {
+      trash = svgEl('foreignObject');
+      trash.setAttribute('class', 'mini-graph-mass-trash');
+      trash.setAttribute('width', String(TRASH_BADGE_SIZE));
+      trash.setAttribute('height', String(TRASH_BADGE_SIZE));
+      const btn = el('button', 'link-trash-badge');
+      btn.type = 'button';
+      btn.append(svgIcon('trash', 11));
+      setTooltip(
+        btn,
+        `Связи в корзине: ${mass.trashed} — нажмите, чтобы открыть корзину и восстановить`,
+      );
+      // Кнопка самостоятельна: mousedown не должен стартовать панораму
+      // холста (d3-zoom слушает svg), клик — открывать корзину.
+      btn.addEventListener('mousedown', (event) => event.stopPropagation());
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void openTrashDialogForNetwork();
+      });
+      trash.append(btn);
+      edgesG.append(trash);
+    }
+    massChips.push({ g: chip, node: entry.node, trash });
   }
 
   // --- Раскладка каждого кадра симуляции ------------------------------------
@@ -558,9 +642,14 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     }
     for (const draw of edgeDraws) paintEdge(draw);
     for (const chip of massChips) {
-      chip.g.setAttribute(
+      const x = (chip.node.x ?? 0) + chip.node.w / 2 + 4;
+      const y = (chip.node.y ?? 0) - CLOUD_H / 2 - 4;
+      chip.g.setAttribute('transform', `translate(${x},${y})`);
+      // Метка корзины — над текстом чипа: под чипом и справа от него она
+      // попадала под foreignObject облачка соседа, и клик перехватывало оно.
+      chip.trash?.setAttribute(
         'transform',
-        `translate(${(chip.node.x ?? 0) + chip.node.w / 2 + 4},${(chip.node.y ?? 0) - CLOUD_H / 2 - 4})`,
+        `translate(${x},${y - MASS_TRASH_OFFSET_Y})`,
       );
     }
   };
@@ -598,6 +687,16 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     });
   svg.addEventListener('contextmenu', (event) => event.preventDefault());
   select(svg).call(zoomBehavior).on('dblclick.zoom', null);
+  // Пересборка панели (обновление состава рёбер) возвращает прежний зум и
+  // панораму: без этого пересборка «прыгала» бы в стартовый вид (круг 3).
+  if (opts.view !== undefined) {
+    select(svg).call(
+      zoomBehavior.transform,
+      zoomIdentity
+        .translate(opts.view.zoom.x, opts.view.zoom.y)
+        .scale(opts.view.zoom.k),
+    );
+  }
 
   // --- Drag узлов ------------------------------------------------------------
   for (const entry of byId.values()) {
@@ -643,11 +742,10 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   root.append(viewport);
 
   // Шапка: понятные показатели, каждый со своей подсказкой (задача 6811d5e7,
-  // п.6). «Соседей» — все прямые соседи; «скрыто массовых» — избыточные рёбра
-  // однотипных пар, свёрнутые в чипы «+N»; «ещё не поместилось» — соседи сверх
-  // порога PERIPHERY_CAP. Механика и тексты — в mini-graph-model.
-  const hiddenMass = [...opts.mass.values()].reduce((s, m) => s + m.hidden, 0);
-  const stats = computeGraphStats(totalNeighbours, hiddenMass);
+  // п.6). «Соседей» — все прямые соседи; «скрыто массовых» — сумма чисел на
+  // чипах «+N» из того же плана, что и линии; «ещё не поместилось» — соседи
+  // сверх порога PERIPHERY_CAP. Механика и тексты — в mini-graph-model.
+  const stats = computeGraphStats(totalNeighbours, plan.hidden);
   const header = div('mini-graph-header');
   for (const entry of graphStatEntries(stats)) {
     const stat = span(entry.text, 'mini-graph-header-stat');
@@ -703,12 +801,30 @@ async function openTrashedLinkDialog(linkId: string): Promise<void> {
   await openLinkDeleteDialog(networkId, linkId);
 }
 
+/**
+ * Клик по метке корзины у массового чипа: скрытых рёбер в корзине может быть
+ * несколько, поэтому открываем общий диалог корзины (там каждая связь —
+ * отдельной строкой с восстановлением), а не диалог одного ребра.
+ */
+async function openTrashDialogForNetwork(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const { openTrashDialog } = await import('../trash.js');
+  await openTrashDialog(networkId);
+}
+
 async function focusLinkRef(id: string): Promise<void> {
   // Фокус + активация экрана «Карта мыслей» — общий помощник (ошибка 562356a9):
   // с другого экрана (структуры, хроника, события) смена фокуса без
-  // переключения вида незаметна.
-  const { focusThoughtOnMap } = await import('../screens/active-view.js');
-  await focusThoughtOnMap(id);
+  // переключения вида незаметна. Отказ фокуса помощник показывает тостом; здесь
+  // гасим только отказ ленивого импорта, чтобы `void focusLinkRef(...)` не давал
+  // unhandled rejection (ошибка 1656ef58).
+  try {
+    const { focusThoughtOnMap } = await import('../screens/active-view.js');
+    await focusThoughtOnMap(id);
+  } catch (error) {
+    console.error('[mini-graph] не удалось открыть карту мыслей', error);
+  }
 }
 
 /**
@@ -718,21 +834,17 @@ async function focusLinkRef(id: string): Promise<void> {
  * редактора — «Открыть в редакторе» без смены фокуса холста и «В фокус».
  */
 async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
   // Ленивый импорт: статический замкнул бы цикл
   // canvas/context-menu → editor/editor → editor/mini-graph.
-  const { showThoughtMenuUnder, resolveSiblingParentId } =
-    await import('../canvas/context-menu.js');
-  showThoughtMenuUnder(
-    anchor,
+  const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
+  // Пилюля не в зоне холста — родителя «налево (родственник)» и сверку сети
+  // держит фасад меню вне холста (ошибки 2baa78fb/89964a9b).
+  await showOutOfCanvasThoughtMenu(
+    { anchor },
     {
       id: node.id,
       title: node.title,
       dir: 'siblings',
-      // Пилюля не в зоне холста — родителя для «налево (родственник)»
-      // резолвим запросом (на холсте он приходит с ответом фокуса).
-      siblingParentId: await resolveSiblingParentId(networkId, node.id),
       trashed: node.ref.marked_for_deletion === true,
     },
     {
@@ -741,4 +853,26 @@ async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void>
       focusHandler: () => void focusLinkRef(node.id),
     },
   );
+}
+
+/**
+ * Снимок текущего вида мини-графа: зум/панорама (d3 transform на SVG) и
+ * позиции узлов (мировые координаты из `transform` групп). Снимается перед
+ * пересборкой панели, чтобы обновление состава рёбер не сбрасывало вид
+ * (ошибка 42a7c0a1, круг 3). `null` — граф ещё не отрисован.
+ */
+export function readMiniGraphView(host: HTMLElement): MiniGraphView | null {
+  const svg = host.querySelector<SVGSVGElement>('.mini-graph-canvas');
+  if (svg === null) return null;
+  const transform = zoomTransform(svg);
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (const g of host.querySelectorAll<SVGGElement>('.mini-node[data-thought-id]')) {
+    const id = g.dataset.thoughtId;
+    const match = /translate\(\s*([^,\s]+)\s*,\s*([^)\s]+)\s*\)/.exec(
+      g.getAttribute('transform') ?? '',
+    );
+    if (id === undefined || match === null) continue;
+    positions[id] = { x: Number(match[1]), y: Number(match[2]) };
+  }
+  return { zoom: { k: transform.k, x: transform.x, y: transform.y }, positions };
 }

@@ -49,7 +49,12 @@ export function initDeepLinkHandler(): void {
   if (wired) return;
   wired = true;
   etn.deepLink.onDeepLink((link) => {
-    void handleDeepLink(link);
+    // Непредвиденный отказ (например, экран публикаций) не должен уходить в
+    // unhandled rejection: у пользователя есть окно, поэтому показываем тост.
+    // Штатные отказы (сеть/мысль/публикация/фокус) applyDeepLink показывает сам.
+    void handleDeepLink(link).catch((error) => {
+      notice(`Не удалось открыть ссылку: ${errToText(error)}`, 'error');
+    });
   });
 }
 
@@ -146,8 +151,14 @@ export async function applyDeepLink(
   //    that updates the store and refreshes the screen. We don't route through
   //    `openThoughtByRef` because the latter is opinionated about the active
   //    view; a deep-link should always go to the canvas (the user's natural
-  //    landing surface).
-  await deps.setFocus(thought.id);
+  //    landing surface). Отказ установки фокуса — тостом: deep-link приходит
+  //    по действию пользователя в открытом окне, «молчание» читалось бы как
+  //    зависание (ошибка 1656ef58).
+  try {
+    await deps.setFocus(thought.id);
+  } catch (err) {
+    deps.notice(`Не удалось открыть мысль: ${errToText(err)}`, 'error');
+  }
 }
 
 function safeCurrentNetworkId(): string | null {

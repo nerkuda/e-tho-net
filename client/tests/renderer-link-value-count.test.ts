@@ -70,7 +70,12 @@ const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)
 /** Ссылки на ячейки, добытые обходом дерева. */
 function nameLabelOf(box: ShimElement): string {
   const cell = collect(box, (el) => el.className === 'prop-name-cell')[0];
-  return cell?.children[0]?.textContent ?? '';
+  // Первый ребёнок ячейки у свойства-связи — значок направления (0.14.1,
+  // задача 626b29bd), поэтому подпись ищем по span без класса подсказки.
+  const label = cell?.children.find(
+    (child) => child.tagName.toLowerCase() === 'span' && !child.className.includes('prop-hint'),
+  );
+  return label?.textContent ?? '';
 }
 
 /** Кнопки «✕» чипов (title 'Убрать из значения'). */

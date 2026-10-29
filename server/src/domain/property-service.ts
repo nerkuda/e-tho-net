@@ -18,7 +18,8 @@
  *     individual thoughts/links. `property_id` references the registry, so a
  *     value survives type changes and detaches: a value whose property is not
  *     attached to the owner's type chain is read back flagged `outside_type`
- *     and can only be deleted, never written (02-data-model.md §3.5a).
+ *     and is a normal editable row (0.14.1, ADR cb95fb4e — запись свободна для
+ *     любого свойства справочника; владельцы-связи сохраняют прежний контракт).
  *
  * Reads go through the `*_v` layer views only (lint layers-s3); writes go
  * through `materializeShadow`/`deleteRowLayered` like every other branchable
@@ -31,10 +32,12 @@ import {
   EtnError,
   LINK_PROPERTY_DIRECTIONS,
   LINK_PROPERTY_SIDES,
+  PROPERTY_SIDE_ERROR_REASON,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
   typeNameKey,
   type EffectiveTypeProperty,
+  type Link,
   type LinkPropertyDirection,
   type LinkPropertySide,
   type LinkPropertyValueItem,
@@ -71,9 +74,15 @@ export type { PropertyUsageBinding, PropertyUsageReport, RegistryPropertyCounter
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
+import { reorderOutsideTypeProperties } from './property-order.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
 import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
+import {
+  removeLinkTarget,
+  type LinkRemoval,
+  type LinkRemovalAction,
+} from './link-target-removal.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import {
   type CrossNetworkRefValue,
@@ -728,7 +737,10 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   }
 
   // 2. Зеркала: свойство-связь с allowed_target_type_ids, покрывающим тип мысли.
-  for (const prop of listNetworkProperties(ndb)) {
+  const registryLinkProperties = listNetworkProperties(ndb).filter(
+    (prop) => prop.value_type === 'link' && !isStructuralLinkProperty(prop.config ?? {}),
+  );
+  for (const prop of registryLinkProperties) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
     if (isStructuralLinkProperty(cfg)) continue;
@@ -756,6 +768,31 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
 
   const counts = linkEdgeCounts(ndb, thoughtId);
 
+  /**
+   * Реестровый id внетиповой проекции (ошибка 45248206): спека 906a29c9 требует
+   * `property_id` у каждого значения, включая вне типа. Ребро могло быть создано
+   * свойством из реестра, не привязанным к типу мысли (или обратной стороной
+   * симметричного типа) — id резолвится по типу связи, направлению и display-имени.
+   * `''` остаётся только для легаси-рёбер, у типа связи которых свойства в
+   * реестре действительно нет (ошибка e5cfacb9).
+   */
+  const resolveRegistryPropertyId = (
+    linkTypeId: string,
+    direction: LinkPropertyDirection,
+    displayName: string,
+  ): string => {
+    const sameType = registryLinkProperties.filter(
+      (prop) => linkPropertyLinkTypeId(prop.config) === linkTypeId,
+    );
+    const byDirection = sameType.find(
+      (prop) => linkPropertyDirection(prop.config) === direction,
+    );
+    if (byDirection !== undefined) return byDirection.id;
+    const byName = sameType.find((prop) => prop.name === displayName);
+    if (byName !== undefined) return byName.id;
+    return sameType.length === 1 ? sameType[0]!.id : '';
+  };
+
   // 3. Внетиповые: рёбра, чья пара (тип связи + направление) не покрыта
   //    явным/зеркальным свойством. Принадлежность типа связи реестру не
   //    проверяется: проекция «ребро → свойство» полная, и живое ребро обязано
@@ -763,8 +800,10 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   //    реестре (легаси-рёбра; ошибка e5cfacb9). Три источника внетиповых
   //    записей: обратная сторона свойства-связи без ограничения (dde92461),
   //    свойство-связь не из типа мысли (dfaacb05) и рёбра типов связей без
-  //    реестрового свойства — у всех property_id пуст, запись через ключ
-  //    реестра недоступна, только чтение и удаление самих рёбер.
+  //    реестрового свойства. `property_id` резолвится из реестра, когда тип
+  //    связи имеет свойство (ошибка 45248206); пустым остаётся только у
+  //    легаси-рёбер без реестрового свойства — запись через ключ там недоступна,
+  //    возможны чтение и удаление самих рёбер.
   for (const [pair, count] of counts) {
     if (count === 0) continue;
     const [linkTypeId, direction] = pair.split('|') as [string, LinkPropertyDirection];
@@ -773,12 +812,13 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       e.count = count;
       continue;
     }
+    const propertyName = linkPropertyDisplayName(ndb, linkTypeId, direction);
     putEntry({
-      property_id: '',
+      property_id: resolveRegistryPropertyId(linkTypeId, direction, propertyName),
       link_type_id: linkTypeId,
       direction,
       structural: false,
-      property_name: linkPropertyDisplayName(ndb, linkTypeId, direction),
+      property_name: propertyName,
       outside_type: true,
       description: null,
       required: false,
@@ -952,6 +992,12 @@ function allowedOppositeTypeIdsForValidation(
  * привязки (`side === null`) или пустом реестровом ограничении — legacy
  * `config.allowed_target_type_ids` (совместимость с привязками до миграции 041
  * и валидацией дефолтов реестра).
+ *
+ * Тексты отказов — русские и пользовательские, без `source`/`target` и GUID
+ * (0.14.1, доработка d9bc6012): их читают и MCP/REST-клиенты. Для несовпадения
+ * типа добавлены машиночитаемые `details.field = "value"` и
+ * `details.reason = PROPERTY_SIDE_ERROR_REASON.targetType` — клиент переводит
+ * причину в свой текст централизованно, как side-причины.
  */
 function validateLinkTargetType(
   ndb: NetworkDb,
@@ -963,10 +1009,11 @@ function validateLinkTargetType(
     | { type_id: string | null }
     | undefined;
   if (!target) {
-    throw new EtnError('VALIDATION_ERROR', `referenced thought ${targetId} does not exist`, {
-      key: prop.name,
-      ref: targetId,
-    });
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `значение свойства «${prop.name}» ссылается на несуществующую мысль`,
+      { key: prop.name, ref: targetId },
+    );
   }
   const registryAllowed =
     side === null ? [] : allowedOppositeTypeIdsForValidation(ndb, prop.id, side);
@@ -979,12 +1026,18 @@ function validateLinkTargetType(
           (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
         );
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
-    throw new EtnError('VALIDATION_ERROR', `thought ${targetId} is not of a required type`, {
-      key: prop.name,
-      ref: targetId,
-      allowed_type_ids: allowedIds,
-      actual_type_id: target.type_id,
-    });
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `свойство «${prop.name}» не принимает значение этого типа`,
+      {
+        key: prop.name,
+        ref: targetId,
+        field: 'value',
+        reason: PROPERTY_SIDE_ERROR_REASON.targetType,
+        allowed_type_ids: allowedIds,
+        actual_type_id: target.type_id,
+      },
+    );
   }
 }
 
@@ -1145,18 +1198,31 @@ function insertLinkRow(
   return id;
 }
 
-/** Пометить ребро в корзину (не физическое удаление — комментарий сохраняется). */
-function markLinkForDeletion(ndb: NetworkDb, linkId: string, actorUserId: string): void {
-  const nowMs = Date.now();
-  const now = new Date(nowMs).toISOString();
-  materializeShadow(ndb, 'links', linkId);
-  ndb
-    .prepare(
-      `UPDATE links SET marked_for_deletion = 1, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
-                        updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
-        WHERE id = ? AND layer_id = ?`,
-    )
-    .run(now, actorUserId, now, actorUserId, nowMs, linkId, ndb.layerId);
+/**
+ * Удаления рёбер, выполненные set-записью свойства-связи. События публикуют
+ * фасады, поэтому результат несёт фактическое действие по каждому ребру.
+ * Символ не сериализуется в JSON — наружу (REST/MCP) поле не утекает.
+ */
+const LINK_REMOVALS = Symbol('etn.linkRemovals');
+
+interface PropertyValueWithRemovals extends PropertyValue {
+  [LINK_REMOVALS]?: LinkRemoval[];
+}
+
+/** Прикрепить к эху записи сведения об удалённых рёбрах (внутренний канал). */
+function attachLinkRemovals(value: PropertyValue, removals: readonly LinkRemoval[]): PropertyValue {
+  if (removals.length > 0) {
+    Object.defineProperty(value, LINK_REMOVALS, { value: [...removals], enumerable: false });
+  }
+  return value;
+}
+
+/**
+ * Рёбра, удалённые этой записью свойства-связи. Используется фасадами для
+ * публикации `link.deleted`/`link.updated`; в ответ клиенту не попадает.
+ */
+export function linkRemovalsOf(value: PropertyValue): LinkRemoval[] {
+  return (value as PropertyValueWithRemovals)[LINK_REMOVALS] ?? [];
 }
 
 /** Позиция нового ребра в списке детей источника (структурное: в конец). */
@@ -1183,7 +1249,8 @@ function setLinkPropertyTargets(
   targetIds: string[],
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): { targets: string[]; createdLinkIds: string[] } {
+  typedKey = false,
+): { targets: string[]; createdLinkIds: string[]; removals: LinkRemoval[] } {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1191,27 +1258,38 @@ function setLinkPropertyTargets(
   // 748b80fd), иначе — по стороне привязки владельца (0.8.2, ошибка c67676f3),
   // fallback на config.direction вне типа владельца.
   const bindingSide = resolveOwnerBindingSide(ndb, ownerId, prop.id);
-  const direction = nameDirection ?? linkPropertyDirection(cfg, bindingSide);
-  // Валидация цели: у внетипового display-ключа (`nameDirection` задан)
-  // привязки у владельца нет — ограничение сторон не применяем, остаётся
-  // legacy `config.allowed_target_type_ids`; иначе — сторона привязки.
-  const side = nameDirection !== null ? null : bindingSide;
+  const bindingDirection =
+    bindingSide === null ? null : linkPropertyDirection(cfg, bindingSide);
+  const direction = nameDirection ?? bindingDirection ?? linkPropertyDirection(cfg);
+  // Валидация цели — по привязке той стороны, на которой стоит владелец в
+  // создаваемом ребре (0.14.1, доработка по верификации d9bc6012): явный `side`
+  // адресует сторону записи и НЕ отменяет ограничение — оно берётся с
+  // ПРОТИВОПОЛОЖНОЙ стороны привязки, как и при записи стороной привязки.
+  // Внетиповой display-ключ (`typedKey === false`) привязки владельца не имеет:
+  // реестрового ограничения нет, остаётся legacy `config.allowed_target_type_ids`.
+  const side = typedKey && bindingSide !== null ? sideFromDirection(direction) : null;
 
   for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId, side);
   for (const targetId of targetIds) {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     if (src === dst) {
-      throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
-        key: prop.name,
-        ref: targetId,
-      });
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `свойство «${prop.name}» не может связать мысль с самой собой`,
+        { key: prop.name, ref: targetId },
+      );
     }
   }
 
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction);
   const wanted = new Set(targetIds);
+  const removals: LinkRemoval[] = [];
   for (const [targetId, link] of existing) {
-    if (!wanted.has(targetId)) markLinkForDeletion(ndb, link.id, actorUserId);
+    if (wanted.has(targetId)) continue;
+    // Умное удаление цели (0.14.1, ADR a967d865): основа — физически, слой —
+    // корзина для ребра из основы/предков и физически для свежесозданного.
+    const removal = removeLinkTarget(ndb, link.id, actorUserId);
+    if (removal !== null) removals.push(removal);
   }
 
   const result: string[] = [];
@@ -1227,6 +1305,13 @@ function setLinkPropertyTargets(
       result.push(targetId);
       return;
     }
+    // 0.14.1 (спека 906a29c9, требование ab06aa20): `set` работает по ЖИВЫМ
+    // рёбрам. Цель, чьё ребро лежит в корзине, набором НЕ восстанавливается и
+    // НЕ удаляется — её судьба решается только явными действиями корзины
+    // (`links.restore` / «Очистить»). Дубль не создаём: тройка занята
+    // корзинным ребром (уникальный индекс миграции 029).
+    const trashedTwin = findLinkTripleRow(ndb, src, dst, linkTypeId);
+    if (trashedTwin !== null && trashedTwin.marked_for_deletion) return;
     const position = structural
       ? direction === 'out'
         ? index
@@ -1238,7 +1323,7 @@ function setLinkPropertyTargets(
     createdLinkIds.push(insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId));
     result.push(targetId);
   });
-  return { targets: result, createdLinkIds };
+  return { targets: result, createdLinkIds, removals };
 }
 
 /**
@@ -1261,7 +1346,7 @@ export function setLinkPropertySourcesForTarget(
   prop: PropertyLike,
   sourceIds: string[],
   actorUserId: string,
-): { targets: string[]; createdLinkIds: string[] } {
+): { targets: string[]; createdLinkIds: string[]; removals: LinkRemoval[] } {
   return ndb.transaction(() => {
     const cfg = prop.config ?? {};
     const linkTypeId = linkPropertyLinkTypeId(cfg);
@@ -1273,8 +1358,11 @@ export function setLinkPropertySourcesForTarget(
     // owner — цель: рёбра ищем направлением `in`, противоположный конец — источник.
     const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in');
     const wanted = new Set(resolvedSourceIds);
+    const removals: LinkRemoval[] = [];
     for (const [sourceId, link] of existing) {
-      if (!wanted.has(sourceId)) markLinkForDeletion(ndb, link.id, actorUserId);
+      if (wanted.has(sourceId)) continue;
+      const removal = removeLinkTarget(ndb, link.id, actorUserId);
+      if (removal !== null) removals.push(removal);
     }
     const result: string[] = [];
     const createdLinkIds: string[] = [];
@@ -1287,7 +1375,7 @@ export function setLinkPropertySourcesForTarget(
       createdLinkIds.push(insertLinkRow(ndb, sourceId, ownerId, linkTypeId, 0, actorUserId));
       result.push(sourceId);
     }
-    return { targets: result, createdLinkIds };
+    return { targets: result, createdLinkIds, removals };
   });
 }
 
@@ -1339,24 +1427,30 @@ function addLinkPropertyTarget(
   actorUserId: string,
   warnings: MutationWarning[],
   nameDirection: LinkPropertyDirection | null = null,
+  typedKey = false,
 ): string {
   const cfg = prop.config ?? {};
   const structural = isStructuralLinkProperty(cfg);
   const linkTypeId = linkPropertyLinkTypeId(cfg);
-  // Направление — из display-имени (748b80fd), иначе сторона привязки
+  // Направление — из display-имени/side (0.14.1), иначе сторона привязки
   // владельца (c67676f3).
   const bindingSide = resolveOwnerBindingSide(ndb, ownerId, prop.id);
-  const direction = nameDirection ?? linkPropertyDirection(cfg, bindingSide);
-  // Внетиповой display-ключ: привязки у владельца нет — без ограничения сторон.
-  const side = nameDirection !== null ? null : bindingSide;
+  const bindingDirection =
+    bindingSide === null ? null : linkPropertyDirection(cfg, bindingSide);
+  const direction = nameDirection ?? bindingDirection ?? linkPropertyDirection(cfg);
+  // Валидация цели — по привязке стороны, на которой стоит владелец (явный
+  // `side` приоритетен, 0.14.1, доработка d9bc6012); внетиповой display-ключ
+  // привязки владельца не имеет — реестрового ограничения нет.
+  const side = typedKey && bindingSide !== null ? sideFromDirection(direction) : null;
 
   validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
   if (src === dst) {
-    throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
-      key: prop.name,
-      ref: targetId,
-    });
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `свойство «${prop.name}» не может связать мысль с самой собой`,
+      { key: prop.name, ref: targetId },
+    );
   }
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing !== undefined) {
@@ -1370,8 +1464,9 @@ function addLinkPropertyTarget(
 }
 
 /**
- * Убрать одну цель из набора свойства-связи (операция `remove`): помечает ребро
- * в корзину (комментарий не теряется). Отсутствующее ребро — no-op.
+ * Убрать одну цель из набора свойства-связи (операция `remove`): применяет
+ * единое умное удаление (ADR a967d865 — основа физически, слой по
+ * происхождению ребра). Отсутствующее/уже помеченное ребро — no-op.
  */
 function removeLinkPropertyTarget(
   ndb: NetworkDb,
@@ -1380,7 +1475,7 @@ function removeLinkPropertyTarget(
   targetId: string,
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): string | null {
+): LinkRemoval | null {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
   // Направление — из display-имени (748b80fd), иначе сторона привязки
@@ -1390,8 +1485,7 @@ function removeLinkPropertyTarget(
     linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
   if (existing === undefined) return null;
-  markLinkForDeletion(ndb, existing.id, actorUserId);
-  return existing.id;
+  return removeLinkTarget(ndb, existing.id, actorUserId);
 }
 
 // ===========================================================================
@@ -2259,13 +2353,16 @@ function attachAllowedOppositeTypeIds(ndb: NetworkDb, out: EffectiveTypeProperty
  * — карта `property_id → { source, target }`. Одна подготовленная выборка на
  * набор свойств: зеркальные записи физических привязок не имеют и не влияют
  * (их `property_id` — это же свойство реестра, а сторона зеркала вычисляется
- * вызывающим).
+ * вызывающим). Единая точка для `allowed_opposite_type_ids` эффективных
+ * определений, серверной валидации значения и производных полей справочника
+ * (`binding_source_type_ids`/`binding_target_type_ids`, ошибка f8f8fa49).
  */
-function loadBindingTypesBySide(
+export function loadBindingTypesBySide(
   ndb: NetworkDb,
   propertyIds: readonly string[],
 ): Map<string, { source: string[]; target: string[] }> {
   const map = new Map<string, { source: string[]; target: string[] }>();
+  if (propertyIds.length === 0) return map;
   const rows = ndb
     .prepare(
       `SELECT DISTINCT property_id, side, owner_id
@@ -3250,6 +3347,8 @@ interface PropertyValueRow {
   value_number: number | null;
   value_bool: number | null;
   value_thought_ref: string | null;
+  /** Время появления значения у владельца (0.14.1, миграция 051). */
+  created_at: string;
   updated_at: string;
   created_by: string;
   updated_by: string;
@@ -3389,10 +3488,17 @@ function ownerTable(ownerType: PropertyOwnerType): 'thoughts_v' | 'links_v' {
 
 /**
  * Property ids attached to the owner's type chain (own binding or any
- * ancestor's, L21): the set of properties a value write may target. An
+ * ancestor's, L21). With 0.14.1 (ADR cb95fb4e) this is NOT a write gate for
+ * thoughts: it only feeds the `outside_type` flag and the unchanged link-owner
+ * contract (`/links/{id}/properties` still requires an attached property). An
  * untyped owner sees the root type's bindings (docs/08-ui-spec.md §8.1).
+ *
+ * Экспортируется для пер-мысленного порядка внетиповых (0.14.1, задача
+ * 3948af62): типовое скалярное свойство упорядочивать нельзя — его место
+ * задаёт привязка. Зеркала `allowed_target_type_ids` сюда не входят: для
+ * свойств-связей порядок проверяет эффективный набор (listThoughtLinkProperties).
  */
-function attachedPropertyIds(
+export function attachedPropertyIds(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
@@ -3433,6 +3539,15 @@ function attachedPropertyIds(
  */
 export interface ResolvedDefinition extends PropertyLike {
   direction: LinkPropertyDirection | null;
+  /**
+   * Ключ разрешён через ЭФФЕКТИВНЫЙ НАБОР типа владельца (типовой ключ):
+   * значение при записи ограничено привязкой той стороны, на которой стоит
+   * владелец (`direction`). Внетиповой display-ключ и имя реестра — `false`:
+   * привязки владельца у такой строки нет, реестровое ограничение цели не
+   * применяется (остаётся legacy `config.allowed_target_type_ids`).
+   * 0.14.1, доработка по верификации ошибки d9bc6012.
+   */
+  typedKey: boolean;
 }
 
 /**
@@ -3457,6 +3572,223 @@ function linkPropertyDirectionFromDisplayName(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Сторона как адрес записи (0.14.1, спека 906a29c9, задача bd349082/Z1)
+// ---------------------------------------------------------------------------
+//
+// `side` — АДРЕС стороны свойства-связи: `source` — владелец является
+// источником ребра (`out`), `target` — целью (`in`). У симметричного типа
+// связи (`name_forward == name_reverse`) имя адресует ОБЕ стороны, поэтому одно
+// имя без `side` не говорит, какие рёбра писать/чистить. Правила:
+//
+//   * запись со `side` создаёт рёбра указанной стороны — в том числе
+//     отсутствующей у мысли (сверки с живыми рёбрами нет);
+//   * при записи явный `side` ПРИОРИТЕТЕН, имя лишь резолвит свойство: даже
+//     когда display-имя однозначно адресует другую сторону (несимметричный
+//     тип), запись идёт по адресу `side` (0.14.1, ошибка d9bc6012: клиент
+//     вправе передать реестровое имя свойства + выбранную пользователем
+//     сторону; 422 «сторона противоречит имени» спекой не предусмотрен);
+//   * без `side` у симметричного имени: одна живая сторона — выводим её,
+//     обе живые — 422 (нужен `side`), ни одной — `config.direction`;
+//   * 422 записи по стороне — только настоящая неоднозначность: обе стороны
+//     живы без `side` либо display-имя принадлежит нескольким свойствам
+//     сети (коллизия имён, уточнение 2 спеки 906a29c9);
+//   * удаление/очистка дополнительно сверяет сторону с ФАКТИЧЕСКИМ
+//     направлением живых рёбер (422 при расхождении).
+
+/** Сторона → направление рёбер у владельца. */
+function directionFromSide(side: LinkPropertySide): LinkPropertyDirection {
+  return side === 'source' ? 'out' : 'in';
+}
+
+/** Направление рёбер у владельца → сторона. */
+function sideFromDirection(direction: LinkPropertyDirection): LinkPropertySide {
+  return direction === 'out' ? 'source' : 'target';
+}
+
+/**
+ * Направления, которые адресует имя: `[]` — ни одного (устаревшее/
+ * каноническое имя реестра), один элемент — несимметричная сторона, два —
+ * симметричный тип (`name_forward == name_reverse`).
+ */
+function linkDirectionsByDisplayName(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  key: string,
+): LinkPropertyDirection[] {
+  const cfg = config ?? {};
+  if (isStructuralLinkProperty(cfg)) return [];
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  if (linkTypeId === null) return [];
+  const k = typeNameKey(key);
+  const directions: LinkPropertyDirection[] = [];
+  if (k === typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'out'))) directions.push('out');
+  if (k === typeNameKey(linkPropertyDisplayName(ndb, linkTypeId, 'in'))) directions.push('in');
+  return directions;
+}
+
+/**
+ * Вывести сторону симметричного имени по ФАКТИЧЕСКИМ живым рёбрам мысли.
+ * Обе стороны живые — имя неоднозначно, нужен `side` (422; либо `null`, когда
+ * вызывающий разрешает неоднозначность и разбирается сам — удаление по
+ * конкретной цели, `allowAmbiguous`). Ни одной живой — сторона привязки
+ * владельца, иначе `config.direction` (каноническая сторона определения).
+ */
+function resolveLiveLinkDirection(
+  ndb: NetworkDb,
+  ownerId: string,
+  key: string,
+  config: PropertyConfig | null,
+  bindingSide: LinkPropertySide | null = null,
+  allowAmbiguous = false,
+): LinkPropertyDirection | null {
+  const linkTypeId = linkPropertyLinkTypeId(config);
+  if (linkTypeId !== null) {
+    const live: LinkPropertyDirection[] = [];
+    for (const direction of ['out', 'in'] as const) {
+      if (listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).size > 0) {
+        live.push(direction);
+      }
+    }
+    if (live.length === 2) {
+      if (allowAmbiguous) return null;
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
+        {
+          field: 'side',
+          reason: PROPERTY_SIDE_ERROR_REASON.required,
+          key,
+          allowed: LINK_PROPERTY_SIDES,
+        },
+      );
+    }
+    if (live.length === 1) return live[0]!;
+  }
+  // Ни одной живой стороны: сторона привязки владельца (если привязка есть),
+  // иначе каноническая сторона определения.
+  return linkPropertyDirection(config, bindingSide);
+}
+
+/**
+ * Направление рёбер для записи/удаления значения свойства-связи (0.14.1).
+ *
+ * `bindingSide` — сторона привязки владельца (или `null` для внетипового
+ * свойства); нужна только как fallback, когда имя не совпало ни с одной
+ * текущей стороной типа связи.
+ */
+function resolveLinkDirectionForWrite(
+  ndb: NetworkDb,
+  ownerId: string,
+  key: string,
+  config: PropertyConfig | null,
+  side: LinkPropertySide | null,
+  bindingSide: LinkPropertySide | null,
+  allowAmbiguous = false,
+): LinkPropertyDirection | null {
+  const matched = linkDirectionsByDisplayName(ndb, config, key);
+  const sideDir = side === null ? null : directionFromSide(side);
+  if (matched.length === 1) {
+    // Явный `side` — адрес записи, имя только резолвит свойство (0.14.1,
+    // ошибка d9bc6012): реестровое имя может адресовать ДРУГУЮ сторону, чем
+    // выбранная пользователем строка, и это не противоречие — пишем ту, что
+    // адресована `side`.
+    return sideDir ?? matched[0]!;
+  }
+  if (matched.length === 2) {
+    // Симметричный тип связи: имя адресует обе стороны.
+    return (
+      sideDir ??
+      resolveLiveLinkDirection(ndb, ownerId, key, config, bindingSide, allowAmbiguous)
+    );
+  }
+  // Имя не совпало ни с одной текущей стороной (канонический ключ реестра,
+  // устаревший снимок имени) — сторона из параметра, иначе из привязки.
+  return sideDir ?? linkPropertyDirection(config, bindingSide);
+}
+
+/**
+ * Направление для случая «одно имя — несколько записей эффективного набора»
+ * ОДНОГО свойства (0.14.1, правка по верификации Z1): явная привязка и
+ * синтетическое read-time зеркало (`mirrored: true`, `config.direction`
+ * построен как ПРОТИВОПОЛОЖНЫЙ) дают две записи с одним симметричным ключом
+ * ещё до появления рёбер. `422` допустим только когда обе стороны ЖИВЫ
+ * (спека 906a29c9); иначе сторона выводится из живых рёбер, а при их
+ * отсутствии — от ЯВНОЙ записи (её привязки), без оглядки на
+ * `config.direction` синтетического зеркала.
+ */
+function resolveSamePropertyLinkDirection(
+  ndb: NetworkDb,
+  ownerId: string,
+  key: string,
+  matches: EffectiveTypeProperty[],
+  allowAmbiguous: boolean,
+): LinkPropertyDirection | null {
+  const linkTypeIds = new Set<string>();
+  for (const match of matches) {
+    const linkTypeId = linkPropertyLinkTypeId(match.config);
+    if (linkTypeId !== null) linkTypeIds.add(linkTypeId);
+  }
+  const live: LinkPropertyDirection[] = [];
+  for (const direction of ['out', 'in'] as const) {
+    if (
+      [...linkTypeIds].some(
+        (linkTypeId) => listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).size > 0,
+      )
+    ) {
+      live.push(direction);
+    }
+  }
+  if (live.length === 2) {
+    if (allowAmbiguous) return null;
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
+      {
+        field: 'side',
+        reason: PROPERTY_SIDE_ERROR_REASON.required,
+        key,
+        allowed: LINK_PROPERTY_SIDES,
+      },
+    );
+  }
+  if (live.length === 1) return live[0]!;
+  // Живых рёбер нет. Направление задаёт ЯВНАЯ запись (привязка); у
+  // синтетического зеркала config.direction противоположен по построению.
+  // При нескольких явных записях (материализованные привязки обеих сторон)
+  // конфиг у них один и тот же (свойство одно) — берём его каноническое
+  // направление. Для sameProperty 422 здесь недостижим.
+  const explicit = matches.filter((match) => match.mirrored !== true);
+  const explicitDirections = new Set(
+    explicit.map((match) => linkPropertyDirection(match.config, match.side ?? null)),
+  );
+  if (explicitDirections.size === 1) return [...explicitDirections][0]!;
+  return linkPropertyDirection((explicit[0] ?? matches[0]!).config);
+}
+
+/**
+ * `422` коллизии display-имён РАЗНЫХ свойств сети (0.14.1, доработка по
+ * верификации d9bc6012): свойств с таким именем несколько, и выбрать одно не
+ * удалось даже по `side`. `details.reason` — машиночитаемый дискриминатор для
+ * клиента (`PROPERTY_SIDE_ERROR_REASON.ambiguous`); текст русский и без
+ * внутренних терминов: его читают не только пользователи GUI, но и MCP/REST.
+ */
+function ambiguousPropertyNameError(
+  key: string,
+  candidates: Array<{ id: string; name: string }>,
+): EtnError {
+  return new EtnError(
+    'VALIDATION_ERROR',
+    `имя свойства «${key}» используют несколько свойств сети — уточните, какое имеется в виду`,
+    {
+      field: 'property',
+      reason: PROPERTY_SIDE_ERROR_REASON.ambiguous,
+      name: key,
+      candidates,
+    },
+  );
+}
+
 /**
  * Resolve a property by the key the READ side shows. Names are unique per
  * network since 0.6.5, so a scalar name alone addresses the property — but a
@@ -3474,8 +3806,8 @@ function linkPropertyDirectionFromDisplayName(
  *     surfaces as an explicit ambiguity error;
  *  2. the registry by stored name (unattached scalars, canonical link names);
  *  3. link properties of the registry by EITHER display side — the outside-type
- *     write arm (требование dfaacb05: запись значения свойства-связи, не
- *     подключённого к типу владельца).
+ *     write arm (требование «Запись значения допускается для любого свойства
+ *     справочника»).
  *
  * Шаги 2–3 возвращают `direction` из display-имени (имя стороны адресует
  * направление однозначно, 0.8.2, ошибка 748b80fd): у внетипового ключа
@@ -3483,18 +3815,34 @@ function linkPropertyDirectionFromDisplayName(
  * Шаг 1 (типовой ключ эффективного набора) направление не задаёт — его, как и
  * раньше, определяет сторона привязки владельца (ошибка c67676f3).
  *
+ * **0.14.1, параметр `side`** (спека 906a29c9): сторона — адрес записи. При
+ * записи явный `side` приоритетен, ключ только резолвит свойство (ошибка
+ * d9bc6012): имя может адресовать другую сторону — пишем ту, что адресована.
+ * Если имя адресует обе стороны симметричного типа связи (`name_forward ==
+ * name_reverse`), `side` выбирает сторону; без него сторона выводится из
+ * живых рёбер, а при обеих живых — 422. Для внетипового владельца с одной
+ * живой стороной `side` позволяет создать ОТСУТСТВУЮЩУЮ сторону.
+ *
  * Connectivity to the owner's type is NOT checked here — callers decide
- * (writes reject unattached properties with 422, deletes of outside-type
- * values must succeed). До 0.8.2 экспортировалась для фасада
- * `etn.properties.set` (удалён, задача 937480ca); остальные пользователи —
- * внутри домена.
+ * (запись свободна для любого свойства справочника; удаление — тем более).
  */
 export function resolveDefinition(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
   key: string,
+  side: LinkPropertySide | null = null,
+  options: {
+    /**
+     * Разрешить неоднозначное симметричное имя без `side`: вместо 422 вернуть
+     * определение с `direction: null`. Нужно удалению по конкретной цели
+     * (`properties.remove`): ребро owner→target однозначно задаёт направление,
+     * и вызывающий решает сам (0.14.1, правка по верификации Z1).
+     */
+    allowAmbiguousLink?: boolean;
+  } = {},
 ): ResolvedDefinition | null {
+  const allowAmbiguous = options.allowAmbiguousLink === true;
   if (ownerType === 'thought') {
     // 1) Эффективный набор типа владельца — ключи, которые отдаёт чтение.
     const row = ndb
@@ -3507,50 +3855,175 @@ export function resolveDefinition(
       );
       if (matches.length === 1) {
         const def = matches[0]!;
-        // Типовой ключ: направление — за привязкой владельца (c67676f3).
+        // Типовой ключ: направление — за привязкой владельца (c67676f3), но с
+        // учётом `side`/симметричного имени (0.14.1).
+        const direction =
+          def.value_type === 'link'
+            ? resolveLinkDirectionForWrite(
+                ndb,
+                ownerId,
+                key,
+                def.config,
+                side,
+                def.side ?? linkPropertySideFromConfig(def.value_type, def.config),
+                allowAmbiguous,
+              )
+            : null;
         return {
           id: def.property_id,
           name: def.key,
           value_type: def.value_type,
           config: def.config,
-          direction: null,
+          direction,
+          typedKey: true,
         };
       }
       if (matches.length > 1) {
-        throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
-          field: 'property',
-          name: key,
-          candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
-        });
+        // Либо один и тот же ключ у НЕСКОЛЬКИХ свойств (коллизия имён), либо
+        // одна и та же пара «звёзд» (свойство + его read-time зеркало).
+        const allLink = matches.every((m) => m.value_type === 'link');
+        if (allLink) {
+          const sameProperty = new Set(matches.map((m) => m.property_id)).size === 1;
+          // Коллизия имён РАЗНЫХ свойств: авто-вывод запрещён — сторону
+          // задаёт только side, и после фильтра должна остаться одна запись
+          // (0.14.1, правка по верификации Z1).
+          if (!sameProperty) {
+            if (side !== null) {
+              const sideDir = directionFromSide(side);
+              const filtered = matches.filter(
+                (m) => linkPropertyDirection(m.config, m.side ?? null) === sideDir,
+              );
+              if (filtered.length === 1) {
+                const def = filtered[0]!;
+                return {
+                  id: def.property_id,
+                  name: def.key,
+                  value_type: def.value_type,
+                  config: def.config,
+                  direction: sideDir,
+                  typedKey: true,
+                };
+              }
+            }
+            if (side === null) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `имя свойства «${key}» принадлежит нескольким свойствам сети — укажите side`,
+                {
+                  field: 'side',
+                  reason: PROPERTY_SIDE_ERROR_REASON.required,
+                  name: key,
+                  allowed: LINK_PROPERTY_SIDES,
+                  candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
+                },
+              );
+            }
+            throw ambiguousPropertyNameError(
+              key,
+              matches.map((m) => ({ id: m.property_id, name: m.key })),
+            );
+          }
+          // Одно свойство: направление выводим по живым рёбрам/явной записи.
+          const wanted =
+            side !== null
+              ? directionFromSide(side)
+              : resolveSamePropertyLinkDirection(ndb, ownerId, key, matches, allowAmbiguous);
+          if (wanted !== null) {
+            const filtered = matches.filter(
+              (m) => linkPropertyDirection(m.config, m.side ?? null) === wanted,
+            );
+            if (filtered.length === 1) {
+              const def = filtered[0]!;
+              return {
+                id: def.property_id,
+                name: def.key,
+                value_type: def.value_type,
+                config: def.config,
+                direction: wanted,
+                typedKey: true,
+              };
+            }
+          } else if (allowAmbiguous) {
+            // Неоднозначность разрешена вызывающему: возвращаем определение
+            // без направления — конкретное ребро он выберет по цели.
+            const def = matches.find((m) => m.mirrored !== true) ?? matches[0]!;
+            return {
+              id: def.property_id,
+              name: def.key,
+              value_type: def.value_type,
+              config: def.config,
+              direction: null,
+              typedKey: true,
+            };
+          }
+        }
+        if (allLink && side === null) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `имя свойства «${key}» адресует обе стороны связи — укажите side`,
+            {
+              field: 'side',
+              reason: PROPERTY_SIDE_ERROR_REASON.required,
+              name: key,
+              allowed: LINK_PROPERTY_SIDES,
+              candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
+            },
+          );
+        }
+        throw ambiguousPropertyNameError(
+          key,
+          matches.map((m) => ({ id: m.property_id, name: m.key })),
+        );
       }
     }
   }
-  // 2) Канонический путь — имя строки реестра. Для свойства-связи имя строки —
-  //    display-имя ОДНОЙ из сторон: если оно совпало с текущей стороной типа
-  //    связи, направление берём из имени (748b80fd).
+  // 2) Канонический путь — имя строки реестра.
   const prop = getNetworkPropertyByName(ndb, key);
   if (prop) {
+    const direction =
+      prop.value_type === 'link'
+        ? ownerType === 'thought'
+          ? resolveLinkDirectionForWrite(
+              ndb,
+              ownerId,
+              key,
+              prop.config,
+              side,
+              resolveOwnerBindingSide(ndb, ownerId, prop.id),
+              allowAmbiguous,
+            )
+          : linkPropertyDirectionFromDisplayName(ndb, prop.config, key)
+        : null;
     return {
       id: prop.id,
       name: prop.name,
       value_type: prop.value_type,
       config: prop.config,
-      direction:
-        prop.value_type === 'link'
-          ? linkPropertyDirectionFromDisplayName(ndb, prop.config, key)
-          : null,
+      direction,
+      // Имя реестра (не ключ эффективного набора): владелец может иметь
+      // привязку, но адресация идёт мимо строки типа — реестровое ограничение
+      // цели не применяем, остаётся legacy `config.allowed_target_type_ids`.
+      typedKey: false,
     };
   }
-  // 3) Внетиповая запись свойства-связи (dfaacb05): ключ может быть
-  //    display-именем любой стороны link-свойства реестра, не подключённого к
-  //    типу владельца; направление — из имени стороны (748b80fd).
+  // 3) Внетиповая запись свойства-связи: ключ может быть display-именем любой
+  //    стороны link-свойства реестра, не подключённого к типу владельца;
+  //    направление — из имени стороны (748b80fd) или из `side`/живых рёбер.
   if (ownerType === 'thought') {
-    const byDisplay = new Map<string, { prop: NetworkProperty; direction: LinkPropertyDirection }>();
+    const byDisplay = new Map<string, { prop: NetworkProperty }>();
+    // Явный `side` — адрес стороны и для внетиповой строки: display-имя
+    // адресует сторону ребра (name_forward ⇒ source, name_reverse ⇒ target),
+    // поэтому кандидат, чьё имя называет только ПРОТИВОПОЛОЖНУЮ сторону,
+    // отбрасывается. 422 остаётся только для настоящей неоднозначности —
+    // после сужения по стороне не осталось ровно одного свойства
+    // (0.14.1, доработка d9bc6012; спека 906a29c9 v13, п.3).
+    const wantedDirection = side === null ? null : directionFromSide(side);
     for (const p of listNetworkProperties(ndb)) {
       if (p.value_type !== 'link') continue;
-      const direction = linkPropertyDirectionFromDisplayName(ndb, p.config, key);
-      if (direction === null) continue;
-      byDisplay.set(p.id, { prop: p, direction });
+      const directions = linkDirectionsByDisplayName(ndb, p.config, key);
+      if (directions.length === 0) continue;
+      if (wantedDirection !== null && !directions.includes(wantedDirection)) continue;
+      byDisplay.set(p.id, { prop: p });
     }
     if (byDisplay.size === 1) {
       const hit = [...byDisplay.values()][0]!;
@@ -3559,15 +4032,25 @@ export function resolveDefinition(
         name: hit.prop.name,
         value_type: hit.prop.value_type,
         config: hit.prop.config,
-        direction: hit.direction,
+        direction: resolveLinkDirectionForWrite(
+          ndb,
+          ownerId,
+          key,
+          hit.prop.config,
+          side,
+          resolveOwnerBindingSide(ndb, ownerId, hit.prop.id),
+          allowAmbiguous,
+        ),
+        // Внетиповая строка: привязки владельца у неё нет — ограничение по
+        // реестру не применяется (legacy config остаётся).
+        typedKey: false,
       };
     }
     if (byDisplay.size > 1) {
-      throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
-        field: 'property',
-        name: key,
-        candidates: [...byDisplay.values()].map((h) => ({ id: h.prop.id, name: h.prop.name })),
-      });
+      throw ambiguousPropertyNameError(
+        key,
+        [...byDisplay.values()].map((h) => ({ id: h.prop.id, name: h.prop.name })),
+      );
     }
   }
   return null;
@@ -3725,6 +4208,9 @@ export function getPropertyValuesWithLinks(
         values: getLinkPropertyValues(ndb, ownerType, ownerId, lp.link_type_id, lp.direction),
       });
     }
+    // 0.14.1 (контракт 27ed2b39): эффективный порядок внетиповых — явные
+    // позиции, хвост по времени появления свойства у мысли.
+    reorderOutsideTypeProperties(ndb, ownerId, out);
   }
   return out;
 }
@@ -3855,6 +4341,9 @@ export function getPropertyValuesResolved(
     for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
       out.push(lp);
     }
+    // 0.14.1 (контракт 27ed2b39): карточка MCP отдаёт внетиповые свойства в
+    // эффективном порядке.
+    reorderOutsideTypeProperties(ndb, ownerId, out);
   }
   return out;
 }
@@ -4117,7 +4606,8 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
     )
     .run(new Date().toISOString(), thoughtId, refLikePattern(thoughtId), ndb.layerId);
   cleared += legacyRes.changes;
-  // Рёбра блокирующих свойств-связей — помечаем в корзину (комментарий не теряется).
+  // Рёбра блокирующих свойств-связей — умное удаление цели: в основе
+  // физически, в слое корзина для ребра из основы/предков (ADR a967d865).
   for (const bp of listBlockingLinkProperties(ndb)) {
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
     const typeClause = bp.link_type_id === null ? 'type_id IS NULL' : 'type_id = ?';
@@ -4128,8 +4618,9 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
       )
       .all(...params) as Array<{ id: string }>;
     for (const link of links) {
-      markLinkForDeletion(ndb, link.id, 'system');
-      cleared += 1;
+      // Единое умное удаление (ADR a967d865): основа — физически, слой —
+      // корзина для ребра из основы/предков.
+      if (removeLinkTarget(ndb, link.id, 'system') !== null) cleared += 1;
     }
   }
   return cleared;
@@ -4415,26 +4906,22 @@ function validatePublicationRefTarget(ndb: NetworkDb, prop: PropertyLike, id: st
 /**
  * Upsert a property value addressed by property name (docs/03-server-api.md §9).
  *
- * The name resolves against the registry; the value is validated against the
- * property's nature and written only to the matching `value_*` column; the
- * other value columns are set to NULL. Passing `null` clears the value.
+ * The name resolves against the WHOLE network registry (0.14.1, ADR cb95fb4e,
+ * требование ab06aa20): attaching the property to the owner's type is NOT
+ * checked for thoughts — a value outside the type is a normal editable row.
+ * The value is validated against the property's nature and written only to the
+ * matching `value_*` column; the other value columns are set to NULL. Passing
+ * `null` clears the value.
  *
- * A value may only be written for a property **attached to the owner's type
- * chain** (own binding or an ancestor's) — a registry property the type does
- * not attach is rejected with `VALIDATION_ERROR` (422), which also covers
- * re-writing an existing outside-type value: attach the property first
- * (02-data-model.md §3.5a).
- *
- * `crossNetworkAccess` — обязателен для записи значений вида
- * `cross_network_ref`: запись идёт с одним живым резолвом в чужую сеть
- * (требование aa89940c). Передаётся REST/MCP-роутами, в юнит-тестах
- * `property-service.test.ts` — фиктивный контекст (см.
- * `cross-network-ref-service.ts`).
+ * `side` (0.14.1, спека 906a29c9) — адрес стороны свойства-связи: нужен, когда
+ * имя адресует обе стороны симметричного типа связи и/или когда требуется
+ * создать отсутствующую у мысли сторону. Для скалярных свойств `side`
+ * недопустим (422).
  *
  * Throws:
- *   * `NOT_FOUND` (404) if the owner or the property (by name) is missing;
- *   * `VALIDATION_ERROR` (422) if the property is not attached to the owner's
- *     type, or the value does not match `value_type`.
+ *   * `NOT_FOUND` (404) if the owner is missing;
+ *   * `VALIDATION_ERROR` (422) if the property is absent from the registry
+ *     (for thoughts) or the value does not match `value_type`.
  */
 export function setPropertyValue(
   ndb: NetworkDb,
@@ -4444,6 +4931,7 @@ export function setPropertyValue(
   value: PropertyValueValue,
   actorUserId: string,
   crossNetworkAccess?: CrossNetworkAccessContext,
+  side: LinkPropertySide | null = null,
 ): PropertyValue {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
@@ -4460,12 +4948,28 @@ export function setPropertyValue(
         id: ownerId,
       });
     }
-    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key, side);
     if (!prop) {
+      // 0.14.1: единственный 422 записи — свойство отсутствует в справочнике
+      // (владельцы-мысли). У владельца-ребра контракт не меняется (404).
+      if (ownerType === 'thought') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `свойства «${key}» нет в справочнике сети — создайте его явно (ontology.write)`,
+          { owner_type: ownerType, owner_id: ownerId, key },
+        );
+      }
       throw new EtnError('NOT_FOUND', `property "${key}" does not exist in this network`, {
         owner_type: ownerType,
         owner_id: ownerId,
         key,
+      });
+    }
+    if (side !== null && prop.value_type !== 'link') {
+      throw new EtnError('VALIDATION_ERROR', 'side задаётся только для свойств-связей', {
+        field: 'side',
+        key,
+        side,
       });
     }
     return setPropertyValueForProperty(
@@ -4477,6 +4981,9 @@ export function setPropertyValue(
       { key },
       actorUserId,
       prop.direction,
+      // Типовой ключ (эффективный набор типа владельца): ограничение цели по
+      // привязке стороны записи действует и при явном `side` (d9bc6012).
+      prop.typedKey,
       crossNetworkAccess,
     );
   });
@@ -4543,11 +5050,19 @@ function setPropertyValueForProperty(
   errKey: { key: string },
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
+  typedKey = false,
   crossNetworkAccess?: CrossNetworkAccessContext,
 ): PropertyValue {
+  // 0.14.1 (ADR cb95fb4e): у владельца-мысли привязка свойства к типу НЕ
+  // проверяется — значение вне типа штатно. Привязка нужна только для флага
+  // `outside_type` в эхе записи (и для владельца-ребра — там контракт прежний).
+  const attached =
+    ownerType === 'thought' ? attachedPropertyIds(ndb, ownerType, ownerId) : null;
+  const outsideType = attached !== null && !attached.has(prop.id);
+
   // Свойство-связь: запись — создание/правка рёбер, а не значение в
   // property_values (ADR «свойство-связь — проекция ребра»). Запись вне типа
-  // разрешена (обратная сторона/внетиповое свойство) — требование 2fe173c5.
+  // разрешена (обратная сторона/внетиповое свойство) — требование ab06aa20.
   if (prop.value_type === 'link') {
     if (ownerType !== 'thought') {
       throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
@@ -4555,17 +5070,18 @@ function setPropertyValueForProperty(
         key: errKey.key,
       });
     }
-    const { targets: targetIds, createdLinkIds } = setLinkPropertyTargets(
+    const { targets: targetIds, createdLinkIds, removals } = setLinkPropertyTargets(
       ndb,
       ownerId,
       prop,
       normalizeLinkTargets(ndb, value, errKey.key),
       actorUserId,
       nameDirection,
+      typedKey,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     const nowMs = Date.now();
-    return {
+    const result: PropertyValue = {
       // Свойство-связь — проекция рёбер (ADR «свойство-связь — проекция ребра»):
       // строки `property_values` у неё нет, поэтому id честно `null`, а не
       // пустая строка-заглушка (ошибка 5a50f906 — `id: ""` в ответе читалось
@@ -4577,7 +5093,7 @@ function setPropertyValueForProperty(
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: prop.id,
-      outside_type: false,
+      outside_type: outsideType,
       property_name: prop.name,
       value_type: 'link',
       value: targetIds.length === 0 ? null : targetIds.length === 1 ? (targetIds[0] ?? null) : targetIds,
@@ -4588,15 +5104,20 @@ function setPropertyValueForProperty(
       created_at_ms: nowMs,
       updated_at_ms: nowMs,
     };
+    return attachLinkRemovals(result, removals);
   }
 
-  const attached = attachedPropertyIds(ndb, ownerType, ownerId);
-  if (!attached.has(prop.id)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      `property "${errKey.key}" is not attached to this owner's type — attach it first`,
-      { owner_type: ownerType, owner_id: ownerId, key: errKey.key, property_id: prop.id },
-    );
+  // Владелец-ребро: контракт `/links/{id}/properties` в 0.14.1 НЕ меняется —
+  // привязка к типу связи по-прежнему обязательна.
+  if (ownerType === 'link') {
+    const attachedToLinkType = attachedPropertyIds(ndb, ownerType, ownerId);
+    if (!attachedToLinkType.has(prop.id)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `property "${errKey.key}" is not attached to this owner's type — attach it first`,
+        { owner_type: ownerType, owner_id: ownerId, key: errKey.key, property_id: prop.id },
+      );
+    }
   }
 
   const { column, raw } = validateAndCoerce(ndb, prop, value);
@@ -4607,6 +5128,7 @@ function setPropertyValueForProperty(
   // ОДИН id, поэтому представления `*_v`, дедуплицирующие по id, видят одну
   // строку на natural key, а не «призрака» с чужим значением.
   const id = propertyValueId(ownerType, ownerId, prop.id);
+  const createdAt = now;
   // S5 (13-layers.md §5.1): the visible row for this natural key is shadowed
   // FIRST — writing into this layer while an ancestor row stays live would
   // break the «one value per (owner, property)» invariant of §3.5. Resolved
@@ -4626,8 +5148,8 @@ function setPropertyValueForProperty(
   ndb
     .prepare(
       `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at,
-                                   created_by, updated_by, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   created_at, created_by, updated_by, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
          deleted = 0,
          value_text = NULL,
@@ -4640,7 +5162,23 @@ function setPropertyValueForProperty(
          updated_by = excluded.updated_by,
          updated_at_ms = excluded.updated_at_ms`,
     )
-    .run(id, ndb.layerId, ownerType, ownerId, prop.id, raw, now, actorUserId, actorUserId, nowMs, nowMs);
+    .run(
+      id,
+      ndb.layerId,
+      ownerType,
+      ownerId,
+      prop.id,
+      raw,
+      now,
+      // `created_at` — время ПОЯВЛЕНИЯ значения и при правке не меняется
+      // (0.14.1, задача 3948af62): upsert его не трогает, при конфликте
+      // остаётся значение первого INSERT.
+      createdAt,
+      actorUserId,
+      actorUserId,
+      nowMs,
+      nowMs,
+    );
 
   // Кросс-сетевая ссылка (задача 7849008a): запись значения идёт с одним
   // живым резолвом в чужую сеть (требование aa89940c). Снапшот имени
@@ -4681,7 +5219,7 @@ function setPropertyValueForProperty(
     owner_type: ownerType,
     owner_id: ownerId,
     property_id: prop.id,
-    outside_type: false,
+    outside_type: outsideType,
     property_name: prop.name,
     value_type: prop.value_type,
     value: readValue(stored, prop.value_type, isMultipleProperty(prop)),
@@ -4742,6 +5280,9 @@ export function setPropertyValueById(
       { key: registryProp.name },
       actorUserId,
       null,
+      // Значение пришло из эффективного набора типа (дефолт привязки) —
+      // ограничение цели по привязке сохраняется, как и до 0.14.1.
+      true,
       crossNetworkAccess,
     );
   });
@@ -4814,6 +5355,7 @@ export function addLinkPropertyValue(
   targetId: string,
   comment: string | null,
   actorUserId: string,
+  side: LinkPropertySide | null = null,
 ): { link_id: string; created: boolean; warnings: MutationWarning[] } {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
@@ -4822,9 +5364,18 @@ export function addLinkPropertyValue(
     });
   }
   return ndb.transaction(() => {
-    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key, side);
     if (!prop || prop.value_type !== 'link') {
-      throw new EtnError('NOT_FOUND', `property "${key}" does not exist or is not a link property`, {
+      if (prop === null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `свойства «${key}» нет в справочнике сети — создайте его явно (ontology.write)`,
+          { owner_type: ownerType, owner_id: ownerId, key },
+        );
+      }
+      throw new EtnError('VALIDATION_ERROR', `property "${key}" is not a link property`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
         key,
       });
     }
@@ -4835,7 +5386,7 @@ export function addLinkPropertyValue(
       ndb,
       ownerId,
       linkPropertyLinkTypeId(prop.config),
-      // Направление — из display-имени (748b80fd), иначе сторона привязки
+      // Направление — из display-имени/side (0.14.1), иначе сторона привязки
       // владельца (0.8.2, ошибка c67676f3).
       prop.direction ??
         linkPropertyDirection(prop.config, resolveOwnerBindingSide(ndb, ownerId, prop.id)),
@@ -4850,6 +5401,7 @@ export function addLinkPropertyValue(
       actorUserId,
       warnings,
       prop.direction,
+      prop.typedKey,
     );
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     return { link_id: id, created: existing === undefined, warnings };
@@ -4860,6 +5412,12 @@ export function addLinkPropertyValue(
  * Убрать одну цель из набора свойства-связи (операция `remove`, 0.8.1): помечает
  * ребро в корзину (комментарий не теряется). Отсутствующее ребро — no-op
  * (`link_id: null`).
+ *
+ * `side` (0.14.1, правка по верификации Z1) — необязательный адрес стороны:
+ * нужен только когда ОДНА И ТА ЖЕ цель соединена с владельцем рёбрами обеих
+ * сторон симметричного типа. Без `side` направление ищется по живому ребру к
+ * конкретной цели (owner→target однозначно задаёт направление) — до 0.14.1
+ * `properties.remove` работал именно так.
  */
 export function removeLinkPropertyValue(
   ndb: NetworkDb,
@@ -4868,7 +5426,8 @@ export function removeLinkPropertyValue(
   key: string,
   targetId: string,
   actorUserId: string,
-): { link_id: string | null } {
+  side: LinkPropertySide | null = null,
+): { link_id: string | null; action: LinkRemovalAction | null; link: Link | null } {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
       owner_type: ownerType,
@@ -4876,25 +5435,59 @@ export function removeLinkPropertyValue(
     });
   }
   return ndb.transaction(() => {
-    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    // Симметричное имя при обеих живых сторонах не должно отказывать `remove`:
+    // конкретную сторону задаёт ребро к цели (или явный `side`).
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key, side, {
+      allowAmbiguousLink: true,
+    });
     if (!prop || prop.value_type !== 'link') {
-      throw new EtnError('NOT_FOUND', `property "${key}" does not exist or is not a link property`, {
+      if (prop === null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `свойства «${key}» нет в справочнике сети`,
+          { owner_type: ownerType, owner_id: ownerId, key },
+        );
+      }
+      throw new EtnError('VALIDATION_ERROR', `property "${key}" is not a link property`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
         key,
       });
     }
     // Короткий id цели → полный (ошибка 68802297): иначе живое ребро по
     // усечённому id не находится и `remove` молча ничего не делает.
     targetId = resolveTargetThoughtId(ndb, targetId);
-    const id = removeLinkPropertyTarget(
+    const linkTypeId = linkPropertyLinkTypeId(prop.config);
+    let direction: LinkPropertyDirection | null = prop.direction;
+    if (direction === null) {
+      // Имя неоднозначно (обе стороны живы) и side не задан: направление
+      // задаёт ребро к КОНКРЕТНОЙ цели.
+      const outLive = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'out').has(targetId);
+      const inLive = listLiveLinkTargets(ndb, ownerId, linkTypeId, 'in').has(targetId);
+      if (outLive && inLive) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `цель соединена рёбрами обеих сторон свойства «${key}» — укажите side`,
+          { field: 'side', key, target: targetId, allowed: LINK_PROPERTY_SIDES },
+        );
+      }
+      if (!outLive && !inLive) return { link_id: null, action: null, link: null };
+      direction = outLive ? 'out' : 'in';
+    }
+    const removal = removeLinkPropertyTarget(
       ndb,
       ownerId,
       prop,
       targetId,
       actorUserId,
-      prop.direction,
+      direction,
     );
-    if (id !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
-    return { link_id: id };
+    if (removal !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    return {
+      link_id: removal?.link_id ?? null,
+      action: removal?.action ?? null,
+      link: removal?.link ?? null,
+    };
   });
 }
 
@@ -4973,13 +5566,19 @@ function hasValue(value: PropertyValueValue | undefined): boolean {
 
 /**
  * Delete a stored property value addressed by property name. Outside-type
- * values are deletable — manual removal is the only action available for them
- * (02-data-model.md §3.5a) — so the property only has to exist in the
+ * values are deletable, and with 0.14.1 freedom of writing any registry
+ * property is deletable too — so the property only has to exist in the
  * registry, not to be attached to the owner's type. Idempotent
  * (error cefb4db0): when no value is stored for the property the call
  * succeeds as a no-op and reports `deleted: false` — DELETE semantics, the
- * editor's blur path may fire it against an already-empty field. Throws
- * `NOT_FOUND` (404) only when the property itself is unknown.
+ * editor's blur path may fire it against an already-empty field.
+ *
+ * `side` (0.14.1, спека 906a29c9) — адрес стороны свойства-связи. При
+ * удалении/очистке сторона СВЕРЯЕТСЯ с фактическим направлением живых рёбер:
+ * если указанная сторона пуста, а рёбра есть на противоположной — 422.
+ *
+ * Throws `VALIDATION_ERROR` (422) when the property is absent from the registry
+ * (for thoughts) or a `side` contradicts the actual direction.
  */
 export function deletePropertyValue(
   ndb: NetworkDb,
@@ -4987,19 +5586,42 @@ export function deletePropertyValue(
   ownerId: string,
   key: string,
   actorUserId: string,
-): { property_id: string; deleted: boolean; link_ids?: string[] } {
+  side: LinkPropertySide | null = null,
+): {
+  property_id: string;
+  deleted: boolean;
+  link_ids?: string[];
+  /** Фактическое действие по каждому снятому ребру — для событий фасада. */
+  removals?: LinkRemoval[];
+} {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
       field: 'owner_type',
     });
   }
   return ndb.transaction(() => {
-    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key, side);
     if (!prop) {
+      // 0.14.1: у владельца-мысли отсутствие свойства в справочнике — 422;
+      // у владельца-ребра контракт не меняется (404).
+      if (ownerType === 'thought') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `свойства «${key}» нет в справочнике сети`,
+          { owner_type: ownerType, owner_id: ownerId, key },
+        );
+      }
       throw new EtnError('NOT_FOUND', `property "${key}" does not exist in this network`, {
         owner_type: ownerType,
         owner_id: ownerId,
         key,
+      });
+    }
+    if (side !== null && prop.value_type !== 'link') {
+      throw new EtnError('VALIDATION_ERROR', 'side задаётся только для свойств-связей', {
+        field: 'side',
+        key,
+        side,
       });
     }
     // Свойство-связь: значения — это рёбра (ADR «свойство-связь — проекция
@@ -5022,14 +5644,48 @@ export function deletePropertyValue(
         linkPropertyLinkTypeId(cfg),
         direction,
       );
+      // Сверка с фактическим направлением (0.14.1): удаление/очистка указанной
+      // стороны при пустой указанной и живой противоположной — 422. Запись
+      // такой сверки не делает — она вправе создать отсутствующую сторону.
+      const oppositeDirection: LinkPropertyDirection = direction === 'out' ? 'in' : 'out';
+      const opposite = listLiveLinkTargets(
+        ndb,
+        ownerId,
+        linkPropertyLinkTypeId(cfg),
+        oppositeDirection,
+      );
+      if (side !== null && existing.size === 0 && opposite.size > 0) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `сторона «${side}» не совпадает с фактическим направлением рёбер свойства «${key}»`,
+          {
+            field: 'side',
+            reason: PROPERTY_SIDE_ERROR_REASON.mismatch,
+            key,
+            side,
+            actual_side: sideFromDirection(oppositeDirection),
+          },
+        );
+      }
       if (existing.size === 0) {
         // Ничего не снято — идемпотентный no-op (ошибка cefb4db0).
         return { property_id: prop.id, deleted: false };
       }
-      const linkIds = [...existing.values()].map((link) => link.id);
-      setLinkPropertyTargets(ndb, ownerId, prop, [], actorUserId, prop.direction);
+      const { removals } = setLinkPropertyTargets(
+        ndb,
+        ownerId,
+        prop,
+        [],
+        actorUserId,
+        prop.direction,
+      );
       touchOwner(ndb, ownerType, ownerId, actorUserId);
-      return { property_id: prop.id, deleted: true, link_ids: linkIds };
+      return {
+        property_id: prop.id,
+        deleted: removals.length > 0,
+        link_ids: removals.map((removal) => removal.link_id),
+        removals,
+      };
     }
     // S4: в слое значение скрывается надгробием (13-layers.md §5.2), в основе —
     // прежний физический DELETE.
@@ -5248,6 +5904,13 @@ export function getPropertyRegistryCounters(
     ).c;
     result.types_source_count = sourceCount;
     result.types_target_count = targetCount;
+    // Типы привязок по сторонам — производные данных того же реестра:
+    // внетиповые строки и массовый диалог применяют их как ограничение
+    // значения (то же `allowed_opposite_type_ids`, что у эффективного
+    // определения, ошибка f8f8fa49).
+    const bindings = loadBindingTypesBySide(ndb, [propertyId]).get(propertyId);
+    result.binding_source_type_ids = [...(bindings?.source ?? [])];
+    result.binding_target_type_ids = [...(bindings?.target ?? [])];
   }
   return result;
 }

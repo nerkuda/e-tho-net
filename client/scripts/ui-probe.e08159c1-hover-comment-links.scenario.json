@@ -1,0 +1,144 @@
+{
+  "name": "e08159c1-hover-comment-links",
+  "description": "Гейт ошибки e08159c1: ссылки в превью ПОСТОЯННОГО комментария обязаны работать. Seed-мысль стенда получает постоянный комментарий с wiki-ссылкой на созданную цель и внешней ссылкой. Ctrl+наведение на индикатор 📝 облачка открывает попап: до фикса у ссылок внутри нет data-hp-kind (wikiKind/anchorKind = null) и шаг markers красный; после фикса wikiKind=wiki-thought, anchorKind=link. Ctrl+наведение на wiki-ссылку открывает ВЛОЖЕННЫЙ попап (2 попапа) с комментарием цели; уход закрывает цепочку (150 мс — 2, 550 мс — 0). Клик по внешней ссылке доходит до общего обработчика (window.open перехвачен: href не открывается в ОС) и не закрывает попап; клик по wiki-ссылке доводит навигацию до серверного focus_id вкладки (window.etn.tabs.list). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.e08159c1-hover-comment-links.scenario.json",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "prepare",
+      "timeout": 60000,
+      "probe": "(async () => { const nid = '{{networkId}}'; const target = await window.etn.thoughts.create(nid, { title: 'Цель e08159c1', comment: { body_md: 'постоянный комментарий цели e08159c1' } }); window.__e08159c1 = { target: target.id }; const comments = await window.etn.comments.list(nid, 'thought', '{{thoughtId}}'); const perm = comments.find((c) => c.kind === 'permanent'); if (perm === undefined) return 'no-permanent'; const body = 'Ссылка на [[#' + target.id + '|цель e08159c1]] и внешняя [внешняя ссылка](https://example.com/e08159c1).'; await window.etn.comments.update(nid, perm.id, { body_md: body }, perm.version); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 90000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    {
+      "name": "hover-indicator",
+      "probe": "(() => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-cloud'; const ind = cloud.querySelector('.cloud-ind .ind'); if (ind === null || ind === undefined) return 'no-ind'; const r = ind.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; ind.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); ind.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-popover",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "markers",
+      "probe": {
+        "name": "markers",
+        "expression": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const pop = pops[pops.length - 1]; if (pop === undefined) return 'no-popover'; const wiki = pop.querySelector('span.wiki-link'); const anchor = pop.querySelector('a[href=\"https://example.com/e08159c1\"]'); return { pops: pops.length, wikiKind: wiki?.dataset?.hpKind ?? null, wikiIdMatchesTarget: (wiki?.getAttribute('data-wiki-id') ?? null) === window.__e08159c1.target, wikiText: (wiki?.textContent ?? '').trim(), anchorKind: anchor?.dataset?.hpKind ?? null, anchorHref: anchor?.getAttribute('href') ?? null }; })()"
+      },
+      "expect": {
+        "pops": 1,
+        "wikiKind": "wiki-thought",
+        "wikiIdMatchesTarget": true,
+        "wikiText": "цель e08159c1",
+        "anchorKind": "link",
+        "anchorHref": "https://example.com/e08159c1"
+      }
+    },
+    {
+      "name": "click-external-link",
+      "probe": "(() => { const pop = document.querySelector('.ui-popover'); const anchor = pop?.querySelector('a[href=\"https://example.com/e08159c1\"]'); if (anchor === null || anchor === undefined) return 'no-anchor'; window.__e08159c1Opened = null; try { const fake = (url) => { window.__e08159c1Opened = String(url); return null; }; fake.__probe = true; window.open = fake; } catch { return 'cannot-patch'; } if (window.open.__probe !== true) return 'not-patched'; anchor.click(); return window.__e08159c1Opened === null ? 'no-call' : 'clicked'; })()",
+      "expect": "clicked"
+    },
+    {
+      "name": "external-opened",
+      "probe": {
+        "name": "externalOpened",
+        "expression": "window.__e08159c1Opened"
+      },
+      "expect": "https://example.com/e08159c1"
+    },
+    {
+      "name": "popover-survives-external-click",
+      "probe": {
+        "name": "popsAfterExternalClick",
+        "expression": "document.querySelectorAll('.ui-popover').length"
+      },
+      "expect": 1
+    },
+    {
+      "name": "hover-wiki-link",
+      "probe": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; if (last === undefined) return 'no-popover'; const link = last.querySelector('span.wiki-link[data-hp-kind]'); if (link === null || link === undefined) return 'no-marked-link'; const r = link.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); link.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-nested-popover",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 2"
+    },
+    {
+      "name": "nested-content",
+      "probe": {
+        "name": "nestedContent",
+        "expression": "(() => { const pops = [...document.querySelectorAll('.ui-popover')]; const last = pops[pops.length - 1]; return { pops: pops.length, head: (last?.querySelector('.ui-popover-head')?.textContent ?? '').trim(), hasTargetComment: (last?.textContent ?? '').includes('постоянный комментарий цели e08159c1') }; })()"
+      },
+      "expect": {
+        "pops": 2,
+        "head": "цель e08159c1",
+        "hasTargetComment": true
+      }
+    },
+    {
+      "name": "leave-chain",
+      "probe": "(async () => { document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: false, clientX: 1, clientY: 1 })); await new Promise((r) => setTimeout(r, 150)); const after150 = document.querySelectorAll('.ui-popover').length; await new Promise((r) => setTimeout(r, 400)); const after550 = document.querySelectorAll('.ui-popover').length; return { after150, after550 }; })()",
+      "expect": { "after150": 2, "after550": 0 }
+    },
+    {
+      "name": "hover-indicator-again",
+      "probe": "(() => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); const ind = cloud?.querySelector('.cloud-ind .ind'); if (ind === null || ind === undefined) return 'no-ind'; const r = ind.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; ind.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); ind.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: x, clientY: y })); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "wait-popover-again",
+      "timeout": 40000,
+      "waitFor": "document.querySelectorAll('.ui-popover').length === 1"
+    },
+    {
+      "name": "click-wiki-link",
+      "probe": "(() => { const pop = document.querySelector('.ui-popover'); const link = pop?.querySelector('span.wiki-link[data-hp-kind=\"wiki-thought\"]'); if (link === null || link === undefined) return 'no-marked-link'; link.click(); return 'clicked'; })()",
+      "expect": "clicked"
+    },
+    {
+      "name": "focus-persisted-on-server",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 100; i += 1) { const tabs = await window.etn.tabs.list(); const tab = tabs.find((t) => t.network_id === '{{networkId}}'); if (tab !== undefined && tab.focus_id === window.__e08159c1.target) return 'ok'; await new Promise((r) => setTimeout(r, 100)); } const tabs = await window.etn.tabs.list(); const tab = tabs.find((t) => t.network_id === '{{networkId}}'); return { result: 'timeout', focus: tab?.focus_id ?? null, target: window.__e08159c1.target }; })()",
+      "expect": "ok"
+    }
+  ]
+}

@@ -562,7 +562,12 @@ export async function resolveLegacyWikiCandidates(
   networkId: string,
   name: string,
 ): Promise<DuplicateHit[]> {
-  const hits = await etn.thoughts.findDuplicates(networkId, name);
+  // Живой поиск, не дедупликация (ошибка 11f14a81): резолвер рассчитывает на
+  // `*`-синонимы по полным словоформам («исправ* ошиб*» → «Исправленные
+  // ошибки») и сам отбрасывает partial. После разделения режимов REST-дефолт
+  // стал строгим `dedupe`, который такие словоформы не матчит, — режим
+  // передаём явно, иначе легаси-ссылка уходила бы в ветку «создать».
+  const hits = await etn.thoughts.findDuplicates(networkId, name, [], [], 'search');
   const exact = exactLegacyCandidates(hits, name);
   if (exact.length === 0) return [];
   try {

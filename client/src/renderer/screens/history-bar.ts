@@ -17,6 +17,11 @@
  *   (profile `chip`): icon, colours, font, dim state and trash mark, ellipsis
  *   by the row width;
  * - empty history hides the area entirely;
+ * - the re-render signature covers EVERY input of the read, including the
+ *   active tab (`history.list` is per-tab) and the connection status, and it
+ *   is kept only after a successful read: a read that failed while the link
+ *   was down is retried on the next store tick (the `connected` transition),
+ *   never leaving an empty strip until the client restarts (ошибка 76282fbc);
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, inactive
  *   thoughts are hidden while `show_inactive` is off, and marked-for-deletion
@@ -35,14 +40,15 @@
  *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
  */
 
-import { setFocus } from '../app.js';
+import { focusFromUi } from '../app.js';
 import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { commitEntity, getEntity } from '../lib/live/index.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
-import { showThoughtContextMenu } from '../canvas/context-menu.js';
-import { store } from '../state.js';
+import { showOutOfCanvasThoughtMenu } from '../canvas/context-menu.js';
+import { getRtStatus, store } from '../state.js';
 import { currentThoughtId, setHistoryChangeListener } from '../history.js';
 // Мини-облачка истории и строки её дропдауна собирает общая фабрика:
 // значок, цвета, начертание, бледность и метка корзины приходят из одного
@@ -59,6 +65,12 @@ const HISTORY_LIMIT = 50;
 let host: HTMLElement | null = null;
 /** Signature of the inputs the bar depends on — avoids redundant re-renders. */
 let lastSignature = '';
+/**
+ * Sequence of the latest render. A render awaits the history read and the ref
+ * resolution; an older one must not paint over a newer one (the list is
+ * per-tab, so a tab switch while a read is in flight is a real race).
+ */
+let renderSeq = 0;
 /** Coalesces `ResizeObserver` ticks into one render per animation frame. */
 let resizePending = false;
 /** Cached `ResizeObserver` so we don't re-create it on every render. */
@@ -120,7 +132,7 @@ function openEntry(id: string): void {
   } else if (store.state.activeView === 'chronicle') {
     void openChronicleThought(id);
   } else {
-    void setFocus(id);
+    focusFromUi(id);
   }
 }
 
@@ -139,27 +151,52 @@ async function render(): Promise<void> {
   const profileId = store.state.profileId;
   const networkId = store.state.networkId;
   const view = store.state.activeView;
-  // The width is part of the signature: the visible chip set depends on it.
-  // The view is part of it too: chips route the click per the active screen.
-  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${host.clientWidth}`;
+  // Every input of the read and of the paint is part of the signature:
+  // - the width, because the visible chip set depends on it;
+  // - the view, because chips route the click per the active screen;
+  // - the active tab, because `history.list` is keyed by (profile, network,
+  //   tab) — without it a tab switch that keeps the same focus served the
+  //   previous tab's list;
+  // - the connection status: after an outage the bar MUST re-read (titles
+  //   resolve again, a read that failed while the link was down is retried).
+  //   The status change is the store tick that guarantees that retry instead
+  //   of an empty strip until the client restarts (ошибка 76282fbc).
+  const signature = `${profileId ?? ''}|${networkId ?? ''}|${store.state.activeTabId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${getRtStatus(store.state)}|${host.clientWidth}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
+  const seq = ++renderSeq;
 
   if (profileId === null || networkId === null) {
     clear(host);
     return;
   }
 
-  const entries = await etn.history.list(
-    profileId,
-    networkId,
-    store.state.activeTabId,
-    HISTORY_LIMIT,
-  );
+  let entries: import('../../main/ipc/contract.js').FocusHistoryEntry[];
+  try {
+    entries = await etn.history.list(
+      profileId,
+      networkId,
+      store.state.activeTabId,
+      HISTORY_LIMIT,
+    );
+  } catch {
+    // The read failed (local DB / IPC hiccup). Do NOT keep the signature: the
+    // next store tick — first of all the `connected` transition after an
+    // outage — retries, instead of the strip staying empty until a restart
+    // (ошибка 76282fbc). A newer render must not lose its own signature.
+    if (seq === renderSeq) lastSignature = '';
+    return;
+  }
+  // A newer render (another tab/focus/status) already owns the strip.
+  if (seq !== renderSeq) return;
   if (host === null || !host.isConnected) return;
   const ids = entries.map((entry) => entry.thoughtId);
 
   const refs = ids.length > 0 ? await resolveRefs(networkId, ids) : new Map();
+  // The ref resolution is a server round-trip: it may finish after a tab
+  // switch or a reconnect started a newer render.
+  if (seq !== renderSeq) return;
+  if (host === null || !host.isConnected) return;
   const activeId = currentId();
   const visible = ids.filter((id) => {
     // The current thought is not a "recent" — it enters the list only after
@@ -282,17 +319,32 @@ function buildMoreButton(count: number, onClick: () => void): HTMLElement {
   return more;
 }
 
-/** Resolves metadata for history ids (single batched call). */
+/**
+ * Resolves metadata for history ids: сначала нормализованный кэш слоя, затем
+ * сервер. При офлайне серверный резолв падает, но заголовок/значок уже
+ * открытой мысли берётся из кэша — облачко не подменяется id (ошибка 90a92c82,
+ * тот же приём, что у панели закреплённых). Сырой id — только последний запас,
+ * когда мысль ещё ни разу не попадала в кэш.
+ */
 async function resolveRefs(
   networkId: string,
   ids: string[],
 ): Promise<Map<string, import('@etn/shared').ThoughtRef>> {
-  try {
-    const resolved = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
-    return new Map(resolved.map((ref) => [ref.id, ref]));
-  } catch {
-    return new Map();
+  const missing = ids.filter((id) => getEntity<import('@etn/shared').ThoughtRef>('thought', id) === undefined);
+  if (missing.length > 0) {
+    try {
+      const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, 100));
+      for (const ref of resolved) commitEntity('thought', ref.id, ref);
+    } catch {
+      // Офлайн/ошибка резолва: отдаём то, что уже лежит в кэше.
+    }
   }
+  const out = new Map<string, import('@etn/shared').ThoughtRef>();
+  for (const id of ids) {
+    const ref = getEntity<import('@etn/shared').ThoughtRef>('thought', id);
+    if (ref !== undefined && ref !== null) out.set(id, ref);
+  }
+  return out;
 }
 
 /** Builds a history mini-cloud chip (icon + title, thought styles, menus). */
@@ -311,11 +363,13 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
         onClick: (targetId) => openEntry(targetId),
         // Контекстное меню — то же общее меню мысли, что у облачка на холсте и
         // чипа закреплённых (спецификация «Контекстное меню мысли»: меню
-        // доступно во всех отображениях, включая чипы истории).
+        // доступно во всех отображениях, включая чипы истории). Чип вне холста:
+        // родителя для «налево» резолвит помощник меню вне холста (ошибка
+        // 2baa78fb), а не конструктор по фокусу карты.
         onContextMenu: (event, targetId) => {
           event.stopPropagation();
-          showThoughtContextMenu(
-            event,
+          void showOutOfCanvasThoughtMenu(
+            { event },
             { id: targetId, title: ref?.title ?? id, dir: 'siblings' },
             // Открытие из меню идёт тем же путём, что и клик по чипу: на карте —
             // в фокус, в структурах/дневнике — в редактор без смены фокуса.
@@ -342,8 +396,10 @@ function wireHistoryContextMenu(el: HTMLElement, id: string, title: string): voi
   el.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    showThoughtContextMenu(
-      event,
+    // Строка дропдауна — тоже облачко вне холста: родитель «налево» — родитель
+    // самой мысли (ошибка 2baa78fb).
+    void showOutOfCanvasThoughtMenu(
+      { event },
       { id, title, dir: 'siblings' },
       { openHandler: (openId) => openEntry(openId) },
     );

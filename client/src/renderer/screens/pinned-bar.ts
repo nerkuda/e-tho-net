@@ -17,16 +17,30 @@
  * - drag-n-drop: chips drag onto the canvas/selection/history by the standard
  *   rules (the pin survives); dropping a thought onto the panel pins it at the
  *   drop position — re-pinning a pinned thought reorders it.
+ *
+ * The re-render signature covers EVERY input of the read and of the paint —
+ * the pin order, both visibility settings and the connection status. It is
+ * stored BEFORE the metadata read and reset if that read fails, so the
+ * signature counts as «отработанная» only after a successful read: a
+ * `thoughts.resolve` that failed during an outage is retried on the next store
+ * tick (first of all the `connected` transition), and chips never stay raw ids
+ * until the client restarts (ошибка 76282fbc — тот же класс, что полоса
+ * истории). The pinned list itself is per user × network (no tab), so the
+ * active tab is NOT an input of this read and is deliberately absent from the
+ * signature.
  */
 
 import type { ThoughtRef } from '@etn/shared';
 
-import { setFocus } from '../app.js';
+import { focusFromUi } from '../app.js';
 // Мини-облачка закреплённых и строки их дропдауна собирает общая фабрика:
 // значок, цвета, начертание, бледность и метка корзины — из одного
 // представления мысли (стандарт «представление мысли — только через фабрику»).
 import { createThoughtCloud } from '../lib/thought-cloud.js';
-import { showThoughtContextMenu } from '../canvas/context-menu.js';
+import {
+  showOutOfCanvasThoughtMenu,
+  type ThoughtMenuOptions,
+} from '../canvas/context-menu.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { button, clear, div, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -41,13 +55,19 @@ import {
   subscribeQuery,
 } from '../lib/live/index.js';
 import { pinAt } from '../pinned/pins.js';
-import { store } from '../state.js';
+import { getRtStatus, store } from '../state.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
 
 let host: HTMLElement | null = null;
 /** Signature of the inputs the panel depends on — avoids redundant re-renders. */
 let lastSignature = '';
+/**
+ * Sequence of the latest render. A render awaits the metadata read; an older
+ * one must not paint over a newer one (a pin list / network / status change
+ * while the resolve is in flight is a real race).
+ */
+let renderSeq = 0;
 /** Drop-position indicator shown while a drag hovers the panel. */
 let insertMarker: HTMLElement | null = null;
 
@@ -125,7 +145,7 @@ function openPinnedEntry(id: string): void {
   } else if (store.state.activeView === 'chronicle') {
     void openChronicleThought(id);
   } else {
-    void setFocus(id);
+    focusFromUi(id);
   }
 }
 
@@ -135,17 +155,38 @@ async function render(): Promise<void> {
   const networkId = store.state.networkId;
   // Порядок — из среза слоя `pins` (единственный источник панели; G6).
   const pins = getQueryState<string[]>(queryKeys.pins()).data ?? [];
-  const signature = `${networkId ?? ''}|${pins.join(',')}|${String(store.state.showInactive)}|${String(store.state.showTrash)}`;
+  // Подпись покрывает все входы чтения и отрисовки:
+  // - список закреплённых — порядок чипов;
+  // - настройки видимости — фильтр неактуальных/корзинных чипов;
+  // - статус соединения: после обрыва метаданные чипов ОБЯЗАНЫ перечитаться,
+  //   иначе на панели остаются сырые id (ошибка 76282fbc — класс полосы
+  //   истории). Смена статуса — тот самый store-тик, который гарантирует
+  //   повтор чтения.
+  // Список закреплённых ведётся на пользователя × сеть, без вкладки, поэтому
+  // activeTabId в подпись не входит — он не вход этого чтения.
+  const signature = `${networkId ?? ''}|${pins.join(',')}|${String(store.state.showInactive)}|${String(store.state.showTrash)}|${getRtStatus(store.state)}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
+  const seq = ++renderSeq;
 
   if (networkId === null) {
     clear(host);
     return;
   }
-  const refs = await resolveRefs(networkId, pins);
+  const resolution = await resolveRefs(networkId, pins);
   // A newer render may have started while we fetched — don't paint stale data.
-  if (host === null || !host.isConnected || signature !== lastSignature) return;
+  if (seq !== renderSeq) return;
+  if (host === null || !host.isConnected) return;
+  if (!resolution.readOk) {
+    // Metadata unavailable: the chips are painted with raw ids below, but the
+    // signature must NOT count as worked out — the next store tick (first of
+    // all the `connected` transition after an outage) retries the resolve,
+    // instead of the raw ids staying until a client restart (76282fbc). The
+    // seq guard above already returned for a newer render, so this reset only
+    // ever clears the signature of THIS render.
+    lastSignature = '';
+  }
+  const refs = resolution.refs;
 
   // Inactive pins follow the «Показывать неактуальное» setting (§16), marked-
   // for-deletion ones — «Показывать содержимое корзины» (задача 77923b49):
@@ -214,8 +255,43 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
       // Same Ctrl-hover preview as the chips themselves — the overflow menu
       // rows are the same thoughts, just hidden from the bar.
       markThoughtCommentPreview(row, rowId, refs.get(rowId)?.title ?? rowId);
+      // Строка дропдауна — та же мысль, что и чип полосы: правый клик даёт
+      // общее меню мысли, как у чипов и строк истории (ошибка ffc173c9).
+      // `showMenuAt` внутри закроет сам дропдаун.
+      wirePinnedContextMenu(row, rowId, refs.get(rowId)?.title ?? rowId);
     }
   }
+}
+
+/**
+ * Вешает общее меню мысли на строку дропдауна закреплённых (её строит
+ * `showMenuAt`, а не фабрика облачка, поэтому жест подключается здесь) — прямой
+ * аналог `wireHistoryContextMenu` полосы истории. `preventDefault` +
+ * `stopPropagation`: правый клик не должен «протечь» на панель/холст.
+ */
+function wirePinnedContextMenu(el: HTMLElement, id: string, title: string): void {
+  el.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openPinnedThoughtMenu(event, id, title, {
+      openHandler: (openId) => openPinnedEntry(openId),
+    });
+  });
+}
+
+/**
+ * Общее меню мысли для чипа/строки закреплённых (вне холста) — тонкая обёртка
+ * фасада: цель меню в контексте закреплённых одна, а сеть, резолв родителя
+ * «налево» и сверка после ответа живут в `showOutOfCanvasThoughtMenu`
+ * (ошибка 2baa78fb, задача d8941b76).
+ */
+async function openPinnedThoughtMenu(
+  event: MouseEvent,
+  id: string,
+  title: string,
+  opts: ThoughtMenuOptions = {},
+): Promise<void> {
+  await showOutOfCanvasThoughtMenu({ event }, { id, title, dir: 'siblings' }, opts);
 }
 
 /**
@@ -303,9 +379,17 @@ function hideInsertMarker(): void {
   insertMarker = null;
 }
 
-/** Resolves metadata for pin ids (normalized layer cache; missing ids fetched). */
-async function resolveRefs(networkId: string, ids: string[]): Promise<Map<string, ThoughtRef>> {
+/**
+ * Resolves metadata for pin ids (normalized layer cache; missing ids fetched).
+ * `readOk === false` means the server round-trip failed — the caller paints the
+ * ids as-is but must not keep its render signature, so the next tick retries.
+ */
+async function resolveRefs(
+  networkId: string,
+  ids: string[],
+): Promise<{ refs: Map<string, ThoughtRef>; readOk: boolean }> {
   const missing = ids.filter((id) => getEntity<ThoughtRef>('thought', id) === undefined);
+  let readOk = true;
   if (missing.length > 0) {
     try {
       const resolved = await etn.thoughts.resolve(networkId, missing);
@@ -313,7 +397,9 @@ async function resolveRefs(networkId: string, ids: string[]): Promise<Map<string
       // реалтайм-патч мысли роутером) увидит свежие заголовок/оформление.
       for (const ref of resolved) commitEntity('thought', ref.id, ref);
     } catch {
-      // Metadata unavailable — render the ids as-is; the next render retries.
+      // Metadata unavailable — render the ids as-is; the caller resets its
+      // signature so the retry happens on the next store tick (76282fbc).
+      readOk = false;
     }
   }
   const out = new Map<string, ThoughtRef>();
@@ -321,7 +407,7 @@ async function resolveRefs(networkId: string, ids: string[]): Promise<Map<string
     const ref = getEntity<ThoughtRef>('thought', id);
     if (ref !== undefined && ref !== null) out.set(id, ref);
   }
-  return out;
+  return { refs: out, readOk };
 }
 
 /** Builds a pinned chip (icon + title, thought styles, menus, drag). */
@@ -339,7 +425,7 @@ function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
         onClick: (targetId) => openPinnedEntry(targetId),
         onContextMenu: (event) => {
           event.stopPropagation();
-          showThoughtContextMenu(event, { id, title: ref?.title ?? id, dir: 'siblings' });
+          void openPinnedThoughtMenu(event, id, ref?.title ?? id);
         },
       },
     },

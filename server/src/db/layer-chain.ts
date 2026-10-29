@@ -77,6 +77,9 @@ export const BRANCHABLE_TABLES = [
   'links',
   'thought_types',
   'thought_type_views',
+  // 0.14.1 (задача a28d444b, ADR 6021918b): внетиповые отборы мысли —
+  // отдельная ветвимая таблица с владельцем-мыслью.
+  'thought_custom_views',
   'link_types',
   'properties',
   'type_properties',
@@ -91,6 +94,9 @@ export const BRANCHABLE_TABLES = [
   'publication_exclusions',
   'shelves',
   'shelf_items',
+  // 0.14.1 (задача 3948af62, ADR 75a79109): пер-мысленный порядок внетиповых
+  // свойств — содержательное знание сети, ветвится построчно.
+  'thought_property_order',
 ] as const;
 
 /** Имя temp-представления ветвимой таблицы. */

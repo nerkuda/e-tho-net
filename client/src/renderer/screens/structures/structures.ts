@@ -31,8 +31,8 @@ import {
 // начертание, бледность и метка корзины; эллипсы и индикаторы дерево
 // добавляет само (домен структур — те же, что на холсте).
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
-import { setFocus } from '../../app.js';
-import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
+import { focusFromUi } from '../../app.js';
+import { showLinkContextMenu, showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
 import { currentThoughtId } from '../../history.js';
@@ -64,7 +64,7 @@ import { preserveScroll } from '../../lib/ui/scroll-anchor.js';
 import { splitterElement } from '../../lib/ui/splitter.js';
 import { deepEqual } from '../../lib/ui/state.js';
 import { errText } from '../../lib/dom.js';
-import { store } from '../../state.js';
+import { getRtStatus, store } from '../../state.js';
 import {
   branchThoughtIds,
   flattenStructuresTree,
@@ -88,11 +88,18 @@ import {
   mountFilterPanel,
   parseFilterState,
   preloadFilterRegistry,
+  resetFilterState,
   setFilterServerIssues,
   setFilterState,
   unmountFilterPanel,
   type FilterState,
 } from './filter-panel.js';
+import {
+  isCurrentScreenPair,
+  readTabScreenState,
+  tabBelongsToNetwork,
+  type ScreenPair,
+} from '../tabs/tab-state.js';
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
 
 // ---------------------------------------------------------------------------
@@ -133,6 +140,8 @@ const directions = new Map<string, { has_incoming: boolean; has_outgoing: boolea
 const edges = new Map<string, FocusEdge>();
 /** Signature of the visible-id set the edges cache was fetched for. */
 let edgesSignature = '';
+/** Sequence of the latest edges read — an older response must not win. */
+let edgesSeq = 0;
 /** Which nodes have parents/children expanded. */
 let expansion: ExpansionMap = new Map();
 
@@ -236,6 +245,9 @@ export async function ensureStructuresInitialised(): Promise<void> {
   const key = `${networkId}:${tabId ?? ''}`;
   if (networkIdSeen === key) return;
   networkIdSeen = key;
+  // Пара принадлежит этому запуску: любой await ниже может пережить смену
+  // сети/вкладки (окно openNetwork), и тогда его результат — устаревший.
+  const pair: ScreenPair = { networkId, tabId };
 
   // Новый снимок грузится целиком — отложенный полный путь больше не нужен.
   fullRefreshPending = false;
@@ -252,23 +264,32 @@ export async function ensureStructuresInitialised(): Promise<void> {
   appliedQuery = null;
   resultPager.reset();
   resetStructuresCursor();
+  // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
+  // снимается вместе с остальным состоянием. САМА панель — модульный синглтон
+  // и переживает перемонтирование, поэтому её отбор сбрасывается ДО чтения
+  // нового снимка: иначе отбор прежней сети ушёл бы запросом в новую
+  // (ошибка 58c55bb9).
+  pendingFilterSnapshot = null;
+  resetFilterState();
 
   // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
   // the active tab has no entry (migration / fresh tab).
   try {
-    let raw: string | null = null;
-    if (tabId !== null) {
-      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
-      raw = tab?.structures_state ?? null;
-    }
+    // Снимок вкладки ЧУЖОЙ сети не применяется: сеть вкладки — часть адреса
+    // снимка (ошибка 58c55bb9). Ошибка «Тип … удалён из сети» прилетала ровно
+    // из окна, где сеть уже новая, а активна ещё старая вкладка.
+    let raw = readTabScreenState(networkId, tabId, 'structures_state');
     if (raw === null) {
       raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
+      // Пока читали L4, пару могли переключить — экран инициализирует уже
+      // другой запуск, этот результат применять нельзя.
+      if (!isCurrentScreenPair(pair)) return;
     }
     if (raw !== null && raw !== '') {
       // Реестр свойств сети нужен конвертеру определения: прежний плоский
       // снимок несёт условия по свойствам, и без реестра они бы выпали.
-      await preloadFilterRegistry();
-      setFilterState(parseFilterState(raw));
+      await loadFilterSnapshot(raw, pair);
+      if (!isCurrentScreenPair(pair)) return;
     }
     // Миграционное значение прежней ширины панели (`structures_state`) —
     // каркас читает его геттером, поэтому переприменяем состояние после
@@ -277,13 +298,126 @@ export async function ensureStructuresInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter (HOME).
   }
+  if (!isCurrentScreenPair(pair)) return;
   await applyQuery(true);
 }
 
-/** Persists the current filter state to the L4 `structures_state` key. */
+// ---------------------------------------------------------------------------
+// Разбор снимка отбора с реестром свойств (ошибка cdeb62f1)
+// ---------------------------------------------------------------------------
+//
+// Вторая (после `preloadFilterRegistry`) точка класса «чтение реестра без учёта
+// отказа»: конвертер определения выбрасывает условия по свойствам, которых нет
+// в реестре (`buildConditionsWire`), а перечитывание реестра само по себе уже
+// разобранное дерево не пересобирает. Поэтому отказ чтения при разборе снимка
+// оставляет снимок в ожидании, а штатный тик store (в т.ч. переход в
+// `connected` после обрыва связи) повторяет чтение и ПЕРЕРАЗБИРАЕТ снимок.
+
+/**
+ * Снимок отбора, не разобранный из-за отказа чтения реестра свойств. Пара
+ * «сеть + вкладка» — часть снимка: отложенный путь обязан применяться только
+ * там, где снимок снят (ошибка 58c55bb9), иначе отбор покинутой сети уходит
+ * запросом в текущую.
+ */
+interface PendingFilterSnapshot {
+  raw: string;
+  pair: ScreenPair;
+  /** Подпись панели, разобранной БЕЗ реестра: правка пользователя её меняет. */
+  signature: string;
+}
+let pendingFilterSnapshot: PendingFilterSnapshot | null = null;
+/** Сторож гонки: повтор уже идёт (тики store чаще, чем чтение реестра). */
+let filterSnapshotRetryInFlight = false;
+
+/** Подпись состояния панели для решения «снимок ещё не перетёрт пользователем». */
+function filterStateSignature(): string {
+  return signatureOfFilterState(getFilterState());
+}
+
+/** Подпись критериев панели (дерево + ключи сортировки) — без учёта прочего. */
+function signatureOfFilterState(state: Pick<FilterState, 'tree' | 'sortKeys'>): string {
+  return `${JSON.stringify(state.tree ?? null)}|${JSON.stringify(state.sortKeys ?? [])}`;
+}
+
+/**
+ * Разобрать снимок отбора с реестром свойств. Отказ чтения реестра — состояние
+ * собирается из того, что есть (видимый набор не теряется целиком), а снимок
+ * остаётся в ожидании переразбора на следующем тике store.
+ */
+async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> {
+  pendingFilterSnapshot = null;
+  const ok = await preloadFilterRegistry();
+  // Пара сменилась, пока читали реестр: снимок принадлежит прежней сети/вкладке
+  // и в текущую применяться не должен (ошибка 58c55bb9).
+  if (!isCurrentScreenPair(pair)) return;
+  setFilterState(parseFilterState(raw));
+  if (ok) return;
+  pendingFilterSnapshot = { raw, pair, signature: filterStateSignature() };
+}
+
+/**
+ * Повтор разбора отложенного снимка отбора: снова читает реестр свойств и при
+ * успехе ПЕРЕРАЗБИРАЕТ снимок — дерево условий получает свойства, применение
+ * отбора перезапрашивает снимок страницы. Отказ оставляет ожидание до
+ * следующего тика store (подпись каталога панели при отказе тоже сброшена).
+ *
+ * Снимок помнит пару «сеть + вкладка» (ошибка 58c55bb9): уход из пары снимает
+ * ожидание, даже если повтор уже в полёте — иначе отбор покинутой сети
+ * применился бы к текущей.
+ */
+async function retryPendingFilterSnapshot(): Promise<void> {
+  const pending = pendingFilterSnapshot;
+  if (pending === null || filterSnapshotRetryInFlight) return;
+  // Экран уже в другой паре — ожидание недействительно; инициализация новой
+  // пары сбросит и остальное состояние.
+  if (!isCurrentScreenPair(pending.pair)) {
+    pendingFilterSnapshot = null;
+    return;
+  }
+  // Пользователь правил отбор, пока реестр ждал чтения: его состояние новее.
+  if (pending.signature !== filterStateSignature()) {
+    pendingFilterSnapshot = null;
+    return;
+  }
+  filterSnapshotRetryInFlight = true;
+  try {
+    const ok = await preloadFilterRegistry();
+    // Отказ — ожидание остаётся до следующего тика; снимок сменился за время
+    // чтения — переразбирать нечего.
+    if (!ok || pendingFilterSnapshot !== pending) return;
+    // Пара сменилась, ПОКА шло чтение реестра (сеть/вкладка): применять снимок
+    // прежней пары к текущей нельзя (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pending.pair)) {
+      pendingFilterSnapshot = null;
+      return;
+    }
+    // Пользователь правил отбор, ПОКА шло чтение реестра: его правка приоритетна
+    // (ошибка f76a3ef9). Подпись сверена и на входе, но между ней и чтением
+    // прошёл IPC-запрос: без повторной сверки снимок перетёр бы правку.
+    if (pending.signature !== filterStateSignature()) {
+      pendingFilterSnapshot = null;
+      return;
+    }
+    pendingFilterSnapshot = null;
+    const next = parseFilterState(pending.raw);
+    // Переразбор без изменений (снимок новой модели реестра не требует) —
+    // лишний сетевой перезапрос страницы не гоним.
+    if (signatureOfFilterState(next) === filterStateSignature()) return;
+    setFilterState(next);
+    await applyQuery(true);
+  } finally {
+    filterSnapshotRetryInFlight = false;
+  }
+}
+
+/** Persists the current filter state to the L4 `structures_state` key.
+ *  Запись адресуется паре «сеть + вкладка»: снимок экрана текущей сети не
+ *  должен лечь в строку вкладки чужой сети (окно гонки, ошибка 58c55bb9). */
 function persistFilterState(): void {
   const tabId = store.state.activeTabId;
-  if (tabId === null) return;
+  const networkId = store.state.networkId;
+  if (tabId === null || networkId === null) return;
+  if (!tabBelongsToNetwork(networkId, tabId)) return;
   void etn.tabs
     .updateState(tabId, { structures_state: JSON.stringify(getFilterState()) })
     .catch(() => undefined);
@@ -309,6 +443,11 @@ function buildFilter(): StructureFilter {
 async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // Ответ адресуется паре на старте: после смены сети/вкладки запись кэшей
+  // экрана перетёрла бы состояние новой пары (ошибка 58c55bb9). Запрос уже
+  // ушёл в СВОЮ сеть, поэтому 422 не даёт, но строки чужой сети до перезапроса
+  // показывались бы как результат текущей.
+  const pair: ScreenPair = { networkId, tabId: store.state.activeTabId };
   const seq = ++querySeq;
   // Быстрая смена фильтра: гасим предыдущий запрос (требование ebed4980) —
   // его fetch в main прерывается, ответа нет вовсе.
@@ -339,6 +478,9 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
       { signal: controller.signal },
     );
     if (seq !== querySeq) return; // a newer query won the race
+    // Пара сменилась, а новая инициализация ещё ждёт чтений: ответ прежней пары
+    // в кэши экрана не пишем (ошибка 58c55bb9).
+    if (!isCurrentScreenPair(pair)) return;
     // Серверная диагностика отбора (неразрешимые токены — требование b7fdab20):
     // строки редактора подсвечиваются, красное запрещает применение (44d61c8a).
     setFilterServerIssues(filterIssuesFromQueryResult(result));
@@ -367,6 +509,10 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
     // Отменённый запрос — не ошибка: его сменил более новый (требование
     // ebed4980). Ничего не показываем.
     if (controller.signal.aborted) return;
+    // Ошибка запроса прежней пары не относится к текущей сети/вкладке
+    // (ошибка 58c55bb9): её диагностика и уведомление перетёрли бы состояние
+    // новой пары.
+    if (!isCurrentScreenPair(pair)) return;
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
     notice(`Ошибка отбора: ${errText(err)}`, 'error');
@@ -675,8 +821,19 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     },
   });
 
+  // Статус, на котором вид смонтирован: переход в `connected` — сигнал
+  // повторить серверные чтения, оборванные на старте/в обрыве (76282fbc).
+  let lastRtStatus = getRtStatus(store.state);
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Статус соединения — не срез данных/визуалки, поэтому `reactToStore` на
+    // него не реагирует. Восстановление связи отслеживаем здесь: снимок рёбер и
+    // реестр свойств читаются с сервера, и обрыв в момент чтения обязан
+    // повториться сам (ошибка 76282fbc — класс «подпись до чтения без
+    // rt-статуса»).
+    const rtStatus = getRtStatus(store.state);
+    const reconnected = rtStatus === 'connected' && rtStatus !== lastRtStatus;
+    lastRtStatus = rtStatus;
     const networkId = store.state.networkId;
     const tabId = store.state.activeTabId;
     if (
@@ -687,6 +844,12 @@ export function mountStructures(hostEl: HTMLElement): () => void {
       void ensureStructuresInitialised();
       return;
     }
+    // Снимок отбора разобран без реестра свойств и ждёт переразбора: тик store —
+    // штатный повтор чтения реестра (ошибка cdeb62f1), в том числе переход в
+    // `connected` после обрыва связи.
+    if (pendingFilterSnapshot !== null && store.state.activeView === 'structures') {
+      void retryPendingFilterSnapshot();
+    }
     if (store.state.activeView === 'structures' && fullRefreshPending) {
       // Вид снова показан, а на скрытом виде накопился отложенный полный путь:
       // перезагружаем снимок сейчас (ошибка 8e702d8c).
@@ -696,6 +859,10 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     }
     if (store.state.activeView !== 'structures') return;
     reactToStore();
+    // Повтор снимка рёбер после восстановления связи: `reactToStore` мог его
+    // не заказать (видимый набор не менялся), а недогруженные линии сами не
+    // вернутся. Дедуп держит подпись в `refreshEdges`.
+    if (reconnected) void refreshEdges();
   });
 
   if (store.state.activeView === 'structures') void ensureStructuresInitialised();
@@ -1193,8 +1360,11 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
         },
         onContextMenu: (event, id) => {
           event.stopPropagation();
-          showThoughtContextMenu(
-            event,
+          // Облачко дерева — вне зон холста: родителя для «налево» резолвит
+          // общий помощник меню вне холста ДО открытия и сверяет сеть после
+          // ответа (ошибка 2baa78fb), а не конструктор по фокусу карты.
+          void showOutOfCanvasThoughtMenu(
+            { event },
             { id, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
             {
               openHandler: (targetId) => void openStructuresThought(targetId),
@@ -1202,7 +1372,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
                 // «Найти на карте мыслей» (L23, §15.8): switch the view first so
                 // the map is visible while the focus response arrives.
                 setActiveView('map');
-                void setFocus(targetId);
+                focusFromUi(targetId);
               },
             },
           );
@@ -1360,9 +1530,14 @@ async function refreshEdges(): Promise<void> {
   // перечитывания линий (ошибка a617b4c6 — снимок обязан уважать фильтр,
   // как раскрытие ветвей в fetchHierarchy).
   const linkFilter = appliedQuery?.filter.link_filter;
-  const signature = `${store.state.showInactive ? 1 : 0}|${JSON.stringify(linkFilter ?? null)}|${ids.slice().sort().join(',')}`;
+  // Статус соединения — вход этого чтения: снимок рёбер читается с сервера, и
+  // после обрыва он ОБЯЗАН перечитаться, иначе линии остаются недогруженными
+  // до следующей смены видимого набора (ошибка 76282fbc — класс «подпись
+  // рендера, снятая до чтения, без rt-статуса»).
+  const signature = `${getRtStatus(store.state)}|${store.state.showInactive ? 1 : 0}|${JSON.stringify(linkFilter ?? null)}|${ids.slice().sort().join(',')}`;
   if (signature === edgesSignature) return;
   edgesSignature = signature;
+  const seq = ++edgesSeq;
   if (ids.length === 0) {
     // §6.12 requires a non-empty ids list; an empty tree just drops the lines.
     edges.clear();
@@ -1376,11 +1551,17 @@ async function refreshEdges(): Promise<void> {
       store.state.showInactive,
       linkFilter,
     );
+    // Новее чтение уже в полёте (сменился видимый набор/фильтр/статус) — его
+    // снимок и должен победить.
+    if (seq !== edgesSeq) return;
     edges.clear();
     for (const edge of list) edges.set(edge.id, edge);
     drawLinks();
   } catch {
-    // The tree stays usable without the lines.
+    // The tree stays usable without the lines. Сброс подписи — чтобы следующая
+    // отрисовка (в первую очередь тик восстановления связи) повторила чтение,
+    // а не сочла снимок уже отработанным (76282fbc).
+    if (seq === edgesSeq) edgesSignature = '';
   }
 }
 

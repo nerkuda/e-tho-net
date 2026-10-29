@@ -81,6 +81,13 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
     reason: 'Навигация облачка связей вкладки — задача исключает editor/**.',
   },
   {
+    file: 'editor/properties.ts',
+    count: 1,
+    category: 'element',
+    reason:
+      'Shift+F10 на фокусируемой ячейке имени строки свойства открывает контекстное меню строки (требование 53701739): клавиатурный контракт WAI-ARIA самого элемента, событие приходит на ячейку с фокусом.',
+  },
+  {
     file: 'editor/comment-hotkeys-dialog.ts',
     count: 1,
     category: 'boundary',
@@ -93,19 +100,21 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
     count: 7,
     category: 'mechanism',
     reason:
-      'Каркас модального диалога: capture-Escape стопки, Ctrl+Enter/Shift+Enter/Ctrl+Shift+Enter, focus-trap Tab, стрелки по кнопкам. Порядок задаёт capture-фаза и обгон через defaultPrevented; диспетчер — один bubble-слушатель на window и не выражает capture/стопку.',
+      'Каркас модального диалога: capture-Escape стопки (уступает верхнему слою через реестр `lib/keymap.ts`), Ctrl+Enter/Shift+Enter/Ctrl+Shift+Enter, focus-trap Tab, стрелки по кнопкам. Порядок задаёт capture-фаза и обгон через defaultPrevented; диспетчер — один bubble-слушатель на window и не выражает capture/стопку.',
   },
   {
     file: 'lib/menu.ts',
     count: 1,
     category: 'mechanism',
-    reason: 'Capture-Escape закрытия контекстного меню (порядок относительно capture-каркаса диалога).',
+    reason:
+      'Capture-Escape меню: должен опередить редактор под меню (CM6 гасит Escape раньше bubble-диспетчера). Чьё это нажатие, решает реестр слоёв диспетчера — `handleEscape` (ошибка 9ff6b606).',
   },
   {
     file: 'lib/suggest-dropdown.ts',
     count: 3,
     category: 'mechanism',
-    reason: 'Window capture-слушатель выпадашки подсказок плюс element-scoped обработчики поля.',
+    reason:
+      'Capture-Escape выпадашки (оконный слушатель; должен опередить редактор поля) плюс element-scoped обработчики поля ввода (↑/↓, Enter, Tab, ←/→). Приоритет Escape решает реестр слоёв диспетчера — `handleEscape`.',
   },
   {
     file: 'screens/publications/workspace.ts',
@@ -125,7 +134,7 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
     count: 1,
     category: 'mechanism',
     reason:
-      'Глобальный жест лупы: `Escape`/нажатие `Ctrl` без сочетания + парный `keyup`; диспетчер модификатор-онли события не резолвит.',
+      'Глобальный жест лупы: `Escape` показанной лупы (через `handleEscape` реестра слоёв диспетчера — приоритет верхнего слоя) и нажатие `Ctrl` БЕЗ не-модификаторной клавиши (у диспетчера такое событие не даёт ни одного сочетания) + парный `keyup`.',
   },
   {
     file: 'lib/month-calendar.ts',
@@ -248,5 +257,92 @@ describe('сторож: единственная точка перехвата k
     const main = SOURCES.get('main.ts');
     assert.ok(main !== undefined, 'есть main.ts');
     assert.ok(main.includes('initKeyboard()'), 'main.ts вызывает initKeyboard');
+  });
+});
+
+/**
+ * Модули всплывающих слоёв, которые закрываются `Escape`. Открываясь, каждый
+ * обязан зарегистрировать слой в общем реестре диспетчера (`pushKeyOverlay`):
+ * иначе `Escape` забирает открытый раньше диалог, а приоритет между слоями
+ * (поповер над меню, диалог поверх меню) не разрешается (ошибка 9ff6b606).
+ * Диалог — такой же слой: он входит в реестр при показе и снимается при
+ * закрытии, поэтому порядок открытия однозначен. Новый всплывающий слой
+ * добавляется сюда и в реестр — второго механизма приоритетов ADR `b420b08c`
+ * не допускает.
+ *
+ * Ограничение: законная привязка `Escape` в контексте диспетчера
+ * (`defineKeyContext`/`pushKeyContext` — диалоговое поле, сплиттер) не
+ * считается всплывающим слоем, и сторож не отличает её от «слоя, забывшего
+ * регистрацию»: контекст — это команда в фокусе, а не стек открытых панелей.
+ * Для новых панелей/поповеров/меню действует правило выше.
+ */
+const ESCAPE_OVERLAY_MODULES: readonly string[] = [
+  'lib/dialog.ts',
+  'lib/menu.ts',
+  'lib/ui/popover.ts',
+  'lib/suggest-dropdown.ts',
+  'lib/image-zoom.ts',
+  'editor/comment-search.ts',
+  'editor/markdown-field.ts',
+];
+
+describe('сторож: слои Escape — в общем диспетчере (ADR b420b08c)', () => {
+  it('каждый всплывающий слой регистрирует Escape через keymap.pushKeyOverlay', () => {
+    const offenders: string[] = [];
+    for (const rel of ESCAPE_OVERLAY_MODULES) {
+      const source = SOURCES.get(rel);
+      if (source === undefined) {
+        offenders.push(`${rel}: файла нет — обнови список слоёв`);
+        continue;
+      }
+      if (!/pushKeyOverlay\s*\(/.test(source)) {
+        offenders.push(`${rel}: слой Escape не зарегистрирован через pushKeyOverlay`);
+      }
+    }
+    assert.deepEqual(offenders, [], offenders.join('; '));
+  });
+
+  it('диалог — слой реестра: закрывается через handleEscape, а не решает приоритет сам', () => {
+    const dialog = SOURCES.get('lib/dialog.ts');
+    assert.ok(dialog !== undefined, 'есть lib/dialog.ts');
+    assert.ok(
+      dialog.includes("id: 'dialog'") && dialog.includes('handleEscape'),
+      'диалог регистрируется в реестре и спрашивает, его ли нажатие',
+    );
+    assert.ok(
+      !/keyOverlaySnapshot|hasKeyOverlayAbove/.test(dialog),
+      'снимок реестра в диалоге не используется — семантика одна (строгий LIFO)',
+    );
+  });
+
+  it('модули не назначают onkeydown в обход диспетчера', () => {
+    const offenders: string[] = [];
+    for (const [rel, source] of SOURCES) {
+      if (/(?:document|window)\s*\.\s*onkeydown\s*=/.test(source)) offenders.push(rel);
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `keydown ставится через диспетчер или объявленный инвентарь: ${offenders.join('; ')}`,
+    );
+  });
+
+  it('второго реестра слоёв/приоритетов Escape в клиенте нет', () => {
+    const offenders: string[] = [];
+    for (const [rel, source] of SOURCES) {
+      if (rel === KEYMAP_REL) continue;
+      if (
+        /pushEscapeLayer|escapeLayerSnapshot|hasEscapeLayerAbove|escape-layers|keyOverlaySnapshot|hasKeyOverlayAbove/.test(
+          source,
+        )
+      ) {
+        offenders.push(rel);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      'приоритет Escape разрешает только lib/keymap.ts (ADR b420b08c)',
+    );
   });
 });

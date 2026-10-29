@@ -73,3 +73,74 @@ export class EtnError extends Error {
     this.requestId = requestId;
   }
 }
+
+/**
+ * Причины отказа записи/удаления значения свойства-связи по адресу стороны
+ * (`side`) — машиночитаемый дискриминатор `details.reason` (0.14.1, ошибка
+ * d9bc6012).
+ *
+ * Серверный текст таких `422` адресован API и агентам (в нём есть `side`,
+ * `source`, `target`), а пользователю клиент показывает свою формулировку из
+ * словаря — выбор формулировки идёт по ЭТИМ значениям, а не по разбору
+ * серверного текста. Один источник правды для обеих сторон контракта.
+ *
+ *   * `side-required` — сторона не указана, а имя адресует обе стороны
+ *     симметричного типа связи и обе живые (либо display-имя принадлежит
+ *     нескольким свойствам сети);
+ *   * `side-mismatch` — при удалении/очистке указанная сторона пуста, а рёбра
+ *     есть на противоположной (сверка с фактическим направлением);
+ *   * `property-ambiguous` — display-имя принадлежит НЕСКОЛЬКИМ разным
+ *     свойствам сети, и выбрать одно не удалось даже по `side` (`field =
+ *     "property"`; 0.14.1, доработка d9bc6012). Причина общая для записи
+ *     свойства по имени: клиент переводит её в человеческий текст так же, как
+ *     side-причины;
+ *   * `target-type-mismatch` — значение свойства-связи не того типа, который
+ *     допускает привязка целевой стороны (`field = "value"`; 0.14.1, круг 3
+ *     ошибки d9bc6012). Серверный текст русский и без GUID, причина нужна для
+ *     централизованного перевода в клиенте.
+ */
+export const PROPERTY_SIDE_ERROR_REASON = {
+  required: 'side-required',
+  mismatch: 'side-mismatch',
+  ambiguous: 'property-ambiguous',
+  targetType: 'target-type-mismatch',
+} as const;
+export type PropertySideErrorReason =
+  (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];
+
+/**
+ * Канонический отказ main-процесса до установки соединения (ошибка f803afb6,
+ * круг 2).
+ *
+ * `requireRest` в `client/src/main/ipc/handlers.ts` и `openNetwork` в
+ * `client/src/main/ipc/connection-lifecycle.ts` бросают эту строку, пока
+ * профиль не подключён/уже отключён; в сеть запрос не уходил. Текст
+ * английский и техничный — до интерфейса он доходить не должен: renderer
+ * распознаёт его предикатом {@link isNotConnectedErrorMessage} и переводит в
+ * словарное «нет соединения с сервером» (а панель «Свойства» — в повторное
+ * чтение после восстановления связи).
+ *
+ * Строка живёт ЗДЕСЬ единственным источником: и main, и renderer, и тесты
+ * берут её отсюда. Дубль литерала по коду краснит сторож
+ * `client/tests/guard-not-connected-literal.test.ts`.
+ */
+export const NOT_CONNECTED_ERROR_PREFIX = 'Not connected: call etn.server.connect';
+
+/** Отказ main, когда нет активного профиля или открытой сети. */
+export const NOT_CONNECTED_NETWORK_ERROR_TEXT = `${NOT_CONNECTED_ERROR_PREFIX} and open a network first`;
+
+/** Отказ main до установки соединения: профиль не подключён. */
+export const NOT_CONNECTED_ERROR_TEXT = `${NOT_CONNECTED_ERROR_PREFIX} first`;
+
+/**
+ * Совпадает ли текст ошибки с каноническим отказом «Not connected…».
+ *
+ * Проверка структурная (по тексту, без `details.kind`): plain-`Error` из
+ * main-процесса переживает IPC без кода и деталей, но означает ровно обрыв
+ * связи. Граница слова после префикса не даёт принять за отказ сообщение,
+ * лишь начинающееся теми же буквами.
+ */
+export function isNotConnectedErrorMessage(message: string): boolean {
+  const escaped = NOT_CONNECTED_ERROR_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}\\b`, 'i').test(message);
+}

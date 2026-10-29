@@ -167,6 +167,31 @@ describe('AST validation (9c156b8c)', () => {
     }
   });
 
+  it('accepts the service marker of a place-injected leaf and keeps it (9ddc488e)', () => {
+    // Метка `service: true` — «лист впечён местом применения, не пользователем»
+    // (редактор отбора типа мысли снимает его при переоткрытии). Сервер обязан
+    // принять метку и сохранить форму; любое другое значение — ошибка формы.
+    const tree: FilterAstNode = {
+      op: 'and',
+      children: [
+        { entity: { kind: 'keywords', scope: ['title', 'synonyms'] }, operator: 'matches', value: 'смета' },
+        { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: true },
+      ],
+    };
+    const parsed = parseFilterAst(ast(tree));
+    const group = parsed.filter as { children: Array<{ service?: true }> };
+    assert.equal(group.children[1]?.service, true, 'метка служебного листа сохранена при разборе');
+
+    const bad: unknown[] = [
+      { version: FILTER_AST_VERSION, filter: { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: false } },
+      { version: FILTER_AST_VERSION, filter: { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: 'yes' } },
+      { version: FILTER_AST_VERSION, filter: { entity: { kind: 'trashed' }, operator: 'eq', value: false, service: 1 } },
+    ];
+    for (const input of bad) {
+      assert.throws(() => parseFilterAst(input), (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR');
+    }
+  });
+
   it('rejects unknown fields at every level', () => {
     const cases: unknown[] = [
       { ...ast(validTree), extra: 1 },
@@ -196,6 +221,21 @@ describe('AST validation (9c156b8c)', () => {
     ];
     for (const input of bad) {
       assert.throws(() => parseFilterAst(input), (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR');
+    }
+  });
+
+  it('rejects Object.prototype keys as entity kind', () => {
+    // `kind` приходит из недоверенного тела: проверка `in ENTITY_KEYS` пропускала
+    // унаследованные имена (`toString`, `constructor`, `__proto__`, …), после
+    // чего справочник отдавал функцию вместо массива ключей и разбор падал
+    // TypeError — маршрут отвечал 500 вместо VALIDATION_ERROR.
+    for (const kind of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+      const input = { version: FILTER_AST_VERSION, filter: { entity: { kind }, operator: 'in', value: ['a'] } };
+      assert.throws(
+        () => parseFilterAst(input),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        `kind=${kind}: ожидается VALIDATION_ERROR`,
+      );
     }
   });
 

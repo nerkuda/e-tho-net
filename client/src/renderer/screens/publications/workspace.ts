@@ -24,6 +24,7 @@
  */
 
 import type {
+  LinkPropertySide,
   LinkPropertyValues,
   Publication,
   PublicationAssembly,
@@ -39,8 +40,10 @@ import {
   renderHtml,
   setTooltip,
 } from '../../lib/dom.js';
+import { wireCommentLinksInDom } from '../../lib/hover-preview.js';
 import { t } from '../../lib/i18n.js';
 import { etn } from '../../lib/etn.js';
+import { linkEntryMatchesPick } from '../../lib/link-entry-match.js';
 import { svgIcon, type IconName } from '../../lib/ui/icon.js';
 import { errorDialog, isInsideDialog, showDialog } from '../../lib/dialog.js';
 import { notice } from '../../lib/notice.js';
@@ -88,7 +91,6 @@ import {
   fitFontSize,
   flattenSections,
   keysAppendedLast,
-  linkEntryMatchesPick,
   positionsFor,
   sectionNodeKey,
   siblingNodeKeys,
@@ -124,6 +126,7 @@ import { renderMarkdown } from '@etn/markdown';
 import { currentThoughtId } from '../../history.js';
 import * as users from '../../lib/users.js';
 import { store } from '../../state.js';
+import { currentScreenPair, isCurrentScreenPair } from '../tabs/tab-state.js';
 
 /** Внешние точки входа рабочей области (связь с экраном «Публикации»). */
 export interface PublicationWorkspaceOptions {
@@ -500,7 +503,12 @@ export function mountPublicationWorkspace(
     elementOf: (entry) => blockNode(entry.key),
     applyHighlight: (entry) => paintDocFrames(entry),
     onCollapse: (entry, isCollapsed) => {
-      if (entry.kind === 'section' && entry.collapsible) setSectionCollapsed(entry.thoughtId, isCollapsed);
+      // Ctrl+↑/↓ (прежняя роль ←/→, решение пользователя 2026-10-25):
+      // сворачивается только раздел документа; строка текста — лист, событие
+      // не перехватывается (стандарт b6b2821d, задача 15236418).
+      if (entry.kind !== 'section' || !entry.collapsible) return false;
+      setSectionCollapsed(entry.thoughtId, isCollapsed);
+      return true;
     },
     onActivate: (entry) => openThought(entry.thoughtId),
     onClick: (target) => {
@@ -781,7 +789,8 @@ export function mountPublicationWorkspace(
   // --- Загрузка ------------------------------------------------------------
 
   async function load(): Promise<void> {
-    const networkId = store.state.networkId;
+    const pair = currentScreenPair();
+    const networkId = pair?.networkId ?? null;
     if (networkId === null || publicationId === null) return;
     loading = true;
     loadError = null;
@@ -791,6 +800,9 @@ export function mountPublicationWorkspace(
         etn.publications.get(networkId, publicationId),
         etn.publications.assembly(networkId, publicationId, page > 1 ? { page } : {}),
       ]);
+      // Ответ снятой пары (сеть/вкладка сменилась, рабочую область уже
+      // уничтожили) не применяется к чужому экрану (ошибка 5768f479).
+      if (pair === null || !isCurrentScreenPair(pair)) return;
       publication = card;
       assembly = doc;
       assembledSummaryRaw = card.summary_md ?? '';
@@ -811,6 +823,7 @@ export function mountPublicationWorkspace(
       renderState();
       updateRebuildStale();
     } catch (err) {
+      if (pair === null || !isCurrentScreenPair(pair)) return;
       loading = false;
       loadError = err;
       renderState();
@@ -878,6 +891,9 @@ export function mountPublicationWorkspace(
         const target = node.querySelector<HTMLElement>('.pub-doc-preamble');
         if (target === null) continue;
         renderHtml(target, html);
+        // Точечная правка предисловия перерисовала его HTML — размечаем ссылки
+        // заново (ошибка a42c1896), как `renderTextBody` у текста ниже.
+        wireCommentLinksInDom(target);
         // Предисловие с трансклюзией достраиваем из НОВОГО `md` — как текст ниже.
         if (previewTextNeedsExpansion(html, md)) void expandTextTransclusions(target, md);
       } else {
@@ -1672,7 +1688,7 @@ export function mountPublicationWorkspace(
     // Защита от цикла: даже если диалог обойдён, перенос в собственного потомка
     // (или в себя) отвергается — иначе REST neighbors возвращает A↔A1.
     if (subtreeIds(block.thoughtId, sectionTreeItems()).has(targetSectionId)) {
-      notice(t('publications.block.moveCycle'), 'error');
+      notice(t('publications.block.moveCycle'));
       return;
     }
     try {
@@ -1697,11 +1713,14 @@ export function mountPublicationWorkspace(
     if (oldOwner === targetSectionId) return;
     const sources = publication?.text_sources ?? [];
     if (sources.length === 0) {
-      notice(t('publications.ws.noTextSources'), 'error');
+      notice(t('publications.ws.noTextSources'));
       return;
     }
     try {
       const rows = await loadPropertyRows(networkId);
+      // Отказ чтения реестра — явная ошибка, а не молчаливо пустой список
+      // (ошибка 3bf62fd7): иначе перенос падал бы «не найдено свойство».
+      if (rows === null) throw new Error(t('publications.registryUnreadable'));
       const listRows = buildPropertyListRows(rows, store.state.linkTypes).filter(
         (row) => !row.structural && row.valueType === 'link' && sources.includes(row.propertyId),
       );
@@ -1711,12 +1730,17 @@ export function mountPublicationWorkspace(
       for (const value of values) {
         if (!('values' in value)) continue;
         if (!value.values.some((item) => item.target_id === block.thoughtId)) continue;
-        // Свойство-связь вне цепочки типа приходит с `property_id: ''` —
-        // сверяем по имени стороны (`linkEntryMatchesPick`), иначе перенос
-        // не находит свойство (блокер 3 верификации ea1b5f14).
+        // У свойства-связи обе стороны несут ОДИН реестровый `property_id`
+        // (ошибка 45248206), поэтому запись ищем по id + стороне
+        // (`linkEntryMatchesPick`); у легаси-ребра без свойства — по имени
+        // стороны (блокер 3 верификации ea1b5f14).
         const candidate =
           listRows.find((item) =>
-            linkEntryMatchesPick(value, { propertyId: item.propertyId, key: item.name }),
+            linkEntryMatchesPick(value, {
+              propertyId: item.propertyId,
+              key: item.name,
+              side: item.side,
+            }),
           ) ?? null;
         if (candidate === null) continue;
         row = candidate;
@@ -1734,13 +1758,22 @@ export function mountPublicationWorkspace(
       await addPropertyValue(
         networkId,
         targetSectionId,
-        { propertyId, key: propertyKey },
+        { propertyId, key: propertyKey, side: row.side },
         block.thoughtId,
       );
       const remaining = entry.values
         .map((item) => item.target_id)
         .filter((id) => id !== block.thoughtId);
-      await etn.properties.set(networkId, 'thought', oldOwner, propertyKey, remaining);
+      // Сторона строки — адрес набора прежнего владельца (как и у
+      // добавления): без неё симметричное имя не различить (ошибка d9bc6012).
+      await etn.properties.set(
+        networkId,
+        'thought',
+        oldOwner,
+        propertyKey,
+        remaining,
+        row.side,
+      );
     } catch (err) {
       errorDialog(t('publications.block.moveToSectionTitle'), err);
       return;
@@ -1856,6 +1889,11 @@ export function mountPublicationWorkspace(
    */
   function renderTextBody(node: HTMLElement, html: string, md: string): void {
     renderHtml(node, html);
+    // Ссылки в тексте публикации — сами по себе триггеры Ctrl+наведения
+    // (ошибка a42c1896): единственный проход разметки `wireCommentLinksInDom`,
+    // что и в просмотре комментария/дневника. ПОСЛЕ вставки HTML и на том же
+    // узле; проход идемпотентен (только (пере)запись data-атрибутов).
+    wireCommentLinksInDom(node);
     const empty = html.trim() === '';
     node.classList.toggle('pub-doc-text-empty', empty);
     if (empty) {
@@ -1887,6 +1925,9 @@ export function mountPublicationWorkspace(
         : null;
     // `renderHtml` сносит содержимое (и грип) через innerHTML — возвращаем грип.
     renderHtml(node, expanded);
+    // Развёртка трансклюзий перерисовала блок ЦЕЛИКОМ — ссылки в новом HTML
+    // снова без разметки (ошибка a42c1896): повторяем проход на том же узле.
+    wireCommentLinksInDom(node);
     node.classList.remove('pub-doc-text-empty');
     if (grip !== null) node.prepend(grip);
   }
@@ -1939,6 +1980,9 @@ export function mountPublicationWorkspace(
         const preamble = div('pub-doc-preamble');
         preamble.dataset['thoughtId'] = block.thoughtId;
         renderHtml(preamble, block.preambleHtml);
+        // Ссылки предисловия раздела — такие же триггеры Ctrl+наведения
+        // (ошибка a42c1896), как в текстах и резюме.
+        wireCommentLinksInDom(preamble);
         node.append(preamble);
       }
       node.addEventListener('click', (ev) => selectBlock(ev, block.thoughtId));
@@ -2069,6 +2113,9 @@ export function mountPublicationWorkspace(
     if (summaryHtml !== '') {
       const block = div('pub-doc-summary');
       renderHtml(block, summaryHtml);
+      // Ссылки резюме — триггеры Ctrl+наведения (ошибка a42c1896): тот же
+      // проход, что у текстов/предисловий.
+      wireCommentLinksInDom(block);
       node.append(block);
       if (!summaryInSync && htmlHasTransclusionMarkup(summaryHtml)) {
         void expandTextTransclusions(block, summaryRaw);
@@ -2442,26 +2489,38 @@ export function mountPublicationWorkspace(
     // Первое свойство-источник текстов: выбранная/созданная мысль добавляется
     // в его значение, даже если в диалоге свойство не подтвердили (карточка
     // ea1b5f14, пункт 3). Пользователь может выбрать другое свойство явно.
-    let textDefaultPick: { propertyId: string; key: string } | null = null;
+    let textDefaultPick: {
+      propertyId: string;
+      key: string;
+      side?: LinkPropertySide | null;
+    } | null = null;
     if (kind === 'text') {
       const sources = publication?.text_sources ?? [];
       if (sources.length === 0) {
-        notice(t('publications.ws.noTextSources'), 'error');
+        notice(t('publications.ws.noTextSources'));
         return;
       }
       const rows = await loadPropertyRows(networkId);
+      // Отказ чтения реестра не выдаём за «нет свойств-источников»
+      // (ошибка 3bf62fd7): причина видна, действие прерывается.
+      if (rows === null) {
+        notice(t('publications.registryUnreadable'), 'error');
+        return;
+      }
       const listRows = buildPropertyListRows(rows, store.state.linkTypes).filter(
         (row) => !row.structural && row.valueType === 'link' && sources.includes(row.propertyId),
       );
       if (listRows.length === 0) {
-        notice(t('publications.ws.noTextSources'), 'error');
+        notice(t('publications.ws.noTextSources'));
         return;
       }
       linkProperty = { rows: listRows };
       // Берём сторону-ИСТОЧНИК (раздел — владелец текста): у свойства-связи
       // две строки сторон, и только source-строка добавляет ребро от раздела.
       const first = listRows.find((row) => row.side === 'source') ?? listRows[0];
-      if (first !== undefined) textDefaultPick = { propertyId: first.propertyId, key: first.name };
+      if (first !== undefined) {
+        textDefaultPick = { propertyId: first.propertyId, key: first.name, side: first.side };
+      }
     }
     const result = await pickThoughtsDialog({
       networkId,
@@ -2579,15 +2638,16 @@ export function mountPublicationWorkspace(
   async function addPropertyValue(
     networkId: string,
     ownerId: string,
-    pick: { propertyId: string; key: string },
+    pick: { propertyId: string; key: string; side?: LinkPropertySide | null },
     targetId: string,
   ): Promise<void> {
     let existing: string[] = [];
     try {
       const values = await etn.properties.get(networkId, 'thought', ownerId);
-      // Свойство-связь вне цепочки типа отдаётся с `property_id: ''` — сверяем
-      // по id И по имени стороны, иначе существующие значения теряются при
-      // добавлении (блокер 2 верификации ea1b5f14).
+      // Обе стороны свойства-связи несут один `property_id` (ошибка 45248206):
+      // запись ищем по id + стороне, иначе чужая сторона подменит набор при
+      // добавлении. Для легаси-ребра без реестрового свойства — по имени
+      // стороны (блокер 2 верификации ea1b5f14).
       const entry = values.find(
         (v): v is LinkPropertyValues => 'values' in v && linkEntryMatchesPick(v, pick),
       );
@@ -2598,12 +2658,22 @@ export function mountPublicationWorkspace(
       existing = [];
     }
     const targets = existing.includes(targetId) ? existing : [...existing, targetId];
-    await etn.properties.set(networkId, 'thought', ownerId, pick.key, targets);
+    // `side` едет вместе с ключом: ключ — display-имя стороны, при
+    // симметричном имени направление по нему не выводится (ошибка d9bc6012).
+    await etn.properties.set(
+      networkId,
+      'thought',
+      ownerId,
+      pick.key,
+      targets,
+      pick.side ?? null,
+    );
   }
 
   // --- Публичный дескриптор ------------------------------------------------
 
   async function open(id: string, target?: PublicationOpenTarget): Promise<void> {
+    const pair = currentScreenPair();
     const samePublication = publicationId === id;
     if (!samePublication) {
       candidates = null;
@@ -2619,6 +2689,9 @@ export function mountPublicationWorkspace(
     // Ширина текста — из персональных настроек при каждом открытии (пункт 5).
     applyTextWidth(opts.getTextWidth());
     await load();
+    // Пока грузилась сборка, пару могли сменить — якорь и кегль применяем только
+    // на своей паре (ошибка 5768f479).
+    if (pair === null || !isCurrentScreenPair(pair)) return;
     if (target?.anchor !== undefined) scrollToAnchor(target.anchor);
     // После первой раскладки листа кегль титула мог быть не измерен (документ
     // рендерился в момент переключения вида) — пересчитываем ещё раз (замечание

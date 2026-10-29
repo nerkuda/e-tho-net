@@ -47,6 +47,7 @@ installShim();
 const { showDialog, closeDialog } = await import('../src/renderer/lib/dialog.js');
 const { t } = await import('../src/renderer/lib/i18n.js');
 const { div } = await import('../src/renderer/lib/dom.js');
+import type { DialogDirtyLabels } from '../src/renderer/lib/dialog.js';
 
 function body(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
@@ -103,9 +104,10 @@ interface Editor {
 /**
  * Форма-образец редактора сущности: поле с загруженным значением и запись.
  * `dirty.isDirty` сравнивает текущее значение поля с загруженным, `save`
- * помечает запись выполненной и закрывает диалог.
+ * помечает запись выполненной и закрывает диалог. `labels` — свои метки
+ * подтверждения закрытия (ошибка ed299fa0: семантика «применить»).
  */
-function openEditor(): Editor {
+function openEditor(labels?: DialogDirtyLabels): Editor {
   const input = (globalThis as any).document.createElement('input') as ShimElement;
   input.value = '';
   const bodyEl = div('form-stack');
@@ -121,6 +123,7 @@ function openEditor(): Editor {
         saved = true;
         close();
       },
+      ...(labels === undefined ? {} : { labels }),
     },
     buttons: [
       { label: t('actions.cancel') },
@@ -218,5 +221,77 @@ describe('подтверждение закрытия «грязного» ре�
     editor.input.value = '';
     pressEscape();
     assert.equal(backdrops().length, 0, 'значение совпало с загруженным — подтверждения нет');
+  });
+});
+
+describe('свои метки подтверждения закрытия (ошибка ed299fa0)', () => {
+  /** Метки диалога с семантикой «применить» (массовые значения свойств). */
+  const APPLY_LABELS: DialogDirtyLabels = {
+    title: 'Неприменённые изменения',
+    message: 'Применить изменения?',
+    save: 'Применить',
+    discard: 'Не применять',
+    stay: 'Отменить закрытие',
+  };
+
+  it('вопрос и три кнопки — из меток диалога, общих «сохранить» нет', () => {
+    installShim();
+    drainDialogs();
+    const editor = openEditor(APPLY_LABELS);
+    editor.input.value = 'правка';
+    pressEscape();
+    assert.equal(backdrops().length, 2, 'подтверждение открылось');
+    const confirm = backdrops()[1]!;
+    assert.ok(confirm.flatText().includes('Применить изменения?'), 'свой вопрос');
+    assert.ok(!confirm.flatText().includes('Сохранить'), 'слов «Сохранить» нет');
+    assert.deepEqual(
+      confirm
+        .querySelectorAll('button')
+        .map((b) => b.textContent)
+        .filter((label) => label !== ''),
+      ['Отменить закрытие', 'Не применять', 'Применить'],
+      'свои подписи всех трёх решений',
+    );
+    assert.equal(editor.saved(), false, 'запись не выполнялась');
+  });
+
+  it('«Применить» подтверждения — тот же путь записи и закрытия', () => {
+    installShim();
+    drainDialogs();
+    const editor = openEditor(APPLY_LABELS);
+    editor.input.value = 'правка';
+    pressEscape();
+    buttonByLabel(backdrops()[1]!, 'Применить').click();
+    assert.equal(editor.saved(), true, 'запись выполнена');
+    assert.equal(backdrops().length, 0, 'диалог закрыт');
+  });
+
+  it('«Не применять» закрывает без записи', () => {
+    installShim();
+    drainDialogs();
+    const editor = openEditor(APPLY_LABELS);
+    editor.input.value = 'правка';
+    pressEscape();
+    buttonByLabel(backdrops()[1]!, 'Не применять').click();
+    assert.equal(backdrops().length, 0, 'диалог закрыт');
+    assert.equal(editor.saved(), false, 'запись не выполнялась');
+  });
+
+  it('метки не заданы — общие подписи требования b58f6aad (обратная совместимость)', () => {
+    installShim();
+    drainDialogs();
+    const editor = openEditor();
+    editor.input.value = 'правка';
+    pressEscape();
+    const confirm = backdrops()[1]!;
+    assert.ok(confirm.flatText().includes(t('dialog.unsaved.message')), 'общий вопрос');
+    assert.deepEqual(
+      confirm
+        .querySelectorAll('button')
+        .map((b) => b.textContent)
+        .filter((label) => label !== ''),
+      [t('dialog.unsaved.stay'), t('dialog.unsaved.discard'), t('dialog.unsaved.save')],
+      'общие подписи кнопок',
+    );
   });
 });

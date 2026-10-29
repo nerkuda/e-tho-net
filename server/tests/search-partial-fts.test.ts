@@ -123,7 +123,9 @@ function legacyPartialIds(ndb: NetworkDb, term: string): string[] {
 
 /** Ids of the partial tier in the current implementation. */
 function partialIds(ndb: NetworkDb, term: string): string[] {
-  return findDuplicates(ndb, term)
+  // Сравниваем partial-тир live-поиска (0.4.5) с legacy LIKE-эталоном;
+  // строгий dedupe (0.14.1, ошибка 11f14a81) живёт в find-duplicates-dedupe.
+  return findDuplicates(ndb, term, [], [], { mode: 'search' })
     .filter((h) => h.matched_on === 'partial')
     .map((h) => h.id)
     .sort();

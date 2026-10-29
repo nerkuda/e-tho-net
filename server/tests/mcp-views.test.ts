@@ -29,8 +29,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { openNetworkDb } from '../src/db/network-db.js';
+import { createThoughtCustomView } from '../src/domain/thought-custom-views-service.js';
 
 import {
   callOp,
@@ -52,8 +54,11 @@ interface ThoughtMetaView {
   name_key: string;
   description: string | null;
   defined_on: string;
+  scope?: 'type' | 'thought';
   inherited: boolean;
   is_default: boolean;
+  /** Собственная пометка строки (0.14.1, дельта раунда 2). */
+  own_default: boolean;
 }
 
 interface ThoughtGetResponse {
@@ -99,6 +104,7 @@ interface ViewsRunResponse {
     name_key: string;
     description: string | null;
     defined_on: string;
+    scope?: 'type' | 'thought';
     inherited: boolean;
   };
   data: Array<{ id: string; title: string; type_id: string | null }>;
@@ -253,6 +259,9 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         assert.equal(view.name_key, 'работы версии');
         assert.equal(view.is_default, true);
         assert.equal(view.inherited, false);
+        // 0.14.1, дельта раунда 2: собственная пометка строки отдаётся рядом с
+        // эффективной — агент видит, что произойдёт при переносе.
+        assert.equal(view.own_default, true);
 
         // Шаг 2: исполняем отбор по имени — получаем пустую страницу
         // (фильтр по `type:eq=задача` отберёт задачи, но в этом тесте
@@ -790,7 +799,6 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
-      void versionTypeId;
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -819,22 +827,46 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         const viewId = created.type_views[0]!.id;
         assert.ok(viewId);
 
-        // Удаляем по id.
-        const delRes = await callOp(
-          handle.client,
-          'ontology.delete',
-          {
-            network_id: ctx.networkId,
-            kind: 'type_view',
-            id: viewId,
-          },
-          true,
+        const received: AnyRealtimeEvent[] = [];
+        const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event: AnyRealtimeEvent) =>
+          received.push(event),
         );
-        assert.equal(delRes.isError, undefined, toolText(delRes));
-        const delData = toolJson<{ deleted: true; affected_counts: Record<string, number> }>(
-          delRes,
-        );
-        assert.equal(delData.deleted, true);
+        try {
+          // Удаляем по id.
+          const delRes = await callOp(
+            handle.client,
+            'ontology.delete',
+            {
+              network_id: ctx.networkId,
+              kind: 'type_view',
+              id: viewId,
+            },
+            true,
+          );
+          assert.equal(delRes.isError, undefined, toolText(delRes));
+          const delData = toolJson<{ deleted: true; affected_counts: Record<string, number> }>(
+            delRes,
+          );
+          assert.equal(delData.deleted, true);
+
+          // 0.14.1, ошибка 1242f78d (в): событие несёт реальный тип-владелец и
+          // полную карточку, а не `thought_type_id: ''`.
+          await new Promise((r) => setImmediate(r));
+          const deleted = received.find((e) => e.type === 'thought-type-view.deleted');
+          assert.ok(deleted, 'thought-type-view.deleted должен уйти');
+          const data = deleted!.data as {
+            thought_type_id: string;
+            view_id: string;
+            view: { id: string; name: string; defined_on: string };
+          };
+          assert.equal(data.thought_type_id, versionTypeId);
+          assert.equal(data.view_id, viewId);
+          assert.equal(data.view.id, viewId);
+          assert.equal(data.view.name, 'Работы версии');
+          assert.equal(data.view.defined_on, versionTypeId);
+        } finally {
+          unsubscribe();
+        }
 
         // После удаления каталог типов уже не содержит отбор.
         const listRes = await handle.client.callTool({
@@ -858,11 +890,10 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const versionTypeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
-      void versionTypeId;
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
-        await handle.client.callTool({
+        const writeRes = await handle.client.callTool({
           name: 'etn.ontology.write',
           arguments: {
             network_id: ctx.networkId,
@@ -880,23 +911,52 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
             ],
           },
         });
+        const created = toolJson<{ type_views: Array<{ id: string }> }>(writeRes);
+        const viewId = created.type_views[0]!.id;
 
-        const delRes = await callOp(
-          handle.client,
-          'ontology.delete',
-          {
-            network_id: ctx.networkId,
-            kind: 'thought_type',
-            id: versionTypeId,
-            force: true,
-          },
-          true,
+        const received: AnyRealtimeEvent[] = [];
+        const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event: AnyRealtimeEvent) =>
+          received.push(event),
         );
-        assert.equal(delRes.isError, undefined, toolText(delRes));
-        const delData = toolJson<{
-          affected_counts: { type_views_count?: number };
-        }>(delRes);
-        assert.equal(delData.affected_counts.type_views_count, 1);
+        try {
+          const delRes = await callOp(
+            handle.client,
+            'ontology.delete',
+            {
+              network_id: ctx.networkId,
+              kind: 'thought_type',
+              id: versionTypeId,
+              force: true,
+            },
+            true,
+          );
+          assert.equal(delRes.isError, undefined, toolText(delRes));
+          const delData = toolJson<{
+            affected_counts: { type_views_count?: number };
+          }>(delRes);
+          assert.equal(delData.affected_counts.type_views_count, 1);
+
+          // 0.14.1, ошибка 1242f78d (б): каскадное событие реально уходит —
+          // список отборов снимается ДО удаления типа, а не после.
+          await new Promise((r) => setImmediate(r));
+          const cascaded = received.filter(
+            (e) => e.type === 'thought-type-view.deleted',
+          );
+          assert.equal(cascaded.length, 1, 'ровно одно событие на отбор');
+          const data = cascaded[0]!.data as {
+            thought_type_id: string;
+            view_id: string;
+            view: { id: string; name: string; defined_on: string; inherited: boolean };
+          };
+          assert.equal(data.thought_type_id, versionTypeId);
+          assert.equal(data.view_id, viewId);
+          assert.equal(data.view.id, viewId);
+          assert.equal(data.view.name, 'Работы версии');
+          assert.equal(data.view.defined_on, versionTypeId);
+          assert.equal(data.view.inherited, false);
+        } finally {
+          unsubscribe();
+        }
       } finally {
         await handle.close();
       }
@@ -1009,6 +1069,90 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
         assert.equal(data.items.length, 1);
         assert.equal(data.items[0]!.meta.views.length, 1);
         assert.equal(data.items[0]!.meta.views[0]!.name, 'Работы версии');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('внетиповой отбор (0.14.1): meta.views и etn.views.run видят scope thought', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeId = makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+      const thoughtId = makeThought(ndb, '0.14.1', { typeId }, ctx.adminId);
+      const custom = createThoughtCustomView(
+        ndb,
+        thoughtId,
+        { name: 'Мой отбор', definition: JSON.stringify({}) },
+        ctx.adminId,
+      );
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Карточка: внетиповой в meta.views со scope/defined_on.
+        const getRes = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        assert.equal(getRes.isError, undefined, toolText(getRes));
+        const card = toolJson<ThoughtGetResponse>(getRes);
+        assert.equal(card.meta.views.length, 1);
+        assert.equal(card.meta.views[0]!.scope, 'thought');
+        assert.equal(card.meta.views[0]!.defined_on, thoughtId);
+        assert.equal(card.meta.views[0]!.inherited, false);
+
+        // Исполнение по имени и по id — один и тот же набор.
+        for (const viewName of ['Мой отбор', custom.id]) {
+          const runRes = await handle.client.callTool({
+            name: 'etn.views.run',
+            arguments: { network_id: ctx.networkId, thought_id: thoughtId, view_name: viewName },
+          });
+          assert.equal(runRes.isError, undefined, toolText(runRes));
+          const run = toolJson<ViewsRunResponse>(runRes);
+          assert.equal(run.view.id, custom.id);
+          assert.equal(run.view.scope, 'thought');
+          assert.equal(run.view.defined_on, thoughtId);
+        }
+
+        // Subgraph seed-узла и resolve — тот же scope.
+        const subRes = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: {
+            network_id: ctx.networkId,
+            seed_ids: [thoughtId],
+            radius: 0,
+          },
+        });
+        assert.equal(subRes.isError, undefined, toolText(subRes));
+        const sub = toolJson<{ nodes: Array<{ id: string; views: ThoughtMetaView[] }> }>(subRes);
+        const seed = sub.nodes.find((n) => n.id === thoughtId)!;
+        assert.equal(seed.views[0]!.scope, 'thought');
+
+        const resolveRes = await handle.client.callTool({
+          name: 'etn.thoughts.resolve',
+          arguments: { network_id: ctx.networkId, thought_ids: [thoughtId] },
+        });
+        assert.equal(resolveRes.isError, undefined, toolText(resolveRes));
+        const resolved = toolJson<{
+          items: Array<{ id: string; meta: { views: ThoughtMetaView[] } }>;
+        }>(resolveRes);
+        assert.equal(resolved.items[0]!.meta.views[0]!.scope, 'thought');
+
+        // Инвариант редактора типа: в views[] типов внетиповых нет.
+        const typesRes = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, scope: 'thoughts' },
+        });
+        assert.equal(typesRes.isError, undefined, toolText(typesRes));
+        const types = toolJson<TypesListResponse>(typesRes);
+        const typeEntry = types.thought_types?.find((t) => t.id === typeId);
+        assert.ok(typeEntry);
+        // Проекция MCP опускает пустые контейнеры: пустой набор views не
+        // сериализуется вовсе.
+        assert.equal((typeEntry!.views ?? []).length, 0);
       } finally {
         await handle.close();
       }

@@ -107,6 +107,10 @@ export const queryKeys = {
   views: (typeId: string) => keyOf('views', ref(typeId)),
   viewsAll: () => 'views',
 
+  /** Внетиповые отборы мысли: `thought-views:@<thoughtId>`. */
+  thoughtViews: (thoughtId: string) => keyOf('thought-views', ref(thoughtId)),
+  thoughtViewsAll: () => 'thought-views',
+
   /** Сохранённые фильтры пользователя: `saved-filters:@<scope>`. */
   savedFilters: (scope = 'user') => keyOf('saved-filters', ref(scope)),
   savedFiltersAll: () => 'saved-filters',

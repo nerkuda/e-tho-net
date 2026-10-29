@@ -307,6 +307,29 @@ export function composeThoughtsWrite(
     }
   }
 
+  // Умное удаление целей свойств-связей set-записью (0.14.1, задача 58b598d5):
+  // физическое удаление — `link.deleted`, пометка корзины — `link.updated`.
+  // Уже помеченное ребро в список не попадает (no-op без события).
+  for (const removal of written.link_removals ?? []) {
+    if (removal.action === 'deleted') {
+      events.push({ type: 'link.deleted', data: { id: removal.link_id } });
+      activity.push({ kind: 'link', action: 'deleted', link: removal.link });
+      continue;
+    }
+    const link = getLink(ndb, removal.link_id);
+    if (link !== null) {
+      events.push({
+        type: 'link.updated',
+        data: {
+          id: link.id,
+          changes: { marked_for_deletion: true },
+          version: link.version,
+        },
+      });
+      activity.push({ kind: 'link', action: 'trashed', link });
+    }
+  }
+
   return { result: written, events, activity };
 }
 

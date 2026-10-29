@@ -509,6 +509,58 @@ describe('единые жесты (клик / двойной клик / Ctrl+к�
     assert.equal(menuFor, 't-1');
   });
 
+  it('contextmenu ровно один раз вызывает onContextMenu (ошибка ffc173c9)', () => {
+    let calls = 0;
+    let menuFor: string | null = null;
+    const root = cloud(thought(), {
+      profile: 'tree',
+      actions: {
+        onContextMenu: (_e, id) => {
+          calls += 1;
+          menuFor = id;
+        },
+      },
+    });
+    root.fire('contextmenu', mouseEvent());
+    assert.equal(calls, 1);
+    assert.equal(menuFor, 't-1');
+  });
+
+  it('без onContextMenu системное меню НЕ подавляется (мёртвый ПКМ, ffc173c9)', () => {
+    // Облачко с действиями, но без меню мысли: `preventDefault()` гасил
+    // браузерное меню, а своего не было — правый клик ничего не делал.
+    const root = cloud(thought(), {
+      profile: 'tree',
+      actions: { onClick: () => undefined },
+    });
+    const e = mouseEvent();
+    root.fire('contextmenu', e);
+    assert.equal(e.defaultPrevented, false, 'системное меню остаётся доступным');
+  });
+
+  it('onContextMenu не срабатывает на левый клик и Ctrl+клик (только ПКМ)', () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let calls = 0;
+      const root = cloud(thought(), {
+        profile: 'tree',
+        actions: {
+          onClick: () => undefined,
+          onCtrlClick: () => undefined,
+          onContextMenu: () => {
+            calls += 1;
+          },
+        },
+      });
+      root.fire('click', mouseEvent());
+      root.fire('click', mouseEvent({ ctrlKey: true }));
+      mock.timers.tick(SINGLE_CLICK_DELAY_MS + 10);
+      assert.equal(calls, 0);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
   it('клик по метке корзины — stopPropagation и onTrashBadgeClick вместо открытия', () => {
     mock.timers.enable({ apis: ['setTimeout'] });
     try {

@@ -65,6 +65,9 @@ export const MCP_TOOL_NAMES = [
   'etn.layers.select',
   // ontology batch ops (задача cc9ca65e / 0.7.2)
   'etn.ontology.write',
+  // внетиповые отборы мысли (0.14.1, задача 769fde88; ADR 2a758041) —
+  // отдельный батч: владелец — мысль, а не реестр сети.
+  'etn.custom_views.write',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -160,6 +163,13 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // Upsert онтологии сети одной транзакцией; повторный вызов с теми же
   // аргументами не меняет состояние.
   'etn.ontology.write': { destructiveHint: false, idempotentHint: true },
+
+  // ---- `etn.custom_views.write` (0.14.1, задача 769fde88) ----------------
+  // Батч внетиповых отборов мысли: `action`-дискриминатор, `on_duplicate`
+  // (`fail`/`reuse`/`update`), `id`/`ref`-адресация и `expected_version` —
+  // повторный вызов с теми же аргументами не меняет состояние (прецедент
+  // `etn.ontology.write` с его `type_views[].action: delete`).
+  'etn.custom_views.write': { destructiveHint: false, idempotentHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).

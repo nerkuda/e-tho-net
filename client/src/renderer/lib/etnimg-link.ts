@@ -99,18 +99,17 @@ async function openEtnimgLink(anchor: HTMLElement, href: string): Promise<void> 
   if (ctx === null) {
     notice(
       'Не удалось открыть файл: ссылка вне поля комментария — владелец вложения неизвестен.',
-      'error',
     );
     return;
   }
   const networkId = store.state.networkId;
   if (networkId === null) {
-    notice('Сначала откройте сеть.', 'error');
+    notice('Сначала откройте сеть.');
     return;
   }
   const filePath = decodeEtnimgUrl(href);
   if (filePath === null) {
-    notice(`Не удалось разобрать путь во вложении: ${href}`, 'error');
+    notice(`Не удалось разобрать путь во вложении: ${href}`);
     return;
   }
   let attachments: Attachment[];
@@ -122,7 +121,7 @@ async function openEtnimgLink(anchor: HTMLElement, href: string): Promise<void> 
   }
   const attachment = findAttachmentByPath(attachments, filePath);
   if (attachment === null || attachment.file_path === null) {
-    notice('Вложение по этой ссылке не найдено у владельца комментария.', 'error');
+    notice('Вложение по этой ссылке не найдено у владельца комментария.');
     return;
   }
   // Same path as the «Вложения» tab's double-click: the main process opens

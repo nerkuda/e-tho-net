@@ -42,6 +42,8 @@ import {
   EtnError,
   FILTER_AST_VERSION,
   FILTER_LINK_EDGE_STATES,
+  FLAT_PROPERTY_CONTAINS_VALUE_DETAILS,
+  FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
   HIERARCHY_SUBTREE_MAX_NODES,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
@@ -103,9 +105,11 @@ import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from '.
 // ---------------------------------------------------------------------------
 
 /**
- * Оператор условия по значению свойства — объединение наборов обоих фасадов:
- * `in`/`not_in`/`is_empty`/`not_empty` — из REST-фильтра «Структур»,
- * `ne`/`gte`/`lte`/`any_of`/`all_of`/`none_of` — из `etn.thoughts.query`.
+ * Оператор условия по значению свойства — канон плоской формы
+ * (`FLAT_PROPERTY_OPS`, задача 40c76144): REST `properties[].op` и MCP
+ * `properties[].operator` принимают один и тот же набор. Применимость
+ * конкретного оператора к природе свойства ограничивает гейт
+ * {@link OPS_BY_VALUE_TYPE} ниже.
  */
 export type ThoughtQueryPropertyOperator =
   | 'eq'
@@ -127,7 +131,9 @@ export type ThoughtQueryPropertyOperator =
 export interface ThoughtQueryPropertyCondition {
   property_id: string;
   operator: ThoughtQueryPropertyOperator;
-  value: string | number | boolean | Array<string | number | boolean>;
+  /** Необязательно для `is_empty`/`not_empty` (задача 40c76144): наличие
+   *  значения решает строка `property_values`, переданное игнорируется. */
+  value?: string | number | boolean | Array<string | number | boolean>;
 }
 
 /**
@@ -460,7 +466,10 @@ export function mcpRequestToQuery(
       return {
         property_id: c.property_id,
         operator: c.operator,
-        value: c.value,
+        // Пара наличия значение не читает (задача 40c76144): контракт
+        // `etn.thoughts.query` разрешает `value` отсутствующим, в канон идёт
+        // пустая строка — движок ветвится по оператору раньше.
+        value: c.value ?? '',
       };
     }),
     active: req.active,
@@ -585,12 +594,15 @@ export const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryP
   // наличие хоть какого-то id, наборы — по элементам массива.
   thought_ref: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of', 'none_of'],
   // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81): отбор по
-  // адресу. eq/ne — точное совпадение; any_of/all_of/none_of — для набора.
-  // is_empty/not_empty не нужны (адрес либо точно совпал, либо нет).
-  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  // адресу. eq/ne — точное совпадение; any_of/all_of/none_of — для набора;
+  // is_empty/not_empty — «значение не задано / задано» (ошибка 0e976df4):
+  // адрес — необязательная ссылка, а NULL не «не равно» (a6866689), поэтому
+  // без пары заполненности мысль с пустой ссылкой иначе не найти.
+  cross_network_ref: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
   // Ссылка на публикацию сети (0.7.1… 0.11.1, задача f37b468d, требование
-  // 9ce84a2b): та же матрица, что у cross_network_ref — отбор по id.
-  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of'],
+  // 9ce84a2b): та же матрица, что у cross_network_ref — отбор по id и наличие
+  // значения (ошибка 0e976df4).
+  publication: ['eq', 'ne', 'any_of', 'all_of', 'none_of', 'is_empty', 'not_empty'],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -631,10 +643,10 @@ function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<St
   return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
 }
 
-/** Клауза совпадения «Найти слова»: SQL-предикат и число LIKE-параметров в нём. */
-interface KeywordMatchClause {
+/** Клауза совпадения «Найти слова» для одного слова: SQL-предикат и его параметры. */
+export interface KeywordWordClause {
   sql: string;
-  paramCount: number;
+  params: unknown[];
 }
 
 /**
@@ -643,13 +655,14 @@ interface KeywordMatchClause {
  * тело И заголовок — ровно так, как путь «текст самой записи» компилирует
  * хроника (`record_body`/`record_title`, задача 608ecb79).
  *
- * Одна точка правды: этот же предикат использует плоский компилятор хроники
- * (`chronicle-service.thoughtKeywordCond`), иначе AST-лист и `keyword_scope`
- * разъехались бы (тот же класс дефекта, что fc97548d).
+ * Одна точка правды: этот же предикат входит в per-word клаузу
+ * {@link buildKeywordWordClause}, которую использует и AST-лист, и плоский
+ * компилятор хроники (`chronicle-service.selectThoughts`), иначе AST-лист и
+ * `keyword_scope` разъехались бы (тот же класс дефекта, что fc97548d).
  *
  * @param alias алиас `thoughts_v` в объемлющем SQL (у обоих вызывающих — `t`).
  */
-export function diaryKeywordClause(alias = 't'): KeywordMatchClause {
+export function diaryKeywordClause(alias = 't'): { sql: string; paramCount: number } {
   return {
     sql:
       `EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = ${alias}.id` +
@@ -661,58 +674,85 @@ export function diaryKeywordClause(alias = 't'): KeywordMatchClause {
 }
 
 /**
- * Одна клауза совпадения по словам для эффективного набора областей: `title`,
+ * Одна клауза совпадения по слову для эффективного набора областей: `title`,
  * `synonyms`, `comment` (постоянный комментарий мысли) и/или `diary`
  * (хронологические записи мысли) — OR между выбранными источниками. LIKE-образец
  * строит {@link buildLikePattern} (экранирование `%`/`_`/`\`, `*` → `%`),
- * поэтому совпадение инфиксное и регистронезависимое.
+ * поэтому литеральное совпадение инфиксное и регистронезависимое.
+ *
+ * **`*`-синонимы (задача f0b06700, требование 35218826, сценарий «поиск», D1).**
+ * В источнике `synonyms` к литеральной подстроке добавлена ветка «слово запроса
+ * совпало со СЛОВОМ `*`-синонима по границам слова» — `synonym_word_pattern_match`
+ * (общий матчер `@etn/shared`, та же семантика `*`, что у дублей и упоминаний,
+ * но без фразового правила: каждое слово запроса матчится независимо). Ветка
+ * добавляется только для слова БЕЗ `*` (D4): слово запроса с `*` остаётся
+ * литеральным, как и раньше. Заголовок расширению не подлежит (D5).
  *
  * `opts.commentIncludesLinkComments` (требование ce111b0d, ошибка fc97548d) —
  * контекст ФАЗЫ 1 ОТБОРА ХРОНИКИ: область `comment` ищет и комментарии
  * инцидентных связей мысли с обеих сторон. Опцию ставит только исполнитель
  * хроники (`chronicle-service.targetsLeafClause`); семантика отбора мыслей
  * (требование b363cad1 — только постоянный комментарий самой мысли) не меняется.
+ *
+ * Плоский компилятор хроники (`chronicle-service.selectThoughts`) использует эту
+ * же клаузу — иначе плоский и AST-пути разъехались бы (правило аналогов,
+ * класс расхождения fc97548d).
  */
-function buildKeywordClause(
+export function buildKeywordWordClause(
   scope: Set<StructureKeywordScope>,
+  word: string,
   opts?: { commentIncludesLinkComments?: boolean },
-): KeywordMatchClause {
-  const parts: KeywordMatchClause[] = [];
-  if (scope.has('title')) parts.push({ sql: "t.title_norm LIKE ? ESCAPE '\\'", paramCount: 1 });
+): KeywordWordClause {
+  // Нормализация обеих сторон сравнения (D6): колонки `*_norm` хранят
+  // NFC+lowercase, слово запроса приводится к той же форме — и для LIKE, и для
+  // матчера `*`-слов (иначе NFD-ввод не совпадёт с NFC-колонкой, 6898ef75).
+  const norm = word.normalize('NFC').toLowerCase();
+  const like = buildLikePattern(norm);
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  if (scope.has('title')) {
+    parts.push("t.title_norm LIKE ? ESCAPE '\\'");
+    params.push(like);
+  }
   if (scope.has('synonyms')) {
-    parts.push({
-      sql:
-        'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
-        " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\')",
-      paramCount: 1,
-    });
+    // D4: слово запроса с `*` — только литеральная ветка.
+    const patternBranch = norm.includes('*')
+      ? ''
+      : ' OR synonym_word_pattern_match(?, ts.synonym_norm)';
+    parts.push(
+      'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+        " WHERE ts.thought_id = t.id AND (ts.synonym_norm LIKE ? ESCAPE '\\'" +
+        `${patternBranch}))`,
+    );
+    params.push(like);
+    if (patternBranch !== '') params.push(norm);
   }
   if (scope.has('comment')) {
-    parts.push({
-      sql:
-        "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
+    parts.push(
+      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
         " AND c.kind = 'permanent' AND unicode_lower(c.body_md) LIKE ? ESCAPE '\\')",
-      paramCount: 1,
-    });
+    );
+    params.push(like);
     if (opts?.commentIncludesLinkComments === true) {
       // Комментарии инцидентных связей с обеих сторон — как в плоском
       // `thoughtKeywordCond` (тип комментария не сужается: и постоянные, и
       // записи дневника связи), требование ce111b0d.
-      parts.push({
-        sql:
-          'EXISTS (SELECT 1 FROM comments_v c2' +
+      parts.push(
+        'EXISTS (SELECT 1 FROM comments_v c2' +
           " JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'" +
           ' JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)' +
           " WHERE unicode_lower(c2.body_md) LIKE ? ESCAPE '\\')",
-        paramCount: 1,
-      });
+      );
+      params.push(like);
     }
   }
-  if (scope.has('diary')) parts.push(diaryKeywordClause('t'));
-  return {
-    sql: `(${parts.map((p) => p.sql).join(' OR ')})`,
-    paramCount: parts.reduce((sum, p) => sum + p.paramCount, 0),
-  };
+  if (scope.has('diary')) {
+    const diary = diaryKeywordClause('t');
+    parts.push(diary.sql);
+    // diaryKeywordClause возвращает параметризованную клаузу — параметры общие.
+    for (let i = 0; i < diary.paramCount; i += 1) params.push(like);
+  }
+  return { sql: `(${parts.join(' OR ')})`, params };
 }
 
 /**
@@ -742,10 +782,26 @@ function buildKeywordFtsJoin(
   if (include.length === 0 || scope.has('comment') || scope.has('diary')) return null;
   const match = nameTrigramMatch(include);
   if (match === null) return null;
-  return {
-    sql: `JOIN (SELECT rowid FROM fts_thought_names WHERE fts_thought_names MATCH ?) __kw ON __kw.rowid = t.rowid`,
-    params: [match],
-  };
+  // D7: сужатель обязан оставаться НАДМНОЖЕСТВОМ точного предиката. При области
+  // `synonyms` к FTS-кандидатам добавляются мысли, у которых слово запроса
+  // совпало со словом `*`-синонима: триграммы такого совпадения не видят
+  // («проектирование» vs «проектиров*»), и без OR-ветки живой случай из DoD
+  // отсекался бы ещё до точной клаузы.
+  const patternWords = scope.has('synonyms')
+    ? include.map((word) => word.normalize('NFC').toLowerCase()).filter((word) => !word.includes('*'))
+    : [];
+  let sql = `JOIN (SELECT rowid FROM fts_thought_names WHERE fts_thought_names MATCH ?`;
+  const params: unknown[] = [match];
+  if (patternWords.length > 0) {
+    sql +=
+      ' UNION SELECT tv.rowid FROM thoughts_v tv WHERE EXISTS (' +
+      'SELECT 1 FROM thought_synonyms_v ts2 WHERE ts2.thought_id = tv.id AND (' +
+      `${patternWords.map(() => 'synonym_word_pattern_match(?, ts2.synonym_norm)').join(' OR ')})` +
+      ')';
+    params.push(...patternWords);
+  }
+  sql += ') __kw ON __kw.rowid = t.rowid';
+  return { sql, params };
 }
 
 /** Результат обхода поддерева: depth каждого узла (включая/исключая корни по
@@ -1470,14 +1526,22 @@ function subqueryStructuralClause(
   return subqueryEdgeQuantClause(base, [], otherCol, ids, quant);
 }
 
-/** Клауза под-выборки по одиночному операнду «Тип» (тип мысли против id-набора). */
+/**
+ * Клауза под-выборки по одиночному операнду «Тип» (тип мысли против id-набора).
+ *
+ * `not_in` — ЛИСТОВАЯ семантика отрицательного ссылочного оператора (ошибка
+ * a6866689): мысль проходит, только если у неё ЕСТЬ тип и он не входит в набор.
+ * Мысли без типа (`type_id IS NULL`) не проходят — «значения нет» выражает
+ * отдельное условие «Тип — не заполнено» (`is_empty`), а не отрицание
+ * равенства. Пустой набор — «нечего исключать»: проходит любая мысль (паритет
+ * с листовым `not_in`).
+ */
 function subqueryTypeClause(ids: readonly string[], quant: SubqueryQuantifier): Clause {
   if (ids.length === 0) return quant === 'in' ? AST_FALSE : AST_TRUE;
   const placeholders = ids.map(() => '?').join(',');
   if (quant === 'in') return { sql: `t.type_id IN (${placeholders})`, params: [...ids] };
-  // not_in: тип не задан либо не входит в набор (NULL не «входит»).
   return {
-    sql: `(t.type_id IS NULL OR t.type_id NOT IN (${placeholders}))`,
+    sql: `(t.type_id IS NOT NULL AND t.type_id NOT IN (${placeholders}))`,
     params: [...ids],
   };
 }
@@ -2335,6 +2399,16 @@ function filterAstLeafClause(
         };
         return operator === 'has' ? match : astNegate(match);
       }
+      // «Заполнено»/«не заполнено» для операнда «Тип» (ошибка a6866689):
+      // тип мысли — необязательная ссылка (`thoughts.type_id`, NULL у
+      // нетипизированных). `not_empty` — «мысль имеет ЛЮБОЙ тип»
+      // (`type_id IS NOT NULL`), `is_empty` — «мысли без типа»
+      // (`type_id IS NULL`). Значение не требуется — как у «Типа связи».
+      if (operator === 'is_empty' || operator === 'not_empty') {
+        return operator === 'not_empty'
+          ? { sql: 't.type_id IS NOT NULL', params: [] }
+          : { sql: 't.type_id IS NULL', params: [] };
+      }
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       // «Тип» — одиночный операнд: наборные `any_of`/`none_of` (значение —
       // список типов; так их строит конструктор UI, MULTIPLE_OPS) тождественны
@@ -2351,23 +2425,35 @@ function filterAstLeafClause(
         astUnsupported(`Оператор «${operator}» для операнда «Тип»`, opPath, requestId);
       }
       const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
-      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'thought_types', list);
+      // Ссылочные операторы (`eq`/`ne`/`in`/`not_in`/`any_of`/`none_of`)
+      // сравнивают тип ТОЧНО по id: поддерево типов раскрывает ТОЛЬКО
+      // «в иерархии»/«не в иерархии» (`hierarchyTypeLeafClause`), иначе
+      // «тип = группа» молча захватывал бы подчинённые типы (ADR 9779dd21,
+      // ошибка aa98f3f9). Неявное раскрытие `type_ids` помимо компиляции в
+      // «в иерархии» запрещено (ADR 9a356460).
+      const matched = list;
       const positive = operator === 'in' || operator === 'eq' || operator === 'any_of';
-      if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
+      if (matched.length === 0) return positive ? AST_FALSE : AST_TRUE;
       const match: Clause = {
-        sql: `t.type_id IN (${expanded.map(() => '?').join(',')})`,
-        params: [...expanded],
+        sql: `t.type_id IN (${matched.map(() => '?').join(',')})`,
+        params: [...matched],
       };
+      // Отрицательные операторы (`ne`/`not_in`/`none_of`) — `NOT (type_id IN …)`:
+      // у мысли без типа сравнение даёт NULL и строка отсекается. Поведение
+      // ОСОЗНАННОЕ (решение заказчика 2026-10-25, ошибка a6866689): «нет
+      // значения» — это не «не равно», для него есть отдельное «не заполнено»
+      // (`is_empty`). Пустой набор — «нечего исключать», проходит любая мысль.
       return positive ? match : { sql: `NOT (${match.sql})`, params: match.params };
     }
 
     case 'link_type': {
       // Единый операнд «Тип связи» (задача f7da04d6, требование 8c131cff) в
       // контексте МЫСЛИ: «у мысли есть инцидентная связь указанного типа».
-      // `in`/`in_hierarchy` (и `eq`) раскрывают тип вместе с потомками
-      // `link_types` (L21) — общий AST-лист фильтра типов связей; `is_empty`/
-      // `not_empty` — «нет/есть ТИПИЗИРОВАННЫХ инцидентных связей» (семантика
-      // подтверждена оркестратором для контекста мысли, задача f7da04d6).
+      // `in_hierarchy`/`not_in_hierarchy` раскрывают тип вместе с потомками
+      // `link_types` (L21); `eq`/`ne`/`in`/`not_in` — точное совпадение по id
+      // (ADR 9779dd21, ошибка aa98f3f9). `is_empty`/`not_empty` — «нет/есть
+      // ТИПИЗИРОВАННЫХ инцидентных связей» (семантика подтверждена
+      // оркестратором для контекста мысли, задача f7da04d6).
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       if (operator === 'is_empty' || operator === 'not_empty') {
         const typed: Clause = {
@@ -2390,7 +2476,11 @@ function filterAstLeafClause(
       }
       const list =
         operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
-      const expanded = list.length === 0 ? [] : expandTypeIdsToSubtree(ndb, 'link_types', list);
+      // Поддерево `link_types` — только у иерархических операторов; наборные
+      // сравнивают тип связи точно (ADR 9779dd21, ошибка aa98f3f9).
+      const hierarchy = operator === 'in_hierarchy' || operator === 'not_in_hierarchy';
+      const expanded =
+        hierarchy && list.length > 0 ? expandTypeIdsToSubtree(ndb, 'link_types', list) : list;
       const positive = operator === 'in' || operator === 'eq' || operator === 'in_hierarchy';
       if (expanded.length === 0) return positive ? AST_FALSE : AST_TRUE;
       const match: Clause = {
@@ -2491,6 +2581,29 @@ function astStringList(
 }
 
 /**
+ * Форма `value` подстрочных операторов — ТОЛЬКО строка (ошибка 9420a34c).
+ *
+ * `not_contains` в AST исполняется как отрицание `contains`, поэтому значение
+ * проверяется здесь ДО делегата: иначе `String(value)` снова молча склеил бы
+ * массив через запятую (`['al','pha']` → `"al,pha"`), а `details.operator`
+ * врал бы — `not_contains` выдавал бы себя за `contains` (замечание
+ * верификатора круга 2). Оператор в деталях — фактический.
+ */
+function assertContainsValueIsString(
+  value: unknown,
+  operator: 'contains' | 'not_contains',
+  requestId?: string,
+): asserts value is string {
+  if (typeof value === 'string') return;
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE,
+    { ...FLAT_PROPERTY_CONTAINS_VALUE_DETAILS, operator },
+    requestId,
+  );
+}
+
+/**
  * Лист по свойству. Семантика — по природе левого операнда (требования
  * 1e19504b/7f0e3f8c/f14e48ab/25324388/bd0348b3):
  *
@@ -2582,7 +2695,11 @@ function propertyLeafClause(
   }
 
   if (operator === 'not_contains') {
-    const inner = propertyClauses(ndb, [{ property_id: def.id, operator: 'contains', value: leaf.value as string }], requestId)[0] ?? AST_FALSE;
+    // Проверка с ФАКТИЧЕСКИМ оператором: `details.operator` = "not_contains"
+    // (замечание верификатора круга 2). Делегат ниже исполняет отрицание
+    // `contains` уже с проверенной строкой.
+    assertContainsValueIsString(leaf.value, 'not_contains', requestId);
+    const inner = propertyClauses(ndb, [{ property_id: def.id, operator: 'contains', value: leaf.value }], requestId)[0] ?? AST_FALSE;
     return astNegate(inner);
   }
   return delegate();
@@ -2802,20 +2919,21 @@ function keywordsLeafClause(
   const text = typeof leaf.value === 'string' ? leaf.value : '';
   const { include, exclude } = parseFilterKeywords(text);
   if (include.length === 0 && exclude.length === 0) return AST_TRUE;
-  const clause = buildKeywordClause(scope, {
-    ...(astOpts?.keywordCommentIncludesLinkComments === true
+  const opts =
+    astOpts?.keywordCommentIncludesLinkComments === true
       ? { commentIncludesLinkComments: true }
-      : {}),
-  });
+      : undefined;
   const parts: string[] = [];
   const params: unknown[] = [];
   for (const word of include) {
+    const clause = buildKeywordWordClause(scope, word, opts);
     parts.push(clause.sql);
-    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+    params.push(...clause.params);
   }
   for (const word of exclude) {
+    const clause = buildKeywordWordClause(scope, word, opts);
     parts.push(`NOT ${clause.sql}`);
-    for (let i = 0; i < clause.paramCount; i += 1) params.push(buildLikePattern(word.toLowerCase()));
+    params.push(...clause.params);
   }
   return { sql: `(${parts.join(' AND ')})`, params };
 }
@@ -3025,10 +3143,10 @@ function hierarchyLinkPropertyClause(
  *   * `eq`/`ne` со строкой — «связь с конкретной целью» (id мысли);
  *   * `eq`/`ne` с boolean — «связь такого типа есть/отсутствует» независимо
  *     от цели (`eq true` / `ne false` — есть; `eq false` / `ne true` — нет);
- *   * `in`/`not_in` (REST) — цель из списка / не из списка;
- *   * `is_empty`/`not_empty` (REST) — наличие/отсутствие любого живого ребра
- *     этого типа;
- *   * `any_of`/`all_of`/`none_of` (MCP) — набор целей рёбер.
+ *   * `in`/`not_in` — цель из списка / не из списка;
+ *   * `is_empty`/`not_empty` — отсутствие/наличие любого живого ребра этого
+ *     типа (`links_v`, а не `property_values`) — канон плоской формы;
+ *   * `any_of`/`all_of`/`none_of` — набор целей рёбер.
  *
  * Направление (`out`/`in`) и тип связи/структурность читаются из `config`
  * теми же хелперами, что использует чтение карточки мысли. `directionRef`
@@ -3238,10 +3356,17 @@ function propertyClauses(
     }
 
     if (cond.operator === 'contains') {
+      // Вторая линия после фасадов (ошибка 9420a34c): значение — ТОЛЬКО
+      // строка. До правки `String(cond.value)` молча склеивал массив через
+      // запятую (`['al','pha']` → `"al,pha"`) — отбор давал пустой результат
+      // без ошибки. MCP-контракт (`contracts.ts`) и REST-разбор
+      // (`structure-service.ts`) отвергают не-строку раньше; движок
+      // страхует прямых вызывающих (AST-лист, доменные тесты).
+      assertContainsValueIsString(cond.value, 'contains', requestId);
       // «Содержит» — подстрочно и регистронезависимо (требование f14e48ab):
       // регистр сворачивается unicode_lower с обеих сторон.
       const fold = foldsCase(def);
-      const pattern = buildLikePattern(String(cond.value));
+      const pattern = buildLikePattern(cond.value);
       const lhs = fold ? `unicode_lower(pv.${column})` : `pv.${column}`;
       const rhs = fold ? 'unicode_lower(?)' : '?';
       out.push({

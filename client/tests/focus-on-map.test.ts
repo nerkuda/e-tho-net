@@ -255,13 +255,25 @@ describe('focusThoughtOnMap — «В фокус» с любого экрана (
     const activeView = readText(SRC.activeView);
     const helper = functionBody(activeView, 'export async function focusThoughtOnMap(');
     assert.ok(helper.includes("setActiveView('map')"), 'помощник обязан показать карту');
-    assert.ok(helper.includes('await setFocus('), 'помощник обязан поставить мысль в фокус');
+    // Фокус — через единый UI-вход `focusFromUi`: отказ `thoughts.focus`
+    // показывается тостом, а не теряется (ошибка 1656ef58).
+    assert.ok(
+      helper.includes('await focusFromUi('),
+      'помощник обязан поставить мысль в фокус через focusFromUi',
+    );
 
-    // Вход 1 — подменю «Действия ▾» шапки редактора.
+    // Вход 1 — подменю «Действия ▾» шапки редактора. Обработчик идёт через
+    // общий помощник, а rejection ленивого импорта гасит `focusOnMapFromMenu`
+    // (ошибка 53d21e82): прямой `void focusThoughtOnMap(...)` оставлял бы
+    // unhandled rejection при сбое загрузки чанка.
     const actions = functionBody(readText(SRC.editor), 'async function openThoughtActionsMenu(');
     assert.ok(
-      actions.includes('focusThoughtOnMap(thought.id)'),
-      '«Действия ▾» → «В фокус» обязан идти общим помощником',
+      actions.includes('focusOnMapFromMenu(focusThoughtOnMap, thought.id)'),
+      '«Действия ▾» → «В фокус» обязан идти общим помощником через гасящий rejection обработчик',
+    );
+    assert.ok(
+      !actions.includes('void focusThoughtOnMap('),
+      '«Действия ▾» не должен звать focusThoughtOnMap напрямую без catch',
     );
     assert.ok(
       !actions.includes('void setFocus('),

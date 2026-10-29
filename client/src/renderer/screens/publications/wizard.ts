@@ -19,7 +19,7 @@ import { div, el } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { footerErrorLine } from '../../lib/ui/messages.js';
 import { fieldInput, fieldRow } from '../../lib/ui/field.js';
-import { store } from '../../state.js';
+import { currentScreenPair, isCurrentScreenPair } from '../tabs/tab-state.js';
 import { wizardShelfChoice } from './model.js';
 
 /** Опции мастера. */
@@ -34,9 +34,10 @@ export interface PublicationWizardOptions {
 
 /** Открывает мастер создания публикации. */
 export function openPublicationWizard(opts: PublicationWizardOptions): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  const netId = networkId;
+  const pair = currentScreenPair();
+  if (pair === null) return;
+  const ownerPair = pair;
+  const netId = pair.networkId;
   const shelves = opts.shelves ?? [];
   /** Полка назначения: явно выбранная (если жива) либо `null` — «без полки». */
   let selectedShelfId = wizardShelfChoice(shelves, opts.initialShelfId ?? null);
@@ -130,7 +131,10 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
       }
       done();
       close();
-      opts.onCreated(created.id);
+      // `onCreated` открывает карточку и инвалидирует библиотеку — это действия
+      // ТЕКУЩЕЙ пары. Если за время запросов пользователь ушёл в другую сеть,
+      // id публикации прежней сети в ней не открывается (ошибка 5768f479).
+      if (isCurrentScreenPair(ownerPair)) opts.onCreated(created.id);
     } catch (err) {
       error.textContent = err instanceof Error ? err.message : t('publication.error');
     }

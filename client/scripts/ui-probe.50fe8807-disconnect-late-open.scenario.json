@@ -1,0 +1,70 @@
+{
+  "name": "50fe8807-disconnect-late-open",
+  "description": "Официальный GUI-гейт ошибки 50fe8807 (main-половина): стенд запускается с --delay-seed-ms 5000 — GET /networks/<A> задержан. История сети A засеяна строкой. Открытие A стартовало, через 500 мс соединение разорвано IPC-вызовом, затем дождались позднего ответа и переподключились к тому же профилю. Наблюдатель currentNetworkId главного процесса — history.clear(): он читает currentNetworkId и без открытой сети бросает «open a network first». До фикса поздний ответ выставляет currentNetworkId=A, history.clear проходит (threw:false) и строка истории исчезает; после фикса clear бросает (threw:true), строка остаётся. Наивный вариант «клик A → сразу disconnect» зелёный и до фикса — здесь обязательны пауза 500 мс и ожидание позднего ответа.",
+  "timeout": 400000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "seed-history",
+      "probe": "(async () => { const profiles = await window.etn.server.listProfiles(); const p = profiles.find((x) => x.isActive) ?? profiles[0]; if (!p) return 'no-profile'; const nets = await window.etn.networks.list(); const net = nets.find((n) => n.display_name === '{{networkName}}') ?? nets[0]; if (!net) return 'no-network'; window.__pid = p.id; window.__nid = net.id; await window.etn.history.push(p.id, net.id, null, '00000000-0000-4000-8000-0000000000aa'); const rows = await window.etn.history.list(p.id, net.id, null, 10); return rows.length === 1 ? 'ok' : 'seed-failed:' + rows.length; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 150000,
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{networkName}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "let-open-request-start",
+      "eval": "(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); return 'waited'; })()"
+    },
+    {
+      "name": "disconnect-mid-open",
+      "probe": "(async () => { await window.etn.server.disconnect(); return 'disconnected'; })()",
+      "expect": "disconnected"
+    },
+    {
+      "name": "wait-late-answer",
+      "eval": "(async () => { await new Promise((resolve) => setTimeout(resolve, 6500)); return 'waited'; })()"
+    },
+    {
+      "name": "reconnect-same-profile",
+      "probe": "(async () => { await window.etn.server.connect(window.__pid); return 'connected'; })()",
+      "expect": "connected"
+    },
+    {
+      "name": "settle-reconnect",
+      "eval": "(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); return 'waited'; })()"
+    },
+    {
+      "name": "observe-current-network-via-history-clear",
+      "probe": "(async () => { const raw = await window.etn.history.clear(); const failed = raw !== null && typeof raw === 'object' && raw.__etnError === true; const rows = await window.etn.history.list(window.__pid, window.__nid, null, 10); window.__obs = { failed: failed, message: failed ? raw.error.message : null, rows: Array.isArray(rows) ? rows.length : -1 }; return JSON.stringify(window.__obs); })()"
+    },
+    { "name": "observer-report", "eval": "JSON.stringify(window.__obs)" },
+    {
+      "name": "late-answer-did-not-set-current-network",
+      "probe": "window.__obs.failed === true",
+      "expect": true
+    },
+    {
+      "name": "error-says-open-network-first",
+      "probe": "String(window.__obs.message || '').includes('open a network first')",
+      "expect": true
+    },
+    { "name": "seeded-history-row-survived", "probe": "window.__obs.rows === 1", "expect": true }
+  ]
+}

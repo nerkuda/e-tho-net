@@ -27,17 +27,20 @@ import type { LockEntityType, LockRow } from '@etn/shared';
 import { EtnError } from '@etn/shared';
 
 import { etn } from './etn.js';
+import { errText } from './dom.js';
 import {
   otherHolder,
   getLock,
   subscribeLockCache,
   holderName,
   holderNameByUserId,
+  dropLockById,
+  refresh as refreshLockCache,
   __setForTests as seedCache,
 } from './lock-cache.js';
 import { notice } from './notice.js';
 import { requireNetworkId } from '../app.js';
-import { store } from '../state.js';
+import { getRtStatus, store, type RtStatus } from '../state.js';
 
 /**
  * Outcome of {@link acquireOrShowBlocked}.
@@ -62,7 +65,18 @@ export interface LockHandle {
   lockId: string | null;
   /** Owner user id — set when we own the lock or someone else does. */
   ownerUserId: string | null;
+  /** Network the lock belongs to; `null` when it was built with no open network. */
+  networkId: string | null;
 }
+
+/**
+ * Live handles — the locks the renderer believes it holds right now. Locks
+ * live only as long as the realtime session: the server drops them on
+ * `ws_disconnect`, so after a reconnect the ids in the handles are dead. The
+ * registry lets {@link reacquireHeldLocks} restore the locks of the still-open
+ * editors (ошибка 0702efb6).
+ */
+const heldLocks = new Set<LockHandle>();
 
 /**
  * Attempt to acquire the lock on `(entityType, entityId)`. If the cache says
@@ -79,7 +93,7 @@ export async function acquireOrShowBlocked(
     if (me !== null && existing.user_id === me.id) {
       return { kind: 'self', lock: existing };
     }
-    notice(blockedByLockMessage(entityType, existing), 'info');
+    notice(blockedByLockMessage(entityType, existing), 'warning');
     return { kind: 'blocked', holder: existing };
   }
 
@@ -117,10 +131,10 @@ export async function acquireOrShowBlocked(
         client_id: details.holder?.client_id ?? null,
         acquired_at_ms: Date.now(),
       };
-      notice(blockedByLockMessage(entityType, holder), 'info');
+      notice(blockedByLockMessage(entityType, holder), 'warning');
       return { kind: 'blocked', holder };
     }
-    notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'info');
+    notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'warning');
     return { kind: 'failed', error: err };
   }
 }
@@ -139,7 +153,7 @@ export async function acquireOrShowBlocked(
 export function foreignLockBlocksEdit(entityType: LockEntityType | string, entityId: string): boolean {
   const existing = otherHolder(entityType, entityId);
   if (existing === null) return false;
-  notice(blockedByLockMessage(entityType, existing), 'info');
+  notice(blockedByLockMessage(entityType, existing), 'warning');
   return true;
 }
 
@@ -162,20 +176,40 @@ export function blockedByLockMessage(entityType: LockEntityType | string, holder
  * outcome is `Blocked` or `Failed` the `lockId` is `null` (nothing to
  * release); the editor still renders the foreign-holder overlay when the
  * handle reports `ownerUserId !== currentUser.id`.
+ *
+ * Handles that actually own a lock are registered for post-reconnect
+ * restoration ({@link reacquireHeldLocks}); {@link releaseHeld} unregisters
+ * them.
  */
 export function lockHandleFromOutcome(
   entityType: LockEntityType | string,
   entityId: string,
   outcome: AcquireOutcome,
 ): LockHandle {
+  const networkId = store.state.networkId;
   switch (outcome.kind) {
     case 'acquired':
-    case 'self':
-      return { entityType, entityId, lockId: outcome.lock.id, ownerUserId: outcome.lock.user_id };
+    case 'self': {
+      const handle: LockHandle = {
+        entityType,
+        entityId,
+        lockId: outcome.lock.id,
+        ownerUserId: outcome.lock.user_id,
+        networkId,
+      };
+      heldLocks.add(handle);
+      return handle;
+    }
     case 'blocked':
-      return { entityType, entityId, lockId: null, ownerUserId: outcome.holder.user_id };
+      return {
+        entityType,
+        entityId,
+        lockId: null,
+        ownerUserId: outcome.holder.user_id,
+        networkId,
+      };
     case 'failed':
-      return { entityType, entityId, lockId: null, ownerUserId: null };
+      return { entityType, entityId, lockId: null, ownerUserId: null, networkId };
   }
 }
 
@@ -183,18 +217,105 @@ export function lockHandleFromOutcome(
  * Release the lock referenced by `handle`. Safe to call when the handle has
  * no `lockId` (no-op). Swallows errors — a release that 404s (already cleared
  * by `ws_disconnect`) is fine.
+ *
+ * The handle is unregistered from the post-reconnect restoration and its cache
+ * row is dropped as soon as the release is confirmed (or reported gone): a dead
+ * lock id must not leave a phantom 🔒 behind (ошибка 0702efb6).
  */
 export async function releaseHeld(handle: LockHandle | null | undefined): Promise<void> {
   if (handle === null || handle === undefined) return;
-  if (handle.lockId === null) return;
-  const networkId = store.state.networkId;
+  heldLocks.delete(handle);
+  const lockId = handle.lockId;
+  handle.lockId = null;
+  if (lockId === null) return;
+  const networkId = handle.networkId ?? store.state.networkId;
   if (networkId === null) return;
   try {
-    await etn.locks.release(networkId, handle.lockId);
-  } catch {
+    await etn.locks.release(networkId, lockId);
+    dropLockById(lockId);
+  } catch (err) {
     // The server may have already cleared it (ws_disconnect on the other end,
-    // or a manual reset). Nothing to do.
+    // or a manual reset). The row is dead either way.
+    if (err instanceof EtnError && err.code === 'NOT_FOUND') dropLockById(lockId);
   }
+}
+
+/**
+ * Re-acquire the locks of the still-open editors after the realtime connection
+ * is restored (ошибка 0702efb6).
+ *
+ * Locks live only as long as the session: the server drops them on
+ * `ws_disconnect`, while the client cache keeps the old rows until the next
+ * refresh. Call this strictly after a SUCCESSFUL cache refresh — against the
+ * server truth; otherwise `acquireOrShowBlocked` answers `self` from a stale row
+ * and no real lock is taken.
+ */
+export async function reacquireHeldLocks(
+  networkId: string | null = store.state.networkId,
+): Promise<void> {
+  if (networkId === null) return;
+  for (const handle of Array.from(heldLocks)) {
+    if (handle.networkId !== networkId) continue;
+    // The surface may have been closed while the walk was running.
+    if (!heldLocks.has(handle)) continue;
+    const outcome = await acquireOrShowBlocked(handle.entityType, handle.entityId);
+    if (!heldLocks.has(handle)) continue;
+    switch (outcome.kind) {
+      case 'acquired':
+      case 'self':
+        handle.lockId = outcome.lock.id;
+        handle.ownerUserId = outcome.lock.user_id;
+        break;
+      case 'blocked':
+        // Another user took the object while we were away — nothing to
+        // restore, and retrying on the next reconnect makes no sense.
+        handle.lockId = null;
+        handle.ownerUserId = outcome.holder.user_id;
+        heldLocks.delete(handle);
+        break;
+      case 'failed':
+        // The network is down again: the old id is dead, so the honest state
+        // is «no lock»; the next reconnect will try again.
+        handle.lockId = null;
+        handle.ownerUserId = null;
+        break;
+    }
+  }
+}
+
+let reconnectWired = false;
+
+/**
+ * Restore held locks after a reconnect (ошибка 0702efb6): when the active
+ * network's realtime status transitions into `connected`, the lock cache is
+ * re-read from the server and then every lock held by an open editor is taken
+ * again. Idempotent; wired from `app.ts` on boot.
+ */
+export function initLockReconnect(): void {
+  if (reconnectWired) return;
+  reconnectWired = true;
+  let lastStatus: RtStatus = getRtStatus(store.state);
+  let lastNetworkId = store.state.networkId;
+  store.subscribe(() => {
+    const networkId = store.state.networkId;
+    const status = getRtStatus(store.state);
+    const restored =
+      status === 'connected' && (lastStatus !== 'connected' || lastNetworkId !== networkId);
+    lastStatus = status;
+    lastNetworkId = networkId;
+    if (!restored || networkId === null) return;
+    void refreshLockCache().then((ok) => {
+      // A failed refresh is no reason to act on a stale picture — the next
+      // reconnect will retry.
+      if (ok) void reacquireHeldLocks(networkId);
+    });
+  });
+}
+
+/** Test hook — forgets tracked handles and the reconnect wire between tests. */
+export function __resetLockGuardForTests(): void {
+  heldLocks.clear();
+  reconnectWired = false;
 }
 
 /**
@@ -260,6 +381,5 @@ function entityLabel(entityType: string): string {
 
 /** Compact `Error.message` rendering for notices. */
 function stringifyError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  return errText(err);
 }

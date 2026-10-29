@@ -326,9 +326,15 @@ body.resizing-h {
   border-color: var(--accent);
 }
 
+/* Унаследованный типовой отбор — приглушённый, НО без курсива (0.14.1,
+ * спека df84de22): курсив закреплён за внетиповым отбором мысли. */
 .canvas-filter-strip-btn.inherited {
-  font-style: italic;
   opacity: 0.85;
+}
+
+/* Внетиповой отбор самой мысли — наклонный шрифт (спека df84de22). */
+.canvas-filter-strip-btn.out-of-type {
+  font-style: italic;
 }
 
 .canvas-filter-strip-btn.canvas-filter-strip-overflow,

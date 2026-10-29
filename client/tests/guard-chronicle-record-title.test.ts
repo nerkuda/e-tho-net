@@ -212,7 +212,7 @@ describe('сторож: единая шапка и единая правка з�
     handle.setContent('Встреча', 'Встреча');
     assert.equal(handle.value(), 'Встреча');
     assert.equal(
-      handle.node().children[handle.node().children.length - 1]?.textContent,
+      handle.node().childNodes[handle.node().childNodes.length - 1]?.textContent,
       'Встреча',
       'надпись просмотра обновилась',
     );

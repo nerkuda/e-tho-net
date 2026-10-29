@@ -15,7 +15,7 @@
  *   * add (attach an existing registry property, OR create a brand-new one
  *     and attach it in the same op),
  *   * toggle `required`,
- *   * reorder (▲/▼),
+ *   * reorder (row-reorder: DnD / Alt+↑/↓ / menu, staged until apply),
  *   * remove (unbind — keeps stored values).
  *
  * Everything is reconciled with the server only when the type editor's
@@ -92,12 +92,14 @@ export function nextDraftPropertyId(): string {
 }
 
 /**
- * Показывать ли у строки кнопки порядка ▲/▼. Порядок принадлежит ТИПУ, а не
- * стороне свойства-связи: кнопки есть у всех строк таблицы «Свойства типа» —
- * у источника, у назначения и у скалярных/структурных (задача b044237d,
- * решение пользователя 2026-09-20). Раньше строки стороны «назначение»
- * перемещать было нельзя (условие `side !== 'target'`, оставшееся от
- * требования 15b88319 «порядок — в пределах стороны источника»).
+ * Доступна ли строка набору порядка таблицы привязок. Порядок принадлежит
+ * ТИПУ, а не стороне свойства-связи: переставляются все строки таблицы
+ * «Свойства типа» — у источника, у назначения и у скалярных/структурных
+ * (задача b044237d, решение пользователя 2026-09-20). Кнопки ▲/▼ из UI убраны
+ * (0.14.1, задача 1425457f): правило осталось как контракт набора порядка
+ * компоненты row-reorder. Раньше строки стороны «назначение» перемещать было
+ * нельзя (условие `side !== 'target'`, оставшееся от требования 15b88319
+ * «порядок — в пределах стороны источника»).
  *
  * Вынесено из DOM-компонента: контракт проверяется юнит-тестом без документа.
  */
@@ -106,25 +108,29 @@ export function canReorderBinding(row: Pick<DraftProperty, 'side'>): boolean {
 }
 
 /**
- * Переставляет строку черновика на `delta` позиций (▲ = `-1`, ▼ = `+1`) и
- * возвращает НОВЫЙ массив; если строка не найдена или ход выходит за границы —
- * возвращает исходный массив тем же референсом (вызывающий отличает no-op).
+ * Переставляет строку черновика с позиции `from` на `to` (индексы видимого
+ * списка) и возвращает НОВЫЙ массив; no-op (нечего двигать или выход за
+ * границы) — исходный массив тем же референсом, чтобы вызывающий отличал
+ * no-op.
  *
- * Порядок один на весь тип: строки обеих сторон привязки двигаются в общей
- * последовательности (задача b044237d). Серверный `position` — тоже общий
- * столбец привязок, независимый для каждого типа.
+ * Это единственный вход перестановки строк привязок: DnD, Alt+↑/↓ и пункты
+ * контекстного меню сводятся к нему (0.14.1, задача 1425457f). Порядок один
+ * на весь тип: строки обеих сторон привязки двигаются в общей
+ * последовательности (задача b044237d); серверный `position` — общий столбец
+ * привязок, независимый для каждого типа.
  */
-export function moveDraftRow<T extends { id: string }>(
+export function reorderDraftRows<T>(
   rows: readonly T[],
-  rowId: string,
-  delta: number,
+  from: number,
+  to: number,
 ): readonly T[] {
-  const from = rows.findIndex((r) => r.id === rowId);
-  const to = from + delta;
-  if (from < 0 || to < 0 || to >= rows.length) return rows;
+  if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) {
+    return rows;
+  }
   const next = [...rows];
   const [moved] = next.splice(from, 1);
-  next.splice(to, 0, moved as T);
+  if (moved === undefined) return rows;
+  next.splice(to, 0, moved);
   return next;
 }
 
@@ -235,7 +241,7 @@ export function planPropertyDiff(
   }
 
   // Trailing reorder covers new rows landing in the middle and any explicit
-  // ▲/▼ reorders. The exact positions don't matter for the diff — a single
+  // row-reorder moves. The exact positions don't matter for the diff — a single
   // `reorderTypeProperties(orderedIds)` at the end asserts the final order.
   const survivorIds = draft.filter((d) => !d.isNew).map((d) => d.id);
   const originalOrder = original

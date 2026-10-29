@@ -22,7 +22,14 @@ import type { CrossNetworkTruncationReason } from './search.js';
 import type { ActivityRow } from './activity.js';
 import type { AuditLogEntry } from './api.js';
 import type { ApiKeyWithSecret, User } from './user.js';
-import type { EffectiveThoughtTypeView, ThoughtTypeView } from './thought-type-view.js';
+import type {
+  EffectiveThoughtCustomView,
+  EffectiveThoughtTypeView,
+  EffectiveThoughtView,
+  ThoughtCustomView,
+  ThoughtTypeView,
+  ThoughtViewScope,
+} from './thought-type-view.js';
 import type { NetworkProperty } from './thought-type.js';
 import type { ThoughtRef } from './thought.js';
 import type { FocusNeighbor } from './thought.js';
@@ -79,6 +86,17 @@ export interface ThoughtTypeViewsResult {
   meta: { effective: EffectiveThoughtTypeView[] };
 }
 
+/**
+ * `GET /networks/{nid}/thoughts/{id}/views` — собственные внетиповые отборы
+ * мысли (`data`) плюс полный эффективный набор с `?include_effective=true`
+ * (`meta.effective`: типовые по цепочке + внетиповые, со `scope`/`defined_on`
+ * и перекрытием, требование 045f539a).
+ */
+export interface ThoughtViewsResult {
+  data: ThoughtCustomView[];
+  meta: { effective?: EffectiveThoughtView[] };
+}
+
 /** Направления рёбер вершины отбора (мета прогона, `focus-filter-strip`). */
 export interface ViewDirectionFlags {
   has_incoming: boolean;
@@ -98,7 +116,19 @@ export interface RunThoughtTypeViewMeta {
   limit: number;
   offset: number;
   directions: Record<string, ViewDirectionFlags>;
-  view: { id: string; name: string; type_id: string };
+  /**
+   * Владелец исполненного отбора. `scope` различает типовой отбор и
+   * внетиповой отбор самой мысли (требование 045f539a, 0.14.1); `defined_on`
+   * называет владельца (тип или мысль). `type_id` заполняется ТОЛЬКО для
+   * типового отбора — у внетипового владелец мысль, подменять её типом нельзя.
+   */
+  view: {
+    id: string;
+    name: string;
+    scope: ThoughtViewScope;
+    defined_on: string;
+    type_id?: string;
+  };
   sort?: string;
   order?: string;
   unresolved?: ViewUnresolvedToken[];
@@ -109,6 +139,22 @@ export interface RunThoughtTypeViewMeta {
    */
   warnings?: FilterDiagnostic[];
 }
+
+/**
+ * Ответ `POST /thought-types/{id}/views/{viewId}/move-to-thought`
+ * (операция 85414fbd, 0.14.1): карточка отбора у НОВОГО владельца-мысли.
+ * Именованный тип-алиас фиксирует форму ответа в общем контракте (прецедент
+ * c83f0215): сервер связывает payload через `satisfies`, клиент читает этот же
+ * тип и не заводит inline-форму.
+ */
+export type TypeViewMoveToThoughtResult = EffectiveThoughtCustomView;
+
+/**
+ * Ответ `POST /thoughts/{id}/views/{viewId}/move-to-type` (операция 85414fbd,
+ * 0.14.1): карточка отбора у НОВОГО владельца-типа. `version` начинается
+ * заново, `position` — в конец получателя (домен `thought-view-transfer.ts`).
+ */
+export type CustomViewMoveToTypeResult = ThoughtTypeView;
 
 /** Результат прогона отбора: страница мыслей + мета (в success-конверте `meta`). */
 export interface RunThoughtTypeViewResult {
@@ -124,6 +170,21 @@ export interface RegistryPropertyCounters {
   types_source_count?: number;
   /** Только для `value_type = 'link'`: привязки на стороне цели. */
   types_target_count?: number;
+  /**
+   * Только для `value_type = 'link'`: типы мыслей, подключившие свойство со
+   * стороны источника (`type_properties.side = 'source'`). Вычисляется по
+   * реестру привязок, не хранится (0.8.2, ошибка f8f8fa49): заполняешь
+   * сторону НАЗНАЧЕНИЯ — допустимые источники берутся отсюда. Ключи
+   * `config.allowed_*_type_ids` к этим полям отношения не имеют.
+   */
+  binding_source_type_ids?: string[];
+  /**
+   * Только для `value_type = 'link'`: типы мыслей, подключившие свойство со
+   * стороны назначения (`type_properties.side = 'target'`). Вычисляется по
+   * реестру привязок, не хранится: заполняешь сторону ИСТОЧНИКА — допустимые
+   * цели берутся отсюда.
+   */
+  binding_target_type_ids?: string[];
 }
 
 /** Свойство справочника + счётчики привязок и значений. */
@@ -175,6 +236,18 @@ export interface NetworkPropertyUsage extends PropertyUsageReport {
   name: string;
   value_type: PropertyValueType;
 }
+
+/**
+ * Семантика `GET /thoughts/duplicates` (ошибка 11f14a81).
+ *
+ * - `dedupe` (по умолчанию) — строгий поиск ДУБЛЕЙ: точные совпадения,
+ *   wildcard-синоним как основа словоформы (короткое окончание), partial —
+ *   слова ввода начинают название/литеральный синоним. Подстрочные совпадения
+ *   и слова из середины чужого названия дублями не считаются.
+ * - `search` — прежнее поведение живого поиска (диалог добавления, пикеры
+ *   мыслей): подстрочные кандидаты с неявными `*`.
+ */
+export type DuplicateSearchMode = 'dedupe' | 'search';
 
 /** Кандидат дубля из `GET /thoughts/duplicates` (08-ui-spec.md §4.4). */
 export interface DuplicateHit {

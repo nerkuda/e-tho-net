@@ -68,6 +68,7 @@ import { store } from '../state.js';
 import { showDialog, type DialogButton } from './dialog.js';
 import { div, el, setTooltip, span } from './dom.js';
 import { etn } from './etn.js';
+import { notice } from './notice.js';
 import { markThoughtCommentPreview } from './hover-preview.js';
 import { defineKeyContext, pushKeyContext, type KeyBindingDef } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
@@ -90,6 +91,7 @@ import { createThoughtCloud, type ThoughtCloudInput } from './thought-cloud.js';
 import { orderedTypeRows, resolveLinkTypeVisual } from './type-tree.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
+import { bindSearchNav } from './ui/search-nav.js';
 import { createTree } from './ui/tree.js';
 
 // ---------------------------------------------------------------------------
@@ -378,7 +380,7 @@ async function loadThoughtHits(
       return [];
     }
   }
-  return etn.thoughts.findDuplicates(networkId, trimmed, [], typeIds).catch(() => []);
+  return etn.thoughts.findDuplicates(networkId, trimmed, [], typeIds, 'search').catch(() => []);
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +517,7 @@ export async function loadCrossNetworkCandidates(
       query,
       [],
       [...typeIds],
+      'search',
     );
     return response.hits;
   } catch {
@@ -965,6 +968,10 @@ export async function pickEntitiesModal(
     searchInput.addEventListener('input', () => {
       tree.setFilter(searchInput.value.trim().toLowerCase());
     });
+    // Поиск — первая строка пикера (правило 1 требования 11ddd910): ↑/↓/Enter
+    // из него исполняет штатную навигацию дерева общим мостом, фокус остаётся
+    // в поле (ошибка 58981cf5). Второго разбора клавиш нет.
+    bindSearchNav(searchInput, { handleKey: (key, modifiers) => tree.handleKey(key, modifiers) });
 
     let clearBtn: HTMLButtonElement | null = null;
     let applyBtn: HTMLButtonElement | null = null;
@@ -1157,6 +1164,20 @@ export interface EntityChipFieldOptions {
    */
   addPlaceholder?: string;
   /**
+   * Подсказка поля ввода (`title`): у полей-ссылок значение выбирается из
+   * списка, а набранный текст — только запрос поиска (DoD-альтернатива
+   * ошибки bfe1bc24). Не задана — подсказки нет.
+   */
+  inputTitle?: string;
+  /**
+   * Сообщение при уходе из поля с непустым запросом: свободный текст — не
+   * значение, при `blur` наружу поле очищается молча. Задано — вызывающий
+   * получает info-тост о том, что значение выбирается из списка (симметрия
+   * с полем свойства-связи; ошибка bfe1bc24, круг 2). Не задано — прежнее
+   * поведение (фильтры и прочие чип-поля).
+   */
+  discardNotice?: string;
+  /**
    * Перетаскивание чипов меняет ПОРЯДОК значений (0.11.1, задача a3cfc018:
    * «порядок перетаскиванием» в рецептах публикации). При `true` каждый чип —
    * источник DnD: брошенный на другой чип, перемещается перед ним; `onChange`
@@ -1206,6 +1227,21 @@ export interface EntityChipField {
   refresh(): void;
   /** Включает/выключает поле: поле ввода, кнопка пикера, снятие чипов. */
   setDisabled(value: boolean): void;
+}
+
+/**
+ * Знак варианта-свойства-связи — значок конца связи, как в строках
+ * выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
+ * значка светился глиф мысли по умолчанию (ошибки 382e3478, 83ca2841).
+ * Условие не зависит от облачка-подписи: вызывающий вправе задать `cloudOf`
+ * ради КАНОНИЧЕСКОГО имени свойства, но знак свойства обязан прийти из
+ * реестра (`linkEnd`). Облачко-мысль (`cloud`) — иной случай: там значок
+ * принадлежит типу/мысли и подмене не подлежит.
+ */
+function applyLinkPropertyMark(chip: HTMLElement, opt: EntityOption | undefined): void {
+  if (opt?.cloud !== undefined || opt?.linkEnd == null) return;
+  const iconBox = chip.querySelector('.mini-icon');
+  if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(opt.linkEnd));
 }
 
 /** Строка выпадашки по варианту сущности: облачко, отступ дерева, свотч линии. */
@@ -1347,6 +1383,21 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? 'Добавить значение…';
+  if (opts.inputTitle !== undefined) input.title = opts.inputTitle;
+  if (opts.discardNotice !== undefined) {
+    const message = opts.discardNotice;
+    // Свободный текст — запрос поиска, а не значение: при уходе наружу поле
+    // очищается, непустой запрос озвучивается (bfe1bc24, круг 2). Уход внутрь
+    // поля (чип, кнопка пикера) потерей не считается.
+    input.addEventListener('blur', (event) => {
+      const typed = input.value.trim();
+      if (typed === '') return;
+      const related = (event as { relatedTarget?: unknown }).relatedTarget;
+      if (related !== null && related !== undefined && field.contains(related as Node)) return;
+      input.value = '';
+      notice(message, 'info');
+    });
+  }
 
   /** Каталог, накопленный источником: по нему рисуются облачка значений. */
   const byId = new Map<string, EntityOption>();
@@ -1527,17 +1578,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       // регистрируется картой, обработчик берёт узел из фокуса.
       if (openMenu !== undefined) chipMenuByNode.set(chip, () => openMenu(chip));
       // Знак варианта-свойства-связи — значок конца связи, как в строках
-      // выпадашки (у облачка-мысли значок рисует фабрика). Без этого в слоте
-      // значка светился глиф мысли по умолчанию. Условие не зависит от
-      // `explicitCloud`: вызывающий вправе задать `cloudOf` ради КАНОНИЧЕСКОГО
-      // имени свойства (рецепт публикации, `propertyChipTitles`), но знак
-      // свойства обязан прийти из реестра (`linkEnd`), а не из облачка-подписи
-      // (ошибка 382e3478). Облачко-мысль (`known.cloud`) — иной случай: там
-      // значок принадлежит типу/мысли и подмене не подлежит.
-      if (known?.cloud === undefined && known?.linkEnd != null) {
-        const iconBox = chip.querySelector('.mini-icon');
-        if (iconBox !== null) iconBox.replaceChildren(buildLinkEndIcon(known.linkEnd));
-      }
+      // выпадашки (общая поправка, ошибки 382e3478/83ca2841).
+      applyLinkPropertyMark(chip, known);
       if (opts.reorderable === true && !disabled) {
         wireChipReorder(chip, value);
       }
@@ -2007,6 +2049,10 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
             }),
       },
     });
+    // Знак свойства-связи в облачке ВЫБРАННОГО значения — тот же, что в
+    // строке списка (ошибка 83ca2841: здесь его не было, и облачко показывало
+    // глиф мысли по умолчанию).
+    applyLinkPropertyMark(chip, opt);
     // Клавиатурный путь меню — привязки контекста комбо: держим чип и его
     // открытие для обработчика, который берёт узел из фокуса.
     comboChipNode = chip;

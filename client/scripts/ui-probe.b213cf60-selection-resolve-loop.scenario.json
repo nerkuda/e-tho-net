@@ -1,0 +1,103 @@
+{
+  "name": "b213cf60-selection-resolve-loop",
+  "description": "GUI-гейт ошибки b213cf60 (G1): панель выделенных не крутит render → resolveRows → render, если thoughts.resolve не вернул ref. Сценарий: сеть стенда, слой создаётся через мост, переключение на слой — через меню тулбара (api-шаг не шлёт Client-Id, поэтому сессионный слой клиента меняется только UI), мысль создаётся В СЛОЕ (мост уже в слое), Ctrl+клик по её облачку, затем переключение обратно на «Основу». Мысль видна только в слое: успешный resolve без ref даёт строку «недоступна» и ОДИН запрос. serverLog.atMost ограничивает число POST …/thoughts/resolve за весь прогон: до фикса цикл генерирует сотни запросов, после — единицы. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.b213cf60-selection-resolve-loop.scenario.json",
+  "timeout": 180000,
+  "serverLog": {
+    "atMost": [
+      {
+        "pattern": "\"url\":\"[^\"]*/thoughts/resolve\",\"status\":200",
+        "max": 60
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seed-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+
+    {
+      "name": "create-layer",
+      "eval": "(async () => { const layer = await window.etn.layers.create('{{networkId}}', { title: 'Слой b213cf60' }); window.__b2 = { layerId: layer.id }; return layer.id; })()"
+    },
+    { "name": "open-layer-menu", "click": "button[title=\"Основа\"]" },
+    {
+      "name": "layer-menu-open",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null"
+    },
+    {
+      "name": "pick-layer",
+      "eval": "(() => { const row = [...document.querySelectorAll('.menu .menu-item')].find((e) => (e.textContent || '').includes('Слой b213cf60')); if (!row) throw new Error('no layer item'); row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "layer-active",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('button[title=\"Слой b213cf60\"]') !== null"
+    },
+    {
+      "name": "create-thought-in-layer",
+      "eval": "(async () => { const t = await window.etn.thoughts.create('{{networkId}}', { title: 'Слойная мысль b213cf60', create_link: { direction: 'parent', target_thought_id: '{{homeId}}' } }); window.__b2.thoughtId = t.id; return t.id; })()"
+    },
+    {
+      "name": "layer-thought-visible",
+      "timeout": 30000,
+      "waitFor": "(() => window.__b2 !== undefined && document.querySelector('.cloud[data-id=\"' + window.__b2.thoughtId + '\"]') !== null)()"
+    },
+    {
+      "name": "select-thought",
+      "eval": "(() => { const el = document.querySelector('.cloud[data-id=\"' + window.__b2.thoughtId + '\"]'); if (!el) throw new Error('no cloud'); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true })); return 'ok'; })()"
+    },
+    {
+      "name": "row-named",
+      "timeout": 30000,
+      "waitFor": "(() => [...document.querySelectorAll('.selection-item')].some((e) => (e.textContent || '').includes('Слойная мысль b213cf60')))()"
+    },
+
+    { "name": "back-to-base", "click": "button[title=\"Слой b213cf60\"]" },
+    {
+      "name": "base-menu-open",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null"
+    },
+    {
+      "name": "pick-base",
+      "eval": "(() => { const row = [...document.querySelectorAll('.menu .menu-item')].find((e) => (e.textContent || '').trim() === 'Основа'); if (!row) throw new Error('no base item'); row.click(); return 'ok'; })()"
+    },
+    {
+      "name": "base-active",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('button[title=\"Основа\"]') !== null"
+    },
+    {
+      "name": "row-unavailable",
+      "timeout": 5000,
+      "waitFor": "(() => [...document.querySelectorAll('.selection-item')].some((e) => (e.textContent || '').includes('недоступна')))()"
+    },
+    {
+      "name": "settle-after-switch",
+      "eval": "(async () => { await new Promise((r) => setTimeout(r, 1200)); return true; })()"
+    },
+    {
+      "name": "row-unavailable-stable",
+      "probe": {
+        "name": "rowAfterSettle",
+        "expression": "(() => { const rows = [...document.querySelectorAll('.selection-item')]; const text = rows.map((e) => (e.textContent || '').trim()).join('|'); return { count: rows.length, unavailable: text.includes('недоступна'), named: text.includes('Слойная мысль b213cf60'), panelVisible: !document.querySelector('.selection-panel').classList.contains('hidden') }; })()"
+      },
+      "expect": { "count": 1, "unavailable": true, "named": false, "panelVisible": true }
+    }
+  ]
+}

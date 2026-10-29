@@ -61,6 +61,7 @@ import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { noteThoughtWillOpen } from '../history.js';
 import { inNeighbourhood } from '../lib/focus-neighbourhood.js';
+import { getEntity } from '../lib/live/entities.js';
 import { reloadTypeCatalogues } from '../lib/type-catalogues.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidateSelectionThought } from '../selection/selection.js';
@@ -69,9 +70,9 @@ import {
   canSave,
   clearDraft,
   clearDraftsFor,
+  createDraftMirror,
   findDraft,
   offlineNotice,
-  saveDraft,
 } from '../drafts.js';
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
@@ -81,6 +82,11 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
+import {
+  linkChangeAffectsGraph,
+  linkPatchAffectsGraph,
+  thoughtChangesAffectGraph,
+} from './mini-graph-model.js';
 // Набор ВЛОЖЕНИЙ показанной сущности (ошибки 05bd8809, abd25adb): изменения
 // приходят кэш-путём слоя — роутер гасит ключ `attachments:@owner`, локальные
 // производители зовут `invalidateQueries` того же ключа. Локальный канал
@@ -168,14 +174,46 @@ export type EditorTabId =
   | 'graph'
   | 'metadata';
 
+/**
+ * Lifecycle of ONE cached editor pane. A pane is detached from the DOM while
+ * another tab is active (the editor keeps only the active pane in
+ * `paneHostEl`) — that is NOT disposal. The editor calls the registered
+ * callbacks when the pane is really evicted: its cache entry is dropped
+ * (`invalidatePanes`), it is rebuilt for another entity (`stalePanes`) or the
+ * whole editor is remounted. Tabs register their store subscriptions here so
+ * a hidden pane keeps listening and reloads its data after reconnect, while a
+ * rebuilt pane drops the old subscriptions (defect de34b35b, verifier
+ * blocker: inactive tabs stayed on the connection error).
+ */
+export interface TabPaneLifecycle {
+  /** Registers a cleanup callback for this pane; safe to call after mount. */
+  onDispose(callback: () => void): void;
+  /**
+   * Registers a «pane shown again» callback. Fired when a CACHED pane is
+   * re-attached to the tab host after being detached — the user came back to
+   * its tab. NOT fired on the first build (the builder reads its own data) and
+   * not on a retarget of an already-shown pane (its content is updated in
+   * place). Tabs that skip reads while hidden keep a dirty flag and refresh
+   * here (ошибка 9667b75c: скрытая «Свойства» не перечитывала значение,
+   * изменённое другим клиентом).
+   */
+  onShow(callback: () => void): void;
+}
+
 /** Builds the content of one tab for the current entity. */
-export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
+export type TabContentBuilder = (
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+) => HTMLElement;
 
 /** Resolves a tab's `(N)` badge count for the current entity. */
 export type TabCountLoader = (ctx: EditorContext) => Promise<number | undefined>;
 
 /** Builds one collapsible group of the «Комментарий» tab (or null to skip). */
-export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
+export type MainSectionBuilder = (
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+) => GroupSpec | null;
 
 /** Static tab bar definition; badges come from registered count loaders. */
 interface EditorTabDef {
@@ -331,6 +369,10 @@ export function openThoughtInEditor(id: string): void {
       store.state.selectedLinkId === null &&
       store.state.structuresActiveThoughtId === null
     ) {
+      // Намеренный no-op: мысль уже в фокусе и уже открыта в редакторе.
+      // Метка в журнале нужна, чтобы такой клик не путали с зависанием
+      // (ошибка 1656ef58: «клик без ответа» не имел пояснения).
+      logUiEvent('ui.focus.noop', { id });
       return;
     }
     // Following the focus again: the halo/current-thought pointer is the
@@ -501,6 +543,63 @@ let tabBarEl: HTMLElement | null = null;
 let paneHostEl: HTMLElement | null = null;
 let tabButtons = new Map<EditorTabId, HTMLButtonElement>();
 let builtPanes = new Map<EditorTabId, HTMLElement>();
+/**
+ * Cleanup callbacks of the cached panes, one set per tab id. Registered by the
+ * pane builders through {@link TabPaneLifecycle.onDispose} and fired only when
+ * the pane is really evicted or rebuilt — never when it is merely detached
+ * because another tab is active.
+ */
+const paneDisposers = new Map<EditorTabId, Set<() => void>>();
+/**
+ * «Pane shown again» callbacks, one set per tab id, registered through
+ * {@link TabPaneLifecycle.onShow}. Fired by `displayTab` only when a cached
+ * pane is re-attached after being detached; a fresh build re-registers them
+ * (ошибка 9667b75c).
+ */
+const paneShowCallbacks = new Map<EditorTabId, Set<() => void>>();
+
+/** Runs and forgets the cleanup callbacks of one pane (best-effort). */
+function disposePane(id: EditorTabId): void {
+  const callbacks = paneDisposers.get(id);
+  paneDisposers.delete(id);
+  // The pane's «shown» callbacks belong to the build that is being evicted too.
+  paneShowCallbacks.delete(id);
+  if (callbacks === undefined) return;
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch {
+      // One failing cleanup must not block the rest of the eviction.
+    }
+  }
+}
+
+/** Notifies one pane that it has been re-attached to the tab host (best-effort). */
+function notifyPaneShown(id: EditorTabId): void {
+  const callbacks = paneShowCallbacks.get(id);
+  if (callbacks === undefined) return;
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch {
+      // One failing «shown» hook must not block the rest of the panes.
+    }
+  }
+}
+
+/**
+ * Parent element of a pane node. Real DOM exposes `parentElement`; the test
+ * DOM shim only has `parent` (see `publication-card.ts` for the same idiom).
+ */
+function paneParentOf(node: HTMLElement): HTMLElement | null {
+  const withParent = node as HTMLElement & { parent?: HTMLElement | null };
+  return node.parentElement ?? withParent.parent ?? null;
+}
+
+/** Runs and forgets the cleanup callbacks of every cached pane. */
+function disposeAllPanes(): void {
+  for (const id of [...paneDisposers.keys()]) disposePane(id);
+}
 /**
  * Сколько раз строилась вкладка за время жизни модуля. Нужен только
  * регрессионному тесту ошибки 786bcd69 («редактор обязан перечитать набор
@@ -693,6 +792,7 @@ export function mountEditor(editorHost: HTMLElement): void {
   tabBarEl = null;
   paneHostEl = null;
   tabButtons = new Map();
+  disposeAllPanes();
   builtPanes = new Map();
   reflowOverflow = null;
   headerRetarget = null;
@@ -860,6 +960,21 @@ export function mountEditor(editorHost: HTMLElement): void {
  */
 function buildTabPane(id: EditorTabId): HTMLElement {
   const ctx = renderCtx;
+  // Every build starts a fresh lifecycle: a rebuild of the same tab (stale
+  // pane, invalidatePanes) must not keep the previous pane's subscriptions.
+  disposePane(id);
+  const disposers = new Set<() => void>();
+  paneDisposers.set(id, disposers);
+  const showCallbacks = new Set<() => void>();
+  paneShowCallbacks.set(id, showCallbacks);
+  const lifecycle: TabPaneLifecycle = {
+    onDispose: (callback) => {
+      disposers.add(callback);
+    },
+    onShow: (callback) => {
+      showCallbacks.add(callback);
+    },
+  };
   const pane = div('tab-pane fixed');
   paneBuildCounts.set(id, (paneBuildCounts.get(id) ?? 0) + 1);
   if (ctx === null) return pane;
@@ -871,7 +986,7 @@ function buildTabPane(id: EditorTabId): HTMLElement {
     // «top + splitter + bottom»; сейчас — одиночная секция (комментарий) на
     // всю высоту.
     const specs = mainSectionBuilders
-      .map((section) => section(ctx))
+      .map((section) => section(ctx, lifecycle))
       .filter((spec): spec is GroupSpec => spec !== null);
     if (specs.length === 0) {
       pane.append(el('p', 'muted', 'Нет содержимого.'));
@@ -919,7 +1034,9 @@ function buildTabPane(id: EditorTabId): HTMLElement {
     return pane;
   }
   const builder = tabContentBuilders.get(id);
-  pane.append(builder !== undefined ? builder(ctx) : el('p', 'muted', 'Нет содержимого.'));
+  pane.append(
+    builder !== undefined ? builder(ctx, lifecycle) : el('p', 'muted', 'Нет содержимого.'),
+  );
   return pane;
 }
 
@@ -936,17 +1053,29 @@ function displayTab(id: EditorTabId): void {
   for (const [tabId, tab] of tabButtons) {
     tab.classList.toggle('active', tabId === id);
   }
-  let pane = builtPanes.get(id);
-  if (pane === undefined) {
+  const cached = builtPanes.get(id);
+  let pane: HTMLElement;
+  let rebuilt = false;
+  if (cached === undefined) {
     pane = buildTabPane(id);
     builtPanes.set(id, pane);
-  } else if (stalePanes.has(id)) {
-    // Content belongs to the previous entity — rebuild it inside the SAME pane
-    // node (identity survives the entity switch, task 90b2256e).
-    stalePanes.delete(id);
-    pane.replaceChildren(...buildTabPane(id).children);
+  } else {
+    pane = cached;
+    if (stalePanes.has(id)) {
+      // Content belongs to the previous entity — rebuild it inside the SAME pane
+      // node (identity survives the entity switch, task 90b2256e).
+      stalePanes.delete(id);
+      pane.replaceChildren(...buildTabPane(id).children);
+      rebuilt = true;
+    }
   }
+  // A cached pane that is not in the host right now is being shown again: its
+  // own `onShow` hooks get a chance to refresh what they had to skip while
+  // hidden (ошибка 9667b75c). A fresh build and a stale rebuild read their own
+  // data — nothing to refresh there.
+  const reattached = cached !== undefined && paneParentOf(pane) !== paneHostEl;
   paneHostEl.replaceChildren(pane);
+  if (reattached && !rebuilt) notifyPaneShown(id);
 }
 
 /** Picks the tab the editor should draw first (saved preference, else «Комментарий»). */
@@ -972,10 +1101,27 @@ function activateEditorTab(id: EditorTabId): void {
 function invalidatePanes(ids: readonly EditorTabId[]): void {
   const shownWasDropped = ids.includes(shownTab) ? builtPanes.delete(shownTab) : false;
   for (const id of ids) {
+    // The cache entry dies here — release its subscriptions before the pane
+    // node is forgotten (verifier blocker de34b35b).
+    disposePane(id);
     builtPanes.delete(id);
     stalePanes.delete(id);
   }
   if (shownWasDropped) displayTab(shownTab);
+}
+
+/**
+ * Пересобрать вкладку «Граф» из свежих данных (ошибка 42a7c0a1, круг 3).
+ *
+ * Панель графа строит снимок соседей/связей один раз и не подписана на
+ * мутации сама; после изменения состава рёбер (корзина, свойства-связи,
+ * realtime) её кэш устаревает — метка корзины, чип «+N», подсказка и счётчик
+ * шапки остаются прежними. Граф пересобирается ТОЛЬКО когда вызывающий уже
+ * решил, что изменение видно на графе (см. `mini-graph-model`); зум/панорама
+ * и позиции узлов переживают пересборку (`readMiniGraphView`).
+ */
+export function invalidateGraphTab(): void {
+  invalidatePanes(['graph']);
 }
 
 /**
@@ -1670,6 +1816,7 @@ function renderFull(ctx: EditorContext | null): void {
   tabBarEl = null;
   paneHostEl = null;
   tabButtons = new Map();
+  disposeAllPanes();
   builtPanes = new Map();
   // A fresh header is about to be built; the old retarget hook must not survive
   // (the builder re-registers it). Placeholders leave it null.
@@ -1788,12 +1935,6 @@ function renderFull(ctx: EditorContext | null): void {
   // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
   // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
   // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
-  // именно DOM-кнопку.
-  // Первый маунт: `ResizeObserver` сработает только при изменении размера,
-  // а табы могут уже не помещаться в момент открытия редактора. Прогоняем
-  // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
-  // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
-  // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
   // именно DOM-кнопку. Передаём getter `() => stripElements.hidden`, а не
   // сам массив: на момент первого вызова tabBar ещё не в DOM, `clientWidth=0`
   // → recomputeOverflow early-return → `hidden=[]`. ResizeObserver потом
@@ -1851,6 +1992,13 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
   next.focus();
 }
 
+/** id мысли, открытой в редакторе (override редактора, иначе фокус). */
+function shownThoughtId(): string {
+  const target = store.state.editorTarget;
+  if (target !== null && target.kind === 'thought') return target.id;
+  return store.state.focus?.focused.id ?? '';
+}
+
 /**
  * Moves the caret into the permanent-comment field of the «Комментарий» tab —
  * the continuation after a type created from the header type picker was
@@ -1861,13 +2009,6 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-/** id мысли, открытой в редакторе (override редактора, иначе фокус). */
-function shownThoughtId(): string {
-  const target = store.state.editorTarget;
-  if (target !== null && target.kind === 'thought') return target.id;
-  return store.state.focus?.focused.id ?? '';
-}
-
 function focusEditorComment(thoughtId: string, findText?: string, selection?: MdSourceSelection): void {
   const deadline = Date.now() + 8000;
   let activated = false;
@@ -2065,6 +2206,11 @@ export function reflectThoughtUpdate(
   // выделения: переименование/смена оформления выделенной мысли обновляет её
   // строку точечно (ошибка 3a64e680).
   invalidateSelectionThought(id);
+  // Вкладка «Граф» показывает пилюлю и соседей этой мысли: правка заголовка,
+  // значка, типа, «актуально» или корзины видна на графе. Остальные поля
+  // (комментарий, синонимы, версия) граф не пересобирают — иначе панель
+  // мигала бы на каждое сохранение (ошибка 42a7c0a1, круг 3).
+  if (thoughtChangesAffectGraph(changes)) invalidateGraphTab();
 }
 
 /**
@@ -2073,9 +2219,17 @@ export function reflectThoughtUpdate(
  * связи из панели использования/корзины). Своё realtime-эхо приходит позже
  * (04-realtime §5), поэтому обновляем из ответа PATCH: ребро фокуса, холст
  * (стиль/метка корзины), открытый редактор связи (снимок `editorTarget.link`
- * — иначе шапка и вкладки живут на старом объекте) и список структур.
+ * — иначе шапка и вкладки живут на старом объекте), список структур и вкладку
+ * «Граф».
+ *
+ * «Граф» пересобирается только когда обновление видно на нём (концы, тип,
+ * оформление, `active`, метка корзины): правка прочих полей не должна мигать
+ * панелью. Прежнее состояние берём из нормализованного кэша; если записи нет
+ * (restore из корзины мимо кэша), изменение считается значимым — иначе
+ * устаревшая метка корзины остаётся на графе (блокер круга 3).
  */
 export function reflectLinkUpdate(updated: Link): void {
+  const before = getEntity<Link>('link', updated.id);
   patchFocusEdge(updated);
   // Связь могла сменить `marked_for_deletion`/`active` — зоны и связки
   // пересобираются с сервера, как при `saveLink`.
@@ -2088,6 +2242,7 @@ export function reflectLinkUpdate(updated: Link): void {
   // счётчиках/строках редактора, поэтому перечитываем тем же путём, что
   // `saveLink`.
   scheduleStructuresRefresh();
+  if (linkChangeAffectsGraph(before, updated)) invalidateGraphTab();
 }
 
 /**
@@ -2160,6 +2315,11 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
     // The structures results list is server-rendered; reload it so the saved
     // link type/style show up right away (the actor's own event arrives later).
     scheduleStructuresRefresh();
+    // «Граф» рисует тип/оформление/активность связи — правим только те поля,
+    // что реально изменились (правка прочих панель не пересобирает).
+    if (linkPatchAffectsGraph(link, patch as Readonly<Record<string, unknown>>)) {
+      invalidateGraphTab();
+    }
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {
@@ -2246,23 +2406,24 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
 
   // Draft mirroring (H19): the in-progress title is saved locally and cleared
   // after a successful send; an existing draft restores the unsaved value.
+  // The mirror invalidates late writes after a commit: a row that lands after
+  // the blur save used to survive with a stale base version (ошибка 5726744b).
   let titleDraftId: string | null = null;
-  let titleDraftTimer: number | null = null;
+  const titleDraftMirror = createDraftMirror({
+    target: () => ({
+      networkId,
+      entityType: 'thought',
+      entityId: thought.id,
+      field: 'title',
+      baseVersion: thought.version,
+    }),
+    onWritten: (id) => {
+      titleDraftId = id;
+    },
+  });
   titleArea.addEventListener('input', () => {
     resizeTitle();
-    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
-    titleDraftTimer = window.setTimeout(() => {
-      void saveDraft({
-        networkId,
-        entityType: 'thought',
-        entityId: thought.id,
-        field: 'title',
-        value: titleArea.value,
-        baseVersion: thought.version,
-      }).then((id) => {
-        titleDraftId = id;
-      });
-    }, 800);
+    titleDraftMirror.schedule(titleArea.value);
   });
   void findDraft(networkId, 'thought', thought.id).then((hit) => {
     // The header may have been retargeted to another thought while the draft
@@ -2294,14 +2455,17 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   });
 
   const commitTitle = (): void => {
-    // The blur save settles the edit — the pending debounce must not mirror
-    // it into a stale draft afterwards.
-    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
-    titleDraftTimer = null;
+    // The commit settles the edit — the pending debounce must not mirror it
+    // into a stale draft afterwards, and an in-flight write must drop its row
+    // when it returns (ошибка 5726744b).
+    titleDraftMirror.settle();
     const value = titleArea.value.trim();
     if (value === '' || value === thought.title) {
       titleArea.value = thought.title;
       resizeTitle();
+      // Nothing to send: the mirrored text of this edit is dead.
+      void clearDraft(titleDraftId);
+      titleDraftId = null;
       return;
     }
     if (!canSave()) {
@@ -2311,8 +2475,8 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     void saveThought({ title: value }).then((ok) => {
       if (!ok) return;
       void clearDraft(titleDraftId);
-      // Sweep by key: a debounce whose id arrived late (or never) would
-      // otherwise leave a stale row behind.
+      // Sweep by key (all statuses): a debounce whose id arrived late (or
+      // never) and a conflict draft of the field are superseded by this save.
       void clearDraftsFor(networkId, 'thought', thought.id);
     });
   };
@@ -2444,8 +2608,10 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
    */
   const applyThought = (next: Thought): void => {
     thought = next;
-    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
-    titleDraftTimer = null;
+    // The previous entity's pending title mirror is settled (its debounce is
+    // cancelled): the text belongs to another thought and must not be written
+    // under the new target's key. A late in-flight write deletes its own row.
+    titleDraftMirror.settle();
     titleDraftId = null;
     applyThoughtIcon(iconBox, next);
     titleArea.value = next.title;
@@ -2468,6 +2634,29 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
 }
 
 /**
+ * «В фокус» из меню «Действия ▾»: `focusThoughtOnMap` показывает отказ
+ * установки фокуса тостом сам и не отклоняет промис, но отказ ленивого
+ * импорта `active-view.js` (сбой загрузки чанка) промис отклоняет. Обработчик
+ * меню вызывается без ожидания, поэтому rejection гасится здесь тостом и
+ * записью в журнал — иначе клик по команде молча ничего не делает
+ * (ошибка 53d21e82). Второго тоста на штатный отказ фокуса нет: его уже
+ * показал помощник.
+ */
+function focusOnMapFromMenu(
+  focusOnMap: (id: string) => Promise<void>,
+  thoughtId: string,
+): void {
+  if (!canSave()) {
+    offlineNotice();
+    return;
+  }
+  void focusOnMap(thoughtId).catch((error: unknown) => {
+    console.error('[editor] не удалось открыть карту мыслей', error);
+    notice(t('editor.focusOnMapFailed', errText(error)), 'error');
+  });
+}
+
+/**
  * Меню «Действия ▾» в шапке редактора: тот же набор команд, что у облачка
  * мысли в значениях свойств и на холсте (спецификация «Контекстное меню
  * мысли»), — единый конструктор `canvas/context-menu.ts`, без второго списка
@@ -2483,32 +2672,24 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
  * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
  */
 async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElement): Promise<void> {
-  const networkId = requireNetworkId();
   // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
   // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
-  const { showThoughtMenuUnder, resolveSiblingParentId } =
-    await import('../canvas/context-menu.js');
+  const { showOutOfCanvasThoughtMenu } = await import('../canvas/context-menu.js');
   const { focusThoughtOnMap } = await import('../screens/active-view.js');
-  showThoughtMenuUnder(
-    anchor,
+  // Мысль не в зоне холста: родителя для «налево (родственник)» резолвит фасад
+  // меню вне холста — вместе с именем, чтобы диалог назвал якорь, а не мысль в
+  // фокусе (ошибки 2baa78fb/89964a9b), и со сверкой сети после ответа.
+  await showOutOfCanvasThoughtMenu(
+    { anchor },
     {
       id: thought.id,
       title: thought.title,
       dir: 'siblings',
-      // Мысль не в зоне холста — родителя для «налево (родственник)» резолвим
-      // запросом (на холсте он приходит с ответом фокуса).
-      siblingParentId: await resolveSiblingParentId(networkId, thought.id),
       trashed: thought.marked_for_deletion,
     },
     {
       hideOpenCommand: true,
-      focusHandler: () => {
-        if (!canSave()) {
-          offlineNotice();
-          return;
-        }
-        void focusThoughtOnMap(thought.id);
-      },
+      focusHandler: () => focusOnMapFromMenu(focusThoughtOnMap, thought.id),
       attachmentHandler: (id) => {
         // Мысль уже открыта в редакторе: «Добавить вложение» ведёт прямо на её
         // вкладку «Вложения». Для чужой мысли (или если вкладки нет — например,
@@ -2800,6 +2981,12 @@ function openLinkSettings(link: Link): void {
 export const editorInternals = {
   /** Registered «Комментарий» sections — must not grow per `mountEditor` call. */
   mainSectionCount: (): number => mainSectionBuilders.length,
+  /**
+   * «В фокус» из меню «Действия ▾» (ошибка 53d21e82): тест подаёт
+   * отклоняющий `focusOnMap` и проверяет, что rejection погашен тостом, а не
+   * уходит в unhandled.
+   */
+  focusOnMapFromMenu,
   /** Comma-separated synonyms field parser (editor-shaking regression). */
   parseSynonymsField,
   /** Order-sensitive synonym list equality (editor-shaking regression). */

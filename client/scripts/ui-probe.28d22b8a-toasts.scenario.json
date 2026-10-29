@@ -1,0 +1,83 @@
+{
+  "name": "28d22b8a-toasts",
+  "description": "Задача 28d22b8a (критерий важности). Рутинная ошибка-подсказка («HOME-мысль нельзя деактивировать») шесть раз подряд уходит в зону сообщений статус-бара и не попадает в стек, а рутинное подтверждение копирования — туда же справа от индикатора сервера. Стек наполняется ТОЛЬКО важными сообщениями: потеря соединения и пять разных сбоев вставки текста в мысль; шестое-седьмое сообщение вытесняет старейшие, стек держит 5 снизу вверх. В конце — агрегирующий вердикт: на дофиксовой сборке (все ошибки тостом) он падает на рутинных наблюдениях, на исправленной — зелёный.",
+  "timeout": 60000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null" },
+    { "name": "home-cloud-visible", "waitFor": "document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null" },
+    {
+      "name": "notices-clear",
+      "waitFor": "document.querySelectorAll('.notice').length === 0"
+    },
+    {
+      "name": "routine-validation-to-statusbar",
+      "timeout": 30000,
+      "probe": "(async () => { window.__obs = {}; const home = () => document.querySelector('[data-id=\"{{homeId}}\"].cloud'); const stack = () => document.querySelector('.notice-stack'); const zone = () => document.querySelector('.sb-message'); const zoneText = () => (zone()?.textContent ?? '').trim(); const stackTexts = () => [...(stack()?.querySelectorAll('.notice .notice-text') ?? [])].map((n) => (n.textContent ?? '').trim()); const routineShown = () => zoneText().includes('HOME-мысль нельзя деактивировать') || stackTexts().some((t) => t.includes('HOME-мысль нельзя деактивировать')); const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); let seenInZone = 0; let maxStack = 0; for (let i = 0; i < 6; i += 1) { const cloud = home(); if (cloud === null) return 'no-home-cloud'; const rect = cloud.getBoundingClientRect(); cloud.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) })); let item = null; for (let tick = 0; tick < 40 && item === null; tick += 1) { item = [...document.querySelectorAll('.menu .menu-item')].find((row) => (row.querySelector('.menu-item-label')?.textContent ?? '').trim() === 'Изменить актуальность') ?? null; if (item === null) await sleep(25); } if (item === null) return 'no-toggle-item'; item.click(); for (let tick = 0; tick < 120 && !routineShown(); tick += 1) await sleep(25); if (zoneText().includes('HOME-мысль нельзя деактивировать')) seenInZone += 1; maxStack = Math.max(maxStack, stack()?.querySelectorAll('.notice').length ?? 0); await sleep(50); } window.__obs.routineStatusText = zoneText() || null; window.__obs.routineSeenInZone = seenInZone; window.__obs.routineMaxStack = maxStack; window.__obs.routineStackCount = stack()?.querySelectorAll('.notice').length ?? 0; window.__obs.routineBodyCount = document.querySelectorAll('.notice').length; window.__obs.routineInToast = stackTexts().some((t) => t.includes('HOME-мысль нельзя деактивировать')); return { statusText: window.__obs.routineStatusText, seenInZone: window.__obs.routineSeenInZone, maxStack: window.__obs.routineMaxStack, inToast: window.__obs.routineInToast }; })()"
+    },
+    {
+      "name": "routine-copy-to-statusbar",
+      "timeout": 20000,
+      "probe": "(async () => { const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-seed-cloud'; const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const rect = cloud.getBoundingClientRect(); cloud.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) })); let item = null; for (let tick = 0; tick < 40 && item === null; tick += 1) { item = [...document.querySelectorAll('.menu .menu-item')].find((row) => (row.querySelector('.menu-item-label')?.textContent ?? '').trim() === 'Копировать') ?? null; if (item === null) await sleep(25); } if (item === null) return 'no-copy-item'; item.click(); const zone = () => document.querySelector('.sb-message'); for (let tick = 0; tick < 80 && !(zone()?.textContent ?? '').includes('Скопировано'); tick += 1) await sleep(25); window.__obs.routineMessage = (zone()?.textContent ?? '').trim() || null; window.__obs.routineCopyInToast = [...document.querySelectorAll('.notice')].some((n) => (n.textContent ?? '').includes('Скопировано')); return { message: window.__obs.routineMessage, routineCopyInToast: window.__obs.routineCopyInToast }; })()"
+    },
+    {
+      "name": "statusbar-zone-geometry",
+      "probe": "(() => { const status = document.querySelector('.sb-status'); const zone = document.querySelector('.sb-message'); const area = document.querySelector('.event-area'); const present = status !== null && zone !== null && area !== null && (zone.textContent ?? '') !== ''; if (!present) { window.__obs.zoneRightOfServer = false; window.__obs.zoneOverlapsServer = false; window.__obs.zoneWithinBar = false; return { present: false }; } const s = status.getBoundingClientRect(); const z = zone.getBoundingClientRect(); const a = area.getBoundingClientRect(); window.__obs.zoneRightOfServer = z.left + 0.5 >= s.right; window.__obs.zoneOverlapsServer = z.left < s.right - 0.5 && z.right > s.left; window.__obs.zoneWithinBar = z.right <= a.right + 0.5 && z.left >= a.left - 0.5; return { present: true, statusRightPx: Math.round(s.right), zoneLeftPx: Math.round(z.left), zoneRightPx: Math.round(z.right), areaRightPx: Math.round(a.right) }; })()"
+    },
+    {
+      "name": "statusbar-zone-ttl",
+      "timeout": 20000,
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 6500)); const zone = document.querySelector('.sb-message'); window.__obs.zoneClearedAfterTtl = zone !== null && (zone.textContent ?? '') === '' && getComputedStyle(zone).display === 'none'; return { zoneClearedAfterTtl: window.__obs.zoneClearedAfterTtl, toastsLeft: document.querySelectorAll('.notice').length }; })()"
+    },
+    {
+      "name": "prepare-important-messages",
+      "timeout": 20000,
+      "probe": "(async () => { const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const cloud = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud'); if (cloud === null) return 'no-seed-cloud'; const rect = cloud.getBoundingClientRect(); const point = { bubbles: true, cancelable: true, button: 0, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) }; cloud.dispatchEvent(new MouseEvent('mousedown', point)); cloud.dispatchEvent(new MouseEvent('mouseup', point)); cloud.dispatchEvent(new MouseEvent('click', point)); await sleep(500); if (document.activeElement !== null && document.activeElement !== document.body && typeof document.activeElement.blur === 'function') document.activeElement.blur(); document.body.focus(); await navigator.clipboard.writeText('Строка 1\\nСтрока 2\\nСтрока 3\\nСтрока 4\\nСтрока 5'); await window.etn.server.disconnect(); const isLoss = (t) => /Нет соединения|Соединение потеряно|Переподключение|Проверяем связь/.test(t); const stackTexts = () => [...document.querySelectorAll('.notice-stack .notice .notice-text')].map((n) => (n.textContent ?? '').trim()); for (let tick = 0; tick < 160; tick += 1) { if (stackTexts().some(isLoss)) break; await sleep(25); } const texts = stackTexts(); window.__obs.lossText = texts.find(isLoss) ?? null; window.__obs.lossInStack = window.__obs.lossText !== null; window.__obs.beforePasteStack = texts.length; window.__obs.activeTag = document.activeElement?.tagName ?? null; return { activeTag: window.__obs.activeTag, lossInStack: window.__obs.lossInStack, beforePasteStack: window.__obs.beforePasteStack, stackTexts: texts }; })()"
+    },
+    {
+      "name": "paste-important-errors",
+      "key": "v",
+      "modifiers": ["ctrl"],
+      "timeout": 20000
+    },
+    {
+      "name": "important-stack-state",
+      "timeout": 20000,
+      "probe": "(async () => { const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const stack = () => document.querySelector('.notice-stack'); const boxes = () => (stack() === null ? [] : [...stack().querySelectorAll('.notice')]); const texts = () => boxes().map((b) => (b.querySelector('.notice-text')?.textContent ?? '').trim()); for (let tick = 0; tick < 160 && !texts().some((t) => t.includes('Не удалось вставить ни одной строки')); tick += 1) await sleep(25); const stackTexts = texts(); const rects = boxes().map((b) => b.getBoundingClientRect()); window.__obs.stackCount = stackTexts.length; window.__obs.bodyCount = document.querySelectorAll('.notice').length; window.__obs.stackTexts = stackTexts; window.__obs.bottomUp = rects.length > 1 && rects.every((r, i) => i === 0 || r.top < rects[i - 1].top); window.__obs.distinctCount = new Set(stackTexts).size; window.__obs.pasteErrorCount = stackTexts.filter((t) => t.includes('Не удалось вставить «Строка')).length; window.__obs.firstLineEvicted = !stackTexts.some((t) => t.includes('Строка 1')); window.__obs.lossEvicted = !stackTexts.some((t) => /Нет соединения|Соединение потеряно|Переподключение|Проверяем связь/.test(t)); window.__obs.summaryPresent = stackTexts.some((t) => t.includes('Не удалось вставить ни одной строки')); window.__obs.zoneAfterPaste = (document.querySelector('.sb-message')?.textContent ?? '').trim() || null; return { stackCount: window.__obs.stackCount, bodyCount: window.__obs.bodyCount, bottomUp: window.__obs.bottomUp, distinctCount: window.__obs.distinctCount, pasteErrorCount: window.__obs.pasteErrorCount, firstLineEvicted: window.__obs.firstLineEvicted, lossEvicted: window.__obs.lossEvicted, summaryPresent: window.__obs.summaryPresent, stackTexts: stackTexts, zoneAfterPaste: window.__obs.zoneAfterPaste }; })()"
+    },
+    {
+      "name": "verdict",
+      "probe": "(() => { const o = window.__obs; return { routineSeenInZone: o.routineSeenInZone, routineMaxStack: o.routineMaxStack, routineStackCount: o.routineStackCount, routineBodyCount: o.routineBodyCount, routineInToast: o.routineInToast, routineStatusText: o.routineStatusText, routineMessage: o.routineMessage, routineCopyInToast: o.routineCopyInToast, zoneRightOfServer: o.zoneRightOfServer, zoneOverlapsServer: o.zoneOverlapsServer, zoneWithinBar: o.zoneWithinBar, zoneClearedAfterTtl: o.zoneClearedAfterTtl, lossInStack: o.lossInStack, stackCount: o.stackCount, bodyCount: o.bodyCount, bottomUp: o.bottomUp, distinctCount: o.distinctCount, pasteErrorCount: o.pasteErrorCount, firstLineEvicted: o.firstLineEvicted, lossEvicted: o.lossEvicted, summaryPresent: o.summaryPresent }; })()",
+      "expect": {
+        "routineSeenInZone": 6,
+        "routineMaxStack": 0,
+        "routineStackCount": 0,
+        "routineBodyCount": 0,
+        "routineInToast": false,
+        "routineStatusText": "HOME-мысль нельзя деактивировать.",
+        "routineMessage": "Скопировано: «{{seedTitle}}»",
+        "routineCopyInToast": false,
+        "zoneRightOfServer": true,
+        "zoneOverlapsServer": false,
+        "zoneWithinBar": true,
+        "zoneClearedAfterTtl": true,
+        "lossInStack": true,
+        "stackCount": 5,
+        "bodyCount": 5,
+        "bottomUp": true,
+        "distinctCount": 5,
+        "pasteErrorCount": 4,
+        "firstLineEvicted": true,
+        "lossEvicted": true,
+        "summaryPresent": true
+      }
+    }
+  ]
+}

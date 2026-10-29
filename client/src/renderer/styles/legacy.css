@@ -375,6 +375,13 @@
   overflow: visible;
 }
 
+/* Метка корзины у массового чипа «+N»: в скрытой части пары есть помеченные
+   рёбра (ошибка 42a7c0a1, круг 2). Размер — foreignObject (18 px), вид —
+   общий `.link-trash-badge`; клик открывает корзину (восстановление). */
+.mini-graph-mass-trash {
+  overflow: visible;
+}
+
 .mini-node {
   cursor: pointer;
 }

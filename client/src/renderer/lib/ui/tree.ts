@@ -61,6 +61,7 @@ import { choiceControl } from './choice-row.js';
 import { emptyState, type StateAction } from './empty-state.js';
 import { FOCUS_ANCHOR_ATTR } from './focus-anchor.js';
 import { reconcileKeyed } from './keyed-list.js';
+import type { NavKeyModifiers } from './nav-core.js';
 
 /** Счётчик деревьев: у каждого свой контекст сочетаний (замыкание навигации). */
 let treeContextSeq = 0;
@@ -266,6 +267,15 @@ export interface TreeHandle<T extends TreeItem> {
   expandAll(): void;
   /** Свернуть всё (кроме `keepExpanded`). */
   collapseAll(keepExpanded?: Iterable<string>): void;
+  /**
+   * Обработать клавишу штатным обработчиком дерева — тем же, что получает
+   * нажатия при фокусе на корне (правила `nav-core`, Enter-активация).
+   * Нужен мостам от полей поиска (`./search-nav.ts`): клавиатура остаётся
+   * общей, второго разбора клавиш не появляется. `modifiers` передаются мостом:
+   * по ним `Ctrl+↑/↓` (свёрнутость узла) отличаются от обычных стрелок.
+   * `true` — клавиша обработана.
+   */
+  handleKey(key: string, modifiers?: NavKeyModifiers): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -921,6 +931,28 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     const items = itemsOf();
     const byId = new Map(items.map((item) => [item.id, item]));
     const ids = visible();
+    // Ctrl+↑/↓ — сворачивание/разворачивание текущего УЗЛА (дублирующие
+    // сочетания, решение пользователя 2026-10-25, стандарт b6b2821d, задача
+    // 15236418). У дерева одна колонка строк, «перехода по колонкам» нет,
+    // поэтому ←/→ сохраняют древовидную семантику (см. ниже). Нет действия
+    // (лист, уже свёрнут/развёрнут) — событие не перехватываем.
+    if (keyEvent.ctrlKey === true && keyEvent.key === 'ArrowDown') {
+      if (currentId === null) return false;
+      const item = byId.get(currentId);
+      if (item === undefined || expanded.has(currentId)) return false;
+      if (treeChildIds(items, currentId).length === 0) return false;
+      applyExpand(currentId, true, item);
+      render();
+      return true;
+    }
+    if (keyEvent.ctrlKey === true && keyEvent.key === 'ArrowUp') {
+      if (currentId === null || !expanded.has(currentId)) return false;
+      const item = byId.get(currentId);
+      if (item === undefined) return false;
+      applyExpand(currentId, false, item);
+      render();
+      return true;
+    }
     switch (keyEvent.key) {
       case 'ArrowDown':
         moveCurrent(1);
@@ -1009,6 +1041,10 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
       { command: 'tree.end', chord: 'End', run: handleTreeKey },
       { command: 'tree.collapse', chord: 'ArrowLeft', run: handleTreeKey },
       { command: 'tree.expand', chord: 'ArrowRight', run: handleTreeKey },
+      // Ctrl+↑/↓ — дублирующие сочетания сворачивания/разворачивания узла
+      // (стандарт b6b2821d, задача 15236418); ←/→ остаются древовидными.
+      { command: 'tree.collapse.ctrl', chord: 'Ctrl+ArrowUp', run: handleTreeKey },
+      { command: 'tree.expand.ctrl', chord: 'Ctrl+ArrowDown', run: handleTreeKey },
       { command: 'tree.toggle', chord: 'Space', run: handleTreeKey },
       // Прежний обработчик активировал строку на Enter НЕЗАВИСИМО от
       // модификаторов — набор выражен привязками (`lib/keymap-chords.ts`).
@@ -1093,6 +1129,18 @@ export function createTree<T extends TreeItem>(options: TreeOptions<T>): TreeHan
     collapseAll(keepExpanded) {
       expanded = new Set(keepExpanded ?? []);
       render();
+    },
+    handleKey(key: string, modifiers: NavKeyModifiers = {}): boolean {
+      // Тот же обработчик, что и у настоящего нажатия; модификаторы передаёт
+      // мост поиска — иначе Ctrl+↑/↓ из поля поиска читались бы как обычные
+      // стрелки и двигали текущую строку.
+      return handleTreeKey({
+        key,
+        ctrlKey: modifiers.ctrlKey === true,
+        metaKey: modifiers.metaKey === true,
+        shiftKey: modifiers.shiftKey === true,
+        altKey: modifiers.altKey === true,
+      } as KeyboardEvent);
     },
   };
 

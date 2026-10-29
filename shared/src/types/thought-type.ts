@@ -470,6 +470,21 @@ export type ResolvedThoughtRefValue =
 
 import type { CrossNetworkRefValue } from './cross-network.js';
 
+/**
+ * Элемент полного набора пер-мысленного порядка внетиповых свойств мысли
+ * (`PUT /thoughts/{id}/properties/order`, контракт 27ed2b39; 0.14.1).
+ *
+ * `side` — АДРЕС строки свойства-связи, а не хранилище направления: сервер
+ * выводит сторону из живых рёбер владельца. Обязателен, когда у владельца живы
+ * обе стороны одного типа связи; при одной стороне необязателен (переданный
+ * сверяется с выведенным).
+ */
+export interface ThoughtPropertyOrderInput {
+  property_id: string;
+  side?: LinkPropertySide;
+  position: number;
+}
+
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {
   /**

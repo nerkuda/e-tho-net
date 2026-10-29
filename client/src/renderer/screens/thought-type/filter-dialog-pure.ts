@@ -31,6 +31,8 @@ import {
   defaultFilterCriteriaState,
   defaultFilterTreeGroup,
   hasAnyFilterCriteria,
+  isFilterAstWire,
+  isTrashedDefaultLeaf,
   parseFilterDefinitionTree,
   type FilterCriteriaState,
   type FilterTreeLeaf,
@@ -54,23 +56,20 @@ export const defaultDialogCriteriaState = defaultFilterCriteriaState;
  * `definition v1` он выражался ОТСУТСТВИЕМ поля `trashed` и разворачивался
  * сервером при чтении; в AST-определении неявных дефолтов нет — поэтому лист
  * «Помечено на удаление = нет» впекается в определение ЯВНО при сохранении (иначе отбор
- * типа начал бы показывать помеченные на удаление). См. {@link stripViewDefaults}
- * и {@link withViewDefaults}.
+ * типа начал бы показывать помеченные на удаление). Метка `service: true`
+ * отличает впечённый лист от условия пользователя: общий читатель AST снимает
+ * помеченные листья с корня, поэтому при переоткрытии дефолт не показывается
+ * строкой и не удовлетворяет запрету пустого отбора (ошибка 9ddc488e).
+ * См. {@link stripViewDefaults} и {@link withViewDefaults}.
  */
 function trashedDefaultLeaf(): FilterTreeLeaf {
-  return { kind: 'leaf', entity: { kind: 'trashed' }, operator: 'eq', value: { kind: 'scalar', value: false } };
-}
-
-/** Лист ровно служебного дефолта «Помечено на удаление = нет» ({@link trashedDefaultLeaf}). */
-function isTrashedDefaultLeaf(node: FilterTreeNode): boolean {
-  return (
-    node.kind === 'leaf' &&
-    node.entity.kind === 'trashed' &&
-    node.operator === 'eq' &&
-    node.value.kind === 'scalar' &&
-    node.value.value === false &&
-    node.mode === undefined
-  );
+  return {
+    kind: 'leaf',
+    entity: { kind: 'trashed' },
+    operator: 'eq',
+    value: { kind: 'scalar', value: false },
+    service: true,
+  };
 }
 
 /** Есть ли в дереве ЛЮБОЙ лист «Помечено на удаление» (пользователь сам решил про удалённые). */
@@ -80,24 +79,53 @@ function treeHasTrashedLeaf(node: FilterTreeNode): boolean {
 }
 
 /**
- * Снять с КОРНЕВОГО уровня служебный дефолт «Помечено на удаление = нет»: в редакторе он
- * не показывается строкой-условием (это дефолт МЕСТА, а не условие пользователя).
- * Лист, вложенный в группу, не трогаем — он осмысленно собран пользователем.
+ * Снять с КОРНЕВОГО уровня НЕпомеченный служебный дефолт «Помечено на удаление =
+ * нет»: такую форму дописывает компилятор плоской формы, и в редакторе она не
+ * показывается строкой-условием. Помеченные листья AST снимает общий читатель
+ * (`stripServiceLeavesAtRoot`), поэтому здесь их трогать не нужно. Лист,
+ * вложенный в группу, не трогаем — он осмысленно собран пользователем.
+ * Предикат — единый `isTrashedDefaultLeaf` конструктора; режим `unmarked: true`
+ * и есть область этого места (twin-функция удалена, задача d3a30c3e).
  */
 export function stripViewDefaults(tree: FilterTreeNode): FilterTreeNode {
   if (tree.kind !== 'group') return tree;
-  return { ...tree, children: tree.children.filter((child) => !isTrashedDefaultLeaf(child)) };
+  return {
+    ...tree,
+    children: tree.children.filter((child) => !isTrashedDefaultLeaf(child, { unmarked: true })),
+  };
 }
 
 /**
  * Обеспечить служебный дефолт места в дереве перед материализацией AST: если
- * листа «Корзина» в дереве нет вовсе — добавить «Помечено на удаление = нет» на корневой
- * уровень. Пользовательский лист «Помечено на удаление» (любой) дефолт отменяет.
+ * листа «Корзина» в дереве нет вовсе — добавить «Помечено на удаление = нет».
+ * Пользовательский лист «Помечено на удаление» (любой) дефолт отменяет.
+ *
+ * Служебное условие «живые» ВСЕГДА СУЖАЕТ выдачу (ошибка a65d27d9), поэтому
+ * место впекания зависит от операции корня:
+ *
+ *   * корень «И» впитывает лист — `(A И B) И живые` = `A И B И живые`;
+ *   * корень «ИЛИ»/«НЕ» и одиночный лист лист НЕ впитывают: внутри «ИЛИ»
+ *     дефолт расширил бы выдачу до ВСЕХ живых мыслей (`(A ИЛИ B) ИЛИ живые`), а
+ *     внутри «НЕ» сломал бы аричность (ровно один ребёнок). Здесь корень
+ *     ОБОРАЧИВАЕТСЯ: `(A ИЛИ B) И живые`;
+ *   * корень «И» с ЕДИНСТВЕННОЙ подгруппой тоже оборачивается: впечённый лист
+ *     сделал бы его неотличимым от обёртки, и читатель развернул бы корень до
+ *     подгруппы — пользователь увидел бы «ИЛИ» вместо своего «И» (ошибка
+ *     ff11075a). Обёрнутый вид `И[И[ИЛИ[A,B]], живые]` читатель возвращает к
+ *     `И[ИЛИ[A,B]]`.
+ *
+ * Обёртку снимает читатель определения вместе со служебным листом
+ * (`stripServiceLeavesAtRoot` в `lib/filter-builder.ts`) — переоткрытие
+ * показывает исходный корень пользователя, а не лишний уровень «И».
  */
 export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
   if (treeHasTrashedLeaf(tree)) return tree;
   const leaf = trashedDefaultLeaf();
-  if (tree.kind === 'group') return { ...tree, children: [...tree.children, leaf] };
+  const singleGroupChild =
+    tree.kind === 'group' && tree.children.length === 1 && tree.children[0]!.kind === 'group';
+  if (tree.kind === 'group' && tree.op === 'and' && !singleGroupChild) {
+    return { ...tree, children: [...tree.children, leaf] };
+  }
   return { kind: 'group', op: 'and', children: [tree, leaf] };
 }
 
@@ -107,36 +135,42 @@ export function withViewDefaults(tree: FilterTreeNode): FilterTreeNode {
  * `definition v1` единый конструктор компилирует в дерево на входе
  * (`parseFilterDefinitionTree` → `compileFlatCriteriaToAst`, задача cfbe8c74;
  * ADR fc23f9c1 запрещает вторую точку чтения сохранённого отбора). Служебный
- * дефолт места («Помечено на удаление = нет») с корневого уровня снимается
- * ({@link stripViewDefaults}) — он не показывается условием пользователя.
+ * дефолт места («Помечено на удаление = нет») в AST распознаётся по метке
+ * `service: true` и снимается общим читателем (`stripServiceLeavesAtRoot`);
+ * непомеченный лист «Помечено на удаление» — условие ПОЛЬЗОВАТЕЛЯ, его скрывать
+ * нельзя (ошибка 9ddc488e). У плоского `definition v1` дефолт выражен
+ * отсутствием поля и снимается здесь ({@link stripViewDefaults}).
  * Returns the default state when the JSON is malformed.
  */
 export function parseViewDefinition(
-  view: ThoughtTypeView | null,
+  view: Pick<ThoughtTypeView, 'definition'> | null,
   registry?: ReadonlyMap<string, NetworkProperty>,
 ): FilterCriteriaState {
-  const state =
-    view === null
-      ? defaultFilterCriteriaState()
-      : parseViewDefinitionJson(view.definition, registry);
-  state.tree = stripViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
-  return state;
-}
-
-function parseViewDefinitionJson(
-  definition: string,
-  registry?: ReadonlyMap<string, NetworkProperty>,
-): FilterCriteriaState {
+  if (view === null) {
+    const fresh = defaultFilterCriteriaState();
+    fresh.tree = stripViewDefaults(fresh.tree ?? defaultFilterTreeGroup('and'));
+    return fresh;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(definition) as unknown;
+    parsed = JSON.parse(view.definition) as unknown;
   } catch {
     return defaultFilterCriteriaState();
   }
-  return parseFilterDefinitionTree(parsed, {
+  const state = parseFilterDefinitionTree(parsed, {
     activeMode: 'view',
     ...(registry !== undefined ? { registry } : {}),
   });
+  // Помеченные служебные листья AST (`service: true`) снял общий читатель —
+  // строкой условия они не показываются и запрет пустого отбора не
+  // удовлетворяют. НЕпомеченный лист «Помечено на удаление» — условие
+  // ПОЛЬЗОВАТЕЛЯ: он виден строкой и обязан пережить переоткрытие (ошибка
+  // 9ddc488e). Плоское определение v1 снимаем здесь: дефолт в нём выражен
+  // отсутствием поля и дописан компилятором (`stripViewDefaults`).
+  if (!isFilterAstWire(parsed)) {
+    state.tree = stripViewDefaults(state.tree ?? defaultFilterTreeGroup('and'));
+  }
+  return state;
 }
 
 /**

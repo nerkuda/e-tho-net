@@ -966,6 +966,49 @@ describe(
       }
     });
 
+    // --- кириллица в регистронезависимом поиске (ошибка 44c27255) -----------
+    it('searchAttachments сворачивает регистр кириллицы (unicode_lower, 44c27255)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e.com/probe', title: 'Проба вложение', description: 'ПРОВЕРКА РЕГИСТРА' },
+          USER,
+        );
+        createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'file', file_path: 'C:\\Документы\\Заметки.txt', title: 'Заметки' },
+          USER,
+        );
+
+        // Встроенный LOWER()/LIKE SQLite сворачивают только ASCII: до фикса
+        // «Проба» и «проба» по заголовку с заглавной кириллицей давали 0.
+        for (const q of ['Проба', 'проба', 'ПРОБА', 'проб*']) {
+          const hit = searchAttachments(ndb, { q });
+          assert.equal(hit.total, 1, `запрос «${q}» должен найти «Проба вложение»`);
+          assert.equal(hit.items[0]!.title, 'Проба вложение');
+        }
+
+        // Другие поля объединения: описание и путь (кириллица в обоих регистрах).
+        assert.equal(searchAttachments(ndb, { q: 'проверка регистра' }).total, 1);
+        assert.equal(searchAttachments(ndb, { q: 'документы заметки' }).total, 1);
+
+        // Исключение `-слово` нормализуется тем же unicode_lower.
+        assert.equal(searchAttachments(ndb, { q: 'вложение -Проба' }).total, 0);
+        assert.equal(searchAttachments(ndb, { q: 'заметки -ПРОБА' }).total, 1);
+
+        // Латиница в кириллическом заголовке — прежнее поведение не сломано.
+        assert.equal(searchAttachments(ndb, { q: 'probe' }).total, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('searchAttachments filters by keywords across title/description/url/file_path', () => {
       const ndb = createInMemoryNetworkDb();
       try {

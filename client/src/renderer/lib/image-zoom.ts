@@ -30,7 +30,14 @@ import { etn } from './etn.js';
 import { el } from './dom.js';
 import { createDelayedOpen } from './preview-open-delay.js';
 import { placeAtCursor, watchOutsideTap } from './ui/popover.js';
+import { pushKeyOverlay, type KeyOverlayHandle } from './keymap.js';
 import { store } from '../state.js';
+import { isZoomAnchor, zoomable, type ZoomAnchor } from './zoom-anchor.js';
+
+// `zoomable` остаётся экспортом этого модуля для существующих потребителей
+// (`tests/renderer-pure.test.ts`); сам предикат живёт в нейтральном
+// `zoom-anchor.ts`, общем с движком Ctrl+hover-предпросмотра (ошибка d0338c48).
+export { zoomable } from './zoom-anchor.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
 const POPUP_OFFSET = 14;
@@ -64,28 +71,6 @@ async function resolveIconAttachment(
   }
   attachPathCache.set(key, { path, at: Date.now() });
   return path;
-}
-
-/**
- * True when enlarging makes sense: the image has loaded and at least one side
- * is displayed smaller than its natural size.
- */
-export function zoomable(
-  natural: { w: number; h: number },
-  displayed: { w: number; h: number },
-): boolean {
-  return natural.w > 0 && natural.h > 0 && (displayed.w < natural.w || displayed.h < natural.h);
-}
-
-/**
- * A rendered picture the magnifier can anchor to: an HTML `<img>` anywhere in
- * the UI, or an SVG `<image>` — the only SVG-rendered icons in the client are
- * the thought icons of the editor's local graph (`editor/mini-graph.ts`).
- */
-type ZoomAnchor = HTMLImageElement | SVGImageElement;
-
-function isZoomAnchor(node: EventTarget | null): node is ZoomAnchor {
-  return node instanceof HTMLImageElement || node instanceof SVGImageElement;
 }
 
 /**
@@ -158,6 +143,14 @@ export function initImageZoom(): void {
   document.body.append(popup);
 
   let current: ZoomAnchor | null = null;
+  /**
+   * Слой `Escape` открытой лупы (ошибка 9ff6b606): диспетчер отдаёт `Escape`
+   * верхнему всплывающему слою, поэтому диалог под лупой уступает нажатие —
+   * лупа закрывается, диалог остаётся открытым. Безусловного перехвата у лупы
+   * нет: document-слушатель ниже отменяет ещё не показанную лупу и отдаёт
+   * Escape слою через `handleEscape` (закроет, только если лупа — верхний слой).
+   */
+  let escapeOverlay: KeyOverlayHandle | null = null;
   let mouseX = 0;
   let mouseY = 0;
   /**
@@ -171,6 +164,8 @@ export function initImageZoom(): void {
     generation++;
     current = null;
     popup.classList.add('hidden');
+    escapeOverlay?.release();
+    escapeOverlay = null;
   };
 
   /** Places the popup beside the cursor, keeping it inside the window — the
@@ -200,6 +195,7 @@ export function initImageZoom(): void {
     popup.src = src;
     popup.classList.remove('hidden');
     place();
+    escapeOverlay ??= pushKeyOverlay({ id: 'image-zoom', onEscape: () => hide() });
     if (zoom === null) return;
     void resolveIconAttachment(zoom.thought, zoom.attachment).then((filePath) => {
       if (current !== anchor || filePath === null || filePath === '') return;
@@ -266,10 +262,13 @@ export function initImageZoom(): void {
   });
 
   // Ctrl pressed while already hovering a picture (no new mouseover fires).
+  // `Escape` показанной лупы обрабатывает её слой в реестре диспетчера:
+  // `handleEscape` закроет лупу только если она верхний слой — иначе нажатие
+  // останется меню/поповеру. Здесь же — отмена ещё НЕ показанной лупы.
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       zoomScheduler.cancel();
-      hide();
+      escapeOverlay?.handleEscape(event);
       return;
     }
     if (event.key === 'Control' && current === null) {

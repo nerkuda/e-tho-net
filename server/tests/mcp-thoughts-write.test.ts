@@ -1215,7 +1215,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('property key not in the registry → NOT_FOUND', async () => {
+  it('property key not in the registry → VALIDATION_ERROR (0.14.1)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -1235,7 +1235,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(result.isError, true);
         const text = toolText(result);
-        assert.ok(text.includes('NOT_FOUND'), text);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
       } finally {
         await handle.close();
       }

@@ -31,10 +31,14 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import {
   EtnError,
   type EffectiveThoughtTypeView,
+  type EffectiveThoughtView,
+  type RunThoughtTypeViewMeta,
   type StructureSort,
   type SortOrder,
+  type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
+  type TypeViewMoveToThoughtResult,
 } from '@etn/shared';
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
@@ -51,6 +55,7 @@ import {
   parseRest,
   RestIfMatch,
   RestViewCreateBody,
+  RestViewMoveToThoughtBody,
   RestViewRunAstBody,
   RestViewRunBody,
   RestViewUpdateBody,
@@ -63,9 +68,12 @@ import {
   getThoughtTypeView,
   listThoughtTypeViewsByType,
   runViewForThought,
+  toEffectiveTypeView,
   updateThoughtTypeView,
 } from '../domain/thought-type-views-service.js';
 import { getThought } from '../domain/thought-service.js';
+import { toEffectiveCustomView } from '../domain/thought-custom-views-service.js';
+import { moveThoughtTypeViewToThought } from '../domain/thought-view-transfer.js';
 import { logFilterStats } from '../log/filter-stats.js';
 
 /** Route params для `:networkId` + `:id` (id типа мысли). */
@@ -95,7 +103,10 @@ interface ThoughtIdParams {
 }
 
 /** Допустимые ключи тела `POST /thought-types/{id}/views`. */
-function parseCreateBody(body: Record<string, unknown>, requestId: string): ThoughtTypeViewInput {
+export function parseViewCreateBody(
+  body: Record<string, unknown>,
+  requestId: string,
+): ThoughtTypeViewInput {
   const out = parseBody(RestViewCreateBody, body, requestId);
   return {
     name: out.name as string,
@@ -106,7 +117,7 @@ function parseCreateBody(body: Record<string, unknown>, requestId: string): Thou
   } as unknown as ThoughtTypeViewInput;
 }
 
-function parseUpdateBody(
+export function parseViewUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtTypeViewUpdateInput {
@@ -136,19 +147,86 @@ function effectiveViewsForType(
 }
 
 /**
+ * Отбор обязан принадлежать типу из пути (`:id`): чужой `:viewId` — 404, не
+ * 403 (ошибка 1cd2b6db; образец — `requireOwnedView` внетиповых отборов).
+ *
+ * Для унаследованного отбора фактический владелец — `thought_type_id` строки
+ * (он же `defined_on`); клиент передаёт в `:id` именно его, а не тип фокуса.
+ * Поэтому сверка идёт с `:id`, а `details.defined_on` сообщает фактического
+ * владельца при промахе.
+ */
+function requireOwnedView(
+  ndb: import('../db/network-db.js').NetworkDb,
+  thoughtTypeId: string,
+  viewId: string,
+  requestId: string,
+): ThoughtTypeView {
+  const view = getThoughtTypeView(ndb, viewId);
+  if (view === null || view.thought_type_id !== thoughtTypeId) {
+    throw new EtnError(
+      'NOT_FOUND',
+      `У типа мысли ${thoughtTypeId} нет отбора ${viewId}.`,
+      {
+        entity: 'thought_type_view',
+        id: viewId,
+        type_id: thoughtTypeId,
+        defined_on: view?.thought_type_id ?? null,
+      },
+      requestId,
+    );
+  }
+  return view;
+}
+
+/**
  * Найти отбор в эффективном наборе мысли по `name` (точное совпадение
  * регистронезависимо по `name_key`) или по `id`. Используется только
  * `run`-маршрутом; CRUD-маршруты адресуются по `:viewId` напрямую.
  */
 function findViewInEffective(
-  effective: EffectiveThoughtTypeView[],
+  effective: EffectiveThoughtView[],
   viewKey: string,
-): EffectiveThoughtTypeView | null {
+): EffectiveThoughtView | null {
   const byId = effective.find((v) => v.id === viewKey);
   if (byId !== undefined) return byId;
   const wantedKey = viewKey.trim().toLowerCase();
   const byName = effective.find((v) => v.name_key === wantedKey);
   return byName ?? null;
+}
+
+/**
+ * `meta.view` прогона: владелец отбора виден по `scope`/`defined_on`.
+ * `type_id` заполняется ТОЛЬКО для типового отбора — у внетипового владелец
+ * мысль, подменять её типом нельзя (операция 5e55b7bb).
+ */
+function runViewMeta(view: EffectiveThoughtView): RunThoughtTypeViewMeta['view'] {
+  return {
+    id: view.id,
+    name: view.name,
+    scope: view.scope,
+    defined_on: view.defined_on,
+    ...(view.scope === 'type' ? { type_id: view.defined_on } : {}),
+  };
+}
+
+/**
+ * Событие исполнения — по владельцу отбора (контракт 5d447380): типовой —
+ * `thought-type-view.run`, внетиповой — `thought-custom-view.run`. Payload
+ * одинаковый; клиент оба события игнорирует, MCP `etn.views.run` их не пишет.
+ */
+function runEventFor(
+  view: EffectiveThoughtView,
+  data: {
+    thought_id: string;
+    view_id: string;
+    view_name: string;
+    result_count: number;
+    unresolved: Array<{ token: string; reason: string; message: string }>;
+  },
+): { type: 'thought-type-view.run' | 'thought-custom-view.run'; data: typeof data } {
+  return view.scope === 'thought'
+    ? { type: 'thought-custom-view.run', data }
+    : { type: 'thought-type-view.run', data };
 }
 
 /**
@@ -196,7 +274,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as TypeIdParams;
-        const input = parseCreateBody(requestBody(req), req.id);
+        const input = parseViewCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const created = createThoughtTypeView(ndb, id, input, req.auth!.user.id, req.id);
@@ -207,6 +285,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             ...created,
             defined_on: id,
             inherited: false,
+            own_default: created.is_default,
           };
           return {
             result: created,
@@ -229,17 +308,11 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       '/networks/:networkId/thought-types/:id/views/:viewId',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
-        const { networkId, viewId } = req.params as ViewIdParams;
+        const { networkId, id, viewId } = req.params as ViewIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const view = getThoughtTypeView(ndb, viewId);
-        if (view === null) {
-          throw new EtnError(
-            'NOT_FOUND',
-            `Отбор ${viewId} не найден.`,
-            { entity: 'thought_type_view', id: viewId },
-            req.id,
-          );
-        }
+        // Владелец сверяется с `:id` (ошибка 1cd2b6db): отбор чужого типа
+        // не читается по прямому id.
+        const view = requireOwnedView(ndb, id, viewId, req.id);
         sendSuccess(reply, view, {
           version: view.version,
           updated_at: view.updated_at,
@@ -256,8 +329,10 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
       async (req: FastifyRequest, reply) => {
         const { networkId, id, viewId } = req.params as ViewIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
-        const changes = parseUpdateBody(requestBody(req), req.id);
+        const changes = parseViewUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Чужой `:viewId` — 404 до записи (ошибка 1cd2b6db).
+        requireOwnedView(ndb, id, viewId, req.id);
         const view = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           const updated = updateThoughtTypeView(
             ndb,
@@ -270,11 +345,15 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           // Эффективный набор — после UPDATE, чтобы клиент видел новый `inherited`/
           // `defined_on` отбора (вдруг он переехал по `name_key` на одноимённый
           // отбор предка, или наоборот — был унаследованным, стал собственным).
-          const effective = effectiveViewsForType(ndb, id);
+          // Владелец для события и набора — фактический `thought_type_id`
+          // строки, а не `:id` из пути (ошибка 1cd2b6db).
+          const ownerTypeId = updated.thought_type_id;
+          const effective = effectiveViewsForType(ndb, ownerTypeId);
           const matched = effective.find((v) => v.id === updated.id) ?? {
             ...updated,
-            defined_on: id,
+            defined_on: ownerTypeId,
             inherited: false,
+            own_default: updated.is_default,
           };
           return {
             result: updated,
@@ -282,7 +361,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
               {
                 type: 'thought-type-view.updated',
                 data: {
-                  thought_type_id: id,
+                  thought_type_id: ownerTypeId,
                   view_id: viewId,
                   changes,
                   version: updated.version,
@@ -309,15 +388,8 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         const { networkId, id, viewId } = req.params as ViewIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const before = getThoughtTypeView(ndb, viewId);
-        if (before === null) {
-          throw new EtnError(
-            'NOT_FOUND',
-            `Отбор ${viewId} не найден.`,
-            { entity: 'thought_type_view', id: viewId },
-            req.id,
-          );
-        }
+        // Чужой `:viewId` — 404 (ошибка 1cd2b6db).
+        const before = requireOwnedView(ndb, id, viewId, req.id);
         // Сравниваем версию здесь, а не в сервисе — `deleteThoughtTypeView`
         // оптимистическую блокировку не делает (только `update`/`create`),
         // см. thought-type-views-service.ts.
@@ -339,11 +411,80 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           return {
             result: undefined,
             events: [
-              { type: 'thought-type-view.deleted', data: { thought_type_id: id, view_id: viewId } },
+              {
+                type: 'thought-type-view.deleted',
+                // Фактический владелец строки, не `:id` из пути (1cd2b6db).
+                // Полная карточка — снапшот ДО удаления (ошибка 69aa355c,
+                // контракт c643fd7b, симметрия с `thought-custom-view.deleted`);
+                // `view_id` оставлен для слоевой видимости.
+                data: {
+                  thought_type_id: before.thought_type_id,
+                  view_id: viewId,
+                  view: toEffectiveTypeView(before),
+                },
+              },
             ],
           };
         });
         reply.code(204).send();
+      },
+    );
+
+    // --- POST /thought-types/{id}/views/{viewId}/move-to-thought ------------
+    //
+    // Перенос владельца «тип → вне» (0.14.1, операция 85414fbd): отбор типа
+    // становится внетиповым у указанной мысли и исчезает у всех прочих (для
+    // унаследованного — у всех потомков предка-владельца). Одна транзакция:
+    // upsert в `thought_custom_views` + надгробие/удаление источника. Ответ
+    // 200 — внетиповая карточка (`scope:'thought'`, `defined_on`).
+    //
+    // `:id` для унаследованного отбора — `defined_on` (тип-владелец), не тип
+    // фокуса; чужой `:viewId`/`:id` — 404 с `details.defined_on`.
+    app.post(
+      '/networks/:networkId/thought-types/:id/views/:viewId/move-to-thought',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id, viewId } = req.params as ViewIdParams;
+        const input = parseRest(RestViewMoveToThoughtBody, req);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const moved = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
+          const result = moveThoughtTypeViewToThought(
+            ndb,
+            id,
+            viewId,
+            input.target_thought_id,
+            req.id,
+          );
+          const card = toEffectiveCustomView(result.view);
+          return {
+            result: card,
+            events: [
+              {
+                type: 'thought-type-view.deleted',
+                data: {
+                  // Фактический владелец строки (для унаследованного — тип, на
+                  // котором отбор определён), не тип фокуса.
+                  thought_type_id: result.source.thought_type_id,
+                  view_id: viewId,
+                  // Снапшот ДО переноса (ошибка 69aa355c): клиент пересчитает
+                  // чипы без GET, как и для обычного удаления.
+                  view: toEffectiveTypeView(result.source),
+                  reason: 'moved',
+                  moved_to: result.thought_id,
+                },
+              },
+              {
+                type: 'thought-custom-view.created',
+                data: { thought_id: result.thought_id, view: card },
+              },
+            ],
+          };
+        });
+        sendSuccess(reply, moved satisfies TypeViewMoveToThoughtResult, {
+          version: moved.version,
+          updated_at: moved.updated_at,
+          request_id: req.id,
+        });
       },
     );
 
@@ -370,10 +511,14 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           );
         }
 
-        // 2. Эффективный набор — относительно типа мысли (`thought.type_id`).
-        //    Если у мысли тип снят — работают отборы корневого типа
-        //    (требование 23e0f78e).
-        const effective = getEffectiveViewsForThought(ndb, { type_id: thought.type_id });
+        // 2. Смешанный эффективный набор — относительно мысли (id + type_id):
+        //    именованный запуск разрешает и внетиповые отборы (0.14.1,
+        //    операция 5e55b7bb). Если у мысли тип снят — работают отборы
+        //    корневого типа (требование 23e0f78e).
+        const effective = getEffectiveViewsForThought(ndb, {
+          id: thought.id,
+          type_id: thought.type_id,
+        });
         const matched = findViewInEffective(effective, view);
         if (matched === null) {
           throw new EtnError(
@@ -423,16 +568,13 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
             result: undefined,
             events: [
-              {
-                type: 'thought-type-view.run',
-                data: {
-                  thought_id: thoughtId,
-                  view_id: matched.id,
-                  view_name: matched.name,
-                  result_count: 0,
-                  unresolved: result.unresolved,
-                },
-              },
+              runEventFor(matched, {
+                thought_id: thoughtId,
+                view_id: matched.id,
+                view_name: matched.name,
+                result_count: 0,
+                unresolved: result.unresolved,
+              }),
             ],
           }));
           reply.code(200).send({
@@ -442,7 +584,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
               limit: limit ?? result.items.length,
               offset,
               directions: {},
-              view: { id: matched.id, name: matched.name, type_id: matched.defined_on },
+              view: runViewMeta(matched),
               unresolved: result.unresolved,
             },
           });
@@ -456,16 +598,13 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         runWrite(ndb, restWriteFx(deps, req, networkId), () => ({
           result: undefined,
           events: [
-            {
-              type: 'thought-type-view.run',
-              data: {
-                thought_id: thoughtId,
-                view_id: matched.id,
-                view_name: matched.name,
-                result_count: total,
-                unresolved: [],
-              },
-            },
+            runEventFor(matched, {
+              thought_id: thoughtId,
+              view_id: matched.id,
+              view_name: matched.name,
+              result_count: total,
+              unresolved: [],
+            }),
           ],
         }));
         reply.code(200).send({
@@ -475,7 +614,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             limit: limit ?? result.items.length,
             offset,
             directions: result.directions,
-            view: { id: matched.id, name: matched.name, type_id: matched.defined_on },
+            view: runViewMeta(matched),
             sort: result.sort,
             order: result.order,
             // Жёлтая диагностика (требование 325efc13): свойство отвязано от

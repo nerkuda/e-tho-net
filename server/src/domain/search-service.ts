@@ -81,6 +81,7 @@ import {
   TRAVERSAL_DEFAULTS,
   type DuplicateHit,
   type DuplicateMatchKind,
+  type DuplicateSearchMode,
   type FilterAst,
   type FilterAstNode,
   type IconKind,
@@ -95,12 +96,13 @@ import {
   type SearchResponseMeta,
   type SearchScope,
   type SearchTextHit,
+  type StructureKeywordScope,
 } from '@etn/shared';
 
 // Формы дублей переехали в общий модуль (задача 120385ba): одна форма ответа
 // `GET /thoughts/duplicates` на сервер и клиент. Реэкспорт — для существующих
 // импортов из домена.
-export type { DuplicateHit, DuplicateMatchKind };
+export type { DuplicateHit, DuplicateMatchKind, DuplicateSearchMode };
 
 import type { NetworkDb } from '../db/network-db.js';
 import {
@@ -114,7 +116,7 @@ import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
-import { filterAstClause, type AstTokenContext } from './query-service.js';
+import { buildKeywordWordClause, filterAstClause, type AstTokenContext } from './query-service.js';
 import {
   resolveThoughtTokensInAst,
   scanStringForTokens,
@@ -268,6 +270,10 @@ interface TrigramQuery {
    * regardless of its own length.
    */
   nameShortExclude: string[];
+  /** ALL NFC-normalised include words — the exact per-word `by_names` predicate. */
+  nameInclude: string[];
+  /** ALL NFC-normalised exclude words — the exact per-word `by_names` predicate. */
+  nameExclude: string[];
 }
 
 /**
@@ -296,7 +302,7 @@ function buildTrigramQuery(text: string): TrigramQuery {
   if (include.length === 0) {
     // No include words at all (empty query, or pure exclusions like `-dog`)
     // — nothing to anchor a match or even a LIKE fallback to.
-    return { match: '', nameShortInclude: [], nameShortExclude: [] };
+    return { match: '', nameShortInclude: [], nameShortExclude: [], nameInclude: [], nameExclude: [] };
   }
 
   const positives: string[] = [];
@@ -312,7 +318,13 @@ function buildTrigramQuery(text: string): TrigramQuery {
     // falls back to a pure LIKE pass (no FTS anchor at all), so every
     // exclude word — long or short — must go through the same LIKE-based
     // NOT for names; the other three groups stay unfiltered (Tier 1).
-    return { match: '', nameShortInclude, nameShortExclude: exclude };
+    return {
+      match: '',
+      nameShortInclude,
+      nameShortExclude: exclude,
+      nameInclude: include,
+      nameExclude: exclude,
+    };
   }
 
   let match = positives.join(' AND ');
@@ -322,7 +334,7 @@ function buildTrigramQuery(text: string): TrigramQuery {
     if (phrase === null) nameShortExclude.push(word);
     else match += ` NOT ${phrase}`;
   }
-  return { match, nameShortInclude, nameShortExclude };
+  return { match, nameShortInclude, nameShortExclude, nameInclude: include, nameExclude: exclude };
 }
 
 /** HTML-escape the five significant characters of a text node. */
@@ -661,13 +673,69 @@ function buildShortWordNameClause(word: string, negate: boolean): Clause {
   return { sql: negate ? `NOT ${sql}` : sql, params: [pattern, pattern] };
 }
 
+/** Области per-word предиката `by_names`: заголовок и синонимы (D5). */
+const NAME_KEYWORD_SCOPE = new Set<StructureKeywordScope>(['title', 'synonyms']);
+
+/**
+ * Точный предикат ОДНОГО include- или исключающего слова по группе `by_names`
+ * (задача f0b06700, требование 35218826, сценарий «поиск», D1/D3/D5):
+ * литеральная подстрока в заголовке ИЛИ в синониме, а для слова БЕЗ `*` — ещё
+ * и совпадение со СЛОВОМ `*`-синонима по границам слова
+ * (`synonym_word_pattern_match`, D4: слово запроса с `*` — только литерально).
+ *
+ * Заголовок расширению не подлежит (D5) — матчер применяется только к синонимам.
+ * Предикат — ОБЩИЙ с `keywords` отбора мыслей (`buildKeywordWordClause`,
+ * правило аналогов): своего SQL здесь нет, чтобы маршруты не разъехались.
+ */
+function buildNameWordClause(word: string, negate: boolean): Clause {
+  const clause = buildKeywordWordClause(NAME_KEYWORD_SCOPE, word);
+  return { sql: negate ? `NOT ${clause.sql}` : clause.sql, params: clause.params };
+}
+
+/**
+ * Только pattern-ветка исключения для FTS-тира: литеральную часть уже учёл
+ * `fts_thought_names MATCH` (в т.ч. короткие слова — своей LIKE-клаузой), а
+ * слово-паттерн синонима туда не попадает. `null` — слово запроса содержит `*`
+ * (D4) или совпадение невозможно.
+ */
+function buildNamePatternExcludeClause(word: string): Clause | null {
+  const norm = word.normalize('NFC').toLowerCase();
+  if (norm.includes('*')) return null;
+  return {
+    sql:
+      'NOT EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+      ' WHERE ts.thought_id = t.id AND synonym_word_pattern_match(?, ts.synonym_norm))',
+    params: [norm],
+  };
+}
+
+/** Колонки хита `by_names` (визуальный стиль и `active` — из строки-победителя). */
+const NAME_HIT_COLUMNS = `t.id AS thought_id, t.title AS title, t.icon AS icon,
+              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
+              t.icon_color AS icon_color,
+              t.fg_color AS fg_color, t.bg_color AS bg_color,
+              t.font_bold AS font_bold, t.font_italic AS font_italic,
+              t.font_underline AS font_underline, t.font_strike AS font_strike,
+              t.font_manual AS font_manual,
+              t.type_id AS type_id, t.active AS active`;
+
 /**
  * Query the thought-names group. `trigram.match === ''` means no include
  * word cleared the trigram floor — the FTS5 join/MATCH is skipped entirely
- * (querying `MATCH ''` is invalid) and the result rests solely on
- * {@link buildShortWordNameClause} fallbacks; the caller only reaches this
- * state when {@link TrigramQuery.nameShortInclude} is non-empty (otherwise
- * `search()` already returned the empty response for the whole request).
+ * (querying `MATCH ''` is invalid) and the result rests solely on the
+ * per-word LIKE fallbacks; the caller only reaches this state when
+ * {@link TrigramQuery.nameShortInclude} is non-empty (otherwise `search()`
+ * already returned the empty response for the whole request).
+ *
+ * **`*`-синонимы (задача f0b06700, требование 35218826, сценарий «поиск»).**
+ * FTS-кандидаты остаются первым тиром с прежним поведением и прежним
+ * ранжированием (`rank`, затем `title_norm`/`id` как детерминированный добор).
+ * Второй тир — мысли, которых FTS не видит, но чьё слово запроса совпало со
+ * СЛОВОМ `*`-синонима: он идёт ПОСЛЕ FTS-ранжированных хитов (D11) и
+ * проверяется точным предикатом каждого слова (D1/D3). Мысль попадает ровно в
+ * один тир (`NOT IN` кандидатов), поэтому `LIMIT`/`OFFSET`/`COUNT` считаются
+ * по объединению и пагинация не теряет и не дублирует строки (D7). Сеть без
+ * `*`-синонимов второй тир не даёт — прежнее поведение (D2).
  */
 function searchNames(
   ndb: NetworkDb,
@@ -675,20 +743,32 @@ function searchNames(
   f: SearchFilters,
 ): { hits: SearchNameHit[]; total: number } {
   const useFts = trigram.match !== '';
-  const join = useFts ? 'JOIN fts_thought_names fnames ON fnames.rowid = t.rowid' : '';
-  const orderBy = useFts ? 'ORDER BY rank' : 'ORDER BY t.title_norm';
-  const { where, params } = joinClauses([
-    useFts ? { sql: 'fts_thought_names MATCH ?', params: [trigram.match] } : null,
-    // Мыслевые настройки (актуальность/корзина/тип/подкорень) — единой
-    // конъюнкцией из AST-движка (требование b91336e7, ADR 7581ac14).
-    // `ORDER BY rank` и сниппеты сохраняются: AST-клауза — обычный предикат
-    // поверх ранжированной FTS-выборки, множество id не материализуется.
+  // Мыслевые настройки (актуальность/корзина/тип/подкорень) — единой
+  // конъюнкцией из AST-движка (требование b91336e7, ADR 7581ac14).
+  const baseClauses: Array<Clause | null> = [
     f.thoughtClause,
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
-    ...trigram.nameShortInclude.map((w) => buildShortWordNameClause(w, false)),
+  ];
+  // Короткие include-слова БЕЗ триграммного представления: точный предикат с
+  // pattern-веткой (D8) — литеральная подстрока ИЛИ слово `*`-синонима. Только
+  // литеральная клауза здесь теряла мысль при комбинации «длинное слово даёт
+  // FTS-якорь + короткое совпадает лишь словом-паттерном»: строка была
+  // FTS-кандидатом и в tier 2 уже не попадала (NOT IN кандидатов).
+  // Короткие ИСКЛЮЧЕНИЯ остаются литеральными: pattern-исключение добавляется
+  // отдельно для КАЖДОГО слова запроса (`patternExcludeClauses` ниже).
+  const shortClauses: Array<Clause | null> = [
+    ...trigram.nameShortInclude.map((w) => buildNameWordClause(w, false)),
     ...trigram.nameShortExclude.map((w) => buildShortWordNameClause(w, true)),
-  ]);
+  ];
+  // Точный предикат каждого слова: литерал ИЛИ слово-паттерн `*`-синонима.
+  const exactIncludeClauses = trigram.nameInclude.map((w) => buildNameWordClause(w, false));
+  const exactExcludeClauses = trigram.nameExclude.map((w) => buildNameWordClause(w, true));
+  const baseFilters = joinClauses(baseClauses);
+  const shortFilters = joinClauses(shortClauses);
+  const exactInclude = joinClauses(exactIncludeClauses);
+  const exactExclude = joinClauses(exactExcludeClauses);
+
   // S6 (13-layers.md §9): when the FTS5 join is used, the names index carries
   // one row per PHYSICAL thought row (rowid = thoughts.pk), so an overridden
   // thought has rows for every layer of the chain. The join is by rowid with
@@ -696,33 +776,58 @@ function searchNames(
   // winner's text matches: stale ancestor revisions, other layers' rows and
   // tombstones (no view row) never reach the result. Dedup by logical id
   // comes free: one FTS row joins per visible thought (`UNIQUE (id,
-  // layer_id)`). FTS5 ranks first, the layer visibility filter runs on top —
-  // `LIMIT`/`OFFSET` and the total are computed after the filtering/dedup,
-  // never pushed into the FTS scan. The LIKE-only fallback path (no join)
-  // already starts from `thoughts_v`, so it inherits the same layer-winner
-  // guarantee without needing the FTS rowid join at all.
+  // layer_id)`) and the second tier excludes every FTS candidate. COUNT and
+  // the page are computed over the same union, never inside the FTS scan.
+  let body: string;
+  let params: unknown[];
+  let pageOrder: string;
+  if (useFts) {
+    const patternExcludeClauses = trigram.nameExclude.map((w) => buildNamePatternExcludeClause(w));
+    const patternExcludes = joinClauses(patternExcludeClauses);
+    const tier1Where = joinClauses([...baseClauses, ...shortClauses, ...patternExcludeClauses]);
+    const tier2Where = joinClauses([
+      { sql: 't.rowid NOT IN (SELECT rowid FROM fts_candidates)', params: [] },
+      ...baseClauses,
+      ...exactIncludeClauses,
+      ...exactExcludeClauses,
+    ]);
+    const tier1 = `SELECT ${NAME_HIT_COLUMNS}, 0 AS kw_tier, f.fts_rank AS kw_rank,
+              t.title_norm AS title_norm, t.id AS sort_id
+       FROM thoughts_v t
+       JOIN fts_candidates f ON f.rowid = t.rowid
+       WHERE ${tier1Where.where}`;
+    const tier2 = `SELECT ${NAME_HIT_COLUMNS}, 1 AS kw_tier, NULL AS kw_rank,
+              t.title_norm AS title_norm, t.id AS sort_id
+       FROM thoughts_v t
+       WHERE ${tier2Where.where}`;
+    body =
+      `WITH fts_candidates(rowid, fts_rank) AS (` +
+      `SELECT rowid, rank FROM fts_thought_names WHERE fts_thought_names MATCH ?` +
+      `) ${tier1} UNION ALL ${tier2}`;
+    params = [
+      trigram.match,
+      ...baseFilters.params,
+      ...shortFilters.params,
+      ...patternExcludes.params,
+      ...baseFilters.params,
+      ...exactInclude.params,
+      ...exactExclude.params,
+    ];
+    pageOrder = 'ORDER BY kw_tier ASC, kw_rank ASC, title_norm ASC, sort_id ASC';
+  } else {
+    const where = joinClauses([...baseClauses, ...exactIncludeClauses, ...exactExcludeClauses]);
+    body = `SELECT ${NAME_HIT_COLUMNS}, t.title_norm AS title_norm, t.id AS sort_id
+       FROM thoughts_v t
+       WHERE ${where.where}`;
+    params = [...baseFilters.params, ...exactInclude.params, ...exactExclude.params];
+    pageOrder = 'ORDER BY title_norm ASC, sort_id ASC';
+  }
+
   const total = (
-    ndb
-      .prepare(`SELECT COUNT(*) AS c FROM thoughts_v t ${join} WHERE ${where}`)
-      .get(...params) as { c: number }
+    ndb.prepare(`SELECT COUNT(*) AS c FROM (${body})`).get(...params) as { c: number }
   ).c;
-  // Visual style and `active` are joined from the winner row so the client can
-  // render the hit row like a cloud on the canvas (08-ui-spec.md §2.2).
   const rows = ndb
-    .prepare(
-      `SELECT t.id AS thought_id, t.title AS title, t.icon AS icon,
-              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
-              t.icon_color AS icon_color,
-              t.fg_color AS fg_color, t.bg_color AS bg_color,
-              t.font_bold AS font_bold, t.font_italic AS font_italic,
-              t.font_underline AS font_underline, t.font_strike AS font_strike,
-              t.font_manual AS font_manual,
-              t.type_id AS type_id, t.active AS active
-       FROM thoughts_v t ${join}
-       WHERE ${where}
-       ${orderBy}
-       LIMIT ? OFFSET ?`,
-    )
+    .prepare(`${body} ${pageOrder} LIMIT ? OFFSET ?`)
     .all(...params, f.limit, f.offset) as Array<{
     thought_id: string;
     title: string;
@@ -1430,6 +1535,95 @@ function norm(value: string): string {
   return value.normalize('NFC').trim().toLowerCase();
 }
 
+/**
+ * Опции {@link findDuplicates}.
+ *
+ * Режим `dedupe` (по умолчанию) — строгая семантика поиска ДУБЛЕЙ (ошибка
+ * 11f14a81): совпадение подстроки слова или одного слова из середины чужого
+ * составного названия не делает мысль дублем; `*` в синониме — основа
+ * словоформы (короткое окончание), а не произвольная подстрока; частичный
+ * кандидат обязан начинать название/литеральный синоним последовательностью
+ * слов с начала. Режим `search` — прежнее поведение живого поиска (диалог
+ * добавления, пикеры мыслей, 0.4.5). Семантика одна для MCP и REST: REST по
+ * умолчанию — `dedupe`, живой поиск клиента передаёт `mode=search` явно.
+ * См. {@link DuplicateSearchMode}.
+ */
+export interface FindDuplicatesOptions {
+  /** Режим сопоставления; по умолчанию `dedupe`. */
+  mode?: DuplicateSearchMode;
+  /**
+   * Тип предлагаемой мысли (гейт записи знает его из `thought.type`).
+   * В режиме `dedupe` partial-кандидаты другого типа отбрасываются.
+   */
+  typeId?: string | null;
+}
+
+/**
+ * Максимум символов слова, которые в режиме `dedupe` поглощает `*`.
+ *
+ * Это НЕ стеммер: `*` — изменяемая часть слова (окончание), а не произвольная
+ * подстрока (карточка ошибки 11f14a81). Русское словоизменение укладывается в
+ * три буквы (`-ами`, `-ого`, `-ыми`, `-ешь`); производные слова (`Владимир` →
+ * `Владимирович`, `Игорян` → `Игорянский`) длиннее и матчем не считаются.
+ */
+const DEDUPE_WILDCARD_MAX_ENDING = 3;
+
+/** Один символ слова — та же граница, что у `synonymPatternSource`. */
+const WORD_CHAR_CLASS = '[\\p{L}\\p{N}_]';
+
+/** Word-tokenizer границы слова (буквы/цифры/подчёркивание). */
+const WORD_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+
+/**
+ * Regex-источник wildcard-синонима для режима `dedupe`: паттерн анкорится на
+ * ВЕСЬ термин, `*` поглощает 0…{@link DEDUPE_WILDCARD_MAX_ENDING} символов
+ * слова и не переходит границу слова (дефис, пробел, пунктуация).
+ */
+function dedupeWildcardSource(patternNorm: string): string {
+  const words = patternNorm.trim().split(/\s+/).filter((w) => w !== '');
+  if (words.length === 0) return '(?!)';
+  const wordBody = (word: string): string =>
+    word
+      .split('*')
+      .map((part) => (part === '' ? '' : regexEscape(part)))
+      .join(`${WORD_CHAR_CLASS}{0,${DEDUPE_WILDCARD_MAX_ENDING}}`);
+  return `^${words.map(wordBody).join('\\s+')}$`;
+}
+
+/** Кэш matcher-ов dedupe по `synonym_norm` (см. {@link anchoredWildcardCache}). */
+const dedupeWildcardCache = new Map<string, RegExp>();
+
+/** Anchored matcher режима `dedupe` для `synonymNorm`, компилируется один раз. */
+function dedupeWildcardFor(synonymNorm: string): RegExp {
+  let re = dedupeWildcardCache.get(synonymNorm);
+  if (re === undefined) {
+    if (dedupeWildcardCache.size >= ANCHORED_WILDCARD_CACHE_MAX) dedupeWildcardCache.clear();
+    re = new RegExp(dedupeWildcardSource(synonymNorm), 'iu');
+    dedupeWildcardCache.set(synonymNorm, re);
+  }
+  return re;
+}
+
+/** Слова терма: последовательность runs из букв/цифр/подчёркивания. */
+function wordTokens(value: string): string[] {
+  return norm(value).match(WORD_TOKEN_RE) ?? [];
+}
+
+/**
+ * Режим `dedupe`: слова ввода должны начинать терм кандидата как
+ * последовательность ЦЕЛЫХ слов (дефис/пунктуация — разделители слов).
+ * Слово из середины или конца чужого названия кандидатом не делает —
+ * «Владимир» не матчит «Беберашвили Владимир», а «Владимир город» матчит
+ * «Владимир (город)».
+ */
+function startsWithWordSequence(candidate: string[], input: readonly string[]): boolean {
+  if (input.length === 0 || input.length > candidate.length) return false;
+  for (let i = 0; i < input.length; i += 1) {
+    if (candidate[i] !== input[i]) return false;
+  }
+  return true;
+}
+
 /** Whole-term matcher of one stored `*`-synonym plus its cheap prefilter markers. */
 interface AnchoredWildcardPattern {
   regex: RegExp;
@@ -1588,28 +1782,48 @@ function chunkDuplicateIds(ids: readonly string[]): string[][] {
  * `find_duplicates`).
  *
  * Match priority (strongest wins per candidate): exact `title_norm`, exact
- * `synonym_norm`, then partial. Partial follows the synonym-pattern principle
- * (02-data-model.md §3.2) with an implicit `*` around every typed word, so
- * the user never types `*`: a single fragment matches inside a word of the
- * title or of one synonym («дор» → «Доработать!», «Подорожание 2026 года»,
- * «Дорога в лето»); several fragments must occur inside CONSECUTIVE words in
- * the typed order («исправ ошиб» → «Исправленные ошибки», but not «исправить
- * старую ошибку»). A `-word` exclusion (03-server-api.md §6.10) uses the same
- * infix semantics and drops a candidate whose title/synonyms contain the
- * fragment anywhere. An explicit `*` in a word is allowed and is absorbed by
- * the implicit wrappers. Results are ordered by match strength.
+ * `synonym_norm`, a stored `*`-synonym matching the WHOLE input term, then
+ * partial. `matched_on` keeps the same three values in every mode.
+ *
+ * Two modes (ошибка 11f14a81 — дедупликация строже живого поиска):
+ *
+ * - `dedupe` (default; MCP and REST) — the duplicate semantics:
+ *   * `*` in a stored synonym is the CHANGEABLE part of a wordform: it absorbs
+ *     0…3 word characters inside one word and never crosses a hyphen, space or
+ *     punctuation («Владимир*» matches «Владимире», not «Владимирович»;
+ *     «Газпромбанк*» does not match «Газпромбанк-Автолизинг»). Not a stemmer:
+ *     derived words do not match;
+ *   * a partial candidate's title/literal synonym must START with the input's
+ *     word sequence (whole words, in order; punctuation/hyphens are word
+ *     separators). A single word from the middle of a foreign title or of a
+ *     compound synonym is not a duplicate — «Владимир» does not match
+ *     «Беберашвили Владимир» or «Отель У Золотых Ворот». Stored `*`-synonyms
+ *     are name templates and never serve as partial haystack;
+ *   * partial candidates of a FOREIGN type are dropped when the type is already
+ *     fixed by a stronger hit (or by the explicit `typeId` of the write gate) —
+ *     a city «Владимир» and a person «Беберашвили Владимир» are not duplicates.
+ * - `search` — legacy live-search behaviour (add-thought dialog, thought
+ *   pickers, 0.4.5): implicit `*` around every typed word, infix candidates,
+ *   fragments inside consecutive words in the typed order («дор» →
+ *   «Доработать!», «исправ ошиб» → «Исправленные ошибки»). A `-word` exclusion
+ *   (03-server-api.md §6.10) keeps its infix semantics.
+ *
+ * Results are ordered by match strength in both modes.
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
  * @param typeIds - optional thought-type filter (link property pickers,
  *   pickers): only thoughts of these types are returned.
+ * @param options - `mode` (`dedupe` by default) и `typeId` предлагаемой мысли.
  */
 export function findDuplicates(
   ndb: NetworkDb,
   title: string,
   synonyms: string[] = [],
   typeIds: string[] = [],
+  options: FindDuplicatesOptions = {},
 ): DuplicateHit[] {
+  const mode: DuplicateSearchMode = options.mode ?? 'dedupe';
   const titleTerms = [title.trim(), ...synonyms.map((s) => s.trim())].filter((t) => t !== '');
   if (titleTerms.length === 0) return [];
 
@@ -1822,7 +2036,14 @@ export function findDuplicates(
     // the FTS table drives). `CROSS JOIN` pins the FTS scan first; the
     // following view lookup uses the rowid primary key, so the join stays an
     // inner join with the same rows.
-    const keywords = parseFilterKeywords(n);
+    // В `dedupe` мини-синтаксис не применяется: ввод — литеральное название,
+    // а не поисковый запрос. Кандидатов сужает тот же FTS/LIKE-префильтр
+    // (фрагмент слова — надмножество префикса терма), точную семантику
+    // «слова ввода начинают терм» проверяет JS-постфильтр ниже.
+    const keywords =
+      mode === 'search'
+        ? parseFilterKeywords(n)
+        : { include: wordTokens(n), exclude: [] as string[] };
     if (keywords.include.length > 0) {
       const filter = buildPartialCandidateFilter(keywords.include, keywords.exclude);
       const from =
@@ -1860,14 +2081,21 @@ export function findDuplicates(
         font_strike: number;
         font_manual: number;
       }>;
-      // The include fragments (each implicitly `*`-wrapped) must hit
-      // consecutive words of the title or of ONE synonym, in the typed
+      // Search mode: the include fragments (each implicitly `*`-wrapped) must
+      // hit consecutive words of the title or of ONE synonym, in the typed
       // order. synonymPatternToRegex already encodes the word-boundary and
       // adjacency rules; the `*` wrappers turn its exact-word matcher into
       // the infix one.
-      const includeRe = synonymPatternToRegex(
-        keywords.include.map((w) => `*${w}*`).join(' '),
-      );
+      //
+      // Dedupe mode: the input's WORD SEQUENCE must start the title or a
+      // LITERAL synonym (stored `*`-synonyms are templates, not text). This is
+      // what keeps «Владимир» away from «Беберашвили Владимир» and from a
+      // compound synonym «Золотые Ворота отель Владимир*».
+      const includeRe =
+        mode === 'search'
+          ? synonymPatternToRegex(keywords.include.map((w) => `*${w}*`).join(' '))
+          : null;
+      const inputTokens = mode === 'search' ? [] : keywords.include;
       if (partialRows.length > 0) {
         // Synonym norms of the candidates in one query, then the
         // consecutive-words check per candidate against its title and
@@ -1886,8 +2114,13 @@ export function findDuplicates(
           else synsByThought.set(s.thought_id, [s.synonym_norm]);
         }
         partialRows = partialRows.filter((r) => {
-          const hay = [norm(r.title), ...(synsByThought.get(r.id) ?? [])];
-          return hay.some((h) => includeRe.test(h));
+          const syns = synsByThought.get(r.id) ?? [];
+          if (includeRe !== null) {
+            return [norm(r.title), ...syns].some((h) => includeRe.test(h));
+          }
+          return [r.title, ...syns.filter((s) => !s.includes('*'))].some((h) =>
+            startsWithWordSequence(wordTokens(h), inputTokens),
+          );
         });
       }
       for (const r of partialRows) {
@@ -1902,6 +2135,10 @@ export function findDuplicates(
     // the whole phrase (08-ui-spec.md §4.4: «`*`-паттерн синонима совпал со
     // вводом»).
     //
+    // Dedupe mode uses the strict wordform matcher (ошибка 11f14a81): `*` is
+    // the changeable part of the word, absorbs at most a short ending and never
+    // crosses a word boundary; derived words do not match.
+    //
     // Performance (ошибка 5e35eb7b): matchers come from a compile cache, and
     // every pattern first passes a cheap conservative prefilter over the term —
     // the same «string sieves before regex» trick as the §21 mentions scan
@@ -1915,13 +2152,33 @@ export function findDuplicates(
       for (const r of wildSynRows) {
         const pat = anchoredWildcardFor(r.synonym_norm);
         if (!mentionPrefilterPass(pat.markers, foldedTerm, foldedWords)) continue;
-        if (!pat.regex.test(n)) continue;
+        const re = mode === 'search' ? pat.regex : dedupeWildcardFor(r.synonym_norm);
+        if (!re.test(n)) continue;
         const hit = ensure(r);
         if (hit.matched_on === 'partial') {
           hit.matched_on = 'synonym';
           hit.matched_synonym = r.synonym;
         }
       }
+    }
+  }
+
+  // Dedupe type rule (ошибка 11f14a81): once the type is fixed by a strong
+  // (title/synonym) candidate or by the explicit `typeId` of the write gate,
+  // a partial candidate of another type is noise, not a duplicate — the city
+  // «Владимир» and the person «Беберашвили Владимир» are different entities.
+  if (mode === 'dedupe') {
+    const strongTypes = new Set<string | null>();
+    for (const hit of byId.values()) {
+      if (hit.matched_on !== 'partial') strongTypes.add(hit.type_id);
+    }
+    for (const [id, hit] of byId) {
+      if (hit.matched_on !== 'partial') continue;
+      if (options.typeId !== undefined && hit.type_id !== options.typeId) {
+        byId.delete(id);
+        continue;
+      }
+      if (strongTypes.size > 0 && !strongTypes.has(hit.type_id)) byId.delete(id);
     }
   }
 

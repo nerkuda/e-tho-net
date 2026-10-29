@@ -7,6 +7,9 @@
  * those paths use {@link renderHtml} and are documented at call sites.
  */
 
+import { PROPERTY_SIDE_ERROR_REASON, isNotConnectedErrorMessage } from '@etn/shared';
+
+import { t } from './i18n.js';
 import { splitHighlightRuns } from './pure.js';
 
 /** Creates an element with an optional class and text. */
@@ -92,10 +95,118 @@ export function renderHighlightedText(
   }
 }
 
-/** Converts any thrown value into a readable Russian message. */
+/** Structural view of an error carrying the main-process wire fields. */
+interface ErrorLike {
+  code?: unknown;
+  details?: unknown;
+  message?: unknown;
+  name?: unknown;
+}
+
+function asErrorLike(err: unknown): ErrorLike | null {
+  if (typeof err === 'object' && err !== null) return err as ErrorLike;
+  return null;
+}
+
+/**
+ * `true` when the failure is OUR link-down rejection (main-process gate or a
+ * cancelled REST request, defect de34b35b). The main process marks both with
+ * `details.kind === 'connection-lost'`; the renderer receives a revived
+ * `EtnError`, but the check is structural so a plain IPC/replay object works
+ * too.
+ *
+ * Также распознаётся канонический отказ main «Not connected…»: он приходит БЕЗ
+ * `details.kind` (plain `Error` из `requireRest`), но означает ровно обрыв
+ * связи и обязан приводить к тому же словарному тексту и повторному чтению
+ * после переподключения (ошибка f803afb6). Строка и её разбор — единственный
+ * источник в `@etn/shared` (`isNotConnectedErrorMessage`), чтобы смена
+ * формулировки в main не разъезжалась с renderer.
+ */
+export function isConnectionLostError(err: unknown): boolean {
+  const like = asErrorLike(err);
+  const details = like?.details;
+  if (typeof details === 'object' && details !== null) {
+    if ((details as { kind?: unknown }).kind === 'connection-lost') return true;
+  }
+  const message =
+    typeof like?.message === 'string' ? like.message : typeof err === 'string' ? err : '';
+  return isNotConnectedErrorMessage(message);
+}
+
+/**
+ * `true` when the server refused the write because the same object already
+ * exists (`DUPLICATE`): повторное создание постоянного комментария, связь
+ * той же тройки и т.п. Проверка структурная (как у
+ * {@link isConnectionLostError}): подходит и `EtnError`, и объект конверта IPC.
+ * Нужна восстановлению после обрыва связи (ошибка ecdb2e7a): «уже существует»
+ * — это не сбой, а повод усыновить существующую запись.
+ */
+export function isDuplicateError(err: unknown): boolean {
+  return asErrorLike(err)?.code === 'DUPLICATE';
+}
+
+/**
+ * Raw transport failures that must never reach the user as-is (they name
+ * `fetch`, sockets and abort codes). Matched against the message of an
+ * `Error`.
+ */
+const RAW_NETWORK_ERROR_RE =
+  /fetch failed|failed to fetch|networkerror|econn(?:refused|reset|aborted)|etimedout|ehostunreach|enotfound|сетевая ошибка/i;
+
+/** Неудачное завершение отменённой операции (`AbortError`, «aborted»). */
+const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
+
+/**
+ * Converts any thrown value into a readable Russian message (замечания
+ * заказчика после проверки GUI: «Дружелюбные сообщения»).
+ *
+ * - `connection-lost` (`details.kind`) → «нет соединения с сервером»;
+ * - прочий `AbortError` → «действие отменено» (пользовательская отмена — не
+ *   сетевой сбой; verifier remark);
+ * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
+ *   `ETIMEDOUT`, «Сетевая ошибка») → «сервер недоступен, попробуйте позже» —
+ *   technical words, codes and stacks never leak;
+ * - `422` по адресу стороны свойства-связи (`details.field === 'side'`), при
+ *   коллизии display-имён (`details.reason === 'property-ambiguous'`) и при
+ *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) →
+ *   формулировка пользователя по `details.reason`: серверный текст адресован
+ *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
+ * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
+ *   `VERSION_CONFLICT`, …) keep their server-authored message verbatim.
+ */
 export function errText(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  if (isConnectionLostError(err)) return t('errors.connectionLost');
+  const like = asErrorLike(err);
+  if (like?.name === 'AbortError') return t('errors.actionCancelled');
+  if (like?.code === 'INTERNAL') return t('errors.serverUnavailable');
+  const message = err instanceof Error ? err.message : String(err);
+  if (ABORT_ERROR_RE.test(message)) return t('errors.actionCancelled');
+  if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
+  const sideText = propertySideErrorText(like);
+  if (sideText !== null) return sideText;
+  return message;
+}
+
+/**
+ * Текст для `422`, адресующего запись свойства-связи: выбор — по
+ * машиночитаемому `details.reason` (общий контракт с сервером,
+ * `PROPERTY_SIDE_ERROR_REASON`), а не по разбору серверного сообщения.
+ * Причина `property-ambiguous` приходит с `field: 'property'` — коллизия
+ * display-имён разных свойств сети (0.14.1, доработка d9bc6012); остальные
+ * причины адресуют сторону (`field: 'side'`). `null` — ошибка не про сторону
+ * свойства: текст остаётся серверным.
+ */
+function propertySideErrorText(like: ErrorLike | null): string | null {
+  if (like?.code !== 'VALIDATION_ERROR') return null;
+  const details = like.details;
+  if (typeof details !== 'object' || details === null) return null;
+  const { field, reason } = details as { field?: unknown; reason?: unknown };
+  if (reason === PROPERTY_SIDE_ERROR_REASON.ambiguous) return t('errors.propertyNameAmbiguous');
+  if (reason === PROPERTY_SIDE_ERROR_REASON.targetType) return t('errors.propertyTargetType');
+  if (field !== 'side') return null;
+  return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
+    ? t('errors.propertySideMismatch')
+    : t('errors.propertySideRequired');
 }
 
 /** Formats an ISO date as `ДД.ММ.ГГГГ` (Russian locale). */

@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
+import { CLIENT_META_KEY, EtnError, NOT_CONNECTED_ERROR_TEXT, NOT_CONNECTED_NETWORK_ERROR_TEXT, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
@@ -91,7 +91,7 @@ function bindCancellable<const A extends unknown[]>(
 function requireRest(deps: HandlerDeps): RestClient {
   const rest = deps.getRest();
   if (!rest) {
-    throw new Error('Not connected: call etn.server.connect first');
+    throw new Error(NOT_CONNECTED_ERROR_TEXT);
   }
   return rest;
 }
@@ -171,6 +171,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
 
+  // Per-network status snapshot (defect de34b35b): the renderer pulls it once
+  // at boot so switching tabs shows the right indicator immediately.
+  handlers.set(
+    'realtime.getStatuses',
+    bind(() => deps.getRealtimePool()?.statusSnapshot() ?? []),
+  );
+
   // --- networks -------------------------------------------------------------
   handlers.set(
     'networks.list',
@@ -238,7 +245,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'tabs.open',
     bind((networkId: string) => {
       const profile = deps.getProfile();
-      if (!profile) throw new Error('Not connected: call etn.server.connect first');
+      if (!profile) throw new Error(NOT_CONNECTED_ERROR_TEXT);
       // Bugfix Q-bug3: always create a new tab. Duplicates of the same
       // network are explicitly allowed (per the original Q decision); if the
       // user picks an already-open network from the picker we still want a
@@ -453,8 +460,21 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughts.findDuplicates',
-    bind((networkId: string, title: string, synonyms?: string[], typeIds?: string[]) =>
-      requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
+    bind(
+      (
+        networkId: string,
+        title: string,
+        synonyms?: string[],
+        typeIds?: string[],
+        mode?: 'dedupe' | 'search',
+      ) =>
+        requireRest(deps).findDuplicates(
+          networkId,
+          title,
+          synonyms ?? [],
+          typeIds ?? [],
+          mode,
+        ),
     ),
   );
   // Задача eb1a3f43: кросс-сетевая проверка дублей — для диалога выбора мысли
@@ -468,6 +488,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         title: string,
         synonyms?: string[],
         typeIds?: string[],
+        mode?: 'dedupe' | 'search',
       ) =>
         requireRest(deps).findDuplicatesAcrossNetworks(
           networkId,
@@ -475,6 +496,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
           title,
           synonyms ?? [],
           typeIds ?? [],
+          mode,
         ),
     ),
   );
@@ -1299,18 +1321,82 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughtTypeViews.run',
-    bind(
+    // Отменяемый прогон (ошибка 6d78ccab): `AbortSignal` контекста вызова
+    // доезжает до fetch, поэтому устаревший прогон отпускает соединение, а
+    // его ответ не публикуется в нижней зоне.
+    bindCancellable(
       (
         networkId: string,
         thoughtId: string,
         viewName: string,
-        opts?: {
+        opts: {
           sort?: import('@etn/shared').StructureSort;
           order?: import('@etn/shared').SortOrder;
           limit?: number;
           offset?: number;
-        },
-      ) => requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, opts),
+        } | undefined,
+        ctx: IpcCallContext,
+      ) =>
+        requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, {
+          ...(opts ?? {}),
+          requestOptions: { signal: ctx.signal },
+        }),
+    ),
+  );
+  handlers.set(
+    'thoughtTypeViews.moveToThought',
+    bind(
+      (networkId: string, thoughtTypeId: string, viewId: string, targetThoughtId: string) =>
+        requireRest(deps).moveThoughtTypeViewToThought(
+          networkId,
+          thoughtTypeId,
+          viewId,
+          targetThoughtId,
+        ),
+    ),
+  );
+
+  // --- thought-custom views (внетиповые отборы мысли, 0.14.1, 5e55b7bb) ---
+  handlers.set(
+    'thoughtCustomViews.list',
+    bind(
+      (networkId: string, thoughtId: string, opts?: { includeEffective?: boolean }) =>
+        requireRest(deps).listThoughtCustomViews(networkId, thoughtId, opts),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.create',
+    bind((networkId: string, thoughtId: string, input: unknown) =>
+      requireRest(deps).createThoughtCustomView(
+        networkId,
+        thoughtId,
+        input as Parameters<RestClient['createThoughtCustomView']>[2],
+      ),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.update',
+    bind(
+      (networkId: string, thoughtId: string, viewId: string, input: unknown, expectedVersion: number) =>
+        requireRest(deps).updateThoughtCustomView(
+          networkId,
+          thoughtId,
+          viewId,
+          input as Parameters<RestClient['updateThoughtCustomView']>[3],
+          expectedVersion,
+        ),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.remove',
+    bind((networkId: string, thoughtId: string, viewId: string, expectedVersion: number) =>
+      requireRest(deps).deleteThoughtCustomView(networkId, thoughtId, viewId, expectedVersion),
+    ),
+  );
+  handlers.set(
+    'thoughtCustomViews.moveToType',
+    bind((networkId: string, thoughtId: string, viewId: string) =>
+      requireRest(deps).moveThoughtCustomViewToType(networkId, thoughtId, viewId),
     ),
   );
 
@@ -1333,22 +1419,44 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ownerId: string,
         key: string,
         value: unknown,
+        side?: 'source' | 'target' | null,
       ) => {
         const rest = requireRest(deps);
         return ownerType === 'thought'
-          ? rest.setThoughtProperty(networkId, ownerId, key, value as never)
-          : rest.setLinkProperty(networkId, ownerId, key, value as never);
+          ? rest.setThoughtProperty(networkId, ownerId, key, value as never, side)
+          : rest.setLinkProperty(networkId, ownerId, key, value as never, side);
       },
     ),
   );
   handlers.set(
     'properties.remove',
-    bind((networkId: string, ownerType: 'thought' | 'link', ownerId: string, key: string) => {
-      const rest = requireRest(deps);
-      return ownerType === 'thought'
-        ? rest.deleteThoughtProperty(networkId, ownerId, key)
-        : rest.deleteLinkProperty(networkId, ownerId, key);
-    }),
+    bind(
+      (
+        networkId: string,
+        ownerType: 'thought' | 'link',
+        ownerId: string,
+        key: string,
+        side?: 'source' | 'target' | null,
+      ) => {
+        const rest = requireRest(deps);
+        return ownerType === 'thought'
+          ? rest.deleteThoughtProperty(networkId, ownerId, key, side)
+          : rest.deleteLinkProperty(networkId, ownerId, key, side);
+      },
+    ),
+  );
+  // Полный набор пер-мысленного порядка внетиповых свойств (0.14.1,
+  // контракт 27ed2b39): запись одной транзакцией, сервер эмитит
+  // `thought.properties.reordered`.
+  handlers.set(
+    'properties.reorder',
+    bind(
+      (
+        networkId: string,
+        thoughtId: string,
+        items: import('@etn/shared').ThoughtPropertyOrderInput[],
+      ) => requireRest(deps).reorderThoughtProperties(networkId, thoughtId, items),
+    ),
   );
   // Кросс-сетевой резолв значений `cross_network_ref` (задача 7849008a,
   // REST `POST …/properties/{key}/cross-resolve`). Пока реализован для
@@ -1781,7 +1889,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         baseVersion: number | null;
       }) => {
         const profile = deps.getProfile();
-        if (!profile) throw new Error('Not connected: call etn.server.connect first');
+        if (!profile) throw new Error(NOT_CONNECTED_ERROR_TEXT);
         const id = randomUUID();
         deps.localDb.upsertDraft({
           id,
@@ -1810,29 +1918,39 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'ui.draftList',
-    bind((networkId: string) => {
+    bind((networkId: string, filter?: 'pending' | 'conflict' | 'all') => {
       const profile = deps.getProfile();
       if (!profile) return [] as DraftRow[];
-      return deps.localDb
-        .listDrafts(profile.id, networkId)
-        .map((row) => ({
-          id: row.id,
-          networkId: row.network_id,
-          entityType: row.entity_type,
-          entityId: row.entity_id,
-          field: row.field,
-          value: row.value,
-          baseVersion: row.base_version,
-          status: row.status,
-          createdAt: row.created_at,
-        }))
-        .filter((row) => row.status === 'pending');
+      // Default is the auto-retry queue; `all` is needed after a successful
+      // save — a conflict draft of the same field is superseded too
+      // (ошибка 5726744b).
+      const rows =
+        filter === 'all'
+          ? deps.localDb.listDrafts(profile.id, networkId)
+          : deps.localDb.listDrafts(profile.id, networkId, filter ?? 'pending');
+      return rows.map((row) => ({
+        id: row.id,
+        networkId: row.network_id,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        field: row.field,
+        value: row.value,
+        baseVersion: row.base_version,
+        status: row.status,
+        createdAt: row.created_at,
+      }));
     }),
   );
   handlers.set(
     'ui.draftDelete',
     bind((id: string) => {
       deps.localDb.deleteDraft(id);
+    }),
+  );
+  handlers.set(
+    'ui.draftSetStatus',
+    bind((id: string, status: 'pending' | 'conflict' | 'sent' | 'failed') => {
+      deps.localDb.updateDraftStatus(id, status);
     }),
   );
   handlers.set(
@@ -1855,7 +1973,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
-        throw new Error('Not connected: call etn.server.connect and open a network first');
+        throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       }
       deps.localDb.rotateVisitHistory(profile.id, networkId, tabId ?? null, oldId, newId);
     }),
@@ -1866,7 +1984,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
-        throw new Error('Not connected: call etn.server.connect and open a network first');
+        throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       }
       if (tabId === null || tabId === undefined) {
         // Q4: `null` means «across every tab of the network» — a deleted thought
@@ -1889,7 +2007,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
-        throw new Error('Not connected: call etn.server.connect and open a network first');
+        throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       }
       deps.localDb.clearVisitHistory(profile.id, networkId, tabId ?? null);
     }),
@@ -2482,4 +2600,58 @@ export function selfMutationNetwork(method: string, args: unknown[]): string | n
   if (!SELF_MUTATING_IPC_METHODS.has(method)) return null;
   const networkId = args[0];
   return typeof networkId === 'string' && networkId.length > 0 ? networkId : null;
+}
+
+/** Canonical UUID shape (used to recognise a network id among IPC args). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Typed rejection of a mutating call while its network is unreachable
+ * (defect de34b35b). Same message/shape the REST client uses, so the renderer
+ * shows one consistent text regardless of where the gate fired.
+ */
+export function connectionLostIpcError(networkId: string): EtnError {
+  return new EtnError(
+    'INTERNAL',
+    'Нет соединения с сервером. Действие не выполнено — повторите после восстановления.',
+    { kind: 'connection-lost', networkId },
+  );
+}
+
+/**
+ * Centralised mutation gate (defect de34b35b): returns the network id when the
+ * call is a network mutation AND that network is known to the pool but not
+ * `connected`. Reads, `server.*`, `ui.*` and networks not held by the pool are
+ * never blocked.
+ */
+export function blockedMutationNetwork(
+  method: string,
+  args: unknown[],
+  hasNetwork: (networkId: string) => boolean,
+  statusOf: (networkId: string) => import('../net/ws-client.js').RealtimeStatus,
+): string | null {
+  const networkId = selfMutationNetwork(method, args);
+  if (networkId === null) return null;
+  if (!hasNetwork(networkId)) return null;
+  return statusOf(networkId) === 'connected' ? null : networkId;
+}
+
+/**
+ * Network whose liveness should be probed when an IPC call hangs for 3 s
+ * (defect de34b35b): the first positional UUID, otherwise the currently open
+ * network. `null` when the call has no network at all.
+ */
+export function actionProbeNetwork(
+  method: string,
+  args: unknown[],
+  currentNetworkId: string | null,
+): string | null {
+  // `me.*` is intentionally NOT excluded (verify remark 1): a hung `PATCH /me`
+  // must probe the open network too — otherwise the user waits ~91 s.
+  if (method.startsWith('server.') || method.startsWith('admin.')) {
+    return null;
+  }
+  const first = args[0];
+  if (typeof first === 'string' && UUID_RE.test(first)) return first;
+  return currentNetworkId;
 }

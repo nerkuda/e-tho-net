@@ -12,6 +12,7 @@ import type {
   CommentOwnerType,
   AttachmentOwnerType,
   FocusDir,
+  LinkPropertySide,
   NetworkRole,
   PropertyOwnerType,
   RealtimeAudience,
@@ -35,7 +36,12 @@ import type {
 } from './thought-type.js';
 import type { SavedFilter } from './structure.js';
 import type { LayerMergeReport } from './layer.js';
-import type { EffectiveThoughtTypeView, ThoughtTypeViewUpdateInput } from './thought-type-view.js';
+import type {
+  EffectiveThoughtCustomView,
+  EffectiveThoughtTypeView,
+  ThoughtCustomViewUpdateInput,
+  ThoughtTypeViewUpdateInput,
+} from './thought-type-view.js';
 import type { Publication, PublicationOrderItem, Shelf } from './publication.js';
 
 // ---------------------------------------------------------------------------
@@ -70,6 +76,8 @@ export const REALTIME_EVENT_TYPES = [
   'thought.updated',
   'thought.deleted',
   'thought.reordered',
+  // порядок внетиповых свойств мысли (0.14.1, задача 3948af62)
+  'thought.properties.reordered',
   // links (§4.2)
   'link.created',
   'link.updated',
@@ -131,6 +139,12 @@ export const REALTIME_EVENT_TYPES = [
   'thought-type-view.updated',
   'thought-type-view.deleted',
   'thought-type-view.run',
+  // thought-custom views (0.14.1, операция 5d447380 — внетиповые отборы мысли).
+  // Имя семейства — с `custom`: `thought-view.updated` занят метками просмотра.
+  'thought-custom-view.created',
+  'thought-custom-view.updated',
+  'thought-custom-view.deleted',
+  'thought-custom-view.run',
   // publications & shelves (0.11.1, задача c59ce742; каталог 67b8748e).
   // Отдельного `publication.created` каталог не объявляет: создание
   // публикации клиент узнаёт тем же `publication.updated` (список/карточка
@@ -314,6 +328,23 @@ export interface PropertyValueDeletedData {
   property_id: string;
 }
 
+/**
+ * Один элемент нормализованного набора порядка внетиповых свойств мысли
+ * (0.14.1, задача 3948af62; контракт 27ed2b39). `side` в событии ВСЕГДА
+ * присутствует: сервер вычислил сторону из живых рёбер; у скаляра — `null`.
+ */
+export interface ThoughtPropertiesReorderedItem {
+  property_id: string;
+  side: LinkPropertySide | null;
+  position: number;
+}
+
+/** `thought.properties.reordered` — полный набор порядка свойств мысли. */
+export interface ThoughtPropertiesReorderedData {
+  thought_id: string;
+  items: ThoughtPropertiesReorderedItem[];
+}
+
 // network & membership
 export interface NetworkUpdatedData {
   display_name?: string;
@@ -457,6 +488,27 @@ export interface ThoughtTypeViewUpdatedData {
 export interface ThoughtTypeViewDeletedData {
   thought_type_id: string;
   view_id: string;
+  /**
+   * Полная карточка удалённого отбора — снапшот ДО удаления (0.14.1, ошибка
+   * 69aa355c; симметрия с `thought-custom-view.deleted`, контракт c643fd7b).
+   * Клиенту не нужен GET, чтобы показать имя/позицию/дефолт снятого чипа и
+   * пересчитать соседей. `view_id` оставлен для адресации ветвимой строки в
+   * слоевой видимости (`layer-visibility.ts`).
+   *
+   * Необязательна для батч-удаления `etn.ontology.write`, где адресация идёт
+   * через `ref_for_update` и карточки до удаления нет; клиент в этом случае
+   * перечитывает список по `view_id` (перед удалением по батчу он уже получил
+   * `created`/`updated` с полной карточкой).
+   */
+  view?: EffectiveThoughtTypeView;
+  /**
+   * Причина удаления: `'moved'` — отбор перенесён новому владельцу
+   * (операция 85414fbd, `move-to-thought`). Клиент отличает перенос от
+   * удаления и не сбрасывает активный чип зря.
+   */
+  reason?: 'moved';
+  /** Id нового владельца (для `reason: 'moved'` — мысль-получатель). */
+  moved_to?: string;
 }
 /**
  * `thought-type-view.run` — успешное исполнение отбора относительно мысли
@@ -471,6 +523,52 @@ export interface ThoughtTypeViewRunData {
   /** Количество мыслей в странице (0 при непустом `unresolved`). */
   result_count: number;
   /** Непустой, если хоть один токен не разрешился (требование b7fdab20). */
+  unresolved: Array<{ token: string; reason: string; message: string }>;
+}
+
+// thought-custom views (0.14.1, операция 5d447380) — внетиповые отборы мысли.
+// Payload — полная карточка отбора (включая `definition`), как у типовых:
+// клиент не делает лишний GET, чтобы узнать имя/позицию/дефолт перекрытия.
+export interface ThoughtCustomViewCreatedData {
+  thought_id: string;
+  view: EffectiveThoughtCustomView;
+}
+export interface ThoughtCustomViewUpdatedData {
+  thought_id: string;
+  view_id: string;
+  changes: ThoughtCustomViewUpdateInput;
+  version: number;
+  view: EffectiveThoughtCustomView;
+}
+export interface ThoughtCustomViewDeletedData {
+  thought_id: string;
+  view_id: string;
+  /**
+   * Полная карточка удалённого отбора (контракт 5d447380: как у `created`
+   * и `updated`) — клиенту не нужен GET, чтобы показать имя/позицию/дефолт
+   * снятого чипа и пересчитать соседей. `view_id` оставлен для адресации
+   * ветвимой строки в слоевой видимости (`layer-visibility.ts`).
+   */
+  view: EffectiveThoughtCustomView;
+  /**
+   * Причина удаления: `'moved'` — отбор перенесён новому владельцу
+   * (операция 85414fbd, `move-to-type`). Клиент отличает перенос от удаления
+   * и не сбрасывает активный чип зря.
+   */
+  reason?: 'moved';
+  /** Id нового владельца (для `reason: 'moved'` — тип-получатель). */
+  moved_to?: string;
+}
+/**
+ * `thought-custom-view.run` — исполнение внетипового отбора через REST.
+ * MCP `etn.views.run` остаётся read-only и событий не пишет. Клиент событие
+ * игнорирует (как `thought-type-view.run`).
+ */
+export interface ThoughtCustomViewRunData {
+  thought_id: string;
+  view_id: string;
+  view_name: string;
+  result_count: number;
   unresolved: Array<{ token: string; reason: string; message: string }>;
 }
 
@@ -536,6 +634,7 @@ export interface RealtimeEventMap {
   'thought.updated': ThoughtUpdatedData;
   'thought.deleted': ThoughtDeletedData;
   'thought.reordered': ThoughtReorderedData;
+  'thought.properties.reordered': ThoughtPropertiesReorderedData;
   'link.created': LinkCreatedData;
   'link.updated': LinkUpdatedData;
   'link.deleted': LinkDeletedData;
@@ -585,6 +684,10 @@ export interface RealtimeEventMap {
   'thought-type-view.updated': ThoughtTypeViewUpdatedData;
   'thought-type-view.deleted': ThoughtTypeViewDeletedData;
   'thought-type-view.run': ThoughtTypeViewRunData;
+  'thought-custom-view.created': ThoughtCustomViewCreatedData;
+  'thought-custom-view.updated': ThoughtCustomViewUpdatedData;
+  'thought-custom-view.deleted': ThoughtCustomViewDeletedData;
+  'thought-custom-view.run': ThoughtCustomViewRunData;
   'publication.updated': PublicationUpdatedData;
   'publication.order.reordered': PublicationOrderReorderedData;
   'publication.exclusions.changed': PublicationExclusionsChangedData;
@@ -641,6 +744,7 @@ export const REALTIME_EVENT_AUDIENCE = {
   'thought.updated': 'network',
   'thought.deleted': 'network',
   'thought.reordered': 'user',
+  'thought.properties.reordered': 'network',
   'link.created': 'network',
   'link.updated': 'network',
   'link.deleted': 'network',
@@ -690,6 +794,10 @@ export const REALTIME_EVENT_AUDIENCE = {
   'thought-type-view.updated': 'network',
   'thought-type-view.deleted': 'network',
   'thought-type-view.run': 'network',
+  'thought-custom-view.created': 'network',
+  'thought-custom-view.updated': 'network',
+  'thought-custom-view.deleted': 'network',
+  'thought-custom-view.run': 'network',
   'publication.updated': 'network',
   'publication.order.reordered': 'network',
   'publication.exclusions.changed': 'network',

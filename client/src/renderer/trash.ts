@@ -50,11 +50,12 @@ import { openEntityDeleteDialog } from './lib/delete-dialog.js';
 import { div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { resolveThoughtRefs } from './lib/thought-ref-batch.js';
-import { notice } from './lib/notice.js';
+import { notice, noticePartial } from './lib/notice.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 import { uiButton } from './lib/ui/button.js';
 import { choiceControl } from './lib/ui/choice-row.js';
 import { fieldInput } from './lib/ui/field.js';
+import { bindSearchNav } from './lib/ui/search-nav.js';
 import { createTable } from './lib/ui/table.js';
 import { splitterElement, wireSplitter, type SplitterHandle } from './lib/ui/splitter.js';
 import { pluralRu } from './lib/plural.js';
@@ -434,14 +435,16 @@ export async function openLinkDeleteDialog(
     },
     onTrash: async (close) => {
       try {
-        await etn.links.update(
+        const updated = await etn.links.update(
           networkId,
           linkId,
           { marked_for_deletion: !alreadyMarked },
           await linkVersion(networkId, linkId),
         );
         close();
-        scheduleRefresh();
+        // Общий путь отражения связи: метка корзины и чип «+N» на графе
+        // редактора не должны ждать realtime-эха (ошибка 42a7c0a1, круг 3).
+        reflectLinkUpdate(updated);
         notice(alreadyMarked ? 'Связь возвращена из корзины.' : 'Связь помещена в корзину.');
       } catch (err) {
         errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
@@ -725,7 +728,7 @@ export async function openThoughtGroupDeleteDialog(
             // alongside the canvas.
             scheduleStructuresRefresh();
             refreshSearchIfVisible();
-            notice(failures > 0 ? `Применено, ошибок: ${failures}.` : 'Применено.');
+            noticePartial(failures > 0 ? `Применено, ошибок: ${failures}.` : 'Применено.', failures);
           } catch (err) {
             errorDialog('Удаление выбранного', err);
           }
@@ -1051,13 +1054,17 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     updateButtons();
   }
   searchInput.addEventListener('input', () => applyFilter());
+  // ↑/↓/Enter из поиска (первая строка диалога, правило 1 требования
+  // 11ddd910) исполняет штатную навигацию таблицы общим мостом; фокус
+  // остаётся в поле, набор запроса продолжается (ошибка 58981cf5).
+  bindSearchNav(searchInput, { handleKey: (key, modifiers) => table.handleKey(key, modifiers) });
 
   /** Полная физическая очистка корзины (массовое управление над списком). */
   async function purgeAll(): Promise<void> {
     try {
       const { purged, skipped } = await etn.trash.purge(networkId);
       scheduleRefresh();
-      notice(`Удалено ${purged}, осталось заблокировано ${skipped}.`);
+      noticePartial(`Удалено ${purged}, осталось заблокировано ${skipped}.`, skipped);
       await render();
     } catch (err) {
       errorDialog('Очистить корзину', err);

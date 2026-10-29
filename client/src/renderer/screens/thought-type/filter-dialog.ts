@@ -31,30 +31,38 @@
 import {
   THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
   THOUGHT_TYPE_VIEW_NAME_MAX,
-  type NetworkProperty,
+  type ThoughtCustomView,
+  type ThoughtCustomViewInput,
+  type ThoughtCustomViewUpdateInput,
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
 } from '@etn/shared';
 import { t } from '../../lib/i18n.js';
 
-import { div, errText } from '../../lib/dom.js';
+import { div, el, errText } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { footerErrorLine, type ErrorAddress, type FooterErrorLine } from '../../lib/ui/messages.js';
 import { etn } from '../../lib/etn.js';
 import { buildFilterEditor, type FilterEditorHandle } from '../../lib/filter-editor.js';
+import { propertyCatalogueRows, reloadPropertyCatalogue } from '../../lib/property-catalogue.js';
 import {
   constructorFilterIssues,
   filterIssuesFromError,
   hasBlockingIssues,
+  lostConditionIssues,
   mergeFilterIssues,
   type FilterIssue,
 } from '../../lib/filter-diagnostics.js';
-import { type FilterCriteriaState } from '../../lib/filter-builder.js';
+import {
+  readFilterDefinitionDetailed,
+  type FilterCriteriaState,
+} from '../../lib/filter-builder.js';
 import type { FilterTreeData } from '../../lib/filter-tree.js';
+import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
 import { formDirty } from '../../lib/pure.js';
-import { fieldRow, fieldTextarea } from '../../lib/ui/field.js';
+import { FIELD_HINT_CLASS, fieldRow, fieldTextarea } from '../../lib/ui/field.js';
 import { checkboxRow } from '../../lib/ui/choice-row.js';
 import { store } from '../../state.js';
 
@@ -72,17 +80,74 @@ import {
 /** What the dialog was opened for: a new view or an existing one. */
 export interface OpenViewEditorOptions {
   networkId: string;
-  /** Type the new view belongs to. */
-  thoughtTypeId: string;
-  /** Type display name (used in the dialog title). */
-  typeName: string;
+  /** Владелец-тип: отбор типа мысли. Взаимоисключим с `ownerThoughtId`. */
+  thoughtTypeId?: string;
+  /** Имя типа-владельца (для заголовка и предупреждения). */
+  typeName?: string;
+  /** Владелец-мысль: внетиповой отбор (0.14.1, спека e0257ca5). */
+  ownerThoughtId?: string;
+  /** Имя мысли-владельца (для заголовка и предупреждения). */
+  thoughtName?: string;
   /** `null` — create; otherwise the existing view to edit. */
-  view: ThoughtTypeView | null;
+  view: ViewEditorView | null;
   /**
    * Called after a successful save. Receives the saved view (newly created or
    * freshly updated). Errors are surfaced in-place; no callback on cancel.
    */
-  onSaved?: (view: ThoughtTypeView) => void;
+  onSaved?: (view: ThoughtTypeView | ThoughtCustomView) => void;
+}
+
+/**
+ * Поля существующего отбора, которые нужны диалогу. Общая структурная форма
+ * для типового (`ThoughtTypeView`) и внетипового (`ThoughtCustomView`) отбора:
+ * владельца задаёт `OpenViewEditorOptions`, а не сама карточка.
+ */
+export interface ViewEditorView {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: string;
+  is_default: boolean;
+  version: number;
+}
+
+/** Владелец отбора, разобранный из опций диалога (ровно один). */
+type ViewOwner =
+  | { kind: 'type'; typeId: string; typeName: string }
+  | { kind: 'thought'; thoughtId: string; thoughtName: string };
+
+/**
+ * Причина, по которой запись отбора могла бы молча потерять условия по
+ * свойствам (ошибка 071acfc2). Причина обязана называться ПО ФАКТУ: после
+ * успешного повтора чтения реестра «реестр не прочитан» — ложь.
+ *
+ * - `registryPending` — реестр сети ещё не прочитан, определение разобрано без
+ *   него, ждём повтор чтения на тике store;
+ * - `conditionsLost` — реестр прочитан, но форму правили до него: условия из
+ *   сохранённого определения в состоянии отсутствуют, запись потеряет их;
+ * - `null` — потерь нет, сохранение разрешено.
+ */
+type LossRisk = 'registryPending' | 'conditionsLost' | null;
+
+/** Ровно один владелец: тип XOR мысль (спека e0257ca5). */
+function resolveOwner(opts: OpenViewEditorOptions): ViewOwner {
+  const typed = opts.thoughtTypeId !== undefined;
+  const owned = opts.ownerThoughtId !== undefined;
+  if (typed === owned) {
+    throw new Error('OpenViewEditorOptions: exactly one owner — thoughtTypeId or ownerThoughtId.');
+  }
+  if (typed) {
+    return {
+      kind: 'type',
+      typeId: opts.thoughtTypeId as string,
+      typeName: opts.typeName ?? '',
+    };
+  }
+  return {
+    kind: 'thought',
+    thoughtId: opts.ownerThoughtId as string,
+    thoughtName: opts.thoughtName ?? '',
+  };
 }
 
 /**
@@ -97,7 +162,7 @@ export function openViewEditorDialog(opts: OpenViewEditorOptions): void {
   // The body is built lazily after the type chain is loaded (we need the
   // ancestor types' effective properties to feed the context-token source).
   void buildAndShow(opts).catch((err: unknown) => {
-    notice(`Не удалось открыть диалог отбора: ${errText(err)}`, 'error');
+    notice(t('filterEditor.openFailed', errText(err)), 'error');
   });
 }
 
@@ -109,29 +174,87 @@ function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
   return buildAndShowImpl(opts);
 }
 
+/** Разобранный объект сохранённого определения (`undefined` — нет/битый JSON). */
+function parseSavedDefinition(view: ViewEditorView | null): unknown {
+  if (view === null) return undefined;
+  try {
+    return JSON.parse(view.definition) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
-  const { networkId, typeName } = opts;
+  const { networkId } = opts;
+  const owner = resolveOwner(opts);
   // Property registry (registry-level metadata, e.g. name and multiple flag for
   // each property). Обратные стороны свойств-связей добавляют сами модули
   // редактора (дерево/сортировка) — реестр передаётся как есть. Токены
   // `$thought.[…]` предлагаются по ВСЕМУ реестру сети (ошибка 50d9bf4e п. A6),
   // поэтому цепочка типов для подсказок больше не грузится.
-  const registry = new Map<string, NetworkProperty>();
-  try {
-    const list = await etn.propertyRegistry.list(networkId);
-    for (const row of list) registry.set(row.id, row);
-  } catch {
-    /* empty registry — the operand list just shows characteristics only */
-  }
+  //
+  // Отказ чтения реестра — «неотработанный вход» (ошибка db42100b, механика
+  // 77f18626): прежняя плоская `definition v1` без реестра теряет условия по
+  // свойствам, поэтому отказ отличается от успешного чтения, а диалог
+  // повторяет чтение на тике store и переразбирает определение до правки
+  // пользователя. Молчаливая перезапись потерянного определения запрещена.
+  //
+  // Источник реестра — ОБЩИЙ живой справочник свойств (`lib/property-catalogue.ts`,
+  // ошибка 6d25c224): карта обновляется на месте, поэтому открытый диалог видит
+  // созданное/переименованное/удалённое свойство без перезапуска клиента.
+  const registry = propertyCatalogueRows(networkId);
+  let registryOk = await reloadPropertyCatalogue(networkId, { fresh: true });
+  /** Определение сохранённого отбора (объект JSON) — вход диагностики потерь. */
+  const savedDefinition = parseSavedDefinition(opts.view);
+  /**
+   * Потери, которые даёт разбор С пустым реестром: если реестр не прочитан, это
+   * условия по свойствам, которые ещё могут вернуться повтором (не «свойства
+   * больше нет в сети» — та формулировка была бы ложной, ошибка 3bf62fd7).
+   */
+  const lossesWithoutRegistry =
+    !registryOk && savedDefinition !== undefined
+      ? readFilterDefinitionDetailed(savedDefinition, {
+          activeMode: 'view',
+          registry: new Map(),
+        }).lost
+      : [];
+  /** Отказ реестра мог стоить условий по свойствам — сохранение блокируется. */
+  let lossRiskReason: LossRisk = lossesWithoutRegistry.length > 0 ? 'registryPending' : null;
+  /** Жёлтая диагностика отбора: потеря из-за отказа реестра либо настоящая. */
+  let lossIssues: readonly FilterIssue[] =
+    lossesWithoutRegistry.length > 0
+      ? [
+          {
+            severity: 'warning',
+            source: 'constructor',
+            code: 'build_warning',
+            path: '',
+            message: t('filterEditor.registryPending'),
+          },
+        ]
+      : registryOk && savedDefinition !== undefined
+        ? lostConditionIssues(
+            readFilterDefinitionDetailed(savedDefinition, {
+              activeMode: 'view',
+              registry,
+            }).lost,
+          )
+        : [];
 
   // 2. Initialise the form state from the existing view (or defaults). Старая
   //    плоская `definition v1` компилируется в дерево здесь же (на входе).
   const isEdit = opts.view !== null;
-  // Заголовок диалога (ошибка 23c7d3e9 п. C1): правка существующего отбора —
-  // «Отбор для «<тип>»», создание нового — «Создать отбор для «<тип>»».
-  const title = isEdit
-    ? t('filterEditor.dialogTitleEdit', typeName)
-    : t('filterEditor.dialogTitleCreate', typeName);
+  // Заголовок явно называет вид владельца (спека e0257ca5, решение
+  // пользователя 2026-10-23): «Создать/Отбор типа «X»» и
+  // «Создать/Отбор мысли «Y»».
+  const ownerName = owner.kind === 'type' ? owner.typeName : owner.thoughtName;
+  const title = owner.kind === 'type'
+    ? (isEdit
+        ? t('filterEditor.dialogTitleEdit', ownerName)
+        : t('filterEditor.dialogTitleCreate', ownerName))
+    : (isEdit
+        ? t('filterEditor.dialogTitleEditThought', ownerName)
+        : t('filterEditor.dialogTitleCreateThought', ownerName));
   const state = parseViewDefinition(opts.view, registry);
   const initialName = opts.view?.name ?? '';
   const initialDescription = opts.view?.description ?? '';
@@ -145,16 +268,30 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   // ошибки диалога, требование 397c5a56).
   const errorLine = footerErrorLine();
 
+  // Предупреждение об общности отбора — по владельцу (спека e0257ca5):
+  // типовой действует на все мысли типа, внетиповой виден всем, но действует
+  // только у этой мысли.
+  const warning = el(
+    'p',
+    FIELD_HINT_CLASS,
+    owner.kind === 'type'
+      ? t('filterEditor.typeViewWarning')
+      : t('filterEditor.thoughtViewWarning'),
+  );
+
   // Description — optional, ≤1000.
   const descInput = fieldTextarea() as HTMLTextAreaElement;
   descInput.rows = 3;
   descInput.maxLength = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
   descInput.value = initialDescription;
-  descInput.placeholder = 'Описание (его читают и человек, и агент)';
-  const descField = fieldRow({ label: 'Описание', control: descInput });
+  descInput.placeholder = t('filterEditor.descriptionPlaceholder');
+  const descField = fieldRow({ label: t('filterEditor.descriptionLabel'), control: descInput });
 
   // «Open by default» checkbox.
-  const defaultRow = checkboxRow({ label: 'Открывать по умолчанию', checked: initialIsDefault });
+  const defaultRow = checkboxRow({
+    label: t('filterEditor.openByDefault'),
+    checked: initialIsDefault,
+  });
   const defaultCheckbox = defaultRow.input;
   const defaultField = defaultRow.row;
 
@@ -179,13 +316,18 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
    * (требование b58f6aad). Снимок — тем же конвертером, поэтому нетронутая
    * форма не считается изменённой.
    *
+   * ПРИ ПЕРЕРАЗБОРЕ на повторе чтения реестра база пересчитывается вместе с
+   * заменой состояния: иначе восстановленные условия выглядели бы правкой
+   * пользователя и диалог без правок спрашивал бы подтверждение закрытия
+   * (ошибка 071acfc2, п. б).
+   *
    * Объявлен ДО сборки редактора: фабрика синхронно строит футер, его
    * `refresh` читает `host.baseline()` — обратись к `criteriaBase` из стрелки
    * `baseline` ниже по коду, получили бы TDZ-ошибку «Cannot access
    * 'criteriaBase' before initialization» при открытии диалога отбора
    * (ошибка 609deba0 п. C1).
    */
-  const criteriaBase = buildViewAst(state);
+  let criteriaBase = buildViewAst(state);
   const editor = buildFilterEditor({
     profile: 'thoughts',
     networkId,
@@ -220,12 +362,14 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       savedName: () => (isEdit ? initialName : null),
       baseline: () => criteriaBase,
       current: () => buildViewAst(state),
-      issues: () => serverIssues,
+      // Диагностика потерь при чтении определения — рядом с записями ядра:
+      // потеря из-за отказа реестра видна строкой, а не молчит (db42100b).
+      issues: () => mergeFilterIssues(lossIssues, serverIssues),
     },
   });
   editorRef = editor;
 
-  body.append(descField, defaultField, editor.root);
+  body.append(warning, descField, defaultField, editor.root);
   // Имя отбора — ПЕРВЫМ полем диалога (ошибка 50d9bf4e п. A1). Строку имени
   // строит футер редактора (одна реализация), но здесь она переносится в начало
   // разметки диалога: у модального места имя — главный идентификатор отбора, и
@@ -236,12 +380,19 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   //    failure; we close only when the IPC call resolves.
   let saveBtn: HTMLButtonElement | null = null;
   let closeDialog: (() => void) | null = null;
+  /** Диалог показан: повтору чтения реестра есть куда применить результат. */
+  let dialogOpen = false;
+  /** Отписка от тиков store — повтор чтения реестра свойств (ошибка db42100b). */
+  let unsubscribeRegistry: (() => void) | null = null;
+  /** Сторож гонки: тики store чаще, чем чтение реестра. */
+  let registryRetryInFlight = false;
   /** Контекст сохранения — общий для кнопки «Применить» и подтверждения
    *  «Сохранить» при закрытии «грязного» редактора (требование b58f6aad). */
   const saveCtx = (close: () => void): SaveCtx => ({
     close,
     saveBtn,
     opts,
+    owner,
     state,
     getName: () => name,
     getDescription: () => descInput.value,
@@ -258,6 +409,7 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       editor.refresh();
     },
     refreshEditor: () => editor.refresh(),
+    lossRiskReason: () => lossRiskReason,
   });
   showDialog({
     title,
@@ -271,7 +423,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
     onMount: (_close, box) => box.classList.add('view-editor-dialog'),
     // Диалог закрыт любой кнопкой/Esc/крестиком — редактор размонтируем:
     // его дерево снимает клавиатурные контексты из реестра `lib/keymap`.
-    onClose: () => editor.destroy(),
+    onClose: () => {
+      dialogOpen = false;
+      unsubscribeRegistry?.();
+      unsubscribeRegistry = null;
+      editor.destroy();
+    },
     // Ошибка сохранения — строкой в панели кнопок (требование 397c5a56):
     // ошибки полей видны только на своей вкладке/месте, футер — всегда.
     footerError: errorLine,
@@ -302,6 +459,59 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
       },
     ],
   });
+  dialogOpen = true;
+
+  // Отказ чтения реестра — «неотработанный вход»: следующий тик store (в т.ч.
+  // восстановление связи) повторяет чтение, а определение ПЕРЕРАЗБИРАЕТСЯ —
+  // условия по свойствам возвращаются в дерево до сохранения (db42100b,
+  // механика 77f18626). Правку пользователя переразбор не перетирает.
+  if (!registryOk) {
+    const retryRegistry = (): void => {
+      if (registryOk || registryRetryInFlight || !dialogOpen) return;
+      registryRetryInFlight = true;
+      void reloadPropertyCatalogue(networkId, { fresh: true })
+        .then((ok) => {
+          // Отказ — ожидание остаётся до следующего тика store.
+          if (!ok || !dialogOpen) return;
+          registryOk = true;
+          const nextLosses =
+            savedDefinition === undefined
+              ? []
+              : readFilterDefinitionDetailed(savedDefinition, {
+                  activeMode: 'view',
+                  registry,
+                }).lost;
+          // Отказ реестра больше не причина потери: остаются только настоящие
+          // потери (свойства действительно нет) — их показывает общий каркас.
+          lossIssues = lostConditionIssues(nextLosses);
+          if (!formDirty(criteriaBase, buildViewAst(state))) {
+            Object.assign(state, parseViewDefinition(opts.view, registry));
+            // База пересчитывается ВМЕСТЕ с состоянием: восстановленные условия —
+            // не правка пользователя, иначе диалог сразу «грязный»
+            // (ошибка 071acfc2, п. б).
+            criteriaBase = buildViewAst(state);
+            // Реестр прочитан и состояние переразобрано — потерь нет.
+            lossRiskReason = null;
+          } else {
+            // Пользователь правил отбор без реестра: переразбор перетёр бы его
+            // правку. Если реестр вернул условия, которых в состоянии нет, —
+            // сохранять нельзя: перезапись потеряет их молча. Причина — именно
+            // потеря условий, а не «реестр не прочитан»: он уже прочитан
+            // (ошибка 071acfc2, п. а).
+            lossRiskReason =
+              nextLosses.length < lossesWithoutRegistry.length ? 'conditionsLost' : null;
+          }
+          editor.refresh();
+        })
+        .catch(() => {
+          // Отказ — ожидание остаётся до следующего тика store.
+        })
+        .finally(() => {
+          registryRetryInFlight = false;
+        });
+    };
+    unsubscribeRegistry = store.subscribe(retryRegistry);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +522,8 @@ interface SaveCtx {
   close: () => void;
   saveBtn: HTMLButtonElement | null;
   opts: OpenViewEditorOptions;
+  /** Владелец отбора (разрешён при открытии диалога). */
+  owner: ViewOwner;
   /** Единая модель отбора (дерево условий + сортировка). */
   state: FilterCriteriaState;
   getName: () => string;
@@ -326,18 +538,30 @@ interface SaveCtx {
   setServerIssues: (issues: readonly FilterIssue[]) => void;
   /** Перерисовать редактор из модели (подсветка строк, футер). */
   refreshEditor: () => void;
+  /**
+   * Причина возможной потери условий по свойствам: реестр не прочитан либо
+   * правка шла без реестра и условия не восстановлены (`null` — потерь нет).
+   */
+  lossRiskReason: () => LossRisk;
 }
 
 async function onSave(ctx: SaveCtx): Promise<void> {
+  // Только Основа (спека e0257ca5): все правки отборов — в Основе. Гейт стоит
+  // ДО записи; диалог, открытый в Основе, после переключения слоя сохранить не
+  // может — иначе правка молча уехала бы в рабочий слой.
+  if (!isInBaseLayer()) {
+    notice(t('filterEditor.baseLayerGuard'), 'info');
+    return;
+  }
   const trimmedName = ctx.getName().trim();
   if (trimmedName === '') {
-    showNameError(ctx, 'Укажите имя отбора.');
+    showNameError(ctx, t('filterEditor.nameRequired'));
     return;
   }
   if (trimmedName.length > THOUGHT_TYPE_VIEW_NAME_MAX) {
     showNameError(
       ctx,
-      `Имя не должно превышать ${THOUGHT_TYPE_VIEW_NAME_MAX} символов (сейчас ${trimmedName.length}).`,
+      t('filterEditor.nameTooLong', [THOUGHT_TYPE_VIEW_NAME_MAX, trimmedName.length]),
     );
     return;
   }
@@ -345,24 +569,44 @@ async function onSave(ctx: SaveCtx): Promise<void> {
   if (trimmedDesc.length > THOUGHT_TYPE_VIEW_DESCRIPTION_MAX) {
     showFieldError(
       ctx,
-      `Описание не должно превышать ${THOUGHT_TYPE_VIEW_DESCRIPTION_MAX} символов (сейчас ${trimmedDesc.length}).`,
+      t('filterEditor.descriptionTooLong', [
+        THOUGHT_TYPE_VIEW_DESCRIPTION_MAX,
+        trimmedDesc.length,
+      ]),
+    );
+    return;
+  }
+  // Запись перезаписала бы условия по свойствам молча — ждём либо повтора
+  // чтения реестра, либо переоткрытия отбора: причина называется ПО ФАКТУ
+  // (реестр не прочитан / условия не восстановлены после его чтения), чтобы
+  // не отправлять пользователя ждать уже прочитанный реестр (ошибка 071acfc2).
+  // Стоит ДО запрета пустого отбора: без реестра дерево выглядит пустым именно
+  // из-за потери, и сообщение обязано называть причину.
+  const lossRiskReason = ctx.lossRiskReason();
+  if (lossRiskReason !== null) {
+    showFieldError(
+      ctx,
+      t(
+        lossRiskReason === 'registryPending'
+          ? 'filterEditor.registryPendingSave'
+          : 'filterEditor.conditionsLostSave',
+      ),
     );
     return;
   }
   // Запрет пустого отбора (ошибка e8365d29): без условий отбор бессмыслен.
   if (!hasAnyCriteria(ctx.state)) {
-    showFieldError(ctx, 'Укажите хотя бы одно условие отбора.');
+    showFieldError(ctx, t('filterEditor.noCriteria'));
     return;
   }
   // Красная диагностика (конструктор + записи ядра) запрещает сохранение
   // (требование 44d61c8a): отбор с ошибкой на хранение не пишется.
   const issues = mergeFilterIssues(constructorFilterIssues(ctx.state.tree ?? null));
   if (hasBlockingIssues(issues)) {
-    showFieldError(ctx, 'В отборе есть ошибки — исправьте их перед сохранением.');
+    showFieldError(ctx, t('filterEditor.blockingIssues'));
     ctx.refreshEditor();
     return;
   }
-
   let definitionJson: string;
   try {
     definitionJson = JSON.stringify(buildViewAstDefinition(ctx.state));
@@ -374,31 +618,46 @@ async function onSave(ctx: SaveCtx): Promise<void> {
   if (ctx.saveBtn !== null) ctx.saveBtn.disabled = true;
   ctx.errorLine.clear();
 
-  const { networkId, thoughtTypeId, view } = ctx.opts;
+  const { networkId, view } = ctx.opts;
+  const input: ThoughtTypeViewInput = {
+    name: trimmedName,
+    description: trimmedDesc === '' ? null : trimmedDesc,
+    definition: definitionJson,
+    is_default: ctx.getIsDefault(),
+  };
   try {
-    let saved: ThoughtTypeView;
-    if (view === null) {
-      const input: ThoughtTypeViewInput = {
-        name: trimmedName,
-        description: trimmedDesc === '' ? null : trimmedDesc,
-        definition: definitionJson,
-        is_default: ctx.getIsDefault(),
-      };
-      saved = await etn.thoughtTypeViews.create(networkId, thoughtTypeId, input);
+    let saved: ThoughtTypeView | ThoughtCustomView;
+    if (ctx.owner.kind === 'type') {
+      if (view === null) {
+        saved = await etn.thoughtTypeViews.create(networkId, ctx.owner.typeId, input);
+      } else {
+        const patch: ThoughtTypeViewUpdateInput = input;
+        saved = await etn.thoughtTypeViews.update(
+          networkId,
+          ctx.owner.typeId,
+          view.id,
+          patch,
+          ctx.version,
+        );
+      }
     } else {
-      const patch: ThoughtTypeViewUpdateInput = {
-        name: trimmedName,
-        description: trimmedDesc === '' ? null : trimmedDesc,
-        definition: definitionJson,
-        is_default: ctx.getIsDefault(),
-      };
-      saved = await etn.thoughtTypeViews.update(
-        networkId,
-        view.thought_type_id,
-        view.id,
-        patch,
-        ctx.version,
-      );
+      const customInput: ThoughtCustomViewInput = input;
+      if (view === null) {
+        saved = await etn.thoughtCustomViews.create(
+          networkId,
+          ctx.owner.thoughtId,
+          customInput,
+        );
+      } else {
+        const patch: ThoughtCustomViewUpdateInput = customInput;
+        saved = await etn.thoughtCustomViews.update(
+          networkId,
+          ctx.owner.thoughtId,
+          view.id,
+          patch,
+          ctx.version,
+        );
+      }
     }
     ctx.opts.onSaved?.(saved);
     ctx.close();

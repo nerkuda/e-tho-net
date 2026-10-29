@@ -143,6 +143,85 @@ describe('маппинг выделения просмотра в исходни
     assert.deepEqual(before, { anchor: 4, head: 4 });
   });
 
+  it('блочная карта сдвига компенсирует escape/HTML-entity вне конструкции (49ebba76)', () => {
+    // `a &amp; b`: диапазон блока [0, 9), `&amp;` короче исходника на 4.
+    const text = textNode('a & b');
+    const paragraph = element(
+      {
+        [MD_SOURCE_START_ATTR]: '0',
+        [MD_SOURCE_END_ATTR]: '9',
+        [MD_SOURCE_SHIFT_ATTR]: '3:4',
+      },
+      [text],
+    );
+    element({}, [paragraph]);
+    // Каретка на `b` (4-й отрисованный символ) → 0 + 4 + 4 = 8 (истина).
+    const range = sourceRangeFromSelection({ node: text, offset: 4 }, { node: text, offset: 4 });
+    assert.deepEqual(range, { anchor: 8, head: 8 });
+    // До укороченного прогона сдвиг не применяется.
+    const before = sourceRangeFromSelection({ node: text, offset: 2 }, { node: text, offset: 2 });
+    assert.deepEqual(before, { anchor: 2, head: 2 });
+  });
+
+  it('блок с вложенной конструкцией: сдвиг после анкера суммируется один раз (49ebba76)', () => {
+    // `**x** &amp; b`: анкер strong.after=5 на отрисованном 3, entity — за ним.
+    const lead = textNode('a ');
+    const strong = element(
+      {
+        [MD_SOURCE_START_ATTR]: '2',
+        [MD_SOURCE_END_ATTR]: '3',
+        [MD_SOURCE_LEAF_ATTR]: '1',
+        [MD_SOURCE_AFTER_ATTR]: '5',
+      },
+      [textNode('x')],
+    );
+    const tail = textNode(' & b');
+    const paragraph = element(
+      {
+        [MD_SOURCE_START_ATTR]: '0',
+        [MD_SOURCE_END_ATTR]: '13',
+        [MD_SOURCE_SHIFT_ATTR]: '4:4',
+      },
+      [lead, strong, tail],
+    );
+    element({}, [paragraph]);
+    // Каретка на `b`: отрисовано 6 символов, база — анкер (source 5, rendered 3)
+    // → 5 + (6 - 3) + 4 = 12.
+    const range = sourceRangeFromSelection({ node: tail, offset: 3 }, { node: tail, offset: 3 });
+    assert.deepEqual(range, { anchor: 12, head: 12 });
+  });
+
+  it('сдвиг ДО анкера не применяется повторно — guard `at > baseRendered` (49ebba76)', () => {
+    // `a &amp; **x** b`: entity стоит ДО конструкции, её сдвиг ({at:3, delta:4})
+    // уже поглощён анкером strong.after=13 на отрисованном 5. Если guard
+    // `entry.at > baseRendered` снять, дельта применится второй раз и каретка
+    // перед `b` уедет с 14 на 18.
+    const lead = textNode('a & ');
+    const strong = element(
+      {
+        [MD_SOURCE_START_ATTR]: '10',
+        [MD_SOURCE_END_ATTR]: '11',
+        [MD_SOURCE_LEAF_ATTR]: '1',
+        [MD_SOURCE_AFTER_ATTR]: '13',
+      },
+      [textNode('x')],
+    );
+    const tail = textNode(' b');
+    const paragraph = element(
+      {
+        [MD_SOURCE_START_ATTR]: '0',
+        [MD_SOURCE_END_ATTR]: '15',
+        [MD_SOURCE_SHIFT_ATTR]: '3:4',
+      },
+      [lead, strong, tail],
+    );
+    element({}, [paragraph]);
+    // Каретка перед `b`: отрисовано 6, база — анкер (rendered 5, source 13)
+    // → 13 + (6 - 5) = 14; повторного применения дельты нет.
+    const range = sourceRangeFromSelection({ node: tail, offset: 1 }, { node: tail, offset: 1 });
+    assert.deepEqual(range, { anchor: 14, head: 14 });
+  });
+
   it('клик на уровне блока отсчитывается от предыдущего data-md-after', () => {
     const { tail } = annotatedParagraph();
     // «хвост» — после ' ' (15-й отрисованный символ), якорь mark.after=18.

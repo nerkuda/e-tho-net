@@ -11,6 +11,10 @@
  * {
  *   "name": "diary-smoke",            // необязательно
  *   "timeout": 8000,                  // необязательно, мс на шаг по умолчанию
+ *   "serverLog": {                    // необязательно, проверяет СТЕНД
+ *     "absent": ["<regex>"],          //   (`ui-probe-stand.mjs`): шаблон не
+ *     "present": ["<regex>"]          //   должен / обязан встретиться в логе
+ *   },                                //   сервера за прогон
  *   "steps": [ <шаг>, … ]             // непустой массив
  * }
  *
@@ -20,29 +24,41 @@
  *   { "click": "#sel" } | { "click": { "selector": "#sel", "at": [4, 4] } }
  *     | { "click": [640, 400] } | { "click": { "x": 10, "y": 20 } }
  *     | { "click": { "selector": "#sel", "count": 2 } } — `count` задаёт число
- *       последовательных нажатий (2 — настоящий двойной клик, `click.detail=2`)
+ *       последовательных нажатий (2 — настоящий двойной клик, `click.detail=2`);
+ *       `allowMismatch: true` (только с `selector`) разрешает нажать в точку,
+ *       которая не попадает в элемент-якорь. По умолчанию промах после
+ *       перемеров ВАЛИТ шаг, и нажатие не выполняется (ошибка af96d388).
  *   { "hover": "#sel" } | { "hover": { "selector": "#sel", "at": [4, 4] } }
  *     | { "hover": [640, 400] } | { "hover": { "x": 10, "y": 20 } }
  *     — навести курсор на точку/элемент БЕЗ клика: синтезирует `mouseMoved`,
  *     включает CSS `:hover` (проверка hover-видимости действий; форма точки —
- *     как у `click`, поля `count` нет).
+ *     как у `click`, полей `count`/`allowMismatch` НЕТ). Точка наведения
+ *     сверяется с целью `elementFromPoint`; промах валит шаг, и событие не
+ *     отправляется (ошибка af96d388): наведение обязано попадать в свой
+ *     элемент, «наведение по пустой точке» стенду не нужно.
  *   { "drag": { "from": "#handle", "to": { "selector": "#row", "at": [10, 2] },
  *               "expect": "#row", "steps": 8, "duration": 120,
  *               "modifiers": ["shift"], "targetTimeout": 2000 } }
  *     — составной жест: pointerdown в `from`, `steps` промежуточных
  *     `mouseMoved`, ожидание попадания `document.elementFromPoint` в `expect`
  *     и pointerup в `to`. `expect` обязателен: промах координат ПРОВАЛИВАЕТ
- *     шаг, а не даёт молчаливое «ok» (грабли 7c521541). `modifiers` — Shift для
+ *     шаг, а не даёт молчаливое «ok» (грабли 7c521541). Источник `from` тоже
+ *     сверяется с целью ДО первого события: промах валит шаг, нажатия и
+ *     перемещений нет (ошибка af96d388). `modifiers` — Shift для
  *     копирования; `duration` — мс на серию перемещений.
  *   { "text": "строка" }                              — ввод текста
  *   { "waitFor": "expr" } | { "waitFor": { "expression": "…", "frames": 2 } }
  *     | { "waitFor": { "frames": 2 } } | { "waitFor": 2 }
  *   { "probe": "expr" } | { "probe": { "name": "rows", "expression": "…" } }
- *     К пробе можно добавить `"expect": <значение>`: раннер сверит факт с
+ *     К шагу пробы добавляется `"expect": <значение>`: раннер сверит факт с
  *     ожиданием и покажет пару «факт/ожидание» в отчёте. Вместо литерала
  *     допустим `"expectFrom": "<имя шага>"` — ожиданием станет значение,
  *     прочитанное ранее выполненным шагом `probe`/`api` с этим именем (снимок
  *     «до» ↔ проверка «после»: например, паритет заголовков до и после правки).
+ *     ВАЖНО: `expect`/`expectFrom` — СОСЕДИ действия, т.е. поля объекта ШАГА,
+ *     а не поля внутри `probe`/`api`: `{ "probe": "…", "expect": true }` верно,
+ *     `{ "probe": { "expression": "…", "expect": true } }` — ошибка валидации
+ *     (неизвестное поле `probe.expect`).
  *   { "shot": "01.png" } | { "shot": { "file": "01.png", "clip": "#sel" } }
  *     clip: селектор | [x, y, w, h] | { x, y, width, height }
  *   { "assert": { "region": "#sel" | [x,y,w,h] | {x,y,width,height},
@@ -248,7 +264,14 @@ export function resolveKey(spec) {
 function normalizeClick(value, where, field = 'click', withCount = true) {
   // `count` — только у клика (у наведения его нет): число последовательных
   // нажатий, 2 — настоящий двойной клик (браузер отдаёт `click` с `detail = 2`).
-  const countField = withCount ? { count: 1 } : {};
+  // `allowMismatch` — тоже только у клика: явное разрешение нажать в точку,
+  // которая не попадает в элемент-якорь (особая точка холста, смещение за
+  // границы). По умолчанию промах валит шаг (ошибка af96d388).
+  // У `hover` и точек `drag` флага НЕТ (withCount = false): наведение и захват
+  // обязаны попадать в свой элемент — «наведение по пустой точке» не нужно
+  // (холст наводится на сам элемент холста), а у `drag.from` промах означает
+  // захват чужого элемента. Промах там всегда валит шаг без события.
+  const countField = withCount ? { count: 1, allowMismatch: false } : {};
   if (typeof value === 'string') {
     return { selector: asString(value, `${where}.${field}`), at: null, x: null, y: null, ...countField };
   }
@@ -257,12 +280,25 @@ function normalizeClick(value, where, field = 'click', withCount = true) {
     return { selector: null, at: null, x: asNumber(value[0], `${where}.${field}[0]`), y: asNumber(value[1], `${where}.${field}[1]`), ...countField };
   }
   if (!isPlainObject(value)) fail(`${where}.${field}: ожидается селектор, [x,y] или объект`);
-  const allowed = withCount ? ['selector', 'x', 'y', 'at', 'count'] : ['selector', 'x', 'y', 'at'];
+  const allowed = withCount
+    ? ['selector', 'x', 'y', 'at', 'count', 'allowMismatch']
+    : ['selector', 'x', 'y', 'at'];
   for (const extra of Object.keys(value)) {
     if (!allowed.includes(extra)) fail(`${where}.${field}: неизвестное поле «${extra}»`);
   }
   if (withCount && value.count !== undefined) {
     countField.count = asPositiveInt(value.count, `${where}.${field}.count`);
+  }
+  if (withCount && value.allowMismatch !== undefined) {
+    // Флаг имеет смысл только вместе с селектором: без него попадание не
+    // проверяется и разрешать нечего.
+    if (value.selector === undefined) {
+      fail(`${where}.${field}.allowMismatch: допустим только вместе с «selector»`);
+    }
+    if (typeof value.allowMismatch !== 'boolean') {
+      fail(`${where}.${field}.allowMismatch: ожидается булево`);
+    }
+    countField.allowMismatch = value.allowMismatch;
   }
   const hasSelector = value.selector !== undefined;
   const hasCoords = value.x !== undefined || value.y !== undefined;
@@ -650,7 +686,7 @@ function validateStep(raw, index, defaultTimeout) {
 export function validateScenario(value) {
   if (!isPlainObject(value)) fail('сценарий должен быть JSON-объектом');
   for (const extra of Object.keys(value)) {
-    if (!['name', 'description', 'steps', 'timeout'].includes(extra)) {
+    if (!['name', 'description', 'steps', 'timeout', 'serverLog'].includes(extra)) {
       fail(`неизвестное поле сценария «${extra}»`);
     }
   }
