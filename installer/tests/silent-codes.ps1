@@ -27,8 +27,14 @@
      15. B1: привилегированная фаза на чистой машине (без install.json/службы)
      16. B3/B5/Z3: состояние машины и галочки по умолчанию
          (not-installed/installed/update-available/repair/adopt/downgrade)
-     17. B4: клиент «для всех» ставится, «для меня» — неэлевированной фазой
+     17. B4: клиент «для всех» ставится, «для меня» — неэлевированной фазой;
+         радиокнопки области клиента читаются обработчиком, область
+         сохраняется в install.json (mode=client) и восстанавливается
      18. Z2: last_log обновляется каждый запуск, повтор версии не меняет версию
+     19. Замечание 1: элевированный неадминистративный запуск не привилегированный
+     20. Замечание 2: health-check fail-closed без службы — код 10, не успех
+     21. Замечание 3: хук /TESTHEALTH только под #ifdef TestMode
+     22. Замечание 4: файл параметров в общем каталоге, удаляется после чтения
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -225,7 +231,13 @@ foreach ($required in @('/SUPPRESSMSGBOXES', '/NORESTART', 'SERVERONLY', 'GetCus
 $staticChecks = @(
     @{ Name = 'static:autopf-appdir'; Text = '#define AppDir "{autopf}\ETN"'; Note = 'каталог программы по режиму установки' },
     @{ Name = 'static:defaultdir-app'; Text = 'DefaultDirName={#AppDir}'; Note = '' },
-    @{ Name = 'static:privileged-phase'; Text = 'ValidatePrivilegedPhasePreconditions'; Note = 'отдельная привилегированная фаза' }
+    @{ Name = 'static:privileged-phase'; Text = 'ValidatePrivilegedPhasePreconditions'; Note = 'отдельная привилегированная фаза' },
+    @{ Name = 'static:radio-onclick-user'; Text = 'GScopeUserRadio.OnClick := @UpdateComponentsState;'; Note = 'радиокнопка «только для меня»' },
+    @{ Name = 'static:radio-onclick-machine'; Text = 'GScopeMachineRadio.OnClick := @UpdateComponentsState;'; Note = 'радиокнопка «для всех»' },
+    @{ Name = 'static:selection-from-controls'; Text = 'ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);'; Note = 'выбор читается с контролов' },
+    @{ Name = 'static:context-admin-mode'; Text = 'GIsElevated and IsAdminInstallMode'; Note = 'привилегированный контекст — только admin mode' },
+    @{ Name = 'static:params-shared-dir'; Text = '{commonappdata}\ETN\.install'; Note = 'файл параметров в общем каталоге' },
+    @{ Name = 'static:params-public-fallback'; Text = "GetEnv('PUBLIC')"; Note = 'запасной общий каталог' }
 )
 foreach ($check in $staticChecks) {
     $present = $issText.Contains($check.Text)
@@ -233,6 +245,10 @@ foreach ($check in $staticChecks) {
     $script:results.Add([pscustomobject]@{ Scenario = $check.Name; Expected = 1; Actual = [int]$present; Ok = $present; Note = $check.Note })
     Write-Host ("{0}  {1,-28} {2}" -f $markText, $check.Name, $check.Note)
 }
+# Замечание 3: тестовый хук health-check не должен попадать в продуктовую сборку.
+$hookUnderIfdef = [regex]::IsMatch($issText, '#ifdef\s+TestMode\s*\r?\n\s*if GTestHealth')
+$script:results.Add([pscustomobject]@{ Scenario = 'static:health-hook-ifdef'; Expected = 1; Actual = [int]$hookUnderIfdef; Ok = $hookUnderIfdef; Note = 'хук /TESTHEALTH под #ifdef TestMode' })
+Write-Host ("{0}  {1,-28} {2}" -f $(if ($hookUnderIfdef) { 'OK  ' } else { 'FAIL' }), 'static:health-hook-ifdef', 'хук /TESTHEALTH под #ifdef TestMode')
 
 # --- Сборка тестового установщика -------------------------------------------
 Write-Host '=== Сборка тестового установщика ==='
@@ -312,6 +328,18 @@ Add-Result -Name 'health-check-failed' -Expected 10 -Actual $code
 $jsonAfterFail = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
 $keptOld = $jsonAfterFail -match '"product_version":"0\.15\.0"'
 Add-Result -Name 'health-fail:json-unchanged' -Expected 1 -Actual ([int]$keptOld) -Note 'install.json не объявляет новую версию'
+
+# --- 8b. health-check fail-closed: служба не найдена (без /TESTHEALTH) -------
+Reset-State
+Write-InstallJson (New-InstallJson -ProductVersion '0.15.0')
+New-ServerFiles
+$code = Invoke-Setup -Arguments ($silent + @('/SERVERONLY', '/TESTELEVATED=1', '/TESTSERVICE=present'))
+Add-Result -Name 'health-no-service' -Expected 10 -Actual $code -Note 'fail-closed: нет службы — не успех'
+$jsonNoService = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+$noServiceKept = $jsonNoService -match '"product_version":"0\.15\.0"'
+Add-Result -Name 'health-no-service:json-unchanged' -Expected 1 -Actual ([int]$noServiceKept)
+$healthMsg = Get-LogLine -Pattern '(Health-check не выполнен: служба не найдена[^\r\n]*)'
+Add-Result -Name 'health-no-service:log' -Expected 1 -Actual ([int]([bool]$healthMsg)) -Note $healthMsg
 
 # --- 9. успех ----------------------------------------------------------------
 $code = Invoke-Setup -Arguments ($silent + @('/SERVERONLY', '/TESTELEVATED=1', '/TESTSERVICE=present', '/TESTHEALTH=ok'))
@@ -458,6 +486,36 @@ Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-user')
 Add-StateResult -Name 'need-elevation:client-user' -Line $probe.State -Pairs @('need_elevation=0')
 
+# Замечание 1: элевированный, но не административный запуск — не
+# привилегированный контекст (иначе сервер ставится и в Program Files, и в
+# профиль пользователя). /TESTGUIMODE отключает silent-термин контекста.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTGUIMODE=1')
+Add-StateResult -Name 'gui-not-elevated-context' -Line $probe.State -Pairs @('in_privileged_context=0')
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTELEVATED=1', '/TESTGUIMODE=1')
+Add-StateResult -Name 'elevated-not-admin-mode' -Line $probe.State -Pairs @('in_privileged_context=0')
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTELEVATED=1', '/TESTGUIMODE=1', '/CURRENTUSER')
+Add-StateResult -Name 'elevated-currentuser' -Line $probe.State -Pairs @('in_privileged_context=0')
+
+# Замечание 4: файл параметров — в общем каталоге, область клиента пишется,
+# после чтения файл удаляется.
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPARAMS=1', '/TESTSELECT=client-machine'))
+Add-Result -Name 'params-shared:code' -Expected 0 -Actual $code
+$paramsPath = Get-LogLine -Pattern 'TESTPARAMS path=(\S+) scope='
+$paramsScope = Get-LogLine -Pattern 'TESTPARAMS path=\S+ scope=(\S+)'
+$paramsDeleted = Get-LogLine -Pattern 'TESTPARAMS deleted=(\d)'
+$sharedPathOk = $paramsPath -match '\\\.install\\params-.*\.json$'
+Add-Result -Name 'params-shared:path' -Expected 1 -Actual ([int][bool]$sharedPathOk) -Note $paramsPath
+Add-Result -Name 'params-shared:scope-machine' -Expected 1 -Actual ([int]($paramsScope -eq 'machine')) -Note ("scope=" + $paramsScope)
+Add-Result -Name 'params-shared:deleted' -Expected 1 -Actual ([int]($paramsDeleted -eq '1')) -Note ("deleted=" + $paramsDeleted)
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPARAMS=1', '/TESTSELECT=client-user'))
+$paramsScopeUser = Get-LogLine -Pattern 'TESTPARAMS path=\S+ scope=(\S+)'
+Add-Result -Name 'params-shared:scope-user' -Expected 1 -Actual ([int]($paramsScopeUser -eq 'user')) -Note ("scope=" + $paramsScopeUser)
+
 # --- B1: привилегированная фаза на чистой машине ----------------------------
 Write-Host '=== Привилегированная фаза (B1, B4) ==='
 Reset-State
@@ -491,6 +549,20 @@ $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$pri
 Add-Result -Name 'privileged-client-machine:code' -Expected 0 -Actual $code -Note 'элевация при клиенте «для всех»'
 $machineClient = Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')
 Add-Result -Name 'privileged-client-machine:files' -Expected 1 -Actual ([int]$machineClient)
+# install.json обязателен и для клиента «для всех» без сервера: иначе повторный
+# запуск потеряет область клиента и поставит вторую per-user копию.
+$clientJsonPath = Join-Path $dataDir 'install.json'
+$clientJsonOk = $false
+if (Test-Path -LiteralPath $clientJsonPath) {
+    $clientJson = Get-Content -LiteralPath $clientJsonPath -Raw
+    $clientJsonOk = ($clientJson -match '"mode":"client"') -and ($clientJson -match '"client_scope":"machine"')
+}
+Add-Result -Name 'client-machine:install-json' -Expected 1 -Actual ([int]$clientJsonOk) -Note 'mode=client, client_scope=machine'
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'client-machine:repeat-state' -Line $probe.State -Pairs @(
+    'server_state=not-installed', 'client_state=installed',
+    'default_server=0', 'default_client=1',
+    'client_scope=machine', 'need_elevation=1') -Note 'область клиента восстановлена'
 
 Reset-State
 $privParams = New-ParamsFile -Server 0 -Client 1 -Scope user -Name 'priv-client-user.ini'

@@ -202,6 +202,8 @@ var
   GTestState: String;
   GTestSelect: String;
   GTestRecord: String;
+  GTestParams: String;
+  GTestGui: String;
 
   { Версия и пути }
   GProductVersion: String;
@@ -210,6 +212,9 @@ var
   GLogPath: String;
   GInstallJsonPath: String;
   GInstallJsonText: String;
+  { Файл параметров привилегированной фазы: создаётся родителем в общем
+    каталоге, путь передаётся дочернему через /PARAMS. }
+  GParamsPath: String;
 
   { Выбор компонентов и параметры }
   GServerSelected: Boolean;
@@ -641,9 +646,12 @@ begin
   GInstalledAt := JsonGetRaw(GInstallJsonText, 'installed_at');
   GInstalledFirewall := LowerCase(JsonGetRaw(GInstallJsonText, 'firewall')) = 'true';
   { Повреждённым считаем файл, у которого нет схемы v1, версии или mode.
-    Такой файл трактуется как repair, а не как «не установлено». }
+    Такой файл трактуется как repair, а не как «не установлено».
+    mode=client — установка только клиента «для всех»: область клиента
+    сохраняется, чтобы повторный запуск не поставил вторую per-user копию. }
   GInstallJsonValid := (Schema = '1') and (GInstalledVersion <> '') and
-    ((GInstalledMode = 'service') or (GInstalledMode = 'app'));
+    ((GInstalledMode = 'service') or (GInstalledMode = 'app') or
+     (GInstalledMode = 'client'));
   if GInstallJsonValid and (GInstalledClientScope = 'null') then
     GInstalledClientScope := '';
 end;
@@ -746,7 +754,15 @@ begin
     { install.json — запись установщика: файлы должны соответствовать ей.
       Сверка версии в server\package.json отличает «актуальная версия» от
       «ремонт»: файлы чужие/недописанные — repair, совпали — installed. }
-    if not GServerFilesPresent then
+    if GInstalledMode = 'client' then
+    begin
+      { Запись о клиенте «для всех» без сервера: сервер не установлен. }
+      if GServerFilesPresent then
+        GServerState := 'repair'
+      else
+        GServerState := 'not-installed';
+    end
+    else if not GServerFilesPresent then
       GServerState := 'repair'
     else if (GFilesVersion <> '') and (GFilesVersion <> GInstalledVersion) then
       GServerState := 'repair'
@@ -792,7 +808,9 @@ end;
 procedure ApplyInstalledParams;
 begin
   if not GInstallJsonValid then Exit;
-  if GInstalledMode <> '' then GServerMode := GInstalledMode;
+  { mode=client — запись только о клиенте: режим сервера из неё не берём. }
+  if (GInstalledMode = 'service') or (GInstalledMode = 'app') then
+    GServerMode := GInstalledMode;
   if GInstalledHost <> '' then GServerHost := GInstalledHost;
   if GInstalledPort <> '' then GServerPort := GInstalledPort;
   if JsonGetRaw(GInstallJsonText, 'firewall') <> '' then
@@ -845,7 +863,9 @@ end;
   клиента (разрушенная установка — её надо чинить, а не ставить с нуля). }
 function ServerWasInstalled: Boolean;
 begin
-  Result := GInstallJsonValid or GServerFilesPresent or GAdoptExistingData or
+  { mode=client — запись только о клиенте «для всех»: сервера она не касается. }
+  Result := (GInstallJsonValid and (GInstalledMode <> 'client')) or
+    GServerFilesPresent or GAdoptExistingData or
     (GInstallerRecordPresent and (not GClientFilesPresent));
 end;
 
@@ -904,12 +924,35 @@ begin
 #endif
 end;
 
-{ Файл параметров для элевированной фазы: строка key=value, ASCII. }
+{ Файл параметров для элевированной фазы: строки key=value, ASCII.
+  UAC может запустить дочерний процесс с учётными данными ДРУГОГО
+  администратора — профиль и %TEMP% тогда чужие, поэтому файл кладётся в
+  общий каталог (%ProgramData%\ETN\.install, при недоступности — %PUBLIC%).
+  Секреты в командной строке не передаются: только путь к файлу. }
+function NewParamsFilePath: String;
+var
+  Dir: String;
+begin
+#ifdef TestMode
+  Dir := GDataDir + '\.install';
+#else
+  Dir := ExpandConstant('{commonappdata}\ETN\.install');
+#endif
+  if not ForceDirectories(Dir) then
+  begin
+    Dir := GetEnv('PUBLIC');
+    if (Dir = '') or (not ForceDirectories(Dir)) then
+      Dir := ExpandConstant('{tmp}');
+  end;
+  Result := Dir + '\params-' + GetDateTimeString('yyyymmdd-hhnnss', '-', ':') + '.json';
+end;
+
 function ParamsFilePath: String;
 begin
-  { Родитель пишет файл параметров во временный каталог своего экземпляра и
-    передаёт путь дочернему через /PARAMS; дочерний читает именно его. }
+  { Дочерний получает путь через /PARAMS; в остальных случаях — путь,
+    вычисленный родителем и сохранённый в GParamsPath. }
   Result := ParamValue('PARAMS');
+  if Result = '' then Result := GParamsPath;
   if Result = '' then
     Result := ExpandConstant('{tmp}') + '\etn-install-params.ini';
 end;
@@ -918,6 +961,8 @@ procedure WriteParamsFile;
 var
   Lines: String;
 begin
+  if GParamsPath = '' then
+    GParamsPath := NewParamsFilePath;
   Lines :=
     'server=' + IntToStr(Ord(GServerSelected)) + #13#10 +
     'client=' + IntToStr(Ord(GClientSelected)) + #13#10 +
@@ -926,7 +971,8 @@ begin
     'host=' + GServerHost + #13#10 +
     'port=' + GServerPort + #13#10 +
     'firewall=' + IntToStr(Ord(GServerFirewall)) + #13#10;
-  SaveStringToFile(ParamsFilePath, Lines, False);
+  if not SaveStringToFile(GParamsPath, Lines, False) then
+    LogLine('ERROR', 'Не удалось записать файл параметров: ' + GParamsPath);
 end;
 
 procedure ApplyParamLine(const Line: String);
@@ -981,18 +1027,28 @@ var
 begin
   Result := -1;
   GChildResult := -1;
+  GParamsPath := '';
   WriteParamsFile;
+  if (GParamsPath = '') or (not FileExists(GParamsPath)) then
+  begin
+    LogLine('ERROR', 'Файл параметров не создан — повышение прав отменено');
+    Exit;
+  end;
   Args := '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /PRIVILEGEDPHASE /PARAMS="' +
-    ParamsFilePath + '"';
-  LogLine('INFO', 'Повышение прав: перезапуск с параметрами ' + Args);
+    GParamsPath + '"';
+  LogLine('INFO', 'Повышение прав: перезапуск (файл параметров ' + GParamsPath + ')');
   if not ShellExec('runas', ExpandConstant('{srcexe}'), Args, '',
     SW_SHOWNORMAL, ewWaitUntilTerminated, Code) then
   begin
     LogLine('ERROR', 'Повышение прав отклонено (UAC): изменения не выполнялись');
+    DeleteFile(GParamsPath);
     Result := -1;
     Exit;
   end;
   LogLine('INFO', 'Дочерний (элевированный) установщик завершился с кодом ' + IntToStr(Code));
+  { Файл параметров удаляется после использования: в общем каталоге он
+    оставаться не должен (дочерний мог не успеть удалить его сам). }
+  DeleteFile(GParamsPath);
   GChildResult := Code;
   Result := Code;
 end;
@@ -1004,8 +1060,12 @@ function InPrivilegedContext: Boolean;
 begin
   { Привилегированная фаза — та, что пишет в каталог программы и каталог
     данных: silent (предусловие — уже элевирован), дочерняя копия с
-    /PRIVILEGEDPHASE, либо GUI, запущенный сразу с правами администратора. }
-  Result := GWorkAllowed and (GSilent or GPrivilegedPhase or GIsElevated);
+    /PRIVILEGEDPHASE, либо административный режим установки (autopf =
+    Program Files). Элевированный, но не административный процесс пишет в
+    профиль пользователя и привилегированной фазой не считается — иначе
+    сервер попал бы и в Program Files (дочерний), и в профиль (родитель). }
+  Result := GWorkAllowed and
+    (GSilent or GPrivilegedPhase or (GIsElevated and IsAdminInstallMode));
 end;
 
 { Права администратора нужны серверу и клиенту «для всех пользователей»;
@@ -1039,9 +1099,24 @@ begin
     (not GPrivilegedPhase);
 end;
 
+{ Режим для install.json: выбран сервер — его режим; сервер не выбран, но
+  есть запись серверной установки — сохраняем её режим; иначе установка только
+  клиента «для всех» (mode=client), чтобы область клиента восстанавливалась. }
+function EffectiveInstallMode: String;
+begin
+  if GServerSelected then
+    Result := GServerMode
+  else if GInstallJsonValid and (GInstalledMode <> 'client') then
+    Result := GInstalledMode
+  else if GClientSelected then
+    Result := 'client'
+  else
+    Result := GServerMode;
+end;
+
 function BuildInstallJson: String;
 var
-  Scope: String;
+  Scope, Mode: String;
 begin
   if GClientSelected then
   begin
@@ -1051,10 +1126,11 @@ begin
     Scope := GInstalledClientScope
   else
     Scope := '';
+  Mode := EffectiveInstallMode;
   Result := '{' +
     '"schema":1,' +
     '"product_version":' + JsonString(GProductVersion) + ',' +
-    '"mode":' + JsonString(GServerMode) + ',' +
+    '"mode":' + JsonString(Mode) + ',' +
     '"data_dir":' + JsonString(GDataDir) + ',' +
     '"host":' + JsonString(GServerHost) + ',' +
     '"port":' + GServerPort + ',' +
@@ -1069,7 +1145,7 @@ function ParamsUnchanged: Boolean;
 begin
   Result := GInstallJsonValid and
     (GInstalledVersion = GProductVersion) and
-    (GInstalledMode = GServerMode) and
+    (GInstalledMode = EffectiveInstallMode) and
     (GInstalledDataDir = GDataDir) and
     (GInstalledHost = GServerHost) and
     (GInstalledPort = GServerPort) and
@@ -1114,24 +1190,27 @@ begin
   Result := True;
 end;
 
-{ Health-check: в этой задаче — только точка вызова и контрактный код.
-  Реальный опрос (GET /api/v1/health + версия) реализуется в bb063ac3;
-  до появления службы (8b1f5980) проверка не выполняется. }
+{ Health-check: fail-closed — успех объявляется только при подтверждённом
+  запуске сервера. Управление службой (WinSW) и опрос GET /api/v1/health —
+  зона bb063ac3; в этой задаче точки вызова и коды. }
 function ProbeHealth: Boolean;
 var
   Code: Integer;
   Url: String;
 begin
+  Result := False;
+#ifdef TestMode
   if GTestHealth <> '' then
   begin
     Result := LowerCase(GTestHealth) = 'ok';
     LogLine('INFO', 'Health-check (тестовый режим): ' + GTestHealth);
     Exit;
   end;
+#endif
   if not FileExists(GServerDir + '\service\etn-service.exe') then
   begin
-    LogLine('INFO', 'Health-check: управление службой появится в bb063ac3 — проверка пропущена');
-    Result := True;
+    LogLine('ERROR', 'Health-check не выполнен: служба не найдена (' +
+      GServerDir + '\service\etn-service.exe)');
     Exit;
   end;
   Url := 'http://127.0.0.1:' + GServerPort + '/api/v1/health';
@@ -1297,12 +1376,23 @@ end;
 { ---------------------------------------------------------------------------
   Экран компонентов (каркас; тексты и оформление — 112642a4)
   --------------------------------------------------------------------------- }
+{ Единая точка чтения выбора: вызывается обработчиками OnClick всех контролов
+  (чекбоксы компонентов и радиокнопки области клиента) и тестовым хуком
+  /TESTSELECT. Область клиента читается с радиокнопок — без обработчика на них
+  выбор «для всех» не влиял бы на элевацию (NeedElevation). }
+procedure ApplySelection(const ServerChecked, ClientChecked,
+  MachineScopeChecked: Boolean);
+begin
+  GServerSelected := ServerChecked;
+  GClientSelected := ClientChecked;
+  GClientScopeUser := not MachineScopeChecked;
+end;
+
 procedure UpdateComponentsState(Sender: TObject);
 begin
   if GSilent then Exit;
-  if GServerCheck <> nil then GServerSelected := GServerCheck.Checked;
-  if GClientCheck <> nil then GClientSelected := GClientCheck.Checked;
-  if GScopeUserRadio <> nil then GClientScopeUser := GScopeUserRadio.Checked;
+  if (GServerCheck <> nil) and (GClientCheck <> nil) and (GScopeMachineRadio <> nil) then
+    ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);
   if GScopeUserRadio <> nil then GScopeUserRadio.Enabled := GClientSelected;
   if GScopeMachineRadio <> nil then GScopeMachineRadio.Enabled := GClientSelected;
   if GReasonLabel <> nil then
@@ -1365,6 +1455,7 @@ begin
   GScopeUserRadio.Width := GComponentsPage.SurfaceWidth - 20;
   GScopeUserRadio.Caption := 'Клиент: только для меня (без прав администратора)';
   GScopeUserRadio.Checked := True;
+  GScopeUserRadio.OnClick := @UpdateComponentsState;
 
   GScopeMachineRadio := TNewRadioButton.Create(GComponentsPage);
   GScopeMachineRadio.Parent := GComponentsPage.Surface;
@@ -1372,6 +1463,7 @@ begin
   GScopeMachineRadio.Top := GScopeUserRadio.Top + GScopeUserRadio.Height + 2;
   GScopeMachineRadio.Width := GComponentsPage.SurfaceWidth - 20;
   GScopeMachineRadio.Caption := 'Клиент: для всех пользователей компьютера';
+  GScopeMachineRadio.OnClick := @UpdateComponentsState;
 
   GDataNoteLabel := TNewStaticText.Create(GComponentsPage);
   GDataNoteLabel.Parent := GComponentsPage.Surface;
@@ -1421,6 +1513,9 @@ begin
   GTestState := '';
   GTestSelect := '';
   GTestRecord := '';
+  GTestParams := '';
+  GTestGui := '';
+  GParamsPath := '';
   GProductVersion := '{#MyAppVersion}';
   GDataDir := ExpandConstant('{#DataDir}');
   GServerDir := ExpandConstant('{#AppDir}');
@@ -1435,6 +1530,8 @@ begin
   GTestState := ParamValue('TESTSTATE');
   GTestSelect := ParamValue('TESTSELECT');
   GTestRecord := ParamValue('TESTRECORD');
+  GTestParams := ParamValue('TESTPARAMS');
+  GTestGui := ParamValue('TESTGUIMODE');
 #endif
 
   InitLog;
@@ -1471,28 +1568,27 @@ begin
     ApplyDefaultSelection;
 
 #ifdef TestMode
+  { /TESTSELECT подменяет выбор компонентов через ту же ApplySelection, которой
+    пользуются обработчики OnClick экрана компонентов (проверка условия
+    элевации и содержимого файла параметров без вывода окон). }
+  if GTestSelect = 'server' then
+    ApplySelection(True, False, False)
+  else if GTestSelect = 'client-machine' then
+    ApplySelection(False, True, True)
+  else if GTestSelect = 'client-user' then
+    ApplySelection(False, True, False);
+
   { Наблюдаемость состояний и галочек без вывода окон: тестовый прогон
     фиксирует вычисленное состояние в журнале и завершается без изменений. }
   if GTestState = '1' then
   begin
-    { /TESTSELECT подменяет выбор компонентов — проверка условия элевации. }
-    if GTestSelect = 'server' then
+    { /TESTGUIMODE=1 — имитация GUI-запуска: в silent-прогоне термин GSilent
+      всегда делает контекст привилегированным, а проверяется сценарий
+      «запуск от имени администратора» в неадминистративном режиме. }
+    if GTestGui = '1' then
     begin
-      GServerSelected := True;
-      GClientSelected := False;
-      GClientScopeUser := True;
-    end
-    else if GTestSelect = 'client-machine' then
-    begin
-      GServerSelected := False;
-      GClientSelected := True;
-      GClientScopeUser := False;
-    end
-    else if GTestSelect = 'client-user' then
-    begin
-      GServerSelected := False;
-      GClientSelected := True;
-      GClientScopeUser := True;
+      LogLine('INFO', 'TESTGUIMODE=1: silent-термин контекста отключён (тестовый режим)');
+      GSilent := False;
     end;
     LogLine('INFO', 'TESTSTATE server_state=' + GServerState +
       ' client_state=' + GClientState +
@@ -1504,13 +1600,34 @@ begin
       ' default_server=' + Pick(GServerSelected, '1', '0') +
       ' default_client=' + Pick(GClientSelected, '1', '0') +
       ' client_scope=' + Pick(GClientScopeUser, 'user', 'machine') +
-      ' need_elevation=' + Pick(NeedElevation, '1', '0'));
+      ' need_elevation=' + Pick(NeedElevation, '1', '0') +
+      ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0'));
+    ExitProcess(EXIT_OK);
+  end;
+
+  { Проверка файла параметров: путь, содержимое (область клиента) и удаление
+    после чтения. }
+  if GTestParams = '1' then
+  begin
+    WriteParamsFile;
+    LogLine('INFO', 'TESTPARAMS path=' + GParamsPath +
+      ' scope=' + Pick(GClientScopeUser, 'user', 'machine'));
+    ReadParamsFile;
+    if GParamsPath <> '' then DeleteFile(GParamsPath);
+    LogLine('INFO', 'TESTPARAMS deleted=' + Pick(not FileExists(GParamsPath), '1', '0'));
     ExitProcess(EXIT_OK);
   end;
 #endif
 
   if GPrivilegedPhase then
-    ValidatePrivilegedPhasePreconditions
+  begin
+    ValidatePrivilegedPhasePreconditions;
+    { Файл параметров больше не нужен: в общем каталоге он оставаться не должен.
+      Удаляется после предусловий — перезапуск в административном режиме
+      (/ADMINMODE) ещё передаёт путь дочернему процессу. }
+    if ParamValue('PARAMS') <> '' then
+      DeleteFile(ParamValue('PARAMS'));
+  end
   else if GSilent then
     ValidateSilentPreconditions
   else if GServerOnly then
@@ -1582,12 +1699,23 @@ begin
     Result := Format('Установка завершилась сбоем (код %d). Журнал: %s', [GChildResult, GLogPath]);
 end;
 
+{ Запись установки нужна и для машинного клиента без сервера: иначе повторный
+  запуск не узнает область клиента и поставит вторую per-user копию. }
+function NeedInstallRecord: Boolean;
+begin
+  Result := InPrivilegedContext and
+    (GServerSelected or (GClientSelected and (not GClientScopeUser)));
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  HealthOk: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
     if GSilent then
       LogLine('INFO', 'Silent server-only: установка файлов завершена');
+    HealthOk := True;
     if GDoPrivilegedWork then
     begin
       { Порядок шагов — контракт bb063ac3: остановка службы, замена файлов,
@@ -1595,12 +1723,16 @@ begin
         проверки, иначе после отката файл врал бы о новой версии. }
       StopServiceIfRunning;
       StartServiceIfNeeded;
-      if not ProbeHealth then
+      HealthOk := ProbeHealth;
+      if not HealthOk then
       begin
         GExitCode := EXIT_FAILED;
         LogLine('ERROR', 'Сбой выполнения: health-check не пройден (код 10)');
-      end
-      else if not WriteInstallJson then
+      end;
+    end;
+    if HealthOk and NeedInstallRecord then
+    begin
+      if not WriteInstallJson then
       begin
         GExitCode := EXIT_FAILED;
         LogLine('ERROR', 'Сбой выполнения: install.json не записан (код 10)');
