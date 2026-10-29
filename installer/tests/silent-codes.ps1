@@ -35,6 +35,9 @@
      20. Замечание 2: health-check fail-closed без службы — код 10, не успех
      21. Замечание 3: хук /TESTHEALTH только под #ifdef TestMode
      22. Замечание 4: файл параметров в общем каталоге, удаляется после чтения
+     23. 9b310991: порт, занятый только на loopback или конкретном адресе,
+         — код 20 (B1); ошибка netsh — предупреждение в журнале без отмены
+         установки; статический сторож .iss — общий хелпер iss-guard.ps1 (B2)
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -230,21 +233,10 @@ New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 
 # --- Сторож статических проверок ---------------------------------------------
-# Поиск идёт по НЕПУСТЫМ строкам без комментария. Прежний подстрочный поиск по
-# всему тексту проходил на закомментированной строке (`; GScopeUserRadio.OnClick
-# := ...`) — дефект приёмки каркаса (9b310991). В Inno `;` — комментарий только
-# в начале строки (в параметрах секций он разделитель), поэтому строка
-# считается комментарием, если после Trim начинается с ';'.
-function Test-IssCode {
-    param([string]$Text, [string]$Pattern)
-    foreach ($line in ($Text -split "`r?`n")) {
-        $trimmed = $line.Trim()
-        if ($trimmed -eq '') { continue }
-        if ($trimmed.StartsWith(';')) { continue }
-        if ($trimmed -match $Pattern) { return $true }
-    }
-    return $false
-}
+# Test-IssCode — общий хелпер installer/tests/iss-guard.ps1 (дефект B2 приёмки
+# 9b310991): наивный подстрочный поиск по всему тексту проходил на
+# закомментированной строке. Тот же хелпер использует init-key.ps1.
+. (Join-Path $PSScriptRoot 'iss-guard.ps1')
 
 function Add-StaticResult {
     param([string]$Name, [bool]$Ok, [string]$Note = '')
@@ -257,15 +249,8 @@ Write-Host '=== Статические проверки .iss ==='
 $issText = Get-Content -LiteralPath $issPath -Raw -Encoding UTF8
 
 # Сторож самопроверяется: закомментированный код НЕ считается, рабочий — считается.
-$commentSample = "; GScopeUserRadio.OnClick := @UpdateComponentsState;"
-$codeSample = "  GScopeUserRadio.OnClick := @UpdateComponentsState;"
-$onClickPattern = [regex]::Escape('GScopeUserRadio.OnClick := @UpdateComponentsState;')
-Add-StaticResult -Name 'static-guard:ignores-comments' `
-    -Ok (-not (Test-IssCode -Text $commentSample -Pattern $onClickPattern)) `
-    -Note 'закомментированный OnClick не считается кодом'
-Add-StaticResult -Name 'static-guard:finds-code' `
-    -Ok (Test-IssCode -Text $codeSample -Pattern $onClickPattern) `
-    -Note 'рабочий OnClick находится'
+$guardSelfTest = Test-IssGuardSelfTest
+Add-StaticResult -Name 'static-guard:self-test' -Ok $guardSelfTest.Ok -Note $guardSelfTest.Message
 
 $msgBoxMatches = [regex]::Matches($issText, '(?<!Suppressible)MsgBox\s*\(')
 if ($msgBoxMatches.Count -gt 0) {
@@ -302,6 +287,11 @@ $staticChecks = @(
     @{ Name = 'static:port-page'; Pattern = [regex]::Escape('CreateServerParamsPage'); Note = 'экран «Параметры сервера»' },
     @{ Name = 'static:port-focus'; Pattern = [regex]::Escape('WizardForm.ActiveControl := GPortEdit'); Note = 'фокус на поле порта при ошибке' },
     @{ Name = 'static:precheck-function'; Pattern = [regex]::Escape('function CheckServerEnvironment'); Note = 'единая предпроверка окружения' },
+    @{ Name = 'static:port-all-listeners'; Pattern = [regex]::Escape('Get-NetTCPConnection -LocalPort $port -State Listen'); Note = 'занятость порта — по всем слушателям (B1)' },
+    @{ Name = 'static:port-loopback-bind'; Pattern = [regex]::Escape('TcpListener([Net.IPAddress]::Loopback,$port)'); Note = 'пробный bind на loopback' },
+    @{ Name = 'static:port-own-service-children'; Pattern = [regex]::Escape('$p.ParentProcessId'); Note = 'служба ETN: потомки WinSW, не только ProcessId' },
+    @{ Name = 'static:firewall-warning-gui'; Pattern = [regex]::Escape('WizardForm.FinishedLabel.Caption'); Note = 'предупреждение netsh на финальном экране' },
+    @{ Name = 'static:firewall-warning-fact'; Pattern = [regex]::Escape('Установка продолжается: сервер слушает'); Note = 'в журнале — факт 0.0.0.0, а не «локально»' },
     @{ Name = 'static:free-space'; Pattern = [regex]::Escape('GetSpaceOnDisk64'); Note = 'проверка свободного места' },
     @{ Name = 'static:precheck-before-changes'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions;'); Note = 'предпроверки до замены файлов' },
     @{ Name = 'static:service-template-subst'; Pattern = [regex]::Escape('function InstallServiceConfig'); Note = 'подстановка шаблона службы' },
@@ -679,6 +669,55 @@ Add-Result -Name 'precheck:port-busy-reason' -Expected 1 -Actual ([int]$busyReas
 $busyLog = Get-LogLine -Pattern 'TESTPRECHECK result=([^\r\n]+)'
 Add-Result -Name 'precheck:port-busy-log' -Expected 1 -Actual ([int]([bool]$busyLog)) -Note $busyLog
 
+# Порт занят ТОЛЬКО на loopback: сервер слушает 0.0.0.0, поэтому пробный bind
+# на 0.0.0.0 такой слушатель не видит — дефект B1 приёмки 9b310991 (установщик
+# возвращал 0, health-check попадал в чужой процесс). Установщик обязан
+# перечислить всех слушателей (Get-NetTCPConnection) и вернуть 20.
+Reset-State
+$loopListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$loopListener.Start()
+$loopPort = ([System.Net.IPEndPoint]$loopListener.LocalEndpoint).Port
+try {
+    Reset-PrecheckResult
+    $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+        "/TESTPORT=$loopPort", "/TESTRESULT=`"$precheckResult`""))
+} finally {
+    $loopListener.Stop()
+}
+Add-Result -Name 'precheck:port-loopback-busy-code' -Expected 20 -Actual $code
+$loopReason = Get-PrecheckResult
+$loopReasonOk = $loopReason -match ('порт ' + $loopPort + ' занят другим приложением')
+Add-Result -Name 'precheck:port-loopback-busy-reason' -Expected 1 -Actual ([int]$loopReasonOk) -Note $loopReason
+
+# Порт занят на КОНКРЕТНОМ адресе (127.0.0.2 — отдельный адрес loopback-
+# диапазона): пробный bind на 0.0.0.0 проходит (проверено: старый код считал
+# порт свободным), а Get-NetTCPConnection видит слушателя — та же ошибка B1,
+# что воспроизведена на 192.168.0.110.
+Reset-State
+$addrListener = $null
+$addrPort = 0
+$addrCaseOk = $false
+try {
+    $addrListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('127.0.0.2'), 0)
+    $addrListener.Start()
+    $addrPort = ([System.Net.IPEndPoint]$addrListener.LocalEndpoint).Port
+    Reset-PrecheckResult
+    $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+        "/TESTPORT=$addrPort", "/TESTRESULT=`"$precheckResult`""))
+    Add-Result -Name 'precheck:port-address-busy-code' -Expected 20 -Actual $code
+    $addrReason = Get-PrecheckResult
+    $addrReasonOk = $addrReason -match ('порт ' + $addrPort + ' занят другим приложением')
+    Add-Result -Name 'precheck:port-address-busy-reason' -Expected 1 -Actual ([int]$addrReasonOk) -Note $addrReason
+    $addrCaseOk = $true
+} catch {
+    Write-Host ('      конкретный адрес 127.0.0.2 недоступен: ' + $_.Exception.Message)
+} finally {
+    if ($null -ne $addrListener) { $addrListener.Stop() }
+}
+if (-not $addrCaseOk) {
+    Add-Result -Name 'precheck:port-address-busy-code' -Expected 1 -Actual 0 -Note '127.0.0.2 не занялся — сценарий не выполнен'
+}
+
 # Некорректный порт.
 Reset-State
 Reset-PrecheckResult
@@ -795,6 +834,26 @@ Add-Result -Name 'server-nofw:log' -Expected 1 -Actual ([int]($nofwMsg -eq [stri
 $nofwXml = [System.IO.File]::ReadAllText((Join-Path $appDir 'service\etn-service.xml'), [System.Text.Encoding]::UTF8)
 $nofwHostOk = $nofwXml -match 'name="ETN_HOST" value="127\.0\.0\.1"'
 Add-Result -Name 'server-nofw:host-local' -Expected 1 -Actual ([int]$nofwHostOk) -Note 'ETN_HOST=127.0.0.1'
+
+# Ошибка netsh (тестовый хук /TESTFIREWALL=fail): установка НЕ отменяется
+# (код 0, install.json с firewall=true), в журнале — понятное предупреждение,
+# что сервер слушает 0.0.0.0, но LAN может блокироваться брандмауэром.
+Reset-State
+$fwFailPort = Get-FreeTcpPort
+$privParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Port $fwFailPort `
+    -Firewall 1 -Name 'server-fw-fail.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$privParams`"",
+    '/TESTELEVATED=1', '/TESTHEALTH=ok', '/TESTFIREWALL=fail'))
+Add-Result -Name 'server-fw-fail:code' -Expected 0 -Actual $code
+$fwFailWarn = Get-LogLine -Pattern ('(Брандмауэр: правило «ETN Server» не создано \(TCP ' + $fwFailPort + '\).*Установка продолжается)')
+Add-Result -Name 'server-fw-fail:warning' -Expected 1 -Actual ([int]($fwFailWarn -ne '')) -Note 'предупреждение в журнале'
+$fwFailHost = Get-LogLine -Pattern 'Установка продолжается: сервер слушает (0\.0\.0\.0)'
+Add-Result -Name 'server-fw-fail:host-fact' -Expected 1 -Actual ([int]($fwFailHost -eq '0.0.0.0')) -Note ('слушает ' + $fwFailHost)
+$fwFailJson = ''
+if (Test-Path -LiteralPath (Join-Path $dataDir 'install.json')) {
+    $fwFailJson = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+}
+Add-Result -Name 'server-fw-fail:install-json' -Expected 1 -Actual ([int]($fwFailJson -match '"firewall":true')) -Note 'firewall остаётся значением чекбокса'
 
 # Отказ предпроверки в привилегированной фазе: код 20, причина — в файле,
 # изменения не выполнялись (нет файлов сервера и install.json).

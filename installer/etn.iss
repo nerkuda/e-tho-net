@@ -52,7 +52,7 @@
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
 ; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
 ; Проверка init и ключа: installer/tests/init-key.ps1.
-; Проверка подстановки шаблона и запуска поставки: installer/tests/service-config.ps1.
+; Проверка подстановки шаблона и запуска поставки: installer/tests/staged-app.ps1.
 ;
 ; Контракт silent server-only режима (постоянный комментарий задачи):
 ;   ETN-Setup-<версия>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY
@@ -68,7 +68,7 @@
 ;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
 ;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
 ;   /TESTFIREWALL, /TESTPRECHECK — только в тестовой сборке
-;   (installer/tests/silent-codes.ps1, init-key.ps1, service-config.ps1).
+;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
 ; ============================================================================
 
 #ifndef MyAppVersion
@@ -303,6 +303,10 @@ var
   GServerHost: String;
   GServerPort: String;
   GServerFirewall: Boolean;
+  { netsh не создал правило брандмауэра: установка продолжается, но на
+    финальном экране GUI показывается предупреждение (в silent — только
+    журнал). Флаг ставится в ApplyFirewallRule. }
+  GFirewallWarning: Boolean;
 
   { Состояние машины }
   GInstallJsonPresent: Boolean;
@@ -1912,11 +1916,18 @@ begin
   Result := R;
 end;
 
-{ Проверка занятости порта. PowerShell пробует занять порт на 0.0.0.0 тем же
-  способом, что и сервер: так ловятся и чужие процессы, и зарезервированные
-  диапазоны Hyper-V, и TIME_WAIT — netstat их не показывает. Порт, занятый
-  собственным сервисом ETN (обновление поверх работающей установки), ошибкой
-  не считается: службу останавливает привилегированная фаза (bb063ac3).
+{ Проверка занятости порта перечисляет ВСЕХ слушателей на порту
+  (Get-NetTCPConnection по всем адресам): пробный bind только на 0.0.0.0
+  не видит чужой процесс, слушающий 127.0.0.1 или конкретный адрес локальной
+  сети, — дефект B1 приёмки 9b310991 (установщик считал порт свободным,
+  health-check попадал в чужой процесс). Слушатели собственной службы ETN
+  занятостью не считаются: службу останавливает привилегированная фаза
+  (bb063ac3). WinSW 2.x запускает сервер дочерним процессом, поэтому
+  владелец сокета сравнивается не только с ProcessId службы, но и с её
+  потомками до 4 уровней (иначе при обновлении поверх работающей установки
+  порт ошибочно считался бы занятым чужим). Если командлет недоступен или
+  IPv4-слушателей нет, выполняются пробные bind: 0.0.0.0 (зарезервированные
+  диапазоны Hyper-V, TIME_WAIT, dual-stack IPv6) и 127.0.0.1 (loopback).
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
   не удалось. }
 function ServerPortStatus(const Port: String): Integer;
@@ -1926,16 +1937,30 @@ var
 begin
   Result := 2;
   Script :=
-    '$ErrorActionPreference=''SilentlyContinue'';' +
-    '$port=' + Port + ';$own=0;' +
-    'try{$s=Get-CimInstance Win32_Service|Where-Object{$_.Name -eq ''ETN''}|' +
-    'Select-Object -First 1;if($s){$own=[int]$s.ProcessId}}catch{};' +
+    '$ErrorActionPreference=''SilentlyContinue'';$port=' + Port + ';$own=@();' +
+    'try{$svc=Get-CimInstance Win32_Service -Filter "Name=''ETN''"|' +
+    'Select-Object -First 1;' +
+    'if($svc -and ([int]$svc.ProcessId -gt 0)){' +
+    '$own+=[int]$svc.ProcessId;' +
+    '$procs=@(Get-CimInstance Win32_Process);' +
+    '$front=@([int]$svc.ProcessId);' +
+    'for($d=0;$d -lt 4 -and $front.Count -gt 0;$d++){' +
+    '$next=@();' +
+    'foreach($p in $procs){' +
+    'if($front -contains [int]$p.ParentProcessId){' +
+    '$own+=[int]$p.ProcessId;$next+=[int]$p.ProcessId}};' +
+    '$front=$next}}}catch{};' +
+    '$v4=$null;' +
+    'try{$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen ' +
+    '-ErrorAction Stop|Where-Object{$_.LocalAddress -notmatch '':''})}catch{};' +
+    'if($null -ne $v4 -and $v4.Count -gt 0){' +
+    '$foreign=@($v4|Where-Object{$own -notcontains [int]$_.OwningProcess});' +
+    'if($foreign.Count -eq 0){exit 0};exit 1};' +
     'try{$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Any,$port);' +
-    '$l.Start();$l.Stop();exit 0}catch{};' +
-    'if($own -gt 0){try{$p=Get-NetTCPConnection -LocalPort $port -State Listen|' +
-    'Select-Object -First 1 -ExpandProperty OwningProcess;' +
-    'if([int]$p -eq $own){exit 0}}catch{}};' +
-    'exit 1';
+    '$l.Start();$l.Stop()}catch{exit 1};' +
+    'try{$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,$port);' +
+    '$l.Start();$l.Stop()}catch{exit 1};' +
+    'exit 0';
   Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
     SW_HIDE, ewWaitUntilTerminated, Code) then
@@ -2164,6 +2189,11 @@ var
 begin
   Result := False;
 #ifdef TestMode
+  if LowerCase(GTestFirewall) = 'fail' then
+  begin
+    LogLine('INFO', 'FIREWALL (тестовый режим, имитация сбоя netsh): ' + Args);
+    Exit;
+  end;
   if LowerCase(GTestFirewall) <> 'real' then
   begin
     LogLine('INFO', 'FIREWALL (тестовый режим, без изменений): netsh ' + Args);
@@ -2195,7 +2225,9 @@ end;
 
 { Приведение правила к выбранному состоянию: всегда сначала удаление (порт мог
   измениться при обновлении), затем создание при включённом чекбоксе. Ошибка
-  netsh не отменяет установку: сервер работает локально, причина в журнале. }
+  netsh установку не отменяет: сервер слушает 0.0.0.0 (ETN_HOST при включённом
+  чекбоксе), но подключения из локальной сети могут блокироваться брандмауэром
+  Windows. Предупреждение пишется в журнал и (в GUI) на финальный экран. }
 procedure ApplyFirewallRule;
 begin
   if not GServerSelected then Exit;
@@ -2212,8 +2244,13 @@ begin
     LogLine('INFO', 'Правило брандмауэра создано: TCP ' + GServerPort +
       ', профили ' + FIREWALL_PROFILES)
   else
-    LogLine('ERROR', 'Правило брандмауэра не создано: TCP ' + GServerPort +
-      ' — подключения с других компьютеров могут быть недоступны');
+  begin
+    GFirewallWarning := True;
+    LogLine('WARN', 'Брандмауэр: правило «' + FIREWALL_RULE_NAME + '» не создано ' +
+      '(TCP ' + GServerPort + '). Установка продолжается: сервер слушает ' +
+      GServerHost + ', но подключения с других компьютеров могут блокироваться ' +
+      'брандмауэром Windows. Причина — в журнале установки.');
+  end;
 end;
 
 { Удаление программы: правило брандмауэра удаляется вместе с ней. Решение
@@ -2740,6 +2777,7 @@ begin
   GDeferredLog := '';
   GParamsLocked := False;
   GUninstallFirewallRule := False;
+  GFirewallWarning := False;
   GProductVersion := '{#MyAppVersion}';
   GDataDir := ExpandConstant('{#DataDir}');
   GServerDir := ExpandConstant('{#AppDir}');
@@ -3025,8 +3063,20 @@ begin
     end;
   end;
   if CurPageID = wpFinished then
+  begin
     if WizardForm <> nil then
+    begin
       WizardForm.NextButton.Enabled := True;
+      { Ошибка netsh не отменяет установку, но пользователь должен узнать о
+        ней не только из журнала: silent-режим сюда не доходит (GSilent). }
+      if GFirewallWarning and (WizardForm.FinishedLabel <> nil) then
+        WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+          'Внимание: правило брандмауэра Windows не создано. ' +
+          'Сервер слушает ' + GServerHost + ':' + GServerPort + ', но подключения ' +
+          'с других компьютеров могут блокироваться брандмауэром. ' +
+          'Причина указана в журнале установки.';
+    end;
+  end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -3198,7 +3248,8 @@ begin
           LogLine('ERROR', 'Сбой выполнения: конфигурация службы не подготовлена (код 10)');
         end;
         { Правило брандмауэра — по чекбоксу; ошибка netsh не отменяет
-          установку (сервер работает локально), причина в журнале. }
+          установку (сервер слушает 0.0.0.0, предупреждение в журнал и на
+          финальный экран), причина в журнале. }
         if GExitCode = EXIT_OK then
           ApplyFirewallRule;
       end;

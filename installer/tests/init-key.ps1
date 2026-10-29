@@ -21,7 +21,9 @@
          код 10 (ручной режим).
       7. Статические проверки .iss: критерий --check, --key-out, окружение
          ETN_DATA_DIR/ETN_PORT/ETN_HOST, icacls, защищённый файл ключа,
-         чекбокс «Я сохранил ключ», предупреждение при закрытии.
+         чекбокс «Я сохранил ключ», предупреждение при закрытии. Проверки
+         идут через общий сторож installer/tests/iss-guard.ps1 (B2 приёмки
+         9b310991): строка комментария реализацией не считается.
 
     Фикстура CLI (fixtures/payload/server/dist/cli.js) запускается настоящим
     node.exe (/TESTNODEEXE): проверяются реальный вызов процесса, аргументы,
@@ -58,6 +60,9 @@ $installerDir = Join-Path $repoRoot 'installer'
 $buildScript = Join-Path $installerDir 'build.ps1'
 $issPath = Join-Path $installerDir 'etn.iss'
 $payloadDir = Join-Path $PSScriptRoot 'fixtures\payload'
+# Общий сторож статических проверок .iss (дефект B2 приёмки 9b310991):
+# наивный Contains проходил на закомментированной строке.
+. (Join-Path $PSScriptRoot 'iss-guard.ps1')
 $workRoot = Join-Path $repoRoot '.tmp\init-key-tests'
 $appDir = Join-Path $workRoot 'app'
 $dataDir = Join-Path $workRoot 'data'
@@ -208,11 +213,18 @@ $staticChecks = @(
     @{ Name = 'static:init-once'; Text = 'etn init не вызывается'; Note = 'повторная инициализация запрещена' }
 )
 foreach ($check in $staticChecks) {
-    $present = $issText.Contains($check.Text)
+    # Test-IssCode — общий хелпер installer/tests/iss-guard.ps1: строка
+    # комментария ('; function ValidDisplayName') реализацией не считается.
+    $present = Test-IssCode -Text $issText -Pattern ([regex]::Escape($check.Text))
     Add-Check -Name $check.Name -Ok $present -Note $check.Note
 }
-# Ключ не пишется в журнал: ни одна строка LogLine не содержит GPendingKey.
-$keyInLog = [regex]::IsMatch($issText, 'LogLine\([^\r\n]*GPendingKey')
+# Хелпер самопроверяется в каждой точке использования: закомментированный код
+# не считается, рабочий — считается.
+$guardSelfTest = Test-IssGuardSelfTest
+Add-Check -Name 'static-guard:self-test' -Ok $guardSelfTest.Ok -Note $guardSelfTest.Message
+# Ключ не пишется в журнал: ни одна строка кода LogLine не содержит GPendingKey
+# (строки комментариев не считаются — общий сторож iss-guard.ps1).
+$keyInLog = Test-IssCode -Text $issText -Pattern 'LogLine\([^\r\n]*GPendingKey'
 Add-Check -Name 'static:key-not-logged' -Ok (-not $keyInLog) -Note 'LogLine без GPendingKey'
 
 # --- Сборка тестового установщика -------------------------------------------

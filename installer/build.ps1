@@ -169,7 +169,9 @@ function Test-PayloadFreshness {
             @{ Relative = 'server\dist\index.js'; Source = (Join-Path $RepoRoot 'server\dist\index.js'); What = 'сервер (server\dist\index.js)' },
             @{ Relative = 'service\etn-service.xml'; Source = (Join-Path $PSScriptRoot 'service\etn-service.xml'); What = 'шаблон службы' })) {
         if (-not (Test-Path -LiteralPath $item.Source)) {
-            Write-Warning "Нет $($item.Source) — свежесть payload по $($item.Relative) не проверена."
+            Write-Warning ("Свежесть payload по $($item.Relative) НЕ ПРОВЕРЕНА: в репозитории нет $($item.Source). " +
+                "Соберите сервер (npm -w @etn/server run build) и обновите payload " +
+                "(pwsh -File installer/fetch-payload.ps1) — иначе exe может разойтись со сборкой.")
             continue
         }
         $payloadPath = Join-Path $Root $item.Relative
