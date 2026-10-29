@@ -13,6 +13,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
 import { getRtStatus, getRtStatusDetail, store } from '../src/renderer/state.js';
 import { canSave, initDrafts } from '../src/renderer/drafts.js';
+import { refreshRealtimeStatuses, toRtStatusDetail } from '../src/renderer/realtime.js';
 
 const NET1 = '11111111-2222-3333-4444-555555555555';
 const NET2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -141,5 +142,28 @@ describe('renderer realtime status (de34b35b)', () => {
     assert.equal(restored.length, 2, restored.join(' | '));
     assert.ok(restored.some((t) => t.includes('Соединение восстановлено')));
     assert.equal(draftListCalls.length, 2, 'реальное восстановление — досыл');
+  });
+
+  it('detail server-maintenance из main доходит до store, неизвестный — отбрасывается (12fd5b0e)', async () => {
+    assert.equal(toRtStatusDetail('server-restart'), 'server-restart');
+    assert.equal(toRtStatusDetail('server-maintenance'), 'server-maintenance');
+    assert.equal(toRtStatusDetail('bogus'), null);
+    assert.equal(toRtStatusDetail(undefined), null);
+
+    installDom();
+    (globalThis as unknown as { window: { etn: unknown } }).window.etn = {
+      realtime: {
+        getStatuses: async () => [
+          { networkId: NET1, status: 'offline', detail: 'server-maintenance' },
+          { networkId: NET2, status: 'reconnecting', detail: 'bogus' },
+        ],
+      },
+    };
+    store.update({ networkId: NET1, rtStatusDetailByNetwork: {} });
+    await refreshRealtimeStatuses();
+    assert.equal(getRtStatusDetail(store.state), 'server-maintenance');
+    store.update({ networkId: NET2 });
+    assert.equal(getRtStatusDetail(store.state), null, 'неизвестное уточнение отброшено');
+    store.update({ networkId: NET1 });
   });
 });

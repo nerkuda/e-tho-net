@@ -76,6 +76,21 @@ export function setRealtimeEffects(next: Partial<RealtimeEffects>): void {
 }
 
 /**
+ * Known visual qualifiers of a realtime status. Unknown values from IPC are
+ * dropped rather than rendered as someone else's detail.
+ * `server-maintenance` — сервер на обслуживании (close 1012, 12fd5b0e); текст
+ * для него добавляет задача 479e37ed, до тех пор показывается текст статуса.
+ */
+const STATUS_DETAILS: readonly RtStatusDetail[] = ['server-restart', 'server-maintenance'];
+
+/** Narrows an IPC `detail` value to a known {@link RtStatusDetail}. */
+export function toRtStatusDetail(value: unknown): RtStatusDetail | null {
+  return typeof value === 'string' && (STATUS_DETAILS as readonly string[]).includes(value)
+    ? (value as RtStatusDetail)
+    : null;
+}
+
+/**
  * Pulls the per-network status snapshot and merges it into the store
  * (defect de34b35b). Called at init, again after the profile is connected
  * (the pool appears only then, so the cold-start snapshot is empty) and after
@@ -99,7 +114,8 @@ export async function refreshRealtimeStatuses(): Promise<void> {
     for (const entry of snapshot) {
       if (!valid.includes(entry.status as RtStatus)) continue;
       map[entry.networkId] = entry.status as RtStatus;
-      if (entry.detail === 'server-restart') details[entry.networkId] = 'server-restart';
+      const detail = toRtStatusDetail(entry.detail);
+      if (detail !== null) details[entry.networkId] = detail;
       else delete details[entry.networkId];
     }
     store.update({
@@ -145,7 +161,8 @@ export function initRealtime(): void {
     const next = statusStr as RtStatus;
     const map = { ...store.state.rtStatusByNetwork, [networkId]: next };
     const details = { ...store.state.rtStatusDetailByNetwork };
-    if (obj.detail === 'server-restart') details[networkId] = obj.detail as RtStatusDetail;
+    const detail = toRtStatusDetail(obj.detail);
+    if (detail !== null) details[networkId] = detail;
     else delete details[networkId];
     store.update({
       rtStatusByNetwork: map,

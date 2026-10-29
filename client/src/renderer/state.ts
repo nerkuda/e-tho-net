@@ -59,8 +59,13 @@ export type EditorTarget =
 /** Realtime connection status as reported by the main process (de34b35b). */
 export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspect';
 
-/** Visual qualifier of a realtime status (`server-restart` → «Сервер перезапускается…»). */
-export type RtStatusDetail = 'server-restart';
+/**
+ * Visual qualifier of a realtime status (de34b35b; 12fd5b0e):
+ * `server-restart` → «Сервер перезапускается…», `server-maintenance` →
+ * обслуживание сервера. Текст для обслуживания добавляет задача 479e37ed; до
+ * него показывается обычный текст статуса, но уточнение уже хранится в сторе.
+ */
+export type RtStatusDetail = 'server-restart' | 'server-maintenance';
 
 /** UI theme (L5 `client_meta.theme`, L10). */
 export type Theme = 'light' | 'dark';
