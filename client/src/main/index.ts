@@ -18,6 +18,7 @@ import path from 'node:path';
 import { CLIENT_META_KEY } from '@etn/shared';
 import { serveEtnimgRequest, type EtnimgServeDeps } from './etnimg.js';
 import { LocalDb } from './db/local-db.js';
+import { purgeStaleDrafts } from './db/drafts-purge.js';
 import {
   defaultMigrationsDir,
   isDefaultUserDataDir,
@@ -493,6 +494,21 @@ app
       // (electron-builder `extraResources`); dev runs use `client/migrations`.
       migrationsDir: app.isPackaged ? packagedMigrationsDir() : defaultMigrationsDir(),
     });
+
+    // Чистка незаписанных черновиков прошлых запусков (ошибка fb9d6058, решение
+    // пользователя 2026-10-29). Точка — здесь, сразу после открытия local.db и
+    // ДО registerIpc/createWindow: ни renderer, ни первый connect сессии не
+    // должны увидеть строку прошлого запуска. Между запусками прошло
+    // неизвестное время; правку могли записать через другой клиент или
+    // MCP/REST, а цель черновика — удалить. Пурж идёт по ВСЕМ профилям и сетям
+    // и удаляет все незавершённые статусы (pending/conflict/failed).
+    // Пользователю — ОДНО стартовое сообщение при N > 0: окна ещё нет, поэтому
+    // счётчик уезжает в client_meta, renderer читает его при старте
+    // (`initDrafts` → `reportStartupPurge`) и очищает ключ.
+    const purgedDrafts = purgeStaleDrafts(localDb);
+    if (purgedDrafts.deletedWithText > 0) {
+      localDb.setMeta(CLIENT_META_KEY.DRAFTS_PURGED_COUNT, String(purgedDrafts.deletedWithText));
+    }
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
 

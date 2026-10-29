@@ -1,0 +1,36 @@
+{
+  "name": "fb9d6058-draft-purge",
+  "description": "Фаза 2 живого гейта п.5 (ошибка fb9d6058): перезапуск клиента на том же изолированном профиле (сервер уже погашен). Main чистит незавершённые черновики прошлых запусков сразу после открытия local.db и до создания окна; счётчик уезжает в client_meta.drafts_purged_count, renderer показывает одно стартовое сообщение и очищает ключ. Ожидание: ключ переведён в '' (значит пурж сработал и сообщение потреблено); текст тоста — в отчёт. Пустота таблицы drafts проверяется прямым чтением local.db после выхода клиента (скрипт фазы 2).",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "renderer-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('#app') !== null"
+    },
+    {
+      "name": "purge-count-consumed",
+      "timeout": 20000,
+      "waitFor": "(async () => (await window.etn.meta.get('drafts_purged_count')) === '')()"
+    },
+    {
+      "name": "purge-count-now",
+      "probe": {
+        "name": "purgeCount",
+        "expression": "(async () => await window.etn.meta.get('drafts_purged_count'))()"
+      },
+      "expect": ""
+    },
+    {
+      "name": "startup-toast-texts",
+      "probe": {
+        "name": "toastTexts",
+        "expression": "Array.from(document.querySelector('.notice-stack')?.children ?? []).map((el) => el.textContent ?? '').join(' | ')"
+      }
+    },
+    {
+      "name": "quit-client",
+      "eval": "setTimeout(() => window.close(), 250); true"
+    }
+  ]
+}

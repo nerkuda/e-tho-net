@@ -34,13 +34,16 @@ export interface LocalDbOptions {
 
 /** Lifecycle status of a draft (07-client-electron.md §3.3). */
 /**
- * Lifecycle of a stored draft (ошибка 5726744b).
+ * Lifecycle of a stored draft (ошибка 5726744b, дополнено fb9d6058).
  *
  * - `pending` — ждёт отправки (в том числе с прошлой сессии);
  * - `conflict` — первая отправка получила `VERSION_CONFLICT`: текст сохранён,
  *   из авто-досылки исключён до следующей правки этой сущности;
- * - `sent` / `failed` — исторические статусы; текущий код строки в них не
- *   переводит, но старые БД могут их содержать.
+ * - `failed` — отправка получила `NOT_FOUND`: цель недостижима навсегда,
+ *   терминальный статус, несмотря на это текст сохранён до чистки при старте
+ *   следующего запуска (fb9d6058). Другие ошибки остаются ретраибельными;
+ * - `sent` — исторический статус: текущий код строки в него не переводит
+ *   (успешная отправка удаляет строку), но старые БД могут его содержать.
  */
 export type DraftStatus = 'pending' | 'conflict' | 'sent' | 'failed';
 
@@ -415,6 +418,17 @@ export class LocalDb {
         'SELECT * FROM drafts WHERE profile_id = ? AND network_id = ? ORDER BY created_at ASC',
       )
       .all(profileId, networkId) as DraftRow[];
+  }
+
+  /**
+   * Lists every draft of every profile and network (startup purge, fb9d6058).
+   * Kept deliberately unfiltered: which statuses are unfinished is the policy of
+   * `db/drafts-purge.ts`, so the policy stays unit-testable without SQLite.
+   */
+  public listAllDrafts(): DraftRow[] {
+    return this.db
+      .prepare('SELECT * FROM drafts ORDER BY created_at ASC')
+      .all() as DraftRow[];
   }
 
   /** Updates the lifecycle status of a draft. */

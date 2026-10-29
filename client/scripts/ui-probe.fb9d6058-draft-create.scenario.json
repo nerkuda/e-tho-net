@@ -1,0 +1,57 @@
+{
+  "name": "fb9d6058-draft-create",
+  "description": "Фаза 1 живого гейта п.5 (ошибка fb9d6058): подключение к стенду, открытие засеянной сети и создание незаписанного черновика через window.etn.ui.draftSave (цель — несуществующий комментарий; досыл не нужен, черновик должен остаться pending до перезапуска). Ожидание: draftList('all') содержит ровно одну строку. Стенд запускается с --keep, профиль переиспользует фаза 2 (ui-probe.fb9d6058-draft-purge.scenario.json).",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "draft-saved",
+      "eval": "window.etn.ui.draftSave({ networkId: '{{networkId}}', entityType: 'comment', entityId: '00000000-1111-2222-3333-444444444444', field: 'body_md', value: 'ТЕКСТ ПРОШЛОЙ СЕССИИ', baseVersion: 1 }).then((id) => { window.__draftId = id; }, (err) => { window.__draftId = 'ERR ' + String(err); }); true"
+    },
+    {
+      "name": "draft-id-received",
+      "timeout": 10000,
+      "waitFor": "typeof window.__draftId === 'string' && window.__draftId !== ''"
+    },
+    {
+      "name": "draft-rows",
+      "probe": {
+        "name": "draftRows",
+        "expression": "(async () => (await window.etn.ui.draftList('{{networkId}}', 'all')).map((d) => ({ status: d.status, value: d.value })))()"
+      }
+    },
+    {
+      "name": "draft-count",
+      "probe": {
+        "name": "draftCount",
+        "expression": "(async () => (await window.etn.ui.draftList('{{networkId}}', 'all')).length)()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "draft-pending",
+      "probe": {
+        "name": "draftStatus",
+        "expression": "(async () => (await window.etn.ui.draftList('{{networkId}}', 'all'))[0]?.status ?? 'none')()"
+      },
+      "expect": "pending"
+    }
+  ]
+}
