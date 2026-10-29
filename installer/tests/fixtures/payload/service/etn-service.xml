@@ -1,0 +1,6 @@
+<!-- Фикстура шаблона службы WinSW (поставка службы — задача 8b1f5980). -->
+<service>
+  <id>ETN</id>
+  <executable>%BASE%\..\node\node.exe</executable>
+  <arguments>server\dist\index.js</arguments>
+</service>
