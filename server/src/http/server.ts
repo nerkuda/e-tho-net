@@ -32,7 +32,9 @@ import { startEventLogCleanup } from '../realtime/event-log-cleanup.js';
 import { EventLogRelay } from '../realtime/event-log-relay.js';
 import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gateway.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
-import { normaliseError } from './errors.js';
+import { normaliseError, sendEtnError } from './errors.js';
+import { createMaintenanceGuard } from './maintenance-guard.js';
+import { SERVER_UPDATING_MESSAGE, createMaintenanceService } from '../maintenance.js';
 import { meRoutes } from '../routes/me.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
@@ -194,13 +196,39 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // immediately. Registered before any route so it applies to all of them.
   registerLayerEchoHook(app, config.dataDir);
 
+  // --- Maintenance state and REST gate (задача 2f599b67, требование 20be64a8) ---
+  // Состояние обслуживания живёт в памяти процесса и после старта всегда
+  // `idle` (сущность aa55d459); сервис декорируется на приложение — задание
+  // обновления (`0a27a63b`) вызовет `app.maintenance.beginUpdating(...)` перед
+  // запуском установщика.
+  // Гейт — `onRequest` и зарегистрирован раньше auth: 503 за обслуживание
+  // приоритетнее 426 и 401, а изменяющий запрос не доходит даже до валидации.
+  // Гейтвей создаётся позже (после WS-плагина); до этого сокетов нет, и
+  // замыкание `announce` читает переменную на момент вызова.
+  let realtimeGatewayForClose: RealtimeGateway | null = null;
+  const maintenance = createMaintenanceService({
+    announce: async (frame) => {
+      await realtimeGatewayForClose?.announceMaintenance(frame);
+    },
+  });
+  app.decorate('maintenance', maintenance);
+  const maintenanceGuard = createMaintenanceGuard({ getState: () => maintenance.getState() });
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    const rejection = maintenanceGuard(req);
+    if (rejection === null) {
+      return;
+    }
+    reply.header('retry-after', String(rejection.retry_after));
+    sendEtnError(reply, 'SERVER_UPDATING', SERVER_UPDATING_MESSAGE, rejection, req.id);
+  });
+
   // --- Plugins -------------------------------------------------------------
   await app.register(corsPlugin, {
     origin: true, // reflect request origin; credentials not used (bearer keys)
   });
   // Realtime gateway instance is created after the WS plugin (it needs the
-  // plugin's routes context); the hook closure reads it lazily.
-  let realtimeGatewayForClose: RealtimeGateway | null = null;
+  // plugin's routes context); the hook closure reads it lazily. The variable
+  // itself is declared above — the maintenance announcer needs it too.
   // Planned-shutdown close frame (defect de34b35b): `@fastify/websocket` adds
   // its own `preClose` on registration and runs FIRST when it was registered
   // earlier — it would drop sockets with 1005, hiding the reason from the
@@ -253,6 +281,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     logger,
     options: deps.realtimeOptions,
     fileLog,
+    // Новые сокеты в период обслуживания не принимаются: сервер закроет их
+    // кодом 1012, чтобы клиент остался в режиме «сервер обновляется» и не
+    // принял скорую остановку службы за сетевую аварию (требование 20be64a8:
+    // установленный WebSocket — признак, что обслуживание закончилось).
+    isServerUpdating: () => maintenance.getState().state === 'updating',
   });
   gateway.register(app);
   realtimeGatewayForClose = gateway;
@@ -431,6 +464,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         logger,
         networkService,
         fileLog,
+        // Диспетчер MCP проверяет обслуживание сам (требование f84db18e):
+        // `/mcp` не перехватывается общим REST-503.
+        maintenance: () => maintenance.getState(),
       },
       { sessionIdleTtlMs: config.mcp.sessionIdleTtlMs },
     );

@@ -11,6 +11,7 @@
 import type { SystemDb } from '../db/system-db.js';
 import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
+import type { MaintenanceState } from '../maintenance.js';
 import type { PubSub } from '../realtime/pubsub.js';
 import type { NetworkService } from '../domain/network-service.js';
 
@@ -69,6 +70,17 @@ export interface McpBaseDeps {
    * Optional so tests and foreign embeddings keep working unchanged.
    */
   fileLog?: FileLog;
+  /**
+   * Текущее состояние обслуживания сервера (задача 2f599b67, требование
+   * f84db18e). Пока `updating`, изменяющий инструмент отвечает
+   * `SERVER_UPDATING` вместо выполнения; читающие не блокируются (карточка
+   * задачи). Провайдер задаётся там, где диспетчер и состояние живут в одном
+   * процессе: `/mcp` на fastify-сервере получает его от `createServer`.
+   * Отдельный процесс stdio-MCP состояния HTTP-сервера не видит (по сущности
+   * aa55d459 состояние живёт в памяти процесса), поэтому там провайдер не
+   * задан и гейт не срабатывает.
+   */
+  maintenance?: () => MaintenanceState;
 }
 
 /** Dependencies of one concrete {@link createMcpServer} instance. */

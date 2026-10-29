@@ -150,6 +150,7 @@ import {
   runTool,
   runWrite,
   runWriteTool,
+  serverUpdatingToolResult,
 } from '../context.js';
 import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
@@ -2043,6 +2044,17 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
             field: 'action',
             allowed: OPS_ACTION_NAMES,
           });
+        }
+        // Гейт обслуживания сервера (задача 2f599b67, требование f84db18e):
+        // read-only действия не блокируются, изменяющие отвечают
+        // SERVER_UPDATING до валидации params и любой записи. Тул-уровневая
+        // проверка диспетчера (`mcp/server.ts`) `etn.ops` пропускает — здесь
+        // роль «изменяющий» играет флаг действия в реестре.
+        if (!entry.readOnly) {
+          const rejection = serverUpdatingToolResult(rt);
+          if (rejection !== null) {
+            return rejection;
+          }
         }
         if (entry.destructive && args.confirm !== true) {
           throw new EtnError(

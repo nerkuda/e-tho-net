@@ -52,6 +52,11 @@ export function httpStatusForCode(code: EtnErrorCode): number {
       // Изменяющий запрос desktop-клиента без версии или вне `client_compatibility`
       // (требование 271e3327, ADR 6ded6a87) — «Upgrade Required».
       return 426;
+    case 'SERVER_UPDATING':
+      // Сервер в режиме обслуживания перед обновлением (задача 2f599b67,
+      // требование 20be64a8): изменяющие запросы получают «Service Unavailable»
+      // и заголовок `Retry-After`.
+      return 503;
     case 'RATE_LIMITED':
       return 429;
     case 'INTERNAL':

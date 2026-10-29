@@ -362,6 +362,79 @@ describe('MCP HTTP endpoint (F1/F2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('во время обслуживания /mcp не перехватывается REST-503: чтение работает, запись — SERVER_UPDATING', async () => {
+    const ctx = await buildHttpContext();
+    try {
+      await ctx.app.maintenance.beginUpdating({ target_version: '0.99.0', retry_after: 60 });
+
+      // Общий REST-гейт изменяющий REST-запрос уже отклоняет…
+      const rest = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/networks',
+        headers: { authorization: `Bearer ${ctx.adminKey}` },
+        payload: { display_name: 'Нет' },
+      });
+      assert.equal(rest.statusCode, 503, rest.body);
+      assert.equal(rest.json().error.code, 'SERVER_UPDATING');
+
+      // …а `/mcp` не перехватывается: initialize и чтение проходят.
+      const init = await ctx.app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: {
+          authorization: `Bearer ${ctx.adminKey}`,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        payload: initializeBody(),
+      });
+      assert.equal(init.statusCode, 200, init.body);
+      const sessionId = init.headers['mcp-session-id'] as string;
+
+      const call = async (
+        id: number,
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<{ statusCode: number; body: string; json: () => Record<string, unknown> }> => {
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: '/mcp',
+          headers: {
+            authorization: `Bearer ${ctx.adminKey}`,
+            'mcp-session-id': sessionId,
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+          },
+          payload: { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } },
+        });
+        return { statusCode: res.statusCode, body: res.body, json: () => res.json() };
+      };
+
+      const read = await call(2, 'etn.thoughts.get', {
+        network_id: ctx.networkId,
+        thought_id: ctx.homeId,
+      });
+      assert.equal(read.statusCode, 200, read.body);
+      const readResult = read.json().result as { content: Array<{ text: string }>; isError?: boolean };
+      assert.equal(readResult.isError, undefined, readResult.content[0]!.text);
+
+      const write = await call(3, 'etn.thoughts.write', {
+        network_id: ctx.networkId,
+        thoughts: [{ ref: 'x', thought: { title: 'Нет' } }],
+      });
+      assert.equal(write.statusCode, 200, write.body);
+      const writeResult = write.json().result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      assert.equal(writeResult.isError, true);
+      assert.match(writeResult.content[0]!.text, /ETN error \[SERVER_UPDATING\]/);
+      assert.match(writeResult.content[0]!.text, /"retry_after":60/);
+    } finally {
+      await closeHttpContext(ctx);
+    }
+  });
+
   it('MCP endpoint is absent when disabled (default config)', async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-mcp-off-'));
     const db: Database.Database = new DatabaseConstructor(':memory:');

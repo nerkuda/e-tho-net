@@ -14,11 +14,16 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE } from '@etn/shared';
+import { EtnError, MCP_MAX_THOUGHTS_PER_WRITE, MCP_TOOL_ANNOTATIONS, type McpToolName } from '@etn/shared';
 
 import { SERVER_VERSION } from '../version.js';
 import { contractFor, mcpValidationError } from '../contracts.js';
-import { createRuntime, etnErrorText, type McpRuntime } from './context.js';
+import {
+  createRuntime,
+  etnErrorText,
+  serverUpdatingToolResult,
+  type McpRuntime,
+} from './context.js';
 import { normalizeThoughtIdArgs } from './id-args.js';
 import { registerPrompts } from './prompts.js';
 import { registerResources } from './resources.js';
@@ -154,6 +159,19 @@ function preflightToolArgs(name: string, args: unknown): EtnError | null {
 }
 
 /**
+ * Инструмент объявлен read-only в витрине (аннотации O7, `MCP_TOOL_NAMES`)?
+ *
+ * Единственный источник «этот инструмент только читает» — таблица
+ * `MCP_TOOL_ANNOTATIONS` из `@etn/shared`: своего списка изменяющих
+ * инструментов гейт обслуживания не заводит. Инструмент без аннотации
+ * считается изменяющим (fail-closed): новый read-only инструмент обязан
+ * объявить `readOnlyHint: true` вместе с регистрацией.
+ */
+function isReadOnlyTool(name: string): boolean {
+  return MCP_TOOL_ANNOTATIONS[name as McpToolName]?.readOnlyHint === true;
+}
+
+/**
  * Единая валидация входа (задача c9d5f21e, веха 8 версии 0.8.2): SDK
  * проверяет `inputSchema` инструмента ДО вызова обработчика и на неудаче
  * возвращает собственный английский текст. Перехватчик регистрирует
@@ -166,6 +184,11 @@ function preflightToolArgs(name: string, args: unknown): EtnError | null {
  * регистрации инструмента: SDK ставит свой `tools/call`-обработчик при
  * первом `registerTool`, и обёртка ложится вокруг него (тот же приём, что
  * `instrumentToolCalls` использует для `registerTool`).
+ *
+ * Там же — гейт обслуживания сервера (задача 2f599b67, требование f84db18e):
+ * изменяющий инструмент отвечает `SERVER_UPDATING` до валидации и выполнения,
+ * читающие проходят; `etn.ops` проверяется по флагу своего действия в
+ * `tools/ops.ts` (read-only задан на уровне действия, а не инструмента).
  *
  * Там же (ошибка d8893a1f) — единая нормализация коротких id мыслей: после
  * успешной валидации аргументы прогоняются через {@link normalizeThoughtIdArgs},
@@ -185,6 +208,12 @@ function installCanonicalToolValidation(mcp: McpServer, rt: McpRuntime): void {
       const validating = (request: unknown, extra: unknown): Promise<unknown> | unknown => {
         const params = (request as { params?: { name?: unknown; arguments?: unknown } }).params;
         const name = typeof params?.name === 'string' ? params.name : undefined;
+        if (name !== undefined && name !== 'etn.ops' && !isReadOnlyTool(name)) {
+          const rejection = serverUpdatingToolResult(rt);
+          if (rejection !== null) {
+            return rejection;
+          }
+        }
         if (name !== undefined) {
           const preflight = preflightToolArgs(name, params?.arguments);
           if (preflight !== null) {

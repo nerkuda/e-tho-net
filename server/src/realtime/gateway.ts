@@ -38,6 +38,7 @@ import {
   type RealtimeClientMessage,
   type RealtimeEvent,
   type RealtimeEventType,
+  type RealtimeMaintenanceFrame,
   type RealtimeServerControlMessage,
 } from '@etn/shared';
 
@@ -134,7 +135,18 @@ export interface RealtimeGatewayDeps {
   fileLog?: FileLog;
   /** Partial option overrides (tests). */
   options?: Partial<RealtimeGatewayOptions>;
+  /**
+   * Идёт ли обслуживание сервера (задача 2f599b67, требование 20be64a8).
+   * Пока `true`, новый сокет не принимается: сервер сразу закрывает его кодом
+   * 1012 с причиной `server updating`, чтобы клиент остался в режиме
+   * обслуживания, а не принял скорую остановку службы за сетевую аварию.
+   * Не задан — обслуживания нет.
+   */
+  isServerUpdating?: () => boolean;
 }
+
+/** Причина close `1012` при плановом обслуживании (требование 9636b1cc). */
+const MAINTENANCE_CLOSE_REASON = 'server updating';
 
 /** Registry key for {@link RealtimeGateway.byClient}. */
 function clientKey(userId: string, clientId: string | null): string {
@@ -211,6 +223,7 @@ export class RealtimeGateway {
   private readonly logger?: Logger;
   private readonly fileLog?: FileLog;
   private readonly options: RealtimeGatewayOptions;
+  private readonly isServerUpdating: () => boolean;
 
   /** Every live connection. */
   private readonly connections = new Set<Connection>();
@@ -226,6 +239,7 @@ export class RealtimeGateway {
     this.logger = deps.logger;
     this.fileLog = deps.fileLog;
     this.options = { ...DEFAULT_REALTIME_GATEWAY_OPTIONS, ...deps.options };
+    this.isServerUpdating = deps.isServerUpdating ?? (() => false);
   }
 
   /**
@@ -272,6 +286,14 @@ export class RealtimeGateway {
     if (role === null) {
       // 04-realtime.md §2: no rights on the network → 4401.
       this.closeSocket(socket, REALTIME_CLOSE_CODES.UNAUTHORIZED, 'not a network member');
+      return;
+    }
+
+    // Обслуживание сервера (задача 2f599b67): новый сокет не принимается —
+    // клиенту сразу уходит close 1012, и он остаётся в режиме «сервер
+    // обновляется» вместо ложного «подключён» перед остановкой службы.
+    if (this.isServerUpdating()) {
+      this.closeSocket(socket, REALTIME_CLOSE_CODES.SERVICE_RESTART, MAINTENANCE_CLOSE_REASON);
       return;
     }
 
@@ -672,14 +694,39 @@ export class RealtimeGateway {
   }
 
   /**
-   * Planned-shutdown close (defect de34b35b): sends `1001 server shutdown` to
-   * every live socket and waits up to 200 ms for the close handshake so the
-   * frame actually reaches the client. Called from the ROOT `preClose` hook,
-   * which is registered before the WS plugin (otherwise
-   * `@fastify/websocket` drops sockets with 1005 and the client cannot tell a
-   * planned restart from a network failure).
+   * Плановое обслуживание (задача 2f599b67, требование 9636b1cc): разослать
+   * кадр `maintenance` всем живым сокетам и закрыть их кодом `1012` с причиной
+   * `server updating`.
+   *
+   * Резолвится, когда close-кадр дошёл до каждой стороны (или истёк дедлайн) —
+   * это и есть подтверждение доставки, после которого задание обновления
+   * (`0a27a63b`) запускает установщик. Кадр уходит до close по построению
+   * `ws`: пакеты одного сокета не переупорядочиваются, а close-хендшейк не
+   * завершается раньше отправки уже поставленных в очередь кадров.
    */
-  public async closeAllGracefully(timeoutMs = 200): Promise<void> {
+  public async announceMaintenance(frame: RealtimeMaintenanceFrame): Promise<void> {
+    for (const conn of [...this.connections]) {
+      sendJson(conn, frame, this.logger);
+    }
+    await this.closeAllGracefully(REALTIME_CLOSE_CODES.SERVICE_RESTART, MAINTENANCE_CLOSE_REASON);
+  }
+
+  /**
+   * Planned-shutdown close (defect de34b35b): sends the given code/reason to
+   * every live socket and waits up to the timeout for the close handshake so
+   * the frame actually reaches the client. Called from the ROOT `preClose`
+   * hook, which is registered before the WS plugin (otherwise
+   * `@fastify/websocket` drops sockets with 1005 and the client cannot tell a
+   * planned restart from a network failure), and from
+   * {@link announceMaintenance} after the maintenance frame.
+   *
+   * Defaults are the planned-shutdown pair `1001 server shutdown`.
+   */
+  public async closeAllGracefully(
+    code = 1001,
+    reason = 'server shutdown',
+    timeoutMs = 200,
+  ): Promise<void> {
     const conns = [...this.connections];
     if (conns.length === 0) return;
     const waits = conns.map(
@@ -698,7 +745,7 @@ export class RealtimeGateway {
             resolve();
           };
           socket.once('close', finish);
-          this.closeSocket(socket, 1001, 'server shutdown');
+          this.closeSocket(socket, code, reason);
           // The close handshake may never answer (peer gone); the deadline
           // keeps shutdown bounded.
           setTimeout(finish, timeoutMs).unref?.();

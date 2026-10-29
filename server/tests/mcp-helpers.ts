@@ -29,6 +29,7 @@ import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { createLogger } from '../src/logger.js';
+import type { MaintenanceState } from '../src/maintenance.js';
 import { createApiKeyAuthProvider } from '../src/mcp/auth.js';
 import { createMcpServer } from '../src/mcp/index.js';
 import { PubSub } from '../src/realtime/pubsub.js';
@@ -220,11 +221,24 @@ export interface McpClientHandle {
   close(): Promise<void>;
 }
 
+/** Настройки тестового MCP-клиента. */
+export interface McpClientOptions {
+  /**
+   * Провайдер состояния обслуживания (задача 2f599b67): в проде его даёт
+   * `createServer` для `/mcp`; тест подставляет состояние напрямую.
+   */
+  maintenance?: () => MaintenanceState;
+}
+
 /**
  * Build the MCP server through {@link createMcpServer} for the given key and
  * connect an SDK client over a linked in-memory transport pair.
  */
-export async function connectMcpClient(ctx: McpTestContext, key: string): Promise<McpClientHandle> {
+export async function connectMcpClient(
+  ctx: McpTestContext,
+  key: string,
+  options: McpClientOptions = {},
+): Promise<McpClientHandle> {
   const authProvider = createApiKeyAuthProvider(ctx.sys);
   const auth = authProvider(key);
   assert.notEqual(auth, null, 'test key must resolve');
@@ -236,6 +250,7 @@ export async function connectMcpClient(ctx: McpTestContext, key: string): Promis
     auth: auth!,
     logger: createLogger('silent'),
     networkService: new NetworkServiceImpl(ctx.sys, ctx.dataDir, createLogger('silent')),
+    ...(options.maintenance === undefined ? {} : { maintenance: options.maintenance }),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'etn-test-client', version: '0.0.1' });

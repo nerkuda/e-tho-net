@@ -30,6 +30,11 @@ export const ETN_ERROR_CODES = [
   // изменяющем запросе — HTTP 426 (задача c3f33e6a, требование 271e3327,
   // ADR 6ded6a87). Чтение и MCP этим кодом не блокируются.
   'CLIENT_VERSION_UNSUPPORTED',
+  // Сервер в режиме обслуживания (обновление, задача 2f599b67): изменяющие
+  // запросы REST получают HTTP 503 + `Retry-After`, изменяющие MCP-инструменты —
+  // ошибку с этим кодом и `details.retry_after`. Чтение не блокируется
+  // (требование 9636b1cc; приоритет 503 выше 426).
+  'SERVER_UPDATING',
   'INTERNAL',
   'RATE_LIMITED',
   'PROTECTED_ENTITY',
@@ -157,6 +162,23 @@ export interface ClientVersionErrorDetails {
   compatibility?: string;
   /** Страница релиза клиента (`GET /version` → `client_download_url`). */
   download_url?: string;
+}
+
+/**
+ * Тело `details` отказа `503 SERVER_UPDATING` (задача 2f599b67, требование
+ * 20be64a8).
+ *
+ * Сервер переводится в обслуживание перед запуском установщика обновления
+ * (тех.проект 2d9f5cc7): изменяющие запросы REST и изменяющие MCP-инструменты
+ * получают этот код вместо выполнения, пока состояние не станет `idle` (после
+ * перезапуска обновлённого сервера). `retry_after` — рекомендация паузы в
+ * целых секундах (то же значение уходит в заголовок `Retry-After` и в поле
+ * кадра `maintenance`); `target_version` — версия, до которой обновляется
+ * сервер, `null` — если неизвестна.
+ */
+export interface ServerUpdatingErrorDetails {
+  retry_after: number;
+  target_version: string | null;
 }
 
 /**

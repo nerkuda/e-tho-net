@@ -152,13 +152,10 @@ export function createClientVersionGuard(options: ClientVersionGuardOptions): Cl
   const compatibility = clientChannel.client_compatibility;
 
   return (req) => {
-    if (!MUTATING_METHODS.has(req.method)) {
-      return null;
-    }
-    // Читающий POST: версия не блокирует (см. READ_ONLY_POST_ROUTES). На
+    // Методы чтения и читающие POST из allowlist версию не проверяют; на
     // остальные методы allowlist не распространяется — `DELETE` по тому же
     // пути остаётся изменяющим запросом и проверяется.
-    if (req.method === 'POST' && isReadOnlyPostRoute(requestPath(req))) {
+    if (!isMutatingRequest(req)) {
       return null;
     }
     // API-интеграция/скрипт: без `Client-Id` версия desktop-клиента не нужна.
@@ -217,6 +214,22 @@ export function describeClientVersionRejection(rejection: ClientVersionRejection
 }
 
 /**
+ * Изменяющий ли запрос: `POST`/`PUT`/`PATCH`/`DELETE`, кроме читающих
+ * `POST`-маршрутов из {@link READ_ONLY_POST_ROUTES}.
+ *
+ * Единый предикат для обеих серверных проверок изменяющих запросов — версии
+ * клиента (этот модуль) и обслуживания сервера (`http/maintenance-guard.ts`):
+ * «изменяющий» у них означает одно и то же, поэтому allowlist читающих POST
+ * не дублируется.
+ */
+export function isMutatingRequest(req: ClientVersionGuardRequest): boolean {
+  if (!MUTATING_METHODS.has(req.method)) {
+    return false;
+  }
+  return !(req.method === 'POST' && isReadOnlyPostRoute(requestPath(req)));
+}
+
+/**
  * Путь запроса для сверки с allowlist.
  *
  * Приоритет — шаблон зарегистрированного маршрута (`routeOptions.url`): он уже
@@ -224,8 +237,11 @@ export function describeClientVersionRejection(rejection: ClientVersionRejection
  * зависит от конкретных id в адресе. Для запроса вне маршрута (теоретический
  * 404 до guard'а) берётся сырой `url`; и он, и шаблон нормализуются одинаково —
  * без query string, фрагмента и завершающего слеша.
+ *
+ * Экспортируется для гейта обслуживания: `/mcp` исключается из общего
+ * REST-перехвата сравнением этого же нормализованного пути.
  */
-function requestPath(req: ClientVersionGuardRequest): string {
+export function requestPath(req: ClientVersionGuardRequest): string {
   const routeUrl = req.routeOptions?.url;
   const raw = typeof routeUrl === 'string' && routeUrl.length > 0 ? routeUrl : req.url;
   return normalizePath(raw);
