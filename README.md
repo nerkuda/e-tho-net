@@ -126,10 +126,29 @@ npm test                 # все тесты
 ## Установка
 
 - **Сервер** — Docker (`docker compose up -d`) или Node.js 22 из исходников;
-  подробно — [`docs/install-server.md`](docs/install-server.md).
+  подробно — [`docs/userdocs/install.md`](docs/userdocs/install.md).
 - **Клиент** — готовые установщики (Windows/macOS/Linux) в
   [релизах](https://github.com/nerkuda/e-tho-net/releases); из исходников —
-  [`docs/install-client.md`](docs/install-client.md).
+  [`docs/userdocs/install.md`](docs/userdocs/install.md).
+
+## Неподписанные сборки
+
+Готовые дистрибутивы и установщик ETN пока **не подписаны** сертификатом
+разработчика: публичные центры сертификации не выдают их заявителям из ряда
+регионов. Поэтому Windows и macOS могут показывать предупреждения:
+
+- **Windows:** SmartScreen — «Windows protected your PC» (нужно «More info» →
+  «Run anyway»); в Windows 11 с включённым Smart App Control запуск
+  неподписанного приложения может быть заблокирован.
+- **macOS:** Gatekeeper — «Apple cannot check it for malicious software»;
+  в macOS 15 и новее обходной путь — System Settings → Privacy & Security →
+  Open Anyway.
+- **Linux:** подпись обычно не требуется; проверяйте SHA-256 архивов по
+  `SHA256SUMS` из релиза.
+
+Если предупреждения недопустимы, проверьте исходный код и соберите дистрибутив
+самостоятельно — инструкция в
+[`docs/userdocs/install.md`](docs/userdocs/install.md).
 
 ## Лицензия
 
