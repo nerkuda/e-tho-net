@@ -7,9 +7,22 @@
 ;
 ; Зоны соседних задач (не реализуются здесь, оставлены точки вызова):
 ;   8b1f5980 — поставка сервера (Node, prod-node_modules, WinSW, служба);
-;   bb063ac3 — остановка службы, бэкап, health-check, откат;
+;   bb063ac3 — остановка службы, health-check, откат и вызов бэкапа;
 ;   112642a4 — экраны, лицензия, прогресс, итоговая сводка, тексты;
 ;   98ad5eec — поставка клиента (область установки, ярлыки, закрытие ETN.exe).
+;
+; Задача ce3ab836 (0.15.1) — бэкап баз данных перед заменой файлов:
+;   * CreateDatabaseBackup(Needed) — вызывающий (bb063ac3) передаёт решение:
+;     при смене версии Needed = True, при ремонте той же версии False;
+;   * архив — каталог backups\<YYYYMMDD-HHmmss> каталога данных с копиями
+;     _system.db и networks\<uuid>\data.db; без вложений и без zip;
+;   * перед копированием WAL-база чекпойнтится через node.exe и
+;     better-sqlite3 поставки; если чекпойнт не удался, копируется и файл -wal;
+;   * каждая копия проходит PRAGMA integrity_check (не ok — архив неудачный и
+;     удаляется, обновление отменяется);
+;   * хранятся три последних архива; четвёртый удаляет самый старый, ошибка
+;     удаления обновление не отменяет (только WARN); чужие файлы и каталоги
+;     в backups не трогаются.
 ;
 ; Задача 686c5d76 (0.15.1) — первичная инициализация и экран ключа:
 ;   * «уже инициализирован» — критерий hasFirstUser(), а не наличие
@@ -240,6 +253,10 @@ const
   MIN_FREE_SPACE_BYTES = 314572800;
   MIN_PORT = 1;
   MAX_PORT = 65535;
+  { Бэкап БД перед обновлением (ce3ab836): хранятся три последних архива. }
+  BACKUPS_KEEP = 3;
+  { Длина имени каталога архива: YYYYMMDD-HHmmss (15 символов). }
+  BACKUP_DIR_NAME_LEN = 15;
 
 var
   { Режим запуска }
@@ -273,6 +290,9 @@ var
   GTestFirewall: String;
   GTestPrecheck: String;
   GTestResult: String;
+  { Хук задачи ce3ab836: прямой прогон бэкапа БД без фаз установки
+    (/TESTBACKUP=1|skip); объявлен всегда, сбрасывается в InitializeSetup. }
+  GTestBackup: String;
   { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
@@ -339,6 +359,9 @@ var
   { Результат }
   GExitCode: Integer;
   GChildResult: Integer;
+  { Архив БД, созданный последним вызовом CreateDatabaseBackup ('' — архива
+    нет). Вызывающему нужен путь для сообщения об отказе/откате. }
+  GLastBackupDir: String;
 
   { Экран компонентов }
   GComponentsPage: TWizardPage;
@@ -1826,6 +1849,377 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
+  Бэкап баз данных перед заменой файлов — задача ce3ab836.
+
+  Функция создаёт архив и проверяет его, но НЕ решает, нужен ли бэкап:
+  решение передаёт вызывающий (bb063ac3): Needed = True при смене версии,
+  False при ремонте той же версии. Остановку службы, откат и health-check
+  выполняет вызывающий. Архив создаётся после остановки службы и до замены
+  файлов, поэтому в каталогах баз может остаться журнал WAL.
+  --------------------------------------------------------------------------- }
+
+{ Строка только из цифр: имя каталога архива и его суффикс. }
+function IsAllDigits(const S: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := S <> '';
+  for I := 1 to Length(S) do
+    if (S[I] < '0') or (S[I] > '9') then
+    begin
+      Result := False;
+      Exit;
+    end;
+end;
+
+{ Имя каталога архива: YYYYMMDD-HHmmss; суффикс -N — если два архива попали
+  в одну секунду (быстрый повтор в тестах). Такой каталог тоже считается
+  своим архивом и участвует в ротации. }
+function IsBackupDirName(const Name: String): Boolean;
+var
+  Tail: String;
+begin
+  Result := False;
+  if Length(Name) < BACKUP_DIR_NAME_LEN then Exit;
+  if Name[9] <> '-' then Exit;
+  if not IsAllDigits(Copy(Name, 1, 8)) then Exit;
+  if not IsAllDigits(Copy(Name, 10, 6)) then Exit;
+  if Length(Name) = BACKUP_DIR_NAME_LEN then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Tail := Copy(Name, BACKUP_DIR_NAME_LEN + 1, Length(Name) - BACKUP_DIR_NAME_LEN);
+  Result := (Length(Tail) > 1) and (Tail[1] = '-') and
+    IsAllDigits(Copy(Tail, 2, Length(Tail) - 1));
+end;
+
+function IsRealSubdir(const FindRec: TFindRec): Boolean;
+begin
+  Result := ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
+    (FindRec.Name <> '.') and (FindRec.Name <> '..');
+end;
+
+{ Есть ли хотя бы одна база сети: networks\<uuid>\data.db. }
+function HasNetworkDatabases(const DataDir: String): Boolean;
+var
+  Root: String;
+  FindRec: TFindRec;
+begin
+  Result := False;
+  Root := DataDir + '\networks';
+  if not DirExists(Root) then Exit;
+  if not FindFirst(Root + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and
+         FileExists(Root + '\' + FindRec.Name + '\data.db') then
+      begin
+        Result := True;
+        Exit;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
+function CountBackupDirs(const BackupsDir: String): Integer;
+var
+  FindRec: TFindRec;
+begin
+  Result := 0;
+  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
+        Result := Result + 1;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
+{ Самый старый архив по имени (имена — нумерованные метки времени, поэтому
+  сравнение строк совпадает с хронологией). Текущий архив исключается: его
+  удалять нельзя даже при переводе часов назад. }
+function OldestBackupDirName(const BackupsDir, Exclude: String): String;
+var
+  FindRec: TFindRec;
+begin
+  Result := '';
+  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) and
+         (CompareText(FindRec.Name, Exclude) <> 0) then
+        if (Result = '') or (CompareText(FindRec.Name, Result) < 0) then
+          Result := FindRec.Name;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
+{ Ротация: пока архивов больше трёх, удаляется самый старый. Чужие файлы и
+  каталоги (имена не по формату архива) не считаются и не трогаются. Ошибка
+  удаления обновление не отменяет — только предупреждение в журнал. }
+procedure RotateBackupArchives(const BackupsDir, CurrentName: String);
+var
+  Oldest: String;
+begin
+  while CountBackupDirs(BackupsDir) > BACKUPS_KEEP do
+  begin
+    Oldest := OldestBackupDirName(BackupsDir, CurrentName);
+    if Oldest = '' then Break;
+    if DelTree(BackupsDir + '\' + Oldest, True, True, True) then
+      LogLine('INFO', 'Бэкап БД: старый архив удалён: ' + Oldest)
+    else
+    begin
+      LogLine('WARN', 'Бэкап БД: не удалось удалить старый архив ' + Oldest +
+        ' — обновление продолжается, архив оставлен');
+      Break;
+    end;
+  end;
+end;
+
+{ Новое имя архива; суффикс -2, -3 при совпадении секунды. }
+function NewBackupArchiveName(const BackupsDir: String): String;
+var
+  Base: String;
+  N: Integer;
+begin
+  Base := GetDateTimeString('yyyymmdd-hhnnss', '-', '-');
+  Result := Base;
+  N := 2;
+  while DirExists(BackupsDir + '\' + Result) do
+  begin
+    Result := Base + '-' + IntToStr(N);
+    N := N + 1;
+  end;
+end;
+
+{ Чекпойнт WAL перед копированием: после остановки службы в -wal могут лежать
+  закоммиченные страницы. PRAGMA wal_checkpoint(TRUNCATE) переносит их в
+  основной файл, и архив остаётся самодостаточным файлом базы — без
+  дополнительных файлов журнала. busy_timeout=0: служба остановлена, ждать
+  нечего; busy=1 означает, что журнал удерживает кто-то ещё. }
+function CheckpointDatabase(const NodeExe, ServerDir, DbPath: String): Boolean;
+var
+  Script, Args: String;
+  Code: Integer;
+begin
+  Result := False;
+  if not FileExists(NodeExe) then Exit;
+  Script :=
+    'try{' +
+    'const Database=require(''better-sqlite3'');' +
+    'const db=new Database(process.argv[1]);' +
+    'db.pragma(''busy_timeout=0'');' +
+    'const j=String(db.pragma(''journal_mode'')[0].journal_mode||'''');' +
+    'if(j.toLowerCase()!==''wal''){db.close();process.exit(0)}' +
+    'const r=db.pragma(''wal_checkpoint(TRUNCATE)'');' +
+    'db.close();' +
+    'process.exit((r.length>0&&Number(r[0].busy)!==0)?1:0)' +
+    '}catch(e){console.error(String(e&&e.stack||e));process.exit(2)}';
+  Args := '-e "' + Script + '" "' + DbPath + '"';
+  if not Exec(NodeExe, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then Exit;
+  Result := Code = 0;
+  if Result then
+    LogLine('INFO', 'Бэкап БД: checkpoint WAL выполнен: ' + DbPath)
+  else
+    LogLine('WARN', 'Бэкап БД: checkpoint WAL не выполнен (код ' + IntToStr(Code) +
+      '): копируется файл журнала: ' + DbPath);
+end;
+
+{ Проверка целостности копии через PRAGMA integrity_check. node.exe и
+  node_modules берутся из установленной поставки: рабочей директорией служит
+  каталог server, поэтому require находит better-sqlite3 поставки. }
+function VerifyDatabaseIntegrity(const NodeExe, ServerDir, DbPath: String): Boolean;
+var
+  Script, Args: String;
+  Code: Integer;
+begin
+  Result := False;
+  if not FileExists(NodeExe) then
+  begin
+    LogLine('ERROR', 'Бэкап БД: нет node.exe поставки: ' + NodeExe +
+      ' — целостность архива не проверить');
+    Exit;
+  end;
+  Script :=
+    'try{' +
+    'const Database=require(''better-sqlite3'');' +
+    'const db=new Database(process.argv[1]);' +
+    'const rows=db.pragma(''integrity_check'');' +
+    'db.close();' +
+    'const ok=rows.length===1&&String(rows[0].integrity_check)===''ok'';' +
+    'if(!ok){console.error(''integrity_check: ''+JSON.stringify(rows));process.exit(1)}' +
+    '}catch(e){console.error(String(e&&e.stack||e));process.exit(2)}';
+  Args := '-e "' + Script + '" "' + DbPath + '"';
+  if not Exec(NodeExe, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    LogLine('ERROR', 'Бэкап БД: не удалось запустить проверку целостности: ' + NodeExe);
+    Exit;
+  end;
+  if Code <> 0 then
+  begin
+    LogLine('ERROR', 'Бэкап БД: integrity_check не пройден: ' + DbPath +
+      ' (код ' + IntToStr(Code) + ')');
+    Exit;
+  end;
+  LogLine('INFO', 'Бэкап БД: integrity_check ok: ' + DbPath);
+  Result := True;
+end;
+
+{ Копия базы в каталог архива. Если чекпойнт не удался, рядом с базой
+  копируется -wal: SQLite применит журнал при открытии, и снимок останется
+  согласованным. Файл -shm не копируется — он транзитный и создаётся SQLite
+  заново. }
+function CopyDatabaseFile(const Src, DestDir: String; const WithWal: Boolean): Boolean;
+var
+  Dest: String;
+begin
+  Result := False;
+  if not ForceDirectories(DestDir) then
+  begin
+    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + DestDir);
+    Exit;
+  end;
+  Dest := DestDir + '\' + ExtractFileName(Src);
+  if not CopyFile(Src, Dest, False) then
+  begin
+    LogLine('ERROR', 'Бэкап БД: не удалось скопировать ' + Src + ' в ' + Dest);
+    Exit;
+  end;
+  if WithWal and FileExists(Src + '-wal') then
+  begin
+    if not CopyFile(Src + '-wal', Dest + '-wal', False) then
+    begin
+      LogLine('ERROR', 'Бэкап БД: не удалось скопировать журнал ' + Src + '-wal');
+      Exit;
+    end;
+    LogLine('INFO', 'Бэкап БД: вместе с базой скопирован WAL: ' + Src + '-wal');
+  end;
+  Result := True;
+end;
+
+{ Одна база: чекпойнт (по возможности), копия, integrity_check копии. }
+function BackupDatabase(const Src, DestDir, NodeExe, ServerDir: String): Boolean;
+var
+  WithWal: Boolean;
+begin
+  WithWal := not CheckpointDatabase(NodeExe, ServerDir, Src);
+  if not CopyDatabaseFile(Src, DestDir, WithWal) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  Result := VerifyDatabaseIntegrity(NodeExe, ServerDir,
+    DestDir + '\' + ExtractFileName(Src));
+end;
+
+{ Копирование всех баз в архив: _system.db и networks\<uuid>\data.db.
+  Возвращает False на первой ошибке; Count — число скопированных баз. }
+function CopyDatabasesInto(const ArchiveDir: String; var Count: Integer): Boolean;
+var
+  NodeExe, ServerDir, NetworksDir, Src, DestDir: String;
+  FindRec: TFindRec;
+begin
+  Result := False;
+  Count := 0;
+  NodeExe := ServerNodeExe(GServerDir);
+  ServerDir := GServerDir + '\server';
+  Src := GDataDir + '\_system.db';
+  if FileExists(Src) then
+  begin
+    if not BackupDatabase(Src, ArchiveDir, NodeExe, ServerDir) then Exit;
+    Count := Count + 1;
+  end;
+  NetworksDir := GDataDir + '\networks';
+  if DirExists(NetworksDir) then
+  begin
+    if FindFirst(NetworksDir + '\*', FindRec) then
+    begin
+      try
+        repeat
+          if IsRealSubdir(FindRec) then
+          begin
+            Src := NetworksDir + '\' + FindRec.Name + '\data.db';
+            if FileExists(Src) then
+            begin
+              DestDir := ArchiveDir + '\networks\' + FindRec.Name;
+              if not BackupDatabase(Src, DestDir, NodeExe, ServerDir) then Exit;
+              Count := Count + 1;
+            end;
+          end;
+        until not FindNext(FindRec);
+      finally
+        FindClose(FindRec);
+      end;
+    end;
+  end;
+  Result := Count > 0;
+  if not Result then
+    LogLine('ERROR', 'Бэкап БД: не найдено ни одной базы для архивации');
+end;
+
+{ Точка входа бэкапа. Needed — решение вызывающего (смена версии или ремонт).
+  Возвращает True, когда архив создан и проверен либо бэкап не требуется;
+  False — архива нет, обновление обязано остановиться до замены файлов. }
+function CreateDatabaseBackup(const Needed: Boolean): Boolean;
+var
+  BackupsDir, ArchiveName, ArchiveDir: String;
+  Copied: Integer;
+begin
+  Result := False;
+  GLastBackupDir := '';
+  if not Needed then
+  begin
+    LogLine('INFO', 'Бэкап БД: смена версии не требуется (ремонт) — архив не создаётся');
+    Result := True;
+    Exit;
+  end;
+  if (not FileExists(GDataDir + '\_system.db')) and
+     (not HasNetworkDatabases(GDataDir)) then
+  begin
+    LogLine('WARN', 'Бэкап БД: в ' + GDataDir +
+      ' нет баз данных — архив не создаётся, обновление продолжается');
+    Result := True;
+    Exit;
+  end;
+  BackupsDir := GDataDir + '\backups';
+  if not ForceDirectories(BackupsDir) then
+  begin
+    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архивов ' + BackupsDir +
+      ' (нет прав или места) — обновление отменяется');
+    Exit;
+  end;
+  ArchiveName := NewBackupArchiveName(BackupsDir);
+  ArchiveDir := BackupsDir + '\' + ArchiveName;
+  if not ForceDirectories(ArchiveDir) then
+  begin
+    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + ArchiveDir +
+      ' (нет прав или места) — обновление отменяется');
+    Exit;
+  end;
+  LogLine('INFO', 'Бэкап БД: создаётся архив ' + ArchiveDir);
+  if not CopyDatabasesInto(ArchiveDir, Copied) then
+  begin
+    if DelTree(ArchiveDir, True, True, True) then
+      LogLine('ERROR', 'Бэкап БД: неудачный архив удалён: ' + ArchiveDir)
+    else
+      LogLine('WARN', 'Бэкап БД: неудачный архив не удалось удалить: ' + ArchiveDir);
+    Exit;
+  end;
+  GLastBackupDir := ArchiveDir;
+  LogLine('INFO', 'Бэкап БД: архив создан: ' + GLastBackupDir +
+    ' (баз: ' + IntToStr(Copied) + ')');
+  RotateBackupArchives(BackupsDir, ArchiveName);
+  Result := True;
+end;
+
+{ ---------------------------------------------------------------------------
   Предусловия silent server-only
   --------------------------------------------------------------------------- }
 procedure FailPrecondition(const Reason: String);
@@ -2762,6 +3156,23 @@ end;
 { ---------------------------------------------------------------------------
   События установщика
   --------------------------------------------------------------------------- }
+#ifdef TestMode
+{ /TESTBACKUP=1|skip — прямой прогон CreateDatabaseBackup без фаз установки:
+  1 — смена версии (архив создаётся), skip — ремонт (архива нет). Решение
+  передаётся так же, как его передаст bb063ac3; служба и файлы не участвуют. }
+function RunBackupProbe: Boolean;
+var
+  Needed, Ok: Boolean;
+begin
+  Needed := LowerCase(GTestBackup) <> 'skip';
+  Ok := CreateDatabaseBackup(Needed);
+  LogLine('INFO', 'TESTBACKUP result=' + Pick(Ok, 'ok', 'fail') +
+    ' needed=' + Pick(Needed, '1', '0') +
+    ' archive=' + IfStr(GLastBackupDir = '', '-', GLastBackupDir));
+  Result := Ok;
+end;
+#endif
+
 function InitializeSetup: Boolean;
 var
   Reason: String;
@@ -2803,6 +3214,8 @@ begin
   GTestResult := '';
   GTestServiceName := '';
   GTestOwnServicePid := '';
+  GTestBackup := '';
+  GLastBackupDir := '';
   GAdminLogin := '';
   GAdminDisplayName := '';
   GFirstUserChecked := False;
@@ -2855,6 +3268,7 @@ begin
   GTestResult := ParamValue('TESTRESULT');
   GTestServiceName := ParamValue('TESTSERVICENAME');
   GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
+  GTestBackup := ParamValue('TESTBACKUP');
   { Подмена каталога данных для предпроверок (путь, занятый файлом,
     недоступный диск): журнал при этом остаётся в обычном каталоге теста. }
   if GTestDataDir <> '' then
@@ -2991,6 +3405,16 @@ begin
       ExitProcess(EXIT_OK)
     else
       ExitProcess(EXIT_PRECONDITION);
+  end;
+
+  { /TESTBACKUP=1|skip — прямой прогон функции бэкапа (ce3ab836): код 0 —
+    архив создан и проверен (или ремонт без архива), 10 — бэкап неудачен. }
+  if GTestBackup <> '' then
+  begin
+    if RunBackupProbe then
+      ExitProcess(EXIT_OK)
+    else
+      ExitProcess(EXIT_FAILED);
   end;
 #endif
 

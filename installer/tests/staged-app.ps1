@@ -216,6 +216,45 @@ if ($latestLog) { $logText = Get-Content -LiteralPath $latestLog.FullName -Raw }
 Add-Check -Name 'service:firewall-log' -Ok ($logText -match ('Правило брандмауэра создано: TCP ' + $port)) `
     -Note 'правило создано (тестовый netsh)'
 
+# --- Бэкап БД: node.exe и better-sqlite3 из установленной поставки -----------
+# ce3ab836: хук /TESTBACKUP запускает ту же функцию, что вызовет ветка
+# обновления, но без /TESTNODEEXE — integrity_check обязан пройти на реальных
+# node.exe и server\node_modules установленной раскладки. Прогон идёт после
+# чтения журнала установки: свой журнал он не должен подменять проверку выше.
+Write-Host '=== Бэкап БД: node.exe и better-sqlite3 из поставки ==='
+$code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1'))
+Add-Check -Name 'backup:code' -Ok ($code -eq 0) -Note 'node.exe поставки, без тестового хука'
+$backupsDir = Join-Path $dataDir 'backups'
+$archives = @(Get-ChildItem -LiteralPath $backupsDir -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d{8}-\d{6}(-\d+)?$' })
+Add-Check -Name 'backup:archive' -Ok ($archives.Count -eq 1) `
+    -Note (($archives | ForEach-Object { $_.Name }) -join ', ')
+if ($archives.Count -ge 1) {
+    $archiveDb = Join-Path $archives[0].FullName '_system.db'
+    Add-Check -Name 'backup:system-db' -Ok (Test-Path -LiteralPath $archiveDb)
+    $integrityScript = @'
+const Database=require('better-sqlite3');
+const db=new Database(process.argv[1]);
+const rows=db.pragma('integrity_check');
+db.close();
+console.log(rows.length===1&&String(rows[0].integrity_check)==='ok'?'ok':'bad');
+'@
+    $installedNode = Join-Path $appDir 'node\node.exe'
+    Push-Location (Join-Path $appDir 'server')
+    try {
+        $integrityOut = @(& $installedNode -e $integrityScript $archiveDb 2>&1)
+        $integrityCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    $integrityOk = ($integrityCode -eq 0) -and
+        ([string]($integrityOut | Select-Object -Last 1) -eq 'ok')
+    Add-Check -Name 'backup:integrity' -Ok $integrityOk `
+        -Note ('node.exe поставки; ' + [string]($integrityOut | Select-Object -Last 1))
+} else {
+    Add-Check -Name 'backup:integrity' -Ok $false -Note 'архив не создан'
+}
+
 # --- Staged-запуск в режиме «приложение» ------------------------------------
 Write-Host '=== Запуск установленного сервера (режим приложения) ==='
 $stdoutLog = Join-Path $workRoot 'server.out.log'
