@@ -27,6 +27,17 @@
  *   thoughts are hidden while `show_inactive` is off, and marked-for-deletion
  *   ones while `show_trash` is off (задача 77923b49, симметрия настроек
  *   видимости);
+ * - the strip is painted TWICE per read: first synchronously from the entity
+ *   cache (raw id as the last-resort title, ошибка 90a92c82), then again when
+ *   the resolution round-trip lands — the strip never sits empty while the
+ *   server answers (ошибка e9c05267: a workspace rebuild mounted the bar into
+ *   a fresh host and the first paint waited for `thoughts.resolve`, so the
+ *   panel «disappeared» for the whole round-trip); the second paint keeps the
+ *   same `seq` guard, so a stale response never paints another tab's list;
+ * - `thoughts.resolve` requests are deduplicated in flight by
+ *   `(networkId, id batch)`: hydration and WS flaps make several store ticks
+ *   start a render each, and every render used to fire its own request — the
+ *   strip then waited for the LAST (slowest) answer (ошибка e9c05267);
  * - clicking an entry opens the thought in the editor: switches the focus
  *   (map view) or opens the thought without moving the canvas focus
  *   (structures/chronicle view) — the current-thought frame follows the pick
@@ -192,11 +203,38 @@ async function render(): Promise<void> {
   if (host === null || !host.isConnected) return;
   const ids = entries.map((entry) => entry.thoughtId);
 
-  const refs = ids.length > 0 ? await resolveRefs(networkId, ids) : new Map();
+  // FIRST paint — by the entity cache only, without waiting for the server:
+  // the host is a fresh empty `.history-bar` after a workspace rebuild, and
+  // `thoughts.resolve` is a network round-trip that took seconds under load.
+  // The cache title is already authoritative; an id never seen before is the
+  // documented last-resort fallback (`{id, title: id}`, ошибка 90a92c82).
+  const cached = cachedRefs(ids);
+  paintHistory(ids, cached);
+  // Every id already has usable metadata — the resolve would fetch nothing and
+  // the second paint would repeat the same state. The warm cache is the hot
+  // path (every store tick), so it must not pay for the chip layout twice.
+  if (cached.size === ids.length) return;
+
+  const refs = await resolveRefs(networkId, ids);
   // The ref resolution is a server round-trip: it may finish after a tab
-  // switch or a reconnect started a newer render.
+  // switch or a reconnect started a newer render. SECOND paint under the same
+  // guard — a late answer must never paint another tab's list.
   if (seq !== renderSeq) return;
   if (host === null || !host.isConnected) return;
+  paintHistory(ids, refs);
+}
+
+/**
+ * Paints the strip from the given id list and metadata map: visibility filter
+ * (`show_inactive`/`show_trash`, the current thought) and the chip/dropdown
+ * layout. Called twice per read — from the cache and after the resolve
+ * (ошибка e9c05267).
+ */
+function paintHistory(
+  ids: string[],
+  refs: Map<string, import('@etn/shared').ThoughtRef>,
+): void {
+  if (host === null) return;
   const activeId = currentId();
   const visible = ids.filter((id) => {
     // The current thought is not a "recent" — it enters the list only after
@@ -211,6 +249,16 @@ async function render(): Promise<void> {
       (store.state.showTrash || ref.marked_for_deletion !== true);
   });
 
+  // Chips are built BEFORE the host is cleared: a chip that throws while being
+  // assembled (e.g. a partial cache record without `title`) must not leave the
+  // strip wiped — the previous content stays until a paint actually succeeds
+  // (гипотеза диагностики e9c05267 о частичных записях).
+  const chips = visible.map((id) => ({
+    id,
+    ref: refs.get(id),
+    el: buildChip(id, refs.get(id)),
+  }));
+
   clear(host);
   if (visible.length === 0) {
     const empty = div('history-empty');
@@ -219,11 +267,6 @@ async function render(): Promise<void> {
     return;
   }
 
-  const chips = visible.map((id) => ({
-    id,
-    ref: refs.get(id),
-    el: buildChip(id, refs.get(id)),
-  }));
   const plan = layoutChips(chips);
 
   if (plan.restCount === 0) {
@@ -325,24 +368,66 @@ function buildMoreButton(count: number, onClick: () => void): HTMLElement {
  * открытой мысли берётся из кэша — облачко не подменяется id (ошибка 90a92c82,
  * тот же приём, что у панели закреплённых). Сырой id — только последний запас,
  * когда мысль ещё ни разу не попадала в кэш.
+ *
+ * Запросы в полёте дедуплицируются по `(networkId, набор id)` (ошибка
+ * e9c05267): гидратация воркспейса и флапы WS дают несколько render подряд,
+ * и каждый запускал свой resolve — полоса ждала САМЫЙ ПОЗДНИЙ ответ. Ключ
+ * строится по набору (порядок не важен), поэтому render с теми же
+ * неразрешёнными id присоединяется к общему запросу, а новые id дают новый
+ * ключ и свой запрос — иначе их данные потерялись бы.
  */
+const resolvesInFlight = new Map<string, Promise<void>>();
+
 async function resolveRefs(
   networkId: string,
   ids: string[],
 ): Promise<Map<string, import('@etn/shared').ThoughtRef>> {
-  const missing = ids.filter((id) => getEntity<import('@etn/shared').ThoughtRef>('thought', id) === undefined);
+  const missing = ids.filter((id) => usableRef(id) === undefined);
   if (missing.length > 0) {
-    try {
-      const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, 100));
-      for (const ref of resolved) commitEntity('thought', ref.id, ref);
-    } catch {
-      // Офлайн/ошибка резолва: отдаём то, что уже лежит в кэше.
+    const batch = missing.slice(0, 100);
+    const key = `${networkId}|${[...batch].sort().join(',')}`;
+    let pending = resolvesInFlight.get(key);
+    if (pending === undefined) {
+      pending = (async () => {
+        try {
+          const resolved = await etn.thoughts.resolve(networkId, batch);
+          for (const ref of resolved) commitEntity('thought', ref.id, ref);
+        } catch {
+          // Офлайн/ошибка резолва: отдаём то, что уже лежит в кэше.
+        } finally {
+          // Снимается только собственный запрос: за время ожидания под тем же
+          // ключом не мог появиться другой (запись жила до этого finally).
+          resolvesInFlight.delete(key);
+        }
+      })();
+      resolvesInFlight.set(key, pending);
     }
+    await pending;
   }
+  return cachedRefs(ids);
+}
+
+/**
+ * Запись кэша, пригодная для облачка: у неё обязан быть строковый `title`.
+ * Патч realtime-события без текста (батч-запись присылает `changes: {}` —
+ * `server/src/domain/write-ops.ts`) даёт частичную запись; `buildTitle`
+ * фабрики облачка ждёт строку, поэтому такая запись трактуется как
+ * отсутствующая: облачко берёт id-фолбэк (ошибка 90a92c82), а `resolve`
+ * до-заполняет её на следующем проходе.
+ */
+function usableRef(id: string): import('@etn/shared').ThoughtRef | undefined {
+  const ref = getEntity<import('@etn/shared').ThoughtRef>('thought', id);
+  if (ref === undefined || ref === null) return undefined;
+  return typeof ref.title === 'string' ? ref : undefined;
+}
+
+/** Метаданные истории из кэша сущностей — всё, что есть у первого прохода
+ *  отрисовки до ответа `thoughts.resolve` (ошибка e9c05267). */
+function cachedRefs(ids: string[]): Map<string, import('@etn/shared').ThoughtRef> {
   const out = new Map<string, import('@etn/shared').ThoughtRef>();
   for (const id of ids) {
-    const ref = getEntity<import('@etn/shared').ThoughtRef>('thought', id);
-    if (ref !== undefined && ref !== null) out.set(id, ref);
+    const ref = usableRef(id);
+    if (ref !== undefined) out.set(id, ref);
   }
   return out;
 }
