@@ -112,6 +112,17 @@ export interface InstallerRunResult {
   installerPath: string;
 }
 
+/**
+ * Контекст хука {@link InstallerRunnerOptions.beforeLaunch}: установщик уже
+ * скачан и проверен, но ещё не запущен.
+ */
+export interface InstallerLaunchContext {
+  /** Версия устанавливаемого сервера. */
+  version: string;
+  /** Абсолютный путь к проверенному установщику. */
+  installerPath: string;
+}
+
 /** Цель обновления — срез кеша проверки обновлений (сущность 6f79610d). */
 export interface InstallerTarget {
   /** Версия устанавливаемого сервера (semver из `available_version`). */
@@ -163,6 +174,14 @@ export interface InstallerRunnerOptions {
   logDirs?: readonly string[];
   /** Часы (тесты); по умолчанию системное время. */
   now?: () => number;
+  /**
+   * Хук между проверкой хеша и запуском установщика. Задание обновления
+   * (`0a27a63b`) переводит в нём сервер в обслуживание и дожидается доставки
+   * кадра: установщик останавливает службу, поэтому клиенты обязаны узнать об
+   * этом раньше процесса. Ошибка хука отменяет запуск — установщик не
+   * стартует, файлы программы не тронуты.
+   */
+  beforeLaunch?: (context: InstallerLaunchContext) => Promise<void>;
   /** Диагностический журнал; ошибки наружу пробрасываются. */
   logger?: Pick<Logger, 'debug' | 'info' | 'warn'>;
 }
@@ -172,7 +191,8 @@ export interface InstallerRunner {
   /** Идёт ли скачивание или запуск прямо сейчас. */
   isRunning(): boolean;
   /**
-   * Скачать установщик, проверить SHA-256, запустить и дождаться завершения.
+   * Скачать установщик, проверить SHA-256, вызвать {@link
+   * InstallerRunnerOptions.beforeLaunch}, запустить и дождаться завершения.
    *
    * @throws {InstallerRunInProgressError} когда предыдущий вызов ещё не завершён.
    * @throws {InstallerTargetError} цель неполна или недопустима (нет версии,
@@ -183,6 +203,7 @@ export interface InstallerRunner {
    * @throws {InstallerLaunchError} процесс установщика не запустился.
    * @throws {InstallerTimeoutError} установщик не завершился за тайм-аут;
    *   процесс оставлен работать, путь к журналу — в ошибке.
+   * @throws ошибка хука `beforeLaunch`, если он отказал: установщик не запущен.
    */
   run(target: InstallerTarget): Promise<InstallerRunResult>;
 }
@@ -611,6 +632,7 @@ export function createInstallerRunner(options: InstallerRunnerOptions = {}): Ins
   const logDirs = options.logDirs ?? defaultInstallerLogDirs();
   const now = options.now ?? Date.now;
   const logger = options.logger;
+  const beforeLaunch = options.beforeLaunch;
   let running = false;
 
   return {
@@ -636,6 +658,15 @@ export function createInstallerRunner(options: InstallerRunnerOptions = {}): Ins
           { version: downloaded.version, installerPath: downloaded.installerPath },
           'update installer: хеш совпал, запуск установщика',
         );
+        // Хук ровно между проверкой хеша и запуском: до него сервер полностью
+        // работоспособен, после — клиенты уведомлены об обслуживании. Ошибка
+        // хука отменяет запуск, установщик не стартует.
+        if (beforeLaunch !== undefined) {
+          await beforeLaunch({
+            version: downloaded.version,
+            installerPath: downloaded.installerPath,
+          });
+        }
         return await launchInstaller(downloaded.installerPath, {
           spawnImpl,
           logDirs,

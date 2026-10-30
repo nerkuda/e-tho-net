@@ -239,6 +239,38 @@ export interface ApiKeyWithUser {
   user: User;
 }
 
+/**
+ * Строка журнала заданий обновления сервера (таблица `update_jobs`, миграция
+ * `016_update_jobs.sql`, сущность «Задание обновления сервера» 1f39811c,
+ * задача 0a27a63b).
+ *
+ * `stage` хранится строкой: набор допустимых значений и их терминальность —
+ * знание домена (`server/src/update/apply.ts`), а не схемы. `updated_at` и
+ * `finished_at` — служебные поля хранения: сущность отдаёт клиенту только
+ * `id`/`target_version`/`stage`/`started_at`/`error`/`backup_path`.
+ */
+export interface UpdateJobRow {
+  id: string;
+  target_version: string;
+  stage: string;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  error: string | null;
+  backup_path: string | null;
+}
+
+/** Поля задания обновления, которые меняются по ходу исполнения. */
+export interface UpdateJobPatch {
+  stage: string;
+  /** ISO-8601 момента записи. */
+  updatedAt: string;
+  /** ISO-8601 момента завершения; `null` у активного задания. */
+  finishedAt: string | null;
+  error: string | null;
+  backupPath: string | null;
+}
+
 /** A still-fresh cached idempotent response (02-data-model.md §2.7). */
 export interface CachedResponse {
   status: number;
@@ -318,6 +350,12 @@ export class SystemDb {
   private readonly stInsertToolCallMetric: Database.Statement;
   private readonly stListApiKeyIdsByUser: Database.Statement;
   private readonly stListMemberNetworkIds: Database.Statement;
+  private readonly stInsertUpdateJob: Database.Statement;
+  private readonly stGetUpdateJob: Database.Statement;
+  private readonly stLatestUpdateJob: Database.Statement;
+  private readonly stActiveUpdateJob: Database.Statement;
+  private readonly stListActiveUpdateJobs: Database.Statement;
+  private readonly stUpdateUpdateJob: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -472,6 +510,35 @@ export class SystemDb {
     this.stListApiKeyIdsByUser = db.prepare('SELECT id FROM api_keys WHERE user_id = ?');
     this.stListMemberNetworkIds = db.prepare(
       'SELECT network_id FROM network_members WHERE user_id = ?',
+    );
+    // Задание обновления сервера (таблица `update_jobs`, задача 0a27a63b):
+    // терминальные этапы сущности 1f39811c — `done` и `failed`; всё остальное
+    // считается активным (в т.ч. неизвестное значение — его добьёт восстановление
+    // после старта). Одновременно активным может быть не более одного задания;
+    // это держит синхронная пара «проверка + вставка» в update/apply.ts.
+    this.stInsertUpdateJob = db.prepare(
+      `INSERT INTO update_jobs
+         (id, target_version, stage, started_at, updated_at, finished_at, error, backup_path)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+    );
+    this.stGetUpdateJob = db.prepare('SELECT * FROM update_jobs WHERE id = ? LIMIT 1');
+    this.stLatestUpdateJob = db.prepare(
+      'SELECT * FROM update_jobs ORDER BY started_at DESC, rowid DESC LIMIT 1',
+    );
+    this.stActiveUpdateJob = db.prepare(
+      `SELECT * FROM update_jobs
+        WHERE stage <> 'done' AND stage <> 'failed'
+        ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+    );
+    this.stListActiveUpdateJobs = db.prepare(
+      `SELECT * FROM update_jobs
+        WHERE stage <> 'done' AND stage <> 'failed'
+        ORDER BY started_at ASC, rowid ASC`,
+    );
+    this.stUpdateUpdateJob = db.prepare(
+      `UPDATE update_jobs
+          SET stage = ?, updated_at = ?, finished_at = ?, error = ?, backup_path = ?
+        WHERE id = ?`,
     );
   }
 
@@ -1356,6 +1423,91 @@ export class SystemDb {
   listMemberNetworkIds(userId: string): string[] {
     const rows = this.stListMemberNetworkIds.all(userId) as Array<{ network_id: string }>;
     return rows.map((r) => r.network_id);
+  }
+
+  // -------------------------------------------------------------------------
+  // Задание обновления сервера (таблица `update_jobs`, задача 0a27a63b)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Создать задание обновления в этапе `preparing`. Вызывающий уже проверил,
+   * что активного задания нет, — отдельного UNIQUE-ограничения в схеме нет
+   * (см. комментарий миграции `016_update_jobs.sql`).
+   */
+  createUpdateJob(params: {
+    id: string;
+    targetVersion: string;
+    stage: string;
+    startedAt: string;
+  }): void {
+    this.stInsertUpdateJob.run(
+      params.id,
+      params.targetVersion,
+      params.stage,
+      params.startedAt,
+      params.startedAt,
+    );
+  }
+
+  /** Задание обновления по id или `null`. */
+  getUpdateJob(id: string): UpdateJobRow | null {
+    const row = this.stGetUpdateJob.get(id) as UpdateJobRow | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Последнее задание обновления по времени старта — то, что показывает
+   * `GET /api/v1/system/update/progress` (терминальное задание тоже: итог
+   * последней попытки). `null` — заданий не было.
+   */
+  getLatestUpdateJob(): UpdateJobRow | null {
+    const row = this.stLatestUpdateJob.get() as UpdateJobRow | undefined;
+    return row ?? null;
+  }
+
+  /** Активное (не терминальное) задание обновления или `null`. */
+  getActiveUpdateJob(): UpdateJobRow | null {
+    const row = this.stActiveUpdateJob.get() as UpdateJobRow | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Перевести незавершённые задания в `failed` (инвариант сущности: после
+   * перезапуска сервера незавершённое задание считается `failed` и
+   * автоматически не возобновляется). `messageFor` получает последний
+   * записанный этап, чтобы причина называла, где остановилось обновление.
+   * Возвращает число переведённых заданий.
+   */
+  failInterruptedUpdateJobs(nowIso: string, messageFor: (stage: string) => string): number {
+    const rows = this.stListActiveUpdateJobs.all() as UpdateJobRow[];
+    if (rows.length === 0) {
+      return 0;
+    }
+    this.transaction(() => {
+      for (const row of rows) {
+        this.stUpdateUpdateJob.run(
+          'failed',
+          nowIso,
+          nowIso,
+          messageFor(row.stage),
+          row.backup_path,
+          row.id,
+        );
+      }
+    });
+    return rows.length;
+  }
+
+  /** Записать новое состояние задания (полная замена изменяемых полей). */
+  updateUpdateJob(id: string, patch: UpdateJobPatch): void {
+    this.stUpdateUpdateJob.run(
+      patch.stage,
+      patch.updatedAt,
+      patch.finishedAt,
+      patch.error,
+      patch.backupPath,
+      id,
+    );
   }
 
   /** Rebuild a full event envelope from an `event_log` row. */

@@ -31,6 +31,7 @@ import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { systemMigrationsDir } from '../src/paths.js';
 import { createServer } from '../src/http/server.js';
+import type { InstallerRunnerOptions } from '../src/update/installer-runner.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
 
@@ -81,10 +82,41 @@ const TEST_CONFIG: ServerConfig = {
 };
 
 /**
+ * Тестовый конфиг сервера с подставленным каталогом данных и необязательными
+ * переопределениями. Второй сервер на той же БД (тест перезапуска задания
+ * обновления) собирается этим же конфигом.
+ */
+export function testServerConfig(
+  dataDir: string,
+  overrides: Partial<ServerConfig> = {},
+): ServerConfig {
+  return { ...TEST_CONFIG, dataDir, ...overrides };
+}
+
+/**
+ * Переопределения контекста для отдельных групп тестов. Обычные тесты
+ * обходятся без них: конфиг — тестовый, путь — standalone.
+ */
+export interface RestContextOptions {
+  /** Частичная замена тестового конфига (например, `deployment`). */
+  config?: Partial<ServerConfig>;
+  /**
+   * Настройки задания обновления (задача 0a27a63b): подмена HTTP-клиента и
+   * процесса установщика, чтобы тест не запускал настоящий exe.
+   */
+  updateApplyOptions?: {
+    runnerOptions?: InstallerRunnerOptions;
+    now?: () => Date;
+  };
+}
+
+/**
  * Build a fresh app, an admin user with an API-key, and a real network with
  * its HOME thought. Callers must {@link closeRestContext} the result.
  */
-export async function buildRestContext(): Promise<RestTestContext> {
+export async function buildRestContext(
+  options: RestContextOptions = {},
+): Promise<RestTestContext> {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-rest-'));
 
   const db: Database.Database = new DatabaseConstructor(':memory:');
@@ -110,9 +142,12 @@ export async function buildRestContext(): Promise<RestTestContext> {
   });
 
   const app = await createServer({
-    config: { ...TEST_CONFIG, dataDir },
+    config: testServerConfig(dataDir, options.config),
     systemDb: sys,
     logger: createLogger('silent'),
+    ...(options.updateApplyOptions === undefined
+      ? {}
+      : { updateApplyOptions: options.updateApplyOptions }),
   });
 
   const created = await app.inject({

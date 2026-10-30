@@ -36,7 +36,12 @@ import { normaliseError, sendEtnError } from './errors.js';
 import { createMaintenanceGuard } from './maintenance-guard.js';
 import { SERVER_UPDATING_MESSAGE, createMaintenanceService } from '../maintenance.js';
 import { createUpdateChecker } from '../update/checker.js';
+import {
+  createUpdateApplyService,
+  type UpdateApplyServiceOptions,
+} from '../update/apply.js';
 import { meRoutes } from '../routes/me.js';
+import { systemUpdateRoutes } from '../routes/system-update.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
@@ -90,6 +95,11 @@ export interface ServerDeps {
   logger: Logger;
   /** Optional WebSocket gateway tuning (mainly for tests). */
   realtimeOptions?: Partial<RealtimeGatewayOptions>;
+  /**
+   * Настройки задания обновления сервера (задача 0a27a63b; тесты подменяют
+   * HTTP-клиент и процесс установщика, чтобы не запускать настоящий exe).
+   */
+  updateApplyOptions?: Pick<UpdateApplyServiceOptions, 'runnerOptions' | 'now'>;
 }
 
 /** Name of the reply header carrying the correlation id for every request. */
@@ -202,8 +212,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // `idle` (сущность aa55d459); сервис декорируется на приложение — задание
   // обновления (`0a27a63b`) вызовет `app.maintenance.beginUpdating(...)` перед
   // запуском установщика.
-  // Гейт — `onRequest` и зарегистрирован раньше auth: 503 за обслуживание
-  // приоритетнее 426 и 401, а изменяющий запрос не доходит даже до валидации.
+  // Сам гейт (`onRequest`) регистрируется НИЖЕ, после плагина CORS: иначе 503
+  // уходил без `access-control-allow-origin` (замечание приёмки 2f599b67), и
+  // браузерный клиент видел сетевую ошибку вместо причины. Приоритет 503 над
+  // 426/401 сохраняется: гейт по-прежнему onRequest, а версия клиента
+  // проверяется позже в preHandler.
   // Гейтвей создаётся позже (после WS-плагина); до этого сокетов нет, и
   // замыкание `announce` читает переменную на момент вызова.
   let realtimeGatewayForClose: RealtimeGateway | null = null;
@@ -214,14 +227,6 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
   app.decorate('maintenance', maintenance);
   const maintenanceGuard = createMaintenanceGuard({ getState: () => maintenance.getState() });
-  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
-    const rejection = maintenanceGuard(req);
-    if (rejection === null) {
-      return;
-    }
-    reply.header('retry-after', String(rejection.retry_after));
-    sendEtnError(reply, 'SERVER_UPDATING', SERVER_UPDATING_MESSAGE, rejection, req.id);
-  });
 
   // --- Проверка канала обновлений и кеш версий (задача 8264988a) ------------
   // Сервис только держит кеш и умеет `checkNow()`; фоновая проверка (старт и
@@ -238,9 +243,41 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     }),
   );
 
+  // --- Задание обновления сервера (задача 0a27a63b) ------------------------
+  // Прогресс — в системной БД (`update_jobs`); создание сервиса — точка
+  // «старта процесса»: незавершённое задание после перезапуска службы
+  // установщиком читается как `failed` и не возобновляется (инвариант сущности
+  // 1f39811c). Runner установщика создаётся здесь же; тесты подменяют его
+  // HTTP-клиент и процесс через `updateApplyOptions`.
+  app.decorate(
+    'updateApply',
+    createUpdateApplyService({
+      systemDb,
+      deployment: config.deployment,
+      maintenance,
+      getCache: () => app.updateChecker.getCache(),
+      logger,
+      ...deps.updateApplyOptions,
+    }),
+  );
+
   // --- Plugins -------------------------------------------------------------
   await app.register(corsPlugin, {
     origin: true, // reflect request origin; credentials not used (bearer keys)
+  });
+
+  // Гейт обслуживания — ПОСЛЕ CORS (замечание приёмки 2f599b67): 503 обязан
+  // нести `access-control-allow-origin`, иначе браузерный клиент не увидит
+  // причину отказа. Порядок хуков — порядок регистрации: CORS успевает
+  // проставить заголовки, затем гейт отправляет 503. Приоритет 503 над 426/401
+  // не меняется: оба гейта смотрят onRequest/preHandler.
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    const rejection = maintenanceGuard(req);
+    if (rejection === null) {
+      return;
+    }
+    reply.header('retry-after', String(rejection.retry_after));
+    sendEtnError(reply, 'SERVER_UPDATING', SERVER_UPDATING_MESSAGE, rejection, req.id);
   });
   // Realtime gateway instance is created after the WS plugin (it needs the
   // plugin's routes context); the hook closure reads it lazily. The variable
@@ -464,6 +501,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // File-journal management (task 1dd33e23 §4): admin-only status/toggle and
   // per-file download/delete endpoints.
   await app.register(systemLoggingRoutes, { prefix: '/api/v1' });
+
+  // Admin-эндпоинты обновления сервера (задача 0a27a63b): статус кеша
+  // (841a2515), принудительная проверка (5b9b064c), создание задания
+  // (8a2972c2) и прогресс (3bc8a9c3). Все — только администратору.
+  await app.register(systemUpdateRoutes, { prefix: '/api/v1' });
 
   // --- MCP StreamableHTTP endpoint (phase F, 05-mcp-server.md §2) -----------
   // Mounted when ETN_MCP_ENABLED=1; agents authenticate with the same
