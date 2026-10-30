@@ -31,8 +31,9 @@
 ;     либо «Откат не выполнен, архив: <путь>»;
 ;   * install.json пишется только после успешного health-check — иначе после
 ;     отката файл врал бы о новой версии;
-;   * коды: 20 — предусловие (занятый порт, режим app, служба не остановилась);
-;     10 — сбой выполнения, включая неудачный бэкап и неудачный откат.
+;   * коды: 20 — предусловие (занятый порт, режим app, служба не остановилась,
+;     служба не перешла в RUNNING); 10 — сбой выполнения, включая неудачный
+;     бэкап и неудачный откат.
 ;
 ; Задача ce3ab836 (0.15.1) — бэкап баз данных перед заменой файлов:
 ;   * CreateDatabaseBackup(Needed) — вызывающий (bb063ac3) передаёт решение:
@@ -111,9 +112,12 @@
 ;     конфигурации и до запуска; уже зарегистрированная служба не
 ;     перегистрируется (WinSW 2.12.0 вернул бы 1073), сбой регистрации —
 ;     код 20 с причиной; запуск ждёт подтверждённого RUNNING, затем health;
+;     служба не перешла в RUNNING за бюджет — тоже код 20 с причиной;
 ;   * при удалении программы служба останавливается и снимается
 ;     (etn-service.exe uninstall) до удаления файлов; отказ отменяет удаление
-;     с причиной; режим app службу не регистрирует и удаление не трогает;
+;     с причиной; деинсталлятор не вызывает InitializeSetup — путь к службе и
+;     журнал удаления берутся из {app}/{commonappdata} и install.json;
+;     режим app службу не регистрирует и удаление не трогает;
 ;   * при обновлении порт, хост, режим и каталог данных фиксированы — берутся
 ;     из install.json, поля на экране только показывают значения;
 ;   * установка только клиента серверных каталогов и правила не создаёт.
@@ -139,8 +143,8 @@
 ;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
 ;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
 ;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
-;   /TESTUNINSTALLSERVICE, /TESTHEALTHURL, /TESTHEALTHWAIT, /TESTHEALTHSTEP,
-;   /TESTROLLBACK — только в тестовой сборке
+;   /TESTSERVICEREALFILE, /TESTUNINSTALLSERVICE, /TESTHEALTHURL,
+;   /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK — только в тестовой сборке
 ;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
 ; ============================================================================
 
@@ -214,7 +218,15 @@
 ; Идентификатор продукта: по нему Inno ведёт запись установки и обновление
 ; поверх прежней версии. Менять нельзя — иначе повторный запуск не увидит
 ; предыдущую установку.
+#ifdef TestUninstallable
+; Проба настоящего деинсталлятора (installer/tests/silent-codes.ps1, приёмка
+; 8b1f5980): у тестовой установки отдельный AppId, чтобы запись установки и
+; удаление не касались продуктовой установки на машине. Определяется только
+; вместе с TestMode (см. Uninstallable ниже).
+AppId={{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}
+#else
 AppId={{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}
+#endif
 AppName=ETN
 AppVersion={#MyAppVersion}
 AppVerName=ETN {#MyAppVersion}
@@ -251,9 +263,14 @@ OutputBaseFilename=ETN-Setup
 Compression=lzma2
 SolidCompression=yes
 #ifdef TestMode
-; Тестовая сборка не создаёт деинсталлятор и запись установки в реестре:
-; прогон silent-codes.ps1 не должен оставлять следов на машине.
+; Тестовая сборка по умолчанию не создаёт деинсталлятор и запись установки в
+; реестре: прогон silent-codes.ps1 не должен оставлять следов на машине.
+; /DTestUninstallable=1 (только вместе с -TestMode) включает деинсталлятор для
+; пробы настоящего удаления с моделью службы (приёмка 8b1f5980): у такой
+; сборки отдельный AppId — см. [Setup].
+#ifndef TestUninstallable
 Uninstallable=no
+#endif
 #endif
 WizardStyle=modern
 UninstallDisplayName=ETN {#MyAppVersion}
@@ -422,6 +439,13 @@ var
   GTestUninstallService: String;
   GTestServiceRegistered: Boolean;
   GTestServiceRunning: Boolean;
+  { /TESTSERVICEREALFILE=1 — модель службы дополнительно проверяет наличие
+    etn-service.exe, как продуктовая ветка RunServiceCommand: проба настоящего
+    деинсталлятора ловит путь, вычисленный из пустого GServerDir (приёмка
+    4151edf6). /TESTSERVICESTART=pending|<pending-stuck> — смоделированный
+    START_PENDING в первых опросах состояния (2) или до таймаута. }
+  GTestServiceRealFile: String;
+  GTestServicePendingPolls: Integer;
   GTestHealthUrl: String;
   GTestHealthWait: String;
   GTestHealthStep: String;
@@ -703,7 +727,15 @@ end;
 
 procedure LogLine(const Level, Msg: String);
 begin
-  if GLogPath = '' then Exit;
+  if GLogPath = '' then
+  begin
+    { Журнал установщика ещё не создан (InitializeSetup) или это
+      деинсталлятор, где InitializeSetup не вызывается и свой журнал создать
+      не удалось: строка уходит в журнал Inno (Log), иначе причина отказа
+      снятия службы при удалении теряется. }
+    Log(RedactLine(Msg));
+    Exit;
+  end;
   AppendUtf8Line(GLogPath,
     GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + '  [' + Level + ']  ' +
     RedactLine(Msg));
@@ -2566,9 +2598,23 @@ end;
   В тестовой сборке управление службой подменяется хуками — настоящая служба
   Windows не нужна.
   --------------------------------------------------------------------------- }
+(* Каталог программы для операций со службой. В деинсталляторе Inno не вызывает
+  InitializeSetup, и GServerDir остаётся пустым, поэтому путь берётся из {app}
+  по месту — как в UninstallFirewallRuleWanted. Раньше путь вычислялся только
+  из GServerDir, и снятие службы при удалении не работало (блокер приёмки
+  4151edf6). В установке каталог уже вычислен (GServerDir = {app}), а
+  ExpandConstant('{app}') до инициализации мастера недоступен — пробу снятия
+  (/TESTUNINSTALLSERVICE) вызывает InitializeSetup. *)
+function ServiceDir: String;
+begin
+  Result := GServerDir;
+  if Result = '' then
+    Result := ExpandConstant('{app}');
+end;
+
 function ServiceExePath: String;
 begin
-  Result := GServerDir + '\service\etn-service.exe';
+  Result := ServiceDir + '\service\etn-service.exe';
 #ifdef TestMode
   if GTestServiceCmd <> '' then Result := GTestServiceCmd;
 #endif
@@ -2601,7 +2647,18 @@ begin
   if GTestService <> '' then
   begin
     if GTestServiceRunning then
-      Result := 'STATE : 4  RUNNING'
+    begin
+      { Смоделированный START_PENDING: реальный SCM держит его, пока служба
+        стартует; RUNNING приходит только следующим опросом. }
+      if GTestServicePendingPolls <> 0 then
+      begin
+        if GTestServicePendingPolls > 0 then
+          GTestServicePendingPolls := GTestServicePendingPolls - 1;
+        Result := 'STATE : 2  START_PENDING';
+        Exit;
+      end;
+      Result := 'STATE : 4  RUNNING';
+    end
     else
       Result := 'STATE : 1  STOPPED';
     Exit;
@@ -2698,24 +2755,59 @@ begin
   Result := ServiceRunningNow;
 end;
 
+{ Разбор кода возврата команды WinSW — общий для продуктовой ветки и модели
+  службы (поведенческий тест 1073 обязан проверять тот же код, что выполняется
+  на машине). WinSW 2.12.0: install существующей службы возвращает
+  ERROR_SERVICE_EXISTS (1073). Служба уже зарегистрирована — цель достигнута,
+  повторная установка не падает. }
+function ServiceCommandResult(const Verb: String; const Code: Integer): Boolean;
+begin
+  Result := False;
+  if Code <> 0 then
+  begin
+    if (Verb = 'install') and (Code = ERROR_SERVICE_EXISTS) then
+    begin
+      LogLine('INFO', 'Служба: install — служба уже существует (код ' +
+        IntToStr(Code) + '), регистрация не требуется');
+      Result := True;
+      Exit;
+    end;
+    LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
+      IntToStr(Code));
+    Exit;
+  end;
+  LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
+  Result := True;
+end;
+
 { Команда WinSW: install, uninstall, stop, start. Код возврата команды —
   успех/неудача; install существующей службы (1073) — не ошибка: повторная
-  установка обязана проходить (8b1f5980).
+  установка обязана проходить (8b1f5980, разбор — ServiceCommandResult).
 
   В тестовой сборке настоящая служба рабочей машины не трогается никогда.
   Хук /TESTSERVICE=present|absent включает модель: команды не выполняются, их
   результат и состояние службы ведут флаги GTestServiceRegistered/Running
   (install/uninstall меняют регистрацию, start/stop — состояние), а сбои
   задаются хуками /TESTSERVICEINSTALL=fail|exists, /TESTSERVICEUNINSTALL=fail,
-  /TESTSERVICESTOP=fail, /TESTSERVICESTART=fail. Без /TESTSERVICE команда тоже
-  не выполняется (изоляция тестов от машины), но состояние службы остаётся
-  «не зарегистрирована». }
+  /TESTSERVICESTOP=fail, /TESTSERVICESTART=fail|pending|pending-stuck. Без
+  /TESTSERVICE команда тоже не выполняется (изоляция тестов от машины), но
+  состояние службы остаётся «не зарегистрирована». /TESTSERVICEREALFILE=1
+  добавляет проверку наличия etn-service.exe, как в продуктовой ветке: проба
+  настоящего деинсталлятора (приёмка 4151edf6) должна падать, если путь к
+  службе вычислен неверно. }
 function RunServiceCommand(const Verb: String): Boolean;
 var
   Code: Integer;
 begin
   Result := False;
 #ifdef TestMode
+  if (GTestService <> '') and (GTestServiceRealFile = '1') and
+     (not FileExists(ServiceExePath)) then
+  begin
+    LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
+      ' не выполнена');
+    Exit;
+  end;
   if GTestService <> '' then
   begin
     if (Verb = 'stop') and (GTestServiceStop = 'fail') then
@@ -2741,10 +2833,7 @@ begin
     if (Verb = 'install') and (GTestServiceInstall = 'exists') then
     begin
       GTestServiceRegistered := True;
-      LogLine('INFO', 'Служба (тестовый режим): install — служба уже ' +
-        'существует (код ' + IntToStr(ERROR_SERVICE_EXISTS) + '), регистрация ' +
-        'не требуется');
-      Result := True;
+      Result := ServiceCommandResult(Verb, ERROR_SERVICE_EXISTS);
       Exit;
     end;
     if Verb = 'install' then
@@ -2753,14 +2842,26 @@ begin
     begin
       GTestServiceRegistered := False;
       GTestServiceRunning := False;
+      GTestServicePendingPolls := 0;
     end
     else if Verb = 'start' then
-      GTestServiceRunning := True
+    begin
+      GTestServiceRunning := True;
+      if GTestServiceStart = 'pending' then
+        GTestServicePendingPolls := 2
+      else if GTestServiceStart = 'pending-stuck' then
+        GTestServicePendingPolls := -1
+      else
+        GTestServicePendingPolls := 0;
+    end
     else if Verb = 'stop' then
+    begin
       GTestServiceRunning := False;
+      GTestServicePendingPolls := 0;
+    end;
     LogLine('INFO', 'Служба (тестовый режим): команда ' + Verb +
-      ' — успех (exe=' + ServiceExePath + ', config=' + GServerDir +
-      '\service\etn-service.xml)');
+      ' — успех (exe=' + ServiceExePath + ', config=' + ServiceDir +
+      '\service\etn-service.xml, exists=' + Pick(FileExists(ServiceExePath), '1', '0') + ')');
     Result := True;
     Exit;
   end;
@@ -2776,7 +2877,7 @@ begin
     Exit;
   end;
   LogLine('INFO', 'Служба: ' + ServiceExePath + ' ' + Verb +
-    ' (конфигурация: ' + GServerDir + '\service\etn-service.xml)');
+    ' (конфигурация: ' + ServiceDir + '\service\etn-service.xml, exists=1)');
   if not Exec(ServiceExePath, Verb, ExtractFileDir(ServiceExePath), SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
@@ -2784,24 +2885,7 @@ begin
       ' ' + Verb);
     Exit;
   end;
-  if Code <> 0 then
-  begin
-    { WinSW 2.12.0: install существующей службы возвращает
-      ERROR_SERVICE_EXISTS (1073). Служба уже зарегистрирована — цель
-      достигнута, повторная установка не падает. }
-    if (Verb = 'install') and (Code = ERROR_SERVICE_EXISTS) then
-    begin
-      LogLine('INFO', 'Служба: install — служба уже существует (код ' +
-        IntToStr(Code) + '), регистрация не требуется');
-      Result := True;
-      Exit;
-    end;
-    LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
-      IntToStr(Code));
-    Exit;
-  end;
-  LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
-  Result := True;
+  Result := ServiceCommandResult(Verb, Code);
 end;
 
 { Остановка перед заменой файлов. False — служба осталась работать (или её
@@ -2898,7 +2982,7 @@ begin
       'сервер запускает пользователь');
     Exit;
   end;
-  Config := GServerDir + '\service\etn-service.xml';
+  Config := ServiceDir + '\service\etn-service.xml';
   if not FileExists(Config) then
   begin
     Reason := 'конфигурация службы не найдена: ' + Config;
@@ -4435,7 +4519,7 @@ var
   Replaced: Integer;
 begin
   Result := False;
-  Path := GServerDir + '\service\etn-service.xml';
+  Path := ServiceDir + '\service\etn-service.xml';
   if not FileExists(Path) then
   begin
     LogLine('ERROR', 'Нет шаблона службы: ' + Path + ' — служба не настроена');
@@ -5510,6 +5594,8 @@ begin
   GTestUninstallService := '';
   GTestServiceRegistered := False;
   GTestServiceRunning := False;
+  GTestServiceRealFile := '';
+  GTestServicePendingPolls := 0;
   GTestHealthUrl := '';
   GTestHealthWait := '';
   GTestHealthStep := '';
@@ -5594,6 +5680,8 @@ begin
   GTestServiceWait := ParamValue('TESTSERVICEWAIT');
   GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
   GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
+  GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
+  GTestServicePendingPolls := 0;
   GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
   { Исходное состояние модели службы: present — зарегистрирована и работает
     (обычное состояние машины; обновление сначала её остановит), absent — не
@@ -6309,7 +6397,7 @@ begin
         begin
           SetInstallStage('Настройка службы…');
           if not InstallServiceConfig then
-            FailInstall('конфигурация службы не подготовлена: ' + GServerDir +
+            FailInstall('конфигурация службы не подготовлена: ' + ServiceDir +
               '\service\etn-service.xml');
         end;
         { Регистрация службы — после записи etn-service.xml (WinSW читает
@@ -6351,9 +6439,13 @@ begin
       if GExitCode = EXIT_OK then
       begin
         SetInstallStage('Запуск службы ETN…');
+        { Служба не перешла в RUNNING — предусловие: сервер не работает, и
+          объявлять установку успешной нельзя (код 20 с причиной, как у сбоя
+          регистрации). После отката прежняя версия поднимается. }
         if not StartServiceIfNeeded then
-          FailInstall('служба ' + SERVICE_NAME + ' не запустилась после замены ' +
-            'файлов (etn-service.exe start вернул ошибку)')
+          FailInstallWithCode(EXIT_PRECONDITION, 'служба ' + SERVICE_NAME +
+            ' не перешла в RUNNING после замены файлов ' +
+            '(etn-service.exe start вернул ошибку или истёк бюджет ожидания)')
         else if not HealthCheckApplicable then
           { Режим app: сервер не служба, его запускает пользователь. Опрос
             health гарантированно истёк бы и увёл обновление в откат. }
@@ -6466,6 +6558,70 @@ begin
     Result := NormalizeExitCode(GExitCode);
   if GLogPath <> '' then
     LogLine('INFO', 'Завершение: код возврата ' + IntToStr(Result));
+end;
+
+(* Деинсталлятор Inno НЕ вызывает InitializeSetup (проверено на Inno 6.7.3):
+  все глобалы установщика в нём пусты. Снятие службы берёт путь из {app} по
+  месту (ServiceDir), а каталог данных и режим для журнала удаления задаются
+  здесь — из install.json, иначе из {commonappdata}\ETN. Журнал удаления
+  (uninstall-*.log) нужен потому, что LogLine без GLogPath молчит: причина
+  отказа снятия службы иначе осталась бы только в журнале Inno, который ведётся
+  лишь при /LOG. *)
+function InitializeUninstall: Boolean;
+var
+  JsonPath, Text, Dir, Candidate: String;
+  JsonPresent: Boolean;
+begin
+  Result := True;
+  GDataDir := ExpandConstant('{#DataDir}');
+  JsonPath := GDataDir + '\install.json';
+  JsonPresent := FileExists(JsonPath);
+  if JsonPresent then
+  begin
+    Text := ReadTextFile(JsonPath);
+    if JsonGetRaw(Text, 'data_dir') <> '' then
+      GDataDir := JsonGetRaw(Text, 'data_dir');
+    if JsonGetRaw(Text, 'mode') <> '' then
+      GServerMode := JsonGetRaw(Text, 'mode');
+  end;
+  { Журнал — в каталоге данных только у серверной установки (install.json);
+    удаление клиента без сервера не должно создавать %ProgramData%\ETN. }
+  Dir := GDataDir + '\logs';
+  Candidate := Dir + '\uninstall-' +
+    GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
+  if JsonPresent and ForceDirectories(Dir) then
+    AppendUtf8Line(Candidate, 'ETN uninstall log');
+  if not FileExists(Candidate) then
+  begin
+    Dir := ExpandConstant('{tmp}');
+    Candidate := Dir + '\etn-uninstall-' +
+      GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
+    AppendUtf8Line(Candidate, 'ETN uninstall log');
+  end;
+  if FileExists(Candidate) then GLogPath := Candidate;
+  LogLine('INFO', 'Удаление ETN: каталог данных ' + GDataDir + ', режим ' +
+    IfStr(GServerMode = '', '—', GServerMode));
+#ifdef TestMode
+  { Проба настоящего деинсталлятора (silent-codes.ps1): InitializeSetup не
+    вызывался, поэтому хуки модели службы разбираются здесь. }
+  GTestMode := True;
+  GTestService := ParamValue('TESTSERVICE');
+  GTestServiceCmd := ParamValue('TESTSERVICECMD');
+  GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
+  GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
+  GTestServiceStart := LowerCase(ParamValue('TESTSERVICESTART'));
+  GTestServiceWait := ParamValue('TESTSERVICEWAIT');
+  GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
+  GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
+  GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
+  GTestFirewall := ParamValue('TESTFIREWALL');
+  GTestServiceRegistered := LowerCase(GTestService) = 'present';
+  GTestServiceRunning := GTestServiceRegistered;
+  GTestServicePendingPolls := 0;
+  LogLine('INFO', 'Деинсталлятор (тестовый режим): TESTSERVICE=' +
+    IfStr(GTestService = '', '—', GTestService) + ', TESTSERVICEREALFILE=' +
+    IfStr(GTestServiceRealFile = '', '—', GTestServiceRealFile));
+#endif
 end;
 
 { Удаление программы: служба ETN снимается, правило брандмауэра удаляется

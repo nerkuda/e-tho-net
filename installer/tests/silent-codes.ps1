@@ -59,11 +59,18 @@
          успехе, неудачный откат — код 10 с путём к архиву в журнале
      27. 8b1f5980: регистрация службы WinSW после записи etn-service.xml и до
          запуска (install с конфигом рядом с exe; повторная установка не
-         перегистрирует службу, WinSW 1073 — успех; сбой install — код 20),
-         запуск с ожиданием подтверждённого RUNNING (маркер в журнале),
-         снятие при удалении — stop → uninstall до удаления файлов (проба
-         /TESTUNINSTALLSERVICE: отказ uninstall/stop — код 10 с причиной),
-         режим app службу не регистрирует и режим при обновлении сохраняется
+         перегистрирует службу, WinSW 1073 — успех, в том числе когда служба
+         уже RUNNING; сбой install — код 20), запуск с ожиданием
+         подтверждённого RUNNING (START_PENDING → RUNNING успешно, навсегда
+         START_PENDING — код 20), снятие при удалении — stop → uninstall до
+         удаления файлов (проба /TESTUNINSTALLSERVICE: отказ uninstall/stop —
+         код 10 с причиной), режим app службу не регистрирует и режим при
+         обновлении сохраняется;
+     28. 8b1f5980 (приёмка): настоящий деинсталлятор (отдельная тестовая
+         сборка с Uninstallable и своим AppId) с моделью службы и проверкой
+         наличия etn-service.exe, как в продуктовой ветке: путь службы —
+         {app}\service\etn-service.exe, stop и uninstall вызваны, пока файл
+         ещё на месте, удаление завершается и файлы удаляются
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -259,13 +266,39 @@ function Get-LatestLog {
 }
 
 function Invoke-Setup {
-    param([string[]]$Arguments)
-    $proc = Start-Process -FilePath $script:SetupPath -ArgumentList $Arguments -PassThru
+    param([string[]]$Arguments, [string]$Path)
+    if (-not $Path) { $Path = $script:SetupPath }
+    $proc = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
     if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
         try { $proc.Kill() } catch { }
         throw "Установщик не завершился за $TimeoutSec с — возможно, появилось окно или модальный диалог."
     }
     return $proc.ExitCode
+}
+
+# Настоящий деинсталлятор (приёмка 8b1f5980): Inno не даёт кода события, но
+# процесс удаления возвращает код Inno (0 — удаление завершено, иначе — нет),
+# а его журнал и наш журнал удаления показывают, что именно произошло.
+function Invoke-Uninstaller {
+    param([string]$Path, [string[]]$Arguments)
+    $proc = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
+    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+        try { $proc.Kill() } catch { }
+        throw "Деинсталлятор не завершился за $TimeoutSec с — возможно, появилось окно или модальный диалог."
+    }
+    return $proc.ExitCode
+}
+
+# Деинсталлятор Inno удаляет себя (и каталог программы) в самом конце, уже
+# после возврата процесса-лаунчера: ждём исчезновения пути, а не одного момента.
+function Wait-PathGone {
+    param([string]$Path, [int]$TimeoutMs = 10000)
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return -not (Test-Path -LiteralPath $Path)
 }
 
 # --- ce3ab836: бэкап БД — настоящий Node и better-sqlite3 -------------------
@@ -2139,9 +2172,9 @@ Add-StaticResult -Name 'static:app-no-health' `
 $hookNames = @(
     'TESTSERVICE', 'TESTSERVICECMD', 'TESTSERVICESTATE', 'TESTSERVICESTOP',
     'TESTSERVICESTART', 'TESTSERVICEWAIT', 'TESTSERVICEINSTALL',
-    'TESTSERVICEUNINSTALL', 'TESTUNINSTALLSERVICE', 'TESTHEALTHURL',
-    'TESTHEALTHWAIT', 'TESTHEALTHSTEP', 'TESTHEALTH', 'TESTROLLBACK',
-    'TESTNODEEXE')
+    'TESTSERVICEUNINSTALL', 'TESTSERVICEREALFILE', 'TESTUNINSTALLSERVICE',
+    'TESTHEALTHURL', 'TESTHEALTHWAIT', 'TESTHEALTHSTEP', 'TESTHEALTH',
+    'TESTROLLBACK', 'TESTNODEEXE')
 $hooksOutside = @()
 foreach ($hook in $hookNames) {
     $hookPattern = [regex]::Escape("ParamValue('$hook')")
@@ -2151,7 +2184,7 @@ foreach ($hook in $hookNames) {
     }
 }
 Add-StaticResult -Name 'static:update-hooks-ifdef' `
-    -Ok (($hookNames.Count -eq 15) -and ($hooksOutside.Count -eq 0)) `
+    -Ok (($hookNames.Count -eq 16) -and ($hooksOutside.Count -eq 0)) `
     -Note ('все ' + $hookNames.Count + ' хуков обновления под #ifdef TestMode; вне: ' +
         $(if ($hooksOutside.Count -eq 0) { 'нет' } else { $hooksOutside -join ',' }))
 # Бэкап только при смене версии (карточка bb063ac3). Прежняя версия неизвестна
@@ -2182,12 +2215,24 @@ Add-StaticResult -Name 'static:service-install-command' `
         (Test-IssCode -Text $registerBody -Pattern ([regex]::Escape("GServerMode = 'app'"))) -and
         (Test-IssCode -Text $registerBody -Pattern ([regex]::Escape('ServiceRegistered')))) `
     -Note 'install после проверки app/регистрации; режим app службу не регистрирует'
-$runServiceBody = Get-IssFunctionBody -Text $issText -Name 'RunServiceCommand'
+# 1073 разбирается общей функцией ServiceCommandResult — её вызывает и
+# продуктовая ветка, и модель TestMode: иначе удаление продуктовой ветки
+# оставалось зелёным (замечание приёмки 0978b96a).
+$commandResultBody = Get-IssFunctionBody -Text $issText -Name 'ServiceCommandResult'
 Add-StaticResult -Name 'static:service-install-exists' `
-    -Ok ((Test-IssCode -Text $runServiceBody -Pattern ([regex]::Escape('ERROR_SERVICE_EXISTS'))) -and
-        (Test-IssCode -Text $runServiceBody -Pattern ([regex]::Escape("(Verb = 'install')"))) -and
-        (Test-IssCode -Text $runServiceBody -Pattern ([regex]::Escape('Result := True')))) `
-    -Note '1073 (служба уже существует) — успех, повторная установка не падает'
+    -Ok ((Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_EXISTS'))) -and
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape("(Verb = 'install')"))) -and
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('Result := True')))) `
+    -Note '1073 (служба уже существует) — успех, разбор общий для продукта и модели'
+# Продуктовая ветка RunServiceCommand — без #ifdef TestMode: проверка файла и
+# вызов общего разбора кода возврата обязаны быть именно в ней.
+$runServiceProd = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'RunServiceCommand' -Ifdef 'TestMode'
+Add-StaticResult -Name 'static:service-production-branch' `
+    -Ok (($runServiceProd -ne '') -and
+        (Test-IssCode -Text $runServiceProd -Pattern ([regex]::Escape('FileExists(ServiceExePath)'))) -and
+        (Test-IssCode -Text $runServiceProd -Pattern ([regex]::Escape('ServiceCommandResult(Verb, Code)'))) -and
+        (-not (Test-IssCode -Text $runServiceProd -Pattern ([regex]::Escape('GTestService'))))) `
+    -Note 'продуктовая ветка: проверка exe и общий разбор 1073 без тестовых хуков'
 Add-StaticResult -Name 'static:service-start-wait' `
     -Ok ((Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'StartServiceIfNeeded') `
             -Pattern ([regex]::Escape('WaitServiceRunning'))) -and
@@ -2196,6 +2241,29 @@ Add-StaticResult -Name 'static:service-start-wait' `
         (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ServiceRunningNow') `
             -Pattern ([regex]::Escape('START_PENDING')))) `
     -Note 'start → ожидание подтверждённого RUNNING (START_PENDING не RUNNING)'
+# Путь к etn-service.exe не зависит от глобалов, заполняемых только установкой:
+# деинсталлятор не вызывает InitializeSetup, и GServerDir в нём пуст (блокер
+# приёмки 0978b96a). В установке {app} ещё не раскрыт внутри InitializeSetup
+# (проба /TESTUNINSTALLSERVICE), поэтому GServerDir — первый кандидат, {app} —
+# запасной и единственный в деинсталляторе.
+$serviceDirBody = Get-IssFunctionBody -Text $issText -Name 'ServiceDir'
+$serviceExeBody = Get-IssFunctionBody -Text $issText -Name 'ServiceExePath'
+Add-StaticResult -Name 'static:service-path-by-app' `
+    -Ok ((Test-IssCode -Text $serviceDirBody -Pattern ([regex]::Escape("ExpandConstant('{app}')"))) -and
+        (Test-IssCode -Text $serviceExeBody -Pattern ([regex]::Escape('ServiceDir'))) -and
+        (-not (Test-IssCode -Text $serviceExeBody -Pattern ([regex]::Escape('GServerDir'))))) `
+    -Note 'ServiceExePath = ServiceDir\service\etn-service.exe; в деинсталляторе — {app}'
+# Инициализация деинсталлятора: каталог данных, режим и журнал удаления —
+# из install.json/{commonappdata}, а не из пустых глобалов setup.
+$initUninstallBody = Get-IssFunctionBody -Text $issText -Name 'InitializeUninstall'
+Add-StaticResult -Name 'static:uninstall-init' `
+    -Ok (($initUninstallBody -ne '') -and
+        (Test-IssCode -Text $initUninstallBody -Pattern ([regex]::Escape("ExpandConstant('{#DataDir}')"))) -and
+        (Test-IssCode -Text $initUninstallBody -Pattern ([regex]::Escape("JsonGetRaw(Text, 'data_dir')"))) -and
+        (Test-IssCode -Text $initUninstallBody -Pattern ([regex]::Escape("JsonGetRaw(Text, 'mode')"))) -and
+        (Test-IssCode -Text $initUninstallBody -Pattern ([regex]::Escape('GLogPath'))) -and
+        (-not (Test-IssCode -Text $initUninstallBody -Pattern ([regex]::Escape('GServerDir'))))) `
+    -Note 'деинсталлятор: данные/режим из install.json, свой журнал, без GServerDir'
 # Снятие службы — строго в usUninstall: срез функции до usPostUninstall.
 $uninstallBody = Get-IssFunctionBody -Text $issText -Name 'CurUninstallStepChanged'
 $pPostUninstall = $uninstallBody.IndexOf('usPostUninstall')
@@ -2616,6 +2684,54 @@ Add-Result -Name 'service-install-exists:log' -Expected 1 `
 Add-Result -Name 'service-install-exists:start' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)'))
 
+# C2. Служба уже есть И работает, а установщик всё же вызвал install (гонка
+#     проверки реестра): 1073 — успех, второй start не нужен. Разбор 1073
+#     общий с продуктовой веткой (ServiceCommandResult), поэтому кейс
+#     поведенчески покрывает ту же логику, что работает на машине.
+Reset-State
+$paramsExistsRunning = New-ParamsFile -Mode 'service' -Name 'service-exists-running.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsExistsRunning`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICEINSTALL=exists', '/TESTSERVICESTATE=running', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-exists-running:code' -Expected 0 -Actual $code
+Add-Result -Name 'service-exists-running:1073' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба уже существует \(код 1073\)')) `
+    -Note '1073 разобран общей функцией — успех'
+Add-Result -Name 'service-exists-running:no-start' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда start')) `
+    -Note 'служба уже RUNNING — повторного start нет'
+Add-Result -Name 'service-exists-running:already-running' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: уже запущена \(RUNNING\)'))
+
+# C3. START_PENDING не считается RUNNING: модель отдаёт START_PENDING два
+#     опроса, затем RUNNING — установка успешна.
+Reset-State
+$paramsPending = New-ParamsFile -Mode 'service' -Name 'service-start-pending.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsPending`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICESTART=pending', '/TESTSERVICEWAIT=5000', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-start-pending:code' -Expected 0 -Actual $code `
+    -Note 'START_PENDING → RUNNING за бюджет — успех'
+Add-Result -Name 'service-start-pending:started' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)')) `
+    -Note 'подтверждённый RUNNING после START_PENDING'
+
+# C4. Служба навсегда в START_PENDING: бюджет истекает — код 20 с причиной,
+#     install.json не пишется.
+Reset-State
+$paramsPendingStuck = New-ParamsFile -Mode 'service' -Name 'service-start-pending-stuck.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsPendingStuck`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICESTART=pending-stuck', '/TESTSERVICEWAIT=600', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-start-pending-stuck:code' -Expected 20 -Actual $code `
+    -Note 'START_PENDING не RUNNING — предусловие не выполнено'
+Add-Result -Name 'service-start-pending-stuck:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'не перешла в RUNNING за 600 мс')) `
+    -Note 'причина таймаута в журнале'
+Add-Result -Name 'service-start-pending-stuck:no-json' -Expected 0 `
+    -Actual ([int](Test-Path (Join-Path $dataDir 'install.json'))) `
+    -Note 'install.json не записан'
+
 # D. Обновление с уже зарегистрированной службой: install не вызывается,
 #    конфигурацию WinSW читает при старте; служба поднята и подтверждена.
 $null = New-UpdateFixture
@@ -2715,6 +2831,103 @@ Add-Result -Name 'service-mode-kept:no-install' -Expected 0 `
 $jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
 Add-Result -Name 'service-mode-kept:install-json' -Expected 1 `
     -Actual ([int]($jsonText -match '"mode":"app"')) -Note 'mode=app сохранён'
+
+# --- 8b1f5980 (приёмка 0978b96a): настоящий деинсталлятор --------------------
+# Тестовая сборка без TestUninstallable деинсталлятора не создаёт, а
+# /TESTUNINSTALLSERVICE вызывает снятие из процесса установки, где GServerDir
+# задан, — поэтому блокер «в деинсталляторе ServiceExePath пуст» ею не ловился.
+# Здесь собирается установщик С деинсталлятором (отдельный AppId) и запускается
+# настоящий unins000.exe с моделью службы: /TESTSERVICEREALFILE=1 включает
+# проверку существования etn-service.exe, как в продуктовой ветке, а путь
+# службы обязан быть {app}\service\etn-service.exe.
+Write-Host '=== 8b1f5980: настоящий деинсталлятор ==='
+$uninsPayload = Join-Path $workRoot 'payload-uninstall'
+Copy-Item -LiteralPath $payloadDir -Destination $uninsPayload -Recurse -Force
+# Заглушка принадлежит установке ([Files] service\*), поэтому деинсталлятор
+# удалит её вместе с остальными файлами — следов на машине не остаётся.
+[System.IO.File]::WriteAllText((Join-Path $uninsPayload 'service\etn-service.exe'), 'stub')
+$uninsBuildDir = Join-Path $workRoot 'build-uninstall'
+$uninsBuildArgs = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript,
+    '-Version', $version,
+    '-TestMode', '-TestUninstallMode',
+    '-BaseFilename', 'ETN-Uninst',
+    '-PayloadRoot', $uninsPayload,
+    '-OutputDir', $uninsBuildDir,
+    '-TestAppDir', $appDir,
+    '-TestDataDir', $dataDir
+)
+if ($IsccPath) { $uninsBuildArgs += @('-IsccPath', $IsccPath) }
+& $psExe @uninsBuildArgs
+if ($LASTEXITCODE -ne 0) { throw "Сборка тестового установщика с деинсталлятором не удалась (код $LASTEXITCODE)." }
+$uninsSetup = Join-Path $uninsBuildDir "ETN-Uninst-unins-test-$version.exe"
+if (-not (Test-Path -LiteralPath $uninsSetup)) { throw "Тестовый установщик с деинсталлятором не найден: $uninsSetup" }
+$testUninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
+    '{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+
+Reset-State
+$paramsRealUninstall = New-ParamsFile -Mode 'service' -Name 'service-real-uninstall.ini'
+try {
+    $installCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+        "/PARAMS=`"$paramsRealUninstall`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
+        '/TESTHEALTH=ok'))
+    Add-Result -Name 'service-real-uninstall:install-code' -Expected 0 -Actual $installCode
+    $serviceExePath = Join-Path $appDir 'service\etn-service.exe'
+    Add-Result -Name 'service-real-uninstall:exe-present' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $serviceExePath)) `
+        -Note 'перед удалением etn-service.exe на месте'
+    $uninsPath = Join-Path $appDir 'unins000.exe'
+    Add-Result -Name 'service-real-uninstall:uninstaller' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $uninsPath)) `
+        -Note 'настоящий деинсталлятор создан'
+    $uninstallCode = Invoke-Uninstaller -Path $uninsPath -Arguments @('/VERYSILENT',
+        '/SUPPRESSMSGBOXES', '/NORESTART', '/TESTSERVICE=present',
+        '/TESTSERVICEREALFILE=1')
+    Add-Result -Name 'service-real-uninstall:code' -Expected 0 -Actual $uninstallCode `
+        -Note 'удаление завершено (снятие службы не отменило его)'
+    Add-Result -Name 'service-real-uninstall:files-removed' -Expected 0 `
+        -Actual ([int](-not (Wait-PathGone -Path (Join-Path $appDir 'server\dist\index.js')))) `
+        -Note 'файлы программы удалены'
+    Add-Result -Name 'service-real-uninstall:uninstaller-gone' -Expected 1 `
+        -Actual ([int](Wait-PathGone -Path $uninsPath)) `
+        -Note 'деинсталлятор удалил себя'
+    # Журнал удаления (InitializeUninstall): путь службы, команды и признак
+    # того, что etn-service.exe ещё существовал в момент stop/uninstall.
+    $uninstallLog = Get-ChildItem -LiteralPath (Join-Path $dataDir 'logs') -Filter 'uninstall-*.log' `
+        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $uninsText = ''
+    if ($uninstallLog) { $uninsText = Get-Content -LiteralPath $uninstallLog.FullName -Raw }
+    $stopLine = [regex]::Match($uninsText, '(?m)^.*команда stop — успех[^\r\n]*')
+    $uninstallLine = [regex]::Match($uninsText, '(?m)^.*команда uninstall — успех[^\r\n]*')
+    $expectedStopPath = 'exe=' + $serviceExePath
+    Add-Result -Name 'service-real-uninstall:stop-path' -Expected 1 `
+        -Actual ([int]($stopLine.Success -and $stopLine.Value.Contains($expectedStopPath))) `
+        -Note $(if ($stopLine.Success) { $stopLine.Value } else { 'строки stop нет' })
+    Add-Result -Name 'service-real-uninstall:uninstall-path' -Expected 1 `
+        -Actual ([int]($uninstallLine.Success -and $uninstallLine.Value.Contains($expectedStopPath))) `
+        -Note $(if ($uninstallLine.Success) { $uninstallLine.Value } else { 'строки uninstall нет' })
+    Add-Result -Name 'service-real-uninstall:file-existed' -Expected 2 `
+        -Actual ([int]([regex]::Matches($uninsText, 'exists=1').Count)) `
+        -Note 'stop и uninstall выполнены до удаления файлов'
+    $stopIndex = $uninsText.IndexOf('команда stop — успех')
+    $uninstallIndex = $uninsText.IndexOf('команда uninstall — успех')
+    Add-Result -Name 'service-real-uninstall:order' -Expected 1 `
+        -Actual ([int](($stopIndex -ge 0) -and ($uninstallIndex -gt $stopIndex))) `
+        -Note 'stop → uninstall'
+    Add-Result -Name 'service-real-uninstall:removed' -Expected 1 `
+        -Actual ([int]($uninsText.Contains('Служба ETN снята (uninstall)'))) `
+        -Note 'служба снята в usUninstall'
+} finally {
+    # Деинсталлятор при отказе (мутация) оставляет установку и запись в HKCU:
+    # убираем за собой, чтобы прогон не оставлял следов.
+    if (Test-Path -LiteralPath $testUninstallKey) {
+        Remove-Item -LiteralPath $testUninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $appDir) {
+        Remove-Item -LiteralPath $appDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 # --- Итог --------------------------------------------------------------------
 $failed = @($script:results | Where-Object { -not $_.Ok })

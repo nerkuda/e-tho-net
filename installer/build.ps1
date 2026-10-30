@@ -43,6 +43,11 @@
     Тестовая сборка для installer/tests/silent-codes.ps1: изолированные
     каталоги и хуки /TESTELEVATED, /TESTSERVICE, /TESTHEALTH, без деинсталлятора.
 
+.PARAMETER TestUninstallMode
+    Вместе с -TestMode: собрать тестовый установщик С деинсталлятором (проба
+    настоящего удаления с моделью службы, приёмка 8b1f5980). У такой сборки
+    отдельный AppId; после прогона запись установки в HKCU удаляется.
+
 .PARAMETER TestAppDir
     Каталог программы тестовой сборки (обязателен при -TestMode).
 
@@ -66,6 +71,7 @@ param(
     [switch]$RefreshPayload,
     [string]$IsccPath,
     [switch]$TestMode,
+    [switch]$TestUninstallMode,
     [string]$TestAppDir,
     [string]$TestDataDir
 )
@@ -217,6 +223,9 @@ $PayloadRoot = Resolve-FullPath -Path $PayloadRoot -Base $repoRoot
 if (-not $OutputDir) { $OutputDir = Join-Path $repoRoot 'release' }
 $OutputDir = Resolve-FullPath -Path $OutputDir -Base $repoRoot
 
+if ($TestUninstallMode) {
+    if (-not $TestMode) { throw '-TestUninstallMode доступен только вместе с -TestMode.' }
+}
 if ($TestMode) {
     if (-not $TestAppDir) { throw 'При -TestMode обязателен -TestAppDir.' }
     if (-not $TestDataDir) { throw 'При -TestMode обязателен -TestDataDir.' }
@@ -261,10 +270,12 @@ if ($TestMode) {
     $defines += '/DTestMode=1'
     $defines += "/DTestAppDir=$TestAppDir"
     $defines += "/DTestDataDir=$TestDataDir"
+    if ($TestUninstallMode) { $defines += '/DTestUninstallable=1' }
 }
 
 $outputName = "$BaseFilename-$Version"
 if ($TestMode) { $outputName = "$BaseFilename-test-$Version" }
+if ($TestUninstallMode) { $outputName = "$BaseFilename-unins-test-$Version" }
 
 Write-Host "ETN installer: версия $Version"
 Write-Host "  ISCC:      $iscc"

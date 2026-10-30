@@ -27,6 +27,9 @@
       Get-IssStrippedLines — строки файла без комментариев (для своих проверок);
       Get-IssFunctionBody  — тело функции/процедуры по имени (проверка реального
                              фрагмента, а не подстроки по всему файлу);
+      Get-IssFunctionBodyWithoutIfdef — тело функции без строк, компилируемых
+                             только под указанной директивой (продуктовая
+                             ветка против TestMode-модели);
       Get-IssIfdefBody     — строки внутри `#ifdef <имя>` (проверка, что хук
                              действительно под директивой, а не в комментарии).
 
@@ -170,6 +173,50 @@ function Get-IssIfdefBody {
     return ($body -join "`n")
 }
 
+# Тело функции без строк, компилируемых только под указанной директивой:
+# продуктовая ветка функции отличается от тестовой модели службы (8b1f5980:
+# сторож 1073 искал подстроки, которые есть и в TestMode-ветке, и потому не
+# ловил удаление продуктовой). Директивы #ifdef/#if/#endif в результат не
+# попадают.
+function Get-IssFunctionBodyWithoutIfdef {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Ifdef
+    )
+    $lines = @(Get-IssStrippedLines -Text $Text)
+    $start = -1
+    $namePattern = '^\s*(function|procedure)\s+' + [regex]::Escape($Name) + '\b'
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match $namePattern) { $start = $i; break }
+    }
+    if ($start -lt 0) { return '' }
+    $body = New-Object System.Collections.Generic.List[string]
+    $nextDecl = '^\s*(function|procedure)\s+[A-Za-z_]'
+    for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match $nextDecl) { break }
+        $body.Add($lines[$i])
+    }
+    $target = '^#ifdef\s+' + [regex]::Escape($Ifdef) + '\b'
+    $stack = New-Object System.Collections.Generic.List[bool]
+    $result = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $body) {
+        $t = $line.Trim()
+        if ($t -match $target) { $stack.Add($true); continue }
+        if (($t -match '^#ifdef\s+\S+') -or ($t -match '^#ifndef\s+\S+') -or ($t -match '^#if\b')) {
+            $stack.Add(($stack.Count -gt 0) -and ($stack[$stack.Count - 1]))
+            continue
+        }
+        if ($t -match '^#endif\b') {
+            if ($stack.Count -gt 0) { $stack.RemoveAt($stack.Count - 1) }
+            continue
+        }
+        if ($stack -contains $true) { continue }
+        $result.Add($line)
+    }
+    return ($result -join "`n")
+}
+
 function Test-IssGuardSelfTest {
     $failures = New-Object System.Collections.Generic.List[string]
     $pattern = [regex]::Escape('function ValidDisplayName')
@@ -216,6 +263,18 @@ function Test-IssGuardSelfTest {
     $ifdefBodyCommented = Get-IssIfdefBody -Text $ifdefCommented -Name 'TestMode'
     if ($ifdefBodyCommented -match 'HOOK_IN') {
         $failures.Add('#ifdef TestMode: закомментированная директива не должна открывать блок')
+    }
+
+    $funcIfdef = "[Code]`r`nfunction F`r`nbegin`r`n  BEFORE`r`n#ifdef TestMode`r`n  HOOK`r`n#endif`r`n  AFTER`r`nend;"
+    $funcNoIfdef = Get-IssFunctionBodyWithoutIfdef -Text $funcIfdef -Name 'F' -Ifdef 'TestMode'
+    if (($funcNoIfdef -notmatch 'BEFORE') -or ($funcNoIfdef -notmatch 'AFTER') -or
+        ($funcNoIfdef -match 'HOOK')) {
+        $failures.Add('тело функции без #ifdef: BEFORE/AFTER остаются, HOOK вырезан')
+    }
+    $funcOtherIfdef = "[Code]`r`nfunction F`r`nbegin`r`n#ifdef OtherMode`r`n  OTHER`r`n#endif`r`n  ALWAYS`r`nend;"
+    $funcOther = Get-IssFunctionBodyWithoutIfdef -Text $funcOtherIfdef -Name 'F' -Ifdef 'TestMode'
+    if (($funcOther -notmatch 'ALWAYS') -or ($funcOther -notmatch 'OTHER')) {
+        $failures.Add('тело функции без #ifdef: чужая директива не должна вырезать код')
     }
 
     return [pscustomobject]@{
