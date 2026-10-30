@@ -183,6 +183,53 @@ describe(
       }
     });
 
+    /**
+     * Регресс ошибки 46bda0e8: reader-воркер переустанавливает контекст слоя на
+     * соединении КАЖДОЙ задачей (`NetworkDb.useLayer`). Установка того же
+     * слоя не должна ни писать в temp-объекты соединения (`total_changes()`
+     * растёт), ни, следовательно, сдвигать сигнал снапшота: иначе первое же
+     * чтение задачи принимает собственные temp-записи `layer_chain` за
+     * изменение данных и пересобирает снапшот по всем ветвимым таблицам
+     * (~160–170 мс на каждое чтение в слое против ~6 мс в основе).
+     *
+     * `total_changes()` соединения — точный детерминированный индикатор: и
+     * DELETE+INSERT в `temp.layer_chain`, и пересборка снапшота видны в нём.
+     */
+    it('повторная задача на том же соединении не пересобирает снапшот и не сдвигает сигнал', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        insertLayer(ndb, LAYER_A, BASE_LAYER_ID, 1);
+        insertThoughtRow(ndb, 'warm', LAYER_A, 'тень');
+        ndb.useLayer(LAYER_A);
+        // Прогрев: снапшот собран, сигнал синхронизирован с состоянием.
+        assert.equal(titleOf(ndb, 'warm'), 'тень');
+        const settled = ndb.totalChanges();
+
+        // Следующая задача того же воркера: тот же слой.
+        ndb.useLayer(LAYER_A);
+        assert.equal(
+          ndb.totalChanges(),
+          settled,
+          'повторная установка того же контекста не должна писать в temp.layer_chain',
+        );
+
+        // Первое чтение задачи обязано обойтись готовым снапшотом.
+        assert.equal(titleOf(ndb, 'warm'), 'тень');
+        assert.equal(
+          ndb.totalChanges(),
+          settled,
+          'чтение после повторной установки не должно пересобирать снапшот',
+        );
+
+        // Сигнал не «слепнет»: собственная запись по-прежнему видна сразу.
+        insertThoughtRow(ndb, 'fresh', LAYER_A, 'новая');
+        assert.ok(ndb.totalChanges() > settled, 'запись обязана сдвинуть сигнал');
+        assert.equal(titleOf(ndb, 'fresh'), 'новая');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('представление экспонирует физический rowid победителя (контракт FTS)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

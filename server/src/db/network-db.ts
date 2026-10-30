@@ -138,8 +138,11 @@ export class NetworkDb {
   useLayer(layerId: string): void {
     this.assertOpen();
     this.layerContext = setupLayerContext(this.db, layerId, this.layerContext.key);
-    // Подпись та же — снапшот не пересобирался, и сигнал остаётся прежним:
-    // если данные с тех пор изменились, читатель пересоберёт снапшот сам.
+    // Подпись та же — контекст не переустанавливался, и сигнал остаётся
+    // прежним: если данные с тех пор изменились, читатель пересоберёт снапшот
+    // сам. Установка того же контекста не пишет в temp-объекты (layer-chain.ts,
+    // `readLayerChain`), поэтому сигнал от собственной установки не сдвигается
+    // и следующее чтение не принимает её за изменение данных (ошибка 46bda0e8).
     if (this.layerContext.rebuilt) {
       this.layerSignal = this.readSignal();
       this.snapshotTxnScoped = false;

@@ -295,10 +295,42 @@ function getCommentOrThrow(ndb: NetworkDb, id: string): Comment {
 }
 
 /**
+ * Строка `comments_v` вместе с глубиной её слоя в цепочке соединения —
+ * ключ порядка для {@link compareCommentRows}.
+ */
+interface CommentListRow extends CommentRow {
+  /** `layer_chain.depth` слоя строки (0 = текущий слой, растёт к основе). */
+  layer_depth: number;
+}
+
+/**
+ * Порядок `listComments`: постоянный комментарий первым; среди нескольких
+ * видимых постоянных побеждает строка БЛИЖАЙШЕГО слоя цепочки, затем
+ * `valid_from` и `created_at`.
+ *
+ * Держится в памяти намеренно (ошибка 46bda0e8): `ORDER BY` по представлению
+ * `comments_v` с коррелированным подзапросом глубины заставлял планировщик
+ * строить temp B-tree и, главное, вместе с прежним OR-предикатом уводил
+ * выборку на скан всех комментариев слоя. Набор строк владельца — единицы-
+ * десятки, сортировка в JS бесплатна.
+ */
+function compareCommentRows(a: CommentListRow, b: CommentListRow): number {
+  const permanentRank = (row: CommentListRow): number => (row.kind === 'permanent' ? 0 : 1);
+  if (permanentRank(a) !== permanentRank(b)) return permanentRank(a) - permanentRank(b);
+  if (a.kind === 'permanent' && b.kind === 'permanent' && a.layer_depth !== b.layer_depth) {
+    return a.layer_depth - b.layer_depth;
+  }
+  // ISO-8601-строки сравниваются побайтово так же, как SQLite (`BINARY`).
+  if (a.valid_from !== b.valid_from) return a.valid_from < b.valid_from ? -1 : 1;
+  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+  return 0;
+}
+
+/**
  * List comments attached to an owner (docs/03-server-api.md §10) — the primary
  * `owner_type/owner_id` pair plus every m2m attachment in `comment_targets`
  * (L20). The permanent comment (if any) sorts first, then chronological
- * comments ordered by `valid_from` ascending.
+ * comments ordered by `valid_from` ascending (см. {@link compareCommentRows}).
  *
  * Среди нескольких видимых постоянных комментариев владельца побеждает
  * строка БЛИЖАЙШЕГО слоя цепочки (ошибка ec9918b3): у легаси-данных, где
@@ -307,6 +339,20 @@ function getCommentOrThrow(ndb: NetworkDb, id: string): Comment {
  * произвольную редакцию — «витрины», читающие `listComments(...).find(permanent)`,
  * могли показать устаревший текст. Тот же детерминированный выбор, что в
  * {@link getPermanentRow}.
+ *
+ * **Две выборки вместо одного OR-предиката (ошибка 46bda0e8).** `listComments`
+ * читается клиентом на каждую видимую строку холста/дерева (индикаторы
+ * комментариев/вложений), поэтому его стоимость обязана зависеть только от
+ * числа комментариев владельца. Предикат
+ * `owner = ? OR EXISTS (SELECT … FROM comment_targets_v)` не даёт планировщику
+ * OR-оптимизации через temp-представление: план вырождался в
+ * `SEARCH t USING INDEX idx_comments_layer (layer_id=?)` — перебор ВСЕХ
+ * комментариев видимого слоя (и это на каждую строку экрана). Две отдельные
+ * выборки идут индексами `idx_comments_owner`/`idx_comments_chrono` и
+ * `idx_comment_targets_owner`; дубли (комментарий, у которого владелец — и
+ * первичный, и m2m-цель) схлопываются по `id`. Тест-сторож плана —
+ * `comment-service.test.ts` («listComments читает только комментарии
+ * владельца»).
  */
 export function listComments(
   ndb: NetworkDb,
@@ -314,21 +360,35 @@ export function listComments(
   ownerId: string,
 ): Comment[] {
   validateOwnerType(ownerType);
-  const rows = ndb
+  // Глубина слоя нужна только порядку постоянного комментария
+  // (`compareCommentRows`) — берётся по первичному ключу temp-цепочки и только
+  // для постоянных строк: CASE не даёт SQLite вычислять подзапрос на каждой
+  // хроно-записи (у владельца хроники бывает сотня).
+  const depth = `CASE WHEN c.kind = 'permanent'
+      THEN (SELECT lc.depth FROM layer_chain lc WHERE lc.layer_id = c.layer_id)
+      ELSE 0 END`;
+  const byOwner = ndb
     .prepare(
-      `SELECT * FROM comments_v c
-       WHERE (c.owner_type = ? AND c.owner_id = ?)
-          OR EXISTS (
-            SELECT 1 FROM comment_targets_v ct
-            WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
-          )
-       ORDER BY (c.kind <> 'permanent'),
-                CASE WHEN c.kind = 'permanent'
-                     THEN (SELECT lc.depth FROM layer_chain lc WHERE lc.layer_id = c.layer_id)
-                     ELSE 0 END ASC,
-                c.valid_from ASC, c.created_at ASC`,
+      `SELECT c.*, ${depth} AS layer_depth
+       FROM comments_v c
+       WHERE c.owner_type = ? AND c.owner_id = ?`,
     )
-    .all(ownerType, ownerId, ownerType, ownerId) as CommentRow[];
+    .all(ownerType, ownerId) as CommentListRow[];
+  const byTarget = ndb
+    .prepare(
+      `SELECT c.*, ${depth} AS layer_depth
+       FROM comment_targets_v ct
+       JOIN comments_v c ON c.id = ct.comment_id
+       WHERE ct.owner_type = ? AND ct.owner_id = ?`,
+    )
+    .all(ownerType, ownerId) as CommentListRow[];
+
+  const byId = new Map<string, CommentListRow>();
+  for (const row of byOwner) byId.set(row.id, row);
+  for (const row of byTarget) {
+    if (!byId.has(row.id)) byId.set(row.id, row);
+  }
+  const rows = [...byId.values()].sort(compareCommentRows);
   const targets = loadTargets(ndb, rows);
   return rows.map((row) => rowToComment(row, targets.get(row.id) ?? []));
 }

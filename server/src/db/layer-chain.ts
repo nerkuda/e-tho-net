@@ -47,6 +47,14 @@
  * Сигнальная проверка живёт в {@link NetworkDb.prepare} на пути чтения; запись
  * отдельной точки инвалидации не требует — см. комментарий там же.
  *
+ * Установка ТОГО ЖЕ контекста (reader-воркер переустанавливает слой на
+ * соединении каждой задачей) не пишет в temp-объекты вообще: цепочка сначала
+ * читается (`readLayerChain`), сравнивается с уже установленной и только при
+ * расхождении перезаписывается. Иначе DELETE+INSERT в `temp.layer_chain`
+ * сдвигал бы `total_changes()` — сигнал снапшота — и каждое чтение в слое
+ * пересобирало бы снапшот (ошибка 46bda0e8: 160–170 мс на чтение против 6 мс
+ * в основе).
+ *
  * Почему temp, а не объекты в схеме `data.db`: (1) SQLite запрещает
  * представлению из `main` ссылаться на объекты `temp` («view … cannot
  * reference objects in database temp»), а контекст обязан быть per-connection —
@@ -282,34 +290,29 @@ export function rebuildLayerSnapshot(db: Database.Database): void {
 }
 
 /**
- * (Пере)заполнить `layer_chain` цепочкой предков `layerId` до основы и вернуть
- * её (от текущего слоя к основе), чтобы вызывающий мог понять, изменилась ли
- * цепочка.
+ * Прочитать цепочку предков `layerId` до основы (от текущего слоя к основе),
+ * НЕ трогая temp-объекты соединения.
  *
- * Таблица создаётся при первом вызове и очищается перед заполнением, так что
- * повторный вызов атомарно меняет контекст слоя соединения.
+ * Чтение отделено от записи в `layer_chain` намеренно (ошибка 46bda0e8):
+ * reader-воркер переустанавливает контекст слоя на соединении КАЖДОЙ задачей,
+ * и безусловная запись (DELETE+INSERT) в temp-таблицу сдвигала
+ * `total_changes()` — сигнал свежести снапшота (`NetworkDb.readSignal`). Сторож
+ * `prepare()` принимал собственные temp-записи за изменение данных и
+ * пересобирал снапшот по всем ветвимым таблицам на каждом чтении слоя
+ * (~160–170 мс против ~6 мс в основе). Теперь при совпадении контекста
+ * (та же цепочка) в temp не пишется ничего.
  *
  * @throws Error если слоя с таким id нет в сети (в том числе когда миграции
  *   ещё не создали `layers`) или цепочка циклична.
  */
-export function setupLayerChain(db: Database.Database, layerId: string): string[] {
-  db.exec(
-    `CREATE TEMP TABLE IF NOT EXISTS layer_chain (
-       layer_id TEXT PRIMARY KEY,
-       depth    INTEGER NOT NULL
-     )`,
-  );
-  db.prepare('DELETE FROM layer_chain').run();
-
+function readLayerChain(db: Database.Database, layerId: string): string[] {
   const byId = db.prepare('SELECT id, parent_id FROM layers WHERE id = ?');
-  const insert = db.prepare('INSERT INTO layer_chain (layer_id, depth) VALUES (?, ?)');
 
   let current: string | null = layerId;
-  let depth = 0;
   const chain: string[] = [];
   const seen = new Set<string>();
   while (current !== null) {
-    if (depth > MAX_CHAIN_DEPTH || seen.has(current)) {
+    if (chain.length > MAX_CHAIN_DEPTH || seen.has(current)) {
       throw new Error(`layer chain of ${layerId} is cyclic or too deep`);
     }
     seen.add(current);
@@ -317,12 +320,30 @@ export function setupLayerChain(db: Database.Database, layerId: string): string[
     if (row === undefined) {
       throw new Error(`layer ${current} not found in layers`);
     }
-    insert.run(row.id, depth);
     chain.push(row.id);
     current = row.parent_id;
-    depth += 1;
   }
   return chain;
+}
+
+/**
+ * Записать цепочку в `temp.layer_chain` (создать таблицу при первом вызове,
+ * очистить перед заполнением). Вызывается только при реальной смене контекста
+ * — {@link setupLayerContext} сначала сравнивает прочитанную цепочку с уже
+ * установленной и не пишет, если она совпала.
+ */
+function writeLayerChain(db: Database.Database, chain: readonly string[]): void {
+  db.exec(
+    `CREATE TEMP TABLE IF NOT EXISTS layer_chain (
+       layer_id TEXT PRIMARY KEY,
+       depth    INTEGER NOT NULL
+     )`,
+  );
+  db.prepare('DELETE FROM layer_chain').run();
+  const insert = db.prepare('INSERT INTO layer_chain (layer_id, depth) VALUES (?, ?)');
+  chain.forEach((id, depth) => {
+    insert.run(id, depth);
+  });
 }
 
 /** Установленный контекст слоя соединения. */
@@ -355,12 +376,18 @@ export function setupLayerContext(
   layerId: string,
   knownKey?: string,
 ): LayerContext {
-  const chain = setupLayerChain(db, layerId);
+  // Сначала только чтение: сравнение с уже установленным контекстом не должно
+  // писать в temp (см. {@link readLayerChain} и {@link writeLayerChain}).
+  const chain = readLayerChain(db, layerId);
   const usesSnapshot = chain.length > 1;
   const key = `${usesSnapshot ? 'snapshot' : 'base'}\u0000${chain.join('>')}`;
   if (key === knownKey) {
+    // Цепочка та же: temp.layer_chain этой установки уже содержит её, а
+    // представления и снапшот собраны прошлой установкой. Свежесть данных
+    // сторожит сигнал соединения на пути чтения (`NetworkDb.prepare`).
     return { key, chain, usesSnapshot, rebuilt: false };
   }
+  writeLayerChain(db, chain);
   if (usesSnapshot) {
     ensureLayerSnapshots(db);
   }

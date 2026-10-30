@@ -78,6 +78,91 @@ function seedLink(ndb: NetworkDb): string {
   return id;
 }
 
+/**
+ * Вставить комментарий напрямую (минуя рендер markdown): стенд плана
+ * `listComments` создаёт тысячи строк, `createComment` для этого слишком дорог.
+ */
+function insertCommentRow(
+  ndb: NetworkDb,
+  id: string,
+  ownerId: string,
+  kind: 'permanent' | 'chronological',
+  body: string,
+  validFrom: string,
+): void {
+  ndb
+    .prepare(
+      `INSERT INTO comments (id, owner_type, owner_id, kind, title, body_md, body_html,
+                             valid_from, valid_to, version, created_at, updated_at,
+                             created_by, updated_by)
+       VALUES (?, 'thought', ?, ?, NULL, ?, ?, ?, ?, 1, ?, ?, 'u', 'u')`,
+    )
+    .run(id, ownerId, kind, body, `<p>${body}</p>`, validFrom, kind === 'permanent' ? null : validFrom, validFrom, validFrom);
+}
+
+/**
+ * Шум стенда: `count` комментариев с уникальными владельцами (не наш владелец).
+ * Как и в живой базе, у каждого комментария есть первичная привязка в
+ * `comment_targets` (L20: `comments.owner_*` — лишь первая из целей).
+ */
+function seedNoiseComments(ndb: NetworkDb, count: number): void {
+  const attach = ndb.prepare(
+    `INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, 'thought', ?)`,
+  );
+  ndb.transaction(() => {
+    for (let i = 0; i < count; i += 1) {
+      const id = `noise-${randomUUID()}`;
+      const ownerId = `noise-owner-${randomUUID()}`;
+      insertCommentRow(ndb, id, ownerId, 'chronological', `шум ${i}`, '2024-02-01T00:00:00.000Z');
+      attach.run(id, ownerId);
+    }
+  });
+}
+
+/**
+ * Перехватить SQL, который `listComments` готовит на этом соединении, и снять
+ * `EXPLAIN QUERY PLAN` по каждому запросу к комментариям (кроме `loadTargets`,
+ * который адресует строки по `comment_id`).
+ *
+ * Параметры подставляются литералами реального владельца: `NULL` для этой
+ * проверки негоден — со статистикой (`ANALYZE`) SQLite знает, что `col = NULL`
+ * заведомо не даёт строк, и планирует по пустому результату (скан вместо
+ * индекса). Литерал даёт ровно тот план, что исполняется на реальных bind-
+ * параметрах.
+ */
+function captureListCommentPlans(ndb: NetworkDb, ownerId: string): string[][] {
+  const captured: string[] = [];
+  const original = ndb.prepare.bind(ndb) as (sql: string) => unknown;
+  (ndb as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+    captured.push(sql);
+    return original(sql);
+  };
+  try {
+    listComments(ndb, 'thought', ownerId);
+  } finally {
+    (ndb as unknown as { prepare: (sql: string) => unknown }).prepare = original;
+  }
+  const literals = ["'thought'", `'${ownerId.replace(/'/g, "''")}'`];
+  return captured
+    .filter((sql) => /\bcomments_v\b/.test(sql) && !/\bcomment_id IN\b/.test(sql))
+    .map((sql) => {
+      let index = 0;
+      const bound = sql.replace(/\?/g, () => literals[index++ % literals.length]!);
+      return (
+        ndb.prepare(`EXPLAIN QUERY PLAN ${bound}`).all() as Array<{ detail: string }>
+      ).map((row) => row.detail);
+    });
+}
+/**
+ * «Отпечаток» плана: какие индексы/ключи используются, без конкретных
+ * оценок и порядка строк. Нужен для сравнения планов на разных объёмах —
+ * стоимость не должна зависеть от общего числа комментариев сети.
+ */
+function indexFingerprint(details: string): string {
+  const used = details.match(/(?:USING (?:COVERING )?INDEX|USING INTEGER PRIMARY KEY) [^\s|]+/g) ?? [];
+  return used.join(',');
+}
+
 describe('markdown renderer', () => {
   it('escapes raw HTML so injected tags are inert', () => {
     const html = renderMarkdown('<script>alert(1)</script>');
@@ -208,6 +293,95 @@ describe(
           list.map((c) => c.body_md),
           ['one', 'two'],
           'chronological ordered by valid_from',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    /**
+     * Регресс ошибки 46bda0e8 (корень 2): `listComments` читается клиентом на
+     * каждую видимую строку холста/дерева (N+1), и его стоимость не должна
+     * зависеть от общего числа комментариев сети.
+     *
+     * Прежний предикат `owner = ? OR EXISTS (SELECT … FROM comment_targets_v)`
+     * не даёт планировщику OR-оптимизации через temp-представление: запрос
+     * сканировал ВСЕ комментарии видимого слоя
+     * (`SEARCH t USING INDEX idx_comments_layer (layer_id=?)`). Тест
+     * перехватывает SQL, который готовит сервис, и закрепляет: выборки
+     * ведутся индексами владельца (`idx_comments_owner`/`idx_comments_chrono`
+     * и `idx_comment_targets_owner`), а план одинаков при любом объёме чужих
+     * комментариев.
+     */
+    it('listComments читает только комментарии владельца: индексы владельца, не скан слоя', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const owner = seedThought(ndb, 'Владелец');
+        const other = seedThought(ndb, 'Чужой');
+
+        // Два комментария владельца: один — первичным владельцем, второй —
+        // только m2m-целью (семантика L20 обязана сохраниться).
+        const ownId = randomUUID();
+        insertCommentRow(ndb, ownId, owner, 'chronological', 'свой', '2024-01-01T00:00:00.000Z');
+        insertCommentRow(ndb, randomUUID(), other, 'chronological', 'чужой', '2024-01-02T00:00:00.000Z');
+        const sharedId = randomUUID();
+        insertCommentRow(ndb, sharedId, other, 'chronological', 'общий', '2024-01-03T00:00:00.000Z');
+        ndb
+          .prepare(
+            `INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, 'thought', ?)`,
+          )
+          .run(sharedId, owner);
+
+        seedNoiseComments(ndb, 50);
+        // Статистика планировщика — часть контракта (требование 239be851):
+        // живая база получает её на открытии после миграций и поддерживает
+        // `PRAGMA optimize` при закрытии соединения. Без статистики SQLite
+        // оценивает `idx_comments_layer` ниже owner-индексов и выбирает
+        // перебор слоя — тест закрепляет план при НОРМАЛЬНОЙ статистике.
+        // Малые объёмы не показательны (скан крошечной таблицы дешевле
+        // индекса), поэтому план проверяется на объёмах живой сети.
+        seedNoiseComments(ndb, 5000);
+        ndb.exec('ANALYZE');
+        const list = listComments(ndb, 'thought', owner);
+        const plans = captureListCommentPlans(ndb, owner);
+
+        assert.deepEqual(
+          list.map((c) => c.id),
+          [ownId, sharedId],
+          'владелец видит свой комментарий и комментарий, привязанный целью',
+        );
+
+        const details = plans.flat().join(' | ');
+        assert.ok(
+          !/USING (?:COVERING )?INDEX idx_comments_layer \(layer_id=\?\)/.test(details),
+          `listComments не должен перебирать комментарии слоя: ${details}`,
+        );
+        assert.ok(
+          plans.some((plan) =>
+            plan.some((d) =>
+              /USING (?:COVERING )?INDEX idx_comments_(?:owner|chrono) \(owner_type=\? AND owner_id=\?\)/.test(d),
+            ),
+          ),
+          `выборка владельца обязана идти индексом владельца: ${details}`,
+        );
+        assert.ok(
+          plans.some((plan) =>
+            plan.some((d) =>
+              /USING (?:COVERING )?INDEX idx_comment_targets_owner \(owner_type=\? AND owner_id=\?\)/.test(d),
+            ),
+          ),
+          `выборка по m2m-целям обязана идти idx_comment_targets_owner: ${details}`,
+        );
+
+        // План не зависит от объёма: ещё 15 тыс. чужих комментариев дают те же
+        // индексы (проверка «стоимость не зависит от числа комментариев сети»).
+        seedNoiseComments(ndb, 15_000);
+        ndb.exec('ANALYZE');
+        const grownDetails = captureListCommentPlans(ndb, owner).flat().join(' | ');
+        assert.equal(
+          indexFingerprint(grownDetails),
+          indexFingerprint(details),
+          `план изменился от объёма: было «${details}», стало «${grownDetails}»`,
         );
       } finally {
         ndb.close();
