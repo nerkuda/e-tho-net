@@ -28,9 +28,14 @@
  * `starting`, `health-check`, `rolling-back` выполняет сам установщик
  * (`bb063ac3`): служба в это время остановлена, и сервер физически не может их
  * записать. Поэтому последний подтверждённый этап перед остановкой службы —
- * `backing-up`; после перезапуска задание читается как `failed` с причиной,
- * называющей этот этап (инвариант сущности: незавершённое задание `failed` и
- * автоматически не возобновляется).
+ * `backing-up`, и нормальный успешный исход сервер сам зафиксировать не может:
+ * установщик убивает его вместе со службой. Итог восстанавливается при старте
+ * нового процесса ({@link recoverInterruptedUpdateJobs}): если запущенная
+ * версия сервера (`SERVER_VERSION`) равна целевой версии задания или новее —
+ * файлы заменены и служба поднята, задание читается как `done`; иначе (цель не
+ * достигнута: откат, ручной перезапуск на старой версии, непригодный
+ * `target_version`) — `failed` с причиной, называющей последний этап. В обоих
+ * случаях задание становится терминальным и автоматически не возобновляется.
  *
  * Single-flight. Второй `apply` получает `409` с текущим заданием. После
  * {@link InstallerTimeoutError} установщик намеренно оставлен работать (он может
@@ -51,6 +56,7 @@ import type { UpdateJob, UpdateJobStage } from '@etn/shared';
 import type { Logger } from '../logger.js';
 import type { SystemDb, UpdateJobRow } from '../db/system-db.js';
 import type { MaintenanceService } from '../maintenance.js';
+import { SERVER_VERSION } from '../version.js';
 import type { UpdateCache } from './checker.js';
 import { DOCKER_APPLY_UNAVAILABLE_MESSAGE, type Deployment } from './deployment.js';
 import {
@@ -212,6 +218,12 @@ export interface UpdateApplyServiceOptions {
   /** Часы (тесты); по умолчанию системное время. */
   now?: () => Date;
   /**
+   * Версия запущенного сервера для восстановления итога задания; по умолчанию
+   * {@link SERVER_VERSION}. Подменяется тестами, чтобы проверить сравнение с
+   * `target_version` независимо от версии репозитория.
+   */
+  serverVersion?: string;
+  /**
    * Настройки runner'а установщика (тесты подменяют HTTP-клиент, процесс и
    * каталоги). `spawnImpl` оборачивается сервисом для флага «installer alive»,
    * `beforeLaunch` задаёт сам сервис.
@@ -251,8 +263,16 @@ export interface UpdateApplyService {
 }
 
 /**
- * Единый текст причины восстановления после перезапуска: инвариант сущности —
- * незавершённое задание читается как `failed`, этап называет, где остановились.
+ * Причина восстановления успешного задания: установщик остановил службу до
+ * замены файлов и убил сервер, поэтому `done` пишет не установщик и не старый
+ * процесс, а восстановление при старте новой версии. Текст кладётся в поле
+ * `error` задания единственным доступным пояснением итога; клиент показывает
+ * `error` только у этапа `failed`, поэтому у `done` это справочная строка.
+ */
+const RECOVERED_DONE_MESSAGE_PREFIX = 'Обновление завершено после перезапуска';
+/**
+ * Единый текст причины восстановления после перезапуска при недостигнутой
+ * цели: этап называет, где остановились; задание не возобновляется.
  */
 function interruptedJobMessage(stage: string): string {
   return (
@@ -262,16 +282,51 @@ function interruptedJobMessage(stage: string): string {
 }
 
 /**
- * Перевести незавершённые задания в `failed` — вызывается при создании сервиса,
- * т.е. при старте процесса сервера (служба поднялась после остановки
- * установщиком либо администратор перезапустил её вручную). Возвращает число
- * заданий, переведённых в `failed`.
+ * Итог незавершённого задания при старте процесса сервера.
+ *
+ * `done` пишет восстановление, а не исполнитель: установщик останавливает
+ * службу до замены файлов (`installer/etn.iss`, `bb063ac3`) и убивает процесс
+ * сервера, поэтому штатный `done` из `runJob` не успевает записаться. Признак
+ * успеха — достигнутая версия: текущая версия сервера равна `target_version`
+ * задания или новее, значит файлы заменены и служба поднялась. Цель не
+ * достигнута (откат, перезапуск на старой версии) или `target_version`
+ * непригодна — `failed`, как раньше.
+ */
+function classifyInterruptedJob(
+  row: UpdateJobRow,
+  serverVersion: string,
+  nowIso: string,
+): { stage: 'done' | 'failed'; error: string | null } {
+  const order = compareSemver(serverVersion, row.target_version);
+  if (order !== null && order >= 0) {
+    return {
+      stage: 'done',
+      error:
+        `${RECOVERED_DONE_MESSAGE_PREFIX}: сервер запущен на версии ${serverVersion}, ` +
+        `целевая версия задания ${row.target_version}; итог восстановлен при старте в ${nowIso}.`,
+    };
+  }
+  return { stage: 'failed', error: interruptedJobMessage(row.stage) };
+}
+
+/**
+ * Завершить незавершённые задания обновления при старте процесса сервера —
+ * вызывается при создании сервиса, т.е. когда служба поднялась после остановки
+ * установщиком либо администратор перезапустил её вручную. Итог каждого
+ * задания решает {@link classifyInterruptedJob} по достигнутой версии
+ * (`serverVersion`, по умолчанию {@link SERVER_VERSION}) и `target_version`;
+ * в обоих случаях пишется время завершения. Возвращает число завершённых
+ * заданий.
  */
 export function recoverInterruptedUpdateJobs(
   systemDb: SystemDb,
   now: () => Date = () => new Date(),
+  serverVersion: string = SERVER_VERSION,
 ): number {
-  return systemDb.failInterruptedUpdateJobs(now().toISOString(), interruptedJobMessage);
+  const nowIso = now().toISOString();
+  return systemDb.recoverInterruptedUpdateJobs(nowIso, (row) =>
+    classifyInterruptedJob(row, serverVersion, nowIso),
+  );
 }
 
 /** Строка хранилища → DTO сущности; неизвестный этап читается как `failed`. */
@@ -313,13 +368,15 @@ export function createUpdateApplyService(
   const now = options.now ?? (() => new Date());
   const logger = options.logger;
   const runnerOptions = options.runnerOptions ?? {};
+  const serverVersion = options.serverVersion ?? SERVER_VERSION;
 
   // Создание сервиса = старт процесса сервера: активных заданий прошлого
-  // процесса быть не может (службу останавливал установщик), поэтому они
-  // переводятся в `failed` и не возобновляются — инвариант сущности 1f39811c.
-  const recovered = recoverInterruptedUpdateJobs(systemDb, now);
+  // процесса быть не может (службу останавливал установщик). Итог решает
+  // достигнутая версия: `done`, если сервер поднялся на целевой версии или
+  // новее, иначе `failed`; задание не возобновляется (сущность 1f39811c).
+  const recovered = recoverInterruptedUpdateJobs(systemDb, now, serverVersion);
   if (recovered > 0) {
-    logger?.warn({ count: recovered }, 'update job: незавершённые задания помечены failed');
+    logger?.warn({ count: recovered }, 'update job: незавершённые задания завершены при старте');
   }
 
   /**

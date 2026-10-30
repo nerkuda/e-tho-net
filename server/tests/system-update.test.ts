@@ -880,6 +880,50 @@ describe('задание обновления — перезапуск серв�
       await closeRestContext(ctx);
     }
   });
+
+  it('задание с достигнутой целевой версией после перезапуска читается как done', async () => {
+    // Установщик останавливает службу до замены файлов и убивает сервер,
+    // поэтому `done` успешного обновления восстанавливается при следующем
+    // старте по версии: текущая версия равна целевой версии задания.
+    const harness = makeRunnerHarness();
+    const ctx = await buildUpdateContext(harness);
+    try {
+      await primeCache(ctx);
+      ctx.sys.createUpdateJob({
+        id: 'completed-job-after-restart',
+        targetVersion: SERVER_VERSION,
+        stage: 'backing-up',
+        startedAt: '2026-10-30T10:00:00.000Z',
+      });
+      // До «перезапуска» задание ещё активно.
+      assert.equal(ctx.app.updateApply.getProgress()?.stage, 'backing-up');
+
+      // Новый процесс сервера на той же БД: восстановление при создании сервиса.
+      const second = await createServer({
+        config: testServerConfig(ctx.dataDir, {
+          deployment: 'windows-service',
+          update: { ...DEFAULT_UPDATE_CONFIG, feedUrl: FEED_URL },
+        }),
+        systemDb: ctx.sys,
+        logger: createLogger('silent'),
+      });
+      try {
+        const job = second.updateApply.getProgress();
+        assert.ok(job !== null);
+        assert.equal(job!.stage, 'done');
+        assert.match(job!.error ?? '', /завершено после перезапуска/);
+        assert.equal(second.updateApply.isJobRunning(), false);
+        assert.equal(ctx.sys.getActiveUpdateJob(), null);
+        const row = ctx.sys.getUpdateJob('completed-job-after-restart');
+        assert.ok(row !== null);
+        assert.notEqual(row!.finished_at, null);
+      } finally {
+        await second.close();
+      }
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1208,6 +1252,11 @@ describe('задание обновления — конфликты верси�
 });
 
 describe('задание обновления — восстановление', { skip: !nativeAvailable() }, () => {
+  /** Фиксированные часы восстановления. */
+  const recoveredAt = () => new Date('2026-10-30T11:00:00.000Z');
+  /** Время восстановления в ISO-виде — попадает в `finished_at`. */
+  const RECOVERED_AT_ISO = '2026-10-30T11:00:00.000Z';
+
   it('recoverInterruptedUpdateJobs переводит активные задания в failed и сохраняет этап в причине', () => {
     const sys = makeSystemDb();
     try {
@@ -1217,6 +1266,7 @@ describe('задание обновления — восстановление',
         stage: 'backing-up',
         startedAt: '2026-10-30T10:00:00.000Z',
       });
+      // TARGET_VERSION строго новее текущей версии — цель не достигнута.
       assert.equal(recoverInterruptedUpdateJobs(sys), 1);
       const row = sys.getUpdateJob('interrupted');
       assert.ok(row !== null);
@@ -1225,6 +1275,89 @@ describe('задание обновления — восстановление',
       assert.notEqual(row!.finished_at, null);
       // Повторный вызов ничего не меняет: терминальные не трогаются.
       assert.equal(recoverInterruptedUpdateJobs(sys), 0);
+    } finally {
+      sys.close();
+    }
+  });
+
+  it('целевая версия достигнута (равна текущей) — задание восстанавливается как done', () => {
+    const sys = makeSystemDb();
+    try {
+      sys.createUpdateJob({
+        id: 'reached-target',
+        targetVersion: '0.16.0',
+        stage: 'backing-up',
+        startedAt: '2026-10-30T10:00:00.000Z',
+      });
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, '0.16.0'), 1);
+      const row = sys.getUpdateJob('reached-target');
+      assert.ok(row !== null);
+      assert.equal(row!.stage, 'done');
+      assert.match(row!.error ?? '', /завершено после перезапуска/);
+      assert.equal(row!.finished_at, RECOVERED_AT_ISO);
+      assert.equal(sys.getActiveUpdateJob(), null);
+      // Терминальное задание повторное восстановление не трогает.
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, '0.16.0'), 0);
+    } finally {
+      sys.close();
+    }
+  });
+
+  it('текущая версия новее целевой — задание тоже done', () => {
+    const sys = makeSystemDb();
+    try {
+      sys.createUpdateJob({
+        id: 'older-target',
+        targetVersion: '0.15.0',
+        stage: 'backing-up',
+        startedAt: '2026-10-30T10:00:00.000Z',
+      });
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, '0.16.0'), 1);
+      const row = sys.getUpdateJob('older-target');
+      assert.ok(row !== null);
+      assert.equal(row!.stage, 'done');
+      assert.match(row!.error ?? '', /завершено после перезапуска/);
+      assert.equal(row!.finished_at, RECOVERED_AT_ISO);
+    } finally {
+      sys.close();
+    }
+  });
+
+  it('задание без пригодной целевой версии — failed, как раньше', () => {
+    const sys = makeSystemDb();
+    try {
+      sys.createUpdateJob({
+        id: 'no-target',
+        targetVersion: '',
+        stage: 'preparing',
+        startedAt: '2026-10-30T10:00:00.000Z',
+      });
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, '0.16.0'), 1);
+      const row = sys.getUpdateJob('no-target');
+      assert.ok(row !== null);
+      assert.equal(row!.stage, 'failed');
+      assert.match(row!.error ?? '', /preparing/);
+      assert.match(row!.error ?? '', /перезапущен/);
+      assert.equal(row!.finished_at, RECOVERED_AT_ISO);
+    } finally {
+      sys.close();
+    }
+  });
+
+  it('неразбираемая целевая версия — failed, а не ложный done', () => {
+    const sys = makeSystemDb();
+    try {
+      sys.createUpdateJob({
+        id: 'garbage-target',
+        targetVersion: 'not-a-version',
+        stage: 'installing',
+        startedAt: '2026-10-30T10:00:00.000Z',
+      });
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, '0.16.0'), 1);
+      const row = sys.getUpdateJob('garbage-target');
+      assert.ok(row !== null);
+      assert.equal(row!.stage, 'failed');
+      assert.match(row!.error ?? '', /installing/);
     } finally {
       sys.close();
     }

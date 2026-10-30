@@ -529,9 +529,10 @@ export class SystemDb {
     );
     // Задание обновления сервера (таблица `update_jobs`, задача 0a27a63b):
     // терминальные этапы сущности 1f39811c — `done` и `failed`; всё остальное
-    // считается активным (в т.ч. неизвестное значение — его добьёт восстановление
-    // после старта). Одновременно активным может быть не более одного задания;
-    // это держит синхронная пара «проверка + вставка» в update/apply.ts.
+    // считается активным (в т.ч. неизвестное значение — его завершит
+    // восстановление после старта: `done` по достигнутой версии либо `failed`).
+    // Одновременно активным может быть не более одного задания; это держит
+    // синхронная пара «проверка + вставка» в update/apply.ts.
     this.stInsertUpdateJob = db.prepare(
       `INSERT INTO update_jobs
          (id, target_version, stage, started_at, updated_at, finished_at, error, backup_path)
@@ -1496,24 +1497,31 @@ export class SystemDb {
   }
 
   /**
-   * Перевести незавершённые задания в `failed` (инвариант сущности: после
-   * перезапуска сервера незавершённое задание считается `failed` и
-   * автоматически не возобновляется). `messageFor` получает последний
-   * записанный этап, чтобы причина называла, где остановилось обновление.
-   * Возвращает число переведённых заданий.
+   * Завершить незавершённые задания обновления — по одному итогу на задание,
+   * одной транзакцией (терминальные не трогаются). Итог решает домен
+   * (`update/apply.ts`): хранилище не знает semver и версий, поэтому
+   * `outcomeFor` получает строку целиком (включая `target_version`,
+   * `stage`, `backup_path`) и возвращает терминальный этап и пояснение.
+   * `nowIso` пишется и в `updated_at`, и в `finished_at`: завершённое задание
+   * не может остаться с пустым временем завершения.
+   * Возвращает число завершённых заданий.
    */
-  failInterruptedUpdateJobs(nowIso: string, messageFor: (stage: string) => string): number {
+  recoverInterruptedUpdateJobs(
+    nowIso: string,
+    outcomeFor: (row: UpdateJobRow) => { stage: 'done' | 'failed'; error: string | null },
+  ): number {
     const rows = this.stListActiveUpdateJobs.all() as UpdateJobRow[];
     if (rows.length === 0) {
       return 0;
     }
     this.transaction(() => {
       for (const row of rows) {
+        const outcome = outcomeFor(row);
         this.stUpdateUpdateJob.run(
-          'failed',
+          outcome.stage,
           nowIso,
           nowIso,
-          messageFor(row.stage),
+          outcome.error,
           row.backup_path,
           row.id,
         );
