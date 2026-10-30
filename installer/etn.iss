@@ -463,8 +463,13 @@ var
   GExitCode: Integer;
   GChildResult: Integer;
   { Архив БД, созданный последним вызовом CreateDatabaseBackup ('' — архива
-    нет). Вызывающему нужен путь для сообщения об отказе/откате. }
+    нет). Вызывающему нужен путь для сообщения об отказе/откате. Откат БД
+    восстанавливает только из него: LatestBackupDir — архив прошлых
+    обновлений, для автоматического отката он не годится (bb063ac3). }
   GLastBackupDir: String;
+  { Причина неудачного бэкапа — для сообщения (сценарий bc7cc846: причина,
+    требуемый объём, путь к журналу). }
+  GBackupReason: String;
   { Снимок отката текущего обновления (.install\rollback\<timestamp>) и
     последняя причина сбоя health-check для журнала и экрана ошибки. }
   GLastRollbackDir: String;
@@ -1681,16 +1686,24 @@ begin
   end;
 end;
 
+procedure WriteReasonFile(const Text: String);
+begin
+  { Причина отказа — родителю в двухфазном UAC. Файл тот же, что у
+    предусловий (GReasonFile), и читается по любому ненулевому коду дочернего
+    процесса. Перезаписывается после отката: родитель должен увидеть не
+    только причину, но и итог отката (bb063ac3). }
+  if GReasonFile <> '' then
+    SaveStringToFile(GReasonFile, Utf8Encode(Text), False);
+end;
+
 procedure FailInstall(const Reason: String);
 begin
   GExitCode := EXIT_FAILED;
   if GFailureReason = '' then GFailureReason := Reason;
   LogLine('ERROR', 'Сбой: ' + Reason + ' (код 10)');
   { Причина сбоя — родителю в двухфазном UAC: иначе он покажет только «код 10».
-    Файл тот же, что у предусловий (GReasonFile), и читается по любому
-    ненулевому коду дочернего процесса. }
-  if GReasonFile <> '' then
-    SaveStringToFile(GReasonFile, Utf8Encode(Reason), False);
+    После отката файл перезаписывается полным текстом (WriteReasonFile). }
+  WriteReasonFile(Reason);
 end;
 
 { ---------------------------------------------------------------------------
@@ -2882,6 +2895,15 @@ begin
   LogLine('ERROR', 'Health-check ' + HealthBaseUrl + ': сбой — ' + GHealthReason);
 end;
 
+{ Применим ли health-check в этом режиме. В режиме app службу никто не
+  запускает (её нет): сервер поднимает пользователь, поэтому опрос HTTP
+  гарантированно истёк бы и обновление уходило в откат (замечание приёмки
+  bb063ac3). }
+function HealthCheckApplicable: Boolean;
+begin
+  Result := GServerMode <> 'app';
+end;
+
 { ---------------------------------------------------------------------------
   Бэкап баз данных перед заменой файлов — задача ce3ab836.
 
@@ -2972,6 +2994,46 @@ begin
   finally
     FindClose(FindRec);
   end;
+end;
+
+{ Объём баз данных, которые копирует архив: _system.db и
+  networks\<uuid>\data.db. Нужен сообщению о неудачном бэкапе (bc7cc846:
+  причина + требуемый объём + путь к журналу). }
+function DatabaseBackupSizeBytes: Int64;
+var
+  NetworksDir, Src: String;
+  FindRec: TFindRec;
+  Size, Total: Int64;
+begin
+  Total := 0;
+  Src := GDataDir + '\_system.db';
+  if FileExists(Src) and FileSize64(Src, Size) then Total := Total + Size;
+  NetworksDir := GDataDir + '\networks';
+  if DirExists(NetworksDir) and FindFirst(NetworksDir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        if IsRealSubdir(FindRec) then
+        begin
+          Src := NetworksDir + '\' + FindRec.Name + '\data.db';
+          if FileExists(Src) and FileSize64(Src, Size) then Total := Total + Size;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+  Result := Total;
+end;
+
+function FormatSizeBytes(const Bytes: Int64): String;
+begin
+  if Bytes >= 1073741824 then
+    Result := Format('%.1f ГБ', [Bytes / 1073741824.0])
+  else if Bytes >= 1048576 then
+    Result := Format('%.1f МБ', [Bytes / 1048576.0])
+  else
+    Result := IntToStr((Bytes + 1023) div 1024) + ' КБ';
 end;
 
 { Самый старый архив по имени (имена — нумерованные метки времени, поэтому
@@ -3238,6 +3300,7 @@ var
 begin
   Result := False;
   GLastBackupDir := '';
+  GBackupReason := '';
   if not Needed then
   begin
     LogLine('INFO', 'Бэкап БД: смена версии не требуется (ремонт) — архив не создаётся');
@@ -3258,6 +3321,8 @@ begin
   SetInstallStage('Резервная копия баз данных…');
   if not ForceDirectories(BackupsDir) then
   begin
+    GBackupReason := 'каталог архивов не создан: ' + BackupsDir +
+      ' (нет прав или свободного места)';
     LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архивов ' + BackupsDir +
       ' (нет прав или места) — обновление отменяется');
     Exit;
@@ -3266,6 +3331,8 @@ begin
   ArchiveDir := BackupsDir + '\' + ArchiveName;
   if not ForceDirectories(ArchiveDir) then
   begin
+    GBackupReason := 'каталог архива не создан: ' + ArchiveDir +
+      ' (нет прав или свободного места)';
     LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + ArchiveDir +
       ' (нет прав или места) — обновление отменяется');
     Exit;
@@ -3273,6 +3340,8 @@ begin
   LogLine('INFO', 'Бэкап БД: создаётся архив ' + ArchiveDir);
   if not CopyDatabasesInto(ArchiveDir, Copied) then
   begin
+    GBackupReason := 'копирование или проверка целостности баз не удалось: ' +
+      ArchiveDir;
     if DelTree(ArchiveDir, True, True, True) then
       LogLine('ERROR', 'Бэкап БД: неудачный архив удалён: ' + ArchiveDir)
     else
@@ -3292,8 +3361,10 @@ end;
   Снимок — единственная резервная копия программы для отката: каталог
   %ProgramData%\ETN\.install\rollback\<timestamp> с копиями server и service
   (данные не копируются — для них есть архив ce3ab836). Создаётся до
-  копирования файлов; после успешного обновления удаляется, при отказе
-  остаётся точкой ручного восстановления до следующего успешного обновления.
+  копирования файлов; после успешного обновления удаляется вместе со старыми
+  снимками, при отказе остаётся единственной точкой ручного восстановления
+  до следующего успешного обновления (замечание приёмки: старые снимки не
+  накапливаются).
   --------------------------------------------------------------------------- }
 function RollbackRoot: String;
 begin
@@ -3362,8 +3433,39 @@ begin
   end;
 end;
 
+{ Удаление старых снимков отката: хранится только копия текущего запуска
+  (её заменяет следующий снимок), после успеха — ни одной (замечание приёмки
+  bb063ac3). Чужие каталоги (имя не по формату снимка) не трогаются. }
+procedure CleanupRollbackSnapshotsExcept(const KeepDir: String);
+var
+  Root, Dir: String;
+  FindRec: TFindRec;
+begin
+  Root := RollbackRoot;
+  if not DirExists(Root) then Exit;
+  if not FindFirst(Root + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
+      begin
+        Dir := Root + '\' + FindRec.Name;
+        if CompareText(Dir, KeepDir) <> 0 then
+        begin
+          if DelTree(Dir, True, True, True) then
+            LogLine('INFO', 'Снимок отката: старый удалён: ' + Dir)
+          else
+            LogLine('WARN', 'Снимок отката: не удалось удалить старый ' + Dir);
+        end;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
 { Снимок перед заменой файлов. False — копию сделать не удалось: файлы
-  заменять нельзя, обновление останавливается. }
+  заменять нельзя, обновление останавливается. Неудачный (частичный) снимок
+  удаляется, старые снимки — тоже: остаётся только копия этого запуска. }
 function CreateRollbackSnapshot: Boolean;
 var
   Dir, Name: String;
@@ -3388,21 +3490,82 @@ begin
   begin
     LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
       '\server в ' + Dir);
+    DelTree(Dir, True, True, True);
     Exit;
   end;
   if not CopyTreeRec(GServerDir + '\service', Dir + '\service') then
   begin
     LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
       '\service в ' + Dir);
+    DelTree(Dir, True, True, True);
     Exit;
   end;
   GLastRollbackDir := Dir;
   LogLine('INFO', 'Снимок отката: создан ' + GLastRollbackDir);
+  { Снимок один: копия прошлого обновления больше не нужна. }
+  CleanupRollbackSnapshotsExcept(GLastRollbackDir);
+  Result := True;
+end;
+
+{ Подмена каталога программы содержимым снимка. Копирование поверх оставляло
+  бы файлы новой версии (dist\cli.js, новые миграции, новые зависимости), и
+  прежняя версия применила бы их к восстановленной БД. Поэтому старый каталог
+  сначала переименовывается рядом (или удаляется, если переименовать нельзя),
+  и только затем на его место копируется снимок — состав файлов совпадает со
+  снимком побайтово (замечание приёмки bb063ac3). }
+function ReplaceTreeFromSnapshot(const Src, Dest, Tag: String): Boolean;
+var
+  OldDir: String;
+  Swapped: Boolean;
+begin
+  Result := False;
+  OldDir := Dest + '.rollback-' + Tag;
+  Swapped := False;
+  if DirExists(Dest) then
+  begin
+    { Хвост прошлой неудачной подмены — убрать, иначе переименование не пройдёт. }
+    if DirExists(OldDir) and (not DelTree(OldDir, True, True, True)) then
+    begin
+      LogLine('ERROR', 'Откат файлов: не удалось удалить ' + OldDir +
+        ' перед возвратом ' + Dest);
+      Exit;
+    end;
+    { MoveFileExW — переименование каталога в пределах тома; цель рядом,
+      поэтому том тот же. }
+    Swapped := MoveFileExW(Dest, OldDir, 0);
+    if not Swapped then
+    begin
+      LogLine('WARN', 'Откат файлов: ' + Dest +
+        ' не переименован — удаляется напрямую');
+      if not DelTree(Dest, True, True, True) then
+      begin
+        LogLine('ERROR', 'Откат файлов: не удалось удалить ' + Dest +
+          ' перед возвратом из снимка');
+        Exit;
+      end;
+    end;
+  end;
+  if DirExists(Src) then
+  begin
+    if not CopyTreeRec(Src, Dest) then
+    begin
+      LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + Dest + ' из снимка' +
+        IfStr(Swapped, '; прежний каталог сохранён как ' + OldDir, ''));
+      Exit;
+    end;
+  end;
+  if Swapped and DirExists(OldDir) then
+  begin
+    if not DelTree(OldDir, True, True, True) then
+      LogLine('WARN', 'Откат файлов: не удалось удалить ' + OldDir +
+        ' (файлы новой версии) — удалите вручную');
+  end;
   Result := True;
 end;
 
 { Возврат файлов программы из снимка. Служба к этому моменту остановлена:
-  иначе занятые файлы не перезаписать. }
+  иначе занятые файлы не перезаписать. Каталоги server и service подменяются
+  целиком: файл, которого не было в снимке, после отката отсутствует. }
 function RestoreInstallFiles: Boolean;
 begin
   Result := False;
@@ -3419,12 +3582,14 @@ begin
     Result := True;
     Exit;
   end;
-  if not CopyTreeRec(GLastRollbackDir + '\server', GServerDir + '\server') then
+  if not ReplaceTreeFromSnapshot(GLastRollbackDir + '\server',
+    GServerDir + '\server', 'server') then
   begin
     LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\server');
     Exit;
   end;
-  if not CopyTreeRec(GLastRollbackDir + '\service', GServerDir + '\service') then
+  if not ReplaceTreeFromSnapshot(GLastRollbackDir + '\service',
+    GServerDir + '\service', 'service') then
   begin
     LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\service');
     Exit;
@@ -3434,8 +3599,12 @@ begin
 end;
 
 { Восстановление БД из архива ce3ab836: _system.db и networks\<uuid>\data.db.
-  Журналы WAL/SHM текущих файлов удаляются до копирования — иначе SQLite
-  применил бы записи неудачного запуска поверх восстановленной копии. }
+  Только из архива ЭТОГО запуска (GLastBackupDir). LatestBackupDir — самый
+  свежий архив прошлых обновлений: он не отражает состояние базы на момент
+  остановки службы, и подставлять его в автоматический откат нельзя (потеря
+  данных, блокер приёмки bb063ac3). Журналы WAL/SHM текущих файлов удаляются
+  до копирования — иначе SQLite применил бы записи неудачного запуска поверх
+  восстановленной копии. }
 function RestoreDatabaseFromBackup: Boolean;
 var
   Archive, Src, Dest, NetworksDir: String;
@@ -3443,10 +3612,11 @@ var
 begin
   Result := False;
   Archive := GLastBackupDir;
-  if Archive = '' then Archive := LatestBackupDir;
   if Archive = '' then
   begin
-    LogLine('WARN', 'Откат БД: архива нет — база не восстанавливается');
+    LogLine('WARN', 'Откат БД: архив в этом запуске не создавался — база ' +
+      'оставлена как есть; изменения, сделанные после остановки службы, ' +
+      'восстановить невозможно');
     Result := True;
     Exit;
   end;
@@ -3499,10 +3669,12 @@ begin
 end;
 
 { Откат после неудачного обновления: остановить службу, вернуть файлы из
-  снимка, восстановить БД из архива, запустить прежнюю версию и повторить
-  health-check (без требования целевой версии — работает же прежняя).
-  Возвращает True, когда файлы и БД восстановлены; причина неудачи отката
-  дописывается в GFailureReason вместе с путями к архиву, снимку и журналу. }
+  снимка, восстановить БД из архива этого запуска, запустить прежнюю версию
+  и повторить health-check (без требования целевой версии — работает же
+  прежняя). Возвращает True, когда файлы и БД восстановлены; причина неудачи
+  отката дописывается в GFailureReason вместе с путями к архиву, снимку и
+  журналу и прямым указанием, что записи после остановки службы теряются
+  (сценарий ed2e42df). }
 function RollbackAfterFailure: Boolean;
 var
   Reason, Archive, Detail: String;
@@ -3523,7 +3695,6 @@ begin
   FilesOk := RestoreInstallFiles;
   DbOk := RestoreDatabaseFromBackup;
   Archive := GLastBackupDir;
-  if Archive = '' then Archive := LatestBackupDir;
   Detail := '';
   if not FilesOk then Detail := 'файлы не восстановлены';
   if not DbOk then
@@ -3534,10 +3705,21 @@ begin
   if FilesOk and DbOk then
   begin
     LogLine('INFO', 'Откат выполнен: файлы возвращены из ' + GLastRollbackDir +
-      IfStr(Archive = '', '; архив БД не создавался', '; БД восстановлена из ' + Archive));
+      IfStr(Archive = '', '; архив БД не создавался — база оставлена как есть',
+        '; БД восстановлена из ' + Archive));
     GFailureReason := GFailureReason + '. Откат выполнен: файлы возвращены из ' +
       GLastRollbackDir +
-      IfStr(Archive = '', '', ', база восстановлена из ' + Archive) + '.';
+      IfStr(Archive = '', ', архив БД не создавался — база оставлена как есть',
+        ', база восстановлена из ' + Archive) + '.';
+    { Окно потерь (сценарий ed2e42df): архив создаётся после остановки службы
+      и до замены файлов, поэтому записи неудачного запуска не сохраняются. }
+    if Archive = '' then
+      GFailureReason := GFailureReason +
+        ' Изменения, сделанные в базу после остановки службы, восстановить невозможно.'
+    else
+      GFailureReason := GFailureReason +
+        ' Данные, записанные после создания архива (неудачный запуск), ' +
+        'потеряны.';
     Result := True;
   end
   else
@@ -3547,11 +3729,16 @@ begin
       GLastRollbackDir + '; журнал: ' + GLogPath);
     GFailureReason := GFailureReason + '. Откат не выполнен (' + Detail +
       '). Архив: ' + IfStr(Archive = '', 'не создавался', Archive) +
-      '. Снимок: ' + GLastRollbackDir + '. Журнал: ' + GLogPath + '.';
+      '. Снимок: ' + GLastRollbackDir + '. Журнал: ' + GLogPath +
+      '. Данные, записанные после остановки службы, могут быть потеряны: ' +
+      'восстановите базу из архива вручную (инструкция в журнале).';
   end;
   if not StartServiceIfNeeded then
     LogLine('WARN', 'Откат: служба не запустилась');
-  if ProbeHealth(False) then
+  if not HealthCheckApplicable then
+    LogLine('INFO', 'Откат: режим app — health-check не выполняется ' +
+      '(сервер запускается пользователем)')
+  else if ProbeHealth(False) then
     LogLine('INFO', 'Откат: прежняя версия отвечает на health-check')
   else
     LogLine('WARN', 'Откат: прежняя версия не отвечает (' + GHealthReason + ')');
@@ -3612,8 +3799,12 @@ begin
     { Подпись этапа «Резервная копия баз данных…» ставит CreateDatabaseBackup. }
     if not CreateDatabaseBackup(True) then
     begin
-      Reason := 'резервная копия баз данных не создана: ' + GDataDir +
-        '\backups — обновление отменено, файлы не заменялись (причина в журнале)';
+      { Сценарий bc7cc846: причина, требуемый объём и путь к журналу. }
+      Reason := 'резервная копия баз данных не создана: ' +
+        IfStr(GBackupReason = '', 'причина в журнале', GBackupReason) +
+        '; требуется свободного места: ' + FormatSizeBytes(DatabaseBackupSizeBytes) +
+        ' (' + GDataDir + '\backups); журнал: ' + GLogPath +
+        ' — обновление отменено, файлы не заменялись';
       { Служба уже остановлена — возвращаем её: сервер обязан работать на
         прежней версии (сценарий bc7cc846). }
       if not StartServiceIfNeeded then
@@ -3633,20 +3824,31 @@ begin
   end;
 end;
 
-{ Успешное обновление: копия отката больше не нужна. Ошибка удаления
-  установку не отменяет — снимок остаётся до следующего успешного обновления. }
+{ Успешное обновление: копия отката больше не нужна — удаляется вместе со
+  всеми прежними снимками (хранится только копия последнего запуска).
+  Ошибка удаления установку не отменяет — снимок остаётся точкой ручного
+  восстановления. }
 procedure CleanupRollbackSnapshot;
+var
+  Keep: String;
 begin
-  if GLastRollbackDir = '' then Exit;
-  if DelTree(GLastRollbackDir, True, True, True) then
+  Keep := '';
+  if GLastRollbackDir <> '' then
   begin
-    LogLine('INFO', 'Снимок отката удалён после успешного обновления: ' +
-      GLastRollbackDir);
-    GLastRollbackDir := '';
-  end
-  else
-    LogLine('WARN', 'Снимок отката не удалось удалить: ' + GLastRollbackDir +
-      ' — оставлен до следующего успешного обновления');
+    if DelTree(GLastRollbackDir, True, True, True) then
+    begin
+      LogLine('INFO', 'Снимок отката удалён после успешного обновления: ' +
+        GLastRollbackDir);
+      GLastRollbackDir := '';
+    end
+    else
+    begin
+      Keep := GLastRollbackDir;
+      LogLine('WARN', 'Снимок отката не удалось удалить: ' + GLastRollbackDir +
+        ' — оставлен до следующего успешного обновления');
+    end;
+  end;
+  CleanupRollbackSnapshotsExcept(Keep);
 end;
 
 { ---------------------------------------------------------------------------
@@ -3662,8 +3864,7 @@ begin
     экземпляр показывает её в сообщении вместо «смотрите журнал» (9b310991).
     Кодировка UTF-8: причину читают и установщик, и тесты — кириллица не
     должна зависеть от системной кодовой страницы. }
-  if GReasonFile <> '' then
-    SaveStringToFile(GReasonFile, Utf8Encode(Reason), False);
+  WriteReasonFile(Reason);
   { Немедленный выход до записи хоть чего-нибудь в каталог программы и данных.
     GetCustomSetupExitCode в Inno не вызывается, если Setup завершается до
     мастера, поэтому контрактный код отдаётся напрямую. }
@@ -4318,19 +4519,35 @@ begin
   if WizardForm <> nil then WizardForm.Close;
 end;
 
+{ Архив для экрана ошибки/сводки. Показывается только архив этого запуска;
+  архив прошлых обновлений помечается явно: он не отражает состояние базы и
+  для автоматического отката не используется (замечание приёмки bb063ac3). }
+function BackupPathForMessage(const Prefix, Suffix: String): String;
+var
+  Backup: String;
+begin
+  if GLastBackupDir <> '' then
+    Result := Prefix + GLastBackupDir + Suffix
+  else
+  begin
+    Backup := LatestBackupDir;
+    if Backup <> '' then
+      Result := Prefix + Backup +
+        ' (архив прошлого обновления — для автоматического отката не используется)' +
+        Suffix
+    else
+      Result := Prefix + 'не создавалась' + Suffix;
+  end;
+end;
+
 function ErrorMemoText: String;
 var
-  S, Backup: String;
+  S: String;
 begin
   S := 'Установка ETN ' + GProductVersion + ' не завершена.' + #13#10#13#10 +
     'Причина: ' + FailureReasonText + '.' + #13#10#13#10 +
     'Журнал установки: ' + IfStr(GLogPath = '', '(журнал не создан)', GLogPath) + #13#10;
-  Backup := GLastBackupDir;
-  if Backup = '' then Backup := LatestBackupDir;
-  if Backup <> '' then
-    S := S + 'Резервная копия баз данных: ' + Backup + #13#10
-  else
-    S := S + 'Резервная копия баз данных: не создавалась' + #13#10;
+  S := S + BackupPathForMessage('Резервная копия баз данных: ', #13#10);
   S := S + #13#10 +
     'Следующий шаг: устраните причину и запустите установщик снова — ' +
     'параметры и данные сохранятся. Если установка не запускается, приложите ' +
@@ -4340,7 +4557,7 @@ end;
 
 function SummaryText: String;
 var
-  S, Backup, Exe, Ipv4: String;
+  S, Exe, Ipv4: String;
 begin
   S := 'Установка ETN ' + GProductVersion + ' завершена.' + #13#10#13#10;
   if GServerSelected then
@@ -4374,10 +4591,10 @@ begin
     if Exe <> '' then
       S := S + 'Клиент ETN: ' + Exe + #13#10;
   end;
-  Backup := GLastBackupDir;
-  if Backup = '' then Backup := LatestBackupDir;
-  if Backup <> '' then
-    S := S + 'Резервная копия баз данных: ' + Backup + #13#10;
+  { Архив этого запуска; если его нет, а в backups что-то есть — архив
+    прошлого обновления с явной пометкой (не для отката). }
+  if (GLastBackupDir <> '') or (LatestBackupDir <> '') then
+    S := S + BackupPathForMessage('Резервная копия баз данных: ', #13#10);
   S := S + 'Журнал установки: ' + IfStr(GLogPath = '', '(не создан)', GLogPath) + #13#10;
   if GKeyWasShown then
     S := S + #13#10 + 'Ключ администратора показывался на предыдущем экране: ' +
@@ -5664,9 +5881,12 @@ begin
       if GChildResult <> EXIT_OK then
       begin
         { Сбой мог произойти после замены файлов: экран ошибки и итоговая
-          сводка покажут причину, журнал и бэкап. }
+          сводка покажут причину, журнал и бэкап. GChildReason прочитан из
+          reason-файла дочернего процесса и после отката содержит и его итог
+          (блокер приёмки bb063ac3: раньше терялся). }
         FailInstall('привилегированная фаза завершилась с кодом ' +
-          IntToStr(GChildResult));
+          IntToStr(GChildResult) +
+          IfStr(GChildReason = '', '', ': ' + GChildReason));
       end;
     end;
   end;
@@ -5746,7 +5966,8 @@ begin
         'Журнал: ' + GLogPath;
   end
   else if GChildResult <> EXIT_OK then
-    Result := Format('Установка завершилась сбоем (код %d). Журнал: %s', [GChildResult, GLogPath]);
+    Result := 'Установка завершилась сбоем (код ' + IntToStr(GChildResult) +
+      IfStr(GChildReason = '', '', ': ' + GChildReason) + '. Журнал: ' + GLogPath;
 end;
 
 { Запись установки нужна и для машинного клиента без сервера: иначе повторный
@@ -5786,8 +6007,7 @@ begin
         FailText := 'Установка не начата: ' + Reason;
         LogLine('ERROR', FailText + ' (код ' + IntToStr(Code) + ')');
         if GFailureReason = '' then GFailureReason := Reason;
-        if GReasonFile <> '' then
-          SaveStringToFile(GReasonFile, Utf8Encode(Reason), False);
+        WriteReasonFile(Reason);
         GExitCode := Code;
         if not GSilent then
           SuppressibleMsgBox(FailText + '.' + #13#10#13#10 + 'Изменения не выполнялись. ' +
@@ -5859,6 +6079,11 @@ begin
         if not StartServiceIfNeeded then
           FailInstall('служба ' + SERVICE_NAME + ' не запустилась после замены ' +
             'файлов (etn-service.exe start вернул ошибку)')
+        else if not HealthCheckApplicable then
+          { Режим app: сервер не служба, его запускает пользователь. Опрос
+            health гарантированно истёк бы и увёл обновление в откат. }
+          LogLine('INFO', 'Режим app: health-check не выполняется — сервер ' +
+            'запускается пользователем')
         else
         begin
           SetInstallStage('Проверка работоспособности…');
@@ -5880,18 +6105,34 @@ begin
         БД из архива, запуск и повторная проверка. Код уже 10, install.json
         не пишется. }
       if GExitCode <> EXIT_OK then
+      begin
         RollbackAfterFailure;
+        { Родитель (двухфазный UAC) читает reason-файл: FailInstall записал
+          только исходную причину, до отката. Перезаписываем полным текстом —
+          с итогом отката (блокер приёмки bb063ac3). }
+        WriteReasonFile(GFailureReason);
+      end;
     end;
-    { Успех: копия отката удаляется — только после подтверждённого health-check
-      и только после успеха (при отказе она остаётся точкой восстановления). }
-    if (GExitCode = EXIT_OK) and GDoPrivilegedWork then
-      CleanupRollbackSnapshot;
     if (GExitCode = EXIT_OK) and NeedInstallRecord then
     begin
       SetInstallStage('Запись параметров установки…');
       if not WriteInstallJson then
+      begin
         FailInstall('install.json не записан: ' + GInstallJsonPath);
+        { Запись о новой версии не легла на диск — возвращаем прежнюю версию:
+          иначе файлы новые, а install.json говорит о прежней. }
+        if GDoPrivilegedWork then
+        begin
+          RollbackAfterFailure;
+          WriteReasonFile(GFailureReason);
+        end;
+      end;
     end;
+    { Снимок отката удаляется последним — только после того, как install.json
+      зафиксировал новую версию (замечание приёмки: сбой записи при уже
+      удалённом снимке оставлял установку без пути отката). }
+    if (GExitCode = EXIT_OK) and GDoPrivilegedWork then
+      CleanupRollbackSnapshot;
     { Ключ мог создать дочерний (элевированный) процесс: читаем защищённый
       файл после установки, чтобы показать его на экране ключа. }
     if GServerSelected then
