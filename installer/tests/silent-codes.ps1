@@ -49,6 +49,14 @@
          архив удаляет самый старый, чужие файлы и каталоги не тронуты; ошибка
          удаления старого архива обновление не отменяет; ремонт — код 0 без
          бэкапа; без баз данных архив не создаётся
+     26. bb063ac3: обновление сервера — порядок фаз до копирования (остановка
+         службы → бэкап БД → снимок отката), ожидание реальной остановки
+         службы (не остановилась — код 20), неудачный бэкап — код 10 без
+         замены файлов с поднятой службой (bc7cc846), расширенный health-check
+         с разбором тела /health и /version (status/db/версия/api; HTTP 500 и
+         чужая версия — код 10 и откат), возврат файлов из снимка и БД из
+         архива, install.json только после успеха, снимок удаляется только при
+         успехе, неудачный откат — код 10 с путём к архиву в журнале
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -359,6 +367,167 @@ function Test-LatestLogContains {
     return ($text -match $Pattern)
 }
 
+# --- bb063ac3: подставной health-сервер, снимок отката и порядок журнала -----
+# Разбор тела health-check проверяется по-настоящему: установщик опрашивает
+# локальный HTTP-сервер (Node 22), который отдаёт заданный ответ — версию,
+# db, HTTP 500 или неверный /api/v1/version. Заодно сервер имитирует запись
+# «неудачного запуска» в БД, чтобы откат БД можно было проверить по данным.
+function Initialize-FakeHealthScript {
+    $scriptPath = Join-Path $workRoot 'fake-health.cjs'
+    if (Test-Path -LiteralPath $scriptPath) { return $scriptPath }
+    $text = @'
+const http = require('http');
+const fs = require('fs');
+const argv = process.argv;
+const port = Number(argv[2]);
+const mode = argv[3];
+const target = argv[4];
+const requestLog = argv[5];
+const dbPath = argv[6] || '';
+const dbModule = argv[7] || '';
+const marker = argv[8] || '';
+let mutated = false;
+function mutate() {
+  if (mutated) return;
+  mutated = true;
+  if (!dbPath || dbPath === '-' || !marker || !dbModule) return;
+  try {
+    const Database = require(dbModule);
+    const db = new Database(dbPath);
+    db.prepare('INSERT INTO t(v) VALUES (?)').run(marker);
+    db.close();
+  } catch (e) {
+    fs.appendFileSync(requestLog, 'mutate-error:' + String(e) + '\n');
+  }
+}
+function health(status, db, version) {
+  return JSON.stringify({ status: status, db: db, version: version, uptime: 1 });
+}
+const server = http.createServer(function (req, res) {
+  fs.appendFileSync(requestLog, req.url + '\n');
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/api/v1/health') {
+    mutate();
+    if (mode === 'http500') {
+      res.statusCode = 500;
+      res.end(health('error', 'error', target));
+      return;
+    }
+    if (mode === 'db-error') { res.end(health('ok', 'error', target)); return; }
+    if (mode === 'wrong-version') { res.end(health('ok', 'ok', '9.9.9')); return; }
+    res.end(health('ok', 'ok', target));
+    return;
+  }
+  if (req.url === '/api/v1/version') {
+    const v = (mode === 'api-version') ? '9.9.9' : target;
+    res.end(JSON.stringify({ version: v, api: 'v1' }));
+    return;
+  }
+  res.statusCode = 404;
+  res.end('{}');
+});
+server.listen(port, '127.0.0.1');
+'@
+    [System.IO.File]::WriteAllText($scriptPath, $text)
+    return $scriptPath
+}
+
+function Test-TcpReady {
+    param([int]$Port, [int]$TimeoutMs = 8000)
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {
+            $iar = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+            if ($iar.AsyncWaitHandle.WaitOne(200) -and $client.Connected) {
+                $client.EndConnect($iar)
+                return $true
+            }
+        } catch { } finally { $client.Close() }
+        Start-Sleep -Milliseconds 100
+    }
+    return $false
+}
+
+function Start-FakeHealthServer {
+    param(
+        [string]$Mode = 'ok',
+        [string]$DbPath = '',
+        [string]$Marker = ''
+    )
+    $scriptPath = Initialize-FakeHealthScript
+    $port = Get-FreeTcpPort
+    $requestLog = Join-Path $workRoot ('health-requests-' + $port + '.log')
+    [System.IO.File]::WriteAllText($requestLog, '')
+    $betterSqlite = Join-Path $repoRoot 'server\node_modules\better-sqlite3'
+    $nodeArgs = @($scriptPath, [string]$port, $Mode, $version, $requestLog,
+        (IfStrEmpty $DbPath), $betterSqlite, $Marker)
+    $proc = Start-Process -FilePath $script:BackupNode -ArgumentList $nodeArgs `
+        -WorkingDirectory (Join-Path $repoRoot 'server') -PassThru
+    if (-not (Test-TcpReady -Port $port)) {
+        try { $proc.Kill() } catch { }
+        throw "Подставной health-сервер не поднялся на порту $port"
+    }
+    return [pscustomobject]@{
+        Process    = $proc
+        Url        = 'http://127.0.0.1:' + $port
+        RequestLog = $requestLog
+    }
+}
+
+function IfStrEmpty {
+    param([string]$Value)
+    if ($Value -eq '') { return '-' }
+    return $Value
+}
+
+function Stop-FakeHealthServer {
+    param($Server)
+    if ($null -eq $Server) { return }
+    try { Stop-Process -Id $Server.Process.Id -Force -ErrorAction SilentlyContinue } catch { }
+    try { $Server.Process.WaitForExit(3000) | Out-Null } catch { }
+}
+
+function Get-FakeHealthRequests {
+    param($Server)
+    if (-not (Test-Path -LiteralPath $Server.RequestLog)) { return '' }
+    return (Get-Content -LiteralPath $Server.RequestLog -Raw)
+}
+
+# Индексы шаблонов в журнале последней установки: -1 — строки нет. Нужны для
+# проверки порядка фаз (остановка → бэкап → снимок → копирование → health →
+# install.json) по фактическому журналу, а не по коду.
+function Get-LogPatternIndices {
+    param([string[]]$Patterns)
+    $log = Get-LatestLog
+    $text = ''
+    if ($log) { $text = Get-Content -LiteralPath $log.FullName -Raw }
+    $result = @()
+    foreach ($p in $Patterns) {
+        $result += $text.IndexOf($p, [System.StringComparison]::Ordinal)
+    }
+    return $result
+}
+
+function Get-RollbackDirs {
+    $root = Join-Path $dataDir '.install\rollback'
+    if (-not (Test-Path -LiteralPath $root)) { return @() }
+    return @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name)
+}
+
+# Заготовка обновления: install.json старой версии, файлы сервера и службы,
+# архив бэкапа требует настоящий node и better-sqlite3 поставки.
+function New-UpdateFixture {
+    param([string]$OldVersion = '0.15.0')
+    Reset-State
+    Write-InstallJson (New-InstallJson -ProductVersion $OldVersion)
+    New-ServerFiles -Version $OldVersion
+    New-Item -ItemType Directory -Path (Join-Path $appDir 'service') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $appDir 'service\etn-service.exe'), 'stub')
+    return (Initialize-BackupServerPayload)
+}
+
 # --- Подготовка рабочего каталога -------------------------------------------
 if (Test-Path -LiteralPath $workRoot) { Remove-Item -LiteralPath $workRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
@@ -547,9 +716,9 @@ Add-StaticResult -Name 'static:stage-statuslabel' `
     -Ok (Test-IssCode -Text $stageBody -Pattern ([regex]::Escape('WizardForm.StatusLabel.Caption := Stage'))) `
     -Note 'подпись этапа — в StatusLabel страницы установки'
 $stepBody = Get-IssFunctionBody -Text $issText -Name 'CurStepChanged'
+$updateBody = Get-IssFunctionBody -Text $issText -Name 'PrepareServerUpdate'
 $stageNames = @(
     'Замена файлов сервера ETN',
-    'Остановка службы ETN',
     'Подготовка каталогов данных',
     'Настройка службы',
     'Правило брандмауэра',
@@ -563,6 +732,11 @@ foreach ($stageName in $stageNames) {
         -Ok (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape($stageName))) `
         -Note 'этап прогресса в CurStepChanged'
 }
+# Остановка службы перенесена в фазы обновления (bb063ac3): подпись этапа и
+# сам вызов живут в PrepareServerUpdate, который ssInstall вызывает до копирования.
+Add-StaticResult -Name 'static:stage:Остановка службы ETN' `
+    -Ok (Test-IssCode -Text $updateBody -Pattern ([regex]::Escape('Остановка службы ETN'))) `
+    -Note 'этап остановки службы в PrepareServerUpdate'
 $backupStageBody = Get-IssFunctionBody -Text $issText -Name 'CreateDatabaseBackup'
 Add-StaticResult -Name 'static:stage:backup' `
     -Ok (Test-IssCode -Text $backupStageBody -Pattern ([regex]::Escape('Резервная копия баз данных'))) `
@@ -1815,6 +1989,263 @@ if ($fallbackArchives.Count -ge 1) {
 }
 Add-Result -Name 'backup:wal-fallback-log' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'копируется файл журнала'))
+
+# ============================================================================
+# bb063ac3: обновление — остановка службы, бэкап, снимок отката, health-check.
+# ============================================================================
+Write-Host '=== bb063ac3: остановка службы, бэкап, health-check и откат ==='
+
+$updateArgs = @('/SERVERONLY', '/TESTELEVATED=1', '/TESTSERVICE=present')
+$nodeArg = "/TESTNODEEXE=`"$script:BackupNode`""
+$fastHealth = @('/TESTHEALTHWAIT=4000', '/TESTHEALTHSTEP=500')
+
+# --- Статические сторожи порядка (bb063ac3) ---------------------------------
+$orderBody = Get-IssFunctionBody -Text $issText -Name 'PrepareServerUpdate'
+$pStop = $orderBody.IndexOf('StopServiceForUpdate')
+$pBackup = $orderBody.IndexOf('CreateDatabaseBackup(True)')
+$pSnapshot = $orderBody.IndexOf('CreateRollbackSnapshot')
+Add-StaticResult -Name 'static:update-order' `
+    -Ok (($pStop -ge 0) -and ($pBackup -gt $pStop) -and ($pSnapshot -gt $pBackup)) `
+    -Note ('остановка → бэкап → снимок отката (' + $pStop + ' < ' + $pBackup + ' < ' + $pSnapshot + ')')
+$ssInstallBody = ''
+$ssPostInstallBody = ''
+$pInstallStep = $stepBody.IndexOf('if CurStep = ssInstall')
+$pPostStep = $stepBody.IndexOf('if CurStep = ssPostInstall')
+if (($pInstallStep -ge 0) -and ($pPostStep -gt $pInstallStep)) {
+    $ssInstallBody = $stepBody.Substring($pInstallStep, $pPostStep - $pInstallStep)
+    $ssPostInstallBody = $stepBody.Substring($pPostStep)
+}
+Add-StaticResult -Name 'static:update-before-copy' `
+    -Ok (($ssInstallBody -ne '') -and
+        (Test-IssCode -Text $ssInstallBody -Pattern ([regex]::Escape('PrepareServerUpdate(Reason)')))) `
+    -Note 'фазы обновления вызываются в ssInstall — до копирования файлов'
+Add-StaticResult -Name 'static:no-stop-in-postinstall' `
+    -Ok (($ssPostInstallBody -ne '') -and
+        (-not (Test-IssCode -Text $ssPostInstallBody -Pattern ([regex]::Escape('StopServiceForUpdate'))))) `
+    -Note 'в ssPostInstall служба не останавливается (перенесено в ssInstall)'
+Add-StaticResult -Name 'static:install-json-after-health' `
+    -Ok (($stepBody.IndexOf('ProbeHealth(True)') -ge 0) -and
+        ($stepBody.IndexOf('ProbeHealth(True)') -lt $stepBody.IndexOf('WriteInstallJson'))) `
+    -Note 'install.json пишется только после health-check'
+Add-StaticResult -Name 'static:cleanup-after-success' `
+    -Ok ([bool]($stepBody -match '(?s)if \(GExitCode = EXIT_OK\) and GDoPrivilegedWork then\s*\r?\n\s*CleanupRollbackSnapshot;')) `
+    -Note 'снимок отката удаляется только при успехе'
+$stopBody = Get-IssFunctionBody -Text $issText -Name 'StopServiceForUpdate'
+$waitBody = Get-IssFunctionBody -Text $issText -Name 'WaitServiceStopped'
+Add-StaticResult -Name 'static:wait-service-stopped' `
+    -Ok ((Test-IssCode -Text $stopBody -Pattern ([regex]::Escape('WaitServiceStopped'))) -and
+        (Test-IssCode -Text $waitBody -Pattern ([regex]::Escape('ServiceStoppedNow')))) `
+    -Note 'ожидание реальной остановки службы (sc query, опрос)'
+$healthBody = Get-IssFunctionBody -Text $issText -Name 'CheckHealthOnce'
+$healthParts = (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/health'))) -and
+    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/version'))) -and
+    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape("JsonGetRaw(Body, 'db')"))) -and
+    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('GProductVersion')))
+Add-StaticResult -Name 'static:health-parses-body' -Ok $healthParts `
+    -Note 'health и version: разбор тела (status/db/version/api), а не только код'
+$rollbackBody = Get-IssFunctionBody -Text $issText -Name 'RollbackAfterFailure'
+Add-StaticResult -Name 'static:rollback-messages' `
+    -Ok ((Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Откат выполнен'))) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Откат не выполнен'))) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('архив: ')))) `
+    -Note 'журнал: «Откат выполнен» / «Откат не выполнен, архив: …»'
+$rollbackRootBody = Get-IssFunctionBody -Text $issText -Name 'RollbackRoot'
+Add-StaticResult -Name 'static:rollback-dir' `
+    -Ok (Test-IssCode -Text $rollbackRootBody -Pattern ([regex]::Escape('\.install\rollback'))) `
+    -Note 'снимок отката в %ProgramData%\ETN\.install\rollback'
+$restoreBody = Get-IssFunctionBody -Text $issText -Name 'RestoreDatabaseFromBackup'
+Add-StaticResult -Name 'static:rollback-db-wal' `
+    -Ok (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("DeleteFile(Dest + '-wal')"))) `
+    -Note 'при восстановлении БД WAL неудачного запуска удаляется'
+Add-StaticResult -Name 'static:update-hooks-ifdef' `
+    -Ok ((Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('GTestHealthUrl'))) -and
+        (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('GTestRollback')))) `
+    -Note 'хуки health-url и отката — только под #ifdef TestMode'
+# Бэкап только при смене версии (карточка bb063ac3). Прежняя версия неизвестна
+# (adopt/первая установка) — архив не создаётся: иначе установка поверх чужих
+# данных падала бы на проверке целостности их _system.db (регрессия init-key).
+$backupNeededBody = Get-IssFunctionBody -Text $issText -Name 'BackupNeeded'
+Add-StaticResult -Name 'static:backup-version-only' `
+    -Ok ((Test-IssCode -Text $backupNeededBody -Pattern ([regex]::Escape("if Old = '' then"))) -and
+        (Test-IssCode -Text $backupNeededBody -Pattern ([regex]::Escape('SemverCompare(Old, GProductVersion)'))) -and
+        (-not (Test-IssCode -Text $backupNeededBody -Pattern ([regex]::Escape('Result := GDataDirPresent'))))) `
+    -Note 'архив только при известной смене версии, без версии — не нужен'
+
+# --- A. Успешное обновление с настоящим разбором тела health-check ----------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$srv = Start-FakeHealthServer -Mode 'ok' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'update-ok:code' -Expected 0 -Actual $code
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+$targetOk = $jsonText -match ('"product_version":"' + [regex]::Escape($version) + '"')
+Add-Result -Name 'update-ok:install-json' -Expected 1 -Actual ([int]$targetOk) -Note ('версия ' + $version)
+$archives = @(Get-BackupArchives)
+Add-Result -Name 'update-ok:archive' -Expected 1 -Actual ([int]($archives.Count -ge 1))
+Add-Result -Name 'update-ok:snapshot-removed' -Expected 0 -Actual ([int](@(Get-RollbackDirs).Count))
+$requests = Get-FakeHealthRequests -Server $srv
+$bothEndpoints = ($requests -match '/api/v1/health') -and ($requests -match '/api/v1/version')
+Add-Result -Name 'update-ok:endpoints' -Expected 1 -Actual ([int][bool]$bothEndpoints) `
+    -Note 'health-check проверил и /health, и /version'
+$order = Get-LogPatternIndices -Patterns @(
+    'Этап: Остановка службы ETN',
+    'Бэкап БД: архив создан',
+    'Снимок отката: создан',
+    'Замена файлов сервера ETN',
+    'Health-check http://127.0.0.1',
+    'install.json записан')
+$orderOk = ($order[0] -ge 0) -and ($order[1] -gt $order[0]) -and ($order[2] -gt $order[1]) -and
+    ($order[3] -gt $order[2]) -and ($order[4] -gt $order[3]) -and ($order[5] -gt $order[4])
+Add-Result -Name 'update-ok:log-order' -Expected 1 -Actual ([int]$orderOk) `
+    -Note ($order -join ' < ')
+$newIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+Add-Result -Name 'update-ok:files-replaced' -Expected 1 -Actual ([int]($newIndex -ne $oldIndex)) `
+    -Note 'новые файлы скопированы'
+
+# --- B. health вернул чужую версию: код 10 и полный откат -------------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$srv = Start-FakeHealthServer -Mode 'wrong-version' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'update-foreign:code' -Expected 10 -Actual $code
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+$keptOld = $jsonText -match '"product_version":"0\.15\.0"'
+Add-Result -Name 'update-foreign:json-unchanged' -Expected 1 -Actual ([int]$keptOld)
+$reverted = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js')) -eq $oldIndex
+Add-Result -Name 'update-foreign:files-restored' -Expected 1 -Actual ([int]$reverted) `
+    -Note 'файлы возвращены из снимка отката'
+$rollbackDirs = @(Get-RollbackDirs)
+Add-Result -Name 'update-foreign:snapshot-kept' -Expected 1 -Actual ([int]$rollbackDirs.Count)
+$snapshotServer = (Test-Path -LiteralPath (Join-Path $dataDir ('.install\rollback\' +
+    $rollbackDirs[0].Name + '\server\dist\index.js')))
+Add-Result -Name 'update-foreign:snapshot-content' -Expected 1 -Actual ([int]$snapshotServer) `
+    -Note 'снимок содержит прежний server (создан до копирования)'
+Add-Result -Name 'update-foreign:rollback-log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Откат выполнен')) `
+    -Note 'журнал: «Откат выполнен»'
+Add-Result -Name 'update-foreign:health-reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'версия 9\.9\.9 вместо 0\.15\.1')) `
+    -Note 'журнал называет причину: чужая версия'
+$dbValues = Get-BackupTestValues -Path (Join-Path $dataDir '_system.db')
+Add-Result -Name 'update-foreign:db-restored' -Expected 1 -Actual ([int]($dbValues -eq 'alpha')) `
+    -Note ('данные после отката: ' + $dbValues)
+
+# --- C. health вернул 500: код 10 и откат -----------------------------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$srv = Start-FakeHealthServer -Mode 'http500' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'update-http500:code' -Expected 10 -Actual $code
+Add-Result -Name 'update-http500:rollback' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Откат выполнен')) `
+    -Note 'HTTP-ошибка health — повод для отката'
+
+# --- D. /api/v1/version вернул чужую версию: код 10 и откат -----------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$srv = Start-FakeHealthServer -Mode 'api-version' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'update-version:code' -Expected 10 -Actual $code
+Add-Result -Name 'update-version:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'version: версия 9\.9\.9 вместо 0\.15\.1')) `
+    -Note 'проверяется и GET /api/v1/version'
+
+# --- E. health с db=error: код 10 и откат -----------------------------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$srv = Start-FakeHealthServer -Mode 'db-error' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'update-db-error:code' -Expected 10 -Actual $code
+Add-Result -Name 'update-db-error:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'health: db=error вместо ok')) `
+    -Note 'db=ok обязателен'
+
+# --- F. Неудачный откат: код 10 и путь к архиву в журнале -------------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$srv = Start-FakeHealthServer -Mode 'http500' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)", '/TESTROLLBACK=fail'))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'update-rollback-fail:code' -Expected 10 -Actual $code
+Add-Result -Name 'update-rollback-fail:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Откат не выполнен')) `
+    -Note 'журнал: «Откат не выполнен»'
+Add-Result -Name 'update-rollback-fail:archive-path' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Откат не выполнен: [^\r\n]*архив: [^\r\n]*backups')) `
+    -Note 'в сообщении путь к архиву БД'
+
+# --- G. Бэкап не удался: код 10, файлы не заменены, служба поднята ----------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$blockedBackups = Join-Path $dataDir 'backups'
+[System.IO.File]::WriteAllText($blockedBackups, 'occupied')
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg))
+Add-Result -Name 'update-backup-fail:code' -Expected 10 -Actual $code `
+    -Note 'сценарий bc7cc846: неудачный бэкап отменяет обновление'
+$stillOld = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js')) -eq $oldIndex
+Add-Result -Name 'update-backup-fail:files-untouched' -Expected 1 -Actual ([int]$stillOld)
+Add-Result -Name 'update-backup-fail:no-snapshot' -Expected 0 -Actual ([int](@(Get-RollbackDirs).Count))
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+Add-Result -Name 'update-backup-fail:json-unchanged' -Expected 1 `
+    -Actual ([int]($jsonText -match '"product_version":"0\.15\.0"'))
+Add-Result -Name 'update-backup-fail:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'не удалось создать каталог архивов'))
+Add-Result -Name 'update-backup-fail:service-back' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена')) `
+    -Note 'служба поднята обратно на прежней версии'
+
+# --- H. Служба не остановилась: код 20, изменений нет -----------------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs +
+    @('/TESTSERVICESTATE=running', '/TESTSERVICEWAIT=1000'))
+Add-Result -Name 'update-stop-fail:code' -Expected 20 -Actual $code `
+    -Note 'служба не остановилась — предусловие не выполнено'
+Add-Result -Name 'update-stop-fail:files-untouched' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex))
+Add-Result -Name 'update-stop-fail:no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
+Add-Result -Name 'update-stop-fail:no-snapshot' -Expected 0 -Actual ([int](@(Get-RollbackDirs).Count))
+Add-Result -Name 'update-stop-fail:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'не остановилась за 1000 мс'))
 
 # --- Итог --------------------------------------------------------------------
 $failed = @($script:results | Where-Object { -not $_.Ok })

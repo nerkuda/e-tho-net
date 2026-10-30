@@ -7,9 +7,32 @@
 ;
 ; Зоны соседних задач (не реализуются здесь, оставлены точки вызова):
 ;   8b1f5980 — поставка сервера (Node, prod-node_modules, WinSW, служба);
-;   bb063ac3 — остановка службы, health-check, откат и вызов бэкапа;
 ;   112642a4 — экраны, лицензия, прогресс, итоговая сводка, тексты;
 ;   98ad5eec — поставка клиента (область установки, ярлыки, закрытие ETN.exe).
+;
+; Задача bb063ac3 (0.15.1) — обновление сервера установщиком:
+;   * порядок фаз закреплён в CurStepChanged(ssInstall) ДО копирования файлов:
+;     остановка службы WinSW с ожиданием реальной остановки, бэкап БД
+;     (ce3ab836), снимок отката, затем копирование файлов;
+;   * остановка до копирования обязательна: занятые node.exe, better-sqlite3
+;     и файлы сервера иначе не заменить;
+;   * бэкап берётся только при смене версии (ремонт той же версии — без
+;     архива); неудачный бэкап отменяет обновление до замены файлов, служба
+;     поднимается обратно (сценарий bc7cc846, код 10);
+;   * снимок отката — %ProgramData%\ETN\.install\rollback\<timestamp> с копией
+;     server и service (данные не копируются); после успешного обновления
+;     удаляется, при отказе остаётся точкой ручного восстановления;
+;   * после копирования: настройка службы, запуск, расширенный health-check
+;     (GET /api/v1/health → 200, status=ok, db=ok, версия = целевая;
+;     GET /api/v1/version → version и api; бюджет 60 с, повтор каждые 2 с);
+;   * неудача health-check: остановка службы, возврат файлов из снимка,
+;     восстановление БД из архива (с удалением WAL/SHM), запуск прежней
+;     версии, повторная проверка, код 10; в журнале отдельно «Откат выполнен»
+;     либо «Откат не выполнен, архив: <путь>»;
+;   * install.json пишется только после успешного health-check — иначе после
+;     отката файл врал бы о новой версии;
+;   * коды: 20 — предусловие (занятый порт, режим app, служба не остановилась);
+;     10 — сбой выполнения, включая неудачный бэкап и неудачный откат.
 ;
 ; Задача ce3ab836 (0.15.1) — бэкап баз данных перед заменой файлов:
 ;   * CreateDatabaseBackup(Needed) — вызывающий (bb063ac3) передаёт решение:
@@ -106,8 +129,10 @@
 ;   проверяются только права, каталог программы, каталог данных и порт;
 ;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
 ;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
-;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID —
-;   только в тестовой сборке
+;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
+;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
+;   /TESTSERVICEWAIT, /TESTHEALTHURL, /TESTHEALTHWAIT, /TESTHEALTHSTEP,
+;   /TESTROLLBACK — только в тестовой сборке
 ;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
 ; ============================================================================
 
@@ -291,6 +316,15 @@ const
   BACKUPS_KEEP = 3;
   { Длина имени каталога архива: YYYYMMDD-HHmmss (15 символов). }
   BACKUP_DIR_NAME_LEN = 15;
+  { Остановка службы WinSW (bb063ac3): после etn-service.exe stop состояние
+    опрашивается раз в 250 мс, бюджет — 60 с (stoptimeout в шаблоне службы
+    30 с, остальное — запас на медленную остановку node.exe). }
+  SERVICE_STOP_WAIT_MS = 60000;
+  SERVICE_STOP_STEP_MS = 250;
+  { Health-check после запуска новой версии (требование 0a79d9de): бюджет
+    60 с, повтор каждые 2 с. Тело ответа разбирается, а не только код. }
+  HEALTH_WAIT_MS = 60000;
+  HEALTH_STEP_MS = 2000;
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
     клиент electron-builder (NSIS) и запись установки Inno. }
   UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
@@ -354,6 +388,18 @@ var
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
   GTestOwnServicePid: String;
+  { Тестовые хуки bb063ac3: служба и health-check без реальной службы Windows
+    и без настоящего сервера — подмена исполняемого файла службы, её состояния
+    и команд, базового URL health-check, бюджетов ожидания и сбоя отката. }
+  GTestServiceCmd: String;
+  GTestServiceState: String;
+  GTestServiceStop: String;
+  GTestServiceStart: String;
+  GTestServiceWait: String;
+  GTestHealthUrl: String;
+  GTestHealthWait: String;
+  GTestHealthStep: String;
+  GTestRollback: String;
 
   { Первичная инициализация и ключ }
   GAdminLogin: String;
@@ -419,6 +465,10 @@ var
   { Архив БД, созданный последним вызовом CreateDatabaseBackup ('' — архива
     нет). Вызывающему нужен путь для сообщения об отказе/откате. }
   GLastBackupDir: String;
+  { Снимок отката текущего обновления (.install\rollback\<timestamp>) и
+    последняя причина сбоя health-check для журнала и экрана ошибки. }
+  GLastRollbackDir: String;
+  GHealthReason: String;
 
   { Экран компонентов }
   GComponentsPage: TWizardPage;
@@ -1636,6 +1686,11 @@ begin
   GExitCode := EXIT_FAILED;
   if GFailureReason = '' then GFailureReason := Reason;
   LogLine('ERROR', 'Сбой: ' + Reason + ' (код 10)');
+  { Причина сбоя — родителю в двухфазном UAC: иначе он покажет только «код 10».
+    Файл тот же, что у предусловий (GReasonFile), и читается по любому
+    ненулевому коду дочернего процесса. }
+  if GReasonFile <> '' then
+    SaveStringToFile(GReasonFile, Utf8Encode(Reason), False);
 end;
 
 { ---------------------------------------------------------------------------
@@ -2094,6 +2149,12 @@ begin
   begin
     LogLine('WARN', 'TESTSERVICE=absent: наличие службы подменено (тестовый режим)');
     Result := False;
+  end
+  else
+  begin
+    { Прогон без хука не должен трогать настоящую службу рабочей машины:
+      тестовая сборка считает службу незарегистрированной. }
+    Result := False;
   end;
 #endif
 end;
@@ -2292,12 +2353,13 @@ begin
     Exit;
   end;
   LogLine('INFO', 'Дочерний (элевированный) установщик завершился с кодом ' + IntToStr(Code));
-  { Причина отказа предусловия — из файла, который записал дочерний процесс:
-    сообщение об ошибке должно называть причину, а не отправлять в журнал. }
-  if Code = EXIT_PRECONDITION then
+  { Причина отказа — из файла, который записал дочерний процесс: сообщение
+    об ошибке должно называть причину, а не отправлять в журнал. }
+  if Code <> 0 then
   begin
     { Причина — UTF-8: файл читают и установщик (сообщение пользователю), и
-      тесты, независимо от системной кодовой страницы. }
+      тесты, независимо от системной кодовой страницы. Пишется и предусловием
+      (код 20), и сбоем (код 10) — родитель покажет причину, а не только код. }
     ReasonText := '';
     if FileExists(GReasonFile) and LoadStringFromFile(GReasonFile, Raw) then
       ReasonText := Utf8Decode(Raw);
@@ -2457,46 +2519,367 @@ begin
   Result := True;
 end;
 
-{ Health-check: fail-closed — успех объявляется только при подтверждённом
-  запуске сервера. Управление службой (WinSW) и опрос GET /api/v1/health —
-  зона bb063ac3; в этой задаче точки вызова и коды. }
-function ProbeHealth: Boolean;
+{ ---------------------------------------------------------------------------
+  Служба ETN (WinSW) — остановка и запуск, задача bb063ac3.
+
+  Служба останавливается до копирования файлов: иначе занятые node.exe,
+  better-sqlite3 и файлы сервера не заменить. После команды stop состояние
+  опрашивается через sc query, пока служба не окажется STOPPED: WinSW мог
+  вернуть управление раньше фактической остановки дочернего node.exe.
+  В тестовой сборке управление службой подменяется хуками — настоящая служба
+  Windows не нужна.
+  --------------------------------------------------------------------------- }
+function ServiceExePath: String;
+begin
+  Result := GServerDir + '\service\etn-service.exe';
+#ifdef TestMode
+  if GTestServiceCmd <> '' then Result := GTestServiceCmd;
+#endif
+end;
+
+{ Вывод sc query по службе. В тестовом режиме — подмена состояния:
+  /TESTSERVICESTATE=running|stopped; при /TESTSERVICE=present без подмены
+  служба считается остановленной (тест обновления не управляет Windows). }
+function ServiceStateOutput: String;
+var
+  Args, OutFile: String;
+  Code: Integer;
+begin
+  Result := '';
+#ifdef TestMode
+  if GTestServiceState = 'running' then
+  begin
+    Result := 'STATE : 4  RUNNING';
+    Exit;
+  end;
+  if GTestServiceState = 'stopped' then
+  begin
+    Result := 'STATE : 1  STOPPED';
+    Exit;
+  end;
+  if GTestService = 'present' then
+  begin
+    Result := 'STATE : 1  STOPPED';
+    Exit;
+  end;
+#endif
+  OutFile := ExpandConstant('{tmp}') + '\etn-service-state.txt';
+  DeleteFile(OutFile);
+  Args := '/c sc query ' + SERVICE_NAME + ' > "' + OutFile + '" 2>&1';
+  if not Exec(ExpandConstant('{cmd}'), Args, '', SW_HIDE,
+    ewWaitUntilTerminated, Code) then Exit;
+  if FileExists(OutFile) then
+    Result := UpperCase(ReadTextFile(OutFile));
+end;
+
+function ServiceStoppedNow: Boolean;
+var
+  S: String;
+begin
+  S := ServiceStateOutput;
+  Result := (Pos('STOPPED', S) > 0) and (Pos('RUNNING', S) = 0) and
+    (Pos('STOP_PENDING', S) = 0) and (Pos('START_PENDING', S) = 0);
+end;
+
+function ServiceStopWaitMs: Integer;
+begin
+  Result := SERVICE_STOP_WAIT_MS;
+#ifdef TestMode
+  if GTestServiceWait <> '' then
+    Result := StrToIntDef(GTestServiceWait, Result);
+#endif
+end;
+
+{ Ждём реальной остановки: опрос раз в SERVICE_STOP_STEP_MS до бюджета. }
+function WaitServiceStopped: Boolean;
+var
+  Waited: Integer;
+begin
+  Result := ServiceStoppedNow;
+  if Result then Exit;
+  Waited := 0;
+  while Waited < ServiceStopWaitMs do
+  begin
+    Sleep(SERVICE_STOP_STEP_MS);
+    Waited := Waited + SERVICE_STOP_STEP_MS;
+    if ServiceStoppedNow then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  Result := ServiceStoppedNow;
+end;
+
+{ Команда WinSW (stop/start). Код возврата команды — успех/неудача; в
+  тестовой сборке команда не запускается, а её результат задаётся хуками
+  /TESTSERVICESTOP=fail и /TESTSERVICESTART=fail. }
+function RunServiceCommand(const Verb: String): Boolean;
 var
   Code: Integer;
-  Url: String;
 begin
   Result := False;
+#ifdef TestMode
+  { Настоящая служба рабочей машины в тестах не запускается: команда
+    подменяется, файла etn-service.exe в фикстуре может не быть. }
+  if GTestService = 'present' then
+  begin
+    if (Verb = 'stop') and (GTestServiceStop = 'fail') then
+    begin
+      LogLine('WARN', 'Служба (тестовый режим): stop не выполнен (хук)');
+      Exit;
+    end;
+    if (Verb = 'start') and (GTestServiceStart = 'fail') then
+    begin
+      LogLine('WARN', 'Служба (тестовый режим): start не выполнен (хук)');
+      Exit;
+    end;
+    LogLine('INFO', 'Служба (тестовый режим): команда ' + Verb + ' — успех');
+    Result := True;
+    Exit;
+  end;
+#endif
+  if not FileExists(ServiceExePath) then
+  begin
+    LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
+      ' не выполнена');
+    Exit;
+  end;
+  if not Exec(ServiceExePath, Verb, ExtractFileDir(ServiceExePath), SW_HIDE,
+    ewWaitUntilTerminated, Code) then
+  begin
+    LogLine('WARN', 'Служба: не удалось запустить ' + ServiceExePath +
+      ' ' + Verb);
+    Exit;
+  end;
+  if Code <> 0 then
+  begin
+    LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
+      IntToStr(Code));
+    Exit;
+  end;
+  LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
+  Result := True;
+end;
+
+{ Остановка перед заменой файлов. False — служба осталась работать (или её
+  состояние не удалось подтвердить): обновление не начинается, код 20.
+  Причина возвращается вызывающему для журнала и сообщения. }
+function StopServiceForUpdate(var Reason: String): Boolean;
+begin
+  Result := True;
+  Reason := '';
+  if not ServiceRegistered then
+  begin
+    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' не зарегистрирована — ' +
+      'останавливать нечего');
+    Exit;
+  end;
+  LogLine('INFO', 'Остановка службы ' + SERVICE_NAME);
+  if ServiceStoppedNow then
+  begin
+    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже остановлена');
+    Exit;
+  end;
+  if not RunServiceCommand('stop') then
+  begin
+    Reason := 'не удалось остановить службу ' + SERVICE_NAME +
+      ' (etn-service.exe stop вернул ошибку)';
+    Result := False;
+    Exit;
+  end;
+  if not WaitServiceStopped then
+  begin
+    Reason := 'служба ' + SERVICE_NAME + ' не остановилась за ' +
+      IntToStr(ServiceStopWaitMs) + ' мс';
+    Result := False;
+    Exit;
+  end;
+  LogLine('INFO', 'Служба ' + SERVICE_NAME + ' остановлена');
+end;
+
+{ Запуск службы после замены файлов (и повторно — при откате). Неудача не
+  выдумывается: вызывающий решает, провал это или повод перейти к health. }
+function StartServiceIfNeeded: Boolean;
+begin
+  Result := True;
+  if not ServiceRegistered then
+  begin
+    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' не зарегистрирована — ' +
+      'запускать нечего');
+    Exit;
+  end;
+  if not RunServiceCommand('start') then
+  begin
+    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': команда start не выполнена');
+    Result := False;
+    Exit;
+  end;
+  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': запущена');
+end;
+
+{ ---------------------------------------------------------------------------
+  Health-check (требование 0a79d9de): GET /api/v1/health → 200, status=ok,
+  db=ok, version = целевая; GET /api/v1/version → version = целевая, api=v1.
+  Тело разбирается, а не только HTTP-код; бюджет 60 с, повтор каждые 2 с.
+  --------------------------------------------------------------------------- }
+function HealthBaseUrl: String;
+begin
+  Result := 'http://127.0.0.1:' + GServerPort;
+#ifdef TestMode
+  if GTestHealthUrl <> '' then Result := GTestHealthUrl;
+#endif
+end;
+
+function HealthWaitMs: Integer;
+begin
+  Result := HEALTH_WAIT_MS;
+#ifdef TestMode
+  if GTestHealthWait <> '' then
+    Result := StrToIntDef(GTestHealthWait, Result);
+#endif
+end;
+
+function HealthStepMs: Integer;
+begin
+  Result := HEALTH_STEP_MS;
+#ifdef TestMode
+  if GTestHealthStep <> '' then
+    Result := StrToIntDef(GTestHealthStep, Result);
+#endif
+end;
+
+{ Один GET через curl.exe с телом в файл. -f: HTTP >= 400 — код 22, тело не
+  считается ответом. Пояснение причины — в Detail. }
+function HttpGetBody(const Url, BodyFile, What: String;
+  var Detail: String): Boolean;
+var
+  Code: Integer;
+begin
+  Result := False;
+  DeleteFile(BodyFile);
+  if not Exec('curl.exe', '-fsS --max-time 5 -o "' + BodyFile + '" "' + Url + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    Detail := What + ': curl.exe не запустился';
+    Exit;
+  end;
+  if Code <> 0 then
+  begin
+    if Code = 22 then
+      Detail := What + ': HTTP-ошибка (ответ не 2xx)'
+    else if Code = 7 then
+      Detail := What + ': соединение отклонено'
+    else if Code = 28 then
+      Detail := What + ': таймаут'
+    else
+      Detail := What + ': сетевой сбой (curl ' + IntToStr(Code) + ')';
+    Exit;
+  end;
+  if not FileExists(BodyFile) then
+  begin
+    Detail := What + ': пустой ответ';
+    Exit;
+  end;
+  Result := True;
+end;
+
+{ Одна попытка расширенного health-check. RequireTargetVersion=False нужен
+  после отката: прежняя версия обязана отвечать, но её версия — не целевая. }
+function CheckHealthOnce(const RequireTargetVersion: Boolean;
+  var Detail: String): Boolean;
+var
+  Base, Body, Status, Db, Api, Ver: String;
+begin
+  Result := False;
+  Detail := '';
+  Base := HealthBaseUrl;
+  if not HttpGetBody(Base + '/api/v1/health',
+    ExpandConstant('{tmp}') + '\etn-health.json', 'GET /api/v1/health', Detail) then Exit;
+  Body := ReadTextFile(ExpandConstant('{tmp}') + '\etn-health.json');
+  Status := LowerCase(JsonGetRaw(Body, 'status'));
+  Db := LowerCase(JsonGetRaw(Body, 'db'));
+  if Status <> 'ok' then
+  begin
+    Detail := 'health: status=' + IfStr(Status = '', '<нет>', Status) +
+      ' вместо ok';
+    Exit;
+  end;
+  if Db <> 'ok' then
+  begin
+    Detail := 'health: db=' + IfStr(Db = '', '<нет>', Db) + ' вместо ok';
+    Exit;
+  end;
+  if not RequireTargetVersion then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Ver := JsonGetRaw(Body, 'version');
+  if Ver <> GProductVersion then
+  begin
+    Detail := 'health: версия ' + IfStr(Ver = '', '<нет>', Ver) +
+      ' вместо ' + GProductVersion;
+    Exit;
+  end;
+  if not HttpGetBody(Base + '/api/v1/version',
+    ExpandConstant('{tmp}') + '\etn-version.json', 'GET /api/v1/version', Detail) then Exit;
+  Body := ReadTextFile(ExpandConstant('{tmp}') + '\etn-version.json');
+  Ver := JsonGetRaw(Body, 'version');
+  if Ver <> GProductVersion then
+  begin
+    Detail := 'version: версия ' + IfStr(Ver = '', '<нет>', Ver) +
+      ' вместо ' + GProductVersion;
+    Exit;
+  end;
+  Api := JsonGetRaw(Body, 'api');
+  if Api <> 'v1' then
+  begin
+    Detail := 'version: api=' + IfStr(Api = '', '<нет>', Api) + ' вместо v1';
+    Exit;
+  end;
+  Result := True;
+end;
+
+{ Health-check: fail-closed — успех объявляется только при подтверждённом
+  запуске сервера целевой версии. Хук /TESTHEALTH=ok|fail подменяет весь
+  опрос (тестовая сборка); /TESTHEALTHURL направляет запросы на подставной
+  HTTP-сервер, чтобы разбор тела проверялся по-настоящему. }
+function ProbeHealth(const RequireTargetVersion: Boolean): Boolean;
+var
+  Elapsed: Integer;
+begin
+  Result := False;
+  GHealthReason := '';
 #ifdef TestMode
   if GTestHealth <> '' then
   begin
     Result := LowerCase(GTestHealth) = 'ok';
+    if not Result then GHealthReason := 'тестовый режим: ' + GTestHealth;
     LogLine('INFO', 'Health-check (тестовый режим): ' + GTestHealth);
     Exit;
   end;
 #endif
-  if not FileExists(GServerDir + '\service\etn-service.exe') then
+  if not FileExists(ServiceExePath) then
   begin
-    LogLine('ERROR', 'Health-check не выполнен: служба не найдена (' +
-      GServerDir + '\service\etn-service.exe)');
+    GHealthReason := 'служба не найдена (' + ServiceExePath + ')';
+    LogLine('ERROR', 'Health-check не выполнен: ' + GHealthReason);
     Exit;
   end;
-  Url := 'http://127.0.0.1:' + GServerPort + '/api/v1/health';
-  Result := Exec('curl.exe', '-fsS --max-time 10 ' + Url, '', SW_HIDE,
-    ewWaitUntilTerminated, Code) and (Code = 0);
-  LogLine('INFO', 'Health-check ' + Url + ': ' + Pick(Result, 'успех', 'сбой'));
-end;
-
-{ Остановка/запуск службы — зона bb063ac3 (WinSW). Точки вызова: здесь. }
-procedure StopServiceIfRunning;
-begin
-  if ServiceRegistered then
-    LogLine('INFO', 'Остановка службы: точка вызова bb063ac3 (пока не реализована)');
-end;
-
-procedure StartServiceIfNeeded;
-begin
-  if ServiceRegistered then
-    LogLine('INFO', 'Запуск службы: точка вызова bb063ac3 (пока не реализована)');
+  Elapsed := 0;
+  while True do
+  begin
+    if CheckHealthOnce(RequireTargetVersion, GHealthReason) then
+    begin
+      LogLine('INFO', 'Health-check ' + HealthBaseUrl + ': успех');
+      Result := True;
+      Exit;
+    end;
+    if Elapsed >= HealthWaitMs then Break;
+    Sleep(HealthStepMs);
+    Elapsed := Elapsed + HealthStepMs;
+  end;
+  LogLine('ERROR', 'Health-check ' + HealthBaseUrl + ': сбой — ' + GHealthReason);
 end;
 
 { ---------------------------------------------------------------------------
@@ -2901,6 +3284,369 @@ begin
     ' (баз: ' + IntToStr(Copied) + ')');
   RotateBackupArchives(BackupsDir, ArchiveName);
   Result := True;
+end;
+
+{ ---------------------------------------------------------------------------
+  Снимок отката и восстановление — задача bb063ac3.
+
+  Снимок — единственная резервная копия программы для отката: каталог
+  %ProgramData%\ETN\.install\rollback\<timestamp> с копиями server и service
+  (данные не копируются — для них есть архив ce3ab836). Создаётся до
+  копирования файлов; после успешного обновления удаляется, при отказе
+  остаётся точкой ручного восстановления до следующего успешного обновления.
+  --------------------------------------------------------------------------- }
+function RollbackRoot: String;
+begin
+  Result := GDataDir + '\.install\rollback';
+end;
+
+{ Рекурсивная копия каталога (в Inno нет готовой): раскладка установки —
+  только каталоги и файлы, символических ссылок нет. }
+function CopyTreeRec(const Src, Dest: String): Boolean;
+var
+  FindRec: TFindRec;
+  S, D: String;
+begin
+  Result := False;
+  if not DirExists(Src) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if not ForceDirectories(Dest) then
+  begin
+    LogLine('ERROR', 'Копия каталога: не удалось создать ' + Dest);
+    Exit;
+  end;
+  if not FindFirst(Src + '\*', FindRec) then
+  begin
+    { Пустой каталог: FindFirst не нашёл ни одного элемента. }
+    Result := True;
+    Exit;
+  end;
+  try
+    repeat
+      if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+      begin
+        S := Src + '\' + FindRec.Name;
+        D := Dest + '\' + FindRec.Name;
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          if not CopyTreeRec(S, D) then Exit;
+        end
+        else if not CopyFile(S, D, False) then
+        begin
+          LogLine('ERROR', 'Копия каталога: не удалось скопировать ' + S + ' в ' + D);
+          Exit;
+        end;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+  Result := True;
+end;
+
+function NewRollbackDirName(const Root: String): String;
+var
+  Base: String;
+  N: Integer;
+begin
+  Base := GetDateTimeString('yyyymmdd-hhnnss', '-', '-');
+  Result := Base;
+  N := 2;
+  while DirExists(Root + '\' + Result) do
+  begin
+    Result := Base + '-' + IntToStr(N);
+    N := N + 1;
+  end;
+end;
+
+{ Снимок перед заменой файлов. False — копию сделать не удалось: файлы
+  заменять нельзя, обновление останавливается. }
+function CreateRollbackSnapshot: Boolean;
+var
+  Dir, Name: String;
+begin
+  Result := False;
+  GLastRollbackDir := '';
+  if not GServerFilesPresent then
+  begin
+    LogLine('INFO', 'Снимок отката: файлов сервера нет — копировать нечего');
+    Result := True;
+    Exit;
+  end;
+  SetInstallStage('Снимок отката…');
+  if not ForceDirectories(RollbackRoot) then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось создать каталог ' + RollbackRoot);
+    Exit;
+  end;
+  Name := NewRollbackDirName(RollbackRoot);
+  Dir := RollbackRoot + '\' + Name;
+  if not CopyTreeRec(GServerDir + '\server', Dir + '\server') then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
+      '\server в ' + Dir);
+    Exit;
+  end;
+  if not CopyTreeRec(GServerDir + '\service', Dir + '\service') then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
+      '\service в ' + Dir);
+    Exit;
+  end;
+  GLastRollbackDir := Dir;
+  LogLine('INFO', 'Снимок отката: создан ' + GLastRollbackDir);
+  Result := True;
+end;
+
+{ Возврат файлов программы из снимка. Служба к этому моменту остановлена:
+  иначе занятые файлы не перезаписать. }
+function RestoreInstallFiles: Boolean;
+begin
+  Result := False;
+#ifdef TestMode
+  if LowerCase(GTestRollback) = 'fail' then
+  begin
+    LogLine('ERROR', 'TESTROLLBACK=fail: восстановление файлов имитирует сбой');
+    Exit;
+  end;
+#endif
+  if GLastRollbackDir = '' then
+  begin
+    LogLine('INFO', 'Откат файлов: снимка нет');
+    Result := True;
+    Exit;
+  end;
+  if not CopyTreeRec(GLastRollbackDir + '\server', GServerDir + '\server') then
+  begin
+    LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\server');
+    Exit;
+  end;
+  if not CopyTreeRec(GLastRollbackDir + '\service', GServerDir + '\service') then
+  begin
+    LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\service');
+    Exit;
+  end;
+  LogLine('INFO', 'Откат файлов: файлы возвращены из ' + GLastRollbackDir);
+  Result := True;
+end;
+
+{ Восстановление БД из архива ce3ab836: _system.db и networks\<uuid>\data.db.
+  Журналы WAL/SHM текущих файлов удаляются до копирования — иначе SQLite
+  применил бы записи неудачного запуска поверх восстановленной копии. }
+function RestoreDatabaseFromBackup: Boolean;
+var
+  Archive, Src, Dest, NetworksDir: String;
+  FindRec: TFindRec;
+begin
+  Result := False;
+  Archive := GLastBackupDir;
+  if Archive = '' then Archive := LatestBackupDir;
+  if Archive = '' then
+  begin
+    LogLine('WARN', 'Откат БД: архива нет — база не восстанавливается');
+    Result := True;
+    Exit;
+  end;
+  Src := Archive + '\_system.db';
+  Dest := GDataDir + '\_system.db';
+  DeleteFile(Dest + '-wal');
+  DeleteFile(Dest + '-shm');
+  if FileExists(Src) then
+  begin
+    if not CopyFile(Src, Dest, False) then
+    begin
+      LogLine('ERROR', 'Откат БД: не удалось вернуть ' + Src + ' в ' + Dest);
+      Exit;
+    end;
+  end;
+  NetworksDir := Archive + '\networks';
+  if DirExists(NetworksDir) and FindFirst(NetworksDir + '\*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') and
+           ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) then
+        begin
+          Src := NetworksDir + '\' + FindRec.Name + '\data.db';
+          Dest := GDataDir + '\networks\' + FindRec.Name + '\data.db';
+          DeleteFile(Dest + '-wal');
+          DeleteFile(Dest + '-shm');
+          if FileExists(Src) then
+          begin
+            if not ForceDirectories(ExtractFileDir(Dest)) then
+            begin
+              LogLine('ERROR', 'Откат БД: не удалось создать ' +
+                ExtractFileDir(Dest));
+              Exit;
+            end;
+            if not CopyFile(Src, Dest, False) then
+            begin
+              LogLine('ERROR', 'Откат БД: не удалось вернуть ' + Src + ' в ' + Dest);
+              Exit;
+            end;
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+  LogLine('INFO', 'Откат БД: база восстановлена из ' + Archive);
+  Result := True;
+end;
+
+{ Откат после неудачного обновления: остановить службу, вернуть файлы из
+  снимка, восстановить БД из архива, запустить прежнюю версию и повторить
+  health-check (без требования целевой версии — работает же прежняя).
+  Возвращает True, когда файлы и БД восстановлены; причина неудачи отката
+  дописывается в GFailureReason вместе с путями к архиву, снимку и журналу. }
+function RollbackAfterFailure: Boolean;
+var
+  Reason, Archive, Detail: String;
+  FilesOk, DbOk: Boolean;
+begin
+  Result := False;
+  if GLastRollbackDir = '' then
+  begin
+    LogLine('INFO', 'Откат не требуется: снимка нет (первая установка или ' +
+      'ремонт без замены файлов)');
+    Exit;
+  end;
+  SetInstallStage('Откат обновления…');
+  LogLine('WARN', 'Откат: начинается (' + GFailureReason + ')');
+  { Служба могла успеть запуститься на новой версии (health-check не прошёл):
+    перед возвратом файлов её нужно остановить снова. }
+  StopServiceForUpdate(Reason);
+  FilesOk := RestoreInstallFiles;
+  DbOk := RestoreDatabaseFromBackup;
+  Archive := GLastBackupDir;
+  if Archive = '' then Archive := LatestBackupDir;
+  Detail := '';
+  if not FilesOk then Detail := 'файлы не восстановлены';
+  if not DbOk then
+  begin
+    if Detail <> '' then Detail := Detail + ', ';
+    Detail := Detail + 'БД не восстановлена';
+  end;
+  if FilesOk and DbOk then
+  begin
+    LogLine('INFO', 'Откат выполнен: файлы возвращены из ' + GLastRollbackDir +
+      IfStr(Archive = '', '; архив БД не создавался', '; БД восстановлена из ' + Archive));
+    GFailureReason := GFailureReason + '. Откат выполнен: файлы возвращены из ' +
+      GLastRollbackDir +
+      IfStr(Archive = '', '', ', база восстановлена из ' + Archive) + '.';
+    Result := True;
+  end
+  else
+  begin
+    LogLine('ERROR', 'Откат не выполнен: ' + Detail + '; архив: ' +
+      IfStr(Archive = '', 'не создавался', Archive) + '; снимок: ' +
+      GLastRollbackDir + '; журнал: ' + GLogPath);
+    GFailureReason := GFailureReason + '. Откат не выполнен (' + Detail +
+      '). Архив: ' + IfStr(Archive = '', 'не создавался', Archive) +
+      '. Снимок: ' + GLastRollbackDir + '. Журнал: ' + GLogPath + '.';
+  end;
+  if not StartServiceIfNeeded then
+    LogLine('WARN', 'Откат: служба не запустилась');
+  if ProbeHealth(False) then
+    LogLine('INFO', 'Откат: прежняя версия отвечает на health-check')
+  else
+    LogLine('WARN', 'Откат: прежняя версия не отвечает (' + GHealthReason + ')');
+end;
+
+{ Вызывается ли бэкап: только при смене версии (карточка bb063ac3). Ремонт
+  той же версии — без архива; установка поверх существующих данных без записи
+  установки (adopt, первая установка) — тоже без архива: прежней версии нет,
+  менять нечего, данные установщик не трогает. }
+function BackupNeeded: Boolean;
+var
+  Old: String;
+begin
+  Result := False;
+  if GSkipCopy then Exit;
+  Old := GInstalledVersion;
+  if Old = '' then Old := GFilesVersion;
+  if Old = '' then
+  begin
+    LogLine('INFO', 'Бэкап БД: прежняя версия неизвестна (первая установка) — ' +
+      'архив не требуется');
+    Exit;
+  end;
+  if SemverCompare(Old, GProductVersion) = 0 then
+  begin
+    LogLine('INFO', 'Бэкап БД: смена версии не требуется — архив не создаётся');
+    Exit;
+  end;
+  Result := True;
+end;
+
+{ ---------------------------------------------------------------------------
+  Фазы обновления до копирования файлов — задача bb063ac3.
+  Порядок обязателен: остановка службы → бэкап БД → снимок отката. Копирование
+  файлов выполняет Inno уже после возврата из этого вызова (ssInstall).
+  Возвращает код контракта: 0 — можно копировать, 20 — предусловие,
+  10 — сбой выполнения (файлы не тронуты).
+  --------------------------------------------------------------------------- }
+function PrepareServerUpdate(var Reason: String): Integer;
+begin
+  Result := EXIT_OK;
+  Reason := '';
+  if not GDoPrivilegedWork then Exit;
+  if GSkipCopy then
+  begin
+    LogLine('INFO', 'Обновление: та же версия, файлы не заменяются — ' +
+      'служба не останавливается, бэкап не создаётся');
+    Exit;
+  end;
+  SetInstallStage('Остановка службы ETN…');
+  if not StopServiceForUpdate(Reason) then
+  begin
+    Result := EXIT_PRECONDITION;
+    Exit;
+  end;
+  if BackupNeeded then
+  begin
+    { Подпись этапа «Резервная копия баз данных…» ставит CreateDatabaseBackup. }
+    if not CreateDatabaseBackup(True) then
+    begin
+      Reason := 'резервная копия баз данных не создана: ' + GDataDir +
+        '\backups — обновление отменено, файлы не заменялись (причина в журнале)';
+      { Служба уже остановлена — возвращаем её: сервер обязан работать на
+        прежней версии (сценарий bc7cc846). }
+      if not StartServiceIfNeeded then
+        LogLine('WARN', 'Не удалось вернуть службу после неудачного бэкапа');
+      Result := EXIT_FAILED;
+      Exit;
+    end;
+  end;
+  if not CreateRollbackSnapshot then
+  begin
+    Reason := 'снимок отката не создан: ' + RollbackRoot +
+      ' — обновление отменено, файлы не заменялись (причина в журнале)';
+    if not StartServiceIfNeeded then
+      LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка');
+    Result := EXIT_FAILED;
+    Exit;
+  end;
+end;
+
+{ Успешное обновление: копия отката больше не нужна. Ошибка удаления
+  установку не отменяет — снимок остаётся до следующего успешного обновления. }
+procedure CleanupRollbackSnapshot;
+begin
+  if GLastRollbackDir = '' then Exit;
+  if DelTree(GLastRollbackDir, True, True, True) then
+  begin
+    LogLine('INFO', 'Снимок отката удалён после успешного обновления: ' +
+      GLastRollbackDir);
+    GLastRollbackDir := '';
+  end
+  else
+    LogLine('WARN', 'Снимок отката не удалось удалить: ' + GLastRollbackDir +
+      ' — оставлен до следующего успешного обновления');
 end;
 
 { ---------------------------------------------------------------------------
@@ -4300,9 +5046,20 @@ begin
   GTestResult := '';
   GTestServiceName := '';
   GTestOwnServicePid := '';
+  GTestServiceCmd := '';
+  GTestServiceState := '';
+  GTestServiceStop := '';
+  GTestServiceStart := '';
+  GTestServiceWait := '';
+  GTestHealthUrl := '';
+  GTestHealthWait := '';
+  GTestHealthStep := '';
+  GTestRollback := '';
   GTestBackup := '';
   GTestLegacy := '';
   GLastBackupDir := '';
+  GLastRollbackDir := '';
+  GHealthReason := '';
   GAdminLogin := '';
   GAdminDisplayName := '';
   GFirstUserChecked := False;
@@ -4371,6 +5128,15 @@ begin
   GTestResult := ParamValue('TESTRESULT');
   GTestServiceName := ParamValue('TESTSERVICENAME');
   GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
+  GTestServiceCmd := ParamValue('TESTSERVICECMD');
+  GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
+  GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
+  GTestServiceStart := LowerCase(ParamValue('TESTSERVICESTART'));
+  GTestServiceWait := ParamValue('TESTSERVICEWAIT');
+  GTestHealthUrl := ParamValue('TESTHEALTHURL');
+  GTestHealthWait := ParamValue('TESTHEALTHWAIT');
+  GTestHealthStep := ParamValue('TESTHEALTHSTEP');
+  GTestRollback := LowerCase(ParamValue('TESTROLLBACK'));
   GTestBackup := ParamValue('TESTBACKUP');
   GTestLegacy := ParamValue('TESTLEGACY');
   GTestLegacyCmd := ParamValue('TESTLEGACYCMD');
@@ -4993,22 +5759,42 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  HealthOk: Boolean;
+  Reason, FailText: String;
+  Code: Integer;
 begin
   if CurStep = ssInstall then
   begin
-    { Подпись этапа на странице установки. При копировании файлов Inno
-      показывает их имена в FilenameLabel — подпись этапа видна в момент
+    { ssInstall вызывается ДО копирования файлов: здесь и только здесь можно
+      остановить службу, сделать бэкап и снимок отката. При копировании файлов
+      Inno показывает их имена в FilenameLabel — подпись этапа видна в момент
       перехода и снова появляется на этапах после копирования. }
-    if GWorkAllowed then
+    if GWorkAllowed and (GExitCode = EXIT_OK) then
     begin
       { Двухфазный UAC: серверные файлы, службу и init выполнил дочерний
         silent-процесс, а этот экземпляр копирует только клиент «для меня» —
         называть конкретный этап здесь нельзя (замечание приёмки 112642a4).
         Подробные этапы дочернего процесса — в журнале. }
       if GChildRanThisPass then
-        SetInstallStage('Установка выполняется…')
-      else if GServerSelected then
+        SetInstallStage('Установка выполняется…');
+      { Фазы обновления (bb063ac3): остановка службы, бэкап БД, снимок
+        отката — строго до первого изменённого файла. Неудача предусловия
+        (служба не остановилась) — код 20, сбой (бэкап/снимок) — код 10.
+        Процесс завершается здесь же: Inno не должен дойти до копирования. }
+      Code := PrepareServerUpdate(Reason);
+      if Code <> EXIT_OK then
+      begin
+        FailText := 'Установка не начата: ' + Reason;
+        LogLine('ERROR', FailText + ' (код ' + IntToStr(Code) + ')');
+        if GFailureReason = '' then GFailureReason := Reason;
+        if GReasonFile <> '' then
+          SaveStringToFile(GReasonFile, Utf8Encode(Reason), False);
+        GExitCode := Code;
+        if not GSilent then
+          SuppressibleMsgBox(FailText + '.' + #13#10#13#10 + 'Изменения не выполнялись. ' +
+            'Журнал: ' + GLogPath, mbError, MB_OK, IDOK);
+        ExitProcess(Code);
+      end;
+      if GServerSelected then
         SetInstallStage('Замена файлов сервера ETN…')
       else if GClientSelected then
         SetInstallStage('Замена файлов клиента ETN…');
@@ -5019,17 +5805,12 @@ begin
   begin
     if GSilent then
       LogLine('INFO', 'Silent server-only: установка файлов завершена');
-    HealthOk := True;
     if GDoPrivilegedWork then
     begin
-      { Порядок шагов — контракт bb063ac3: остановка службы, замена файлов,
-        инициализация (только первая установка), запуск, health-check;
-        install.json пишется только после успешной проверки, иначе после
-        отката файл врал бы о новой версии. Подписи этапов стоят в точках
-        вызова: пока bb063ac3 не реализована, остановка и запуск службы —
-        заглушки, но этапы уже называют реальные операции. }
-      SetInstallStage('Остановка службы ETN…');
-      StopServiceIfRunning;
+      { Служба уже остановлена в ssInstall; здесь — каталоги данных, шаблон
+        службы, инициализация (только первая установка), запуск и расширенный
+        health-check. install.json пишется только после успешной проверки —
+        иначе после отката файл врал бы о новой версии. }
       { Каталог данных и подкаталоги, которые обязаны существовать до старта
         службы (WinSW каталог журнала не создаёт) — 9b310991. }
       if GServerSelected then
@@ -5075,25 +5856,37 @@ begin
       if GExitCode = EXIT_OK then
       begin
         SetInstallStage('Запуск службы ETN…');
-        StartServiceIfNeeded;
-        SetInstallStage('Проверка работоспособности…');
-        HealthOk := ProbeHealth;
-        if not HealthOk then
-          FailInstall('health-check не пройден: сервер не ответил на ' +
-            'http://127.0.0.1:' + GServerPort + '/api/v1/health');
-      end
-      else
-        HealthOk := False;
+        if not StartServiceIfNeeded then
+          FailInstall('служба ' + SERVICE_NAME + ' не запустилась после замены ' +
+            'файлов (etn-service.exe start вернул ошибку)')
+        else
+        begin
+          SetInstallStage('Проверка работоспособности…');
+          { Расширенный health-check (0a79d9de): 200, status=ok, db=ok,
+            версия = целевая; затем GET /api/v1/version. }
+          if not ProbeHealth(True) then
+            FailInstall('health-check не пройден: ' + GHealthReason);
+        end;
+      end;
       { Silent: init не вызывался; без администратора сервер не работает —
         код 10, нужен ручной режим. }
-      if HealthOk and (GExitCode = EXIT_OK) and IsSilentServerOnly then
+      if (GExitCode = EXIT_OK) and IsSilentServerOnly then
       begin
         if not SilentAdminPresent then
           FailInstall('сервер не инициализирован: нет первого администратора ' +
             '(нужен ручной режим etn init --username)');
       end;
+      { Сбой после замены файлов — возвращаем прежнюю версию: файлы из снимка,
+        БД из архива, запуск и повторная проверка. Код уже 10, install.json
+        не пишется. }
+      if GExitCode <> EXIT_OK then
+        RollbackAfterFailure;
     end;
-    if HealthOk and (GExitCode = EXIT_OK) and NeedInstallRecord then
+    { Успех: копия отката удаляется — только после подтверждённого health-check
+      и только после успеха (при отказе она остаётся точкой восстановления). }
+    if (GExitCode = EXIT_OK) and GDoPrivilegedWork then
+      CleanupRollbackSnapshot;
+    if (GExitCode = EXIT_OK) and NeedInstallRecord then
     begin
       SetInstallStage('Запись параметров установки…');
       if not WriteInstallJson then
