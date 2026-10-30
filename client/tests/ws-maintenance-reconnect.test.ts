@@ -197,7 +197,7 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     }
   });
 
-  it('исчерпав 12 попыток, останавливается в offline/server-maintenance без цикла', async () => {
+  it('исчерпав 12 попыток, уходит в offline/server-maintenance и ждёт retry_after', async () => {
     const { server, url, close } = await startServer();
     const timers = makeFakeTimers();
     const conn = nextConnection(server);
@@ -228,8 +228,80 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     assert.equal(scheduled, 12, 'ровно 12 попыток');
     assert.equal(client.getStatusDetail(), 'server-maintenance');
     await wait(100);
-    assert.equal(timers.reconnect(), undefined, 'новых попыток не планируется');
+    // Быстрого цикла нет: единственный запланированный таймер — медленный
+    // повтор по серверной рекомендации (кадр не приходил → запасные 30 с).
+    assert.equal(timers.reconnect(), undefined, 'новых быстрых попыток не планируется');
+    const slow = timers.all().find((timer) => timer.ms === 30_000);
+    assert.ok(slow !== undefined, 'запланирован медленный повтор через 30 с');
     assert.equal(client.getStatus(), 'offline');
+
+    // Медленный повтор обязан ДЕЙСТВИТЕЛЬНО попробовать снова: сервер всё ещё
+    // недоступен, поэтому следующий повтор снова планируется через 30 с —
+    // клиент сам вернётся в работу, когда обновлённый сервер поднимется.
+    timers.run(slow);
+    await until(() => timers.all().some((timer) => timer.ms === 30_000));
+    assert.equal(client.getStatus(), 'offline');
+  });
+
+  it('кадр maintenance задаёт retry_after и уточняет паузу после бюджета', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const timers = makeFakeTimers();
+    const conn = nextConnection(server);
+    const client = makeClient(url, timers, { maintenanceReconnectLimit: 1 });
+    const frames: unknown[] = [];
+    client.onTyped('maintenance', (frame) => frames.push(frame));
+    client.connect();
+    const ws = await conn;
+    await until(() => client.getStatus() === 'connected');
+
+    // Кадр приходит ДО close 1012 и сразу переводит клиент в обслуживание.
+    ws.send(
+      JSON.stringify({
+        type: 'maintenance',
+        reason: 'server-updating',
+        retry_after: 7.2,
+        target_version: '0.15.2',
+      }),
+    );
+    await until(() => client.getStatusDetail() === 'server-maintenance');
+    assert.equal(client.getStatus(), 'reconnecting');
+    assert.deepEqual(frames, [
+      { type: 'maintenance', reason: 'server-updating', retry_after: 8, target_version: '0.15.2' },
+    ]);
+
+    // Одна быстрая попытка по бюджету, затем пауза из кадра (8 с), а не 30.
+    ws.close(1012, 'maintenance');
+    await close();
+    await until(() => timers.reconnect() !== undefined);
+    timers.run(timers.reconnect()!);
+    await until(() => client.getStatus() === 'offline');
+    await wait(100);
+    assert.equal(timers.reconnect(), undefined, 'быстрого цикла нет');
+    const slow = timers.all().find((timer) => timer.ms === 8_000);
+    assert.ok(slow !== undefined, 'пауза взята из retry_after кадра');
+  });
+
+  it('кадр maintenance без retry_after получает запасные 30 с и null target_version', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const timers = makeFakeTimers();
+    const conn = nextConnection(server);
+    const client = makeClient(url, timers, { maintenanceReconnectLimit: 1 });
+    const frames: unknown[] = [];
+    client.onTyped('maintenance', (frame) => frames.push(frame));
+    client.connect();
+    const ws = await conn;
+    await until(() => client.getStatus() === 'connected');
+
+    ws.send(JSON.stringify({ type: 'maintenance', retry_after: 0, target_version: '' }));
+    await until(() => frames.length === 1);
+    assert.deepEqual(frames[0], {
+      type: 'maintenance',
+      reason: 'server-updating',
+      retry_after: 30,
+      target_version: null,
+    });
   });
 
   it('сервер принимает сокет и снова присылает 1012 — бюджет не обнуляется', async () => {
@@ -261,7 +333,11 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     }
     await until(() => client.getStatus() === 'offline');
     assert.equal(client.getStatusDetail(), 'server-maintenance');
-    assert.equal(timers.reconnect(), undefined, 'бесконечного цикла нет');
+    assert.equal(timers.reconnect(), undefined, 'быстрого цикла нет');
+    assert.ok(
+      timers.all().some((timer) => timer.ms === 30_000),
+      'вместо цикла — медленный повтор через retry_after',
+    );
   });
 
   it('10 с стабильного соединения обнуляют бюджет: следующий 1006 идёт обычной задержкой', async () => {

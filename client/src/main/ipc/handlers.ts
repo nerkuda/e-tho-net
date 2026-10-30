@@ -21,7 +21,7 @@ import { CLIENT_META_KEY, EtnError, NOT_CONNECTED_ERROR_TEXT, NOT_CONNECTED_NETW
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult, ServerMaintenanceDto } from './contract.js';
 import type { CompatibilityResult } from '../compatibility.js';
 import { openClientUpdatePage } from '../client-update.js';
 import { readClipboard } from './clipboard.js';
@@ -59,6 +59,12 @@ export interface HandlerDeps {
    * отключился. Владелец состояния — `CompatibilityGate` в `register.ts`.
    */
   getCompatibility: () => CompatibilityResult | null;
+  /**
+   * Текущее состояние обслуживания сервера (задача 479e37ed, требование
+   * 9636b1cc, форма IPC `ServerMaintenanceDto`). Владелец — `register.ts`;
+   * `active: false` означает штатную работу.
+   */
+  getServerMaintenance: () => ServerMaintenanceDto;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
   getCurrentNetworkId: () => string | null;
   /** Opens a network: persists L4 state, connects realtime, returns meta. */
@@ -190,6 +196,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'realtime.getStatuses',
     bind(() => deps.getRealtimePool()?.statusSnapshot() ?? []),
+  );
+
+  // Состояние обслуживания сервера (задача 479e37ed): рендерер забирает его
+  // при старте/подключении — не дожидаясь первого кадра или статуса.
+  handlers.set(
+    'realtime.getMaintenance',
+    bind(() => deps.getServerMaintenance()),
   );
 
   // --- networks -------------------------------------------------------------

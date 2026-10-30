@@ -183,4 +183,24 @@ describe('errText: дружелюбные сообщения', () => {
   it('не-Error значения приводятся к строке (совместимость)', () => {
     assert.equal(errText('строка'), 'строка');
   });
+
+  it('503 SERVER_UPDATING → «сервер обновляется» со сроком, без «недоступен» (479e37ed)', () => {
+    const text = errText(
+      new EtnError('SERVER_UPDATING', 'Server is updating', {
+        retry_after: 42.4,
+        target_version: '0.15.2',
+      }),
+    );
+    assert.equal(text, 'сервер обновляется, попробуйте примерно через 43 с');
+    assert.doesNotMatch(text, /недоступен|Server is updating|503/i);
+    // Конверт без пригодного срока — формулировка без числа.
+    assert.equal(
+      errText({ code: 'SERVER_UPDATING', details: { retry_after: 0 } }),
+      'сервер обновляется, попробуйте позже',
+    );
+    assert.equal(
+      errText({ code: 'SERVER_UPDATING' }),
+      'сервер обновляется, попробуйте позже',
+    );
+  });
 });

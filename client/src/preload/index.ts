@@ -403,6 +403,13 @@ function buildApi(): EtnBridgeApi {
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
       getStatuses: () => invoke('realtime.getStatuses'),
+      getMaintenance: () => invoke('realtime.getMaintenance'),
+      onMaintenance(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { active: boolean; retry_after?: number; target_version?: string | null });
+        ipcRenderer.on('realtime:maintenance', listener);
+        return () => ipcRenderer.removeListener('realtime:maintenance', listener);
+      },
       onStale(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
           cb(payload as { networkId: string; lastSeq: number });

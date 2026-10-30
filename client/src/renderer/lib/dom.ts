@@ -166,6 +166,9 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  * - `INTERNAL` and raw transport errors (`fetch failed`, `ECONN*`,
  *   `ETIMEDOUT`, «Сетевая ошибка») → «сервер недоступен, попробуйте позже» —
  *   technical words, codes and stacks never leak;
+ * - `503 SERVER_UPDATING` → «сервер обновляется» со сроком из
+ *   `details.retry_after` (задача 479e37ed): штатное обслуживание не выдаётся
+ *   за недоступность сервера;
  * - `422` по адресу стороны свойства-связи (`details.field === 'side'`), при
  *   коллизии display-имён (`details.reason === 'property-ambiguous'`) и при
  *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) →
@@ -179,12 +182,29 @@ export function errText(err: unknown): string {
   const like = asErrorLike(err);
   if (like?.name === 'AbortError') return t('errors.actionCancelled');
   if (like?.code === 'INTERNAL') return t('errors.serverUnavailable');
+  if (like?.code === 'SERVER_UPDATING') return serverUpdatingText(like.details);
   const message = err instanceof Error ? err.message : String(err);
   if (ABORT_ERROR_RE.test(message)) return t('errors.actionCancelled');
   if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
   const sideText = propertySideErrorText(like);
   if (sideText !== null) return sideText;
   return message;
+}
+
+/**
+ * Текст для `503 SERVER_UPDATING` (задача 479e37ed): штатное обновление сервера
+ * — не «сервер недоступен». Срок берётся из `details.retry_after` серверного
+ * конверта; нечисловое/нулевое значение — общая формулировка без срока.
+ */
+function serverUpdatingText(details: unknown): string {
+  const retry =
+    typeof details === 'object' && details !== null
+      ? (details as { retry_after?: unknown }).retry_after
+      : undefined;
+  if (typeof retry === 'number' && Number.isFinite(retry) && retry > 0) {
+    return t('errors.serverUpdating', Math.ceil(retry));
+  }
+  return t('errors.serverUpdatingNoRetry');
 }
 
 /**

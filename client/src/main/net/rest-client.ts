@@ -70,10 +70,16 @@ import {
   type TypeOwnerType,
   type UpdateJob,
   type ClientVersionErrorDetails,
+  type ServerUpdatingErrorDetails,
 } from '@etn/shared';
 
 import { getClientLog } from '../log/client-log.js';
 import type { ConnectFailureDetails, ConnectFailureReason } from '../ipc/contract.js';
+import {
+  DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+  serverUpdatingError,
+  type ServerMaintenanceHandle,
+} from '../server-maintenance.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -225,6 +231,15 @@ export interface RestClientOptions {
    */
   onClientVersionUnsupported?: (details: ClientVersionErrorDetails | null) => void;
   /**
+   * Состояние обслуживания сервера (задача 479e37ed, требование 9636b1cc):
+   * пока оно активно, изменяющий запрос НЕ отправляется — клиент отвечает
+   * `SERVER_UPDATING` с `retry_after` из состояния (повтор раньше `Retry-After`
+   * запрещён). Ответ `503 SERVER_UPDATING` от сервера переводит состояние в
+   * активное; успешный `GET /me` — выводит из него. Владелец состояния —
+   * `register.ts`; без него гейт выключен (юнит-тесты без обслуживания).
+   */
+  serverMaintenance?: ServerMaintenanceHandle;
+  /**
    * Прикладной таймаут одного HTTP-запроса, мс. По умолчанию
    * {@link RESPONSE_TIMEOUT_MS} (30 с); переопределение — для тестов
    * (молчащий сервер не должен держать сьют полминуты).
@@ -302,6 +317,7 @@ export class RestClient {
   private readonly random: () => number;
   private readonly isServerDown: () => boolean;
   private readonly onClientVersionUnsupported: (details: ClientVersionErrorDetails | null) => void;
+  private readonly serverMaintenance: ServerMaintenanceHandle | undefined;
   private readonly responseTimeoutMs: number;
 
   /**
@@ -367,7 +383,20 @@ export class RestClient {
     this.random = opts.random ?? Math.random;
     this.isServerDown = opts.isServerDown ?? (() => false);
     this.onClientVersionUnsupported = opts.onClientVersionUnsupported ?? (() => undefined);
+    this.serverMaintenance = opts.serverMaintenance;
     this.responseTimeoutMs = opts.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS;
+  }
+
+  /**
+   * Текущее состояние обслуживания сервера, если оно активно (задача 479e37ed).
+   * `null` — сервер работает штатно. Владелец — `register.ts`; здесь только
+   * чтение для гейта и показа.
+   */
+  public getServerMaintenance(): ServerUpdatingErrorDetails | null {
+    const info = this.serverMaintenance?.get() ?? null;
+    return info === null
+      ? null
+      : { retry_after: info.retry_after, target_version: info.target_version };
   }
 
   /**
@@ -595,6 +624,23 @@ export class RestClient {
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Maintenance gate (задача 479e37ed, требование 9636b1cc): пока сервер
+      // обновляется, изменяющий запрос не уходит вовсе — ни первой попыткой,
+      // ни повтором. Ответ — тот же канонический `SERVER_UPDATING` с
+      // `retry_after`, что вернул бы сервер, поэтому UI показывает причину
+      // обслуживания, а не «сервер недоступен». Чтения проходят: их серверный
+      // гейт не блокирует.
+      if (dataChanging) {
+        const maintenance = this.getServerMaintenance();
+        if (maintenance !== null) {
+          getClientLog()?.info('rest', 'request blocked: server maintenance', {
+            method,
+            path,
+            retry_after: maintenance.retry_after,
+          });
+          throw serverUpdatingError(maintenance);
+        }
+      }
       // Link gate (de34b35b): a mutating request for an unreachable network is
       // never sent — not even as a retry after the link dropped mid-flight.
       // Requests without a network context (`me.*`, `networks.create`, …) are
@@ -717,7 +763,21 @@ export class RestClient {
       // Retry transient server errors (5xx) once more — unless this call opted
       // out of automatic repeats. A 5xx with `retry: false` falls through to
       // `parseResponse`, so the caller sees the server's own error code.
-      if (retrying && res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {
+      //
+      // `503` с заголовком `Retry-After` НЕ повторяется (задача 479e37ed): у
+      // него собственный срок повтора — серверный `Retry-After`. Повтор внутри
+      // вызова шёл бы раньше него и превращал обслуживание в шторм запросов.
+      // Конверт разбирается штатно: `SERVER_UPDATING` переводит клиент в
+      // состояние обслуживания и отдаёт `retry_after` наверх. Голый `503` (без
+      // `Retry-After` — например, от прокси) остаётся обычной транзиентной
+      // ошибкой и повторяется, как раньше.
+      if (
+        retrying &&
+        res.status >= 500 &&
+        res.status < 600 &&
+        !(res.status === 503 && res.headers.get('retry-after') !== null) &&
+        attempt < MAX_ATTEMPTS
+      ) {
         lastError = new Error(`HTTP ${res.status}`);
         await this.backoff(method, path, attempt, `http_${res.status}`);
         continue;
@@ -735,6 +795,10 @@ export class RestClient {
       // was in flight could have been computed by the server BEFORE its commit
       // and delivered after it, so it must not be reused by later reads either.
       if (dataChanging) this.invalidateInFlightReads();
+      // Конец обслуживания (контракт 2f599b67): успешный `GET /me` — признак,
+      // что обновлённый сервер поднялся и принял сессию. Снимать состояние по
+      // любому успешному чтению нельзя: чтения во время обслуживания работают.
+      if (method === 'GET' && path === '/me') this.serverMaintenance?.leave();
       return envelope;
     }
 
@@ -789,6 +853,7 @@ export class RestClient {
       const err = body?.error;
       if (err) {
         this.notifyVersionRejection(err.code, err.details);
+        this.notifyServerUpdating(err.code, err.details);
         throw new EtnError(err.code, err.message, err.details, err.request_id);
       }
       // Server returned an error in a non-canonical shape.
@@ -820,6 +885,18 @@ export class RestClient {
   private notifyVersionRejection(code: string, details: unknown): void {
     if (code !== 'CLIENT_VERSION_UNSUPPORTED') return;
     this.onClientVersionUnsupported(versionDetailsOrNull(details));
+  }
+
+  /**
+   * Сообщает владельцу состояния об отказе `503 SERVER_UPDATING` (задача
+   * 479e37ed): сервер ушёл в обслуживание до запуска установщика. Дальнейшие
+   * изменяющие запросы блокируются до успешного `GET /me` или открытия
+   * WebSocket — ровно поэтому мало «просто показать ошибку»: следующий клик
+   * пользователя не должен снова уходить на сервер раньше `Retry-After`.
+   */
+  private notifyServerUpdating(code: string, details: unknown): void {
+    if (code !== 'SERVER_UPDATING' || this.serverMaintenance === undefined) return;
+    this.serverMaintenance.enter(serverUpdatingDetailsOrNull(details), 'rest');
   }
 
   /**
@@ -4291,6 +4368,32 @@ function versionDetailsOrNull(details: unknown): ClientVersionErrorDetails | nul
   const d = details as Record<string, unknown>;
   if (typeof d['reason'] !== 'string') return null;
   return details as ClientVersionErrorDetails;
+}
+
+/**
+ * `details` отказа `503 SERVER_UPDATING` → типизированный вид. Недостающая или
+ * битая пауза заменяется умолчанием серверной стороны: клиенту нужен срок
+ * повтора для показа и паузы, а не точность чужого поля.
+ */
+function serverUpdatingDetailsOrNull(
+  details: unknown,
+): Pick<ServerUpdatingErrorDetails, 'retry_after' | 'target_version'> {
+  if (typeof details !== 'object' || details === null) {
+    return {
+      retry_after: DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+      target_version: null,
+    };
+  }
+  const d = details as Record<string, unknown>;
+  const retry = d['retry_after'];
+  const target = d['target_version'];
+  return {
+    retry_after:
+      typeof retry === 'number' && Number.isFinite(retry) && retry > 0
+        ? Math.ceil(retry)
+        : DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+    target_version: typeof target === 'string' && target.trim() !== '' ? target : null,
+  };
 }
 
 /** Retry reason classification for the journal (timeout / network / 5xx). */

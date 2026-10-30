@@ -67,7 +67,12 @@ import {
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
-import { initRealtime, refreshRealtimeStatuses, setRealtimeEffects } from './realtime.js';
+import {
+  initRealtime,
+  refreshRealtimeStatuses,
+  refreshServerMaintenance,
+  setRealtimeEffects,
+} from './realtime.js';
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
@@ -175,6 +180,9 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // status snapshot so the indicator does not wait for the next broadcast
   // (defect de34b35b, verify remark 4).
   void refreshRealtimeStatuses();
+  // Обслуживание сервера (задача 479e37ed): перечитываем и его состояние —
+  // редкий случай, когда оно уже активно к моменту открытия сети.
+  void refreshServerMaintenance();
   const prefs = await etn.networks.getPreferences(networkId);
   if (!isCurrentOpenNetwork(seq)) return;
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
@@ -943,8 +951,10 @@ export async function boot(): Promise<void> {
       const me = await etn.server.connect(active.id);
       store.update({ profileId: active.id, serverLabel, me });
       // The realtime pool now exists: pull the per-network status snapshot
-      // (defect de34b35b, verify remark 4).
+      // (defect de34b35b, verify remark 4) and the maintenance state
+      // (задача 479e37ed).
       void refreshRealtimeStatuses();
+      void refreshServerMaintenance();
       // Q-bugfix: restore the previous session — saved tabs go straight to
       // the most recently active one, no forced re-pick from the network list.
       await restoreSession();

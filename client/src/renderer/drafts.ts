@@ -32,6 +32,7 @@ import { findPermanentComment } from './lib/permanent-comment.js';
 import { t } from './lib/i18n.js';
 import { notice, toast } from './lib/notice.js';
 import { pluralRu } from './lib/plural.js';
+import { serverMaintenanceText } from './lib/server-maintenance-text.js';
 import { isConnected } from './realtime.js';
 import { getRtStatus, store, type RtStatus } from './state.js';
 
@@ -67,8 +68,17 @@ let hadConnection = false;
 /** Previous per-network statuses (draft retries are per network, de34b35b). */
 let prevByNetwork: Record<string, RtStatus> = {};
 
-/** Status-specific warning shown when the active connection drops (de34b35b). */
+/**
+ * Status-specific warning shown when the active connection drops (de34b35b).
+ *
+ * Обслуживание сервера — отдельная причина (задача 479e37ed, сценарий
+ * 610169a5): close `1012`/кадр `maintenance` НЕ выдаётся за «переподключение
+ * или сетевую аварию». Когда main подтвердил состояние обслуживания, текст
+ * говорит «сервер обновляется» и называет срок из `retry_after`.
+ */
 function linkLossMessage(status: RtStatus): string {
+  const maintenanceText = serverMaintenanceText(store.state.serverMaintenance);
+  if (maintenanceText !== null) return maintenanceText;
   switch (status) {
     case 'suspect':
       return t('realtime.link.lostSuspect');

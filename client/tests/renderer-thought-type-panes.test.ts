@@ -261,6 +261,7 @@ describe('изменение типа перечитывает редактор 
       },
       realtime: {
         onStatusChange: () => undefined,
+        onMaintenance: () => undefined,
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,

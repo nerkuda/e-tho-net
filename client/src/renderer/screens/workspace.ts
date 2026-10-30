@@ -26,10 +26,12 @@
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
+import { serverMaintenanceText } from '../lib/server-maintenance-text.js';
 import { mountStatusMessage, unmountStatusMessage } from '../lib/status-message.js';
 import { initUpdateBanner, createUpdateBannerHost } from '../lib/update-banner.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { store, getRtStatus, getRtStatusDetail, type RtStatus, type RtStatusDetail } from '../state.js';
+import type { ServerMaintenanceDto } from '../../main/ipc/contract.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
@@ -167,14 +169,27 @@ export interface StatusGlyph {
  * every "link is not usable right now" state (`connecting`, `suspect`,
  * `reconnecting`, planned restart), red is the 60 s `offline`, neutral is
  * `idle` (no network open — not a failure).
+ *
+ * Обслуживание сервера (задача 479e37ed) важнее статуса сокета: пока main
+ * подтверждает `serverMaintenance`, показатель говорит «Сервер: обновление»
+ * и НЕ показывает «Нет соединения»/«Сервер недоступен» — это штатная
+ * остановка на обновление, а не авария. Срок до возврата — в тултипе.
  */
 export function statusGlyph(
   status: RtStatus,
   detail?: RtStatusDetail | null,
   serverLabel?: string | null,
+  maintenance?: ServerMaintenanceDto | null,
 ): StatusGlyph {
   const label = serverLabel?.trim() ?? '';
   const named = label !== '';
+  if (maintenance !== null && maintenance !== undefined && maintenance.active === true) {
+    return {
+      cls: 'warn',
+      text: t('realtime.status.serverMaintenance'),
+      title: serverMaintenanceText(maintenance) ?? t('realtime.tip.maintenanceNoRetry'),
+    };
+  }
   switch (status) {
     case 'connected':
       return {
@@ -564,7 +579,7 @@ export function buildWorkspace(): HTMLElement {
     layerMenuLabel.textContent = truncateLayerMenuLabel(st.currentLayer?.title);
     setTooltip(layerMenuButton, layerMenuTooltip(st.currentLayer?.title));
     const rtStatus = getRtStatus(st);
-    const glyph = statusGlyph(rtStatus, getRtStatusDetail(st), st.serverLabel);
+    const glyph = statusGlyph(rtStatus, getRtStatusDetail(st), st.serverLabel, st.serverMaintenance);
     statusLeft.className = `status-light ${glyph.cls}`.trimEnd();
     // One tooltip for the whole indicator block (dot + caption).
     setTooltip(sbStatus, glyph.title);

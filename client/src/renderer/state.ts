@@ -34,7 +34,7 @@ import {
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
-import type { CompatibilityResult, TabDto } from '../main/ipc/contract.js';
+import type { CompatibilityResult, ServerMaintenanceDto, TabDto } from '../main/ipc/contract.js';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
@@ -228,6 +228,14 @@ export interface AppState {
    * ed068706; сами элементы — задачи 0afec967/b57910b5, здесь только состояние.
    */
   compatibility: CompatibilityResult | null;
+  /**
+   * Обслуживание сервера (задача 479e37ed, требование 9636b1cc): `null` —
+   * сервер работает штатно. Активное состояние приходит каналом
+   * `realtime:maintenance` (кадр `maintenance` или `503 SERVER_UPDATING`) и
+   * снимается подтверждением восстановления (`GET /me` / открытие WebSocket).
+   * По нему статус-бар и уведомление показывают причину, а не сетевую ошибку.
+   */
+  serverMaintenance: ServerMaintenanceDto | null;
 }
 
 /** Initial snapshot. */
@@ -291,6 +299,7 @@ const initial: AppState = {
   lockCache: {},
   lockCacheTick: 0,
   compatibility: null,
+  serverMaintenance: null,
 };
 
 /**

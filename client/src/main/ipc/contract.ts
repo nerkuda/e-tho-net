@@ -249,6 +249,24 @@ export interface RealtimeStatusSnapshotDto {
 }
 
 /**
+ * Состояние обслуживания сервера для рендерера (задача 479e37ed, требование
+ * 9636b1cc). `active: false` — сервер работает штатно и полей нет. Активное
+ * состояние несёт `retry_after` (секунды до рекомендуемого повтора) и
+ * `target_version` (версия обновления; `null` — неизвестна) — по ним UI
+ * строит текст «сервер обновляется, вернётся примерно через N с».
+ *
+ * Одно на активное подключение (сервер один): кадр `maintenance` по любой сети
+ * и `503 SERVER_UPDATING` на изменяющем запросе дают одно и то же состояние.
+ */
+export interface ServerMaintenanceDto {
+  active: boolean;
+  /** Рекомендуемая пауза до повтора, целые секунды (только при `active`). */
+  retry_after?: number;
+  /** Версия, до которой обновляется сервер (только при `active`). */
+  target_version?: string | null;
+}
+
+/**
  * Упаковать брошенную main-обработчиком ошибку в {@link IpcErrorEnvelope}.
  * Поля `code`/`details`/`requestId` берутся у `EtnError`; для прочих ошибок
  * остаются только `name` и `message`.
@@ -1389,6 +1407,20 @@ export interface EtnApi {
      * instead of the status of whichever network reported last.
      */
     getStatuses(): Promise<RealtimeStatusSnapshotDto[]>;
+    /**
+     * Текущее состояние обслуживания сервера (задача 479e37ed). Рендерер
+     * читает его при старте и на каждом подключении, чтобы не ждать первого
+     * кадра/статуса; активное состояние — повод показать «сервер обновляется»
+     * и блокировать изменяющие действия.
+     */
+    getMaintenance(): Promise<ServerMaintenanceDto>;
+    /**
+     * Смена состояния обслуживания сервера (задача 479e37ed). Один канал на
+     * сервер: кадр `maintenance` любой сети и `503 SERVER_UPDATING` дают одну
+     * и ту же запись; `active: false` — обслуживание закончилось (успешный
+     * `GET /me` или открытие WebSocket).
+     */
+    onMaintenance(cb: (payload: ServerMaintenanceDto) => void): () => void;
     /**
      * `resume.stale` per network (Q2). Payload: `{networkId, lastSeq}` — the
      * UI must fully re-focus the network whose event-log window was exceeded.

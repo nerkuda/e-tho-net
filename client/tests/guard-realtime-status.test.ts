@@ -77,6 +77,20 @@ describe('guard: статусы realtime-соединения', () => {
       text: 'Сервер: —',
       title: 'Сеть не открыта',
     });
+    // Обслуживание сервера (задача 479e37ed) сильнее статуса сокета: даже при
+    // `offline` пользователь видит «Сервер: обновление», а НЕ «Нет соединения».
+    assert.deepEqual(statusGlyph('offline', 'server-maintenance', server, { active: true, retry_after: 30 }), {
+      cls: 'warn',
+      text: 'Сервер: обновление',
+      title: 'Сервер обновляется, вернётся примерно через 30 с',
+    });
+    assert.deepEqual(statusGlyph('connected', null, server, { active: true, target_version: null }), {
+      cls: 'warn',
+      text: 'Сервер: обновление',
+      title: 'Сервер обновляется, ожидаем восстановления',
+    });
+    // Неактивное состояние ничего не меняет — обычная таблица.
+    assert.equal(statusGlyph('offline', null, server, { active: false }).cls, 'bad');
     // Имя сервера неизвестно — общие формулировки без подстановки.
     assert.equal(statusGlyph('connected', null, null).title, 'Подключено к серверу');
     assert.equal(statusGlyph('connecting', null, null).title, 'Подключение к серверу…');

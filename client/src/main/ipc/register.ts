@@ -34,6 +34,8 @@ import {
   connectProfileWithCompatibility,
 } from './connect-active-profile.js';
 import { ConnectionLifecycle } from './connection-lifecycle.js';
+import { ServerMaintenanceState, serverUpdatingError } from '../server-maintenance.js';
+import { MAINTENANCE_RETRY_AFTER_FALLBACK_S } from '../net/ws-client.js';
 import {
   CompatibilityGate,
   isReconnectTransition,
@@ -111,6 +113,27 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   };
 
   /**
+   * Единое состояние обслуживания сервера (задача 479e37ed, требование
+   * 9636b1cc). Один владелец на активное подключение: кадр `maintenance` и
+   * отказ `503 SERVER_UPDATING` входят в него, успешный `GET /me` и открытие
+   * WebSocket — выводят. REST-клиент по нему блокирует изменяющие запросы,
+   * рендерер показывает «сервер обновляется»; канал показа — `realtime:maintenance`.
+   */
+  const serverMaintenance = new ServerMaintenanceState();
+  serverMaintenance.subscribe((info) => {
+    broadcast(
+      'realtime:maintenance',
+      info === null
+        ? { active: false }
+        : {
+            active: true,
+            retry_after: info.retry_after,
+            target_version: info.target_version,
+          },
+    );
+  });
+
+  /**
    * Проверка совместимости (задача 12fd5b0e, требование 4d3be6ca): main
    * получает `/version` ДО первой авторизованной операции, повторяет проверку
    * на переподключении и по `426` в середине сессии разрывает соединение и
@@ -166,7 +189,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // изменяющий запрос клиента вне диапазона — немедленно разрываем
       // соединение и публикуем блокирующий `client-outdated`.
       onClientVersionUnsupported: (details) => compatibility.onVersionRejected(details),
+      // Обслуживание (задача 479e37ed): изменяющие запросы не уходят, пока
+      // состояние активно; `503 SERVER_UPDATING` переводит в него.
+      serverMaintenance,
     });
+    // Новый профиль — чистый лист: обслуживание предыдущего сервера к нему не
+    // относится (состояние живёт в памяти процесса, а не в профиле).
+    serverMaintenance.leave();
     // key check before anything else; only a successful check persists the
     // profile as active (defect «клиент не запоминает сервер»: previously
     // only `addProfile` called `setActiveProfile`, so re-selecting an
@@ -232,9 +261,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // before they leave main, and in-flight requests are aborted without
       // retries. `idle` (no tab) and `connecting` (first attempt) are not
       // outages.
-      onStatus: (networkId, status) => {
+      onStatus: (networkId, status, detail) => {
         if (status === 'connected') {
           restClient.setLinkDown(networkId, false);
+          // Открытие WebSocket — второй признак конца обслуживания (сценарий
+          // 610169a5): сервер принял сокет, значит обновлённый процесс жив.
+          // Первый признак — успешный `GET /me` (контракт 2f599b67).
+          serverMaintenance.leave();
         } else if (status === 'suspect') {
           // Probe in flight: new mutations are blocked, but the hung request
           // that triggered the check must keep running — if the pong arrives
@@ -245,6 +278,16 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
           // the user does not wait for the 30 s × 3 REST retry cycle.
           restClient.setLinkDown(networkId, true);
         }
+        // `server-maintenance` без кадра (сервер закрыл сокет 1012 раньше, чем
+        // клиент прочитал `maintenance`): сам признак уже означает штатное
+        // обслуживание, а не аварию — блокируем запись и говорим «обновление».
+        // Срок — тот же запасной, что у сокета; пришедший кадр уточнит его.
+        if (detail === 'server-maintenance' && !serverMaintenance.isActive()) {
+          serverMaintenance.enter(
+            { retry_after: MAINTENANCE_RETRY_AFTER_FALLBACK_S, target_version: null },
+            'realtime',
+          );
+        }
         // Переподключение (в т.ч. после обслуживания 1012) — проверка
         // совместимости повторяется (требование 4d3be6ca). Первый коннект
         // уже проверен до `GET /me`; блокирующий вердикт здесь разрывает
@@ -254,6 +297,14 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         if (isReconnectTransition(previous, status)) {
           void compatibility.recheck(fetchVersion);
         }
+      },
+      // Кадр `maintenance` (операция 9636b1cc): сервер уходит на обновление.
+      // Входим в состояние до close 1012 — запись блокируется сразу.
+      onMaintenance: (_networkId, frame) => {
+        serverMaintenance.enter(
+          { retry_after: frame.retry_after, target_version: frame.target_version },
+          'realtime',
+        );
       },
     });
 
@@ -314,6 +365,9 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     // блокировки сняты). Разрыв по 426 сюда НЕ идёт — там вердикт сохраняется.
     compatibility.reset();
     lastRealtimeStatus.clear();
+    // Состояние обслуживания — принадлежность подключения: без него
+    // «сервер обновляется» осталось бы висеть на экране подключения.
+    serverMaintenance.leave();
     conn.disconnect();
   };
 
@@ -355,6 +409,16 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     removeProfile,
     disconnect,
     getCompatibility: () => compatibility.getResult(),
+    getServerMaintenance: () => {
+      const info = serverMaintenance.get();
+      return info === null
+        ? { active: false as const }
+        : {
+            active: true as const,
+            retry_after: info.retry_after,
+            target_version: info.target_version,
+          };
+    },
     getCurrentNetworkId: () => conn.getCurrentNetworkId(),
     openNetwork: (networkId) => conn.openNetwork(networkId),
     broadcastRealtimeEvent: (event) => broadcast('realtime:event', event),
@@ -382,6 +446,24 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
             (networkId) => pool?.getStatus(networkId) ?? 'idle',
           );
     if (blockedNetwork !== null) {
+      // Обслуживание сервера важнее «обрыва связи» (задача 479e37ed): сокет
+      // закрыт именно потому, что сервер обновляется. Отдаём канонический
+      // `SERVER_UPDATING` с `retry_after`, иначе UI сказал бы пользователю
+      // «нет соединения» и не показал причину со сроком.
+      const maintenance = serverMaintenance.get();
+      if (maintenance !== null) {
+        getClientLog()?.warn('ipc', 'mutation blocked: server maintenance', {
+          method: payload.method,
+          networkId: blockedNetwork,
+          retry_after: maintenance.retry_after,
+        });
+        return toIpcErrorEnvelope(
+          serverUpdatingError({
+            retry_after: maintenance.retry_after,
+            target_version: maintenance.target_version,
+          }),
+        );
+      }
       getClientLog()?.warn('ipc', 'mutation blocked: network link down', {
         method: payload.method,
         networkId: blockedNetwork,
