@@ -142,6 +142,7 @@ import {
   chronicleQueryDefinition,
   clearFilter,
   type ChronicleFilterState,
+  defaultChroniclePeriod,
   filterIssuesFromQueryError,
   filterIssuesFromQueryResult,
   getFilterState,
@@ -520,7 +521,10 @@ async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> 
   // и в текущую применяться не должен (ошибка 58c55bb9).
   if (!isCurrentScreenPair(pair)) return;
   const parsed = parseChronicleState(raw, registryWithSides());
-  setFilterState(readFilterDefinition(parsed.filter));
+  // Отбор без периода — вход получает период по умолчанию (ошибка 167860ac):
+  // снимок без строки «Период записи» (легаси/импорт) не должен открывать
+  // ленту «за все записи».
+  setFilterState(defaultChroniclePeriod(readFilterDefinition(parsed.filter)));
   setSavedFilterId(parsed.savedFilterId);
   if (parsed.month !== null) month = parsed.month;
   if (ok) return;
@@ -568,8 +572,11 @@ async function retryPendingFilterSnapshot(): Promise<void> {
       return;
     }
     pendingFilterSnapshot = null;
-    const next = readFilterDefinition(
-      parseChronicleState(pending.raw, registryWithSides()).filter,
+    // Переразбор идёт тем же читателем, что первичный разбор: период по
+    // умолчанию (ошибка 167860ac) обязан примениться и здесь — иначе повтор
+    // после отказа реестра СНИМАЛ бы `$today` из отбора.
+    const next = defaultChroniclePeriod(
+      readFilterDefinition(parseChronicleState(pending.raw, registryWithSides()).filter),
     );
     // Переразбор без изменений (снимок новой модели реестра не требует) —
     // лишний сетевой перезапрос ленты не гоним.
@@ -636,6 +643,21 @@ export async function ensureChronicleInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter.
   }
+  // Вход без отбора: «снимка нет» либо снимок без строки «Период записи» —
+  // период по умолчанию ТЕКУЩАЯ ДАТА (ошибка 167860ac, элементы 55b07702/
+  // 9b424548). Токен `$today` (не голая дата) раскрывается в момент применения
+  // (требование 91f8d8dd), поэтому вход на следующий день снова даёт
+  // «сегодня». Дефолт не персистится: пустой снимок остаётся признаком
+  // «отбор не настраивался».
+  let entryMonthCounts: CalendarCountsSnapshot | null = null;
+  if (chroniclePeriod().from === '' && chroniclePeriod().to === '') {
+    setChroniclePeriod('$today', '$today');
+    // Календарь собран в `mountChronicle` ДО чтения снимка: месяц отбора не
+    // несёт — показываем месяц сегодняшней даты (выделение дня поставит
+    // `syncCalendar` после запроса ленты). `showDate` не уведомляет
+    // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
+    entryMonthCounts = showEntryMonth();
+  }
   await getHome().catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
@@ -643,6 +665,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
   if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
+  if (entryMonthCounts !== null) void refreshCalendarCounts(entryMonthCounts);
 }
 
 /** Persists the current filter + month to L4 (per-tab). Запись адресуется
@@ -2241,6 +2264,26 @@ function syncCalendar(): void {
     resolvePeriodDay(period.to, todayLocal(), fdw),
   );
   month = calendar.getMonth();
+}
+
+/**
+ * Показать в календаре месяц ВХОДА без отбора (ошибка 167860ac): календарь
+ * собран в `mountChronicle` ДО чтения снимка и мог остаться на месяце прежней
+ * пары — вход без периода обязан показать месяц сегодняшней даты. Возвращает
+ * снимок счётчиков, когда месяц реально сменился: `showDate` не уведомляет
+ * `onMonthChange`, и без пересчёта отметки записей остались бы от прежнего
+ * месяца.
+ */
+function showEntryMonth(): CalendarCountsSnapshot | null {
+  if (calendar === null) return null;
+  const shown = calendar.getMonth();
+  const today = todayLocal();
+  const year = Number(today.slice(0, 4));
+  const monthNo = Number(today.slice(5, 7));
+  if (shown.year === year && shown.month === monthNo) return null;
+  calendar.showDate(today);
+  month = { year, month: monthNo };
+  return calendarCountsSnapshot();
 }
 
 /**
