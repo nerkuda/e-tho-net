@@ -125,11 +125,13 @@ npm test                 # все тесты
 
 ## Установка
 
-- **Сервер** — Docker (`docker compose up -d`) или Node.js 22 из исходников;
-  установка и обновление (в том числе в Docker) —
-  [`docs/userdocs/install.md`](docs/userdocs/install.md).
-- **Клиент** — готовые установщики (Windows/macOS/Linux) в
-  [релизах](https://github.com/nerkuda/e-tho-net/releases); из исходников —
+- **Сервер** — установщик Windows `ETN-Setup-<версия>.exe` (служба Windows),
+  поставка Linux `etn-server-<версия>.tar.gz`, Docker (`docker compose up -d`)
+  или Node.js 22 из исходников; установка, обновление и ручное восстановление
+  баз — [`docs/userdocs/install.md`](docs/userdocs/install.md).
+- **Клиент** — готовые сборки в
+  [релизах](https://github.com/nerkuda/e-tho-net/releases) (Windows —
+  установщик, Linux — `install.sh` и архив); установка и обновление —
   [`docs/userdocs/install.md`](docs/userdocs/install.md).
 
 ## Неподписанные сборки
