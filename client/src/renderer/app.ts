@@ -80,6 +80,7 @@ import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
 import { initCompatibilityDialog } from './lib/compatibility-dialog.js';
+import { openServerUpdateDialog } from './lib/server-update-dialog.js';
 import { initLockReconnect } from './lib/lock-guard.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
@@ -902,6 +903,9 @@ export async function boot(): Promise<void> {
     subscribe: (listener) => store.subscribe(listener),
     // Страница релиза клиента — только через `client-update.ts` (задача 61cec451).
     openExternal: (url) => etn.system.openClientUpdatePage(url),
+    // «Обновить сервер» из блокирующего диалога — реальный диалог обновления
+    // (элемент c9c96e5c, задача ca26c59d); роль администратора проверяет сам.
+    openServerUpdate: () => openServerUpdateDialog(),
     copyText: async (text) => {
       await navigator.clipboard.writeText(text);
     },

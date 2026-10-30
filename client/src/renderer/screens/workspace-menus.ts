@@ -45,6 +45,7 @@ import { showSettingsDialog } from './settings.js';
 // команды меню открывают его на своей вкладке.
 import { showTypeCatalogueDialog } from './type-catalogue.js';
 import { showAboutDialog } from './about-dialog.js';
+import { openServerUpdateDialog } from '../lib/server-update-dialog.js';
 import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
 import { uiButton } from '../lib/ui/button.js';
@@ -410,6 +411,9 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
  * 2026-09-29, задача a9cb53dd, вернулись сюда из меню «Мыслесеть»),
  * administration (admin only), the unified Settings dialog on the
  * «Пользователь» section, «О программе» (restored) and disconnect.
+ * «Обновление сервера» (задача ca26c59d) — пункт меню администратора рядом с
+ * «Администрированием»: тот же диалог открывается из блокирующего диалога
+ * совместимости (элемент c9c96e5c).
  * «О программе» also stays on the network list screen
  * (screens/networks.ts) — its original entry point. Персональные настройки
  * (display_name, размер облачка, тема) живут в объединённом диалоге настроек.
@@ -417,7 +421,13 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 export function buildUserMenuItems(): MenuItem[] {
   const items: MenuItem[] = [];
   if (store.state.me?.is_admin === true) {
-    items.push(menuAction(t('userMenu.admin'), () => openAdminPanel()), MENU_SEPARATOR);
+    // Диалог обновления сервера — только администратору (c9c96e5c, ca26c59d):
+    // оба пункта стоят в блоке администратора, отделённом от остальных команд.
+    items.push(
+      menuAction(t('userMenu.admin'), () => openAdminPanel()),
+      menuAction(t('userMenu.serverUpdate'), () => openServerUpdateDialog()),
+      MENU_SEPARATOR,
+    );
   }
   items.push(
     // Открытие/создание мыслесети — команды уровня пользователя (a9cb53dd):

@@ -525,6 +525,13 @@ function buildApi(): EtnBridgeApi {
       readClipboard: () => invoke('system.readClipboard'),
       health: () => invoke('system.health'),
       version: () => invoke('system.version'),
+      // Обновление сервера (задача ca26c59d): снимок кеша, проверка канала,
+      // запуск задания и чтение прогресса. Права проверяет сервер.
+      getServerUpdate: () => invoke('system.getServerUpdate'),
+      checkServerUpdate: () => invoke('system.checkServerUpdate'),
+      applyServerUpdate: (targetVersion: string) =>
+        invoke('system.applyServerUpdate', targetVersion),
+      getServerUpdateProgress: () => invoke('system.getServerUpdateProgress'),
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
       downloadExport: (jobId: string, suggestedFilename: string, targetPath?: string) =>

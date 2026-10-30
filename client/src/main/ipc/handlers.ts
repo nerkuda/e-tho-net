@@ -2048,6 +2048,25 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'system.version',
     bind(() => requireRest(deps).getVersion()),
   );
+  // Обновление сервера (задача ca26c59d, эндпоинты — 0a27a63b). Только
+  // администратор — это проверяет сервер; renderer ограничивает вход в диалог
+  // ролью из `/me`, но полагаться на UI-гейт нельзя.
+  handlers.set(
+    'system.getServerUpdate',
+    bind(() => requireRest(deps).getServerUpdate()),
+  );
+  handlers.set(
+    'system.checkServerUpdate',
+    bind(() => requireRest(deps).checkServerUpdate()),
+  );
+  handlers.set(
+    'system.applyServerUpdate',
+    bind((targetVersion: string) => requireRest(deps).systemUpdateApply(targetVersion)),
+  );
+  handlers.set(
+    'system.getServerUpdateProgress',
+    bind(() => requireRest(deps).getServerUpdateProgress()),
+  );
   handlers.set(
     'system.export',
     bind((networkId: string, request: Parameters<RestClient['exportThoughts']>[1]) =>

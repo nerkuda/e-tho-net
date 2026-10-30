@@ -81,6 +81,10 @@ import {
   serverUpdatingError,
   type ServerMaintenanceHandle,
 } from '../server-maintenance.js';
+import type {
+  ServerUpdateProgressDto,
+  ServerUpdateStatusDto,
+} from '../server-update.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -93,6 +97,16 @@ const RETRY_MAX_DELAY_MS = 5_000;
 
 /** Response timeout applied to every request, in milliseconds (03-server-api.md §4.1). */
 const RESPONSE_TIMEOUT_MS = 30_000;
+
+/**
+ * Тайм-аут ответа `POST /system/update/apply` (задача ca26c59d): сервер
+ * отвечает синхронно — только после скачивания установщика и проверки
+ * SHA-256, до 10 минут по конфигурации runner'а. Общий тайм-аут 30 с дал бы
+ * ложный обрыв на живом обновлении. 11 минут — запас над серверным пределом;
+ * обрыв по нему диалог всё равно трактует как «обновление идёт» и читает
+ * прогресс (`GET /system/update/progress`), а не как отказ.
+ */
+export const UPDATE_APPLY_TIMEOUT_MS = 11 * 60 * 1000;
 
 /**
  * Network id embedded in an API path (`/networks/<uuid>/...`). Link-down
@@ -277,6 +291,13 @@ export interface RequestOptions {
    * «превышен лимит повторов».
    */
   retry?: boolean;
+  /**
+   * Тайм-аут ответа этого вызова, мс. Не задан — общий
+   * {@link RESPONSE_TIMEOUT_MS} (30 с). Нужен вызовам, где сервер отвечает
+   * долго по контракту: `POST /system/update/apply` ждёт скачивания установщика
+   * и проверки SHA-256 (до 10 минут, {@link UPDATE_APPLY_TIMEOUT_MS}).
+   */
+  timeoutMs?: number;
 }
 
 /** Query string value — primitives are stringified, arrays repeated. */
@@ -701,7 +722,9 @@ export class RestClient {
       if (networkId !== null) this.trackController(networkId, controller);
       const timeout = setTimeout(
         () => controller.abort(new Error('ETN response timeout')),
-        this.responseTimeoutMs,
+        // Долгий по контракту вызов (apply обновления сервера) задаёт свой
+        // тайм-аут; остальные живут общим 30 с.
+        ro.timeoutMs ?? this.responseTimeoutMs,
       );
       if (ro.signal !== undefined) {
         // Forward caller-initiated aborts.
@@ -3762,6 +3785,36 @@ export class RestClient {
   // admin-only management endpoints of the server diagnostic journal.
 
   /**
+   * `GET /system/update` — кеш проверки канала, режим развёртывания и
+   * инструкция (задача 0a27a63b, операция GET). Администратор; читается
+   * диалогом обновления при открытии (задача ca26c59d).
+   */
+  public async getServerUpdate(): Promise<ServerUpdateStatusDto> {
+    return this.request('GET', '/system/update');
+  }
+
+  /**
+   * `POST /system/update/check` — принудительная проверка канала (операция
+   * POST /check). Ответ — тот же снимок кеша, что у {@link getServerUpdate}.
+   *
+   * `429 RATE_LIMITED` означает «проверка уже идёт» и НЕ является ошибкой:
+   * диалог обновления показывает её как состояние проверки, а не как сбой
+   * (задача ca26c59d).
+   */
+  public async checkServerUpdate(): Promise<ServerUpdateStatusDto> {
+    return this.request('POST', '/system/update/check');
+  }
+
+  /**
+   * `GET /system/update/progress` — последнее задание обновления (операция
+   * progress): `{ job: UpdateJob | null }`. Единственный источник фактического
+   * прогресса после обрыва/тайм-аута apply.
+   */
+  public async getServerUpdateProgress(): Promise<ServerUpdateProgressDto> {
+    return this.request('GET', '/system/update/progress');
+  }
+
+  /**
    * `POST /system/update/apply` — создать задание обновления сервера (задача
    * 0a27a63b, операция 8a2972c2). Администратор; `201` — задание создано и
    * установщик запущен.
@@ -3770,6 +3823,8 @@ export class RestClient {
    * операция неидемпотентна, а сервер отвечает синхронно — только после
    * скачивания установщика и проверки SHA-256 (до 10 минут), при клиентском
    * тайм-ауте 30 с. Любой повтор создал бы второе задание и второе скачивание.
+   * Поэтому же вызову поднят тайм-аут ответа ({@link UPDATE_APPLY_TIMEOUT_MS}):
+   * иначе живое обновление обрывалось бы на 30-й секунде.
    *
    * **Трактовка сбоя (обязанность диалога `ca26c59d`).** Обрыв соединения,
    * тайм-аут, `409` (задание уже идёт) и `503` (сервер в обслуживании) значат
@@ -3785,9 +3840,14 @@ export class RestClient {
   ): Promise<UpdateJob> {
     return this.request('POST', '/system/update/apply', {
       body: { target_version: targetVersion },
-      // `retry: false` перекрывает значение из opts осознанно: автоповтор
-      // этого вызова запрещён на уровне клиента, а не на уровне вызывающего.
-      requestOptions: { ...opts, retry: false },
+      requestOptions: {
+        ...opts,
+        // `retry: false` перекрывает значение из opts осознанно: автоповтор
+        // этого вызова запрещён на уровне клиента, а не на уровне вызывающего.
+        // Тайм-аут ответа — под серверный предел скачивания и проверки хеша.
+        retry: false,
+        timeoutMs: opts?.timeoutMs ?? UPDATE_APPLY_TIMEOUT_MS,
+      },
     });
   }
 

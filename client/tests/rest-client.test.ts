@@ -10,7 +10,7 @@ import { describe, it, mock } from 'node:test';
 
 import { EtnError } from '@etn/shared';
 
-import { RestClient, type RequestOptions } from '../src/main/net/rest-client.js';
+import { RestClient, UPDATE_APPLY_TIMEOUT_MS, type RequestOptions } from '../src/main/net/rest-client.js';
 
 /** Minimal record of a single fetch invocation. */
 interface FetchCall {
@@ -648,6 +648,94 @@ describe('RestClient — apply обновления сервера без авт
     const job = await client.systemUpdateApply('0.15.2');
     assert.deepEqual(job, JOB);
     assert.equal(calls.length, 1);
+  });
+
+  it('apply получает поднятый тайм-аут ответа (сервер отвечает до 10 минут)', async () => {
+    assert.equal(UPDATE_APPLY_TIMEOUT_MS, 11 * 60 * 1000, '11 минут — запас над серверным пределом');
+    // Тайм-аут вызова переопределяем вниз, чтобы проба была быстрой: fetch
+    // «молчит», клиент обязан оборвать запрос по своему таймеру, а не ждать 11
+    // минут и не повторять вызов.
+    let aborted = false;
+    const fetchImpl = ((_url: string, init?: RequestInit): Promise<Response> => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(init.signal?.reason ?? new Error('aborted'));
+        });
+      });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchImpl, { random: () => 0 });
+
+    await assert.rejects(() => client.systemUpdateApply('0.15.2', { timeoutMs: 20 }));
+    assert.equal(aborted, true, 'запрос оборван таймером вызова');
+  });
+});
+
+describe('RestClient — admin-эндпоинты обновления сервера (задача 0a27a63b)', () => {
+  const STATUS = {
+    current_version: '0.15.1',
+    available_version: '0.15.2',
+    channel: 'stable',
+    checked_at: '2026-10-29T12:00:00.000Z',
+    check_error: null,
+    download_url: 'https://example.test/ETN-Setup-0.15.2.exe',
+    sha256: 'a'.repeat(64),
+    deployment: 'windows-service',
+    instruction: null,
+  };
+
+  it('GET /system/update — снимок кеша как есть', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: { data: STATUS } }]);
+    const client = makeClient(fetch);
+
+    const status = await client.getServerUpdate();
+    assert.deepEqual(status, STATUS);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.init.method, 'GET');
+    assert.ok(calls[0]!.url.endsWith('/api/v1/system/update'));
+  });
+
+  it('POST /system/update/check — 429 остаётся каноническим RATE_LIMITED', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 429,
+        body: { error: { code: 'RATE_LIMITED', message: 'Проверка обновлений уже идёт.' } },
+      },
+    ]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    await assert.rejects(
+      () => client.checkServerUpdate(),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal((err as EtnError).code, 'RATE_LIMITED');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, '429 не повторяется');
+    assert.equal(calls[0]!.init.method, 'POST');
+    assert.ok(calls[0]!.url.endsWith('/api/v1/system/update/check'));
+  });
+
+  it('GET /system/update/progress — последнее задание или null', async () => {
+    const job = {
+      id: 'job-1',
+      target_version: '0.15.2',
+      stage: 'backing-up',
+      started_at: '2026-10-29T12:00:00.000Z',
+      error: null,
+      backup_path: null,
+    };
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: { job } } },
+      { status: 200, body: { data: { job: null } } },
+    ]);
+    const client = makeClient(fetch);
+
+    assert.deepEqual(await client.getServerUpdateProgress(), { job });
+    assert.deepEqual(await client.getServerUpdateProgress(), { job: null });
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0]!.url.endsWith('/api/v1/system/update/progress'));
   });
 });
 

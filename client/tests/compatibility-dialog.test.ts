@@ -10,8 +10,7 @@
  *    `CLIENT_VERSION_ERROR_REASON` и общая формулировка без причины;
  *  - роль администратора: кнопка «Обновить сервер» — только при
  *    `is_admin: true`, иначе нейтральный текст «Обратитесь к администратору
- *    сервера»; честный текст, пока автообновление сервера недоступно
- *    (ca26c59d);
+ *    сервера»; кнопка открывает диалог обновления сервера (ca26c59d);
  *  - отсутствие кнопок «Отложить» и «Проверить»; закрытие крестиком и Esc
  *    блокировку не снимает;
  *  - «Повторить» переподключается к профилю, отказ повтора называет адрес и
@@ -144,7 +143,12 @@ async function tick(): Promise<void> {
 
 interface Harness {
   update(next: CompatibilityDialogState): void;
-  calls: { external: string[]; retries: string[]; copies: string[] };
+  calls: {
+    external: string[];
+    retries: string[];
+    copies: string[];
+    serverUpdateOpens: number[];
+  };
   stop(): void;
 }
 
@@ -155,7 +159,13 @@ function mount(
 ): Harness {
   let state = initial;
   const listeners = new Set<() => void>();
-  const calls = { external: [] as string[], retries: [] as string[], copies: [] as string[] };
+  const calls = {
+    external: [] as string[],
+    retries: [] as string[],
+    copies: [] as string[],
+    /** Сколько раз открывали диалог обновления сервера (ca26c59d). */
+    serverUpdateOpens: [] as number[],
+  };
   const stop = initCompatibilityDialog({
     getState: () => state,
     subscribe: (listener) => {
@@ -167,6 +177,9 @@ function mount(
     openExternal: async (url) => {
       calls.external.push(url);
       return '';
+    },
+    openServerUpdate: () => {
+      calls.serverUpdateOpens.push(1);
     },
     retry: async (profileId) => {
       calls.retries.push(profileId);
@@ -205,7 +218,6 @@ describe('compatibilityDialogModel: состояния блокирующего 
     assert.equal(model.reasonKey, 'compatibility.reason.clientOutdated');
     assert.deepEqual(model.actions, ['retry', 'update-client']);
     assert.equal(model.contactAdmin, false);
-    assert.equal(model.serverUpdateUnavailable, false);
     assert.equal(model.downloadUnavailable, false);
   });
 
@@ -221,18 +233,16 @@ describe('compatibilityDialogModel: состояния блокирующего 
     )!;
     assert.equal(model.reasonKey, 'compatibility.reason.serverOutdated');
     assert.equal(model.contactAdmin, true);
-    assert.equal(model.serverUpdateUnavailable, false);
     assert.deepEqual(model.actions, ['retry']);
     assert.equal(model.actions.includes('update-server'), false);
   });
 
-  it('server-outdated администратор: «Обновить сервер» и честный текст о недоступности', () => {
+  it('server-outdated администратор: «Обновить сервер» открывает диалог обновления', () => {
     const model = compatibilityDialogModel(
       verdict({ status: 'server-outdated', reason: 'server-outdated', is_admin: true }),
     )!;
     assert.deepEqual(model.actions, ['retry', 'update-server']);
     assert.equal(model.contactAdmin, false);
-    assert.equal(model.serverUpdateUnavailable, true);
   });
 
   it('все три details.reason дают разные причины из словаря', () => {
@@ -418,21 +428,21 @@ describe('initCompatibilityDialog: блокирующий диалог (0afec967
     }
   });
 
-  it('server-outdated администратору: «Обновить сервер» и честный текст о недоступности', () => {
+  it('server-outdated администратору: «Обновить сервер» открывает диалог обновления', () => {
     const harness = mount({
       ...AUTHENTICATED,
       compatibility: verdict({ status: 'server-outdated', reason: 'server-outdated', is_admin: true }),
     });
     try {
       const dialog = backdrops()[0]!;
-      assert.ok(dialog.flatText().includes(t('compatibility.serverUpdateUnavailable')));
       assert.equal(dialog.flatText().includes(t('compatibility.contactAdmin')), false);
       buttonByLabel(dialog, t('compatibility.action.updateServer')).click();
-      assert.equal(backdrops().length, 2, 'открылся диалог-пояснение');
-      assert.ok(
-        backdrops()[1]!.flatText().includes(t('compatibility.serverUpdate.unavailable')),
-        'честный текст вместо несуществующего действия',
+      assert.deepEqual(
+        harness.calls.serverUpdateOpens,
+        [1],
+        'кнопка открывает диалог обновления сервера (ca26c59d), а не пояснение',
       );
+      assert.equal(backdrops().length, 1, 'блокирующий диалог остаётся открытым');
     } finally {
       harness.stop();
     }

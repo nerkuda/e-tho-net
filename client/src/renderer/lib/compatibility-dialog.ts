@@ -18,8 +18,8 @@
  *    релиза в браузере, без автозагрузки) и «Повторить»;
  *  - `server-outdated` — неадминистратору нейтральный текст «Обратитесь к
  *    администратору сервера»; администратору (`is_admin` из `/me`) — «Обновить
- *    сервер» и честный текст, что автоматического обновления сервера из
- *    клиента в этой версии ещё нет (диалог обновления — задача ca26c59d).
+ *    сервер», открывающая диалог обновления сервера (элемент c9c96e5c, задача
+ *    ca26c59d).
  *
  * Все строки — из словаря (`lib/i18n.ts`); причина выбирается по словарю
  * `details.reason` в `lib/compatibility-reason.ts` (одна точка с текстом отказа
@@ -50,8 +50,6 @@ export interface CompatibilityDialogModel {
   actions: CompatibilityDialogAction[];
   /** Нейтральный текст «Обратитесь к администратору сервера». */
   contactAdmin: boolean;
-  /** Честный текст о недоступном обновлении сервера (администратору). */
-  serverUpdateUnavailable: boolean;
   /** Кнопки «Обновить клиент» нет — сервер не сообщил страницу релиза. */
   downloadUnavailable: boolean;
 }
@@ -89,7 +87,6 @@ export function compatibilityDialogModel(
     reasonKey: compatibilityReasonKey(result),
     actions,
     contactAdmin: result.status === 'server-outdated' && result.is_admin !== true,
-    serverUpdateUnavailable: result.status === 'server-outdated' && result.is_admin === true,
     downloadUnavailable,
   };
 }
@@ -112,6 +109,12 @@ export interface CompatibilityDialogDeps {
   subscribe(listener: () => void): () => void;
   /** Открыть страницу релиза в системном браузере. Пустая строка — успех. */
   openExternal(url: string): Promise<string>;
+  /**
+   * Открыть диалог обновления сервера (элемент c9c96e5c, задача ca26c59d).
+   * Вызывается кнопкой «Обновить сервер» — блокирующий диалог при этом
+   * остаётся открытым под ним.
+   */
+  openServerUpdate(): void;
   /** Повторная проверка: переподключение к профилю (может бросить отказ). */
   retry(profileId: string): Promise<void>;
   /** Записать текст в буфер обмена. */
@@ -161,14 +164,12 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
     reason: el('p', 'dialog-text'),
     facts: el('p', 'dialog-text muted'),
     contact: el('p', 'dialog-text'),
-    unavailable: el('p', 'dialog-text muted'),
     copyRow: div('form-row'),
     copyFeedback: el('span', 'muted'),
     retryError: errorLine(),
     footer: div('dialog-footer'),
   };
   view.contact.hidden = true;
-  view.unavailable.hidden = true;
   view.copyFeedback.hidden = true;
   view.retryError.hidden = true;
 
@@ -186,7 +187,6 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
     view.reason,
     view.facts,
     view.contact,
-    view.unavailable,
     view.copyRow,
     view.retryError,
   );
@@ -272,20 +272,12 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
   }
 
   /**
-   * Честное пояснение администратору: автоматического обновления сервера из
-   * клиента в этой версии нет (диалог и задание — ca26c59d). Отдельный диалог
-   * поверх блокирующего: сам блокирующий закрывать нельзя.
+   * Кнопка действия с учётом главного (последнего) действия.
+   *
+   * «Обновить сервер» — реальный диалог обновления (как только он появился,
+   * задача ca26c59d): раньше здесь показывалось пояснение о недоступности.
+   * Блокирующий диалог остаётся открытым под новым — его закрывать нельзя.
    */
-  function showServerUpdateInfo(): void {
-    showDialog({
-      title: t('compatibility.serverUpdate.title'),
-      size: 's',
-      body: el('p', 'dialog-text', t('compatibility.serverUpdate.unavailable')),
-      buttons: [{ label: t('actions.close'), primary: true }],
-    });
-  }
-
-  /** Кнопка действия с учётом главного (последнего) действия. */
   function actionButton(
     action: CompatibilityDialogAction,
     result: CompatibilityResult,
@@ -303,7 +295,7 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
       return uiButton({
         label: t('compatibility.action.updateServer'),
         role,
-        onClick: () => showServerUpdateInfo(),
+        onClick: () => deps.openServerUpdate(),
       });
     }
     const button = uiButton({
@@ -322,10 +314,6 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
     view.facts.textContent = compatibilityFactsText(result);
     view.contact.hidden = !model.contactAdmin;
     view.contact.textContent = model.contactAdmin ? t('compatibility.contactAdmin') : '';
-    view.unavailable.hidden = !model.serverUpdateUnavailable;
-    view.unavailable.textContent = model.serverUpdateUnavailable
-      ? t('compatibility.serverUpdateUnavailable')
-      : '';
     view.copyFeedback.hidden = true;
     if (!retryBusy) {
       view.retryError.hidden = true;

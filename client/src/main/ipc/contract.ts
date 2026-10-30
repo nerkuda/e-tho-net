@@ -16,8 +16,17 @@ import type { DraftStatus } from '../db/local-db.js';
 // Тип объявлен в main-модуле проверки и реэкспортируется здесь как часть
 // IPC-контракта; renderer видит только тип, не код main-процесса.
 import type { CompatibilityResult } from '../compatibility.js';
+// Контракт обновления сервера (задача ca26c59d, тех.проект 2d9f5cc7):
+// зеркало ответов admin-эндпоинтов `/system/update*` (задача 0a27a63b).
+// Renderer видит только типы, сеть — в `net/rest-client.ts`.
+import type {
+  ServerUpdateProgressDto,
+  ServerUpdateStatusDto,
+} from '../server-update.js';
 
 export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState } from '../compatibility.js';
+
+export type { ServerDeployment, ServerUpdateChannel, ServerUpdateProgressDto, ServerUpdateStatusDto } from '../server-update.js';
 
 import type {
   ApiKey,
@@ -138,6 +147,7 @@ import type {
   UserFocusPreferences,
   UserPreferenceEntry,
   UsageClearResult,
+  UpdateJob,
   VersionResponse,
   Layer,
   LayerColors,
@@ -1648,6 +1658,34 @@ export interface EtnApi {
     readClipboard(): Promise<ClipboardReadResult>;
     health(): Promise<HealthResponse>;
     version(): Promise<VersionResponse>;
+    /**
+     * `GET /api/v1/system/update` — снимок кеша проверки обновлений сервера
+     * (текущая и доступная версии, канал, дата проверки, `check_error`),
+     * режим развёртывания (`deployment`) и инструкция (`instruction`).
+     * Только администратор (сервер отвечает `403` остальным).
+     */
+    getServerUpdate(): Promise<ServerUpdateStatusDto>;
+    /**
+     * `POST /api/v1/system/update/check` — принудительная проверка канала;
+     * ответ — новый снимок кеша. `429 RATE_LIMITED` значит «проверка уже
+     * идёт»: диалог показывает это состоянием, а не ошибкой.
+     */
+    checkServerUpdate(): Promise<ServerUpdateStatusDto>;
+    /**
+     * `POST /api/v1/system/update/apply` — создать задание обновления и
+     * запустить установщик (`201`). Единственный вызов, который renderer
+     * делает без автоповтора и с поднятым тайм-аутом ответа: сервер отвечает
+     * после скачивания установщика и проверки SHA-256 (до 10 минут).
+     * Обрыв/`409`/`503` трактуются как «обновление идёт», состояние читается
+     * через {@link getServerUpdateProgress}.
+     */
+    applyServerUpdate(targetVersion: string): Promise<UpdateJob>;
+    /**
+     * `GET /api/v1/system/update/progress` — последнее задание обновления
+     * (`{ job: UpdateJob | null }`). Источник правды о ходе обновления после
+     * обрыва apply и при повторном открытии диалога.
+     */
+    getServerUpdateProgress(): Promise<ServerUpdateProgressDto>;
     export(networkId: string, request: ExportRequest): Promise<ExportJobStartResult>;
     getJob(jobId: string): Promise<ExportJob>;
     /**
