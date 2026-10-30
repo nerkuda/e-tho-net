@@ -1,0 +1,277 @@
+{
+  "name": "blank-lines-7f017ce1",
+  "description": "Ошибка 7f017ce1 «При просмотре комментариев исчезают переводы строк». САМОДОСТАТОЧНЫЙ сценарий: постоянный комментарий с пустыми строками заводит сам шагом api (POST на корневую мысль HOME, {{homeId}}), поэтому --seed-comment не нужен. Проверяет ПРОГРАММНО (DOM-пробы, без скриншотов), что каждая пустая строка исходника занимает в просмотре ровно одну строку строкового ритма --md-line-height: ведущая пустая строка, ДВЕ пустые строки между абзацами (раньше склопывались в одну), пустая строка между пунктами списка (раньше исчезала полностью — li без полей), пустая строка внутри цитаты, пустая строка после таблицы и ХВОСТОВЫЕ пустые строки. Дополнительно: одиночный перевод строки остаётся <br> (паритет из 5de0332d), а серверный body_html несёт ту же разметку пустых строк (единый рендерер, не только клиент). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.7f017ce1-blank-lines.scenario.json --out .tmp/blank-lines-out",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "\nПервый абзац.\n\n\nВторой абзац после двух пустых строк.\n\n1. пункт A\n\n2. пункт B\n\n> цитата один\n>\n> цитата два\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nПосле таблицы.\n\nСтрока раз\nСтрока два\n\n\n"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    { "name": "open-comment-owner", "click": "[data-id=\"{{homeId}}\"].cloud" },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Первый абзац') === true"
+    },
+    {
+      "name": "install-probe-helpers",
+      "eval": "(() => { window.__poll = async (fn, tries = 40) => { for (let i = 0; i < tries; i += 1) { const value = fn(); if (value !== null && value !== undefined && value !== false) return value; await new Promise((resolve) => setTimeout(resolve, 25)); } return fn(); }; window.__view = () => document.querySelector('.ui-comment .md-field-view'); window.__lh = () => parseFloat(getComputedStyle(window.__view()).lineHeight); window.__p = (text) => [...window.__view().querySelectorAll('p')].find((e) => (e.textContent || '').startsWith(text)) ?? null; window.__gap = (a, b) => { if (a === null || b === null) return null; return Math.round(b.getBoundingClientRect().top - a.getBoundingClientRect().bottom); }; window.__near = (actual, expected) => actual !== null && Math.abs(actual - expected) <= 2; return true; })()"
+    },
+    {
+      "name": "view-settled",
+      "waitFor": "window.__poll(() => window.__p('Строка раз') !== null)"
+    },
+    {
+      "name": "line-height",
+      "probe": { "name": "lineHeight", "expression": "window.__lh()" }
+    },
+    {
+      "name": "leading-blank-line",
+      "probe": {
+        "name": "leadingGap",
+        "expression": "window.__poll(() => { const view = window.__view(); const first = window.__p('Первый'); if (first === null) return null; const cs = getComputedStyle(view); const vr = view.getBoundingClientRect(); return { gap: Math.round(first.getBoundingClientRect().top - vr.top + view.scrollTop - parseFloat(cs.paddingTop)), line: Math.round(window.__lh()) }; })"
+      }
+    },
+    {
+      "name": "leading-blank-line-kept",
+      "probe": {
+        "name": "leadingKept",
+        "expression": "window.__poll(() => { const view = window.__view(); const first = window.__p('Первый'); if (first === null) return null; const cs = getComputedStyle(view); const vr = view.getBoundingClientRect(); const gap = first.getBoundingClientRect().top - vr.top + view.scrollTop - parseFloat(cs.paddingTop); return window.__near(Math.round(gap), Math.round(window.__lh())); })"
+      },
+      "expect": true
+    },
+    {
+      "name": "two-blank-lines-between-paragraphs",
+      "probe": {
+        "name": "paragraphGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('Первый'), window.__p('Второй')))"
+      }
+    },
+    {
+      "name": "two-blank-lines-kept",
+      "probe": {
+        "name": "paragraphGapKept",
+        "expression": "window.__poll(() => window.__near(window.__gap(window.__p('Первый'), window.__p('Второй')), Math.round(2 * window.__lh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "blank-line-between-list-items",
+      "probe": {
+        "name": "listItemGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('пункт A'), window.__p('пункт B')))"
+      }
+    },
+    {
+      "name": "blank-line-between-list-items-kept",
+      "probe": {
+        "name": "listItemGapKept",
+        "expression": "window.__poll(() => window.__near(window.__gap(window.__p('пункт A'), window.__p('пункт B')), Math.round(window.__lh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "blank-line-inside-quote",
+      "probe": {
+        "name": "quoteGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('цитата один'), window.__p('цитата два')))"
+      }
+    },
+    {
+      "name": "blank-line-inside-quote-kept",
+      "probe": {
+        "name": "quoteGapKept",
+        "expression": "window.__poll(() => window.__near(window.__gap(window.__p('цитата один'), window.__p('цитата два')), Math.round(window.__lh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "blank-line-after-table",
+      "probe": {
+        "name": "tableGap",
+        "expression": "window.__poll(() => { const view = window.__view(); const table = view.querySelector('table'); const after = window.__p('После таблицы'); if (table === null || after === null) return null; return Math.round(after.getBoundingClientRect().top - table.getBoundingClientRect().bottom); })"
+      }
+    },
+    {
+      "name": "blank-line-after-table-kept",
+      "probe": {
+        "name": "tableGapKept",
+        "expression": "window.__poll(() => { const view = window.__view(); const table = view.querySelector('table'); const after = window.__p('После таблицы'); if (table === null || after === null) return null; return window.__near(Math.round(after.getBoundingClientRect().top - table.getBoundingClientRect().bottom), Math.round(window.__lh())); })"
+      },
+      "expect": true
+    },
+    {
+      "name": "trailing-blank-lines",
+      "probe": {
+        "name": "trailingGap",
+        "expression": "window.__poll(() => { const view = window.__view(); const last = window.__p('Строка раз'); if (last === null) return null; const cs = getComputedStyle(view); const vr = view.getBoundingClientRect(); const bottom = last.getBoundingClientRect().bottom - vr.top + view.scrollTop; return Math.round(view.scrollHeight - bottom - parseFloat(cs.paddingBottom)); })"
+      }
+    },
+    {
+      "name": "trailing-blank-lines-kept",
+      "probe": {
+        "name": "trailingGapKept",
+        "expression": "window.__poll(() => { const view = window.__view(); const last = window.__p('Строка раз'); if (last === null) return null; const cs = getComputedStyle(view); const vr = view.getBoundingClientRect(); const bottom = last.getBoundingClientRect().bottom - vr.top + view.scrollTop; const gap = view.scrollHeight - bottom - parseFloat(cs.paddingBottom); return window.__near(Math.round(gap), Math.round(3 * window.__lh())); })"
+      },
+      "expect": true
+    },
+    {
+      "name": "single-newline-is-br",
+      "probe": {
+        "name": "softBreakIsBr",
+        "expression": "window.__poll(() => { const p = window.__p('Строка раз'); return p === null ? null : p.querySelectorAll('br').length === 1; })"
+      },
+      "expect": true
+    },
+    {
+      "name": "blank-line-markers-in-view",
+      "probe": {
+        "name": "markerCount",
+        "expression": "window.__poll(() => window.__view().querySelectorAll('.md-blank-line').length)"
+      }
+    },
+    {
+      "name": "blank-line-markers-present",
+      "probe": {
+        "name": "markersPresent",
+        "expression": "window.__poll(() => window.__view().querySelectorAll('.md-blank-line').length >= 8)"
+      },
+      "expect": true
+    },
+    {
+      "name": "seed-chrono-api",
+      "api": {
+        "name": "seededChrono",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "body_md": "Запись один.\n\n\nЗапись два.\n\n- пункт X\n\n- пункт Y"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "chronological"
+    },
+    {
+      "name": "open-chrono-tab",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((t) => (t.textContent || '').includes('Дневник')); if (tab === undefined) return 'нет вкладки'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "chrono-view-visible",
+      "waitFor": "document.querySelector('.chrono-editor .md-field-view')?.textContent?.includes('Запись один') === true"
+    },
+    {
+      "name": "chrono-helpers",
+      "eval": "(() => { window.__cv = () => document.querySelector('.chrono-editor .md-field-view'); window.__cp = (text) => [...window.__cv().querySelectorAll('p')].find((e) => (e.textContent || '').startsWith(text)) ?? null; window.__cgap = (a, b) => (a === null || b === null ? null : Math.round(b.getBoundingClientRect().top - a.getBoundingClientRect().bottom)); window.__clh = () => parseFloat(getComputedStyle(window.__cv()).lineHeight); return true; })()"
+    },
+    {
+      "name": "chrono-two-blank-lines",
+      "probe": {
+        "name": "chronoParagraphGap",
+        "expression": "window.__poll(() => window.__cgap(window.__cp('Запись один'), window.__cp('Запись два')))"
+      }
+    },
+    {
+      "name": "chrono-two-blank-lines-kept",
+      "probe": {
+        "name": "chronoParagraphGapKept",
+        "expression": "window.__poll(() => window.__near(window.__cgap(window.__cp('Запись один'), window.__cp('Запись два')), Math.round(2 * window.__clh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "chrono-blank-line-between-items-kept",
+      "probe": {
+        "name": "chronoListItemGapKept",
+        "expression": "window.__poll(() => window.__near(window.__cgap(window.__cp('пункт X'), window.__cp('пункт Y')), Math.round(window.__clh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "seed-attachment-file",
+      "api": {
+        "name": "seededAttachment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/attachments/file",
+        "body": {
+          "title": "blank-lines.md",
+          "mime_type": "text/markdown",
+          "data_base64": "0JLQu9C+0LbQtdC90LjQtSDRgdGC0YDQvtC60LAg0L7QtNC40L0uCgoK0JLQu9C+0LbQtdC90LjQtSDRgdGC0YDQvtC60LAg0LTQstCwLgoKLSDQv9GD0L3QutGCIEEKCi0g0L/Rg9C90LrRgiBC"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "file"
+    },
+    {
+      "name": "open-attachments-tab",
+      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((t) => (t.textContent || '').includes('Вложения')); if (tab === undefined) return 'нет вкладки'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "attachment-row-visible",
+      "waitFor": "document.querySelector('.attachments-list .attachment-item') !== null"
+    },
+    { "name": "select-attachment", "click": ".attachments-list .attachment-item" },
+    {
+      "name": "attachment-view-visible",
+      "waitFor": "document.querySelector('.attachment-view-frame .md-field-view')?.textContent?.includes('Вложение строка один') === true"
+    },
+    {
+      "name": "attachment-helpers",
+      "eval": "(() => { window.__av = () => document.querySelector('.attachment-view-frame .md-field-view'); window.__ap = (text) => [...window.__av().querySelectorAll('p')].find((e) => (e.textContent || '').startsWith(text)) ?? null; window.__agap = (a, b) => (a === null || b === null ? null : Math.round(b.getBoundingClientRect().top - a.getBoundingClientRect().bottom)); window.__alh = () => parseFloat(getComputedStyle(window.__av()).lineHeight); return true; })()"
+    },
+    {
+      "name": "attachment-two-blank-lines-kept",
+      "probe": {
+        "name": "attachmentParagraphGapKept",
+        "expression": "window.__poll(() => window.__near(window.__agap(window.__ap('Вложение строка один'), window.__ap('Вложение строка два')), Math.round(2 * window.__alh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "attachment-blank-line-between-items-kept",
+      "probe": {
+        "name": "attachmentListItemGapKept",
+        "expression": "window.__poll(() => window.__near(window.__agap(window.__ap('пункт A'), window.__ap('пункт B')), Math.round(window.__alh())))"
+      },
+      "expect": true
+    },
+    {
+      "name": "server-html-has-blank-lines",
+      "api": {
+        "name": "serverBodyHtml",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "expression": "(() => { const comment = data.find((c) => c.kind === 'permanent'); return comment.body_html.includes('md-blank-line'); })()"
+      },
+      "expect": true
+    }
+  ]
+}

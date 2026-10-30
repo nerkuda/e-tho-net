@@ -19,6 +19,7 @@ import hljs from 'highlight.js/lib/common';
 
 import { htmlCommentPlugin } from './html-comment.js';
 import { schemeAutolinkPlugin } from './autolink.js';
+import { blankLinesPlugin } from './blank-lines.js';
 import { imagePlugin } from './image.js';
 import { linkSafetyPlugin } from './link.js';
 import { markPlugin } from './mark.js';
@@ -112,6 +113,11 @@ export function getRenderer(): MarkdownIt {
   // ТП1 (задача ba68771d): разметка отрендеренных узлов диапазонами исходных
   // смещений — opt-in через env.sourceMap, вне него вывод не меняется.
   sourceMapPlugin(md);
+  // Пустые строки исходника в просмотре (ошибка 7f017ce1): каждая пустая
+  // строка — ровно одна пустая строка ритма в HTML. Правило идёт по готовым
+  // block-токенам (core.ruler.push — после разбора и разметки позиций) и
+  // вставляет маркеры `<div class="md-blank-line">`.
+  blankLinesPlugin(md);
   instance = md;
   return md;
 }

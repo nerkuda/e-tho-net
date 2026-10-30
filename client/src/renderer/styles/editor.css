@@ -1199,6 +1199,18 @@
   margin-block-end: var(--md-block-gap);
 }
 
+/* Пустые строки markdown-исходника (ошибка 7f017ce1). Рендерер выводит на
+   каждый разрыв блок `.md-blank-line` из N `<br>` — ровно N строк строкового
+   ритма, без собственных полей. Автоматический зазор «первой пустой строки»
+   (`--md-block-gap` у p/ul/ol выше и `--wa-content-spacing` прозы Web Awesome
+   у pre/table) у блока ПЕРЕД маркером снимается: иначе первая пустая строка
+   посчиталась бы дважды, а серия из двух и более строк — склеилась бы в одну
+   (симптом ошибки). У `li` автоматического зазора нет вовсе — пустая строка
+   между пунктами списка задаётся тем же маркером. */
+.comment-view :is(p, ul, ol, pre, table):has(+ .md-blank-line) {
+  margin-block-end: 0;
+}
+
 .comment-view code,
 .comment-view pre,
 .cm-editor .cm-line .cm-md-inline-code {
