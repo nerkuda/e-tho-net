@@ -40,6 +40,32 @@
 ;     показывает ключ оттуда;
 ;   * silent: init не вызывается никогда, отсутствие администратора — код 10.
 ;
+; Задача 112642a4 (0.15.1) — экраны, лицензия, прогресс, сводка и ошибки:
+;   * экран компонентов — первый экран и приветствие: подписи компонентов
+;     зависят от состояния, описания сервера/клиента, ссылка на другие
+;     варианты установки сервера;
+;   * лицензия MIT — чекбокс «Я принимаю условия лицензии MIT» с локальным
+;     текстом (файл LICENSE извлекается из установщика, интернет не нужен);
+;     показывается только при первой установке (нет ни сервера, ни клиента),
+;     без принятия «Далее» неактивна с причиной (требование d75b7988);
+;   * понижение версии — сообщение и только «Отмена»;
+;   * старый NSIS-клиент (electron-builder) — предупреждение и удаление его
+;     деинсталлятором перед установкой нового клиента;
+;   * прогресс — подпись текущего этапа в StatusLabel страницы установки
+;     (остановка службы, резервная копия, замена файлов, инициализация,
+;     запуск, health-check); этапы выполняет тот процесс, который их делает —
+;     при двухфазном UAC это привилегированная фаза (её этапы в журнале);
+;   * экран ошибки — причина, путь к журналу, путь к резервной копии и
+;     следующий шаг; кнопки «Открыть журнал» и «Повторить»;
+;   * итоговая сводка — что установлено, адрес сервера (локальный и LAN при
+;     открытом брандмауэре), каталог данных, журнал, бэкап, напоминание
+;     сохранить ключ; кнопки «Запустить клиент», «Открыть папку данных»,
+;     «Открыть журнал»;
+;   * отказ UAC — объяснение и возврат на экран компонентов с сохранённым
+;     выбором (попытка повышения прав выполняется на экране готовности, где
+;     «Назад» ещё доступна);
+;   * занятый порт — фокус на поле порта и подсказка свободного значения.
+;
 ; Задача 9b310991 (0.15.1) — каталог данных, порт, брандмауэр и предпроверки:
 ;   * каталог данных фиксирован %ProgramData%\ETN (ADR 144bcdb0), поля выбора
 ;     в 0.15.1 нет; сервер получает его через ETN_DATA_DIR; каталог программы —
@@ -172,7 +198,11 @@ DefaultDirName={#AppDir}
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=no
-LicenseFile=..\LICENSE
+; Первый экран — собственный экран компонентов с приветствием и лицензией
+; (требование d75b7988): стандартные страницы приветствия и лицензии Inno не
+; используются. Текст лицензии — локальный файл LICENSE в [Files] (dontcopy),
+; открывается ссылкой на экране компонентов.
+DisableWelcomePage=yes
 
 ; Сборка идёт от обычного пользователя: установщик сам повышает права только
 ; там, где это нужно (сервер / клиент «для всех»), через перезапуск копии
@@ -202,6 +232,10 @@ UsePreviousTasks=no
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
+; --- Лицензия (MIT): текст открывается локально со ссылки на экране
+; --- компонентов; в установку не копируется (dontcopy).
+Source: "..\LICENSE"; Flags: dontcopy noencryption
+
 ; --- Сервер (поставка 8b1f5980). DestDir — {app}\server, точка запуска службы
 ; --- node.exe server\dist\index.js; версия — server\package.json.
 #ifdef HaveServerPayload
@@ -257,6 +291,9 @@ const
   BACKUPS_KEEP = 3;
   { Длина имени каталога архива: YYYYMMDD-HHmmss (15 символов). }
   BACKUP_DIR_NAME_LEN = 15;
+  { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
+    клиент electron-builder (NSIS) и запись установки Inno. }
+  UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
 
 var
   { Режим запуска }
@@ -293,6 +330,9 @@ var
   { Хук задачи ce3ab836: прямой прогон бэкапа БД без фаз установки
     (/TESTBACKUP=1|skip); объявлен всегда, сбрасывается в InitializeSetup. }
   GTestBackup: String;
+  { Хук задачи 112642a4: подмена найденного старого NSIS-клиента
+    (/TESTLEGACY=<версия>|machine:<версия>); в обычной сборке кода нет. }
+  GTestLegacy: String;
   { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
@@ -367,18 +407,61 @@ var
   GComponentsPage: TWizardPage;
   GServerCheck: TNewCheckBox;
   GServerStateLabel: TNewStaticText;
-  GInitStateLabel: TNewStaticText;
+  GServerAltLink: TNewLinkLabel;
   GClientCheck: TNewCheckBox;
   GClientStateLabel: TNewStaticText;
+  GClientHintLabel: TNewStaticText;
   GScopeUserRadio: TNewRadioButton;
   GScopeMachineRadio: TNewRadioButton;
   GDataNoteLabel: TNewStaticText;
   GReasonLabel: TNewStaticText;
+  { Лицензия MIT (112642a4): чекбокс и ссылка на локальный текст; показываются
+    только при первой установке (нет ни сервера, ни клиента). }
+  GLicenseCheck: TNewCheckBox;
+  GLicenseLink: TNewLinkLabel;
+  GLicenseAccepted: Boolean;
+  { Уведомление, оставленное после возврата на экран компонентов (отказ UAC,
+    ошибка удаления старого клиента): показывается вместо обычной причины и
+    сбрасывается при изменении выбора. }
+  GComponentsNotice: String;
+  GDowngradeWarned: Boolean;
+
+  { Прогресс установки: подпись текущего этапа на странице установки. }
+  GInstallStage: String;
+
+  { Ошибка установки: причина для экрана ошибки и итоговой сводки. }
+  GFailureReason: String;
+  GErrorPage: TWizardPage;
+  GErrorMemo: TNewMemo;
+  GErrorOpenLogButton: TNewButton;
+  GErrorRetryButton: TNewButton;
+  GErrorOpenDataButton: TNewButton;
+
+  { Итоговая сводка на странице завершения. }
+  GSummaryMemo: TNewMemo;
+  GSummaryRunButton: TNewButton;
+  GSummaryDataButton: TNewButton;
+  GSummaryLogButton: TNewButton;
+  GKeyWasShown: Boolean;
+  GLanIp: String;
+  GLanIpChecked: Boolean;
+
+  { Старый клиент, установленный NSIS-установщиком electron-builder. }
+  GLegacyClientFound: Boolean;
+  GLegacyClientVersion: String;
+  GLegacyClientMachine: Boolean;
+  GLegacyClientChecked: Boolean;
+
+  { Повышение прав на экране готовности: попытка уже выполнена в этом проходе
+    (PrepareToInstall не должен запускать дочерний процесс второй раз). }
+  GChildRanThisPass: Boolean;
 
   { Экраны администратора и ключа }
   GAdminPage: TWizardPage;
   GAdminLoginLabel: TNewStaticText;
   GAdminLoginEdit: TNewEdit;
+  GAdminDisplayLabel: TNewStaticText;
+  GAdminDisplayEdit: TNewEdit;
   GAdminHintLabel: TNewStaticText;
   GAdminErrorLabel: TNewStaticText;
   GKeyPage: TWizardPage;
@@ -1067,9 +1150,384 @@ end;
 function ClientStateText: String;
 begin
   if GClientState = 'installed' then
-    Result := 'клиент обнаружен на этом компьютере'
+    Result := 'клиент уже установлен — при обновлении он будет заменён'
+  else if GLegacyClientFound then
+    Result := 'найден клиент ETN ' + GLegacyClientVersion + ', установленный ' +
+      'старым установщиком (NSIS' +
+      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + '): перед ' +
+      'установкой нового клиента старая версия будет удалена её деинсталлятором'
   else
     Result := 'не установлен';
+end;
+
+{ ---------------------------------------------------------------------------
+  Лицензия MIT (112642a4, требование d75b7988).
+  --------------------------------------------------------------------------- }
+{ Лицензия запрашивается только при первой установке: на машине нет ни
+  установленного сервера, ни клиента. Состояние adopt (данные без программы)
+  программой не считается — лицензия показывается. }
+function LicensePromptNeeded: Boolean;
+begin
+  Result := ((GServerState = 'not-installed') or (GServerState = 'adopt')) and
+    (GClientState <> 'installed');
+end;
+
+procedure OpenLocalLicense(Sender: TObject; const Link: String;
+  LinkType: TSysLinkType);
+var
+  Code: Integer;
+begin
+  { Текст лицензии лежит в самом установщике ([Files] dontcopy) и
+    распаковывается во временный каталог: интернет не нужен. }
+  try
+    ExtractTemporaryFile('LICENSE');
+  except
+    LogLine('ERROR', 'Не удалось извлечь текст лицензии LICENSE из установщика');
+    SuppressibleMsgBox('Не удалось открыть текст лицензии. Он находится в файле ' +
+      'LICENSE рядом с установщиком.', mbError, MB_OK, IDOK);
+    Exit;
+  end;
+  if not ShellExec('open', ExpandConstant('{tmp}\LICENSE'), '', '',
+    SW_SHOWNORMAL, ewNoWait, Code) then
+    SuppressibleMsgBox('Не удалось открыть текст лицензии во временном каталоге: ' +
+      ExpandConstant('{tmp}\LICENSE'), mbError, MB_OK, IDOK);
+end;
+
+{ ---------------------------------------------------------------------------
+  Старый клиент NSIS (electron-builder): обнаружение и удаление (112642a4).
+  --------------------------------------------------------------------------- }
+{ Признак записи electron-builder/NSIS: DisplayName начинается с «ETN » и
+  UninstallString указывает на «Uninstall ETN.exe». Запись самого Inno
+  (суффикс _is1) исключается: её удаляет штатный деинсталлятор. }
+function IsLegacyClientKey(const SubKeyName, DisplayName,
+  UninstallCmd: String): Boolean;
+begin
+  Result := False;
+  if Pos('_is1', SubKeyName) > 0 then Exit;
+  if Pos('ETN', DisplayName) <> 1 then Exit;
+  if Pos('Uninstall ETN.exe', UninstallCmd) <= 0 then Exit;
+  Result := True;
+end;
+
+function FindLegacyClientInRoot(const Root: Integer; const UninstallKey: String;
+  var Version, UninstallCmd: String): Boolean;
+var
+  Names: TArrayOfString;
+  I: Integer;
+  Key, DisplayName, Cmd, Ver: String;
+begin
+  Result := False;
+  if not RegGetSubkeyNames(Root, UninstallKey, Names) then Exit;
+  for I := 0 to GetArrayLength(Names) - 1 do
+  begin
+    Key := UninstallKey + '\' + Names[I];
+    DisplayName := '';
+    Cmd := '';
+    if not RegQueryStringValue(Root, Key, 'DisplayName', DisplayName) then Continue;
+    if not RegQueryStringValue(Root, Key, 'UninstallString', Cmd) then Continue;
+    if not IsLegacyClientKey(Names[I], DisplayName, Cmd) then
+      Continue;
+    Ver := '';
+    RegQueryStringValue(Root, Key, 'DisplayVersion', Ver);
+    Version := Ver;
+    UninstallCmd := Cmd;
+    Result := True;
+    Exit;
+  end;
+end;
+
+{ Ищет старый клиент: сначала запись текущего пользователя (HKCU), затем
+  машинную (HKLM64/HKLM). IsMachine=True — запись «для всех пользователей». }
+function FindLegacyClient(var Version, UninstallCmd: String;
+  var IsMachine: Boolean): Boolean;
+begin
+  Version := '';
+  UninstallCmd := '';
+  IsMachine := False;
+  Result := FindLegacyClientInRoot(HKCU, UNINSTALL_KEY, Version, UninstallCmd);
+  if Result then Exit;
+  Result := FindLegacyClientInRoot(HKLM64, UNINSTALL_KEY, Version, UninstallCmd);
+  if not Result then
+    Result := FindLegacyClientInRoot(HKLM, UNINSTALL_KEY, Version, UninstallCmd);
+  if Result then IsMachine := True;
+end;
+
+{ Путь к exe из командной строки деинсталлятора: строка в кавычках или до
+  первого пробела. }
+function UninstallerExe(const Cmd: String): String;
+var
+  P: Integer;
+begin
+  Result := Trim(Cmd);
+  if (Result <> '') and (Result[1] = '"') then
+  begin
+    P := Pos('"', Copy(Result, 2, Length(Result)));
+    if P > 0 then
+      Result := Copy(Result, 2, P - 1)
+    else
+      Result := Copy(Result, 2, Length(Result));
+  end
+  else
+  begin
+    P := Pos(' ', Result);
+    if P > 0 then Result := Copy(Result, 1, P - 1);
+  end;
+end;
+
+{ Аргументы деинсталлятора без пути: сохраняются (/currentuser, /allusers),
+  добавляется /S — тихий режим NSIS. }
+function UninstallerArgs(const Cmd: String): String;
+var
+  Exe: String;
+  Rest: String;
+begin
+  Exe := UninstallerExe(Cmd);
+  Rest := Trim(Cmd);
+  if (Rest <> '') and (Rest[1] = '"') then
+    Rest := Trim(Copy(Rest, Length(Exe) + 3, Length(Rest)))
+  else
+    Rest := Trim(Copy(Rest, Length(Exe) + 1, Length(Rest)));
+  if Pos('/S', UpperCase(Rest)) = 0 then
+    Rest := Trim(Rest + ' /S');
+  Result := Rest;
+end;
+
+function RunLegacyUninstaller(const Cmd, Version: String): Boolean;
+var
+  Exe, Args: String;
+  Code: Integer;
+begin
+  Result := False;
+  Exe := UninstallerExe(Cmd);
+  if (Exe = '') or (not FileExists(Exe)) then
+  begin
+    LogLine('ERROR', 'Старый клиент ETN ' + Version + ': деинсталлятор не найден: ' + Exe);
+    Exit;
+  end;
+  Args := UninstallerArgs(Cmd);
+  LogLine('INFO', 'Старый клиент ETN ' + Version + ': запуск деинсталлятора ' +
+    Exe + ' ' + Args);
+  if not Exec(Exe, Args, ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    LogLine('ERROR', 'Старый клиент ETN ' + Version + ': деинсталлятор не запустился');
+    Exit;
+  end;
+  if Code <> 0 then
+  begin
+    LogLine('ERROR', 'Старый клиент ETN ' + Version +
+      ': деинсталлятор вернул код ' + IntToStr(Code));
+    Exit;
+  end;
+  LogLine('INFO', 'Старый клиент ETN ' + Version + ' удалён');
+  Result := True;
+end;
+
+{ Удаляет найденные старые клиенты в доступной области (IncludeMachine —
+  только в элевированном процессе). Возвращает True, если удалять было нечего
+  или удаление прошло успешно. }
+function RemoveLegacyClients(const IncludeMachine: Boolean;
+  var FailReason: String): Boolean;
+var
+  Version, Cmd: String;
+  IsMachine: Boolean;
+begin
+  Result := True;
+  FailReason := '';
+  if not FindLegacyClient(Version, Cmd, IsMachine) then Exit;
+  if IsMachine and (not IncludeMachine) then
+  begin
+    FailReason := 'старый клиент ETN ' + Version +
+      ' установлен для всех пользователей: для его удаления нужны права ' +
+      'администратора. Выберите установку клиента «Для всех пользователей» ' +
+      'или удалите старую версию вручную в «Программы и компоненты».';
+    Result := False;
+    Exit;
+  end;
+  if not RunLegacyUninstaller(Cmd, Version) then
+  begin
+    FailReason := 'не удалось удалить старый клиент ETN ' + Version +
+      ' его деинсталлятором. Удалите его вручную в «Программы и компоненты» ' +
+      'и повторите установку.';
+    Result := False;
+  end;
+end;
+
+{ Состояние старого клиента для экрана компонентов: запись установщика
+  electron-builder (NSIS) ищется до первого показа экрана. Silent и
+  привилегированная фаза ничего не показывают — им состояние не нужно. }
+procedure DetectLegacyClient;
+var
+  Cmd: String;
+begin
+  GLegacyClientChecked := True;
+  GLegacyClientFound := False;
+  GLegacyClientVersion := '';
+  GLegacyClientMachine := False;
+#ifdef TestMode
+  if GTestMode then
+  begin
+    if GTestLegacy <> '' then
+    begin
+      GLegacyClientFound := True;
+      if Pos('machine:', LowerCase(GTestLegacy)) = 1 then
+      begin
+        GLegacyClientMachine := True;
+        GLegacyClientVersion := Copy(GTestLegacy, 9, Length(GTestLegacy));
+      end
+      else
+        GLegacyClientVersion := GTestLegacy;
+      LogLine('WARN', 'TESTLEGACY=' + GTestLegacy +
+        ': старый клиент NSIS подменён (тестовый режим)');
+    end;
+    Exit;
+  end;
+#endif
+  if GSilent or GPrivilegedPhase then Exit;
+  Cmd := '';
+  if FindLegacyClient(GLegacyClientVersion, Cmd, GLegacyClientMachine) then
+  begin
+    GLegacyClientFound := True;
+    LogLine('INFO', 'Найден старый клиент ETN ' + GLegacyClientVersion +
+      ' (NSIS, ' + Pick(GLegacyClientMachine, 'для всех пользователей',
+      'для текущего пользователя') + ') — будет удалён перед установкой');
+  end;
+end;
+
+{ Удаление старого клиента перед установкой нового (только при выбранном
+  клиенте). В неэлевированном процессе удаляется запись текущего пользователя;
+  машинную запись удаляет привилегированная фаза — в GUI её вызов идёт до
+  показа экрана готовности. Возвращает False только когда удаление обязательно
+  и не удалось. }
+function RemoveLegacyBeforeInstall(const Elevated: Boolean;
+  var Reason: String): Boolean;
+var
+  Version, Cmd: String;
+  IsMachine: Boolean;
+begin
+  Result := True;
+  Reason := '';
+  { Тестовая сборка не должна запускать деинсталлятор настоящего клиента на
+    машине разработчика: удаление старых клиентов в тестах не выполняется. }
+#ifdef TestMode
+  if GTestMode then Exit;
+#endif
+  if not GClientSelected then Exit;
+  if not FindLegacyClient(Version, Cmd, IsMachine) then Exit;
+  if IsMachine and (not Elevated) then
+  begin
+    LogLine('INFO', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
+      'пользователей: удаление выполнит привилегированная фаза');
+    Exit;
+  end;
+  if IsMachine then
+    Result := RemoveLegacyClients(True, Reason)
+  else
+    Result := RemoveLegacyClients(False, Reason);
+  if Result then
+    GLegacyClientFound := False;
+end;
+
+{ ---------------------------------------------------------------------------
+  Прогресс и ошибки установки (112642a4).
+  --------------------------------------------------------------------------- }
+procedure SetInstallStage(const Stage: String);
+begin
+  GInstallStage := Stage;
+  { Этап пишется в журнал всегда: при двухфазном UAC видимый процесс —
+    родительский, а привилегированная фаза silent; журнал остаётся
+    единственным следом каждого этапа. }
+  LogLine('INFO', 'Этап: ' + Stage);
+  if GSilent then Exit;
+  if (WizardForm <> nil) and (WizardForm.StatusLabel <> nil) then
+  begin
+    WizardForm.StatusLabel.Caption := Stage;
+    WizardForm.StatusLabel.Update;
+    if WizardForm.FilenameLabel <> nil then
+      WizardForm.FilenameLabel.Caption := '';
+    WizardForm.Update;
+  end;
+end;
+
+procedure FailInstall(const Reason: String);
+begin
+  GExitCode := EXIT_FAILED;
+  if GFailureReason = '' then GFailureReason := Reason;
+  LogLine('ERROR', 'Сбой: ' + Reason + ' (код 10)');
+end;
+
+{ ---------------------------------------------------------------------------
+  Пути для итоговой сводки и экрана ошибки (112642a4).
+  --------------------------------------------------------------------------- }
+function ClientExePath: String;
+begin
+  Result := '';
+  if FileExists(GServerDir + '\ETN.exe') then
+    Result := GServerDir + '\ETN.exe'
+  else if FileExists(GServerDir + '\client\ETN.exe') then
+    Result := GServerDir + '\client\ETN.exe'
+  else if (MachineAppDir <> '') and
+    FileExists(MachineAppDir + '\client\ETN.exe') then
+    Result := MachineAppDir + '\client\ETN.exe'
+  else if (MachineAppDir <> '') and FileExists(MachineAppDir + '\ETN.exe') then
+    Result := MachineAppDir + '\ETN.exe';
+end;
+
+procedure OpenPath(const Path: String);
+var
+  Code: Integer;
+begin
+  if Path = '' then Exit;
+  if not ShellExec('open', Path, '', '', SW_SHOWNORMAL, ewNoWait, Code) then
+    SuppressibleMsgBox('Не удалось открыть: ' + Path + #13#10 +
+      'Путь можно скопировать из поля на экране.', mbError, MB_OK, IDOK);
+end;
+
+procedure OpenServerOptions(Sender: TObject; const Link: String;
+  LinkType: TSysLinkType);
+begin
+  OpenPath('https://github.com/nerkuda/e-tho-net/blob/main/docs/userdocs/install.md');
+end;
+
+{ Первый IPv4-адрес машины в локальной сети. Нужен для адреса в итоговой
+  сводке при открытом брандмауэре; если узнать не удалось — пустая строка,
+  сводка покажет только локальный адрес. }
+function DetectLanIp: String;
+var
+  Script, Args, OutFile, OutFileLiteral: String;
+  Code: Integer;
+  Raw: AnsiString;
+begin
+  Result := '';
+  if GLanIpChecked then
+  begin
+    Result := GLanIp;
+    Exit;
+  end;
+  GLanIpChecked := True;
+  OutFile := ExpandConstant('{tmp}') + '\etn-lan-ip.txt';
+  OutFileLiteral := OutFile;
+  StringChangeEx(OutFileLiteral, '''', '''''', True);
+  { Внутри скрипта только одинарные кавычки: -Command передаётся в двойных
+    (см. ServerPortStatus, дефект B3 приёмки 9b310991). }
+  Script :=
+    '$ErrorActionPreference=''SilentlyContinue'';' +
+    '$ip=Get-NetIPAddress -AddressFamily IPv4|' +
+    'Where-Object{$_.IPAddress -notlike ''127.*'' -and ' +
+    '$_.IPAddress -notlike ''169.254.*''}|' +
+    'Sort-Object InterfaceMetric|Select-Object -First 1 -ExpandProperty IPAddress;' +
+    'if($ip){[IO.File]::WriteAllText(''' + OutFileLiteral + ''',$ip)}';
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
+    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) and FileExists(OutFile) then
+  begin
+    Raw := '';
+    if LoadStringFromFile(OutFile, Raw) then
+      Result := Trim(Utf8Decode(Raw));
+    DeleteFile(OutFile);
+  end;
+  if Result = '' then
+    LogLine('WARN', 'Не удалось определить IPv4-адрес машины для итоговой сводки');
+  GLanIp := Result;
 end;
 
 { Сервер считается присутствующим, если о нём есть запись установщика,
@@ -1961,6 +2419,36 @@ begin
   end;
 end;
 
+{ Самый свежий архив по имени: нужен итоговой сводке и экрану ошибки, чтобы
+  показать реальный путь резервной копии (в двухфазном UAC архив создаёт
+  дочерний процесс — родитель знает о нём только через каталог архивов). }
+function LatestBackupDirName(const BackupsDir: String): String;
+var
+  FindRec: TFindRec;
+begin
+  Result := '';
+  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
+        if (Result = '') or (CompareText(FindRec.Name, Result) > 0) then
+          Result := FindRec.Name;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
+function LatestBackupDir: String;
+var
+  Name: String;
+begin
+  Result := '';
+  Name := LatestBackupDirName(GDataDir + '\backups');
+  if Name <> '' then
+    Result := GDataDir + '\backups\' + Name;
+end;
+
 { Ротация: пока архивов больше трёх, удаляется самый старый. Чужие файлы и
   каталоги (имена не по формату архива) не считаются и не трогаются. Ошибка
   удаления обновление не отменяет — только предупреждение в журнал. }
@@ -2189,6 +2677,9 @@ begin
     Exit;
   end;
   BackupsDir := GDataDir + '\backups';
+  { Этап прогресса: подпись на странице установки (112642a4). В silent
+    записывается только в журнал. }
+  SetInstallStage('Резервная копия баз данных…');
   if not ForceDirectories(BackupsDir) then
   begin
     LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архивов ' + BackupsDir +
@@ -2806,12 +3297,271 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Экран компонентов (каркас; тексты и оформление — 112642a4)
+  Экран ошибки и итоговая сводка (112642a4)
   --------------------------------------------------------------------------- }
+function FailureReasonText: String;
+begin
+  if GFailureReason <> '' then
+    Result := GFailureReason
+  else
+    Result := 'причина не записана — смотрите журнал установки';
+end;
+
+{ Возврат на экран компонентов: отказ UAC и ошибка удаления старого клиента
+  не должны выбрасывать пользователя из мастера — выбор компонентов
+  сохраняется. Перейти на страницу напрямую Inno не даёт, поэтому «Назад»
+  нажимается программно. }
+procedure ReturnToComponentsPage;
+var
+  Guard: Integer;
+begin
+  if (WizardForm = nil) or (GComponentsPage = nil) then Exit;
+  Guard := 0;
+  while (WizardForm.CurPageID <> GComponentsPage.ID) and (Guard < 20) do
+  begin
+    WizardForm.BackButton.OnClick(WizardForm.BackButton);
+    Guard := Guard + 1;
+  end;
+end;
+
+{ Свободный порт рядом с занятым: подсказка на экране параметров. Поле не
+  меняется — решение за пользователем. Пустая строка — свободного рядом нет. }
+function SuggestFreePort(const BasePort: String): String;
+var
+  Base, I, Candidate: Integer;
+begin
+  Result := '';
+  Base := StrToIntDef(Trim(BasePort), 0);
+  if Base <= 0 then Exit;
+  for I := 1 to 20 do
+  begin
+    Candidate := Base + I;
+    if Candidate > MAX_PORT then Break;
+    if ServerPortStatus(IntToStr(Candidate)) = 0 then
+    begin
+      Result := IntToStr(Candidate);
+      Exit;
+    end;
+  end;
+end;
+
+procedure OpenLogClick(Sender: TObject);
+begin
+  OpenPath(GLogPath);
+end;
+
+procedure OpenDataDirClick(Sender: TObject);
+begin
+  OpenPath(GDataDir);
+end;
+
+procedure RunClientClick(Sender: TObject);
+begin
+  OpenPath(ClientExePath);
+end;
+
+{ «Повторить установку» на экране ошибки: запускает установщик заново и
+  закрывает текущий. Состояние машины уже записано (файлы, install.json),
+  поэтому повторный запуск увидит repair/update и продолжит с того же места. }
+procedure RetryInstallClick(Sender: TObject);
+var
+  Code: Integer;
+begin
+  if not ShellExec('open', ExpandConstant('{srcexe}'), '', '',
+    SW_SHOWNORMAL, ewNoWait, Code) then
+  begin
+    SuppressibleMsgBox('Не удалось запустить установщик заново: ' +
+      ExpandConstant('{srcexe}') + #13#10 + 'Запустите его вручную.',
+      mbError, MB_OK, IDOK);
+    Exit;
+  end;
+  LogLine('INFO', 'Экран ошибки: установщик запущен заново');
+  if WizardForm <> nil then WizardForm.Close;
+end;
+
+function ErrorMemoText: String;
+var
+  S, Backup: String;
+begin
+  S := 'Установка ETN ' + GProductVersion + ' не завершена.' + #13#10#13#10 +
+    'Причина: ' + FailureReasonText + '.' + #13#10#13#10 +
+    'Журнал установки: ' + IfStr(GLogPath = '', '(журнал не создан)', GLogPath) + #13#10;
+  Backup := GLastBackupDir;
+  if Backup = '' then Backup := LatestBackupDir;
+  if Backup <> '' then
+    S := S + 'Резервная копия баз данных: ' + Backup + #13#10
+  else
+    S := S + 'Резервная копия баз данных: не создавалась' + #13#10;
+  S := S + #13#10 +
+    'Следующий шаг: устраните причину и запустите установщик снова — ' +
+    'параметры и данные сохранятся. Если установка не запускается, приложите ' +
+    'журнал установки к обращению в поддержку.';
+  Result := S;
+end;
+
+function SummaryText: String;
+var
+  S, Backup, Exe, Ipv4: String;
+begin
+  S := 'Установка ETN ' + GProductVersion + ' завершена.' + #13#10#13#10;
+  if GServerSelected then
+  begin
+    S := S + 'Сервер ETN установлен.' + #13#10;
+    S := S + 'Адрес на этом компьютере: http://127.0.0.1:' + GServerPort + #13#10;
+    if GServerFirewall then
+    begin
+      Ipv4 := DetectLanIp;
+      if Ipv4 <> '' then
+        S := S + 'Адрес в локальной сети: http://' + Ipv4 + ':' + GServerPort + #13#10
+      else
+        S := S + 'Адрес в локальной сети: определить не удалось (порт ' +
+          GServerPort + ' открыт брандмауэром)' + #13#10;
+      if GFirewallWarning then
+        S := S + 'Внимание: правило брандмауэра Windows не создано — подключения ' +
+          'с других компьютеров могут блокироваться. Причина указана в журнале.' + #13#10;
+    end
+    else
+      S := S + 'Подключения с других компьютеров отключены (только этот компьютер).' + #13#10;
+    S := S + 'Каталог данных: ' + GDataDir + #13#10;
+  end;
+  Exe := ClientExePath;
+  if Exe <> '' then
+    S := S + 'Клиент ETN: ' + Exe + #13#10;
+  Backup := GLastBackupDir;
+  if Backup = '' then Backup := LatestBackupDir;
+  if Backup <> '' then
+    S := S + 'Резервная копия баз данных: ' + Backup + #13#10;
+  S := S + 'Журнал установки: ' + IfStr(GLogPath = '', '(не создан)', GLogPath) + #13#10;
+  if GKeyWasShown then
+    S := S + #13#10 + 'Ключ администратора показывался на предыдущем экране: ' +
+      'сохраните его в надёжном месте — восстановить ключ нельзя, только ' +
+      'выпустить новый.';
+  Result := S;
+end;
+
+{ Экран ошибки — после экрана ключа: ключ показывается всегда, даже если
+  установка сорвалась после init (восстановить его нельзя). }
+procedure CreateErrorPage;
+begin
+  GErrorPage := CreateCustomPage(GKeyPage.ID, 'Установка не завершена',
+    'Установка ETN прервана. Ниже — причина, журнал, резервная копия и ' +
+    'следующий шаг.');
+
+  GErrorMemo := TNewMemo.Create(GErrorPage);
+  GErrorMemo.Parent := GErrorPage.Surface;
+  GErrorMemo.Left := 0;
+  GErrorMemo.Top := 0;
+  GErrorMemo.Width := GErrorPage.SurfaceWidth;
+  GErrorMemo.Height := GErrorPage.SurfaceHeight - ScaleY(44);
+  GErrorMemo.ReadOnly := True;
+  GErrorMemo.WordWrap := True;
+  GErrorMemo.ScrollBars := ssVertical;
+  GErrorMemo.Font.Name := 'Segoe UI';
+  GErrorMemo.Font.Size := 9;
+
+  GErrorOpenLogButton := TNewButton.Create(GErrorPage);
+  GErrorOpenLogButton.Parent := GErrorPage.Surface;
+  GErrorOpenLogButton.Left := 0;
+  GErrorOpenLogButton.Top := GErrorMemo.Top + GErrorMemo.Height + ScaleY(8);
+  GErrorOpenLogButton.Width := ScaleX(130);
+  GErrorOpenLogButton.Caption := 'Открыть журнал';
+  GErrorOpenLogButton.OnClick := @OpenLogClick;
+
+  GErrorOpenDataButton := TNewButton.Create(GErrorPage);
+  GErrorOpenDataButton.Parent := GErrorPage.Surface;
+  GErrorOpenDataButton.Left := GErrorOpenLogButton.Width + ScaleX(8);
+  GErrorOpenDataButton.Top := GErrorOpenLogButton.Top;
+  GErrorOpenDataButton.Width := ScaleX(150);
+  GErrorOpenDataButton.Caption := 'Открыть папку данных';
+  GErrorOpenDataButton.OnClick := @OpenDataDirClick;
+
+  GErrorRetryButton := TNewButton.Create(GErrorPage);
+  GErrorRetryButton.Parent := GErrorPage.Surface;
+  GErrorRetryButton.Left := GErrorOpenDataButton.Left + GErrorOpenDataButton.Width +
+    ScaleX(8);
+  GErrorRetryButton.Top := GErrorOpenLogButton.Top;
+  GErrorRetryButton.Width := ScaleX(170);
+  GErrorRetryButton.Caption := 'Повторить установку';
+  GErrorRetryButton.OnClick := @RetryInstallClick;
+end;
+
+{ Сводка на стандартной странице завершения: свой memo вместо FinishedLabel
+  (у него одна строка без переносов) и кнопки действий. }
+procedure CreateFinishedControls;
+begin
+  if (WizardForm = nil) or (GSummaryMemo <> nil) then Exit;
+  GSummaryMemo := TNewMemo.Create(WizardForm);
+  GSummaryMemo.Parent := WizardForm.FinishedPage;
+  GSummaryMemo.Left := 0;
+  GSummaryMemo.Top := WizardForm.FinishedHeadingLabel.Top +
+    WizardForm.FinishedHeadingLabel.Height + ScaleY(8);
+  GSummaryMemo.Width := WizardForm.FinishedPage.ClientWidth;
+  GSummaryMemo.Height := WizardForm.FinishedPage.ClientHeight -
+    GSummaryMemo.Top - ScaleY(34);
+  GSummaryMemo.ReadOnly := True;
+  GSummaryMemo.WordWrap := True;
+  GSummaryMemo.ScrollBars := ssVertical;
+  GSummaryMemo.Font.Name := 'Segoe UI';
+  GSummaryMemo.Font.Size := 9;
+
+  GSummaryRunButton := TNewButton.Create(WizardForm);
+  GSummaryRunButton.Parent := WizardForm.FinishedPage;
+  GSummaryRunButton.Left := 0;
+  GSummaryRunButton.Top := WizardForm.FinishedPage.ClientHeight - ScaleY(26);
+  GSummaryRunButton.Width := ScaleX(130);
+  GSummaryRunButton.Caption := 'Запустить клиент';
+  GSummaryRunButton.OnClick := @RunClientClick;
+
+  GSummaryDataButton := TNewButton.Create(WizardForm);
+  GSummaryDataButton.Parent := WizardForm.FinishedPage;
+  GSummaryDataButton.Left := GSummaryRunButton.Width + ScaleX(8);
+  GSummaryDataButton.Top := GSummaryRunButton.Top;
+  GSummaryDataButton.Width := ScaleX(150);
+  GSummaryDataButton.Caption := 'Открыть папку данных';
+  GSummaryDataButton.OnClick := @OpenDataDirClick;
+
+  GSummaryLogButton := TNewButton.Create(WizardForm);
+  GSummaryLogButton.Parent := WizardForm.FinishedPage;
+  GSummaryLogButton.Left := GSummaryDataButton.Left + GSummaryDataButton.Width +
+    ScaleX(8);
+  GSummaryLogButton.Top := GSummaryRunButton.Top;
+  GSummaryLogButton.Width := ScaleX(130);
+  GSummaryLogButton.Caption := 'Открыть журнал';
+  GSummaryLogButton.OnClick := @OpenLogClick;
+end;
+
+{ ---------------------------------------------------------------------------
+  Экран компонентов — первый экран и приветствие (112642a4)
+  --------------------------------------------------------------------------- }
+{ Подписи компонентов зависят от состояния машины (спека, экран 1). }
+function ServerCheckCaption: String;
+begin
+  if GServerState = 'not-installed' then
+    Result := 'Установить сервер ETN'
+  else if GServerState = 'update-available' then
+    Result := 'Обновить сервер ETN: ' + GInstalledVersion + ' → ' + GProductVersion
+  else if GServerState = 'installed' then
+    Result := 'Переустановить сервер ETN ' + GProductVersion
+  else if GServerState = 'repair' then
+    Result := 'Восстановить сервер ETN'
+  else if GServerState = 'adopt' then
+    Result := 'Установить сервер ETN и подключить существующие данные'
+  else
+    Result := 'Сервер ETN (установлена более новая версия)';
+end;
+
+function ClientCheckCaption: String;
+begin
+  if GClientState = 'installed' then
+    Result := 'Переустановить клиент ETN'
+  else
+    Result := 'Установить клиент ETN';
+end;
+
 { Единая точка чтения выбора: вызывается обработчиками OnClick всех контролов
-  (чекбоксы компонентов и радиокнопки области клиента) и тестовым хуком
-  /TESTSELECT. Область клиента читается с радиокнопок — без обработчика на них
-  выбор «для всех» не влиял бы на элевацию (NeedElevation). }
+  (чекбоксы компонентов, радиокнопки области клиента, чекбокс лицензии) и
+  тестовым хуком /TESTSELECT. Область клиента читается с радиокнопок — без
+  обработчика на них выбор «для всех» не влиял бы на элевацию (NeedElevation). }
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
@@ -2825,114 +3575,210 @@ begin
   if GSilent then Exit;
   if (GServerCheck <> nil) and (GClientCheck <> nil) and (GScopeMachineRadio <> nil) then
     ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);
+  if GLicenseCheck <> nil then
+    GLicenseAccepted := GLicenseCheck.Checked;
   if GScopeUserRadio <> nil then GScopeUserRadio.Enabled := GClientSelected;
   if GScopeMachineRadio <> nil then GScopeMachineRadio.Enabled := GClientSelected;
+  if GServerCheck <> nil then GServerCheck.Caption := ServerCheckCaption;
+  if GClientCheck <> nil then GClientCheck.Caption := ClientCheckCaption;
+  if GClientHintLabel <> nil then
+  begin
+    if GClientSelected and (not GServerSelected) then
+      GClientHintLabel.Caption :=
+        'Сервер не выбран: при первом запуске понадобится адрес существующего ' +
+        'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.'
+    else
+      GClientHintLabel.Caption :=
+        'Клиент — окно для работы с базами; при первом запуске нужны адрес ' +
+        'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.';
+    GClientHintLabel.Height := GClientHintLabel.AdjustHeight;
+  end;
   if GReasonLabel <> nil then
   begin
     if GBlockedDowngrade then
       GReasonLabel.Caption := 'Установлена более новая версия ' + ServerVersionText +
-        ' — понижение запрещено. Доступна только отмена.'
+        ' — понижение версии не поддерживается. Доступна только отмена.'
+    else if GComponentsNotice <> '' then
+      GReasonLabel.Caption := GComponentsNotice
     else if (not GServerSelected) and (not GClientSelected) then
       GReasonLabel.Caption := 'Выберите хотя бы один компонент.'
-    else if GServerSelected and GBlockedDowngrade then
-      GReasonLabel.Caption := 'Сервер: установлена более новая версия — понижение запрещено.'
+    else if LicensePromptNeeded and (not GLicenseAccepted) then
+      GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.'
     else
       GReasonLabel.Caption := '';
+    GReasonLabel.Height := GReasonLabel.AdjustHeight;
   end;
   if WizardForm <> nil then
     WizardForm.NextButton.Enabled :=
-      (not GBlockedDowngrade) and (GServerSelected or GClientSelected);
+      (not GBlockedDowngrade) and (GServerSelected or GClientSelected) and
+      ((not LicensePromptNeeded) or GLicenseAccepted);
+end;
+
+{ Изменение выбора пользователем: уведомление после отказа UAC или ошибки
+  удаления старого клиента больше не актуально. }
+procedure ComponentsChanged(Sender: TObject);
+begin
+  GComponentsNotice := '';
+  UpdateComponentsState(Sender);
 end;
 
 procedure CreateComponentsPage;
+var
+  Y: Integer;
 begin
-  GComponentsPage := CreateCustomPage(wpLicense,
-    'Компоненты ETN',
-    'Выберите, что установить или обновить на этом компьютере.');
+  { Первый экран — приветствие и выбор компонентов (стандартные страницы
+    welcome/license отключены в [Setup]). }
+  GComponentsPage := CreateCustomPage(wpWelcome, 'ETN — установка',
+    'Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом ' +
+    'компьютере, клиент — окно для работы с ними.');
+
+  Y := 0;
 
   GServerCheck := TNewCheckBox.Create(GComponentsPage);
   GServerCheck.Parent := GComponentsPage.Surface;
   GServerCheck.Left := 0;
-  GServerCheck.Top := 0;
+  GServerCheck.Top := Y;
   GServerCheck.Width := GComponentsPage.SurfaceWidth;
-  GServerCheck.Caption := 'Сервер ETN';
-  GServerCheck.OnClick := @UpdateComponentsState;
+  GServerCheck.Caption := ServerCheckCaption;
+  GServerCheck.OnClick := @ComponentsChanged;
+  Y := Y + GServerCheck.Height + ScaleY(2);
 
   GServerStateLabel := TNewStaticText.Create(GComponentsPage);
   GServerStateLabel.Parent := GComponentsPage.Surface;
   GServerStateLabel.Left := 20;
-  GServerStateLabel.Top := GServerCheck.Top + GServerCheck.Height + 2;
+  GServerStateLabel.Top := Y;
+  GServerStateLabel.AutoSize := False;
+  GServerStateLabel.WordWrap := True;
   GServerStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GServerStateLabel.Caption := ServerStateText;
+  GServerStateLabel.Font.Color := clGray;
+  GServerStateLabel.Caption := ServerStateText +
+    IfStr(InitStateText = '', '', ' ' + InitStateText);
+  GServerStateLabel.Height := GServerStateLabel.AdjustHeight;
+  Y := Y + GServerStateLabel.Height + ScaleY(4);
 
-  { «Сервер уже инициализирован» / «найден ключ от прошлого запуска» (686c5d76). }
-  GInitStateLabel := TNewStaticText.Create(GComponentsPage);
-  GInitStateLabel.Parent := GComponentsPage.Surface;
-  GInitStateLabel.Left := 20;
-  GInitStateLabel.Top := GServerStateLabel.Top + GServerStateLabel.Height + 2;
-  GInitStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GInitStateLabel.Caption := InitStateText;
+  { Node.js входит в поставку; другие варианты — для опытных (спека, экран 1). }
+  GServerAltLink := TNewLinkLabel.Create(GComponentsPage);
+  GServerAltLink.Parent := GComponentsPage.Surface;
+  GServerAltLink.Left := 20;
+  GServerAltLink.Top := Y;
+  GServerAltLink.Width := GComponentsPage.SurfaceWidth - 20;
+  GServerAltLink.Caption := '<a href="server-options">Другие варианты установки ' +
+    'сервера (удалённый сервер, Docker)</a> — для опытных. Node.js уже входит ' +
+    'в установку, отдельно ставить не нужно.';
+  GServerAltLink.OnLinkClick := @OpenServerOptions;
+  Y := Y + GServerAltLink.Height + ScaleY(10);
 
   GClientCheck := TNewCheckBox.Create(GComponentsPage);
   GClientCheck.Parent := GComponentsPage.Surface;
   GClientCheck.Left := 0;
-  GClientCheck.Top := GInitStateLabel.Top + GInitStateLabel.Height + 14;
+  GClientCheck.Top := Y;
   GClientCheck.Width := GComponentsPage.SurfaceWidth;
-  GClientCheck.Caption := 'Клиент ETN';
-  GClientCheck.OnClick := @UpdateComponentsState;
+  GClientCheck.Caption := ClientCheckCaption;
+  GClientCheck.OnClick := @ComponentsChanged;
+  Y := Y + GClientCheck.Height + ScaleY(2);
 
   GClientStateLabel := TNewStaticText.Create(GComponentsPage);
   GClientStateLabel.Parent := GComponentsPage.Surface;
   GClientStateLabel.Left := 20;
-  GClientStateLabel.Top := GClientCheck.Top + GClientCheck.Height + 2;
+  GClientStateLabel.Top := Y;
+  GClientStateLabel.AutoSize := False;
+  GClientStateLabel.WordWrap := True;
   GClientStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
+  GClientStateLabel.Font.Color := clGray;
   GClientStateLabel.Caption := ClientStateText;
+  GClientStateLabel.Height := GClientStateLabel.AdjustHeight;
+  Y := Y + GClientStateLabel.Height + ScaleY(2);
+
+  GClientHintLabel := TNewStaticText.Create(GComponentsPage);
+  GClientHintLabel.Parent := GComponentsPage.Surface;
+  GClientHintLabel.Left := 20;
+  GClientHintLabel.Top := Y;
+  GClientHintLabel.AutoSize := False;
+  GClientHintLabel.WordWrap := True;
+  GClientHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
+  GClientHintLabel.Font.Color := clGray;
+  GClientHintLabel.Caption := '';
+  GClientHintLabel.Height := GClientHintLabel.AdjustHeight;
+  Y := Y + GClientHintLabel.Height + ScaleY(4);
 
   GScopeUserRadio := TNewRadioButton.Create(GComponentsPage);
   GScopeUserRadio.Parent := GComponentsPage.Surface;
   GScopeUserRadio.Left := 20;
-  GScopeUserRadio.Top := GClientStateLabel.Top + GClientStateLabel.Height + 6;
+  GScopeUserRadio.Top := Y;
   GScopeUserRadio.Width := GComponentsPage.SurfaceWidth - 20;
   GScopeUserRadio.Caption := 'Клиент: только для меня (без прав администратора)';
   GScopeUserRadio.Checked := True;
-  GScopeUserRadio.OnClick := @UpdateComponentsState;
+  GScopeUserRadio.OnClick := @ComponentsChanged;
+  Y := Y + GScopeUserRadio.Height + ScaleY(2);
 
   GScopeMachineRadio := TNewRadioButton.Create(GComponentsPage);
   GScopeMachineRadio.Parent := GComponentsPage.Surface;
   GScopeMachineRadio.Left := 20;
-  GScopeMachineRadio.Top := GScopeUserRadio.Top + GScopeUserRadio.Height + 2;
+  GScopeMachineRadio.Top := Y;
   GScopeMachineRadio.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeMachineRadio.Caption := 'Клиент: для всех пользователей компьютера';
-  GScopeMachineRadio.OnClick := @UpdateComponentsState;
+  GScopeMachineRadio.Caption := 'Клиент: для всех пользователей (нужны права администратора)';
+  GScopeMachineRadio.OnClick := @ComponentsChanged;
+  Y := Y + GScopeMachineRadio.Height + ScaleY(8);
 
   GDataNoteLabel := TNewStaticText.Create(GComponentsPage);
   GDataNoteLabel.Parent := GComponentsPage.Surface;
   GDataNoteLabel.Left := 0;
-  GDataNoteLabel.Top := GScopeMachineRadio.Top + GScopeMachineRadio.Height + 14;
+  GDataNoteLabel.Top := Y;
   GDataNoteLabel.Width := GComponentsPage.SurfaceWidth;
+  GDataNoteLabel.Font.Color := clGray;
   GDataNoteLabel.Caption := 'Каталог данных сервера: ' + GDataDir + ' (в 0.15.1 фиксирован)';
+  Y := Y + GDataNoteLabel.Height + ScaleY(8);
+
+  { Лицензия MIT — только первая установка (нет ни сервера, ни клиента). }
+  GLicenseCheck := TNewCheckBox.Create(GComponentsPage);
+  GLicenseCheck.Parent := GComponentsPage.Surface;
+  GLicenseCheck.Left := 0;
+  GLicenseCheck.Top := Y;
+  GLicenseCheck.Width := GComponentsPage.SurfaceWidth - ScaleX(120);
+  GLicenseCheck.Caption := 'Я принимаю условия лицензии MIT';
+  GLicenseCheck.Checked := False;
+  GLicenseCheck.OnClick := @ComponentsChanged;
+  GLicenseCheck.Visible := LicensePromptNeeded;
+
+  GLicenseLink := TNewLinkLabel.Create(GComponentsPage);
+  GLicenseLink.Parent := GComponentsPage.Surface;
+  GLicenseLink.Left := GComponentsPage.SurfaceWidth - ScaleX(110);
+  GLicenseLink.Top := Y + ScaleY(2);
+  GLicenseLink.Width := ScaleX(110);
+  GLicenseLink.Caption := '<a href="license">Текст лицензии</a>';
+  GLicenseLink.OnLinkClick := @OpenLocalLicense;
+  GLicenseLink.Visible := LicensePromptNeeded;
+  if LicensePromptNeeded then
+    Y := Y + GLicenseCheck.Height + ScaleY(6)
+  else
+    Y := Y + ScaleY(2);
 
   GReasonLabel := TNewStaticText.Create(GComponentsPage);
   GReasonLabel.Parent := GComponentsPage.Surface;
   GReasonLabel.Left := 0;
-  GReasonLabel.Top := GDataNoteLabel.Top + GDataNoteLabel.Height + 14;
+  GReasonLabel.Top := Y;
+  GReasonLabel.AutoSize := False;
+  GReasonLabel.WordWrap := True;
   GReasonLabel.Width := GComponentsPage.SurfaceWidth;
   GReasonLabel.Caption := '';
   GReasonLabel.Font.Color := clRed;
+  GReasonLabel.Height := GReasonLabel.AdjustHeight;
 
   { Начальный выбор вычислен в ApplyDefaultSelection (чистая машина — оба
     компонента, частичная — только установленные); здесь он лишь переносится
-    в контролы. Тексты и оформление — 112642a4. }
+    в контролы. }
   GServerCheck.Checked := GServerSelected;
   GClientCheck.Checked := GClientSelected;
   GScopeUserRadio.Checked := GClientScopeUser;
   GScopeMachineRadio.Checked := not GClientScopeUser;
+  GLicenseAccepted := False;
   UpdateComponentsState(nil);
 end;
 
 { ---------------------------------------------------------------------------
-  Экран администратора (686c5d76): единственное поле — логин первого
-  администратора. Оформление и полный экран сервера — 112642a4.
+  Экран администратора (686c5d76): логин первого администратора и его
+  отображаемое имя (112642a4: поле имени — на этом экране, etn init уже
+  принимает --display-name).
   --------------------------------------------------------------------------- }
 procedure CreateAdminPage;
 begin
@@ -2954,10 +3800,24 @@ begin
   GAdminLoginEdit.Width := GAdminPage.SurfaceWidth;
   GAdminLoginEdit.Text := GAdminLogin;
 
+  GAdminDisplayLabel := TNewStaticText.Create(GAdminPage);
+  GAdminDisplayLabel.Parent := GAdminPage.Surface;
+  GAdminDisplayLabel.Left := 0;
+  GAdminDisplayLabel.Top := GAdminLoginEdit.Top + GAdminLoginEdit.Height + 12;
+  GAdminDisplayLabel.Width := GAdminPage.SurfaceWidth;
+  GAdminDisplayLabel.Caption := 'Отображаемое имя (необязательно):';
+
+  GAdminDisplayEdit := TNewEdit.Create(GAdminPage);
+  GAdminDisplayEdit.Parent := GAdminPage.Surface;
+  GAdminDisplayEdit.Left := 0;
+  GAdminDisplayEdit.Top := GAdminDisplayLabel.Top + GAdminDisplayLabel.Height + 4;
+  GAdminDisplayEdit.Width := GAdminPage.SurfaceWidth;
+  GAdminDisplayEdit.Text := GAdminDisplayName;
+
   GAdminHintLabel := TNewStaticText.Create(GAdminPage);
   GAdminHintLabel.Parent := GAdminPage.Surface;
   GAdminHintLabel.Left := 0;
-  GAdminHintLabel.Top := GAdminLoginEdit.Top + GAdminLoginEdit.Height + 8;
+  GAdminHintLabel.Top := GAdminDisplayEdit.Top + GAdminDisplayEdit.Height + 8;
   GAdminHintLabel.Width := GAdminPage.SurfaceWidth;
   GAdminHintLabel.Caption := 'Логин используется один раз — при первичной инициализации ' +
     'сервера. Если сервер уже инициализирован, логин не меняется.';
@@ -2994,12 +3854,25 @@ begin
 end;
 
 procedure UpdateServerParamsState;
+var
+  S: String;
 begin
   if GParamsLocked then
   begin
+    { Обновление/ремонт: параметры берутся из install.json, поля только
+      показывают значения; здесь — что именно произойдёт. }
+    S := 'Сервер уже установлен: ' + IfStr(GInstalledVersion = '',
+      ServerVersionText, GInstalledVersion) + ' → ' + GProductVersion +
+      ', режим ' + IfStr(GInstalledMode = '', GServerMode, GInstalledMode) + '.' +
+      ' При обновлении порт, доступ по локальной сети и каталог данных не меняются.';
+    if GInstalledVersion <> GProductVersion then
+      S := S + ' Служба ETN останавливается на время замены файлов, базы данных ' +
+        'копируются в ' + GDataDir + '\backups, затем служба запускается снова.';
     if GServerParamsNoteLabel <> nil then
-      GServerParamsNoteLabel.Caption := 'Сервер уже установлен: при обновлении порт, ' +
-        'доступ по локальной сети и каталог данных не меняются.';
+    begin
+      GServerParamsNoteLabel.Caption := S;
+      GServerParamsNoteLabel.Height := GServerParamsNoteLabel.AdjustHeight;
+    end;
   end
   else if GServerParamsNoteLabel <> nil then
     GServerParamsNoteLabel.Caption := '';
@@ -3062,6 +3935,8 @@ begin
   GServerParamsNoteLabel.Left := 0;
   GServerParamsNoteLabel.Top := GDataDirInfoLabel.Top + GDataDirInfoLabel.Height + ScaleY(8);
   GServerParamsNoteLabel.Width := GServerParamsPage.SurfaceWidth;
+  GServerParamsNoteLabel.AutoSize := False;
+  GServerParamsNoteLabel.WordWrap := True;
   GServerParamsNoteLabel.Caption := '';
 
   GPortErrorLabel := TNewStaticText.Create(GServerParamsPage);
@@ -3069,6 +3944,8 @@ begin
   GPortErrorLabel.Left := 0;
   GPortErrorLabel.Top := GServerParamsNoteLabel.Top + GServerParamsNoteLabel.Height + ScaleY(8);
   GPortErrorLabel.Width := GServerParamsPage.SurfaceWidth;
+  GPortErrorLabel.AutoSize := False;
+  GPortErrorLabel.WordWrap := True;
   GPortErrorLabel.Caption := '';
   GPortErrorLabel.Font.Color := clRed;
 end;
@@ -3215,6 +4092,7 @@ begin
   GTestServiceName := '';
   GTestOwnServicePid := '';
   GTestBackup := '';
+  GTestLegacy := '';
   GLastBackupDir := '';
   GAdminLogin := '';
   GAdminDisplayName := '';
@@ -3224,6 +4102,19 @@ begin
   GPendingKey := '';
   GPendingKeyPrevious := False;
   GKeyBeforeInstall := '';
+  GComponentsNotice := '';
+  GDowngradeWarned := False;
+  GLicenseAccepted := False;
+  GInstallStage := '';
+  GFailureReason := '';
+  GKeyWasShown := False;
+  GLanIp := '';
+  GLanIpChecked := False;
+  GLegacyClientFound := False;
+  GLegacyClientVersion := '';
+  GLegacyClientMachine := False;
+  GLegacyClientChecked := False;
+  GChildRanThisPass := False;
   GParamsPath := '';
   GReasonFile := '';
   GChildReason := '';
@@ -3269,6 +4160,7 @@ begin
   GTestServiceName := ParamValue('TESTSERVICENAME');
   GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
   GTestBackup := ParamValue('TESTBACKUP');
+  GTestLegacy := ParamValue('TESTLEGACY');
   { Подмена каталога данных для предпроверок (путь, занятый файлом,
     недоступный диск): журнал при этом остаётся в обычном каталоге теста. }
   if GTestDataDir <> '' then
@@ -3281,6 +4173,9 @@ begin
   LoadInstallJson;
   ApplyInstalledParams;
   DetectState;
+  { Старый NSIS-клиент (0.14.x) ищется до показа экрана компонентов: подпись
+    клиента и предупреждение о его удалении видны на первом экране. }
+  DetectLegacyClient;
 
   { Выбор компонентов по умолчанию: в привилегированной фазе выбор пришёл из
     файла параметров и не пересчитывается. }
@@ -3368,7 +4263,10 @@ begin
       ' default_client=' + Pick(GClientSelected, '1', '0') +
       ' client_scope=' + Pick(GClientScopeUser, 'user', 'machine') +
       ' need_elevation=' + Pick(NeedElevation, '1', '0') +
-      ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0'));
+      ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
+      ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
+      ' legacy_machine=' + Pick(GLegacyClientMachine, '1', '0') +
+      ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
     ExitProcess(EXIT_OK);
   end;
 
@@ -3421,6 +4319,13 @@ begin
   if GPrivilegedPhase then
   begin
     ValidatePrivilegedPhasePreconditions;
+    { Старый NSIS-клиент удаляется до копирования файлов: привилегированная
+      фаза — единственный процесс, который может снять машинную запись.
+      Отказ деинсталлятора останавливает установку кодом 20 с причиной для
+      родителя. }
+    Reason := '';
+    if GClientSelected and (not RemoveLegacyBeforeInstall(True, Reason)) then
+      FailPrecondition(Reason);
     { Файл параметров больше не нужен: в общем каталоге он оставаться не должен.
       Удаляется после предусловий — перезапуск в административном режиме
       (/ADMINMODE) ещё передаёт путь дочернему процессу. }
@@ -3446,6 +4351,9 @@ begin
   CreateAdminPage;
   CreateServerParamsPage;
   CreateKeyPage;
+  { Экран ошибки — после экрана ключа: при сбое после init ключ показывается
+    всегда (восстановить его нельзя). }
+  CreateErrorPage;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -3458,10 +4366,13 @@ begin
        ((GComponentsPage <> nil) and (PageID = GComponentsPage.ID)) then
       Result := True;
   end;
-  { Лицензия — только первая установка: если на машине уже есть сервер или
-    клиент, экран лицензии не показывается. }
+  { Стандартные страницы приветствия и лицензии не используются: первый экран —
+    собственный экран компонентов с приветствием, лицензия MIT — чекбокс на
+    нём (d75b7988). При обновлении лицензия не запрашивается вовсе. }
+  if PageID = wpWelcome then
+    Result := True;
   if PageID = wpLicense then
-    Result := (GServerState <> 'not-installed') or (GClientState = 'installed');
+    Result := True;
   { Каталог программы фиксирован ADR 144bcdb0. }
   if PageID = wpSelectDir then
     Result := True;
@@ -3476,6 +4387,9 @@ begin
     или из защищённого файла предыдущей попытки. }
   if (GKeyPage <> nil) and (PageID = GKeyPage.ID) then
     Result := GPendingKey = '';
+  { Экран ошибки — только при сбое. }
+  if (GErrorPage <> nil) and (PageID = GErrorPage.ID) then
+    Result := GExitCode = EXIT_OK;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -3483,15 +4397,38 @@ begin
   if GSilent then Exit;
   if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
   begin
-    if GInitStateLabel <> nil then GInitStateLabel.Caption := InitStateText;
+    if GServerStateLabel <> nil then
+    begin
+      GServerStateLabel.Caption := ServerStateText +
+        IfStr(InitStateText = '', '', ' ' + InitStateText);
+      GServerStateLabel.Height := GServerStateLabel.AdjustHeight;
+    end;
+    if GClientStateLabel <> nil then
+    begin
+      GClientStateLabel.Caption := ClientStateText;
+      GClientStateLabel.Height := GClientStateLabel.AdjustHeight;
+    end;
     UpdateComponentsState(nil);
+    { Понижение версии: один раз на запуск — объяснить и оставить «Отмена». }
+    if GBlockedDowngrade and (not GDowngradeWarned) then
+    begin
+      GDowngradeWarned := True;
+      LogLine('WARN', 'Понижение версии запрещено: установлена ' +
+        ServerVersionText + ', установщик ' + GProductVersion);
+      SuppressibleMsgBox('На этом компьютере установлена более новая версия ETN ' +
+        ServerVersionText + '.' + #13#10 + 'Установщик ' + GProductVersion +
+        ' не может её понизить: установка невозможна, доступна только отмена.',
+        mbError, MB_OK, IDOK);
+    end;
   end;
   if (GAdminPage <> nil) and (CurPageID = GAdminPage.ID) then
   begin
     if (GAdminLoginEdit <> nil) and (GAdminLoginEdit.Text = '') then
       GAdminLoginEdit.Text := GAdminLogin;
+    if (GAdminDisplayEdit <> nil) and (GAdminDisplayEdit.Text = '') then
+      GAdminDisplayEdit.Text := GAdminDisplayName;
     if GAdminErrorLabel <> nil then GAdminErrorLabel.Caption := '';
-    if WizardForm <> nil then
+    if (WizardForm <> nil) and (GAdminLoginEdit <> nil) then
       WizardForm.NextButton.Enabled := Trim(GAdminLoginEdit.Text) <> '';
   end;
   if (GServerParamsPage <> nil) and (CurPageID = GServerParamsPage.ID) then
@@ -3520,6 +4457,7 @@ begin
     if GKeyCopiedLabel <> nil then GKeyCopiedLabel.Caption := '';
     if GKeyPreviousLabel <> nil then GKeyPreviousLabel.Visible := GPendingKeyPrevious;
     if GKeyConfirmCheck <> nil then GKeyConfirmCheck.Checked := False;
+    GKeyWasShown := True;
     { «Назад» на экране ключа недоступен: ключ уже создан, вернуться к выбору
       компонентов нельзя. «Далее» разблокирует только «Я сохранил ключ». }
     if WizardForm <> nil then
@@ -3528,28 +4466,87 @@ begin
       WizardForm.NextButton.Enabled := False;
     end;
   end;
+  if (GErrorPage <> nil) and (CurPageID = GErrorPage.ID) then
+  begin
+    if GErrorMemo <> nil then
+      GErrorMemo.Lines.Text := ErrorMemoText;
+    if GErrorOpenLogButton <> nil then
+      GErrorOpenLogButton.Visible := FileExists(GLogPath);
+    if GErrorOpenDataButton <> nil then
+      GErrorOpenDataButton.Visible := DirExists(GDataDir);
+    if WizardForm <> nil then
+      WizardForm.NextButton.Enabled := True;
+  end;
   if CurPageID = wpFinished then
   begin
     if WizardForm <> nil then
     begin
       WizardForm.NextButton.Enabled := True;
-      { Ошибка netsh не отменяет установку, но пользователь должен узнать о
-        ней не только из журнала: silent-режим сюда не доходит (GSilent). }
-      if GFirewallWarning and (WizardForm.FinishedLabel <> nil) then
-        WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-          'Внимание: правило брандмауэра Windows не создано. ' +
-          'Сервер слушает ' + GServerHost + ':' + GServerPort + ', но подключения ' +
-          'с других компьютеров могут блокироваться брандмауэром. ' +
-          'Причина указана в журнале установки.';
+      { Итоговая сводка: свой memo вместо однострочного FinishedLabel; при
+        сбое — причина, журнал, бэкап и следующий шаг. Ошибка netsh установку
+        не отменяет, но предупреждение о брандмауэре входит в сводку. }
+      CreateFinishedControls;
+      WizardForm.FinishedLabel.Visible := False;
+      if GExitCode = EXIT_OK then
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'Установка ETN завершена';
+        if GSummaryMemo <> nil then
+          GSummaryMemo.Lines.Text := SummaryText;
+      end
+      else
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'Установка ETN не завершена';
+        if GSummaryMemo <> nil then
+          GSummaryMemo.Lines.Text := ErrorMemoText;
+      end;
+      if GSummaryRunButton <> nil then
+        GSummaryRunButton.Visible := (GExitCode = EXIT_OK) and
+          (ClientExePath <> '');
+      if GSummaryDataButton <> nil then
+        GSummaryDataButton.Visible := DirExists(GDataDir);
+      if GSummaryLogButton <> nil then
+        GSummaryLogButton.Visible := FileExists(GLogPath);
     end;
   end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Reason, PortText: String;
+  Reason, PortText, FreePort: String;
 begin
   Result := True;
+  if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
+  begin
+    UpdateComponentsState(nil);
+    if GBlockedDowngrade then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if (not GServerSelected) and (not GClientSelected) then
+    begin
+      if GReasonLabel <> nil then
+        GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
+      Result := False;
+      Exit;
+    end;
+    if LicensePromptNeeded and (not GLicenseAccepted) then
+    begin
+      if GReasonLabel <> nil then
+        GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.';
+      if (WizardForm <> nil) and (GLicenseCheck <> nil) then
+        WizardForm.ActiveControl := GLicenseCheck;
+      LogLine('WARN', 'Экран компонентов: не принята лицензия MIT');
+      Result := False;
+      Exit;
+    end;
+    LogLine('INFO', 'Экран компонентов: сервер=' +
+      Pick(GServerSelected, 'да', 'нет') + ', клиент=' +
+      Pick(GClientSelected, 'да', 'нет') + ', область клиента=' +
+      Pick(GClientScopeUser, 'user', 'machine') + ', лицензия=' +
+      IfStr(LicensePromptNeeded, Pick(GLicenseAccepted, 'принята', 'не принята'),
+        'не требуется'));
+  end;
   if (GServerParamsPage <> nil) and (CurPageID = GServerParamsPage.ID) then
   begin
     if GParamsLocked then Exit;
@@ -3560,8 +4557,19 @@ begin
     if Reason <> '' then
     begin
       { Ошибка окружения — до запуска установки: экран остаётся открытым,
-        фокус на поле порта (сценарий «порт 4321 занят»). }
-      if GPortErrorLabel <> nil then GPortErrorLabel.Caption := Reason;
+        фокус на поле порта. Для занятого порта — подсказка свободного
+        значения (поле не меняется без решения пользователя). }
+      FreePort := '';
+      if Pos('занят', Reason) > 0 then
+        FreePort := SuggestFreePort(GServerPort);
+      if FreePort <> '' then
+        Reason := Reason + '. Рядом свободен порт ' + FreePort +
+          ' — укажите его и нажмите «Далее»';
+      if GPortErrorLabel <> nil then
+      begin
+        GPortErrorLabel.Caption := Reason;
+        GPortErrorLabel.Height := GPortErrorLabel.AdjustHeight;
+      end;
       if WizardForm <> nil then WizardForm.ActiveControl := GPortEdit;
       LogLine('WARN', 'Экран параметров сервера: ' + Reason);
       Result := False;
@@ -3574,10 +4582,19 @@ begin
   if (GAdminPage <> nil) and (CurPageID = GAdminPage.ID) then
   begin
     GAdminLogin := Trim(GAdminLoginEdit.Text);
+    if GAdminDisplayEdit <> nil then
+      GAdminDisplayName := Trim(GAdminDisplayEdit.Text);
     if not ValidAdminLogin(GAdminLogin) then
     begin
       if GAdminErrorLabel <> nil then
         GAdminErrorLabel.Caption := 'Логин обязателен и не должен содержать кавычек и переводов строк.';
+      Result := False;
+      Exit;
+    end;
+    if (GAdminDisplayName <> '') and (not ValidDisplayName(GAdminDisplayName)) then
+    begin
+      if GAdminErrorLabel <> nil then
+        GAdminErrorLabel.Caption := 'Отображаемое имя не должно содержать кавычек и переводов строк.';
       Result := False;
       Exit;
     end;
@@ -3597,6 +4614,67 @@ begin
     else
       LogLine('WARN', 'Не удалось удалить временный файл ключа: ' + KeyFilePath);
     GPendingKey := '';
+  end;
+  { Готовность: до копирования файлов удаляется старый NSIS-клиент и
+    выполняется повышение прав. Отказ UAC возвращает на экран компонентов
+    с сохранённым выбором (PrepareToInstall дочерний процесс уже не запускает).
+    В silent и привилегированной фазе мастера нет: повышение прав там
+    выполняет InitializeSetup (silent-предусловие «уже элевирован»), поэтому
+    этот обработчик для них ничего не делает. }
+  if CurPageID = wpReady then
+  begin
+    if GSilent or GPrivilegedPhase then Exit;
+    if GChildRanThisPass then Exit;
+    Reason := '';
+    if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
+    begin
+      GComponentsNotice := 'Установка не начата: ' + Reason;
+      SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
+        mbError, MB_OK, IDOK);
+      ReturnToComponentsPage;
+      Result := False;
+      Exit;
+    end;
+    if NeedElevation and (not (GIsElevated and IsAdminInstallMode)) then
+    begin
+      GChildRanThisPass := True;
+      GChildResult := RunElevatedChild;
+      if GChildResult < 0 then
+      begin
+        GChildRanThisPass := False;
+        GChildResult := 0;
+        GComponentsNotice := 'Повышение прав отменено: для выбранных ' +
+          'компонентов нужны права администратора. Изменения не выполнялись, ' +
+          'выбор сохранён.';
+        SuppressibleMsgBox(GComponentsNotice + #13#10#13#10 +
+          'Можно изменить выбор или закрыть установщик.',
+          mbError, MB_OK, IDOK);
+        ReturnToComponentsPage;
+        Result := False;
+        Exit;
+      end;
+      if GChildResult = EXIT_PRECONDITION then
+      begin
+        GChildRanThisPass := False;
+        GChildResult := 0;
+        GComponentsNotice := 'Установка не начата: ' +
+          IfStr(GChildReason = '', 'не выполнено предусловие (код 20)',
+            GChildReason);
+        SuppressibleMsgBox(GComponentsNotice + #13#10#13#10 +
+          'Изменения не выполнялись. Порт и доступ по локальной сети можно ' +
+          'изменить в «Параметры сервера».', mbError, MB_OK, IDOK);
+        ReturnToComponentsPage;
+        Result := False;
+        Exit;
+      end;
+      if GChildResult <> EXIT_OK then
+      begin
+        { Сбой мог произойти после замены файлов: экран ошибки и итоговая
+          сводка покажут причину, журнал и бэкап. }
+        FailInstall('привилегированная фаза завершилась с кодом ' +
+          IntToStr(GChildResult));
+      end;
+    end;
   end;
 end;
 
@@ -3622,12 +4700,13 @@ begin
   end;
 end;
 
-{ Подтверждение перед установкой: двухфазное повышение прав.
-  До этого момента на диск не пишется ничего, кроме временного файла
-  параметров; при отказе UAC частичных файлов не остаётся. }
-{ Подтверждение перед установкой: двухфазное повышение прав.
-  До этого момента на диск не пишется ничего, кроме временного файла
-  параметров; при отказе UAC частичных файлов не остаётся. }
+{ Подтверждение перед установкой. Повышение прав выполняется на экране
+  готовности (NextButtonClick(wpReady)): при отказе UAC мастер возвращается на
+  экран компонентов, а не показывает сообщение поверх экрана готовности.
+  До копирования файлов на диск не пишется ничего, кроме временного файла
+  параметров; при отказе UAC частичных файлов не остаётся. Здесь — только
+  страховка на случай, если дочерний процесс ещё не запускался (например,
+  экран готовности пропущен). }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Reason: String;
@@ -3635,6 +4714,9 @@ begin
   Result := '';
   NeedsRestart := False;
   if GSilent or GPrivilegedPhase then Exit;
+  { Повышение прав уже выполнено на экране готовности — второй дочерний
+    процесс не запускается. }
+  if GChildRanThisPass then Exit;
   if not NeedElevation then Exit;
   { Уже элевированный процесс пишет в Program Files сам, но только в
     административном режиме установки; иначе нужен дочерний /ALLUSERS. }
@@ -3685,6 +4767,20 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   HealthOk: Boolean;
 begin
+  if CurStep = ssInstall then
+  begin
+    { Подпись этапа на странице установки. При копировании файлов Inno
+      показывает их имена в FilenameLabel — подпись этапа видна в момент
+      перехода и снова появляется на этапах после копирования. }
+    if GWorkAllowed then
+    begin
+      if GServerSelected then
+        SetInstallStage('Замена файлов сервера ETN…')
+      else if GClientSelected then
+        SetInstallStage('Замена файлов клиента ETN…');
+    end;
+    Exit;
+  end;
   if CurStep = ssPostInstall then
   begin
     if GSilent then
@@ -3695,34 +4791,46 @@ begin
       { Порядок шагов — контракт bb063ac3: остановка службы, замена файлов,
         инициализация (только первая установка), запуск, health-check;
         install.json пишется только после успешной проверки, иначе после
-        отката файл врал бы о новой версии. }
+        отката файл врал бы о новой версии. Подписи этапов стоят в точках
+        вызова: пока bb063ac3 не реализована, остановка и запуск службы —
+        заглушки, но этапы уже называют реальные операции. }
+      SetInstallStage('Остановка службы ETN…');
       StopServiceIfRunning;
       { Каталог данных и подкаталоги, которые обязаны существовать до старта
         службы (WinSW каталог журнала не создаёт) — 9b310991. }
       if GServerSelected then
       begin
+        SetInstallStage('Подготовка каталогов данных…');
         if not EnsureServerDirs then
-        begin
-          GExitCode := EXIT_FAILED;
-          LogLine('ERROR', 'Сбой выполнения: каталог данных не подготовлен (код 10)');
-        end;
+          FailInstall('каталог данных не подготовлен: ' + GDataDir);
         { Подстановка шаблона службы до регистрации/запуска: пока в
           etn-service.xml плейсхолдеры, службу запускать нельзя (ADR db60302a). }
-        if (GExitCode = EXIT_OK) and (not InstallServiceConfig) then
+        if GExitCode = EXIT_OK then
         begin
-          GExitCode := EXIT_FAILED;
-          LogLine('ERROR', 'Сбой выполнения: конфигурация службы не подготовлена (код 10)');
+          SetInstallStage('Настройка службы…');
+          if not InstallServiceConfig then
+            FailInstall('конфигурация службы не подготовлена: ' + GServerDir +
+              '\service\etn-service.xml');
         end;
         { Правило брандмауэра — по чекбоксу; ошибка netsh не отменяет
-          установку (сервер слушает 0.0.0.0, предупреждение в журнал и на
-          финальный экран), причина в журнале. }
+          установку (сервер слушает 0.0.0.0, предупреждение в журнал и в
+          итоговую сводку), причина в журнале. }
         if GExitCode = EXIT_OK then
+        begin
+          SetInstallStage('Правило брандмауэра…');
           ApplyFirewallRule;
+        end;
       end;
       { Инициализация — до запуска службы: сервер без администратора не
         стартует. Вызывается один раз: критерий hasFirstUser (686c5d76). }
-      if GServerSelected then
+      if (GServerSelected) and (GExitCode = EXIT_OK) then
+      begin
+        SetInstallStage('Инициализация сервера…');
         EnsureFirstUser;
+        if GExitCode <> EXIT_OK then
+          FailInstall('инициализация сервера не выполнена (etn init) — ' +
+            'подробности в журнале');
+      end;
 #ifdef TestMode
       if (GTestFailAfterInit = '1') and GInitAttempted and (GPendingKey <> '') then
       begin
@@ -3730,31 +4838,32 @@ begin
         ExitProcess(EXIT_FAILED);
       end;
 #endif
-      StartServiceIfNeeded;
-      HealthOk := ProbeHealth;
-      if not HealthOk then
+      if GExitCode = EXIT_OK then
       begin
-        GExitCode := EXIT_FAILED;
-        LogLine('ERROR', 'Сбой выполнения: health-check не пройден (код 10)');
-      end;
+        SetInstallStage('Запуск службы ETN…');
+        StartServiceIfNeeded;
+        SetInstallStage('Проверка работоспособности…');
+        HealthOk := ProbeHealth;
+        if not HealthOk then
+          FailInstall('health-check не пройден: сервер не ответил на ' +
+            'http://127.0.0.1:' + GServerPort + '/api/v1/health');
+      end
+      else
+        HealthOk := False;
       { Silent: init не вызывался; без администратора сервер не работает —
         код 10, нужен ручной режим. }
-      if HealthOk and IsSilentServerOnly then
+      if HealthOk and (GExitCode = EXIT_OK) and IsSilentServerOnly then
       begin
         if not SilentAdminPresent then
-        begin
-          GExitCode := EXIT_FAILED;
-          LogLine('ERROR', 'Сбой выполнения: сервер не инициализирован (код 10)');
-        end;
+          FailInstall('сервер не инициализирован: нет первого администратора ' +
+            '(нужен ручной режим etn init --username)');
       end;
     end;
     if HealthOk and (GExitCode = EXIT_OK) and NeedInstallRecord then
     begin
+      SetInstallStage('Запись параметров установки…');
       if not WriteInstallJson then
-      begin
-        GExitCode := EXIT_FAILED;
-        LogLine('ERROR', 'Сбой выполнения: install.json не записан (код 10)');
-      end;
+        FailInstall('install.json не записан: ' + GInstallJsonPath);
     end;
     { Ключ мог создать дочерний (элевированный) процесс: читаем защищённый
       файл после установки, чтобы показать его на экране ключа. }

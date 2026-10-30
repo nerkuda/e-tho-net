@@ -390,8 +390,8 @@ $staticChecks = @(
     @{ Name = 'static:autopf-appdir'; Pattern = [regex]::Escape('#define AppDir "{autopf}\ETN"'); Note = 'каталог программы по режиму установки' },
     @{ Name = 'static:defaultdir-app'; Pattern = [regex]::Escape('DefaultDirName={#AppDir}'); Note = '' },
     @{ Name = 'static:privileged-phase'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions'); Note = 'отдельная привилегированная фаза' },
-    @{ Name = 'static:radio-onclick-user'; Pattern = [regex]::Escape('GScopeUserRadio.OnClick := @UpdateComponentsState;'); Note = 'радиокнопка «только для меня»' },
-    @{ Name = 'static:radio-onclick-machine'; Pattern = [regex]::Escape('GScopeMachineRadio.OnClick := @UpdateComponentsState;'); Note = 'радиокнопка «для всех»' },
+    @{ Name = 'static:radio-onclick-user'; Pattern = [regex]::Escape('GScopeUserRadio.OnClick := @ComponentsChanged;'); Note = 'радиокнопка «только для меня»' },
+    @{ Name = 'static:radio-onclick-machine'; Pattern = [regex]::Escape('GScopeMachineRadio.OnClick := @ComponentsChanged;'); Note = 'радиокнопка «для всех»' },
     @{ Name = 'static:selection-from-controls'; Pattern = [regex]::Escape('ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);'); Note = 'выбор читается с контролов' },
     @{ Name = 'static:context-admin-mode'; Pattern = [regex]::Escape('GIsElevated and IsAdminInstallMode'); Note = 'привилегированный контекст — только admin mode' },
     @{ Name = 'static:params-shared-dir'; Pattern = [regex]::Escape('{commonappdata}\ETN\.install'); Note = 'файл параметров в общем каталоге' },
@@ -407,7 +407,7 @@ $staticChecks = @(
     @{ Name = 'static:precheck-function'; Pattern = [regex]::Escape('function CheckServerEnvironment'); Note = 'единая предпроверка окружения' },
     @{ Name = 'static:port-loopback-bind'; Pattern = [regex]::Escape('TcpListener([Net.IPAddress]::Loopback,$port)'); Note = 'пробный bind на loopback' },
     @{ Name = 'static:port-own-service-children'; Pattern = [regex]::Escape('$p.ParentProcessId'); Note = 'служба ETN: потомки WinSW, не только ProcessId' },
-    @{ Name = 'static:firewall-warning-gui'; Pattern = [regex]::Escape('WizardForm.FinishedLabel.Caption'); Note = 'предупреждение netsh на финальном экране' },
+    @{ Name = 'static:firewall-warning-gui'; Pattern = [regex]::Escape('Внимание: правило брандмауэра Windows не создано'); Note = 'предупреждение netsh — в итоговой сводке' },
     @{ Name = 'static:firewall-warning-fact'; Pattern = [regex]::Escape('Установка продолжается: сервер слушает'); Note = 'в журнале — факт 0.0.0.0, а не «локально»' },
     @{ Name = 'static:free-space'; Pattern = [regex]::Escape('GetSpaceOnDisk64'); Note = 'проверка свободного места' },
     @{ Name = 'static:precheck-before-changes'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions;'); Note = 'предпроверки до замены файлов' },
@@ -497,6 +497,129 @@ $backupHookIfdef = ($testModeBody -ne '') -and
     (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('if GTestBackup')))
 Add-StaticResult -Name 'static:backup-hook-ifdef' -Ok $backupHookIfdef `
     -Note 'хук /TESTBACKUP под #ifdef TestMode'
+
+# 112642a4: экраны, лицензия MIT, прогресс, экран ошибки и итоговая сводка.
+# Проверки — по телам функций: подстрочный поиск по всему файлу проходил бы на
+# закомментированной копии (дефект B2 приёмки 9b310991).
+$componentsBody = Get-IssFunctionBody -Text $issText -Name 'CreateComponentsPage'
+$licenseUi = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('GLicenseCheck'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Я принимаю условия лицензии MIT'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('GLicenseLink')))
+Add-StaticResult -Name 'static:license-checkbox' -Ok $licenseUi `
+    -Note 'лицензия MIT: чекбокс согласия и ссылка на текст на экране компонентов'
+$licenseLocal = (Test-IssCode -Text $issText -Pattern ([regex]::Escape("ExtractTemporaryFile('LICENSE')"))) -and
+    (Test-IssCode -Text $issText -Pattern ([regex]::Escape('Source: "..\LICENSE"; Flags: dontcopy')))
+Add-StaticResult -Name 'static:license-local-text' -Ok $licenseLocal `
+    -Note 'текст лицензии в установщике и открывается локально (d75b7988)'
+$licenseNeededBody = Get-IssFunctionBody -Text $issText -Name 'LicensePromptNeeded'
+$licenseFirstOnly = (Test-IssCode -Text $licenseNeededBody -Pattern ([regex]::Escape("GServerState = 'not-installed'"))) -and
+    (Test-IssCode -Text $licenseNeededBody -Pattern ([regex]::Escape("(GClientState <> 'installed')")))
+Add-StaticResult -Name 'static:license-first-install-only' -Ok $licenseFirstOnly `
+    -Note 'лицензия запрашивается только при первой установке'
+$skipBody = Get-IssFunctionBody -Text $issText -Name 'ShouldSkipPage'
+$skipLicense = (Test-IssCode -Text $skipBody -Pattern ([regex]::Escape('if PageID = wpLicense then'))) -and
+    (Test-IssCode -Text $skipBody -Pattern ([regex]::Escape('if PageID = wpWelcome then')))
+Add-StaticResult -Name 'static:skip-welcome-license' -Ok $skipLicense `
+    -Note 'стандартные экраны приветствия и лицензии не показываются'
+$skipError = (Test-IssCode -Text $skipBody -Pattern ([regex]::Escape('PageID = GErrorPage.ID'))) -and
+    (Test-IssCode -Text $skipBody -Pattern ([regex]::Escape('Result := GExitCode = EXIT_OK')))
+Add-StaticResult -Name 'static:skip-error-on-success' -Ok $skipError `
+    -Note 'экран ошибки показывается только при сбое'
+Add-StaticResult -Name 'static:welcome-page-disabled' `
+    -Ok (Test-IssCode -Text $issText -Pattern ([regex]::Escape('DisableWelcomePage=yes')) -IniComments) `
+    -Note 'первый экран — компоненты с приветствием'
+
+$stageBody = Get-IssFunctionBody -Text $issText -Name 'SetInstallStage'
+Add-StaticResult -Name 'static:stage-statuslabel' `
+    -Ok (Test-IssCode -Text $stageBody -Pattern ([regex]::Escape('WizardForm.StatusLabel.Caption := Stage'))) `
+    -Note 'подпись этапа — в StatusLabel страницы установки'
+$stepBody = Get-IssFunctionBody -Text $issText -Name 'CurStepChanged'
+$stageNames = @(
+    'Замена файлов сервера ETN',
+    'Остановка службы ETN',
+    'Подготовка каталогов данных',
+    'Настройка службы',
+    'Правило брандмауэра',
+    'Инициализация сервера',
+    'Запуск службы ETN',
+    'Проверка работоспособности',
+    'Запись параметров установки'
+)
+foreach ($stageName in $stageNames) {
+    Add-StaticResult -Name ('static:stage:' + $stageName) `
+        -Ok (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape($stageName))) `
+        -Note 'этап прогресса в CurStepChanged'
+}
+$backupStageBody = Get-IssFunctionBody -Text $issText -Name 'CreateDatabaseBackup'
+Add-StaticResult -Name 'static:stage:backup' `
+    -Ok (Test-IssCode -Text $backupStageBody -Pattern ([regex]::Escape('Резервная копия баз данных'))) `
+    -Note 'этап бэкапа в CreateDatabaseBackup (вызовет bb063ac3)'
+
+$errorBody = Get-IssFunctionBody -Text $issText -Name 'ErrorMemoText'
+$errorParts = @('FailureReasonText', 'Журнал установки', 'Резервная копия баз данных', 'Следующий шаг')
+$errorOk = $true
+foreach ($part in $errorParts) { if (-not (Test-IssCode -Text $errorBody -Pattern ([regex]::Escape($part)))) { $errorOk = $false } }
+Add-StaticResult -Name 'static:error-page-content' -Ok $errorOk `
+    -Note 'экран ошибки: причина, журнал, бэкап и следующий шаг'
+$errorPageBody = Get-IssFunctionBody -Text $issText -Name 'CreateErrorPage'
+$errorButtons = (Test-IssCode -Text $errorPageBody -Pattern ([regex]::Escape('Открыть журнал'))) -and
+    (Test-IssCode -Text $errorPageBody -Pattern ([regex]::Escape('Повторить установку'))) -and
+    (Test-IssCode -Text $errorPageBody -Pattern ([regex]::Escape('GErrorPage := CreateCustomPage')))
+Add-StaticResult -Name 'static:error-page-buttons' -Ok $errorButtons `
+    -Note 'экран ошибки: журнал, папка данных, повтор установки'
+
+$summaryBody = Get-IssFunctionBody -Text $issText -Name 'SummaryText'
+$summaryParts = @('http://127.0.0.1:', 'Адрес в локальной сети', 'DetectLanIp',
+    'Каталог данных', 'Журнал установки', 'GKeyWasShown')
+$summaryOk = $true
+foreach ($part in $summaryParts) { if (-not (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape($part)))) { $summaryOk = $false } }
+Add-StaticResult -Name 'static:summary-content' -Ok $summaryOk `
+    -Note 'сводка: локальный и LAN-адрес, каталог данных, журнал, напоминание о ключе'
+$summaryLan = (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape('if GServerFirewall then'))) -and
+    (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape('GFirewallWarning')))
+Add-StaticResult -Name 'static:summary-lan-firewall' -Ok $summaryLan `
+    -Note 'LAN-адрес только при открытом брандмауэре, предупреждение netsh — в сводке'
+$finishedBody = Get-IssFunctionBody -Text $issText -Name 'CreateFinishedControls'
+$finishedOk = (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedPage'))) -and
+    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Запустить клиент'))) -and
+    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Открыть папку данных'))) -and
+    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Открыть журнал')))
+Add-StaticResult -Name 'static:summary-page' -Ok $finishedOk `
+    -Note 'сводка на странице завершения: memo и кнопки действий'
+$pageChangedBody = Get-IssFunctionBody -Text $issText -Name 'CurPageChanged'
+Add-StaticResult -Name 'static:summary-heading' `
+    -Ok ((Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('FinishedHeadingLabel.Caption'))) -and
+         (Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('GSummaryMemo.Lines.Text := SummaryText')))) `
+    -Note 'заголовок завершения и текст сводки'
+Add-StaticResult -Name 'static:downgrade-message' `
+    -Ok ((Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('GDowngradeWarned'))) -and
+         (Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('Понижение версии запрещено')))) `
+    -Note 'сообщение при понижении версии'
+$nextBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
+Add-StaticResult -Name 'static:port-suggestion' `
+    -Ok (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('SuggestFreePort'))) `
+    -Note 'подсказка свободного порта при занятом'
+Add-StaticResult -Name 'static:uac-back-to-components' `
+    -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('ReturnToComponentsPage'))) -and
+         (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('GChildRanThisPass'))) -and
+         (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('wpReady')))) `
+    -Note 'отказ UAC: возврат на экран компонентов с сохранённым выбором'
+$prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall'
+Add-StaticResult -Name 'static:prepare-no-second-child' `
+    -Ok (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('if GChildRanThisPass then Exit'))) `
+    -Note 'дочерний процесс не запускается второй раз'
+Add-StaticResult -Name 'static:legacy-nsis-detect' `
+    -Ok ((Test-IssCode -Text $issText -Pattern ([regex]::Escape("Pos('Uninstall ETN.exe', UninstallCmd)"))) -and
+         (Test-IssCode -Text $issText -Pattern ([regex]::Escape('function FindLegacyClient'))) -and
+         (Test-IssCode -Text $issText -Pattern ([regex]::Escape('function RunLegacyUninstaller')))) `
+    -Note 'старый NSIS-клиент: поиск в реестре и удаление его деинсталлятором'
+Add-StaticResult -Name 'static:legacy-removal-wired' `
+    -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall'))) -and
+         (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'InitializeSetup') -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall(True')))) `
+    -Note 'удаление старого клиента до установки: GUI и привилегированная фаза'
+$adminBody = Get-IssFunctionBody -Text $issText -Name 'CreateAdminPage'
+Add-StaticResult -Name 'static:display-name-field' -Ok (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('GAdminDisplayEdit'))) `
+    -Note 'поле отображаемого имени на экране администратора'
 
 # --- Сторож свежести payload в build.ps1 (дефект 3) --------------------------
 # Продуктовая сборка (без -TestMode) обязана отказаться от устаревшей поставки
@@ -732,6 +855,28 @@ $probe = Invoke-StateProbe
 Add-StateResult -Name 'state-downgrade:defaults' -Line $probe.State -Pairs @(
     'server_state=downgrade', 'downgrade=1',
     'default_server=0', 'default_client=0') -Note 'понижение не отмечается'
+
+# 112642a4: лицензия запрашивается только при первой установке; старый
+# NSIS-клиент распознаётся (хук /TESTLEGACY), в том числе машинная запись.
+Reset-State
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'license:first-install' -Line $probe.State -Pairs @('license_prompt=1') `
+    -Note 'чистая машина — лицензия запрашивается'
+Reset-State
+New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), 'stub')
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'license:update-not-asked' -Line $probe.State -Pairs @(
+    'client_state=installed', 'license_prompt=0') -Note 'обновление — лицензия не запрашивается'
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTLEGACY=0.14.1')
+Add-StateResult -Name 'legacy-client:user' -Line $probe.State -Pairs @(
+    'legacy=0.14.1', 'legacy_machine=0', 'license_prompt=1') `
+    -Note 'старый NSIS-клиент текущего пользователя найден'
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTLEGACY=machine:0.14.1')
+Add-StateResult -Name 'legacy-client:machine' -Line $probe.State -Pairs @(
+    'legacy=0.14.1', 'legacy_machine=1') -Note 'машинная запись старого клиента найдена'
 
 # Z3: запись установки Inno (хук /TESTRECORD) — разрушенная установка сервера.
 Reset-State
