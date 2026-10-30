@@ -23,14 +23,15 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 
-import {
-  applyCanvasScaleVars,
-  queueIndicatorLoad,
-} from '../../canvas/canvas.js';
+import { applyCanvasScaleVars } from '../../canvas/canvas.js';
 // Облачка дерева собирает общая фабрика (профиль `tree`): значок, цвета,
 // начертание, бледность и метка корзины; эллипсы и индикаторы дерево
 // добавляет само (домен структур — те же, что на холсте).
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
+import {
+  releaseCloudIndicatorInterest,
+  setCloudIndicatorInterest,
+} from '../../lib/cloud-indicators.js';
 import { focusFromUi } from '../../app.js';
 import { showLinkContextMenu, showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
@@ -878,6 +879,9 @@ export function mountStructures(hostEl: HTMLElement): () => void {
     structuresInvalidationUnsub?.();
     structuresInvalidationUnsub = null;
     structuresQueryKey = null;
+    // Дерево размонтировано — его видимый набор индикаторов снимается
+    // (подписки холста остаются за своим владельцем, ошибка 46bda0e8).
+    releaseCloudIndicatorInterest('structures');
     host = null;
   };
 }
@@ -1114,6 +1118,13 @@ function renderTree(keepScroll = false): void {
     drawLinks();
   }
   void refreshEdges();
+  // Индикаторы облачков — по ВИДИМОМУ набору строк дерева (ошибка 46bda0e8):
+  // строки, ушедшие из отбора/свёрнутые, отписываются от счётчиков, а
+  // пересобранные облачка получают значения из общего кэша слоя.
+  setCloudIndicatorInterest(
+    'structures',
+    rows.map((row) => row.thoughtId),
+  );
   // Сборка применила и данные, и визуальные классы — фиксируем оба среза,
   // чтобы следующее постороннее обновление store не вызвало пересборку.
   syncRenderSlices(dataSlice(), visualSlice());
@@ -1307,9 +1318,9 @@ function fillRow(rowEl: HTMLElement, row: TreeRow, selection: Set<string>): void
   rowEl.replaceChildren();
   if (row.root) rowEl.append(div('st-root-marker'));
   rowEl.append(buildCloud(row, selection));
-  // Patch the indicator row from the shared canvas indicator cache/queue
-  // (the cache hit applies synchronously to the fresh DOM, §15.4).
-  queueIndicatorLoad(row.thoughtId);
+  // Индикаторы облачка (📝/📅/📎) патчит общий модуль `lib/cloud-indicators`
+  // по ВИДИМОМУ набору строк — он объявляется после сборки дерева (ошибка
+  // 46bda0e8: по-строчная подписка копила подписки за всю сессию).
 }
 
 /** Builds one per-node «Показать ещё» button (§15.5 pagination). */

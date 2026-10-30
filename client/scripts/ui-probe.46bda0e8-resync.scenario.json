@@ -1,0 +1,127 @@
+{
+  "name": "46bda0e8-layer-resync-indicators",
+  "description": "GUI-гейт ошибки 46bda0e8 (клиентский корень 3): волна индикаторов при ресинке после смены слоя не перечитывает историю посещений. Стенд сеет 10 групп по 8 детей (фикстура ui-probe.46bda0e8-seed.mjs) и слой «Слой 46bda0e8»; сценарий поочерёдно фокусирует 10 групп (каждая — своя окрестность, подписки копятся) и переключает слой через настоящее меню «Основа», запуская resyncAfterLayerSwitch. serverLog.atMost считает запросы comments/attachments за прогон: до фикса волна перечитывала ВСЕ когда-либо показанные мысли, после — только видимый набор (проверена красная фаза на дофиксовой сборке). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.46bda0e8-resync.scenario.json --scenario-seed client/scripts/ui-probe.46bda0e8-seed.mjs",
+  "timeout": 240000,
+  "serverLog": {
+    "atMost": [
+      {
+        "pattern": "\"url\":\"[^\"]*/thoughts/[^\"]*/comments\",\"status\":200",
+        "max": 220
+      },
+      {
+        "pattern": "\"url\":\"[^\"]*/thoughts/[^\"]*/attachments\",\"status\":200",
+        "max": 220
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    {
+      "name": "server-url-value",
+      "probe": "document.querySelector(\"input[placeholder^='http']\")?.value ?? null",
+      "expect": "{{serverUrl}}"
+    },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "canvas-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.canvas-focus-row .focus-cloud') !== null"
+    },
+    {
+      "name": "seed-groups-visible",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.zone-children .cloud')].some((e) => { const t = e.querySelector('.cloud-title'); return ((t ? t.textContent : e.textContent) || '').trim() === 'Группа 46bda0e8 1'; })"
+    },
+    {
+      "name": "install-helper",
+      "eval": "(() => { window.__i46 = { t: (e) => { const q = e.querySelector('.cloud-title'); return ((q ? q.textContent : e.textContent) || '').trim(); }, cloud: (title) => [...document.querySelectorAll('.canvas .cloud')].find((e) => window.__i46.t(e) === title) || null, visit: (k) => { const c = window.__i46.cloud('Группа 46bda0e8 ' + k); if (c === null) return 'absent'; c.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window })); return 'ok'; }, focus: () => { const f = document.querySelector('.canvas-focus-row .focus-cloud'); return f === null ? null : window.__i46.t(f); }, layerLabel: () => [...document.querySelectorAll('.toolbar .tb-label')].map((x) => (x.textContent || '').trim()).find((t) => t === 'Основа' || t === 'Слой 46bda0e8') || null, openLayerMenu: () => { const s = [...document.querySelectorAll('.toolbar .tb-label')].find((x) => { const t = (x.textContent || '').trim(); return t === 'Основа' || t === 'Слой 46bda0e8'; }); if (s === undefined) return 'no-button'; s.closest('button').click(); return 'ok'; }, pickLayer: (title) => { const item = [...document.querySelectorAll('.menu .menu-item')].find((e) => { const l = e.querySelector('.menu-item-label'); return ((l ? l.textContent : e.textContent) || '').trim() === title; }); if (item === undefined) return 'no-item'; item.click(); return 'ok'; }, children: (k) => [...document.querySelectorAll('.zone-children .cloud')].filter((e) => window.__i46.t(e).indexOf('Проба 46bda0e8 ' + k + '-') === 0).length }; return 'ok'; })()"
+    },
+    { "name": "visit-1", "probe": "window.__i46.visit(1)", "expect": "ok" },
+    { "name": "focus-1", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 1'" },
+    { "name": "visit-2", "probe": "window.__i46.visit(2)", "expect": "ok" },
+    { "name": "focus-2", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 2'" },
+    { "name": "visit-3", "probe": "window.__i46.visit(3)", "expect": "ok" },
+    { "name": "focus-3", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 3'" },
+    { "name": "visit-4", "probe": "window.__i46.visit(4)", "expect": "ok" },
+    { "name": "focus-4", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 4'" },
+    { "name": "visit-5", "probe": "window.__i46.visit(5)", "expect": "ok" },
+    { "name": "focus-5", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 5'" },
+    { "name": "visit-6", "probe": "window.__i46.visit(6)", "expect": "ok" },
+    { "name": "focus-6", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 6'" },
+    { "name": "visit-7", "probe": "window.__i46.visit(7)", "expect": "ok" },
+    { "name": "focus-7", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 7'" },
+    { "name": "visit-8", "probe": "window.__i46.visit(8)", "expect": "ok" },
+    { "name": "focus-8", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 8'" },
+    { "name": "visit-9", "probe": "window.__i46.visit(9)", "expect": "ok" },
+    { "name": "focus-9", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 9'" },
+    { "name": "visit-10", "probe": "window.__i46.visit(10)", "expect": "ok" },
+    { "name": "focus-10", "timeout": 30000, "waitFor": "window.__i46.focus() === 'Группа 46bda0e8 10'" },
+    {
+      "name": "children-of-focus-visible",
+      "timeout": 30000,
+      "probe": "window.__i46.children(10)",
+      "expect": 8
+    },
+    {
+      "name": "layer-label-before",
+      "probe": "window.__i46.layerLabel()",
+      "expect": "Основа"
+    },
+    { "name": "open-layer-menu", "probe": "window.__i46.openLayerMenu()", "expect": "ok" },
+    {
+      "name": "layer-menu-open",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "layer-item-present",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.menu .menu-item')].some((e) => { const l = e.querySelector('.menu-item-label'); return ((l ? l.textContent : e.textContent) || '').trim() === 'Слой 46bda0e8'; })"
+    },
+    { "name": "pick-layer", "probe": "window.__i46.pickLayer('Слой 46bda0e8')", "expect": "ok" },
+    {
+      "name": "layer-switched",
+      "timeout": 60000,
+      "waitFor": "window.__i46.layerLabel() === 'Слой 46bda0e8'"
+    },
+    {
+      "name": "resync-settle",
+      "timeout": 60000,
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 8000)); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "focus-survived-resync",
+      "probe": "window.__i46.focus()",
+      "expect": "Группа 46bda0e8 10"
+    },
+    {
+      "name": "children-survived-resync",
+      "probe": "window.__i46.children(10)",
+      "expect": 8
+    },
+    {
+      "name": "layer-exists-in-db",
+      "api": {
+        "name": "layer-exists-in-db",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/layers",
+        "expression": "(Array.isArray(data) ? data : data.items).some((l) => l.title === 'Слой 46bda0e8')"
+      },
+      "expect": true
+    }
+  ]
+}

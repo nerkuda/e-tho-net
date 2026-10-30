@@ -83,9 +83,9 @@ import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js
 import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
-  getQueryState,
-  subscribeQuery,
-} from '../lib/live/index.js';
+  releaseCloudIndicatorInterest,
+  setCloudIndicatorInterest,
+} from '../lib/cloud-indicators.js';
 import {
   initLinksOverlay,
   drawLinksNow,
@@ -164,13 +164,6 @@ export interface ZoneEntry {
    * edge-based map (regression cbb91b62).
    */
   viewResultRelated?: readonly string[];
-}
-
-/** Comment/attachment counts shown in the cloud indicators row. */
-export interface IndicatorInfo {
-  permanent: boolean;
-  chrono: number;
-  attachments: number;
 }
 
 /** Overlap rows rendered beyond the visible window (virtualization). */
@@ -264,21 +257,28 @@ const refCache = new Map<string, ThoughtRef>();
  */
 let refEpoch = 0;
 /**
- * Подписки на запросы индикаторов слоя (`indicators:@id`). Данные счётчиков
- * (комментарии/вложения) живут в реестре запросов реактивного слоя (G5
- * техпроекта 269016e2): подписка на видимую мысль «зажигает» запрос, инвалидация
- * ключа (роутер на `comment.*`/`attachment.*`, производители — на свою правку)
- * перезапрашивает его, а слушатель перерисовывает ячейки. Своей кэш-россыпи у
- * холста больше нет. Подписки сбрасываются при смене сети и размонтировании.
+ * Видимый набор индикаторов холста (ошибка 46bda0e8): id фокус-облачка и
+ * мысли, чьи облачка СЕЙЧАС в окнах зон (виртуализация). Набор объявляется
+ * общему модулю `lib/cloud-indicators.ts` — «подписка = видимость»: ушедшие
+ * из окна мысли отписываются, и волна `indicatorsAll` не перечитывает историю
+ * прокрутки. Данные живут в реестре запросов слоя (G5 техпроекта 269016e2).
  */
-const indicatorSubscriptions = new Map<string, () => void>();
-let indicatorNetworkId: string | null = null;
+let focusIndicatorId: string | null = null;
+const zoneVisibleThoughtIds = new Map<'parents' | 'siblings' | 'children', readonly string[]>();
 
-/** Снимает все подписки индикаторов (смена сети/размонтирование холста). */
-function resetIndicatorSubscriptions(): void {
-  for (const unsubscribe of indicatorSubscriptions.values()) unsubscribe();
-  indicatorSubscriptions.clear();
-  indicatorNetworkId = null;
+/** Пересчитать видимый набор индикаторов холста (фокус-ряд + окна зон). */
+function syncCanvasIndicatorInterest(): void {
+  const ids = new Set<string>();
+  if (focusIndicatorId !== null) ids.add(focusIndicatorId);
+  for (const visible of zoneVisibleThoughtIds.values()) for (const id of visible) ids.add(id);
+  setCloudIndicatorInterest('canvas', ids);
+}
+
+/** Снять видимый набор холста и забыть отслеживание (teardown/пустой фокус). */
+function clearCanvasIndicatorInterest(): void {
+  focusIndicatorId = null;
+  zoneVisibleThoughtIds.clear();
+  releaseCloudIndicatorInterest('canvas');
 }
 
 // ---------------------------------------------------------------------------
@@ -516,8 +516,9 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     resizeObserver.disconnect();
     linksOverlay.dispose();
     disposeZoneSplitters();
-    // Подписки индикаторов слоя — снять вместе с холстом.
-    resetIndicatorSubscriptions();
+    // Индикаторы: видимый набор холста снимается, подписки «Структур»
+    // (если дерево ещё смонтировано) остаются за своим владельцем.
+    clearCanvasIndicatorInterest();
     // Detach the DOM handles so no late async render paints into a dead host.
     host = null;
     zones = null;
@@ -836,6 +837,9 @@ async function render(): Promise<void> {
     emptyEl?.classList.remove('hidden');
     resetFocusBand(host);
     resetCanvasCursor();
+    // Облачков нет — видимый набор индикаторов пуст (облачка прежнего
+    // расклада удаляются ниже либо уже удалены).
+    clearCanvasIndicatorInterest();
     // Смена сети без фокуса: облачка и линии прежней сети просто удаляются —
     // без анимаций и перелётов. `lastNetworkId` здесь намеренно НЕ трогаем:
     // первый рендер расклада новой сети обязан увидеть смену и проявиться.
@@ -1422,7 +1426,10 @@ function renderFocusRow(focus: FocusResponse): void {
   refreshCloudLockBadges(cloud, 'thought', thought.id);
   focusRow.append(cloud);
   focusCloudEl = cloud;
-  queueIndicatorLoad(thought.id);
+  // Фокус-облачко — часть видимого набора индикаторов; набор применяется
+  // после того, как узел попал в DOM (кэш патчит существующие ячейки).
+  focusIndicatorId = thought.id;
+  syncCanvasIndicatorInterest();
 }
 
 /** Groups neighbour rows by thought id, attaching cached refs. */
@@ -2205,6 +2212,10 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   );
 
   if (entries.length === 0) {
+    // Зона пуста — её прежние облачка уходят из DOM: мысли отписываются от
+    // счётчиков (ошибка 46bda0e8).
+    zoneVisibleThoughtIds.set(dir, []);
+    syncCanvasIndicatorInterest();
     spacer.style.height = '0px';
     empty.classList.remove('hidden');
     clear(grid);
@@ -2352,9 +2363,11 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   const first = startRow * cols;
   const last = endRow * cols;
   const rowClouds = new Map<number, HTMLElement[]>();
+  const visibleIds: string[] = [];
   for (let i = first; i < last; i++) {
     const entry = entries[i];
     if (entry === undefined) continue;
+    visibleIds.push(entry.id);
     const position = showPosition ? (entry.links[0]?.manual_position ?? null) : null;
     const cloud = buildCloud(entry, dir, position);
     const r = Math.floor(i / cols);
@@ -2385,11 +2398,11 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
 
   // Request indicators only AFTER the clouds are in the DOM: a cached value is
   // applied synchronously and would otherwise patch nothing (the focus row
-  // loads it after mounting for the same reason).
-  for (let i = first; i < last; i++) {
-    const entry = entries[i];
-    if (entry !== undefined) queueIndicatorLoad(entry.id);
-  }
+  // loads it after mounting for the same reason). Видимый набор зоны заменяет
+  // прежний окно-набор целиком: мысли, ушедшие из окна прокруткой, отпишутся
+  // (ошибка 46bda0e8).
+  zoneVisibleThoughtIds.set(dir, visibleIds);
+  syncCanvasIndicatorInterest();
   // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
   syncCanvasCursor();
   redrawLinks?.();
@@ -2675,93 +2688,6 @@ async function resolveNeighborsPreview(trigger: HTMLElement): Promise<HoverPrevi
 }
 
 registerHoverPreviewResolver('neighbors', resolveNeighborsPreview);
-
-// ---------------------------------------------------------------------------
-// Indicators (lazy, cached)
-// ---------------------------------------------------------------------------
-
-/**
- * Enqueues an indicator load for a thought: подписывает холст на запрос слоя
- * `indicators:@id` (deduplicated). Exported so the structures tree can share the
- * same query/layer data for its clouds (L15, 08-ui-spec.md §15.4: clouds match
- * the canvas 1-to-1, indicators included).
- */
-export function queueIndicatorLoad(id: string): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  // Смена сети обнуляет реестр запросов — старые подписки «повисают» на
-  // удалённых записях. Пересоздаём их в контексте новой сети.
-  if (indicatorNetworkId !== networkId) {
-    resetIndicatorSubscriptions();
-    indicatorNetworkId = networkId;
-  }
-  // Clouds are rebuilt on scroll/resize (virtualized zones); a value already in
-  // the layer must be re-applied to the fresh DOM instead of being skipped.
-  const existing = indicatorSubscriptions.get(id);
-  if (existing !== undefined) {
-    const state = getQueryState<IndicatorInfo>(queryKeys.indicators(id));
-    if (state.data !== undefined) applyIndicators(id, state.data);
-    return;
-  }
-  const unsubscribe = subscribeQuery<IndicatorInfo>(
-    queryKeys.indicators(id),
-    () => fetchIndicatorCounts(id),
-    (state) => {
-      if (state.data !== undefined) applyIndicators(id, state.data);
-    },
-  );
-  indicatorSubscriptions.set(id, unsubscribe);
-}
-
-/** Fetches comment/attachment counts for one thought (fetcher слоя). */
-async function fetchIndicatorCounts(id: string): Promise<IndicatorInfo> {
-  const networkId = store.state.networkId;
-  if (networkId === null) throw new Error('network is not open');
-  const [comments, attachments] = await Promise.all([
-    etn.comments.list(networkId, 'thought', id),
-    etn.attachments.list(networkId, 'thought', id),
-  ]);
-  return {
-    permanent: comments.some((c) => c.kind === 'permanent'),
-    chrono: comments.filter((c) => c.kind === 'chronological').length,
-    attachments: attachments.length,
-  };
-}
-
-/**
- * Patches indicator cells of every rendered cloud with this id, on the canvas
- * AND the structures tree (both render the same `.cloud`/`.cloud-ind` markup,
- * 08-ui-spec.md §15.4) — queried document-wide, not scoped to the canvas host.
- */
-function applyIndicators(id: string, info: IndicatorInfo): void {
-  for (const cloud of document.querySelectorAll<HTMLElement>(`.cloud[data-id="${id}"]`)) {
-    const cells = cloud.querySelectorAll<HTMLElement>('.cloud-ind .ind');
-    const perm = cells[0];
-    const chrono = cells[1];
-    const att = cells[2];
-    if (perm === undefined || chrono === undefined || att === undefined) continue;
-    if (info.permanent) {
-      perm.textContent = '📝';
-      perm.classList.remove('dim');
-      perm.classList.add('active');
-      perm.title = 'Есть постоянный комментарий';
-    } else {
-      // Explicitly dim: this may re-patch a previously active cell (the
-      // permanent comment was deleted while the cloud stayed rendered).
-      perm.classList.add('dim');
-      perm.classList.remove('active');
-      perm.title = 'Постоянного комментария нет';
-    }
-    chrono.textContent = `📅${info.chrono}`;
-    chrono.classList.toggle('dim', info.chrono === 0);
-    chrono.classList.toggle('active', info.chrono > 0);
-    chrono.title = `Хронологических комментариев: ${info.chrono}`;
-    att.textContent = `📎${info.attachments}`;
-    att.classList.toggle('dim', info.attachments === 0);
-    att.classList.toggle('active', info.attachments > 0);
-    att.title = `Вложений: ${info.attachments}`;
-  }
-}
 
 /** Test seam for unit tests. */
 export const canvasInternals = {
