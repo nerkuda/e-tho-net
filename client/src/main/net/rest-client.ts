@@ -77,6 +77,7 @@ import { getClientLog } from '../log/client-log.js';
 import type { ConnectFailureDetails, ConnectFailureReason } from '../ipc/contract.js';
 import {
   DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+  isMaintenanceEndedByVersion,
   serverUpdatingError,
   type ServerMaintenanceHandle,
 } from '../server-maintenance.js';
@@ -235,14 +236,18 @@ export interface RestClientOptions {
    * пока оно активно, изменяющий запрос НЕ отправляется — клиент отвечает
    * `SERVER_UPDATING` с `retry_after` из состояния (повтор раньше `Retry-After`
    * запрещён). Ответ `503 SERVER_UPDATING` от сервера переводит состояние в
-   * активное; успешный `GET /me` — выводит из него. Владелец состояния —
+   * активное; успешный `GET /me` выводит из него ТОЛЬКО вместе со сменой
+   * версии процесса (публичный `GET /version`), потому что в обслуживании
+   * `/me` — обычное чтение и отвечает 200. Владелец состояния —
    * `register.ts`; без него гейт выключен (юнит-тесты без обслуживания).
    */
   serverMaintenance?: ServerMaintenanceHandle;
   /**
-   * Вызывается ПОСЛЕ действующего выхода из состояния обслуживания (сейчас —
-   * успешный `GET /me`, контракт 2f599b67). Владелец соединения по этому
-   * сигналу повторяет проверку совместимости, как на переподключении
+   * Вызывается ПОСЛЕ действующего выхода из состояния обслуживания (успешный
+   * `GET /me` + смена версии процесса, правило
+   * {@link isMaintenanceEndedByVersion}). Владелец соединения по этому сигналу
+   * принудительно переподключает realtime (сокет всё ещё offline и ждёт
+   * `retry_after`) и повторяет проверку совместимости, как на переподключении
    * (требование 4d3be6ca). Не вызывается, если состояние и не было активным.
    */
   onServerMaintenanceEnded?: () => void;
@@ -327,6 +332,16 @@ export class RestClient {
   private readonly serverMaintenance: ServerMaintenanceHandle | undefined;
   private readonly onServerMaintenanceEnded: () => void;
   private readonly responseTimeoutMs: number;
+
+  /**
+   * Последняя наблюдённая версия процесса сервера — её показал публичный
+   * `GET /version` (проверка совместимости при подключении и на
+   * переподключениях). Нужна как база эпизода обслуживания: версия, которую
+   * клиент наблюдал до обновления, — «версия на входе» (задача 479e37ed).
+   * Смена этой версии доказывает, что поднялся новый процесс; сам `/me`
+   * такого доказательства не даёт.
+   */
+  private lastKnownServerVersion: string | null = null;
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
@@ -819,10 +834,10 @@ export class RestClient {
       // was in flight could have been computed by the server BEFORE its commit
       // and delivered after it, so it must not be reused by later reads either.
       if (dataChanging) this.invalidateInFlightReads();
-      // Конец обслуживания (контракт 2f599b67): успешный `GET /me` — признак,
-      // что обновлённый сервер поднялся и принял сессию. Снимать состояние по
-      // любому успешному чтению нельзя: чтения во время обслуживания работают.
-      if (method === 'GET' && path === '/me') this.leaveServerMaintenance();
+      // Конец обслуживания (задача 479e37ed): успешный `GET /me` сам по себе
+      // НЕ доказательство — в обслуживании это обычное чтение с ответом 200.
+      // Выход решает смена версии процесса, её показывает публичный `/version`.
+      if (method === 'GET' && path === '/me') await this.confirmServerMaintenanceEnded();
       return envelope;
     }
 
@@ -926,28 +941,82 @@ export class RestClient {
   /**
    * Сообщает владельцу состояния об отказе `503 SERVER_UPDATING` (задача
    * 479e37ed): сервер ушёл в обслуживание до запуска установщика. Дальнейшие
-   * изменяющие запросы блокируются до успешного `GET /me` или стабильного окна
-   * сокета (`maintenance-stable`) — ровно поэтому мало «просто показать
-   * ошибку»: следующий клик пользователя не должен снова уходить на сервер
-   * раньше `Retry-After`.
+   * изменяющие запросы блокируются до смены версии процесса (успешный
+   * `/me` + другой `/version`) или стабильного окна сокета
+   * (`maintenance-stable`) — ровно поэтому мало «просто показать ошибку»:
+   * следующий клик пользователя не должен снова уходить на сервер раньше
+   * `Retry-After`. Версия на входе — последняя наблюдённая `/version`: её
+   * смена и будет доказательством, что обновлённый процесс поднялся.
    */
   private notifyServerUpdating(code: string, details: unknown): void {
     if (code !== 'SERVER_UPDATING' || this.serverMaintenance === undefined) return;
-    this.serverMaintenance.enter(serverUpdatingDetailsOrNull(details), 'rest');
+    this.serverMaintenance.enter(
+      serverUpdatingDetailsOrNull(details),
+      'rest',
+      this.lastKnownServerVersion,
+    );
   }
 
   /**
-   * Конец обслуживания по успешному `GET /me` (контракт 2f599b67). Выход
-   * обязателен только при активном состоянии (`leave()` вернул `true`) — тогда
-   * владелец соединения повторяет проверку совместимости, как при
-   * переподключении (требование 4d3be6ca).
+   * Конец обслуживания по успешному `GET /me` (задача 479e37ed, вердикт
+   * повторной приёмки). `/me` — чтение: сервер в обслуживании отвечает на него
+   * 200, поэтому успех сам по себе НЕ выход (раньше он гасил состояние, и
+   * причина обслуживания подменялась «нет соединения» до `retry_after`).
+   * Выход доказывает только смена версии процесса:
+   *
+   *  1. состояние не активно — выходить не из чего, запросов нет;
+   *  2. ОДИН публичный `GET /version` (`requestRaw`: одна попытка, гейт
+   *     обслуживания его не трогает, сервер отвечает 200);
+   *  3. решение — общее правило {@link isMaintenanceEndedByVersion}
+   *     (`target_version` из состояния либо смена версии от базы эпизода);
+   *  4. действующий выход — `leave()` и сигнал владельцу соединения
+   *     (принудительный реконнект realtime + проверка совместимости).
+   *
+   * Ошибка/пустой ответ `/version` оставляет состояние активным: без
+   * доказательства изменяющая запись не уходит, а следующий `/me`, стабильный
+   * сокет или `retry_after` дадут новую попытку.
    */
-  private leaveServerMaintenance(): void {
-    if (this.serverMaintenance?.leave() !== true) return;
+  private async confirmServerMaintenanceEnded(): Promise<void> {
+    const handle = this.serverMaintenance;
+    if (handle === undefined) return;
+    const info = handle.get();
+    if (info === null) return;
+    const observed = await this.observeServerVersion();
+    if (!isMaintenanceEndedByVersion(info, observed)) {
+      getClientLog()?.info('rest', 'server maintenance exit deferred: server version unchanged', {
+        observed: observed ?? '',
+        entry: info.entry_version ?? '',
+        target: info.target_version ?? '',
+      });
+      return;
+    }
+    if (handle.leave() !== true) return;
+    getClientLog()?.info('rest', 'server maintenance ended: server version changed', {
+      observed: observed ?? '',
+      entry: info.entry_version ?? '',
+      target: info.target_version ?? '',
+    });
     try {
       this.onServerMaintenanceEnded();
     } catch {
-      // Колбэк диагностики не должен ломать ответ успешного `/me`.
+      // Колбэк владельца не должен ломать ответ успешного `/me`.
+    }
+  }
+
+  /**
+   * Один публичный `GET /version` для проверки выхода из обслуживания.
+   * Ошибка (таймаут, 5xx, обрыв) — `null`: доказательства нет, состояние
+   * остаётся активным.
+   */
+  private async observeServerVersion(): Promise<string | null> {
+    try {
+      const response = await this.getVersion();
+      return typeof response?.version === 'string' ? response.version : null;
+    } catch (err) {
+      getClientLog()?.info('rest', 'server maintenance version check failed', {
+        error: errTextShort(err),
+      });
+      return null;
     }
   }
 
@@ -3676,9 +3745,17 @@ export class RestClient {
   }
 
   /** `GET /api/v1/version` (03-server-api.md §16) — public, без авторизации;
-   *  используется для проверки совместимости и в диалоге «О программе». */
+   *  используется для проверки совместимости и в диалоге «О программе».
+   *
+   *  Запоминает версию процесса (`lastKnownServerVersion`): это база эпизода
+   *  обслуживания — версия, которую клиент наблюдал до обновления. Смена этой
+   *  версии после `/me` доказывает, что поднялся новый процесс (задача
+   *  479e37ed, вердикт повторной приёмки). */
   public async getVersion(): Promise<import('@etn/shared').VersionResponse> {
-    return this.requestRaw('GET', '/version');
+    const response = await this.requestRaw<import('@etn/shared').VersionResponse>('GET', '/version');
+    const version = response?.version;
+    this.lastKnownServerVersion = typeof version === 'string' && version.trim() !== '' ? version : null;
+    return response;
   }
 
   // §16a Server file journal (task f051bf95, 03-server-api.md §16):

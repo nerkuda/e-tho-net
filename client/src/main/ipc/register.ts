@@ -115,13 +115,15 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   /**
    * Единое состояние обслуживания сервера (задача 479e37ed, требование
    * 9636b1cc). Один владелец на активное подключение: кадр `maintenance` и
-   * отказ `503 SERVER_UPDATING` входят в него, выводят — успешный `GET /me`
-   * (контракт 2f599b67) либо сокет, проживший стабильное окно
-   * (`maintenance-stable`, `RealtimeClient.maintenanceStableMs`). Открытие
-   * сокета само по себе НЕ выход: сервер в обслуживании намеренно принимает
-   * сокет и сразу закрывает его кодом 1012. REST-клиент по состоянию блокирует
-   * изменяющие запросы, рендерер показывает «сервер обновляется»; канал
-   * показа — `realtime:maintenance`.
+   * отказ `503 SERVER_UPDATING` входят в него, выводят — сокет, проживший
+   * стабильное окно (`maintenance-stable`, `RealtimeClient.maintenanceStableMs`),
+   * либо успешный `GET /me` ВМЕСТЕ со сменой версии процесса (публичный
+   * `GET /version` показывает другую версию или не меньше `target_version`).
+   * Один `/me` выходом не является: в обслуживании он отвечает 200 как обычное
+   * чтение. Открытие сокета само по себе тоже НЕ выход: сервер в обслуживании
+   * намеренно принимает сокет и сразу закрывает его кодом 1012. REST-клиент по
+   * состоянию блокирует изменяющие запросы, рендерер показывает «сервер
+   * обновляется»; канал показа — `realtime:maintenance`.
    */
   const serverMaintenance = new ServerMaintenanceState();
   serverMaintenance.subscribe((info) => {
@@ -196,10 +198,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // Обслуживание (задача 479e37ed): изменяющие запросы не уходят, пока
       // состояние активно; `503 SERVER_UPDATING` переводит в него.
       serverMaintenance,
-      // Выход из обслуживания по успешному `GET /me` (контракт 2f599b67) —
-      // повторная проверка совместимости, как на переподключении
-      // (требование 4d3be6ca).
+      // Действующий выход из обслуживания — `/me` + смена версии процесса
+      // (вердикт повторной приёмки 479e37ed). Сокет всё ещё offline/
+      // server-maintenance и ждёт `retry_after` (наблюдали 300 с), хотя REST
+      // уже работает: принудительно переподключаем пул, затем повторяем
+      // проверку совместимости (требование 4d3be6ca).
       onServerMaintenanceEnded: () => {
+        forceReconnectRealtime();
         void compatibility.recheck(fetchVersion);
       },
     });
@@ -276,8 +281,9 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
           restClient.setLinkDown(networkId, false);
           // Открытие сокета НЕ завершает обслуживание (блокер приёмки
           // 479e37ed): сервер в обслуживании намеренно принимает сокет и сразу
-          // закрывает его кодом 1012 — выход даёт только успешный `GET /me`
-          // или сокет, проживший стабильное окно (`onMaintenanceStable`).
+          // закрывает его кодом 1012 — выход даёт только сокет, проживший
+          // стабильное окно (`onMaintenanceStable`), или `/me` со сменой
+          // версии процесса.
         } else if (status === 'suspect') {
           // Probe in flight: new mutations are blocked, but the hung request
           // that triggered the check must keep running — if the pong arrives
@@ -292,10 +298,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         // клиент прочитал `maintenance`): сам признак уже означает штатное
         // обслуживание, а не аварию — блокируем запись и говорим «обновление».
         // Срок — тот же запасной, что у сокета; пришедший кадр уточнит его.
+        // База версии эпизода — последняя наблюдённая `/version`: её смена
+        // после `/me` и будет доказательством, что процесс обновился.
         if (detail === 'server-maintenance' && !serverMaintenance.isActive()) {
           serverMaintenance.enter(
             { retry_after: MAINTENANCE_RETRY_AFTER_FALLBACK_S, target_version: null },
             'realtime',
+            compatibility.getResult()?.serverVersion ?? null,
           );
         }
         // Переподключение (в т.ч. после обслуживания 1012) — проверка
@@ -309,16 +318,20 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
         }
       },
       // Кадр `maintenance` (операция 9636b1cc): сервер уходит на обновление.
-      // Входим в состояние до close 1012 — запись блокируется сразу.
+      // Входим в состояние до close 1012 — запись блокируется сразу. База
+      // версии — последняя наблюдённая `/version` (старый процесс): выход из
+      // обслуживания потом докажет только её смена.
       onMaintenance: (_networkId, frame) => {
         serverMaintenance.enter(
           { retry_after: frame.retry_after, target_version: frame.target_version },
           'realtime',
+          compatibility.getResult()?.serverVersion ?? null,
         );
       },
       // Сокет прожил стабильное окно после 1012 — обновление завершено. Это
-      // второй (и последний) выход из состояния помимо успешного `GET /me`;
-      // выход сопровождается проверкой совместимости, как при переподключении.
+      // второй (и последний) выход из состояния помимо `/me` со сменой версии;
+      // здесь он безусловный: сокет уже жив, проверять версию незачем. Выход
+      // сопровождается проверкой совместимости, как при переподключении.
       onMaintenanceStable: () => {
         if (serverMaintenance.leave()) void compatibility.recheck(fetchVersion);
       },

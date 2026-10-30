@@ -11,9 +11,12 @@
  *     сторож пропускает `if (maintenance !== null && false)`»).
  *  2. Открытие сокета НЕ завершает обслуживание: сервер в обслуживании
  *     намеренно принимает сокет и сразу закрывает его кодом 1012. Выход даёт
- *     только успешный `GET /me` или сокет, проживший стабильное окно
- *     (`onMaintenanceStable`). Ветка `status === 'connected'` не имеет права
- *     звать `serverMaintenance.leave()` (блокер приёмки 479e37ed).
+ *     сокет, проживший стабильное окно (`onMaintenanceStable`), либо успешный
+ *     `GET /me` ВМЕСТЕ со сменой версии процесса (`GET /version` показывает
+ *     другую/целевую версию): `/me` — чтение, и в обслуживании сервер
+ *     отвечает на него 200, поэтому один `/me` ничего не доказывает (вердикт
+ *     повторной приёмки 479e37ed). Ветка `status === 'connected'` не имеет
+ *     права звать `serverMaintenance.leave()`.
  *  3. Предупреждение о потерянной связи показывает текст обслуживания раньше
  *     таблицы статусов — иначе «сервер обновляется» превращается в «аварию».
  *     Досыл черновиков и тост «Соединение восстановлено» в обслуживании не
@@ -135,7 +138,7 @@ describe('guard: обслуживание сервера (479e37ed)', () => {
     );
   });
 
-  it('выход из обслуживания — только по /me или стабильному сокету, не по connected', () => {
+  it('выход из обслуживания — стабильный сокет или /me со сменой версии, не по connected', () => {
     const source = read(path.join(MAIN_ROOT, 'ipc', 'register.ts'));
     const connectedAt = source.indexOf("if (status === 'connected') {");
     assert.notEqual(connectedAt, -1, 'нет ветки connected в onStatus');
@@ -152,6 +155,67 @@ describe('guard: обслуживание сервера (479e37ed)', () => {
       'обработчик стабильного сокета обязан выходить из обслуживания',
     );
     assert.match(source, /onServerMaintenanceEnded:/, 'нет выхода по успешному `GET /me`');
+  });
+
+  it('выход по /me требует смены версии процесса: /me сам по себе не гасит состояние', () => {
+    // Блокер повторной приёмки 479e37ed: сервер в обслуживании отвечает на
+    // `/me` 200, поэтому успех `/me` сам по себе не отличает старый процесс от
+    // нового. Доказательство — публичный `GET /version`: смена версии (или
+    // версия не меньше `target_version`).
+    const source = read(path.join(MAIN_ROOT, 'net', 'rest-client.ts'));
+    const meAt = source.indexOf("path === '/me'");
+    assert.notEqual(meAt, -1, 'нет обработки успешного GET /me');
+    const meBranch = source.slice(meAt, meAt + 300);
+    assert.doesNotMatch(
+      meBranch,
+      /\.leave\(/,
+      'успешный /me не выходит из обслуживания сам по себе (чтения в обслуживании проходят)',
+    );
+    const decisionAt = source.indexOf('isMaintenanceEndedByVersion(');
+    assert.notEqual(
+      decisionAt,
+      -1,
+      'нет решения о выходе по смене версии (isMaintenanceEndedByVersion)',
+    );
+    const leaveAt = source.indexOf('.leave()');
+    assert.notEqual(leaveAt, -1, 'нет действующего выхода из обслуживания (leave)');
+    assert.ok(
+      decisionAt < leaveAt,
+      'leave обязан идти только ПОСЛЕ решения по версии процесса',
+    );
+    const leaves = source.match(/\.leave\(\)/g) ?? [];
+    assert.equal(leaves.length, 1, 'в RestClient одно место выхода — после проверки версии');
+    assert.match(
+      source,
+      /getVersion\(\)/,
+      'проверка выхода обязана спрашивать публичный GET /version',
+    );
+  });
+
+  it('действующий выход по /me заставляет realtime переподключиться', () => {
+    // Вердикт повторной приёмки: без forceReconnectRealtime сокет остаётся
+    // offline/server-maintenance и ждёт `retry_after` (наблюдали 300 с), хотя
+    // REST уже работает: статус «Нет соединения» держится на пустом месте.
+    const source = read(path.join(MAIN_ROOT, 'ipc', 'register.ts'));
+    const at = source.indexOf('onServerMaintenanceEnded:');
+    assert.notEqual(at, -1, 'нет выхода по успешному `GET /me`');
+    const block = source.slice(at, at + 500);
+    const force = block.indexOf('forceReconnectRealtime()');
+    const recheck = block.indexOf('compatibility.recheck(');
+    assert.notEqual(force, -1, 'выход по /me не переподключает realtime (forceReconnectRealtime)');
+    assert.notEqual(recheck, -1, 'выход по /me не повторяет проверку совместимости');
+    assert.ok(force < recheck, 'сначала принудительный реконнект, затем проверка совместимости');
+    // Стабильный сокет — исключение: сокет уже жив, решения по версии и
+    // принудительного реконнекта там быть не должно.
+    const stableAt = source.indexOf('onMaintenanceStable:');
+    assert.notEqual(stableAt, -1, 'нет выхода по стабильному окну сокета');
+    const stableBlock = source.slice(stableAt, stableAt + 300);
+    assert.match(stableBlock, /serverMaintenance\.leave\(\)/, 'стабильный сокет обязан выходить');
+    assert.doesNotMatch(
+      stableBlock,
+      /isMaintenanceEndedByVersion|forceReconnectRealtime/,
+      'стабильный сокет выходит безусловно, без проверки версии и реконнекта',
+    );
   });
 
   it('потеря связи показывает текст обслуживания раньше таблицы статусов', () => {

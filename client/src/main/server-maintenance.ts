@@ -16,11 +16,15 @@
  *  - Вход идемпотентен: повторный кадр/отказ обновляет `retry_after` и
  *    `target_version`, но не плодит уведомления при тех же значениях.
  *  - Выход из состояния — только внешний и только по двум признакам: успешный
- *    `GET /api/v1/me` (контракт завершения обслуживания, 2f599b67) либо сокет,
+ *    `GET /api/v1/me` ВМЕСТЕ со сменой версии процесса (публичный `GET /version`
+ *    показывает другую версию либо не меньше `target_version`) либо сокет,
  *    проживший стабильное окно `maintenanceStableMs` (`maintenance-stable`).
- *    ОТКРЫТИЕ сокета выходом не является: сервер в обслуживании намеренно
- *    принимает сокет и сразу закрывает его кодом 1012 (блокер приёмки
- *    479e37ed). Само состояние ничего не опрашивает — сети в модуле нет.
+ *    Сам по себе `GET /me` выходом НЕ является: это чтение, и сервер в
+ *    обслуживании отвечает на него 200 (вердикт повторной приёмки 479e37ed).
+ *    ОТКРЫТИЕ сокета выходом не является тоже: сервер в обслуживании намеренно
+ *    принимает сокет и сразу закрывает его кодом 1012. Само состояние ничего
+ *    не опрашивает — сети в модуле нет; проверку версии делает REST-клиент,
+ *    правило решения — {@link isMaintenanceEndedByVersion}.
  *  - Модуль без зависимости от Electron: юнит-тестируется обычным `node --test`
  *    (тот же приём, что `ipc/connection-lifecycle.ts`).
  *
@@ -29,7 +33,7 @@
  * словарь `t()`. Так строки остаются в одном месте (требование локализации).
  */
 
-import { EtnError, type ServerUpdatingErrorDetails } from '@etn/shared';
+import { EtnError, compareSemver, type ServerUpdatingErrorDetails } from '@etn/shared';
 
 /**
  * Текст отказа периода обслуживания — тот же, что у сервера
@@ -60,6 +64,14 @@ export interface ServerMaintenanceInfo {
   retry_after: number;
   /** Версия, до которой обновляется сервер; `null` — неизвестна. */
   target_version: string | null;
+  /**
+   * Версия процесса, объявившего обслуживание, — та, что клиент наблюдал
+   * последней (`GET /version` при подключении/переподключении). Фиксируется
+   * при входе в эпизод первым непустым значением и дальше не перезаписывается:
+   * именно её смена доказывает, что поднялся НОВЫЙ процесс. `null` — клиент
+   * версию не наблюдал.
+   */
+  entry_version: string | null;
   /** Момент входа в состояние (epoch ms) — для журнала и диагностики. */
   since: number;
   /** Источник последнего уведомления. */
@@ -77,9 +89,42 @@ function normaliseRetryAfter(value: unknown): number {
   return Math.max(1, Math.ceil(value));
 }
 
-/** Приводит `target_version` к строке или `null`. */
-function normaliseTargetVersion(value: unknown): string | null {
+/** Приводит версию (`target_version`/`entry_version`) к строке или `null`. */
+function normaliseVersion(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+/**
+ * Действующий выход из обслуживания по успешному `GET /me` (задача 479e37ed,
+ * вердикт повторной приёмки). `/me` — ЧТЕНИЕ: сервер в обслуживании отвечает
+ * на него 200 (`maintenance-guard.ts` пропускает читающие методы), поэтому
+ * успех `/me` сам по себе не отличает старый процесс от нового. Доказывает
+ * конец обслуживания только смена версии процесса — её показывает публичный
+ * `GET /version` (гейт его не трогает, всегда 200).
+ *
+ *  - `observedVersion` не прочитана (`null`) — НЕ выход: без доказательства
+ *    состояние остаётся, изменяющая запись по-прежнему блокируется;
+ *  - версия отличается от наблюдённой на входе в эпизод (`entry_version`) —
+ *    выход: сервер мог обновиться на версию, которую не объявлял;
+ *  - `target_version` известна и версия процесса не меньше неё — тоже выход
+ *    (сравнение `compareSemver` из `@etn/shared`, числовое: `0.15.10` новее
+ *    `0.15.2`). Неразборчивая `target_version` сама выхода не даёт: тогда
+ *    решение принимается по смене версии от базы эпизода.
+ *
+ * Чистая функция — вызывается REST-клиентом после успешного `/me` и
+ * покрыта тестами без сети.
+ */
+export function isMaintenanceEndedByVersion(
+  info: Pick<ServerMaintenanceInfo, 'target_version' | 'entry_version'>,
+  observedVersion: string | null,
+): boolean {
+  const observed = normaliseVersion(observedVersion);
+  if (observed === null) return false;
+  if (info.target_version !== null) {
+    const order = compareSemver(observed, info.target_version);
+    if (order !== null && order >= 0) return true;
+  }
+  return info.entry_version !== null && observed !== info.entry_version;
 }
 
 /**
@@ -108,17 +153,23 @@ export class ServerMaintenanceState {
   /**
    * Вход в обслуживание по кадру `maintenance` или конверту `503`. Повторный
    * вход с теми же значениями ничего не уведомляет; изменившиеся
-   * `retry_after`/`target_version` доезжают до слушателей.
+   * `retry_after`/`target_version` доезжают до слушателей. `entryVersion` —
+   * версия процесса, объявившего обслуживание (`GET /version`): фиксируется
+   * первым непустым значением эпизода и не перезаписывается, иначе смена
+   * версии после обновления потерялась бы.
    */
   public enter(
     details: Pick<ServerUpdatingErrorDetails, 'retry_after' | 'target_version'>,
     source: ServerMaintenanceSource,
+    entryVersion: string | null = null,
   ): ServerMaintenanceInfo {
     const next: ServerMaintenanceInfo = {
       retry_after: normaliseRetryAfter(details.retry_after),
-      target_version: normaliseTargetVersion(details.target_version),
+      target_version: normaliseVersion(details.target_version),
       // Вход повторно не сдвигает начало: «сколько уже длится» не должно
-      // обнуляться каждым новым 503/кадром.
+      // обнуляться каждым новым 503/кадром. База версии — так же: эпизод один,
+      // а версию доносит то кадр (проверка совместимости), то отказ 503.
+      entry_version: this.info?.entry_version ?? normaliseVersion(entryVersion),
       since: this.info?.since ?? this.now(),
       source,
     };
@@ -126,6 +177,7 @@ export class ServerMaintenanceState {
       this.info === null ||
       this.info.retry_after !== next.retry_after ||
       this.info.target_version !== next.target_version ||
+      this.info.entry_version !== next.entry_version ||
       this.info.source !== next.source;
     this.info = next;
     if (changed) this.notify(next);
@@ -168,6 +220,7 @@ export interface ServerMaintenanceHandle {
   enter(
     details: Pick<ServerUpdatingErrorDetails, 'retry_after' | 'target_version'>,
     source: ServerMaintenanceSource,
+    entryVersion?: string | null,
   ): ServerMaintenanceInfo;
   leave(): boolean;
 }

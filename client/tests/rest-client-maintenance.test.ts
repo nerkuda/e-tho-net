@@ -73,6 +73,73 @@ function makeClient(
   });
 }
 
+interface RouteCall {
+  method: string;
+  path: string;
+}
+
+type RouteResponse = { status: number; body?: unknown; headers?: Record<string, string> };
+
+/**
+ * Stub `fetch` by route `METHOD /path` (последний ответ маршрута повторяется,
+ * `setRoute` меняет его на ходу). Нужен тестам правила выхода: `/version`
+ * обязан вернуть ДРУГУЮ версию, чтобы `/me` считался доказательством.
+ */
+function makeRoutedFetch(routes: Record<string, RouteResponse>): {
+  fetch: typeof fetch;
+  calls: RouteCall[];
+  setRoute: (route: string, response: RouteResponse) => void;
+} {
+  const store = { ...routes };
+  const calls: RouteCall[] = [];
+  const fetchStub = ((input: string, init?: RequestInit): Promise<Response> => {
+    const url = new URL(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const path = url.pathname.replace(/^\/api\/v1/, '');
+    calls.push({ method, path });
+    const canned = store[`${method} ${path}`];
+    if (canned === undefined) {
+      throw new Error(`makeRoutedFetch: нет маршрута ${method} ${path}`);
+    }
+    const bodyStr =
+      canned.body === undefined
+        ? ''
+        : typeof canned.body === 'string'
+          ? canned.body
+          : JSON.stringify(canned.body);
+    const response = {
+      ok: canned.status >= 200 && canned.status < 300,
+      status: canned.status,
+      headers: new Headers(canned.headers ?? { 'content-type': 'application/json' }),
+      text: () => Promise.resolve(bodyStr),
+      json: () => Promise.resolve(canned.body === undefined ? undefined : JSON.parse(bodyStr)),
+    } as unknown as Response;
+    return Promise.resolve(response);
+  }) as unknown as typeof fetch;
+  return {
+    fetch: fetchStub,
+    calls,
+    setRoute: (route, response) => {
+      store[route] = response;
+    },
+  };
+}
+
+/** Успешный публичный `GET /version` с заданной версией процесса. */
+function versionResponse(version: string): RouteResponse {
+  return {
+    status: 200,
+    body: {
+      data: {
+        version,
+        api: 'v1',
+        min_client: '0.15.0',
+        client_compatibility: '>=0.15.0 <0.16.0',
+      },
+    },
+  };
+}
+
 /** Канонический конверт `503 SERVER_UPDATING` с заголовком `Retry-After`. */
 function updatingResponse(details: ServerUpdatingErrorDetails): {
   status: number;
@@ -140,30 +207,116 @@ describe('RestClient — обслуживание сервера (479e37ed)', ()
     assert.equal(calls.length, 0, 'запрос не отправлен вовсе');
   });
 
-  it('чтения во время обслуживания проходят; успешный GET /me снимает режим', async () => {
+  it('чтения во время обслуживания проходят; /me 200 без смены версии режим НЕ снимает', async () => {
+    // Вердикт повторной приёмки 479e37ed: сервер в обслуживании отвечает на
+    // `/me` 200 (чтения не блокируются), поэтому успех `/me` сам по себе не
+    // отличает старый процесс от нового. Доказательство — смена версии,
+    // которую показывает публичный `GET /version`.
     const maintenance = new ServerMaintenanceState();
-    maintenance.enter({ retry_after: 60, target_version: '0.15.2' }, 'realtime');
-    const { fetch, calls } = makeFetch([
-      { status: 200, body: { data: [] } },
-      { status: 200, body: { data: ME } },
-    ]);
+    maintenance.enter({ retry_after: 60, target_version: null }, 'realtime', '0.15.1');
+    const { fetch, calls, setRoute } = makeRoutedFetch({
+      'GET /networks': { status: 200, body: { data: [] } },
+      'GET /me': { status: 200, body: { data: ME } },
+      'GET /version': versionResponse('0.15.1'),
+    });
     const client = makeClient(fetch, maintenance);
 
-    // Произвольное чтение режим не снимает — сервер обновляется, пока не
-    // ответил `GET /me` (контракт 2f599b67).
+    // Произвольное чтение режим не снимает.
     await client.listNetworks();
     assert.notEqual(maintenance.get(), null, 'чтение не подтверждает конец обслуживания');
 
+    // `/me` 200, но версия процесса прежняя — это тот же старый процесс.
     const me = await client.getMe();
     assert.equal(me.id, 'u1');
-    assert.equal(maintenance.get(), null, 'GET /me подтвердил восстановление');
-    assert.equal(calls.length, 2);
+    assert.notEqual(maintenance.get(), null, '/me без смены версии НЕ выход');
+    assert.equal(calls.filter((c) => c.path === '/version').length, 1, 'ровно один GET /version на проверку');
+
+    // Обновлённый процесс поднялся — та же проверка теперь даёт выход.
+    setRoute('GET /version', versionResponse('0.15.2'));
+    await client.getMe();
+    assert.equal(maintenance.get(), null, '/me + другая версия процесса — выход');
+    assert.equal(calls.filter((c) => c.path === '/version').length, 2);
 
     // Блокировка записи снята: следующая мутация уходит в сеть.
     const next = makeFetch([{ status: 200, body: { data: ME } }]);
     const client2 = makeClient(next.fetch, maintenance);
     await client2.updateMe('Имя');
     assert.equal(next.calls.length, 1);
+  });
+
+  it('target_version известна: выход по версии не меньше целевой, без ожидания смены базы', async () => {
+    const maintenance = new ServerMaintenanceState();
+    maintenance.enter({ retry_after: 60, target_version: '0.15.2' }, 'realtime', '0.15.1');
+    const { fetch } = makeRoutedFetch({
+      'GET /me': { status: 200, body: { data: ME } },
+      'GET /version': versionResponse('0.15.2'),
+    });
+    let ended = 0;
+    const client = makeClient(fetch, maintenance, { onServerMaintenanceEnded: () => (ended += 1) });
+
+    await client.getMe();
+    assert.equal(maintenance.get(), null, 'версия процесса достигла target_version');
+    assert.equal(ended, 1);
+  });
+
+  it('неудачная проверка /version оставляет обслуживание активным', async () => {
+    const maintenance = new ServerMaintenanceState();
+    maintenance.enter({ retry_after: 60, target_version: null }, 'realtime', '0.15.1');
+    const { fetch, calls } = makeRoutedFetch({
+      'GET /me': { status: 200, body: { data: ME } },
+      'GET /version': { status: 500, body: { error: { code: 'INTERNAL', message: 'boom' } } },
+    });
+    let ended = 0;
+    const client = makeClient(fetch, maintenance, { onServerMaintenanceEnded: () => (ended += 1) });
+
+    const me = await client.getMe();
+    assert.equal(me.id, 'u1', 'ответ /me не ломается неудачей проверки версии');
+    assert.notEqual(maintenance.get(), null, 'без доказательства состояние остаётся');
+    assert.equal(ended, 0, 'колбэк выхода не вызывается');
+    // `/version` идёт напрямую (requestRaw): одна попытка, без повторов.
+    assert.equal(calls.filter((c) => c.path === '/version').length, 1);
+  });
+
+  it('вне обслуживания /me не запрашивает /version (лишнего запроса нет)', async () => {
+    const maintenance = new ServerMaintenanceState();
+    const { fetch, calls } = makeRoutedFetch({
+      'GET /me': { status: 200, body: { data: ME } },
+    });
+    const client = makeClient(fetch, maintenance);
+
+    await client.getMe();
+    assert.deepEqual(
+      calls.map((c) => c.path),
+      ['/me'],
+      'проверка версии выполняется только при активном обслуживании',
+    );
+  });
+
+  it('вход по 503 запоминает версию процесса на входе: её смена и есть выход', async () => {
+    const maintenance = new ServerMaintenanceState();
+    const { fetch, calls, setRoute } = makeRoutedFetch({
+      'GET /version': versionResponse('0.15.1'),
+      'POST /networks/net1/thoughts': updatingResponse({ retry_after: 60, target_version: null }),
+      'GET /me': { status: 200, body: { data: ME } },
+    });
+    const client = makeClient(fetch, maintenance);
+
+    // Клиент уже знает версию процесса (проверка совместимости при подключении).
+    await client.getVersion();
+    await assert.rejects(
+      () => client.createThought('net1', { title: 'новая мысль' }),
+      (err: unknown) => err instanceof EtnError && err.code === 'SERVER_UPDATING',
+    );
+    assert.equal(maintenance.get()?.entry_version, '0.15.1', 'база эпизода — наблюдённая версия');
+
+    // Прежняя версия — не выход.
+    await client.getMe();
+    assert.notEqual(maintenance.get(), null);
+    // Новая версия того же публичного `/version` — выход.
+    setRoute('GET /version', versionResponse('0.15.2'));
+    await client.getMe();
+    assert.equal(maintenance.get(), null, 'смена версии процесса завершает обслуживание');
+    assert.equal(calls.filter((c) => c.path === '/version').length, 3, 'два наблюдения + проверка в /me');
   });
 
   it('голый 503 без Retry-After остаётся транзиентной ошибкой и повторяется', async () => {
@@ -249,13 +402,13 @@ describe('RestClient — обслуживание сервера (479e37ed)', ()
     assert.equal(calls.length, 3, '3 попытки транзиентной ошибки');
   });
 
-  it('успешный GET /me выходит из обслуживания и сообщает владельцу (checkCompatibility)', async () => {
+  it('действующий выход по /me сообщает владельцу (forceReconnect + checkCompatibility)', async () => {
     const maintenance = new ServerMaintenanceState();
-    maintenance.enter({ retry_after: 60, target_version: '0.15.2' }, 'realtime');
-    const { fetch } = makeFetch([
-      { status: 200, body: { data: ME } },
-      { status: 200, body: { data: ME } },
-    ]);
+    maintenance.enter({ retry_after: 60, target_version: '0.15.2' }, 'realtime', '0.15.1');
+    const { fetch } = makeRoutedFetch({
+      'GET /me': { status: 200, body: { data: ME } },
+      'GET /version': versionResponse('0.15.2'),
+    });
     let ended = 0;
     const client = makeClient(fetch, maintenance, {
       onServerMaintenanceEnded: () => {
@@ -264,8 +417,8 @@ describe('RestClient — обслуживание сервера (479e37ed)', ()
     });
 
     await client.getMe();
-    assert.equal(maintenance.get(), null, 'GET /me снял обслуживание');
-    assert.equal(ended, 1, 'владелец получил сигнал выхода (повтор checkCompatibility)');
+    assert.equal(maintenance.get(), null, 'GET /me + смена версии сняли обслуживание');
+    assert.equal(ended, 1, 'владелец получил сигнал выхода (реконнект + checkCompatibility)');
 
     // Состояние уже неактивно — повторный /me колбэк НЕ дёргает.
     await client.getMe();

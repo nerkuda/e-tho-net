@@ -38,6 +38,8 @@
  *    намеренно принимает сокет и сразу закрывает его кодом 1012, поэтому
  *    признак восстановления — соединение, прожившее `maintenanceStableMs`
  *    (событие `maintenance-stable`, уходит в main как выход из режима);
+ *    второй признак конца (в main) — успешный `GET /me` со сменой версии
+ *    процесса (`/version`), один `/me` выходом не является;
  *  - `resume.stale` (event-log window exceeded) is re-emitted as `stale` so the UI
  *    can trigger a full re-focus (04-realtime.md §6).
  *
@@ -169,8 +171,9 @@ export interface RealtimeClientEvents extends EventMap {
    * (`maintenanceStableMs`) и сервер не закрыл его снова кодом 1012 — эпизод
    * обслуживания завершён. Открытие сокета само по себе НЕ признак: сервер в
    * обслуживании принимает сокет и сразу шлёт 1012, поэтому главный процесс
-   * выходит из состояния `serverMaintenance` только по этому событию (или по
-   * успешному `GET /me`), а не по `connected`.
+   * выходит из состояния `serverMaintenance` по этому событию либо по
+   * успешному `GET /me` со сменой версии процесса (публичный `/version`), а
+   * не по `connected`.
    */
   'maintenance-stable': [];
   /** Server closed with `4401` — API-key rejected or membership lost. */
