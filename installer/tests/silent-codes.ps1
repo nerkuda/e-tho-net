@@ -189,6 +189,19 @@ function Get-LogLine {
     return ''
 }
 
+# Время строки журнала (112642a4): журнал пишет метку с точностью до секунды,
+# этого достаточно, чтобы доказать ожидание деинсталлятора (ping -n 4 ≈ 3 с).
+function Get-LogMoment {
+    param([string]$Pattern)
+    $log = Get-LatestLog
+    if (-not $log) { return $null }
+    $text = Get-Content -LiteralPath $log.FullName -Raw
+    $m = [regex]::Match($text, '(?m)^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})  \[[A-Z]+\]  ' + $Pattern)
+    if (-not $m.Success) { return $null }
+    return [datetime]::ParseExact($m.Groups[1].Value, 'yyyy-MM-dd HH:mm:ss',
+        [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Invoke-StateProbe {
     param([string[]]$ExtraArgs = @())
     $code = Invoke-Setup -Arguments (@($silent) + @('/TESTSTATE=1') + $ExtraArgs)
@@ -617,6 +630,40 @@ Add-StaticResult -Name 'static:legacy-removal-wired' `
     -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall'))) -and
          (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'InitializeSetup') -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall(True')))) `
     -Note 'удаление старого клиента до установки: GUI и привилегированная фаза'
+
+# Блокер и замечания приёмки 112642a4.
+$legacyArgsBody = Get-IssFunctionBody -Text $issText -Name 'UninstallerArgs'
+Add-StaticResult -Name 'static:legacy-uninstall-args' `
+    -Ok ((Test-IssCode -Text $legacyArgsBody -Pattern ([regex]::Escape("_?=' + ExtractFileDir(Exe)"))) -and
+         (Test-IssCode -Text $legacyArgsBody -Pattern ([regex]::Escape("'/S'"))) -and
+         (Test-IssCode -Text $legacyArgsBody -Pattern ([regex]::Escape("Result := Rest + ' _?='")))) `
+    -Note 'деинсталлятор старого клиента: /S и _?=<каталог> последним параметром (NSIS 3.2.2)'
+$legacyRunBody = Get-IssFunctionBody -Text $issText -Name 'RunLegacyUninstaller'
+Add-StaticResult -Name 'static:legacy-uninstall-waits' `
+    -Ok ((Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape('ewWaitUntilTerminated'))) -and
+         (Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape('WaitLegacyRecordGone')))) `
+    -Note 'установка ждёт деинсталлятор и исчезновение записи Uninstall'
+$licenseVisible = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('GLicenseCheck.Visible := LicensePromptNeeded'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('GLicenseLink.Visible := LicensePromptNeeded')))
+Add-StaticResult -Name 'static:license-visible-rule' -Ok $licenseVisible `
+    -Note 'чекбокс и ссылка лицензии привязаны к LicensePromptNeeded'
+$clientStateBody = Get-IssFunctionBody -Text $issText -Name 'ClientStateText'
+Add-StaticResult -Name 'static:client-state-selected' `
+    -Ok (Test-IssCode -Text $clientStateBody -Pattern ([regex]::Escape('GLegacyClientFound and GClientSelected'))) `
+    -Note 'обещание удалить старый клиент — только при выбранном клиенте'
+Add-StaticResult -Name 'static:summary-run-button-client' `
+    -Ok (Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('GSummaryRunButton.Visible := (GExitCode = EXIT_OK) and GClientSelected'))) `
+    -Note 'кнопка «Запустить клиент» — только когда клиент выбран'
+$lanBody = Get-IssFunctionBody -Text $issText -Name 'DetectLanIp'
+Add-StaticResult -Name 'static:lan-excludes-virtual' `
+    -Ok ((Test-IssCode -Text $lanBody -Pattern ([regex]::Escape('InterfaceDescription'))) -and
+         (Test-IssCode -Text $lanBody -Pattern ([regex]::Escape('vEthernet'))) -and
+         (Test-IssCode -Text $lanBody -Pattern ([regex]::Escape('Hyper-V')))) `
+    -Note 'LAN-адрес: виртуальные адаптеры исключены, остальное помечено в сводке'
+Add-StaticResult -Name 'static:progress-uac-generic' `
+    -Ok ((Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('Установка выполняется'))) -and
+         (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('if GChildRanThisPass then')))) `
+    -Note 'двухфазный UAC: без ложной конкретики этапа в родительском окне'
 $adminBody = Get-IssFunctionBody -Text $issText -Name 'CreateAdminPage'
 Add-StaticResult -Name 'static:display-name-field' -Ok (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('GAdminDisplayEdit'))) `
     -Note 'поле отображаемого имени на экране администратора'
@@ -877,6 +924,106 @@ Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTLEGACY=machine:0.14.1')
 Add-StateResult -Name 'legacy-client:machine' -Line $probe.State -Pairs @(
     'legacy=0.14.1', 'legacy_machine=1') -Note 'машинная запись старого клиента найдена'
+
+# Замечание 1 приёмки: правило лицензии проверяется по состоянию сервера,
+# а не только по наличию клиента. Сервер установлен, клиента нет — обновление,
+# лицензия не запрашивается.
+Reset-State
+Write-InstallJson (New-InstallJson -ProductVersion '0.15.0')
+New-ServerFiles -Version '0.15.0'
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'license:server-installed-client-missing' -Line $probe.State -Pairs @(
+    'server_state=update-available', 'client_state=not-installed', 'license_prompt=0') `
+    -Note 'обновление сервера без клиента — лицензия не запрашивается'
+# Только данные без программы (adopt) — первая установка, лицензия нужна.
+Reset-State
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $dataDir '_system.db'), 'stub')
+$probe = Invoke-StateProbe
+Add-StateResult -Name 'license:adopt-data-only' -Line $probe.State -Pairs @(
+    'server_state=adopt', 'license_prompt=1') -Note 'подключение данных — лицензия запрашивается'
+
+# Блокер приёмки 112642a4: удаление старого NSIS-клиента дожидается конца
+# работы деинсталлятора. Настоящий клиент на машине разработчика не
+# запускается: /TESTLEGACYCMD подменяет деинсталлятор командой теста.
+$legacyReasonFile = Join-Path $workRoot 'legacy-reason.txt'
+$legacyCmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
+
+# 1. Медленный подставной деинсталлятор (ping -n 4 ≈ 3 с): установка обязана
+#    ждать его завершения, а не продолжать копирование параллельно.
+Reset-State
+$legacyParams = New-ParamsFile -Server 0 -Client 1 -Scope user -Name 'legacy-slow.ini'
+$legacySlow = '/TESTLEGACYCMD="' + $legacyCmd + ' /c ping -n 4 127.0.0.1 >nul"'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$legacyParams`"", '/TESTELEVATED=1', $legacySlow,
+    '/TESTLEGACYSTUCK=0', '/TESTLEGACYWAIT=5000'))
+Add-Result -Name 'legacy-uninstall:waits-code' -Expected 0 -Actual $code
+$legacyStarted = Get-LogMoment -Pattern 'TESTLEGACYCMD: подставной деинсталлятор запущен'
+$legacyFinished = Get-LogMoment -Pattern 'TESTLEGACYCMD: подставной деинсталлятор завершился, код 0'
+$legacyWaited = $false
+$legacySeconds = 0
+if ($legacyStarted -and $legacyFinished) {
+    $legacySeconds = [int]($legacyFinished - $legacyStarted).TotalSeconds
+    $legacyWaited = ($legacySeconds -ge 2)
+}
+Add-Result -Name 'legacy-uninstall:waits' -Expected 1 -Actual ([int]$legacyWaited) `
+    -Note ("установка ждала деинсталлятор " + $legacySeconds + " с")
+
+# 2. Запись Uninstall исчезает не сразу: установка ждёт её исчезновения.
+Reset-State
+$legacyParams = New-ParamsFile -Server 0 -Client 1 -Scope user -Name 'legacy-wait.ini'
+$legacyFast = '/TESTLEGACYCMD="' + $legacyCmd + ' /c exit 0"'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$legacyParams`"", '/TESTELEVATED=1', $legacyFast,
+    '/TESTLEGACYSTUCK=1200', '/TESTLEGACYWAIT=5000'))
+Add-Result -Name 'legacy-uninstall:record-wait-code' -Expected 0 -Actual $code
+$recordWait = Get-LogLine -Pattern 'TESTLEGACYCMD result=ok wait_ms=(\d+)'
+Add-Result -Name 'legacy-uninstall:record-wait' -Expected 1 `
+    -Actual ([int]([int]$recordWait -ge 1000)) -Note ("wait_ms=" + $recordWait)
+
+# 3. Запись не исчезла за бюджет ожидания: установка не начинается (код 20)
+#    и называет причину.
+Reset-State
+Remove-Item -LiteralPath $legacyReasonFile -Force -ErrorAction SilentlyContinue
+$legacyParams = New-ParamsFile -Server 0 -Client 1 -Scope user `
+    -ReasonFile $legacyReasonFile -Name 'legacy-timeout.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$legacyParams`"", '/TESTELEVATED=1', $legacyFast,
+    '/TESTLEGACYSTUCK=60000', '/TESTLEGACYWAIT=800'))
+Add-Result -Name 'legacy-uninstall:timeout-code' -Expected 20 -Actual $code
+$timeoutReason = ''
+if (Test-Path -LiteralPath $legacyReasonFile) {
+    $timeoutReason = [System.IO.File]::ReadAllText($legacyReasonFile, [System.Text.Encoding]::UTF8)
+}
+Add-Result -Name 'legacy-uninstall:timeout-reason' -Expected 1 `
+    -Actual ([int]($timeoutReason -match 'запись установки не исчезла')) -Note $timeoutReason
+
+# 4. Деинсталлятор вернул ненулевой код: установка не начинается.
+Reset-State
+Remove-Item -LiteralPath $legacyReasonFile -Force -ErrorAction SilentlyContinue
+$legacyParams = New-ParamsFile -Server 0 -Client 1 -Scope user `
+    -ReasonFile $legacyReasonFile -Name 'legacy-exit.ini'
+$legacyFail = '/TESTLEGACYCMD="' + $legacyCmd + ' /c exit 7"'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$legacyParams`"", '/TESTELEVATED=1', $legacyFail,
+    '/TESTLEGACYSTUCK=0', '/TESTLEGACYWAIT=5000'))
+Add-Result -Name 'legacy-uninstall:nonzero-code' -Expected 20 -Actual $code
+$nonzeroReason = ''
+if (Test-Path -LiteralPath $legacyReasonFile) {
+    $nonzeroReason = [System.IO.File]::ReadAllText($legacyReasonFile, [System.Text.Encoding]::UTF8)
+}
+Add-Result -Name 'legacy-uninstall:nonzero-reason' -Expected 1 `
+    -Actual ([int]($nonzeroReason -match 'не удалось удалить старый клиент')) -Note $nonzeroReason
+
+# 5. Аргументы деинсталлятора: /S и _?=<каталог> последним, без кавычек —
+#    даже когда путь деинсталлятора содержит пробелы (документация NSIS 3.2.2).
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLEGACYARGS=1'))
+Add-Result -Name 'legacy-uninstall:args-code' -Expected 0 -Actual $code
+$legacyArgs = Get-LogLine -Pattern 'TESTLEGACYARGS args=([^\r\n]+)'
+$legacyArgsOk = ($legacyArgs -eq '/currentuser /S _?=C:\Program Files\ETN')
+Add-Result -Name 'legacy-uninstall:args' -Expected 1 -Actual ([int]$legacyArgsOk) `
+    -Note $legacyArgs
 
 # Z3: запись установки Inno (хук /TESTRECORD) — разрушенная установка сервера.
 Reset-State
