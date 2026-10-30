@@ -17,7 +17,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { compatibilityRangeFor, satisfiesRange, type VersionResponse } from '@etn/shared';
+import {
+  compatibilityRangeFor,
+  satisfiesRange,
+  type HealthResponse,
+  type VersionResponse,
+} from '@etn/shared';
 
 import { ConfigError, loadConfig } from '../src/config.js';
 import {
@@ -27,7 +32,12 @@ import {
   buildVersionPayload,
   resolveClientChannel,
 } from '../src/version.js';
-import { buildRestContext, closeRestContext, nativeAvailable } from './rest-helpers.js';
+import {
+  authHeaders,
+  buildRestContext,
+  closeRestContext,
+  nativeAvailable,
+} from './rest-helpers.js';
 
 /** 64 hex — валидный SHA-256 (буквы в верхнем регистре нормализуются). */
 const SHA256_UPPER = 'A'.repeat(64);
@@ -280,7 +290,7 @@ describe('loadConfig — отказ старта на некорректных E
 });
 
 describe(
-  'GET /api/v1/version — тело ответа и неизменный /health',
+  'GET /api/v1/version — тело ответа и health с полем db',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
     it('публичный ответ 200 со всеми полями контракта', async () => {
@@ -307,16 +317,66 @@ describe(
       }
     });
 
-    it('GET /api/v1/health не изменился: status/version/uptime', async () => {
+    it('GET /api/v1/health: status/version/uptime и db:"ok" (операция ae4ae06f)', async () => {
       const ctx = await buildRestContext();
       try {
         const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/health' });
         assert.equal(res.statusCode, 200);
-        const body = res.json() as { status: string; version: string; uptime: number };
-        assert.deepEqual(Object.keys(body).sort(), ['status', 'uptime', 'version']);
+        const body = res.json() as HealthResponse;
+        assert.deepEqual(Object.keys(body).sort(), ['db', 'status', 'uptime', 'version']);
         assert.equal(body.status, 'ok');
+        assert.equal(body.db, 'ok');
         assert.equal(body.version, SERVER_VERSION);
         assert.equal(typeof body.uptime, 'number');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('GET /api/v1/health: сбой чтения БД — 503 с db:"error", набор полей тот же', async () => {
+      const ctx = await buildRestContext({ dbHealth: async () => 'error' });
+      try {
+        const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/health' });
+        assert.equal(res.statusCode, 503, res.body);
+        const body = res.json() as HealthResponse;
+        assert.deepEqual(Object.keys(body).sort(), ['db', 'status', 'uptime', 'version']);
+        assert.equal(body.status, 'error');
+        assert.equal(body.db, 'error');
+        assert.equal(body.version, SERVER_VERSION);
+        assert.equal(typeof body.uptime, 'number');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('health не блокируется обслуживанием: 200 db:"ok", /version — 200, изменяющий — 503', async () => {
+      const ctx = await buildRestContext();
+      try {
+        await ctx.app.maintenance.beginUpdating({ target_version: '0.99.0', retry_after: 45 });
+
+        const health = await ctx.app.inject({ method: 'GET', url: '/api/v1/health' });
+        assert.equal(health.statusCode, 200, health.body);
+        assert.equal((health.json() as HealthResponse).db, 'ok');
+
+        // `/version` не менялся и отдаётся всегда — в том числе в обслуживании.
+        const version = await ctx.app.inject({ method: 'GET', url: '/api/v1/version' });
+        assert.equal(version.statusCode, 200, version.body);
+        assert.deepEqual(Object.keys(version.json() as VersionResponse).sort(), [
+          ...VERSION_FIELDS,
+        ]);
+
+        // Гейт 2f599b67 по-прежнему блокирует изменяющий запрос.
+        const mutating = await ctx.app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: authHeaders(ctx),
+          payload: { display_name: 'Нет' },
+        });
+        assert.equal(mutating.statusCode, 503, mutating.body);
+        assert.equal(
+          (mutating.json() as { error: { code: string } }).error.code,
+          'SERVER_UPDATING',
+        );
       } finally {
         await closeRestContext(ctx);
       }

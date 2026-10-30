@@ -25,6 +25,8 @@ import { describe, it } from 'node:test';
 
 import { WebSocket } from 'ws';
 
+import type { HealthResponse } from '@etn/shared';
+
 import {
   DEFAULT_MAINTENANCE_RETRY_AFTER_SECONDS,
   MIN_MAINTENANCE_RETRY_AFTER_SECONDS,
@@ -257,6 +259,11 @@ describe('обслуживание — сквозная матрица REST', { 
       for (const url of ['/api/v1/health', '/api/v1/version', '/api/v1/me']) {
         const res = await ctx.app.inject({ method: 'GET', url, headers: authHeaders(ctx) });
         assert.equal(res.statusCode, 200, `${url}: ${res.body}`);
+        if (url === '/api/v1/health') {
+          // Health в обслуживании по-прежнему проверяет БД (задача 0178253c):
+          // установщик ждёт db:"ok" именно в этот период.
+          assert.equal((res.json() as HealthResponse).db, 'ok', 'db в обслуживании');
+        }
       }
 
       // Чтение через POST-allowlist не блокируется.

@@ -4538,7 +4538,8 @@ export type ReaderOp =
   | 'comments.visible'
   | 'comments.presented'
   | 'comments.permanentPresented'
-  | 'comments.previewBatch';
+  | 'comments.previewBatch'
+  | 'db.ping';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
 export interface ReaderThoughtsQueryPayload {
@@ -4654,23 +4655,43 @@ export interface ReaderCommentsPreviewPayload {
   expandTransclusions: boolean;
 }
 
+/**
+ * Контекст задачи `db.ping` (задача 0178253c, `/health`): проверка БД не
+ * привязана ни к сети, ни к слою — нужен только файл. Соединение открывается
+ * воркером `readonly: true`; контекст слоя (`connectionFor`) не применяется.
+ */
+export interface ReaderDbPingContext {
+  /** Абсолютный путь к проверяемому файлу SQLite. */
+  dbPath: string;
+}
+
+/** Payload `db.ping` — пустой: путь БД приходит в контексте задачи. */
+export type ReaderDbPingPayload = Record<string, never>;
+
+/** Результат `db.ping` — версия схемы прочитанной БД (доказательство чтения). */
+export interface ReaderDbPingResult {
+  schema_version: number;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
-export type ReaderTask = { context: ReaderTaskContext } & (
-  | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
-  | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
-  | { op: 'thoughts.resolve'; payload: ReaderResolvePayload }
-  | { op: 'thoughts.resolveCards'; payload: ReaderResolvePayload }
-  | { op: 'thoughts.neighbors'; payload: ReaderNeighborsPayload }
-  | { op: 'thoughts.findDuplicates'; payload: ReaderFindDuplicatesPayload }
-  | { op: 'search.query'; payload: ReaderSearchPayload }
-  | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
-  | { op: 'graph.traverse'; payload: ReaderTraversePayload }
-  | { op: 'comments.list'; payload: ReaderCommentsListPayload }
-  | { op: 'comments.visible'; payload: ReaderCommentByIdPayload }
-  | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
-  | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
-  | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
-);
+export type ReaderTask =
+  | ({ context: ReaderTaskContext } & (
+      | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
+      | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
+      | { op: 'thoughts.resolve'; payload: ReaderResolvePayload }
+      | { op: 'thoughts.resolveCards'; payload: ReaderResolvePayload }
+      | { op: 'thoughts.neighbors'; payload: ReaderNeighborsPayload }
+      | { op: 'thoughts.findDuplicates'; payload: ReaderFindDuplicatesPayload }
+      | { op: 'search.query'; payload: ReaderSearchPayload }
+      | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
+      | { op: 'graph.traverse'; payload: ReaderTraversePayload }
+      | { op: 'comments.list'; payload: ReaderCommentsListPayload }
+      | { op: 'comments.visible'; payload: ReaderCommentByIdPayload }
+      | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
+      | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
+      | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
+    ))
+  | { context: ReaderDbPingContext; op: 'db.ping'; payload: ReaderDbPingPayload };
 
 /** `depths` в плоском виде (Map не переживает structured clone). */
 export interface ReaderDepthsEntry {

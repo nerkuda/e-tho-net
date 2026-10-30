@@ -108,8 +108,13 @@ export const SERVER_VERSION: string = readServerVersion();
 /** Process start timestamp, frozen at module load for `uptime` reporting. */
 export const HEALTH_STARTED_AT: string = new Date().toISOString();
 
-/** Static part of the `/health` response (uptime is filled in per-request). */
-export const HEALTH_RESPONSE: Omit<HealthResponse, 'uptime'> = {
+/**
+ * Static part of the `/health` response: version and the healthy status.
+ * `uptime` is filled in per request; `db` — by the reader-pool check
+ * (задача 0178253c): при сбое чтения обработчик меняет `status` на `error`
+ * и отдаёт 503 (требование 0a79d9de, операция `ae4ae06f`).
+ */
+export const HEALTH_RESPONSE: Omit<HealthResponse, 'uptime' | 'db'> = {
   status: 'ok',
   version: SERVER_VERSION,
 };

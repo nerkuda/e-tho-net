@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { BASE_LAYER_ID } from '@etn/shared';
+import { BASE_LAYER_ID, type HealthDbStatus } from '@etn/shared';
 
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import corsPlugin from '@fastify/cors';
@@ -75,6 +75,8 @@ import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { createApiKeyAuthProvider } from '../mcp/auth.js';
 import { createMcpHttpEndpoint } from '../mcp/http.js';
+import { systemDbPath } from '../paths.js';
+import { createDbHealthCheck } from '../db/db-health.js';
 import {
   HEALTH_STARTED_AT,
   HEALTH_RESPONSE,
@@ -84,6 +86,14 @@ import {
 
 /** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
 const RATE_LIMITER_CLEANUP_MS = 60_000;
+
+/**
+ * Проверка БД для `GET /api/v1/health` (задача 0178253c): `ok` — лёгкое
+ * чтение через reader pool прошло, `error` — нет. Дефолт — кешированная
+ * проверка системной БД (`createDbHealthCheck`), но чистая функция-зависимость
+ * позволяет тестам подменить источник.
+ */
+export type DbHealthCheck = () => Promise<HealthDbStatus>;
 
 /** Dependencies injected into {@link createServer}. */
 export interface ServerDeps {
@@ -100,6 +110,13 @@ export interface ServerDeps {
    * HTTP-клиент и процесс установщика, чтобы не запускать настоящий exe).
    */
   updateApplyOptions?: Pick<UpdateApplyServiceOptions, 'runnerOptions' | 'now'>;
+  /**
+   * Проверка БД для `/health` (задача 0178253c). По умолчанию — лёгкое чтение
+   * системной БД через процессный reader-пул с кешем 1.5 с. Тесты подменяют
+   * пробу: их системная БД — `:memory:`, которую вторым соединением не
+   * открыть; реальный путь проверяется в `health-db.test.ts`.
+   */
+  dbHealth?: DbHealthCheck;
 }
 
 /** Name of the reply header carrying the correlation id for every request. */
@@ -487,14 +504,29 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(createImportRoutes(routeDeps), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
-  app.get('/api/v1/health', async () => {
-    return { ...HEALTH_RESPONSE, uptime: Math.round(process.uptime() * 1000) / 1000 };
+  // `GET /health` (операция ae4ae06f, требование 0a79d9de, задача 0178253c):
+  // 200 `{status:"ok", version, uptime, db:"ok"}`, пока лёгкое чтение БД через
+  // reader pool проходит. Сбой чтения — 503 `{status:"error", …, db:"error"}`:
+  // установщик обновления (`bb063ac3`) разбирает тело, а не только код, и по
+  // `db:"error"` уходит в откат. Проверка кешируется на 1.5 с, поэтому
+  // частый опрос не бьёт БД. Гейт обслуживания (2f599b67) блокирует только
+  // изменяющие запросы — health в обслуживании остаётся 200.
+  const dbHealth: DbHealthCheck =
+    deps.dbHealth ?? createDbHealthCheck({ dbPath: systemDbPath(config.dataDir) });
+  app.get('/api/v1/health', async (_req, reply) => {
+    const db = await dbHealth();
+    const uptime = Math.round(process.uptime() * 1000) / 1000;
+    if (db !== 'ok') {
+      reply.code(503);
+      return { ...HEALTH_RESPONSE, status: 'error', db, uptime };
+    }
+    return { ...HEALTH_RESPONSE, db, uptime };
   });
 
   // Нормативный контракт версии и канала обновления клиента (сущность
   // «Ответ GET /version», задача 89a6ea40). Поля неизменны в течение жизни
   // процесса: `loadConfig` вывел их из версии сервера и провалидировал
-  // override на старте. Публичный, всегда 200.
+  // override на старте. Публичный, всегда 200 — в том числе в обслуживании.
   const versionPayload = buildVersionPayload(config.clientChannel);
   app.get('/api/v1/version', async () => versionPayload);
 

@@ -30,7 +30,7 @@ import { runMigrations } from '../src/db/migrator.js';
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { systemMigrationsDir } from '../src/paths.js';
-import { createServer } from '../src/http/server.js';
+import { createServer, type DbHealthCheck } from '../src/http/server.js';
 import type { InstallerRunnerOptions } from '../src/update/installer-runner.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
@@ -108,6 +108,14 @@ export interface RestContextOptions {
     runnerOptions?: InstallerRunnerOptions;
     now?: () => Date;
   };
+  /**
+   * Проверка БД для `/health` (задача 0178253c). По умолчанию — `ok`:
+   * системная БД тестового контекста живёт в `:memory:` и вторым соединением
+   * reader-пула не открывается. Ошибку БД тест задаёт явно
+   * (`async () => 'error'`), а реальный путь «reader pool → 503» проверяется
+   * на файловой БД в `health-db.test.ts`.
+   */
+  dbHealth?: DbHealthCheck;
 }
 
 /**
@@ -145,6 +153,9 @@ export async function buildRestContext(
     config: testServerConfig(dataDir, options.config),
     systemDb: sys,
     logger: createLogger('silent'),
+    // Проверка БД `/health`: `:memory:`-база не открывается вторым
+    // соединением — подменяем источник; реальный путь — `health-db.test.ts`.
+    dbHealth: options.dbHealth ?? (async () => 'ok'),
     ...(options.updateApplyOptions === undefined
       ? {}
       : { updateApplyOptions: options.updateApplyOptions }),

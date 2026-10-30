@@ -78,11 +78,26 @@ export interface ApiError {
 /** Any top-level API response envelope (success / list / error). */
 export type ApiResponse<T> = ApiSuccess<T> | ApiList<T> | ApiError;
 
-/** Response of `GET /api/v1/health` (03-server-api.md §16). */
+/**
+ * Статус БД в `GET /api/v1/health` (операция `ae4ae06f`, задача 0178253c):
+ * `ok` — лёгкое чтение через reader pool прошло, `error` — не прошло
+ * (ответ эндпоинта при этом 503, требование `0a79d9de`).
+ */
+export type HealthDbStatus = 'ok' | 'error';
+
+/**
+ * Response of `GET /api/v1/health` (03-server-api.md §16, операция `ae4ae06f`).
+ *
+ * `db` — результат лёгкого чтения БД через reader pool с кешем 1–2 с: по нему
+ * установщик (задача `bb063ac3`) отличает живой сервер от сервера, у которого
+ * поднялся HTTP, но база не читается. Сбой чтения — 503 с `status`/`db` =
+ * `error` и тем же набором полей.
+ */
 export interface HealthResponse {
-  status: 'ok';
+  status: 'ok' | 'error';
   version: string;
   uptime: number;
+  db: HealthDbStatus;
 }
 
 /**

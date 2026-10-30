@@ -75,6 +75,14 @@ interface Slot {
 /** Прорежённый тип сообщения воркера. */
 type WorkerMessage = ReaderTaskResponse;
 
+/**
+ * Сеть, к которой привязана задача. `db.ping` (проверка БД в `/health`)
+ * сети не имеет — для неё `null`, и `closeNetwork` такие задачи не трогает.
+ */
+function taskNetworkId(task: ReaderTask): string | null {
+  return task.op === 'db.ping' ? null : task.context.networkId;
+}
+
 /** Открыть `Worker` на файл воркера, подбирая загрузчик под расширение модуля. */
 function spawnWorker(): Worker {
   const selfPath = fileURLToPath(import.meta.url);
@@ -200,7 +208,7 @@ export class ReaderPool {
     );
     for (let i = this.queue.length - 1; i >= 0; i -= 1) {
       const job = this.queue[i];
-      if (job !== undefined && job.task.context.networkId === networkId) {
+      if (job !== undefined && taskNetworkId(job.task) === networkId) {
         this.queue.splice(i, 1);
         clearTimeout(job.timer);
         job.reject(error);
@@ -250,7 +258,7 @@ export class ReaderPool {
       slot.job = job;
       // Воркер откроет/переиспользует соединение под эту сеть — запоминаем её,
       // чтобы `closeNetwork` знал, какие воркеры держат `data.db`.
-      slot.networkId = job.task.context.networkId;
+      slot.networkId = taskNetworkId(job.task);
       slot.worker.postMessage(job.task);
     }
   }
