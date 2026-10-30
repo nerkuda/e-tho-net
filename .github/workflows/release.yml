@@ -1,5 +1,29 @@
-# Release pipeline (task K3): on a version tag, build installers for all three
-# desktop platforms and publish a server Docker image to GHCR.
+# Релизный конвейер ETN (задача 6d93fe6f, 0.15.1).
+#
+# На тег `vX.Y.Z` (или на ручной запуск с указанием тега) workflow собирает
+# ассеты релиза и публикует GitHub Release:
+#
+#   ETN-Setup-<version>.exe               — установщик Windows (Inno Setup, installer/build.ps1);
+#   ETN-Client-<version>-linux-x64.tar.gz — распакованный клиент Linux (electron-builder --dir);
+#   etn-server-<version>.tar.gz           — серверная поставка Linux (server/scripts/build-server-tarball.mjs);
+#   SHA256SUMS                            — SHA-256 всех трёх бинарных ассетов;
+#   install.sh                            — установщик Linux-клиента (не хешируется: это скрипт).
+#
+# Имена и состав ассетов — контракт (карточка 6d93fe6f, требование d9e2dcf8):
+# по ним строятся install.sh, client_sha256 в GET /version и серверное
+# обновление (server/src/update/checker.ts ищет `ETN-Setup-<version>.exe`
+# и файл `SHA256SUMS`). Пропуск любого ассета — падение workflow, а не
+# «релиз без файла».
+#
+# Флаг prerelease/stable. Push тега `vX.Y.Z` публикует стабильный релиз.
+# Предварительный релиз той же версии публикуется ручным запуском
+# (workflow_dispatch) с `prerelease: true` до появления тега: тег будет создан
+# на коммите запуска. Повторный ручной запуск с `prerelease: false` переводит
+# релиз в стабильный — ассеты перезаписываются, а не дублируются.
+#
+# macOS DMG и Docker-образ сервера в 0.15.1 не публикуются (границы
+# компонента f4c02ddd): macOS в поставку версии не входит, Docker —
+# отдельная задача.
 
 name: release
 
@@ -7,84 +31,261 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег релиза (vX.Y.Z)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Опубликовать как предварительный релиз'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
-  packages: write
+
+env:
+  NODE_VERSION: '22'
 
 jobs:
-  client:
-    strategy:
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  # Версия и канал релиза — единственный источник для имён ассетов ниже.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.ref }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Resolve version and channel
+        id: resolve
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          tag="${TAG}"
+          version="${tag#v}"
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
+            echo "::error::тег ${tag} не соответствует схеме vX.Y.Z"
+            exit 1
+          fi
+          package_version="$(node -p "require('./server/package.json').version")"
+          if [ "${package_version}" != "${version}" ]; then
+            echo "::error::версия в server/package.json (${package_version}) не совпадает с тегом ${tag}"
+            exit 1
+          fi
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            prerelease="${PRERELEASE_INPUT:-false}"
+          else
+            prerelease=false
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "версия ${version}, prerelease=${prerelease}"
+
+  windows-installer:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm install
       - run: npm run build
-      - name: Package with electron-builder
-        # `--publish never`: artifacts are attached to the release by the
-        # github-release job below, not by electron-builder itself.
-        run: npm -w @etn/client run package -- --publish never
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+      - name: Build installer
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # -RefreshPayload готовит Node 22, prod-зависимости, службу WinSW и
+          # клиентскую часть payload (задачи 8b1f5980, 98ad5eec), после чего
+          # build.ps1 проверяет свежесть payload и компилирует .iss.
+          pwsh -File installer/build.ps1 -Version $env:VERSION -RefreshPayload
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installer asset
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $exe = "release/ETN-Setup-$($env:VERSION).exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "нет ассета $exe" }
+          if ((Get-Item -LiteralPath $exe).Length -le 0) { throw "ассет $exe пуст" }
+          Write-Host "OK: $exe"
       - uses: actions/upload-artifact@v7
         with:
-          name: etn-${{ matrix.os }}
-          path: client/release/*
+          name: release-windows
+          path: release/ETN-Setup-*.exe
           if-no-files-found: error
 
-  server-image:
+  linux-client:
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/login-action@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.ref }}
+      - uses: actions/setup-node@v7
         with:
-          context: .
-          file: server/Dockerfile
-          push: true
-          tags: ghcr.io/${{ github.repository }}/etn-server:${{ github.ref_name }}
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm install
+      - run: npm run build:shared
+      - name: Build unpacked client
+        # Цель `dir`: отдельный установщик NSIS из electron-builder снимается
+        # (98ad5eec), Linux-клиент поставляется распакованным каталогом.
+        run: npm -w @etn/client run package -- --dir --publish never
+      - name: Pack client tarball
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          unpacked="client/release/linux-unpacked"
+          if [ ! -x "${unpacked}/etn" ]; then
+            echo "::error::electron-builder не создал ${unpacked}/etn"
+            ls -la client/release || true
+            exit 1
+          fi
+          # Иконка для ярлыка рабочего стола: install.sh берёт etn.png из
+          # каталога установленной версии, если он есть.
+          cp client/build/icon.png "${unpacked}/etn.png"
+          asset="ETN-Client-${VERSION}-linux-x64.tar.gz"
+          mkdir -p dist
+          tar --owner=0 --group=0 --numeric-owner -czf "dist/${asset}" -C "${unpacked}" .
+          if [ ! -s "dist/${asset}" ]; then
+            echo "::error::ассет dist/${asset} не создан"
+            exit 1
+          fi
+          echo "OK: dist/${asset} ($(du -h "dist/${asset}" | cut -f1))"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-client
+          path: dist/ETN-Client-*.tar.gz
+          if-no-files-found: error
 
-  github-release:
-    needs: [client, server-image]
+  linux-server:
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          # Full history and tags: the notes step reads the previous tag and the
-          # annotated tag message.
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm install
+      - run: npm run build:shared
+      - run: npm -w @etn/server run build
+      - name: Build server tarball
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # Скрипт сам проверяет состав архива и прогоняет smoke-test:
+          # etn init + запуск сервера + GET /api/v1/health.
+          node server/scripts/build-server-tarball.mjs --version "${VERSION}" --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-server
+          path: dist/etn-server-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [version, windows-installer, linux-client, linux-server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.ref }}
+          # Полная история и теги: заголовок берётся из аннотации тега,
+          # compare-ссылка — из предыдущего тега.
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-          # Only the client installers: the tiny `*.dockerbuild` metadata
-          # artifact of build-push-action must not reach the release.
-          pattern: etn-*
           merge-multiple: true
+      - name: Generate and verify SHA256SUMS
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          expected=(
+            "ETN-Setup-${VERSION}.exe"
+            "etn-server-${VERSION}.tar.gz"
+            "ETN-Client-${VERSION}-linux-x64.tar.gz"
+          )
+          for name in "${expected[@]}"; do
+            if [ ! -s "${name}" ]; then
+              echo "::error::в релизе нет обязательного ассета ${name}"
+              ls -la
+              exit 1
+            fi
+          done
+          sha256sum "${expected[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          if [ "$(wc -l < SHA256SUMS)" -ne "${#expected[@]}" ]; then
+            echo "::error::SHA256SUMS покрывает не все ассеты"
+            cat SHA256SUMS
+            exit 1
+          fi
+          for name in "${expected[@]}"; do
+            if ! awk -v asset="${name}" 'length($1) == 64 && $2 == asset { found = 1 } END { exit found ? 0 : 1 }' SHA256SUMS; then
+              echo "::error::в SHA256SUMS нет строки для ${name}"
+              exit 1
+            fi
+          done
+          echo "OK: SHA256SUMS"
+          cat SHA256SUMS
       - name: Prepare release notes
         id: notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          prev_tag="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
-          title="$(git tag -l --format='%(contents:subject)' "${tag}")"
-          if [ -z "${title}" ]; then title="ETN ${version}"; fi
-          args=(--version "${version}" --out release-body.md)
+          set -euo pipefail
+          # Тег пуша уже существует; при ручном запуске его может ещё не быть —
+          # тогда предыдущий релиз ищем от HEAD, а тег создаст публикация.
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            prev_tag="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          else
+            prev_tag="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
+          fi
+          title="$(git tag -l --format='%(contents:subject)' "${TAG}")"
+          if [ -z "${title}" ]; then title="ETN ${VERSION}"; fi
+          args=(--version "${VERSION}" --out release-body.md)
           if [ -n "${prev_tag}" ]; then args+=(--prev-tag "${prev_tag}"); fi
           node server/scripts/release-notes.mjs "${args[@]}"
           echo "name=${title}" >> "${GITHUB_OUTPUT}"
-      - uses: softprops/action-gh-release@v3
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.notes.outputs.name }}
           body_path: release-body.md
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: |
             artifacts/*
+            scripts/install.sh
