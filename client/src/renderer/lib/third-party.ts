@@ -110,13 +110,6 @@ export const THIRD_PARTY_COMPONENTS: readonly ThirdPartyComponent[] = [
     url: 'https://github.com/WiseLibs/better-sqlite3',
     packages: ['better-sqlite3'],
   },
-  {
-    title: 'electron-updater',
-    license: 'MIT',
-    copyright: 'Vladimir Krivosheev',
-    url: 'https://github.com/electron-userland/electron-builder',
-    packages: ['electron-updater'],
-  },
 ];
 
 /** Все npm-имена, покрытые каталогом (для проверок и генератора). */

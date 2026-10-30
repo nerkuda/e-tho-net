@@ -42,7 +42,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
 
-# macOS: dmg (arm64 + x64), hardened runtime for update signing.
+# macOS: dmg (arm64 + x64), hardened runtime.
 mac:
   target:
     - dmg
@@ -61,10 +61,3 @@ linux:
   # and desktop-friendly.
   artifactName: ${productName}-${version}.${ext}
   executableName: etn
-
-# Auto-update source (task K4): GitHub Releases. The updater only acts in
-# packaged builds; DEV_MODE builds skip checks.
-publish:
-  provider: github
-  owner: nerkuda
-  repo: e-tho-net

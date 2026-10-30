@@ -38,7 +38,6 @@ import {
   extractDeepLink,
   type DeepLinkPayload,
 } from './ipc/deep-link.js';
-import { initAutoUpdater } from './updater.js';
 import {
   loadWindowBounds,
   sanitizeBounds,
@@ -620,9 +619,6 @@ app
     // Cold start (Win/Linux): URL в argv — цель ждёт в буфере до ack renderer.
     const initial = extractDeepLink(process.argv);
     if (initial !== null) dispatchOrBuffer(win, initial);
-
-    // Auto-update (K4): quiet check in packaged builds; inert in dev.
-    void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0 && localDb !== null) {

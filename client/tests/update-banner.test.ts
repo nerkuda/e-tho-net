@@ -422,6 +422,35 @@ describe('initUpdateBanner: показ по состоянию', () => {
     dispose();
   });
 
+  it('успешный повтор снимает строку прошлой ошибки (замечание b57910b5)', async () => {
+    let attempt = 0;
+    const store = fakeStore({ compatibility: verdict(), authenticated: true });
+    const dispose = initUpdateBanner(host as unknown as HTMLElement, {
+      ...store.deps,
+      openExternal: async () => {
+        attempt += 1;
+        return attempt === 1 ? 'нет прав' : '';
+      },
+    });
+
+    buttonByLabel(host, t('compatibility.action.updateClient')).click();
+    await Promise.resolve();
+    await Promise.resolve();
+    const failure = t('compatibility.openFailed', 'нет прав');
+    assert.ok(bannerText(host).includes(failure), 'первый клик честно показал ошибку');
+
+    // Второй клик открыл страницу — прошлая строка ошибки не должна висеть.
+    buttonByLabel(host, t('compatibility.action.updateClient')).click();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.ok(
+      !bannerText(host).includes(failure),
+      'после успешного открытия ложной ошибки в баннере нет',
+    );
+    assert.equal(host.hidden, false, 'баннер и рекомендация остаются на месте');
+    dispose();
+  });
+
   it('ошибка открытия устаревшего вердикта не попадает в новый баннер', async () => {
     let fail: ((reason: string) => void) | null = null;
     const pending = new Promise<string>((resolve) => {

@@ -540,7 +540,8 @@ export function buildWorkspace(): HTMLElement {
         authenticated: store.state.me !== null,
       }),
       subscribe: (listener) => store.subscribe(listener),
-      openExternal: (url) => etn.system.openExternal(url),
+      // Страница релиза клиента — через `client-update.ts` (задача 61cec451).
+      openExternal: (url) => etn.system.openClientUpdatePage(url),
     }),
   );
   onWorkspaceTeardown(mountSearch({ input: searchInput, host: searchHost }));

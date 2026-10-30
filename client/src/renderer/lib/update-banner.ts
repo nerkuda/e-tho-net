@@ -289,6 +289,18 @@ export function initUpdateBanner(host: HTMLElement, deps: UpdateBannerDeps): () 
     sync();
   }
 
+  /**
+   * Снять строку ошибки после успешного открытия (замечание приёмки b57910b5):
+   * сообщение относится к прошлому клику и не должно висеть над уже
+   * открывшейся страницей. Смена вердикта и так сбрасывает ошибку.
+   */
+  function clearOpenFailure(forVerdict: CompatibilityResult | null): void {
+    if (deps.getState().compatibility !== forVerdict) return;
+    if (error === null) return;
+    error = null;
+    sync();
+  }
+
   /** Открыть страницу релиза (`download_url`) — без скачивания файла. */
   async function openRelease(): Promise<void> {
     const result = deps.getState().compatibility;
@@ -296,7 +308,8 @@ export function initUpdateBanner(host: HTMLElement, deps: UpdateBannerDeps): () 
     if (result === null || url === '') return;
     try {
       const failure = await deps.openExternal(url);
-      if (failure !== '') showOpenFailure(t('compatibility.openFailed', failure), result);
+      if (failure === '') clearOpenFailure(result);
+      else showOpenFailure(t('compatibility.openFailed', failure), result);
     } catch {
       showOpenFailure(t('compatibility.openFailed', t('connect.reason.other')), result);
     }

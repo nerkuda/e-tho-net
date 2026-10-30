@@ -23,6 +23,7 @@ import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
 import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
 import type { CompatibilityResult } from '../compatibility.js';
+import { openClientUpdatePage } from '../client-update.js';
 import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
@@ -2053,6 +2054,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((filePath: string) => openAttachmentFile(deps, filePath)),
   );
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
+  handlers.set(
+    'system.openClientUpdatePage',
+    bind((url: string) => openClientUpdatePageShell(url)),
+  );
 
   // --- file journals: client + server (task f051bf95, 07-client-electron.md §7) ---
   handlers.set(
@@ -2562,6 +2567,20 @@ async function openExternalShell(target: string): Promise<string> {
       : ' (возможно, протокол не зарегистрирован в системе)';
     return `Не удалось открыть «${classified.url}»${hint}: ${detail}`;
   }
+}
+
+/**
+ * Открывает страницу релиза клиента в системном браузере (задача 61cec451,
+ * требование d654473a): только абсолютный http(s)-адрес, без скачивания файла
+ * и запуска установщика. Возвращает '' при успехе или причину отказа — тот же
+ * формат, что у {@link openExternalShell}.
+ */
+async function openClientUpdatePageShell(url: string): Promise<string> {
+  const { shell } = await import('electron');
+  const result = await openClientUpdatePage(url, {
+    openExternal: (target) => shell.openExternal(target),
+  });
+  return result.ok ? '' : result.reason;
 }
 
 /**

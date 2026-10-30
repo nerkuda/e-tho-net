@@ -144,6 +144,13 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
   let rendered: CompatibilityResult | null = null;
   /** Идёт переподключение по кнопке «Повторить» (защита от двойного клика). */
   let retryBusy = false;
+  /**
+   * Что показывает общая строка ошибки: отказ повтора (`retry`) или неудачное
+   * открытие страницы релиза (`open`). Нужен, чтобы успешное открытие снимало
+   * только СВОЮ ошибку и не гасило честный текст отказа повтора (замечание
+   * приёмки b57910b5 — тот же класс, что и строка ошибки баннера).
+   */
+  let errorKind: 'retry' | 'open' | null = null;
   /** Адрес активного профиля для честного текста отказа повтора. */
   let connectTarget: { label: string; baseUrl: string } | null = null;
   /** Загрузка адреса профиля (одна на диалог; тексту отказа важно дождаться). */
@@ -209,6 +216,7 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
     retryBusy = true;
     if (retryButton !== null) retryButton.disabled = true;
     view.retryError.hidden = true;
+    errorKind = null;
     try {
       await deps.retry(profileId);
     } catch (err) {
@@ -218,6 +226,7 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
       if (!isCompatibilityRefusal(err)) {
         view.retryError.textContent = t('compatibility.retryFailed', await retryFailureText(err));
         view.retryError.hidden = false;
+        errorKind = 'retry';
       }
     } finally {
       retryBusy = false;
@@ -234,10 +243,17 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
       if (failure !== '') {
         view.retryError.textContent = t('compatibility.openFailed', failure);
         view.retryError.hidden = false;
+        errorKind = 'open';
+      } else if (errorKind === 'open') {
+        // Успешный повтор: строка прошлой ошибки относится к прежнему клику.
+        view.retryError.textContent = '';
+        view.retryError.hidden = true;
+        errorKind = null;
       }
     } catch {
       view.retryError.textContent = t('compatibility.openFailed', t('connect.reason.other'));
       view.retryError.hidden = false;
+      errorKind = 'open';
     }
   }
 
@@ -314,6 +330,7 @@ export function initCompatibilityDialog(deps: CompatibilityDialogDeps): () => vo
     if (!retryBusy) {
       view.retryError.hidden = true;
       view.retryError.textContent = '';
+      errorKind = null;
     }
     retryButton = null;
     view.footer.replaceChildren();

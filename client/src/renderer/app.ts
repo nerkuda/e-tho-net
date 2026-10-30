@@ -892,7 +892,8 @@ export async function boot(): Promise<void> {
       profileId: store.state.profileId,
     }),
     subscribe: (listener) => store.subscribe(listener),
-    openExternal: (url) => etn.system.openExternal(url),
+    // Страница релиза клиента — только через `client-update.ts` (задача 61cec451).
+    openExternal: (url) => etn.system.openClientUpdatePage(url),
     copyText: async (text) => {
       await navigator.clipboard.writeText(text);
     },

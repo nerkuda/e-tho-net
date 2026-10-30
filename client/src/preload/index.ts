@@ -540,6 +540,7 @@ function buildApi(): EtnBridgeApi {
       openPath: (filePath: string) => invoke('system.openPath', filePath),
       openAttachmentFile: (filePath: string) => invoke('system.openAttachment', filePath),
       openExternal: (url: string) => invoke('system.openExternal', url),
+      openClientUpdatePage: (url: string) => invoke('system.openClientUpdatePage', url),
       // --- file journals (task f051bf95) ---
       getClientLogState: () => invoke('system.getClientLogState'),
       setClientLogging: (enabled: boolean) => invoke('system.setClientLogging', enabled),

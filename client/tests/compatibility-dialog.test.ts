@@ -341,6 +341,38 @@ describe('initCompatibilityDialog: блокирующий диалог (0afec967
     }
   });
 
+  it('успешный повтор открытия снимает строку прошлой ошибки (аналог b57910b5)', async () => {
+    let attempt = 0;
+    const harness = mount(AUTHENTICATED, {
+      openExternal: async () => {
+        attempt += 1;
+        return attempt === 1 ? 'нет прав' : '';
+      },
+    });
+    try {
+      const dialog = backdrops()[0]!;
+      buttonByLabel(dialog, t('compatibility.action.updateClient')).click();
+      await tick();
+      const error = dialog.querySelector('.error-text');
+      assert.ok(error !== null, 'строка ошибки есть в диалоге');
+      assert.equal(error!.hidden, false, 'неудачный клик показал причину');
+      assert.ok(
+        error!.textContent.includes(t('compatibility.openFailed', 'нет прав')),
+        'в строке — причина отказа',
+      );
+
+      buttonByLabel(dialog, t('compatibility.action.updateClient')).click();
+      await tick();
+      assert.equal(
+        error!.hidden,
+        true,
+        'после успешного открытия ложная ошибка не висит (замечание b57910b5)',
+      );
+    } finally {
+      harness.stop();
+    }
+  });
+
   it('причина в диалоге зависит от details.reason сервера', () => {
     const harness = mount({
       ...AUTHENTICATED,

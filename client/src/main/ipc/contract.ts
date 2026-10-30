@@ -1707,6 +1707,14 @@ export interface EtnApi {
      * so the renderer can show feedback.
      */
     openExternal(url: string): Promise<string>;
+    /**
+     * Открыть страницу релиза клиента (`client_download_url` из
+     * `/api/v1/version`) в системном браузере (задача 61cec451, требование
+     * d654473a). Принимается только абсолютный http(s)-адрес; файл не
+     * скачивается, хеш не проверяется, установщик не запускается. Возвращает
+     * пустую строку при успехе или причину отказа для строки ошибки.
+     */
+    openClientUpdatePage(url: string): Promise<string>;
     // --- client/server file journals (task f051bf95, 07-client-electron.md §7) ---
     /**
      * State of the CLIENT file journal: the `log_enabled` flag, the current
