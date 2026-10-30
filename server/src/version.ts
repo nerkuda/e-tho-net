@@ -35,11 +35,17 @@ import {
 export const API_VERSION = 'v1' as const;
 
 /**
+ * Repository slug that owns the published releases. Single source for every
+ * release URL the server builds (release page, update feed, download links).
+ */
+export const ETN_REPOSITORY = 'nerkuda/e-tho-net';
+
+/**
  * Base of the default `client_download_url`: the GitHub release **page**
  * (never a direct asset link — the client opens it in a browser, and the user
  * downloads and verifies the artefact manually).
  */
-export const CLIENT_RELEASE_PAGE_BASE = 'https://github.com/nerkuda/e-tho-net/releases/tag/v';
+export const CLIENT_RELEASE_PAGE_BASE = `https://github.com/${ETN_REPOSITORY}/releases/tag/v`;
 
 /** Shape of the `ETN_CLIENT_SHA256` value: a lowercase or uppercase SHA-256 hex digest. */
 const SHA256_PATTERN = /^[0-9a-fA-F]{64}$/;

@@ -35,6 +35,7 @@ import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempot
 import { normaliseError, sendEtnError } from './errors.js';
 import { createMaintenanceGuard } from './maintenance-guard.js';
 import { SERVER_UPDATING_MESSAGE, createMaintenanceService } from '../maintenance.js';
+import { createUpdateChecker } from '../update/checker.js';
 import { meRoutes } from '../routes/me.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
@@ -221,6 +222,21 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     reply.header('retry-after', String(rejection.retry_after));
     sendEtnError(reply, 'SERVER_UPDATING', SERVER_UPDATING_MESSAGE, rejection, req.id);
   });
+
+  // --- Проверка канала обновлений и кеш версий (задача 8264988a) ------------
+  // Сервис только держит кеш и умеет `checkNow()`; фоновая проверка (старт и
+  // каждые `ETN_UPDATE_CHECK_INTERVAL_HOURS`) запускается в `index.ts`, а
+  // admin-эндпоинты `GET/POST /system/update*` — задача 0a27a63b.
+  app.decorate(
+    'updateChecker',
+    createUpdateChecker({
+      feedUrl: config.update.feedUrl,
+      channel: config.update.channel,
+      currentVersion: SERVER_VERSION,
+      deployment: config.deployment,
+      logger,
+    }),
+  );
 
   // --- Plugins -------------------------------------------------------------
   await app.register(corsPlugin, {

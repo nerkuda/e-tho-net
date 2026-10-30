@@ -18,7 +18,10 @@ import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 
-import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
+import {
+  DEFAULT_MCP_SESSION_IDLE_TTL_MS,
+  DEFAULT_UPDATE_CONFIG,
+} from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
 import { resolveClientChannel } from '../src/version.js';
 import { SystemDb } from '../src/db/system-db.js';
@@ -84,6 +87,8 @@ async function buildApp(): Promise<Ctx> {
   // Пул записи в тестах выключен: пути записи переводит отдельная задача (c8920d04).
   writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
   clientChannel: resolveClientChannel({}),
+  update: DEFAULT_UPDATE_CONFIG,
+  deployment: 'standalone',
   };
   const app = await createServer({ config, systemDb: sys, logger: createLogger('silent') });
   ctx = { app, sys, dataDir, adminKey: gen.key, logsDir: path.join(dataDir, 'logs') };

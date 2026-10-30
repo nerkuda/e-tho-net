@@ -23,6 +23,7 @@ import { sweepCommentHtml } from './domain/markdown-sweep.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
 import { handleMcpNodeRequest } from './mcp/http.js';
+import { startUpdateCheckScheduler } from './update/checker.js';
 import { SERVER_VERSION } from './version.js';
 
 /** Run the server against `env`/`argv`. Exported for tests. */
@@ -149,9 +150,21 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     logger.info('WAL background checkpoint disabled (ETN_WAL_CHECKPOINT_INTERVAL_MS=0)');
   }
 
+  // Проверка канала обновлений (задача 8264988a, требование d3ed341b): стартовая
+  // проверка не ожидается — сервер уже слушает порт, недоступный фид не
+  // задерживает и не роняет старт; далее — каждые
+  // `ETN_UPDATE_CHECK_INTERVAL_HOURS` (12 по умолчанию). Таймер `unref()`-нут,
+  // ошибки проверки остаются в кеше (`app.updateChecker`).
+  const updateChecks = startUpdateCheckScheduler({
+    checker: app.updateChecker,
+    intervalMs: config.update.intervalMs,
+    logger,
+  });
+
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Shutting down ETN server');
     fileLog.info('server', 'ETN server shutting down', { signal });
+    updateChecks.stop();
     walCheckpoint?.stop();
     if (mcpListener !== null) {
       await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
