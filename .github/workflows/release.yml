@@ -15,11 +15,15 @@
 # и файл `SHA256SUMS`). Пропуск любого ассета — падение workflow, а не
 # «релиз без файла».
 #
-# Флаг prerelease/stable. Push тега `vX.Y.Z` публикует стабильный релиз.
-# Предварительный релиз той же версии публикуется ручным запуском
-# (workflow_dispatch) с `prerelease: true` до появления тега: тег будет создан
-# на коммите запуска. Повторный ручной запуск с `prerelease: false` переводит
-# релиз в стабильный — ассеты перезаписываются, а не дублируются.
+# Канал prerelease/stable. Канал выводится из тега: версия с prerelease-суффиксом
+# (`v0.15.1-rc.1`) публикуется предварительным релизом (`prerelease: true`,
+# `make_latest: false`), чистая версия (`v0.15.1`) — стабильным. Ручной запуск
+# (workflow_dispatch) может переопределить канал входом `channel`: `auto` —
+# по тегу, `prerelease` или `stable` — принудительно. Тег для ручного запуска
+# обязан начинаться с `v` — install.sh строит URL ассета как
+# `.../releases/download/v<версия>/<asset>`. Повторный ручной запуск с другим
+# каналом переводит релиз в другой канал — ассеты перезаписываются, а не
+# дублируются.
 #
 # macOS DMG и Docker-образ сервера в 0.15.1 не публикуются (границы
 # компонента f4c02ddd): macOS в поставку версии не входит, Docker —
@@ -34,14 +38,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Тег релиза (vX.Y.Z)'
+        description: 'Тег релиза с префиксом v (vX.Y.Z или vX.Y.Z-rc.1)'
         required: true
         type: string
-      prerelease:
-        description: 'Опубликовать как предварительный релиз'
+      channel:
+        description: 'Канал: auto — из тега (суффикс → prerelease), stable или prerelease'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - auto
+          - stable
+          - prerelease
+        default: auto
 
 permissions:
   contents: write
@@ -56,6 +64,7 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
+      make_latest: ${{ steps.resolve.outputs.make_latest }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,11 +76,20 @@ jobs:
         id: resolve
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
-          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+          CHANNEL_INPUT: ${{ inputs.channel || 'auto' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           tag="${TAG}"
+          # install.sh строит URL ассета как .../releases/download/v<версия>/<asset>:
+          # тег без v сделал бы релиз невидимым для установщика.
+          case "${tag}" in
+            v*) ;;
+            *)
+              echo "::error::тег ${tag} должен начинаться с v: vX.Y.Z (сюда же vX.Y.Z-rc.1)"
+              exit 1
+              ;;
+          esac
           version="${tag#v}"
           if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
             echo "::error::тег ${tag} не соответствует схеме vX.Y.Z"
@@ -82,14 +100,34 @@ jobs:
             echo "::error::версия в server/package.json (${package_version}) не совпадает с тегом ${tag}"
             exit 1
           fi
+          # Канал выводится из тега: prerelease-суффикс (`-rc.1`, `-beta.2`) —
+          # предварительный релиз без метки latest, чистая версия — стабильный.
+          case "${version}" in
+            *-*) tag_prerelease=true ;;
+            *) tag_prerelease=false ;;
+          esac
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            prerelease="${PRERELEASE_INPUT:-false}"
+            case "${CHANNEL_INPUT:-auto}" in
+              auto) prerelease="${tag_prerelease}" ;;
+              prerelease) prerelease=true ;;
+              stable) prerelease=false ;;
+              *)
+                echo "::error::неизвестный канал ${CHANNEL_INPUT}: ожидается auto, stable или prerelease"
+                exit 1
+                ;;
+            esac
           else
-            prerelease=false
+            prerelease="${tag_prerelease}"
+          fi
+          if [ "${prerelease}" = "true" ]; then
+            make_latest=false
+          else
+            make_latest=true
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
-          echo "версия ${version}, prerelease=${prerelease}"
+          echo "make_latest=${make_latest}" >> "${GITHUB_OUTPUT}"
+          echo "версия ${version}, prerelease=${prerelease}, make_latest=${make_latest}"
 
   windows-installer:
     needs: version
@@ -178,7 +216,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: release-linux-client
-          path: dist/ETN-Client-*.tar.gz
+          path: dist/ETN-Client-*-linux-x64.tar.gz
           if-no-files-found: error
 
   linux-server:
@@ -283,7 +321,7 @@ jobs:
           name: ${{ steps.notes.outputs.name }}
           body_path: release-body.md
           prerelease: ${{ needs.version.outputs.prerelease }}
-          make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
+          make_latest: ${{ needs.version.outputs.make_latest }}
           fail_on_unmatched_files: true
           overwrite_files: true
           files: |

@@ -357,7 +357,7 @@ async function main() {
         '  ETN_DATA_DIR=/var/lib/etn node dist/cli.js init --username admin --display-name "Администратор"',
         '',
         'Запуск:',
-        '  ETN_DATA_DIR=/var/lib/etn node dist/index.js',
+        '  ETN_DATA_DIR=/var/lib/etn ETN_PORT=4321 node dist/index.js',
         '',
         'Проверка готовности:',
         '  curl http://127.0.0.1:4321/api/v1/health',

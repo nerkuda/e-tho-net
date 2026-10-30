@@ -31,6 +31,8 @@ readonly PROG="install.sh"
 readonly DEFAULT_RELEASE_BASE_URL="https://github.com/nerkuda/e-tho-net"
 readonly MARKER_NAME=".etn-install"
 readonly DESKTOP_MARKER="X-ETN-Installer=true"
+# Код возврата, когда установка найдена, но удалить её не удалось (права).
+readonly REMOVE_FAILED_CODE=10
 
 RELEASE_BASE_URL="${ETN_RELEASE_BASE_URL:-$DEFAULT_RELEASE_BASE_URL}"
 RELEASE_BASE_URL="${RELEASE_BASE_URL%/}"
@@ -132,7 +134,10 @@ EUID_NOW="$(id -u)"
 [ -n "${HOME:-}" ] || die "не задан HOME — некуда ставить клиент"
 
 # Пользовательский режим под sudo: предупреждаем (сценарий 7cbbf51c) и ставим
-# в домашний каталог пользователя, вызвавшего sudo, а не в /root.
+# в домашний каталог пользователя, вызвавшего sudo, а не в /root. Созданные
+# каталоги цепочки (~/.local, ~/.local/opt, ~/.local/share/applications)
+# передаются этому пользователю: root-овые родители не дают ни удалить
+# установку без sudo, ни переустановить её (вердикт приёмки 2026-10-30).
 SUDO_TARGET_USER=""
 if [ "$EUID_NOW" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$MODE" = "user" ]; then
   SUDO_TARGET_USER="$SUDO_USER"
@@ -172,6 +177,60 @@ else
   BIN_LINK="/usr/local/bin/etn"
 fi
 DESKTOP_FILE="$DESKTOP_DIR/etn.desktop"
+
+# --- Каталоги и владелец ------------------------------------------------------
+
+# Ошибка удаления: установка найдена, но снять её не удалось. Отдельный код
+# отличает «не смогли удалить» (права, занятость) от «не удалось поставить».
+remove_failed() {
+  printf '%s: ошибка: %s\n' "$PROG" "$*" >&2
+  exit "$REMOVE_FAILED_CODE"
+}
+
+# Существующие каталоги установки в sudo-режиме обязаны принадлежать
+# SUDO_USER. Иначе root-овый родитель останется недоступным пользователю:
+# --uninstall без sudo не сможет убрать установку, а повторная установка
+# упадёт на mkdir. Такой каталог скрипт починить не вправе (он его не создал)
+# — отказываем до скачивания и подсказываем команду возврата прав.
+check_owner_chain() {
+  local dir owner
+  [ -n "$SUDO_TARGET_USER" ] || return 0
+  for dir in "$@"; do
+    [ -d "$dir" ] || continue
+    owner="$(stat -c '%U' -- "$dir" 2>/dev/null || true)"
+    if [ -n "$owner" ] && [ "$owner" != "$SUDO_TARGET_USER" ]; then
+      die "каталог ${dir} принадлежит ${owner}, а не ${SUDO_TARGET_USER}: установка под sudo оставит его недоступным. Верните права (sudo chown -R ${SUDO_TARGET_USER}: '${dir}') или запустите скрипт без sudo"
+    fi
+  done
+}
+
+# Создать каталог и всю недостающую цепочку родителей. В sudo-режиме каждый
+# созданный скриптом каталог сразу передаётся SUDO_USER — вплоть до $HOME, но
+# не выше и только те, которых до вызова не было. Не удалось передать —
+# отказываем: иначе установка завершится «успешно», а пользователь не сможет
+# ни запустить обновление, ни удалить её без sudo.
+make_dirs() {
+  local dir="$1" probe="$1" created owner_group
+  local -a missing=()
+  while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do
+    missing+=("$probe")
+    probe="$(dirname -- "$probe")"
+  done
+  mkdir -p -- "$dir" || return 1
+  if [ "${#missing[@]}" -eq 0 ] || [ -z "$SUDO_TARGET_USER" ]; then
+    return 0
+  fi
+  owner_group="$(id -gn "$SUDO_TARGET_USER" 2>/dev/null || true)"
+  for created in "${missing[@]}"; do
+    if [ -n "$owner_group" ]; then
+      chown "${SUDO_TARGET_USER}:${owner_group}" -- "$created" \
+        || die "не удалось передать ${created} пользователю ${SUDO_TARGET_USER}: запустите скрипт без sudo"
+    else
+      chown "${SUDO_TARGET_USER}:" -- "$created" \
+        || die "не удалось передать ${created} пользователю ${SUDO_TARGET_USER}: запустите скрипт без sudo"
+    fi
+  done
+}
 
 # --- Инструменты -------------------------------------------------------------
 
@@ -421,6 +480,11 @@ install_version() {
 
   ensure_managed_base
 
+  # Владелец существующих каталогов проверяется до скачивания: root-овый
+  # родитель из прошлой sudo-установки сделает результат непригодным.
+  check_owner_chain "$TARGET_HOME/.local" "$TARGET_HOME/.local/opt" \
+    "$TARGET_HOME/.local/share" "$DESKTOP_DIR" "$BASE"
+
   case "$RELEASE_BASE_URL" in
     file://*) ;;
     *) need_cmd curl ;;
@@ -451,7 +515,7 @@ install_version() {
     die "не хватает системных библиотек — установка не начата, текущая версия не изменена"
   fi
 
-  mkdir -p "$BASE"
+  make_dirs "$BASE" || die "не удалось создать ${BASE}"
   final="$BASE/$VERSION"
   old="$BASE/.old-${VERSION}.$$"
   if [ -e "$final" ]; then
@@ -473,12 +537,13 @@ install_version() {
   write_desktop_entry
 
   if [ -n "$BIN_LINK" ]; then
-    mkdir -p "$(dirname "$BIN_LINK")"
+    make_dirs "$(dirname -- "$BIN_LINK")" || die "не удалось создать ${BIN_LINK%/*}"
     ln -sfn "$BASE/current/etn" "$BIN_LINK"
   fi
 
   if [ -n "$SUDO_TARGET_USER" ]; then
-    chown -R "$SUDO_TARGET_USER:" "$BASE" "$DESKTOP_FILE" 2>/dev/null || true
+    chown -R "$SUDO_TARGET_USER:" "$BASE" "$DESKTOP_FILE" \
+      || die "не удалось передать установленные файлы пользователю ${SUDO_TARGET_USER}: запустите скрипт без sudo"
   fi
 
   info "Установлено: ${BASE}/${VERSION} (симлинк current переключён)"
@@ -489,7 +554,7 @@ install_version() {
 write_desktop_entry() {
   local icon_line="" executable
   executable="$BASE/current/etn"
-  mkdir -p "$DESKTOP_DIR"
+  make_dirs "$DESKTOP_DIR" || die "не удалось создать ${DESKTOP_DIR}"
   if [ -f "$BASE/current/etn.png" ]; then
     icon_line="Icon=$BASE/current/etn.png"
   fi
@@ -517,6 +582,16 @@ desktop_file_is_ours() {
   [ -f "$1" ] && grep -q "^${DESKTOP_MARKER}$" "$1" 2>/dev/null
 }
 
+# Удаление требует записи в родительский каталог, а не в сам объект. Проверка
+# до rm: иначе rm -rf сносит содержимое и только потом упирается в root-ового
+# родителя — установка остаётся полуразобранной, без маркера, и повторить
+# удаление уже нельзя. Root проходит проверку всегда.
+can_unlink() {
+  local parent
+  parent="$(dirname -- "$1")"
+  [ -d "$parent" ] && [ -w "$parent" ]
+}
+
 remove_scope() {
   local scope="$1" base desktop bin removed=0
   if [ "$scope" = "system" ]; then
@@ -538,7 +613,19 @@ remove_scope() {
     elif [ "$scope" = "system" ] && [ "$EUID_NOW" -ne 0 ]; then
       die "удаление системной установки требует прав: sudo bash ${PROG} --uninstall"
     else
-      rm -rf -- "$base"
+      # rm печатает причину (Permission denied и т. п.) в stderr. Код возврата
+      # проверяется явно: вызов из `if remove_scope` отключает set -e, и раньше
+      # скрипт сообщал «Удалено» на неудалённом каталоге, теряя маркер и
+      # оставляя root-овый остаток, который нельзя убрать из-под пользователя.
+      if ! can_unlink "$base"; then
+        remove_failed "не удалось удалить ${base}: нет прав на запись в ${base%/*}. Каталог и его родители должны принадлежать пользователю; root-овую установку снимайте через sudo bash ${PROG} --uninstall"
+      fi
+      if ! rm -rf -- "$base"; then
+        remove_failed "не удалось удалить ${base}: см. причину выше. Каталог и его родители должны принадлежать пользователю; root-овую установку снимайте через sudo bash ${PROG} --uninstall"
+      fi
+      if [ -e "$base" ]; then
+        remove_failed "не удалось удалить ${base}: каталог остался на месте"
+      fi
       info "Удалено: ${base}"
       removed=1
     fi
@@ -548,7 +635,15 @@ remove_scope() {
     if [ "$scope" = "system" ] && [ "$EUID_NOW" -ne 0 ]; then
       die "удаление системного ярлыка требует прав: sudo bash ${PROG} --uninstall"
     fi
-    rm -f -- "$desktop"
+    if ! can_unlink "$desktop"; then
+      remove_failed "не удалось удалить ${desktop}: нет прав на запись в ${desktop%/*}. Ярлык и его каталог должны принадлежать пользователю; root-овый ярлык снимайте через sudo bash ${PROG} --uninstall"
+    fi
+    if ! rm -f -- "$desktop"; then
+      remove_failed "не удалось удалить ${desktop}: см. причину выше. Ярлык должен принадлежать пользователю; root-овый ярлык снимайте через sudo bash ${PROG} --uninstall"
+    fi
+    if [ -e "$desktop" ]; then
+      remove_failed "не удалось удалить ${desktop}: файл остался на месте"
+    fi
     info "Удалено: ${desktop}"
     removed=1
   fi
@@ -557,7 +652,12 @@ remove_scope() {
     case "$(readlink -- "$bin" 2>/dev/null || true)" in
       /opt/etn/*)
         if [ "$EUID_NOW" -eq 0 ]; then
-          rm -f -- "$bin"
+          if ! rm -f -- "$bin"; then
+            remove_failed "не удалось удалить ${bin}: см. причину выше"
+          fi
+          if [ -L "$bin" ]; then
+            remove_failed "не удалось удалить ${bin}: симлинк остался на месте"
+          fi
           info "Удалено: ${bin}"
           removed=1
         else
