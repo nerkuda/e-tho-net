@@ -2,7 +2,7 @@
  * Диалог обновления сервера — чистая модель и разбор отказов (элемент
  * интерфейса c9c96e5c, задача ca26c59d, тех.проект 2d9f5cc7).
  *
- * Модуль без DOM: по снимку кеша проверки (`ServerUpdateStatusDto`) и
+ * Модуль без DOM: по снимку кеша проверки (`SystemUpdateStatus`) и
  * последнему заданию (`UpdateJob`) собирает готовые строки и флаги диалога, а
  * отказ `POST /system/update/apply` раскладывает на три исхода:
  *
@@ -33,8 +33,8 @@ import { EtnError, type UpdateJob, type UpdateJobStage } from '@etn/shared';
 
 import type {
   ServerDeployment,
-  ServerUpdateChannel,
-  ServerUpdateStatusDto,
+  SystemUpdateStatus,
+  UpdateChannel,
 } from '../../main/ipc/contract.js';
 import { fmtDateTime } from './dom.js';
 import { t, type MessageKey } from './i18n.js';
@@ -78,7 +78,7 @@ export function isTerminalJobStage(stage: UpdateJobStage): boolean {
 }
 
 /** Подпись канала обновлений. */
-export function updateChannelLabel(channel: ServerUpdateChannel): MessageKey {
+export function updateChannelLabel(channel: UpdateChannel): MessageKey {
   return channel === 'prerelease'
     ? 'serverUpdate.channel.prerelease'
     : 'serverUpdate.channel.stable';
@@ -111,7 +111,7 @@ export function extractJournalPath(error: string | null): string | null {
 /** Снимок состояния диалога. */
 export interface ServerUpdateState {
   /** Кеш проверки; `null` — ещё не загружен (или не удалось прочитать). */
-  status: ServerUpdateStatusDto | null;
+  status: SystemUpdateStatus | null;
   /** Последнее задание с сервера. */
   job: UpdateJob | null;
   /** Фаза диалога. */
@@ -197,6 +197,9 @@ export function serverUpdateViewModel(state: ServerUpdateState): ServerUpdateVie
     status !== null &&
     availableVersion !== null &&
     deployment !== 'docker' &&
+    // После `done` повторная кнопка «Обновить сервер» не нужна: задание уже
+    // завершено, новый снимок кеша покажет актуальную версию.
+    !done &&
     !runningPhase &&
     // Отказ установщика (`502`, `retryable: false`): повторный запуск
     // автоматически НЕ предлагается — только причина и журнал.

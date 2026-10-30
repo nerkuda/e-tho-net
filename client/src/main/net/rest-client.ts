@@ -66,6 +66,8 @@ import {
   type Shelf,
   type ShelfInput,
   type SystemLoggingStatus,
+  type SystemUpdateProgress,
+  type SystemUpdateStatus,
   type ThoughtTypeViewsResult,
   type TypeOwnerType,
   type UpdateJob,
@@ -81,10 +83,6 @@ import {
   serverUpdatingError,
   type ServerMaintenanceHandle,
 } from '../server-maintenance.js';
-import type {
-  ServerUpdateProgressDto,
-  ServerUpdateStatusDto,
-} from '../server-update.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -3789,7 +3787,7 @@ export class RestClient {
    * инструкция (задача 0a27a63b, операция GET). Администратор; читается
    * диалогом обновления при открытии (задача ca26c59d).
    */
-  public async getServerUpdate(): Promise<ServerUpdateStatusDto> {
+  public async getServerUpdate(): Promise<SystemUpdateStatus> {
     return this.request('GET', '/system/update');
   }
 
@@ -3801,7 +3799,7 @@ export class RestClient {
    * диалог обновления показывает её как состояние проверки, а не как сбой
    * (задача ca26c59d).
    */
-  public async checkServerUpdate(): Promise<ServerUpdateStatusDto> {
+  public async checkServerUpdate(): Promise<SystemUpdateStatus> {
     return this.request('POST', '/system/update/check');
   }
 
@@ -3810,7 +3808,7 @@ export class RestClient {
    * progress): `{ job: UpdateJob | null }`. Единственный источник фактического
    * прогресса после обрыва/тайм-аута apply.
    */
-  public async getServerUpdateProgress(): Promise<ServerUpdateProgressDto> {
+  public async getServerUpdateProgress(): Promise<SystemUpdateProgress> {
     return this.request('GET', '/system/update/progress');
   }
 

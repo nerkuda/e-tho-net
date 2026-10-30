@@ -17,16 +17,17 @@ import type { DraftStatus } from '../db/local-db.js';
 // IPC-контракта; renderer видит только тип, не код main-процесса.
 import type { CompatibilityResult } from '../compatibility.js';
 // Контракт обновления сервера (задача ca26c59d, тех.проект 2d9f5cc7):
-// зеркало ответов admin-эндпоинтов `/system/update*` (задача 0a27a63b).
-// Renderer видит только типы, сеть — в `net/rest-client.ts`.
-import type {
-  ServerUpdateProgressDto,
-  ServerUpdateStatusDto,
-} from '../server-update.js';
+// формы ответов admin-эндпоинтов `/system/update*` (задача 0a27a63b) —
+// общие контракты `@etn/shared` (стандарт 01268f2d), здесь только реэкспорт
+// для рендерера. Сеть — в `net/rest-client.ts`.
+export type {
+  ServerDeployment,
+  SystemUpdateProgress,
+  SystemUpdateStatus,
+  UpdateChannel,
+} from '@etn/shared';
 
 export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState } from '../compatibility.js';
-
-export type { ServerDeployment, ServerUpdateChannel, ServerUpdateProgressDto, ServerUpdateStatusDto } from '../server-update.js';
 
 import type {
   ApiKey,
@@ -148,6 +149,8 @@ import type {
   UserPreferenceEntry,
   UsageClearResult,
   UpdateJob,
+  SystemUpdateProgress,
+  SystemUpdateStatus,
   VersionResponse,
   Layer,
   LayerColors,
@@ -1664,13 +1667,13 @@ export interface EtnApi {
      * режим развёртывания (`deployment`) и инструкция (`instruction`).
      * Только администратор (сервер отвечает `403` остальным).
      */
-    getServerUpdate(): Promise<ServerUpdateStatusDto>;
+    getServerUpdate(): Promise<SystemUpdateStatus>;
     /**
      * `POST /api/v1/system/update/check` — принудительная проверка канала;
      * ответ — новый снимок кеша. `429 RATE_LIMITED` значит «проверка уже
      * идёт»: диалог показывает это состоянием, а не ошибкой.
      */
-    checkServerUpdate(): Promise<ServerUpdateStatusDto>;
+    checkServerUpdate(): Promise<SystemUpdateStatus>;
     /**
      * `POST /api/v1/system/update/apply` — создать задание обновления и
      * запустить установщик (`201`). Единственный вызов, который renderer
@@ -1685,7 +1688,7 @@ export interface EtnApi {
      * (`{ job: UpdateJob | null }`). Источник правды о ходе обновления после
      * обрыва apply и при повторном открытии диалога.
      */
-    getServerUpdateProgress(): Promise<ServerUpdateProgressDto>;
+    getServerUpdateProgress(): Promise<SystemUpdateProgress>;
     export(networkId: string, request: ExportRequest): Promise<ExportJobStartResult>;
     getJob(jobId: string): Promise<ExportJob>;
     /**

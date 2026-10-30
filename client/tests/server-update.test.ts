@@ -20,7 +20,7 @@ import { describe, it } from 'node:test';
 
 import { EtnError, type UpdateJob } from '@etn/shared';
 
-import type { ServerUpdateStatusDto } from '../src/main/ipc/contract.js';
+import type { SystemUpdateStatus } from '../src/main/ipc/contract.js';
 import {
   CONFIRMED_UPDATE_STAGES,
   classifyApplyFailure,
@@ -34,7 +34,7 @@ import {
 import { t } from '../src/renderer/lib/i18n.js';
 
 /** Снимок кеша: сервер-служба, есть версия новее. */
-function status(overrides: Partial<ServerUpdateStatusDto> = {}): ServerUpdateStatusDto {
+function status(overrides: Partial<SystemUpdateStatus> = {}): SystemUpdateStatus {
   return {
     current_version: '0.15.1',
     available_version: '0.15.2',

@@ -41,8 +41,8 @@
 import type { UpdateJob } from '@etn/shared';
 
 import type {
-  ServerUpdateProgressDto,
-  ServerUpdateStatusDto,
+  SystemUpdateProgress,
+  SystemUpdateStatus,
 } from '../../main/ipc/contract.js';
 import { confirmDialog, showDialog } from './dialog.js';
 import { div, el } from './dom.js';
@@ -66,13 +66,13 @@ export interface ServerUpdateDialogDeps {
   /** Текущий пользователь — администратор? Диалог только для него. */
   isAdmin(): boolean;
   /** Снимок кеша проверки (`GET /system/update`). */
-  getStatus(): Promise<ServerUpdateStatusDto>;
+  getStatus(): Promise<SystemUpdateStatus>;
   /** Принудительная проверка канала (`POST /system/update/check`). */
-  check(): Promise<ServerUpdateStatusDto>;
+  check(): Promise<SystemUpdateStatus>;
   /** Запуск задания (`POST /system/update/apply`). */
   apply(targetVersion: string): Promise<UpdateJob>;
   /** Последнее задание (`GET /system/update/progress`). */
-  getProgress(): Promise<ServerUpdateProgressDto>;
+  getProgress(): Promise<SystemUpdateProgress>;
   /** Подтверждение с честным текстом последствий. */
   confirm(title: string, message: string): Promise<boolean>;
   /** Запись пути в буфер обмена. */
@@ -137,6 +137,8 @@ export function openServerUpdateDialog(
 
   let closed = false;
   let applyPending = false;
+  /** Чтение состояния уже провалилось: в теле не повторяем «Чтение…». */
+  let statusLoadFailed = false;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollBusy = false;
   /** Подпись футера: пересобираем кнопки только при смене набора действий. */
@@ -263,15 +265,24 @@ export function openServerUpdateDialog(
   /** Текст-состояние над списком версий («проверка идёт», «проверка уже идёт»). */
   function renderStatus(): void {
     const status = state.status;
+    // После неудачного чтения в теле не остаётся «Чтение состояния…»:
+    // ошибка — в футере, тело ждёт повторного действия.
+    currentLine.hidden = status === null && statusLoadFailed;
     currentLine.textContent =
       status === null
-        ? t('serverUpdate.loading')
+        ? statusLoadFailed
+          ? ''
+          : t('serverUpdate.loading')
         : t('serverUpdate.current', status.current_version);
     const view = serverUpdateViewModel(state);
+    // Пока снимка нет, «Обновлений нет» было бы неправдой — строки нет.
+    availableLine.hidden = status === null;
     availableLine.textContent =
-      view.availableVersion === null
-        ? t('serverUpdate.noUpdate')
-        : t('serverUpdate.available', view.availableVersion);
+      status === null
+        ? ''
+        : view.availableVersion === null
+          ? t('serverUpdate.noUpdate')
+          : t('serverUpdate.available', view.availableVersion);
     channelLine.textContent = [
       view.channelText === null ? '' : t('serverUpdate.channel', view.channelText),
       view.checkedAtText === null
@@ -429,6 +440,7 @@ export function openServerUpdateDialog(
     render();
     try {
       state.status = await deps.check();
+      statusLoadFailed = false;
     } catch (err) {
       if (isRateLimited(err)) {
         // Состояние, не ошибка: проверка уже идёт (DoD задачи).
@@ -506,10 +518,12 @@ export function openServerUpdateDialog(
   async function load(): Promise<void> {
     try {
       state.status = await deps.getStatus();
+      statusLoadFailed = false;
       if (closed) return;
       render();
     } catch (err) {
       if (closed) return;
+      statusLoadFailed = true;
       errorLine.show(t('serverUpdate.loadFailed', errorText(err)));
       render();
     }

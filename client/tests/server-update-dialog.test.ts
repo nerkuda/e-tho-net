@@ -61,7 +61,7 @@ const { t } = await import('../src/renderer/lib/i18n.js');
 import type {
   ServerUpdateDialogDeps,
 } from '../src/renderer/lib/server-update-dialog.js';
-import type { ServerUpdateStatusDto } from '../src/main/ipc/contract.js';
+import type { SystemUpdateStatus } from '../src/main/ipc/contract.js';
 
 function body(): ShimElement {
   return (globalThis as any).document.body as ShimElement;
@@ -104,7 +104,7 @@ async function tick(ms = 0): Promise<void> {
 }
 
 /** Снимок кеша: сервер-служба, есть версия новее. */
-function status(overrides: Partial<ServerUpdateStatusDto> = {}): ServerUpdateStatusDto {
+function status(overrides: Partial<SystemUpdateStatus> = {}): SystemUpdateStatus {
   return {
     current_version: '0.15.1',
     available_version: '0.15.2',
@@ -292,6 +292,23 @@ describe('открытие диалога: только администрато
       harness.stop();
     }
   });
+
+  it('сбой чтения состояния: ошибка в футере, в теле нет «Чтение состояния…»', async () => {
+    const harness = mount({
+      getStatus: async () => {
+        throw new Error('сервер недоступен');
+      },
+    });
+    try {
+      await tick();
+      assert.ok(footerErrorText(dialog()).includes('сервер недоступен'));
+      const text = dialog().flatText();
+      assert.equal(text.includes(t('serverUpdate.loading')), false, 'тело не врёт про чтение');
+      assert.equal(text.includes(t('serverUpdate.noUpdate')), false, 'и не заявляет «Обновлений нет»');
+    } finally {
+      harness.stop();
+    }
+  });
 });
 
 describe('проверка обновлений: 429 — состояние, а не ошибка', () => {
@@ -384,6 +401,31 @@ describe('запуск обновления и прогресс', () => {
       progress.set(job('done'));
       await tick(40);
       assert.ok(dialog().flatText().includes(t('serverUpdate.stage.done')));
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('после done кнопка «Обновить сервер» повторно не показывается', async () => {
+    const progress = manualProgress();
+    const harness = mount({
+      apply: async () => job('preparing'),
+      getProgress: progress.getProgress,
+    });
+    try {
+      await tick();
+      buttonByLabel(dialog(), t('serverUpdate.apply')).click();
+      await tick(10);
+      progress.set(job('done'));
+      await tick(40);
+      assert.ok(dialog().flatText().includes(t('serverUpdate.stage.done')));
+      // Снимок кеша после done перечитывается и всё ещё предлагает 0.15.2;
+      // повторная кнопка запуска не должна появляться.
+      assert.equal(
+        footerLabels(dialog()).includes(t('serverUpdate.apply')),
+        false,
+        'после завершённого задания повторное обновление не предлагается',
+      );
     } finally {
       harness.stop();
     }
