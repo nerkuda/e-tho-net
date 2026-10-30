@@ -57,6 +57,13 @@
          чужая версия — код 10 и откат), возврат файлов из снимка и БД из
          архива, install.json только после успеха, снимок удаляется только при
          успехе, неудачный откат — код 10 с путём к архиву в журнале
+     27. 8b1f5980: регистрация службы WinSW после записи etn-service.xml и до
+         запуска (install с конфигом рядом с exe; повторная установка не
+         перегистрирует службу, WinSW 1073 — успех; сбой install — код 20),
+         запуск с ожиданием подтверждённого RUNNING (маркер в журнале),
+         снятие при удалении — stop → uninstall до удаления файлов (проба
+         /TESTUNINSTALLSERVICE: отказ uninstall/stop — код 10 с причиной),
+         режим app службу не регистрирует и режим при обновлении сохраняется
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -721,6 +728,7 @@ $stageNames = @(
     'Замена файлов сервера ETN',
     'Подготовка каталогов данных',
     'Настройка службы',
+    'Регистрация службы ETN',
     'Правило брандмауэра',
     'Инициализация сервера',
     'Запуск службы ETN',
@@ -2130,8 +2138,10 @@ Add-StaticResult -Name 'static:app-no-health' `
 # два из десяти. Проверяется разбор каждого параметра.
 $hookNames = @(
     'TESTSERVICE', 'TESTSERVICECMD', 'TESTSERVICESTATE', 'TESTSERVICESTOP',
-    'TESTSERVICESTART', 'TESTSERVICEWAIT', 'TESTHEALTHURL', 'TESTHEALTHWAIT',
-    'TESTHEALTHSTEP', 'TESTHEALTH', 'TESTROLLBACK', 'TESTNODEEXE')
+    'TESTSERVICESTART', 'TESTSERVICEWAIT', 'TESTSERVICEINSTALL',
+    'TESTSERVICEUNINSTALL', 'TESTUNINSTALLSERVICE', 'TESTHEALTHURL',
+    'TESTHEALTHWAIT', 'TESTHEALTHSTEP', 'TESTHEALTH', 'TESTROLLBACK',
+    'TESTNODEEXE')
 $hooksOutside = @()
 foreach ($hook in $hookNames) {
     $hookPattern = [regex]::Escape("ParamValue('$hook')")
@@ -2141,7 +2151,7 @@ foreach ($hook in $hookNames) {
     }
 }
 Add-StaticResult -Name 'static:update-hooks-ifdef' `
-    -Ok (($hookNames.Count -eq 12) -and ($hooksOutside.Count -eq 0)) `
+    -Ok (($hookNames.Count -eq 15) -and ($hooksOutside.Count -eq 0)) `
     -Note ('все ' + $hookNames.Count + ' хуков обновления под #ifdef TestMode; вне: ' +
         $(if ($hooksOutside.Count -eq 0) { 'нет' } else { $hooksOutside -join ',' }))
 # Бэкап только при смене версии (карточка bb063ac3). Прежняя версия неизвестна
@@ -2153,6 +2163,64 @@ Add-StaticResult -Name 'static:backup-version-only' `
         (Test-IssCode -Text $backupNeededBody -Pattern ([regex]::Escape('SemverCompare(Old, GProductVersion)'))) -and
         (-not (Test-IssCode -Text $backupNeededBody -Pattern ([regex]::Escape('Result := GDataDirPresent'))))) `
     -Note 'архив только при известной смене версии, без версии — не нужен'
+
+# --- 8b1f5980: регистрация и снятие службы WinSW -----------------------------
+# Статические сторожи порядка: install — после записи etn-service.xml и до
+# start; uninstall — в usUninstall, до удаления файлов. Проверка по телам
+# функций и срезам ветвей, а не подстрокой по всему файлу.
+$pConfig = $ssPostInstallBody.IndexOf('InstallServiceConfig')
+$pRegister = $ssPostInstallBody.IndexOf('RegisterServiceIfNeeded')
+$pStart = $ssPostInstallBody.IndexOf('StartServiceIfNeeded')
+Add-StaticResult -Name 'static:service-register-order' `
+    -Ok (($ssPostInstallBody -ne '') -and ($pConfig -ge 0) -and
+        ($pRegister -gt $pConfig) -and ($pStart -gt $pRegister)) `
+    -Note ('конфигурация → регистрация → запуск (' + $pConfig + ' < ' + $pRegister +
+        ' < ' + $pStart + ')')
+$registerBody = Get-IssFunctionBody -Text $issText -Name 'RegisterServiceIfNeeded'
+Add-StaticResult -Name 'static:service-install-command' `
+    -Ok ((Test-IssCode -Text $registerBody -Pattern ([regex]::Escape("RunServiceCommand('install')"))) -and
+        (Test-IssCode -Text $registerBody -Pattern ([regex]::Escape("GServerMode = 'app'"))) -and
+        (Test-IssCode -Text $registerBody -Pattern ([regex]::Escape('ServiceRegistered')))) `
+    -Note 'install после проверки app/регистрации; режим app службу не регистрирует'
+$runServiceBody = Get-IssFunctionBody -Text $issText -Name 'RunServiceCommand'
+Add-StaticResult -Name 'static:service-install-exists' `
+    -Ok ((Test-IssCode -Text $runServiceBody -Pattern ([regex]::Escape('ERROR_SERVICE_EXISTS'))) -and
+        (Test-IssCode -Text $runServiceBody -Pattern ([regex]::Escape("(Verb = 'install')"))) -and
+        (Test-IssCode -Text $runServiceBody -Pattern ([regex]::Escape('Result := True')))) `
+    -Note '1073 (служба уже существует) — успех, повторная установка не падает'
+Add-StaticResult -Name 'static:service-start-wait' `
+    -Ok ((Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'StartServiceIfNeeded') `
+            -Pattern ([regex]::Escape('WaitServiceRunning'))) -and
+        (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'WaitServiceRunning') `
+            -Pattern ([regex]::Escape('ServiceRunningNow'))) -and
+        (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ServiceRunningNow') `
+            -Pattern ([regex]::Escape('START_PENDING')))) `
+    -Note 'start → ожидание подтверждённого RUNNING (START_PENDING не RUNNING)'
+# Снятие службы — строго в usUninstall: срез функции до usPostUninstall.
+$uninstallBody = Get-IssFunctionBody -Text $issText -Name 'CurUninstallStepChanged'
+$pPostUninstall = $uninstallBody.IndexOf('usPostUninstall')
+$usUninstallBody = ''
+if ($pPostUninstall -gt 0) {
+    $usUninstallBody = $uninstallBody.Substring(0, $pPostUninstall)
+}
+Add-StaticResult -Name 'static:service-uninstall-before-files' `
+    -Ok (($usUninstallBody -ne '') -and
+        (Test-IssCode -Text $usUninstallBody -Pattern ([regex]::Escape('RemoveServiceOnUninstall(Reason)'))) -and
+        (Test-IssCode -Text $usUninstallBody -Pattern ([regex]::Escape('Abort;')))) `
+    -Note 'служба снимается в usUninstall (до удаления файлов), отказ отменяет удаление'
+$removeBody = Get-IssFunctionBody -Text $issText -Name 'RemoveServiceOnUninstall'
+Add-StaticResult -Name 'static:service-uninstall-commands' `
+    -Ok ((Test-IssCode -Text $removeBody -Pattern ([regex]::Escape('StopServiceForUpdate(Reason)'))) -and
+        (Test-IssCode -Text $removeBody -Pattern ([regex]::Escape("RunServiceCommand('uninstall')")))) `
+    -Note 'снятие: stop (с ожиданием) → etn-service.exe uninstall'
+# Uninstaller Inno не поддерживает свой код события: договорный код 10
+# проверяется пробой /TESTUNINSTALLSERVICE, которая вызывает тот же код.
+$uninstallProbeBody = Get-IssFunctionBody -Text $issText -Name 'RunUninstallServiceProbe'
+Add-StaticResult -Name 'static:service-uninstall-probe' `
+    -Ok ((Test-IssCode -Text $uninstallProbeBody -Pattern ([regex]::Escape('RemoveServiceOnUninstall(Reason)'))) -and
+        (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape("if GTestUninstallService = '1'"))) -and
+        (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('RunUninstallServiceProbe')))) `
+    -Note 'проба /TESTUNINSTALLSERVICE вызывает то же снятие: отказ — код 10 с причиной'
 
 # --- A. Успешное обновление с настоящим разбором тела health-check ----------
 $null = New-UpdateFixture
@@ -2455,6 +2523,198 @@ Add-Result -Name 'app-mode:install-json' -Expected 1 `
     -Actual ([int]($jsonText -match ('"product_version":"' + [regex]::Escape($version) + '"'))) `
     -Note 'запись установки обновлена'
 Add-Result -Name 'app-mode:snapshot-removed' -Expected 0 -Actual ([int](@(Get-RollbackDirs).Count))
+
+# --- 8b1f5980: регистрация и снятие службы WinSW ----------------------------
+Write-Host '=== 8b1f5980: регистрация и снятие службы WinSW ==='
+
+# Конфигурация службы в каталоге программы: свежая установка копирует шаблон
+# из payload, ремонт той же версии файлы не заменяет — шаблон кладётся тестом.
+function New-ServiceFixture {
+    New-Item -ItemType Directory -Path (Join-Path $appDir 'service') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\payload\service\etn-service.xml') `
+        -Destination (Join-Path $appDir 'service\etn-service.xml') -Force
+    [System.IO.File]::WriteAllText((Join-Path $appDir 'service\etn-service.exe'), 'stub')
+}
+
+function Get-ServiceConfigText {
+    $path = Join-Path $appDir 'service\etn-service.xml'
+    if (Test-Path -LiteralPath $path) {
+        return (Get-Content -LiteralPath $path -Raw -Encoding UTF8)
+    }
+    return ''
+}
+
+# Индексы строк журнала монотонно возрастают: каждый шаблон найден и стоит
+# строго после предыдущего.
+function Test-LogOrder {
+    param([int[]]$Indices)
+    if ($Indices.Count -eq 0) { return $false }
+    if ($Indices[0] -lt 0) { return $false }
+    for ($i = 1; $i -lt $Indices.Count; $i++) {
+        if (($Indices[$i] -lt 0) -or ($Indices[$i] -le $Indices[$i - 1])) { return $false }
+    }
+    return $true
+}
+
+# A. Чистая машина: службы нет — установщик вызывает install с конфигом и
+#    запускает службу до подтверждённого RUNNING, затем health.
+Reset-State
+$paramsRegister = New-ParamsFile -Mode 'service' -Name 'service-register.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsRegister`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTHEALTH=ok'))
+Add-Result -Name 'service-register:code' -Expected 0 -Actual $code
+$configText = Get-ServiceConfigText
+$configOk = ($configText -ne '') -and ($configText -notmatch '\{\{') -and
+    ($configText -match ('value="' + [regex]::Escape($dataDir) + '"'))
+Add-Result -Name 'service-register:config' -Expected 1 -Actual ([int][bool]$configOk) `
+    -Note 'etn-service.xml подставлен: DATA_DIR каталога теста, плейсхолдеров нет'
+$installArgs = Test-LatestLogContains -Pattern 'exe=.*etn-service\.exe, config=.*service\\etn-service\.xml'
+Add-Result -Name 'service-register:install-args' -Expected 1 -Actual ([int]$installArgs) `
+    -Note 'install вызван с конфигом рядом с etn-service.exe'
+$order = Get-LogPatternIndices -Patterns @(
+    'etn-service.xml: DATA_DIR=',
+    'Регистрация службы ETN:',
+    'команда install',
+    'команда start',
+    'Служба ETN: запущена (RUNNING)',
+    'install.json записан')
+Add-Result -Name 'service-register:log-order' -Expected 1 `
+    -Actual ([int](Test-LogOrder $order)) -Note ($order -join ' < ')
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+Add-Result -Name 'service-register:install-json' -Expected 1 `
+    -Actual ([int]($jsonText -match '"mode":"service"')) -Note 'mode=service'
+
+# B. Сбой install: код 20 с причиной, install.json не пишется, запуска нет.
+Reset-State
+$paramsFail = New-ParamsFile -Mode 'service' -Name 'service-install-fail.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsFail`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICEINSTALL=fail', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-install-fail:code' -Expected 20 -Actual $code `
+    -Note 'сбой регистрации — код 20'
+Add-Result -Name 'service-install-fail:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба ETN не зарегистрирована: etn-service.exe install вернул ошибку')) `
+    -Note 'причина в журнале'
+Add-Result -Name 'service-install-fail:no-json' -Expected 0 `
+    -Actual ([int](Test-Path (Join-Path $dataDir 'install.json'))) `
+    -Note 'install.json не записан'
+Add-Result -Name 'service-install-fail:no-start' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда start')) `
+    -Note 'до запуска службы дело не дошло'
+
+# C. Служба уже существует (WinSW 1073): повторная установка не падает.
+Reset-State
+$paramsExists = New-ParamsFile -Mode 'service' -Name 'service-install-exists.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsExists`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICEINSTALL=exists', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-install-exists:code' -Expected 0 -Actual $code
+Add-Result -Name 'service-install-exists:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба уже существует \(код 1073\)')) `
+    -Note '1073 трактуется как успех'
+Add-Result -Name 'service-install-exists:start' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)'))
+
+# D. Обновление с уже зарегистрированной службой: install не вызывается,
+#    конфигурацию WinSW читает при старте; служба поднята и подтверждена.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=ok'))
+Add-Result -Name 'service-repeat:code' -Expected 0 -Actual $code
+Add-Result -Name 'service-repeat:skip-install' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда install')) `
+    -Note 'уже зарегистрированная служба не перегистрируется'
+Add-Result -Name 'service-repeat:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'уже зарегистрирована')) `
+    -Note 'install не требуется'
+Add-Result -Name 'service-repeat:running' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)')) `
+    -Note 'после замены файлов служба запущена и подтверждена RUNNING'
+
+# E. Ремонт той же версии: служба уже работает — второй start не нужен.
+$null = New-UpdateFixture -OldVersion $version
+New-ServiceFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=ok'))
+Add-Result -Name 'service-repair:code' -Expected 0 -Actual $code
+Add-Result -Name 'service-repair:no-start' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда start')) `
+    -Note 'работающая служба не запускается второй раз'
+Add-Result -Name 'service-repair:already-running' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: уже запущена \(RUNNING\)'))
+
+# F. Удаление: stop и uninstall вызываются в этом порядке (та же функция, что
+#    в uninstaller — проба /TESTUNINSTALLSERVICE).
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTELEVATED=1', '/TESTSERVICE=present',
+    '/TESTUNINSTALLSERVICE=1'))
+Add-Result -Name 'service-uninstall:code' -Expected 0 -Actual $code
+$order = Get-LogPatternIndices -Patterns @(
+    'команда stop',
+    'Служба ETN остановлена',
+    'команда uninstall',
+    'Служба ETN снята (uninstall)')
+Add-Result -Name 'service-uninstall:log-order' -Expected 1 `
+    -Actual ([int](Test-LogOrder $order)) -Note ($order -join ' < ')
+Add-Result -Name 'service-uninstall:result' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'TESTUNINSTALLSERVICE result=ok'))
+
+# G. Отказ uninstall: код 10 с причиной.
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTELEVATED=1', '/TESTSERVICE=present',
+    '/TESTSERVICEUNINSTALL=fail', '/TESTUNINSTALLSERVICE=1'))
+Add-Result -Name 'service-uninstall-fail:code' -Expected 10 -Actual $code
+Add-Result -Name 'service-uninstall-fail:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'не удалось снять службу ETN \(etn-service.exe uninstall вернул ошибку\)')) `
+    -Note 'причина отказа — в журнале'
+
+# H. Отказ останова при удалении: код 10 с причиной.
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTELEVATED=1', '/TESTSERVICE=present',
+    '/TESTSERVICESTOP=fail', '/TESTUNINSTALLSERVICE=1'))
+Add-Result -Name 'service-uninstall-stop-fail:code' -Expected 10 -Actual $code
+Add-Result -Name 'service-uninstall-stop-fail:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба ETN не остановлена: не удалось остановить службу ETN')) `
+    -Note 'служба не остановилась — снятие не выполняется'
+
+# I. Режим app: служба не регистрируется, сервер поднимает пользователь,
+#    health не блокирует установку.
+Reset-State
+$paramsApp = New-ParamsFile -Mode 'app' -Name 'service-app.ini'
+$closedPort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsApp`"", '/TESTELEVATED=1', '/TESTSERVICE=absent') +
+    @($fastHealth, "/TESTHEALTHURL=http://127.0.0.1:$closedPort"))
+Add-Result -Name 'service-app:code' -Expected 0 -Actual $code
+Add-Result -Name 'service-app:no-install' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда install')) `
+    -Note 'режим app службу не регистрирует'
+Add-Result -Name 'service-app:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Режим app: служба ETN не регистрируется'))
+Add-Result -Name 'service-app:no-health' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Режим app: health-check не выполняется'))
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+Add-Result -Name 'service-app:install-json' -Expected 1 `
+    -Actual ([int]($jsonText -match '"mode":"app"')) -Note 'mode=app в install.json'
+
+# J. Переключение режима при обновлении: install.json (app) главнее файла
+#    параметров (service) — режим сохраняется, служба не регистрируется.
+$null = New-UpdateFixture
+Write-InstallJson (New-InstallJson -ProductVersion '0.15.0' -Mode 'app')
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$paramsSwitch = New-ParamsFile -Mode 'service' -Name 'service-mode-switch.ini'
+$closedPort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsSwitch`"", '/TESTELEVATED=1', '/TESTSERVICE=absent', $nodeArg) +
+    @($fastHealth, "/TESTHEALTHURL=http://127.0.0.1:$closedPort"))
+Add-Result -Name 'service-mode-kept:code' -Expected 0 -Actual $code
+Add-Result -Name 'service-mode-kept:no-install' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда install')) `
+    -Note 'режим из install.json не переключается файлом параметров'
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+Add-Result -Name 'service-mode-kept:install-json' -Expected 1 `
+    -Actual ([int]($jsonText -match '"mode":"app"')) -Note 'mode=app сохранён'
 
 # --- Итог --------------------------------------------------------------------
 $failed = @($script:results | Where-Object { -not $_.Ok })
