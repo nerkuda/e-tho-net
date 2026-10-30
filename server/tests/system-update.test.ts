@@ -1259,6 +1259,9 @@ describe('задание обновления — восстановление',
 
   it('recoverInterruptedUpdateJobs переводит активные задания в failed и сохраняет этап в причине', () => {
     const sys = makeSystemDb();
+    // Версия сервера задана явно ниже целевой: тест не зависит от
+    // SERVER_VERSION ветки (на 0.16.x цель TARGET_VERSION была бы достигнута).
+    const serverVersion = '0.15.0';
     try {
       sys.createUpdateJob({
         id: 'interrupted',
@@ -1266,15 +1269,15 @@ describe('задание обновления — восстановление',
         stage: 'backing-up',
         startedAt: '2026-10-30T10:00:00.000Z',
       });
-      // TARGET_VERSION строго новее текущей версии — цель не достигнута.
-      assert.equal(recoverInterruptedUpdateJobs(sys), 1);
+      // TARGET_VERSION строго новее переданной версии — цель не достигнута.
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, serverVersion), 1);
       const row = sys.getUpdateJob('interrupted');
       assert.ok(row !== null);
       assert.equal(row!.stage, 'failed');
       assert.match(row!.error ?? '', /backing-up/);
       assert.notEqual(row!.finished_at, null);
       // Повторный вызов ничего не меняет: терминальные не трогаются.
-      assert.equal(recoverInterruptedUpdateJobs(sys), 0);
+      assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, serverVersion), 0);
     } finally {
       sys.close();
     }
