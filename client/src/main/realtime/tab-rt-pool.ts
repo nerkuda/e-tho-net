@@ -101,6 +101,14 @@ export interface TabRealtimePoolOptions {
    * состояние включается раньше статуса `reconnecting`.
    */
   onMaintenance?: (networkId: string, frame: RealtimeMaintenanceFrame) => void;
+  /**
+   * Optional main-process side-channel: соединение в режиме обслуживания
+   * прожило стабильное окно (`maintenanceStableMs`) — обновление завершено.
+   * ТОЛЬКО этот сигнал (либо успешный `GET /me`) снимает состояние
+   * обслуживания: открытие сокета ничего не доказывает — сервер в обслуживании
+   * принимает его и сразу закрывает кодом 1012.
+   */
+  onMaintenanceStable?: (networkId: string) => void;
 }
 
 /** One pooled network entry. */
@@ -324,6 +332,9 @@ export class TabRealtimePool {
     });
     client.onTyped('maintenance', (frame: RealtimeMaintenanceFrame) => {
       this.opts.onMaintenance?.(networkId, frame);
+    });
+    client.onTyped('maintenance-stable', () => {
+      this.opts.onMaintenanceStable?.(networkId);
     });
     client.onTyped('unauthorized', () => {
       const payload: RealtimeNetworkLostPayload = {

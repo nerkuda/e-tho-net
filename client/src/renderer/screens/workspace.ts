@@ -26,7 +26,7 @@
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
-import { serverMaintenanceText } from '../lib/server-maintenance-text.js';
+import { activeServerMaintenanceText } from '../lib/server-maintenance-text.js';
 import { mountStatusMessage, unmountStatusMessage } from '../lib/status-message.js';
 import { initUpdateBanner, createUpdateBannerHost } from '../lib/update-banner.js';
 import { svgIcon } from '../lib/ui/icon.js';
@@ -187,7 +187,7 @@ export function statusGlyph(
     return {
       cls: 'warn',
       text: t('realtime.status.serverMaintenance'),
-      title: serverMaintenanceText(maintenance) ?? t('realtime.tip.maintenanceNoRetry'),
+      title: activeServerMaintenanceText(maintenance),
     };
   }
   switch (status) {

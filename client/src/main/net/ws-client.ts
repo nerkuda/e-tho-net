@@ -34,6 +34,10 @@
  *    не более 12 попыток; после — статус `offline` и остановка цикла (ручной
  *    повтор — `forceReconnect`). Сетевой обрыв без кадра 1012 идёт прежней
  *    логикой переподключения;
+ *  - обслуживание заканчивается НЕ открытием сокета: сервер в обслуживании
+ *    намеренно принимает сокет и сразу закрывает его кодом 1012, поэтому
+ *    признак восстановления — соединение, прожившее `maintenanceStableMs`
+ *    (событие `maintenance-stable`, уходит в main как выход из режима);
  *  - `resume.stale` (event-log window exceeded) is re-emitted as `stale` so the UI
  *    can trigger a full re-focus (04-realtime.md §6).
  *
@@ -160,6 +164,15 @@ export interface RealtimeClientEvents extends EventMap {
    * сам сокет-клиент держит только режим переподключения и срок паузы.
    */
   maintenance: [frame: RealtimeMaintenanceFrame];
+  /**
+   * Соединение в режиме обслуживания прожило стабильное окно
+   * (`maintenanceStableMs`) и сервер не закрыл его снова кодом 1012 — эпизод
+   * обслуживания завершён. Открытие сокета само по себе НЕ признак: сервер в
+   * обслуживании принимает сокет и сразу шлёт 1012, поэтому главный процесс
+   * выходит из состояния `serverMaintenance` только по этому событию (или по
+   * успешному `GET /me`), а не по `connected`.
+   */
+  'maintenance-stable': [];
   /** Server closed with `4401` — API-key rejected or membership lost. */
   unauthorized: [];
   /** Server closed with `4404` — network does not exist. */
@@ -570,9 +583,10 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.reconnectAttempts = 0;
     this.slowReconnectAttempts = 0;
     this.reconnectStartedAt = null;
-    // Обслуживание считается завершённым открытием WebSocket (610169a5):
-    // сообщение снимается сразу, а бюджет попыток обнуляется, только если
-    // соединение продержится (сервер может принять сокет и снова прислать 1012).
+    // Обслуживание НЕ считается завершённым открытием сокета: сервер в
+    // обслуживании намеренно принимает сокет и сразу закрывает его кодом 1012.
+    // Взводим таймер стабильности — если соединение проживёт его, эпизод
+    // закрывается событием `maintenance-stable` (main выйдет из состояния).
     if (this.maintenanceMode) this.armMaintenanceStableTimer();
     this.setStatus('connected');
     // Start the liveness clock: the first server ping is expected within 30 s.
@@ -647,7 +661,6 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
           : MAINTENANCE_RETRY_AFTER_FALLBACK_S;
       this.maintenanceMode = true;
       this.maintenanceRetryAfterSeconds = retryAfter;
-      this.setStatus('reconnecting', 'server-maintenance');
       const frame: RealtimeMaintenanceFrame = {
         type: 'maintenance',
         reason: 'server-updating',
@@ -662,7 +675,13 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
         retry_after: frame.retry_after,
         target_version: frame.target_version ?? '',
       });
+      // Кадр уходит подписчикам РАНЬШЕ статуса `reconnecting/server-maintenance`
+      // (замечание приёмки 479e37ed): иначе main входит в обслуживание по
+      // статусу с запасными 30 с, а настоящий `retry_after` кадра (например
+      // 300 с) доезжает вторым сообщением — пользователь видит срок в 10 раз
+      // меньше серверного.
       this.emitTyped('maintenance', frame);
+      this.setStatus('reconnecting', 'server-maintenance');
       return;
     }
 
@@ -895,8 +914,9 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
 
   /**
    * Взводит таймер стабильности после открытия в режиме обслуживания: если
-   * соединение проживёт `maintenanceStableMs`, эпизод считается завершённым и
-   * бюджет попыток обнуляется. Закрытие раньше срока сохраняет бюджет —
+   * соединение проживёт `maintenanceStableMs`, эпизод считается завершённым —
+   * бюджет попыток обнуляется, а подписчику уходит `maintenance-stable` (main
+   * выходит из состояния обслуживания). Закрытие раньше срока сохраняет бюджет:
    * сервер, принимающий сокет и снова присылающий 1012, не зациклит клиента.
    */
   private armMaintenanceStableTimer(): void {
@@ -904,6 +924,11 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.maintenanceStableTimer = this.setTimeoutFn(() => {
       this.maintenanceStableTimer = null;
       this.resetMaintenance();
+      getClientLog()?.info('ws', 'maintenance stable window passed', {
+        network: this.getNetworkId() ?? '',
+        stable_ms: this.maintenanceStableMs,
+      });
+      this.emitTyped('maintenance-stable');
     }, this.maintenanceStableMs);
     this.maintenanceStableTimer.unref?.();
   }

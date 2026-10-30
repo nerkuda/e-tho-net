@@ -23,7 +23,7 @@ import { etn } from './lib/etn.js';
 import { routeRealtimeEvent } from './lib/live/event-router.js';
 import { toast } from './lib/notice.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
-import { serverMaintenanceText } from './lib/server-maintenance-text.js';
+import { activeServerMaintenanceText } from './lib/server-maintenance-text.js';
 import {
   getRtStatus,
   store,
@@ -153,10 +153,7 @@ function applyServerMaintenance(dto: ServerMaintenanceDto): void {
   };
   const wasActive = store.state.serverMaintenance !== null;
   store.update({ serverMaintenance: next });
-  if (!wasActive) {
-    const text = serverMaintenanceText(next);
-    if (text !== null) toast(text, 'warning');
-  }
+  if (!wasActive) toast(activeServerMaintenanceText(next), 'warning');
 }
 
 /**

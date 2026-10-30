@@ -240,6 +240,13 @@ export interface RestClientOptions {
    */
   serverMaintenance?: ServerMaintenanceHandle;
   /**
+   * Вызывается ПОСЛЕ действующего выхода из состояния обслуживания (сейчас —
+   * успешный `GET /me`, контракт 2f599b67). Владелец соединения по этому
+   * сигналу повторяет проверку совместимости, как на переподключении
+   * (требование 4d3be6ca). Не вызывается, если состояние и не было активным.
+   */
+  onServerMaintenanceEnded?: () => void;
+  /**
    * Прикладной таймаут одного HTTP-запроса, мс. По умолчанию
    * {@link RESPONSE_TIMEOUT_MS} (30 с); переопределение — для тестов
    * (молчащий сервер не должен держать сьют полминуты).
@@ -318,6 +325,7 @@ export class RestClient {
   private readonly isServerDown: () => boolean;
   private readonly onClientVersionUnsupported: (details: ClientVersionErrorDetails | null) => void;
   private readonly serverMaintenance: ServerMaintenanceHandle | undefined;
+  private readonly onServerMaintenanceEnded: () => void;
   private readonly responseTimeoutMs: number;
 
   /**
@@ -384,6 +392,7 @@ export class RestClient {
     this.isServerDown = opts.isServerDown ?? (() => false);
     this.onClientVersionUnsupported = opts.onClientVersionUnsupported ?? (() => undefined);
     this.serverMaintenance = opts.serverMaintenance;
+    this.onServerMaintenanceEnded = opts.onServerMaintenanceEnded ?? (() => undefined);
     this.responseTimeoutMs = opts.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS;
   }
 
@@ -764,18 +773,33 @@ export class RestClient {
       // out of automatic repeats. A 5xx with `retry: false` falls through to
       // `parseResponse`, so the caller sees the server's own error code.
       //
-      // `503` с заголовком `Retry-After` НЕ повторяется (задача 479e37ed): у
-      // него собственный срок повтора — серверный `Retry-After`. Повтор внутри
-      // вызова шёл бы раньше него и превращал обслуживание в шторм запросов.
-      // Конверт разбирается штатно: `SERVER_UPDATING` переводит клиент в
-      // состояние обслуживания и отдаёт `retry_after` наверх. Голый `503` (без
-      // `Retry-After` — например, от прокси) остаётся обычной транзиентной
-      // ошибкой и повторяется, как раньше.
+      // Обслуживание сервера (задача 479e37ed) распознаётся по КОНВЕРТУ с
+      // кодом `SERVER_UPDATING`, а не по заголовку `Retry-After` (замечание
+      // приёмки): у обслуживания собственный срок повтора, и повтор внутри
+      // вызова шёл бы раньше него. Голый `503` — например, от прокси или
+      // балансировщика — остаётся обычной транзиентной ошибкой и повторяется
+      // (3 попытки), даже если несёт `Retry-After`: заголовок прокси ставит по
+      // своим правилам, признак обслуживания — только код в конверте.
+      //
+      // Тело 503 читается ЗДЕСЬ (и передаётся в `parseResponse`), потому что
+      // признак живёт в теле, а не в статусе/заголовках.
+      let bodyText: string | undefined;
+      let maintenanceRejection = false;
+      if (res.status === 503) {
+        try {
+          bodyText = await readResponseBody(() => res.text(), ro.signal);
+          maintenanceRejection = isServerUpdatingBody(bodyText);
+        } catch {
+          // Тело не прочиталось (обрыв уже начатого ответа): обслуживанием это
+          // быть не может — решает обычная ветка повтора/разбора.
+          bodyText = undefined;
+        }
+      }
       if (
         retrying &&
         res.status >= 500 &&
         res.status < 600 &&
-        !(res.status === 503 && res.headers.get('retry-after') !== null) &&
+        !maintenanceRejection &&
         attempt < MAX_ATTEMPTS
       ) {
         lastError = new Error(`HTTP ${res.status}`);
@@ -790,7 +814,7 @@ export class RestClient {
         duration_ms: Date.now() - attemptStarted,
         status: res.status,
       });
-      const envelope = await this.parseResponse<T>(res, ro.signal);
+      const envelope = await this.parseResponse<T>(res, ro.signal, bodyText);
       // Completion boundary (ошибка da7bbb53): a GET started while this write
       // was in flight could have been computed by the server BEFORE its commit
       // and delivered after it, so it must not be reused by later reads either.
@@ -798,7 +822,7 @@ export class RestClient {
       // Конец обслуживания (контракт 2f599b67): успешный `GET /me` — признак,
       // что обновлённый сервер поднялся и принял сессию. Снимать состояние по
       // любому успешному чтению нельзя: чтения во время обслуживания работают.
-      if (method === 'GET' && path === '/me') this.serverMaintenance?.leave();
+      if (method === 'GET' && path === '/me') this.leaveServerMaintenance();
       return envelope;
     }
 
@@ -826,12 +850,16 @@ export class RestClient {
    * Тело читается через {@link readResponseBody}: обрыв уже начатого ответа
    * (заголовки получены, сокет закрыт) нормализуется в `EtnError` с причиной
    * (ошибка 69790006), а не уходит сырым `TypeError: terminated`.
+   *
+   * `bodyText` — уже прочитанное тело (вызывающий прочитал его, чтобы отличить
+   * `503 SERVER_UPDATING` от голого 503): второй раз поток не читается.
    */
   private async parseResponse<T>(
     res: Response,
     callerSignal?: AbortSignal,
+    bodyText?: string,
   ): Promise<ResponseEnvelope<T>> {
-    const text = await readResponseBody(() => res.text(), callerSignal);
+    const text = bodyText ?? (await readResponseBody(() => res.text(), callerSignal));
     const empty = text.length === 0;
     let payload: unknown = undefined;
     if (!empty) {
@@ -843,7 +871,7 @@ export class RestClient {
       }
     }
 
-    if (res.status === 204 || empty) {
+    if (res.status === 204) {
       // 204 No Content (e.g. DELETE) — no body to return.
       return { data: undefined as T, meta: undefined };
     }
@@ -856,13 +884,21 @@ export class RestClient {
         this.notifyServerUpdating(err.code, err.details);
         throw new EtnError(err.code, err.message, err.details, err.request_id);
       }
-      // Server returned an error in a non-canonical shape.
+      // Server returned an error in a non-canonical shape. Пустое тело ошибки
+      // (голый 503 прокси/балансировщика) — всё равно ОТКАЗ: успехом пустой
+      // ответ на 4xx/5xx не бывает, иначе вызывающий получил бы `undefined`
+      // как данные.
       const code = mapHttpStatus(res.status);
       this.notifyVersionRejection(code, undefined);
       throw new EtnError(
         code,
         `HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
       );
+    }
+
+    if (empty) {
+      // 2xx без тела — данные отсутствуют (декремент счётчика, DELETE 200…).
+      return { data: undefined as T, meta: undefined };
     }
 
     // Success envelope: either `{ data, meta }` (single) or `{ data: [...], meta }`
@@ -890,13 +926,29 @@ export class RestClient {
   /**
    * Сообщает владельцу состояния об отказе `503 SERVER_UPDATING` (задача
    * 479e37ed): сервер ушёл в обслуживание до запуска установщика. Дальнейшие
-   * изменяющие запросы блокируются до успешного `GET /me` или открытия
-   * WebSocket — ровно поэтому мало «просто показать ошибку»: следующий клик
-   * пользователя не должен снова уходить на сервер раньше `Retry-After`.
+   * изменяющие запросы блокируются до успешного `GET /me` или стабильного окна
+   * сокета (`maintenance-stable`) — ровно поэтому мало «просто показать
+   * ошибку»: следующий клик пользователя не должен снова уходить на сервер
+   * раньше `Retry-After`.
    */
   private notifyServerUpdating(code: string, details: unknown): void {
     if (code !== 'SERVER_UPDATING' || this.serverMaintenance === undefined) return;
     this.serverMaintenance.enter(serverUpdatingDetailsOrNull(details), 'rest');
+  }
+
+  /**
+   * Конец обслуживания по успешному `GET /me` (контракт 2f599b67). Выход
+   * обязателен только при активном состоянии (`leave()` вернул `true`) — тогда
+   * владелец соединения повторяет проверку совместимости, как при
+   * переподключении (требование 4d3be6ca).
+   */
+  private leaveServerMaintenance(): void {
+    if (this.serverMaintenance?.leave() !== true) return;
+    try {
+      this.onServerMaintenanceEnded();
+    } catch {
+      // Колбэк диагностики не должен ломать ответ успешного `/me`.
+    }
   }
 
   /**
@@ -4394,6 +4446,22 @@ function serverUpdatingDetailsOrNull(
         : DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
     target_version: typeof target === 'string' && target.trim() !== '' ? target : null,
   };
+}
+
+/**
+ * `true` — тело ответа `503` является каноническим конвертом обслуживания
+ * (`{ error: { code: 'SERVER_UPDATING', … } }`, задача 479e37ed). Признак
+ * обслуживания — КОД в конверте, а не заголовок `Retry-After`: голый 503
+ * прокси с этим заголовком остаётся транзиентной ошибкой и повторяется.
+ */
+function isServerUpdatingBody(text: string): boolean {
+  try {
+    const payload = JSON.parse(text) as { error?: { code?: unknown } } | null;
+    return payload?.error?.code === 'SERVER_UPDATING';
+  } catch {
+    // Не JSON (HTML прокси, пустое тело) — обслуживанием не является.
+    return false;
+  }
 }
 
 /** Retry reason classification for the journal (timeout / network / 5xx). */

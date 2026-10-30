@@ -26,6 +26,15 @@ import { t } from './i18n.js';
  */
 export function serverMaintenanceText(info: ServerMaintenanceDto | null): string | null {
   if (info === null || info.active !== true) return null;
+  return activeServerMaintenanceText(info);
+}
+
+/**
+ * Текст УЖЕ активного обслуживания (вызывающий проверил `active === true`).
+ * Отдельная функция, чтобы потребителю не приходилось закрывать `null`
+ * недостижимой веткой: фраза по-прежнему собирается только здесь.
+ */
+export function activeServerMaintenanceText(info: ServerMaintenanceDto): string {
   const retry = info.retry_after;
   // Нечисловой/нулевой срок — всё равно «срок неизвестен»: число в тексте
   // обязано быть подтверждено сервером (нормализация дублируется на границе

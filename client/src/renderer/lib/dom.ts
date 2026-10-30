@@ -146,6 +146,18 @@ export function isDuplicateError(err: unknown): boolean {
 }
 
 /**
+ * `true` when the write was refused because the server is updating
+ * (`SERVER_UPDATING`, задача 479e37ed). Штатное обслуживание, а не сбой: для
+ * цикла досыла черновиков это такой же повод остановить волну, как обрыв связи
+ * — текст останется в черновике и уйдёт после восстановления сервера.
+ * Проверка структурная (как у {@link isConnectionLostError}): подходит и
+ * `EtnError`, и объект конверта IPC.
+ */
+export function isServerUpdatingError(err: unknown): boolean {
+  return asErrorLike(err)?.code === 'SERVER_UPDATING';
+}
+
+/**
  * Raw transport failures that must never reach the user as-is (they name
  * `fetch`, sockets and abort codes). Matched against the message of an
  * `Error`.

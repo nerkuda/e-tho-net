@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 
 import { EtnError, NOT_CONNECTED_ERROR_TEXT } from '@etn/shared';
 
-import { errText, isConnectionLostError } from '../src/renderer/lib/dom.js';
+import { errText, isConnectionLostError, isServerUpdatingError } from '../src/renderer/lib/dom.js';
 
 const CONNECTION_LOST = 'нет соединения с сервером';
 const SERVER_UNAVAILABLE = 'сервер недоступен, попробуйте позже';
@@ -202,5 +202,18 @@ describe('errText: дружелюбные сообщения', () => {
       errText({ code: 'SERVER_UPDATING' }),
       'сервер обновляется, попробуйте позже',
     );
+  });
+
+  it('isServerUpdatingError распознаёт обслуживание в EtnError и конверте IPC', () => {
+    // Цикл досыла черновиков по этому признаку останавливает волну без
+    // красного тоста (задача 479e37ed): штатное обновление — не сбой.
+    assert.equal(
+      isServerUpdatingError(new EtnError('SERVER_UPDATING', 'updating', { retry_after: 300 })),
+      true,
+    );
+    assert.equal(isServerUpdatingError({ code: 'SERVER_UPDATING' }), true);
+    assert.equal(isServerUpdatingError(new EtnError('INTERNAL', 'down')), false);
+    assert.equal(isServerUpdatingError({ code: 'NOT_FOUND' }), false);
+    assert.equal(isServerUpdatingError(null), false);
   });
 });

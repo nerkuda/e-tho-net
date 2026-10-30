@@ -310,6 +310,8 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     const timers = makeFakeTimers();
     const conn = nextConnection(server);
     const client = makeClient(url, timers);
+    const stableEvents: string[] = [];
+    client.onTyped('maintenance-stable', () => stableEvents.push(client.getStatus()));
     client.connect();
     let ws = await conn;
     await until(() => client.getStatus() === 'connected');
@@ -338,6 +340,41 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
       timers.all().some((timer) => timer.ms === 30_000),
       'вместо цикла — медленный повтор через retry_after',
     );
+    // Ни один короткий сокет не закрыл обслуживание: иначе main снимал бы
+    // состояние на каждом открытии (блокер приёмки 479e37ed).
+    assert.deepEqual(stableEvents, [], 'короткие сокеты не эмитят maintenance-stable');
+  });
+
+  it('кадр maintenance уходит раньше статуса reconnecting/server-maintenance', async () => {
+    // Блокер приёмки 479e37ed: статус, эмитированный первым, заставляет main
+    // войти в обслуживание с запасными 30 с, и только вторым сообщением
+    // доезжает настоящий retry_after кадра (300 с) — пользователь видит срок в
+    // 10 раз меньше серверного. Порядок обратный: кадр, затем статус.
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const timers = makeFakeTimers();
+    const conn = nextConnection(server);
+    const client = makeClient(url, timers);
+    const order: string[] = [];
+    client.onTyped('maintenance', () => order.push('maintenance'));
+    client.onTyped('status', (status, detail) => {
+      if (detail === 'server-maintenance') order.push(`status:${status}`);
+    });
+    client.connect();
+    const ws = await conn;
+    await until(() => client.getStatus() === 'connected');
+
+    ws.send(
+      JSON.stringify({
+        type: 'maintenance',
+        reason: 'server-updating',
+        retry_after: 300,
+        target_version: '0.15.2',
+      }),
+    );
+    await until(() => order.length === 2);
+    assert.deepEqual(order, ['maintenance', 'status:reconnecting']);
+    assert.equal(client.getStatusDetail(), 'server-maintenance');
   });
 
   it('10 с стабильного соединения обнуляют бюджет: следующий 1006 идёт обычной задержкой', async () => {
@@ -348,6 +385,8 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     // random 0.5: обычная fast-лестница = 750 мс, maintenance-шаг = 1000 мс —
     // исход различим по числам, а не только по detail.
     const client = makeClient(url, timers, { maintenanceStableMs: 10_000 });
+    const stableEvents: string[] = [];
+    client.onTyped('maintenance-stable', () => stableEvents.push(client.getStatus()));
     client.connect();
     let ws = await conn;
     await until(() => client.getStatus() === 'connected');
@@ -366,9 +405,13 @@ describe('RealtimeClient — обслуживание сервера (1012, 6101
     await until(() => client.getStatus() === 'connected');
     const stable = timers.all().find((timer) => timer.ms === 10_000);
     assert.ok(stable !== undefined, 'в режиме обслуживания взведён таймер стабильности 10 с');
+    // Открытие сокета само по себе НЕ закрывает обслуживание: стабильное окно
+    // ещё не прожито (блокер приёмки).
+    assert.deepEqual(stableEvents, [], 'открытие сокета не эмитит maintenance-stable');
 
-    // 10 с прожили — эпизод обслуживания закрыт.
+    // 10 с прожили — эпизод обслуживания закрыт, main получает сигнал выхода.
     timers.run(stable);
+    assert.deepEqual(stableEvents, ['connected'], 'по стабильному окну — событие выхода');
 
     // Обычный сетевой обрыв (1006): прежняя fast-лестница 500–1000 мс (750 при
     // random 0.5), без detail обслуживания. Без сброса бюджета был бы шаг

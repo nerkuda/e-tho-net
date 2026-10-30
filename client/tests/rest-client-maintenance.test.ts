@@ -59,6 +59,7 @@ function makeFetch(
 function makeClient(
   fetchImpl: typeof fetch,
   maintenance: ServerMaintenanceState,
+  extra: { onServerMaintenanceEnded?: () => void } = {},
 ): RestClient {
   return new RestClient({
     baseUrl: 'http://localhost:3000',
@@ -68,6 +69,7 @@ function makeClient(
     fetchImpl,
     random: () => 0,
     serverMaintenance: maintenance,
+    ...extra,
   });
 }
 
@@ -176,5 +178,97 @@ describe('RestClient — обслуживание сервера (479e37ed)', ()
     assert.equal(me.id, 'u1');
     assert.equal(calls.length, 2, '1 попытка + 1 повтор');
     assert.equal(maintenance.get(), null);
+  });
+
+  it('503 прокси с Retry-After, но без конверта SERVER_UPDATING, — транзиентный: 3 попытки', async () => {
+    // Замечание приёмки 479e37ed: признак обслуживания — КОД в конверте, а не
+    // заголовок. Прокси/балансировщик ставит `Retry-After` по своим правилам;
+    // раньше такой ответ не повторялся и показывался как «сервер недоступен».
+    const { fetch, calls } = makeFetch([
+      {
+        status: 503,
+        headers: { 'content-type': 'application/json', 'retry-after': '300' },
+        body: { error: { code: 'INTERNAL', message: 'service unavailable' } },
+      },
+    ]);
+    const maintenance = new ServerMaintenanceState();
+    const client = makeClient(fetch, maintenance);
+
+    await assert.rejects(
+      () => client.createThought('net1', { title: 'новая мысль' }),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal(err.code, 'INTERNAL');
+        assert.notEqual(err.code, 'SERVER_UPDATING');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 3, 'все три попытки, как у любой транзиентной 5xx');
+    assert.equal(maintenance.get(), null, 'обслуживание не включено');
+  });
+
+  it('503 SERVER_UPDATING без заголовка Retry-After распознаётся по конверту: одна попытка', async () => {
+    const details: ServerUpdatingErrorDetails = { retry_after: 300, target_version: '0.15.2' };
+    const { fetch, calls } = makeFetch([
+      {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+        body: {
+          error: { code: 'SERVER_UPDATING', message: 'Сервер обновляется.', details },
+        },
+      },
+    ]);
+    const maintenance = new ServerMaintenanceState();
+    const client = makeClient(fetch, maintenance);
+
+    await assert.rejects(
+      () => client.createThought('net1', { title: 'новая мысль' }),
+      (err: unknown) => err instanceof EtnError && err.code === 'SERVER_UPDATING',
+    );
+    assert.equal(calls.length, 1, 'конверт обслуживания не повторяется (срок — свой)');
+    assert.equal(maintenance.get()?.retry_after, 300);
+  });
+
+  it('голый 503 с пустым телом — отказ после 3 попыток, а не «успех» с undefined', async () => {
+    // Пустое тело 5xx — отказ, а не данные: иначе вызывающий получил бы
+    // `undefined` как успешный результат (тот же класс, что голый 503).
+    const { fetch, calls } = makeFetch([
+      { status: 503, headers: { 'content-type': 'text/plain' } },
+    ]);
+    const maintenance = new ServerMaintenanceState();
+    const client = makeClient(fetch, maintenance);
+
+    await assert.rejects(
+      () => client.getMe(),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal(err.code, 'INTERNAL');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 3, '3 попытки транзиентной ошибки');
+  });
+
+  it('успешный GET /me выходит из обслуживания и сообщает владельцу (checkCompatibility)', async () => {
+    const maintenance = new ServerMaintenanceState();
+    maintenance.enter({ retry_after: 60, target_version: '0.15.2' }, 'realtime');
+    const { fetch } = makeFetch([
+      { status: 200, body: { data: ME } },
+      { status: 200, body: { data: ME } },
+    ]);
+    let ended = 0;
+    const client = makeClient(fetch, maintenance, {
+      onServerMaintenanceEnded: () => {
+        ended += 1;
+      },
+    });
+
+    await client.getMe();
+    assert.equal(maintenance.get(), null, 'GET /me снял обслуживание');
+    assert.equal(ended, 1, 'владелец получил сигнал выхода (повтор checkCompatibility)');
+
+    // Состояние уже неактивно — повторный /me колбэк НЕ дёргает.
+    await client.getMe();
+    assert.equal(ended, 1, 'сигнал выхода — только при действующем выходе');
   });
 });

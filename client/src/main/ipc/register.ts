@@ -115,9 +115,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   /**
    * Единое состояние обслуживания сервера (задача 479e37ed, требование
    * 9636b1cc). Один владелец на активное подключение: кадр `maintenance` и
-   * отказ `503 SERVER_UPDATING` входят в него, успешный `GET /me` и открытие
-   * WebSocket — выводят. REST-клиент по нему блокирует изменяющие запросы,
-   * рендерер показывает «сервер обновляется»; канал показа — `realtime:maintenance`.
+   * отказ `503 SERVER_UPDATING` входят в него, выводят — успешный `GET /me`
+   * (контракт 2f599b67) либо сокет, проживший стабильное окно
+   * (`maintenance-stable`, `RealtimeClient.maintenanceStableMs`). Открытие
+   * сокета само по себе НЕ выход: сервер в обслуживании намеренно принимает
+   * сокет и сразу закрывает его кодом 1012. REST-клиент по состоянию блокирует
+   * изменяющие запросы, рендерер показывает «сервер обновляется»; канал
+   * показа — `realtime:maintenance`.
    */
   const serverMaintenance = new ServerMaintenanceState();
   serverMaintenance.subscribe((info) => {
@@ -192,6 +196,12 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       // Обслуживание (задача 479e37ed): изменяющие запросы не уходят, пока
       // состояние активно; `503 SERVER_UPDATING` переводит в него.
       serverMaintenance,
+      // Выход из обслуживания по успешному `GET /me` (контракт 2f599b67) —
+      // повторная проверка совместимости, как на переподключении
+      // (требование 4d3be6ca).
+      onServerMaintenanceEnded: () => {
+        void compatibility.recheck(fetchVersion);
+      },
     });
     // Новый профиль — чистый лист: обслуживание предыдущего сервера к нему не
     // относится (состояние живёт в памяти процесса, а не в профиле).
@@ -264,10 +274,10 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       onStatus: (networkId, status, detail) => {
         if (status === 'connected') {
           restClient.setLinkDown(networkId, false);
-          // Открытие WebSocket — второй признак конца обслуживания (сценарий
-          // 610169a5): сервер принял сокет, значит обновлённый процесс жив.
-          // Первый признак — успешный `GET /me` (контракт 2f599b67).
-          serverMaintenance.leave();
+          // Открытие сокета НЕ завершает обслуживание (блокер приёмки
+          // 479e37ed): сервер в обслуживании намеренно принимает сокет и сразу
+          // закрывает его кодом 1012 — выход даёт только успешный `GET /me`
+          // или сокет, проживший стабильное окно (`onMaintenanceStable`).
         } else if (status === 'suspect') {
           // Probe in flight: new mutations are blocked, but the hung request
           // that triggered the check must keep running — if the pong arrives
@@ -305,6 +315,12 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
           { retry_after: frame.retry_after, target_version: frame.target_version },
           'realtime',
         );
+      },
+      // Сокет прожил стабильное окно после 1012 — обновление завершено. Это
+      // второй (и последний) выход из состояния помимо успешного `GET /me`;
+      // выход сопровождается проверкой совместимости, как при переподключении.
+      onMaintenanceStable: () => {
+        if (serverMaintenance.leave()) void compatibility.recheck(fetchVersion);
       },
     });
 

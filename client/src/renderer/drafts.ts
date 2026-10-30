@@ -13,6 +13,12 @@
  *   session while the link was down. A `suspect → connected` transition is a
  *   liveness probe answered in time — not a recovery: nothing is re-sent and
  *   nothing is announced (ошибка fb9d6058, п.4 решений);
+ * - обслуживание сервера (`serverMaintenance` активен) — не восстановление:
+ *   сервер в обновлении принимает сокет и сразу закрывает его кодом 1012,
+ *   поэтому `connected` мигает многократно. Пока состояние активно, ни досыл
+ *   черновиков, ни тост «Соединение восстановлено» не запускаются, а отказ
+ *   записи `SERVER_UPDATING` останавливает волну без красного тоста (задача
+ *   479e37ed, блокер приёмки);
  * - drafts never survive a client restart: the main process purges every
  *   unfinished row right after opening the local DB, before the window exists
  *   (решение пользователя 2026-10-29, fb9d6058). The renderer only reports the
@@ -26,7 +32,7 @@
 
 import { CLIENT_META_KEY, EtnError } from '@etn/shared';
 
-import { errText, isConnectionLostError, isDuplicateError } from './lib/dom.js';
+import { errText, isConnectionLostError, isDuplicateError, isServerUpdatingError } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { findPermanentComment } from './lib/permanent-comment.js';
 import { t } from './lib/i18n.js';
@@ -105,6 +111,14 @@ export function initDrafts(): void {
     // отличить от настоящего восстановления после обрыва.
     const activeId = store.state.networkId;
     const prevActive = activeId === null ? undefined : prevByNetwork[activeId];
+    // Обслуживание сервера (блокер приёмки 479e37ed): во время обновления
+    // сервер принимает сокет и сразу закрывает его кодом 1012, поэтому статус
+    // успевает мигнуть `connected` десяток раз. Открытие сокета — не
+    // восстановление: ни досыл черновиков, ни тост «Соединение восстановлено»
+    // в обслуживании не запускаются, иначе пользователь получает 12 волн
+    // красных тостов и ложное «восстановлено» при «Сервер: обновление».
+    const maintenance = store.state.serverMaintenance;
+    const inMaintenance = maintenance !== null && maintenance.active === true;
     // Per-network recovery (de34b35b): drafts of EVERY network are re-sent,
     // not just the active one. The first connect of a session counts too — a
     // draft typed in THIS session while the link was down must be flushed
@@ -113,6 +127,7 @@ export function initDrafts(): void {
     // answered within its deadline, NOT a recovery: no resend (fb9d6058 п.4).
     for (const [nid, status] of Object.entries(map)) {
       if (
+        !inMaintenance &&
         status === 'connected' &&
         prevByNetwork[nid] !== 'connected' &&
         prevByNetwork[nid] !== 'suspect'
@@ -127,10 +142,13 @@ export function initDrafts(): void {
     if (connected && !lastConnected) {
       // Recovery notice only after a real loss: the very first connect of a
       // session and a probe answered in time must not claim «Соединение
-      // восстановлено» (de34b35b, fb9d6058).
+      // восстановлено» (de34b35b, fb9d6058). Мигание сокета в обслуживании —
+      // тоже не восстановление (блокер приёмки 479e37ed).
       // Восстановление связи — важное сообщение (доступность сервера), поэтому
       // тост, а не рутинная строка статус-бара (задача 28d22b8a).
-      if (hadConnection && prevActive !== 'suspect') toast(t('realtime.link.recovered'), 'success');
+      if (!inMaintenance && hadConnection && prevActive !== 'suspect') {
+        toast(t('realtime.link.recovered'), 'success');
+      }
       hadConnection = true;
     } else if (status === 'suspect') {
       // Проба живости только отправлена — потери связи ещё нет, и на входе в
@@ -462,6 +480,14 @@ export async function retryPendingDrafts(networkId?: string): Promise<void> {
       if (outcome === 'conflict') conflicts += 1;
       else if (outcome === 'failed') unavailable += 1;
     } catch (err) {
+      // Обслуживание сервера (блокер приёмки 479e37ed): запись отклонена
+      // штатным `SERVER_UPDATING` — это не сбой досыла. Волну останавливаем
+      // без красного тоста (пользователь уже видит «Сервер: обновление» со
+      // сроком), текст остаётся в черновике до восстановления сервера.
+      if (isServerUpdatingError(err)) {
+        reportTerminalDrafts();
+        return;
+      }
       notice(t('drafts.retry.failed', errText(err)), 'error');
       // Соединение оборвалось посреди досылки: остальные строки отправлять
       // бессмысленно, они уйдут на следующем восстановлении связи. Агрегат за
