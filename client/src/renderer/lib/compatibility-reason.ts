@@ -53,6 +53,16 @@ export function compatibilityReasonText(result: CompatibilityResult): string {
  * Строка версий для человека и для передачи администратору: клиент, сервер,
  * требуемый диапазон. Неизвестное значение называется «неизвестно», а не
  * пустотой.
+ *
+ * «Требуется» — диапазон той стороны, которой не соответствует вторая
+ * (ошибка ff1c5e44):
+ *
+ *  - `server-outdated` — встроенный диапазон клиента (`>=0.15.0 <0.16.0`):
+ *    какого сервера клиент требует; у старого сервера `serverCompatibility`
+ *    здесь наоборот — диапазон КЛИЕНТОВ, которые он принимает (`>=0.1.0`),
+ *    подставлять его нельзя;
+ *  - `client-outdated` (включая `426`) — `serverCompatibility`: какого клиента
+ *    принимает сервер.
  */
 export function compatibilityFactsText(result: CompatibilityResult): string {
   const unknown = t('compatibility.value.unknown');
@@ -61,6 +71,13 @@ export function compatibilityFactsText(result: CompatibilityResult): string {
   return t('compatibility.facts', [
     text(result.clientVersion),
     text(result.serverVersion),
-    text(result.serverCompatibility),
+    text(requiredRangeOf(result)),
   ]);
+}
+
+/** Требуемый диапазон по статусу вердикта (см. {@link compatibilityFactsText}). */
+function requiredRangeOf(result: CompatibilityResult): string | null {
+  return result.status === 'server-outdated'
+    ? result.clientCompatibility
+    : result.serverCompatibility;
 }
