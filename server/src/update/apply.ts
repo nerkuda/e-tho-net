@@ -52,7 +52,7 @@ import type { Logger } from '../logger.js';
 import type { SystemDb, UpdateJobRow } from '../db/system-db.js';
 import type { MaintenanceService } from '../maintenance.js';
 import type { UpdateCache } from './checker.js';
-import type { Deployment } from './deployment.js';
+import { DOCKER_APPLY_UNAVAILABLE_MESSAGE, type Deployment } from './deployment.js';
 import {
   InstallerDownloadError,
   InstallerHashError,
@@ -127,7 +127,8 @@ export const NOT_A_SERVICE_MESSAGE =
 /**
  * Причины отказа `apply` со статусом `409` (кроме прав администратора).
  * `job-active` — уже идёт обновление, `installer-alive` — установщик предыдущей
- * попытки ещё работает, `docker` — автообновление в контейнере невозможно,
+ * попытки ещё работает, `docker` — автообновление в контейнере невозможно
+ * (текст отказа цитирует Docker-инструкцию обновления, задача c79afe43),
  * `downgrade` — целевая версия не новее текущей, `version-mismatch` — кеш
  * успел смениться и запрошенная версия больше не предлагается.
  */
@@ -420,10 +421,7 @@ export function createUpdateApplyService(
       );
     }
     if (options.deployment === 'docker') {
-      throw new UpdateApplyConflictError(
-        'docker',
-        'Сервер развёрнут в Docker — автообновление недоступно.',
-      );
+      throw new UpdateApplyConflictError('docker', DOCKER_APPLY_UNAVAILABLE_MESSAGE);
     }
 
     const cache = options.getCache();

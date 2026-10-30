@@ -5,7 +5,9 @@
  *
  * Два слоя:
  *  - сквозные REST-тесты на реальном Fastify-приложении: права администратора,
- *    статус кеша (+ HTTPS-предупреждение), `429` идущей проверки, гонка двух
+ *    статус кеша (+ HTTPS-предупреждение), Docker-инструкция обновления
+ *    (задача c79afe43: `instruction` только у Docker, отказ `apply` со
+ *    ссылкой на неё), `429` идущей проверки, гонка двух
  *    администраторов (`201` + `409` с текущим заданием), Docker/downgrade `409`,
  *    «сервер не службой» — `failed` без остановки, `502` при хеше без остановки
  *    службы, maintenance включён до запуска установщика, CORS на `503`,
@@ -55,6 +57,10 @@ import {
   type InstallerRunnerOptions,
   type SpawnInstaller,
 } from '../src/update/installer-runner.js';
+import {
+  DOCKER_UPDATE_COMMAND,
+  DOCKER_UPDATE_INSTRUCTION,
+} from '../src/update/deployment.js';
 import { INSTALLER_HTTPS_WARNING } from '../src/routes/system-update.js';
 import {
   authHeaders,
@@ -442,6 +448,55 @@ describe('system/update — администратор и статус', { skip:
     }
   });
 
+  it('instruction: команда обновления только у Docker; служба и standalone — null', async () => {
+    const harness = makeRunnerHarness();
+    const docker = await buildUpdateContext(harness, 'docker');
+    try {
+      const res = await docker.app.inject({
+        method: 'GET',
+        url: '/api/v1/system/update',
+        headers: authHeaders(docker),
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      const data = res.json().data as {
+        deployment: string;
+        available_version: string | null;
+        instruction: string | null;
+      };
+      assert.equal(data.deployment, 'docker');
+      // Инструкция не зависит от того, найдено ли обновление (проверки ещё не было).
+      assert.equal(data.available_version, null);
+      assert.equal(data.instruction, DOCKER_UPDATE_INSTRUCTION);
+      assert.ok(data.instruction !== null && data.instruction.includes(DOCKER_UPDATE_COMMAND));
+      // Сохранность данных: том, миграции при старте, резервная копия.
+      assert.match(data.instruction!, /том/i);
+      assert.match(data.instruction!, /ETN_DATA_DIR/);
+      assert.match(data.instruction!, /схема БД обновляется автоматически/i);
+      assert.match(data.instruction!, /резервную копию/i);
+      // Инструкция — про сервер: автообновления клиента не обещает.
+      assert.doesNotMatch(data.instruction!, /клиент/i);
+    } finally {
+      await closeRestContext(docker);
+    }
+
+    for (const deployment of ['windows-service', 'standalone'] as const) {
+      const ctx = await buildUpdateContext(harness, deployment);
+      try {
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: '/api/v1/system/update',
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        const data = res.json().data as { deployment: string; instruction: string | null };
+        assert.equal(data.deployment, deployment);
+        assert.equal(data.instruction, null, `${deployment}: инструкции быть не должно`);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    }
+  });
+
   it('http-ссылка на ассет отражается предупреждением в check_error, кеш не меняется', async () => {
     const harness = makeRunnerHarness();
     const ctx = await buildUpdateContext(harness);
@@ -556,7 +611,7 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
     }
   });
 
-  it('Docker — 409, прогресс всегда null', async () => {
+  it('Docker — 409 с инструкцией обновления, прогресс всегда null', async () => {
     const harness = makeRunnerHarness();
     const ctx = await buildUpdateContext(harness, 'docker');
     try {
@@ -564,6 +619,12 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       const res = await apiApply(ctx, TARGET_VERSION);
       assert.equal(res.statusCode, 409, res.body);
       assert.equal((res.details as { reason: string }).reason, 'docker');
+      // Причина и точная команда — в тексте; инструкция доступна полем GET.
+      const message = (JSON.parse(res.body) as { error: { message: string } }).error.message;
+      assert.match(message, /Docker/i);
+      assert.match(message, /автообновление из клиента невозможно/i);
+      assert.ok(message.includes(DOCKER_UPDATE_COMMAND), message);
+      assert.ok(message.includes('GET /api/v1/system/update'), message);
       assert.equal(ctx.sys.getLatestUpdateJob(), null);
       const progress = await ctx.app.inject({
         method: 'GET',

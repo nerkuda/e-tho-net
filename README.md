@@ -126,7 +126,8 @@ npm test                 # все тесты
 ## Установка
 
 - **Сервер** — Docker (`docker compose up -d`) или Node.js 22 из исходников;
-  подробно — [`docs/userdocs/install.md`](docs/userdocs/install.md).
+  установка и обновление (в том числе в Docker) —
+  [`docs/userdocs/install.md`](docs/userdocs/install.md).
 - **Клиент** — готовые установщики (Windows/macOS/Linux) в
   [релизах](https://github.com/nerkuda/e-tho-net/releases); из исходников —
   [`docs/userdocs/install.md`](docs/userdocs/install.md).

@@ -23,30 +23,23 @@
  * ошибки `apply` приходит из runner'а.
  *
  * Docker-инструкция (`docker compose pull && docker compose up -d`) — задача
- * c79afe43: здесь `instruction` всегда `null`, `apply` в Docker отдаёт `409`.
+ * c79afe43: при `deployment = docker` поле `instruction` несёт команду и
+ * пояснение о сохранности данных (текст — `update/deployment.ts`), а `apply`
+ * отвечает `409` со ссылкой на ту же инструкцию и не запускает установщик.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, type SystemUpdateProgress, type SystemUpdateStatus } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { UpdateCheckInProgressError, type UpdateCache } from '../update/checker.js';
+import { UpdateCheckInProgressError } from '../update/checker.js';
+import { DOCKER_UPDATE_INSTRUCTION } from '../update/deployment.js';
 import {
   UpdateApplyConflictError,
   UpdateApplyNoUpdateError,
   UpdateInstallerFailureError,
 } from '../update/apply.js';
-
-/**
- * Ответ `GET /api/v1/system/update` (и `POST /check`): поля кеша проверки
- * обновлений (сущность 6f79610d) плюс инструкция обновления.
- * `deployment` уже входит в кеш; `instruction` отдаётся всегда (`null`, пока
- * Docker-инструкция не реализована — задача c79afe43).
- */
-export interface SystemUpdateStatus extends UpdateCache {
-  instruction: string | null;
-}
 
 /** Текст предупреждения о ссылке на установщик не по HTTPS. */
 export const INSTALLER_HTTPS_WARNING =
@@ -70,7 +63,13 @@ export function installerHttpsWarning(downloadUrl: string | null): string | null
   return parsed.protocol === 'https:' ? null : INSTALLER_HTTPS_WARNING;
 }
 
-/** Снимок ответа GET/check: кеш + инструкция + HTTPS-предупреждение. */
+/**
+ * Снимок ответа GET/check — общий контракт `SystemUpdateStatus` из
+ * `@etn/shared` (стандарт 01268f2d): кеш проверки (сущность 6f79610d) плюс
+ * инструкция и HTTPS-предупреждение. `instruction` — только Docker (команда
+ * обновления контейнера, задача c79afe43); для `windows-service` и
+ * `standalone` — `null`: там обновление идёт через клиент или установщик.
+ */
 function statusPayload(app: FastifyInstance): SystemUpdateStatus {
   const cache = app.updateChecker.getCache();
   const warning = installerHttpsWarning(cache.download_url);
@@ -78,7 +77,11 @@ function statusPayload(app: FastifyInstance): SystemUpdateStatus {
     warning === null
       ? cache.check_error
       : [cache.check_error, warning].filter((part) => part !== null && part !== '').join(' ');
-  return { ...cache, check_error: checkError, instruction: null };
+  return {
+    ...cache,
+    check_error: checkError,
+    instruction: cache.deployment === 'docker' ? DOCKER_UPDATE_INSTRUCTION : null,
+  } satisfies SystemUpdateStatus;
 }
 
 /** Тело `POST /apply` — `{ target_version }` (операция 8a2972c2). */
@@ -191,6 +194,6 @@ export const systemUpdateRoutes: FastifyPluginAsync = async (app: FastifyInstanc
   });
 
   app.get('/system/update/progress', adminOnly, async (_req, reply) => {
-    sendSuccess(reply, { job: app.updateApply.getProgress() });
+    sendSuccess(reply, { job: app.updateApply.getProgress() } satisfies SystemUpdateProgress);
   });
 };
