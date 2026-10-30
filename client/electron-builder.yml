@@ -7,6 +7,20 @@
 
 appId: dev.etn.app
 productName: ETN
+# Строка авторских прав в VERSIONINFO exe. Задаётся явно: значение по
+# умолчанию дописывает год и берёт автора из author.name.
+copyright: Copyright © 2026 В. Зайцев (aka Nerkuda)
+
+# CompanyName в VERSIONINFO: поля win.companyName в 24.x нет — electron-builder
+# берёт его из author.name, но нормализует author по правилам npm (unParsePerson
+# → parsePerson), и parsePerson обрезает имя по первой «(»: «(aka Nerkuda)»
+# уезжает в url и в exe не попадает. extraMetadata мержится в метаданные уже
+# после нормализации (packager.js, перед созданием AppInfo), поэтому
+# CompanyName получает полное имя. Держать в согласии с author в package.json.
+extraMetadata:
+  author:
+    name: В. Зайцев (aka Nerkuda)
+    email: nerkuda@users.noreply.github.com
 # Pinned to the same version as devDependencies.electron — electron-builder
 # cannot detect the version from node_modules when electron is hoisted to the
 # workspace root (npm workspaces), so it must be stated explicitly.

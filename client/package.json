@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "description": "ETN — The Endless Thought Network desktop client",
-  "author": "В. Зайцев (aka Nerkuda) <nerkuda@users.noreply.github.com>",
+  "author": {
+    "name": "В. Зайцев (aka Nerkuda)",
+    "email": "nerkuda@users.noreply.github.com"
+  },
   "homepage": "https://github.com/nerkuda/e-tho-net",
   "main": "out/main/index.js",
   "scripts": {

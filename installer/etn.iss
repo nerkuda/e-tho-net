@@ -242,6 +242,9 @@ AppName=ETN
 AppVersion={#MyAppVersion}
 AppVerName=ETN {#MyAppVersion}
 AppPublisher=ETN
+; Строка авторских прав: та же, что в VERSIONINFO клиентского exe
+; (client/electron-builder.yml, copyright). AppPublisher остаётся ETN.
+AppCopyright=© 2026 В. Зайцев (aka Nerkuda)
 AppPublisherURL=https://github.com/nerkuda/e-tho-net
 AppSupportURL=https://github.com/nerkuda/e-tho-net/issues
 AppUpdatesURL=https://github.com/nerkuda/e-tho-net/releases
