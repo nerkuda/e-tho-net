@@ -208,9 +208,20 @@
 #endif
 
 #define HaveClientPayload
-#if !DirExists(ClientPayload)
+#if !FileExists(AddBackslash(ClientPayload) + "ETN.exe")
   #undef HaveClientPayload
-  #pragma message "ПРЕДУПРЕЖДЕНИЕ: в payload нет client\ — файлы клиента не поставляются (задача 98ad5eec)"
+  #pragma message "ПРЕДУПРЕЖДЕНИЕ: в payload нет client\ETN.exe — файлы клиента не поставляются (задача 98ad5eec)"
+#endif
+
+; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». В тестовой
+; сборке каталоги уводятся в песочницу теста: прогон silent-codes.ps1 не
+; должен трогать настоящий рабочий стол и меню «Пуск» пользователя.
+#ifdef TestMode
+  #define ShortcutDesktopDir ExtractFileDir(TestAppDir) + "\shortcuts\desktop"
+  #define ShortcutMenuDir ExtractFileDir(TestAppDir) + "\shortcuts\menu"
+#else
+  #define ShortcutDesktopDir "{autodesktop}"
+  #define ShortcutMenuDir "{autoprograms}\ETN"
 #endif
 
 ; ============================================================================
@@ -313,6 +324,20 @@ Source: "{#ClientPayload}\*"; DestDir: "{app}\client"; Flags: ignoreversion recu
 Source: "{#ClientPayload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientUser
 #endif
 
+[Icons]
+; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». Цель зависит
+; от области установки — «для всех» ставится в {app}\client привилегированной
+; фазой, «только для меня» — в {app} неэлевированной фазы (профиль
+; пользователя). Каталоги ярлыков заданы через #define: в тестовой сборке они
+; уведены в песочницу. Созданные ярлыки Inno удаляет деинсталлятором сам
+; (записи [Icons] попадают в журнал удаления) — отдельного кода не нужно.
+#ifdef HaveClientPayload
+Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientMachine
+Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\ETN.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
+Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\client\ETN.exe"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Check: InstallClientMachine
+Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\ETN.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ETN.exe"; Check: InstallClientUser
+#endif
+
 [Run]
 ; Точки вызова службы (8b1f5980) живут в [Code]: регистрация — в ssPostInstall
 ; после записи etn-service.xml, снятие — в CurUninstallStepChanged(usUninstall)
@@ -368,6 +393,14 @@ const
     Опрос — раз в 250 мс, общий бюджет — 2 минуты (112642a4). }
   LEGACY_GONE_WAIT_MS = 120000;
   LEGACY_GONE_STEP_MS = 250;
+  { Закрытие запущенного клиента (задача 98ad5eec): сначала мягко (taskkill
+    без /F — WM_CLOSE, Electron завершает процесс сам), ожидание выхода 30 с;
+    только после таймаута — принудительно (/F /T) и ожидание ещё 15 с.
+    Опрос — раз в 250 мс, как у службы и старого клиента. Если процесс не
+    завершился и после /F — установка останавливается кодом 20 с причиной. }
+  CLIENT_CLOSE_WAIT_MS = 30000;
+  CLIENT_KILL_WAIT_MS = 15000;
+  CLIENT_POLL_STEP_MS = 250;
 
 var
   { Режим запуска }
@@ -418,6 +451,35 @@ var
   GTestLegacyStuck: String;
   GTestLegacyWait: String;
   GTestLegacyArgs: String;
+  { Хуки задачи 98ad5eec: модель запущенного клиента без реальных процессов и
+    реальная проверка с фильтром по каталогу. /TESTCLIENTPIDS=<pid,...> —
+    процессы считаются запущенными; /TESTCLIENTGONE=<мс> — через сколько
+    «выйдут» после мягкого закрытия (по умолчанию сразу); /TESTCLIENTSOFT=none
+    — мягкое закрытие не помогает; /TESTCLIENTFORCE=fail — принудительное не
+    помогает (код 20); /TESTCLIENTWAIT=<мс> — бюджет ожидания мягкого
+    закрытия; /TESTCLIENTREAL=1 — настоящий опрос Get-Process и taskkill,
+    /TESTCLIENTPATH=<каталог> — только процессы из этого каталога (чтобы
+    прогон не трогал клиент пользователя). }
+  GTestClientPids: String;
+  GTestClientGone: String;
+  GTestClientSoft: String;
+  GTestClientForce: String;
+  GTestClientWait: String;
+  GTestClientReal: String;
+  GTestClientPath: String;
+  { Состояние модели: процесс ещё жив, мягкое закрытие уже запрошено и момент
+    «выхода» после него. }
+  GTestClientRunning: Boolean;
+  GTestClientSoftIssued: Boolean;
+  GTestClientGoneAt: Integer;
+  { Пользователь отказался закрывать клиент (отличает отказ от технической
+    неудачи: техническую неудачу в родительском процессе исправит попытка в
+    привилегированной фазе, отказ — нет). }
+  GClientCloseRefused: Boolean;
+  { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
+    снимает silent-термин для проверки копирования неэлевированной фазой
+    (silent-контракт клиент не ставит). }
+  GTestUserInstall: String;
   { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
@@ -1724,6 +1786,284 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
+  Закрытие запущенного клиента (задача 98ad5eec).
+  --------------------------------------------------------------------------- }
+{ Список PID из вывода PowerShell: только цифры, через запятую. }
+function PidsFromText(const Text: String): String;
+var
+  I: Integer;
+  Token: String;
+begin
+  Result := '';
+  Token := '';
+  for I := 1 to Length(Text) do
+  begin
+    if (Text[I] >= '0') and (Text[I] <= '9') then
+      Token := Token + Text[I]
+    else
+    begin
+      if Token <> '' then
+      begin
+        if Result <> '' then Result := Result + ',';
+        Result := Result + Token;
+        Token := '';
+      end;
+    end;
+  end;
+  if Token <> '' then
+  begin
+    if Result <> '' then Result := Result + ',';
+    Result := Result + Token;
+  end;
+end;
+
+{ Настоящий опрос: Get-Process по имени ETN.exe. /TESTCLIENTPATH (только
+  тестовая сборка) ограничивает выборку каталогом — прогон не должен закрывать
+  клиент пользователя. PowerShell получает скрипт в двойных кавычках: внутри
+  только одинарные (грабли B3 приёмки 9b310991). }
+function RealClientPids: String;
+var
+  Script, Args, OutFile, OutFileLiteral, Filter: String;
+  Code: Integer;
+  Raw: AnsiString;
+begin
+  Result := '';
+  OutFile := ExpandConstant('{tmp}') + '\etn-client-pids.txt';
+  DeleteFile(OutFile);
+  OutFileLiteral := OutFile;
+  StringChangeEx(OutFileLiteral, '''', '''''', True);
+  Filter := '';
+#ifdef TestMode
+  { Тестовая сборка не должна закрывать клиент пользователя: реальный опрос
+    разрешён только с фильтром по каталогу теста. }
+  Filter := GTestClientPath;
+  if Filter = '' then
+  begin
+    LogLine('WARN', 'Клиент ETN: реальный опрос без /TESTCLIENTPATH запрещён (тестовый режим)');
+    Exit;
+  end;
+#endif
+  if Filter = '' then
+    Script :=
+      '$ids=@(Get-Process -Name ''ETN''|ForEach-Object{$_.Id});' +
+      '[IO.File]::WriteAllText(''' + OutFileLiteral + ''',($ids -join [Environment]::NewLine))'
+  else
+  begin
+    StringChangeEx(Filter, '''', '''''', True);
+    Script :=
+      '$ids=@(Get-Process -Name ''ETN''|ForEach-Object{$p=$_;$path='''';' +
+      'try{$path=$p.Path}catch{};' +
+      'if($path.StartsWith(''' + Filter + ''',' +
+      '[System.StringComparison]::OrdinalIgnoreCase)){$p.Id}});' +
+      '[IO.File]::WriteAllText(''' + OutFileLiteral + ''',($ids -join [Environment]::NewLine))';
+  end;
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
+    SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    LogLine('WARN', 'Клиент ETN: не удалось запустить PowerShell для поиска процессов');
+    Exit;
+  end;
+  Raw := '';
+  if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
+    Result := PidsFromText(Utf8Decode(Raw));
+  DeleteFile(OutFile);
+end;
+
+{ Процессы клиента, которые нужно закрыть. В тестовой сборке — модель:
+  реальные процессы машины не трогаются, если не задан /TESTCLIENTREAL=1. }
+function ClientPidsRunning: String;
+begin
+#ifdef TestMode
+  if GTestClientPids <> '' then
+  begin
+    if GTestClientRunning then
+      Result := GTestClientPids
+    else
+      Result := '';
+    Exit;
+  end;
+  { Без /TESTCLIENTREAL=1 тестовая сборка процессы машины не опрашивает и не
+    закрывает: только модель /TESTCLIENTPIDS. }
+  if GTestClientReal <> '1' then
+  begin
+    Result := '';
+    Exit;
+  end;
+#endif
+  Result := RealClientPids;
+end;
+
+function ClientCloseWaitMs: Integer;
+begin
+  Result := CLIENT_CLOSE_WAIT_MS;
+#ifdef TestMode
+  if GTestClientWait <> '' then
+    Result := StrToIntDef(GTestClientWait, CLIENT_CLOSE_WAIT_MS);
+#endif
+end;
+
+{ Ожидание выхода процессов: опрос раз в 250 мс, бюджет WaitMs. В модели
+  момент выхода задаёт /TESTCLIENTGONE — время отсчитывается от мягкого
+  закрытия, реальный Sleep не нужен (прогон не длится 30 секунд). }
+function WaitClientProcessesGone(const WaitMs: Integer; var WaitedMs: Integer): Boolean;
+var
+  Elapsed: Integer;
+begin
+  Elapsed := 0;
+  repeat
+    if ClientPidsRunning = '' then
+    begin
+      WaitedMs := Elapsed;
+      Result := True;
+      Exit;
+    end;
+    if Elapsed >= WaitMs then Break;
+#ifdef TestMode
+    if GTestClientPids = '' then
+      Sleep(CLIENT_POLL_STEP_MS);
+    if (GTestClientPids <> '') and GTestClientSoftIssued and
+       (GTestClientSoft <> 'none') and
+       (Elapsed + CLIENT_POLL_STEP_MS >= GTestClientGoneAt) then
+      GTestClientRunning := False;
+#else
+    Sleep(CLIENT_POLL_STEP_MS);
+#endif
+    Elapsed := Elapsed + CLIENT_POLL_STEP_MS;
+  until False;
+  WaitedMs := Elapsed;
+  Result := False;
+end;
+
+{ Один PID из списка и остаток списка. }
+function TakePid(var List: String): String;
+var
+  P: Integer;
+begin
+  P := Pos(',', List);
+  if P > 0 then
+  begin
+    Result := Copy(List, 1, P - 1);
+    List := Copy(List, P + 1, Length(List) - P);
+  end
+  else
+  begin
+    Result := List;
+    List := '';
+  end;
+end;
+
+function RunTaskkill(const Params: String; const Soft: Boolean): Boolean;
+var
+  Code: Integer;
+begin
+  Code := -1;
+  Result := Exec(ExpandConstant('{sys}\taskkill.exe'), Params, '', SW_HIDE,
+    ewWaitUntilTerminated, Code) and (Code = 0);
+  LogLine(Pick(Result, 'INFO', 'WARN'), 'Клиент ETN: taskkill ' +
+    IfStr(Soft, 'без /F', '/F') + ' ' + Params + ' — код ' + IntToStr(Code));
+end;
+
+procedure SoftCloseClientPids(const Pids: String);
+var
+  Rest, Pid: String;
+begin
+#ifdef TestMode
+  if GTestClientPids <> '' then
+  begin
+    GTestClientSoftIssued := True;
+    LogLine('INFO', 'Клиент ETN: мягкое закрытие (модель, PID ' + Pids + ')');
+    Exit;
+  end;
+#endif
+  Rest := Pids;
+  while Rest <> '' do
+  begin
+    Pid := TakePid(Rest);
+    if Pid <> '' then
+      RunTaskkill('/PID ' + Pid, True);
+  end;
+end;
+
+procedure ForceCloseClientPids(const Pids: String);
+var
+  Rest, Pid: String;
+begin
+#ifdef TestMode
+  if GTestClientPids <> '' then
+  begin
+    LogLine('WARN', 'Клиент ETN: принудительное закрытие (модель, PID ' + Pids + ')');
+    if GTestClientForce <> 'fail' then
+      GTestClientRunning := False;
+    Exit;
+  end;
+#endif
+  Rest := Pids;
+  while Rest <> '' do
+  begin
+    Pid := TakePid(Rest);
+    if Pid <> '' then
+      RunTaskkill('/F /PID ' + Pid + ' /T', False);
+  end;
+end;
+
+{ Закрытие запущенного клиента перед заменой файлов. Interactive — показать
+  пользователю предупреждение и спросить согласие (только GUI). Возвращает
+  False с причиной, если клиент не закрыт: вызывающий останавливает установку
+  кодом 20, файлы не заменяются. }
+function CloseRunningClient(const Interactive: Boolean; var Reason: String): Boolean;
+var
+  Pids, Remaining: String;
+  WaitedMs: Integer;
+begin
+  Result := True;
+  Reason := '';
+  GClientCloseRefused := False;
+  Pids := ClientPidsRunning;
+  if Pids = '' then
+  begin
+    LogLine('INFO', 'Клиент ETN: запущенных процессов не найдено');
+    Exit;
+  end;
+  LogLine('INFO', 'Клиент ETN: запущено процессов ETN.exe — ' + Pids);
+  if Interactive and (not GSilent) then
+  begin
+    if SuppressibleMsgBox('Клиент ETN запущен. Чтобы заменить файлы, его нужно ' +
+        'закрыть — несохранённые данные могут быть потеряны.' + #13#10#13#10 +
+        'Закрыть клиент и продолжить установку?',
+        mbConfirmation, MB_YESNO, IDYES) <> IDYES then
+    begin
+      LogLine('WARN', 'Клиент ETN: пользователь отказался закрывать клиент');
+      Reason := 'клиент ETN не закрыт: пользователь отказался закрыть запущенный клиент';
+      GClientCloseRefused := True;
+      Result := False;
+      Exit;
+    end;
+  end;
+  LogLine('INFO', 'Клиент ETN: мягкое закрытие (taskkill без /F)');
+  SoftCloseClientPids(Pids);
+  if WaitClientProcessesGone(ClientCloseWaitMs, WaitedMs) then
+  begin
+    LogLine('INFO', 'Клиент ETN: закрыт мягко за ' + IntToStr(WaitedMs) + ' мс');
+    Exit;
+  end;
+  Remaining := ClientPidsRunning;
+  LogLine('WARN', 'Клиент ETN: за ' + IntToStr(ClientCloseWaitMs) +
+    ' мс не закрылся — принудительное закрытие (taskkill /F)' +
+    IfStr(Remaining = '', '', ', PID ' + Remaining));
+  ForceCloseClientPids(Remaining);
+  if WaitClientProcessesGone(CLIENT_KILL_WAIT_MS, WaitedMs) then
+  begin
+    LogLine('INFO', 'Клиент ETN: принудительно закрыт за ' + IntToStr(WaitedMs) + ' мс');
+    Exit;
+  end;
+  Reason := 'клиент ETN не закрыт: процессы ETN.exe не завершились даже после ' +
+    'принудительного закрытия';
+  LogLine('ERROR', Reason);
+  Result := False;
+end;
+
+{ ---------------------------------------------------------------------------
   Прогресс и ошибки установки (112642a4).
   --------------------------------------------------------------------------- }
 procedure SetInstallStage(const Stage: String);
@@ -1788,6 +2128,22 @@ begin
     Result := MachineAppDir + '\client\ETN.exe'
   else if (MachineAppDir <> '') and FileExists(MachineAppDir + '\ETN.exe') then
     Result := MachineAppDir + '\ETN.exe';
+end;
+
+{ Каталог установки клиента по области: «только для меня» — профиль
+  пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
+  Показывается на экране компонентов: каталог фиксирован ADR 144bcdb0, но
+  область установки пользователь выбирает сам. }
+function ClientInstallPath: String;
+begin
+#ifdef TestMode
+  Result := GServerDir;
+#else
+  if GClientScopeUser then
+    Result := ExpandConstant('{localappdata}') + '\Programs\ETN'
+  else
+    Result := ExpandConstant('{commonpf}') + '\ETN';
+#endif
 end;
 
 procedure OpenPath(const Path: String);
@@ -4663,6 +5019,22 @@ var
   DataDirFromJson, Reason: String;
 begin
   LogLine('INFO', 'Silent server-only: проверка предусловий');
+#ifdef TestMode
+  { /TESTUSERINSTALL=1 — установка клиента «только для меня» без окон.
+    Silent-контракт ставит только сервер (клиент запрещён), поэтому ветки
+    Files и Icons для клиента иначе не проверяются. Тест ставит только клиента:
+    серверные предусловия (install.json, служба, порт) не применяются,
+    GServerSelected снимается — серверные файлы не копируются. GSilent
+    остаётся True: мастер не создаётся, установка идёт как silent. }
+  if GTestUserInstall = '1' then
+  begin
+    GServerSelected := False;
+    GClientSelected := True;
+    GClientScopeUser := True;
+    LogLine('INFO', 'TESTUSERINSTALL=1: silent-предусловия пропущены — ставится только клиент «для меня»');
+    Exit;
+  end;
+#endif
   if ParamExists('SERVERONLY') = False then
     FailPrecondition('/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена');
   if not GIsElevated then
@@ -4802,8 +5174,23 @@ begin
 end;
 
 procedure RunClientClick(Sender: TObject);
+var
+  Exe: String;
+  Code: Integer;
 begin
-  OpenPath(ClientExePath);
+  Exe := ClientExePath;
+  if Exe = '' then Exit;
+  { Клиент — обычное приложение пользователя, а не служба: запускаем от
+    исходного пользователя, даже если установщик повышал права. Иначе клиент
+    открылся бы в профиле другого администратора (режим app). }
+  if ShellExecAsOriginalUser('open', Exe, '', ExtractFileDir(Exe),
+    SW_SHOWNORMAL, ewNoWait, Code) then
+    LogLine('INFO', 'Клиент запущен от исходного пользователя: ' + Exe)
+  else
+  begin
+    LogLine('WARN', 'ShellExecAsOriginalUser не сработал, запуск через оболочку: ' + Exe);
+    OpenPath(Exe);
+  end;
 end;
 
 { «Повторить установку» на экране ошибки: запускает установщик заново и
@@ -5069,6 +5456,11 @@ begin
       GClientHintLabel.Caption :=
         'Клиент — окно для работы с базами; при первом запуске нужны адрес ' +
         'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.';
+    { Каталог установки виден до начала установки: область клиента меняет и
+      его, а отдельного экрана каталога нет (ADR 144bcdb0). }
+    if GClientSelected then
+      GClientHintLabel.Caption := GClientHintLabel.Caption + ' Каталог установки: ' +
+        ClientInstallPath + '.';
     GClientHintLabel.Height := GClientHintLabel.AdjustHeight;
   end;
   if GReasonLabel <> nil then
@@ -5553,6 +5945,7 @@ begin
   GServerSelected := False;
   GClientSelected := False;
   GClientScopeUser := True;
+  GClientCloseRefused := False;
   GServerMode := 'service';
   GServerHost := '0.0.0.0';
   GServerPort := '4321';
@@ -5628,6 +6021,18 @@ begin
   GTestLegacyStuck := '';
   GTestLegacyWait := '';
   GTestLegacyArgs := '';
+  { Хуки 98ad5eec: модель запущенного клиента и установка клиента «для меня». }
+  GTestClientPids := '';
+  GTestClientGone := '';
+  GTestClientSoft := '';
+  GTestClientForce := '';
+  GTestClientWait := '';
+  GTestClientReal := '';
+  GTestClientPath := '';
+  GTestClientRunning := False;
+  GTestClientSoftIssued := False;
+  GTestClientGoneAt := 0;
+  GTestUserInstall := '';
   GChildRanThisPass := False;
   GParamsPath := '';
   GReasonFile := '';
@@ -5703,6 +6108,22 @@ begin
   GTestLegacyStuck := ParamValue('TESTLEGACYSTUCK');
   GTestLegacyWait := ParamValue('TESTLEGACYWAIT');
   GTestLegacyArgs := ParamValue('TESTLEGACYARGS');
+  GTestClientPids := ParamValue('TESTCLIENTPIDS');
+  GTestClientGone := ParamValue('TESTCLIENTGONE');
+  GTestClientSoft := LowerCase(ParamValue('TESTCLIENTSOFT'));
+  GTestClientForce := LowerCase(ParamValue('TESTCLIENTFORCE'));
+  GTestClientWait := ParamValue('TESTCLIENTWAIT');
+  GTestClientReal := ParamValue('TESTCLIENTREAL');
+  GTestClientPath := ParamValue('TESTCLIENTPATH');
+  GTestUserInstall := ParamValue('TESTUSERINSTALL');
+  GTestClientRunning := GTestClientPids <> '';
+  GTestClientSoftIssued := False;
+  if GTestClientGone <> '' then
+    GTestClientGoneAt := StrToIntDef(GTestClientGone, 0)
+  else
+    GTestClientGoneAt := 0;
+  if GTestClientForce = '' then
+    GTestClientForce := 'ok';
   { Подмена каталога данных для предпроверок (путь, занятый файлом,
     недоступный диск): журнал при этом остаётся в обычном каталоге теста. }
   if GTestDataDir <> '' then
@@ -5781,6 +6202,13 @@ begin
     ApplySelection(False, True, True)
   else if GTestSelect = 'client-user' then
     ApplySelection(False, True, False);
+
+  { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
+    проверка выполняется в ValidateSilentPreconditions (silent-контракт клиент
+    не ставит, но ветку [Files]/[Icons] нужно проверить). Здесь только след в
+    журнале — GSilent не меняется, мастер не создаётся. }
+  if GTestUserInstall = '1' then
+    LogLine('INFO', 'TESTUSERINSTALL=1: установка только клиента «для меня» (тестовый режим)');
 
   { Наблюдаемость состояний и галочек без вывода окон: тестовый прогон
     фиксирует вычисленное состояние в журнале и завершается без изменений. }
@@ -6187,8 +6615,38 @@ begin
     этот обработчик для них ничего не делает. }
   if CurPageID = wpReady then
   begin
+    LogLine('INFO', 'Экран готовности: проверка перед установкой (silent=' +
+      Pick(GSilent, 'да', 'нет') + ', privileged_phase=' +
+      Pick(GPrivilegedPhase, 'да', 'нет') + ', need_elevation=' +
+      Pick(NeedElevation, 'да', 'нет') + ')');
     if GSilent or GPrivilegedPhase then Exit;
     if GChildRanThisPass then Exit;
+    { Запущенный клиент закрывается до повышения прав и копирования: замена
+      ETN.exe невозможна, пока процесс работает. Отказ пользователя или
+      неудача закрытия — установка не начинается (код 20), выбор сохраняется.
+      Исключение: машинный клиент другого пользователя родительский процесс
+      закрыть не может (нет прав) — попытку повторит привилегированная фаза,
+      которая и вернёт код 20 с причиной, если клиент не закроется. }
+    Reason := '';
+    if GClientSelected and (not CloseRunningClient(True, Reason)) then
+    begin
+      if (not GClientCloseRefused) and NeedElevation and
+         (not (GIsElevated and IsAdminInstallMode)) then
+      begin
+        LogLine('WARN', 'Клиент ETN: родительский процесс не закрыл клиент (' +
+          Reason + ') — повтор в привилегированной фазе');
+        GComponentsNotice := '';
+      end
+      else
+      begin
+        GComponentsNotice := 'Установка не начата: ' + Reason;
+        SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
+          mbError, MB_OK, IDOK);
+        ReturnToComponentsPage;
+        Result := False;
+        Exit;
+      end;
+    end;
     Reason := '';
     if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
     begin
@@ -6350,6 +6808,25 @@ begin
         Подробные этапы дочернего процесса — в журнале. }
       if GChildRanThisPass then
         SetInstallStage('Установка выполняется…');
+      { Запущенный клиент закрывается до первого изменённого файла: мягко,
+        с ожиданием, принудительно только после таймаута. Неудача — код 20,
+        файлы не заменяются (в silent-прогоне без предупреждения). }
+      if GClientSelected then
+      begin
+        Reason := '';
+        if not CloseRunningClient(False, Reason) then
+        begin
+          FailText := 'Установка не начата: ' + Reason;
+          LogLine('ERROR', FailText + ' (код ' + IntToStr(EXIT_PRECONDITION) + ')');
+          if GFailureReason = '' then GFailureReason := Reason;
+          WriteReasonFile(Reason);
+          GExitCode := EXIT_PRECONDITION;
+          if not GSilent then
+            SuppressibleMsgBox(FailText + '.' + #13#10#13#10 +
+              'Изменения не выполнялись. Журнал: ' + GLogPath, mbError, MB_OK, IDOK);
+          ExitProcess(EXIT_PRECONDITION);
+        end;
+      end;
       { Фазы обновления (bb063ac3): остановка службы, бэкап БД, снимок
         отката — строго до первого изменённого файла. Неудача предусловия
         (служба не остановилась) — код 20, сбой (бэкап/снимок) — код 10.

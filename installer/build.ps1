@@ -10,13 +10,16 @@
     компилируется.
 
     Перед сборкой продуктового установщика payload проверяется на свежесть:
-    обязательные файлы на месте, версия сервера совпадает с репозиторием,
-    dist и шаблон службы совпадают по SHA-256, CLI умеет --check и --key-out.
-    Устаревший payload — ошибка с указанием, что обновить (installer/
-    fetch-payload.ps1 или -RefreshPayload), а не молчаливая сборка exe,
-    падающего на etn init (дефект приёмки каркаса 9b310991: собранный exe
-    падал на --key-out). В -TestMode проверка пропускается: тестовая
-    поставка — фикстура, она заведомо не совпадает с репозиторием.
+    обязательные файлы на месте (включая клиент: client\ETN.exe и
+    resources\app.asar), версия сервера совпадает с репозиторием, весь
+    server\dist, все server\migrations и шаблон службы совпадают по SHA-256,
+    CLI умеет --check и --key-out. Устаревший payload — ошибка с указанием,
+    что обновить (installer/fetch-payload.ps1 или -RefreshPayload), а не
+    молчаливая сборка exe, падающего на etn init (дефект приёмки каркаса
+    9b310991: собранный exe падал на --key-out; расширение проверки на весь
+    server/dist — задача 98ad5eec, дефект 0178253c). В -TestMode проверка
+    пропускается: тестовая поставка — фикстура, она заведомо не совпадает с
+    репозиторием.
 
     Задача a1211915 (0.15.1); проверка свежести payload — 9b310991.
 
@@ -138,10 +141,71 @@ function Read-PackageVersion {
 # --key-out, подставляет плейсхолдеры шаблона службы и рассчитывает на файлы
 # контракта. Устаревшая поставка (например, dist/cli.js без --key-out)
 # собирается в exe, который падает уже на установке, — поэтому проверка до
-# компиляции. Возвращает объект { Problems; HashCompared }: пустой Problems —
-# payload годен, HashCompared = false — сравнение SHA-256 с репозиторием
-# пропущено (нет server/dist или шаблона в репозитории), о чём печатается
-# предупреждение и отдельная итоговая формулировка.
+# компиляции. Сравниваются не отдельные файлы, а весь server/dist и все
+# migrations (задача 98ad5eec): иначе пересборка модуля, не попавшая в
+# payload, проходила проверку и поставка расходилась с репозиторием (дефект
+# приёмки 0178253c). Возвращает объект { Problems; HashCompared }: пустой
+# Problems — payload годен, HashCompared = false — сравнение SHA-256 с
+# репозиторием пропущено (нет server/dist или шаблона в репозитории), о чём
+# печатается предупреждение и отдельная итоговая формулировка.
+function Get-TreeFileHashes {
+    param([string]$Root)
+    $map = @{}
+    Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object {
+        $relative = $_.FullName.Substring($Root.Length).TrimStart('\')
+        $map[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    return $map
+}
+
+# Сравнение каталога payload с каталогом репозитория: состав файлов и их
+# SHA-256. Возвращает $true, если сравнение выполнено (каталог репозитория
+# есть), и $false, если сравнивать не с чем — вызывающий считает проверку
+# неполной. Проблемы пишутся в $Problems, а не возвращаются исключением:
+# свежесть — это список причин, которые видит человек.
+function Compare-PayloadTree {
+    param(
+        [string]$RepoTree,
+        [string]$PayloadTree,
+        [string]$Relative,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    if (-not (Test-Path -LiteralPath $RepoTree)) {
+        Write-Warning ("Свежесть payload по $Relative НЕ ПРОВЕРЕНА: в репозитории нет $RepoTree. " +
+            'Соберите сервер (npm -w @etn/server run build) и обновите payload ' +
+            '(pwsh -File installer/fetch-payload.ps1) — иначе exe может разойтись со сборкой.')
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $PayloadTree)) {
+        $Problems.Add("нет каталога payload: $Relative")
+        return $true
+    }
+    $repo = Get-TreeFileHashes -Root $RepoTree
+    $payload = Get-TreeFileHashes -Root $PayloadTree
+    $missing = @($repo.Keys | Where-Object { -not $payload.ContainsKey($_) } | Sort-Object)
+    $extra = @($payload.Keys | Where-Object { -not $repo.ContainsKey($_) } | Sort-Object)
+    $changed = @($repo.Keys | Where-Object {
+            $payload.ContainsKey($_) -and ($payload[$_] -ne $repo[$_])
+        } | Sort-Object)
+    $limit = 5
+    if ($missing.Count -gt 0) {
+        $shown = ($missing | Select-Object -First $limit) -join ', '
+        $tail = if ($missing.Count -gt $limit) { " и ещё $($missing.Count - $limit)" } else { '' }
+        $Problems.Add("payload устарел: в $Relative не хватает файлов: $shown$tail")
+    }
+    if ($extra.Count -gt 0) {
+        $shown = ($extra | Select-Object -First $limit) -join ', '
+        $tail = if ($extra.Count -gt $limit) { " и ещё $($extra.Count - $limit)" } else { '' }
+        $Problems.Add("payload устарел: в $Relative лишние файлы, которых нет в репозитории: $shown$tail")
+    }
+    if ($changed.Count -gt 0) {
+        $shown = ($changed | Select-Object -First $limit) -join ', '
+        $tail = if ($changed.Count -gt $limit) { " и ещё $($changed.Count - $limit)" } else { '' }
+        $Problems.Add("payload устарел: в $Relative отличаются от сборки репозитория: $shown$tail")
+    }
+    return $true
+}
+
 function Test-PayloadFreshness {
     param([string]$Root, [string]$RepoRoot)
     $problems = New-Object System.Collections.Generic.List[string]
@@ -151,9 +215,13 @@ function Test-PayloadFreshness {
         'server\package.json',
         'server\dist\index.js',
         'server\dist\cli.js',
+        'server\migrations\system',
+        'server\migrations\network',
         'server\node_modules\better-sqlite3\package.json',
         'service\etn-service.exe',
-        'service\etn-service.xml')
+        'service\etn-service.xml',
+        'client\ETN.exe',
+        'client\resources\app.asar')
     if (-not (Test-Path -LiteralPath $Root)) {
         $problems.Add("каталог payload не найден: $Root")
         return $result
@@ -172,26 +240,33 @@ function Test-PayloadFreshness {
         $problems.Add("payload собран из server $payloadVersion, в репозитории $repoVersion")
     }
 
-    # Совпадение сборки и шаблона службы с репозиторием. Если dist в
-    # репозитории ещё не собран, сравнивать не с чем — об этом предупреждаем.
+    # Совпадение сборки сервера, миграций и шаблона службы с репозиторием.
+    # Если dist в репозитории ещё не собран, сравнивать не с чем — об этом
+    # предупреждаем.
     $hashTotal = 0
     $hashCompared = 0
-    foreach ($item in @(
-            @{ Relative = 'server\dist\cli.js'; Source = (Join-Path $RepoRoot 'server\dist\cli.js'); What = 'CLI сервера (server\dist\cli.js)' },
-            @{ Relative = 'server\dist\index.js'; Source = (Join-Path $RepoRoot 'server\dist\index.js'); What = 'сервер (server\dist\index.js)' },
-            @{ Relative = 'service\etn-service.xml'; Source = (Join-Path $PSScriptRoot 'service\etn-service.xml'); What = 'шаблон службы' })) {
-        $hashTotal++
-        if (-not (Test-Path -LiteralPath $item.Source)) {
-            Write-Warning ("Свежесть payload по $($item.Relative) НЕ ПРОВЕРЕНА: в репозитории нет $($item.Source). " +
-                "Соберите сервер (npm -w @etn/server run build) и обновите payload " +
-                "(pwsh -File installer/fetch-payload.ps1) — иначе exe может разойтись со сборкой.")
-            continue
-        }
+    $hashTotal++
+    $serviceSource = Join-Path $PSScriptRoot 'service\etn-service.xml'
+    if (-not (Test-Path -LiteralPath $serviceSource)) {
+        Write-Warning ("Свежесть payload по service\etn-service.xml НЕ ПРОВЕРЕНА: в репозитории нет $serviceSource. " +
+            'Обновите payload (pwsh -File installer/fetch-payload.ps1) — иначе exe может разойтись со сборкой.')
+    } else {
         $hashCompared++
-        $payloadPath = Join-Path $Root $item.Relative
-        if ((Get-FileSha256 -Path $item.Source) -ne (Get-FileSha256 -Path $payloadPath)) {
-            $problems.Add("payload устарел: $($item.What) отличается от сборки репозитория")
+        $payloadServiceTemplate = Join-Path $Root 'service\etn-service.xml'
+        if ((Get-FileSha256 -Path $serviceSource) -ne (Get-FileSha256 -Path $payloadServiceTemplate)) {
+            $problems.Add('payload устарел: шаблон службы (service\etn-service.xml) отличается от репозитория')
         }
+    }
+    foreach ($tree in @(
+            @{ Relative = 'server\dist'; What = 'сборка сервера' },
+            @{ Relative = 'server\migrations'; What = 'миграции сервера' })) {
+        $hashTotal++
+        $compared = Compare-PayloadTree `
+            -RepoTree (Join-Path $RepoRoot $tree.Relative) `
+            -PayloadTree (Join-Path $Root $tree.Relative) `
+            -Relative $tree.Relative `
+            -Problems $problems
+        if ($compared) { $hashCompared++ }
     }
 
     # Возможности CLI, на которые опирается установщик.
@@ -253,9 +328,9 @@ if ($TestMode) {
             '(или запустите build.ps1 с -RefreshPayload).')
     }
     if ($freshness.HashCompared) {
-        Write-Host 'Payload свежий: файлы контракта, версия, dist и шаблон службы совпадают с репозиторием.'
+        Write-Host 'Payload свежий: файлы контракта, версия, весь server/dist, migrations и шаблон службы совпадают с репозиторием.'
     } else {
-        Write-Host ('Payload проверен частично (dist не сравнивался): файлы контракта и версия проверены. ' +
+        Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версия проверены. ' +
             'Соберите server/dist (npm -w @etn/server run build) и обновите payload для полной проверки.')
     }
 }

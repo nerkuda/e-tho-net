@@ -136,7 +136,7 @@ function Add-Result {
 }
 
 function Reset-State {
-    foreach ($dir in @($appDir, $dataDir)) {
+    foreach ($dir in @($appDir, $dataDir, (Join-Path $workRoot 'shortcuts'))) {
         if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
     }
 }
@@ -883,30 +883,199 @@ $adminBody = Get-IssFunctionBody -Text $issText -Name 'CreateAdminPage'
 Add-StaticResult -Name 'static:display-name-field' -Ok (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('GAdminDisplayEdit'))) `
     -Note 'поле отображаемого имени на экране администратора'
 
-# --- Сторож свежести payload в build.ps1 (дефект 3) --------------------------
+# --- 98ad5eec: клиент в поставке, ярлыки, закрытие ETN.exe -------------------
+Write-Host '=== 98ad5eec: клиент, ярлыки, закрытие ETN.exe (статика) ==='
+$clientFilesMachine = Test-IssCode -Text $issText -IniComments `
+    -Pattern ([regex]::Escape('Source: "{#ClientPayload}\*"; DestDir: "{app}\client"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientMachine'))
+$clientFilesUser = Test-IssCode -Text $issText -IniComments `
+    -Pattern ([regex]::Escape('Source: "{#ClientPayload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientUser'))
+Add-StaticResult -Name 'static:client-files-scope' -Ok ($clientFilesMachine -and $clientFilesUser) `
+    -Note '[Files] клиента: «для всех» — {app}\client, «для меня» — {app}'
+$iconsOk = (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Name: "{#ShortcutDesktopDir}\ETN"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Name: "{#ShortcutMenuDir}\ETN"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Filename: "{app}\client\ETN.exe"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Filename: "{app}\ETN.exe"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Check: InstallClientMachine'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Check: InstallClientUser')))
+Add-StaticResult -Name 'static:client-shortcuts' -Ok $iconsOk `
+    -Note 'ярлыки: рабочий стол и меню «Пуск», цель и Check — по области установки'
+$installPathBody = Get-IssFunctionBody -Text $issText -Name 'ClientInstallPath'
+$installPathOk = (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{localappdata}'"))) -and
+    (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{commonpf}'")))
+Add-StaticResult -Name 'static:client-install-path' -Ok $installPathOk `
+    -Note 'каталог клиента по области: профиль пользователя / Program Files'
+$jsonBody = Get-IssFunctionBody -Text $issText -Name 'BuildInstallJson'
+Add-StaticResult -Name 'static:client-scope-json' `
+    -Ok ((Test-IssCode -Text $jsonBody -Pattern ([regex]::Escape('"client_scope"'))) -and
+         (Test-IssCode -Text $jsonBody -Pattern ([regex]::Escape("Scope := 'user'"))) -and
+         (Test-IssCode -Text $jsonBody -Pattern ([regex]::Escape("Scope := 'machine'")))) `
+    -Note 'client_scope (user/machine) пишется в install.json'
+
+$closeBody = Get-IssFunctionBody -Text $issText -Name 'CloseRunningClient'
+$softIdx = $closeBody.IndexOf('SoftCloseClientPids')
+$softWaitIdx = $closeBody.IndexOf('WaitClientProcessesGone(ClientCloseWaitMs')
+$forceIdx = $closeBody.IndexOf('ForceCloseClientPids')
+$forceWaitIdx = $closeBody.IndexOf('WaitClientProcessesGone(CLIENT_KILL_WAIT_MS')
+$closeOrder = ($closeBody -ne '') -and ($softIdx -ge 0) -and ($softWaitIdx -gt $softIdx) -and
+    ($forceIdx -gt $softWaitIdx) -and ($forceWaitIdx -gt $forceIdx)
+Add-StaticResult -Name 'static:client-close-order' -Ok $closeOrder `
+    -Note 'мягкое закрытие → ожидание → принудительное → ожидание'
+$softBody = Get-IssFunctionBody -Text $issText -Name 'SoftCloseClientPids'
+$forceBody = Get-IssFunctionBody -Text $issText -Name 'ForceCloseClientPids'
+$softNoForce = (Test-IssCode -Text $softBody -Pattern ([regex]::Escape("RunTaskkill('/PID ' + Pid, True)"))) -and
+    (-not (Test-IssCode -Text $softBody -Pattern ([regex]::Escape("'/F"))))
+$forceKills = Test-IssCode -Text $forceBody -Pattern ([regex]::Escape("RunTaskkill('/F /PID ' + Pid + ' /T', False)"))
+Add-StaticResult -Name 'static:client-close-taskkill' -Ok ($softNoForce -and $forceKills) `
+    -Note 'мягко — taskkill без /F, принудительно — /F /PID … /T'
+$closeCallIdx = $stepBody.IndexOf('CloseRunningClient(False, Reason)')
+$prepIdx = $stepBody.IndexOf('PrepareServerUpdate(Reason)')
+$closeBeforeCopy = ($closeCallIdx -ge 0) -and ($prepIdx -gt $closeCallIdx)
+Add-StaticResult -Name 'static:client-close-before-copy' -Ok $closeBeforeCopy `
+    -Note 'закрытие клиента — в ssInstall до PrepareServerUpdate и копирования'
+$closeGuard = (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('if not CloseRunningClient(False, Reason) then'))) -and
+    (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('GExitCode := EXIT_PRECONDITION'))) -and
+    (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('ExitProcess(EXIT_PRECONDITION)')))
+Add-StaticResult -Name 'static:client-close-code20' -Ok $closeGuard `
+    -Note 'клиент не закрылся — код 20 и выход до копирования файлов'
+$readyBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
+Add-StaticResult -Name 'static:client-close-gui-warning' `
+    -Ok ((Test-IssCode -Text $readyBody -Pattern ([regex]::Escape('CloseRunningClient(True, Reason)'))) -and
+         (Test-IssCode -Text $issText -Pattern ([regex]::Escape('Закрыть клиент и продолжить установку?')))) `
+    -Note 'GUI: предупреждение и согласие до повышения прав'
+$clientPidsProduct = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'ClientPidsRunning' -Ifdef 'TestMode'
+$clientHooksIfdef = ($clientPidsProduct -ne '') -and
+    (-not ($clientPidsProduct -match 'GTestClientPids')) -and
+    (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('GTestClientPids')))
+Add-StaticResult -Name 'static:client-hooks-ifdef' -Ok $clientHooksIfdef `
+    -Note 'модель клиента и хуки /TESTCLIENT* — только под #ifdef TestMode'
+Add-StaticResult -Name 'static:client-launch-original-user' `
+    -Ok (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') `
+        -Pattern ([regex]::Escape("ShellExecAsOriginalUser('open', Exe"))) `
+    -Note 'запуск клиента с итоговой сводки — от исходного пользователя (режим app)'
+$fetchText = Get-Content -LiteralPath (Join-Path $installerDir 'fetch-payload.ps1') -Raw -Encoding UTF8
+$buildText = Get-Content -LiteralPath $buildScript -Raw -Encoding UTF8
+Add-StaticResult -Name 'static:payload-fetch-client' `
+    -Ok (($fetchText -match [regex]::Escape("'-w', '@etn/client', 'run', 'package:dir'")) -and
+         ($fetchText -match [regex]::Escape('payloadClient')) -and
+         ($fetchText -match [regex]::Escape("'client\ETN.exe'"))) `
+    -Note 'fetch-payload: сборка клиента (--dir) и копирование в payload\client'
+Add-StaticResult -Name 'static:payload-required-client' `
+    -Ok ($buildText -match [regex]::Escape("'client\ETN.exe'")) `
+    -Note 'build.ps1: клиент — обязательный файл payload'
+Add-StaticResult -Name 'static:freshness-full-trees' `
+    -Ok (($buildText -match [regex]::Escape('Compare-PayloadTree')) -and
+         ($buildText -match [regex]::Escape("Relative = 'server\dist'")) -and
+         ($buildText -match [regex]::Escape("Relative = 'server\migrations'"))) `
+    -Note 'свежесть: весь server\dist и все migrations, а не два файла'
+$builderYml = Get-Content -LiteralPath (Join-Path $repoRoot 'client\electron-builder.yml') -Raw -Encoding UTF8
+$dirTarget = ($builderYml -match '(?m)^\s+-\s+dir\s*$') -and
+    ($builderYml -notmatch '(?m)^\s*-\s*nsis\s*$') -and
+    ($builderYml -notmatch '(?m)^nsis\s*:')
+Add-StaticResult -Name 'static:client-dir-target' -Ok $dirTarget `
+    -Note 'electron-builder: цель win — dir, NSIS снят (один установщик)'
+$clientPkgText = Get-Content -LiteralPath (Join-Path $repoRoot 'client\package.json') -Raw -Encoding UTF8
+Add-StaticResult -Name 'static:client-package-dir-script' `
+    -Ok (($clientPkgText -match [regex]::Escape('"package:dir"')) -and
+         ($clientPkgText -match [regex]::Escape('electron-builder --dir'))) `
+    -Note 'npm -w @etn/client run package:dir собирает win-unpacked'
+
+
+# --- Сторож свежести payload в build.ps1 (дефект 3, 98ad5eec) ----------------
 # Продуктовая сборка (без -TestMode) обязана отказаться от устаревшей поставки
 # до компиляции: иначе exe собирается, а падает уже на etn init --key-out.
-Write-Host '=== Сторож свежести payload (дефект 3) ==='
-$stalePayload = Join-Path $workRoot 'stale-payload'
-foreach ($dir in @('node', 'service', 'server\dist', 'server\node_modules\better-sqlite3')) {
-    New-Item -ItemType Directory -Path (Join-Path $stalePayload $dir) -Force | Out-Null
+# Задача 98ad5eec расширила проверку на весь server/dist и все migrations и
+# сделала клиент обязательным — проверяются обе стороны: неполный payload и
+# payload, разошедшийся со сборкой репозитория, не собираются; свежий —
+# собирается (иначе сторож браковал бы верную поставку).
+Write-Host '=== Сторож свежести payload (дефект 3, 98ad5eec) ==='
+function Copy-Tree {
+    param([string]$Source, [string]$Destination)
+    & robocopy $Source $Destination /E /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy $Source -> $Destination завершился с кодом $LASTEXITCODE." }
 }
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'node\node.exe'), 'stub')
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'service\etn-service.exe'), 'stub')
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'service\etn-service.xml'), '<service><id>ETN</id></service>')
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\package.json'), '{"name":"@etn/server","version":"0.0.1"}')
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\dist\index.js'), '// stub')
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\dist\cli.js'), '// старая сборка без --key-out')
-[System.IO.File]::WriteAllText((Join-Path $stalePayload 'server\node_modules\better-sqlite3\package.json'),
-    '{"name":"better-sqlite3","version":"11.1.2"}')
+
+function New-FreshnessPayload {
+    param([string]$Path, [switch]$WithoutClient, [switch]$WithoutMigrations)
+    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
+    foreach ($dir in @('node', 'service', 'server\node_modules\better-sqlite3', 'client\resources')) {
+        New-Item -ItemType Directory -Path (Join-Path $Path $dir) -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText((Join-Path $Path 'node\node.exe'), 'stub')
+    [System.IO.File]::WriteAllText((Join-Path $Path 'service\etn-service.exe'), 'stub')
+    $templateText = Get-Content -LiteralPath (Join-Path $installerDir 'service\etn-service.xml') -Raw -Encoding UTF8
+    [System.IO.File]::WriteAllText((Join-Path $Path 'service\etn-service.xml'), $templateText,
+        (New-Object System.Text.UTF8Encoding($false)))
+    $serverPkg = Get-Content -LiteralPath (Join-Path $repoRoot 'server\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    [System.IO.File]::WriteAllText((Join-Path $Path 'server\package.json'),
+        '{"name":"@etn/server","version":"' + $serverPkg.version + '"}')
+    [System.IO.File]::WriteAllText((Join-Path $Path 'server\node_modules\better-sqlite3\package.json'),
+        '{"name":"better-sqlite3","version":"11.1.2"}')
+    if (-not $WithoutMigrations) {
+        Copy-Tree -Source (Join-Path $repoRoot 'server\migrations') -Destination (Join-Path $Path 'server\migrations')
+    }
+    if (Test-Path -LiteralPath (Join-Path $repoRoot 'server\dist')) {
+        Copy-Tree -Source (Join-Path $repoRoot 'server\dist') -Destination (Join-Path $Path 'server\dist')
+    } else {
+        New-Item -ItemType Directory -Path (Join-Path $Path 'server\dist') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\index.js'), '// stub')
+        [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\cli.js'), '// --key-out --check')
+    }
+    if (-not $WithoutClient) {
+        [System.IO.File]::WriteAllText((Join-Path $Path 'client\ETN.exe'), 'stub')
+        [System.IO.File]::WriteAllText((Join-Path $Path 'client\resources\app.asar'), 'stub')
+    }
+}
+
+function Invoke-PayloadBuild {
+    param([string]$Payload, [string]$OutputName)
+    $out = & $psExeForBuild -NoProfile -ExecutionPolicy Bypass -File $buildScript `
+        -PayloadRoot $Payload -OutputDir (Join-Path $workRoot $OutputName) 2>&1 | Out-String
+    return [pscustomobject]@{ Code = $LASTEXITCODE; Output = $out }
+}
+
 $psExeForBuild = (Get-Process -Id $PID).Path
-$staleOut = & $psExeForBuild -NoProfile -ExecutionPolicy Bypass -File $buildScript `
-    -PayloadRoot $stalePayload -OutputDir (Join-Path $workRoot 'stale-out') 2>&1 | Out-String
-$staleFailed = ($LASTEXITCODE -ne 0)
-Add-StaticResult -Name 'build:stale-payload-fails' -Ok $staleFailed `
-    -Note 'сборка без -TestMode не собирает exe из устаревшей поставки'
-Add-StaticResult -Name 'build:stale-payload-message' -Ok ($staleOut -match 'Обновите payload') `
+
+# A. Клиент обязателен: без client\ETN.exe сборка отказывается.
+$noClientPayload = Join-Path $workRoot 'payload-no-client'
+New-FreshnessPayload -Path $noClientPayload -WithoutClient
+$noClientBuild = Invoke-PayloadBuild -Payload $noClientPayload -OutputName 'no-client-out'
+Add-StaticResult -Name 'build:payload-requires-client' `
+    -Ok (($noClientBuild.Code -ne 0) -and ($noClientBuild.Output -match 'client\\ETN\.exe')) `
+    -Note 'без клиента в payload продуктовый установщик не собирается'
+
+# B. Правка server\dist после сборки ловится сравнением всего каталога.
+$staleDistPayload = Join-Path $workRoot 'payload-stale-dist'
+New-FreshnessPayload -Path $staleDistPayload
+[System.IO.File]::AppendAllText((Join-Path $staleDistPayload 'server\dist\index.js'),
+    "`r`n// локальная правка после сборки`r`n")
+$staleDistBuild = Invoke-PayloadBuild -Payload $staleDistPayload -OutputName 'stale-dist-out'
+Add-StaticResult -Name 'build:stale-dist-detected' `
+    -Ok (($staleDistBuild.Code -ne 0) -and ($staleDistBuild.Output -match 'server\\dist')) `
+    -Note 'изменённый файл server\dist — payload устарел'
+Add-StaticResult -Name 'build:stale-dist-message' `
+    -Ok ($staleDistBuild.Output -match 'Обновите payload') `
     -Note 'сообщение указывает на fetch-payload.ps1'
+
+# C. Правка migrations после сборки ловится так же.
+$staleMigPayload = Join-Path $workRoot 'payload-stale-migrations'
+New-FreshnessPayload -Path $staleMigPayload
+$firstMigration = Get-ChildItem -LiteralPath (Join-Path $staleMigPayload 'server\migrations\system') `
+    -Filter '*.sql' -File | Select-Object -First 1
+if (-not $firstMigration) { throw 'В репозитории нет миграций system\*.sql для проверки свежести.' }
+[System.IO.File]::AppendAllText($firstMigration.FullName, "`r`n-- локальная правка`r`n")
+$staleMigBuild = Invoke-PayloadBuild -Payload $staleMigPayload -OutputName 'stale-migrations-out'
+Add-StaticResult -Name 'build:stale-migrations-detected' `
+    -Ok (($staleMigBuild.Code -ne 0) -and ($staleMigBuild.Output -match 'server\\migrations')) `
+    -Note 'изменённый файл migrations — payload устарел'
+
+# D. Свежий payload проверку проходит (нет ложного отказа) и собирается.
+$freshPayload = Join-Path $workRoot 'payload-fresh'
+New-FreshnessPayload -Path $freshPayload
+$freshBuild = Invoke-PayloadBuild -Payload $freshPayload -OutputName 'fresh-out'
+Add-StaticResult -Name 'build:fresh-payload-accepted' `
+    -Ok (($freshBuild.Code -eq 0) -and ($freshBuild.Output -match 'Payload свежий')) `
+    -Note 'свежий payload: весь server/dist, migrations и клиент совпадают'
+
 
 # --- Сборка тестового установщика -------------------------------------------
 Write-Host '=== Сборка тестового установщика ==='
@@ -1014,6 +1183,15 @@ $filesOk = (Test-Path -LiteralPath (Join-Path $appDir 'server\package.json')) -a
     (Test-Path -LiteralPath (Join-Path $appDir 'node\node.exe')) -and
     (Test-Path -LiteralPath (Join-Path $appDir 'service\etn-service.xml'))
 Add-Result -Name 'success:payload-files' -Expected 1 -Actual ([int]$filesOk)
+# /SERVERONLY не ставит клиент: ни машинной, ни пользовательской раскладки.
+$serverOnlyClient = (Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')) -or
+    (Test-Path -LiteralPath (Join-Path $appDir 'ETN.exe'))
+Add-Result -Name 'success:no-client' -Expected 0 -Actual ([int]$serverOnlyClient) `
+    -Note '/SERVERONLY: файлы клиента не устанавливаются'
+$serverOnlyShortcuts = (Test-Path -LiteralPath (Join-Path $workRoot 'shortcuts\desktop\ETN.lnk')) -or
+    (Test-Path -LiteralPath (Join-Path $workRoot 'shortcuts\menu\ETN.lnk'))
+Add-Result -Name 'success:no-client-shortcuts' -Expected 0 -Actual ([int]$serverOnlyShortcuts) `
+    -Note '/SERVERONLY: ярлыки клиента не создаются'
 
 # --- 10. повторный запуск той же версии -------------------------------------
 Start-Sleep -Milliseconds 1100
@@ -1800,6 +1978,14 @@ if (Test-Path -LiteralPath $clientJsonPath) {
     $clientJsonOk = ($clientJson -match '"mode":"client"') -and ($clientJson -match '"client_scope":"machine"')
 }
 Add-Result -Name 'client-machine:install-json' -Expected 1 -Actual ([int]$clientJsonOk) -Note 'mode=client, client_scope=machine'
+# Ярлыки создаются этим же прогоном; проверяются до Reset-State следующего
+# сценария, иначе их уже нет.
+$desktopLnk = Join-Path $workRoot 'shortcuts\desktop\ETN.lnk'
+$menuLnk = Join-Path $workRoot 'shortcuts\menu\ETN.lnk'
+Add-Result -Name 'client-machine:shortcut-desktop' -Expected 1 `
+    -Actual ([int](Test-Path -LiteralPath $desktopLnk)) -Note 'ярлык на рабочем столе'
+Add-Result -Name 'client-machine:shortcut-menu' -Expected 1 `
+    -Actual ([int](Test-Path -LiteralPath $menuLnk)) -Note 'ярлык в меню «Пуск»'
 $probe = Invoke-StateProbe
 Add-StateResult -Name 'client-machine:repeat-state' -Line $probe.State -Pairs @(
     'server_state=not-installed', 'client_state=installed',
@@ -1813,6 +1999,163 @@ Add-Result -Name 'privileged-client-user:code' -Expected 0 -Actual $code
 $userClientInChild = (Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')) -or
     (Test-Path -LiteralPath (Join-Path $appDir 'ETN.exe'))
 Add-Result -Name 'privileged-client-user:not-copied' -Expected 0 -Actual ([int]$userClientInChild) -Note 'пользовательский клиент ставит неэлевированная фаза'
+
+# --- 98ad5eec: клиент «только для меня» — установка и ярлыки -----------------
+# /TESTUSERINSTALL=1 обходит silent-предусловия и ставит только клиента
+# (silent-контракт клиент не ставит), /VERYSILENT оставляет запуск без окон:
+# проверяется та же ветка [Files]/[Icons], что и в GUI, — неэлевированная фаза
+# ставит клиента в {app} (профиль).
+Write-Host '=== 98ad5eec: клиент «только для меня» ==='
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTSELECT=client-user', '/TESTUSERINSTALL=1', '/TESTELEVATED=1', '/TESTHEALTH=ok'))
+Add-Result -Name 'client-user:code' -Expected 0 -Actual $code
+Add-Result -Name 'client-user:exe' -Expected 1 `
+    -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'ETN.exe'))) `
+    -Note 'клиент «для меня» — в корне {app}'
+Add-Result -Name 'client-user:not-machine' -Expected 0 `
+    -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe'))) `
+    -Note 'в {app}\client машинная копия не появляется'
+Add-Result -Name 'client-user:shortcut-desktop' -Expected 1 `
+    -Actual ([int](Test-Path -LiteralPath $desktopLnk))
+Add-Result -Name 'client-user:shortcut-menu' -Expected 1 `
+    -Actual ([int](Test-Path -LiteralPath $menuLnk))
+
+# --- 98ad5eec: закрытие запущенного клиента ----------------------------------
+# Модель процессов: /TESTCLIENTPIDS — что «запущено», /TESTCLIENTGONE — через
+# сколько мс процесс выходит после мягкого закрытия, /TESTCLIENTFORCE=fail —
+# не выходит и после /F, /TESTCLIENTWAIT — бюджет ожидания. Порядок «мягко →
+# ожидание → /F» проверяется строками журнала.
+Write-Host '=== 98ad5eec: закрытие запущенного клиента ==='
+function Get-ClientCloseLog {
+    $log = Get-LatestLog
+    if (-not $log) { return '' }
+    return Get-Content -LiteralPath $log.FullName -Raw
+}
+
+Reset-State
+$closeParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-close-soft.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$closeParams`"",
+    '/TESTELEVATED=1', '/TESTCLIENTPIDS=4242', '/TESTCLIENTGONE=0'))
+Add-Result -Name 'client-close:soft-code' -Expected 0 -Actual $code
+$softLog = Get-ClientCloseLog
+Add-Result -Name 'client-close:soft-wait' `
+    -Expected 1 -Actual ([int]($softLog -match 'мягкое закрытие')) `
+    -Note 'мягкое закрытие (taskkill без /F)'
+Add-Result -Name 'client-close:soft-closed' `
+    -Expected 1 -Actual ([int]($softLog -match 'закрыт мягко')) `
+    -Note 'процесс вышел после мягкого закрытия'
+Add-Result -Name 'client-close:soft-no-force' `
+    -Expected 0 -Actual ([int]($softLog -match 'принудительное закрытие')) `
+    -Note 'принудительное не применялось — хватило мягкого'
+Add-Result -Name 'client-close:soft-files' -Expected 1 `
+    -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe'))) `
+    -Note 'файлы клиента заменены после закрытия'
+
+Reset-State
+$closeParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-close-timeout.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$closeParams`"",
+    '/TESTELEVATED=1', '/TESTCLIENTPIDS=4242', '/TESTCLIENTGONE=60000',
+    '/TESTCLIENTWAIT=500', '/TESTCLIENTFORCE=ok'))
+Add-Result -Name 'client-close:timeout-code' -Expected 0 -Actual $code
+$timeoutLog = Get-ClientCloseLog
+$forceIdxLog = $timeoutLog.IndexOf('принудительное закрытие')
+$softIdxLog = $timeoutLog.IndexOf('мягкое закрытие')
+Add-Result -Name 'client-close:timeout-force' `
+    -Expected 1 -Actual ([int]($timeoutLog -match 'не закрылся — принудительное закрытие')) `
+    -Note 'после таймаута — /F'
+Add-Result -Name 'client-close:timeout-order' `
+    -Expected 1 -Actual ([int](($softIdxLog -ge 0) -and ($forceIdxLog -gt $softIdxLog))) `
+    -Note 'сначала мягкое закрытие, потом принудительное'
+Add-Result -Name 'client-close:timeout-closed' `
+    -Expected 1 -Actual ([int]($timeoutLog -match 'принудительно закрыт')) `
+    -Note 'после /F процесс закрыт, установка продолжена'
+
+Reset-State
+$closeReasonFile = Join-Path $workRoot 'client-close-fail.reason'
+$closeParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-close-fail.ini' `
+    -ReasonFile $closeReasonFile
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$closeParams`"",
+    '/TESTELEVATED=1', '/TESTCLIENTPIDS=4242', '/TESTCLIENTGONE=60000',
+    '/TESTCLIENTWAIT=500', '/TESTCLIENTFORCE=fail'))
+Add-Result -Name 'client-close:fail-code' -Expected 20 -Actual $code `
+    -Note 'процесс не закрылся — код 20'
+Add-Result -Name 'client-close:fail-not-copied' -Expected 0 `
+    -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe'))) `
+    -Note 'файлы клиента не заменялись'
+Add-Result -Name 'client-close:fail-no-json' -Expected 0 `
+    -Actual ([int](Test-Path -LiteralPath (Join-Path $dataDir 'install.json'))) `
+    -Note 'запись установки не создавалась'
+$closeReason = ''
+if (Test-Path -LiteralPath $closeReasonFile) { $closeReason = Get-Content -LiteralPath $closeReasonFile -Raw }
+Add-Result -Name 'client-close:fail-reason' -Expected 1 `
+    -Actual ([int]($closeReason -match 'клиент ETN не закрыт')) `
+    -Note 'причина для родителя записана в reason-файл'
+
+Reset-State
+$writeParams = New-ParamsFile -Server 1 -Client 0 -Scope user -Name 'server-no-client-close.ini'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$writeParams`"",
+    '/TESTELEVATED=1', '/TESTSERVICE=present', '/TESTHEALTH=ok', '/TESTCLIENTPIDS=4242'))
+Add-Result -Name 'client-close:server-only-skip' -Expected 0 -Actual $code `
+    -Note 'сервер без клиента: запущенный клиент не трогается'
+$serverOnlyLog = Get-ClientCloseLog
+Add-Result -Name 'client-close:server-only-no-close' -Expected 0 `
+    -Actual ([int]($serverOnlyLog -match 'мягкое закрытие')) `
+    -Note 'без выбранного клиента taskkill не вызывается'
+
+# --- 98ad5eec: реальное закрытие ETN.exe (Get-Process + taskkill) ------------
+# Модель проверяет порядок, но не сам taskkill. Здесь запускается настоящий
+# процесс с именем ETN.exe (копия powershell.exe с невидимой формой; окно вне
+# экрана и без кнопки на панели задач) и закрывается мягко. Фильтр
+# /TESTCLIENTPATH не даёт задеть клиент пользователя, если он запущен.
+$realCloseOk = $true
+$psHostExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$dummyDir = Join-Path $workRoot 'dummy'
+$dummyExe = Join-Path $dummyDir 'ETN.exe'
+$dummyForm = Join-Path $dummyDir 'form.ps1'
+if (-not (Test-Path -LiteralPath $psHostExe)) {
+    $realCloseOk = $false
+    Add-StaticResult -Name 'client-close:real-host' -Ok $false -Note "нет $psHostExe"
+} else {
+    if (Test-Path -LiteralPath $dummyDir) { Remove-Item -LiteralPath $dummyDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $dummyDir -Force | Out-Null
+    Copy-Item -LiteralPath $psHostExe -Destination $dummyExe -Force
+    [System.IO.File]::WriteAllText($dummyForm,
+        "Add-Type -AssemblyName System.Windows.Forms`r`n" +
+        "`$f = New-Object System.Windows.Forms.Form`r`n" +
+        "`$f.ShowInTaskbar = `$false`r`n" +
+        "`$f.StartPosition = 'Manual'`r`n" +
+        "`$f.Location = New-Object System.Drawing.Point(-10000, -10000)`r`n" +
+        "`$f.FormBorderStyle = 'None'`r`n" +
+        "`$f.Width = 10`r`n`$f.Height = 10`r`n" +
+        "[System.Windows.Forms.Application]::Run(`$f)`r`n")
+    Reset-State
+    $closeParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-close-real.ini'
+    $dummy = Start-Process -FilePath $dummyExe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $dummyForm) -PassThru
+    try {
+        Start-Sleep -Seconds 2
+        Add-Result -Name 'client-close:real-started' -Expected 1 `
+            -Actual ([int](-not $dummy.HasExited)) -Note "PID $($dummy.Id)"
+        $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$closeParams`"",
+            '/TESTELEVATED=1', '/TESTCLIENTREAL=1', "/TESTCLIENTPATH=$dummyDir",
+            '/TESTCLIENTWAIT=5000'))
+        Add-Result -Name 'client-close:real-code' -Expected 0 -Actual $code
+        $null = $dummy.WaitForExit(5000)
+        Add-Result -Name 'client-close:real-exited' -Expected 1 `
+            -Actual ([int]$dummy.HasExited) -Note 'мягкий taskkill закрыл процесс'
+        $realLog = Get-ClientCloseLog
+        Add-Result -Name 'client-close:real-soft' -Expected 1 `
+            -Actual ([int]($realLog -match 'taskkill без /F .*код 0')) `
+            -Note 'taskkill без /F выполнен с кодом 0'
+        Add-Result -Name 'client-close:real-files' -Expected 1 `
+            -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')))
+    } finally {
+        if (-not $dummy.HasExited) { Stop-Process -Id $dummy.Id -Force -ErrorAction SilentlyContinue }
+    }
+}
+if ($realCloseOk) {
+    Add-StaticResult -Name 'client-close:real-available' -Ok $true -Note 'реальная ветка выполнена'
+}
 
 # ============================================================================
 # ce3ab836: бэкап БД перед обновлением — формат, целостность, ротация.
@@ -2918,6 +3261,35 @@ try {
     Add-Result -Name 'service-real-uninstall:removed' -Expected 1 `
         -Actual ([int]($uninsText.Contains('Служба ETN снята (uninstall)'))) `
         -Note 'служба снята в usUninstall'
+
+    # 98ad5eec: настоящий деинсталлятор удаляет ярлыки клиента «только для меня».
+    # Ярлыки лежат вне {app} (песочница теста), поэтому их исчезновение — работа
+    # деинсталлятора по журналу [Icons], а не удаление каталога программы.
+    Write-Host '=== 98ad5eec: деинсталлятор удаляет ярлыки клиента ==='
+    Reset-State
+    $installCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @(
+        '/TESTSELECT=client-user', '/TESTUSERINSTALL=1', '/TESTELEVATED=1'))
+    Add-Result -Name 'client-real-uninstall:install-code' -Expected 0 -Actual $installCode
+    $clientDesktopLnk = Join-Path $workRoot 'shortcuts\desktop\ETN.lnk'
+    $clientMenuLnk = Join-Path $workRoot 'shortcuts\menu\ETN.lnk'
+    Add-Result -Name 'client-real-uninstall:lnk-before' -Expected 2 `
+        -Actual ([int]([int](Test-Path -LiteralPath $clientDesktopLnk) + [int](Test-Path -LiteralPath $clientMenuLnk))) `
+        -Note 'оба ярлыка созданы установкой'
+    $clientUninsPath = Join-Path $appDir 'unins000.exe'
+    Add-Result -Name 'client-real-uninstall:uninstaller' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $clientUninsPath))
+    $uninstallCode = Invoke-Uninstaller -Path $clientUninsPath -Arguments @('/VERYSILENT',
+        '/SUPPRESSMSGBOXES', '/NORESTART')
+    Add-Result -Name 'client-real-uninstall:code' -Expected 0 -Actual $uninstallCode
+    Add-Result -Name 'client-real-uninstall:desktop-gone' -Expected 1 `
+        -Actual ([int](Wait-PathGone -Path $clientDesktopLnk)) `
+        -Note 'ярлык рабочего стола удалён'
+    Add-Result -Name 'client-real-uninstall:menu-gone' -Expected 1 `
+        -Actual ([int](Wait-PathGone -Path $clientMenuLnk)) `
+        -Note 'ярлык меню «Пуск» удалён'
+    Add-Result -Name 'client-real-uninstall:files-gone' -Expected 0 `
+        -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'ETN.exe'))) `
+        -Note 'файлы клиента удалены'
 } finally {
     # Деинсталлятор при отказе (мутация) оставляет установку и запись в HKCU:
     # убираем за собой, чтобы прогон не оставлял следов.

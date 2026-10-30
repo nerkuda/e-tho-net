@@ -1,7 +1,9 @@
 # electron-builder configuration for the ETN desktop client (task K1,
 # docs/07-client-electron.md §9).
 #
-# Build: `npm -w @etn/client run package` (electron-vite build + electron-builder).
+# Build: `npm -w @etn/client run package:dir` — распакованный каталог
+# release/win-unpacked для установщика Inno Setup (задача 98ad5eec).
+# `npm -w @etn/client run package` остаётся общей сборкой (macOS/Linux).
 
 appId: dev.etn.app
 productName: ETN
@@ -33,14 +35,14 @@ extraResources:
 asarUnpack:
   - '**/*.node'
 
-# Windows: NSIS installer.
+# Windows: только распакованный каталог (`dir`). Установщик Windows — Inno
+# Setup (installer/etn.iss), NSIS-цель снята задачей 98ad5eec: один установщик
+# на платформу, без второго экземпляра «Программы и компоненты».
+# electron-builder складывает dir-сборку в release/win-unpacked — её и берёт
+# installer/fetch-payload.ps1 в payload/client.
 win:
   target:
-    - nsis
-nsis:
-  oneClick: false
-  allowToChangeInstallationDirectory: true
-  deleteAppDataOnUninstall: false
+    - dir
 
 # macOS: dmg (arm64 + x64), hardened runtime.
 mac:

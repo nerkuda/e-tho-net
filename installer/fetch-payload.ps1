@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Подготовка payload установщика ETN: Node 22, WinSW и серверная поставка.
+    Подготовка payload установщика ETN: Node 22, WinSW, сервер и клиент.
 
 .DESCRIPTION
     Воспроизводимо готовит installer/payload для installer/build.ps1:
@@ -15,13 +15,19 @@
         server/migrations/         миграции system/ и network/;
         server/node_modules/       prod-зависимости (без dev), плюс
                                    собранные @etn/shared и @etn/markdown;
+        client/                    распакованная сборка @etn/client
+                                   (electron-builder --dir: ETN.exe,
+                                   resources/app.asar, migrations,
+                                   THIRD-PARTY-NOTICES.txt);
         server-manifest.json       что именно попало в поставку (версии,
-                                   хеши, resolved-версии зависимостей).
+                                   хеши, resolved-версии зависимостей,
+                                   версия клиента и Electron).
 
     Раскладка — контракт installer/etn.iss ([Files] и проверки payload при
-    компиляции): программа ставится в {app}, где node\, server\ и service\
-    лежат рядом. Точка запуска службы — `node.exe server\dist\index.js`
-    (см. installer/service/etn-service.xml).
+    компиляции): программа ставится в {app}, где node\, server\, service\ и
+    client\ лежат рядом. Точка запуска службы — `node.exe server\dist\index.js`
+    (см. installer/service/etn-service.xml), клиента — `client\ETN.exe`
+    (машинная установка) или `ETN.exe` в корне {app} («только для меня»).
 
     Шаги:
       1. скачать/взять из кэша и проверить SHA-256 Node и WinSW;
@@ -31,23 +37,31 @@
          их в payload (workspace-пакеты @etn/* кладутся физически, без
          симлинков npm);
       5. скопировать package.json, dist и migrations сервера;
-      6. проверить поставку: версия Node = 22, загрузка нативного
+      6. собрать клиент (electron-builder --dir, цель dir — NSIS снят задачей
+         98ad5eec) и скопировать release/win-unpacked в payload/client;
+      7. проверить поставку: версия Node = 22, загрузка нативного
          better-sqlite3 под поставленный node.exe, импорт @etn/shared и
-         @etn/markdown, наличие миграций; затем (если не указан
-         -SkipSmokeTest) поднять сервер из payload на временном каталоге
-         данных и свободном порту и проверить GET /api/v1/health.
+         @etn/markdown, наличие миграций, ETN.exe клиента и resources/app.asar;
+         затем (если не указан -SkipSmokeTest) поднять сервер из payload на
+         временном каталоге данных и свободном порту и проверить
+         GET /api/v1/health.
 
     Кэш скачанных архивов — installer/.cache (gitignored), payload —
     installer/payload (gitignored). Повторный запуск идемпотентен: каталоги
-    node/, service/, server/ пересоздаются, client/ не трогается (его
-    готовит задача 98ad5eec).
+    node/, service/, server/ и client/ пересоздаются.
+
+    Внимание: electron-builder пересобирает better-sqlite3 клиента (11.10.0,
+    Electron ABI) в корневом node_modules. Запущенный dev-клиент
+    (node_modules\electron) держит better_sqlite3.node и ломает сборку
+    (EBUSY/EPERM) — закройте его перед подготовкой payload.
 
     Требования: Node 22 (nvm use 22), выполненный npm install в корне
     репозитория (нужны dev-зависимости для сборки), доступ к nodejs.org и
     github.com для первой загрузки.
 
-    Задача 8b1f5980 (0.15.1). Лицензии поставки — installer/third-party/;
-    описание контракта и плейсхолдеров службы — installer/README.md.
+    Задачи 8b1f5980 и 98ad5eec (0.15.1). Лицензии поставки —
+    installer/third-party/; описание контракта и плейсхолдеров службы —
+    installer/README.md.
 
 .PARAMETER CacheDir
     Каталог кэша загрузок. По умолчанию installer/.cache.
@@ -114,9 +128,11 @@ $PayloadRoot = Resolve-FullPath -Path $PayloadRoot -Base $repoRoot
 $payloadNode = Join-Path $PayloadRoot 'node'
 $payloadService = Join-Path $PayloadRoot 'service'
 $payloadServer = Join-Path $PayloadRoot 'server'
+$payloadClient = Join-Path $PayloadRoot 'client'
 $nodeExe = Join-Path $payloadNode 'node.exe'
 $serviceTemplate = Join-Path $PSScriptRoot 'service\etn-service.xml'
 $stagingDir = Join-Path $CacheDir 'server-prod'
+$clientReleaseDir = Join-Path $repoRoot 'client\release\win-unpacked'
 
 $npmCmd = (Get-Command npm.cmd -ErrorAction SilentlyContinue)
 if (-not $npmCmd) { $npmCmd = Get-Command npm -ErrorAction Stop }
@@ -241,7 +257,7 @@ New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
 New-Item -ItemType Directory -Path $PayloadRoot -Force | Out-Null
 
 # --- 1. Node 22 --------------------------------------------------------------
-Write-Step "1/6 Node $NodeVersion"
+Write-Step "1/7 Node $NodeVersion"
 $nodeZip = Get-PinnedFile -Url $NodeArchiveUrl -FileName $NodeArchiveName -Sha256 $NodeArchiveSha256
 $nodeExtract = Join-Path $CacheDir "node-v$NodeVersion"
 if (Test-Path -LiteralPath $nodeExtract) { Remove-Item -LiteralPath $nodeExtract -Recurse -Force }
@@ -261,7 +277,7 @@ if ($nodeReportedVersion -notmatch '^v22\.') {
 Write-Host "  node.exe: $nodeReportedVersion"
 
 # --- 2. WinSW и шаблон службы ------------------------------------------------
-Write-Step "2/6 WinSW $WinSwVersion"
+Write-Step "2/7 WinSW $WinSwVersion"
 $winSwExe = Get-PinnedFile -Url $WinSwUrl -FileName $WinSwAssetName -Sha256 $WinSwSha256
 if (-not (Test-Path -LiteralPath $serviceTemplate)) { throw "Нет шаблона службы: $serviceTemplate" }
 $templateText = Get-Content -LiteralPath $serviceTemplate -Raw -Encoding UTF8
@@ -282,7 +298,7 @@ Copy-Item -LiteralPath $serviceTemplate -Destination (Join-Path $payloadService 
 Write-Host '  service/etn-service.exe + etn-service.xml'
 
 # --- 3. Сборка workspace-пакетов -------------------------------------------
-Write-Step '3/6 Сборка @etn/shared, @etn/markdown, @etn/server'
+Write-Step '3/7 Сборка @etn/shared, @etn/markdown, @etn/server'
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'node_modules'))) {
     throw "Нет node_modules в $repoRoot — выполните npm install (Node 22) перед сборкой payload."
 }
@@ -302,7 +318,7 @@ foreach ($artifact in @(
 Write-Host '  сборка на месте: server/dist, shared/dist, markdown/dist'
 
 # --- 4. Prod-зависимости сервера --------------------------------------------
-Write-Step '4/6 Prod-зависимости сервера'
+Write-Step '4/7 Prod-зависимости сервера'
 $serverPkg = Read-JsonFile -Path (Join-Path $serverDir 'package.json')
 $markdownPkg = Read-JsonFile -Path (Join-Path $markdownDir 'package.json')
 
@@ -359,14 +375,46 @@ foreach ($workspacePackage in @(
 Write-Host "  prod node_modules: $((Get-ChildItem -LiteralPath (Join-Path $payloadServer 'node_modules') -Force).Count) записей"
 
 # --- 5. Файлы сервера --------------------------------------------------------
-Write-Step '5/6 package.json, dist и migrations сервера'
+Write-Step '5/7 package.json, dist и migrations сервера'
 Copy-Item -LiteralPath (Join-Path $serverDir 'package.json') -Destination (Join-Path $payloadServer 'package.json') -Force
 Copy-Directory -Source (Join-Path $serverDir 'dist') -Destination (Join-Path $payloadServer 'dist')
 Copy-Directory -Source (Join-Path $serverDir 'migrations') -Destination (Join-Path $payloadServer 'migrations')
 Write-Host "  server/package.json (версия $($serverPkg.version)), dist, migrations"
 
-# --- 6. Проверки поставки ----------------------------------------------------
-Write-Step '6/6 Проверки поставки'
+# --- 6. Клиент ---------------------------------------------------------------
+Write-Step '6/7 Сборка клиента (electron-builder --dir)'
+# electron-builder пересобирает нативный better-sqlite3 клиента в корневом
+# node_modules. Запущенный dev-клиент держит этот файл и сборка падает на
+# EBUSY/EPERM — предупреждаем заранее, а не показываем стек npm.
+$devElectron = @(Get-Process -Name 'electron' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith((Join-Path $repoRoot 'node_modules\electron'), [System.StringComparison]::OrdinalIgnoreCase)
+    })
+if ($devElectron.Count -gt 0) {
+    Write-Warning ("Запущен dev-клиент из репозитория (PID " + (($devElectron | ForEach-Object { $_.Id }) -join ', ') +
+        "): electron-builder не сможет пересобрать better-sqlite3 (файл занят). " +
+        'Закройте dev-клиент; сборка будет предпринята, но может завершиться EBUSY/EPERM.')
+}
+$clientPkg = Read-JsonFile -Path (Join-Path $repoRoot 'client\package.json')
+Invoke-Npm -WorkingDirectory $repoRoot -Arguments @('-w', '@etn/client', 'run', 'package:dir')
+$clientExe = Join-Path $clientReleaseDir 'ETN.exe'
+if (-not (Test-Path -LiteralPath $clientExe)) {
+    throw "electron-builder --dir не создал клиент: нет $clientExe. Проверьте client/electron-builder.yml (цель win: dir)."
+}
+Copy-Directory -Source $clientReleaseDir -Destination $payloadClient
+foreach ($clientRequired in @(
+        (Join-Path $payloadClient 'ETN.exe'),
+        (Join-Path $payloadClient 'resources\app.asar'),
+        (Join-Path $payloadClient 'resources\migrations'),
+        (Join-Path $payloadClient 'resources\THIRD-PARTY-NOTICES.txt'))) {
+    if (-not (Test-Path -LiteralPath $clientRequired)) {
+        throw "В каталоге клиента нет обязательного файла: $clientRequired"
+    }
+}
+$clientExeSize = [math]::Round(((Get-Item -LiteralPath (Join-Path $payloadClient 'ETN.exe')).Length / 1MB), 1)
+Write-Host "  client/ETN.exe (версия $($clientPkg.version), Electron $($clientPkg.devDependencies.electron), $clientExeSize МБ), resources/app.asar, migrations, THIRD-PARTY-NOTICES.txt"
+
+# --- 7. Проверки поставки ----------------------------------------------------
+Write-Step '7/7 Проверки поставки'
 Push-Location -LiteralPath $payloadServer
 try {
     # Нативный модуль под поставленным Node: ABI 127, prebuilt под win32-x64.
@@ -407,20 +455,24 @@ foreach ($migrations in @('migrations\system', 'migrations\network')) {
     Write-Host "  ${migrations}: $count миграций"
 }
 
-# Обязательные файлы контракта etn.iss.
+# Обязательные файлы контракта etn.iss. Клиент обязателен: без ETN.exe
+# установщик с выбранным клиентом ставил бы пустой каталог, а build.ps1
+# отбраковал бы payload как неполный (задача 98ad5eec).
 foreach ($required in @(
         (Join-Path $payloadServer 'package.json'),
         (Join-Path $payloadServer 'dist\index.js'),
         (Join-Path $payloadServer 'dist\cli.js'),
         (Join-Path $payloadNode 'node.exe'),
         (Join-Path $payloadService 'etn-service.exe'),
-        (Join-Path $payloadService 'etn-service.xml'))) {
+        (Join-Path $payloadService 'etn-service.xml'),
+        (Join-Path $payloadClient 'ETN.exe'),
+        (Join-Path $payloadClient 'resources\app.asar'))) {
     if (-not (Test-Path -LiteralPath $required)) { throw "В payload нет обязательного файла: $required" }
 }
 
 # --- Smoke-test: init и health-check на временном каталоге данных -----------
 if (-not $SkipSmokeTest) {
-    Write-Step '6б Smoke-test: etn init + GET /api/v1/health'
+    Write-Step '7б Smoke-test: etn init + GET /api/v1/health'
     $smokeData = Join-Path $CacheDir 'smoke-data'
     if (Test-Path -LiteralPath $smokeData) { Remove-Item -LiteralPath $smokeData -Recurse -Force }
     New-Item -ItemType Directory -Path $smokeData -Force | Out-Null
@@ -516,6 +568,7 @@ $dependencyVersions['@etn/markdown'] = $markdownPkgVersion
 $manifest = [ordered]@{
     generated_at    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     server_version  = [string]$serverPkg.version
+    client_version  = [string]$clientPkg.version
     node            = [ordered]@{
         version    = $NodeVersion
         sha256     = $NodeArchiveSha256
@@ -527,6 +580,12 @@ $manifest = [ordered]@{
         sha256     = $WinSwSha256
         source     = $WinSwUrl
         executable = 'service\etn-service.exe'
+    }
+    client          = [ordered]@{
+        version    = [string]$clientPkg.version
+        electron   = [string]$clientPkg.devDependencies.electron
+        source     = 'client\release\win-unpacked (electron-builder --dir, цель dir)'
+        executable = 'client\ETN.exe'
     }
     service_template = 'service\etn-service.xml'
     dependencies    = $dependencyVersions
