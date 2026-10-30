@@ -19,9 +19,13 @@
                                    (electron-builder --dir: ETN.exe,
                                    resources/app.asar, migrations,
                                    THIRD-PARTY-NOTICES.txt);
-        server-manifest.json       что именно попало в поставку (версии,
-                                   хеши, resolved-версии зависимостей,
-                                   версия клиента и Electron).
+        server-manifest.json       паспорт поставки: версии и SHA-256 самого
+                                   payload (Node, WinSW), resolved-версии
+                                   зависимостей, версия клиента, Electron и
+                                   хэши файлов client\; пишется последним
+                                   шагом, а в начале прогона удаляется — по
+                                   нему build.ps1 отличает свежую поставку от
+                                   остатка неудачного прогона.
 
     Раскладка — контракт installer/etn.iss ([Files] и проверки payload при
     компиляции): программа ставится в {app}, где node\, server\, service\ и
@@ -125,6 +129,15 @@ $CacheDir = Resolve-FullPath -Path $CacheDir -Base $repoRoot
 if (-not $PayloadRoot) { $PayloadRoot = Join-Path $PSScriptRoot 'payload' }
 $PayloadRoot = Resolve-FullPath -Path $PayloadRoot -Base $repoRoot
 
+# Паспорт поставки пишется в самом конце и удаляется в начале прогона: иначе
+# неудачный прогон (например, package:dir упал на занятом better_sqlite3.node)
+# оставлял бы в payload старый клиент и старый манифест, по которым build.ps1
+# считал бы поставку свежей (замечание приёмки 98ad5eec).
+$manifestPath = Join-Path $PayloadRoot 'server-manifest.json'
+if (Test-Path -LiteralPath $manifestPath) {
+    Remove-Item -LiteralPath $manifestPath -Force
+}
+
 $payloadNode = Join-Path $PayloadRoot 'node'
 $payloadService = Join-Path $PayloadRoot 'service'
 $payloadServer = Join-Path $PayloadRoot 'server'
@@ -147,6 +160,20 @@ function Write-Step {
 function Get-FileSha256 {
     param([string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+# Хэши файлов дерева для паспорта поставки: ключ — относительный путь через
+# '/', значение — SHA-256. Сортировка делает манифест воспроизводимым. По этой
+# карте build.ps1 проверяет, что payload\client — ровно та сборка, которую
+# записал fetch-payload.ps1, а не остаток неудачного прогона (98ad5eec).
+function Get-TreeHashes {
+    param([string]$Root)
+    $map = [ordered]@{}
+    Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($Root.Length).TrimStart('\').Replace('\', '/')
+        $map[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    return $map
 }
 
 function Assert-FileHash {
@@ -565,6 +592,11 @@ $markdownPkgVersion = [string](Read-JsonFile -Path (Join-Path $payloadServer 'no
 $dependencyVersions['@etn/shared'] = $sharedPkgVersion
 $dependencyVersions['@etn/markdown'] = $markdownPkgVersion
 
+# Хэши файлов клиента — часть паспорта поставки: build.ps1 сверяет по ним
+# payload\client (версия клиента ловит смену релиза, хэши — подмену/недокопию
+# файлов после успешного прогона).
+$clientHashes = Get-TreeHashes -Root $payloadClient
+
 $manifest = [ordered]@{
     generated_at    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     server_version  = [string]$serverPkg.version
@@ -586,6 +618,8 @@ $manifest = [ordered]@{
         electron   = [string]$clientPkg.devDependencies.electron
         source     = 'client\release\win-unpacked (electron-builder --dir, цель dir)'
         executable = 'client\ETN.exe'
+        files      = $clientHashes.Count
+        hashes     = $clientHashes
     }
     service_template = 'service\etn-service.xml'
     dependencies    = $dependencyVersions

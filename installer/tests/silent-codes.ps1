@@ -948,6 +948,31 @@ $clientHooksIfdef = ($clientPidsProduct -ne '') -and
     (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('GTestClientPids')))
 Add-StaticResult -Name 'static:client-hooks-ifdef' -Ok $clientHooksIfdef `
     -Note 'модель клиента и хуки /TESTCLIENT* — только под #ifdef TestMode'
+# Закрытие только своих процессов (замечание приёмки 98ad5eec): в продуктовой
+# ветке Get-Process фильтруется по каталогу области установки (ClientCloseRoot),
+# иначе ETN.exe другого пользователя приводит к 30+15 с и коду 20.
+$realPidsProduct = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'RealClientPids' -Ifdef 'TestMode'
+$closeFilterOk = (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('ClientCloseRoot'))) -and
+    (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('StartsWith'))) -and
+    (-not (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape("Get-Process -Name ''ETN''|ForEach-Object{`$_.Id}"))))
+$closeRootBody = Get-IssFunctionBody -Text $issText -Name 'ClientCloseRoot'
+$closeRootOk = (Test-IssCode -Text $closeRootBody -Pattern ([regex]::Escape('ClientInstallPath'))) -and
+    (Test-IssCode -Text $closeRootBody -Pattern ([regex]::Escape('GPrivilegedPhase')))
+Add-StaticResult -Name 'static:client-close-own-processes' -Ok ($closeFilterOk -and $closeRootOk) `
+    -Note 'Get-Process фильтруется каталогом области установки; чужие ETN.exe не трогаются'
+# Обновление: область клиента фиксирована — радиокнопки скрыты, область
+# выводится текстом (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec).
+$updateStateBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
+$radiosHidden = (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeUserRadio.Visible := ClientScopeRadiosVisible'))) -and
+    (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeMachineRadio.Visible := ClientScopeRadiosVisible'))) -and
+    (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeFixedLabel.Visible := ClientScopeFixed')))
+$scopeFixedBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeFixed'
+$scopeFixedOk = Test-IssCode -Text $scopeFixedBody -Pattern ([regex]::Escape("GClientState = 'installed'"))
+$scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
+$scopeTextOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('область установки'))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('не меняется')))
+Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($radiosHidden -and $scopeFixedOk -and $scopeTextOk) `
+    -Note 'при установленном клиенте радиокнопки скрыты, область — текстом'
 Add-StaticResult -Name 'static:client-launch-original-user' `
     -Ok (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') `
         -Pattern ([regex]::Escape("ShellExecAsOriginalUser('open', Exe"))) `
@@ -967,6 +992,24 @@ Add-StaticResult -Name 'static:freshness-full-trees' `
          ($buildText -match [regex]::Escape("Relative = 'server\dist'")) -and
          ($buildText -match [regex]::Escape("Relative = 'server\migrations'"))) `
     -Note 'свежесть: весь server\dist и все migrations, а не два файла'
+# Свежесть клиента (замечание приёмки 98ad5eec): версия из паспорта поставки
+# сверяется с репозиторием, файлы client\ — по хэш-карте; fetch-payload.ps1
+# обязан писать и то, и другое, а также удалять паспорт в начале прогона.
+Add-StaticResult -Name 'static:freshness-client-version' `
+    -Ok (($buildText -match [regex]::Escape("'server-manifest.json'")) -and
+         ($buildText -match [regex]::Escape("client_version")) -and
+         ($buildText -match [regex]::Escape("client\package.json"))) `
+    -Note 'свежесть клиента: client_version из манифеста сверяется с client/package.json'
+Add-StaticResult -Name 'static:freshness-client-hashes' `
+    -Ok (($buildText -match [regex]::Escape('Compare-PayloadHashMap')) -and
+         ($buildText -match [regex]::Escape('client.hashes')) -and
+         ($fetchText -match [regex]::Escape('Get-TreeHashes')) -and
+         ($fetchText -match [regex]::Escape('hashes     = $clientHashes'))) `
+    -Note 'свежесть клиента: хэши файлов client сверяются с client.hashes манифеста'
+Add-StaticResult -Name 'static:freshness-manifest-invalidated' `
+    -Ok (($fetchText -match [regex]::Escape("Remove-Item -LiteralPath `$manifestPath -Force")) -and
+         ($fetchText -match [regex]::Escape("'server-manifest.json'"))) `
+    -Note 'fetch-payload удаляет паспорт в начале: недописанный прогон не выглядит свежим'
 $builderYml = Get-Content -LiteralPath (Join-Path $repoRoot 'client\electron-builder.yml') -Raw -Encoding UTF8
 $dirTarget = ($builderYml -match '(?m)^\s+-\s+dir\s*$') -and
     ($builderYml -notmatch '(?m)^\s*-\s*nsis\s*$') -and
@@ -995,7 +1038,8 @@ function Copy-Tree {
 }
 
 function New-FreshnessPayload {
-    param([string]$Path, [switch]$WithoutClient, [switch]$WithoutMigrations)
+    param([string]$Path, [switch]$WithoutClient, [switch]$WithoutMigrations,
+        [string]$ClientVersion)
     if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
     foreach ($dir in @('node', 'service', 'server\node_modules\better-sqlite3', 'client\resources')) {
         New-Item -ItemType Directory -Path (Join-Path $Path $dir) -Force | Out-Null
@@ -1024,6 +1068,40 @@ function New-FreshnessPayload {
         [System.IO.File]::WriteAllText((Join-Path $Path 'client\ETN.exe'), 'stub')
         [System.IO.File]::WriteAllText((Join-Path $Path 'client\resources\app.asar'), 'stub')
     }
+    Write-FreshnessManifest -Path $Path -ClientVersion $ClientVersion
+}
+
+# Хэши дерева фикстуры — как в fetch-payload.ps1 (ключ — путь через '/'):
+# build.ps1 сверяет client\ с картой client.hashes из паспорта поставки.
+function Get-FixtureTreeHashes {
+    param([string]$Root)
+    $map = [ordered]@{}
+    if (-not (Test-Path -LiteralPath $Root)) { return $map }
+    Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($Root.Length).TrimStart('\').Replace('\', '/')
+        $map[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    return $map
+}
+
+# Паспорт поставки фикстуры: client_version и хэши client\ — без него
+# продуктовый build.ps1 отказывается от payload как от недописанного.
+function Write-FreshnessManifest {
+    param([string]$Path, [string]$ClientVersion)
+    $clientPkg = Get-Content -LiteralPath (Join-Path $repoRoot 'client\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $ClientVersion) { $ClientVersion = [string]$clientPkg.version }
+    $hashes = Get-FixtureTreeHashes -Root (Join-Path $Path 'client')
+    $manifest = [ordered]@{
+        server_version = '0.0.0'
+        client_version = $ClientVersion
+        client         = [ordered]@{
+            version = $ClientVersion
+            files   = $hashes.Count
+            hashes  = $hashes
+        }
+    }
+    [System.IO.File]::WriteAllText((Join-Path $Path 'server-manifest.json'),
+        ($manifest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function Invoke-PayloadBuild {
@@ -1075,6 +1153,42 @@ $freshBuild = Invoke-PayloadBuild -Payload $freshPayload -OutputName 'fresh-out'
 Add-StaticResult -Name 'build:fresh-payload-accepted' `
     -Ok (($freshBuild.Code -eq 0) -and ($freshBuild.Output -match 'Payload свежий')) `
     -Note 'свежий payload: весь server/dist, migrations и клиент совпадают'
+
+# E. Версия клиента из манифеста сверяется с client/package.json: подмена
+# client_version — отказ. Раньше client_version писался, но не читался, и
+# старый клиент после неудачной package:dir проходил как свежий.
+$versionPayload = Join-Path $workRoot 'payload-client-version'
+New-FreshnessPayload -Path $versionPayload -ClientVersion '0.0.0'
+$versionBuild = Invoke-PayloadBuild -Payload $versionPayload -OutputName 'client-version-out'
+$repoClientVersion = [string](Get-Content -LiteralPath (Join-Path $repoRoot 'client\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+Add-StaticResult -Name 'build:client-version-mismatch' `
+    -Ok (($versionBuild.Code -ne 0) -and
+         ($versionBuild.Output -match 'клиентом 0\.0\.0') -and
+         ($versionBuild.Output -match [regex]::Escape("client $repoClientVersion"))) `
+    -Note 'client_version в манифесте разошёлся с client/package.json — сборка не начинается'
+
+# F. Хэши файлов client\ сверяются с манифестом: правка после записи паспорта
+# (недокопия/подмена) — отказ.
+$clientHashPayload = Join-Path $workRoot 'payload-client-hash'
+New-FreshnessPayload -Path $clientHashPayload
+[System.IO.File]::AppendAllText((Join-Path $clientHashPayload 'client\resources\app.asar'),
+    "`r`n// правка после записи манифеста`r`n")
+$clientHashBuild = Invoke-PayloadBuild -Payload $clientHashPayload -OutputName 'client-hash-out'
+Add-StaticResult -Name 'build:client-hash-mismatch' `
+    -Ok (($clientHashBuild.Code -ne 0) -and
+         ($clientHashBuild.Output -match 'client') -and
+         ($clientHashBuild.Output -match 'отличаются от манифеста')) `
+    -Note 'файл client разошёлся с client.hashes — payload устарел'
+
+# G. Паспорта поставки нет (fetch-payload.ps1 не дошёл до конца) — отказ, а не
+# молчаливая сборка со старым клиентом.
+$noManifestPayload = Join-Path $workRoot 'payload-no-manifest'
+New-FreshnessPayload -Path $noManifestPayload
+Remove-Item -LiteralPath (Join-Path $noManifestPayload 'server-manifest.json') -Force
+$noManifestBuild = Invoke-PayloadBuild -Payload $noManifestPayload -OutputName 'no-manifest-out'
+Add-StaticResult -Name 'build:manifest-required' `
+    -Ok (($noManifestBuild.Code -ne 0) -and ($noManifestBuild.Output -match 'server-manifest\.json')) `
+    -Note 'без паспорта поставки сборка не начинается'
 
 
 # --- Сборка тестового установщика -------------------------------------------
@@ -1431,7 +1545,8 @@ New-Item -ItemType Directory -Path (Join-Path $appDir 'client') -Force | Out-Nul
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTRECORD=1')
 Add-StateResult -Name 'state-machine-client-with-record' -Line $probe.State -Pairs @(
     'server_state=not-installed', 'record=1',
-    'default_server=0', 'default_client=1')
+    'default_server=0', 'default_client=1',
+    'scope_fixed=1', 'scope_radios=hidden') -Note 'обновление: область клиента фиксирована'
 
 # B4: повышение прав нужно серверу и клиенту «для всех», но не клиенту «для меня».
 Reset-State
@@ -1439,7 +1554,8 @@ $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=server')
 Add-StateResult -Name 'need-elevation:server' -Line $probe.State -Pairs @('need_elevation=1')
 Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-machine')
-Add-StateResult -Name 'need-elevation:client-machine' -Line $probe.State -Pairs @('need_elevation=1')
+Add-StateResult -Name 'need-elevation:client-machine' -Line $probe.State -Pairs @(
+    'need_elevation=1', 'scope_fixed=0', 'scope_radios=visible') -Note 'первая установка: радиокнопки области видны'
 Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-user')
 Add-StateResult -Name 'need-elevation:client-user' -Line $probe.State -Pairs @('need_elevation=0')
@@ -2151,6 +2267,46 @@ if (-not (Test-Path -LiteralPath $psHostExe)) {
             -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')))
     } finally {
         if (-not $dummy.HasExited) { Stop-Process -Id $dummy.Id -Force -ErrorAction SilentlyContinue }
+    }
+}
+if ($realCloseOk) {
+    # Два подставных процесса с именем ETN.exe: свой — в каталоге установки
+    # теста, чужой — вне его. Закрывается только свой: раньше продуктовый
+    # Get-Process брал все ETN.exe машины (замечание приёмки 98ad5eec).
+    $foreignDir = Join-Path $workRoot 'dummy-foreign'
+    $foreignExe = Join-Path $foreignDir 'ETN.exe'
+    $ownExe = ''
+    $own = $null
+    $foreign = $null
+    try {
+        if (Test-Path -LiteralPath $foreignDir) { Remove-Item -LiteralPath $foreignDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $foreignDir -Force | Out-Null
+        Copy-Item -LiteralPath $psHostExe -Destination $foreignExe -Force
+        Reset-State
+        New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+        $ownExe = Join-Path $appDir 'ETN.exe'
+        Copy-Item -LiteralPath $psHostExe -Destination $ownExe -Force
+        $foreign = Start-Process -FilePath $foreignExe `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $dummyForm) -PassThru
+        $own = Start-Process -FilePath $ownExe `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $dummyForm) -PassThru
+        Start-Sleep -Seconds 2
+        Add-Result -Name 'client-close:two-started' -Expected 2 `
+            -Actual ([int](-not $own.HasExited) + [int](-not $foreign.HasExited)) `
+            -Note "свой PID $($own.Id), чужой PID $($foreign.Id)"
+        # /TESTCLIENTPATH не задан: фильтр — каталог программы теста ($appDir).
+        $twoParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-close-two.ini'
+        $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$twoParams`"",
+            '/TESTELEVATED=1', '/TESTCLIENTREAL=1', '/TESTCLIENTWAIT=5000'))
+        Add-Result -Name 'client-close:two-code' -Expected 0 -Actual $code
+        $null = $own.WaitForExit(5000)
+        Add-Result -Name 'client-close:own-exited' -Expected 1 -Actual ([int]$own.HasExited) `
+            -Note 'свой ETN.exe закрыт'
+        Add-Result -Name 'client-close:foreign-alive' -Expected 1 -Actual ([int](-not $foreign.HasExited)) `
+            -Note 'чужой ETN.exe вне области установки не тронут'
+    } finally {
+        if ($null -ne $own -and -not $own.HasExited) { Stop-Process -Id $own.Id -Force -ErrorAction SilentlyContinue }
+        if ($null -ne $foreign -and -not $foreign.HasExited) { Stop-Process -Id $foreign.Id -Force -ErrorAction SilentlyContinue }
     }
 }
 if ($realCloseOk) {

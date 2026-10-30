@@ -10,16 +10,19 @@
     компилируется.
 
     Перед сборкой продуктового установщика payload проверяется на свежесть:
-    обязательные файлы на месте (включая клиент: client\ETN.exe и
-    resources\app.asar), версия сервера совпадает с репозиторием, весь
+    обязательные файлы на месте (включая клиент: client\ETN.exe,
+    resources\app.asar и паспорт поставки server-manifest.json), версии
+    сервера и клиента совпадают с репозиторием (client_version из манифеста —
+    с client/package.json), хэши файлов client\ совпадают с манифестом, весь
     server\dist, все server\migrations и шаблон службы совпадают по SHA-256,
     CLI умеет --check и --key-out. Устаревший payload — ошибка с указанием,
     что обновить (installer/fetch-payload.ps1 или -RefreshPayload), а не
     молчаливая сборка exe, падающего на etn init (дефект приёмки каркаса
     9b310991: собранный exe падал на --key-out; расширение проверки на весь
-    server/dist — задача 98ad5eec, дефект 0178253c). В -TestMode проверка
-    пропускается: тестовая поставка — фикстура, она заведомо не совпадает с
-    репозиторием.
+    server/dist — задача 98ad5eec, дефект 0178253c; проверка версии и хэшей
+    клиента — замечание приёмки 98ad5eec: после неудачной package:dir старый
+    клиент проходил как свежий). В -TestMode проверка пропускается: тестовая
+    поставка — фикстура, она заведомо не совпадает с репозиторием.
 
     Задача a1211915 (0.15.1); проверка свежести payload — 9b310991.
 
@@ -45,6 +48,13 @@
 .PARAMETER TestMode
     Тестовая сборка для installer/tests/silent-codes.ps1: изолированные
     каталоги и хуки /TESTELEVATED, /TESTSERVICE, /TESTHEALTH, без деинсталлятора.
+
+.PARAMETER CheckPayloadOnly
+    Только проверить свежесть payload и выйти (код 0 — свежий, иначе —
+    ошибка с перечнем причин). Компиляция exe не выполняется: нужно для
+    быстрой проверки поставки на машине, где полная сборка недоступна
+    (занятый dev-клиентом better_sqlite3.node, нет права симлинков).
+    С -TestMode несовместим.
 
 .PARAMETER TestUninstallMode
     Вместе с -TestMode: собрать тестовый установщик С деинсталлятором (проба
@@ -75,6 +85,7 @@ param(
     [string]$IsccPath,
     [switch]$TestMode,
     [switch]$TestUninstallMode,
+    [switch]$CheckPayloadOnly,
     [string]$TestAppDir,
     [string]$TestDataDir
 )
@@ -152,7 +163,10 @@ function Get-TreeFileHashes {
     param([string]$Root)
     $map = @{}
     Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object {
-        $relative = $_.FullName.Substring($Root.Length).TrimStart('\')
+        # Ключ — путь через '/', как в манифесте поставки (client.hashes):
+        # хэш-карта из fetch-payload.ps1 и расчёт по дереву payload должны
+        # совпадать без нормализаций на стороне вызывающего.
+        $relative = $_.FullName.Substring($Root.Length).TrimStart('\').Replace('\', '/')
         $map[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     return $map
@@ -206,6 +220,46 @@ function Compare-PayloadTree {
     return $true
 }
 
+# Сверка дерева payload с хэш-картой из паспорта поставки (client.hashes,
+# пишет fetch-payload.ps1): missing/extra/changed — как у Compare-PayloadTree.
+# Нужна там, где сравнивать не с чем в репозитории: client/release/win-unpacked
+# — артефакт сборки, его может не быть (gitignored, другая машина), а манифест
+# едет вместе с payload и фиксирует ровно то, что скопировал fetch-payload.ps1.
+function Compare-PayloadHashMap {
+    param(
+        [hashtable]$Expected,
+        [string]$PayloadTree,
+        [string]$Relative,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    if (-not (Test-Path -LiteralPath $PayloadTree)) {
+        $Problems.Add("нет каталога payload: $Relative")
+        return
+    }
+    $actual = Get-TreeFileHashes -Root $PayloadTree
+    $missing = @($Expected.Keys | Where-Object { -not $actual.ContainsKey($_) } | Sort-Object)
+    $extra = @($actual.Keys | Where-Object { -not $Expected.ContainsKey($_) } | Sort-Object)
+    $changed = @($Expected.Keys | Where-Object {
+            $actual.ContainsKey($_) -and ($actual[$_] -ne $Expected[$_])
+        } | Sort-Object)
+    $limit = 5
+    if ($missing.Count -gt 0) {
+        $shown = ($missing | Select-Object -First $limit) -join ', '
+        $tail = if ($missing.Count -gt $limit) { " и ещё $($missing.Count - $limit)" } else { '' }
+        $Problems.Add("payload устарел: в $Relative не хватает файлов из манифеста: $shown$tail")
+    }
+    if ($extra.Count -gt 0) {
+        $shown = ($extra | Select-Object -First $limit) -join ', '
+        $tail = if ($extra.Count -gt $limit) { " и ещё $($extra.Count - $limit)" } else { '' }
+        $Problems.Add("payload устарел: в $Relative лишние файлы, которых нет в манифесте: $shown$tail")
+    }
+    if ($changed.Count -gt 0) {
+        $shown = ($changed | Select-Object -First $limit) -join ', '
+        $tail = if ($changed.Count -gt $limit) { " и ещё $($changed.Count - $limit)" } else { '' }
+        $Problems.Add("payload устарел: в $Relative отличаются от манифеста: $shown$tail")
+    }
+}
+
 function Test-PayloadFreshness {
     param([string]$Root, [string]$RepoRoot)
     $problems = New-Object System.Collections.Generic.List[string]
@@ -221,7 +275,8 @@ function Test-PayloadFreshness {
         'service\etn-service.exe',
         'service\etn-service.xml',
         'client\ETN.exe',
-        'client\resources\app.asar')
+        'client\resources\app.asar',
+        'server-manifest.json')
     if (-not (Test-Path -LiteralPath $Root)) {
         $problems.Add("каталог payload не найден: $Root")
         return $result
@@ -240,11 +295,62 @@ function Test-PayloadFreshness {
         $problems.Add("payload собран из server $payloadVersion, в репозитории $repoVersion")
     }
 
+    # Клиент: версия из паспорта поставки (client_version) и хэши файлов
+    # client\ (client.hashes). Раньше проверялось только наличие ETN.exe и
+    # app.asar, а client_version нигде не читался: после неудачной package:dir
+    # в payload оставался старый клиент и проходил проверку как свежий
+    # (замечание приёмки 98ad5eec). Манифест пишется последним шагом
+    # fetch-payload.ps1, поэтому его отсутствие — тоже признак недописанной
+    # поставки.
+    $hashTotal = 0
+    $hashCompared = 0
+    $hashTotal++
+    $manifestPath = Join-Path $Root 'server-manifest.json'
+    $repoClientVersion = Read-PackageVersion -Path (Join-Path $RepoRoot 'client\package.json')
+    $manifest = $null
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        $problems.Add("server-manifest.json не читается: $($_.Exception.Message)")
+    }
+    if (-not $manifest) {
+        $problems.Add('server-manifest.json не прочитан — паспорт поставки недоступен')
+    } else {
+        $manifestClientVersion = ''
+        if ($manifest.PSObject.Properties['client_version']) {
+            $manifestClientVersion = [string]$manifest.client_version
+        }
+        if (-not $manifestClientVersion) {
+            $problems.Add('в server-manifest.json нет client_version — поставка собрана старой версией fetch-payload.ps1, обновите payload')
+        } elseif ($repoClientVersion -and ($manifestClientVersion -ne $repoClientVersion)) {
+            $problems.Add("payload собран с клиентом $manifestClientVersion, в репозитории client $repoClientVersion — обновите payload")
+        }
+        $clientHashes = $null
+        if ($manifest.PSObject.Properties['client'] -and
+            $manifest.client.PSObject.Properties['hashes']) {
+            $clientHashes = $manifest.client.hashes
+        }
+        if ($null -eq $clientHashes) {
+            $problems.Add('в server-manifest.json нет client.hashes — файлы клиента не опознаны, обновите payload')
+        } else {
+            $expectedClient = @{}
+            foreach ($prop in $clientHashes.PSObject.Properties) {
+                $expectedClient[$prop.Name] = [string]$prop.Value
+            }
+            if ($expectedClient.Count -eq 0) {
+                $problems.Add('в server-manifest.json пустой client.hashes — клиент не опознан')
+            } else {
+                Compare-PayloadHashMap -Expected $expectedClient `
+                    -PayloadTree (Join-Path $Root 'client') -Relative 'client' `
+                    -Problems $problems
+                $hashCompared++
+            }
+        }
+    }
+
     # Совпадение сборки сервера, миграций и шаблона службы с репозиторием.
     # Если dist в репозитории ещё не собран, сравнивать не с чем — об этом
     # предупреждаем.
-    $hashTotal = 0
-    $hashCompared = 0
     $hashTotal++
     $serviceSource = Join-Path $PSScriptRoot 'service\etn-service.xml'
     if (-not (Test-Path -LiteralPath $serviceSource)) {
@@ -301,6 +407,9 @@ $OutputDir = Resolve-FullPath -Path $OutputDir -Base $repoRoot
 if ($TestUninstallMode) {
     if (-not $TestMode) { throw '-TestUninstallMode доступен только вместе с -TestMode.' }
 }
+if ($CheckPayloadOnly -and $TestMode) {
+    throw '-CheckPayloadOnly несовместим с -TestMode: тестовая поставка — фикстура, свежесть в ней не проверяется.'
+}
 if ($TestMode) {
     if (-not $TestAppDir) { throw 'При -TestMode обязателен -TestAppDir.' }
     if (-not $TestDataDir) { throw 'При -TestMode обязателен -TestDataDir.' }
@@ -328,10 +437,17 @@ if ($TestMode) {
             '(или запустите build.ps1 с -RefreshPayload).')
     }
     if ($freshness.HashCompared) {
-        Write-Host 'Payload свежий: файлы контракта, версия, весь server/dist, migrations и шаблон службы совпадают с репозиторием.'
+        Write-Host 'Payload свежий: файлы контракта, версии сервера и клиента, хэши клиента, весь server/dist, migrations и шаблон службы совпадают с репозиторием.'
     } else {
-        Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версия проверены. ' +
+        Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версии проверены. ' +
             'Соберите server/dist (npm -w @etn/server run build) и обновите payload для полной проверки.')
+    }
+    if ($CheckPayloadOnly) {
+        # Проверка без компиляции: на машине, где полная сборка недоступна
+        # (занятый dev-клиентом better_sqlite3.node, нет права симлинков),
+        # можно убедиться, что payload свежий и годится для сборки.
+        Write-Host "OK: payload свежий — $PayloadRoot (компиляция пропущена: -CheckPayloadOnly)"
+        exit 0
     }
 }
 

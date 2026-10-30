@@ -458,8 +458,9 @@ var
     — мягкое закрытие не помогает; /TESTCLIENTFORCE=fail — принудительное не
     помогает (код 20); /TESTCLIENTWAIT=<мс> — бюджет ожидания мягкого
     закрытия; /TESTCLIENTREAL=1 — настоящий опрос Get-Process и taskkill,
-    /TESTCLIENTPATH=<каталог> — только процессы из этого каталога (чтобы
-    прогон не трогал клиент пользователя). }
+    /TESTCLIENTPATH=<каталог> — только процессы из этого каталога (по
+    умолчанию — каталог программы тестового прогона, чтобы прогон не трогал
+    клиент пользователя). }
   GTestClientPids: String;
   GTestClientGone: String;
   GTestClientSoft: String;
@@ -597,6 +598,9 @@ var
   GClientHintLabel: TNewStaticText;
   GScopeUserRadio: TNewRadioButton;
   GScopeMachineRadio: TNewRadioButton;
+  { Область клиента при обновлении фиксирована: вместо радиокнопок
+    показывается текст (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec). }
+  GScopeFixedLabel: TNewStaticText;
   GDataNoteLabel: TNewStaticText;
   GReasonLabel: TNewStaticText;
   { Лицензия MIT (112642a4): чекбокс и ссылка на локальный текст; показываются
@@ -1361,6 +1365,28 @@ begin
     Result := 'не установлен';
 end;
 
+{ Область установки клиента при обновлении фиксирована: менять её нельзя
+  (ea8e223a, 4a66b7a5 — иначе на машине остались бы файлы и ярлыки старой
+  области). Радиокнопки в этом состоянии только сбивают с толку: они видны и
+  выглядят доступными, хотя выбор уже сделан (замечание приёмки 98ad5eec),
+  поэтому вместо них выводится текст. }
+function ClientScopeFixed: Boolean;
+begin
+  Result := GClientState = 'installed';
+end;
+
+function ClientScopeRadiosVisible: Boolean;
+begin
+  Result := not ClientScopeFixed;
+end;
+
+function ClientScopeText: String;
+begin
+  Result := 'Клиент уже установлен: область установки — ' +
+    Pick(GClientScopeUser, '«только для меня»', '«для всех пользователей»') +
+    '; при обновлении она не меняется.';
+end;
+
 { ---------------------------------------------------------------------------
   Лицензия MIT (112642a4, требование d75b7988).
   --------------------------------------------------------------------------- }
@@ -1817,10 +1843,42 @@ begin
   end;
 end;
 
-{ Настоящий опрос: Get-Process по имени ETN.exe. /TESTCLIENTPATH (только
-  тестовая сборка) ограничивает выборку каталогом — прогон не должен закрывать
-  клиент пользователя. PowerShell получает скрипт в двойных кавычках: внутри
-  только одинарные (грабли B3 приёмки 9b310991). }
+{ Каталог установки клиента по области: «только для меня» — профиль
+  пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
+  Показывается на экране компонентов и ограничивает поиск запущенного клиента:
+  каталог фиксирован ADR 144bcdb0, но область установки пользователь выбирает
+  сам. }
+function ClientInstallPath: String;
+begin
+#ifdef TestMode
+  Result := GServerDir;
+#else
+  if GClientScopeUser then
+    Result := ExpandConstant('{localappdata}') + '\Programs\ETN'
+  else
+    Result := ExpandConstant('{commonpf}') + '\ETN';
+#endif
+end;
+
+{ Каталог, процессы которого заменяет этот экземпляр установщика: закрываем
+  только клиента из своей области установки. Get-Process по имени ETN.exe без
+  фильтра закрывал любые процессы ETN.exe на машине — при per-user установке
+  это живой клиент другого пользователя: 30+15 с ожидания и код 20 (замечание
+  приёмки 98ad5eec). В привилегированной фазе пользовательский клиент не
+  устанавливается, а каталог локальных приложений там — профиль администратора:
+  чужие профили не трогаем. }
+function ClientCloseRoot: String;
+begin
+  Result := '';
+  if GClientScopeUser and GPrivilegedPhase then Exit;
+  Result := ClientInstallPath;
+end;
+
+{ Настоящий опрос: Get-Process по имени ETN.exe, но только процессы из каталога
+  установки (Product: ClientCloseRoot; TestMode: /TESTCLIENTPATH, по умолчанию
+  каталог программы тестового прогона) — чужой клиент не трогается. PowerShell
+  получает скрипт в двойных кавычках: внутри только одинарные (грабли B3
+  приёмки 9b310991). }
 function RealClientPids: String;
 var
   Script, Args, OutFile, OutFileLiteral, Filter: String;
@@ -1834,29 +1892,29 @@ begin
   StringChangeEx(OutFileLiteral, '''', '''''', True);
   Filter := '';
 #ifdef TestMode
-  { Тестовая сборка не должна закрывать клиент пользователя: реальный опрос
-    разрешён только с фильтром по каталогу теста. }
+  { Тестовая сборка может задать каталог явно (/TESTCLIENTPATH); иначе —
+    общий продуктовый фильтр по области установки (в тестовой сборке это
+    каталог программы теста). }
   Filter := GTestClientPath;
-  if Filter = '' then
-  begin
-    LogLine('WARN', 'Клиент ETN: реальный опрос без /TESTCLIENTPATH запрещён (тестовый режим)');
-    Exit;
-  end;
 #endif
   if Filter = '' then
-    Script :=
-      '$ids=@(Get-Process -Name ''ETN''|ForEach-Object{$_.Id});' +
-      '[IO.File]::WriteAllText(''' + OutFileLiteral + ''',($ids -join [Environment]::NewLine))'
-  else
+    Filter := ClientCloseRoot;
+  if Filter = '' then
   begin
-    StringChangeEx(Filter, '''', '''''', True);
-    Script :=
-      '$ids=@(Get-Process -Name ''ETN''|ForEach-Object{$p=$_;$path='''';' +
-      'try{$path=$p.Path}catch{};' +
-      'if($path.StartsWith(''' + Filter + ''',' +
-      '[System.StringComparison]::OrdinalIgnoreCase)){$p.Id}});' +
-      '[IO.File]::WriteAllText(''' + OutFileLiteral + ''',($ids -join [Environment]::NewLine))';
+    LogLine('INFO', 'Клиент ETN: процессов вне области установки не ищем — закрывать нечего');
+    Exit;
   end;
+  { Префикс с завершающим '\': иначе 'C:\Program Files\ETN' совпал бы с
+    'C:\Program Files\ETN2\ETN.exe'. }
+  if Copy(Filter, Length(Filter), 1) <> '\' then
+    Filter := Filter + '\';
+  StringChangeEx(Filter, '''', '''''', True);
+  Script :=
+    '$ids=@(Get-Process -Name ''ETN''|ForEach-Object{$p=$_;$path='''';' +
+    'try{$path=$p.Path}catch{};' +
+    'if($path.StartsWith(''' + Filter + ''',' +
+    '[System.StringComparison]::OrdinalIgnoreCase)){$p.Id}});' +
+    '[IO.File]::WriteAllText(''' + OutFileLiteral + ''',($ids -join [Environment]::NewLine))';
   Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
     SW_HIDE, ewWaitUntilTerminated, Code) then
@@ -2132,20 +2190,8 @@ end;
 
 { Каталог установки клиента по области: «только для меня» — профиль
   пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
-  Показывается на экране компонентов: каталог фиксирован ADR 144bcdb0, но
-  область установки пользователь выбирает сам. }
-function ClientInstallPath: String;
-begin
-#ifdef TestMode
-  Result := GServerDir;
-#else
-  if GClientScopeUser then
-    Result := ExpandConstant('{localappdata}') + '\Programs\ETN'
-  else
-    Result := ExpandConstant('{commonpf}') + '\ETN';
-#endif
-end;
-
+  Определена рядом с поиском запущенного клиента: по ней ограничивается
+  закрытие процессов ETN.exe. }
 procedure OpenPath(const Path: String);
 var
   Code: Integer;
@@ -5434,8 +5480,29 @@ begin
     ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);
   if GLicenseCheck <> nil then
     GLicenseAccepted := GLicenseCheck.Checked;
-  if GScopeUserRadio <> nil then GScopeUserRadio.Enabled := GClientSelected;
-  if GScopeMachineRadio <> nil then GScopeMachineRadio.Enabled := GClientSelected;
+  { Область клиента: на обновлении она фиксирована — радиокнопки не просто
+    неактивны, а не показываются; выбранная область выводится текстом
+    (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec). На первой установке
+    радиокнопки видны и доступны только при выбранном клиенте. }
+  if GScopeUserRadio <> nil then
+  begin
+    GScopeUserRadio.Visible := ClientScopeRadiosVisible;
+    GScopeUserRadio.Enabled := GClientSelected;
+  end;
+  if GScopeMachineRadio <> nil then
+  begin
+    GScopeMachineRadio.Visible := ClientScopeRadiosVisible;
+    GScopeMachineRadio.Enabled := GClientSelected;
+  end;
+  if GScopeFixedLabel <> nil then
+  begin
+    GScopeFixedLabel.Visible := ClientScopeFixed;
+    if ClientScopeFixed then
+    begin
+      GScopeFixedLabel.Caption := ClientScopeText;
+      GScopeFixedLabel.Height := GScopeFixedLabel.AdjustHeight;
+    end;
+  end;
   if GServerCheck <> nil then GServerCheck.Caption := ServerCheckCaption;
   if GClientCheck <> nil then GClientCheck.Caption := ClientCheckCaption;
   { Текст состояния клиента зависит от выбора: обещание удалить старый
@@ -5570,6 +5637,19 @@ begin
   GClientHintLabel.Caption := '';
   GClientHintLabel.Height := GClientHintLabel.AdjustHeight;
   Y := Y + GClientHintLabel.Height + ScaleY(4);
+
+  { Область клиента: на первой установке — радиокнопки, при обновлении — текст
+    в той же области (радиокнопки скрыты: выбор уже сделан, ea8e223a). }
+  GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
+  GScopeFixedLabel.Parent := GComponentsPage.Surface;
+  GScopeFixedLabel.Left := 20;
+  GScopeFixedLabel.Top := Y;
+  GScopeFixedLabel.AutoSize := False;
+  GScopeFixedLabel.WordWrap := True;
+  GScopeFixedLabel.Width := GComponentsPage.SurfaceWidth - 20;
+  GScopeFixedLabel.Caption := '';
+  GScopeFixedLabel.Visible := False;
+  GScopeFixedLabel.Height := GScopeFixedLabel.AdjustHeight;
 
   GScopeUserRadio := TNewRadioButton.Create(GComponentsPage);
   GScopeUserRadio.Parent := GComponentsPage.Surface;
@@ -6232,6 +6312,8 @@ begin
       ' default_server=' + Pick(GServerSelected, '1', '0') +
       ' default_client=' + Pick(GClientSelected, '1', '0') +
       ' client_scope=' + Pick(GClientScopeUser, 'user', 'machine') +
+      ' scope_fixed=' + Pick(ClientScopeFixed, '1', '0') +
+      ' scope_radios=' + Pick(ClientScopeRadiosVisible, 'visible', 'hidden') +
       ' need_elevation=' + Pick(NeedElevation, '1', '0') +
       ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
       ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
