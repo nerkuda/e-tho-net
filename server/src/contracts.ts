@@ -1904,7 +1904,41 @@ export const TypesList = defineContract(
     limit: z.number().int().min(1).max(500).optional(),
     offset: z.number().int().min(0).optional(),
     max_chars: z.number().int().min(1000).optional(),
+    // Задача 17ff4619 (0.15.1): фильтр по именам типов до пагинации — агент
+    // не выкачивает каталог ради одного имени.
+    keywords: z.string().min(1).optional(),
+    // Задача 17ff4619 (0.15.1): только идентификационные поля записи.
+    compact: z.boolean().optional(),
   }),
+  {},
+);
+
+/**
+ * `etn.types.get` (задача 17ff4619, 0.15.1, элемент спеки — «etn.types.get»):
+ * точечное чтение ОДНОГО типа по `id` XOR `name`. До инструмента агент
+ * выкачивал весь каталог и повторял вызов, не находя нужный тип в обрезанном
+ * ответе.
+ *
+ * `scope` ограничивает каталог поиска; резолв имени — тот же, что у `type` в
+ * `etn.thoughts.write`: мысли по `name_key`, связи по `name_forward` ИЛИ
+ * `name_reverse` (case-insensitive). Несколько совпадений В ОДНОМ каталоге →
+ * `VALIDATION_ERROR` с `details.candidates`; в разных каталогах при `scope:
+ * "all"` — не неоднозначность, возвращаются оба.
+ */
+export const TypesGet = defineContract(
+  'etn.types.get',
+  z
+    .object({
+      network_id: NetworkId,
+      id: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      scope: z.enum(TYPES_LIST_SCOPES).optional(),
+    })
+    // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
+    .strict()
+    .refine((v) => (v.id === undefined) !== (v.name === undefined), {
+      message: 'Укажите ровно одно: id (идентификатор типа) или name (имя типа).',
+    }),
   {},
 );
 

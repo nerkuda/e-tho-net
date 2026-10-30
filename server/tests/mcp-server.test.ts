@@ -529,8 +529,11 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // `idempotentHint: true` (прецедент `etn.ontology.write` с его
         // `type_views[].action: delete`): 26 инструментов, аннотированы 24,
         // 17 readOnly, 0 destructive, 5 idempotent.
-        assert.equal(annotated, 24);
-        assert.equal(hintReadOnly, 17);
+        // 0.15.1 (задача 17ff4619): `etn.types.get` — точечное чтение одного
+        // типа по id/name, `readOnlyHint: true`: 27 инструментов, аннотированы
+        // 25, 18 readOnly, 0 destructive, 5 idempotent.
+        assert.equal(annotated, 25);
+        assert.equal(hintReadOnly, 18);
         assert.equal(hintDestructive, 0);
         assert.equal(hintIdempotent, 5);
       } finally {

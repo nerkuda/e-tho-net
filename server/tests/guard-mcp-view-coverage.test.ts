@@ -227,6 +227,12 @@ const MCP_READ_ONLY_VIEWS: readonly { tool: string; field: string; note: string 
     note: 'только чтение (readOnlyHint): вид выбирает каталог типов (мысли/связи), записи нет.',
   },
   {
+    // 0.15.1 (задача 17ff4619): точечное чтение одного типа по id/name.
+    tool: 'etn.types.get',
+    field: 'scope',
+    note: 'только чтение (readOnlyHint): вид выбирает каталог для поиска типа (мысли/связи/оба), записи нет.',
+  },
+  {
     tool: 'etn.metrics.reads',
     field: 'kind',
     note: 'только чтение (readOnlyHint): вид выборки метрик (top/cold), записи нет.',

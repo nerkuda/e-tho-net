@@ -44,6 +44,28 @@ export function buildLikePattern(word: string): string {
 }
 
 /**
+ * Совпадение одного слова мини-синтаксиса §6.10 с произвольной строкой-именем
+ * (без SQL): регистронезависимое, инфиксное, `*` — любая подстрока
+ * (нуль и более символов). Остальные символы слова литеральны.
+ *
+ * Нужно там, где набор фильтруется в памяти, а не предикатом SQL (фильтр
+ * `keywords` каталога типов `etn.types.list` — у типов нет нормализованных
+ * колонок и FTS-индекса). SQL-маршруты по-прежнему строят предикат через
+ * {@link buildLikePattern}; семантика совпадает.
+ */
+export function keywordMatchesText(word: string, text: string): boolean {
+  const needle = word.normalize('NFC').toLowerCase();
+  const haystack = text.normalize('NFC').toLowerCase();
+  if (needle === '') return true;
+  // Литеральные куски между `*` экранируются для RegExp, сами `*` — `.*`.
+  const pattern = needle
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*');
+  return new RegExp(pattern, 'u').test(haystack);
+}
+
+/**
  * Normalized comparison key of a type name: trimmed and lower-cased. Thought
  * and link type names must be unique ignoring case (`Тип` = `тип` = `ТИП`,
  * docs/02-data-model.md §3.3/§3.7). The server stores the key alongside the
