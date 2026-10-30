@@ -71,6 +71,10 @@
          наличия etn-service.exe, как в продуктовой ветке: путь службы —
          {app}\service\etn-service.exe, stop и uninstall вызваны, пока файл
          ещё на месте, удаление завершается и файлы удаляются
+     29. e375123f: шаблон службы и фикстура задают
+         ETN_DEPLOYMENT=windows-service; после установки сгенерированный
+         etn-service.xml сохраняет режим службы (сервер, запущенный службой,
+         обязан определяться как windows-service)
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -651,6 +655,33 @@ $staticChecks = @(
 foreach ($check in $staticChecks) {
     Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
 }
+
+# e375123f: шаблон службы обязан задавать ETN_DEPLOYMENT=windows-service —
+# без него сервер, запущенный службой, определяет себя как standalone и
+# отклоняет обновление из клиента («сервер запущен не службой»). Значение
+# фиксированное, не плейсхолдер: проверяется разбором XML, а не подстрокой.
+# Фикстура повторяет шаблон — по ней проверяются подстановка и конфиг после
+# установки; статический сторож страхует, что fixture не разойдётся.
+function Get-ServiceDeploymentEnv {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $xml = [xml]([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8))
+        $node = $xml.SelectSingleNode('/service/env[@name="ETN_DEPLOYMENT"]')
+        if ($null -eq $node) { return '' }
+        return [string]$node.GetAttribute('value')
+    } catch {
+        return $null
+    }
+}
+$templateDeployment = Get-ServiceDeploymentEnv -Path (Join-Path $installerDir 'service\etn-service.xml')
+Add-StaticResult -Name 'static:service-deployment-env' `
+    -Ok ($templateDeployment -eq 'windows-service') `
+    -Note ('шаблон службы: ETN_DEPLOYMENT=' + (IfStrEmpty ([string]$templateDeployment)))
+$fixtureDeployment = Get-ServiceDeploymentEnv -Path (Join-Path $PSScriptRoot 'fixtures\payload\service\etn-service.xml')
+Add-StaticResult -Name 'static:service-fixture-deployment' `
+    -Ok ($fixtureDeployment -eq 'windows-service') `
+    -Note ('фикстура: ETN_DEPLOYMENT=' + (IfStrEmpty ([string]$fixtureDeployment)))
 # Поля выбора каталога данных быть не должно (ADR 144bcdb0): проверка на
 # отсутствие страницы, а не на наличие.
 Add-StaticResult -Name 'static:no-datadir-choice' `
@@ -1921,6 +1952,7 @@ $serviceXmlPath = Join-Path $appDir 'service\etn-service.xml'
 $serviceXmlOk = $false
 $serviceNoPlaceholders = $false
 $serviceValuesOk = $false
+$serviceDeployment = ''
 $serviceDescription = ''
 if (Test-Path -LiteralPath $serviceXmlPath) {
     $serviceText = [System.IO.File]::ReadAllText($serviceXmlPath, [System.Text.Encoding]::UTF8)
@@ -1931,6 +1963,10 @@ if (Test-Path -LiteralPath $serviceXmlPath) {
         $dataEnv = ($envNodes | Where-Object { $_.name -eq 'ETN_DATA_DIR' } | Select-Object -First 1).value
         $portEnv = ($envNodes | Where-Object { $_.name -eq 'ETN_PORT' } | Select-Object -First 1).value
         $hostEnv = ($envNodes | Where-Object { $_.name -eq 'ETN_HOST' } | Select-Object -First 1).value
+        # StrictMode: обращение к .value отсутствующего узла — исключение,
+        # поэтому сначала узел, потом значение (отсутствие — красная проверка).
+        $deploymentNode = $envNodes | Where-Object { $_.name -eq 'ETN_DEPLOYMENT' } | Select-Object -First 1
+        if ($null -ne $deploymentNode) { $serviceDeployment = [string]$deploymentNode.value }
         $logPath = [string]$serviceXml.service.logpath
         $serviceDescription = [string]$serviceXml.service.description
         $serviceValuesOk = ($dataEnv -eq $dataDir) -and ($portEnv -eq [string]$serverPort) -and
@@ -1943,6 +1979,11 @@ if (Test-Path -LiteralPath $serviceXmlPath) {
 Add-Result -Name 'server-fw:xml-parsed' -Expected 1 -Actual ([int]$serviceXmlOk)
 Add-Result -Name 'server-fw:no-placeholders' -Expected 1 -Actual ([int]$serviceNoPlaceholders)
 Add-Result -Name 'server-fw:env-values' -Expected 1 -Actual ([int]$serviceValuesOk) -Note ('данные/порт/хост/журнал; ' + $serviceDescription)
+# e375123f: сгенерированный конфиг обязан сохранить режим службы — без него
+# сервер не отличит службу от обычного процесса.
+Add-Result -Name 'server-fw:deployment-env' -Expected 1 `
+    -Actual ([int]($serviceDeployment -eq 'windows-service')) `
+    -Note ('ETN_DEPLOYMENT=' + (IfStrEmpty $serviceDeployment))
 Add-Result -Name 'server-fw:description-utf8' -Expected 1 `
     -Actual ([int]($serviceDescription -eq 'ETN — сервер графовых баз знаний')) -Note $serviceDescription
 
@@ -3136,6 +3177,9 @@ $configOk = ($configText -ne '') -and ($configText -notmatch '\{\{') -and
     ($configText -match ('value="' + [regex]::Escape($dataDir) + '"'))
 Add-Result -Name 'service-register:config' -Expected 1 -Actual ([int][bool]$configOk) `
     -Note 'etn-service.xml подставлен: DATA_DIR каталога теста, плейсхолдеров нет'
+$configDeploymentOk = $configText -match 'name="ETN_DEPLOYMENT" value="windows-service"'
+Add-Result -Name 'service-register:deployment-env' -Expected 1 -Actual ([int][bool]$configDeploymentOk) `
+    -Note 'после InstallServiceConfig ETN_DEPLOYMENT=windows-service на месте'
 $installArgs = Test-LatestLogContains -Pattern 'exe=.*etn-service\.exe, config=.*service\\etn-service\.xml'
 Add-Result -Name 'service-register:install-args' -Expected 1 -Actual ([int]$installArgs) `
     -Note 'install вызван с конфигом рядом с etn-service.exe'

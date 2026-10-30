@@ -7,7 +7,8 @@
     НАСТОЯЩИМ payload (installer/payload), в изолированные каталоги
     .tmp\installer-staged: каталог программы и каталог данных — песочница,
     реестр и служба не затрагиваются. Затем проверяет установленную раскладку
-    и запускает сервер так, как его запускает режим «обычное приложение»:
+    и запускает сервер двумя способами: как режим «обычное приложение» и с
+    окружением из сгенерированного конфига службы:
 
       node.exe server\dist\index.js
       ETN_DATA_DIR=<каталог данных> ETN_PORT=<порт> ETN_HOST=127.0.0.1
@@ -20,7 +21,12 @@
       3. каталоги данных logs\service и backups созданы установщиком;
       4. правило брандмауэра «создано» (netsh подменён тестовым хуком);
       5. сервер из установленного каталога стартует и отвечает
-         GET /api/v1/health → 200, status=ok, версия из payload.
+         GET /api/v1/health → 200, status=ok, версия из payload;
+      6. режим развёртывания (ошибка e375123f): «приложение» без
+         ETN_DEPLOYMENT отдаёт deployment=standalone, а сервер, запущенный
+         с окружением из сгенерированного etn-service.xml (включая
+         ETN_DEPLOYMENT=windows-service), — deployment=windows-service
+         в GET /api/v1/system/update.
 
     Задача 9b310991 (0.15.1): staged-запуск хотя бы в режиме «приложение».
     Нужен подготовленный payload: pwsh -File installer/fetch-payload.ps1.
@@ -255,64 +261,136 @@ console.log(rows.length===1&&String(rows[0].integrity_check)==='ok'?'ok':'bad');
     Add-Check -Name 'backup:integrity' -Ok $false -Note 'архив не создан'
 }
 
-# --- Staged-запуск в режиме «приложение» ------------------------------------
-Write-Host '=== Запуск установленного сервера (режим приложения) ==='
-$stdoutLog = Join-Path $workRoot 'server.out.log'
-$stderrLog = Join-Path $workRoot 'server.err.log'
-$previousEnv = @{
-    ETN_DATA_DIR = $env:ETN_DATA_DIR
-    ETN_PORT     = $env:ETN_PORT
-    ETN_HOST     = $env:ETN_HOST
+# --- Staged-запуск: режим «приложение» и окружение из конфигурации службы ---
+Write-Host '=== Запуск установленного сервера: приложение и окружение службы ==='
+
+# Переменные окружения сервера: недостающий ключ удаляется из процесса, чтобы
+# прогоны не наследовали режим друг друга (в частности ETN_DEPLOYMENT).
+function Set-StagedServerEnv {
+    param([hashtable]$ServerEnv)
+    foreach ($name in @('ETN_DATA_DIR', 'ETN_PORT', 'ETN_HOST', 'ETN_DEPLOYMENT')) {
+        $value = $null
+        if ($ServerEnv.ContainsKey($name)) { $value = $ServerEnv[$name] }
+        [System.Environment]::SetEnvironmentVariable($name, $value, 'Process')
+    }
 }
-$serverProcess = $null
-$health = $null
-$healthOk = $false
-try {
-    $env:ETN_DATA_DIR = $dataDir
-    $env:ETN_PORT = [string]$port
-    $env:ETN_HOST = '127.0.0.1'
-    $serverProcess = Start-Process -FilePath $installedNode `
+
+# Окружение службы — ровно env из сгенерированного etn-service.xml, то есть
+# то, что WinSW передаст серверу при старте службы (ошибка e375123f).
+function Get-StagedServiceEnv {
+    param([string]$Path)
+    $result = @{}
+    $xml = [xml]([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8))
+    foreach ($node in @($xml.SelectNodes('/service/env'))) {
+        $result[[string]$node.GetAttribute('name')] = [string]$node.GetAttribute('value')
+    }
+    return $result
+}
+
+function Start-StagedServer {
+    param([string]$Name, [hashtable]$ServerEnv, [int]$HealthTimeoutSec = 90)
+    $outLog = Join-Path $workRoot ("server-$Name.out.log")
+    $errLog = Join-Path $workRoot ("server-$Name.err.log")
+    Set-StagedServerEnv -ServerEnv $ServerEnv
+    $serverPort = [int]$ServerEnv['ETN_PORT']
+    $process = Start-Process -FilePath $installedNode `
         -ArgumentList 'dist/index.js' `
         -WorkingDirectory (Join-Path $appDir 'server') `
         -PassThru -WindowStyle Hidden `
-        -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+        -RedirectStandardOutput $outLog -RedirectStandardError $errLog
 
-    $deadline = (Get-Date).AddSeconds(90)
+    $deadline = (Get-Date).AddSeconds($HealthTimeoutSec)
     $lastError = ''
     while ((Get-Date) -lt $deadline) {
-        if ($serverProcess.HasExited) {
-            $tail = Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue
-            throw "Сервер завершился с кодом $($serverProcess.ExitCode) до health-check. stderr: $tail"
+        if ($process.HasExited) {
+            $tail = Get-Content -LiteralPath $errLog -Raw -ErrorAction SilentlyContinue
+            throw "Сервер ($Name) завершился с кодом $($process.ExitCode) до health-check. stderr: $tail"
         }
         try {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/health" `
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$serverPort/api/v1/health" `
                 -UseBasicParsing -TimeoutSec 2
             if ($response.StatusCode -eq 200) {
-                $health = $response.Content | ConvertFrom-Json
-                $healthOk = $true
-                break
+                return [pscustomobject]@{
+                    Process = $process
+                    Health  = ($response.Content | ConvertFrom-Json)
+                    Port    = $serverPort
+                }
             }
         } catch {
             $lastError = $_.Exception.Message
             Start-Sleep -Milliseconds 500
         }
     }
-    if (-not $healthOk) {
-        $tail = Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue
-        throw "Health-check не прошёл за 90 с: $lastError. stderr: $tail"
+    $tail = Get-Content -LiteralPath $errLog -Raw -ErrorAction SilentlyContinue
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "Health-check ($Name) не прошёл за $HealthTimeoutSec с: $lastError. stderr: $tail"
+}
+
+function Stop-StagedServer {
+    param($Server)
+    if ($null -eq $Server) { return }
+    if (-not $Server.Process.HasExited) {
+        Stop-Process -Id $Server.Process.Id -Force -ErrorAction SilentlyContinue
+        $null = $Server.Process.WaitForExit(15000)
     }
+}
+
+function Get-StagedAdminJson {
+    param([int]$ServerPort, [string]$Path, [string]$Key)
+    $response = Invoke-WebRequest -Uri ("http://127.0.0.1:$ServerPort" + $Path) `
+        -Headers @{ Authorization = "Bearer $Key" } -UseBasicParsing -TimeoutSec 5
+    # Контракт API: полезная нагрузка — в поле data.
+    $json = $response.Content | ConvertFrom-Json
+    return $json.data
+}
+
+$serviceEnvForServer = Get-StagedServiceEnv -Path $serviceXmlPath
+Add-Check -Name 'service:deployment-env' `
+    -Ok ($serviceEnvForServer['ETN_DEPLOYMENT'] -eq 'windows-service') `
+    -Note ('ETN_DEPLOYMENT=' + [string]$serviceEnvForServer['ETN_DEPLOYMENT'])
+
+$previousEnv = @{}
+foreach ($name in @('ETN_DATA_DIR', 'ETN_PORT', 'ETN_HOST', 'ETN_DEPLOYMENT')) {
+    $previousEnv[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
+}
+$appServer = $null
+$serviceServer = $null
+try {
+    # 1. Режим «приложение»: без ETN_DEPLOYMENT сервер обязан считать себя
+    #    standalone — иначе app-установка получила бы чужой режим.
+    $appServer = Start-StagedServer -Name 'app' -ServerEnv @{
+        ETN_DATA_DIR = $dataDir
+        ETN_PORT     = [string]$port
+        ETN_HOST     = '127.0.0.1'
+    }
+    $health = $appServer.Health
     Add-Check -Name 'app:health-200' -Ok $true -Note 'GET /api/v1/health'
     Add-Check -Name 'app:health-status' -Ok ($health.status -eq 'ok') -Note ([string]$health.status)
     Add-Check -Name 'app:health-version' -Ok ($health.version -eq $payloadVersion) `
         -Note ([string]$health.version + ' (payload ' + $payloadVersion + ')')
+    $appUpdate = Get-StagedAdminJson -ServerPort $appServer.Port -Path '/api/v1/system/update' -Key $key
+    Add-Check -Name 'app:deployment-standalone' -Ok ($appUpdate.deployment -eq 'standalone') `
+        -Note ('deployment=' + [string]$appUpdate.deployment)
+    Stop-StagedServer $appServer
+    $appServer = $null
+
+    # 2. Окружение службы из сгенерированного конфига: сервер должен назвать
+    #    себя windows-service, иначе обновление из клиента отказывает как
+    #    «сервер запущен не службой» (ошибка e375123f).
+    $serviceServer = Start-StagedServer -Name 'service' -ServerEnv $serviceEnvForServer
+    $svcHealth = $serviceServer.Health
+    Add-Check -Name 'service:health-200' -Ok $true -Note 'GET /api/v1/health'
+    Add-Check -Name 'service:health-status' -Ok ($svcHealth.status -eq 'ok') -Note ([string]$svcHealth.status)
+    $svcUpdate = Get-StagedAdminJson -ServerPort $serviceServer.Port -Path '/api/v1/system/update' -Key $key
+    Add-Check -Name 'service:deployment-windows-service' `
+        -Ok ($svcUpdate.deployment -eq 'windows-service') `
+        -Note ('deployment=' + [string]$svcUpdate.deployment)
 } finally {
-    if ($null -ne $serverProcess -and -not $serverProcess.HasExited) {
-        Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
-        $null = $serverProcess.WaitForExit(15000)
+    Stop-StagedServer $appServer
+    Stop-StagedServer $serviceServer
+    foreach ($name in $previousEnv.Keys) {
+        [System.Environment]::SetEnvironmentVariable($name, $previousEnv[$name], 'Process')
     }
-    $env:ETN_DATA_DIR = $previousEnv.ETN_DATA_DIR
-    $env:ETN_PORT = $previousEnv.ETN_PORT
-    $env:ETN_HOST = $previousEnv.ETN_HOST
 }
 
 # --- Итог --------------------------------------------------------------------

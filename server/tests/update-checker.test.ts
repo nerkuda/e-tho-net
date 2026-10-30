@@ -267,6 +267,29 @@ describe('Режим развёртывания (resolveDeployment)', () => {
     assert.equal(resolveDeployment({}, { platform: 'win32', exists: () => true }), 'standalone');
   });
 
+  it('ETN_DEPLOYMENT=windows-service (окружение шаблона WinSW) — режим службы', () => {
+    // Ошибка e375123f: шаблон службы передаёт windows-service; режим обязан
+    // определяться и на Windows, и в Linux-контейнере (явная переменная
+    // перекрывает маркер /.dockerenv).
+    for (const platform of ['win32', 'linux'] as NodeJS.Platform[]) {
+      assert.equal(
+        resolveDeployment(
+          { ETN_DEPLOYMENT: 'windows-service' },
+          { platform, exists: (p) => p === DOCKER_MARKER_PATH },
+        ),
+        'windows-service',
+        platform,
+      );
+    }
+  });
+
+  it('без ETN_DEPLOYMENT (режим app) — standalone', () => {
+    assert.equal(
+      resolveDeployment({}, { platform: 'win32', exists: () => false }),
+      'standalone',
+    );
+  });
+
   it('неизвестный ETN_DEPLOYMENT — DeploymentConfigError', () => {
     assert.throws(
       () => resolveDeployment({ ETN_DEPLOYMENT: 'vm' }),

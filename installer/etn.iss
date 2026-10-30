@@ -2309,7 +2309,10 @@ begin
 end;
 
 { Окружение дочерних процессов: init и любые вызовы node получают те же
-  ETN_DATA_DIR/ETN_PORT/ETN_HOST, что и служба. }
+  ETN_DATA_DIR/ETN_PORT/ETN_HOST, что и служба. ETN_DEPLOYMENT здесь не
+  выставляется: он описывает тип запуска, а не раскладку, и задаётся ровно в
+  одном месте — шаблоном службы service\etn-service.xml (windows-service).
+  Иначе app-режим унаследовал бы чужой режим (ошибка e375123f). }
 procedure ApplyServerEnv;
 begin
   SetEnvironmentVariableW('ETN_DATA_DIR', GDataDir);
