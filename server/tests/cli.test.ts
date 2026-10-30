@@ -7,7 +7,16 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -15,7 +24,9 @@ import { afterEach, describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { main, parseInitArgs } from '../src/cli.js';
+import { runMigrations } from '../src/db/migrator.js';
 import { SystemDb } from '../src/db/system-db.js';
+import { systemMigrationsDir } from '../src/paths.js';
 
 /** Capture console.{log,error} output during an async callback. */
 async function captureConsole<T>(
@@ -248,6 +259,56 @@ describe(
       );
       assert.equal(after.result, 0);
       assert.match(after.stdout.join('\n'), /первый администратор есть/);
+    });
+
+    it('--check на базе версии до 0.15.1 (нет update_jobs) даёт 0, а не 2', async () => {
+      // Блокер приёмки 0a27a63b: checkFirstUser открывает БД предыдущей версии
+      // строго на чтение и БЕЗ миграций. Готовить в конструкторе SystemDb
+      // statements для всех таблиц текущей схемы нельзя — на базе 0.15.0
+      // (миграции 001–015) падает `no such table: update_jobs`, и проверка
+      // возвращает exit 2 вместо контрактного 0 (установщик etn.iss:1858,4429).
+      const root = mkdtempSync(path.join(os.tmpdir(), 'etn-cli-check-old-'));
+      tmpRoots.push(root);
+      const dataDir = path.join(root, 'data');
+      mkdirSync(dataDir, { recursive: true });
+
+      // Схема 0.15.0: все системные миграции до 016_update_jobs.sql.
+      const oldMigrationsDir = path.join(root, 'migrations-015');
+      mkdirSync(oldMigrationsDir, { recursive: true });
+      const oldMigrations = readdirSync(systemMigrationsDir())
+        .filter((f) => f.endsWith('.sql') && f < '016')
+        .sort();
+      assert.ok(oldMigrations.length > 0, 'нет системных миграций до 016');
+      for (const file of oldMigrations) {
+        copyFileSync(path.join(systemMigrationsDir(), file), path.join(oldMigrationsDir, file));
+      }
+
+      const raw = new DatabaseConstructor(path.join(dataDir, '_system.db'));
+      try {
+        raw.pragma('journal_mode = WAL');
+        raw.pragma('foreign_keys = ON');
+        runMigrations(raw, oldMigrationsDir);
+        // Первый администратор уже создан (`etn init` версии 0.15.0).
+        raw.prepare(
+          `INSERT INTO users (id, username, display_name, is_admin, is_first_user, created_at, updated_at)
+           VALUES (?, 'admin', 'Admin', 1, 1, ?, ?)`,
+        ).run(randomUUID(), '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+        const tables = (
+          raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(!tables.includes('update_jobs'), 'предусловие: схемы 0.15.0 без update_jobs');
+      } finally {
+        raw.close();
+      }
+
+      const check = await captureConsole(() =>
+        main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: dataDir } }),
+      );
+      assert.equal(check.result, 0, `check: ${check.stderr.join('\n') || check.stdout.join('\n')}`);
+      assert.match(check.stdout.join('\n'), /первый администратор есть/);
+      assert.doesNotMatch(check.stderr.join('\n'), /no such table/);
     });
 
     it('--key-out writes the key to a file once and never prints it', async () => {

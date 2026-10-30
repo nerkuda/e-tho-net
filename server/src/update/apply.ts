@@ -46,6 +46,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { compareSemver, parseSemver } from '@etn/shared';
+import type { UpdateJob, UpdateJobStage } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import type { SystemDb, UpdateJobRow } from '../db/system-db.js';
@@ -80,7 +81,8 @@ declare module 'fastify' {
 
 /**
  * Этапы задания — значения сущности «Задание обновления сервера» 1f39811c.
- * Терминальные — `done` и `failed`.
+ * Терминальные — `done` и `failed`. Состав объявлен в `@etn/shared`
+ * (`UpdateJobStage`): тот же тип читает клиент.
  */
 export const UPDATE_JOB_STAGES = [
   'preparing',
@@ -92,10 +94,10 @@ export const UPDATE_JOB_STAGES = [
   'done',
   'rolling-back',
   'failed',
-] as const;
+] as const satisfies readonly UpdateJobStage[];
 
-/** Этап задания обновления. */
-export type UpdateJobStage = (typeof UPDATE_JOB_STAGES)[number];
+/** Этап задания обновления (общий контракт `@etn/shared`). */
+export type { UpdateJobStage };
 
 /** Терминальные этапы: задание завершено и не считается активным. */
 export const TERMINAL_UPDATE_JOB_STAGES = ['done', 'failed'] as const;
@@ -112,19 +114,10 @@ export function isTerminalUpdateJobStage(stage: UpdateJobStage): boolean {
 
 /**
  * Задание обновления в том виде, в каком его отдают admin-эндпоинты
- * (`GET /progress`, ответ `apply`) — ровно поля сущности 1f39811c.
+ * (`GET /progress`, ответ `apply`) — ровно поля сущности 1f39811c. Форма —
+ * общий контракт `@etn/shared` (`UpdateJob`), её же читает клиент.
  */
-export interface UpdateJob {
-  id: string;
-  target_version: string;
-  stage: UpdateJobStage;
-  /** ISO-8601 момента создания задания. */
-  started_at: string;
-  /** Причина сбоя; `null` — сбоя не было. */
-  error: string | null;
-  /** Путь к архиву БД; `null` — неизвестен (архив создаёт установщик). */
-  backup_path: string | null;
-}
+export type { UpdateJob };
 
 /** Текст задания «сервер запущен не службой» (сценарий 6b7c09a9). */
 export const NOT_A_SERVICE_MESSAGE =
@@ -187,12 +180,19 @@ export type UpdateInstallerFailureReason =
 export class UpdateInstallerFailureError extends Error {
   readonly reason: UpdateInstallerFailureReason;
   readonly job: UpdateJob;
+  /**
+   * Этап, на котором задание остановилось (`preparing` для ассета/хеша,
+   * `backing-up` для запуска после обслуживания). Уезжает в `details.stage`
+   * ошибки `UPDATE_INSTALLER_FAILED`.
+   */
+  readonly stage: UpdateJobStage;
 
-  constructor(reason: UpdateInstallerFailureReason, job: UpdateJob) {
+  constructor(reason: UpdateInstallerFailureReason, job: UpdateJob, stage: UpdateJobStage) {
     super(job.error ?? 'Установщик обновления не запущен');
     this.name = 'UpdateInstallerFailureError';
     this.reason = reason;
     this.job = job;
+    this.stage = stage;
   }
 }
 
@@ -335,6 +335,8 @@ export function createUpdateApplyService(
   let releaseLaunchGate: (() => void) | null = null;
   /** Причина провала до запуска — для `502` (см. {@link UpdateInstallerFailureReason}). */
   let preLaunchFailure: UpdateInstallerFailureReason | null = null;
+  /** Этап, на котором задание остановилось до запуска установщика (`details.stage`). */
+  let preLaunchStage: UpdateJobStage = 'preparing';
 
   const runner = createInstallerRunner({
     ...runnerOptions,
@@ -379,6 +381,12 @@ export function createUpdateApplyService(
       backupPath: current.backup_path,
     });
     return toUpdateJob(systemDb.getUpdateJob(jobId) as UpdateJobRow);
+  }
+
+  /** Текущий (ещё не перезаписанный в `failed`) этап задания. */
+  function currentStage(jobId: string): UpdateJobStage {
+    const row = systemDb.getUpdateJob(jobId);
+    return row !== null && isUpdateJobStage(row.stage) ? row.stage : 'preparing';
   }
 
   /** Синхронная часть `apply`: проверки, вставка задания, цель runner'а. */
@@ -451,6 +459,7 @@ export function createUpdateApplyService(
       startedAt: now().toISOString(),
     });
     preLaunchFailure = null;
+    preLaunchStage = 'preparing';
     return {
       jobId,
       target: { version: available, downloadUrl: cache.download_url, sha256: cache.sha256 },
@@ -479,21 +488,27 @@ export function createUpdateApplyService(
         logger?.error({ jobId, logPath: err.logPath }, 'update job: тайм-аут установщика');
       } else if (err instanceof InstallerTargetError) {
         preLaunchFailure = 'installer-target';
+        preLaunchStage = currentStage(jobId);
         writeJob(jobId, 'failed', err.message);
       } else if (err instanceof InstallerDownloadError) {
         preLaunchFailure = 'installer-download';
+        preLaunchStage = currentStage(jobId);
         writeJob(jobId, 'failed', err.message);
       } else if (err instanceof InstallerHashError) {
         preLaunchFailure = 'installer-hash';
+        preLaunchStage = currentStage(jobId);
         writeJob(jobId, 'failed', err.message);
       } else if (err instanceof InstallerLaunchError) {
         preLaunchFailure = 'installer-launch';
+        preLaunchStage = currentStage(jobId);
         writeJob(jobId, 'failed', err.message);
       } else if (err instanceof InstallerRunInProgressError) {
         preLaunchFailure = 'installer-launch';
+        preLaunchStage = currentStage(jobId);
         writeJob(jobId, 'failed', err.message);
       } else {
         preLaunchFailure = 'installer-launch';
+        preLaunchStage = currentStage(jobId);
         const message = err instanceof Error ? err.message : String(err);
         writeJob(jobId, 'failed', `Задание обновления не выполнено: ${message}`);
         logger?.error({ err, jobId }, 'update job: неожиданная ошибка');
@@ -562,7 +577,7 @@ export function createUpdateApplyService(
       const job = toUpdateJob(current);
       if (!launched) {
         const reason = preLaunchFailure ?? 'installer-launch';
-        throw new UpdateInstallerFailureError(reason, job);
+        throw new UpdateInstallerFailureError(reason, job, preLaunchStage);
       }
       return job;
     },

@@ -68,6 +68,7 @@ import {
   type SystemLoggingStatus,
   type ThoughtTypeViewsResult,
   type TypeOwnerType,
+  type UpdateJob,
   type ClientVersionErrorDetails,
 } from '@etn/shared';
 
@@ -239,6 +240,16 @@ export interface RequestOptions {
   expectedVersion?: number;
   /** Optional abort signal; combined with the internal response timeout. */
   signal?: AbortSignal;
+  /**
+   * Автоматические повторы при 5xx и сетевых сбоях. По умолчанию включены
+   * (до `MAX_ATTEMPTS` попыток, только для 5xx/сети). `false` — ровно одна
+   * попытка: для НЕидемпотентного вызова, где повтор создаёт второй эффект —
+   * например `POST /system/update/apply` создаёт второе задание и второе
+   * скачивание установщика (задача 0a27a63b). Ответ 5xx при этом штатно
+   * разбирается в `EtnError` с кодом сервера, а не превращается в `INTERNAL`
+   * «превышен лимит повторов».
+   */
+  retry?: boolean;
 }
 
 /** Query string value — primitives are stringified, arrays repeated. */
@@ -574,6 +585,13 @@ export class RestClient {
     // are not writes and keep the epoch stable.
     const dataChanging = mutating && opts.idempotentPost !== true;
     if (dataChanging) this.invalidateInFlightReads();
+    // Автоповтор выключается на один вызов (`RequestOptions.retry: false`):
+    // неидемпотентная операция (например apply обновления сервера) при повторе
+    // создаёт второй эффект. При выключенном повторе 5xx НЕ перехватывается
+    // ветвью ретрая, а штатно разбирается в `parseResponse` — клиент получает
+    // код сервера (`UPDATE_INSTALLER_FAILED`), а не `INTERNAL` «превышен лимит
+    // повторов».
+    const retrying = ro.retry !== false;
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -668,9 +686,11 @@ export class RestClient {
           );
         }
         // Network-level failure (DNS, connection refused, timeout abort, etc.).
-        // Retryable unless the caller aborted the request themselves.
+        // Retryable unless the caller aborted the request themselves or the
+        // call opted out of automatic repeats (`retry: false`): a repeat of a
+        // non-idempotent call could duplicate its effect.
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_ATTEMPTS) {
+        if (retrying && attempt < MAX_ATTEMPTS) {
           await this.backoff(method, path, attempt, classifyRetryReason(lastError));
           continue;
         }
@@ -694,8 +714,10 @@ export class RestClient {
       clearTimeout(timeout);
       if (networkId !== null) this.untrackController(networkId, controller);
 
-      // Retry transient server errors (5xx) once more.
-      if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {
+      // Retry transient server errors (5xx) once more — unless this call opted
+      // out of automatic repeats. A 5xx with `retry: false` falls through to
+      // `parseResponse`, so the caller sees the server's own error code.
+      if (retrying && res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {
         lastError = new Error(`HTTP ${res.status}`);
         await this.backoff(method, path, attempt, `http_${res.status}`);
         continue;
@@ -3532,6 +3554,36 @@ export class RestClient {
 
   // §16a Server file journal (task f051bf95, 03-server-api.md §16):
   // admin-only management endpoints of the server diagnostic journal.
+
+  /**
+   * `POST /system/update/apply` — создать задание обновления сервера (задача
+   * 0a27a63b, операция 8a2972c2). Администратор; `201` — задание создано и
+   * установщик запущен.
+   *
+   * Единственный вызов клиента с `retry: false` (`RequestOptions.retry`):
+   * операция неидемпотентна, а сервер отвечает синхронно — только после
+   * скачивания установщика и проверки SHA-256 (до 10 минут), при клиентском
+   * тайм-ауте 30 с. Любой повтор создал бы второе задание и второе скачивание.
+   *
+   * **Трактовка сбоя (обязанность диалога `ca26c59d`).** Обрыв соединения,
+   * тайм-аут, `409` (задание уже идёт) и `503` (сервер в обслуживании) значат
+   * «обновление идёт», а не «обновить не удалось»: фактическое состояние
+   * читается из `GET /system/update/progress`. `502 UPDATE_INSTALLER_FAILED`
+   * означает отказ до запуска установщика (`details.retryable: false`,
+   * `details.stage`, `details.job`) — сервер продолжает работать на текущей
+   * версии, повторять вызов нельзя.
+   */
+  public async systemUpdateApply(
+    targetVersion: string,
+    opts?: RequestOptions,
+  ): Promise<UpdateJob> {
+    return this.request('POST', '/system/update/apply', {
+      body: { target_version: targetVersion },
+      // `retry: false` перекрывает значение из opts осознанно: автоповтор
+      // этого вызова запрещён на уровне клиента, а не на уровне вызывающего.
+      requestOptions: { ...opts, retry: false },
+    });
+  }
 
   /** `GET /system/logging` — server journal flag + retention + file list. */
   public async getServerLogging(): Promise<SystemLoggingStatus> {

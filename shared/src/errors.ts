@@ -45,6 +45,14 @@ export const ETN_ERROR_CODES = [
   // различает «правь позже» от «правки не было».
   'LOCKED',
   'LOCK_NOT_FOUND',
+  // Задание обновления сервера не смогло запустить установщик (задача 0a27a63b,
+  // операция `POST /system/update/apply` 8a2972c2): не скачался ассет, не
+  // сошёлся SHA-256 или процесс не запустился. HTTP 502 «Bad Gateway»: отказала
+  // сторона поставки, сервер продолжает работать на текущей версии. Отдельный
+  // код, а не `INTERNAL` с `details.status`, — рендерер показывает осмысленный
+  // текст, а клиент видит `details.retryable: false` и не повторяет вызов
+  // (повтор создал бы второе задание и второе скачивание).
+  'UPDATE_INSTALLER_FAILED',
 ] as const;
 export type EtnErrorCode = (typeof ETN_ERROR_CODES)[number];
 

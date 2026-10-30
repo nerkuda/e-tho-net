@@ -46,6 +46,7 @@ import {
   recoverInterruptedUpdateJobs,
   type UpdateApplyService,
   type UpdateJob,
+  type UpdateJobStage,
 } from '../src/update/apply.js';
 import {
   type InstallerFetch,
@@ -319,18 +320,25 @@ async function apiApply(
   ctx: RestTestContext,
   targetVersion: string,
   headers: Record<string, string> = authHeaders(ctx),
-): Promise<{ statusCode: number; body: string; data: UpdateJob | null; details: unknown }> {
+): Promise<{
+  statusCode: number;
+  body: string;
+  data: UpdateJob | null;
+  code: string | null;
+  details: unknown;
+}> {
   const res = await ctx.app.inject({
     method: 'POST',
     url: '/api/v1/system/update/apply',
     headers: { ...headers, 'client-request-id': `apply-${targetVersion}-${Math.random()}` },
     payload: { target_version: targetVersion },
   });
-  const json = res.json() as { data?: UpdateJob; error?: { details?: unknown } };
+  const json = res.json() as { data?: UpdateJob; error?: { code?: string; details?: unknown } };
   return {
     statusCode: res.statusCode,
     body: res.body,
     data: json.data ?? null,
+    code: json.error?.code ?? null,
     details: json.error?.details ?? null,
   };
 }
@@ -656,8 +664,18 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       await primeCache(ctx);
       const res = await apiApply(ctx, TARGET_VERSION);
       assert.equal(res.statusCode, 502, res.body);
-      const details = res.details as { reason: string; job: UpdateJob };
+      assert.equal(res.code, 'UPDATE_INSTALLER_FAILED');
+      const details = res.details as {
+        status: number;
+        stage: string;
+        reason: string;
+        retryable: boolean;
+        job: UpdateJob;
+      };
       assert.equal(details.reason, 'installer-hash');
+      assert.equal(details.stage, 'preparing');
+      assert.equal(details.retryable, false);
+      assert.equal(details.status, 502);
       assert.equal(details.job.stage, 'failed');
       assert.equal(details.job.target_version, TARGET_VERSION);
       assert.equal(harness.spawns(), 0);
@@ -682,8 +700,10 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       await primeCache(ctx, 'http://feed.test/ETN-Setup.exe');
       const res = await apiApply(ctx, TARGET_VERSION);
       assert.equal(res.statusCode, 502, res.body);
-      const details = res.details as { reason: string; job: UpdateJob };
+      assert.equal(res.code, 'UPDATE_INSTALLER_FAILED');
+      const details = res.details as { reason: string; retryable: boolean; job: UpdateJob };
       assert.equal(details.reason, 'installer-target');
+      assert.equal(details.retryable, false);
       assert.match(details.job.error ?? '', /HTTPS/i);
       assert.equal(harness.downloads(), 0);
       assert.equal(harness.spawns(), 0);
@@ -968,6 +988,8 @@ describe('задание обновления — виды 502', { skip: !native
     harness: () => RunnerHarness;
     cache: () => UpdateCache;
     expected: UpdateInstallerFailureError['reason'];
+    /** Этап, на котором задание остановилось (`details.stage` ошибки 502). */
+    expectedStage: UpdateJobStage;
     /** Сколько раз сервис пытался запустить установщик. */
     spawns: number;
     /** Включалось ли обслуживание до отказа. */
@@ -978,6 +1000,7 @@ describe('задание обновления — виды 502', { skip: !native
       harness: () => makeRunnerHarness(),
       cache: () => makeCache({ download_url: null, sha256: null }),
       expected: 'installer-target',
+      expectedStage: 'preparing',
       spawns: 0,
       maintenanceCalls: 0,
     },
@@ -989,6 +1012,7 @@ describe('задание обновления — виды 502', { skip: !native
         }),
       cache: () => makeCache(),
       expected: 'installer-download',
+      expectedStage: 'preparing',
       spawns: 0,
       maintenanceCalls: 0,
     },
@@ -997,6 +1021,7 @@ describe('задание обновления — виды 502', { skip: !native
       harness: () => makeRunnerHarness({ fetchImpl: async () => okResponse(Buffer.from('другое')) }),
       cache: () => makeCache(),
       expected: 'installer-hash',
+      expectedStage: 'preparing',
       spawns: 0,
       maintenanceCalls: 0,
     },
@@ -1010,6 +1035,7 @@ describe('задание обновления — виды 502', { skip: !native
         }),
       cache: () => makeCache(),
       expected: 'installer-launch',
+      expectedStage: 'backing-up',
       spawns: 1,
       // Хук обслуживания стоит до spawn: он уже отработал, но установщик не
       // запущен и служба не остановлена.
@@ -1027,7 +1053,9 @@ describe('задание обновления — виды 502', { skip: !native
         await assert.rejects(
           service.apply({ targetVersion: TARGET_VERSION }),
           (err: unknown) =>
-            err instanceof UpdateInstallerFailureError && err.reason === testCase.expected,
+            err instanceof UpdateInstallerFailureError &&
+            err.reason === testCase.expected &&
+            err.stage === testCase.expectedStage,
         );
         const job = service.getProgress();
         assert.ok(job !== null);

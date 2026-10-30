@@ -59,6 +59,13 @@ export function httpStatusForCode(code: EtnErrorCode): number {
       return 503;
     case 'RATE_LIMITED':
       return 429;
+    case 'UPDATE_INSTALLER_FAILED':
+      // Установщик обновления не скачан/не проверен/не запущен (задача
+      // 0a27a63b): «Bad Gateway» — отказала сторона поставки, сервер работает
+      // на текущей версии. Отдельный код вместо `INTERNAL` + `details.status`,
+      // чтобы рендерер показал осмысленный текст (как ATTACHMENT_OWNER_IS_ICON
+      // сохраняет свой прецедент явного статуса для 409).
+      return 502;
     case 'INTERNAL':
     default:
       return 500;

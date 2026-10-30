@@ -56,6 +56,40 @@ export interface AuditListResult {
   total: number;
 }
 
+/**
+ * Этап задания обновления сервера — значения сущности «Задание обновления
+ * сервера» 1f39811c (задача 0a27a63b). Терминальные — `done` и `failed`;
+ * остальные означают «обновление идёт».
+ */
+export type UpdateJobStage =
+  | 'preparing'
+  | 'backing-up'
+  | 'stopping'
+  | 'installing'
+  | 'starting'
+  | 'health-check'
+  | 'done'
+  | 'rolling-back'
+  | 'failed';
+
+/**
+ * Задание обновления сервера в том виде, в каком его отдают admin-эндпоинты
+ * (`POST /system/update/apply`, `GET /system/update/progress`) — ровно поля
+ * сущности 1f39811c. Контракт общий: сервер собирает payload этим типом,
+ * клиент читает его же (стандарт 01268f2d).
+ */
+export interface UpdateJob {
+  id: string;
+  target_version: string;
+  stage: UpdateJobStage;
+  /** ISO-8601 момента создания задания. */
+  started_at: string;
+  /** Причина сбоя; `null` — сбоя не было. */
+  error: string | null;
+  /** Путь к архиву БД; `null` — неизвестен (архив создаёт установщик). */
+  backup_path: string | null;
+}
+
 /** `POST /networks/{nid}/thoughts/{id}/focus-order` — порядок обхода фокуса. */
 export interface FocusOrderResult {
   focus_thought_id: string;

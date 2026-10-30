@@ -45,6 +45,14 @@ import {
   type WalCheckpointStats,
 } from './wal-checkpoint.js';
 
+/**
+ * Критерий «первый администратор есть» — единственный источник и для
+ * {@link SystemDb.hasFirstUser}, и для read-only проверки
+ * {@link SystemDb.checkFirstUser} (задача 686c5d76). Вынесен в константу,
+ * чтобы проба на базе предыдущей версии не могла разойтись с рабочей веткой.
+ */
+const COUNT_FIRST_USER_SQL = 'SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1';
+
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
   id: string;
@@ -360,6 +368,14 @@ export class SystemDb {
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
    * PRAGMAs or migrations — callers that need those use {@link SystemDb.open}.
+   *
+   * Требование к схеме: statements готовятся для ВСЕХ таблиц текущей версии,
+   * поэтому соединение обязано пройти миграции. Чтение базы предыдущей версии
+   * (без новых миграций) идёт не через конструктор, а через статическую пробу
+   * {@link SystemDb.checkFirstUser}: иначе отсутствующая таблица (например
+   * `update_jobs` из миграции 016) роняет конструктор на `no such table` и
+   * ломает контракт `etn init --check` (блокер приёмки 0a27a63b, задача
+   * 686c5d76).
    */
   constructor(db: Database.Database) {
     this.db = db;
@@ -376,7 +392,7 @@ export class SystemDb {
     this.stInsertAudit = db.prepare(
       'INSERT INTO audit_log (ts, actor_user_id, network_id, category, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
-    this.stCountFirstUser = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1');
+    this.stCountFirstUser = db.prepare(COUNT_FIRST_USER_SQL);
     this.stGetMemberRole = db.prepare(
       'SELECT role FROM network_members WHERE user_id = ? AND network_id = ? LIMIT 1',
     );
@@ -577,7 +593,12 @@ export class SystemDb {
    *
    * Never creates the data directory, the database file or migrations: the
    * connection is opened with `readonly: true` and only `sqlite_master` /
-   * `users` are read.
+   * `users` are read. Схему текущей версии проверка НЕ требует: база
+   * предыдущей версии (например 0.15.0 без таблицы `update_jobs`) обязана
+   * читаться, иначе установщик получает exit 2 вместо контрактного 0/1.
+   * Поэтому запрос — минимальный (`COUNT_FIRST_USER_SQL`), а не
+   * `new SystemDb(db)` с подготовкой statements всех таблиц (блокер приёмки
+   * 0a27a63b).
    *
    * @param dataDir - absolute ETN data directory.
    */
@@ -592,7 +613,10 @@ export class SystemDb {
         .prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table' AND name = 'users'")
         .get() as { c: number };
       if (usersTable.c === 0) return { state: 'not-initialized', reason: 'no-users-table' };
-      return new SystemDb(db).hasFirstUser()
+      // Тот же критерий, что у hasFirstUser(), но без конструктора: он
+      // готовит statements для таблиц, которых в базе прошлой версии ещё нет.
+      const firstUser = db.prepare(COUNT_FIRST_USER_SQL).get() as { c: number };
+      return firstUser.c > 0
         ? { state: 'initialized' }
         : { state: 'not-initialized', reason: 'no-first-user' };
     } catch (err) {

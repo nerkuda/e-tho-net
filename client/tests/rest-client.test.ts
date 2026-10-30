@@ -556,6 +556,101 @@ describe('RestClient — retry & timeout', () => {
   });
 });
 
+describe('RestClient — apply обновления сервера без автоповтора (задача 0a27a63b)', () => {
+  const JOB = {
+    id: 'job-1',
+    target_version: '0.15.2',
+    stage: 'preparing',
+    started_at: '2026-10-29T00:00:00.000Z',
+    error: null,
+    backup_path: null,
+  };
+
+  it('502 UPDATE_INSTALLER_FAILED — ровно одна попытка, код сервера сохранён', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 502,
+        body: {
+          error: {
+            code: 'UPDATE_INSTALLER_FAILED',
+            message: 'SHA-256 установщика не совпал',
+            details: { status: 502, stage: 'preparing', reason: 'installer-hash', retryable: false },
+          },
+        },
+      },
+    ]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    await assert.rejects(
+      () => client.systemUpdateApply('0.15.2'),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal((err as EtnError).code, 'UPDATE_INSTALLER_FAILED');
+        assert.deepEqual((err as EtnError).details, {
+          status: 502,
+          stage: 'preparing',
+          reason: 'installer-hash',
+          retryable: false,
+        });
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, '502 от apply не повторяется');
+    assert.equal(calls[0]!.init.method, 'POST');
+    assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { target_version: '0.15.2' });
+  });
+
+  it('обрыв/тайм-аут apply тоже не повторяется: ответ может идти дольше клиентского тайм-аута', async () => {
+    let callsCount = 0;
+    const fetchImpl = mock.fn((): Promise<Response> => {
+      callsCount++;
+      return Promise.reject(new Error('ETN response timeout'));
+    }) as unknown as typeof fetch;
+    const client = new RestClient({
+      baseUrl: 'http://localhost:3000',
+      getApiKey: async () => 'k',
+      getClientId: () => 'c',
+      clientVersion: '0.15.1',
+      fetchImpl,
+      random: () => 0,
+    });
+
+    await assert.rejects(() => client.systemUpdateApply('0.15.2'));
+    assert.equal(callsCount, 1, 'сетевой сбой apply не повторяется');
+  });
+
+  it('тот же 502 на обычном вызове по-прежнему повторяется (отказ только для apply)', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 502,
+        body: {
+          error: { code: 'UPDATE_INSTALLER_FAILED', message: 'нет установщика' },
+        },
+      },
+    ]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    await assert.rejects(
+      () => client.getMe(),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal((err as EtnError).code, 'UPDATE_INSTALLER_FAILED');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 3, 'остальные вызовы повторяют 5xx до MAX_ATTEMPTS');
+  });
+
+  it('успешный apply отдаёт задание из общего контракта', async () => {
+    const { fetch, calls } = makeFetch([{ status: 201, body: { data: JOB } }]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    const job = await client.systemUpdateApply('0.15.2');
+    assert.deepEqual(job, JOB);
+    assert.equal(calls.length, 1);
+  });
+});
+
 describe('RestClient — сохранённые отборы «Структур» (ошибка 0a8b9da3)', () => {
   it('lists/creates/updates/deletes structure saved filters with view=structures', async () => {
     const filter = {

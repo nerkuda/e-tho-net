@@ -105,8 +105,9 @@ function targetVersionFromBody(req: FastifyRequest): string {
  *     сменившийся кеш) — `409 VERSION_CONFLICT`, `details.job` с текущим
  *     заданием (клиент показывает прогресс, а не ошибку);
  *   * обновлять нечего / цель непригодна — `422 VALIDATION_ERROR`;
- *   * установщик не скачался/не проверился/не запустился — `502` с заданием и
- *     причиной; сервер продолжает работать на текущей версии.
+ *   * установщик не скачался/не проверился/не запустился — `502
+ *     UPDATE_INSTALLER_FAILED` с этапом, причиной, заданием и
+ *     `retryable: false`; сервер продолжает работать на текущей версии.
  */
 function mapApplyError(err: unknown, requestId: string): unknown {
   if (err instanceof UpdateApplyConflictError) {
@@ -122,13 +123,16 @@ function mapApplyError(err: unknown, requestId: string): unknown {
   }
   if (err instanceof UpdateInstallerFailureError) {
     // HTTP 502 «Bad Gateway»: ассет/процесс отказал на стороне поставки, а
-    // сервер жив. Кода ошибки под 502 в каталоге нет, поэтому канонический
-    // код — INTERNAL, а явный статус задан в details.status (как у
-    // ATTACHMENT_OWNER_IS_ICON с 409).
+    // сервер жив. Отдельный код каталога (а не INTERNAL + details.status)
+    // нужен рендереру для осмысленного текста и клиенту — для отказа от
+    // автоповтора: `retryable: false` + `status: 502` едут в details, статус
+    // также выводится из кода в `http/errors.ts`. Прецедент явного статуса
+    // для кода с другим каноническим HTTP (ATTACHMENT_OWNER_IS_ICON) не
+    // тронут.
     return new EtnError(
-      'INTERNAL',
+      'UPDATE_INSTALLER_FAILED',
       err.message,
-      { status: 502, reason: err.reason, job: err.job },
+      { status: 502, stage: err.stage, reason: err.reason, retryable: false, job: err.job },
       requestId,
     );
   }
@@ -158,6 +162,24 @@ export const systemUpdateRoutes: FastifyPluginAsync = async (app: FastifyInstanc
     sendSuccess(reply, statusPayload(app));
   });
 
+  /**
+   * `POST /system/update/apply` — создать задание и запустить установщик.
+   *
+   * **Синхронный ответ — до конца скачивания и проверки SHA-256** (до 10 минут
+   * по конфигурации runner'а), а не сразу после создания задания: `201` уходит
+   * в момент запуска установщика, `502 UPDATE_INSTALLER_FAILED` — если ассет не
+   * скачался/не сошёлся по хешу/процесс не стартовал (DoD: отказ на этой фазе
+   * не переводит службу в обслуживание и не останавливает сервер).
+   *
+   * **Обязанность клиента** (`ca26c59d`): у `rest-client` тайм-аут ответа 30 с,
+   * то есть apply заведомо может «оборваться» на живом обновлении. Обрыв
+   * соединения/тайм-аут, `409` (задание уже идёт) и `503` (обслуживание)
+   * трактуются как «обновление идёт», а не как отказ: фактическое состояние
+   * читается из `GET /system/update/progress`. Поэтому вызов идёт с
+   * `retry: false` (`RestClient.systemUpdateApply`) — автоматический повтор
+   * создал бы второе задание и второе скачивание установщика; `502` с
+   * `details.retryable: false` повторять нельзя тем более.
+   */
   app.post('/system/update/apply', adminOnly, async (req, reply) => {
     const targetVersion = targetVersionFromBody(req);
     try {
