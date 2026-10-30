@@ -7,11 +7,18 @@
  * реестре, а клиенты получали фантомный `network.deleted` ещё до удаления.
  * Проверяем: явное закрытие сети в обоих пулах до удаления файлов, 204,
  * отсутствие фантомного события и освобождение воркеров.
+ *
+ * Второй сценарий — регресс задачи 0178253c: `db.ping` (проверка БД в
+ * `GET /api/v1/health`, установщик опрашивает её каждые 2 с) — задача БЕЗ сети.
+ * Пул обязан сохранить привязку слота к сети, к чьему `data.db` воркер держит
+ * соединение, иначе удаление сети снова падает EBUSY.
  */
 
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { afterEach, describe, it } from 'node:test';
+
+import DatabaseConstructor from 'better-sqlite3';
 
 import { FILTER_AST_VERSION } from '@etn/shared';
 
@@ -25,7 +32,8 @@ import {
   configureReaderPool,
   getReaderPool,
 } from '../src/db/reader-pool.js';
-import { networkDir } from '../src/paths.js';
+import { probeDbThroughReaderPool } from '../src/db/db-health.js';
+import { networkDir, systemDbPath } from '../src/paths.js';
 import {
   authHeaders,
   buildRestContext,
@@ -138,6 +146,84 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(alive.statusCode, 200);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('db.ping (/health) не сбрасывает привязку reader-слота: DELETE 204 (0178253c)', async () => {
+      // Проверку БД для /health ведём реальным `db.ping` через процессный
+      // reader-пул — так же, как обработчик `/health`. Путь файла известен
+      // только после создания контекста, поэтому проба читает переменную в
+      // момент вызова.
+      let pingDbPath = '';
+      const ctx = await buildRestContext({
+        // Обёртка как в `createDbHealthCheck`: успешное чтение → `ok`, отказ →
+        // `error` (сам `probeDbThroughReaderPool` — проба без статуса).
+        dbHealth: () =>
+          probeDbThroughReaderPool(pingDbPath).then(
+            () => 'ok' as const,
+            () => 'error' as const,
+          ),
+      });
+      try {
+        configureWritePool({ size: 1, taskTimeoutMs: 60_000 });
+        // Размер 1: ping обязан попасть на ТОТ ЖЕ слот, что держит соединение
+        // сети, — только тогда дефект воспроизводится.
+        configureReaderPool({ size: 1, taskTimeoutMs: 60_000 });
+        // Проверяемый файл БД: `db.ping` читает `PRAGMA schema_version` на
+        // read-only соединении, поэтому достаточно пустой SQLite-базы.
+        pingDbPath = systemDbPath(ctx.dataDir);
+        const pingFile = new DatabaseConstructor(pingDbPath);
+        pingFile.close();
+
+        const queried = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/query`,
+          headers: authHeaders(ctx),
+          payload: {
+            ast: { version: FILTER_AST_VERSION, filter: { op: 'and', children: [] } },
+          },
+        });
+        assert.equal(queried.statusCode, 200, queried.body);
+        const pool = getReaderPool();
+        assert.ok(pool !== null);
+        assert.ok(
+          pool.stats().networks.includes(ctx.networkId),
+          'reader-воркер держит соединение сети до ping',
+        );
+
+        // Публичный триггер: установщик опрашивает /health каждые 2 с.
+        const health = await ctx.app.inject({ method: 'GET', url: '/api/v1/health' });
+        assert.equal(health.statusCode, 200, health.body);
+        assert.equal(
+          (health.json() as { db?: string }).db,
+          'ok',
+          'db.ping по-прежнему работает после правки',
+        );
+
+        // Главное: задача без сети не стирает привязку слота — иначе воркер с
+        // открытым `data.db` невидим для `closeNetwork` и `rmSync` даёт EBUSY.
+        assert.ok(
+          pool.stats().networks.includes(ctx.networkId),
+          'db.ping не сбрасывает привязку reader-слота к сети',
+        );
+
+        const deleted = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/admin/networks/${ctx.networkId}`,
+          headers: authHeaders(ctx),
+        });
+
+        assert.equal(deleted.statusCode, 204, deleted.body);
+        assert.equal(ctx.sys.getNetworkById(ctx.networkId), null, 'реестр очищен');
+        assert.equal(
+          existsSync(networkDir(ctx.dataDir, ctx.networkId)),
+          false,
+          'каталог сети удалён',
+        );
+        assert.deepEqual(pool.stats().networks, [], 'привязки к сети не осталось');
+        assert.equal(pool.stats().workers, 0, 'reader-воркер терминирован');
       } finally {
         await closeRestContext(ctx);
       }
