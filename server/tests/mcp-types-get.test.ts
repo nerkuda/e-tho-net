@@ -20,6 +20,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import { TYPES_LIST_BUDGET_PREVIEW_CHARS } from '@etn/shared';
+
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
@@ -607,6 +609,86 @@ describe('etn.types.get + list { keywords, compact, meta } (17ff4619)', {
         assert.equal(shrunk.meta?.thought_types_returned, returned);
         assert.equal(shrunk.meta?.has_more, true, 'обрезанный ответ не выглядит полным');
         assert.equal(shrunk.meta?.next_offset, returned, 'next_offset — на первую выброшенную запись');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('next_offset of two under-delivered catalogues is the MIN position, not max', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const long = 'z'.repeat(1500);
+      for (const name of ['Тип-1', 'Тип-2', 'Тип-3', 'Тип-4', 'Тип-5']) {
+        createThoughtType(ndb, { name, description: long }, ctx.adminId);
+      }
+      for (const name of ['связь-1', 'связь-2', 'связь-3', 'связь-4', 'связь-5']) {
+        createLinkType(
+          ndb,
+          { name_forward: name, name_reverse: `${name}-обр`, description: long },
+          ctx.adminId,
+        );
+      }
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // 1) Страница без бюджета: ровно те записи, которые увидит шринкер.
+        const page = await list(handle.client, ctx.networkId, {
+          scope: 'all',
+          limit: 3,
+          offset: 0,
+        });
+        assert.equal(page.thought_types?.length, 3);
+        assert.equal(page.link_types?.length, 3);
+
+        // 2) Воспроизводим шаг 1 шринкера (превью текстов до 200) и измеряем
+        //    точный размер payload при 3/2/1 записях мыслей + 3 связях.
+        //    Ключи и порядок совпадают с payload сервера (meta добавляется
+        //    ПОСЛЕ шринкера и в бюджет не входит).
+        const previewEntry = (entry: TypeEntry): TypeEntry => {
+          const clone: TypeEntry = { ...entry };
+          const writable = clone as unknown as Record<string, unknown>;
+          for (const key of ['description', 'comment_template_md']) {
+            const text = writable[key];
+            if (typeof text === 'string') {
+              writable[key] = text.slice(0, TYPES_LIST_BUDGET_PREVIEW_CHARS);
+            }
+          }
+          return clone;
+        };
+        const thoughts = page.thought_types!.map(previewEntry);
+        const links = page.link_types!.map(previewEntry);
+        const sizeFor = (thoughtCount: number): number =>
+          JSON.stringify({
+            thought_types: thoughts.slice(0, thoughtCount),
+            structural_properties_note: page.structural_properties_note,
+            link_types: links,
+          }).length;
+        const s3 = sizeFor(3);
+        const s2 = sizeFor(2);
+        const s1 = sizeFor(1);
+        assert.ok(s1 < s2 && s2 < s3, `размеры payload убывают: ${s1} < ${s2} < ${s3}`);
+
+        // Бюджет ровно под одну запись мыслей + три связи: шринкер сбросит
+        // хвост каталога мыслей до одной записи, связи не тронет.
+        const shrunk = await list(handle.client, ctx.networkId, {
+          scope: 'all',
+          limit: 3,
+          max_chars: s1,
+        });
+        assert.equal(shrunk.meta?.truncated, true);
+        assert.equal(shrunk.meta?.reason, 'max_chars_items');
+        assert.equal(shrunk.meta?.thought_types_returned, 1, 'хвост мыслей срезан до одной');
+        assert.equal(shrunk.meta?.link_types_returned, 3, 'связи не тронуты');
+        assert.ok((shrunk.meta?.thought_types_total ?? 0) > 3, 'за страницей остались мысли');
+        assert.ok((shrunk.meta?.link_types_total ?? 0) > 3, 'за страницей остались связи');
+        assert.equal(shrunk.meta?.has_more, true);
+        // Оба каталога недочитаны, позиции разные (1 и 3): next_offset берёт
+        // МИНИМУМ — повтор записи лучше пропуска. Math.max дал бы 3.
+        assert.equal(shrunk.meta?.next_offset, 1, 'next_offset = min(1, 3), не max');
       } finally {
         await handle.close();
       }
