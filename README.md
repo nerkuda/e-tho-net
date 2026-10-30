@@ -97,7 +97,7 @@
 
 ## Стек
 
-- **Сервер:** Node.js 20+ (**рекомендуется 22 LTS** — для него у better-sqlite3 есть готовая prebuilt-binary; на Node 24 потребуется Python в PATH для компиляции), TypeScript, Fastify, better-sqlite3, WebSocket.
+- **Сервер:** Node.js 22 LTS (`.nvmrc`; для него у better-sqlite3 есть готовая prebuilt-binary — на Node 24 потребуется Python в PATH), TypeScript, Fastify, better-sqlite3, WebSocket.
 - **Клиент:** Electron, TypeScript.
 - **Хранилище:** SQLite — одна `_system.db` + `networks/<id>/data.db` на сеть.
 - **MCP:** `@modelcontextprotocol/sdk`.
@@ -138,14 +138,16 @@ npm test                 # все тесты
 
 Готовые дистрибутивы и установщик ETN пока **не подписаны** сертификатом
 разработчика: публичные центры сертификации не выдают их заявителям из ряда
-регионов. Поэтому Windows и macOS могут показывать предупреждения:
+регионов. Поэтому Windows и самостоятельно собранное приложение для macOS
+могут показывать предупреждения:
 
 - **Windows:** SmartScreen — «Windows protected your PC» (нужно «More info» →
   «Run anyway»); в Windows 11 с включённым Smart App Control запуск
   неподписанного приложения может быть заблокирован.
-- **macOS:** Gatekeeper — «Apple cannot check it for malicious software»;
-  в macOS 15 и новее обходной путь — System Settings → Privacy & Security →
-  Open Anyway.
+- **macOS:** готовой сборки в релизе нет — клиент собирают из исходников; если
+  вы передаёте собранное приложение другим, Gatekeeper может показать
+  «Apple cannot check it for malicious software»; в macOS 15 и новее обходной
+  путь — System Settings → Privacy & Security → Open Anyway.
 - **Linux:** подпись обычно не требуется; проверяйте SHA-256 архивов по
   `SHA256SUMS` из релиза.
 
