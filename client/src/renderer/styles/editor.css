@@ -1250,17 +1250,48 @@
 }
 
 /* ТП1 (задача 2fc28fa2): task-списки из единого рендерера — чекбокс вместо
-   маркера. Классы ставит @etn/markdown. */
-.comment-view ul.contains-task-list,
-.comment-view ol.contains-task-list,
-.comment-view li.task-list-item {
+   маркера. Классы ставит @etn/markdown; это единственная разметка такого вида,
+   поэтому селектор — по классу рендерера БЕЗ класса-хоста: одно правило
+   покрывает все места просмотра markdown — просмотр постоянного комментария
+   и хронологии (`.md-field-view.comment-view`), вложения, документ публикации
+   (`.pub-doc.comment-view`), попап предпросмотра и ленту «Дневника» (у неё
+   собственный хост `.diary-body` вместо `.comment-view`). Вложенные списки и
+   смешанные пункты (список в цитате, цитата в пункте) получают те же классы от
+   рендерера. */
+ul.contains-task-list,
+ol.contains-task-list,
+li.task-list-item {
   list-style: none;
 }
 
-.comment-view .task-list-item-checkbox,
+/* Чекбокс задачи — ИНДИКАТОР состояния, а не интерактивный контрол. Вендор
+   (`@layer wa-native`, `native.css`) рисует любой `input[type=checkbox]` на
+   токенах формы и приглушает отключённый до `opacity: 0.5`: рамка
+   `--border-strong` в половину прозрачности сливалась с фоном — в тёмной теме
+   чек-боксы задач были не видны (ошибка 5c6cc7d3). Здесь вид задан токенами
+   темы без приглушения: контур `--text-dim` (контраст как у вторичного текста),
+   заливка `--surface-2`, у отмеченного — заливка `--accent` и белая галочка
+   `--accent-fg`. Галочку рисует вендорская `:checked::after` через
+   `currentColor`, но `color` ей задаём ЯВНО: базовое правило `input, select,
+   textarea { color: inherit }` (tokens.css) не в слое и перебивает вендорское
+   `:checked { color: … }`, из-за чего в правке галочка наследовала приглушённый
+   `--text-dim` и терялась на акцентной заливке.
+   Парный класс правки (`cm-md-task-checkbox`) ставит `editor/md-live.ts`, чтобы
+   просмотр и правка выглядели одинаково. */
+input.task-list-item-checkbox,
 .cm-editor .cm-line .cm-md-task-checkbox {
+  opacity: 1;
   margin-inline-end: 0.4em;
   vertical-align: baseline;
+  border-color: var(--text-dim);
+  background-color: var(--surface-2);
+}
+
+input.task-list-item-checkbox:checked,
+.cm-editor .cm-line .cm-md-task-checkbox:checked {
+  border-color: var(--accent);
+  background-color: var(--accent);
+  color: var(--accent-fg);
 }
 
 /* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
