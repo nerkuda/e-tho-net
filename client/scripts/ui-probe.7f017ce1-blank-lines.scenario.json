@@ -1,6 +1,6 @@
 {
   "name": "blank-lines-7f017ce1",
-  "description": "Ошибка 7f017ce1 «При просмотре комментариев исчезают переводы строк». САМОДОСТАТОЧНЫЙ сценарий: постоянный комментарий с пустыми строками заводит сам шагом api (POST на корневую мысль HOME, {{homeId}}), поэтому --seed-comment не нужен. Проверяет ПРОГРАММНО (DOM-пробы, без скриншотов), что каждая пустая строка исходника занимает в просмотре ровно одну строку строкового ритма --md-line-height: ведущая пустая строка, ДВЕ пустые строки между абзацами (раньше склопывались в одну), пустая строка между пунктами списка (раньше исчезала полностью — li без полей), пустая строка внутри цитаты, пустая строка после таблицы и ХВОСТОВЫЕ пустые строки. Дополнительно: одиночный перевод строки остаётся <br> (паритет из 5de0332d), а серверный body_html несёт ту же разметку пустых строк (единый рендерер, не только клиент). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.7f017ce1-blank-lines.scenario.json --out .tmp/blank-lines-out",
+  "description": "Ошибка 7f017ce1 «При просмотре комментариев исчезают переводы строк». САМОДОСТАТОЧНЫЙ сценарий: постоянный комментарий с пустыми строками заводит сам шагом api (POST на корневую мысль HOME, {{homeId}}), поэтому --seed-comment не нужен. Проверяет ПРОГРАММНО (DOM-пробы, без скриншотов), что каждая пустая строка исходника занимает в просмотре ровно одну строку строкового ритма --md-line-height: ведущая пустая строка, ДВЕ пустые строки между абзацами (раньше склопывались в одну), пустая строка между пунктами списка (раньше исчезала полностью — li без полей), пустая строка внутри цитаты, пустая строка после таблицы и ХВОСТОВЫЕ пустые строки. Дополнительно: одиночный перевод строки остаётся <br> (паритет из 5de0332d), ГРАНИЦА «список → пустая строка → блок вне списка» даёт ровно N строк (1 → 20.15, 2 → 40.3, зазор списка снят, маркер — сосед списка), а серверный body_html несёт ту же разметку пустых строк (единый рендерер, не только клиент). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.7f017ce1-blank-lines.scenario.json --out .tmp/blank-lines-out",
   "timeout": 90000,
   "steps": [
     {
@@ -25,7 +25,7 @@
         "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
         "body": {
           "kind": "permanent",
-          "body_md": "\nПервый абзац.\n\n\nВторой абзац после двух пустых строк.\n\n1. пункт A\n\n2. пункт B\n\n> цитата один\n>\n> цитата два\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nПосле таблицы.\n\nСтрока раз\nСтрока два\n\n\n"
+          "body_md": "\nПервый абзац.\n\n\nВторой абзац после двух пустых строк.\n\n1. пункт A\n\n2. пункт B\n\n> цитата один\n>\n> цитата два\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nПосле таблицы.\n\nСписок один:\n\n- пункт C\n\nПосле списка C.\n\nСписок два:\n\n- пункт D\n\n\nПосле списка D.\n\nСтрока раз\nСтрока два\n\n\n"
         },
         "expression": "data.kind"
       },
@@ -125,6 +125,52 @@
       "probe": {
         "name": "tableGapKept",
         "expression": "window.__poll(() => { const view = window.__view(); const table = view.querySelector('table'); const after = window.__p('После таблицы'); if (table === null || after === null) return null; return window.__near(Math.round(after.getBoundingClientRect().top - table.getBoundingClientRect().bottom), Math.round(window.__lh())); })"
+      },
+      "expect": true
+    },
+    {
+      "name": "list-to-paragraph-one-blank",
+      "probe": {
+        "name": "listToParagraphOneBlank",
+        "expression": "window.__poll(() => { const view = window.__view(); const list = [...view.querySelectorAll('ul')].find((u) => (u.textContent || '').includes('пункт C')); const after = window.__p('После списка C'); if (list === undefined || after === null) return null; return Math.round(after.getBoundingClientRect().top - list.getBoundingClientRect().bottom); })"
+      }
+    },
+    {
+      "name": "list-to-paragraph-one-blank-kept",
+      "probe": {
+        "name": "listToParagraphOneBlankKept",
+        "expression": "window.__poll(() => { const view = window.__view(); const list = [...view.querySelectorAll('ul')].find((u) => (u.textContent || '').includes('пункт C')); const after = window.__p('После списка C'); if (list === undefined || after === null) return null; return window.__near(Math.round(after.getBoundingClientRect().top - list.getBoundingClientRect().bottom), Math.round(window.__lh())); })"
+      },
+      "expect": true
+    },
+    {
+      "name": "list-margin-end-suppressed",
+      "probe": {
+        "name": "listMarginBlockEnd",
+        "expression": "window.__poll(() => { const view = window.__view(); const list = [...view.querySelectorAll('ul')].find((u) => (u.textContent || '').includes('пункт C')); return list === undefined ? null : getComputedStyle(list).marginBlockEnd; })"
+      },
+      "expect": "0px"
+    },
+    {
+      "name": "list-marker-is-sibling",
+      "probe": {
+        "name": "listMarkerIsSibling",
+        "expression": "(() => { const view = window.__view(); const list = [...view.querySelectorAll('ul')].find((u) => (u.textContent || '').includes('пункт C')); return list !== undefined && list.nextElementSibling !== null && list.nextElementSibling.classList.contains('md-blank-line'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "list-to-paragraph-two-blanks",
+      "probe": {
+        "name": "listToParagraphTwoBlanks",
+        "expression": "window.__poll(() => { const view = window.__view(); const list = [...view.querySelectorAll('ul')].find((u) => (u.textContent || '').includes('пункт D')); const after = window.__p('После списка D'); if (list === undefined || after === null) return null; return Math.round(after.getBoundingClientRect().top - list.getBoundingClientRect().bottom); })"
+      }
+    },
+    {
+      "name": "list-to-paragraph-two-blanks-kept",
+      "probe": {
+        "name": "listToParagraphTwoBlanksKept",
+        "expression": "window.__poll(() => { const view = window.__view(); const list = [...view.querySelectorAll('ul')].find((u) => (u.textContent || '').includes('пункт D')); const after = window.__p('После списка D'); if (list === undefined || after === null) return null; return window.__near(Math.round(after.getBoundingClientRect().top - list.getBoundingClientRect().bottom), Math.round(2 * window.__lh())); })"
       },
       "expect": true
     },

@@ -32,6 +32,11 @@
  *   * маркеры ставятся только внутри значимых контейнеров — таблицы и её
  *     секции не разбираются (пустых строк внутри таблицы в markdown нет, а
  *     строка-разделитель `| --- |` пустой строкой не является);
+ *   * пустые строки на границе контейнера и следующего блока принадлежат
+ *     родительскому потоку: маркер ставится ПОСЛЕ закрытия контейнера
+ *     (`</ul>`, `</ol>`, `</blockquote>`), а не внутри него — иначе к пустой
+ *     строке добавлялся бы внешний зазор блока и она считалась бы дважды
+ *     (ошибка 7f017ce1, круг 2);
  *   * пустая строка — это разрыв МЕЖДУ блоками: внутри абзаца одиночный
  *     перевод строки даёт `<br>` и пустой строкой не считается;
  *   * хвостовые пустые строки документа считаются как у редактора: у
@@ -73,6 +78,14 @@ interface Frame {
   /** Конец последнего дочернего блока с картой строк, `null` — детей ещё нет. */
   lastEnd: number | null;
   /**
+   * Пустые строки, оставшиеся после ЗАКРЫТОГО дочернего контейнера. Они
+   * принадлежат уже потоку этого кадра и выводятся перед следующим его блоком
+   * (или на закрытии самого кадра) — то есть ВНЕ закрытого контейнера: иначе
+   * маркер попадает в содержимое (`<li>`, `<ul>`) и к пустой строке
+   * добавляется внешний зазор блока (ошибка 7f017ce1, круг 2).
+   */
+  pending: number;
+  /**
    * Сколько строк первой строки контейнера занято его собственным маркером:
    * у элемента списка на первой строке стоит `-`/`1.` (не пустая строка), у
    * цитаты и списка — стоит.
@@ -109,6 +122,7 @@ function collectBlankLines(tokens: readonly Token[], lineCount: number): Map<num
       contentStart: 0,
       contentEnd: lineCount,
       lastEnd: null,
+      pending: 0,
       firstLineIsMarkup: false,
     },
   ];
@@ -117,13 +131,11 @@ function collectBlankLines(tokens: readonly Token[], lineCount: number): Map<num
   const child = (frame: Frame, index: number, map: readonly [number, number]): void => {
     const start = map[0];
     const end = map[1];
-    if (frame.lastEnd === null) {
-      // Ведущий разрыв: у элемента списка первая строка занята маркером.
-      const from = frame.contentStart + (frame.firstLineIsMarkup ? 1 : 0);
-      add(index, start - from);
-    } else {
-      add(index, start - frame.lastEnd);
-    }
+    const from = frame.lastEnd ?? frame.contentStart + (frame.firstLineIsMarkup ? 1 : 0);
+    // pending — пустые строки после закрытого дочернего контейнера: они уже
+    // вне его разметки и выводятся здесь, перед следующим блоком родителя.
+    add(index, frame.pending + (start - from));
+    frame.pending = 0;
     frame.lastEnd = end;
   };
 
@@ -144,6 +156,7 @@ function collectBlankLines(tokens: readonly Token[], lineCount: number): Map<num
           contentStart: map[0],
           contentEnd: map[1],
           lastEnd: null,
+          pending: 0,
           firstLineIsMarkup: token.type === 'list_item_open',
         });
       }
@@ -151,11 +164,19 @@ function collectBlankLines(tokens: readonly Token[], lineCount: number): Map<num
     }
 
     if (token.nesting === -1) {
-      // Закрытие контейнера: хвостовые пустые строки — перед закрывающим токеном.
+      // Хвостовые пустые строки контейнера НЕ выводятся внутри него: маркер
+      // стал бы содержимым (`<li>`, `<ul>`), а внешний зазор блока остался бы —
+      // пустая строка после списка считалась бы дважды (ошибка 7f017ce1,
+      // круг 2). Передаём их родителю: они вставятся перед его следующим
+      // блоком, то есть уже после закрытия контейнера.
       const current = frames[frames.length - 1]!;
       if (current.openLevel !== token.level) continue;
-      if (current.lastEnd !== null) add(i, current.contentEnd - current.lastEnd);
-      if (frames.length > 1) frames.pop();
+      const trailing =
+        current.pending + (current.lastEnd !== null ? current.contentEnd - current.lastEnd : 0);
+      if (frames.length > 1) {
+        frames.pop();
+        frames[frames.length - 1]!.pending += trailing;
+      }
       continue;
     }
 
@@ -165,7 +186,7 @@ function collectBlankLines(tokens: readonly Token[], lineCount: number): Map<num
 
   // Хвостовые пустые строки документа (как последняя строка в редакторе).
   const root = frames[0]!;
-  if (root.lastEnd !== null) add(tokens.length, lineCount - root.lastEnd);
+  if (root.lastEnd !== null) add(tokens.length, root.pending + (lineCount - root.lastEnd));
   return inserts;
 }
 

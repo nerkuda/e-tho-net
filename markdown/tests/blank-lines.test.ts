@@ -18,7 +18,10 @@
  *   * `real-map-blocks.md` — байт-в-байт слайс реального документа
  *     `client/tests/fixtures/real-markdown/etn-map-desktop.md` (строки 1–13):
  *     заголовок, цитата, абзац, таблица и блок кода без пустых строк между
- *     ними — сторож «ложных» пустых строк.
+ *     ними — сторож «ложных» пустых строк;
+ *   * `real-list-after-blank.md` — байт-в-байт слайс того же документа (строки
+ *     27–32): список и через одну пустую строку следующий блок (`<a id=…>`).
+ *     Реальная форма границы «список → пустая строка → блок вне списка».
  *
  * Краевые случаи, которых в реальных комментариях пока нет (серии из 2+
  * пустых строк, ведущие/хвостовые пустые строки, пустая строка внутри цитаты),
@@ -66,8 +69,13 @@ describe('пустые строки исходника в просмотре (7f
     );
     assert.match(
       html,
-      /<li>\s*<p>[^]*?<\/p>\s*<div class="md-blank-line" aria-hidden="true"><br><\/div>\s*<\/li>/,
-      'пустая строка между пунктами списка принадлежит пункту — иначе она теряется (li без полей)',
+      /<\/li>\s*<div class="md-blank-line" aria-hidden="true"><br><\/div>\s*<li>/,
+      'пустая строка между пунктами стоит между </li> и <li> — на границе пунктов',
+    );
+    assert.doesNotMatch(
+      html,
+      /<li>(?:(?!<\/li>)[\s\S])*?md-blank-line/,
+      'внутри пункта маркера нет: иначе пустая строка смешивалась бы с зазором блока',
     );
   });
 
@@ -86,6 +94,46 @@ describe('пустые строки исходника в просмотре (7f
     assert.match(html, /<blockquote>[\s\S]*?<\/blockquote>/, 'цитата реального снимка отрисована');
   });
 
+  it('реальный список → пустая строка → блок вне списка: маркер после списка, не внутри пункта', () => {
+    const html = renderMarkdown(readFixture('real-list-after-blank.md'));
+    assert.deepEqual(
+      blankCounts(html),
+      [1],
+      'единственная пустая строка снимка — между списком и следующим блоком',
+    );
+    assert.match(
+      html,
+      /<\/ul>\s*<div class="md-blank-line" aria-hidden="true"><br><\/div>\s*<p>/,
+      'маркер стоит между списком и следующим блоком — сосед списка, а не его содержимое',
+    );
+    assert.doesNotMatch(
+      html,
+      /<li>(?:(?!<\/li>)[\s\S])*?md-blank-line/,
+      'внутри пункта списка маркера нет: иначе к пустой строке добавлялся бы ещё и margin-block-end списка',
+    );
+  });
+
+  it('список → 1 пустая → абзац даёт одну строку, две пустые — две', () => {
+    const base = readFixture('real-list-blank-lines.md');
+    const one = renderMarkdown(`${base}\n\nСледующий абзац.`);
+    assert.match(
+      one,
+      /<\/ol>\s*<div class="md-blank-line" aria-hidden="true"><br><\/div>\s*<p>Следующий абзац\./,
+      'одна пустая строка — один <br> сразу после списка',
+    );
+    const two = renderMarkdown(`${base}\n\n\nСледующий абзац.`);
+    assert.match(
+      two,
+      /<\/ol>\s*<div class="md-blank-line" aria-hidden="true"><br><br><\/div>\s*<p>Следующий абзац\./,
+      'две пустые строки — два <br> сразу после списка',
+    );
+    assert.doesNotMatch(
+      two,
+      /<li>(?:(?!<\/li>)[\s\S])*?md-blank-line/,
+      'хвостовые пустые строки последнего пункта не остаются внутри li',
+    );
+  });
+
   it('серия из трёх пустых строк между пунктами даёт три пустые строки', () => {
     const source = withBlankRun(readFixture('real-list-blank-lines.md'), '2. **Двойной клик', 3);
     assert.deepEqual(blankCounts(renderMarkdown(source)), [1, 3]);
@@ -99,16 +147,14 @@ describe('пустые строки исходника в просмотре (7f
   it('хвостовые пустые строки показываются', () => {
     const source = `${readFixture('real-list-blank-lines.md')}\n\n\n`;
     const html = renderMarkdown(source);
-    const counts = blankCounts(html);
-    // Разрыв абзац → список (1) + между пунктами (1) + хвостовые (3). Хвостовые
-    // строки markdown-it относит к последнему пункту списка, поэтому они делятся
-    // между маркером внутри `li` и маркером после списка — на просмотр это не
-    // влияет, важна суммарная высота.
-    assert.equal(counts.reduce((sum, n) => sum + n, 0), 5);
+    // Разрыв абзац → список (1) + между пунктами (1) + хвостовые (3) одним
+    // маркером ПОСЛЕ списка: хвостовые строки последнего пункта уходят в
+    // родительский поток, внутрь `li` не попадают (ошибка 7f017ce1, круг 2).
+    assert.deepEqual(blankCounts(html), [1, 1, 3]);
     assert.match(
       html,
-      /<\/ol>\s*<div class="md-blank-line" aria-hidden="true"><br><\/div>\s*$/,
-      'после списка в конце документа остаётся пустая строка',
+      /<\/ol>\s*<div class="md-blank-line" aria-hidden="true"><br><br><br><\/div>\s*$/,
+      'после списка в конце документа остаются три пустые строки',
     );
   });
 
