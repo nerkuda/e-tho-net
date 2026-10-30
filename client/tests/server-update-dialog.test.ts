@@ -12,7 +12,9 @@
  *  - `502`: причина и путь к журналу, кнопки «Повторить» нет, apply не
  *    повторяется;
  *  - `backup_path: null` — путь архива не рисуется;
- *  - повторное открытие восстанавливает прогресс из `GET /progress`.
+ *  - повторное открытие восстанавливает прогресс из `GET /progress`;
+ *  - Docker-инструкция: строка + кнопка копирования (успех/ошибка), кнопки
+ *    нет при `instruction: null`, текст инструкции не дублируется (c79afe43).
  *
  * Дом — общий DOM-шим (`dom-shim.ts`, конвенция `compatibility-dialog.test.ts`).
  * Скриншотов нет: доказательства — текст и состояние DOM.
@@ -556,6 +558,133 @@ describe('запуск обновления и прогресс', () => {
       await tick(10);
       assert.ok(footerErrorText(dialog()).includes('Сервер развёрнут в Docker'));
       assert.deepEqual(harness.calls.applies, ['0.15.2']);
+    } finally {
+      harness.stop();
+    }
+  });
+});
+
+describe('Docker-инструкция: показ и копирование (c79afe43)', () => {
+  /** Образец текста сервера (полная редакция — `DOCKER_UPDATE_INSTRUCTION`). */
+  const DOCKER_COMMAND = 'docker compose pull && docker compose up -d';
+  const DOCKER_INSTRUCTION =
+    `Обновление выполняется на хосте с compose-файлом: ${DOCKER_COMMAND}. ` +
+    'Данные лежат в томе `etn_data`, внутри — `/data` (он же `ETN_DATA_DIR`).';
+
+  function dockerStatus(instruction: string | null = DOCKER_INSTRUCTION): SystemUpdateStatus {
+    return status({
+      deployment: 'docker',
+      download_url: null,
+      sha256: null,
+      instruction,
+    });
+  }
+
+  /** Кнопка копирования инструкции — по подписи словаря. */
+  function copyInstructionButton(node: ShimElement): ShimElement | undefined {
+    return node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === t('serverUpdate.copyInstruction'));
+  }
+
+  /** Число вхождений подстроки в плоский текст диалога. */
+  function countOccurrences(text: string, needle: string): number {
+    return text.split(needle).length - 1;
+  }
+
+  it('Docker: инструкция показана с кнопкой; нажатие копирует текст сервера', async () => {
+    const harness = mount({ getStatus: async () => dockerStatus() });
+    try {
+      await tick();
+      const node = dialog();
+      assert.ok(
+        node.flatText().includes(t('serverUpdate.instruction', DOCKER_INSTRUCTION)),
+        'строка инструкции в теле диалога',
+      );
+      const button = copyInstructionButton(node);
+      assert.ok(button !== undefined, 'рядом с инструкцией есть кнопка копирования');
+      button!.click();
+      await tick();
+      assert.deepEqual(harness.calls.copies, [DOCKER_INSTRUCTION], 'в буфер ушёл весь текст инструкции');
+      assert.ok(
+        node.flatText().includes(t('serverUpdate.instructionCopied')),
+        'подтверждение копирования показано',
+      );
+      assert.equal(footerErrorText(node), '', 'успешное копирование — не ошибка действия');
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('ошибка копирования — сообщение рядом с кнопкой, инструкция остаётся', async () => {
+    const harness = mount({
+      getStatus: async () => dockerStatus(),
+      copyText: async () => {
+        throw new Error('буфер недоступен');
+      },
+    });
+    try {
+      await tick();
+      const node = dialog();
+      copyInstructionButton(node)!.click();
+      await tick();
+      assert.ok(
+        node.flatText().includes(t('serverUpdate.instructionCopyFailed')),
+        'сказано, что скопировать не удалось',
+      );
+      assert.ok(
+        node.flatText().includes(t('serverUpdate.instruction', DOCKER_INSTRUCTION)),
+        'инструкция не пропала при ошибке копирования',
+      );
+      assert.equal(footerErrorText(node), '', 'ошибка копирования — не ошибка операции');
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('instruction: null — кнопки копирования в диалоге нет', async () => {
+    const harness = mount({
+      getStatus: async () => status({ deployment: 'windows-service', instruction: null }),
+    });
+    try {
+      await tick();
+      const node = dialog();
+      assert.equal(copyInstructionButton(node), undefined, 'копировать нечего — кнопки нет');
+      assert.equal(
+        node.flatText().includes(t('serverUpdate.instruction', '')),
+        false,
+        'пустой строки инструкции тоже нет',
+      );
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('пустой instruction — то же, что отсутствие: кнопки нет', async () => {
+    const harness = mount({ getStatus: async () => status({ instruction: '   ' }) });
+    try {
+      await tick();
+      assert.equal(copyInstructionButton(dialog()), undefined, 'пробельная инструкция — не команда');
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('текст инструкции не дублируется: команда встречается в диалоге один раз', async () => {
+    const harness = mount({ getStatus: async () => dockerStatus() });
+    try {
+      await tick();
+      const text = dialog().flatText();
+      assert.equal(
+        countOccurrences(text, DOCKER_COMMAND),
+        1,
+        'команда показана ровно один раз (кнопка не повторяет текст)',
+      );
+      assert.equal(
+        countOccurrences(text, DOCKER_INSTRUCTION),
+        1,
+        'строка инструкции одна',
+      );
     } finally {
       harness.stop();
     }

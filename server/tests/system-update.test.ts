@@ -473,6 +473,11 @@ describe('system/update — администратор и статус', { skip:
       assert.match(data.instruction!, /ETN_DATA_DIR/);
       assert.match(data.instruction!, /схема БД обновляется автоматически/i);
       assert.match(data.instruction!, /резервную копию/i);
+      // Точная формулировка тома: имя тома и путь внутри, без смешения с переменной.
+      assert.match(data.instruction!, /том[ае]? `etn_data`, внутри — `\/data` \(он же `ETN_DATA_DIR`\)/i);
+      // Оговорка про build-only compose: `pull` не обещает скачивание образа.
+      assert.match(data.instruction!, /docker compose build/i);
+      assert.match(data.instruction!, /`pull` ничего не скачивает/i);
       // Инструкция — про сервер: автообновления клиента не обещает.
       assert.doesNotMatch(data.instruction!, /клиент/i);
     } finally {
@@ -624,6 +629,8 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       assert.match(message, /Docker/i);
       assert.match(message, /автообновление из клиента невозможно/i);
       assert.ok(message.includes(DOCKER_UPDATE_COMMAND), message);
+      // Та же оговорка, что в инструкции: build-only compose собирается заново.
+      assert.match(message, /docker compose build/i);
       assert.ok(message.includes('GET /api/v1/system/update'), message);
       assert.equal(ctx.sys.getLatestUpdateJob(), null);
       const progress = await ctx.app.inject({

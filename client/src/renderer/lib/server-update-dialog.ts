@@ -10,7 +10,7 @@
  * **Что показывает.** Текущую и доступную версии, канал, дату проверки, ошибку
  * проверки, режим развёртывания (`deployment`) и инструкцию (`instruction`);
  * кнопки «Проверить» и «Обновить сервер» (в Docker кнопки обновления нет —
- * только пояснение; инструкция появится с задачей c79afe43).
+ * пояснение и инструкция от сервера с кнопкой копирования, задача c79afe43).
  *
  * **Запуск.** Подтверждение честно описывает последствия (сервер
  * останавливается, БД копируется в архив, клиенты получают 503/1012 и
@@ -156,6 +156,13 @@ export function openServerUpdateDialog(
   const deploymentLine = el('p', 'dialog-text muted');
   const checkErrorLine = el('p', 'dialog-text');
   const instructionLine = el('p', 'dialog-text');
+  /** Подтверждение копирования инструкции — рядом с кнопкой, не в ошибке. */
+  const instructionFeedback = el('span', 'muted');
+  instructionFeedback.hidden = true;
+  const instructionRow = div('form-row');
+  instructionRow.append(instructionLine);
+  /** Кнопка копирования инструкции: есть только при непустой инструкции. */
+  let instructionCopy: HTMLButtonElement | null = null;
   const unavailableLine = el('p', 'dialog-text muted');
   const noteLine = el('p', 'dialog-text muted');
   versionsBox.append(
@@ -164,7 +171,7 @@ export function openServerUpdateDialog(
     channelLine,
     deploymentLine,
     checkErrorLine,
-    instructionLine,
+    instructionRow,
     unavailableLine,
     noteLine,
   );
@@ -211,6 +218,19 @@ export function openServerUpdateDialog(
       copyFeedback.textContent = t('serverUpdate.pathCopyFailed');
     }
     copyFeedback.hidden = false;
+  }
+
+  /** Скопировать команду обновления из инструкции сервера (если она есть). */
+  async function copyInstruction(): Promise<void> {
+    const instruction = serverUpdateViewModel(state).instruction;
+    if (instruction === null) return;
+    try {
+      await deps.copyText(instruction);
+      instructionFeedback.textContent = t('serverUpdate.instructionCopied');
+    } catch {
+      instructionFeedback.textContent = t('serverUpdate.instructionCopyFailed');
+    }
+    instructionFeedback.hidden = false;
   }
 
   /** Пересобрать кнопки футера под текущее состояние. */
@@ -300,10 +320,8 @@ export function openServerUpdateDialog(
     checkErrorLine.textContent =
       view.checkError === null ? '' : t('serverUpdate.checkError', view.checkError);
     checkErrorLine.hidden = view.checkError === null;
-    instructionLine.textContent =
-      view.instruction === null ? '' : t('serverUpdate.instruction', view.instruction);
-    instructionLine.hidden = view.instruction === null;
-    // Пояснение недоступности обновления (Docker — до задачи c79afe43).
+    renderInstruction(view.instruction);
+    // Пояснение недоступности обновления (Docker).
     unavailableLine.textContent = view.unavailableNote ?? '';
     unavailableLine.hidden = view.unavailableNote === null;
     // Состояние проверки — не ошибка (в т.ч. 429 «проверка уже идёт»).
@@ -312,6 +330,32 @@ export function openServerUpdateDialog(
       : (state.checkNote ?? '');
     noteLine.textContent = note;
     noteLine.hidden = note === '';
+  }
+
+  /**
+   * Строка инструкции и кнопка копирования: кнопка существует только при
+   * непустом `instruction` (в Docker), у остальных режимов её нет в DOM.
+   */
+  function renderInstruction(instruction: string | null): void {
+    instructionFeedback.hidden = true;
+    instructionRow.hidden = instruction === null;
+    instructionLine.hidden = instruction === null;
+    instructionLine.textContent =
+      instruction === null ? '' : t('serverUpdate.instruction', instruction);
+    if (instruction === null) {
+      instructionCopy?.remove();
+      instructionCopy = null;
+      return;
+    }
+    if (instructionCopy === null) {
+      instructionCopy = uiButton({
+        label: t('serverUpdate.copyInstruction'),
+        role: 'ghost',
+        size: 's',
+        onClick: () => void copyInstruction(),
+      });
+      instructionRow.append(instructionCopy, instructionFeedback);
+    }
   }
 
   /** Текст-состояние прогресса: только подтверждённые сервером этапы. */

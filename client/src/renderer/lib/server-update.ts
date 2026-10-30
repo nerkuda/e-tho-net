@@ -137,7 +137,7 @@ export interface ServerUpdateViewModel {
   /** Текст последней ошибки проверки фида; `null` — проверка успешна. */
   checkError: string | null;
   deploymentText: string | null;
-  /** Инструкция обновления (Docker) от сервера; пока `null`. */
+  /** Инструкция обновления от сервера (Docker); `null` — режим без инструкции. */
   instruction: string | null;
   /** Можно запросить проверку. */
   canCheck: boolean;
@@ -177,6 +177,10 @@ export function serverUpdateViewModel(state: ServerUpdateState): ServerUpdateVie
   const job = state.job;
   const availableRaw = status?.available_version ?? '';
   const availableVersion = availableRaw.trim() === '' ? null : availableRaw;
+  // Пустой текст инструкции — то же, что её отсутствие: кнопки копирования
+  // не на что вешать.
+  const instructionRaw = status?.instruction ?? '';
+  const instruction = instructionRaw.trim() === '' ? null : instructionRaw;
   const deployment = status?.deployment ?? null;
   const runningPhase = state.phase === 'applying';
   const done = state.phase === 'done' || job?.stage === 'done';
@@ -217,7 +221,7 @@ export function serverUpdateViewModel(state: ServerUpdateState): ServerUpdateVie
         : fmtDateTime(status.checked_at),
     checkError: status?.check_error ?? null,
     deploymentText: deployment === null ? null : t(updateDeploymentLabel(deployment)),
-    instruction: status?.instruction ?? null,
+    instruction,
     canCheck: !state.checking && !runningPhase,
     canApply,
     unavailableNote:
