@@ -825,8 +825,20 @@ export function mountStructures(hostEl: HTMLElement): () => void {
   // Статус, на котором вид смонтирован: переход в `connected` — сигнал
   // повторить серверные чтения, оборванные на старте/в обрыве (76282fbc).
   let lastRtStatus = getRtStatus(store.state);
+  // Вид, на котором набор индикаторов дерева объявлен: смена вида — событие
+  // видимости (ошибка 1ae1f9b8), см. блок в подписчике ниже.
+  let lastActiveView = store.state.activeView;
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
+    // Смена вида — событие видимости набора индикаторов (ошибка 1ae1f9b8).
+    // Ушли с вида — скрытое дерево подписок не держит; вернулись — набор
+    // объявляется заново по уже отрисованным строкам (кэш слоя применяется
+    // к их облачкам синхронно). Блок стоит до ранних `return` ниже: иначе
+    // показ вида с отложенным полным путём оставил бы дерево без подписок.
+    if (store.state.activeView !== lastActiveView) {
+      lastActiveView = store.state.activeView;
+      syncStructuresIndicatorInterest(currentRows());
+    }
     // Статус соединения — не срез данных/визуалки, поэтому `reactToStore` на
     // него не реагирует. Восстановление связи отслеживаем здесь: снимок рёбер и
     // реестр свойств читаются с сервера, и обрыв в момент чтения обязан
@@ -1118,6 +1130,24 @@ function renderTree(keepScroll = false): void {
     drawLinks();
   }
   void refreshEdges();
+  syncStructuresIndicatorInterest(rows);
+  // Сборка применила и данные, и визуальные классы — фиксируем оба среза,
+  // чтобы следующее постороннее обновление store не вызвало пересборку.
+  syncRenderSlices(dataSlice(), visualSlice());
+}
+
+/**
+ * Объявить видимый набор индикаторов дерева. Набор объявляется ТОЛЬКО пока вид
+ * «Структуры» активен (ошибка 1ae1f9b8): скрытый экран подписок не держит, иначе
+ * волна `indicatorsAll` (смена слоя, `comment.updated`/`attachment.updated`)
+ * перечитывает строки невидимого дерева. Вызов из `renderTree` гейтится тем же
+ * правилом — дорисовка, завершившаяся уже после ухода с вида, набор не объявит.
+ */
+function syncStructuresIndicatorInterest(rows: readonly TreeRow[]): void {
+  if (store.state.activeView !== 'structures') {
+    releaseCloudIndicatorInterest('structures');
+    return;
+  }
   // Индикаторы облачков — по ВИДИМОМУ набору строк дерева (ошибка 46bda0e8):
   // строки, ушедшие из отбора/свёрнутые, отписываются от счётчиков, а
   // пересобранные облачка получают значения из общего кэша слоя.
@@ -1125,9 +1155,6 @@ function renderTree(keepScroll = false): void {
     'structures',
     rows.map((row) => row.thoughtId),
   );
-  // Сборка применила и данные, и визуальные классы — фиксируем оба среза,
-  // чтобы следующее постороннее обновление store не вызвало пересборку.
-  syncRenderSlices(dataSlice(), visualSlice());
 }
 
 // ---------------------------------------------------------------------------

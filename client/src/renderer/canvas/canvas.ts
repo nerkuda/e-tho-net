@@ -265,9 +265,21 @@ let refEpoch = 0;
  */
 let focusIndicatorId: string | null = null;
 const zoneVisibleThoughtIds = new Map<'parents' | 'siblings' | 'children', readonly string[]>();
+/**
+ * Вид, на котором холст объявлял набор индикаторов последним (ошибка
+ * 1ae1f9b8): смена вида — событие видимости, см. store-подписчик монтирования.
+ */
+let lastCanvasActiveView: string | null = null;
 
 /** Пересчитать видимый набор индикаторов холста (фокус-ряд + окна зон). */
 function syncCanvasIndicatorInterest(): void {
+  // Скрытый холст подписок не держит (ошибка 1ae1f9b8): «подписка = видимость»
+  // — облачка не на экране («Структуры», «Хроника», «События», публикации),
+  // и волна `indicatorsAll` не должна перечитывать их счётчики.
+  if (store.state.activeView !== 'map') {
+    releaseCloudIndicatorInterest('canvas');
+    return;
+  }
   const ids = new Set<string>();
   if (focusIndicatorId !== null) ids.add(focusIndicatorId);
   for (const visible of zoneVisibleThoughtIds.values()) for (const id of visible) ids.add(id);
@@ -307,6 +319,9 @@ let lockBadgeUnsubscribe: (() => void) | null = null;
  */
 export function mountCanvas(canvasHost: HTMLElement): () => void {
   host = canvasHost;
+  // Вид на момент монтирования — стартовая точка отслеживания видимости
+  // набора индикаторов (ошибка 1ae1f9b8): первый же уход с карты снимет набор.
+  lastCanvasActiveView = store.state.activeView;
   // A remount (layer/view switch) may find a transition still running against
   // the previous host — drop its layers/timers before the DOM is wiped.
   finishFocusTransition();
@@ -426,6 +441,14 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
 
   storeUnsubscribe = store.subscribe(() => {
     if (host?.isConnected !== true) return;
+    // Смена вида — событие видимости набора индикаторов (ошибка 1ae1f9b8):
+    // ушли с карты — набор снимается, вернулись — объявляется заново по уже
+    // отрисованным облачкам (кэш слоя патчит их синхронно). Без этого
+    // скрытый холст делил подписки с «Структурами» и получал их волну.
+    if (store.state.activeView !== lastCanvasActiveView) {
+      lastCanvasActiveView = store.state.activeView;
+      syncCanvasIndicatorInterest();
+    }
     // The label follows layer/theme changes even when the canvas data itself
     // is unchanged (the fast path below skips the full rebuild).
     updateLayerLabel();
