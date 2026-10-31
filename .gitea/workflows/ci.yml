@@ -53,5 +53,16 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Ресурсы раннера в лог: разбор таймаутов серверных тестов (ошибка
+      # 68a395b5) требует знать реальные CPU/RAM/диск и IO-давление ВМ.
+      - name: Runner resources
+        run: |
+          nproc
+          node -p "require('os').availableParallelism()"
+          free -m
+          df -h /opt /tmp
+          uptime
+          cat /proc/pressure/io || true
+
       - name: Server tests
         run: npm -w @etn/server test
