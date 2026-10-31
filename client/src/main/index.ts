@@ -18,7 +18,7 @@ import path from 'node:path';
 import { CLIENT_META_KEY } from '@etn/shared';
 import { serveEtnimgRequest, type EtnimgServeDeps } from './etnimg.js';
 import { LocalDb } from './db/local-db.js';
-import { purgeStaleDrafts } from './db/drafts-purge.js';
+import { purgeStaleDrafts, type DraftPurgeResult } from './db/drafts-purge.js';
 import {
   defaultMigrationsDir,
   isDefaultUserDataDir,
@@ -504,9 +504,18 @@ app
     // Пользователю — ОДНО стартовое сообщение при N > 0: окна ещё нет, поэтому
     // счётчик уезжает в client_meta, renderer читает его при старте
     // (`initDrafts` → `reportStartupPurge`) и очищает ключ.
-    const purgedDrafts = purgeStaleDrafts(localDb);
-    if (purgedDrafts.deletedWithText > 0) {
-      localDb.setMeta(CLIENT_META_KEY.DRAFTS_PURGED_COUNT, String(purgedDrafts.deletedWithText));
+    // Сбой локальной БД не должен мешать старту клиента (351068ed п.5): пурж
+    // сам не бросает, а запись счётчика обёрнута здесь. След чистки — в
+    // журнале клиента ниже (успех и сбой).
+    let draftsPurge: DraftPurgeResult | null = null;
+    try {
+      draftsPurge = purgeStaleDrafts(localDb);
+      // Счётчик пишется ВСЕГДА, в том числе 0 (351068ed п.4): условная запись
+      // оставляла в client_meta число запуска, который упал до показа, и
+      // следующий запуск без черновиков показывал чужой счётчик.
+      localDb.setMeta(CLIENT_META_KEY.DRAFTS_PURGED_COUNT, String(draftsPurge.deletedWithText));
+    } catch (err) {
+      console.error('[ETN] drafts purge failed:', err);
     }
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
@@ -533,6 +542,18 @@ app
         userData: app.getPath('userData'),
         argv: process.argv.join(' '),
       });
+      // След стартовой чистки черновиков (351068ed п.5): сколько удалено,
+      // сколько из них с текстом (по этому числу renderer покажет одно
+      // сообщение) и сколько операций сорвалось.
+      if (draftsPurge === null) {
+        clientLog.warn('drafts', 'startup purge failed');
+      } else {
+        clientLog.info('drafts', 'startup purge', {
+          deleted: draftsPurge.deleted,
+          withText: draftsPurge.deletedWithText,
+          failed: draftsPurge.failed,
+        });
+      }
     }
 
     // The etnimg protocol serves attachment files through the active
