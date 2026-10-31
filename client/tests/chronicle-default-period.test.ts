@@ -215,13 +215,18 @@ async function mountDiary(tabId: string, snapshot: string | null, rtStatus = 'co
   await flush();
 }
 
-afterEach(() => {
+/** Снять текущий стенд и кэши, которые переживают монтаж (общий teardown). */
+function teardownScreen(): void {
   if (mountedScreen !== null) {
     mountedScreen();
     mountedScreen = null;
   }
   panelMod.unmountChronicleFilterPanel();
   catalogueMod.resetPropertyCatalogue();
+}
+
+afterEach(() => {
+  teardownScreen();
 });
 
 beforeEach(() => {
@@ -414,16 +419,38 @@ describe('«Дневник»: сохранённый месяц календар
     assert.notEqual(saved, undefined, 'смена месяца записана в состояние вкладки');
     const state = saved!.patch['chronicle_state'] as string;
     assert.deepEqual(JSON.parse(state).month, nextMonth, 'в снимок лёг новый месяц');
-    // «Перезапуск»: новый монтаж с этим снимком показывает сохранённый месяц.
-    mountedScreen?.();
-    mountedScreen = null;
-    panelMod.unmountChronicleFilterPanel();
-    catalogueMod.resetPropertyCatalogue();
+    // «Перезапуск»: модульный `month` не должен переживать процесс. Прогрев на
+    // другой вкладке сбрасывает его к текущему месяцу (в холодном старте он
+    // `null`) — без этого кейс зеленел бы и без `alignEntryMonth`: сетка нового
+    // монтажа строилась бы из месяца, оставшегося от клика, а не из снимка.
+    teardownScreen();
+    await mountDiary('tab-dp-8-restart', null);
+    // Кнопка «Сегодня» доводит календарь прогрева до текущего месяца детермини-
+    // рованно (не завися от месяца, оставшегося от предыдущего кейса).
+    (host.querySelector('.cal-today') as ShimElement).click();
+    await flush();
+    teardownScreen();
     queries.length = 0;
     tabUpdates = [];
     await mountDiary('tab-dp-8', state);
     const firstDay = `${nextMonth.year}-${pad2(nextMonth.month)}-01`;
-    assert.ok(calendarDays().includes(firstDay), 'сетка сохранённого месяца восстановлена');
+    // Дни СВОЕГО месяца сетки (без приглушённых ячеек соседних месяцев):
+    // только так видно, что показан сохранённый месяц, а не текущий с
+    // дописанным в конец первой датой следующего.
+    const ownDays = host
+      .querySelectorAll('.cal-day')
+      .filter((cell) => !cell.classList.contains('is-out'))
+      .map((cell) => cell.title);
+    assert.ok(ownDays.includes(firstDay), 'сетка сохранённого месяца восстановлена');
+    assert.equal(
+      ownDays.length,
+      new Date(Date.UTC(nextMonth.year, nextMonth.month, 0)).getUTCDate(),
+      'показан именно сохранённый месяц (число дней своего месяца)',
+    );
+    assert.ok(
+      !ownDays.some((day) => day.startsWith(today.slice(0, 7))),
+      'текущий месяц не подставлен вместо сохранённого',
+    );
     assert.equal(
       host.querySelectorAll('.cal-day.is-selected').length,
       1,
