@@ -483,15 +483,20 @@ async function openStructuresMenu(): Promise<ShimElement> {
 
 /** Смонтировать «Дневник» с записью, у которой есть чип мысли M. */
 async function openChronicleMenu(): Promise<{ host: ShimElement; body: ShimElement }> {
+  // Период входа в «Дневник» без отбора — ТЕКУЩАЯ ДАТА (ошибка 167860ac):
+  // запись фикстуры датирована сегодняшним локальным днём, иначе лента честно
+  // отфильтрует её по периоду и чипа в DOM не будет.
+  const now = new Date();
+  const recordAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 0, 0, 0);
   const row = {
     id: 'row-1',
     title: null,
-    valid_from: '2026-10-27T10:00:00.000Z',
-    valid_to: '2026-10-27T10:00:00.000Z',
+    valid_from: recordAt.toISOString(),
+    valid_to: recordAt.toISOString(),
     use_time: false,
     version: 1,
-    created_at: '2026-10-27T10:00:00.000Z',
-    updated_at: '2026-10-27T10:00:00.000Z',
+    created_at: recordAt.toISOString(),
+    updated_at: recordAt.toISOString(),
     created_by: 'user-1',
     updated_by: 'user-1',
     snippet: 'Запись с упоминанием',
