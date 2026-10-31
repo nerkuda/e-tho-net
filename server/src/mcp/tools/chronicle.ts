@@ -101,6 +101,13 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
             total: result.total,
             offset: request.offset,
             limit: request.limit,
+            // Диагностика ядра отбора (ошибка 5c24af2f): тот же конверт и та же
+            // семантика, что у REST `POST /chronicle/query` и `etn.views.run` —
+            // пусто, поле не добавляется. Жёлтое ядро строится только при
+            // явном `ast` (контекста типа у хроники нет — требование 0fd1dc5d).
+            ...(result.warnings !== undefined && result.warnings.length > 0
+              ? { warnings: result.warnings }
+              : {}),
           },
         };
       }),

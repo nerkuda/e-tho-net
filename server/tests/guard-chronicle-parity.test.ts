@@ -666,6 +666,84 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     }
   });
 
+  it('MCP отдаёт meta.warnings той же формы, что REST (ошибка 5c24af2f)', async (t) => {
+    // Статический гейт: до фикса фасад вообще не упоминал warnings — этот
+    // assert красный на дофиксовой сборке (red-green плавника).
+    assert.match(
+      MCP,
+      /result\.warnings !== undefined && result\.warnings\.length > 0/,
+      'MCP-фасад обязан прокидывать warnings в meta с семантикой «пусто — поля нет»',
+    );
+    assert.match(
+      MCP,
+      /meta:\s*\{[\s\S]*warnings/,
+      'warnings обязаны лежать в meta (конверт REST)',
+    );
+
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Ast-фикстура');
+      createComment(
+        ndb,
+        'thought',
+        target,
+        { kind: 'chronological', body_md: 'запись', valid_from: '2024-01-01' },
+        USER,
+      );
+      const ast = {
+        version: 1,
+        filter: { entity: { kind: 'targets' }, operator: 'not_empty' },
+      };
+
+      const restRes = await rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+        headers: authHeaders(rest),
+        payload: { ast },
+      });
+      assert.equal(restRes.statusCode, 200, JSON.stringify(restRes.json()));
+      const restMeta = restRes.json().meta as { total: number; warnings?: unknown[] };
+
+      const mcpRes = await handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: { network_id: rest.networkId, ast },
+      });
+      const mcpMeta = toolJson<{ meta: { total: number; offset: number; limit: number; warnings?: unknown[] } }>(
+        mcpRes,
+      ).meta;
+
+      // Жёлтое ядро хроники строится только с контекстом типа (требование
+      // 0fd1dc5d), которого у записи нет: на штатной фикстуре warnings пуст у
+      // ОБОИХ фасадов, и пустое поле не добавляется. Непустой случай проверяет
+      // прогон с мутацией домена (отчёт работы 5c24af2f): REST↔MCP совпадают.
+      // Семантика «пусто — поля нет» единая; при непустом ответе форма общая.
+      if (restMeta.warnings === undefined) {
+        assert.equal('warnings' in mcpMeta, false, 'REST: пусто — поля нет; MCP тоже');
+      } else {
+        assert.deepEqual(mcpMeta.warnings, restMeta.warnings, 'warnings совпадают по форме');
+      }
+      assert.equal(mcpMeta.total, restMeta.total, 'total совпадает');
+      t.diagnostic(
+        `warnings parity: REST=${JSON.stringify(restMeta.warnings)}, MCP=${JSON.stringify(mcpMeta.warnings)}`,
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
   it('замер: MCP-ответ на 50 записей в md меньше, чем в html (ошибка 50a94510)', async (t) => {
     const rest = await buildRestContext();
     const mcp = await buildMcpContext({
