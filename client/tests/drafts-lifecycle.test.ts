@@ -55,12 +55,14 @@ win['removeEventListener'] = () => undefined;
 
 import {
   beginDraftFieldWrite,
+  clearDraft,
   clearDraftsFor,
   createDraftMirror,
   findDraft,
   reportStartupPurge,
   retryPendingDrafts,
   saveDraft,
+  withDraftFieldWrite,
   type DraftRecord,
   type DraftStatus,
 } from '../src/renderer/drafts.js';
@@ -554,6 +556,77 @@ test('блокер 351068ed: волна не дублирует PATCH поля, 
   await saving;
 
   assert.equal(updates, 1, 'ровно один PATCH поля');
+  assert.equal(noticeCount() - before, 0, 'ложного conflict-тоста нет');
+  assert.equal(h.rows.length, 0, 'черновик удалён успешным сохранением');
+});
+
+test('окно заголовка f537f56b: регистрация держится до конца очистки черновика', async () => {
+  const h = installHarness();
+  const THOUGHT_ID = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+  const row = h.setRow({
+    entityType: 'thought',
+    entityId: THOUGHT_ID,
+    field: 'title',
+    value: 'НОВЫЙ ЗАГОЛОВОК',
+    baseVersion: 1,
+  });
+  // Сервер: PATCH пользователя поднимает версию 1 → 2; второй PATCH с той же
+  // base_version — VERSION_CONFLICT (как в пробе верификатора).
+  const api = (globalThis as unknown as {
+    window: { etn: { ui: { draftDelete: unknown }; thoughts: { update: unknown } } };
+  }).window.etn;
+  let version = 1;
+  let updates = 0;
+  let conflicts = 0;
+  api.thoughts.update = async (
+    _networkId: string,
+    _id: string,
+    _patch: unknown,
+    expectedVersion: number,
+  ) => {
+    updates += 1;
+    if (expectedVersion !== version) {
+      conflicts += 1;
+      throw new EtnError('VERSION_CONFLICT', 'thought version mismatch');
+    }
+    version += 1;
+    return { id: THOUGHT_ID, version };
+  };
+  // Очистка черновика — IPC в main: ответ приходит позже PATCH (здесь 20 мс).
+  const ui = api.ui;
+  const originalDelete = ui.draftDelete as (id: string) => Promise<void>;
+  ui.draftDelete = async (id: string) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await originalDelete(id);
+  };
+  const before = noticeCount();
+
+  // Боевой порядок editor.ts:commitTitle — через `withDraftFieldWrite`:
+  // PATCH → await очистки → только потом release.
+  const update = api.thoughts.update as (
+    networkId: string,
+    id: string,
+    patch: { title: string },
+    expectedVersion: number,
+  ) => Promise<unknown>;
+  const saving = withDraftFieldWrite(
+    { networkId: NET, entityType: 'thought', entityId: THOUGHT_ID, field: 'title' },
+    async () => {
+      await update(NET, THOUGHT_ID, { title: 'НОВЫЙ ЗАГОЛОВОК' }, 1);
+      await clearDraft(row.id);
+      await clearDraftsFor(NET, 'thought', THOUGHT_ID);
+    },
+  );
+
+  // Один макротакт: PATCH уже завершён, `draftDelete` ещё в полёте. Если
+  // регистрация снята раньше очистки (старый `.finally`), волна видит
+  // pending-строку и шлёт второй PATCH — ложный conflict-тост.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await retryPendingDrafts(NET);
+  await saving;
+
+  assert.equal(updates, 1, 'ровно один PATCH заголовка');
+  assert.equal(conflicts, 0, 'ложного конфликта нет');
   assert.equal(noticeCount() - before, 0, 'ложного conflict-тоста нет');
   assert.equal(h.rows.length, 0, 'черновик удалён успешным сохранением');
 });

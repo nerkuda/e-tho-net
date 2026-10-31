@@ -67,13 +67,13 @@ import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidateSelectionThought } from '../selection/selection.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import {
-  beginDraftFieldWrite,
   canSave,
   clearDraft,
   clearDraftsFor,
   createDraftMirror,
   findDraft,
   offlineNotice,
+  withDraftFieldWrite,
 } from '../drafts.js';
 import { clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
@@ -2475,24 +2475,21 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     }
     // Пока PATCH заголовка летит, волна досыла не должна отправлять его
     // pending-строку: второй PATCH с той же base_version дал бы ложный
-    // VERSION_CONFLICT (ошибка 351068ed, блокер п.1). Регистрация охватывает и
-    // очистку черновика ниже — окно «PATCH завершился, строка ещё pending»
-    // закрыто.
-    const releaseTitleWrite = beginDraftFieldWrite({
-      networkId,
-      entityType: 'thought',
-      entityId: thought.id,
-      field: 'title',
-    });
-    void saveThought({ title: value })
-      .then((ok) => {
-        if (!ok) return;
-        void clearDraft(titleDraftId);
+    // VERSION_CONFLICT (ошибка 351068ed, блокер п.1). Регистрация обязана
+    // жить до конца очистки черновиков: снятие сразу после `.then` оставляло
+    // окно «PATCH завершился, строка ещё pending» — второй PATCH при медленной
+    // `draftDelete` (ошибка f537f56b). `withDraftFieldWrite` держит ключ, пока
+    // `run` не завершит `await` очистки.
+    void withDraftFieldWrite(
+      { networkId, entityType: 'thought', entityId: thought.id, field: 'title' },
+      async () => {
+        if (!(await saveThought({ title: value }))) return;
+        await clearDraft(titleDraftId);
         // Sweep by key (all statuses): a debounce whose id arrived late (or
         // never) and a conflict draft of the field are superseded by this save.
-        void clearDraftsFor(networkId, 'thought', thought.id);
-      })
-      .finally(releaseTitleWrite);
+        await clearDraftsFor(networkId, 'thought', thought.id);
+      },
+    );
   };
   titleArea.addEventListener('blur', commitTitle);
   // Enter inserts a newline; Ctrl/Cmd+Enter commits.

@@ -548,6 +548,33 @@ function isDraftFieldWriteInFlight(draft: DraftRecord): boolean {
   return fieldWritesInFlight.has(draftFieldKey(draft));
 }
 
+/**
+ * Выполняет запись поля, зеркалируемого в черновики, удерживая in-flight
+ * регистрацию до конца `run` — включая очистку черновиков (ошибка f537f56b).
+ *
+ * Порядок обязателен: если снять регистрацию раньше завершения IPC-удаления
+ * строки, волна досыла увидит ещё pending-черновик и отправит второй PATCH с
+ * той же `If-Match`-версией → ложный `VERSION_CONFLICT`. `run` должен сам
+ * дождаться очистки (`await clearDraft` / `await clearDraftsFor`) — хелпер
+ * снимает ключ только после его завершения, в том числе при исключении.
+ */
+export async function withDraftFieldWrite<T>(
+  key: {
+    networkId: string;
+    entityType: DraftKind;
+    entityId: string;
+    field: string;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  const release = beginDraftFieldWrite(key);
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
 /** One wave per network: the in-flight promise (351068ed п.2). */
 const retryWaves = new Map<string, Promise<void>>();
 /** Сети, для которых во время волны запрошен ЕЩЁ один проход по свежей очереди. */
