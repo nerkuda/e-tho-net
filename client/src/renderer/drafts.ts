@@ -442,6 +442,14 @@ export function offlineNotice(): void {
  * REAL connection recovery (de34b35b). Per-network: a background tab that came
  * back online must flush its own drafts, not only the visible one.
  *
+ * ONE wave per network at a time (ошибка 351068ed п.2). Two `connected` events
+ * in a row used to start two overlapping waves: the second one carried a stale
+ * `draftList` snapshot and re-sent a row the first wave had just deleted,
+ * producing a false `VERSION_CONFLICT` toast («запись изменена в другом
+ * месте»). A repeat call while a wave runs only schedules ONE more pass after
+ * it finishes: that pass re-reads the queue instead of replaying a snapshot,
+ * so rows typed during the wave still get sent.
+ *
  * A draft whose send hits `VERSION_CONFLICT` is marked `conflict` on the FIRST
  * attempt and therefore disappears from the `pending` queue: later connects do
  * not retry it and do not repeat the notice. The user gets ONE clear message;
@@ -457,6 +465,26 @@ export function offlineNotice(): void {
 export async function retryPendingDrafts(networkId?: string): Promise<void> {
   const target = networkId ?? store.state.networkId;
   if (target === null) return;
+  const running = retryWaves.get(target);
+  if (running !== undefined) {
+    retryRerun.add(target);
+    return running;
+  }
+  const wave = runRetryWave(target).then(async () => {
+    retryWaves.delete(target);
+    if (retryRerun.delete(target)) await retryPendingDrafts(target);
+  });
+  retryWaves.set(target, wave);
+  return wave;
+}
+
+/** Волны досыла в полёте — по сети (одна волна на сеть, 351068ed п.2). */
+const retryWaves = new Map<string, Promise<void>>();
+/** Сети, для которых во время волны запрошен ЕЩЁ один проход по свежей очереди. */
+const retryRerun = new Set<string>();
+
+/** Один проход по `pending`-очереди сети; терминальные исходы — агрегатом. */
+async function runRetryWave(target: string): Promise<void> {
   let drafts: DraftRecord[];
   try {
     drafts = await listDrafts(target, 'pending');

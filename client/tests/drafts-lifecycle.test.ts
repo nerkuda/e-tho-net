@@ -360,6 +360,38 @@ test('первый connect сессии досылает pending-чернови�
   assert.equal(h.rows.length, 0, 'подтверждённая проба очистила очередь');
 });
 
+test('перекрывающиеся волны досыла: одна отправка на сеть, без ложного conflict', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'ТЕКСТ ПОД ГОНКОЙ',
+    baseVersion: 3,
+  });
+  // Сервер эмулирует запись: строка, удалённая первой волной, для второй
+  // выглядит «уже не той версии» — ответ VERSION_CONFLICT.
+  const api = (globalThis as unknown as { window: { etn: { comments: { update: unknown } } } })
+    .window.etn.comments;
+  const originalUpdate = api.update as (...args: unknown[]) => Promise<unknown>;
+  let updates = 0;
+  api.update = async (...args: unknown[]) => {
+    updates += 1;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    if (h.rows.length === 0) throw new EtnError('VERSION_CONFLICT', 'comment version mismatch');
+    return originalUpdate(...args);
+  };
+  const before = noticeCount();
+
+  // Два `connected` подряд (второй — снапшот/повторный кадр) порождают две
+  // волны в одном тике. Вторая обязана не отправлять устаревший снимок.
+  await Promise.all([retryPendingDrafts(NET), retryPendingDrafts(NET)]);
+
+  assert.equal(updates, 1, 'вторая волна не отправляет уже удалённую строку');
+  assert.equal(noticeCount() - before, 0, 'ложного «запись изменена в другом месте» нет');
+  assert.equal(h.rows.length, 0, 'черновик отправлен и удалён');
+});
+
 // ---------------------------------------------------------------------------
 // 3. Конфликт: одна попытка, статус conflict, одно уведомление, текст цел
 // ---------------------------------------------------------------------------
