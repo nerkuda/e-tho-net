@@ -117,11 +117,11 @@ export interface ChronicleQueryRequest extends ChronicleFilter {
   limit: number;
   offset: number;
   /**
-   * Формат тела записи в строке ответа (0.15.1, ошибка 50a94510): `md` —
-   * только `body_md`, `html` — только `body_html`, `both` — оба поля.
+   * Формат тела записи в строке ответа (0.15.1, ошибки 50a94510, 35e1319a):
+   * `md` — только `body_md`, `html` — только `body_html`, `both` — оба поля.
    * Проекция выполняется в домене — единый путь для REST и MCP. Отсутствие —
-   * `both` (совместимость REST, где `body_html` отдаётся и клиенту); MCP-
-   * инструмент подставляет свой дефолт `md` до разбора тела.
+   * `html` (дефолт REST = прежний состав ответа: клиент читает `body_html`);
+   * MCP-инструмент подставляет свой дефолт `md` до разбора тела.
    */
   body?: ChronicleBodyFormat;
 }
@@ -166,7 +166,9 @@ export interface ChronicleRow {
   /**
    * Тело записи в markdown — есть, когда запрошен формат тела `md` или `both`
    * (0.15.1, ошибка 50a94510). MCP `etn.chronicle.query` по умолчанию отдаёт
-   * только это поле (дефолт `body: 'md'`), REST — оба тела (дефолт `'both'`).
+   * только это поле (дефолт `body: 'md'`); REST по умолчанию отдаёт только
+   * `body_html` (дефолт `'html'`, ошибка 35e1319a), `body_md` — по явному
+   * `md`/`both`.
    */
   body_md?: string;
   /**

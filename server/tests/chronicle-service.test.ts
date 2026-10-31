@@ -433,11 +433,12 @@ describe(
           },
           USER,
         );
-        // Без поля `body` — дефолт REST `both`: оба тела в строке.
+        // Без поля `body` — дефолт REST `html` (прежний состав ответа,
+        // ошибка 35e1319a): только `body_html`, `body_md` на провод не идёт.
         const row = query(ndb, {}).rows[0];
         assert.ok(row, 'запись найдена');
         assert.ok(row!.body_html !== undefined, 'дефолт REST отдаёт body_html');
-        assert.ok(row!.body_md !== undefined, 'дефолт REST отдаёт body_md');
+        assert.ok(!('body_md' in row!), 'дефолт REST не отдаёт body_md');
         assert.match(row!.body_html!, /<h2/, 'заголовок markdown — как <h2>');
         assert.match(row!.body_html!, /<ul/, 'список markdown — как <ul>');
         assert.match(row!.body_html!, /<strong/, 'жирный markdown — как <strong>');
@@ -449,7 +450,7 @@ describe(
       }
     });
 
-    it('проекция тела записи по `body`: md — только markdown, html — только HTML (0.15.1, ошибка 50a94510)', () => {
+    it('проекция тела записи по `body`: md — только markdown, html — только HTML, дефолт html (0.15.1, ошибки 50a94510, 35e1319a)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const a = seedThought(ndb, 'A');
@@ -469,6 +470,12 @@ describe(
         assert.ok(html, 'запись найдена (html)');
         assert.ok(!('body_md' in html!), 'html: поля body_md нет');
         assert.match(html!.body_html!, /<h2/, 'html: markdown отрендерен');
+        // Дефолт REST — `html`: ровно прежний состав ответа, без `body_md`
+        // (ошибка 35e1319a).
+        const byDefault = query(ndb, {}).rows[0];
+        assert.ok(byDefault, 'запись найдена (без body)');
+        assert.equal(byDefault!.body_html, html!.body_html, 'дефолт = html: то же тело');
+        assert.ok(!('body_md' in byDefault!), 'дефолт: поля body_md нет');
         const both = query(ndb, { body: 'both' }).rows[0];
         assert.ok(both, 'запись найдена (both)');
         assert.equal(both!.body_md, bodyMd);
@@ -476,6 +483,7 @@ describe(
         // `snippet` не зависит от формата тела (ошибка 50a94510).
         assert.equal(md!.snippet, html!.snippet, 'snippet стабилен md ↔ html');
         assert.equal(md!.snippet, both!.snippet, 'snippet стабилен md ↔ both');
+        assert.equal(md!.snippet, byDefault!.snippet, 'snippet стабилен md ↔ дефолт');
         // Закрытый словарь: прочие значения — VALIDATION_ERROR поля `body`.
         assert.throws(
           () => query(ndb, { body: 'markdown' }),

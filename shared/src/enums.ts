@@ -245,11 +245,11 @@ export type StructureKeywordScope = (typeof STRUCTURE_KEYWORD_SCOPES)[number];
 
 /**
  * Формат тела записи в строке хроники (`POST /chronicle/query`,
- * `etn.chronicle.query`; ошибка 50a94510): `md` — только `body_md`, `html` —
- * только `body_html`, `both` — оба поля. MCP-инструмент допускает `md`/`html`
- * (дефолт `md` — агенту нужен markdown), REST — все три (дефолт `both`:
- * совместимость действующих потребителей, включая клиент). Один закрытый
- * словарь для контракта MCP и доменного парсера тела запроса.
+ * `etn.chronicle.query`; ошибки 50a94510, 35e1319a): `md` — только `body_md`,
+ * `html` — только `body_html`, `both` — оба поля. MCP-инструмент допускает
+ * `md`/`html` (дефолт `md` — агенту нужен markdown), REST — все три (дефолт
+ * `html` — ровно прежний состав ответа: клиент читает `body_html`). Один
+ * закрытый словарь для контракта MCP и доменного парсера тела запроса.
  */
 export const CHRONICLE_BODY_FORMATS = ['md', 'html', 'both'] as const;
 export type ChronicleBodyFormat = (typeof CHRONICLE_BODY_FORMATS)[number];

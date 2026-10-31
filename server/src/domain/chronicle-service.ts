@@ -472,16 +472,17 @@ export function parseChronicleQueryBody(
 }
 
 /**
- * Формат тела записи в строке ответа (0.15.1, ошибка 50a94510): закрытый
- * словарь {@link CHRONICLE_BODY_FORMATS}, отсутствие — `both` (дефолт REST:
- * клиент получает `body_html`, совместимость с действующими потребителями).
+ * Формат тела записи в строке ответа (0.15.1, ошибки 50a94510, 35e1319a):
+ * закрытый словарь {@link CHRONICLE_BODY_FORMATS}, отсутствие — `html`
+ * (дефолт REST = прежний состав ответа: только `body_html`, который читает
+ * клиент; ошибка 35e1319a). `md`/`both` — только явными значениями.
  * MCP-фасад подставляет свой дефолт `md` до разбора — домен дефолт не угадывает.
  */
 function parseChronicleBodyFormat(
   raw: unknown,
   requestId: string,
 ): ChronicleBodyFormat {
-  if (raw === undefined) return 'both';
+  if (raw === undefined) return 'html';
   if (typeof raw === 'string' && (CHRONICLE_BODY_FORMATS as readonly string[]).includes(raw)) {
     return raw as ChronicleBodyFormat;
   }
@@ -1486,7 +1487,7 @@ export function queryChronicle(
     });
   }
 
-  const bodyFormat: ChronicleBodyFormat = request.body ?? 'both';
+  const bodyFormat: ChronicleBodyFormat = request.body ?? 'html';
   const withSnippets = rows.map((row) => {
     // Сниппет строится из того же развёрнутого текста, что и `body_html`, если
     // фасад передал трансформ (MCP): иначе превью показывало бы литерал

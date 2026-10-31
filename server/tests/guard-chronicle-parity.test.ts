@@ -560,7 +560,7 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     }
   });
 
-  it('формат тела записи: MCP — md по умолчанию и html по запросу, REST — три значения с дефолтом both (ошибка 50a94510)', async () => {
+  it('формат тела записи: MCP — md по умолчанию и html по запросу, REST — три значения с дефолтом html (ошибки 50a94510, 35e1319a)', async () => {
     const rest = await buildRestContext();
     const mcp = await buildMcpContext({
       dataDir: rest.dataDir,
@@ -620,10 +620,11 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
       });
       assert.equal(both.isError, true, 'MCP отвергает body=both (закрытый словарь)');
 
-      // REST: дефолт — оба поля (совместимость действующих потребителей).
+      // REST: дефолт — `html` (ровно прежний состав ответа: клиент читает
+      // `body_html`; `body_md` на провод не идёт — ошибка 35e1319a).
       const restDefault = await restRow({ thought_ids: [target] });
-      assert.equal(restDefault.body_md, bodyMd);
       assert.match(restDefault.body_html!, /<h2/);
+      assert.ok(!('body_md' in restDefault), 'REST-дефолт не отдаёт body_md');
 
       // REST: все три значения словаря.
       assert.equal((await restRow({ thought_ids: [target], body: 'md' })).body_md, bodyMd);
@@ -633,7 +634,9 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
         (await restRow({ thought_ids: [target], body: 'html' })).body_html!,
         /<h2/,
       );
-      assert.equal((await restRow({ thought_ids: [target], body: 'both' })).body_md, bodyMd);
+      const restBoth = await restRow({ thought_ids: [target], body: 'both' });
+      assert.equal(restBoth.body_md, bodyMd);
+      assert.match(restBoth.body_html!, /<h2/, 'both: оба тела');
 
       // REST: недопустимое значение — 422 поля `body`.
       const invalid = await rest.app.inject({
@@ -667,12 +670,20 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
   });
 
   it('MCP отдаёт meta.warnings той же формы, что REST (ошибка 5c24af2f)', async (t) => {
-    // Статический гейт: до фикса фасад вообще не упоминал warnings — этот
-    // assert красный на дофиксовой сборке (red-green плавника).
+    // Pin против удаления проброса (до фикса фасад вообще не упоминал warnings
+    // — красный на дофиксовой сборке). Проверка допускает эквивалентные записи
+    // условия («непустой список»): `warnings !== undefined && warnings.length > 0`
+    // и `warnings?.length`; переноси pin вместе с рефакторингом фасада.
+    // Семантику «пусто — поля нет» доказывает прогон ниже, не эта регулярка.
     assert.match(
       MCP,
-      /result\.warnings !== undefined && result\.warnings\.length > 0/,
-      'MCP-фасад обязан прокидывать warnings в meta с семантикой «пусто — поля нет»',
+      /warnings(?:\?\.|\.)length/,
+      'MCP-фасад обязан проверять непустоту warnings перед добавлением в meta',
+    );
+    assert.match(
+      MCP,
+      /warnings\s*:\s*(?:result\.)?warnings\b/,
+      'MCP-фасад обязан прокидывать результат домена в meta.warnings',
     );
     assert.match(
       MCP,

@@ -2211,9 +2211,10 @@ export const ChronicleQuery = defineContract(
     // операнды записи (`record_*`) и «Цели» (`targets`). XOR с плоскими
     // критериями — разбирает доменный `parseChronicleQueryBody`.
     ast: FilterAstBody.optional(),
-    // Формат тела записи в строке (0.15.1, ошибка 50a94510): агенту по
-    // умолчанию нужен markdown, HTML — по явному запросу. `both` агенту не
-    // предлагается (REST-совместимость); дефолт `md` подставляет фасад.
+    // Формат тела записи в строке (0.15.1, ошибки 50a94510, 35e1319a): агенту
+    // по умолчанию нужен markdown, HTML — по явному запросу. `both` агенту не
+    // предлагается: это значение только для REST (там дефолт `html` — прежний
+    // состав ответа); дефолт `md` подставляет фасад.
     body: z.enum(MCP_CHRONICLE_BODY_FORMATS).optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(100).optional(),

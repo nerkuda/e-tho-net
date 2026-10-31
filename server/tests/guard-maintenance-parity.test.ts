@@ -43,6 +43,7 @@ import { MCP_TOOL_ANNOTATIONS, MCP_TOOL_NAMES } from '@etn/shared';
 
 import { READ_ONLY_POST_ROUTES } from '../src/auth/client-version-guard.js';
 import { OPS_ACTIONS } from '../src/mcp/tools/ops-catalog.js';
+import { buildRestContext, closeRestContext } from './rest-helpers.js';
 
 /** Читающий REST-аналог MCP-инструмента/действия. */
 interface RestReadAnalog {
@@ -410,10 +411,26 @@ describe('паритет классификации обслуживания RES
     }
   });
 
-  it('allowlist читающих POST — только POST-маршруты, зарегистрированные в REST', () => {
+  it('allowlist читающих POST — только POST-маршруты, зарегистрированные в REST', async () => {
     assert.ok(READ_ONLY_POST_ROUTES.length > 0, 'allowlist читающих POST пуст');
-    for (const route of READ_ONLY_POST_ROUTES) {
-      assert.ok(route.startsWith('/api/v1/'), `allowlist: маршрут без префикса /api/v1 — ${route}`);
+    // Сверка с ФАКТИЧЕСКОЙ регистрацией: `hasRoute` смотрит в роутер собранного
+    // приложения (включая маршруты, зарегистрированные шаблонными строками и
+    // плагинами с префиксом) — опечатка или удалённый маршрут в allowlist
+    // краснеют, а не проходят по одному префиксу `/api/v1/`. Отрицательную
+    // проверку «не GET» не ставим: Fastify сопоставляет шаблон-запрос
+    // структурно, и `:query`-сегмент ложно совпал бы с `GET …/thoughts/:id`.
+    const rest = await buildRestContext();
+    try {
+      for (const route of READ_ONLY_POST_ROUTES) {
+        assert.ok(route.startsWith('/api/v1/'), `allowlist: маршрут без префикса /api/v1 — ${route}`);
+        assert.equal(
+          rest.app.hasRoute({ method: 'POST', url: route }),
+          true,
+          `allowlist: ${route} не зарегистрирован как POST в собранном REST-приложении`,
+        );
+      }
+    } finally {
+      await closeRestContext(rest);
     }
   });
 });
