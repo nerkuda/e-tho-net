@@ -187,9 +187,14 @@ function draftNoun(count: number): string {
 export async function reportStartupPurge(): Promise<void> {
   try {
     const raw = await etn.meta.get(CLIENT_META_KEY.DRAFTS_PURGED_COUNT);
-    const count = Number(raw ?? '');
-    if (!Number.isInteger(count) || count <= 0) return;
+    if (raw === null || raw === '') return;
+    // Ключ очищается при ЛЮБОМ значении, включая 0 (замечание приёмки к
+    // 351068ed): main пишет счётчик при каждом старте, прочитанное значение
+    // отработано и следующему запуску не принадлежит. Иначе «0» оставался бы
+    // в client_meta навсегда.
     await etn.meta.set(CLIENT_META_KEY.DRAFTS_PURGED_COUNT, '');
+    const count = Number(raw);
+    if (!Number.isInteger(count) || count <= 0) return;
     notice(t('drafts.startup.purged', [count, draftNoun(count)]), 'warning');
   } catch {
     // Локальное хранилище недоступно — сообщать нечего.
@@ -470,15 +475,73 @@ export async function retryPendingDrafts(networkId?: string): Promise<void> {
     retryRerun.add(target);
     return running;
   }
-  const wave = runRetryWave(target).then(async () => {
-    retryWaves.delete(target);
+  const wave = (async () => {
+    try {
+      await runRetryWave(target);
+    } catch {
+      // Волна не должна оставлять отвергнутый промис в реестре: иначе
+      // следующие вызовы получают его вечно, а `initDrafts` — unhandled
+      // rejection (замечание приёмки к 351068ed).
+    } finally {
+      // Запись снимается ДО возможного повторного прохода: тот создаёт новую
+      // волну и кладёт в реестр собственный промис.
+      retryWaves.delete(target);
+    }
     if (retryRerun.delete(target)) await retryPendingDrafts(target);
-  });
+  })();
   retryWaves.set(target, wave);
   return wave;
 }
 
-/** Волны досыла в полёте — по сети (одна волна на сеть, 351068ed п.2). */
+const fieldWritesInFlight = new Map<string, number>();
+
+/** Ключ поля правки — тот же, что у строки черновика (без профиля). */
+function draftFieldKey(key: {
+  networkId: string;
+  entityType: string;
+  entityId: string;
+  field: string;
+}): string {
+  return `${key.networkId}|${key.entityType}|${key.entityId}|${key.field}`;
+}
+
+/**
+ * Регистрирует PATCH, уже летящий по полю, которое зеркалится в черновики
+ * (ошибка 351068ed, блокер п.1). Пока запись не завершена, волна досыла НЕ
+ * отправляет черновик этого поля: второй PATCH с той же `If-Match`-версией
+ * дал бы ложный `VERSION_CONFLICT` — проиграла волна (тост «запись изменена в
+ * другом месте») или сохранение (ошибка коммита с английским текстом).
+ *
+ * Вызывают оба места зеркалирования: `editor/comments.ts` (`comment` /
+ * `comment-new`) и `editor/editor.ts` (заголовок `thought`). Регистрация
+ * охватывает и успешную очистку черновиков (`clearDraftsFor`), поэтому окно
+ * «PATCH завершился, строка ещё pending» тоже закрыто. Функция снятия
+ * идемпотентна; повторные входы по тому же ключу считаются.
+ */
+export function beginDraftFieldWrite(key: {
+  networkId: string;
+  entityType: DraftKind;
+  entityId: string;
+  field: string;
+}): () => void {
+  const k = draftFieldKey(key);
+  fieldWritesInFlight.set(k, (fieldWritesInFlight.get(k) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (fieldWritesInFlight.get(k) ?? 1) - 1;
+    if (left <= 0) fieldWritesInFlight.delete(k);
+    else fieldWritesInFlight.set(k, left);
+  };
+}
+
+/** Летит ли PATCH по этому полю прямо сейчас (см. {@link beginDraftFieldWrite}). */
+function isDraftFieldWriteInFlight(draft: DraftRecord): boolean {
+  return fieldWritesInFlight.has(draftFieldKey(draft));
+}
+
+/** One wave per network: the in-flight promise (351068ed п.2). */
 const retryWaves = new Map<string, Promise<void>>();
 /** Сети, для которых во время волны запрошен ЕЩЁ один проход по свежей очереди. */
 const retryRerun = new Set<string>();
@@ -510,6 +573,12 @@ async function runRetryWave(target: string): Promise<void> {
     if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
   };
   for (const draft of drafts) {
+    // PATCH этого поля уже летит сохранением (проба живости запустила волну
+    // посреди записи): второй PATCH с той же base_version дал бы ложный
+    // VERSION_CONFLICT. Строка остаётся `pending`; успешное сохранение удалит
+    // её через `clearDraftsFor`, неуспешное — отправит следующая волна
+    // (ошибка 351068ed, блокер п.1).
+    if (isDraftFieldWriteInFlight(draft)) continue;
     try {
       const outcome = await sendDraft(draft);
       if (outcome === 'conflict') conflicts += 1;
@@ -540,13 +609,16 @@ async function runRetryWave(target: string): Promise<void> {
 /**
  * Пользовательский текст сбоя досылки (351068ed п.7). Серверные сообщения
  * английские и адресованы API — в тосте они не показываются. Русские ветки
- * `errText` (обрыв, недоступный сервер, обслуживание, отмена) сохраняются;
- * прочие коды получают общую русскую формулировку.
+ * `errText` сохраняются только для распознанных классов (обрыв связи,
+ * недоступный сервер, обслуживание); всё остальное, включая локальные сбои БД
+ * с английским SQLite-текстом, получает общую русскую формулировку
+ * (замечание приёмки: класс «английский текст в тосте»).
  */
 function draftRetryErrorText(err: unknown): string {
+  if (isConnectionLostError(err)) return t('errors.connectionLost');
   const code =
     typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
-  if (typeof code !== 'string' || code === 'INTERNAL' || code === 'SERVER_UPDATING') {
+  if (code === 'INTERNAL' || code === 'SERVER_UPDATING') {
     return errText(err);
   }
   return t('drafts.retry.rejected');

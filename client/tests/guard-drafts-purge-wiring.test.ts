@@ -55,7 +55,7 @@ describe('guard: чистка черновиков при старте (fb9d6058
     );
   });
 
-  it('счётчик пишется безусловно и чистка журналируется (351068ed пп.4, 5)', () => {
+  it('счётчик пишется безусловно ВНУТРИ try/catch пуржа и чистка журналируется', () => {
     const source = read('src/main/index.ts');
     // Условная запись оставляла в client_meta счётчик запуска, который упал до
     // показа: следующий запуск с нулём черновиков показывал чужое число.
@@ -64,17 +64,26 @@ describe('guard: чистка черновиков при старте (fb9d6058
       /if \(purgedDrafts\.deletedWithText > 0\)/,
       'счётчик не пишется под условием N > 0',
     );
-    assert.match(
-      source,
-      /localDb\.setMeta\(CLIENT_META_KEY\.DRAFTS_PURGED_COUNT,\s*String\(/,
-      'счётчик пишется всегда — stale-ключ исключён',
+    // Структурная проверка (замечание приёмки): и пурж, и запись счётчика —
+    // в ОДНОМ try, до его catch. Перенос setMeta за try/catch (или за catch)
+    // обязан красить: запись счётчика — часть защищённого блока, иначе сбой
+    // локальной БД валит старт клиента.
+    const runAt = source.indexOf('let draftsPurge');
+    assert.notEqual(runAt, -1, 'блок чистки найден');
+    const tryAt = source.indexOf('try {', runAt);
+    const purgeAt = source.indexOf('purgeStaleDrafts(localDb)', tryAt);
+    const setMetaAt = source.indexOf(
+      'localDb.setMeta(CLIENT_META_KEY.DRAFTS_PURGED_COUNT',
+      purgeAt,
     );
-    // Сбой БД не валит старт: пурж и запись счётчика — в try/catch.
-    assert.match(
-      source,
-      /try \{[\s\S]{0,600}purgeStaleDrafts\(localDb\)[\s\S]{0,400}catch/,
-      'пурж обёрнут в try/catch',
+    const catchAt = source.indexOf('catch (err)', purgeAt);
+    assert.ok(tryAt > runAt, 'try начинается после объявления результата');
+    assert.ok(purgeAt > tryAt, 'purgeStaleDrafts внутри try');
+    assert.ok(
+      setMetaAt > purgeAt,
+      'запись счётчика внутри try — после пуржа и до catch',
     );
+    assert.ok(catchAt > setMetaAt, 'catch идёт после записи счётчика');
     // След чистки в журнале: сколько удалено/с текстом/сбоев или сам сбой.
     assert.match(source, /clientLog\.info\(\s*'drafts'/, 'успешная чистка журналируется');
     assert.match(source, /clientLog\.warn\(\s*'drafts'/, 'сбой чистки журналируется');

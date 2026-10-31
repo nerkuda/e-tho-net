@@ -15,6 +15,7 @@
 import type { AnyRealtimeEvent, Comment } from '@etn/shared';
 
 import {
+  beginDraftFieldWrite,
   clearDraft,
   clearDraftsFor,
   createDraftMirror,
@@ -362,43 +363,66 @@ function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
         // into a stale draft afterwards, and an in-flight write must drop its
         // row when it returns (ошибка 5726744b).
         draftMirror.settle();
-        let html: string;
-        if (permanent === null) {
-          if (md.trim() === '') {
-            html = '';
+        // Пока PATCH этого поля летит, волна досыла не должна отправлять его
+        // pending-строку: второй PATCH с той же base_version дал бы ложный
+        // VERSION_CONFLICT (ошибка 351068ed, блокер п.1). Регистрация
+        // охватывает и очистку черновиков ниже.
+        const releaseWrite = beginDraftFieldWrite(
+          permanent === null
+            ? {
+                networkId,
+                entityType: 'comment-new',
+                entityId: ctx.ownerId,
+                field: 'body_md',
+              }
+            : {
+                networkId,
+                entityType: 'comment',
+                entityId: permanent.id,
+                field: 'body_md',
+              },
+        );
+        try {
+          let html: string;
+          if (permanent === null) {
+            if (md.trim() === '') {
+              html = '';
+            } else {
+              // Создание с усыновлением (ошибка ecdb2e7a): комментарий мог быть
+              // создан за клиента досылом черновика после обрыва связи (H19) —
+              // повторный `create` давал DUPLICATE и вечный цикл ошибок.
+              const created = await createOrAdoptPermanentComment(
+                { networkId, ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+                md,
+              );
+              permanent = created;
+              draftKind = 'comment';
+              html = created.body_html;
+            }
           } else {
-            // Создание с усыновлением (ошибка ecdb2e7a): комментарий мог быть
-            // создан за клиента досылом черновика после обрыва связи (H19) —
-            // повторный `create` давал DUPLICATE и вечный цикл ошибок.
-            const created = await createOrAdoptPermanentComment(
-              { networkId, ownerType: ctx.ownerType, ownerId: ctx.ownerId },
-              md,
+            const updated = await etn.comments.update(
+              networkId,
+              permanent.id,
+              { body_md: md },
+              permanent.version,
             );
-            permanent = created;
-            draftKind = 'comment';
-            html = created.body_html;
+            permanent = updated;
+            html = updated.body_html;
           }
-        } else {
-          const updated = await etn.comments.update(
-            networkId,
-            permanent.id,
-            { body_md: md },
-            permanent.version,
-          );
-          permanent = updated;
-          html = updated.body_html;
+          await clearDraft(draftId);
+          draftId = null;
+          // Sweep by key: a debounce that resolved after the blur would
+          // otherwise leave a row behind (its id never reached `draftId`).
+          await clearDraftsFor(networkId, 'comment', permanent?.id ?? ctx.ownerId);
+          await clearDraftsFor(networkId, 'comment-new', ctx.ownerId);
+          invalidateQueries(queryKeys.indicators(ctx.ownerId));
+          // Своя правка постоянного комментария: открытый документ публикации
+          // обязан обновить блок мысли — сигнал слоя (ускоритель; с B1 приходит и своё событие).
+          signalPermanentCommentSaved(ctx.ownerId, md);
+          return html;
+        } finally {
+          releaseWrite();
         }
-        await clearDraft(draftId);
-        draftId = null;
-        // Sweep by key: a debounce that resolved after the blur would
-        // otherwise leave a row behind (its id never reached `draftId`).
-        await clearDraftsFor(networkId, 'comment', permanent?.id ?? ctx.ownerId);
-        await clearDraftsFor(networkId, 'comment-new', ctx.ownerId);
-        invalidateQueries(queryKeys.indicators(ctx.ownerId));
-        // Своя правка постоянного комментария: открытый документ публикации
-        // обязан обновить блок мысли — сигнал слоя (ускоритель; с B1 приходит и своё событие).
-        signalPermanentCommentSaved(ctx.ownerId, md);
-        return html;
       },
       onCancel: () => {
         // Esc: the edit is dropped — neither the pending timer nor the saved

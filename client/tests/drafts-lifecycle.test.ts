@@ -54,6 +54,7 @@ win['removeEventListener'] = () => undefined;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 import {
+  beginDraftFieldWrite,
   clearDraftsFor,
   createDraftMirror,
   findDraft,
@@ -422,6 +423,38 @@ test('волны разных сетей не схлопываются: кажд
   assert.equal(h.rows.length, 0, 'обе строки удалены после отправки');
 });
 
+test('внутренний сбой волны не застревает в реестре: следующий вызов досылает', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'ТЕКСТ ПОСЛЕ СБОЯ',
+    baseVersion: 4,
+  });
+  const api = (globalThis as unknown as { window: { etn: { ui: { draftList: unknown } } } })
+    .window.etn.ui;
+  const originalList = api.draftList as (...args: unknown[]) => Promise<unknown>;
+  let listCalls = 0;
+  api.draftList = async (...args: unknown[]) => {
+    listCalls += 1;
+    // Первый вызов ломает волну ВНЕ защищённого try (ответ не массив):
+    // промис волны отвергается. Без `finally` он навсегда остался бы в
+    // реестре, и все следующие вызовы получали бы тот же rejected-промис
+    // (замечание приёмки к 351068ed).
+    if (listCalls === 1) return null;
+    return originalList(...args);
+  };
+
+  // Сбой волны не вылетает наружу (catch): `initDrafts` не получает unhandled
+  // rejection, а `finally` снимает промис с реестра. Вторая волна — новая.
+  await retryPendingDrafts(NET);
+  await retryPendingDrafts(NET);
+
+  assert.equal(listCalls, 2, 'после сбоя запущена новая волна');
+  assert.equal(h.rows.length, 0, 'черновик дослан второй волной');
+});
+
 test('NOT_FOUND при правке заголовка мысли: терминальный failed', async () => {
   const h = installHarness();
   h.setRow({
@@ -472,6 +505,57 @@ test('failed-черновик возвращается в pending следующ
   await retryPendingDrafts(NET);
   assert.deepEqual(h.updateVersions, [1, 5], 'повторная отправка с новой версией');
   assert.equal(h.rows.length, 0, 'черновик отправлен и удалён');
+});
+
+test('блокер 351068ed: волна не дублирует PATCH поля, по которому летит сохранение', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'ТЕКСТ СОХРАНЕНИЯ',
+    baseVersion: 3,
+  });
+  // Сервер: второй PATCH с той же If-Match-версией — VERSION_CONFLICT.
+  const api = (globalThis as unknown as { window: { etn: { comments: { update: unknown } } } })
+    .window.etn.comments;
+  const originalUpdate = api.update as (...args: unknown[]) => Promise<unknown>;
+  let updates = 0;
+  api.update = async (...args: unknown[]) => {
+    updates += 1;
+    const attempt = updates;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    if (attempt > 1) throw new EtnError('VERSION_CONFLICT', 'comment version mismatch');
+    return originalUpdate(...args);
+  };
+  const before = noticeCount();
+
+  // Пользователь нажал «Сохранить»: PATCH поля уже летит (медленный сервер),
+  // debounce успел записать pending-строку с той же base_version.
+  const release = beginDraftFieldWrite({
+    networkId: NET,
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+  });
+  const saving = (async () => {
+    try {
+      const update = api.update as (...args: unknown[]) => Promise<unknown>;
+      await update(NET, COMMENT_ID, { body_md: 'ТЕКСТ СОХРАНЕНИЯ' }, 3);
+      await clearDraftsFor(NET, 'comment', COMMENT_ID);
+    } finally {
+      release();
+    }
+  })();
+
+  // Проба живости подтвердилась → волна досыла. Она обязана пропустить поле,
+  // по которому уже летит PATCH, иначе второй PATCH получит ложный конфликт.
+  await retryPendingDrafts(NET);
+  await saving;
+
+  assert.equal(updates, 1, 'ровно один PATCH поля');
+  assert.equal(noticeCount() - before, 0, 'ложного conflict-тоста нет');
+  assert.equal(h.rows.length, 0, 'черновик удалён успешным сохранением');
 });
 
 // ---------------------------------------------------------------------------
@@ -1047,6 +1131,35 @@ test('неизвестный тип черновика: терминальный
 // client_meta, показывает ОДНО сообщение и очищает ключ.
 // ---------------------------------------------------------------------------
 
+test('локальный сбой без кода: общий русский текст, английский SQLite не протекает', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'ТЕКСТ',
+    baseVersion: 1,
+  });
+  // Локальный сбой моста (SQLite/fs): ни EtnError, ни поля `code`.
+  const api = (globalThis as unknown as { window: { etn: { comments: { update: unknown } } } })
+    .window.etn.comments;
+  api.update = async () => {
+    throw new Error('SqliteError: database is locked (SQLITE_BUSY)');
+  };
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows.length, 1, 'черновик остался в очереди');
+  assert.equal(h.rows[0]!.status, 'pending', 'сбой ретраибельный');
+  assert.equal(noticeCount() - before, 1, 'сбой показан');
+  const text = noticeTexts().at(-1) ?? '';
+  // Замечание приёмки к 351068ed: английский текст SQLite/сервера не должен
+  // доходить до пользователя ни при каком классе ошибки без известного кода.
+  assert.ok(!/SqliteError|SQLITE_BUSY|database is locked/i.test(text), `без английского: ${text}`);
+  assert.ok(text.includes('сервер отклонил изменение'), `общая русская формулировка: ${text}`);
+});
+
 test('стартовое сообщение о чистке черновиков: один раз, со счётчиком, ключ очищен', async () => {
   const h = installHarness();
   h.meta[CLIENT_META_KEY.DRAFTS_PURGED_COUNT] = '2';
@@ -1067,7 +1180,7 @@ test('стартовое сообщение о чистке черновиков
   assert.equal(noticeCount() - before, 1, 'повторно не показывается');
 });
 
-test('нулевой/пустой счётчик чистки — сообщения нет', async () => {
+test('нулевой/пустой счётчик чистки — сообщения нет, ключ тоже очищается', async () => {
   const h = installHarness();
   const before = noticeCount();
   await reportStartupPurge();
@@ -1076,5 +1189,13 @@ test('нулевой/пустой счётчик чистки — сообщен
   h.meta[CLIENT_META_KEY.DRAFTS_PURGED_COUNT] = '0';
   await reportStartupPurge();
   assert.equal(noticeCount() - before, 0, 'ноль — тишина');
+  // Замечание приёмки к 351068ed: main пишет счётчик при каждом старте, и
+  // прочитанный «0» — тоже отработанное значение. Оставить его в client_meta
+  // значит навсегда держать там чужой/устаревший ключ.
+  assert.equal(
+    h.meta[CLIENT_META_KEY.DRAFTS_PURGED_COUNT],
+    '',
+    'ключ очищен и при нулевом счётчике',
+  );
 });
 
