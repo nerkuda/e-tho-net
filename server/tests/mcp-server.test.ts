@@ -452,11 +452,26 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         const propAdd = byName.get('etn.properties.add')!;
         assert.equal(propAdd.annotations?.idempotentHint, true);
 
-        // Sanity check: count coverage matches the registry so a future
-        // addition does not silently leak a tool without a hint.
+        // Явный список инструментов БЕЗ аннотации (ошибка 736969ab): раньше
+        // здесь стоял только счётчик `annotated === 25`, и новый инструмент без
+        // аннотации не менял счёт — тест оставался зелёным, а гейт обслуживания
+        // молча считал такой инструмент изменяющим. Теперь состав
+        // неаннотированных — явный список: новый инструмент обязан либо нести
+        // аннотацию, либо быть внесён сюда осознанно.
+        const UNANNOTATED_TOOLS = ['etn.comments.update', 'etn.ops'];
         const annotated = MCP_TOOL_NAMES.filter(
           (n) => MCP_TOOL_ANNOTATIONS[n] !== undefined,
         ).length;
+        assert.deepEqual(
+          MCP_TOOL_NAMES.filter((n) => MCP_TOOL_ANNOTATIONS[n] === undefined).sort(),
+          [...UNANNOTATED_TOOLS].sort(),
+          'инструмент без аннотации — только явно перечисленные',
+        );
+        assert.equal(
+          annotated,
+          MCP_TOOL_NAMES.length - UNANNOTATED_TOOLS.length,
+          'каждый инструмент вне явного списка обязан иметь аннотацию',
+        );
         const hintReadOnly = MCP_TOOL_NAMES.filter(
           (n) => MCP_TOOL_ANNOTATIONS[n]?.readOnlyHint === true,
         ).length;
