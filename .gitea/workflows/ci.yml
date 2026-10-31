@@ -37,6 +37,15 @@ jobs:
       - name: Build @etn/shared
         run: npm run build:shared
 
+      # Ресурсы раннера в лог: разбор замираний и IO-столлов win-vm
+      # (ошибка 68a395b5) требует знать реальные CPU/RAM/диск джобы.
+      - name: Runner resources
+        run: |
+          Write-Output ("NUMBER_OF_PROCESSORS=" + $env:NUMBER_OF_PROCESSORS)
+          node -p "require('os').availableParallelism()"
+          Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory,TotalVisibleMemorySize | Format-List
+          Get-PSDrive C | Select-Object Used,Free | Format-List
+
       - name: Typecheck
         run: npm run typecheck
 
