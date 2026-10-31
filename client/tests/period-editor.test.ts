@@ -244,8 +244,13 @@ describe('period-editor: режимы и значение', () => {
     const source = '2026-09-26T10:30:00.000Z';
     const editor = buildPeriodEditor({ mode: 'datetime', value: { from: source } });
     editor.setMode('date');
-    assert.equal(editor.getValue().hasTime, false);
-    assert.equal(instantToLocalDate(editor.getValue().from ?? ''), instantToLocalDate(source));
+    const value = editor.getValue();
+    assert.equal(value.hasTime, false);
+    // В режиме «дата» значение — ГОЛАЯ локальная дата (ADR времени), поэтому
+    // сравниваем строки: прогон голой даты через `instantToLocalDate` разбирает
+    // её как UTC-полночь и в отрицательных поясах даёт предыдущий день
+    // (ошибка 21a3be38; на Windows-ВМ CI — пояс UTC-7).
+    assert.equal(value.from, instantToLocalDate(source));
   });
 
   it('setValue (range) кладёт конец во вторую границу', () => {
