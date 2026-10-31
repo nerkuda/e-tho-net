@@ -247,7 +247,12 @@ function installHarness(): Harness {
             ],
     },
     thoughts: {
-      update: async () => ({ id: 'thought-1', version: 2 }),
+      update: async () => {
+        if (harness.updateErrorCode !== null) {
+          throw new EtnError(harness.updateErrorCode as never, 'server rejected the write');
+        }
+        return { id: 'thought-1', version: 2 };
+      },
     },
   };
   // `etn` — live-Proxy над `window.etn`; в шиме window уже создан выше, поэтому
@@ -389,6 +394,83 @@ test('перекрывающиеся волны досыла: одна отпр�
 
   assert.equal(updates, 1, 'вторая волна не отправляет уже удалённую строку');
   assert.equal(noticeCount() - before, 0, 'ложного «запись изменена в другом месте» нет');
+  assert.equal(h.rows.length, 0, 'черновик отправлен и удалён');
+});
+
+test('волны разных сетей не схлопываются: каждая досылает свои черновики', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'СВОЯ',
+    baseVersion: 2,
+  });
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'ЧУЖАЯ',
+    baseVersion: 7,
+    networkId: OTHER_NET,
+  });
+
+  // In-flight-защита — ПО СЕТИ: одновременные волны двух сетей идут обе.
+  await Promise.all([retryPendingDrafts(NET), retryPendingDrafts(OTHER_NET)]);
+
+  assert.deepEqual(h.updateVersions.sort((a, b) => a - b), [2, 7], 'обе сети дослали');
+  assert.equal(h.rows.length, 0, 'обе строки удалены после отправки');
+});
+
+test('NOT_FOUND при правке заголовка мысли: терминальный failed', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'thought',
+    entityId: 'thought-gone',
+    field: 'title',
+    value: 'НОВЫЙ ЗАГОЛОВОК',
+    baseVersion: 4,
+  });
+  h.updateErrorCode = 'NOT_FOUND';
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows[0]!.status, 'failed', 'цель заголовка недостижима — терминально');
+  assert.equal(noticeCount() - before, 1, 'одно агрегированное сообщение');
+
+  await retryPendingDrafts(NET);
+  assert.equal(h.rows[0]!.status, 'failed', 'повторно не ретраится');
+});
+
+test('failed-черновик возвращается в pending следующей правкой поля и уходит', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'УДАЛЁННАЯ ЦЕЛЬ',
+    baseVersion: 1,
+  });
+  h.updateErrorCode = 'NOT_FOUND';
+  await retryPendingDrafts(NET);
+  assert.equal(h.rows[0]!.status, 'failed');
+
+  // Цель восстановлена, пользователь правит поле снова: upsert по ключу
+  // возвращает строку в очередь с актуальной версией.
+  h.updateErrorCode = null;
+  await saveDraft({
+    networkId: NET,
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'АКТУАЛЬНЫЙ ТЕКСТ',
+    baseVersion: 5,
+  });
+  assert.equal(h.rows[0]!.status, 'pending', 'failed→pending при повторной правке');
+
+  await retryPendingDrafts(NET);
+  assert.deepEqual(h.updateVersions, [1, 5], 'повторная отправка с новой версией');
   assert.equal(h.rows.length, 0, 'черновик отправлен и удалён');
 });
 
