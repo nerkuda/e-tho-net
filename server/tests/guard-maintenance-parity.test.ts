@@ -31,6 +31,27 @@
  *   * удалить/добавить `readOnly` у действия `etn.ops` — расхождение с
  *     таблицей действий → красный;
  *   * сослаться на несуществующий или нечитающий REST-аналог — красный.
+ *
+ * ## Побочные эффекты read-only путей (ошибка df2d971f)
+ *
+ * Классификация «читающее» обязана означать «не пишет», иначе гейт пропускает
+ * запись при `maintenance: updating`. Второй блок проверок:
+ *   * read-only действие `etn.ops` не содержит пути записи (`runWrite`,
+ *     `runWriteTool`, `requireWriteBudget`, `mcpWriteFx`) — кроме условно
+ *     мутирующих действий (`mutatingParams` в реестре) и записанных исключений
+ *     с причиной (`properties.resolve` — производные снапшоты);
+ *   * read-only MCP-инструмент не содержит пути записи — исключений нет:
+ *     инструмент — фасад одного действия, условная мутируемость живёт в
+ *     реестре `etn.ops`;
+ *   * условная мутируемость объявлена в реестре, названа в обработчике и
+ *     реально применяется диспетчером (`isMutatingOpCall`): `mentions_scan`
+ *     с `create_links: true` блокируется при обслуживании, без него — читает;
+ *   * `shelves.list` не вставляет строки полок (повторный вызов + счётчик
+ *     строк БД);
+ *   * GET-маршруты REST (читающие безусловно) не вызывают обёртку записи, а
+ *     читающий POST `POST /mentions/scan` не несёт мутирующего `create_links`
+ *     — мутирующий режим живёт только в MCP-действии, где классификация идёт
+ *     по аргументам.
  */
 
 import assert from 'node:assert/strict';
@@ -42,7 +63,18 @@ import { describe, it } from 'node:test';
 import { MCP_TOOL_ANNOTATIONS, MCP_TOOL_NAMES } from '@etn/shared';
 
 import { READ_ONLY_POST_ROUTES } from '../src/auth/client-version-guard.js';
-import { OPS_ACTIONS } from '../src/mcp/tools/ops-catalog.js';
+import { openNetworkDb } from '../src/db/network-db.js';
+import type { MaintenanceState } from '../src/maintenance.js';
+import { OPS_ACTIONS, OPS_ACTIONS_BY_NAME, isMutatingOpCall } from '../src/mcp/tools/ops-catalog.js';
+import {
+  buildMcpContext,
+  callOp,
+  closeMcpContext,
+  connectMcpClient,
+  nativeAvailable,
+  toolJson,
+  toolText,
+} from './mcp-helpers.js';
 import { buildRestContext, closeRestContext } from './rest-helpers.js';
 
 /** Читающий REST-аналог MCP-инструмента/действия. */
@@ -431,6 +463,299 @@ describe('паритет классификации обслуживания RES
       }
     } finally {
       await closeRestContext(rest);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Read-only не пишет: побочные эффекты и условная мутируемость (df2d971f)
+// ---------------------------------------------------------------------------
+
+/** Исходник диспетчера `etn.ops` — обработчики действий и гейт обслуживания. */
+const OPS_TOOL_SOURCE = fs.readFileSync(
+  path.join(SERVER_ROOT, 'src', 'mcp', 'tools', 'ops.ts'),
+  'utf8',
+);
+
+/** Исходник фасада публикаций/полок — вторая карта обработчиков `etn.ops`. */
+const PUBLICATIONS_TOOL_SOURCE = fs.readFileSync(
+  path.join(SERVER_ROOT, 'src', 'mcp', 'tools', 'publications.ts'),
+  'utf8',
+);
+
+/** Исходник контрактов REST — читающий POST-двойник `mentions.scan`. */
+const CONTRACTS_SOURCE = fs.readFileSync(path.join(SERVER_ROOT, 'src', 'contracts.ts'), 'utf8');
+
+/** Признаки пути записи в фасаде: обёртка записи, бюджет, контекст записи. */
+const WRITE_PATH_RE = /runWriteTool\(|runWrite\(|requireWriteBudget\(|mcpWriteFx\(/;
+
+/**
+ * Read-only действия, которые пишут ПРОИЗВОДНЫЕ данные и остаются read-only по
+ * бюджету/аудиту. Записанное исключение с причиной (ошибка df2d971f допускает
+ * такие явные записи): снапшот cross_network_ref обновляется мимо обёртки
+ * `runWrite` и является производным состоянием, а не знанием.
+ */
+const READ_ONLY_WRITE_EXCEPTIONS: Readonly<Record<string, string>> = {
+  'properties.resolve':
+    'служебное чтение (требование c104a0fc: без write-бюджета и audit-строки) обновляет ' +
+    'снапшот значений cross_network_ref — производные данные, не знания',
+};
+
+/**
+ * Тела обработчиков карты действий: имя действия → исходник блока.
+ *
+ * `etn.ops` собирает обработчики из ДВУХ карт (`HANDLERS` в `tools/ops.ts` и
+ * `PUBLICATION_OPS_HANDLERS` в `tools/publications.ts`), поэтому парсер
+ * вызывается дважды, а результаты сливаются. Границы — ключи первого уровня
+ * (`  'action':`); вложенные объекты имеют бо́льший отступ и не попадают.
+ */
+function collectOpHandlerBodies(source: string, declaration: string): Map<string, string> {
+  const start = source.indexOf(declaration);
+  assert.notEqual(start, -1, `не найдена карта обработчиков «${declaration}»`);
+  const end = source.indexOf('\n};', start);
+  assert.notEqual(end, -1, `не найден конец карты «${declaration}»`);
+  const block = source.slice(start, end);
+  const marker = /^ {2}'([A-Za-z0-9_.]+)':/gm;
+  const matches = [...block.matchAll(marker)];
+  const bodies = new Map<string, string>();
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i]!;
+    const bodyEnd = i + 1 < matches.length ? matches[i + 1]!.index! : block.length;
+    bodies.set(match[1]!, block.slice(match.index!, bodyEnd));
+  }
+  return bodies;
+}
+
+/**
+ * GET-обработчики, вызывающие обёртку записи: `файл GET путь`.
+ *
+ * GET классифицируется читающим БЕЗУСЛОВНО (`isMutatingRequest`), поэтому
+ * запись в нём проходит гейт обслуживания при любом состоянии сервера — та же
+ * ошибка класса df2d971f, что и `shelves.list`.
+ */
+function collectGetHandlersWithWrites(): string[] {
+  const routesDir = path.join(SERVER_ROOT, 'src', 'routes');
+  const routeStart = /app\.(get|post|put|patch|delete)\(\s*(?:'([^']+)'|`([^`]+)`)/g;
+  const offenders: string[] = [];
+  for (const file of fs.readdirSync(routesDir)) {
+    if (!file.endsWith('.ts')) continue;
+    const source = fs.readFileSync(path.join(routesDir, file), 'utf8');
+    const matches = [...source.matchAll(routeStart)];
+    for (let i = 0; i < matches.length; i += 1) {
+      const match = matches[i]!;
+      if (match[1]!.toLowerCase() !== 'get') continue;
+      const end = i + 1 < matches.length ? matches[i + 1]!.index! : source.length;
+      const body = source.slice(match.index!, end);
+      if (WRITE_PATH_RE.test(body)) offenders.push(`${file} GET ${match[2] ?? match[3]}`);
+    }
+  }
+  return offenders;
+}
+
+/** Тела регистраций MCP-инструментов: имя инструмента → исходник блока. */
+function collectMcpToolBodies(): Map<string, string> {
+  const toolsDir = path.join(SERVER_ROOT, 'src', 'mcp', 'tools');
+  const bodies = new Map<string, string>();
+  for (const file of fs.readdirSync(toolsDir)) {
+    if (!file.endsWith('.ts')) continue;
+    const source = fs.readFileSync(path.join(toolsDir, file), 'utf8');
+    const matches = [...source.matchAll(/mcp\.registerTool\(\s*\n?\s*'([^']+)'/g)];
+    for (let i = 0; i < matches.length; i += 1) {
+      const match = matches[i]!;
+      const end = i + 1 < matches.length ? matches[i + 1]!.index! : source.length;
+      bodies.set(match[1]!, source.slice(match.index!, end));
+    }
+  }
+  return bodies;
+}
+
+/** Состояние обслуживания, которое отдают провайдеры в поведенческих тестах. */
+const UPDATING_STATE: MaintenanceState = {
+  state: 'updating',
+  reason: 'server-updating',
+  since: '2026-10-29T12:00:00.000Z',
+  retry_after: 60,
+  target_version: '0.99.0',
+};
+
+describe('read-only не пишет: статические правила (ошибка df2d971f)', () => {
+  it('read-only действия etn.ops не содержат пути записи (кроме условных и исключений)', () => {
+    const bodies = new Map([
+      ...collectOpHandlerBodies(OPS_TOOL_SOURCE, 'const HANDLERS'),
+      ...collectOpHandlerBodies(PUBLICATIONS_TOOL_SOURCE, 'export const PUBLICATION_OPS_HANDLERS'),
+    ]);
+    for (const entry of OPS_ACTIONS) {
+      if (!entry.readOnly) continue;
+      const body = bodies.get(entry.action);
+      assert.ok(body !== undefined, `нет обработчика «${entry.action}» в HANDLERS`);
+      const writes = WRITE_PATH_RE.test(body);
+      const exception = READ_ONLY_WRITE_EXCEPTIONS[entry.action];
+      if (exception !== undefined) {
+        assert.ok((exception).trim().length > 0, `«${entry.action}»: исключение без причины`);
+        continue;
+      }
+      if ((entry.mutatingParams ?? []).length > 0) {
+        assert.ok(
+          writes,
+          `«${entry.action}»: объявлена условная мутируемость, но ветки записи в обработчике нет — ` +
+            'объявление протухло',
+        );
+        for (const rule of entry.mutatingParams!) {
+          assert.ok(
+            body.includes(rule.param),
+            `«${entry.action}»: условный параметр «${rule.param}» не назван в обработчике — ` +
+              'реестр и код разошлись',
+          );
+        }
+        continue;
+      }
+      assert.equal(
+        writes,
+        false,
+        `read-only действие «${entry.action}» содержит путь записи — гейт обслуживания пропустит ` +
+          'его при обновлении сервера; пометь действие изменяющим, объяви mutatingParams ' +
+          'или внеси исключение с причиной',
+      );
+    }
+    // Исключения не протухают: имя обязано адресовать живое read-only действие.
+    for (const name of Object.keys(READ_ONLY_WRITE_EXCEPTIONS)) {
+      const entry = OPS_ACTIONS_BY_NAME.get(name);
+      assert.ok(
+        entry !== undefined && entry.readOnly,
+        `исключение «${name}» адресует неизвестное или уже изменяющее действие`,
+      );
+    }
+  });
+
+  it('диспетчер etn.ops классифицирует условно мутирующие вызовы по аргументам', () => {
+    // Гейт диспетчера обязан решать по реестру аргументов, а не только по
+    // статическому флагу: иначе создание связей снова пройдёт при обслуживании.
+    assert.match(
+      OPS_TOOL_SOURCE,
+      /isMutatingOpCall\(entry,\s*args\.params\s*\?\?\s*\{\}\)/,
+      'диспетчер etn.ops обязан вызывать isMutatingOpCall(entry, args.params ?? {}) до обработчика',
+    );
+    const scan = OPS_ACTIONS_BY_NAME.get('thoughts.mentions_scan');
+    assert.ok(scan !== undefined, 'в реестре нет thoughts.mentions_scan');
+    assert.equal(isMutatingOpCall(scan!, {}), false, 'скан без create_links — чтение');
+    assert.equal(isMutatingOpCall(scan!, { create_links: false }), false, 'create_links: false — чтение');
+    assert.equal(isMutatingOpCall(scan!, { create_links: true }), true, 'create_links: true — изменяющее');
+    for (const entry of OPS_ACTIONS) {
+      if (entry.readOnly) continue;
+      assert.equal(
+        isMutatingOpCall(entry, {}),
+        true,
+        `изменяющее действие «${entry.action}» обязано блокироваться при обслуживании без аргументов`,
+      );
+    }
+  });
+
+  it('REST-паритет: GET не пишет, читающий POST /mentions/scan не несёт create_links', () => {
+    assert.deepEqual(
+      collectGetHandlersWithWrites(),
+      [],
+      'GET-маршрут вызывает обёртку записи: GET классифицируется читающим безусловно ' +
+        '(ошибка df2d971f — так проходил lazy-create полки в GET /shelves)',
+    );
+    // Мутирующий режим скана живёт ТОЛЬКО в MCP-действии, где классификация
+    // идёт по аргументам. REST-двойник — поиск упоминаний в присланных текстах
+    // без записи; появление `create_links` в его контракте сделало бы
+    // allowlist читающих POST дырой в гейте обслуживания.
+    const block =
+      /export const RestMentionsScan = defineContract\([\s\S]*?\n\);/.exec(CONTRACTS_SOURCE)?.[0] ?? '';
+    assert.ok(block.length > 0, 'не найден контракт RestMentionsScan в contracts.ts');
+    assert.equal(
+      /\bcreate_links\b/.test(block),
+      false,
+      'читающий POST /mentions/scan не должен нести мутирующий create_links',
+    );
+  });
+
+  it('read-only MCP-инструменты не содержат пути записи', () => {
+    // Тул-уровневая аннотация read-onlyHint — единственная классификация
+    // инструментов для гейта обслуживания; запись внутри тела такого инструмента
+    // проходит гейт так же, как проходил lazy-create полки в shelves.list
+    // (ошибка df2d971f). Исключений у инструментов нет: инструмент — фасад
+    // одного действия, условная мутируемость живёт в реестре etn.ops.
+    const bodies = collectMcpToolBodies();
+    for (const name of Object.keys(READ_ONLY_MCP_TOOLS)) {
+      const body = bodies.get(name);
+      assert.ok(body !== undefined, `не найдена регистрация read-only инструмента «${name}»`);
+      assert.equal(
+        WRITE_PATH_RE.test(body),
+        false,
+        `read-only MCP-инструмент «${name}» содержит путь записи — гейт обслуживания пропустит ` +
+          'его при обновлении сервера; инструмент без записи либо классификация «изменяющее»',
+      );
+    }
+  });
+});
+
+describe('read-only не пишет: поведение (ошибка df2d971f)', { skip: !nativeAvailable() }, () => {
+  it('при обслуживании mentions_scan{create_links:true} блокируется, чтение проходит', async () => {
+    const ctx = await buildMcpContext();
+    const handle = await connectMcpClient(ctx, ctx.adminKey, {
+      maintenance: () => UPDATING_STATE,
+    });
+    try {
+      // Чтение (без create_links и с явным false) не блокируется.
+      for (const createLinks of [undefined, false]) {
+        const read = await callOp(handle.client, 'thoughts.mentions_scan', {
+          network_id: ctx.networkId,
+          text: 'текст без упоминаний мыслей',
+          ...(createLinks === undefined ? {} : { create_links: createLinks }),
+        });
+        assert.equal(read.isError, undefined, toolText(read));
+      }
+      // Мутирующий режим — SERVER_UPDATING ещё ДО валидации params: связь не
+      // создаётся даже при неполном наборе аргументов.
+      const blocked = await callOp(handle.client, 'thoughts.mentions_scan', {
+        network_id: ctx.networkId,
+        text: 'текст без упоминаний мыслей',
+        create_links: true,
+      });
+      assert.equal(blocked.isError, true);
+      assert.match(toolText(blocked), /ETN error \[SERVER_UPDATING\]/);
+    } finally {
+      await handle.close();
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('shelves.list не создаёт полку — проверка отсутствия вставки', async () => {
+    const ctx = await buildMcpContext();
+    const handle = await connectMcpClient(ctx, ctx.adminKey);
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const countShelves = (): number =>
+        (ndb.prepare('SELECT COUNT(*) AS c FROM shelves').get() as { c: number }).c;
+
+      const initial = toolJson<{ data: Array<{ id: string; title: string }> }>(
+        await callOp(handle.client, 'shelves.list', { network_id: ctx.networkId }),
+      );
+      assert.equal(initial.data.length, 1, 'новая сеть создана с дефолтной «Полкой»');
+      await callOp(
+        handle.client,
+        'shelves.delete',
+        { network_id: ctx.networkId, shelf_id: initial.data[0]!.id },
+        true,
+      );
+      const before = countShelves();
+      assert.equal(before, 0, 'полка физически удалена');
+
+      // Дважды: первый вызов ловил бы ленивое создание, второй — повторную
+      // вставку после первого.
+      for (const attempt of [1, 2]) {
+        const page = toolJson<{ data: unknown[]; meta: { total: number } }>(
+          await callOp(handle.client, 'shelves.list', { network_id: ctx.networkId }),
+        );
+        assert.equal(page.data.length, 0, `вызов ${attempt}: список пуст`);
+        assert.equal(page.meta.total, 0);
+        assert.equal(countShelves(), before, `вызов ${attempt}: shelves.list не вставил строку`);
+      }
+    } finally {
+      await handle.close();
+      await closeMcpContext(ctx);
     }
   });
 });

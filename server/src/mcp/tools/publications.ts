@@ -27,7 +27,6 @@
 import { z } from 'zod';
 
 import {
-  BASE_LAYER_ID,
   EtnError,
   type Publication,
   type PublicationActiveFilter,
@@ -43,7 +42,6 @@ import type { McpRuntime } from '../context.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
-  openMemberNetworkBase,
   requireWritable,
   requireWriteBudget,
   runTool,
@@ -58,7 +56,6 @@ import {
   createPublication,
   createShelf,
   deleteShelf,
-  ensureDefaultShelf,
   getPublication,
   getShelf,
   listPublications,
@@ -711,31 +708,12 @@ export const PUBLICATION_OPS_HANDLERS: Record<string, OpHandler> = {
     const a = p as unknown as z.infer<typeof McpShelfList.schema>;
     return runTool(() => {
       const ndb = openMemberNetwork(rt, a.network_id);
-      let shelves = listShelves(ndb);
-      // Ленивое создание дефолтной полки «Полка» — паритет с REST GET
-      // /shelves (0.11.1, задача 8c2660e6; карточка c80951ea v2): сеть без
-      // живых полок получает её при первом запросе списка — В ОСНОВЕ. Запись
-      // идёт через `runWrite` (ADR 162d8e7a), событие атрибутировано основе.
-      if (shelves.length === 0) {
-        const baseNdb = openMemberNetworkBase(rt, a.network_id);
-        const created = runWrite(baseNdb, mcpWriteFx(rt, a.network_id), () => {
-          const shelf = ensureDefaultShelf(baseNdb, rt.deps.auth.userId);
-          return {
-            result: shelf,
-            events:
-              shelf === null
-                ? []
-                : [
-                    {
-                      type: 'shelf.updated' as const,
-                      data: { shelf },
-                      options: { layerId: BASE_LAYER_ID },
-                    },
-                  ],
-          };
-        });
-        if (created !== null) shelves = listShelves(ndb);
-      }
+      // 0.15.1 (ошибка df2d971f): чтение не пишет в БД. Дефолтная «Полка»
+      // сеется при создании сети (`NetworkServiceImpl.createNetwork`) и
+      // создаётся явно (`shelves.create` / REST `POST /shelves`); ленивое
+      // создание из списка снято — оно проходило гейт обслуживания как
+      // read-only, хотя меняло данные (паритет с REST `GET /shelves`).
+      const shelves = listShelves(ndb);
       return { data: shelves, meta: { total: shelves.length, offset: 0, limit: shelves.length } };
     });
   },

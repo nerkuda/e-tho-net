@@ -156,7 +156,7 @@ import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
 import { mcpTokenContext } from './token-context.js';
 import { PUBLICATION_OPS_HANDLERS } from './publications.js';
-import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, type OpEntry } from './ops-catalog.js';
+import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, isMutatingOpCall, type OpEntry } from './ops-catalog.js';
 
 /** Разложить `params` по схеме действия (уже провалидированы контрактом). */
 export type Params = Record<string, unknown>;
@@ -1947,6 +1947,13 @@ function renderTopic(entry: OpEntry): string {
     `Вызов — только через \`etn.ops { action: "${entry.action}" }\`.`,
     `Деструктивна: ${entry.destructive ? 'да — требуется `confirm: true` на верхнем уровне `etn.ops`' : 'нет'}.`,
     `Read-only: ${entry.readOnly ? 'да' : 'нет'}.`,
+    ...((entry.mutatingParams ?? []).length === 0
+      ? []
+      : [
+          `Изменяет БД при аргументах: ${entry.mutatingParams!
+            .map((rule) => `\`${rule.param}: ${JSON.stringify(rule.equals)}\``)
+            .join(', ')} — такой вызов блокируется при обслуживании сервера (SERVER_UPDATING).`,
+        ]),
     '',
     '## params',
   ];
@@ -2049,8 +2056,11 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         // read-only действия не блокируются, изменяющие отвечают
         // SERVER_UPDATING до валидации params и любой записи. Тул-уровневая
         // проверка диспетчера (`mcp/server.ts`) `etn.ops` пропускает — здесь
-        // роль «изменяющий» играет флаг действия в реестре.
-        if (!entry.readOnly) {
+        // роль «изменяющий» играет флаг действия в реестре, а у условно
+        // мутирующих (`mutatingParams`, ошибка df2d971f) — ещё и аргументы:
+        // `thoughts.mentions_scan` с `create_links: true` пишет связи и
+        // обязан блокироваться так же, как действие с `readOnly: false`.
+        if (isMutatingOpCall(entry, args.params ?? {})) {
           const rejection = serverUpdatingToolResult(rt);
           if (rejection !== null) {
             return rejection;
