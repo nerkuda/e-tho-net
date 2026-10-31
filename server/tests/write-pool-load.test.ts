@@ -6,8 +6,9 @@
  * файловых БД в tmp (в памяти второе соединение невозможно, а WAL тем более):
  *
  *   * «массовый батч»: батч из 50 мыслей исполняется воркером, а главный поток
- *     отвечает на пинги — p99 задержки пинга не выше относительного потолка от
- *     синхронного ориентира (см. `ping-lag.ts`, ошибки ea49a9b6/23e0e0cf);
+ *     остаётся свободным — CPU-время главного потока не выше относительного
+ *     потолка от синхронного ориентира (см. `ping-lag.ts`, ошибки
+ *     ea49a9b6/23e0e0cf, 21a3be38);
  *   * «параллельная запись в разные сети»: сети пишутся одновременно (наблюдаемо
  *     две занятые привязки), пул не медленнее синхронного пути на том же объёме;
  *   * «две записи одной сети»: порядок событий = порядок коммитов, латентность
@@ -47,7 +48,13 @@ import {
 } from '../src/db/write-pool.js';
 import { runThoughtsWrite } from '../src/domain/heavy-write.js';
 import type { WriteEmit, WriteFx } from '../src/domain/write-wrapper.js';
-import { PING_P99_CEIL_MS, p99, pingP99Ceiling, startPingLag } from './ping-lag.js';
+import {
+  PING_P99_CEIL_MS,
+  assertPoolUnblocks,
+  p99,
+  startPingLag,
+  type PingLagResult,
+} from './ping-lag.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -176,18 +183,17 @@ describe(
       return other;
     }
 
-    it('массовый батч 50 не блокирует главный поток (p99 пинга < 50 мс)', async () => {
+    it('массовый батч 50 не блокирует главный поток (CPU главного потока в потолке)', async () => {
       // Замер одного и того же батча на двух путях: сначала без пула (фасад
       // деградирует в синхронную запись в главном потоке — так было до переноса),
       // затем через пул. Пинги главного потока считаются в обоих прогонах.
       assert.equal(getWritePool(), null, 'перед синхронным замером пула нет');
       const measure = async (
         tag: string,
-      ): Promise<{ ms: number; pings: number; p99: number; busy: number }> => {
-        // Лаг главного потока — сэмплер из `ping-lag`: тик ставится с расчётом
-        // «предыдущий + период», и разница с фактом показывает, сколько поток был
-        // занят. На синхронном пути просроченный тик отчитается длительностью
-        // всей записи.
+      ): Promise<{ ms: number } & PingLagResult> => {
+        // Блокировка главного потока — сэмплер из `ping-lag`: лаг пинга плюс
+        // активное время событийного цикла (ELU). На синхронном пути поток
+        // работает всю запись, через пул — только накладные расходы маршрута.
         const stopPing = startPingLag(
           () => (getWritePool()?.stats().busyWorkers ?? 0) > 0,
         );
@@ -214,8 +220,10 @@ describe(
       const pooled = await measure('через-пул-50');
 
       console.log(
-        `[write-pool-load] батч ${LOAD_BATCH}: синхронно=${sync.ms} мс (p99 пинга=${sync.p99.toFixed(1)} мс, ` +
-          `пингов=${sync.pings}); через пул=${pooled.ms} мс (p99 пинга=${pooled.p99.toFixed(1)} мс, ` +
+        `[write-pool-load] батч ${LOAD_BATCH}: синхронно=${sync.ms} мс (блокировка p99=${sync.p99Blocked.toFixed(1)} мс, ` +
+          `CPU главного=${sync.cpuMs?.toFixed(1) ?? '—'} мс, p99 лага=${sync.p99.toFixed(1)} мс, пингов=${sync.pings}); ` +
+          `через пул=${pooled.ms} мс (блокировка p99=${pooled.p99Blocked.toFixed(1)} мс, ` +
+          `CPU главного=${pooled.cpuMs?.toFixed(1) ?? '—'} мс, p99 лага=${pooled.p99.toFixed(1)} мс, ` +
           `пингов=${pooled.pings}, при занятом воркере=${pooled.busy})`,
       );
 
@@ -229,14 +237,10 @@ describe(
         pooled.busy > 0,
         'пинги через пул приходятся на время, когда воркер занят — окно перекрытия есть',
       );
-      // Потолок относительный: под конкуренцией за CPU в полном прогоне
-      // абсолютные 50 мс не выдерживаются даже корректным пулом (см. ping-lag).
-      const ceiling = pingP99Ceiling(sync.p99);
-      assert.ok(
-        pooled.p99 <= ceiling,
-        `p99 задержки пинга ${pooled.p99.toFixed(1)} мс > потолка ${ceiling.toFixed(1)} мс ` +
-          `(синхронный ориентир ${sync.p99.toFixed(1)} мс) — главный поток блокируется`,
-      );
+      // Критерий относительный, выборка блокировки взвешена CPU-временем
+      // главного потока: лаг пинга под конкуренцией за CPU измеряет
+      // планировщик (ping-lag, ошибка 21a3be38).
+      assertPoolUnblocks(sync, pooled);
     });
 
     it('параллельная запись в разные сети: сети пишутся одновременно, пул обгоняет синхронный путь', async () => {

@@ -7,11 +7,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { promisify } from 'node:util';
+import { crc32 } from 'node:zlib';
 import { describe, it } from 'node:test';
 import yauzl from 'yauzl';
 
@@ -80,6 +77,65 @@ async function readZipEntry(buffer: Buffer, fileName: string): Promise<Buffer> {
     zip.on('error', reject);
     zip.readEntry();
   });
+}
+
+/**
+ * Full archive integrity check (bug 21a3be38). Replaces the external
+ * `unzip -t`, which only exists on POSIX hosts: on Windows CI the command was
+ * missing and the test failed on ENOENT instead of checking the archive.
+ *
+ * Checks the same things `unzip -t` does: every file entry inflates without
+ * errors, its uncompressed length and CRC-32 match the central directory.
+ */
+async function assertZipIntegrity(buffer: Buffer): Promise<void> {
+  const zip = await yauzlFromBuffer(buffer, { lazyEntries: true });
+  let files = 0;
+  await new Promise<void>((resolve, reject) => {
+    zip.on('entry', (entry: yauzl.Entry) => {
+      if (/\/$/.test(entry.fileName)) {
+        zip.readEntry();
+        return;
+      }
+      zip.openReadStream(entry, (err, stream) => {
+        if (err !== null) {
+          reject(err);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        stream.on('error', reject);
+        stream.on('end', () => {
+          const data = Buffer.concat(chunks);
+          if (data.length !== entry.uncompressedSize) {
+            reject(
+              new Error(
+                `${entry.fileName}: inflated ${data.length} bytes, ` +
+                  `central directory declares ${entry.uncompressedSize}`,
+              ),
+            );
+            return;
+          }
+          const actual = crc32(data);
+          if (actual !== entry.crc32) {
+            reject(
+              new Error(
+                `${entry.fileName}: CRC-32 ${actual.toString(16)} ≠ ` +
+                  `${entry.crc32.toString(16)} from central directory`,
+              ),
+            );
+            return;
+          }
+          files += 1;
+          zip.readEntry();
+        });
+      });
+    });
+    zip.on('end', () => resolve());
+    zip.on('error', reject);
+    zip.readEntry();
+  });
+  zip.close();
+  assert.ok(files > 0, 'archive contains at least one file entry');
 }
 
 /** Create a thought via the API and return its id. */
@@ -342,20 +398,13 @@ describe(
         assert.equal(buf[2], 0x03);
         assert.equal(buf[3], 0x04);
 
-        // Persist to disk and ask the system `unzip` (if available) whether
-        // the archive is well-formed — this is the strongest cross-check
-        // against any silent corruption along the archiver → Buffer → HTTP
-        // → `app.inject` chain that the user's archive manager would also see.
-        const onDisk = path.join(tmpdir(), `etnx-test-${jobId}.zip`);
-        writeFileSync(onDisk, buf);
-        try {
-          execFileSync('unzip', ['-t', onDisk], { stdio: 'pipe' });
-        } catch (e) {
-          // Surface the `unzip` stderr so a CI failure is debuggable.
-          const err = e as { stderr?: Buffer };
-          const detail = err.stderr !== undefined ? err.stderr.toString('utf8') : '';
-          assert.fail(`unzip -t rejected the .etnx archive: ${detail}`);
-        }
+        // Full archive integrity check, platform-neutral (bug 21a3be38): the
+        // external `unzip` exists only on POSIX, so on Windows CI this test
+        // failed on ENOENT instead of checking the archive. Verify exactly what
+        // `unzip -t` verifies — every entry inflates without errors, its length
+        // and CRC-32 match the central directory — across the whole
+        // archiver → Buffer → HTTP → `app.inject` chain.
+        await assertZipIntegrity(buf);
 
         const entries = await listZipEntries(buf);
         const names = entries.map((e) => e.fileName);

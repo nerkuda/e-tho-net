@@ -18,8 +18,8 @@
  *     синхронный путь (файл физически появляется в сети-получателе);
  *   * `ETN_WRITE_POOL_SIZE=0` (пул не настроен) — синхронный путь как раньше;
  *   * нагрузочная проба: тяжёлая батч-операция через пул не блокирует главный
- *     поток (p99 лага пинга не выше относительного потолка от синхронного
- *     ориентира — см. `ping-lag.ts`).
+ *     поток (CPU-время главного потока не выше относительного потолка от
+ *     синхронного ориентира — см. `ping-lag.ts`, ошибка 21a3be38).
  */
 
 import assert from 'node:assert/strict';
@@ -48,7 +48,12 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
-import { PING_P99_CEIL_MS, pingP99Ceiling, startPingLag } from './ping-lag.js';
+import {
+  PING_P99_CEIL_MS,
+  assertPoolUnblocks,
+  startPingLag,
+  type PingLagResult,
+} from './ping-lag.js';
 
 /** Тяжёлый батч в нагрузочной пробе: 50 целей × 20 якорей = 1000 рёбер. */
 const LOAD_TARGETS = 50;
@@ -441,11 +446,15 @@ describe(
         const batchUrl = `/api/v1/networks/${ctx.networkId}/thoughts/batch`;
         const measure = async (
           tag: string,
-        ): Promise<{ ms: number; pings: number; p99: number; busy: number }> => {
-          const stopPing = startPingLag(() => (getWritePool()?.stats().busyWorkers ?? 0) > 0);
-
+        ): Promise<{ ms: number } & PingLagResult> => {
+          // Сетап замера — вставка 70 мыслей в БД — работа главного потока, но НЕ
+          // предмет проверки: замер описывает ровно батч-запрос, поэтому сэмплер
+          // стартует после сетапа (образец — write-pool-load).
           const targets = seedPlainThoughts(ctx.ndb, `${tag}-цель`, LOAD_TARGETS);
           const anchors = seedPlainThoughts(ctx.ndb, `${tag}-якорь`, LOAD_ANCHORS);
+
+          const stopPing = startPingLag(() => (getWritePool()?.stats().busyWorkers ?? 0) > 0);
+
           const started = Date.now();
           const res = await injectData<{ affected: number; failures: unknown[] }>(ctx, 'POST', batchUrl, {
             ids: targets,
@@ -472,9 +481,11 @@ describe(
 
         console.log(
           `[thoughts-batch-pool] ${LOAD_TARGETS}×${LOAD_ANCHORS} link_parents: ` +
-            `синхронно=${sync.ms} мс (p99 пинга=${sync.p99.toFixed(1)} мс, пингов=${sync.pings}); ` +
-            `через пул=${pooled.ms} мс (p99 пинга=${pooled.p99.toFixed(1)} мс, пингов=${pooled.pings}, ` +
-            `при занятом воркере=${pooled.busy})`,
+            `синхронно=${sync.ms} мс (блокировка p99=${sync.p99Blocked.toFixed(1)} мс, ` +
+            `CPU главного=${sync.cpuMs?.toFixed(1) ?? '—'} мс, p99 лага=${sync.p99.toFixed(1)} мс, пингов=${sync.pings}); ` +
+            `через пул=${pooled.ms} мс (блокировка p99=${pooled.p99Blocked.toFixed(1)} мс, ` +
+            `CPU главного=${pooled.cpuMs?.toFixed(1) ?? '—'} мс, p99 лага=${pooled.p99.toFixed(1)} мс, ` +
+            `пингов=${pooled.pings}, при занятом воркере=${pooled.busy})`,
         );
 
         assert.ok(pooled.pings >= 5, `пинги успели накопиться (${pooled.pings})`);
@@ -483,12 +494,12 @@ describe(
           `синхронный путь обязан блокировать главный поток (p99 пинга ${sync.p99.toFixed(1)} мс)`,
         );
         assert.ok(pooled.busy > 0, 'пинги через пул приходятся на время занятого воркера');
-        const ceiling = pingP99Ceiling(sync.p99);
-        assert.ok(
-          pooled.p99 <= ceiling,
-          `p99 лага пинга через пул ${pooled.p99.toFixed(1)} мс > потолка ${ceiling.toFixed(1)} мс ` +
-            `(синхронный ориентир ${sync.p99.toFixed(1)} мс) — главный поток блокируется`,
-        );
+        // Критерий относительный, выборка блокировки взвешена CPU-временем
+        // главного потока: на 2-vCPU Windows-ВМ лаг пинга измеряет загрузку
+        // планировщика, а не блокировку кодом (простаивающий поток получает тик
+        // с опозданием на 250–300 мс при 31–112 мс собственного CPU — ошибка
+        // 21a3be38, см. ping-lag).
+        assertPoolUnblocks(sync, pooled);
         assert.ok(pool.stats().completed >= 2, 'батч-задачи исполнены пулом');
       } finally {
         await closeWritePool();

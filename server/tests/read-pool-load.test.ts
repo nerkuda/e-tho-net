@@ -10,8 +10,10 @@
  * до 295 мс и удлинял очереди GUI-клиенту.
  *
  * Синхронный ориентир исполняет 10 батчей подряд в одном тике — главный поток
- * занят суммарно; пул те же 10 батчей считает в воркерах, а главный поток
- * отвечает на пинги. Порог относительный (`pingP99Ceiling`), как в эталоне.
+ * занят суммарно; пул те же 10 батчей считает в воркерах. Порог относительный
+ * (`poolCeiling`), а выборка блокировки взвешена CPU-временем главного потока:
+ * лаг пинга на нагруженной ВМ описывает загрузку планировщика, а не блокировку
+ * кодом (ошибка 21a3be38).
  */
 
 import assert from 'node:assert/strict';
@@ -33,7 +35,11 @@ import {
 } from '../src/db/reader-pool.js';
 import { resolveThoughtCardsAsync } from '../src/domain/heavy-read.js';
 import { getThoughtsByIdsResolved } from '../src/domain/thought-service.js';
-import { PING_P99_CEIL_MS, pingP99Ceiling, startPingLag } from './ping-lag.js';
+import {
+  PING_P99_CEIL_MS,
+  assertPoolUnblocks,
+  startPingLag,
+} from './ping-lag.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -141,7 +147,7 @@ describe(
       rmSync(dataDir, { recursive: true, force: true });
     });
 
-    it('волна resolve не блокирует главный поток (p99 пинга не хуже эталона)', async () => {
+    it('волна resolve не блокирует главный поток (блокировка p99 в потолке эталона)', async () => {
       // 1. Синхронный ориентир: пула нет, 10 батчей подряд занимают поток.
       assert.equal(getReaderPool(), null, 'перед синхронным замером пула нет');
       const stopSyncPing = startPingLag();
@@ -167,8 +173,10 @@ describe(
 
       console.log(
         `[read-pool-load] resolve ${ROUNDS}×${TARGETS}: синхронно=${syncMs} мс ` +
-          `(p99 пинга=${syncLag.p99.toFixed(1)} мс, пингов=${syncLag.pings}); ` +
-          `через пул=${poolMs} мс (p99 пинга=${poolLag.p99.toFixed(1)} мс, ` +
+          `(блокировка p99=${syncLag.p99Blocked.toFixed(1)} мс, ` +
+          `CPU главного=${syncLag.cpuMs?.toFixed(1) ?? '—'} мс, p99 лага=${syncLag.p99.toFixed(1)} мс, ` +
+          `пингов=${syncLag.pings}); через пул=${poolMs} мс (блокировка p99=${poolLag.p99Blocked.toFixed(1)} мс, ` +
+          `CPU главного=${poolLag.cpuMs?.toFixed(1) ?? '—'} мс, p99 лага=${poolLag.p99.toFixed(1)} мс, ` +
           `пингов=${poolLag.pings}, при занятом воркере=${poolLag.busy})`,
       );
 
@@ -183,12 +191,10 @@ describe(
         `синхронный путь обязан блокировать главный поток (p99 ${syncLag.p99.toFixed(1)} мс)`,
       );
       assert.ok(poolLag.busy > 0, 'пинги через пул приходятся на занятый воркер');
-      const ceiling = pingP99Ceiling(syncLag.p99);
-      assert.ok(
-        poolLag.p99 <= ceiling,
-        `p99 задержки пинга ${poolLag.p99.toFixed(1)} мс > потолка ${ceiling.toFixed(1)} мс ` +
-          `(синхронный ориентир ${syncLag.p99.toFixed(1)} мс) — главный поток блокируется`,
-      );
+      // Критерий относительный, выборка блокировки взвешена CPU-временем
+      // главного потока: лаг пинга на нагруженной ВМ описывает загрузку
+      // планировщика, а не блокировку кодом (см. ping-lag, ошибка 21a3be38).
+      assertPoolUnblocks(syncLag, poolLag);
     });
   },
 );
