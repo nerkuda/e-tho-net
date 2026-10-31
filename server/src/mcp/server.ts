@@ -122,6 +122,40 @@ function isToolErrorResult(result: unknown): boolean {
 }
 
 /**
+ * Распознать `ref`, положенный ВНУТРЬ блока `thought` (ошибка f87ca85d).
+ *
+ * Прежнее описание инструмента читалось как «блок `thought` обязан нести
+ * `ref`», и агенты клали поле внутрь блока. Схема элемента — `.strict()`,
+ * поэтому zod отбрасывал ключ и отдавал голое «Неизвестные поля: ref» без
+ * указания правильного места. Пока аргументы сырые, ищем такой `ref` и
+ * отвечаем `VALIDATION_ERROR` с уровнем элемента и корректным примером.
+ */
+function misplacedRefError(items: unknown[]): EtnError | null {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue;
+    const record = item as { ref?: unknown; thought?: unknown };
+    if (record.ref !== undefined) continue;
+    const thought = record.thought;
+    if (typeof thought !== 'object' || thought === null || Array.isArray(thought)) continue;
+    if (!Object.prototype.hasOwnProperty.call(thought, 'ref')) continue;
+    return new EtnError(
+      'VALIDATION_ERROR',
+      `ref новой мысли ставится на уровне элемента thoughts[${index}], рядом с блоком ` +
+        '`thought`, а не внутри него: `{ "ref": "a", "thought": { "title": "…" } }`. ' +
+        'Внутри `thought` поля `ref` нет — перенесите его в элемент.',
+      {
+        field: `thoughts.${index}.thought.ref`,
+        correct_field: `thoughts.${index}.ref`,
+        example: { ref: 'a', thought: { title: '…' } },
+        how_to: 'etn.how_to_write_batch',
+      },
+    );
+  }
+  return null;
+}
+
+/**
  * Распознать неинформативный сбой разбора аргументов КРУПНОГО вызова и
  * заменить его понятной ошибкой (ошибка a64c66f7-8c7a-431d-a91b-90a57b99928f).
  *
@@ -130,7 +164,8 @@ function isToolErrorResult(result: unknown): boolean {
  * expected as array but provided as string»), либо общей схемой — без
  * указания причины и лимита. Здесь, пока аргументы ещё сырые, проверяем тип
  * `thoughts` ДО канонической валидации и отдаём `VALIDATION_ERROR` с полем,
- * полученным типом, причиной и лимитом батча.
+ * полученным типом, причиной и лимитом батча. Там же — подсказка для `ref`,
+ * положенного внутрь `thought` ({@link misplacedRefError}, ошибка f87ca85d).
  *
  * Транспортные лимиты, о которых стоит помнить вызывающему: тело POST /mcp —
  * 10 МиБ (`MAX_MCP_BODY_BYTES` в `http.ts`); на отдельном `ETN_MCP_PORT` тот же
@@ -141,7 +176,8 @@ function preflightToolArgs(name: string, args: unknown): EtnError | null {
   if (name !== 'etn.thoughts.write') return null;
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return null;
   const thoughts = (args as { thoughts?: unknown }).thoughts;
-  if (thoughts === undefined || Array.isArray(thoughts)) return null;
+  if (thoughts === undefined) return null;
+  if (Array.isArray(thoughts)) return misplacedRefError(thoughts);
   const received = thoughts === null ? 'null' : typeof thoughts;
   return new EtnError(
     'VALIDATION_ERROR',
