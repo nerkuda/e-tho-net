@@ -346,6 +346,28 @@ describe('«Дневник»: период по умолчанию при вхо
       'лента перезапрошена с периодом и восстановленным свойством',
     );
   });
+
+  it('6. повторный монтаж той же пары инициализирует новый хост (вторая вкладка сети)', async () => {
+    await mountDiary('tab-dp-9', null);
+    assert.ok(feedQueries().length >= 1, 'первый хост ленту запросил');
+    // Пересборка рабочего пространства на второй вкладке той же сети: экран
+    // инициализировался на ПРЕЖНЕМ хосте до неё, новый хост оставался пустым
+    // (найдено GUI-стендом 167860ac).
+    mountedScreen?.();
+    mountedScreen = null;
+    queries.length = 0;
+    host = new ShimElement('div');
+    mountedScreen = chronicleMod.mountChronicle(host as unknown as HTMLElement);
+    // Тик store, который шлёт `showScreen` после пересборки workspace.
+    stateMod.store.update({ screen: 'workspace' } as any);
+    await flush();
+    assert.ok(feedQueries().length >= 1, 'лента НОВОГО хоста запрошена после монтажа');
+    assert.deepEqual(
+      panelMod.chroniclePeriod(),
+      { from: '$today', to: '$today' },
+      'период по умолчанию у нового хоста',
+    );
+  });
 });
 
 /** Дни сетки календаря (подсказка `title` ячейки — её дата). */

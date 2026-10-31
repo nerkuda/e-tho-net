@@ -699,6 +699,14 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   hostEl.replaceChildren();
   feedNav?.destroy();
   feedNav = null;
+  // Новый монтаж = новое рабочее пространство: инициализация обязана пройти
+  // заново даже для той же пары «сеть + вкладка». Иначе окно `openNetwork`
+  // (вторая вкладка той же сети наследует вид) инициализировало экран на
+  // ПРЕЖНЕМ хосте до пересборки рабочего пространства — ключ пары уже отмечен,
+  // и лента/календарь нового хоста оставались пустыми до смены вкладки
+  // (найдено GUI-стендом 167860ac). Тик store после `showScreen` (`screen`)
+  // запускает инициализацию нового хоста.
+  networkIdSeen = null;
 
   const filterArea = div('chron-filter-area');
   const splitter = splitterElement('chron-splitter');
