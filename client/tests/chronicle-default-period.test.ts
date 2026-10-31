@@ -347,3 +347,66 @@ describe('«Дневник»: период по умолчанию при вхо
     );
   });
 });
+
+/** Дни сетки календаря (подсказка `title` ячейки — её дата). */
+function calendarDays(): string[] {
+  return host.querySelectorAll('.cal-day').map((cell) => cell.title);
+}
+
+/** Двузначная запись числа. */
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+describe('«Дневник»: сохранённый месяц календаря (9b49d672)', () => {
+  it('1. снимок с месяцем: календарь показывает его, период подсвечен', async () => {
+    const snapshot = JSON.stringify({
+      filter: { date_from: '2026-03-10', date_to: '2026-03-12', order: 'asc' },
+      month: { year: 2026, month: 3 },
+      savedFilterId: null,
+    });
+    await mountDiary('tab-dp-6', snapshot);
+    assert.equal(panelMod.chroniclePeriod().from, '2026-03-10', 'период снимка не подменён');
+    const days = calendarDays();
+    assert.ok(days.includes('2026-03-01'), 'сетка сохранённого месяца марта 2026 показана');
+    assert.ok(days.includes('2026-03-31'), 'месяц показан целиком');
+    assert.ok(
+      !days.includes(`${diaryMod.todayLocal().slice(0, 7)}-01`),
+      'сегодняшний месяц не подставлен вместо сохранённого',
+    );
+    const selected = host
+      .querySelectorAll('.cal-day.is-selected')
+      .map((cell) => cell.title)
+      .sort();
+    assert.deepEqual(selected, ['2026-03-10', '2026-03-11', '2026-03-12']);
+  });
+
+  it('2. смена месяца пользователем пишется в chronicle_state и восстанавливается', async () => {
+    await mountDiary('tab-dp-7', null);
+    const today = diaryMod.todayLocal();
+    const next = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1));
+    const nextMonth = { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1 };
+    (host.querySelector('.cal-next') as ShimElement).click();
+    await flush();
+    const saved = tabUpdates.filter((row) => typeof row.patch['chronicle_state'] === 'string').at(-1);
+    assert.notEqual(saved, undefined, 'смена месяца записана в состояние вкладки');
+    const state = saved!.patch['chronicle_state'] as string;
+    assert.deepEqual(JSON.parse(state).month, nextMonth, 'в снимок лёг новый месяц');
+    // «Перезапуск»: новый монтаж с этим снимком показывает сохранённый месяц.
+    mountedScreen?.();
+    mountedScreen = null;
+    panelMod.unmountChronicleFilterPanel();
+    catalogueMod.resetPropertyCatalogue();
+    queries.length = 0;
+    tabUpdates = [];
+    await mountDiary('tab-dp-8', state);
+    const firstDay = `${nextMonth.year}-${pad2(nextMonth.month)}-01`;
+    assert.ok(calendarDays().includes(firstDay), 'сетка сохранённого месяца восстановлена');
+    assert.equal(
+      host.querySelectorAll('.cal-day.is-selected').length,
+      1,
+      'период $today подсвечен и в новом месяце входа',
+    );
+    assert.deepEqual(tabUpdates, [], 'восстановление месяца не пишет состояние повторно');
+  });
+});

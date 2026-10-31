@@ -649,15 +649,15 @@ export async function ensureChronicleInitialised(): Promise<void> {
   // (требование 91f8d8dd), поэтому вход на следующий день снова даёт
   // «сегодня». Дефолт не персистится: пустой снимок остаётся признаком
   // «отбор не настраивался».
-  let entryMonthCounts: CalendarCountsSnapshot | null = null;
   if (chroniclePeriod().from === '' && chroniclePeriod().to === '') {
     setChroniclePeriod('$today', '$today');
-    // Календарь собран в `mountChronicle` ДО чтения снимка: месяц отбора не
-    // несёт — показываем месяц сегодняшней даты (выделение дня поставит
-    // `syncCalendar` после запроса ленты). `showDate` не уведомляет
-    // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
-    entryMonthCounts = showEntryMonth();
   }
+  // Календарь собран в `mountChronicle` ДО чтения снимка: показываем месяц
+  // входа — восстановленный из снимка (`month`, ошибка 9b49d672) либо месяц
+  // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac). Выделение дня
+  // поставит `syncCalendar` после запроса ленты; `showDate` не уведомляет
+  // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
+  const entryMonthCounts = alignEntryMonth();
   await getHome().catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
@@ -2267,22 +2267,31 @@ function syncCalendar(): void {
 }
 
 /**
- * Показать в календаре месяц ВХОДА без отбора (ошибка 167860ac): календарь
- * собран в `mountChronicle` ДО чтения снимка и мог остаться на месяце прежней
- * пары — вход без периода обязан показать месяц сегодняшней даты. Возвращает
- * снимок счётчиков, когда месяц реально сменился: `showDate` не уведомляет
- * `onMonthChange`, и без пересчёта отметки записей остались бы от прежнего
- * месяца.
+ * Показать в календаре месяц ВХОДА. Календарь собран в `mountChronicle` ДО
+ * чтения снимка и мог остаться на месяце прежней пары, поэтому показанный
+ * месяц переводится на:
+ *   • сохранённый в снимке (`chronicle_state.month`) — ошибка 9b49d672:
+ *     после перезапуска календарь обязан открыться в сохранённом месяце;
+ *   • месяц сегодняшней даты, когда снимок месяца не нёс, — ошибка 167860ac:
+ *     вход без отбора позиционируется на текущей дате.
+ * `showDate` не уведомляет `onMonthChange` (месяц уже проставлен в `month`),
+ * поэтому счётчики нового месяца пересчитывает вызывающий: возвращённый снимок
+ * — признак реальной смены месяца.
  */
-function showEntryMonth(): CalendarCountsSnapshot | null {
+function alignEntryMonth(): CalendarCountsSnapshot | null {
   if (calendar === null) return null;
-  const shown = calendar.getMonth();
   const today = todayLocal();
-  const year = Number(today.slice(0, 4));
-  const monthNo = Number(today.slice(5, 7));
-  if (shown.year === year && shown.month === monthNo) return null;
-  calendar.showDate(today);
-  month = { year, month: monthNo };
+  const target = month ?? {
+    year: Number(today.slice(0, 4)),
+    month: Number(today.slice(5, 7)),
+  };
+  const shown = calendar.getMonth();
+  if (shown.year === target.year && shown.month === target.month) {
+    month = target;
+    return null;
+  }
+  calendar.showDate(`${target.year}-${pad2(target.month)}-01`);
+  month = target;
   return calendarCountsSnapshot();
 }
 
