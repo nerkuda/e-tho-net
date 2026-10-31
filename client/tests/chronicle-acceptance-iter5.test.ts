@@ -419,7 +419,7 @@ describe('приёмка №5, п.1: компоновка карточки за�
     );
     assert.match(
       CHRONICLE,
-      /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\): void \{[\s\S]*renderRecordView\(shell, row\)/,
+      /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\): void \{[\s\S]*renderRecordView\(shell, \{ body_html: bodyHtml \}\)/,
     );
   });
 });

@@ -76,7 +76,7 @@ describe('сторож: подсветка упоминаний в теле за
 
     assert.match(
       code,
-      /const recordView = renderRecordView\(shell, row\)/,
+      /const recordView = renderRecordView\(shell, \{ body_html: bodyHtml \}\)/,
       'тело просмотра удерживается для декорирования',
     );
     assert.match(

@@ -165,20 +165,22 @@ describe('MCP-развёртка трансклюзий (bcfc7eb7, ADR 85a7a01e)
         assert.ok(html.includes('<strong>жирным</strong>'), `источник не отрендерен: ${html}`);
 
         // chronicle.query: body_html строки тоже собран из развёрнутого текста.
-        const chron = toolJson<{ rows: Array<{ body_md?: string; body_html: string }> }>(
+        // 0.15.1 (ошибка 50a94510): MCP-дефолт тела — markdown, HTML запрашивается
+        // явно (`body: 'html'`) — иначе поля `body_html` в строке нет вовсе.
+        const chron = toolJson<{ rows: Array<{ body_md?: string; body_html?: string }> }>(
           await handle.client.callTool({
             name: 'etn.chronicle.query',
-            arguments: { network_id: ctx.networkId, thought_ids: [boxId], limit: 50 },
+            arguments: { network_id: ctx.networkId, thought_ids: [boxId], limit: 50, body: 'html' },
           }),
         );
-        const row = chron.rows.find((r) => r.body_html.includes('Дневниковая заметка'));
+        const row = chron.rows.find((r) => r.body_html!.includes('Дневниковая заметка'));
         assert.ok(row !== undefined, 'строка хроники не найдена');
         assert.ok(
-          !row.body_html.includes('![[#'),
+          !row.body_html!.includes('![[#'),
           `chronicle body_html содержит литерал ссылки: ${row.body_html}`,
         );
         assert.ok(
-          row.body_html.includes('Текст источника'),
+          row.body_html!.includes('Текст источника'),
           `chronicle body_html не развёрнут: ${row.body_html}`,
         );
       } finally {

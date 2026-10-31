@@ -23,11 +23,13 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
       // 0.14.1 (ошибка d47e5ba3): keywords/keyword_scope и раскрытие
       // `*`-синонимов в scope title/synonyms — та же формулировка, что у
       // `etn.thoughts.search`/`query` (общий предикат, коммит 4037a997).
+      // 0.15.1 (ошибка 50a94510): `body` — формат тела записи в строке; проза
+      // сжата, бюджет tools/list (ADR b2eebf8b) остаётся соблюдённым.
       description:
         'Запрос хроники: хроно-комментарии по фильтру мыслей; `targets` — критерии целей; ' +
         '`keywords`/`keyword_scope` — мини-синтаксис §6.10 (AND, `*`, `-слово`); в `title`/`synonyms` ' +
-        'слово без `*` совпадает и с целым словом `*`-синонима; `ast` — тело профиля «хроника» ' +
-        '(грамматика — etn.guide { topic: "thoughts.query" }), XOR с плоскими критериями.',
+        'слово без `*` равно слову `*`-синонима; `ast` — профиль «хроника» ' +
+        '(etn.guide «thoughts.query»), XOR с плоскими; `body` — `md` (дефолт) | `html`.',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },
@@ -47,26 +49,31 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
             ]);
         // Сборка тела запроса под domain `parseChronicleQueryBody` —
         // повторяет ключи REST с минимальной правкой имён.
-        const body: Record<string, unknown> = {};
-        if (args.keywords !== undefined) body.keywords = args.keywords;
-        if (args.keyword_scope !== undefined) body.keyword_scope = args.keyword_scope;
-        if (args.thought_ids !== undefined) body.thought_ids = args.thought_ids;
-        if (args.include_subtree !== undefined) body.include_subtree = args.include_subtree;
-        if (typeIds !== undefined) body.type_ids = typeIds;
-        if (linkTypeIds !== undefined) body.link_type_ids = linkTypeIds;
-        if (args.link_scope !== undefined) body.link_scope = args.link_scope;
-        if (args.date_from !== undefined) body.date_from = args.date_from;
-        if (args.date_to !== undefined) body.date_to = args.date_to;
-        if (args.targets !== undefined) body.targets = args.targets;
-        if (args.ast !== undefined) body.ast = args.ast;
-        if (args.order !== undefined) body.order = args.order;
-        if (args.limit !== undefined) body.limit = args.limit;
-        if (args.offset !== undefined) body.offset = args.offset;
-        const request = parseChronicleQueryBody(body, '');
+        const payload: Record<string, unknown> = {};
+        if (args.keywords !== undefined) payload.keywords = args.keywords;
+        if (args.keyword_scope !== undefined) payload.keyword_scope = args.keyword_scope;
+        if (args.thought_ids !== undefined) payload.thought_ids = args.thought_ids;
+        if (args.include_subtree !== undefined) payload.include_subtree = args.include_subtree;
+        if (typeIds !== undefined) payload.type_ids = typeIds;
+        if (linkTypeIds !== undefined) payload.link_type_ids = linkTypeIds;
+        if (args.link_scope !== undefined) payload.link_scope = args.link_scope;
+        if (args.date_from !== undefined) payload.date_from = args.date_from;
+        if (args.date_to !== undefined) payload.date_to = args.date_to;
+        if (args.targets !== undefined) payload.targets = args.targets;
+        if (args.ast !== undefined) payload.ast = args.ast;
+        if (args.order !== undefined) payload.order = args.order;
+        if (args.limit !== undefined) payload.limit = args.limit;
+        if (args.offset !== undefined) payload.offset = args.offset;
+        // Дефолт агентского формата тела — markdown (ошибка 50a94510):
+        // HTML агенту не нужен, а на месяце записей он удваивал ответ.
+        // REST-дефолт (both) остаётся в доменном парсере.
+        payload.body = args.body ?? 'md';
+        const request = parseChronicleQueryBody(payload, '');
         // MCP-выдача пересобирает `body_html` из развёрнутого `body_md`, чтобы
         // HTML был согласован с развёрнутыми трансклюзиями (ошибка a6da3d37,
         // ТП2 задача bcfc7eb7, ADR 85a7a01e). REST-путь transform не передаёт
-        // и сохраняет кешированный `body_html`.
+        // и сохраняет кешированный `body_html`. При формате `md` (дефолт)
+        // домен трансформ не вызывает — HTML не собирается вовсе.
         const present = createBodyPresenter(ndb);
         // `snippet` собирается из развёрнутого текста без маркеров границ
         // (ошибка a3fb62b6): превью строки согласовано с `body_md`/`body_html`
@@ -90,7 +97,11 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
         });
         return {
           rows: result.rows,
-          meta: { total: result.total, offset: request.offset, limit: request.limit },
+          meta: {
+            total: result.total,
+            offset: request.offset,
+            limit: request.limit,
+          },
         };
       }),
   );

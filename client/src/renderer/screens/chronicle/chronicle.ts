@@ -1532,6 +1532,11 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // класс пересчитывается (запись могла перестать быть целью перехода).
   card.classList.toggle('diary-record-target', row.id === jumpHighlightId);
 
+  // Тело просмотра (0.15.1, ошибка 50a94510): REST-дефолт формата тела — `both`,
+  // поэтому клиент `body_html` получает всегда. Общий `ChronicleRow` допускает
+  // его отсутствие (агентский `body: 'md'`) — нормализуем один раз.
+  const bodyHtml = row.body_html ?? '';
+
   let editing = false;
   /** md тела загружен (лента несёт только `body_html`/`snippet`). */
   let bodyLoaded = false;
@@ -1543,7 +1548,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   const body = div('diary-record-body');
   // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
   // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
-  const recordView = renderRecordView(shell, row);
+  const recordView = renderRecordView(shell, { body_html: bodyHtml });
   body.append(shell.root);
   // Сворачивание заголовков в просмотре записи — тем же механизмом, что у
   // комментария мысли (ошибка c91a0067): статичный `body_html` без декоратора
@@ -1551,7 +1556,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // сам хроно-комментарий (`row.id`): иначе записи одной мысли делили бы
   // свёрнутость. Это забота ЭКРАНА: `record-body.ts` остаётся чистым.
   const collapseNetworkId = store.state.networkId;
-  if (collapseNetworkId !== null && row.body_html.trim() !== '') {
+  if (collapseNetworkId !== null && bodyHtml.trim() !== '') {
     // Резолв ID-форм wiki-ссылок (`[[#<id>]]` / `[[n:<net>#<id>]]`) в просмотре
     // записи (ошибка ab8b6da8): серверный `body_html` отдаёт такие ссылки пустым
     // спаном `<span class="wiki-link" data-wiki-id>` — имя мысли подставляет
@@ -1609,7 +1614,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     const owner = currentOwner();
     widget = createMarkdownField({
       md: bodyDraft,
-      html: row.body_html,
+      html: bodyHtml,
       placeholder: t('diary.emptyRecordHint'),
       // Каретка/выделение при входе в правку — в месте клика в просмотре
       // (требование bac754e4, задача 189da39e).
@@ -1669,7 +1674,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // монтирования карточки (`ensureWidget` не создаёт поле до `body.isConnected`),
   // поэтому откладываем на макрозадачу; `setTimeout`, а не rAF — кадры скрытого
   // окна заторможены (грабли 03e33360).
-  if (htmlHasTransclusionMarkup(row.body_html)) {
+  if (htmlHasTransclusionMarkup(bodyHtml)) {
     setTimeout(() => {
       if (body.isConnected) void ensureWidget();
     }, 0);

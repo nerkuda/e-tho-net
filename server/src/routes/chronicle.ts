@@ -35,6 +35,10 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
+        // Формат тела строки (0.15.1, ошибка 50a94510): доменный парсер
+        // принимает md|html|both, отсутствие — `both` (совместимость: клиент
+        // читает `body_html`, остальные потребители получают и markdown).
+        // Проекция выполняется в `queryChronicle` — общий путь с MCP.
         const query = parseChronicleQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Контекст профиля хроники (требование 0095daad, ADR 0c02ab4f): первый

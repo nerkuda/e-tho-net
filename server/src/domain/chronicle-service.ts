@@ -10,8 +10,9 @@
  *   2. list **chronological comments** attached to the selected thoughts or to
  *      their links (link types / link scope filter) OR matching the keywords in
  *      their OWN body/title (0.10.1, T7 — так сужаются и записи дня на HOME),
- *      intersected with the requested date range, sorted by record class,
- *      `valid_from`, `valid_to`, `created_at`, `id` and paged.
+ *      intersected with the requested date range, sorted by `valid_from`,
+ *      `valid_to`, `created_at`, `id` (класс записи из ключа удалён в 0.12.1)
+ *      and paged.
  *
  * Row snippets reuse {@link makeSnippet} from the search service (same
  * `<mark>` highlight convention); targets are resolved to `ThoughtRef`s /
@@ -19,6 +20,7 @@
  */
 
 import {
+  CHRONICLE_BODY_FORMATS,
   CHRONICLE_LINK_SCOPES,
   CHRONICLE_PAGE_SIZE,
   CHRONICLE_QUERY_MAX_LIMIT,
@@ -34,6 +36,7 @@ import {
   buildLikePattern,
   commentScopeEnabled,
   parseFilterKeywords,
+  type ChronicleBodyFormat,
   type ChronicleFilter,
   type ChronicleFilterDefinition,
   type ChronicleLinkScope,
@@ -464,7 +467,30 @@ export function parseChronicleQueryBody(
       : 'asc';
   const limit = parseChronicleLimit(body, requestId);
   const offset = parseChronicleOffset(body, requestId);
-  return { ...filter, order, limit, offset };
+  const format = parseChronicleBodyFormat(body['body'], requestId);
+  return { ...filter, order, limit, offset, body: format };
+}
+
+/**
+ * Формат тела записи в строке ответа (0.15.1, ошибка 50a94510): закрытый
+ * словарь {@link CHRONICLE_BODY_FORMATS}, отсутствие — `both` (дефолт REST:
+ * клиент получает `body_html`, совместимость с действующими потребителями).
+ * MCP-фасад подставляет свой дефолт `md` до разбора — домен дефолт не угадывает.
+ */
+function parseChronicleBodyFormat(
+  raw: unknown,
+  requestId: string,
+): ChronicleBodyFormat {
+  if (raw === undefined) return 'both';
+  if (typeof raw === 'string' && (CHRONICLE_BODY_FORMATS as readonly string[]).includes(raw)) {
+    return raw as ChronicleBodyFormat;
+  }
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    'Недопустимый body — ожидается одно из значений: md, html, both.',
+    { field: 'body', allowed: CHRONICLE_BODY_FORMATS },
+    requestId,
+  );
 }
 
 /** Parse `limit` of a chronicle query (default {@link CHRONICLE_PAGE_SIZE}). */
@@ -638,6 +664,7 @@ function buildRows(
   rows: Row[],
   refs: Map<string, ThoughtRefRow>,
   linkTargets: Map<string, ChronicleTargetLink>,
+  bodyFormat: ChronicleBodyFormat,
 ): ChronicleRow[] {
   return rows.map((row) => {
     const targetRows = ndb
@@ -677,7 +704,11 @@ function buildRows(
       created_by: row.created_by,
       updated_by: row.updated_by,
       snippet: row.snippet,
-      body_html: row.body_html,
+      // Проекция тела записи по запрошенному формату (0.15.1, ошибка 50a94510):
+      // md — только markdown, html — только HTML, both — оба поля. Единый путь
+      // для REST и MCP: фасады лишь передают формат.
+      ...(bodyFormat === 'html' ? {} : { body_md: row.body_md }),
+      ...(bodyFormat === 'md' ? {} : { body_html: row.body_html }),
       targets,
     };
   });
@@ -1455,6 +1486,7 @@ export function queryChronicle(
     });
   }
 
+  const bodyFormat: ChronicleBodyFormat = request.body ?? 'both';
   const withSnippets = rows.map((row) => {
     // Сниппет строится из того же развёрнутого текста, что и `body_html`, если
     // фасад передал трансформ (MCP): иначе превью показывало бы литерал
@@ -1464,12 +1496,18 @@ export function queryChronicle(
     return {
       ...row,
       snippet: makeSnippet(snippetSource, includeWords),
+      // HTML нужен только для форматов `html`/`both`: для `md` его не собираем
+      // (MCP-дефолт — экономия рендера на каждой строке, ошибка 50a94510).
       body_html:
-        opts.bodyHtmlTransform === undefined ? row.body_html : opts.bodyHtmlTransform(row.body_md),
+        bodyFormat === 'md'
+          ? row.body_html
+          : opts.bodyHtmlTransform === undefined
+            ? row.body_html
+            : opts.bodyHtmlTransform(row.body_md),
     };
   });
   return {
-    rows: buildRows(ndb, withSnippets, refs, linkTargets),
+    rows: buildRows(ndb, withSnippets, refs, linkTargets, bodyFormat),
     total,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
