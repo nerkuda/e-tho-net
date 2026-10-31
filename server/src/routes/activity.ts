@@ -66,7 +66,18 @@ export function createActivityRoutes(deps: RouteDeps): FastifyPluginAsync {
             : {}),
           requestId: req.id,
         });
-        sendList(reply, result.data, result.total, result.offset, result.limit);
+        sendList(
+          reply,
+          result.data,
+          result.total,
+          result.offset,
+          result.limit,
+          // Ошибка b23a7104: жёлтая диагностика ядра отбора в конверте —
+          // семантика «пусто — поля нет», как у хроники и `etn.views.run`.
+          result.warnings !== undefined && result.warnings.length > 0
+            ? { warnings: result.warnings }
+            : undefined,
+        );
       },
     );
 

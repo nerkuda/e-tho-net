@@ -52,6 +52,11 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
             total: result.total,
             offset: result.offset,
             limit: result.limit,
+            // Ошибка b23a7104: жёлтая диагностика ядра отбора — в `meta`, как у
+            // хроники и `etn.views.run`; пусто — поля нет.
+            ...(result.warnings !== undefined && result.warnings.length > 0
+              ? { warnings: result.warnings }
+              : {}),
           },
         };
       }),

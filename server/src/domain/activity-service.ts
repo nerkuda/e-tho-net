@@ -36,6 +36,7 @@ import {
   type FilterAstLeaf,
   type FilterAstListItem,
   type FilterAstNode,
+  type FilterDiagnostic,
   type Layer,
   type Link,
   type LinkType,
@@ -182,6 +183,14 @@ export interface ActivityListResult {
   total: number;
   limit: number;
   offset: number;
+  /**
+   * Жёлтая диагностика ядра отбора (ошибка b23a7104): общий конверт с хроникой
+   * и `etn.views.run` — `FilterDiagnostic[]`, пусто — поля нет. Профиль
+   * «события» не несёт контекста типа мысли, поэтому предупреждение
+   * «свойство отвязано от типа» структурно недостижимо; путь проброса
+   * существует, чтобы оба транспорта отдавали одинаковую диагностику.
+   */
+  warnings?: FilterDiagnostic[];
 }
 
 // ---------------------------------------------------------------------------
@@ -575,10 +584,16 @@ export function listActivity(
 ): ActivityListResult {
   const { limit, offset } = normalizeActivityPagination(params);
   let ast: FilterAst;
+  let warnings: FilterDiagnostic[] = [];
   if (params.ast !== undefined) {
     assertFilterAstInProfile(params.ast, 'events', opts.requestId);
-    const diag = diagnoseFilterAst(ndb, params.ast);
+    const diag = diagnoseFilterAst(ndb, params.ast, {
+      ...(opts.requestId !== undefined ? { requestId: opts.requestId } : {}),
+    });
     if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
+    // Ошибка b23a7104: жёлтая диагностика не теряется — конверт тот же, что у
+    // хроники и `etn.views.run` («пусто — поля нет»).
+    warnings = diag.warnings;
     ast = params.ast;
   } else {
     ast = compileActivityToAst(params);
@@ -609,6 +624,7 @@ export function listActivity(
     total,
     limit,
     offset,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 

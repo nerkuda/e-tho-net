@@ -412,8 +412,21 @@ const HANDLERS: Record<string, OpHandler> = {
       // Контекст профиля «вложения»: время не несётся (withTime=false), нужен
       // пользователь для под-выборки мыслей-владельцев.
       const tokenCtx = mcpTokenContext(rt, a.network_id, 'attachments');
-      const { items } = searchAttachments(ndb, query, { userId: tokenCtx.userId });
-      return items;
+      const { items, total, warnings } = searchAttachments(ndb, query, {
+        userId: tokenCtx.userId,
+      });
+      // 0.15.1 (ошибка b23a7104): ответ — конверт REST (`data` + `meta`), а не
+      // голый массив: в `meta` помещается `warnings` ядра отбора той же
+      // семантики, что у хроники и `etn.views.run` («пусто — поля нет»).
+      return {
+        data: items,
+        meta: {
+          total,
+          offset: query.offset ?? 0,
+          limit: query.limit ?? 50,
+          ...(warnings !== undefined && warnings.length > 0 ? { warnings } : {}),
+        },
+      };
     });
   },
   'attachments.usage': (rt, p) => {

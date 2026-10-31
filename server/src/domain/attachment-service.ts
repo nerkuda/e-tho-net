@@ -61,6 +61,7 @@ import {
   type FilterAstListItem,
   type FilterAstNode,
   type FilterAstValue,
+  type FilterDiagnostic,
 } from '@etn/shared';
 
 import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
@@ -1342,6 +1343,17 @@ export interface AttachmentSearchOptions {
   requestId?: string;
 }
 
+/**
+ * Итог поиска вложений (ошибка b23a7104): страница + жёлтая диагностика ядра
+ * отбора. `warnings` — общий конверт с хроникой и `etn.views.run`; пусто —
+ * поля нет.
+ */
+export interface AttachmentSearchResult {
+  items: Attachment[];
+  total: number;
+  warnings?: FilterDiagnostic[];
+}
+
 /** Плоские фильтры вложений — несовместимы с AST-телом (XOR). */
 const ATTACHMENT_FLAT_FIELDS = ['q', 'kind', 'exclude_owner_type', 'exclude_owner_id'] as const;
 
@@ -1786,9 +1798,11 @@ export function searchAttachmentsByAst(
   ast: FilterAst,
   query: Pick<AttachmentSearchQuery, 'limit' | 'offset'> = {},
   opts: AttachmentSearchOptions = {},
-): { items: Attachment[]; total: number } {
+): AttachmentSearchResult {
   assertFilterAstInProfile(ast, 'attachments', opts.requestId);
-  const diag = diagnoseFilterAst(ndb, ast);
+  const diag = diagnoseFilterAst(ndb, ast, {
+    ...(opts.requestId !== undefined ? { requestId: opts.requestId } : {}),
+  });
   if (diag.errors.length > 0) throw filterDiagnosticsError(diag.errors);
   const limit = typeof query.limit === 'number' ? Math.max(0, Math.min(200, Math.trunc(query.limit))) : 50;
   const offset = typeof query.offset === 'number' ? Math.max(0, Math.trunc(query.offset)) : 0;
@@ -1802,7 +1816,14 @@ export function searchAttachmentsByAst(
        ORDER BY a.created_at DESC LIMIT ? OFFSET ?`,
     )
     .all(...clause.args, limit, offset) as AttachmentRow[];
-  return { items: hydrateAttachmentSearchRows(ndb, rows), total: totalRow.n };
+  return {
+    items: hydrateAttachmentSearchRows(ndb, rows),
+    total: totalRow.n,
+    // Ошибка b23a7104: жёлтая диагностика не теряется — конверт тот же, что у
+    // хроники и `etn.views.run` («пусто — поля нет»). Профиль «вложения»
+    // контекста типа не несёт, поэтому список структурно пуст.
+    ...(diag.warnings.length > 0 ? { warnings: diag.warnings } : {}),
+  };
 }
 
 /**
@@ -1829,7 +1850,7 @@ export function searchAttachments(
   ndb: NetworkDb,
   query: AttachmentSearchQuery,
   opts: AttachmentSearchOptions = {},
-): { items: Attachment[]; total: number } {
+): AttachmentSearchResult {
   if (query.ast !== undefined) return searchAttachmentsByAst(ndb, query.ast, query, opts);
   const keywords = parseFilterKeywords(query.q ?? '');
   if (keywords.include.length === 0) {

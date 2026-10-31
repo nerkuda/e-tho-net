@@ -539,13 +539,18 @@ describe('etn.attachments.update / removeOwner (0.7.2, 0.12.1)', { skip: !native
         assert.equal(updated.id, created.id);
 
         // Поиск по уникальной метке — должны найти обновлённое вложение.
-        const searched = toolJson<Array<{ id: string; title: string | null; description: string | null }>>(
+        // 0.15.1 (ошибка b23a7104): ответ — конверт `{ data, meta }`.
+        const searched = toolJson<{
+          data: Array<{ id: string; title: string | null; description: string | null }>;
+          meta: { total: number };
+        }>(
           await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: unique }),
         );
-        const hit = searched.find((a) => a.id === created.id);
+        const hit = searched.data.find((a) => a.id === created.id);
         assert.ok(hit, 'обновлённое вложение находится поиском');
         assert.equal(hit!.title, `Новое ${unique}`);
         assert.equal(hit!.description, `Новое описание ${unique}`);
+        assert.equal(searched.meta.total, searched.data.length, 'meta.total — паритет с REST');
       } finally {
         await handle.close();
       }
@@ -571,10 +576,10 @@ describe('etn.attachments.update / removeOwner (0.7.2, 0.12.1)', { skip: !native
         );
 
         // До снятия владения — находится поиском.
-        const before = toolJson<Array<{ id: string }>>(
+        const before = toolJson<{ data: Array<{ id: string }> }>(
           await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: 'to-delete' }),
         );
-        assert.ok(before.find((a) => a.id === created.id), 'находится ДО');
+        assert.ok(before.data.find((a) => a.id === created.id), 'находится ДО');
 
         const removed = toolJson<{ removed: boolean; attachment_deleted: boolean }>(
           await callOp(handle.client, 'attachments.removeOwner', {
@@ -587,11 +592,11 @@ describe('etn.attachments.update / removeOwner (0.7.2, 0.12.1)', { skip: !native
         assert.equal(removed.removed, true);
         assert.equal(removed.attachment_deleted, true, 'последний живой владелец удаляет вложение');
 
-        const after = toolJson<Array<{ id: string }>>(
+        const after = toolJson<{ data: Array<{ id: string }> }>(
           await callOp(handle.client, 'attachments.search', { network_id: ctx.networkId, q: 'to-delete' }),
         );
         assert.equal(
-          after.find((a) => a.id === created.id),
+          after.data.find((a) => a.id === created.id),
           undefined,
           'после снятия владения запись не находится поиском',
         );
