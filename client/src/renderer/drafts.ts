@@ -141,13 +141,20 @@ export function initDrafts(): void {
     const status = getRtStatus(store.state);
     const connected = status === 'connected';
     if (connected && !lastConnected) {
-      // Recovery notice only after a real loss: the very first connect of a
-      // session and a probe answered in time must not claim «Соединение
-      // восстановлено» (de34b35b, fb9d6058). Мигание сокета в обслуживании —
-      // тоже не восстановление (блокер приёмки 479e37ed).
-      // Восстановление связи — важное сообщение (доступность сервера), поэтому
-      // тост, а не рутинная строка статус-бара (задача 28d22b8a).
-      if (!inMaintenance && hadConnection && prevActive !== 'suspect') {
+      // Recovery notice only after a REAL loss of THE SAME network: the very
+      // first connect of a session, a probe answered in time (`suspect →
+      // connected`) and a switch to an already healthy network must not claim
+      // «Соединение восстановлено» (de34b35b, fb9d6058). Мигание сокета в
+      // обслуживании — тоже не восстановление (блокер приёмки 479e37ed).
+      // Переключение на здоровую сеть во время пробы раньше давало ложный
+      // тост: глобальный `lastConnected` был false из-за `suspect` СТАРОЙ
+      // сети, а `prevActive !== 'suspect'` пропускал статус НОВОЙ (ошибка
+      // 98f94df6). Поэтому тост решает только собственный переход сети:
+      // `reconnecting`/`offline → connected`. Таблица переходов — в
+      // постоянном комментарии ошибки 98f94df6. Восстановление связи —
+      // важное сообщение (доступность сервера), поэтому тост, а не рутинная
+      // строка статус-бара (задача 28d22b8a).
+      if (!inMaintenance && hadConnection && (prevActive === 'reconnecting' || prevActive === 'offline')) {
         toast(t('realtime.link.recovered'), 'success');
       }
       hadConnection = true;
