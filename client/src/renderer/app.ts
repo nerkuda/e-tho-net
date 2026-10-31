@@ -95,6 +95,11 @@ import {
 } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
 import {
+  applyPendingWorkspaceView,
+  beginWorkspaceTransition,
+  endWorkspaceTransition,
+} from './screens/workspace-transition.js';
+import {
   currentScreenPair,
   findOpenTargetTab,
   isCurrentScreenPair,
@@ -163,6 +168,24 @@ function isCurrentOpenNetwork(seq: number): boolean {
  */
 export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
   const seq = ++openNetworkSeq;
+  // Окно смены поколения workspace (ошибка f1febdfc): пока новая сеть/вкладка
+  // не опубликована, в DOM живёт прежнее пространство. Клик по закладке вида в
+  // нём запоминается (`screens/workspace-transition.ts`) и применяется к новому
+  // поколению сразу после `showScreen`. Входы пикера/ленты вкладок открывают
+  // это окно раньше — на время собственного await до вызова `openNetwork`.
+  const transition = beginWorkspaceTransition();
+  try {
+    await openNetworkBody(seq, networkId, tabId);
+  } finally {
+    endWorkspaceTransition(transition);
+  }
+}
+
+async function openNetworkBody(
+  seq: number,
+  networkId: string,
+  tabId: string | undefined,
+): Promise<void> {
   // The cursor lives on a cloud from the previously open network — drop it
   // before anything else, otherwise a quick Ctrl+V in the new network would
   // target an id that no longer exists on the map.
@@ -357,6 +380,10 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   if (!isCurrentOpenNetwork(seq)) return;
 
   showScreen('workspace');
+  // Новое поколение в DOM, сеть/вкладка/вид опубликованы: клик по закладке
+  // вида, нажатый в уходящем workspace, применяется здесь — до загрузки фокуса,
+  // чтобы пользователь сразу увидел выбранный экран (ошибка f1febdfc).
+  applyPendingWorkspaceView();
 
   // Q-bugfix: per-tab focus_id takes priority over the legacy L4 key. The
   // tab's focus was already persisted by the previous `setFocus` call (or by
