@@ -292,6 +292,10 @@ describe('etn.types.get + list { keywords, compact, meta } (17ff4619)', {
         assert.equal(ambiguous.isError, true);
         assert.match(toolText(ambiguous), /\[VALIDATION_ERROR\]/);
         const details = errorDetails(ambiguous);
+        // Параметр инструмента называется `name`: `details.field` обязан
+        // называть ИМЕННО его, а не `type` доменного резолва (ошибка 2f39e8f0).
+        assert.equal(details.field, 'name', 'details.field — имя параметра инструмента');
+        assert.equal(details.name, 'АЛЬФА', 'исходное имя сохранено в details.name');
         const candidates = details.candidates as Array<Record<string, unknown>>;
         assert.equal(candidates.length, 2, 'оба типа-кандидата в details.candidates');
         assert.deepEqual(

@@ -404,6 +404,37 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
  * `scope: "all"` отсутствие в одном каталоге не ошибка — совпадения в разных
  * каталогах неоднозначностью не являются, возвращаются оба.
  */
+/** Резолв имени для `etn.types.get`.
+ *
+ * Доменные резолверы `resolveThoughtTypeIdByName`/`resolveLinkTypeIdByName`
+ * общие с параметром `type` в `etn.thoughts.write` и `etn.ontology.write`, где
+ * `details.field = "type"` — правильное имя параметра. У `etn.types.get`
+ * параметр называется `name`, поэтому поле ошибки переписывается здесь:
+ * агент, разбирающий `details.field`, обязан увидеть имя того параметра,
+ * который он действительно передал (ошибка 2f39e8f0). `candidates` и прочие
+ * поля `details` сохраняются как есть.
+ */
+function resolveTypeNameForGet(resolve: () => string): string {
+  try {
+    return resolve();
+  } catch (err) {
+    if (
+      err instanceof EtnError &&
+      err.details !== null &&
+      typeof err.details === 'object' &&
+      (err.details as Record<string, unknown>).field === 'type'
+    ) {
+      throw new EtnError(
+        err.code,
+        err.message,
+        { ...(err.details as Record<string, unknown>), field: 'name' },
+        err.requestId,
+      );
+    }
+    throw err;
+  }
+}
+
 export function registerTypesGetTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.types.get',
@@ -453,14 +484,18 @@ export function registerTypesGetTool(mcp: McpServer, rt: McpRuntime): void {
           // `scope: "all"` NOT_FOUND одного каталога не отменяет поиск в другом.
           if (includesThoughts) {
             try {
-              thoughtTypes.push(getThoughtType(ndb, resolveThoughtTypeIdByName(ndb, name))!);
+              thoughtTypes.push(
+                getThoughtType(ndb, resolveTypeNameForGet(() => resolveThoughtTypeIdByName(ndb, name)))!,
+              );
             } catch (err) {
               if (!(err instanceof EtnError) || err.code !== 'NOT_FOUND') throw err;
             }
           }
           if (includesLinks) {
             try {
-              linkTypes.push(getLinkType(ndb, resolveLinkTypeIdByName(ndb, name))!);
+              linkTypes.push(
+                getLinkType(ndb, resolveTypeNameForGet(() => resolveLinkTypeIdByName(ndb, name)))!,
+              );
             } catch (err) {
               if (!(err instanceof EtnError) || err.code !== 'NOT_FOUND') throw err;
             }
