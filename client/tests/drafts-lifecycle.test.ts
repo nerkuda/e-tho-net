@@ -879,12 +879,83 @@ test('прочие ошибки остаются ретраибельными: V
   assert.equal(h.rows.length, 1, 'черновик остался');
   assert.equal(h.rows[0]!.status, 'pending', 'не терминален — попытка повторится');
   assert.equal(noticeCount() - before, 1, 'сбой показан (drafts.retry.failed)');
+  // Пользовательский текст — русский (351068ed п.7): серверное сообщение
+  // `server rejected the write` адресовано API и в тосте не показывается.
+  const text = noticeTexts().at(-1) ?? '';
+  assert.ok(!text.includes('server rejected the write'), `без серверного английского: ${text}`);
+  assert.ok(text.includes('отклонил'), `русская формулировка: ${text}`);
 
   // Причина исчезла — следующая волна досылает тот же черновик.
   h.updateErrorCode = null;
   await retryPendingDrafts(NET);
   assert.deepEqual(h.updateVersions, [1, 1], 'повторная попытка состоялась');
   assert.equal(h.rows.length, 0, 'успешная отправка удалила черновик');
+});
+
+// ---------------------------------------------------------------------------
+// 10а. Неисправимые локальные дефекты черновика (351068ed п.8)
+//
+// Битый JSON-конверт `comment-new` и неизвестный `entityType` не могут стать
+// отправляемыми ни при каком восстановлении связи. Раньше они бросали на
+// каждом connect: вечный ретрай и технический английский в тосте. Теперь это
+// терминальный `failed` с одним русским сообщением на волну.
+// ---------------------------------------------------------------------------
+
+test('битый JSON comment-new: терминальный failed, одно русское сообщение, без ретрая', async () => {
+  const h = installHarness();
+  // Синтаксически битый конверт.
+  h.setRow({
+    entityType: 'comment-new',
+    entityId: 'thought-1',
+    field: 'body_md',
+    value: '{"ownerType":"thought",',
+    baseVersion: null,
+  });
+  // Синтаксически валидный, но структурно непригодный (неизвестный владелец).
+  h.setRow({
+    entityType: 'comment-new',
+    entityId: 'thought-2',
+    field: 'body_md',
+    value: JSON.stringify({ ownerType: 'planet', ownerId: 'thought-2', bodyMd: 'ТЕКСТ' }),
+    baseVersion: null,
+  });
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows.filter((r) => r.status === 'failed').length, 2, 'обе строки терминальны');
+  assert.equal(noticeCount() - before, 1, 'одно сообщение на волну');
+  const text = noticeTexts().at(-1) ?? '';
+  assert.ok(!/Unexpected|JSON|SyntaxError/i.test(text), `без технического английского: ${text}`);
+  assert.ok(text.includes('поврежд'), `русская формулировка: ${text}`);
+  assert.ok(text.includes('2 черновика'), `счётчик и форма слова: ${text}`);
+
+  // Следующие connect'ы не повторяют ни попытку, ни сообщение.
+  await retryPendingDrafts(NET);
+  assert.equal(h.rows.filter((r) => r.status === 'failed').length, 2, 'статус не откатился');
+  assert.equal(noticeCount() - before, 1, 'вечного ретрая нет');
+});
+
+test('неизвестный тип черновика: терминальный failed, без вечного ретрая', async () => {
+  const h = installHarness();
+  h.setRow({
+    entityType: 'mystery',
+    entityId: 'some-id',
+    field: 'some-field',
+    value: 'ТЕКСТ',
+    baseVersion: null,
+  });
+  const before = noticeCount();
+
+  await retryPendingDrafts(NET);
+
+  assert.equal(h.rows[0]!.status, 'failed', 'неизвестный тип терминален');
+  assert.equal(noticeCount() - before, 1, 'одно сообщение');
+  const text = noticeTexts().at(-1) ?? '';
+  assert.ok(text.includes('поврежд'), `русская формулировка: ${text}`);
+
+  await retryPendingDrafts(NET);
+  assert.equal(noticeCount() - before, 1, 'повторно не сообщается');
 });
 
 // ---------------------------------------------------------------------------

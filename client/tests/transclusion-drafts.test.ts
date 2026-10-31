@@ -407,9 +407,8 @@ test('retryPendingDrafts: черновик трансклюзии не уход�
 test('sendDraft: ветка «transclusion» — черновик не отправлен и не удалён (6a085e01)', async () => {
   const stub = stubDraftStore();
   // Прямой вызов узкой логики (тестовый шов `draftsInternals`): удаление ветки
-  // `case 'transclusion'` уводит в `default`, который бросает — тест краснеет
-  // (`assert.doesNotReject`). Прежняя проверка через `retryPendingDrafts` этого
-  // не ловила: ветки `transclusion` и `default` были эквивалентны.
+  // `case 'transclusion'` уводит в `default` (терминальный `failed` для
+  // неизвестного типа, 351068ed п.8) — тест краснеет по исходу 'skipped'.
   let commentUpdates = 0;
   let draftDeletes = 0;
   const ui = (globalThis as unknown as { etn: { ui: Record<string, unknown> } }).etn.ui;
@@ -440,10 +439,8 @@ test('sendDraft: ветка «transclusion» — черновик не отпр�
     status: 'pending' as const,
     createdAt: '2026-10-08T00:00:00.000Z',
   };
-  await assert.doesNotReject(
-    () => draftsInternals.sendDraft(record),
-    'ветка transclusion обрабатывает черновик без ошибки',
-  );
+  const outcome = await draftsInternals.sendDraft(record);
+  assert.equal(outcome, 'skipped', 'ветка transclusion обрабатывает черновик без ошибки');
   assert.equal(commentUpdates, 0, 'черновик источника не отправлен как комментарий');
   assert.equal(draftDeletes, 0, 'черновик источника не удалён');
   assert.equal(stub.rows().length, 0, 'шов не трогает хранилище');

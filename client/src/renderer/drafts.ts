@@ -67,7 +67,7 @@ export interface DraftRecord {
 }
 
 /** Outcome of sending one draft through the retry loop. */
-export type DraftSendOutcome = 'sent' | 'skipped' | 'conflict' | 'failed';
+export type DraftSendOutcome = 'sent' | 'skipped' | 'conflict' | 'failed' | 'unusable';
 
 let lastConnected = false;
 let initialized = false;
@@ -494,12 +494,18 @@ async function runRetryWave(target: string): Promise<void> {
   if (drafts.length === 0) return;
   let conflicts = 0;
   let unavailable = 0;
+  let unusable = 0;
   // Терминальные черновики этой волны уже вышли из очереди `pending` —
   // повторной волны для них не будет. Поэтому агрегат показывается и при
   // обрыве связи посреди досылки (fb9d6058, замечание верификатора).
   const reportTerminalDrafts = (): void => {
     if (unavailable > 0) {
       notice(t('drafts.failed.unavailable', [unavailable, draftNoun(unavailable)]), 'warning');
+    }
+    if (unusable > 0) {
+      // Локальный дефект черновика (битый конверт/неизвестный тип): ретрай не
+      // поможет — строка переведена в терминальный `failed` (351068ed п.8).
+      notice(t('drafts.failed.unusable', [unusable, draftNoun(unusable)]), 'warning');
     }
     if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
   };
@@ -508,6 +514,7 @@ async function runRetryWave(target: string): Promise<void> {
       const outcome = await sendDraft(draft);
       if (outcome === 'conflict') conflicts += 1;
       else if (outcome === 'failed') unavailable += 1;
+      else if (outcome === 'unusable') unusable += 1;
     } catch (err) {
       // Обслуживание сервера (блокер приёмки 479e37ed): запись отклонена
       // штатным `SERVER_UPDATING` — это не сбой досыла. Волну останавливаем
@@ -517,7 +524,7 @@ async function runRetryWave(target: string): Promise<void> {
         reportTerminalDrafts();
         return;
       }
-      notice(t('drafts.retry.failed', errText(err)), 'error');
+      notice(t('drafts.retry.failed', draftRetryErrorText(err)), 'error');
       // Соединение оборвалось посреди досылки: остальные строки отправлять
       // бессмысленно, они уйдут на следующем восстановлении связи. Агрегат за
       // уже обработанные терминальные черновики — ДО выхода из волны.
@@ -528,6 +535,21 @@ async function runRetryWave(target: string): Promise<void> {
     }
   }
   reportTerminalDrafts();
+}
+
+/**
+ * Пользовательский текст сбоя досылки (351068ed п.7). Серверные сообщения
+ * английские и адресованы API — в тосте они не показываются. Русские ветки
+ * `errText` (обрыв, недоступный сервер, обслуживание, отмена) сохраняются;
+ * прочие коды получают общую русскую формулировку.
+ */
+function draftRetryErrorText(err: unknown): string {
+  const code =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (typeof code !== 'string' || code === 'INTERNAL' || code === 'SERVER_UPDATING') {
+    return errText(err);
+  }
+  return t('drafts.retry.rejected');
 }
 
 /** True when the failure is an `If-Match` version conflict. */
@@ -619,11 +641,26 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
       );
     }
     case 'comment-new': {
-      const parsed = JSON.parse(value) as {
-        ownerType: 'thought' | 'link';
-        ownerId: string;
-        bodyMd: string;
-      };
+      // Конверт черновика создаёт сам клиент. Синтаксически битый JSON или
+      // чужая структура не станут отправляемыми ни при каком восстановлении
+      // связи: раньше `JSON.parse` бросал на каждом connect — вечный ретрай с
+      // техническим английским (351068ed п.8). Теперь это терминальный
+      // `failed`; текст строки цел до чистки при следующем запуске.
+      let parsed: { ownerType: 'thought' | 'link'; ownerId: string; bodyMd: string };
+      try {
+        parsed = JSON.parse(value) as typeof parsed;
+      } catch {
+        await markDraftFailed(draft.id);
+        return 'unusable';
+      }
+      const valid =
+        (parsed.ownerType === 'thought' || parsed.ownerType === 'link') &&
+        typeof parsed.ownerId === 'string' &&
+        typeof parsed.bodyMd === 'string';
+      if (!valid) {
+        await markDraftFailed(draft.id);
+        return 'unusable';
+      }
       try {
         return await writeFile(() =>
           etn.comments.create(networkId, parsed.ownerType, parsed.ownerId, {
@@ -676,10 +713,13 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
       // после успешной единой записи (или по `Esc`).
       return 'skipped';
     default:
-      // Неизвестный тип черновика: не игнорировать молча — неизвестная строка
-      // не отправлена, и это должно быть видно (явная ветка `transclusion`
-      // выше обязана существовать: её нейтрализация уводит сюда и краснит тест).
-      throw new Error(t('drafts.unknownType', String(draft.entityType)));
+      // Неизвестный тип черновика: не игнорировать молча и не ретраить вечно
+      // (351068ed п.8) — тип не появится от восстановления связи, поэтому
+      // строка терминальна (`failed`), а пользователь получает одно русское
+      // сообщение на волну. Явная ветка `transclusion` выше обязана
+      // существовать: её удаление уводит сюда и краснит тест.
+      await markDraftFailed(draft.id);
+      return 'unusable';
   }
 }
 
