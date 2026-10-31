@@ -91,7 +91,7 @@ describe('renderer realtime status (de34b35b)', () => {
     assert.equal(canSave(), true);
   });
 
-  it('проба живости: suspect→connected без тостов и досыла; потеря и восстановление — по одному сообщению', async () => {
+  it('проба живости: suspect→connected без тостов, черновики досылаются; потеря и восстановление — по одному сообщению', async () => {
     installDom();
     // Мост черновиков: волна досылки видна по вызову `draftList`. Стартовое
     // сообщение о чистке (client_meta) здесь пустое.
@@ -117,13 +117,15 @@ describe('renderer realtime status (de34b35b)', () => {
 
     // Проба живости (действие зависло > 3 с): на входе в suspect сообщения НЕТ
     // (fb9d6058 п.4), а pong до дедлайна возвращает connected без ложного
-    // «Соединение восстановлено» и БЕЗ повторного досыла черновиков.
+    // «Соединение восстановлено». Черновики, набранные в окне пробы, при
+    // подтверждении ДОСЫЛАЮТСЯ (351068ed п.1): иначе сохранённый текст
+    // теряется молча при следующем запуске.
     store.update({ rtStatusByNetwork: { [NET1]: 'suspect' }, rtStatus: 'suspect' });
     assert.deepEqual(noticeTexts(), [], 'вход в suspect молчит');
     store.update({ rtStatusByNetwork: { [NET1]: 'connected' }, rtStatus: 'connected' });
     await settleAsync();
     assert.deepEqual(noticeTexts(), [], 'проба подтвердила живость — тишина');
-    assert.equal(draftListCalls.length, 1, 'проба — не восстановление: досыла нет');
+    assert.equal(draftListCalls.length, 2, 'проба подтвердилась — черновики досылаются');
 
     // Реальная потеря: проба НЕ подтвердилась за дедлайн (suspect →
     // reconnecting) — ровно одно «Проверяем связь», дальше до offline молчание.
@@ -141,7 +143,7 @@ describe('renderer realtime status (de34b35b)', () => {
     const restored = noticeTexts();
     assert.equal(restored.length, 2, restored.join(' | '));
     assert.ok(restored.some((t) => t.includes('Соединение восстановлено')));
-    assert.equal(draftListCalls.length, 2, 'реальное восстановление — досыл');
+    assert.equal(draftListCalls.length, 3, 'реальное восстановление — досыл');
   });
 
   it('detail server-maintenance из main доходит до store, неизвестный — отбрасывается (12fd5b0e)', async () => {

@@ -340,6 +340,24 @@ test('первый connect сессии досылает pending-чернови�
   store.update({ rtStatusByNetwork: { [networkId]: 'connected' }, rtStatus: 'connected' });
   await settleAsync();
   assert.deepEqual(h.updateVersions, [5], 'повторный снапшот не досылает');
+
+  // Черновик, набранный в окне пробы живости: подтверждённая проба — досыл
+  // (351068ed п.1). Иначе текст остаётся pending до реального обрыва и
+  // удаляется при следующем запуске, хотя пользователь видел «отправится
+  // после восстановления связи».
+  h.setRow({
+    entityType: 'comment',
+    entityId: COMMENT_ID,
+    field: 'body_md',
+    value: 'ЧЕРНОВИК ИЗ ОКНА ПРОБЫ',
+    baseVersion: 6,
+  });
+  store.update({ rtStatusByNetwork: { [networkId]: 'suspect' }, rtStatus: 'suspect' });
+  store.update({ rtStatusByNetwork: { [networkId]: 'connected' }, rtStatus: 'connected' });
+  await settleAsync();
+
+  assert.deepEqual(h.updateVersions, [5, 6], 'черновик, набранный в окне suspect, дослан');
+  assert.equal(h.rows.length, 0, 'подтверждённая проба очистила очередь');
 });
 
 // ---------------------------------------------------------------------------

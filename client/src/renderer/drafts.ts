@@ -10,9 +10,11 @@
  * - on a REAL (re)connect, pending drafts are re-sent automatically (idempotent
  *   `Client-Request-Id` machinery on the server prevents double-applies). The
  *   first `connected` of a session counts too: it flushes drafts typed in THIS
- *   session while the link was down. A `suspect → connected` transition is a
- *   liveness probe answered in time — not a recovery: nothing is re-sent and
- *   nothing is announced (ошибка fb9d6058, п.4 решений);
+ *   session while the link was down. A confirmed liveness probe
+ *   (`suspect → connected`) also flushes the drafts typed while the probe was
+ *   in flight — otherwise they would be lost silently (ошибка 351068ed п.1);
+ *   the «Соединение восстановлено» toast still never fires for a probe
+ *   (fb9d6058, п.4 решений);
  * - обслуживание сервера (`serverMaintenance` активен) — не восстановление:
  *   сервер в обновлении принимает сокет и сразу закрывает его кодом 1012,
  *   поэтому `connected` мигает многократно. Пока состояние активно, ни досыл
@@ -123,15 +125,14 @@ export function initDrafts(): void {
     // not just the active one. The first connect of a session counts too — a
     // draft typed in THIS session while the link was down must be flushed
     // (H19); rows left by previous runs are purged in main before the window
-    // exists (fb9d6058). A `suspect → connected` transition is a liveness probe
-    // answered within its deadline, NOT a recovery: no resend (fb9d6058 п.4).
+    // exists (fb9d6058). A confirmed liveness probe (`suspect → connected`)
+    // flushes too: the draft typed while the probe was in flight would
+    // otherwise sit pending until a REAL drop and be purged on the next launch
+    // — silent loss under the «отправится после восстановления связи» promise
+    // (ошибка 351068ed п.1). Only the «Соединение восстановлено» toast stays
+    // suppressed — the probe is not a recovery on the messaging level.
     for (const [nid, status] of Object.entries(map)) {
-      if (
-        !inMaintenance &&
-        status === 'connected' &&
-        prevByNetwork[nid] !== 'connected' &&
-        prevByNetwork[nid] !== 'suspect'
-      ) {
+      if (!inMaintenance && status === 'connected' && prevByNetwork[nid] !== 'connected') {
         void retryPendingDrafts(nid);
       }
     }
