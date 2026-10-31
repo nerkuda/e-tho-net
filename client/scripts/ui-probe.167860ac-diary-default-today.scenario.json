@@ -95,6 +95,11 @@
       "waitFor": "document.querySelector('.network-item') !== null"
     },
     {
+      "name": "second-tab-workspace-before",
+      "probe": "(() => { window.__wsBefore = document.querySelector('.workspace'); return window.__wsBefore !== null; })()",
+      "expect": true
+    },
+    {
       "name": "pick-same-network-second-tab",
       "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{networkName}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
@@ -102,7 +107,7 @@
     {
       "name": "second-tab-workspace",
       "timeout": 60000,
-      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].filter((e) => (e.textContent || '').includes('{{networkName}}')).length === 1 && document.querySelectorAll('button.view-tab').length >= 5"
+      "waitFor": "window.__wsBefore != null && document.querySelector('.workspace') !== null && document.querySelector('.workspace') !== window.__wsBefore && [...document.querySelectorAll('.tab.tab-active')].filter((e) => (e.textContent || '').includes('{{networkName}}')).length === 1 && document.querySelectorAll('button.view-tab').length >= 5"
     },
     {
       "name": "open-diary-second-tab",
@@ -133,6 +138,11 @@
       "expect": "ok"
     },
     {
+      "name": "network-b-workspace-before",
+      "probe": "(() => { window.__wsBeforeB = document.querySelector('.workspace'); return window.__wsBeforeB !== null; })()",
+      "expect": true
+    },
+    {
       "name": "open-plus-for-b",
       "click": ".tab.tab-plus"
     },
@@ -149,7 +159,7 @@
     {
       "name": "tab-b-active",
       "timeout": 60000,
-      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Дневник без записей 167860ac')) && document.querySelectorAll('button.view-tab').length >= 5"
+      "waitFor": "window.__wsBeforeB != null && document.querySelector('.workspace') !== null && document.querySelector('.workspace') !== window.__wsBeforeB && [...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Дневник без записей 167860ac')) && document.querySelectorAll('button.view-tab').length >= 5"
     },
     {
       "name": "open-diary-b",
@@ -171,6 +181,11 @@
       "expect": "ok"
     },
     {
+      "name": "first-tab-workspace-before",
+      "probe": "(() => { window.__wsBeforeC = document.querySelector('.workspace'); return window.__wsBeforeC !== null; })()",
+      "expect": true
+    },
+    {
       "name": "back-to-first-tab",
       "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
       "expect": "ok"
@@ -178,7 +193,7 @@
     {
       "name": "first-tab-active",
       "timeout": 60000,
-      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+      "waitFor": "window.__wsBeforeC != null && document.querySelector('.workspace') !== null && document.querySelector('.workspace') !== window.__wsBeforeC && [...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
     },
     {
       "name": "open-diary-first-tab",
