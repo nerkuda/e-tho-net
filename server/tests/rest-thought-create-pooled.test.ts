@@ -288,8 +288,9 @@ describe(
       try {
         seedLargeProfile(ctx.ndb, PROFILE_THOUGHTS, PROFILE_WILDCARDS);
 
-        // Блокировка главного потока — сэмплер из `ping-lag`: лаг пинга плюс
-        // активное время событийного цикла (ELU) — мера реальной работы потока.
+        // Блокировка главного потока — сэмплер из `ping-lag`: лаг пинга,
+        // взвешенный CPU-временем главного потока (`process.threadCpuUsage`),
+        // — мера реальной работы потока, а не ожидания планировщика.
         const measure = async (
           tag: string,
         ): Promise<{ ms: number } & PingLagResult> => {

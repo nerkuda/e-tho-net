@@ -32,6 +32,6 @@
     "disableUsageStatistics": true
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.2.0"
   }
 }
