@@ -1,0 +1,57 @@
+# CI на ВМ-раннерах Gitea (задача 00345091, подзадача П4).
+# Host-mode: джобы выполняются шеллом в ВМ (без docker).
+# GitHub Actions (ci.yml) остаётся на hosted-раннерах для main — не трогаем.
+name: Gitea CI
+
+on:
+  push:
+    branches: ['releases/**', 'main']
+  pull_request:
+
+jobs:
+  windows:
+    name: Windows (win-vm)
+    runs-on: win-vm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build @etn/shared
+        run: npm run build:shared
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Server tests
+        run: npm -w @etn/server test
+
+      - name: Client tests
+        run: npm -w @etn/client test
+
+  linux:
+    name: Linux (linux-vm)
+    runs-on: linux-vm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build @etn/shared
+        run: npm run build:shared
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Server tests
+        run: npm -w @etn/server test
