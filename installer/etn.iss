@@ -420,6 +420,10 @@ var
   GTestRecord: String;
   GTestParams: String;
   GTestGui: String;
+  { /TESTLAYOUT=1 (ошибка 860def0d): снять раскладку экранов без окон — тест
+    проверяет, что подписи не обрезаны (Height не «дельта» AdjustHeight) и не
+    налезают друг на друга. }
+  GTestLayout: String;
   { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
   GTestInit: String;
   GTestNodeExe: String;
@@ -595,10 +599,14 @@ var
   GComponentsPage: TWizardPage;
   GServerCheck: TNewCheckBox;
   GServerStateLabel: TNewStaticText;
+  { Что такое сервер и что такое клиент, чем области установки клиента
+    отличаются (договорённость ТП; ошибка 860def0d, п.2). }
+  GServerHintLabel: TNewStaticText;
   GServerAltLink: TNewLinkLabel;
   GClientCheck: TNewCheckBox;
   GClientStateLabel: TNewStaticText;
   GClientHintLabel: TNewStaticText;
+  GScopeHintLabel: TNewStaticText;
   GScopeUserRadio: TNewRadioButton;
   GScopeMachineRadio: TNewRadioButton;
   { Область клиента при обновлении фиксирована: вместо радиокнопок
@@ -615,6 +623,10 @@ var
     ошибка удаления старого клиента): показывается вместо обычной причины и
     сбрасывается при изменении выбора. }
   GComponentsNotice: String;
+  { Экран компонентов построен и начальный выбор перенесён в контролы. До этого
+    обработчики Checked (Inno вызывает OnClick и при программной установке
+    Checked) не должны читать ещё не заполненные контролы (ошибка 860def0d). }
+  GComponentsReady: Boolean;
   GDowngradeWarned: Boolean;
 
   { Прогресс установки: подпись текущего этапа на странице установки. }
@@ -698,6 +710,19 @@ end;
 function IfStr(const Condition: Boolean; const TrueValue, FalseValue: String): String;
 begin
   if Condition then Result := TrueValue else Result := FalseValue;
+end;
+
+{ Подогнать высоту подписи под перенос текста. Внимание: AdjustHeight сам
+  выставляет Height по тексту и ВОЗВРАЩАЕТ РАЗНИЦУ (Inno: Height - OldHeight);
+  присваивать её Height нельзя — подпись сжимается до полосы в несколько
+  пикселей и текст обрезается, а на экране «мелькают остатки» (ошибка 860def0d,
+  п.1: обрезанные подсказки на всех экранах). }
+procedure FitLabel(Lbl: TNewStaticText);
+var
+  Delta: Integer;
+begin
+  if Lbl = nil then Exit;
+  Delta := Lbl.AdjustHeight;
 end;
 
 function NowIso: String;
@@ -1355,15 +1380,17 @@ begin
       Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
   end
   else if GLegacyClientFound and GClientSelected then
-    Result := 'найден клиент ETN ' + GLegacyClientVersion + ', установленный ' +
-      'старым установщиком (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + '): перед ' +
-      'установкой нового клиента старая версия будет удалена её деинсталлятором'
+    { Компактно: длинный текст выталкивал нижние подписи за поверхность
+      страницы (ошибка 860def0d, п.1). }
+    Result := 'найден клиент ETN ' + GLegacyClientVersion +
+      ' от старого установщика (NSIS' +
+      IfStr(GLegacyClientMachine, ', для всех пользователей', '') +
+      ') — перед установкой он будет удалён'
   else if GLegacyClientFound then
-    Result := 'найден клиент ETN ' + GLegacyClientVersion + ', установленный ' +
-      'старым установщиком (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + '); ' +
-      'при установке только сервера он не затрагивается'
+    Result := 'найден клиент ETN ' + GLegacyClientVersion +
+      ' от старого установщика (NSIS' +
+      IfStr(GLegacyClientMachine, ', для всех пользователей', '') +
+      '); при установке только сервера он не затрагивается'
   else
     Result := 'не установлен';
 end;
@@ -1385,9 +1412,28 @@ end;
 
 function ClientScopeText: String;
 begin
-  Result := 'Клиент уже установлен: область установки — ' +
-    Pick(GClientScopeUser, '«только для меня»', '«для всех пользователей»') +
-    '; при обновлении она не меняется.';
+  { Формулировка пользователя (ошибка 860def0d, n5): прямо говорит, в каком
+    варианте клиент уже установлен и что сделать, чтобы получить другой, —
+    без термина «область установки». }
+  if GClientScopeUser then
+    Result := 'Клиент установлен в варианте «только для меня». Для установки ' +
+      '«для всех» удалите клиента и выполните установку заново.'
+  else
+    Result := 'Клиент установлен в варианте «для всех пользователей». Для установки ' +
+      '«только для меня» удалите клиента и выполните установку заново.';
+end;
+
+{ Понятное название режима запуска сервера (ошибка 860def0d, n6): «service» и
+  «app» — внутренние значения install.json, обычному пользователю они ничего не
+  говорят. Неизвестное значение показываем как есть, чтобы не соврать. }
+function ServerModeText(const Mode: String): String;
+begin
+  if Mode = 'service' then
+    Result := 'автоматический запуск в режиме службы Windows'
+  else if Mode = 'app' then
+    Result := 'ручной запуск сервера как обычного приложения'
+  else
+    Result := Mode;
 end;
 
 { ---------------------------------------------------------------------------
@@ -4675,12 +4721,15 @@ end;
   невалидным, служба не находится (дефект B3 той же приёмки). Поэтому внутри
   скрипта только одинарные кавычки, а имя службы подставляется переменной.
   IPv6: ETN_HOST в 0.15.1 — только IPv4, поэтому IPv6-слушатели в перебор не
-  входят (IPv6-only слушатель серверу не мешает); dual-stack `::` блокирует
-  bind 0.0.0.0 и ловится пробой ниже. Если сервер начнёт слушать IPv6,
-  перечисление надо расширить.
-  Если командлет недоступен или IPv4-слушателей нет, выполняются пробные
-  bind: 0.0.0.0 (зарезервированные диапазоны Hyper-V, TIME_WAIT, dual-stack
-  IPv6) и 127.0.0.1 (loopback).
+  входят (IPv6-only слушатель серверу не мешает); dual-stack `::` показывается
+  в Get-NetTCPConnection и ловится перебором адресов. Если сервер начнёт
+  слушать IPv6, перечисление надо расширить.
+  Если командлет недоступен или IPv4-слушателей нет, порт проверяется без
+  пробного bind на все интерфейсы: зарезервированные диапазоны (Hyper-V/WinNAT,
+  TIME_WAIT после перезапуска) читаются из netsh, затем пробный bind на
+  127.0.0.1 (loopback). Пробный bind 0.0.0.0 вызывал диалог Windows Security
+  «Allow для Windows PowerShell» прямо во время установки (ошибка 860def0d,
+  п.4).
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
   не удалось. Тестовые хуки (только TestMode): TESTSERVICENAME подменяет имя
   службы, и скрипт возвращает 0/2 по факту её нахождения (поведенческая проба
@@ -4733,8 +4782,17 @@ begin
     'if($null -ne $v4 -and $v4.Count -gt 0){' +
     '$foreign=@($v4|Where-Object{$own -notcontains [int]$_.OwningProcess});' +
     'if($foreign.Count -eq 0){exit 0};exit 1};' +
-    'try{$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Any,$port);' +
-    '$l.Start();$l.Stop()}catch{exit 1};' +
+    { Порт в зарезервированном диапазоне (Hyper-V/WinNAT, TIME_WAIT после
+      перезапуска) слушателя не имеет, но bind на 0.0.0.0 для него закрыт.
+      Раньше это ловилось пробным bind на все интерфейсы — он и вызывал диалог
+      Windows Security «Allow для Windows PowerShell» во время установки.
+      Диапазоны читаем через netsh, пробный bind остаётся только на loopback
+      (loopback диалога не вызывает). Ошибка 860def0d, п.4. }
+    'try{$ex=@(netsh int ipv4 show excludedportrange protocol=tcp)}catch{$ex=@()};' +
+    'foreach($ln in $ex){$t=@(($ln.Trim()) -split ''\s+'');' +
+    'if($t.Count -ge 2){$a=0;$b=0;' +
+    'if([int]::TryParse($t[0],[ref]$a)){if([int]::TryParse($t[1],[ref]$b)){' +
+    'if(($port -ge $a) -and ($port -le $b)){exit 1}}}}}' +
     'try{$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,$port);' +
     '$l.Start();$l.Stop()}catch{exit 1};' +
     'exit 0';
@@ -5395,48 +5453,59 @@ begin
 end;
 
 { Сводка на стандартной странице завершения: свой memo вместо FinishedLabel
-  (у него одна строка без переносов) и кнопки действий. }
+  (у него одна строка без переносов) и кнопки действий. Геометрия берётся у
+  FinishedLabel: страница завершения — на всю ширину окна и слева у неё
+  декоративная полоса; memo от Left=0 перекрывал её (ошибка 860def0d, п.10).
+  Кнопки — в две строки: три кнопки в ряд шире области контента (362 px). }
 procedure CreateFinishedControls;
+var
+  BtnTop: Integer;
 begin
   if (WizardForm = nil) or (GSummaryMemo <> nil) then Exit;
-  GSummaryMemo := TNewMemo.Create(WizardForm);
-  GSummaryMemo.Parent := WizardForm.FinishedPage;
-  GSummaryMemo.Left := 0;
-  GSummaryMemo.Top := WizardForm.FinishedHeadingLabel.Top +
-    WizardForm.FinishedHeadingLabel.Height + ScaleY(8);
-  GSummaryMemo.Width := WizardForm.FinishedPage.ClientWidth;
-  GSummaryMemo.Height := WizardForm.FinishedPage.ClientHeight -
-    GSummaryMemo.Top - ScaleY(34);
-  GSummaryMemo.ReadOnly := True;
-  GSummaryMemo.WordWrap := True;
-  GSummaryMemo.ScrollBars := ssVertical;
-  GSummaryMemo.Font.Name := 'Segoe UI';
-  GSummaryMemo.Font.Size := 9;
 
   GSummaryRunButton := TNewButton.Create(WizardForm);
   GSummaryRunButton.Parent := WizardForm.FinishedPage;
-  GSummaryRunButton.Left := 0;
-  GSummaryRunButton.Top := WizardForm.FinishedPage.ClientHeight - ScaleY(26);
+  GSummaryRunButton.Left := WizardForm.FinishedLabel.Left;
   GSummaryRunButton.Width := ScaleX(130);
   GSummaryRunButton.Caption := 'Запустить клиент';
   GSummaryRunButton.OnClick := @RunClientClick;
 
   GSummaryDataButton := TNewButton.Create(WizardForm);
   GSummaryDataButton.Parent := WizardForm.FinishedPage;
-  GSummaryDataButton.Left := GSummaryRunButton.Width + ScaleX(8);
-  GSummaryDataButton.Top := GSummaryRunButton.Top;
+  GSummaryDataButton.Left := GSummaryRunButton.Left + GSummaryRunButton.Width +
+    ScaleX(8);
+  GSummaryDataButton.Top := 0;
   GSummaryDataButton.Width := ScaleX(150);
   GSummaryDataButton.Caption := 'Открыть папку данных';
   GSummaryDataButton.OnClick := @OpenDataDirClick;
 
   GSummaryLogButton := TNewButton.Create(WizardForm);
   GSummaryLogButton.Parent := WizardForm.FinishedPage;
-  GSummaryLogButton.Left := GSummaryDataButton.Left + GSummaryDataButton.Width +
-    ScaleX(8);
-  GSummaryLogButton.Top := GSummaryRunButton.Top;
+  GSummaryLogButton.Left := WizardForm.FinishedLabel.Left;
   GSummaryLogButton.Width := ScaleX(130);
   GSummaryLogButton.Caption := 'Открыть журнал';
   GSummaryLogButton.OnClick := @OpenLogClick;
+
+  { Нижняя строка кнопок — у нижнего края страницы, верхняя — над ней. }
+  BtnTop := WizardForm.FinishedPage.ClientHeight - ScaleY(26);
+  GSummaryLogButton.Top := BtnTop;
+  GSummaryRunButton.Top := BtnTop - GSummaryLogButton.Height - ScaleY(6);
+  GSummaryDataButton.Top := GSummaryRunButton.Top;
+
+  GSummaryMemo := TNewMemo.Create(WizardForm);
+  GSummaryMemo.Parent := WizardForm.FinishedPage;
+  GSummaryMemo.Left := WizardForm.FinishedLabel.Left;
+  GSummaryMemo.Top := WizardForm.FinishedLabel.Top;
+  GSummaryMemo.Width := WizardForm.FinishedLabel.Width;
+  GSummaryMemo.Height := GSummaryRunButton.Top - GSummaryMemo.Top - ScaleY(8);
+  GSummaryMemo.ReadOnly := True;
+  GSummaryMemo.WordWrap := True;
+  GSummaryMemo.ScrollBars := ssVertical;
+  GSummaryMemo.Font.Name := 'Segoe UI';
+  GSummaryMemo.Font.Size := 9;
+  { Стандартная подпись завершения остаётся под memo: её текст — не сводка и
+    просвечивал бы сквозь/из-под memo. Геометрия снята с неё до скрытия. }
+  WizardForm.FinishedLabel.Visible := False;
 end;
 
 { ---------------------------------------------------------------------------
@@ -5479,9 +5548,95 @@ begin
   GClientScopeUser := not MachineScopeChecked;
 end;
 
+{ Разложить контролы экрана компонентов сверху вниз по ФАКТИЧЕСКИМ высотам.
+  Вызывается после каждой смены подписей (UpdateComponentsState): высота
+  зависит от переноса текста, а раскладка, посчитанная один раз при создании,
+  при росте подписей давала наложение и «мелькающие остатки» (ошибка
+  860def0d, п.1). Скрытые контролы места не занимают; позиция им всё равно
+  назначается — при показе они встанут на своё место. }
+procedure LayoutComponentsPage;
+var
+  Y: Integer;
+begin
+  if (GComponentsPage = nil) or (GServerCheck = nil) then Exit;
+  Y := 0;
+  GServerCheck.Top := Y;
+  Y := Y + GServerCheck.Height + ScaleY(2);
+
+  if GServerStateLabel <> nil then
+  begin
+    GServerStateLabel.Top := Y;
+    Y := Y + GServerStateLabel.Height + ScaleY(4);
+  end;
+  if GServerHintLabel <> nil then
+  begin
+    GServerHintLabel.Top := Y;
+    Y := Y + GServerHintLabel.Height + ScaleY(4);
+  end;
+  if GServerAltLink <> nil then
+  begin
+    GServerAltLink.Top := Y;
+    Y := Y + GServerAltLink.Height + ScaleY(6);
+  end;
+
+  if GClientCheck <> nil then
+  begin
+    GClientCheck.Top := Y;
+    Y := Y + GClientCheck.Height + ScaleY(2);
+  end;
+  if GClientStateLabel <> nil then
+  begin
+    GClientStateLabel.Top := Y;
+    Y := Y + GClientStateLabel.Height + ScaleY(2);
+  end;
+  if GClientHintLabel <> nil then
+  begin
+    GClientHintLabel.Top := Y;
+    Y := Y + GClientHintLabel.Height + ScaleY(4);
+  end;
+
+  { Область клиента — одна строка: радиокнопки стоят рядом (см.
+    CreateComponentsPage), при обновлении на их месте поясняющий текст
+    (ea8e223a). }
+  if GScopeFixedLabel <> nil then
+  begin
+    GScopeFixedLabel.Top := Y;
+    if GScopeFixedLabel.Visible then
+      Y := Y + GScopeFixedLabel.Height + ScaleY(4);
+  end;
+  if GScopeUserRadio <> nil then GScopeUserRadio.Top := Y;
+  if GScopeMachineRadio <> nil then GScopeMachineRadio.Top := Y;
+  if (GScopeUserRadio <> nil) and GScopeUserRadio.Visible then
+    Y := Y + GScopeUserRadio.Height + ScaleY(4);
+  if GScopeHintLabel <> nil then
+  begin
+    GScopeHintLabel.Top := Y;
+    if GScopeHintLabel.Visible then
+      Y := Y + GScopeHintLabel.Height + ScaleY(4);
+  end;
+
+  if GDataNoteLabel <> nil then
+  begin
+    GDataNoteLabel.Top := Y;
+    Y := Y + GDataNoteLabel.Height + ScaleY(4);
+  end;
+  if (GLicenseCheck <> nil) and GLicenseCheck.Visible then
+  begin
+    GLicenseCheck.Top := Y;
+    if GLicenseLink <> nil then
+      GLicenseLink.Top := Y + ScaleY(2);
+    Y := Y + GLicenseCheck.Height + ScaleY(6);
+  end;
+  if GReasonLabel <> nil then
+  begin
+    GReasonLabel.Top := Y;
+    Y := Y + GReasonLabel.Height;
+  end;
+end;
+
 procedure UpdateComponentsState(Sender: TObject);
 begin
-  if GSilent then Exit;
+  if GSilent or (not GComponentsReady) then Exit;
   if (GServerCheck <> nil) and (GClientCheck <> nil) and (GScopeMachineRadio <> nil) then
     ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);
   if GLicenseCheck <> nil then
@@ -5506,8 +5661,15 @@ begin
     if ClientScopeFixed then
     begin
       GScopeFixedLabel.Caption := ClientScopeText;
-      GScopeFixedLabel.Height := GScopeFixedLabel.AdjustHeight;
+      FitLabel(GScopeFixedLabel);
     end;
+  end;
+  if GServerHintLabel <> nil then
+  begin
+    GServerHintLabel.Caption :=
+      'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
+      'доступ по сети. Node.js входит в установку.';
+    FitLabel(GServerHintLabel);
   end;
   if GServerCheck <> nil then GServerCheck.Caption := ServerCheckCaption;
   if GClientCheck <> nil then GClientCheck.Caption := ClientCheckCaption;
@@ -5517,7 +5679,7 @@ begin
   if GClientStateLabel <> nil then
   begin
     GClientStateLabel.Caption := ClientStateText;
-    GClientStateLabel.Height := GClientStateLabel.AdjustHeight;
+    FitLabel(GClientStateLabel);
   end;
   if GClientHintLabel <> nil then
   begin
@@ -5527,14 +5689,24 @@ begin
         'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.'
     else
       GClientHintLabel.Caption :=
-        'Клиент — окно для работы с базами; при первом запуске нужны адрес ' +
-        'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.';
+        'Клиент — окно для работы с базами; нужны адрес сервера и ключ.';
     { Каталог установки виден до начала установки: область клиента меняет и
       его, а отдельного экрана каталога нет (ADR 144bcdb0). }
     if GClientSelected then
       GClientHintLabel.Caption := GClientHintLabel.Caption + ' Каталог установки: ' +
         ClientInstallPath + '.';
-    GClientHintLabel.Height := GClientHintLabel.AdjustHeight;
+    FitLabel(GClientHintLabel);
+  end;
+  { Чем «только для меня» отличается от «для всех пользователей» (п.2
+    ошибки 860def0d): подсказка показывается, пока выбор области доступен. }
+  if GScopeHintLabel <> nil then
+  begin
+    GScopeHintLabel.Caption :=
+      '«Только для меня» — клиент в вашем профиле, права администратора не ' +
+      'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
+      'администратора.';
+    FitLabel(GScopeHintLabel);
+    GScopeHintLabel.Visible := ClientScopeRadiosVisible and GClientSelected;
   end;
   if GReasonLabel <> nil then
   begin
@@ -5549,8 +5721,11 @@ begin
       GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.'
     else
       GReasonLabel.Caption := '';
-    GReasonLabel.Height := GReasonLabel.AdjustHeight;
+    FitLabel(GReasonLabel);
   end;
+  { Раскладка — после подписей и высот: иначе выросшая подпись наезжает на
+    следующие контролы (ошибка 860def0d, п.1). }
+  LayoutComponentsPage;
   if WizardForm <> nil then
     WizardForm.NextButton.Enabled :=
       (not GBlockedDowngrade) and (GServerSelected or GClientSelected) and
@@ -5566,130 +5741,141 @@ begin
 end;
 
 procedure CreateComponentsPage;
-var
-  Y: Integer;
 begin
+  { До переноса начального выбора экран не готов: программная установка Checked
+    вызывает OnClick, и ранний обработчик снял бы выбор клиента. }
+  GComponentsReady := False;
   { Первый экран — приветствие и выбор компонентов (стандартные страницы
-    welcome/license отключены в [Setup]). }
+    welcome/license отключены в [Setup]). Позиции контролов назначает
+    LayoutComponentsPage по фактическим высотам подписей (ошибка 860def0d,
+    п.1): текст зависит от состояния машины и выбора, поэтому статическая
+    раскладка при создании не годится. }
   GComponentsPage := CreateCustomPage(wpWelcome, 'ETN — установка',
     'Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом ' +
     'компьютере, клиент — окно для работы с ними.');
 
-  Y := 0;
-
   GServerCheck := TNewCheckBox.Create(GComponentsPage);
   GServerCheck.Parent := GComponentsPage.Surface;
   GServerCheck.Left := 0;
-  GServerCheck.Top := Y;
   GServerCheck.Width := GComponentsPage.SurfaceWidth;
   GServerCheck.Caption := ServerCheckCaption;
   GServerCheck.OnClick := @ComponentsChanged;
-  Y := Y + GServerCheck.Height + ScaleY(2);
 
   GServerStateLabel := TNewStaticText.Create(GComponentsPage);
   GServerStateLabel.Parent := GComponentsPage.Surface;
   GServerStateLabel.Left := 20;
-  GServerStateLabel.Top := Y;
   GServerStateLabel.AutoSize := False;
   GServerStateLabel.WordWrap := True;
   GServerStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
   GServerStateLabel.Font.Color := clGray;
   GServerStateLabel.Caption := ServerStateText +
     IfStr(InitStateText = '', '', ' ' + InitStateText);
-  GServerStateLabel.Height := GServerStateLabel.AdjustHeight;
-  Y := Y + GServerStateLabel.Height + ScaleY(4);
+  FitLabel(GServerStateLabel);
 
-  { Node.js входит в поставку; другие варианты — для опытных (спека, экран 1). }
+  { Что такое сервер (договорённость ТП; ошибка 860def0d, п.2). }
+  GServerHintLabel := TNewStaticText.Create(GComponentsPage);
+  GServerHintLabel.Parent := GComponentsPage.Surface;
+  GServerHintLabel.Left := 20;
+  GServerHintLabel.AutoSize := False;
+  GServerHintLabel.WordWrap := True;
+  GServerHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
+  GServerHintLabel.Font.Color := clGray;
+  GServerHintLabel.Caption := '';
+  FitLabel(GServerHintLabel);
+
+  { Node.js входит в поставку; другие варианты — для опытных (спека, экран 1).
+    Подпись ссылки — в одну строку: у TNewLinkLabel нет переноса, и длинный
+    текст уходил за правый край страницы (ошибка 860def0d, п.1). }
   GServerAltLink := TNewLinkLabel.Create(GComponentsPage);
   GServerAltLink.Parent := GComponentsPage.Surface;
   GServerAltLink.Left := 20;
-  GServerAltLink.Top := Y;
   GServerAltLink.Width := GComponentsPage.SurfaceWidth - 20;
   GServerAltLink.Caption := '<a href="server-options">Другие варианты установки ' +
-    'сервера (удалённый сервер, Docker)</a> — для опытных. Node.js уже входит ' +
-    'в установку, отдельно ставить не нужно.';
+    'сервера (удалённый сервер, Docker)</a>';
   GServerAltLink.OnLinkClick := @OpenServerOptions;
-  Y := Y + GServerAltLink.Height + ScaleY(10);
 
   GClientCheck := TNewCheckBox.Create(GComponentsPage);
   GClientCheck.Parent := GComponentsPage.Surface;
   GClientCheck.Left := 0;
-  GClientCheck.Top := Y;
   GClientCheck.Width := GComponentsPage.SurfaceWidth;
   GClientCheck.Caption := ClientCheckCaption;
   GClientCheck.OnClick := @ComponentsChanged;
-  Y := Y + GClientCheck.Height + ScaleY(2);
 
   GClientStateLabel := TNewStaticText.Create(GComponentsPage);
   GClientStateLabel.Parent := GComponentsPage.Surface;
   GClientStateLabel.Left := 20;
-  GClientStateLabel.Top := Y;
   GClientStateLabel.AutoSize := False;
   GClientStateLabel.WordWrap := True;
   GClientStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
   GClientStateLabel.Font.Color := clGray;
   GClientStateLabel.Caption := ClientStateText;
-  GClientStateLabel.Height := GClientStateLabel.AdjustHeight;
-  Y := Y + GClientStateLabel.Height + ScaleY(2);
+  FitLabel(GClientStateLabel);
 
+  { Что такое клиент (договорённость ТП; ошибка 860def0d, п.2). }
   GClientHintLabel := TNewStaticText.Create(GComponentsPage);
   GClientHintLabel.Parent := GComponentsPage.Surface;
   GClientHintLabel.Left := 20;
-  GClientHintLabel.Top := Y;
   GClientHintLabel.AutoSize := False;
   GClientHintLabel.WordWrap := True;
   GClientHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
   GClientHintLabel.Font.Color := clGray;
   GClientHintLabel.Caption := '';
-  GClientHintLabel.Height := GClientHintLabel.AdjustHeight;
-  Y := Y + GClientHintLabel.Height + ScaleY(4);
+  FitLabel(GClientHintLabel);
 
   { Область клиента: на первой установке — радиокнопки, при обновлении — текст
-    в той же области (радиокнопки скрыты: выбор уже сделан, ea8e223a). }
+    в той же области (радиокнопки скрыты: выбор уже сделан, ea8e223a).
+    Радиокнопки стоят рядом — подсказка о разнице областей занимает отдельную
+    строку и при вертикальном расположении содержимое не помещалось на экран
+    (ошибка 860def0d, п.1–2). }
   GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
   GScopeFixedLabel.Parent := GComponentsPage.Surface;
   GScopeFixedLabel.Left := 20;
-  GScopeFixedLabel.Top := Y;
   GScopeFixedLabel.AutoSize := False;
   GScopeFixedLabel.WordWrap := True;
   GScopeFixedLabel.Width := GComponentsPage.SurfaceWidth - 20;
   GScopeFixedLabel.Caption := '';
   GScopeFixedLabel.Visible := False;
-  GScopeFixedLabel.Height := GScopeFixedLabel.AdjustHeight;
+  FitLabel(GScopeFixedLabel);
 
   GScopeUserRadio := TNewRadioButton.Create(GComponentsPage);
   GScopeUserRadio.Parent := GComponentsPage.Surface;
   GScopeUserRadio.Left := 20;
-  GScopeUserRadio.Top := Y;
-  GScopeUserRadio.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeUserRadio.Caption := 'Клиент: только для меня (без прав администратора)';
+  GScopeUserRadio.Width := ScaleX(220);
+  GScopeUserRadio.Caption := 'Клиент: только для меня';
   GScopeUserRadio.Checked := True;
   GScopeUserRadio.OnClick := @ComponentsChanged;
-  Y := Y + GScopeUserRadio.Height + ScaleY(2);
 
   GScopeMachineRadio := TNewRadioButton.Create(GComponentsPage);
   GScopeMachineRadio.Parent := GComponentsPage.Surface;
-  GScopeMachineRadio.Left := 20;
-  GScopeMachineRadio.Top := Y;
-  GScopeMachineRadio.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeMachineRadio.Caption := 'Клиент: для всех пользователей (нужны права администратора)';
+  GScopeMachineRadio.Left := 20 + ScaleX(230);
+  GScopeMachineRadio.Width := GComponentsPage.SurfaceWidth - 20 - ScaleX(230);
+  GScopeMachineRadio.Caption := 'Клиент: для всех пользователей';
   GScopeMachineRadio.OnClick := @ComponentsChanged;
-  Y := Y + GScopeMachineRadio.Height + ScaleY(8);
+
+  GScopeHintLabel := TNewStaticText.Create(GComponentsPage);
+  GScopeHintLabel.Parent := GComponentsPage.Surface;
+  GScopeHintLabel.Left := 20;
+  GScopeHintLabel.AutoSize := False;
+  GScopeHintLabel.WordWrap := True;
+  GScopeHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
+  GScopeHintLabel.Font.Color := clGray;
+  GScopeHintLabel.Caption := '';
+  FitLabel(GScopeHintLabel);
 
   GDataNoteLabel := TNewStaticText.Create(GComponentsPage);
   GDataNoteLabel.Parent := GComponentsPage.Surface;
   GDataNoteLabel.Left := 0;
-  GDataNoteLabel.Top := Y;
+  GDataNoteLabel.AutoSize := False;
+  GDataNoteLabel.WordWrap := True;
   GDataNoteLabel.Width := GComponentsPage.SurfaceWidth;
   GDataNoteLabel.Font.Color := clGray;
-  GDataNoteLabel.Caption := 'Каталог данных сервера: ' + GDataDir + ' (в 0.15.1 фиксирован)';
-  Y := Y + GDataNoteLabel.Height + ScaleY(8);
+  GDataNoteLabel.Caption := 'Каталог данных: ' + GDataDir + ' (фиксирован)';
+  FitLabel(GDataNoteLabel);
 
   { Лицензия MIT — только первая установка (нет ни сервера, ни клиента). }
   GLicenseCheck := TNewCheckBox.Create(GComponentsPage);
   GLicenseCheck.Parent := GComponentsPage.Surface;
   GLicenseCheck.Left := 0;
-  GLicenseCheck.Top := Y;
   GLicenseCheck.Width := GComponentsPage.SurfaceWidth - ScaleX(120);
   GLicenseCheck.Caption := 'Я принимаю условия лицензии MIT';
   GLicenseCheck.Checked := False;
@@ -5699,35 +5885,32 @@ begin
   GLicenseLink := TNewLinkLabel.Create(GComponentsPage);
   GLicenseLink.Parent := GComponentsPage.Surface;
   GLicenseLink.Left := GComponentsPage.SurfaceWidth - ScaleX(110);
-  GLicenseLink.Top := Y + ScaleY(2);
   GLicenseLink.Width := ScaleX(110);
   GLicenseLink.Caption := '<a href="license">Текст лицензии</a>';
   GLicenseLink.OnLinkClick := @OpenLocalLicense;
   GLicenseLink.Visible := LicensePromptNeeded;
-  if LicensePromptNeeded then
-    Y := Y + GLicenseCheck.Height + ScaleY(6)
-  else
-    Y := Y + ScaleY(2);
 
   GReasonLabel := TNewStaticText.Create(GComponentsPage);
   GReasonLabel.Parent := GComponentsPage.Surface;
   GReasonLabel.Left := 0;
-  GReasonLabel.Top := Y;
   GReasonLabel.AutoSize := False;
   GReasonLabel.WordWrap := True;
   GReasonLabel.Width := GComponentsPage.SurfaceWidth;
   GReasonLabel.Caption := '';
   GReasonLabel.Font.Color := clRed;
-  GReasonLabel.Height := GReasonLabel.AdjustHeight;
+  FitLabel(GReasonLabel);
 
   { Начальный выбор вычислен в ApplyDefaultSelection (чистая машина — оба
     компонента, частичная — только установленные); здесь он лишь переносится
-    в контролы. }
+    в контролы. Присваивание Checked в Inno вызывает OnClick, поэтому до этого
+    места экран считается неготовым: иначе первый же обработчик прочитал бы
+    ещё не заполненные чекбоксы и снял выбор клиента (найдено при 860def0d). }
   GServerCheck.Checked := GServerSelected;
   GClientCheck.Checked := GClientSelected;
   GScopeUserRadio.Checked := GClientScopeUser;
   GScopeMachineRadio.Checked := not GClientScopeUser;
   GLicenseAccepted := False;
+  GComponentsReady := True;
   UpdateComponentsState(nil);
 end;
 
@@ -5739,8 +5922,9 @@ end;
 procedure CreateAdminPage;
 begin
   GAdminPage := CreateCustomPage(GComponentsPage.ID, 'Администратор сервера',
-    'Логин первого администратора ETN. Пароль не задаётся: вход по API-ключу, ' +
-    'который будет показан после установки.');
+    { Формулировка пользователя (ошибка 860def0d, п.3). }
+    'Первый пользователь станет администратором ETN. Задайте его логин и ' +
+    'отображаемое имя, а после установки сервера получите ключ для входа.');
 
   GAdminLoginLabel := TNewStaticText.Create(GAdminPage);
   GAdminLoginLabel.Parent := GAdminPage.Surface;
@@ -5774,14 +5958,21 @@ begin
   GAdminHintLabel.Parent := GAdminPage.Surface;
   GAdminHintLabel.Left := 0;
   GAdminHintLabel.Top := GAdminDisplayEdit.Top + GAdminDisplayEdit.Height + 8;
+  GAdminHintLabel.AutoSize := False;
+  GAdminHintLabel.WordWrap := True;
   GAdminHintLabel.Width := GAdminPage.SurfaceWidth;
   GAdminHintLabel.Caption := 'Логин используется один раз — при первичной инициализации ' +
     'сервера. Если сервер уже инициализирован, логин не меняется.';
+  { Перенос обязателен: без него длинная подпись уходила за правый край и
+    обрезалась (ошибка 860def0d, п.1). }
+  FitLabel(GAdminHintLabel);
 
   GAdminErrorLabel := TNewStaticText.Create(GAdminPage);
   GAdminErrorLabel.Parent := GAdminPage.Surface;
   GAdminErrorLabel.Left := 0;
   GAdminErrorLabel.Top := GAdminHintLabel.Top + GAdminHintLabel.Height + 8;
+  GAdminErrorLabel.AutoSize := False;
+  GAdminErrorLabel.WordWrap := True;
   GAdminErrorLabel.Width := GAdminPage.SurfaceWidth;
   GAdminErrorLabel.Caption := '';
   GAdminErrorLabel.Font.Color := clRed;
@@ -5792,6 +5983,50 @@ end;
   компьютеров и фиксированный каталог данных. Тексты и оформление полного
   экрана — зона 112642a4; здесь функциональный минимум.
   --------------------------------------------------------------------------- }
+{ Пересчитать позиции контролов экрана «Параметры сервера». Пояснение к
+  брандмауэру меняет высоту при переключении чекбокса, а пояснение обновления
+  появляется при заблокированных параметрах; без пересчёта следующие подписи
+  оставались на старых местах и наезжали друг на друга (ошибка 860def0d, п.1). }
+procedure LayoutServerParamsPage;
+var
+  Y: Integer;
+begin
+  if (GServerParamsPage = nil) or (GPortEdit = nil) then Exit;
+  if GPortHintLabel <> nil then
+    GPortHintLabel.Top := GPortEdit.Top + ScaleY(4);
+  Y := GFirewallCheck.Top + GFirewallCheck.Height + ScaleY(2);
+  if GFirewallNoteLabel <> nil then
+  begin
+    GFirewallNoteLabel.Top := Y;
+    if GFirewallNoteLabel.Visible then
+      Y := Y + GFirewallNoteLabel.Height + ScaleY(8);
+  end;
+  if GDataDirInfoLabel <> nil then
+  begin
+    GDataDirInfoLabel.Top := Y;
+    Y := Y + GDataDirInfoLabel.Height + ScaleY(8);
+  end;
+  if GServerParamsNoteLabel <> nil then
+  begin
+    { Пустая подпись не занимает места: иначе её прямоугольник совпадает с
+      подписью ошибки порта — тест раскладки видит «наложение» там, где текста
+      нет. Высоту вернёт FitLabel, когда текст появится. }
+    if GServerParamsNoteLabel.Caption = '' then
+      GServerParamsNoteLabel.Height := 0;
+    GServerParamsNoteLabel.Top := Y;
+    if (GServerParamsNoteLabel.Visible) and (GServerParamsNoteLabel.Caption <> '') then
+      Y := Y + GServerParamsNoteLabel.Height + ScaleY(8);
+  end;
+  if GPortErrorLabel <> nil then
+  begin
+    if GPortErrorLabel.Caption = '' then
+      GPortErrorLabel.Height := 0;
+    GPortErrorLabel.Top := Y;
+    if (GPortErrorLabel.Visible) and (GPortErrorLabel.Caption <> '') then
+      Y := Y + GPortErrorLabel.Height;
+  end;
+end;
+
 procedure FirewallCheckClick(Sender: TObject);
 begin
   if (GFirewallCheck = nil) or GParamsLocked then Exit;
@@ -5806,7 +6041,9 @@ begin
     else
       GFirewallNoteLabel.Caption := 'Сервер будет доступен только с этого компьютера ' +
         '(127.0.0.1). Подключения с других компьютеров локальной сети работать не будут.';
+    FitLabel(GFirewallNoteLabel);
   end;
+  LayoutServerParamsPage;
 end;
 
 procedure UpdateServerParamsState;
@@ -5816,10 +6053,12 @@ begin
   if GParamsLocked then
   begin
     { Обновление/ремонт: параметры берутся из install.json, поля только
-      показывают значения; здесь — что именно произойдёт. }
+      показывают значения; здесь — что именно произойдёт. Режим запуска
+      называется по-человечески, а не «service»/«app» (ошибка 860def0d, n6). }
     S := 'Сервер уже установлен: ' + IfStr(GInstalledVersion = '',
       ServerVersionText, GInstalledVersion) + ' → ' + GProductVersion +
-      ', режим ' + IfStr(GInstalledMode = '', GServerMode, GInstalledMode) + '.' +
+      ', режим: ' + ServerModeText(IfStr(GInstalledMode = '',
+        GServerMode, GInstalledMode)) + '.' +
       ' При обновлении порт, доступ по локальной сети и каталог данных не меняются.';
     if GInstalledVersion <> GProductVersion then
       S := S + ' Служба ETN останавливается на время замены файлов, базы данных ' +
@@ -5827,12 +6066,16 @@ begin
     if GServerParamsNoteLabel <> nil then
     begin
       GServerParamsNoteLabel.Caption := S;
-      GServerParamsNoteLabel.Height := GServerParamsNoteLabel.AdjustHeight;
+      FitLabel(GServerParamsNoteLabel);
     end;
   end
   else if GServerParamsNoteLabel <> nil then
+  begin
     GServerParamsNoteLabel.Caption := '';
+    FitLabel(GServerParamsNoteLabel);
+  end;
   FirewallCheckClick(nil);
+  LayoutServerParamsPage;
 end;
 
 procedure CreateServerParamsPage;
@@ -5859,8 +6102,11 @@ begin
   GPortHintLabel.Parent := GServerParamsPage.Surface;
   GPortHintLabel.Left := GPortEdit.Width + 12;
   GPortHintLabel.Top := GPortEdit.Top + ScaleY(4);
+  GPortHintLabel.AutoSize := False;
+  GPortHintLabel.WordWrap := True;
   GPortHintLabel.Width := GServerParamsPage.SurfaceWidth - GPortEdit.Width - 12;
   GPortHintLabel.Caption := 'Порт должен быть свободен: занятость проверяется до установки.';
+  FitLabel(GPortHintLabel);
 
   GFirewallCheck := TNewCheckBox.Create(GServerParamsPage);
   GFirewallCheck.Parent := GServerParamsPage.Surface;
@@ -5875,16 +6121,24 @@ begin
   GFirewallNoteLabel.Parent := GServerParamsPage.Surface;
   GFirewallNoteLabel.Left := 20;
   GFirewallNoteLabel.Top := GFirewallCheck.Top + GFirewallCheck.Height + 2;
+  { Перенос и пересчёт высоты: без них подпись уходила за правый край, а при
+    смене текста наезжала на нижние контролы (ошибка 860def0d, п.1). }
+  GFirewallNoteLabel.AutoSize := False;
+  GFirewallNoteLabel.WordWrap := True;
   GFirewallNoteLabel.Width := GServerParamsPage.SurfaceWidth - 20;
   GFirewallNoteLabel.Caption := '';
+  FitLabel(GFirewallNoteLabel);
 
   GDataDirInfoLabel := TNewStaticText.Create(GServerParamsPage);
   GDataDirInfoLabel.Parent := GServerParamsPage.Surface;
   GDataDirInfoLabel.Left := 0;
   GDataDirInfoLabel.Top := GFirewallNoteLabel.Top + GFirewallNoteLabel.Height + ScaleY(16);
+  GDataDirInfoLabel.AutoSize := False;
+  GDataDirInfoLabel.WordWrap := True;
   GDataDirInfoLabel.Width := GServerParamsPage.SurfaceWidth;
   GDataDirInfoLabel.Caption := 'Каталог данных: ' + GDataDir +
     ' (в 0.15.1 фиксирован, не меняется при обновлении и удалении программы)';
+  FitLabel(GDataDirInfoLabel);
 
   GServerParamsNoteLabel := TNewStaticText.Create(GServerParamsPage);
   GServerParamsNoteLabel.Parent := GServerParamsPage.Surface;
@@ -5894,6 +6148,7 @@ begin
   GServerParamsNoteLabel.AutoSize := False;
   GServerParamsNoteLabel.WordWrap := True;
   GServerParamsNoteLabel.Caption := '';
+  FitLabel(GServerParamsNoteLabel);
 
   GPortErrorLabel := TNewStaticText.Create(GServerParamsPage);
   GPortErrorLabel.Parent := GServerParamsPage.Surface;
@@ -5904,6 +6159,9 @@ begin
   GPortErrorLabel.WordWrap := True;
   GPortErrorLabel.Caption := '';
   GPortErrorLabel.Font.Color := clRed;
+  FitLabel(GPortErrorLabel);
+
+  LayoutServerParamsPage;
 end;
 
 procedure CopyKeyClick(Sender: TObject);
@@ -5925,6 +6183,31 @@ begin
   if (WizardForm <> nil) and (GKeyPage <> nil) and
      (WizardForm.CurPageID = GKeyPage.ID) then
     WizardForm.NextButton.Enabled := GKeyConfirmCheck.Checked;
+end;
+
+{ Пересчитать позиции экрана ключа: подсказка о предыдущем запуске показывается
+  не всегда, а её высота зависит от переноса текста; без пересчёта чекбокс
+  «Я сохранил ключ» оказывался поверх текста (ошибка 860def0d, п.1). }
+procedure LayoutKeyPage;
+var
+  Y: Integer;
+begin
+  if (GKeyPage = nil) or (GKeyCopyButton = nil) then Exit;
+  Y := GKeyCopyButton.Top + GKeyCopyButton.Height + ScaleY(14);
+  if GKeyWarningLabel <> nil then
+  begin
+    GKeyWarningLabel.Top := Y;
+    Y := Y + GKeyWarningLabel.Height + ScaleY(6);
+  end;
+  if GKeyPreviousLabel <> nil then
+  begin
+    GKeyPreviousLabel.Top := Y;
+    if GKeyPreviousLabel.Visible then
+      Y := Y + GKeyPreviousLabel.Height + ScaleY(14)
+    else
+      Y := Y + ScaleY(14);
+  end;
+  if GKeyConfirmCheck <> nil then GKeyConfirmCheck.Top := Y;
 end;
 
 { Экран первичного API-ключа: после установки, до итоговой сводки. Ключ
@@ -5963,18 +6246,24 @@ begin
   GKeyWarningLabel.Parent := GKeyPage.Surface;
   GKeyWarningLabel.Left := 0;
   GKeyWarningLabel.Top := GKeyCopyButton.Top + GKeyCopyButton.Height + 14;
+  GKeyWarningLabel.AutoSize := False;
+  GKeyWarningLabel.WordWrap := True;
   GKeyWarningLabel.Width := GKeyPage.SurfaceWidth;
   GKeyWarningLabel.Caption := 'Ключ показывается один раз. Восстановить нельзя — только ' +
     'выпустить новый. Сохраните его в надёжном месте.';
+  FitLabel(GKeyWarningLabel);
 
   GKeyPreviousLabel := TNewStaticText.Create(GKeyPage);
   GKeyPreviousLabel.Parent := GKeyPage.Surface;
   GKeyPreviousLabel.Left := 0;
   GKeyPreviousLabel.Top := GKeyWarningLabel.Top + GKeyWarningLabel.Height + 6;
+  GKeyPreviousLabel.AutoSize := False;
+  GKeyPreviousLabel.WordWrap := True;
   GKeyPreviousLabel.Width := GKeyPage.SurfaceWidth;
   GKeyPreviousLabel.Caption := 'Ключ получен при предыдущем запуске установщика ' +
     '(после сбоя) и сохранён в защищённом файле.';
   GKeyPreviousLabel.Visible := False;
+  FitLabel(GKeyPreviousLabel);
 
   GKeyConfirmCheck := TNewCheckBox.Create(GKeyPage);
   GKeyConfirmCheck.Parent := GKeyPage.Surface;
@@ -5984,6 +6273,7 @@ begin
   GKeyConfirmCheck.Caption := 'Я сохранил ключ';
   GKeyConfirmCheck.Checked := False;
   GKeyConfirmCheck.OnClick := @UpdateKeyPageState;
+  LayoutKeyPage;
 end;
 
 { ---------------------------------------------------------------------------
@@ -6046,6 +6336,7 @@ begin
   GTestRecord := '';
   GTestParams := '';
   GTestGui := '';
+  GTestLayout := '';
   GTestInit := '';
   GTestNodeExe := '';
   GTestLogin := '';
@@ -6149,6 +6440,7 @@ begin
   GTestRecord := ParamValue('TESTRECORD');
   GTestParams := ParamValue('TESTPARAMS');
   GTestGui := ParamValue('TESTGUIMODE');
+  GTestLayout := ParamValue('TESTLAYOUT');
   GTestInit := ParamValue('TESTINIT');
   GTestNodeExe := ParamValue('TESTNODEEXE');
   GTestLogin := ParamValue('TESTLOGIN');
@@ -6393,6 +6685,17 @@ begin
   end;
 #endif
 
+#ifdef TestMode
+  { /TESTLAYOUT=1: только снять раскладку экранов и выйти (ошибка 860def0d).
+    Silent-предусловия не выполняются: установка не начинается. }
+  if GTestLayout = '1' then
+  begin
+    LogLine('INFO', 'TESTLAYOUT=1: снимок раскладки экранов без установки (тестовый режим)');
+    Result := True;
+    Exit;
+  end;
+#endif
+
   if GPrivilegedPhase then
   begin
     ValidatePrivilegedPhasePreconditions;
@@ -6421,8 +6724,130 @@ begin
   Result := True;
 end;
 
+#ifdef TestMode
+{ /TESTLAYOUT=1 (ошибка 860def0d): раскладка экранов без окон. Тест читает
+  строки TESTLAYOUT из журнала и проверяет, что подписи не обрезаны (Height не
+  «дельта» AdjustHeight), не налезают друг на друга и помещаются на поверхность
+  страницы. Значения реальные — их посчитал Inno при создании контролов в
+  текущем состоянии машины. }
+procedure DumpControl(const PageName, Name: String; C: TControl);
+begin
+  if C = nil then
+  begin
+    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name + ' missing');
+    Exit;
+  end;
+  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name +
+    ' left=' + IntToStr(C.Left) + ' top=' + IntToStr(C.Top) +
+    ' width=' + IntToStr(C.Width) + ' height=' + IntToStr(C.Height) +
+    ' visible=' + Pick(C.Visible, '1', '0'));
+end;
+
+{ Подпись: в снимок идёт и длина текста. Тест отличает пустую подпись (высота 0
+  допустима) от сжатой «дельтой» AdjustHeight — у неё высота 0 при непустом
+  тексте и текст обрезан (ошибка 860def0d, п.1). }
+procedure DumpText(const PageName, Name: String; L: TNewStaticText);
+begin
+  if L = nil then
+  begin
+    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name + ' missing');
+    Exit;
+  end;
+  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name +
+    ' left=' + IntToStr(L.Left) + ' top=' + IntToStr(L.Top) +
+    ' width=' + IntToStr(L.Width) + ' height=' + IntToStr(L.Height) +
+    ' visible=' + Pick(L.Visible, '1', '0') +
+    ' chars=' + IntToStr(Length(L.Caption)));
+end;
+
+procedure DumpPageSurface(const PageName: String; P: TWizardPage);
+begin
+  if P = nil then
+  begin
+    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' surface missing');
+    Exit;
+  end;
+  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' surface width=' + IntToStr(P.SurfaceWidth) +
+    ' height=' + IntToStr(P.SurfaceHeight));
+end;
+
+procedure DumpLayout;
+begin
+  LogLine('INFO', 'TESTLAYOUT state server_selected=' + Pick(GServerSelected, '1', '0') +
+    ' client_selected=' + Pick(GClientSelected, '1', '0') +
+    ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
+    ' radios=' + Pick(ClientScopeRadiosVisible, '1', '0') +
+    ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
+  DumpPageSurface('components', GComponentsPage);
+  DumpControl('components', 'serverCheck', GServerCheck);
+  DumpText('components', 'serverState', GServerStateLabel);
+  DumpText('components', 'serverHint', GServerHintLabel);
+  DumpControl('components', 'serverAltLink', GServerAltLink);
+  DumpControl('components', 'clientCheck', GClientCheck);
+  DumpText('components', 'clientState', GClientStateLabel);
+  DumpText('components', 'clientHint', GClientHintLabel);
+  DumpText('components', 'scopeFixed', GScopeFixedLabel);
+  DumpControl('components', 'scopeUser', GScopeUserRadio);
+  DumpControl('components', 'scopeMachine', GScopeMachineRadio);
+  DumpText('components', 'scopeHint', GScopeHintLabel);
+  DumpText('components', 'dataNote', GDataNoteLabel);
+  DumpControl('components', 'license', GLicenseCheck);
+  DumpText('components', 'reason', GReasonLabel);
+  DumpPageSurface('admin', GAdminPage);
+  DumpText('admin', 'loginLabel', GAdminLoginLabel);
+  DumpControl('admin', 'loginEdit', GAdminLoginEdit);
+  DumpText('admin', 'displayLabel', GAdminDisplayLabel);
+  DumpControl('admin', 'displayEdit', GAdminDisplayEdit);
+  DumpText('admin', 'hint', GAdminHintLabel);
+  DumpText('admin', 'error', GAdminErrorLabel);
+  UpdateServerParamsState;
+  DumpPageSurface('params', GServerParamsPage);
+  DumpText('params', 'portLabel', GPortLabel);
+  DumpControl('params', 'portEdit', GPortEdit);
+  DumpText('params', 'portHint', GPortHintLabel);
+  DumpControl('params', 'firewallCheck', GFirewallCheck);
+  DumpText('params', 'firewallNote', GFirewallNoteLabel);
+  DumpText('params', 'dataDirInfo', GDataDirInfoLabel);
+  DumpText('params', 'paramsNote', GServerParamsNoteLabel);
+  DumpText('params', 'portError', GPortErrorLabel);
+  DumpPageSurface('credentials', GKeyPage);
+  DumpControl('credentials', 'valueEdit', GKeyValueEdit);
+  DumpControl('credentials', 'copyButton', GKeyCopyButton);
+  DumpText('credentials', 'copiedLabel', GKeyCopiedLabel);
+  DumpText('credentials', 'warning', GKeyWarningLabel);
+  DumpText('credentials', 'previous', GKeyPreviousLabel);
+  DumpControl('credentials', 'confirm', GKeyConfirmCheck);
+  { Итоговый экран (п.10): сводка и кнопки не должны налезать на левую полосу
+    оформления и друг на друга. Геометрия берётся у FinishedLabel. }
+  CreateFinishedControls;
+  LogLine('INFO', 'TESTLAYOUT finished surface width=' +
+    IntToStr(WizardForm.FinishedPage.ClientWidth) + ' height=' +
+    IntToStr(WizardForm.FinishedPage.ClientHeight));
+  DumpText('finished', 'label', WizardForm.FinishedLabel);
+  DumpControl('finished', 'memo', GSummaryMemo);
+  DumpControl('finished', 'run', GSummaryRunButton);
+  DumpControl('finished', 'data', GSummaryDataButton);
+  DumpControl('finished', 'log', GSummaryLogButton);
+end;
+#endif
+
 procedure InitializeWizard;
 begin
+#ifdef TestMode
+  { Раскладка без окон (ошибка 860def0d): строится тем же кодом, что и в GUI.
+    GSilent снимается до создания страниц — иначе UpdateComponentsState не
+    заполняет подписи и не раскладывает контролы. }
+  if GTestLayout = '1' then
+  begin
+    GSilent := False;
+    CreateComponentsPage;
+    CreateAdminPage;
+    CreateServerParamsPage;
+    CreateKeyPage;
+    DumpLayout;
+    ExitProcess(EXIT_OK);
+  end;
+#endif
   if GSilent then Exit;
   CreateComponentsPage;
   CreateAdminPage;
@@ -6478,12 +6903,12 @@ begin
     begin
       GServerStateLabel.Caption := ServerStateText +
         IfStr(InitStateText = '', '', ' ' + InitStateText);
-      GServerStateLabel.Height := GServerStateLabel.AdjustHeight;
+      FitLabel(GServerStateLabel);
     end;
     if GClientStateLabel <> nil then
     begin
       GClientStateLabel.Caption := ClientStateText;
-      GClientStateLabel.Height := GClientStateLabel.AdjustHeight;
+      FitLabel(GClientStateLabel);
     end;
     UpdateComponentsState(nil);
     { Понижение версии: один раз на запуск — объяснить и оставить «Отмена». }
@@ -6533,6 +6958,7 @@ begin
     if GKeyValueEdit <> nil then GKeyValueEdit.Text := GPendingKey;
     if GKeyCopiedLabel <> nil then GKeyCopiedLabel.Caption := '';
     if GKeyPreviousLabel <> nil then GKeyPreviousLabel.Visible := GPendingKeyPrevious;
+    LayoutKeyPage;
     if GKeyConfirmCheck <> nil then GKeyConfirmCheck.Checked := False;
     GKeyWasShown := True;
     { «Назад» на экране ключа недоступен: ключ уже создан, вернуться к выбору
@@ -6588,6 +7014,21 @@ begin
         GSummaryLogButton.Visible := FileExists(GLogPath);
     end;
   end;
+end;
+
+{ Экран готовности: предупредить о запросе UAC ДО клика «Установить»
+  (ошибка 860def0d, пп.4–5): следующий шаг — окно UAC, и пользователь должен
+  знать, что в нём нажать «Да», иначе установка не начнётся. }
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
+  MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  S: String;
+begin
+  S := '';
+  if NeedElevation and (not (GIsElevated and IsAdminInstallMode)) then
+    S := 'Windows запросит права администратора — в окне UAC нажмите «Да», ' +
+      'иначе установка не начнётся.' + NewLine + NewLine;
+  Result := S + MemoDirInfo + MemoComponentsInfo + MemoGroupInfo + MemoTasksInfo;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -6648,7 +7089,8 @@ begin
       if GPortErrorLabel <> nil then
       begin
         GPortErrorLabel.Caption := Reason;
-        GPortErrorLabel.Height := GPortErrorLabel.AdjustHeight;
+        FitLabel(GPortErrorLabel);
+        LayoutServerParamsPage;
       end;
       if WizardForm <> nil then WizardForm.ActiveControl := GPortEdit;
       LogLine('WARN', 'Экран параметров сервера: ' + Reason);
@@ -6753,12 +7195,13 @@ begin
       begin
         GChildRanThisPass := False;
         GChildResult := 0;
-        GComponentsNotice := 'Повышение прав отменено: для выбранных ' +
-          'компонентов нужны права администратора. Изменения не выполнялись, ' +
-          'выбор сохранён.';
-        SuppressibleMsgBox(GComponentsNotice + #13#10#13#10 +
-          'Можно изменить выбор или закрыть установщик.',
-          mbError, MB_OK, IDOK);
+        { Отказ UAC ведёт к следующему шагу (ошибка 860def0d, п.5): раньше
+          текст «можно изменить выбор или закрыть установщик» не подсказывал
+          повторить и подтвердить запрос. }
+        GComponentsNotice := 'Повышение прав отменено: изменения не выполнялись, ' +
+          'выбор сохранён. Чтобы установить выбранные компоненты, нажмите ' +
+          '«Далее» и подтвердите запрос UAC кнопкой «Да».';
+        SuppressibleMsgBox(GComponentsNotice, mbError, MB_OK, IDOK);
         ReturnToComponentsPage;
         Result := False;
         Exit;
@@ -6853,8 +7296,9 @@ begin
   LogLine('INFO', 'Выбранным компонентам нужны права администратора — повышение прав');
   GChildResult := RunElevatedChild;
   if GChildResult < 0 then
-    Result := 'Для выбранных компонентов нужны права администратора. Запрос UAC отклонён — ' +
-      'изменения не выполнялись, выбор сохранён. Журнал: ' + GLogPath
+    Result := 'Повышение прав отменено: изменения не выполнялись, выбор сохранён. ' +
+      'Чтобы установить выбранные компоненты, нажмите «Установить» и подтвердите ' +
+      'запрос UAC кнопкой «Да». Журнал: ' + GLogPath
   else if GChildResult = EXIT_PRECONDITION then
   begin
     if GChildReason = '' then

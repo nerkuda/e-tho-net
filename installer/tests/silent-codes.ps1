@@ -1000,10 +1000,14 @@ $radiosHidden = (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('
 $scopeFixedBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeFixed'
 $scopeFixedOk = Test-IssCode -Text $scopeFixedBody -Pattern ([regex]::Escape("GClientState = 'installed'"))
 $scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
-$scopeTextOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('область установки'))) -and
-    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('не меняется')))
+# Формулировка пользователя (ошибка 860def0d, n5): вариант установки и что
+# сделать, чтобы получить другой, — без термина «область установки».
+$scopeTextOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «только для меня»'))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «для всех пользователей»'))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('удалите клиента и выполните установку заново'))) -and
+    (-not (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('область установки'))))
 Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($radiosHidden -and $scopeFixedOk -and $scopeTextOk) `
-    -Note 'при установленном клиенте радиокнопки скрыты, область — текстом'
+    -Note 'при установленном клиенте радиокнопки скрыты, область — текстом в формулировке пользователя'
 Add-StaticResult -Name 'static:client-launch-original-user' `
     -Ok (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') `
         -Pattern ([regex]::Escape("ShellExecAsOriginalUser('open', Exe"))) `
@@ -1052,6 +1056,94 @@ Add-StaticResult -Name 'static:client-package-dir-script' `
     -Ok (($clientPkgText -match [regex]::Escape('"package:dir"')) -and
          ($clientPkgText -match [regex]::Escape('electron-builder --dir'))) `
     -Note 'npm -w @etn/client run package:dir собирает win-unpacked'
+
+
+# --- 860def0d: UX-тексты и раскладка экранов (статика) ----------------------
+# Пользователь видел обрезанные подсказки на всех экранах, не видел описаний
+# сервера, клиента и разницы областей, читал «режим service» и терял сводку под
+# полосой оформления. Сторожа держат и тексты (договорённости ТП, дословные
+# формулировки), и механику: высоту подписи задаёт FitLabel, а не «дельта»
+# AdjustHeight, раскладка пересчитывается от фактических высот.
+Write-Host '=== 860def0d: UX-тексты и раскладка экранов (статика) ==='
+$fitBody = Get-IssFunctionBody -Text $issText -Name 'FitLabel'
+$fitOk = (Test-IssCode -Text $fitBody -Pattern ([regex]::Escape('Delta := Lbl.AdjustHeight'))) -and
+    (-not ($issText -match 'Height\s*:=\s*\w+\.AdjustHeight'))
+Add-StaticResult -Name 'static:fitlabel-no-delta' -Ok $fitOk `
+    -Note 'AdjustHeight вызывается без присваивания Height (дельта сжимала подпись до полосы)'
+
+$componentsBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
+$componentsTextOk = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Сервер хранит графовые базы знаний'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Клиент — окно для работы с базами'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('«Только для меня» — клиент в вашем профиле'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('«Для всех пользователей» — в Program Files')))
+Add-StaticResult -Name 'static:components-descriptions' -Ok $componentsTextOk `
+    -Note 'что такое сервер и клиент и чем различаются области — подписи на экране компонентов'
+
+$layoutBody = Get-IssFunctionBody -Text $issText -Name 'LayoutComponentsPage'
+$layoutOk = (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GServerHintLabel.Height'))) -and
+    (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GClientHintLabel.Height'))) -and
+    (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GScopeHintLabel.Height'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('FitLabel(GScopeHintLabel)'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('LayoutComponentsPage')))
+Add-StaticResult -Name 'static:components-relayout' -Ok $layoutOk `
+    -Note 'позиции — по фактическим высотам подписей после каждой смены текста'
+
+$readyComponents = Get-IssFunctionBody -Text $issText -Name 'CreateComponentsPage'
+$readyOk = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('not GComponentsReady'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsReady := True')))
+Add-StaticResult -Name 'static:components-init-guard' -Ok $readyOk `
+    -Note 'программная установка Checked не снимает выбор клиента (OnClick до готовности экрана)'
+
+$adminBody = Get-IssFunctionBody -Text $issText -Name 'CreateAdminPage'
+$adminFlat = $adminBody -replace '\r?\n\s*', ' '
+$adminSubtitleRx = 'Первый пользователь станет администратором ETN\. Задайте его логин и ' +
+    ''' \+ ''отображаемое имя, а после установки сервера получите ключ для входа\.'
+$adminOk = ($adminFlat -match $adminSubtitleRx) -and
+    (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('GAdminHintLabel.WordWrap := True'))) -and
+    (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('FitLabel(GAdminHintLabel)')))
+Add-StaticResult -Name 'static:admin-texts' -Ok $adminOk `
+    -Note 'подзаголовок — дословно формулировка пользователя; подсказка с переносом и пересчётом'
+
+$modeBody = Get-IssFunctionBody -Text $issText -Name 'ServerModeText'
+$modeOk = (Test-IssCode -Text $modeBody -Pattern ([regex]::Escape('автоматический запуск в режиме службы Windows'))) -and
+    (Test-IssCode -Text $modeBody -Pattern ([regex]::Escape('ручной запуск сервера как обычного приложения'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateServerParamsState') `
+        -Pattern ([regex]::Escape('ServerModeText(')))
+Add-StaticResult -Name 'static:server-mode-human' -Ok $modeOk `
+    -Note 'режим запуска на экране — по-человечески, без термина service'
+
+$readyMemoBody = Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo'
+$uacOk = (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора'))) -and
+    (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('нажмите «Да»'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'NextButtonClick') `
+        -Pattern ([regex]::Escape('подтвердите запрос UAC кнопкой «Да»'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall') `
+        -Pattern ([regex]::Escape('Повышение прав отменено')))
+Add-StaticResult -Name 'static:uac-warning-and-guidance' -Ok $uacOk `
+    -Note 'предупреждение до UAC и инструкция после отмены повышения прав'
+
+$portBody = Get-IssFunctionBody -Text $issText -Name 'ServerPortStatus'
+$portOk = (-not (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('IPAddress]::Any')))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('show excludedportrange protocol=tcp')))
+Add-StaticResult -Name 'static:port-no-firewall-prompt' -Ok $portOk `
+    -Note 'проверка порта — bind на loopback и таблица исключений netsh, без запроса брандмауэра'
+
+$finishedBody = Get-IssFunctionBody -Text $issText -Name 'CreateFinishedControls'
+$finishedOk = (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedLabel.Left'))) -and
+    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedLabel.Width'))) -and
+    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedLabel.Top'))) -and
+    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedPage.ClientHeight'))) -and
+    (-not (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Left := 0'))))
+Add-StaticResult -Name 'static:finished-anchored' -Ok $finishedOk `
+    -Note 'сводка и кнопки — по FinishedLabel, а не от левого края (полоса оформления)'
+
+$initProduct = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'InitializeSetup' -Ifdef 'TestMode'
+$layoutHookIfdef = (-not ($initProduct -match [regex]::Escape("ParamValue('TESTLAYOUT')"))) -and
+    (-not ($initProduct -match [regex]::Escape("GTestLayout = '1'"))) -and
+    (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('GTestLayout'))) -and
+    (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('DumpLayout')))
+Add-StaticResult -Name 'static:layout-hook-ifdef' -Ok $layoutHookIfdef `
+    -Note '/TESTLAYOUT и снимок раскладки — только под #ifdef TestMode'
 
 
 # --- Сторож свежести payload в build.ps1 (дефект 3, 98ad5eec) ----------------
@@ -1242,6 +1334,139 @@ $script:SetupPath = Join-Path $buildDir "ETN-Setup-test-$version.exe"
 if (-not (Test-Path -LiteralPath $script:SetupPath)) { throw "Тестовый установщик не найден: $script:SetupPath" }
 
 $silent = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+
+# --- 860def0d: раскладка экранов без окон ------------------------------------
+# /TESTLAYOUT=1 строит все экраны тем же кодом, что и мастер, и пишет в журнал
+# фактические позиции и высоты контролов. Проверяется то, что видел пользователь:
+# подписи не сжаты «дельтой» AdjustHeight, видимые контролы не налезают друг на
+# друга, содержимое помещается на поверхность страницы, сводка не заходит на
+# полосу оформления; на чистой машине выбраны оба компонента.
+Write-Host '=== 860def0d: раскладка экранов (TESTLAYOUT) ==='
+
+function Get-LayoutLines {
+    $log = Get-LatestLog
+    if (-not $log) { return @() }
+    return @(Get-Content -LiteralPath $log.FullName | ForEach-Object {
+        if ($_ -match 'TESTLAYOUT (.*)$') { $Matches[1] }
+    })
+}
+
+function Read-Layout {
+    param([string[]]$Lines)
+    $surfaces = @{}
+    $controls = @{}
+    foreach ($line in $Lines) {
+        if ($line -match '^(?<page>\w+) surface width=(?<w>\d+) height=(?<h>\d+)$') {
+            $surfaces[$Matches['page']] = [int]$Matches['h']
+            continue
+        }
+        if ($line -match '^(?<page>\w+) (?<name>\w+) left=(?<l>\d+) top=(?<t>\d+) width=(?<w>\d+) height=(?<h>\d+) visible=(?<v>[01])(?: chars=(?<c>\d+))?$') {
+            if (-not $controls.ContainsKey($Matches['page'])) {
+                $controls[$Matches['page']] = New-Object System.Collections.Generic.List[object]
+            }
+            $chars = -1
+            if ($Matches['c'] -ne '') { $chars = [int]$Matches['c'] }
+            $controls[$Matches['page']].Add([pscustomobject]@{
+                Name = $Matches['name']; Left = [int]$Matches['l']; Top = [int]$Matches['t']
+                Width = [int]$Matches['w']; Height = [int]$Matches['h']
+                Visible = ($Matches['v'] -eq '1'); Chars = $chars
+            })
+        }
+    }
+    return [pscustomobject]@{ Surfaces = $surfaces; Controls = $controls }
+}
+
+function Add-LayoutChecks {
+    param([string]$Suffix, [string]$Note = '')
+    $lines = Get-LayoutLines
+    Add-Result -Name "layout:${Suffix}:dump" -Expected 1 -Actual ([int]($lines.Count -gt 0)) `
+        -Note ("строк снимка: " + $lines.Count + $Note)
+    $state = @($lines | Where-Object { $_ -like 'state *' })[0]
+    $both = ($state -match 'server_selected=1') -and ($state -match 'client_selected=1')
+    Add-Result -Name "layout:${Suffix}:default-selection" -Expected 1 -Actual ([int]$both) -Note $state
+
+    $layout = Read-Layout -Lines $lines
+    foreach ($page in @('components', 'admin', 'params', 'credentials', 'finished')) {
+        Add-Result -Name "layout:${Suffix}:$page" -Expected 1 `
+            -Actual ([int](($layout.Surfaces.ContainsKey($page)) -and ($layout.Controls.ContainsKey($page)))) `
+            -Note "страница $page в снимке"
+    }
+    # 1. Подпись с непустым текстом не сжата: высота не меньше строки. Высота 0
+    #    допустима только для пустой подписи (chars=0).
+    $bad = @()
+    foreach ($page in $layout.Controls.Keys) {
+        foreach ($ctl in $layout.Controls[$page]) {
+            if (-not $ctl.Visible) { continue }
+            if (($ctl.Chars -gt 0) -and ($ctl.Height -lt 15)) {
+                $bad += "$page/$($ctl.Name)=$($ctl.Height) при chars=$($ctl.Chars)"
+            }
+        }
+    }
+    Add-Result -Name "layout:${Suffix}:no-squeezed" -Expected 1 -Actual ([int]($bad.Count -eq 0)) `
+        -Note ($bad -join ', ')
+    # 2. Видимые контролы с текстом не налезают друг на друга.
+    $overlaps = @()
+    foreach ($page in $layout.Controls.Keys) {
+        $items = @($layout.Controls[$page] | Where-Object { $_.Visible -and $_.Height -gt 0 })
+        for ($i = 0; $i -lt $items.Count; $i++) {
+            for ($j = $i + 1; $j -lt $items.Count; $j++) {
+                $a = $items[$i]; $b = $items[$j]
+                $hOverlap = ($a.Left -lt ($b.Left + $b.Width)) -and ($b.Left -lt ($a.Left + $a.Width))
+                $vOverlap = ($a.Top -lt ($b.Top + $b.Height)) -and ($b.Top -lt ($a.Top + $a.Height))
+                if ($hOverlap -and $vOverlap) { $overlaps += "$page/$($a.Name)&$($b.Name)" }
+            }
+        }
+    }
+    Add-Result -Name "layout:${Suffix}:no-overlap" -Expected 1 -Actual ([int]($overlaps.Count -eq 0)) `
+        -Note ($overlaps -join ', ')
+    # 3. Содержимое не выходит за поверхность страницы.
+    $overflows = @()
+    foreach ($page in $layout.Controls.Keys) {
+        if (-not $layout.Surfaces.ContainsKey($page)) { continue }
+        $bottom = 0
+        foreach ($ctl in @($layout.Controls[$page] | Where-Object { $_.Visible -and $_.Height -gt 0 })) {
+            if (($ctl.Top + $ctl.Height) -gt $bottom) { $bottom = $ctl.Top + $ctl.Height }
+        }
+        if ($bottom -gt $layout.Surfaces[$page]) {
+            $overflows += "$page bottom=$bottom > $($layout.Surfaces[$page])"
+        }
+    }
+    Add-Result -Name "layout:${Suffix}:content-fits" -Expected 1 -Actual ([int]($overflows.Count -eq 0)) `
+        -Note ($overflows -join ', ')
+    # 4. Описания компонентов и разницы областей действительно на экране.
+    $components = @{}
+    foreach ($ctl in $layout.Controls['components']) { $components[$ctl.Name] = $ctl }
+    $descriptions = $components.ContainsKey('serverHint') -and $components['serverHint'].Visible -and
+        ($components['serverHint'].Height -ge 15) -and
+        $components.ContainsKey('clientHint') -and $components['clientHint'].Visible -and
+        ($components['clientHint'].Height -ge 15) -and
+        $components.ContainsKey('scopeHint') -and $components['scopeHint'].Visible -and
+        ($components['scopeHint'].Height -ge 15)
+    Add-Result -Name "layout:${Suffix}:descriptions" -Expected 1 -Actual ([int]$descriptions) `
+        -Note 'сервер, клиент и разница областей — видимые подписи с переносом'
+    # 5. Сводка и кнопки итогового экрана: от левого края FinishedLabel.
+    $finished = @{}
+    foreach ($ctl in $layout.Controls['finished']) { $finished[$ctl.Name] = $ctl }
+    $anchored = $finished.ContainsKey('label') -and $finished.ContainsKey('memo') -and
+        ($finished['memo'].Left -eq $finished['label'].Left) -and
+        ($finished['memo'].Width -eq $finished['label'].Width) -and
+        ($finished['memo'].Top -eq $finished['label'].Top)
+    Add-Result -Name "layout:${Suffix}:finished-anchored" -Expected 1 -Actual ([int]$anchored) `
+        -Note 'memo начинается там же, где FinishedLabel (правее полосы оформления)'
+}
+
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1'))
+Add-Result -Name 'layout:exit' -Expected 0 -Actual $code -Note 'снимок раскладки без установки'
+Add-LayoutChecks -Suffix 'clean'
+
+# Длинное состояние клиента (найден старый NSIS-клиент) — проверка на реальном
+# сообщении, которое раньше выходило за край и обрезалось.
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTLEGACY=machine:0.14.1'))
+Add-Result -Name 'layout:legacy-exit' -Expected 0 -Actual $code -Note 'снимок с найденным старым клиентом'
+Add-LayoutChecks -Suffix 'legacy'
+
 
 # --- 1. /VERYSILENT без /SERVERONLY -----------------------------------------
 Reset-State
