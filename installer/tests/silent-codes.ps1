@@ -1176,10 +1176,11 @@ $scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
 # сделать, чтобы получить другой, — без термина «область установки».
 $scopeTextOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «только для меня»'))) -and
     (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «для всех пользователей»'))) -and
-    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('удалите клиента и выполните установку заново'))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('в диалоге режима выберите «Установить только для меня»'))) -and
+    (-not (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('удалите клиента и выполните установку заново')))) -and
     (-not (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('область установки'))))
 Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($scopeLabelOk -and $scopeFixedOk -and $scopeTextOk) `
-    -Note 'при установленном клиенте радиокнопки скрыты, область — текстом в формулировке пользователя'
+    -Note 'при установленном клиенте область выводится текстом в формулировке пользователя (радиокнопок нет)'
 Add-StaticResult -Name 'static:client-launch-original-user' `
     -Ok (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') `
         -Pattern ([regex]::Escape("ShellExecAsOriginalUser('open', Exe"))) `
