@@ -919,17 +919,44 @@ Write-Host '=== 98ad5eec: клиент, ярлыки, закрытие ETN.exe (
 $clientFilesMachine = Test-IssCode -Text $issText -IniComments `
     -Pattern ([regex]::Escape('Source: "{#ClientPayload}\*"; DestDir: "{app}\client"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientMachine'))
 $clientFilesUser = Test-IssCode -Text $issText -IniComments `
-    -Pattern ([regex]::Escape('Source: "{#ClientPayload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientUser'))
+    -Pattern ([regex]::Escape('Source: "{#ClientPayload}\*"; DestDir: "{#ClientUserDir}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientUser'))
 Add-StaticResult -Name 'static:client-files-scope' -Ok ($clientFilesMachine -and $clientFilesUser) `
-    -Note '[Files] клиента: «для всех» — {app}\client, «для меня» — {app}'
+    -Note '[Files] клиента: «для всех» — {app}\client, «для меня» — {#ClientUserDir} (профиль, не {app})'
 $iconsOk = (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Name: "{#ShortcutDesktopDir}\ETN"'))) -and
     (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Name: "{#ShortcutMenuDir}\ETN"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Name: "{#ShortcutUserDesktopDir}\ETN"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Name: "{#ShortcutUserMenuDir}\ETN"'))) -and
     (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Filename: "{app}\client\ETN.exe"'))) -and
-    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Filename: "{app}\ETN.exe"'))) -and
+    (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Filename: "{#ClientUserDir}\ETN.exe"'))) -and
     (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Check: InstallClientMachine'))) -and
     (Test-IssCode -Text $issText -IniComments -Pattern ([regex]::Escape('Check: InstallClientUser')))
 Add-StaticResult -Name 'static:client-shortcuts' -Ok $iconsOk `
     -Note 'ярлыки: рабочий стол и меню «Пуск», цель и Check — по области установки'
+# Ошибка 0f8dd0f3, п.7 (860def0d): при client_scope=user ETN.exe оказывался в
+# Program Files, если установщик запущен в административном режиме (/ALLUSERS):
+# пользовательская ветка копировала в {app}, а {app} в этом режиме —
+# {commonpf}. Каталог пользовательской области обязан быть явным и совпадать с
+# ClientInstallPath; поиск клиента и признак «клиент установлен» — тоже.
+$explicitUserDir = ($issText -match [regex]::Escape('#define ClientUserDir "{localappdata}\Programs\ETN"')) -and
+    ($issText -match [regex]::Escape('#define ClientUserDir TestAppDir'))
+$exePathBody = Get-IssFunctionBody -Text $issText -Name 'ClientExePath'
+$filesPresentBody = Get-IssFunctionBody -Text $issText -Name 'ClientFilesPresent'
+$userDirSearchOk = ($exePathBody -match [regex]::Escape('ClientInstallPath')) -and
+    ($filesPresentBody -match [regex]::Escape('ClientInstallPath'))
+Add-StaticResult -Name 'static:client-user-dir-explicit' -Ok ($explicitUserDir -and $userDirSearchOk) `
+    -Note 'пользовательский клиент — явно в профиле (не {app}); путь и признак установки это учитывают'
+# Ошибка 0f8dd0f3, п.6: «Запустить клиент» после установки сервера обязан
+# передать имя и адрес локального сервера аргументами командной строки.
+$runClientBody = Get-IssFunctionBody -Text $issText -Name 'RunClientClick'
+$connectParamsBody = Get-IssFunctionBody -Text $issText -Name 'ClientConnectParams'
+$connectArgsOk = (Test-IssCode -Text $runClientBody -Pattern ([regex]::Escape('Params := ClientConnectParams'))) -and
+    (Test-IssCode -Text $runClientBody -Pattern ([regex]::Escape("ShellExecAsOriginalUser('open', Exe, Params,"))) -and
+    (Test-IssCode -Text $connectParamsBody -Pattern ([regex]::Escape('--connect-url="http://localhost:'))) -and
+    (Test-IssCode -Text $connectParamsBody -Pattern ([regex]::Escape('--connect-name="'))) -and
+    (Test-IssCode -Text $connectParamsBody -Pattern ([regex]::Escape('Локальный сервер'))) -and
+    (Test-IssCode -Text $connectParamsBody -Pattern ([regex]::Escape('GServerPort')))
+Add-StaticResult -Name 'static:client-run-connect-args' -Ok $connectArgsOk `
+    -Note '«Запустить клиент» передаёт --connect-name/--connect-url с портом установки'
 $installPathBody = Get-IssFunctionBody -Text $issText -Name 'ClientInstallPath'
 $installPathOk = (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{localappdata}'"))) -and
     (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{commonpf}'")))
@@ -2419,6 +2446,28 @@ Add-Result -Name 'client-user:shortcut-desktop' -Expected 1 `
     -Actual ([int](Test-Path -LiteralPath $desktopLnk))
 Add-Result -Name 'client-user:shortcut-menu' -Expected 1 `
     -Actual ([int](Test-Path -LiteralPath $menuLnk))
+
+# --- 0f8dd0f3 (п.6 860def0d): предзаполнение подключения клиента -------------
+# «Запустить клиент» после установки сервера передаёт имя и адрес локального
+# сервера аргументами командной строки. Хук /TESTCONNECTPARAMS печатает ровно
+# ту строку параметров, которую получил бы ETN.exe, — клиент не запускается.
+Write-Host '=== 0f8dd0f3: connect-параметры кнопки «Запустить клиент» ==='
+Reset-State
+$connectPort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/TESTSELECT=server', "/TESTPORT=$connectPort", '/TESTCONNECTPARAMS=1'))
+Add-Result -Name 'connect-params:code' -Expected 0 -Actual $code
+$connectLine = Get-LogLine -Pattern 'TESTCONNECTPARAMS ([^\r\n]+)'
+$expectedConnect = '--connect-url="http://localhost:' + $connectPort + '" --connect-name="Локальный сервер"'
+Add-Result -Name 'connect-params:server' -Expected 1 `
+    -Actual ([int]($connectLine -eq $expectedConnect)) `
+    -Note "порт установки и имя по умолчанию; получено: $connectLine"
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTSELECT=client-user', '/TESTCONNECTPARAMS=1'))
+Add-Result -Name 'connect-params:no-server-code' -Expected 0 -Actual $code
+$connectLine = Get-LogLine -Pattern 'TESTCONNECTPARAMS ([^\r\n]+)'
+Add-Result -Name 'connect-params:no-server' -Expected 1 `
+    -Actual ([int]($connectLine -eq '(none)')) `
+    -Note 'сервера нет — клиент запускается без предзаполнения'
 
 # --- 98ad5eec: закрытие запущенного клиента ----------------------------------
 # Модель процессов: /TESTCLIENTPIDS — что «запущено», /TESTCLIENTGONE — через

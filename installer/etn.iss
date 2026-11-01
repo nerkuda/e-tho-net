@@ -216,12 +216,25 @@
 ; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». В тестовой
 ; сборке каталоги уводятся в песочницу теста: прогон silent-codes.ps1 не
 ; должен трогать настоящий рабочий стол и меню «Пуск» пользователя.
+;
+; Пользовательская область (ошибка 0f8dd0f3, п.7 карточки 860def0d) задана
+; ЯВНО, а не через {autodesktop}/{autoprograms}: в административном режиме
+; установки (/ALLUSERS) авто-константы указывают на общие ярлыки и Program
+; Files, хотя выбран вариант «только для меня». Явный каталог клиента в
+; профиле совпадает с ClientInstallPath — область в install.json и реальное
+; место файлов больше не расходятся.
 #ifdef TestMode
   #define ShortcutDesktopDir ExtractFileDir(TestAppDir) + "\shortcuts\desktop"
   #define ShortcutMenuDir ExtractFileDir(TestAppDir) + "\shortcuts\menu"
+  #define ShortcutUserDesktopDir ShortcutDesktopDir
+  #define ShortcutUserMenuDir ShortcutMenuDir
+  #define ClientUserDir TestAppDir
 #else
   #define ShortcutDesktopDir "{autodesktop}"
   #define ShortcutMenuDir "{autoprograms}\ETN"
+  #define ShortcutUserDesktopDir "{userdesktop}"
+  #define ShortcutUserMenuDir "{userprograms}\ETN"
+  #define ClientUserDir "{localappdata}\Programs\ETN"
 #endif
 
 ; ============================================================================
@@ -325,27 +338,28 @@ Source: "{#ServicePayload}\*"; DestDir: "{app}\service"; Flags: ignoreversion re
 #endif
 
 ; --- Клиент (поставка 98ad5eec). «Для всех» ставится в {app}\client
-; --- привилегированной фазой; «только для меня» — в неэлевированной фазе
-; --- и в тот же {app}, который при обычном запуске указывает на профиль
-; --- пользователя (иначе {localappdata} элевированного процесса может
-; --- оказаться профилем другого администратора).
+; --- привилегированной фазой; «только для меня» — в каталог профиля пользователя
+; --- ({#ClientUserDir} = %LOCALAPPDATA%\Programs\ETN), НЕ в {app}: в
+; --- административном режиме (/ALLUSERS) {app} — Program Files, и файлы
+; --- расходились с client_scope=user (ошибка 0f8dd0f3, п.7). Явный каталог
+; --- совпадает с ClientInstallPath.
 #ifdef HaveClientPayload
 Source: "{#ClientPayload}\*"; DestDir: "{app}\client"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientMachine
-Source: "{#ClientPayload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientUser
+Source: "{#ClientPayload}\*"; DestDir: "{#ClientUserDir}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallClientUser
 #endif
 
 [Icons]
 ; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». Цель зависит
 ; от области установки — «для всех» ставится в {app}\client привилегированной
-; фазой, «только для меня» — в {app} неэлевированной фазы (профиль
-; пользователя). Каталоги ярлыков заданы через #define: в тестовой сборке они
-; уведены в песочницу. Созданные ярлыки Inno удаляет деинсталлятором сам
-; (записи [Icons] попадают в журнал удаления) — отдельного кода не нужно.
+; фазой, «только для меня» — в явный каталог профиля ({#ClientUserDir}).
+; Каталоги ярлыков заданы через #define: в тестовой сборке они уведены в
+; песочницу. Созданные ярлыки Inno удаляет деинсталлятором сам (записи [Icons]
+; попадают в журнал удаления) — отдельного кода не нужно.
 #ifdef HaveClientPayload
 Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientMachine
-Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\ETN.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
+Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
 Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\client\ETN.exe"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Check: InstallClientMachine
-Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\ETN.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ETN.exe"; Check: InstallClientUser
+Name: "{#ShortcutUserDesktopDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Check: InstallClientUser
 #endif
 
 [Run]
@@ -495,6 +509,10 @@ var
     снимает silent-термин для проверки копирования неэлевированной фазой
     (silent-контракт клиент не ставит). }
   GTestUserInstall: String;
+  { Хук ошибки 0f8dd0f3: /TESTCONNECTPARAMS=1 печатает в журнал параметры
+    подключения, которые установщик передаст клиенту при «Запустить клиент»
+    (проверка без живого клиента и без окон). }
+  GTestConnectParams: String;
   { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
@@ -1234,13 +1252,38 @@ begin
     (FileExists(GDataDir + '\_system.db') or DirExists(GDataDir + '\networks'));
 end;
 
+(* Каталог установки клиента по области: «только для меня» — профиль
+  пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
+  Определён ДО ClientFilesPresent: признак «клиент установлен» обязан видеть
+  пользовательскую копию и в административном режиме установки (/ALLUSERS),
+  когда {app} — Program Files, а клиент лежит в профиле (ошибка 0f8dd0f3, п.7).
+  Показывается на экране компонентов; запущенный клиент ищется по обоим
+  вариантам (ClientCloseRoots), потому что обновление может застать клиента
+  прежней области. Каталог фиксирован ADR 144bcdb0, но область установки
+  пользователь выбирает сам. *)
+function ClientInstallPath: String;
+begin
+#ifdef TestMode
+  Result := GServerDir;
+#else
+  if GClientScopeUser then
+    Result := ExpandConstant('{localappdata}') + '\Programs\ETN'
+  else
+    Result := ExpandConstant('{commonpf}') + '\ETN';
+#endif
+end;
+
 function ClientFilesPresent: Boolean;
 var
-  MachineDir: String;
+  MachineDir, ScopeDir: String;
 begin
   MachineDir := MachineAppDir;
-  Result := FileExists(GServerDir + '\ETN.exe') or
-    FileExists(GServerDir + '\client\ETN.exe');
+  ScopeDir := ClientInstallPath;
+  Result := (ScopeDir <> '') and
+    (FileExists(ScopeDir + '\ETN.exe') or FileExists(ScopeDir + '\client\ETN.exe'));
+  if not Result then
+    Result := FileExists(GServerDir + '\ETN.exe') or
+      FileExists(GServerDir + '\client\ETN.exe');
   if not Result and (MachineDir <> '') then
     Result := FileExists(MachineDir + '\client\ETN.exe') or
       FileExists(MachineDir + '\ETN.exe');
@@ -1899,24 +1942,6 @@ begin
   end;
 end;
 
-{ Каталог установки клиента по области: «только для меня» — профиль
-  пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
-  Показывается на экране компонентов; запущенный клиент ищется по обоим
-  вариантам (ClientCloseRoots), потому что обновление может застать клиента
-  прежней области. Каталог фиксирован ADR 144bcdb0, но область установки
-  пользователь выбирает сам. }
-function ClientInstallPath: String;
-begin
-#ifdef TestMode
-  Result := GServerDir;
-#else
-  if GClientScopeUser then
-    Result := ExpandConstant('{localappdata}') + '\Programs\ETN'
-  else
-    Result := ExpandConstant('{commonpf}') + '\ETN';
-#endif
-end;
-
 { Каталоги, процессы которых заменяет этот экземпляр установщика: выбранная
   область установки и второй вариант ADR 144bcdb0. Закрываем только клиента из
   этих каталогов: Get-Process по имени ETN.exe без фильтра закрывал любые
@@ -2293,8 +2318,27 @@ end;
   Пути для итоговой сводки и экрана ошибки (112642a4).
   --------------------------------------------------------------------------- }
 function ClientExePath: String;
+var
+  ScopeDir: String;
 begin
   Result := '';
+  (* Сначала — каталог ВЫБРАННОЙ области: при client_scope=user в
+    административном режиме установки (/ALLUSERS) {app} — Program Files, а
+    клиент лежит в профиле пользователя (ошибка 0f8dd0f3, п.7). *)
+  ScopeDir := ClientInstallPath;
+  if ScopeDir <> '' then
+  begin
+    if FileExists(ScopeDir + '\ETN.exe') then
+    begin
+      Result := ScopeDir + '\ETN.exe';
+      Exit;
+    end;
+    if FileExists(ScopeDir + '\client\ETN.exe') then
+    begin
+      Result := ScopeDir + '\client\ETN.exe';
+      Exit;
+    end;
+  end;
   if FileExists(GServerDir + '\ETN.exe') then
     Result := GServerDir + '\ETN.exe'
   else if FileExists(GServerDir + '\client\ETN.exe') then
@@ -2306,10 +2350,6 @@ begin
     Result := MachineAppDir + '\ETN.exe';
 end;
 
-{ Каталог установки клиента по области: «только для меня» — профиль
-  пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
-  Определена рядом с поиском запущенного клиента: по ней ограничивается
-  закрытие процессов ETN.exe. }
 procedure OpenPath(const Path: String);
 var
   Code: Integer;
@@ -5352,23 +5392,49 @@ begin
   OpenPath(GDataDir);
 end;
 
+{ Параметры подключения к локальному серверу для автозапуска клиента
+  (ошибка 0f8dd0f3, п.6 860def0d). Передаются, только когда сервер установлен
+  или ставится этим же запуском: без сервера клиенту некуда подключаться и
+  предзаполнение было бы ложью. Адрес — loopback с портом установки, имя —
+  то, что пользователь увидит в списке подключений; API-ключ вводит он сам. }
+function ClientConnectParams: String;
+begin
+  if not (GServerSelected or (GServerState <> 'not-installed')) then
+  begin
+    Result := '';
+    Exit;
+  end;
+  Result := '--connect-url="http://localhost:' + GServerPort + '"' +
+    ' --connect-name="Локальный сервер"';
+end;
+
 procedure RunClientClick(Sender: TObject);
 var
-  Exe: String;
+  Exe, Params: String;
   Code: Integer;
 begin
   Exe := ClientExePath;
   if Exe = '' then Exit;
+  Params := ClientConnectParams;
   { Клиент — обычное приложение пользователя, а не служба: запускаем от
     исходного пользователя, даже если установщик повышал права. Иначе клиент
     открылся бы в профиле другого администратора (режим app). }
-  if ShellExecAsOriginalUser('open', Exe, '', ExtractFileDir(Exe),
+  if ShellExecAsOriginalUser('open', Exe, Params, ExtractFileDir(Exe),
     SW_SHOWNORMAL, ewNoWait, Code) then
-    LogLine('INFO', 'Клиент запущен от исходного пользователя: ' + Exe)
+    LogLine('INFO', 'Клиент запущен от исходного пользователя: ' + Exe +
+      IfStr(Params = '', '', '; параметры подключения: ' + Params))
   else
   begin
     LogLine('WARN', 'ShellExecAsOriginalUser не сработал, запуск через оболочку: ' + Exe);
-    OpenPath(Exe);
+    { Оболочка параметры не передаст — клиент открылся бы пустым. Запасной
+      вариант — ShellExec с теми же параметрами: лучше предзаполнение в чужом
+      профиле, чем пустая форма у пользователя. }
+    if (Params <> '') and
+       ShellExec('open', Exe, Params, ExtractFileDir(Exe), SW_SHOWNORMAL,
+         ewNoWait, Code) then
+      LogLine('INFO', 'Клиент запущен с параметрами подключения (ShellExec): ' + Exe)
+    else
+      OpenPath(Exe);
   end;
 end;
 
@@ -6479,6 +6545,7 @@ begin
   GTestClientSoftIssued := False;
   GTestClientGoneAt := 0;
   GTestUserInstall := '';
+  GTestConnectParams := '';
   GChildRanThisPass := False;
   GParamsPath := '';
   GReasonFile := '';
@@ -6563,6 +6630,7 @@ begin
   GTestClientReal := ParamValue('TESTCLIENTREAL');
   GTestClientPath := ParamValue('TESTCLIENTPATH');
   GTestUserInstall := ParamValue('TESTUSERINSTALL');
+  GTestConnectParams := ParamValue('TESTCONNECTPARAMS');
   GTestClientRunning := GTestClientPids <> '';
   GTestClientSoftIssued := False;
   if GTestClientGone <> '' then
@@ -6707,6 +6775,16 @@ begin
   begin
     GServerPort := GTestPort;
     LogLine('WARN', 'TESTPORT=' + GTestPort + ': порт подменён (тестовый режим)');
+  end;
+
+  { /TESTCONNECTPARAMS=1 — какие параметры получит клиент при «Запустить
+    клиент» (ошибка 0f8dd0f3). Подмена порта уже применена, выбор компонентов и
+    состояние машины — тоже; прогон завершается без изменений. }
+  if GTestConnectParams = '1' then
+  begin
+    LogLine('INFO', 'TESTCONNECTPARAMS ' +
+      IfStr(ClientConnectParams = '', '(none)', ClientConnectParams));
+    ExitProcess(EXIT_OK);
   end;
 
   { /TESTPRECHECK=1 — прогон предпроверок без окон: та же функция, что вызывают
