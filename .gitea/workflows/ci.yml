@@ -61,6 +61,17 @@ jobs:
       - name: Client tests
         run: npm -w @etn/client test
 
+      # Установщик Windows (DoD П4, задача 00345091): TestMode-сборка с
+      # фиктивным payload и матрица silent-режима — installer/tests/silent-codes.ps1.
+      # Скрипт рассчитан на pwsh (в 5.1 stderr нативной команды при
+      # $ErrorActionPreference='Stop' обрывает прогон), поэтому инструменты
+      # ставятся заранее: Inno Setup 6 (ISCC) и PowerShell 7.
+      - name: Ensure CI tools (Inno Setup 6, PowerShell 7)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\tests\ensure-ci-tools.ps1
+
+      - name: Installer silent-contract tests
+        run: '"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\silent-codes.ps1'
+
   linux:
     name: Linux (linux-vm)
     runs-on: linux-vm
@@ -81,6 +92,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
       # Ресурсы раннера в лог: разбор таймаутов серверных тестов (ошибка
       # 68a395b5) требует знать реальные CPU/RAM/диск и IO-давление ВМ.
       - name: Runner resources
@@ -94,3 +111,42 @@ jobs:
 
       - name: Server tests
         run: npm -w @etn/server test
+
+      # Поставка Linux (DoD П4): те же шаги, что release.yml (linux-client и
+      # linux-server), но без публикации — проверяем сборку ассетов на раннере.
+      - name: Build client tarball
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./server/package.json').version")"
+          npm -w @etn/client run package -- --dir --publish never
+          unpacked="client/release/linux-unpacked"
+          if [ ! -x "${unpacked}/etn" ]; then
+            echo "::error::electron-builder не создал ${unpacked}/etn"
+            ls -la client/release || true
+            exit 1
+          fi
+          # Иконка для ярлыка рабочего стола: install.sh берёт etn.png из
+          # каталога установленной версии, если он есть.
+          cp client/build/icon.png "${unpacked}/etn.png"
+          asset="ETN-Client-${version}-linux-x64.tar.gz"
+          mkdir -p dist
+          tar --owner=0 --group=0 --numeric-owner -czf "dist/${asset}" -C "${unpacked}" .
+          test -s "dist/${asset}"
+          echo "OK: dist/${asset} ($(du -h "dist/${asset}" | cut -f1))"
+
+      - name: Build server tarball
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./server/package.json').version")"
+          # Скрипт сам проверяет состав архива и прогоняет smoke-test:
+          # etn init + запуск сервера + GET /api/v1/health.
+          node server/scripts/build-server-tarball.mjs --version "${version}" --out dist
+          test -s "dist/etn-server-${version}.tar.gz"
+          echo "OK: dist/etn-server-${version}.tar.gz"
+
+      # Проверка установщика Linux-клиента (DoD П4): подставной архив + локальный
+      # file://-источник релиза. Настоящий electron-бинарник потребовал бы
+      # GUI-библиотек (libgtk-3, libnss3, …) и упал бы на проверке ldd, хотя
+      # проверяется логика install.sh, а не клиент.
+      - name: install.sh checks
+        run: bash scripts/install-sh-smoke.sh "$(node -p "require('./server/package.json').version")"
