@@ -2293,17 +2293,40 @@ if (-not (Test-Path -LiteralPath $psHostExe)) {
         Start-Sleep -Seconds 2
         Add-Result -Name 'client-close:real-started' -Expected 1 `
             -Actual ([int](-not $dummy.HasExited)) -Note "PID $($dummy.Id)"
+        # Мягкое закрытие (taskkill без /F) посылает WM_CLOSE окну процесса.
+        # На раннере CI — служба Gitea в сессии 0 без интерактивного рабочего
+        # стола: окно у подставного процесса не создаётся (MainWindowHandle =
+        # 0), и taskkill отвечает «can only be terminated forcefully». Там
+        # проверяем штатный откат — ненулевой код мягкой попытки и
+        # принудительное закрытие /F. На машине с рабочим столом ожидание
+        # прежнее: мягкое закрытие с кодом 0.
+        $hasDesktop = $false
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $dummy.Refresh()
+            if ($dummy.HasExited) { break }
+            if ($dummy.MainWindowHandle -ne 0) { $hasDesktop = $true; break }
+            Start-Sleep -Milliseconds 250
+        }
+        Write-Host ("client-close: интерактивный рабочий стол={0}" -f [int]$hasDesktop)
         $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$closeParams`"",
             '/TESTELEVATED=1', '/TESTCLIENTREAL=1', "/TESTCLIENTPATH=$dummyDir",
             '/TESTCLIENTWAIT=5000'))
         Add-Result -Name 'client-close:real-code' -Expected 0 -Actual $code
         $null = $dummy.WaitForExit(5000)
         Add-Result -Name 'client-close:real-exited' -Expected 1 `
-            -Actual ([int]$dummy.HasExited) -Note 'мягкий taskkill закрыл процесс'
+            -Actual ([int]$dummy.HasExited) -Note 'процесс ETN.exe закрыт (мягко или откатом /F)'
         $realLog = Get-ClientCloseLog
+        if ($hasDesktop) {
+            $softOk = $realLog -match 'taskkill без /F .*код 0'
+            $softNote = 'taskkill без /F выполнен с кодом 0'
+        } else {
+            $softOk = ($realLog -match 'taskkill без /F .*код [1-9]') -and
+                ($realLog -match 'принудительное закрытие \(taskkill /F\)') -and
+                ($realLog -match 'принудительно закрыт за')
+            $softNote = 'нет рабочего стола (сессия CI): мягкая попытка не прошла, откат /F выполнен'
+        }
         Add-Result -Name 'client-close:real-soft' -Expected 1 `
-            -Actual ([int]($realLog -match 'taskkill без /F .*код 0')) `
-            -Note 'taskkill без /F выполнен с кодом 0'
+            -Actual ([int]$softOk) -Note $softNote
         Add-Result -Name 'client-close:real-files' -Expected 1 `
             -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe')))
     } finally {
