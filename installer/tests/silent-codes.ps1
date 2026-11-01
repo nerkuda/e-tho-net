@@ -969,6 +969,29 @@ Add-StaticResult -Name 'static:client-scope-json' `
          (Test-IssCode -Text $jsonBody -Pattern ([regex]::Escape("Scope := 'machine'")))) `
     -Note 'client_scope (user/machine) пишется в install.json'
 
+# Ошибка 2dd215f7: отказ элевации на Windows 11 с Administrator Protection
+# невозможно разобрать без точного Win32-кода ShellExec и без значения
+# унаследованного шима __COMPAT_LAYER. Сторож держит диагностику в коде, а не
+# в комментариях: без неё повторный отчёт с голой машины снова будет слепым.
+$elevatedBody = Get-IssFunctionBody -Text $issText -Name 'RunElevatedChild'
+$elevationDiagOk = ($issText -match '(?m)^SetupLogging=yes\s*$') -and
+    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape('__COMPAT_LAYER'))) -and
+    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape("SetEnvironmentVariableW('__COMPAT_LAYER', '')"))) -and
+    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape('GElevationErrorCode := Code'))) -and
+    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape('ShellErrorText(Code)'))) -and
+    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape("ShellExec('runas'")))
+$initBody = Get-IssFunctionBody -Text $issText -Name 'InitializeSetup'
+$elevationDiagOk = $elevationDiagOk -and
+    (Test-IssCode -Text $initBody -Pattern ([regex]::Escape("'Слой совместимости: __COMPAT_LAYER='"))) -and
+    (Test-IssCode -Text $initBody -Pattern ([regex]::Escape("ExpandConstant('{log}')")))
+Add-StaticResult -Name 'static:elevation-diagnostics' -Ok $elevationDiagOk `
+    -Note 'отказ runas: Win32-код в журнал, шим __COMPAT_LAYER снимается и логируется; SetupLogging включён'
+$relaunchBody = Get-IssFunctionBody -Text $issText -Name 'RelaunchAdminInstallMode'
+$relaunchOk = (Test-IssCode -Text $relaunchBody -Pattern ([regex]::Escape("ShellExec('open'"))) -and
+    (Test-IssCode -Text $relaunchBody -Pattern ([regex]::Escape('/ALLUSERS /ADMINMODE')))
+Add-StaticResult -Name 'static:admin-relaunch-verb' -Ok $relaunchOk `
+    -Note 'перезапуск в /ALLUSERS идёт с глаголом open, а не путём вместо Verb'
+
 $closeBody = Get-IssFunctionBody -Text $issText -Name 'CloseRunningClient'
 $softIdx = $closeBody.IndexOf('SoftCloseClientPids')
 $softWaitIdx = $closeBody.IndexOf('WaitClientProcessesGone(ClientCloseWaitMs')
@@ -1158,11 +1181,22 @@ Add-StaticResult -Name 'static:server-mode-human' -Ok $modeOk `
     -Note 'режим запуска на экране — по-человечески, без термина service'
 
 $readyMemoBody = Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo'
+# Тексты отказа элевации вынесены в хелперы (2dd215f7): места показа ссылаются
+# на них, а сами формулировки — в телах хелперов. Сторож проверяет и связь, и
+# текст: иначе сообщение «отменено» могло бы остаться без совета, что делать.
+$elevationTextBody = Get-IssFunctionBody -Text $issText -Name 'ElevationFailureText'
+$elevationAdviceBody = Get-IssFunctionBody -Text $issText -Name 'ElevationAdvice'
 $uacOk = (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора'))) -and
     (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('нажмите «Да»'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'NextButtonClick') `
+        -Pattern ([regex]::Escape('ElevationAdvice'))) -and
+    (Test-IssCode -Text $elevationAdviceBody `
         -Pattern ([regex]::Escape('подтвердите запрос UAC кнопкой «Да»'))) -and
+    (Test-IssCode -Text $elevationAdviceBody `
+        -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall') `
+        -Pattern ([regex]::Escape('ElevationFailureText'))) -and
+    (Test-IssCode -Text $elevationTextBody `
         -Pattern ([regex]::Escape('Повышение прав отменено')))
 Add-StaticResult -Name 'static:uac-warning-and-guidance' -Ok $uacOk `
     -Note 'предупреждение до UAC и инструкция после отмены повышения прав'

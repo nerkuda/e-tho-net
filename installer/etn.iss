@@ -308,6 +308,10 @@ Uninstallable=no
 #endif
 WizardStyle=modern
 UninstallDisplayName=ETN {#MyAppVersion}
+; Журнал Inno включён всегда (ошибка 2dd215f7): в нём лоадер печатает слой
+; совместимости («Compatibility mode: …») и низкоуровневые причины отказа
+; запуска/элевации, которых нет в нашем install-логе. Путь журнала пишется в
+; наш лог строкой «Журнал Inno: …» (константа {log}).
 SetupLogging=yes
 UsePreviousAppDir=no
 UsePreviousTasks=no
@@ -392,6 +396,11 @@ const
   BACKUPS_KEEP = 3;
   { Длина имени каталога архива: YYYYMMDD-HHmmss (15 символов). }
   BACKUP_DIR_NAME_LEN = 15;
+  { Win32-коды отказа элевации (ошибка 2dd215f7): в журнал пишется код
+    ShellExec, чтобы отличить отмену UAC от отказа окружения. }
+  ERROR_ACCESS_DENIED = 5;
+  ERROR_ELEVATION_REQUIRED = 740;
+  ERROR_CANCELLED = 1223;
   { Остановка службы WinSW (bb063ac3): после etn-service.exe stop состояние
     опрашивается раз в 250 мс, бюджет — 60 с (stoptimeout в шаблоне службы
     30 с, остальное — запас на медленную остановку node.exe). }
@@ -682,6 +691,11 @@ var
   { Повышение прав на экране готовности: попытка уже выполнена в этом проходе
     (PrepareToInstall не должен запускать дочерний процесс второй раз). }
   GChildRanThisPass: Boolean;
+  { Причина отказа самовызова runas (ошибка 2dd215f7): Win32-код ShellExec и
+    его расшифровка. Для кодов, кроме отмены UAC, сообщение ведёт пользователя
+    к запуску установщика «от имени администратора». }
+  GElevationFailure: String;
+  GElevationErrorCode: Integer;
 
   { Экраны администратора и ключа }
   GAdminPage: TWizardPage;
@@ -2952,33 +2966,78 @@ begin
     ApplyParamLine(Trim(Copy(Text, StartPos, Length(Text) - StartPos + 1)));
 end;
 
+{ Расшифровка кода отказа ShellExec (ошибка 2dd215f7): без кода «повышение
+  прав отклонено» не отличить отмену UAC пользователем от отказа окружения
+  (Administrator Protection Windows 11 26H2 и подобные). }
+function ShellErrorText(const Code: Integer): String;
+begin
+  if Code = ERROR_CANCELLED then
+    Result := 'код 1223: запрос UAC отклонён (ERROR_CANCELLED)'
+  else if Code = ERROR_ELEVATION_REQUIRED then
+    Result := 'код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)'
+  else if Code = ERROR_ACCESS_DENIED then
+    Result := 'код 5: отказано в доступе (ERROR_ACCESS_DENIED)'
+  else if Code = 0 then
+    Result := 'код не сообщён'
+  else
+    Result := 'Win32-код ' + IntToStr(Code);
+end;
+
 { Перезапуск себя с повышением прав (UAC): как только пользователь согласился,
   родительский экземпляр ждёт код возврата дочернего и возвращает его сам.
   Отказ UAC — ShellExec вернёт False. }
 function RunElevatedChild: Integer;
 var
-  Args, ReasonText: String;
+  Args, ReasonText, SavedCompat: String;
   Raw: AnsiString;
   Code: Integer;
+  Ok: Boolean;
 begin
   Result := -1;
   GChildResult := -1;
   GChildReason := '';
+  GElevationFailure := '';
+  GElevationErrorCode := 0;
   GParamsPath := '';
   GReasonFile := '';
   WriteParamsFile;
   if (GParamsPath = '') or (not FileExists(GParamsPath)) then
   begin
+    GElevationFailure := 'файл параметров не создан';
     LogLine('ERROR', 'Файл параметров не создан — повышение прав отменено');
     Exit;
   end;
   Args := '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /PRIVILEGEDPHASE /PARAMS="' +
     GParamsPath + '"';
   LogLine('INFO', 'Повышение прав: перезапуск (файл параметров ' + GParamsPath + ')');
-  if not ShellExec('runas', ExpandConstant('{srcexe}'), Args, '',
-    SW_SHOWNORMAL, ewWaitUntilTerminated, Code) then
+  { Ошибка 2dd215f7: оболочка Windows 11 26H2 с Administrator Protection
+    ставит установщику слой совместимости
+    __COMPAT_LAYER=DetectorsAdminProtection Installer. Слой наследуется
+    дочерним процессом и ломает его самовызов runas — UAC не появляется вовсе.
+    Снимаем слой у себя на время вызова: дочерний экземпляр (он всегда silent)
+    получает чистое окружение, элевация проходит. После вызова возвращаем
+    исходное значение. }
+  SavedCompat := GetEnv('__COMPAT_LAYER');
+  if SavedCompat <> '' then
   begin
-    LogLine('ERROR', 'Повышение прав отклонено (UAC): изменения не выполнялись');
+    LogLine('INFO', 'Слой совместимости снят для дочернего процесса: __COMPAT_LAYER=' +
+      SavedCompat);
+    SetEnvironmentVariableW('__COMPAT_LAYER', '');
+  end;
+  try
+    Ok := ShellExec('runas', ExpandConstant('{srcexe}'), Args, '',
+      SW_SHOWNORMAL, ewWaitUntilTerminated, Code);
+  finally
+    if SavedCompat <> '' then
+      SetEnvironmentVariableW('__COMPAT_LAYER', SavedCompat);
+  end;
+  if not Ok then
+  begin
+    GElevationErrorCode := Code;
+    GElevationFailure := ShellErrorText(Code);
+    LogLine('ERROR', 'Повышение прав не удалось: ShellExec(''runas'') — ' +
+      GElevationFailure + '; __COMPAT_LAYER=' +
+      IfStr(SavedCompat = '', '(нет)', SavedCompat) + '; изменения не выполнялись');
     DeleteFile(GParamsPath);
     DeleteFile(GReasonFile);
     Result := -1;
@@ -3003,6 +3062,33 @@ begin
   DeleteFile(GParamsPath);
   GChildResult := Code;
   Result := Code;
+end;
+
+(* Совет при отказе элевации (ошибка 2dd215f7): отмена UAC лечится повтором с
+  подтверждением «Да», а отказ окружения (Administrator Protection, код 5/740 и
+  прочие) — только запуском установщика от имени администратора. Без кода и
+  совета пользователь повторял тот же запуск по кругу. *)
+function ElevationCanceled: Boolean;
+begin
+  Result := GElevationErrorCode = ERROR_CANCELLED;
+end;
+
+function ElevationFailureText: String;
+begin
+  if GElevationFailure = '' then
+    Result := 'Повышение прав отменено'
+  else
+    Result := 'Повышение прав не удалось (' + GElevationFailure + ')';
+end;
+
+function ElevationAdvice: String;
+begin
+  if ElevationCanceled then
+    Result := 'Чтобы установить выбранные компоненты, повторите установку и ' +
+      'подтвердите запрос UAC кнопкой «Да».'
+  else
+    Result := 'Запустите установщик правым кликом → «Запуск от имени администратора» ' +
+      'и повторите установку.';
 end;
 
 { ---------------------------------------------------------------------------
@@ -5224,13 +5310,18 @@ end;
   профиль пользователя. Процесс уже элевирован — повторный UAC не показывается;
   маркер /ADMINMODE защищает от бесконечного перезапуска. }
 procedure RelaunchAdminInstallMode(const ExtraArgs: String);
+var
+  Code: Integer;
 begin
   if GTestMode or IsAdminInstallMode or ParamExists('ADMINMODE') then Exit;
   LogLine('INFO', 'Перезапуск в административном режиме установки (/ALLUSERS)');
-  if ShellExec(ExpandConstant('{srcexe}'), '/ALLUSERS /ADMINMODE' + ExtraArgs,
-    '', '', SW_HIDE, ewWaitUntilTerminated, GChildResult) then
-    ExitProcess(GChildResult);
-  LogLine('WARN', 'Перезапуск в административном режиме не удался — продолжаем как есть');
+  { Дефект: ShellExec вызывался БЕЗ глагола — первым аргументом уходил путь к
+    exe вместо Verb, и перезапуск молча не выполнялся (2dd215f7). }
+  if ShellExec('open', ExpandConstant('{srcexe}'), '/ALLUSERS /ADMINMODE' + ExtraArgs,
+    '', SW_HIDE, ewWaitUntilTerminated, Code) then
+    ExitProcess(Code);
+  LogLine('WARN', 'Перезапуск в административном режиме не удался (' +
+    ShellErrorText(Code) + ') — продолжаем как есть');
 end;
 
 procedure ValidateSilentPreconditions;
@@ -6674,6 +6765,13 @@ begin
   LogLine('INFO', 'Каталог программы: ' + GServerDir + '; каталог данных: ' + GDataDir);
   LogLine('INFO', 'Inno: autopf=' + ExpandConstant('{autopf}') +
     '; admin_install_mode=' + Pick(IsAdminInstallMode, 'да', 'нет'));
+  { Ошибка 2dd215f7: слой совместимости оболочки (Windows 11 с Administrator
+    Protection) наследуется дочерними процессами и ломает их runas. Пишем его
+    всегда — по журналу видно, запущен ли установщик оболочкой. }
+  LogLine('INFO', 'Слой совместимости: __COMPAT_LAYER=' +
+    IfStr(GetEnv('__COMPAT_LAYER') = '', '(нет)', GetEnv('__COMPAT_LAYER')));
+  LogLine('INFO', 'Журнал Inno: ' +
+    IfStr(ExpandConstant('{log}') = '', '(выключен)', ExpandConstant('{log}')));
   LogLine('INFO', 'Журнал: ' + GLogPath);
   LogLine('INFO', 'Состояние: сервер=' + GServerState +
     ' (установлено: ' + IfStr(GInstalledVersion = '', '—', GInstalledVersion) +
@@ -6683,6 +6781,26 @@ begin
     '; install.json=' + Pick(GInstallJsonValid, 'корректен',
       IfStr(GInstallJsonPresent, 'повреждён', 'нет')) +
     '; данные=' + Pick(GDataDirPresent, 'есть', 'нет'));
+
+  (* Ошибка 2dd215f7 и п.7 860def0d: установщик запущен «от имени
+    администратора», но без /ALLUSERS — Inno работает в неадминистративном
+    режиме: {app} указывает в профиль, сервер должен лежать в Program Files.
+    Перезапускаем себя в административном режиме установки: процесс уже
+    элевирован, UAC не показывается, а самовызов runas (сломанный на системах
+    с Administrator Protection) не нужен вовсе. Это рабочий обход по
+    инструкции «правый клик по установщику → Запуск от имени администратора».
+    Silent и привилегированная фаза передают /ALLUSERS сами; /CURRENTUSER
+    уважаем — пользователь явно выбрал установку в свой профиль. *)
+  if (not GSilent) and (not GPrivilegedPhase) and GIsElevated and
+     (not IsAdminInstallMode) and (not ParamExists('CURRENTUSER')) then
+  begin
+    LogLine('INFO', 'Запуск от имени администратора без /ALLUSERS — ' +
+      'перезапуск в административном режиме установки');
+    if ParamValue('LANG') = '' then
+      RelaunchAdminInstallMode('')
+    else
+      RelaunchAdminInstallMode(' /LANG=' + ParamValue('LANG'));
+  end;
 
   { Чекбокс «Разрешить подключения с других компьютеров» — единственный
     источник ETN_HOST; при обновлении значения пришли из install.json. }
@@ -7344,10 +7462,10 @@ begin
         GChildResult := 0;
         { Отказ UAC ведёт к следующему шагу (ошибка 860def0d, п.5): раньше
           текст «можно изменить выбор или закрыть установщик» не подсказывал
-          повторить и подтвердить запрос. }
-        GComponentsNotice := 'Повышение прав отменено: изменения не выполнялись, ' +
-          'выбор сохранён. Чтобы установить выбранные компоненты, нажмите ' +
-          '«Далее» и подтвердите запрос UAC кнопкой «Да».';
+          повторить и подтвердить запрос. Отказ окружения (2dd215f7) требует
+          другого действия — запуска от имени администратора. }
+        GComponentsNotice := ElevationFailureText + ': изменения не выполнялись, ' +
+          'выбор сохранён. ' + ElevationAdvice;
         SuppressibleMsgBox(GComponentsNotice, mbError, MB_OK, IDOK);
         ReturnToComponentsPage;
         Result := False;
@@ -7443,9 +7561,8 @@ begin
   LogLine('INFO', 'Выбранным компонентам нужны права администратора — повышение прав');
   GChildResult := RunElevatedChild;
   if GChildResult < 0 then
-    Result := 'Повышение прав отменено: изменения не выполнялись, выбор сохранён. ' +
-      'Чтобы установить выбранные компоненты, нажмите «Установить» и подтвердите ' +
-      'запрос UAC кнопкой «Да». Журнал: ' + GLogPath
+    Result := ElevationFailureText + ': изменения не выполнялись, выбор сохранён. ' +
+      ElevationAdvice + ' Журнал: ' + GLogPath
   else if GChildResult = EXIT_PRECONDITION then
   begin
     if GChildReason = '' then
