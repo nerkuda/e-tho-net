@@ -7,15 +7,18 @@
  * Клиент на первом запуске обязан показать форму нового подключения с уже
  * заполненными названием и адресом — пользователю остаётся ввести API-ключ.
  *
- * Тест монтирует реальный `buildOnboarding` на общем DOM-шиме и проверяет два
+ * Тест монтирует реальный `buildOnboarding` на общем DOM-шиме и проверяет три
  * контракта:
  *  1) main отдал предзаполнение (`server.connectPrefill`) → поля «Название» и
  *     «Адрес сервера» заполнены, поле API-key пустое;
  *  2) предзаполнения нет (обычный запуск из меню) → все поля пустые, как
- *     раньше.
+ *     раньше;
+ *  3) пользователь начал ввод до ответа main → заполняются только пустые поля,
+ *     начатый ввод не перетирается.
  *
  * Мутации, которые краснят: не читать `connectPrefill` на онбординге; писать
- * предзаполнение в поле ключа; заполнять адрес без названия.
+ * предзаполнение в поле ключа; заполнять адрес без названия; писать
+ * предзаполнение без проверки пустоты поля (перетирать начатый ввод).
  */
 
 import assert from 'node:assert/strict';
@@ -152,5 +155,43 @@ describe('onboarding: предзаполнение подключения от �
     assert.equal((url as any).value, '');
     assert.equal((label as any).value, '');
     assert.equal((key as any).value, '');
+  });
+
+  it('начатый ввод не перетирается ответом main', async () => {
+    prefillCalls.count = 0;
+    shimDom();
+    let resolvePrefill: (value: Prefill | null) => void = () => undefined;
+    const pending = new Promise<Prefill | null>((resolve) => {
+      resolvePrefill = resolve;
+    });
+    // Мост отвечает не сразу: пользователь успевает начать ввод.
+    (globalThis as any).window.etn = {
+      server: {
+        listProfiles: async () => [],
+        connectPrefill: async () => {
+          prefillCalls.count += 1;
+          return pending;
+        },
+      },
+    };
+
+    const root = await mountOnboarding();
+    const url = inputByPlaceholder(root, URL_PLACEHOLDER);
+    const label = inputByPlaceholder(root, LABEL_PLACEHOLDER);
+
+    await waitFor(() => prefillCalls.count > 0, 'предзаполнение запрошено');
+    (label as any).value = 'Мой сервер';
+    (url as any).value = 'http://10.0.0.5:3000';
+
+    resolvePrefill({ name: 'Локальный сервер', url: 'http://localhost:4321' });
+    // Дать продолжиться loadConnectPrefill после разрешения промиса.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal((label as any).value, 'Мой сервер', 'введённое название сохранено');
+    assert.equal(
+      (url as any).value,
+      'http://10.0.0.5:3000',
+      'введённый адрес сохранён',
+    );
   });
 });
