@@ -980,17 +980,35 @@ $clientHooksIfdef = ($clientPidsProduct -ne '') -and
 Add-StaticResult -Name 'static:client-hooks-ifdef' -Ok $clientHooksIfdef `
     -Note 'модель клиента и хуки /TESTCLIENT* — только под #ifdef TestMode'
 # Закрытие только своих процессов (замечание приёмки 98ad5eec): в продуктовой
-# ветке Get-Process фильтруется по каталогу области установки (ClientCloseRoot),
-# иначе ETN.exe другого пользователя приводит к 30+15 с и коду 20.
+# ветке Get-Process фильтруется по каталогам возможных установок клиента
+# (ClientCloseRoots: выбранная область + второй вариант ADR 144bcdb0), иначе
+# ETN.exe другого пользователя приводит к 30+15 с и коду 20. Оба каталога нужны
+# и потому, что в привилегированной фазе {localappdata} — профиль того же
+# пользователя, а машинный клиент из Program Files тоже может работать
+# (905dec4c).
 $realPidsProduct = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'RealClientPids' -Ifdef 'TestMode'
-$closeFilterOk = (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('ClientCloseRoot'))) -and
-    (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('StartsWith'))) -and
+$closeFilterOk = (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('ClientPathCondition'))) -and
+    (-not (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('ClientCloseRoot(')))) -and
     (-not (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape("Get-Process -Name ''ETN''|ForEach-Object{`$_.Id}"))))
-$closeRootBody = Get-IssFunctionBody -Text $issText -Name 'ClientCloseRoot'
-$closeRootOk = (Test-IssCode -Text $closeRootBody -Pattern ([regex]::Escape('ClientInstallPath'))) -and
-    (Test-IssCode -Text $closeRootBody -Pattern ([regex]::Escape('GPrivilegedPhase')))
-Add-StaticResult -Name 'static:client-close-own-processes' -Ok ($closeFilterOk -and $closeRootOk) `
-    -Note 'Get-Process фильтруется каталогом области установки; чужие ETN.exe не трогаются'
+$closeRootsBody = Get-IssFunctionBody -Text $issText -Name 'ClientCloseRoots'
+$closeRootsOk = (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('{localappdata}'))) -and
+    (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('{commonpf}'))) -and
+    (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('ClientInstallPath')))
+$pathCondBody = Get-IssFunctionBody -Text $issText -Name 'ClientPathCondition'
+$rootCondBody = Get-IssFunctionBody -Text $issText -Name 'ClientRootCondition'
+$pathCondOk = (Test-IssCode -Text $pathCondBody -Pattern ([regex]::Escape(' -or '))) -and
+    (Test-IssCode -Text $rootCondBody -Pattern ([regex]::Escape('StartsWith')))
+Add-StaticResult -Name 'static:client-close-own-processes' -Ok ($closeFilterOk -and $closeRootsOk -and $pathCondOk) `
+    -Note 'фильтр Get-Process — оба каталога клиента; чужие ETN.exe не трогаются'
+# Диалог Inno «Не удалось автоматически закрыть все приложения…» со списком
+# 4× «ETN» — Restart Manager; выбор «Игнорировать» вёл к сбою копирования
+# d3dcompiler_47.dll (905dec4c). Наше закрытие (мягко → /F) заменяет RM, а сам
+# механизм должен быть выключен, иначе список и «Игнорировать» возвращаются.
+$setupSection = [regex]::Match($issText, '(?ms)^\[Setup\](.*?)^\[').Groups[1].Value
+$rmOff = ($setupSection -match '(?m)^\s*CloseApplications\s*=\s*no\s*$') -and
+    ($setupSection -match '(?m)^\s*RestartApplications\s*=\s*no\s*$')
+Add-StaticResult -Name 'static:restart-manager-off' -Ok $rmOff `
+    -Note 'Restart Manager выключен: список ETN и «Игнорировать» недоступны'
 # Обновление: область клиента фиксирована — радиокнопки скрыты, область
 # выводится текстом (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec).
 $updateStateBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
@@ -2541,14 +2559,23 @@ if (-not (Test-Path -LiteralPath $psHostExe)) {
         Add-Result -Name 'client-close:real-exited' -Expected 1 `
             -Actual ([int]$dummy.HasExited) -Note 'процесс ETN.exe закрыт (мягко или откатом /F)'
         $realLog = Get-ClientCloseLog
-        if ($hasDesktop) {
-            $softOk = $realLog -match 'taskkill без /F .*код 0'
-            $softNote = 'taskkill без /F выполнен с кодом 0'
+        # Исход зависит от окружения: на интерактивном рабочем столе мягкое
+        # закрытие обычно проходит; в сессии без рабочего стола WM_CLOSE не
+        # доставляется (MainWindowHandle=0) и штатно срабатывает откат /F.
+        # Допустимы оба пути, но журнал обязан показать один из них целиком:
+        # либо «закрыт мягко», либо «не закрылся → принудительное → закрыт».
+        # (Раньше ветку выбирал MainWindowHandle, и при нулевом handle, но
+        # успешном закрытии тест краснел на исправном установщике.)
+        $softClosedOk = ($realLog -match 'закрыт мягко')
+        $forceFallbackOk = ($realLog -match 'не закрылся — принудительное закрытие \(taskkill /F\)') -and
+            ($realLog -match 'принудительно закрыт за')
+        if ($softClosedOk) {
+            $softOk = $true
+            $softNote = 'мягкое закрытие: процесс закрыт (рабочий стол: ' + [int]$hasDesktop + ')'
         } else {
-            $softOk = ($realLog -match 'taskkill без /F .*код [1-9]') -and
-                ($realLog -match 'принудительное закрытие \(taskkill /F\)') -and
-                ($realLog -match 'принудительно закрыт за')
-            $softNote = 'нет рабочего стола (сессия CI): мягкая попытка не прошла, откат /F выполнен'
+            $softOk = $forceFallbackOk
+            $softNote = 'мягкая попытка не прошла, откат /F выполнен (рабочий стол: ' +
+                [int]$hasDesktop + ')'
         }
         Add-Result -Name 'client-close:real-soft' -Expected 1 `
             -Actual ([int]$softOk) -Note $softNote
@@ -2600,6 +2627,86 @@ if ($realCloseOk) {
 }
 if ($realCloseOk) {
     Add-StaticResult -Name 'client-close:real-available' -Ok $true -Note 'реальная ветка выполнена'
+}
+
+# --- 905dec4c: клиент перехватывает закрытие — установщик обязан применить /F -
+# Electron перехватывает WM_CLOSE, поэтому мягкое закрытие не завершает клиента;
+# в карточке ошибки диалог Inno со списком 4× «ETN» и выбор «Игнорировать» вели к
+# сбою копирования d3dcompiler_47.dll. Здесь подставной ETN.exe с окном, которое
+# отменяет и WM_CLOSE, и завершение сеанса (Restart Manager): закрыть его можно
+# только принудительно. Установка обязана: мягкая попытка → таймаут → /F всех
+# процессов клиента → копирование файлов.
+if ($realCloseOk) {
+    Write-Host '=== 905dec4c: клиент игнорирует мягкое закрытие ==='
+    $stubbornDir = Join-Path $workRoot 'dummy-stubborn'
+    # Подставной клиент лежит ТАМ ЖЕ, куда установщик копирует файл
+    # ($appDir\client\ETN.exe): иначе копирование не столкнулось бы с занятым
+    # файлом и тест не доказывал бы закрытие ДО копирования.
+    $stubbornExe = Join-Path $appDir 'client\ETN.exe'
+    $stubbornCompile = Join-Path $stubbornDir 'stubborn-compile.ps1'
+    # Подставной клиент — Windows-приложение БЕЗ консоли: у консольного
+    # powershell.exe WM_CLOSE закрывает консоль и процесс завершается, тогда
+    # мягкое закрытие выглядело бы успешным. WndProc игнорирует WM_CLOSE и
+    # WM_QUERYENDSESSION — как Electron, перехватывающий закрытие; завершить
+    # такой процесс можно только /F.
+    $stubbornSource = @'
+param([string]$Out)
+$cs = "using System;`nusing System.Windows.Forms;`npublic class StubbornForm : Form {`n  protected override void WndProc(ref Message m) {`n    if (m.Msg == 0x0010 || m.Msg == 0x0011) { m.Result = IntPtr.Zero; return; }`n    base.WndProc(ref m);`n  }`n  [STAThread] public static void Main() { Application.Run(new StubbornForm()); }`n}"
+Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms,System.Drawing -OutputAssembly $Out -OutputType WindowsApplication
+'@
+    Reset-State
+    if (Test-Path -LiteralPath $stubbornDir) { Remove-Item -LiteralPath $stubbornDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $stubbornDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path -Parent $stubbornExe) -Force | Out-Null
+    [System.IO.File]::WriteAllText($stubbornCompile, $stubbornSource,
+        (New-Object System.Text.UTF8Encoding($false)))
+    # Сборка Windows-приложения — Windows PowerShell 5.1: Add-Type в pwsh 7 не
+    # поддерживает -OutputType WindowsApplication.
+    & $psHostExe -NoProfile -ExecutionPolicy Bypass -File $stubbornCompile -Out $stubbornExe
+    Add-Result -Name 'client-close:stubborn-built' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $stubbornExe)) -Note 'подставной ETN.exe собран'
+    if (-not (Test-Path -LiteralPath $stubbornExe)) {
+        throw 'Не удалось собрать подставной ETN.exe, игнорирующий мягкое закрытие.'
+    }
+    # Три процесса, как у Electron (main + renderer + GPU): фильтр по каталогу
+    # обязан найти все, а принудительное закрытие — завершить все до копирования.
+    $stubbornPids = @()
+    $stubborn = @()
+    try {
+        foreach ($n in 1..3) {
+            $proc = Start-Process -FilePath $stubbornExe -PassThru
+            $stubborn += $proc
+            $stubbornPids += $proc.Id
+        }
+        Start-Sleep -Seconds 2
+        $alive = @($stubborn | Where-Object { -not $_.HasExited }).Count
+        Add-Result -Name 'client-close:stubborn-started' -Expected 3 -Actual $alive `
+            -Note ("PID " + ($stubbornPids -join ','))
+        $stubbornParams = New-ParamsFile -Server 0 -Client 1 -Scope machine -Name 'client-close-stubborn.ini'
+        $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE', "/PARAMS=`"$stubbornParams`"",
+            '/TESTELEVATED=1', '/TESTCLIENTREAL=1', '/TESTCLIENTWAIT=1500'))
+        Add-Result -Name 'client-close:stubborn-code' -Expected 0 -Actual $code `
+            -Note 'установка продолжилась после принудительного закрытия'
+        foreach ($proc in $stubborn) {
+            $null = $proc.WaitForExit(5000)
+            $proc.Refresh()
+        }
+        $stillAlive = @($stubborn | Where-Object { -not $_.HasExited }).Count
+        Add-Result -Name 'client-close:stubborn-all-exited' -Expected 0 -Actual $stillAlive `
+            -Note 'все процессы клиента завершены до копирования'
+        $stubbornLog = Get-ClientCloseLog
+        Add-Result -Name 'client-close:stubborn-force' -Expected 1 `
+            -Actual ([int](($stubbornLog -match 'не закрылся — принудительное закрытие') -and
+                ($stubbornLog -match 'принудительно закрыт'))) `
+            -Note 'мягкое закрытие не сработало — применено /F (перехват WM_CLOSE)'
+        Add-Result -Name 'client-close:stubborn-files' -Expected 1 `
+            -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'client\ETN.exe'))) `
+            -Note 'файлы клиента заменены (d3dcompiler_47.dll не заблокирован)'
+    } finally {
+        foreach ($proc in $stubborn) {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+        }
+    }
 }
 
 # ============================================================================

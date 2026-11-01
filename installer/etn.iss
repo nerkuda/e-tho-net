@@ -262,6 +262,13 @@ DisableReadyPage=no
 ; используются. Текст лицензии — локальный файл LICENSE в [Files] (dontcopy),
 ; открывается ссылкой на экране компонентов.
 DisableWelcomePage=yes
+; Restart Manager выключен: его диалог показывает служебный список процессов
+; («4× ETN») и кнопку «Игнорировать», после которой копирование занятых файлов
+; клиента гарантированно падает (ошибка 905dec4c). Клиент закрывает сам
+; установщик — мягко, с таймаутом и принудительным завершением всех процессов
+; до копирования (CloseRunningClient в [Code]).
+CloseApplications=no
+RestartApplications=no
 
 ; Сборка идёт от обычного пользователя: установщик сам повышает права только
 ; там, где это нужно (сервер / клиент «для всех»), через перезапуск копии
@@ -1894,9 +1901,10 @@ end;
 
 { Каталог установки клиента по области: «только для меня» — профиль
   пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
-  Показывается на экране компонентов и ограничивает поиск запущенного клиента:
-  каталог фиксирован ADR 144bcdb0, но область установки пользователь выбирает
-  сам. }
+  Показывается на экране компонентов; запущенный клиент ищется по обоим
+  вариантам (ClientCloseRoots), потому что обновление может застать клиента
+  прежней области. Каталог фиксирован ADR 144bcdb0, но область установки
+  пользователь выбирает сам. }
 function ClientInstallPath: String;
 begin
 #ifdef TestMode
@@ -1909,28 +1917,94 @@ begin
 #endif
 end;
 
-{ Каталог, процессы которого заменяет этот экземпляр установщика: закрываем
-  только клиента из своей области установки. Get-Process по имени ETN.exe без
-  фильтра закрывал любые процессы ETN.exe на машине — при per-user установке
-  это живой клиент другого пользователя: 30+15 с ожидания и код 20 (замечание
-  приёмки 98ad5eec). В привилегированной фазе пользовательский клиент не
-  устанавливается, а каталог локальных приложений там — профиль администратора:
-  чужие профили не трогаем. }
-function ClientCloseRoot: String;
+{ Каталоги, процессы которых заменяет этот экземпляр установщика: выбранная
+  область установки и второй вариант ADR 144bcdb0. Закрываем только клиента из
+  этих каталогов: Get-Process по имени ETN.exe без фильтра закрывал любые
+  процессы ETN.exe на машине — при per-user установке это живой клиент другого
+  пользователя: 30+15 с ожидания и код 20 (замечание приёмки 98ad5eec).
+
+  Второй каталог нужен и в привилегированной фазе (905dec4c): каталог
+  локальных приложений там — профиль того же пользователя (обычное
+  подтверждение UAC), поэтому пользовательский клиент закрывается, а машинный
+  клиент из Program Files закрывается всегда, даже если сейчас выбрана область
+  «только для меня». Раньше при user-scope в привилегированной фазе фильтр был
+  пуст и клиент не закрывался вовсе. }
+function ClientCloseRoots: String;
+var
+  UserRoot, MachineRoot: String;
 begin
-  Result := '';
-  if GClientScopeUser and GPrivilegedPhase then Exit;
+#ifdef TestMode
+  { Тестовая сборка реальные каталоги продукта не трогает: фильтр — каталог
+    программы теста либо явный /TESTCLIENTPATH. }
   Result := ClientInstallPath;
+#else
+  UserRoot := ExpandConstant('{localappdata}') + '\Programs\ETN';
+  MachineRoot := ExpandConstant('{commonpf}') + '\ETN';
+  if GClientScopeUser then
+    Result := UserRoot + #13#10 + MachineRoot
+  else
+    Result := MachineRoot + #13#10 + UserRoot;
+#endif
 end;
 
-{ Настоящий опрос: Get-Process по имени ETN.exe, но только процессы из каталога
-  установки (Product: ClientCloseRoot; TestMode: /TESTCLIENTPATH, по умолчанию
-  каталог программы тестового прогона) — чужой клиент не трогается. PowerShell
-  получает скрипт в двойных кавычках: внутри только одинарные (грабли B3
-  приёмки 9b310991). }
+{ Условие PowerShell «путь процесса начинается с каталога». Завершающий '\'
+  обязателен: иначе 'C:\Program Files\ETN' совпал бы с
+  'C:\Program Files\ETN2\ETN.exe'. }
+function ClientRootCondition(const Root: String): String;
+var
+  Dir: String;
+begin
+  Result := '';
+  if Root = '' then Exit;
+  Dir := Root;
+  if Copy(Dir, Length(Dir), 1) <> '\' then
+    Dir := Dir + '\';
+  StringChangeEx(Dir, '''', '''''', True);
+  Result := '$path.StartsWith(''' + Dir + ''',' +
+    '[System.StringComparison]::OrdinalIgnoreCase)';
+end;
+
+{ Условие для всех каталогов клиента (ClientCloseRoots), объединённое через
+  -or: процесс из любого варианта установки подлежит закрытию. }
+function ClientPathCondition: String;
+var
+  Roots, Root, Cond: String;
+  P: Integer;
+begin
+  Result := '';
+  Cond := '';
+  Roots := ClientCloseRoots;
+  while Roots <> '' do
+  begin
+    P := Pos(#13#10, Roots);
+    if P > 0 then
+    begin
+      Root := Copy(Roots, 1, P - 1);
+      Roots := Copy(Roots, P + 2, Length(Roots) - P - 1);
+    end
+    else
+    begin
+      Root := Roots;
+      Roots := '';
+    end;
+    if Root <> '' then
+    begin
+      if Cond <> '' then
+        Cond := Cond + ' -or ';
+      Cond := Cond + ClientRootCondition(Root);
+    end;
+  end;
+  Result := Cond;
+end;
+
+{ Настоящий опрос: Get-Process по имени ETN.exe, но только процессы из
+  каталогов клиента (Product: ClientPathCondition; TestMode: /TESTCLIENTPATH,
+  по умолчанию каталог программы тестового прогона) — чужой клиент не
+  трогается. PowerShell получает скрипт в двойных кавычках: внутри только
+  одинарные (грабли B3 приёмки 9b310991). }
 function RealClientPids: String;
 var
-  Script, Args, OutFile, OutFileLiteral, Filter: String;
+  Script, Args, OutFile, OutFileLiteral, Condition: String;
   Code: Integer;
   Raw: AnsiString;
 begin
@@ -1939,30 +2013,25 @@ begin
   DeleteFile(OutFile);
   OutFileLiteral := OutFile;
   StringChangeEx(OutFileLiteral, '''', '''''', True);
-  Filter := '';
+  Condition := '';
 #ifdef TestMode
   { Тестовая сборка может задать каталог явно (/TESTCLIENTPATH); иначе —
-    общий продуктовый фильтр по области установки (в тестовой сборке это
+    общий продуктовый фильтр по каталогам клиента (в тестовой сборке это
     каталог программы теста). }
-  Filter := GTestClientPath;
+  if GTestClientPath <> '' then
+    Condition := ClientRootCondition(GTestClientPath);
 #endif
-  if Filter = '' then
-    Filter := ClientCloseRoot;
-  if Filter = '' then
+  if Condition = '' then
+    Condition := ClientPathCondition;
+  if Condition = '' then
   begin
-    LogLine('INFO', 'Клиент ETN: процессов вне области установки не ищем — закрывать нечего');
+    LogLine('INFO', 'Клиент ETN: каталоги установки не определены — закрывать нечего');
     Exit;
   end;
-  { Префикс с завершающим '\': иначе 'C:\Program Files\ETN' совпал бы с
-    'C:\Program Files\ETN2\ETN.exe'. }
-  if Copy(Filter, Length(Filter), 1) <> '\' then
-    Filter := Filter + '\';
-  StringChangeEx(Filter, '''', '''''', True);
   Script :=
     '$ids=@(Get-Process -Name ''ETN''|ForEach-Object{$p=$_;$path='''';' +
     'try{$path=$p.Path}catch{};' +
-    'if($path.StartsWith(''' + Filter + ''',' +
-    '[System.StringComparison]::OrdinalIgnoreCase)){$p.Id}});' +
+    'if(' + Condition + '){$p.Id}});' +
     '[IO.File]::WriteAllText(''' + OutFileLiteral + ''',($ids -join [Environment]::NewLine))';
   Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
