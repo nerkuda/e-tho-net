@@ -135,16 +135,19 @@
 ;   %ProgramData%\ETN\logs\install-YYYYMMDD-HHmmss.log (fallback %TEMP%).
 ;
 ; Внутренние режимы запуска (не для пользователя):
-;   /PRIVILEGEDPHASE — дочерняя элевированная фаза GUI-установки (сервер и
-;   клиент «для всех»); silent-предусловия самообновления к ней НЕ применяются,
-;   проверяются только права, каталог программы, каталог данных и порт;
+;   /PRIVILEGEDPHASE — привилегированная работа без мастера: фаза пишет в
+;   каталог программы и каталог данных; silent-предусловия самообновления к ней
+;   НЕ применяются, проверяются только права, каталог программы, каталог данных
+;   и порт. GUI-установка её больше не запускает (элевация штатная, 2dd215f7);
+;   фаза остаётся для installer/tests/*.ps1.
 ;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
 ;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
 ;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
 ;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
 ;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
 ;   /TESTSERVICEREALFILE, /TESTUNINSTALLSERVICE, /TESTHEALTHURL,
-;   /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK — только в тестовой сборке
+;   /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK, /TESTADMINMODE,
+;   /TESTUSERONLYMODE, /TESTGUIMODE — только в тестовой сборке
 ;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
 ; ============================================================================
 
@@ -283,11 +286,31 @@ DisableWelcomePage=yes
 CloseApplications=no
 RestartApplications=no
 
-; Сборка идёт от обычного пользователя: установщик сам повышает права только
-; там, где это нужно (сервер / клиент «для всех»), через перезапуск копии
-; с /ALLUSERS и ShellExec('runas') — см. [Code].
+; Элевация — штатная, силами Inno и до [Code] (ошибка 2dd215f7): скриптовый
+; self-exec установщика платформа запрещает (Exec/ShellExec/FileCopy по
+; {srcexe} до старта установки дают код 5). Права запрашивает Windows один раз
+; при старте; диалог режима позволяет выбрать установку «только для меня»
+; (/CURRENTUSER) — она идёт без элевации.
+;   admin    — режим по умолчанию: сервер и клиент «для всех пользователей»;
+;   dialog   — диалог режима на старте; /ALLUSERS и /CURRENTUSER его отменяют;
+;   UsePreviousPrivileges — если ETN уже установлена, повторный запуск не
+;              спрашивает режим: берётся прошлый выбор (меньше диалогов).
+#ifdef TestMode
+; В тестовой сборке привилегий нет (иначе UAC в CI): административный режим
+; моделируется хуком /TESTADMINMODE=1, неадминистративный — /TESTUSERONLYMODE=1.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
+#else
+PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=commandline dialog
+UsePreviousPrivileges=yes
+; Предупреждение Inno «per-user areas in admin mode» снято осознанно: пути
+; {localappdata}/{userdesktop}/{userprograms} используются только установкой
+; клиента «только для меня», а в административном режиме она недоступна
+; (GAdminMachineScope и Check InstallClientUser отключают ветку); машинный
+; клиент ставится в {autopf}. Ярлыки и файлы per-user остаются под Check.
+UsedUserAreasWarning=no
+#endif
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -318,6 +341,23 @@ UsePreviousTasks=no
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
+
+[Messages]
+; Диалог режима установки (PrivilegesRequiredOverridesAllowed=commandline
+; dialog) — то единственное место, где пользователь выбирает «для всех» или
+; «только для меня»: он показывается до мастера, вместе со штатным запросом
+; прав Windows (ошибка 2dd215f7). Стандартные тексты Inno говорят о
+; «привилегиях администратора» без последствий, поэтому здесь прямо сказано,
+; что именно ставится в каждом режиме и когда появится UAC. Text1 — текущий
+; режим по умолчанию admin, Text2 — lowest (тестовая сборка).
+PrivilegesRequiredOverrideTitle=Режим установки ETN
+PrivilegesRequiredOverrideInstruction=Выберите, для кого установить ETN
+PrivilegesRequiredOverrideText1=%1 может быть установлена для всех пользователей компьютера (сервер-служба и клиент; Windows запросит права администратора) или только для вас (клиент в вашем профиле, без прав администратора).
+PrivilegesRequiredOverrideText2=%1 может быть установлена только для вас (клиент в вашем профиле, без прав администратора) или для всех пользователей компьютера (сервер-служба и клиент; Windows запросит права администратора).
+PrivilegesRequiredOverrideAllUsers=Установить для всех пользователей (сервер и клиент)
+PrivilegesRequiredOverrideAllUsersRecommended=Установить для всех пользователей (рекомендуется: сервер и клиент)
+PrivilegesRequiredOverrideCurrentUser=Установить только для меня (клиент, без прав администратора)
+PrivilegesRequiredOverrideCurrentUserRecommended=Установить только для меня (клиент, без прав администратора)
 
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
@@ -359,11 +399,15 @@ Source: "{#ClientPayload}\*"; DestDir: "{#ClientUserDir}"; Flags: ignoreversion 
 ; Каталоги ярлыков заданы через #define: в тестовой сборке они уведены в
 ; песочницу. Созданные ярлыки Inno удаляет деинсталлятором сам (записи [Icons]
 ; попадают в журнал удаления) — отдельного кода не нужно.
+; Параметры подключения (ошибка 0f8dd0f3) лежат в самом ярлыке: запуск из меню
+; «Пуск»/рабочего стола передаёт клиенту тот же prefill, что и кнопка
+; «Запустить клиент». Это единственный путь для административного режима, где
+; автозапуск клиента запрещён (профиль SMAA, 2dd215f7).
 #ifdef HaveClientPayload
-Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientMachine
-Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
-Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\client\ETN.exe"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Check: InstallClientMachine
-Name: "{#ShortcutUserDesktopDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Check: InstallClientUser
+Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientMachine
+Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
+Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Check: InstallClientMachine
+Name: "{#ShortcutUserDesktopDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Check: InstallClientUser
 #endif
 
 [Run]
@@ -441,6 +485,18 @@ var
   GServerOnly: Boolean;
   GPrivilegedPhase: Boolean;
   GIsElevated: Boolean;
+  { Административный режим установки: установщик работает «для всех
+    пользователей» (PrivilegesRequired=admin или /ALLUSERS). Права запрашивает
+    сам Inno при старте (native respawn); скриптового самозапуска нет —
+    ошибка 2dd215f7. В TestMode моделируется /TESTADMINMODE=1. }
+  GAdminInstallMode: Boolean;
+  { Неадминистративный режим («только для меня»): сервер и клиент «для всех»
+    недоступны, ставится только клиент в профиль пользователя (сценарий n2). }
+  GUserOnlyMode: Boolean;
+  { В административном режиме клиент ставится только «для всех»: под
+    Administrator Protection элевированный процесс работает в отдельном
+    профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
+  GAdminMachineScope: Boolean;
   GTestMode: Boolean;
   GTestHealth: String;
   GTestElevated: String;
@@ -522,6 +578,13 @@ var
     подключения, которые установщик передаст клиенту при «Запустить клиент»
     (проверка без живого клиента и без окон). }
   GTestConnectParams: String;
+  { Хук 2dd215f7: /TESTADMINMODE=1 моделирует административный режим установки
+    без настоящей элевации (проверка «клиент только для всех»); без него
+    тестовая сборка работает как неадминистративный режим «только для меня». }
+  GTestAdminMode: String;
+  { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
+    сборке: сервер недоступен, ставится только клиент «для меня». }
+  GTestUserOnlyMode: String;
   { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
@@ -615,7 +678,6 @@ var
 
   { Результат }
   GExitCode: Integer;
-  GChildResult: Integer;
   { Архив БД, созданный последним вызовом CreateDatabaseBackup ('' — архива
     нет). Вызывающему нужен путь для сообщения об отказе/откате. Откат БД
     восстанавливает только из него: LatestBackupDir — архив прошлых
@@ -688,15 +750,6 @@ var
   GLegacyClientVersion: String;
   GLegacyClientMachine: Boolean;
 
-  { Повышение прав на экране готовности: попытка уже выполнена в этом проходе
-    (PrepareToInstall не должен запускать дочерний процесс второй раз). }
-  GChildRanThisPass: Boolean;
-  { Причина отказа самовызова runas (ошибка 2dd215f7): Win32-код ShellExec и
-    его расшифровка. Для кодов, кроме отмены UAC, сообщение ведёт пользователя
-    к запуску установщика «от имени администратора». }
-  GElevationFailure: String;
-  GElevationErrorCode: Integer;
-
   { Экраны администратора и ключа }
   GAdminPage: TWizardPage;
   GAdminLoginLabel: TNewStaticText;
@@ -730,10 +783,10 @@ var
     привилегированной фазы идёт раньше: от него зависит выбор компонентов и
     место журнала). Выводятся сразу после InitLog. }
   GDeferredLog: String;
-  { Файл причины отказа предусловия: дочерняя (элевированная) фаза пишет
-    причину, родитель читает и показывает её в сообщении об ошибке. }
+  { Файл причины отказа предусловия: привилегированная фаза (/PRIVILEGEDPHASE)
+    пишет сюда причину, а вызывающий её процесс читает и показывает в
+    сообщении об ошибке. }
   GReasonFile: String;
-  GChildReason: String;
   { Правило брандмауэра существовало до удаления программы (ставится в
     CurUninstallStepChanged). }
   GUninstallFirewallRule: Boolean;
@@ -1444,12 +1497,19 @@ begin
       Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
   end
   else if GLegacyClientFound and GClientSelected then
+  begin
     { Компактно: длинный текст выталкивал нижние подписи за поверхность
-      страницы (ошибка 860def0d, п.1). }
+      страницы (ошибка 860def0d, п.1). В режиме «только для меня» машинный
+      старый клиент не удаляется — не обещаем этого (2dd215f7). }
     Result := 'найден клиент ETN ' + GLegacyClientVersion +
       ' от старого установщика (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') +
-      ') — перед установкой он будет удалён'
+      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + ')';
+    if GUserOnlyMode and GLegacyClientMachine then
+      Result := Result + ' — для его удаления нужны права администратора; ' +
+        'новый клиент поставится в ваш профиль'
+    else
+      Result := Result + ' — перед установкой он будет удалён';
+  end
   else if GLegacyClientFound then
     Result := 'найден клиент ETN ' + GLegacyClientVersion +
       ' от старого установщика (NSIS' +
@@ -1469,13 +1529,48 @@ begin
   Result := GClientState = 'installed';
 end;
 
+{ В административном режиме установки «клиент для меня» запрещён: под
+  Administrator Protection элевированный процесс работает в отдельном профиле
+  (SMAA), и пользовательские файлы/ярлыки попали бы в чужой профиль. Это же
+  правило рекомендует Microsoft: в административном режиме пользовательские
+  области не трогать. В режиме «только для меня» область одна по построению —
+  радиокнопки тоже не нужны. Привилегированная фаза исключена — клиента «для
+  меня» ставит неэлевированная фаза, ребёнок его не касается. }
 function ClientScopeRadiosVisible: Boolean;
 begin
-  Result := not ClientScopeFixed;
+  Result := (not ClientScopeFixed) and (not GAdminMachineScope) and
+    (not GUserOnlyMode);
 end;
 
 function ClientScopeText: String;
 begin
+  if GAdminMachineScope then
+  begin
+    Result := 'Установщик запущен от имени администратора: клиент ставится ' +
+      'для всех пользователей. Подключение к локальному серверу уже ' +
+      'предзаполнено в ярлыке клиента.';
+    Exit;
+  end;
+  { Режим «только для меня» (2dd215f7): клиент «для всех» без прав
+    администратора не заменить — говорим, что сделать, вместо невнятного
+    «выберите хотя бы один компонент». }
+  if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+  begin
+    Result := 'Клиент установлен для всех пользователей: его обновление ' +
+      'требует прав администратора. Закройте установщик и запустите его снова, ' +
+      'выбрав «Установить для всех пользователей».';
+    Exit;
+  end;
+  { Режим «только для меня»: клиент в профиле обновляется на месте; другой
+    вариант — запуск установщика с выбором «для всех пользователей». }
+  if GUserOnlyMode then
+  begin
+    Result := 'Клиент установлен в варианте «только для меня» — обновление ' +
+      'продолжится в ваш профиль. Чтобы поставить клиент «для всех ' +
+      'пользователей», закройте установщик и запустите его снова, выбрав ' +
+      '«Установить для всех пользователей».';
+    Exit;
+  end;
   { Формулировка пользователя (ошибка 860def0d, n5): прямо говорит, в каком
     варианте клиент уже установлен и что сделать, чтобы получить другой, —
     без термина «область установки». }
@@ -1503,6 +1598,23 @@ end;
 { ---------------------------------------------------------------------------
   Лицензия MIT (112642a4, требование d75b7988).
   --------------------------------------------------------------------------- }
+{ Текст отказа ShellExec по Win32-коду (2dd215f7): код 1223 — отказ UAC, 740 —
+  нужны права администратора, 5 — доступ запрещён. Нужен и здесь, и на экране
+  ошибки: без кода отказ оболочки невозможно разобрать по журналу. }
+function ShellErrorText(const Code: Integer): String;
+begin
+  if Code = ERROR_CANCELLED then
+    Result := 'код 1223: запрос UAC отклонён (ERROR_CANCELLED)'
+  else if Code = ERROR_ELEVATION_REQUIRED then
+    Result := 'код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)'
+  else if Code = ERROR_ACCESS_DENIED then
+    Result := 'код 5: отказано в доступе (ERROR_ACCESS_DENIED)'
+  else if Code = 0 then
+    Result := 'код не сообщён'
+  else
+    Result := 'Win32-код ' + IntToStr(Code);
+end;
+
 { Лицензия запрашивается только при первой установке: на машине нет ни
   установленного сервера, ни клиента. Состояние adopt (данные без программы)
   программой не считается — лицензия показывается. }
@@ -1529,8 +1641,12 @@ begin
   end;
   if not ShellExec('open', ExpandConstant('{tmp}\LICENSE'), '', '',
     SW_SHOWNORMAL, ewNoWait, Code) then
+  begin
+    { Win32-код отказа — в журнал: диагностика проблем оболочки (2dd215f7). }
+    LogLine('ERROR', 'ShellExec(open, LICENSE) не удался: ' + ShellErrorText(Code));
     SuppressibleMsgBox('Не удалось открыть текст лицензии во временном каталоге: ' +
       ExpandConstant('{tmp}\LICENSE'), mbError, MB_OK, IDOK);
+  end;
 end;
 
 { ---------------------------------------------------------------------------
@@ -1912,8 +2028,13 @@ begin
   if not FindLegacyClient(Version, Cmd, IsMachine) then Exit;
   if IsMachine and (not Elevated) then
   begin
-    LogLine('INFO', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
-      'пользователей: удаление выполнит привилегированная фаза');
+    { Машинный клиент старого установщика без прав не удалить: скриптовой
+      элевации больше нет (2dd215f7), привилегированной фазы в GUI нет. В
+      режиме «только для меня» это не ошибка — новый клиент ставится в профиль,
+      старый остаётся; на экране компонентов обещания удаления нет. }
+    LogLine('WARN', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
+      'пользователей: удаление требует прав администратора — запустите ' +
+      'установщик, выбрав «Установить для всех пользователей»');
     Exit;
   end;
   if IsMachine then
@@ -2459,9 +2580,26 @@ begin
     GClientSelected := True;
   end;
 
-  { Область клиента: «только для меня»; если клиент уже стоит «для всех»
-    (install.json, client_scope=machine) — сохраняем машинную область. }
-  GClientScopeUser := GInstalledClientScope <> 'machine';
+  { Режим «только для меня» (2dd215f7): прав администратора нет, поэтому
+    сервер не ставится. Клиент ставится в профиль; если он уже установлен
+    «для всех», обновить его без прав нельзя — выбор снят, объяснение выводит
+    ClientScopeText. }
+  if GUserOnlyMode then
+  begin
+    GServerSelected := False;
+    GClientSelected := (GClientState <> 'installed') or
+      (GInstalledClientScope <> 'machine');
+    GClientScopeUser := True;
+    Exit;
+  end;
+
+  { Область клиента: в административном режиме — «для всех»
+    (GAdminMachineScope), иначе «только для меня»; если клиент уже стоит «для
+    всех» (install.json, client_scope=machine) — сохраняем машинную область. }
+  if GAdminMachineScope then
+    GClientScopeUser := False
+  else
+    GClientScopeUser := GInstalledClientScope <> 'machine';
 end;
 
 { ---------------------------------------------------------------------------
@@ -2966,130 +3104,15 @@ begin
     ApplyParamLine(Trim(Copy(Text, StartPos, Length(Text) - StartPos + 1)));
 end;
 
-{ Расшифровка кода отказа ShellExec (ошибка 2dd215f7): без кода «повышение
-  прав отклонено» не отличить отмену UAC пользователем от отказа окружения
-  (Administrator Protection Windows 11 26H2 и подобные). }
-function ShellErrorText(const Code: Integer): String;
-begin
-  if Code = ERROR_CANCELLED then
-    Result := 'код 1223: запрос UAC отклонён (ERROR_CANCELLED)'
-  else if Code = ERROR_ELEVATION_REQUIRED then
-    Result := 'код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)'
-  else if Code = ERROR_ACCESS_DENIED then
-    Result := 'код 5: отказано в доступе (ERROR_ACCESS_DENIED)'
-  else if Code = 0 then
-    Result := 'код не сообщён'
-  else
-    Result := 'Win32-код ' + IntToStr(Code);
-end;
+{ Элевация (ошибка 2dd215f7): скриптовый self-exec установщика запрещён
+  платформой — Inno не даёт Exec/ShellExec/FileCopy целиться в сам setup до
+  старта установки (документация ISetup.chm, разделы Exec/ShellExec; пробы
+  дают код 5). Права запрашивает сам Inno при старте: PrivilegesRequired=
+  admin и PrivilegesRequiredOverridesAllowed=commandline dialog. Режим
+  «только для меня» (/CURRENTUSER или выбор в диалоге) идёт без элевации.
+  Скриптовых RunElevatedChild, /ELEVATEHELPER и RelaunchAdminInstallMode
+  больше нет. }
 
-{ Перезапуск себя с повышением прав (UAC): как только пользователь согласился,
-  родительский экземпляр ждёт код возврата дочернего и возвращает его сам.
-  Отказ UAC — ShellExec вернёт False. }
-function RunElevatedChild: Integer;
-var
-  Args, ReasonText, SavedCompat: String;
-  Raw: AnsiString;
-  Code: Integer;
-  Ok: Boolean;
-begin
-  Result := -1;
-  GChildResult := -1;
-  GChildReason := '';
-  GElevationFailure := '';
-  GElevationErrorCode := 0;
-  GParamsPath := '';
-  GReasonFile := '';
-  WriteParamsFile;
-  if (GParamsPath = '') or (not FileExists(GParamsPath)) then
-  begin
-    GElevationFailure := 'файл параметров не создан';
-    LogLine('ERROR', 'Файл параметров не создан — повышение прав отменено');
-    Exit;
-  end;
-  Args := '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS /PRIVILEGEDPHASE /PARAMS="' +
-    GParamsPath + '"';
-  LogLine('INFO', 'Повышение прав: перезапуск (файл параметров ' + GParamsPath + ')');
-  { Ошибка 2dd215f7: оболочка Windows 11 26H2 с Administrator Protection
-    ставит установщику слой совместимости
-    __COMPAT_LAYER=DetectorsAdminProtection Installer. Слой наследуется
-    дочерним процессом и ломает его самовызов runas — UAC не появляется вовсе.
-    Снимаем слой у себя на время вызова: дочерний экземпляр (он всегда silent)
-    получает чистое окружение, элевация проходит. После вызова возвращаем
-    исходное значение. }
-  SavedCompat := GetEnv('__COMPAT_LAYER');
-  if SavedCompat <> '' then
-  begin
-    LogLine('INFO', 'Слой совместимости снят для дочернего процесса: __COMPAT_LAYER=' +
-      SavedCompat);
-    SetEnvironmentVariableW('__COMPAT_LAYER', '');
-  end;
-  try
-    Ok := ShellExec('runas', ExpandConstant('{srcexe}'), Args, '',
-      SW_SHOWNORMAL, ewWaitUntilTerminated, Code);
-  finally
-    if SavedCompat <> '' then
-      SetEnvironmentVariableW('__COMPAT_LAYER', SavedCompat);
-  end;
-  if not Ok then
-  begin
-    GElevationErrorCode := Code;
-    GElevationFailure := ShellErrorText(Code);
-    LogLine('ERROR', 'Повышение прав не удалось: ShellExec(''runas'') — ' +
-      GElevationFailure + '; __COMPAT_LAYER=' +
-      IfStr(SavedCompat = '', '(нет)', SavedCompat) + '; изменения не выполнялись');
-    DeleteFile(GParamsPath);
-    DeleteFile(GReasonFile);
-    Result := -1;
-    Exit;
-  end;
-  LogLine('INFO', 'Дочерний (элевированный) установщик завершился с кодом ' + IntToStr(Code));
-  { Причина отказа — из файла, который записал дочерний процесс: сообщение
-    об ошибке должно называть причину, а не отправлять в журнал. }
-  if Code <> 0 then
-  begin
-    { Причина — UTF-8: файл читают и установщик (сообщение пользователю), и
-      тесты, независимо от системной кодовой страницы. Пишется и предусловием
-      (код 20), и сбоем (код 10) — родитель покажет причину, а не только код. }
-    ReasonText := '';
-    if FileExists(GReasonFile) and LoadStringFromFile(GReasonFile, Raw) then
-      ReasonText := Utf8Decode(Raw);
-    GChildReason := Trim(ReasonText);
-    DeleteFile(GReasonFile);
-  end;
-  { Файл параметров удаляется после использования: в общем каталоге он
-    оставаться не должен (дочерний мог не успеть удалить его сам). }
-  DeleteFile(GParamsPath);
-  GChildResult := Code;
-  Result := Code;
-end;
-
-(* Совет при отказе элевации (ошибка 2dd215f7): отмена UAC лечится повтором с
-  подтверждением «Да», а отказ окружения (Administrator Protection, код 5/740 и
-  прочие) — только запуском установщика от имени администратора. Без кода и
-  совета пользователь повторял тот же запуск по кругу. *)
-function ElevationCanceled: Boolean;
-begin
-  Result := GElevationErrorCode = ERROR_CANCELLED;
-end;
-
-function ElevationFailureText: String;
-begin
-  if GElevationFailure = '' then
-    Result := 'Повышение прав отменено'
-  else
-    Result := 'Повышение прав не удалось (' + GElevationFailure + ')';
-end;
-
-function ElevationAdvice: String;
-begin
-  if ElevationCanceled then
-    Result := 'Чтобы установить выбранные компоненты, повторите установку и ' +
-      'подтвердите запрос UAC кнопкой «Да».'
-  else
-    Result := 'Запустите установщик правым кликом → «Запуск от имени администратора» ' +
-      'и повторите установку.';
-end;
 
 { ---------------------------------------------------------------------------
   Установка и параметры
@@ -3097,13 +3120,16 @@ end;
 function InPrivilegedContext: Boolean;
 begin
   { Привилегированная фаза — та, что пишет в каталог программы и каталог
-    данных: silent (предусловие — уже элевирован), дочерняя копия с
-    /PRIVILEGEDPHASE, либо административный режим установки (autopf =
-    Program Files). Элевированный, но не административный процесс пишет в
-    профиль пользователя и привилегированной фазой не считается — иначе
-    сервер попал бы и в Program Files (дочерний), и в профиль (родитель). }
+    данных: silent (предусловие — уже элевирован), внутренняя фаза
+    /PRIVILEGEDPHASE (тесты установщика; GUI её больше не запускает), либо
+    административный режим установки — его обеспечивает сам Inno
+    (PrivilegesRequired=admin), autopf = Program Files. Элевированный, но не
+    административный процесс пишет в профиль пользователя и привилегированной
+    фазой не считается — иначе сервер попал бы и в Program Files, и в профиль.
+    GAdminInstallMode, а не IsAdminInstallMode: в тестовой сборке режим
+    моделируется хуком /TESTADMINMODE. }
   Result := GWorkAllowed and
-    (GSilent or GPrivilegedPhase or (GIsElevated and IsAdminInstallMode));
+    (GSilent or GPrivilegedPhase or (GIsElevated and GAdminInstallMode));
 end;
 
 { Права администратора нужны серверу и клиенту «для всех пользователей»;
@@ -3132,9 +3158,12 @@ function InstallClientUser: Boolean;
 begin
   { «Только для меня» ставится только неэлевированной фазой: в дочернем
     привилегированном процессе autopf и localappdata могут указывать на
-    профиль другого администратора. }
+    профиль другого администратора. GAdminMachineScope закрывает ещё один
+    случай — пользователь сам запустил установщик от имени администратора:
+    под Administrator Protection это отдельный профиль SMAA, и «для меня»
+    попало бы в него (замечание верификатора 2dd215f7, п.4). }
   Result := GClientSelected and GWorkAllowed and GClientScopeUser and
-    (not GPrivilegedPhase);
+    (not GPrivilegedPhase) and (not GAdminMachineScope);
 end;
 
 { Режим для install.json: выбран сервер — его режим; сервер не выбран, но
@@ -5305,25 +5334,6 @@ begin
   Result := FileExists(ExpandConstant('{app}\server\dist\index.js'));
 end;
 
-{ Перезапуск в административном режиме установки: нужен, чтобы деинсталлятор и
-  запись установки легли в машинные места (HKLM и Program Files), а не в
-  профиль пользователя. Процесс уже элевирован — повторный UAC не показывается;
-  маркер /ADMINMODE защищает от бесконечного перезапуска. }
-procedure RelaunchAdminInstallMode(const ExtraArgs: String);
-var
-  Code: Integer;
-begin
-  if GTestMode or IsAdminInstallMode or ParamExists('ADMINMODE') then Exit;
-  LogLine('INFO', 'Перезапуск в административном режиме установки (/ALLUSERS)');
-  { Дефект: ShellExec вызывался БЕЗ глагола — первым аргументом уходил путь к
-    exe вместо Verb, и перезапуск молча не выполнялся (2dd215f7). }
-  if ShellExec('open', ExpandConstant('{srcexe}'), '/ALLUSERS /ADMINMODE' + ExtraArgs,
-    '', SW_HIDE, ewWaitUntilTerminated, Code) then
-    ExitProcess(Code);
-  LogLine('WARN', 'Перезапуск в административном режиме не удался (' +
-    ShellErrorText(Code) + ') — продолжаем как есть');
-end;
-
 procedure ValidateSilentPreconditions;
 var
   DataDirFromJson, Reason: String;
@@ -5349,10 +5359,10 @@ begin
     FailPrecondition('/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена');
   if not GIsElevated then
     FailPrecondition('процесс не элевирован: нужны права администратора');
-  { Установщик должен работать в административном режиме, иначе запись
-    установки уйдёт в HKCU и станет невидимой для службы/других сеансов. }
-  RelaunchAdminInstallMode(' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY' +
-    IfStr(ParamValue('PARAMS') <> '', ' /PARAMS="' + ParamValue('PARAMS') + '"', ''));
+  { Административный режим установки гарантирует сам Inno: в продуктовой
+    сборке PrivilegesRequired=admin, поэтому silent-прогон сразу идёт в
+    административном режиме. Скриптового перезапуска для этого больше нет:
+    self-exec установщика запрещён платформой (2dd215f7). }
   if not GInstallJsonPresent then
     FailPrecondition('нет ' + GInstallJsonPath + ' — сервер не устанавливался установщиком');
   if not GInstallJsonValid then
@@ -5389,8 +5399,10 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Предусловия привилегированной фазы — внутреннего запуска с /PRIVILEGEDPHASE
-  (дочерний процесс GUI-установки и клиента «для всех» поднимает себя сам).
+  Предусловия привилегированной фазы — внутреннего запуска с /PRIVILEGEDPHASE.
+  GUI-установка её больше не запускает (элевация штатная, 2dd215f7); фазу
+  используют тесты установщика (installer/tests/*.ps1), чтобы выполнить
+  привилегированную работу без настоящей элевации.
   Это НЕ silent-самообновление: install.json, файлы и служба не требуются —
   проверяются только права, каталог, данные, порт и свободное место.
   --------------------------------------------------------------------------- }
@@ -5403,8 +5415,8 @@ begin
     FailPrecondition('/PRIVILEGEDPHASE допустим только с /VERYSILENT');
   if not GIsElevated then
     FailPrecondition('привилегированная фаза запущена без прав администратора');
-  RelaunchAdminInstallMode(' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /PRIVILEGEDPHASE' +
-    IfStr(ParamValue('PARAMS') <> '', ' /PARAMS="' + ParamValue('PARAMS') + '"', ''));
+  { Административный режим установки обеспечивает сам Inno
+    (PrivilegesRequired=admin); скриптового перезапуска нет (2dd215f7). }
   if (not GServerSelected) and (not GClientSelected) then
     FailPrecondition('не выбран ни один компонент: файл параметров пуст или повреждён');
   if GBlockedDowngrade then
@@ -5499,11 +5511,28 @@ begin
     ' --connect-name="Локальный сервер"';
 end;
 
+(* Обёртка для скриптовой константы в [Icons]: такая константа обязана иметь
+  параметр Param: String (справка Inno «Scripted Constants»). *)
+function ClientConnectParamsConst(Param: String): String;
+begin
+  Result := ClientConnectParams;
+end;
+
 procedure RunClientClick(Sender: TObject);
 var
   Exe, Params: String;
   Code: Integer;
 begin
+  { Из элевированного процесса клиент не запускаем: под Administrator
+    Protection это отдельный профиль SMAA, и клиент открылся бы не у того
+    пользователя. Кнопка в этом режиме скрыта, запуск — из ярлыка (в нём уже
+    есть параметры подключения). }
+  if GAdminMachineScope then
+  begin
+    LogLine('WARN', 'Запуск клиента из элевированного процесса отключён: ' +
+      'профиль Administrator Protection отделён, запускайте клиент из ярлыка');
+    Exit;
+  end;
   Exe := ClientExePath;
   if Exe = '' then Exit;
   Params := ClientConnectParams;
@@ -5539,6 +5568,7 @@ begin
   if not ShellExec('open', ExpandConstant('{srcexe}'), '', '',
     SW_SHOWNORMAL, ewNoWait, Code) then
   begin
+    LogLine('ERROR', 'Повторный запуск установщика не удался: ' + ShellErrorText(Code));
     SuppressibleMsgBox('Не удалось запустить установщик заново: ' +
       ExpandConstant('{srcexe}') + #13#10 + 'Запустите его вручную.',
       mbError, MB_OK, IDOK);
@@ -5619,6 +5649,10 @@ begin
     Exe := ClientExePath;
     if Exe <> '' then
       S := S + 'Клиент ETN: ' + Exe + #13#10;
+    if GAdminMachineScope then
+      S := S + 'Клиент установлен для всех пользователей. Запустите его из ' +
+        'меню «Пуск» или с рабочего стола: подключение к локальному серверу ' +
+        'уже предзаполнено в ярлыке.' + #13#10;
   end;
   { Архив этого запуска; если его нет, а в backups что-то есть — архив
     прошлого обновления с явной пометкой (не для отката). }
@@ -5769,9 +5803,17 @@ end;
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
-  GServerSelected := ServerChecked;
+  { В режиме «только для меня» сервера нет: права на него не запрашивались
+    (2dd215f7). Флаг остаётся ложным даже если чекбокс программно отмечен. }
+  GServerSelected := ServerChecked and (not GUserOnlyMode);
   GClientSelected := ClientChecked;
-  GClientScopeUser := not MachineScopeChecked;
+  { В административном режиме область одна — «для всех» (GAdminMachineScope):
+    радиокнопки скрыты, а выбор из них всё равно не должен вернуть «для меня».
+    В режиме «только для меня» — наоборот: только профиль пользователя. }
+  if GUserOnlyMode then
+    GClientScopeUser := True
+  else
+    GClientScopeUser := (not MachineScopeChecked) and (not GAdminMachineScope);
 end;
 
 { Разложить контролы экрана компонентов сверху вниз по ФАКТИЧЕСКИМ высотам.
@@ -5883,8 +5925,8 @@ begin
   end;
   if GScopeFixedLabel <> nil then
   begin
-    GScopeFixedLabel.Visible := ClientScopeFixed;
-    if ClientScopeFixed then
+    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
+    if ClientScopeFixed or GAdminMachineScope then
     begin
       GScopeFixedLabel.Caption := ClientScopeText;
       FitLabel(GScopeFixedLabel);
@@ -5892,12 +5934,26 @@ begin
   end;
   if GServerHintLabel <> nil then
   begin
-    GServerHintLabel.Caption :=
-      'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
-      'доступ по сети. Node.js входит в установку.';
+    { В режиме «только для меня» сервер недоступен не случайно: служба Windows
+      требует прав администратора, а они не запрашивались (2dd215f7). Говорим,
+      что сделать, — иначе выключенный чекбокс выглядит поломкой. }
+    if GUserOnlyMode then
+      GServerHintLabel.Caption :=
+        'Сервер не устанавливается в режиме «только для меня»: он работает как ' +
+        'служба Windows и требует прав администратора. Чтобы установить сервер, ' +
+        'закройте установщик и запустите его снова, выбрав «Установить для всех ' +
+        'пользователей», — Windows запросит права.'
+    else
+      GServerHintLabel.Caption :=
+        'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
+        'доступ по сети. Node.js входит в установку.';
     FitLabel(GServerHintLabel);
   end;
-  if GServerCheck <> nil then GServerCheck.Caption := ServerCheckCaption;
+  if GServerCheck <> nil then
+  begin
+    GServerCheck.Caption := ServerCheckCaption;
+    GServerCheck.Enabled := not GUserOnlyMode;
+  end;
   if GClientCheck <> nil then GClientCheck.Caption := ClientCheckCaption;
   { Текст состояния клиента зависит от выбора: обещание удалить старый
     NSIS-клиент — только когда клиент действительно выбран (замечание приёмки
@@ -5924,15 +5980,24 @@ begin
     FitLabel(GClientHintLabel);
   end;
   { Чем «только для меня» отличается от «для всех пользователей» (п.2
-    ошибки 860def0d): подсказка показывается, пока выбор области доступен. }
+    ошибки 860def0d): подсказка показывается, пока выбор области доступен. В
+    режиме «только для меня» она объясняет сам режим и как получить сервер. }
   if GScopeHintLabel <> nil then
   begin
-    GScopeHintLabel.Caption :=
-      '«Только для меня» — клиент в вашем профиле, права администратора не ' +
-      'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
-      'администратора.';
+    if GUserOnlyMode then
+      GScopeHintLabel.Caption :=
+        'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
+        'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
+        'пользователей», закройте установщик и запустите его снова, выбрав в ' +
+        'диалоге режима «Установить для всех пользователей».'
+    else
+      GScopeHintLabel.Caption :=
+        '«Только для меня» — клиент в вашем профиле, права администратора не ' +
+        'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
+        'администратора.';
     FitLabel(GScopeHintLabel);
-    GScopeHintLabel.Visible := ClientScopeRadiosVisible and GClientSelected;
+    GScopeHintLabel.Visible :=
+      (ClientScopeRadiosVisible or GUserOnlyMode) and GClientSelected;
   end;
   if GReasonLabel <> nil then
   begin
@@ -5942,7 +6007,14 @@ begin
     else if GComponentsNotice <> '' then
       GReasonLabel.Caption := GComponentsNotice
     else if (not GServerSelected) and (not GClientSelected) then
-      GReasonLabel.Caption := 'Выберите хотя бы один компонент.'
+    begin
+      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+        GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
+          'обновление требует прав администратора — закройте установщик и ' +
+          'запустите его снова, выбрав «Установить для всех пользователей».'
+      else
+        GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
+    end
     else if LicensePromptNeeded and (not GLicenseAccepted) then
       GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.'
     else
@@ -6542,11 +6614,11 @@ var
   Reason: String;
 begin
   GExitCode := EXIT_OK;
-  GChildResult := 0;
   GWorkAllowed := True;
   GServerSelected := False;
   GClientSelected := False;
   GClientScopeUser := True;
+  GAdminMachineScope := False;
   GClientCloseRefused := False;
   GServerMode := 'service';
   GServerHost := '0.0.0.0';
@@ -6637,10 +6709,10 @@ begin
   GTestClientGoneAt := 0;
   GTestUserInstall := '';
   GTestConnectParams := '';
-  GChildRanThisPass := False;
+  GTestAdminMode := '';
+  GTestUserOnlyMode := '';
   GParamsPath := '';
   GReasonFile := '';
-  GChildReason := '';
   GDeferredLog := '';
   GParamsLocked := False;
   GUninstallFirewallRule := False;
@@ -6722,6 +6794,18 @@ begin
   GTestClientPath := ParamValue('TESTCLIENTPATH');
   GTestUserInstall := ParamValue('TESTUSERINSTALL');
   GTestConnectParams := ParamValue('TESTCONNECTPARAMS');
+  GTestAdminMode := ParamValue('TESTADMINMODE');
+  GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
+  { /TESTGUIMODE=1 имитирует GUI-запуск в silent-прогоне: silent-термин снимается
+    ДО расчёта режима (GUserOnlyMode) и выбора компонентов — иначе контекст
+    всегда привилегированный, а режим «только для меня» не смоделировать. }
+  if GTestGui = '1' then
+    GSilent := False;
+  { /TESTUSERONLYMODE=1 моделирует выбор «только для меня»: в продуктовой
+    сборке это неадминистративный GUI-режим (silent всегда административный),
+    поэтому silent-термин снимается и здесь. }
+  if GTestUserOnlyMode = '1' then
+    GSilent := False;
   GTestClientRunning := GTestClientPids <> '';
   GTestClientSoftIssued := False;
   if GTestClientGone <> '' then
@@ -6745,6 +6829,30 @@ begin
   { Старый NSIS-клиент (0.14.x) ищется до показа экрана компонентов: подпись
     клиента и предупреждение о его удалении видны на первом экране. }
   DetectLegacyClient;
+
+  { Режим установки выбирает Inno до [Code]: PrivilegesRequired=admin и
+    PrivilegesRequiredOverridesAllowed=commandline dialog (2dd215f7). В
+    TestMode привилегий нет — административный и неадминистративный режимы
+    моделируются хуками /TESTADMINMODE и /TESTUSERONLYMODE. }
+  GAdminInstallMode := IsAdminInstallMode;
+#ifdef TestMode
+  if GTestAdminMode = '1' then
+  begin
+    GAdminInstallMode := True;
+    LogOrDefer('WARN', 'TESTADMINMODE=1: административный режим смоделирован (тестовый режим)');
+  end;
+  if GTestUserOnlyMode = '1' then
+  begin
+    GAdminInstallMode := False;
+    LogOrDefer('WARN', 'TESTUSERONLYMODE=1: режим «только для меня» смоделирован (тестовый режим)');
+  end;
+#endif
+  { Привилегированная фаза всегда административная: вызывающий запускает её с
+    /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон в продуктовой
+    сборке тоже административный (PrivilegesRequired=admin). }
+  GAdminMachineScope := GAdminInstallMode and (not GPrivilegedPhase);
+  GUserOnlyMode := (not GAdminInstallMode) and (not GPrivilegedPhase) and
+    (not GSilent);
 
   { Выбор компонентов по умолчанию: в привилегированной фазе выбор пришёл из
     файла параметров и не пересчитывается. }
@@ -6781,26 +6889,6 @@ begin
     '; install.json=' + Pick(GInstallJsonValid, 'корректен',
       IfStr(GInstallJsonPresent, 'повреждён', 'нет')) +
     '; данные=' + Pick(GDataDirPresent, 'есть', 'нет'));
-
-  (* Ошибка 2dd215f7 и п.7 860def0d: установщик запущен «от имени
-    администратора», но без /ALLUSERS — Inno работает в неадминистративном
-    режиме: {app} указывает в профиль, сервер должен лежать в Program Files.
-    Перезапускаем себя в административном режиме установки: процесс уже
-    элевирован, UAC не показывается, а самовызов runas (сломанный на системах
-    с Administrator Protection) не нужен вовсе. Это рабочий обход по
-    инструкции «правый клик по установщику → Запуск от имени администратора».
-    Silent и привилегированная фаза передают /ALLUSERS сами; /CURRENTUSER
-    уважаем — пользователь явно выбрал установку в свой профиль. *)
-  if (not GSilent) and (not GPrivilegedPhase) and GIsElevated and
-     (not IsAdminInstallMode) and (not ParamExists('CURRENTUSER')) then
-  begin
-    LogLine('INFO', 'Запуск от имени администратора без /ALLUSERS — ' +
-      'перезапуск в административном режиме установки');
-    if ParamValue('LANG') = '' then
-      RelaunchAdminInstallMode('')
-    else
-      RelaunchAdminInstallMode(' /LANG=' + ParamValue('LANG'));
-  end;
 
   { Чекбокс «Разрешить подключения с других компьютеров» — единственный
     источник ETN_HOST; при обновлении значения пришли из install.json. }
@@ -6847,14 +6935,10 @@ begin
     фиксирует вычисленное состояние в журнале и завершается без изменений. }
   if GTestState = '1' then
   begin
-    { /TESTGUIMODE=1 — имитация GUI-запуска: в silent-прогоне термин GSilent
-      всегда делает контекст привилегированным, а проверяется сценарий
-      «запуск от имени администратора» в неадминистративном режиме. }
+    { /TESTGUIMODE=1 уже снял silent-термин при разборе параметров — здесь
+      только след в журнале. }
     if GTestGui = '1' then
-    begin
       LogLine('INFO', 'TESTGUIMODE=1: silent-термин контекста отключён (тестовый режим)');
-      GSilent := False;
-    end;
     LogLine('INFO', 'TESTSTATE server_state=' + GServerState +
       ' client_state=' + GClientState +
       ' server_files=' + Pick(GServerFilesPresent, '1', '0') +
@@ -6904,6 +6988,9 @@ begin
       IfStr(ClientConnectParams = '', '(none)', ClientConnectParams));
     ExitProcess(EXIT_OK);
   end;
+
+  { /TESTELEVHELPER удалён вместе со скриптовой элевацией (2dd215f7):
+    режим установки выбирается диалогом Inno до мастера. }
 
   { /TESTPRECHECK=1 — прогон предпроверок без окон: та же функция, что вызывают
     экран параметров сервера и привилегированная фаза. Результат — в журнале и
@@ -6972,8 +7059,8 @@ begin
     if GClientSelected and (not RemoveLegacyBeforeInstall(True, Reason)) then
       FailPrecondition(Reason);
     { Файл параметров больше не нужен: в общем каталоге он оставаться не должен.
-      Удаляется после предусловий — перезапуск в административном режиме
-      (/ADMINMODE) ещё передаёт путь дочернему процессу. }
+      Удаляется после предусловий — привилегированная фаза (тесты) ещё
+      передаёт путь через /PARAMS. }
     if ParamValue('PARAMS') <> '' then
       DeleteFile(ParamValue('PARAMS'));
   end
@@ -7269,10 +7356,12 @@ begin
       end;
       { Кнопка «Запустить клиент» — только когда клиент выбран в этом запуске:
         иначе она могла бы открыть старый NSIS-клиент, оставшийся в каталоге
-        программы (замечание приёмки 112642a4). }
+        программы (замечание приёмки 112642a4), и только в неэлевированном
+        режиме: из административного процесса клиент открылся бы в профиле
+        SMAA (2dd215f7), там его запускают ярлыком. }
       if GSummaryRunButton <> nil then
         GSummaryRunButton.Visible := (GExitCode = EXIT_OK) and GClientSelected and
-          (ClientExePath <> '');
+          (ClientExePath <> '') and (not GAdminMachineScope);
       if GSummaryDataButton <> nil then
         GSummaryDataButton.Visible := DirExists(GDataDir);
       if GSummaryLogButton <> nil then
@@ -7289,10 +7378,13 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
 var
   S: String;
 begin
+  { Права уже запрошены Inno при старте (PrivilegesRequired=admin): к экрану
+    готовности UAC позади, и второй раз он не появится. В режиме «только для
+    меня» прав нет вовсе — сказано на экране компонентов (2dd215f7). }
   S := '';
-  if NeedElevation and (not (GIsElevated and IsAdminInstallMode)) then
-    S := 'Windows запросит права администратора — в окне UAC нажмите «Да», ' +
-      'иначе установка не начнётся.' + NewLine + NewLine;
+  if GUserOnlyMode then
+    S := 'Режим «только для меня»: права администратора не требуются.' +
+      NewLine + NewLine;
   Result := S + MemoDirInfo + MemoComponentsInfo + MemoGroupInfo + MemoTasksInfo;
 end;
 
@@ -7312,7 +7404,29 @@ begin
     if (not GServerSelected) and (not GClientSelected) then
     begin
       if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
+      begin
+        if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+          GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
+            'обновление требует прав администратора — закройте установщик и ' +
+            'запустите его снова, выбрав «Установить для всех пользователей».'
+        else
+          GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
+      end;
+      Result := False;
+      Exit;
+    end;
+    { Режим «только для меня» физически не может поставить сервер или клиент
+      «для всех»: прав нет, а запрашивает их Inno только при старте (2dd215f7).
+      Защита от программной установки флагов (например, из тестового хука). }
+    if GUserOnlyMode and
+       (GServerSelected or (GClientSelected and (not GClientScopeUser))) then
+    begin
+      if GReasonLabel <> nil then
+        GReasonLabel.Caption := 'Для установки сервера или клиента «для всех ' +
+          'пользователей» закройте установщик и запустите его снова, выбрав ' +
+          '«Установить для всех пользователей».';
+      LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
+        'компоненты, требующие прав администратора');
       Result := False;
       Exit;
     end;
@@ -7402,45 +7516,31 @@ begin
       LogLine('WARN', 'Не удалось удалить временный файл ключа: ' + KeyFilePath);
     GPendingKey := '';
   end;
-  { Готовность: до копирования файлов удаляется старый NSIS-клиент и
-    выполняется повышение прав. Отказ UAC возвращает на экран компонентов
-    с сохранённым выбором (PrepareToInstall дочерний процесс уже не запускает).
-    В silent и привилегированной фазе мастера нет: повышение прав там
-    выполняет InitializeSetup (silent-предусловие «уже элевирован»), поэтому
-    этот обработчик для них ничего не делает. }
+  { Готовность: до копирования файлов удаляется старый NSIS-клиент. Режим
+    установки выбран до мастера (диалог Inno, PrivilegesRequiredOverridesAllowed):
+    в неадминистративном режиме сервер недоступен, поэтому повышать права здесь
+    нечего и нельзя — self-exec установщика запрещён (2dd215f7). }
   if CurPageID = wpReady then
   begin
     LogLine('INFO', 'Экран готовности: проверка перед установкой (silent=' +
       Pick(GSilent, 'да', 'нет') + ', privileged_phase=' +
-      Pick(GPrivilegedPhase, 'да', 'нет') + ', need_elevation=' +
-      Pick(NeedElevation, 'да', 'нет') + ')');
+      Pick(GPrivilegedPhase, 'да', 'нет') + ', admin_mode=' +
+      Pick(GAdminInstallMode, 'да', 'нет') + ')');
     if GSilent or GPrivilegedPhase then Exit;
-    if GChildRanThisPass then Exit;
-    { Запущенный клиент закрывается до повышения прав и копирования: замена
-      ETN.exe невозможна, пока процесс работает. Отказ пользователя или
-      неудача закрытия — установка не начинается (код 20), выбор сохраняется.
-      Исключение: машинный клиент другого пользователя родительский процесс
-      закрыть не может (нет прав) — попытку повторит привилегированная фаза,
-      которая и вернёт код 20 с причиной, если клиент не закроется. }
+    { Запущенный клиент закрывается до копирования: замена ETN.exe невозможна,
+      пока процесс работает. Отказ пользователя или неудача закрытия —
+      установка не начинается (код 20), выбор сохраняется. Машинный клиент
+      другого пользователя без прав не закроется: в административном режиме
+      установщик уже элевирован, поэтому попытка выполняется с его правами. }
     Reason := '';
     if GClientSelected and (not CloseRunningClient(True, Reason)) then
     begin
-      if (not GClientCloseRefused) and NeedElevation and
-         (not (GIsElevated and IsAdminInstallMode)) then
-      begin
-        LogLine('WARN', 'Клиент ETN: родительский процесс не закрыл клиент (' +
-          Reason + ') — повтор в привилегированной фазе');
-        GComponentsNotice := '';
-      end
-      else
-      begin
-        GComponentsNotice := 'Установка не начата: ' + Reason;
-        SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
-          mbError, MB_OK, IDOK);
-        ReturnToComponentsPage;
-        Result := False;
-        Exit;
-      end;
+      GComponentsNotice := 'Установка не начата: ' + Reason;
+      SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
+        mbError, MB_OK, IDOK);
+      ReturnToComponentsPage;
+      Result := False;
+      Exit;
     end;
     Reason := '';
     if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
@@ -7451,50 +7551,6 @@ begin
       ReturnToComponentsPage;
       Result := False;
       Exit;
-    end;
-    if NeedElevation and (not (GIsElevated and IsAdminInstallMode)) then
-    begin
-      GChildRanThisPass := True;
-      GChildResult := RunElevatedChild;
-      if GChildResult < 0 then
-      begin
-        GChildRanThisPass := False;
-        GChildResult := 0;
-        { Отказ UAC ведёт к следующему шагу (ошибка 860def0d, п.5): раньше
-          текст «можно изменить выбор или закрыть установщик» не подсказывал
-          повторить и подтвердить запрос. Отказ окружения (2dd215f7) требует
-          другого действия — запуска от имени администратора. }
-        GComponentsNotice := ElevationFailureText + ': изменения не выполнялись, ' +
-          'выбор сохранён. ' + ElevationAdvice;
-        SuppressibleMsgBox(GComponentsNotice, mbError, MB_OK, IDOK);
-        ReturnToComponentsPage;
-        Result := False;
-        Exit;
-      end;
-      if GChildResult = EXIT_PRECONDITION then
-      begin
-        GChildRanThisPass := False;
-        GChildResult := 0;
-        GComponentsNotice := 'Установка не начата: ' +
-          IfStr(GChildReason = '', 'не выполнено предусловие (код 20)',
-            GChildReason);
-        SuppressibleMsgBox(GComponentsNotice + #13#10#13#10 +
-          'Изменения не выполнялись. Порт и доступ по локальной сети можно ' +
-          'изменить в «Параметры сервера».', mbError, MB_OK, IDOK);
-        ReturnToComponentsPage;
-        Result := False;
-        Exit;
-      end;
-      if GChildResult <> EXIT_OK then
-      begin
-        { Сбой мог произойти после замены файлов: экран ошибки и итоговая
-          сводка покажут причину, журнал и бэкап. GChildReason прочитан из
-          reason-файла дочернего процесса и после отката содержит и его итог
-          (блокер приёмки bb063ac3: раньше терялся). }
-        FailInstall('привилегированная фаза завершилась с кодом ' +
-          IntToStr(GChildResult) +
-          IfStr(GChildReason = '', '', ': ' + GChildReason));
-      end;
     end;
   end;
 end;
@@ -7521,13 +7577,10 @@ begin
   end;
 end;
 
-{ Подтверждение перед установкой. Повышение прав выполняется на экране
-  готовности (NextButtonClick(wpReady)): при отказе UAC мастер возвращается на
-  экран компонентов, а не показывает сообщение поверх экрана готовности.
-  До копирования файлов на диск не пишется ничего, кроме временного файла
-  параметров; при отказе UAC частичных файлов не остаётся. Здесь — только
-  страховка на случай, если дочерний процесс ещё не запускался (например,
-  экран готовности пропущен). }
+{ Подтверждение перед установкой. Права запрашивает Inno при старте (режим
+  выбран диалогом до мастера), поэтому здесь — только предпроверки окружения
+  до замены файлов (9b310991). Скриптовой элевации нет: self-exec установщика
+  запрещён платформой (2dd215f7). }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Reason: String;
@@ -7535,46 +7588,19 @@ begin
   Result := '';
   NeedsRestart := False;
   if GSilent or GPrivilegedPhase then Exit;
-  { Повышение прав уже выполнено на экране готовности — второй дочерний
-    процесс не запускается. }
-  if GChildRanThisPass then Exit;
   if not NeedElevation then Exit;
-  { Уже элевированный процесс пишет в Program Files сам, но только в
-    административном режиме установки; иначе нужен дочерний /ALLUSERS. }
-  if GIsElevated and IsAdminInstallMode then
+  if not GServerSelected then Exit;
+  { Административный режим: этот экземпляр сам выполняет привилегированную
+    работу. В режиме «только для меня» сервер недоступен, поэтому выбранным
+    компонентам права не нужны. }
+  if not InPrivilegedContext then Exit;
+  Reason := CheckServerEnvironment(False);
+  if Reason <> '' then
   begin
-    { Этот экземпляр — сам себе привилегированная фаза: предпроверки окружения
-      выполняются здесь, до замены файлов (9b310991). }
-    if GServerSelected then
-    begin
-      Reason := CheckServerEnvironment(False);
-      if Reason <> '' then
-      begin
-        LogLine('ERROR', 'Установка не начата: ' + Reason);
-        Result := 'Установка не начата: ' + Reason + '. Изменения не выполнялись. ' +
-          'Журнал: ' + GLogPath;
-      end;
-    end;
-    Exit;
+    LogLine('ERROR', 'Установка не начата: ' + Reason);
+    Result := 'Установка не начата: ' + Reason + '. Изменения не выполнялись. ' +
+      'Журнал: ' + GLogPath;
   end;
-
-  LogLine('INFO', 'Выбранным компонентам нужны права администратора — повышение прав');
-  GChildResult := RunElevatedChild;
-  if GChildResult < 0 then
-    Result := ElevationFailureText + ': изменения не выполнялись, выбор сохранён. ' +
-      ElevationAdvice + ' Журнал: ' + GLogPath
-  else if GChildResult = EXIT_PRECONDITION then
-  begin
-    if GChildReason = '' then
-      Result := 'Установка не начата: не выполнено предусловие (код 20). Журнал: ' + GLogPath
-    else
-      Result := 'Установка не начата: ' + GChildReason + '. Изменения не выполнялись. ' +
-        'Порт и доступ по локальной сети можно изменить в «Параметры сервера». ' +
-        'Журнал: ' + GLogPath;
-  end
-  else if GChildResult <> EXIT_OK then
-    Result := 'Установка завершилась сбоем (код ' + IntToStr(GChildResult) +
-      IfStr(GChildReason = '', '', ': ' + GChildReason) + '. Журнал: ' + GLogPath;
 end;
 
 { Запись установки нужна и для машинного клиента без сервера: иначе повторный
@@ -7598,12 +7624,6 @@ begin
       перехода и снова появляется на этапах после копирования. }
     if GWorkAllowed and (GExitCode = EXIT_OK) then
     begin
-      { Двухфазный UAC: серверные файлы, службу и init выполнил дочерний
-        silent-процесс, а этот экземпляр копирует только клиент «для меня» —
-        называть конкретный этап здесь нельзя (замечание приёмки 112642a4).
-        Подробные этапы дочернего процесса — в журнале. }
-      if GChildRanThisPass then
-        SetInstallStage('Установка выполняется…');
       { Запущенный клиент закрывается до первого изменённого файла: мягко,
         с ожиданием, принудительно только после таймаута. Неудача — код 20,
         файлы не заменяются (в silent-прогоне без предупреждения). }
@@ -7822,13 +7842,9 @@ end;
 
 function GetCustomSetupExitCode: Integer;
 begin
-  { Дочерний (привилегированный) экземпляр отдаёт свой код сам; родитель
-    транслирует код дочернего — в том числе когда выбран только клиент
-    «для всех» (сервер при этом не выбран). }
-  if (not GSilent) and (not GPrivilegedPhase) and (GChildResult <> 0) then
-    Result := NormalizeExitCode(GChildResult)
-  else
-    Result := NormalizeExitCode(GExitCode);
+  { Установка выполняется в выбранном режиме одним экземпляром: дочернего
+    привилегированного процесса больше нет (2dd215f7). }
+  Result := NormalizeExitCode(GExitCode);
   if GLogPath <> '' then
     LogLine('INFO', 'Завершение: код возврата ' + IntToStr(Result));
 end;

@@ -603,10 +603,21 @@ Add-StaticResult -Name 'static-guard:self-test' -Ok $guardSelfTest.Ok -Note $gua
 $msgBoxInCode = Test-IssCode -Text $issText -Pattern '(?<!Suppressible)MsgBox\s*\('
 Add-StaticResult -Name 'static:no-msgbox' -Ok (-not $msgBoxInCode) `
     -Note 'MsgBox в коде .iss нет (строки комментариев не считаются)'
-foreach ($required in @('/SUPPRESSMSGBOXES', '/NORESTART', 'SERVERONLY', 'GetCustomSetupExitCode')) {
+foreach ($required in @('SERVERONLY', 'GetCustomSetupExitCode')) {
     # ini-секции: там ';' — комментарий, а не разделитель операторов.
     $present = Test-IssCode -Text $issText -Pattern ([regex]::Escape($required)) -IniComments
     Add-StaticResult -Name "static:$required" -Ok $present
+}
+# Контракт silent-обновления: установщик флаги сам не собирает — их передаёт
+# служба (server/src/update/installer-runner.ts). /ALLUSERS обязателен с
+# 2dd215f7: служба элевирована, но административный режим установки сам не
+# включается, и без флага тихая установка ушла бы в профиль LocalSystem.
+$runnerPath = Join-Path $repoRoot 'server\src\update\installer-runner.ts'
+$runnerText = Get-Content -LiteralPath $runnerPath -Raw -Encoding UTF8
+foreach ($required in @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SERVERONLY', '/ALLUSERS')) {
+    $present = [bool]($runnerText -match [regex]::Escape("'$required'"))
+    Add-StaticResult -Name "static:runner$required" -Ok $present `
+        -Note 'флаг silent-обновления службы'
 }
 # B2: каталог программы выбирается по режиму установки ({autopf}), а не жёстко
 # из Program Files — иначе неэлевированный экземпляр падает с Error 5.
@@ -619,7 +630,7 @@ $staticChecks = @(
     @{ Name = 'static:radio-onclick-user'; Pattern = [regex]::Escape('GScopeUserRadio.OnClick := @ComponentsChanged;'); Note = 'радиокнопка «только для меня»' },
     @{ Name = 'static:radio-onclick-machine'; Pattern = [regex]::Escape('GScopeMachineRadio.OnClick := @ComponentsChanged;'); Note = 'радиокнопка «для всех»' },
     @{ Name = 'static:selection-from-controls'; Pattern = [regex]::Escape('ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);'); Note = 'выбор читается с контролов' },
-    @{ Name = 'static:context-admin-mode'; Pattern = [regex]::Escape('GIsElevated and IsAdminInstallMode'); Note = 'привилегированный контекст — только admin mode' },
+    @{ Name = 'static:context-admin-mode'; Pattern = [regex]::Escape('GIsElevated and GAdminInstallMode'); Note = 'привилегированный контекст — только admin mode' },
     @{ Name = 'static:params-shared-dir'; Pattern = [regex]::Escape('{commonappdata}\ETN\.install'); Note = 'файл параметров в общем каталоге' },
     @{ Name = 'static:params-public-fallback'; Pattern = [regex]::Escape("GetEnv('PUBLIC')"); Note = 'запасной общий каталог' },
     @{ Name = 'static:params-write-probe'; Pattern = [regex]::Escape('ProbeWritableDir(Dir)'); Note = 'проверка записи пробным файлом (дефект 1)' },
@@ -858,15 +869,18 @@ $nextBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
 Add-StaticResult -Name 'static:port-suggestion' `
     -Ok (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('SuggestFreePort'))) `
     -Note 'подсказка свободного порта при занятом'
-Add-StaticResult -Name 'static:uac-back-to-components' `
-    -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('ReturnToComponentsPage'))) -and
-         (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('GChildRanThisPass'))) -and
-         (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('wpReady')))) `
-    -Note 'отказ UAC: возврат на экран компонентов с сохранённым выбором'
+Add-StaticResult -Name 'static:ready-no-script-elevation' `
+    -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('wpReady'))) -and
+         (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('ReturnToComponentsPage'))) -and
+         (-not ($nextBody -match [regex]::Escape('RunElevatedChild'))) -and
+         (-not ($nextBody -match [regex]::Escape("ShellExec('runas'")))) `
+    -Note 'на экране готовности права не запрашиваются: режим выбран диалогом Inno до мастера'
 $prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall'
-Add-StaticResult -Name 'static:prepare-no-second-child' `
-    -Ok (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('if GChildRanThisPass then Exit'))) `
-    -Note 'дочерний процесс не запускается второй раз'
+Add-StaticResult -Name 'static:prepare-no-script-elevation' `
+    -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('if not InPrivilegedContext then Exit'))) -and
+         (-not ($prepareBody -match [regex]::Escape('RunElevatedChild'))) -and
+         (-not ($prepareBody -match [regex]::Escape("ShellExec('runas'")))) `
+    -Note 'PrepareToInstall не поднимает второй экземпляр: привилегию даёт admin-режим Inno'
 Add-StaticResult -Name 'static:legacy-nsis-detect' `
     -Ok ((Test-IssCode -Text $issText -Pattern ([regex]::Escape("Pos('Uninstall ETN.exe', UninstallCmd)"))) -and
          (Test-IssCode -Text $issText -Pattern ([regex]::Escape('function FindLegacyClient'))) -and
@@ -906,10 +920,10 @@ Add-StaticResult -Name 'static:lan-excludes-virtual' `
          (Test-IssCode -Text $lanBody -Pattern ([regex]::Escape('vEthernet'))) -and
          (Test-IssCode -Text $lanBody -Pattern ([regex]::Escape('Hyper-V')))) `
     -Note 'LAN-адрес: виртуальные адаптеры исключены, остальное помечено в сводке'
-Add-StaticResult -Name 'static:progress-uac-generic' `
-    -Ok ((Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('Установка выполняется'))) -and
-         (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('if GChildRanThisPass then')))) `
-    -Note 'двухфазный UAC: без ложной конкретики этапа в родительском окне'
+Add-StaticResult -Name 'static:progress-no-second-pass' `
+    -Ok ((-not ($stepBody -match [regex]::Escape('GChildRanThisPass'))) -and
+         (-not ($stepBody -match [regex]::Escape('RunElevatedChild')))) `
+    -Note 'установка идёт одним экземпляром: в CurStepChanged нет дочернего прохода (2dd215f7)'
 $adminBody = Get-IssFunctionBody -Text $issText -Name 'CreateAdminPage'
 Add-StaticResult -Name 'static:display-name-field' -Ok (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('GAdminDisplayEdit'))) `
     -Note 'поле отображаемого имени на экране администратора'
@@ -969,28 +983,81 @@ Add-StaticResult -Name 'static:client-scope-json' `
          (Test-IssCode -Text $jsonBody -Pattern ([regex]::Escape("Scope := 'machine'")))) `
     -Note 'client_scope (user/machine) пишется в install.json'
 
-# Ошибка 2dd215f7: отказ элевации на Windows 11 с Administrator Protection
-# невозможно разобрать без точного Win32-кода ShellExec и без значения
-# унаследованного шима __COMPAT_LAYER. Сторож держит диагностику в коде, а не
-# в комментариях: без неё повторный отчёт с голой машины снова будет слепым.
-$elevatedBody = Get-IssFunctionBody -Text $issText -Name 'RunElevatedChild'
-$elevationDiagOk = ($issText -match '(?m)^SetupLogging=yes\s*$') -and
-    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape('__COMPAT_LAYER'))) -and
-    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape("SetEnvironmentVariableW('__COMPAT_LAYER', '')"))) -and
-    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape('GElevationErrorCode := Code'))) -and
-    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape('ShellErrorText(Code)'))) -and
-    (Test-IssCode -Text $elevatedBody -Pattern ([regex]::Escape("ShellExec('runas'")))
+# Ошибка 2dd215f7: отказ элевации/оболочки невозможно разобрать без точного
+# Win32-кода ShellExec и без значения унаследованного шима __COMPAT_LAYER.
+# Сторож держит диагностику в коде, а не в комментариях: без неё повторный
+# отчёт с голой машины снова будет слепым.
 $initBody = Get-IssFunctionBody -Text $issText -Name 'InitializeSetup'
-$elevationDiagOk = $elevationDiagOk -and
+$elevationDiagOk = ($issText -match '(?m)^SetupLogging=yes\s*$') -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ShellErrorText') -Pattern ([regex]::Escape('ERROR_ACCESS_DENIED'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'OpenLocalLicense') -Pattern ([regex]::Escape('ShellErrorText(Code)'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RetryInstallClick') -Pattern ([regex]::Escape('ShellErrorText(Code)'))) -and
     (Test-IssCode -Text $initBody -Pattern ([regex]::Escape("'Слой совместимости: __COMPAT_LAYER='"))) -and
     (Test-IssCode -Text $initBody -Pattern ([regex]::Escape("ExpandConstant('{log}')")))
 Add-StaticResult -Name 'static:elevation-diagnostics' -Ok $elevationDiagOk `
-    -Note 'отказ runas: Win32-код в журнал, шим __COMPAT_LAYER снимается и логируется; SetupLogging включён'
-$relaunchBody = Get-IssFunctionBody -Text $issText -Name 'RelaunchAdminInstallMode'
-$relaunchOk = (Test-IssCode -Text $relaunchBody -Pattern ([regex]::Escape("ShellExec('open'"))) -and
-    (Test-IssCode -Text $relaunchBody -Pattern ([regex]::Escape('/ALLUSERS /ADMINMODE')))
-Add-StaticResult -Name 'static:admin-relaunch-verb' -Ok $relaunchOk `
-    -Note 'перезапуск в /ALLUSERS идёт с глаголом open, а не путём вместо Verb'
+    -Note 'отказ ShellExec: Win32-код в журнал, шим __COMPAT_LAYER логируется; SetupLogging включён'
+
+# Решение по ошибке 2dd215f7: элевация штатная, силами Inno ДО [Code].
+# PrivilegesRequired=admin + диалог режима: «для всех» — один запрос UAC на
+# старте, «только для меня» — штатный неадминистративный режим (/CURRENTUSER).
+# Скриптовый self-exec установщика запрещён платформой (Exec/ShellExec/FileCopy
+# по {srcexe} до старта установки дают код 5), поэтому помощника элевации,
+# RunElevatedChild и перезапуска мастера с /ALLUSERS быть не должно.
+$testLowIdx = $issText.IndexOf('PrivilegesRequired=lowest')
+$testDefIdx = $issText.LastIndexOf('#ifdef TestMode', $testLowIdx)
+$elseIdx = $issText.IndexOf('#else', $testDefIdx)
+$endifIdx = $issText.IndexOf('#endif', $elseIdx)
+$adminIdx = $issText.IndexOf('PrivilegesRequired=admin', $elseIdx)
+$dialogIdx = $issText.IndexOf('PrivilegesRequiredOverridesAllowed=commandline dialog', $elseIdx)
+$prevIdx = $issText.IndexOf('UsePreviousPrivileges=yes', $elseIdx)
+$nativeModeOk = ($testDefIdx -ge 0) -and ($elseIdx -gt $testDefIdx) -and
+    ($endifIdx -gt $elseIdx) -and ($testLowIdx -gt $testDefIdx) -and
+    ($testLowIdx -lt $elseIdx) -and ($adminIdx -gt $elseIdx) -and
+    ($adminIdx -lt $endifIdx) -and ($dialogIdx -gt $elseIdx) -and
+    ($dialogIdx -lt $endifIdx) -and ($prevIdx -gt $elseIdx) -and
+    ($prevIdx -lt $endifIdx)
+$nativeElevationOk = $nativeModeOk -and
+    (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GAdminInstallMode := IsAdminInstallMode'))) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape("ParamExists('ELEVATEHELPER')")))) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape("ShellExec('runas'")))) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('RunElevatedChild')))) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('RelaunchAdminInstallMode'))))
+Add-StaticResult -Name 'static:elevation-native' -Ok $nativeElevationOk `
+    -Note 'элевация штатная: admin + commandline dialog в продуктовой ветке, lowest в TestMode; self-exec установщика нет'
+
+# Режим «только для меня» (2dd215f7): без прав администратора сервер и клиент
+# «для всех» недоступны. Сервер выключен и снят из выбора, область клиента —
+# только профиль пользователя, мастер объясняет отказ и путь к серверу.
+$userOnlyOk = (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GUserOnlyMode := (not GAdminInstallMode)'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplySelection') -Pattern ([regex]::Escape('ServerChecked and (not GUserOnlyMode)'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplyDefaultSelection') -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ClientScopeRadiosVisible') -Pattern ([regex]::Escape('(not GUserOnlyMode)'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState') -Pattern ([regex]::Escape('GServerCheck.Enabled := not GUserOnlyMode'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo') -Pattern ([regex]::Escape('if GUserOnlyMode then')))
+Add-StaticResult -Name 'static:user-only-mode' -Ok $userOnlyOk `
+    -Note 'режим «только для меня»: сервер выключен, клиент в профиль, экран объясняет отказ и путь к серверу'
+
+# Administrator Protection: элевированный процесс — отдельный профиль SMAA,
+# поэтому в административном режиме клиент ставится только «для всех»; из
+# элевированного процесса клиент не запускается (профиль не тот).
+$applyBody = Get-IssFunctionBody -Text $issText -Name 'ApplySelection'
+$installUserBody = Get-IssFunctionBody -Text $issText -Name 'InstallClientUser'
+$radiosBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeRadiosVisible'
+$adminScopeOk = (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GAdminMachineScope := GAdminInstallMode and (not GPrivilegedPhase)'))) -and
+    (Test-IssCode -Text $applyBody -Pattern ([regex]::Escape('(not GAdminMachineScope)'))) -and
+    (Test-IssCode -Text $installUserBody -Pattern ([regex]::Escape('(not GAdminMachineScope)'))) -and
+    (Test-IssCode -Text $radiosBody -Pattern ([regex]::Escape('(not GAdminMachineScope)'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') -Pattern ([regex]::Escape('if GAdminMachineScope then'))) -and
+    (Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('(not GAdminMachineScope)')))
+Add-StaticResult -Name 'static:admin-machine-scope' -Ok $adminScopeOk `
+    -Note 'admin-режим: клиент только machine, радиокнопки скрыты, автозапуск из setup отключён'
+
+# Ярлыки несут параметры подключения: в административном режиме это
+# единственный путь prefill (клиент из элевированного процесса не запускаем).
+$shortcutArgsOk = ([regex]::Matches($issText, [regex]::Escape('Parameters: "{code:ClientConnectParamsConst}"')).Count -eq 4) -and
+    ($issText -match [regex]::Escape('function ClientConnectParamsConst(Param: String): String;'))
+Add-StaticResult -Name 'static:client-shortcut-connect-args' -Ok $shortcutArgsOk `
+    -Note 'все четыре ярлыка передают ClientConnectParams (обёртка Param: String)'
 
 $closeBody = Get-IssFunctionBody -Text $issText -Name 'CloseRunningClient'
 $softIdx = $closeBody.IndexOf('SoftCloseClientPids')
@@ -1181,24 +1248,16 @@ Add-StaticResult -Name 'static:server-mode-human' -Ok $modeOk `
     -Note 'режим запуска на экране — по-человечески, без термина service'
 
 $readyMemoBody = Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo'
-# Тексты отказа элевации вынесены в хелперы (2dd215f7): места показа ссылаются
-# на них, а сами формулировки — в телах хелперов. Сторож проверяет и связь, и
-# текст: иначе сообщение «отменено» могло бы остаться без совета, что делать.
-$elevationTextBody = Get-IssFunctionBody -Text $issText -Name 'ElevationFailureText'
-$elevationAdviceBody = Get-IssFunctionBody -Text $issText -Name 'ElevationAdvice'
-$uacOk = (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора'))) -and
-    (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('нажмите «Да»'))) -and
-    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'NextButtonClick') `
-        -Pattern ([regex]::Escape('ElevationAdvice'))) -and
-    (Test-IssCode -Text $elevationAdviceBody `
-        -Pattern ([regex]::Escape('подтвердите запрос UAC кнопкой «Да»'))) -and
-    (Test-IssCode -Text $elevationAdviceBody `
-        -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
-    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall') `
-        -Pattern ([regex]::Escape('ElevationFailureText'))) -and
-    (Test-IssCode -Text $elevationTextBody `
-        -Pattern ([regex]::Escape('Повышение прав отменено')))
-Add-StaticResult -Name 'static:uac-warning-and-guidance' -Ok $uacOk `
+# 2dd215f7: предупреждения об UAC в мастере больше нет — права запрашивает
+# Inno на старте, до [Code]. Вместо него мастер говорит о режиме «только для
+# меня» и объясняет, что сделать, если нужен сервер или клиент «для всех»:
+# иначе выключенный чекбокс сервера выглядит поломкой.
+$uacOk = (-not (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора')))) -and
+    (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Сервер не устанавливается в режиме «только для меня»'))) -and
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Установить для всех'))) -and
+    (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('GUserOnlyMode')))
+Add-StaticResult -Name 'static:mode-guidance' -Ok $uacOk `
     -Note 'предупреждение до UAC и инструкция после отмены повышения прав'
 
 $portBody = Get-IssFunctionBody -Text $issText -Name 'ServerPortStatus'
@@ -1895,6 +1954,50 @@ Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-user')
 Add-StateResult -Name 'need-elevation:client-user' -Line $probe.State -Pairs @('need_elevation=0')
 
+# 2dd215f7: в административном режиме «клиент для меня» запрещён — под
+# Administrator Protection элевированный процесс работает в отдельном профиле
+# SMAA. Радиокнопки скрыты, выбор принудительно machine.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1', '/TESTSELECT=client-user')
+Add-StateResult -Name 'admin-mode:client-scope' -Line $probe.State -Pairs @(
+    'client_scope=machine', 'scope_fixed=0', 'scope_radios=hidden') `
+    -Note 'admin-режим: клиент только для всех (SMAA-профиль не трогаем)'
+
+# 2dd215f7: элевация штатная — режим выбирает диалог Inno до мастера, права
+# запрашивает Windows один раз на старте. Неадминистративный режим («только для
+# меня») моделируется /TESTUSERONLYMODE=1: сервер недоступен (службе нужны
+# права администратора), клиент ставится в профиль пользователя, радиокнопки
+# области скрыты, повышение прав не нужно.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTUSERONLYMODE=1')
+Add-StateResult -Name 'user-only-mode:defaults' -Line $probe.State -Pairs @(
+    'default_server=0', 'default_client=1', 'client_scope=user',
+    'scope_radios=hidden', 'need_elevation=0') `
+    -Note 'режим «только для меня»: клиент в профиль, сервер не предлагается'
+
+# Защита от программного выбора: /TESTSELECT идёт через ту же ApplySelection,
+# что и обработчики экрана; сервер здесь не выбирается, область — только user.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTUSERONLYMODE=1', '/TESTSELECT=server')
+Add-StateResult -Name 'user-only-mode:server-guard' -Line $probe.State -Pairs @(
+    'default_server=0', 'default_client=0', 'need_elevation=0') `
+    -Note 'сервер в режиме «только для меня» не выбирается даже программно'
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTUSERONLYMODE=1', '/TESTSELECT=client-machine')
+Add-StateResult -Name 'user-only-mode:scope-guard' -Line $probe.State -Pairs @(
+    'default_client=1', 'client_scope=user', 'need_elevation=0') `
+    -Note 'область клиента принудительно user: клиент «для всех» требует прав'
+
+# Административный режим — режим по умолчанию продуктовой сборки
+# (PrivilegesRequired=admin). На чистой машине предлагаются сервер и клиент
+# «для всех», область фиксирована machine; UAC Inno уже показал на старте.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1')
+Add-StateResult -Name 'admin-mode:defaults' -Line $probe.State -Pairs @(
+    'default_server=1', 'default_client=1', 'client_scope=machine',
+    'scope_radios=hidden', 'need_elevation=1') `
+    -Note 'административный режим: сервер и клиент «для всех» по умолчанию'
+
 # Замечание 1: элевированный, но не административный запуск — не
 # привилегированный контекст (иначе сервер ставится и в Program Files, и в
 # профиль пользователя). /TESTGUIMODE отключает silent-термин контекста.
@@ -2502,6 +2605,11 @@ $connectLine = Get-LogLine -Pattern 'TESTCONNECTPARAMS ([^\r\n]+)'
 Add-Result -Name 'connect-params:no-server' -Expected 1 `
     -Actual ([int]($connectLine -eq '(none)')) `
     -Note 'сервера нет — клиент запускается без предзаполнения'
+# Замечание верификатора: хук проверки не должен попадать в продуктовую сборку.
+Add-StaticResult -Name 'static:connect-params-hook-ifdef' `
+    -Ok ((Test-IssCode -Text $issText -Pattern ([regex]::Escape("ParamValue('TESTCONNECTPARAMS')"))) -and
+        (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape("ParamValue('TESTCONNECTPARAMS')")))) `
+    -Note 'хук /TESTCONNECTPARAMS есть только под #ifdef TestMode'
 
 # --- 98ad5eec: закрытие запущенного клиента ----------------------------------
 # Модель процессов: /TESTCLIENTPIDS — что «запущено», /TESTCLIENTGONE — через
@@ -3107,20 +3215,14 @@ Add-StaticResult -Name 'static:rollback-snapshot-rotation' `
     -Ok ((Test-IssCode -Text $snapshotBody -Pattern ([regex]::Escape('CleanupRollbackSnapshotsExcept(GLastRollbackDir)'))) -and
         (Test-IssCode -Text $cleanupBody -Pattern ([regex]::Escape("CleanupRollbackSnapshotsExcept(Keep)")))) `
     -Note 'старые снимки отката удаляются; после успеха — все'
-# Блокер 3 приёмки: причина сбоя дочерней фазы и итог отката — в GUI и в
-# reason-файле; в ветке кода 10 родитель обязан показать GChildReason.
-$readyBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
-$prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall'
-# Строго в ветке кода 10: сообщение о коде и причина обязаны стоять в одном
-# выражении — иначе GChildReason из ветки кода 20 маскирует потерю причины.
-$readyReasonOk = [bool]($readyBody -match '(?s)привилегированная фаза завершилась с кодом.*?GChildReason')
-$prepareReasonOk = [bool]($prepareBody -match '(?s)Установка завершилась сбоем.*?GChildReason')
-Add-StaticResult -Name 'static:child-reason-gui' `
-    -Ok ($readyReasonOk -and $prepareReasonOk -and
-        (Test-IssCode -Text $ssPostInstallBody -Pattern ([regex]::Escape('WriteReasonFile(GFailureReason)'))) -and
+# Блокер 3 приёмки: причина сбоя и итог отката — в GUI и в reason-файле.
+# Дочерней фазы больше нет (2dd215f7), причина — GFailureReason установщика;
+# reason-файл пишется после откатa, иначе перезапись скрыла бы его причину.
+Add-StaticResult -Name 'static:failure-reason-gui' `
+    -Ok ((Test-IssCode -Text $ssPostInstallBody -Pattern ([regex]::Escape('WriteReasonFile(GFailureReason)'))) -and
         ($ssPostInstallBody.IndexOf('RollbackAfterFailure') -lt
          $ssPostInstallBody.IndexOf('WriteReasonFile(GFailureReason)'))) `
-    -Note 'код 10: GChildReason в сообщении; reason-файл перезаписан после отката'
+    -Note 'код 10: reason-файл перезаписан после откатa, причина — GFailureReason'
 # Замечание приёмки: прямое указание потери данных при откате (ed2e42df).
 Add-StaticResult -Name 'static:rollback-data-loss-text' `
     -Ok ((Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('потеряны'))) -and

@@ -196,12 +196,13 @@ after(() => {
 });
 
 describe('контрактные флаги и путь загрузки', () => {
-  it('флаги командной строки — ровно /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY', () => {
+  it('флаги командной строки — ровно /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY /ALLUSERS', () => {
     assert.deepEqual([...INSTALLER_SILENT_ARGS], [
       '/VERYSILENT',
       '/SUPPRESSMSGBOXES',
       '/NORESTART',
       '/SERVERONLY',
+      '/ALLUSERS',
     ]);
   });
 
@@ -231,6 +232,7 @@ describe('контрактные флаги и путь загрузки', () =>
       '/SUPPRESSMSGBOXES',
       '/NORESTART',
       '/SERVERONLY',
+      '/ALLUSERS',
     ]);
     assert.ok(existsSync(expectedPath), 'скачанный установщик остался на месте');
     assert.deepEqual(readFileSync(expectedPath), INSTALLER_BYTES);
