@@ -69,8 +69,12 @@ jobs:
       - name: Ensure CI tools (Inno Setup 6, PowerShell 7)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\tests\ensure-ci-tools.ps1
 
+      # Команда обязана начинаться с оператора вызова `&`: раннер Gitea на
+      # Windows исполняет run в Windows PowerShell, и строка, начинающаяся с
+      # кавычки, разбирается как выражение, а не как команда («Unexpected
+      # token '-NoProfile'», run 92).
       - name: Installer silent-contract tests
-        run: '"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\silent-codes.ps1'
+        run: '& "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\silent-codes.ps1'
 
   linux:
     name: Linux (linux-vm)
