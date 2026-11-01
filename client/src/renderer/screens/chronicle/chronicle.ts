@@ -524,9 +524,17 @@ async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> 
   // Отбор без периода — вход получает период по умолчанию (ошибка 167860ac):
   // снимок без строки «Период записи» (легаси/импорт) не должен открывать
   // ленту «за все записи».
-  setFilterState(defaultChroniclePeriod(readFilterDefinition(parsed.filter)));
+  const saved = readFilterDefinition(parsed.filter);
+  const savedPeriod = chroniclePeriod(saved);
+  const savedHasPeriod = savedPeriod.from !== '' || savedPeriod.to !== '';
+  setFilterState(defaultChroniclePeriod(saved));
   setSavedFilterId(parsed.savedFilterId);
-  if (parsed.month !== null) month = parsed.month;
+  if (parsed.month !== null) {
+    // Месяц без периода — остаток прежнего формата снимка, а не отбор: дневник
+    // открывается на текущей дате, как при входе без снимка (ошибка 2770c2cc).
+    // Нормальный снимок (период + месяц) применяется целиком (9b49d672).
+    month = savedHasPeriod ? parsed.month : null;
+  }
   if (ok) return;
   pendingFilterSnapshot = { raw, pair, signature: filterStateSignature() };
 }

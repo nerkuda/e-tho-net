@@ -474,4 +474,34 @@ describe('«Дневник»: сохранённый месяц календар
     );
     assert.deepEqual(tabUpdates, [], 'восстановление месяца не пишет состояние повторно');
   });
+
+  it('3. легаси-снимок: месяц без периода игнорируется — текущая дата (2770c2cc)', async () => {
+    // Пользователь: месяц без периода — не отбор, а остаток прежнего формата.
+    // Дневник должен открыться как без снимка: период $today, текущий месяц,
+    // сегодня выделено; нормальный снимок (кейс 1) применяется целиком.
+    const snapshot = JSON.stringify({
+      filter: { keywords: 'кофе', keyword_scope: ['title'], order: 'asc' },
+      month: { year: 2026, month: 3 },
+      savedFilterId: null,
+    });
+    await mountDiary('tab-dp-10', snapshot);
+    assert.deepEqual(
+      panelMod.chroniclePeriod(),
+      { from: '$today', to: '$today' },
+      'легаси-месяц не сделал снимок отбором: период — $today',
+    );
+    const today = diaryMod.todayLocal();
+    const todayMonth = today.slice(0, 7);
+    const days = calendarDays();
+    assert.ok(days.includes(`${todayMonth}-01`), 'календарь открыт на текущем месяце');
+    if (todayMonth !== '2026-03') {
+      assert.ok(!days.includes('2026-03-01'), 'сохранённый в легаси-снимке март не показан');
+    }
+    assert.deepEqual(
+      host.querySelectorAll('.cal-day.is-selected').map((cell) => cell.title),
+      [today],
+      'выделен сегодняшний день',
+    );
+    assert.deepEqual(tabUpdates, [], 'легаси-месяц не персистится повторно');
+  });
 });
