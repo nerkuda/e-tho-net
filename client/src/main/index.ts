@@ -28,6 +28,7 @@ import {
   parseUserDataDirArg,
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
+import { parseConnectArgs } from './connect-prefill.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { decideNavigation, EXTERNAL_SCHEMES } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
@@ -84,6 +85,15 @@ if (userDataDirArg !== null) {
   // share the installed app's local.db / server profiles / settings.
   app.setPath('userData', path.join(app.getPath('appData'), '@etn-dev'));
 }
+
+/**
+ * Предзаполнение подключения от установщика (ошибка 0f8dd0f3, п.6 860def0d):
+ * «Запустить клиент» после установки сервера передаёт
+ * `--connect-url=http://localhost:<порт> --connect-name="Локальный сервер"`.
+ * Значение живёт весь запуск и отдаётся renderer запросом
+ * `server.connectPrefill`; обычный запуск из меню даёт `null`.
+ */
+const connectPrefill = parseConnectArgs(process.argv);
 
 // Hidden-window test mode must never touch the user's real profile (task
 // 5c5b30e2). Guard by construction, before the journal, the local DB or any
@@ -599,6 +609,9 @@ app
       // (требование 339b507f): сервер отклоняет изменяющие запросы вне
       // `client_compatibility` кодом 426 (задача c3f33e6a).
       clientVersion: app.getVersion(),
+      // Предзаполнение подключения от установщика (ошибка 0f8dd0f3): renderer
+      // забирает его на онбординге запросом `server.connectPrefill`.
+      connectPrefill,
       getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     });
 

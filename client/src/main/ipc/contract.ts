@@ -16,6 +16,9 @@ import type { DraftStatus } from '../db/local-db.js';
 // Тип объявлен в main-модуле проверки и реэкспортируется здесь как часть
 // IPC-контракта; renderer видит только тип, не код main-процесса.
 import type { CompatibilityResult } from '../compatibility.js';
+// Предзаполнение подключения от установщика (ошибка 0f8dd0f3, п.6 860def0d):
+// тип принадлежит чистому разборщику argv, контракт его только объявляет.
+import type { ConnectPrefill } from '../connect-prefill.js';
 // Контракт обновления сервера (задача ca26c59d, тех.проект 2d9f5cc7):
 // формы ответов admin-эндпоинтов `/system/update*` (задача 0a27a63b) —
 // общие контракты `@etn/shared` (стандарт 01268f2d), здесь только реэкспорт
@@ -497,6 +500,13 @@ export interface EtnApi {
      * выполнялась или пользователь отключился.
      */
     getCompatibility(): Promise<CompatibilityResult | null>;
+    /**
+     * Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6
+     * 860def0d): имя и адрес локального сервера из флагов
+     * `--connect-name/--connect-url`, с которыми установщик запускает клиент
+     * после установки сервера. `null` — обычный запуск (из меню, ярлыка).
+     */
+    connectPrefill(): Promise<ConnectPrefill | null>;
     /**
      * Подписка на изменение вердикта (канал `compatibility:status`):
      * подключение/переподключение, `426` в середине сессии, отключение

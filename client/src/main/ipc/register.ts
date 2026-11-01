@@ -16,6 +16,7 @@ import { ipcMain, type BrowserWindow } from 'electron';
 import { NOT_CONNECTED_ERROR_TEXT, UI_STATE_KEY, type CurrentUser, type VersionResponse } from '@etn/shared';
 
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
+import type { ConnectPrefill } from '../connect-prefill.js';
 import { getClientLog, truncateForLog } from '../log/client-log.js';
 import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
@@ -66,6 +67,11 @@ export interface RegisterIpcOptions {
    * задача c3f33e6a); renderer значение не задаёт.
    */
   clientVersion: string;
+  /**
+   * Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6
+   * 860def0d) — разобрано из argv в `main/index.ts`. `null` — обычный запуск.
+   */
+  connectPrefill: ConnectPrefill | null;
   /** Resolves the current main window (for realtime broadcast). */
   getWindow: () => BrowserWindow | null;
 }
@@ -438,6 +444,9 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     removeProfile,
     disconnect,
     getCompatibility: () => compatibility.getResult(),
+    // Предзаполнение подключения от установщика (ошибка 0f8dd0f3): значение
+    // неизменно весь запуск, обработчик `server.connectPrefill` читает его.
+    getConnectPrefill: () => opts.connectPrefill,
     getServerMaintenance: () => {
       const info = serverMaintenance.get();
       return info === null

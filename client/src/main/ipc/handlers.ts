@@ -23,6 +23,7 @@ import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
 import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult, ServerMaintenanceDto } from './contract.js';
 import type { CompatibilityResult } from '../compatibility.js';
+import type { ConnectPrefill } from '../connect-prefill.js';
 import { openClientUpdatePage } from '../client-update.js';
 import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
@@ -59,6 +60,12 @@ export interface HandlerDeps {
    * отключился. Владелец состояния — `CompatibilityGate` в `register.ts`.
    */
   getCompatibility: () => CompatibilityResult | null;
+  /**
+   * Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6
+   * 860def0d): разобрано из argv в `main/index.ts`, `null` — обычный запуск.
+   * Значение неизменно весь запуск; renderer читает его на онбординге.
+   */
+  getConnectPrefill: () => ConnectPrefill | null;
   /**
    * Текущее состояние обслуживания сервера (задача 479e37ed, требование
    * 9636b1cc, форма IPC `ServerMaintenanceDto`). Владелец — `register.ts`;
@@ -189,6 +196,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'server.getCompatibility',
     bind(() => deps.getCompatibility()),
+  );
+  // Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6):
+  // «Запустить клиент» передал имя и адрес локального сервера флагами
+  // `--connect-name/--connect-url`. Renderer заполняет ими форму.
+  handlers.set(
+    'server.connectPrefill',
+    bind(() => deps.getConnectPrefill()),
   );
 
   // Per-network status snapshot (defect de34b35b): the renderer pulls it once

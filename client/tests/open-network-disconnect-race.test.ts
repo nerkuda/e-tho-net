@@ -126,6 +126,9 @@ function stubEtn(options: { deferTypes?: boolean; deferLayers?: boolean }): void
         disconnected = true;
       },
       listProfiles: async () => [],
+      // Предзаполнение подключения от установщика (ошибка 0f8dd0f3): онбординг
+      // запрашивает его при монтировании; обычный запуск — null.
+      connectPrefill: async () => null,
       getStatus: async () => 'idle',
     },
     networks: {

@@ -64,6 +64,9 @@ function buildApi(): EtnBridgeApi {
       // чтение при старте + подписка на изменения (подключение,
       // переподключение, 426 в середине сессии, отключение → null).
       getCompatibility: () => invoke('server.getCompatibility'),
+      // Предзаполнение подключения от установщика (ошибка 0f8dd0f3, п.6
+      // 860def0d): «Запустить клиент» передал имя и адрес сервера флагами.
+      connectPrefill: () => invoke('server.connectPrefill'),
       onCompatibilityChange(cb) {
         const listener = (_event: unknown, payload: unknown): void => {
           cb(payload as CompatibilityResult | null);

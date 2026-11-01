@@ -226,6 +226,19 @@ export function buildOnboarding(): HTMLElement {
     }
   }
 
+  /** Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6
+   *  860def0d): после установки сервера кнопка «Запустить клиент» передаёт
+   *  `--connect-url/--connect-name`, и форма обязана открыться с готовыми
+   *  названием и адресом — пользователю остаётся ввести API-ключ. Заполняем
+   *  только пустые поля: начатый пользователем ввод важнее. */
+  async function loadConnectPrefill(): Promise<void> {
+    const prefill = await etn.server.connectPrefill();
+    if (prefill === null || !root.isConnected) return;
+    if (labelInput.value === '') labelInput.value = prefill.name;
+    if (urlInput.value === '') urlInput.value = prefill.url;
+  }
+
   void loadProfiles();
+  void loadConnectPrefill();
   return root;
 }
