@@ -28,8 +28,9 @@
      16. B3/B5/Z3: состояние машины и галочки по умолчанию
          (not-installed/installed/update-available/repair/adopt/downgrade)
      17. B4: клиент «для всех» ставится, «для меня» — неэлевированной фазой;
-         радиокнопки области клиента читаются обработчиком, область
-         сохраняется в install.json (mode=client) и восстанавливается
+         область задаёт режим установки (диалог Inno), а не радиокнопки;
+         область сохраняется в install.json (mode=client) и восстанавливается;
+         копия «только для меня» видна и в административном режиме
      18. Z2: last_log обновляется каждый запуск, повтор версии не меняет версию
      19. Замечание 1: элевированный неадминистративный запуск не привилегированный
      20. Замечание 2: health-check fail-closed без службы — код 10, не успех
@@ -627,9 +628,6 @@ $staticChecks = @(
     @{ Name = 'static:autopf-appdir'; Pattern = [regex]::Escape('#define AppDir "{autopf}\ETN"'); Note = 'каталог программы по режиму установки' },
     @{ Name = 'static:defaultdir-app'; Pattern = [regex]::Escape('DefaultDirName={#AppDir}'); Note = '' },
     @{ Name = 'static:privileged-phase'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions'); Note = 'отдельная привилегированная фаза' },
-    @{ Name = 'static:radio-onclick-user'; Pattern = [regex]::Escape('GScopeUserRadio.OnClick := @ComponentsChanged;'); Note = 'радиокнопка «только для меня»' },
-    @{ Name = 'static:radio-onclick-machine'; Pattern = [regex]::Escape('GScopeMachineRadio.OnClick := @ComponentsChanged;'); Note = 'радиокнопка «для всех»' },
-    @{ Name = 'static:selection-from-controls'; Pattern = [regex]::Escape('ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);'); Note = 'выбор читается с контролов' },
     @{ Name = 'static:context-admin-mode'; Pattern = [regex]::Escape('GIsElevated and GAdminInstallMode'); Note = 'привилегированный контекст — только admin mode' },
     @{ Name = 'static:params-shared-dir'; Pattern = [regex]::Escape('{commonappdata}\ETN\.install'); Note = 'файл параметров в общем каталоге' },
     @{ Name = 'static:params-public-fallback'; Pattern = [regex]::Escape("GetEnv('PUBLIC')"); Note = 'запасной общий каталог' },
@@ -956,7 +954,7 @@ $explicitUserDir = ($issText -match [regex]::Escape('#define ClientUserDir "{loc
 $exePathBody = Get-IssFunctionBody -Text $issText -Name 'ClientExePath'
 $filesPresentBody = Get-IssFunctionBody -Text $issText -Name 'ClientFilesPresent'
 $userDirSearchOk = ($exePathBody -match [regex]::Escape('ClientInstallPath')) -and
-    ($filesPresentBody -match [regex]::Escape('ClientInstallPath'))
+    ($filesPresentBody -match [regex]::Escape('ClientUserCopyPresent'))
 Add-StaticResult -Name 'static:client-user-dir-explicit' -Ok ($explicitUserDir -and $userDirSearchOk) `
     -Note 'пользовательский клиент — явно в профиле (не {app}); путь и признак установки это учитывают'
 # Ошибка 0f8dd0f3, п.6: «Запустить клиент» после установки сервера обязан
@@ -972,10 +970,12 @@ $connectArgsOk = (Test-IssCode -Text $runClientBody -Pattern ([regex]::Escape('P
 Add-StaticResult -Name 'static:client-run-connect-args' -Ok $connectArgsOk `
     -Note '«Запустить клиент» передаёт --connect-name/--connect-url с портом установки'
 $installPathBody = Get-IssFunctionBody -Text $issText -Name 'ClientInstallPath'
-$installPathOk = (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{localappdata}'"))) -and
-    (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{commonpf}'")))
+$userClientDirBody = Get-IssFunctionBody -Text $issText -Name 'UserClientDir'
+$installPathOk = (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape('UserClientDir'))) -and
+    (Test-IssCode -Text $installPathBody -Pattern ([regex]::Escape("'{commonpf}'"))) -and
+    (Test-IssCode -Text $userClientDirBody -Pattern ([regex]::Escape('{#ClientUserDir}')))
 Add-StaticResult -Name 'static:client-install-path' -Ok $installPathOk `
-    -Note 'каталог клиента по области: профиль пользователя / Program Files'
+    -Note 'каталог клиента по области: профиль пользователя ({#ClientUserDir}) / Program Files'
 $jsonBody = Get-IssFunctionBody -Text $issText -Name 'BuildInstallJson'
 Add-StaticResult -Name 'static:client-scope-json' `
     -Ok ((Test-IssCode -Text $jsonBody -Pattern ([regex]::Escape('"client_scope"'))) -and
@@ -1000,6 +1000,9 @@ Add-StaticResult -Name 'static:elevation-diagnostics' -Ok $elevationDiagOk `
 # Решение по ошибке 2dd215f7: элевация штатная, силами Inno ДО [Code].
 # PrivilegesRequired=admin + диалог режима: «для всех» — один запрос UAC на
 # старте, «только для меня» — штатный неадминистративный режим (/CURRENTUSER).
+# UsePreviousPrivileges=no — диалог режима показывается при каждом запуске:
+# с yes при уже установленной user-версии Inno подавлял диалог, и подсказки
+# «запустите снова и выберите „для всех"» становились тупиком (блокер приёмки).
 # Скриптовый self-exec установщика запрещён платформой (Exec/ShellExec/FileCopy
 # по {srcexe} до старта установки дают код 5), поэтому помощника элевации,
 # RunElevatedChild и перезапуска мастера с /ALLUSERS быть не должно.
@@ -1009,13 +1012,14 @@ $elseIdx = $issText.IndexOf('#else', $testDefIdx)
 $endifIdx = $issText.IndexOf('#endif', $elseIdx)
 $adminIdx = $issText.IndexOf('PrivilegesRequired=admin', $elseIdx)
 $dialogIdx = $issText.IndexOf('PrivilegesRequiredOverridesAllowed=commandline dialog', $elseIdx)
-$prevIdx = $issText.IndexOf('UsePreviousPrivileges=yes', $elseIdx)
+$prevIdx = $issText.IndexOf('UsePreviousPrivileges=no', $elseIdx)
+$prevYesIdx = $issText.IndexOf('UsePreviousPrivileges=yes', $elseIdx)
 $nativeModeOk = ($testDefIdx -ge 0) -and ($elseIdx -gt $testDefIdx) -and
     ($endifIdx -gt $elseIdx) -and ($testLowIdx -gt $testDefIdx) -and
     ($testLowIdx -lt $elseIdx) -and ($adminIdx -gt $elseIdx) -and
     ($adminIdx -lt $endifIdx) -and ($dialogIdx -gt $elseIdx) -and
     ($dialogIdx -lt $endifIdx) -and ($prevIdx -gt $elseIdx) -and
-    ($prevIdx -lt $endifIdx)
+    ($prevIdx -lt $endifIdx) -and ($prevYesIdx -lt 0)
 $nativeElevationOk = $nativeModeOk -and
     (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GAdminInstallMode := IsAdminInstallMode'))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape("ParamExists('ELEVATEHELPER')")))) -and
@@ -1023,7 +1027,15 @@ $nativeElevationOk = $nativeModeOk -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('RunElevatedChild')))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('RelaunchAdminInstallMode'))))
 Add-StaticResult -Name 'static:elevation-native' -Ok $nativeElevationOk `
-    -Note 'элевация штатная: admin + commandline dialog в продуктовой ветке, lowest в TestMode; self-exec установщика нет'
+    -Note 'элевация штатная: admin + commandline dialog + UsePreviousPrivileges=no в продуктовой ветке, lowest в TestMode; self-exec установщика нет'
+
+# Блокер приёмки: подсказки «закройте установщик и запустите снова, выбрав
+# „для всех"» должны быть выполнимы. UsePreviousPrivileges=no — диалог режима
+# показывается при каждом запуске, даже если ETN уже установлена «только для
+# меня»; с yes Inno молча брал прошлый режим и подсказка вела в тупик.
+$prevNoOk = ($prevIdx -gt $elseIdx) -and ($prevIdx -lt $endifIdx) -and ($prevYesIdx -lt 0)
+Add-StaticResult -Name 'static:mode-dialog-every-run' -Ok $prevNoOk `
+    -Note 'UsePreviousPrivileges=no: смена режима — повторный запуск и выбор в диалоге, без флагов'
 
 # Режим «только для меня» (2dd215f7): без прав администратора сервер и клиент
 # «для всех» недоступны. Сервер выключен и снят из выбора, область клиента —
@@ -1031,7 +1043,7 @@ Add-StaticResult -Name 'static:elevation-native' -Ok $nativeElevationOk `
 $userOnlyOk = (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GUserOnlyMode := (not GAdminInstallMode)'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplySelection') -Pattern ([regex]::Escape('ServerChecked and (not GUserOnlyMode)'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplyDefaultSelection') -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
-    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ClientScopeRadiosVisible') -Pattern ([regex]::Escape('(not GUserOnlyMode)'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplyDefaultSelection') -Pattern ([regex]::Escape('GClientScopeUser := True'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState') -Pattern ([regex]::Escape('GServerCheck.Enabled := not GUserOnlyMode'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo') -Pattern ([regex]::Escape('if GUserOnlyMode then')))
 Add-StaticResult -Name 'static:user-only-mode' -Ok $userOnlyOk `
@@ -1042,15 +1054,40 @@ Add-StaticResult -Name 'static:user-only-mode' -Ok $userOnlyOk `
 # элевированного процесса клиент не запускается (профиль не тот).
 $applyBody = Get-IssFunctionBody -Text $issText -Name 'ApplySelection'
 $installUserBody = Get-IssFunctionBody -Text $issText -Name 'InstallClientUser'
-$radiosBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeRadiosVisible'
 $adminScopeOk = (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GAdminMachineScope := GAdminInstallMode and (not GPrivilegedPhase)'))) -and
     (Test-IssCode -Text $applyBody -Pattern ([regex]::Escape('(not GAdminMachineScope)'))) -and
     (Test-IssCode -Text $installUserBody -Pattern ([regex]::Escape('(not GAdminMachineScope)'))) -and
-    (Test-IssCode -Text $radiosBody -Pattern ([regex]::Escape('(not GAdminMachineScope)'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') -Pattern ([regex]::Escape('if GAdminMachineScope then'))) -and
     (Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('(not GAdminMachineScope)')))
 Add-StaticResult -Name 'static:admin-machine-scope' -Ok $adminScopeOk `
-    -Note 'admin-режим: клиент только machine, радиокнопки скрыты, автозапуск из setup отключён'
+    -Note 'admin-режим: клиент только machine, автозапуск из setup отключён'
+
+# Чистка недостижимых радиокнопок области (замечание верификатора 2dd215f7,
+# п.4): в продуктовой сборке область задаёт диалог режима, радиокнопок в
+# мастере быть не должно. Сторож краснеет, если контрол вернут.
+Add-StaticResult -Name 'static:no-scope-radios' `
+    -Ok (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('TNewRadioButton')))) `
+    -Note 'выбора области в мастере нет: её задаёт диалог режима Inno'
+
+# Замечание верификатора п.1: признак «клиент установлен» обязан видеть копию
+# «только для меня» в профиле и в административном режиме — иначе /ALLUSERS
+# поверх user-установки молча ставил вторую копию.
+$clientFilesBody = Get-IssFunctionBody -Text $issText -Name 'ClientFilesPresent'
+$clientUserBody = Get-IssFunctionBody -Text $issText -Name 'ClientUserCopyPresent'
+$bothAreasOk = (Test-IssCode -Text $clientFilesBody -Pattern ([regex]::Escape('ClientUserCopyPresent'))) -and
+    (Test-IssCode -Text $clientFilesBody -Pattern ([regex]::Escape('MachineAppDir'))) -and
+    (Test-IssCode -Text $clientUserBody -Pattern ([regex]::Escape('UserClientDir'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UserClientDir') -Pattern ([regex]::Escape('{#ClientUserDir}')))
+Add-StaticResult -Name 'static:client-both-areas' -Ok $bothAreasOk `
+    -Note 'клиент ищется в профиле и в машинной области; путь профиля — явная {#ClientUserDir}'
+
+# Замечание верификатора п.1 (сообщение): при найденной user-копии в
+# административном режиме мастер честно говорит, что копия в профиле останется.
+$scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
+$userCopyMsgOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('GUserClientCopyPresent'))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Найден клиент «только для меня»')))
+Add-StaticResult -Name 'static:client-user-copy-message' -Ok $userCopyMsgOk `
+    -Note 'admin-режим поверх user-копии: сказано, что она останется и рядом появится машинная'
 
 # Ярлыки несут параметры подключения: в административном режиме это
 # единственный путь prefill (клиент из элевированного процесса не запускаем).
@@ -1129,9 +1166,9 @@ Add-StaticResult -Name 'static:restart-manager-off' -Ok $rmOff `
 # Обновление: область клиента фиксирована — радиокнопки скрыты, область
 # выводится текстом (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec).
 $updateStateBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
-$radiosHidden = (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeUserRadio.Visible := ClientScopeRadiosVisible'))) -and
-    (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeMachineRadio.Visible := ClientScopeRadiosVisible'))) -and
-    (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeFixedLabel.Visible := ClientScopeFixed')))
+$scopeLabelOk = (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope'))) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('GScopeUserRadio')))) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('GScopeMachineRadio'))))
 $scopeFixedBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeFixed'
 $scopeFixedOk = Test-IssCode -Text $scopeFixedBody -Pattern ([regex]::Escape("GClientState = 'installed'"))
 $scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
@@ -1141,7 +1178,7 @@ $scopeTextOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('К�
     (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «для всех пользователей»'))) -and
     (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('удалите клиента и выполните установку заново'))) -and
     (-not (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('область установки'))))
-Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($radiosHidden -and $scopeFixedOk -and $scopeTextOk) `
+Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($scopeLabelOk -and $scopeFixedOk -and $scopeTextOk) `
     -Note 'при установленном клиенте радиокнопки скрыты, область — текстом в формулировке пользователя'
 Add-StaticResult -Name 'static:client-launch-original-user' `
     -Ok (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'RunClientClick') `
@@ -1248,17 +1285,18 @@ Add-StaticResult -Name 'static:server-mode-human' -Ok $modeOk `
     -Note 'режим запуска на экране — по-человечески, без термина service'
 
 $readyMemoBody = Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo'
-# 2dd215f7: предупреждения об UAC в мастере больше нет — права запрашивает
-# Inno на старте, до [Code]. Вместо него мастер говорит о режиме «только для
-# меня» и объясняет, что сделать, если нужен сервер или клиент «для всех»:
-# иначе выключенный чекбокс сервера выглядит поломкой.
+# 2dd215f7: диалог режима Inno показывается до мастера, поэтому предупреждать
+# об UAC внутри мастера не нужно. Вместо него мастер объясняет режим «только
+# для меня» и точный путь к серверу или клиенту «для всех»: запустить установщик
+# снова и выбрать вариант в диалоге режима (UsePreviousPrivileges=no — диалог
+# будет показан при каждом запуске, подсказка выполнима).
 $uacOk = (-not (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора')))) -and
     (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
     (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Сервер не устанавливается в режиме «только для меня»'))) -and
     (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Установить для всех'))) -and
     (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('GUserOnlyMode')))
 Add-StaticResult -Name 'static:mode-guidance' -Ok $uacOk `
-    -Note 'предупреждение до UAC и инструкция после отмены повышения прав'
+    -Note 'мастер объясняет режим «только для меня» и как перейти к варианту «для всех» (диалог режима при каждом запуске)'
 
 $portBody = Get-IssFunctionBody -Text $issText -Name 'ServerPortStatus'
 $portOk = (-not (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('IPAddress]::Any')))) -and
@@ -1940,7 +1978,7 @@ $probe = Invoke-StateProbe -ExtraArgs @('/TESTRECORD=1')
 Add-StateResult -Name 'state-machine-client-with-record' -Line $probe.State -Pairs @(
     'server_state=not-installed', 'record=1',
     'default_server=0', 'default_client=1',
-    'scope_fixed=1', 'scope_radios=hidden') -Note 'обновление: область клиента фиксирована'
+    'scope_fixed=1', 'machine_copy=1', 'user_copy=0') -Note 'обновление: область клиента фиксирована'
 
 # B4: повышение прав нужно серверу и клиенту «для всех», но не клиенту «для меня».
 Reset-State
@@ -1949,18 +1987,18 @@ Add-StateResult -Name 'need-elevation:server' -Line $probe.State -Pairs @('need_
 Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-machine')
 Add-StateResult -Name 'need-elevation:client-machine' -Line $probe.State -Pairs @(
-    'need_elevation=1', 'scope_fixed=0', 'scope_radios=visible') -Note 'первая установка: радиокнопки области видны'
+    'need_elevation=1', 'scope_fixed=0') -Note 'первая установка: клиент «для всех»'
 Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTSELECT=client-user')
 Add-StateResult -Name 'need-elevation:client-user' -Line $probe.State -Pairs @('need_elevation=0')
 
 # 2dd215f7: в административном режиме «клиент для меня» запрещён — под
 # Administrator Protection элевированный процесс работает в отдельном профиле
-# SMAA. Радиокнопки скрыты, выбор принудительно machine.
+# SMAA. Выбор принудительно machine.
 Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1', '/TESTSELECT=client-user')
 Add-StateResult -Name 'admin-mode:client-scope' -Line $probe.State -Pairs @(
-    'client_scope=machine', 'scope_fixed=0', 'scope_radios=hidden') `
+    'client_scope=machine', 'scope_fixed=0') `
     -Note 'admin-режим: клиент только для всех (SMAA-профиль не трогаем)'
 
 # 2dd215f7: элевация штатная — режим выбирает диалог Inno до мастера, права
@@ -1972,7 +2010,7 @@ Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTUSERONLYMODE=1')
 Add-StateResult -Name 'user-only-mode:defaults' -Line $probe.State -Pairs @(
     'default_server=0', 'default_client=1', 'client_scope=user',
-    'scope_radios=hidden', 'need_elevation=0') `
+    'need_elevation=0') `
     -Note 'режим «только для меня»: клиент в профиль, сервер не предлагается'
 
 # Защита от программного выбора: /TESTSELECT идёт через ту же ApplySelection,
@@ -1995,8 +2033,43 @@ Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1')
 Add-StateResult -Name 'admin-mode:defaults' -Line $probe.State -Pairs @(
     'default_server=1', 'default_client=1', 'client_scope=machine',
-    'scope_radios=hidden', 'need_elevation=1') `
+    'need_elevation=1') `
     -Note 'административный режим: сервер и клиент «для всех» по умолчанию'
+
+# Замечание верификатора п.1: копия клиента «только для меня» видна и в
+# административном режиме (иначе /ALLUSERS поверх user-установки молча ставил
+# вторую копию с сообщением «клиент не установлен»). В тестовой сборке
+# {#ClientUserDir} = каталог программы, поэтому пользовательская копия —
+# ETN.exe в корне appDir.
+Reset-State
+New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), 'stub')
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1')
+Add-StateResult -Name 'admin-mode:user-copy-visible' -Line $probe.State -Pairs @(
+    'client_state=installed', 'user_copy=1', 'machine_copy=0',
+    'default_client=1', 'client_scope=machine', 'scope_fixed=1') `
+    -Note 'admin-режим видит копию «только для меня» и рядом ставит «для всех»'
+
+# Машинная копия (appDir\client\ETN.exe) не считается пользовательской:
+# machine_copy=1, user_copy=0 — мастер не путает области.
+Reset-State
+New-Item -ItemType Directory -Path (Join-Path $appDir 'client') -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'client\ETN.exe'), 'stub')
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1')
+Add-StateResult -Name 'admin-mode:machine-copy-visible' -Line $probe.State -Pairs @(
+    'client_state=installed', 'user_copy=0', 'machine_copy=1') `
+    -Note 'машинная копия не считается пользовательской'
+
+# Копия «только для меня» в user-режиме: клиент обновляется в профиле,
+# сервер по-прежнему недоступен.
+Reset-State
+New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), 'stub')
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTUSERONLYMODE=1')
+Add-StateResult -Name 'user-only-mode:user-copy' -Line $probe.State -Pairs @(
+    'client_state=installed', 'user_copy=1', 'machine_copy=0',
+    'default_client=1', 'client_scope=user', 'scope_fixed=1') `
+    -Note 'режим «только для меня»: найденная копия обновляется в профиле'
 
 # Замечание 1: элевированный, но не административный запуск — не
 # привилегированный контекст (иначе сервер ставится и в Program Files, и в

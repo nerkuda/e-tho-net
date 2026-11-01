@@ -2,7 +2,7 @@
 ; installer/etn.iss — комбинированный установщик ETN для Windows
 ;
 ; Задача a1211915 (0.15.1): каркас установщика, определение состояния машины,
-; параметры установки (install.json), двухфазное повышение прав (UAC) и
+; параметры установки (install.json), штатная элевация Inno (UAC) и
 ; silent server-only режим для самообновления сервера.
 ;
 ; Зоны соседних задач (не реализуются здесь, оставлены точки вызова):
@@ -51,7 +51,8 @@
 ; Задача 686c5d76 (0.15.1) — первичная инициализация и экран ключа:
 ;   * «уже инициализирован» — критерий hasFirstUser(), а не наличие
 ;     _system.db (база от прерванной попытки доинициализируется);
-;   * init вызывается в привилегированной фазе: node.exe server\dist\cli.js
+;   * init вызывается в административном режиме (единый процесс установки):
+;     node.exe server\dist\cli.js
 ;     init --username <логин> --key-out <защищённый файл>; в окружение
 ;     процесса выставляются ETN_DATA_DIR, ETN_PORT, ETN_HOST;
 ;   * ключ пишется в %ProgramData%\ETN\.install\primary-key.txt, каталог
@@ -77,17 +78,17 @@
 ;     деинсталлятором перед установкой нового клиента;
 ;   * прогресс — подпись текущего этапа в StatusLabel страницы установки
 ;     (остановка службы, резервная копия, замена файлов, инициализация,
-;     запуск, health-check); этапы выполняет тот процесс, который их делает —
-;     при двухфазном UAC это привилегированная фаза (её этапы в журнале);
+;     запуск, health-check); установка идёт одним процессом, этапы видны и в
+;     StatusLabel, и в журнале;
 ;   * экран ошибки — причина, путь к журналу, путь к резервной копии и
 ;     следующий шаг; кнопки «Открыть журнал» и «Повторить»;
 ;   * итоговая сводка — что установлено, адрес сервера (локальный и LAN при
 ;     открытом брандмауэре), каталог данных, журнал, бэкап, напоминание
 ;     сохранить ключ; кнопки «Запустить клиент», «Открыть папку данных»,
 ;     «Открыть журнал»;
-;   * отказ UAC — объяснение и возврат на экран компонентов с сохранённым
-;     выбором (попытка повышения прав выполняется на экране готовности, где
-;     «Назад» ещё доступна);
+;   * отказ UAC — установщик не запускается вовсе (права запрашиваются до
+;     мастера); причина отказа остаётся только в журнале Inno ({log}) — нашего
+;     install-лога в этот момент ещё нет (ограничение диагностики 2dd215f7);
 ;   * занятый порт — фокус на поле порта и подсказка свободного значения.
 ;
 ; Задача 9b310991 (0.15.1) — каталог данных, порт, брандмауэр и предпроверки:
@@ -173,12 +174,11 @@
   #define AppDir TestAppDir
   #define DataDir TestDataDir
 #else
-  ; Каталог программы выбирается по режиму установки: обычный запуск идёт без
-  ; прав администратора, и {autopf} — каталог пользователя
-  ; (%LOCALAPPDATA%\Programs\ETN). Машинная установка (Program Files) возможна
-  ; только в привилегированной фазе — дочерний процесс с /ALLUSERS. Жёсткий
-  ; {commonpf} здесь недопустим: неэлевированный экземпляр не сможет создать
-  ; каталог и записать деинсталлятор (Error 5: Отказано в доступе).
+  ; Каталог программы выбирается по режиму установки: административный режим
+  ; (по умолчанию) — %ProgramFiles%\ETN; «только для меня» (диалог режима или
+  ; /CURRENTUSER) — %LOCALAPPDATA%\Programs\ETN без прав администратора.
+  ; Жёсткий {commonpf} здесь недопустим: в user-режиме экземпляр не сможет
+  ; создать каталог и записать деинсталлятор (Error 5: Отказано в доступе).
   #define AppDir "{autopf}\ETN"
   #define DataDir "{commonappdata}\ETN"
 #endif
@@ -266,8 +266,9 @@ AppSupportURL=https://github.com/nerkuda/e-tho-net/issues
 AppUpdatesURL=https://github.com/nerkuda/e-tho-net/releases
 
 ; Каталог программы: имя ETN фиксировано (ADR 144bcdb0), расположение — по
-; режиму установки ({autopf}\ETN: %LOCALAPPDATA%\Programs\ETN без прав
-; администратора, %ProgramFiles%\ETN в привилегированной фазе с /ALLUSERS).
+; режиму установки ({autopf}\ETN: административный режим — %ProgramFiles%\ETN,
+; «только для меня» (диалог режима или /CURRENTUSER) —
+; %LOCALAPPDATA%\Programs\ETN, без прав администратора).
 ; Каталог данных — %ProgramData%\ETN (поля выбора в 0.15.1 нет).
 DefaultDirName={#AppDir}
 DisableDirPage=yes
@@ -293,8 +294,13 @@ RestartApplications=no
 ; (/CURRENTUSER) — она идёт без элевации.
 ;   admin    — режим по умолчанию: сервер и клиент «для всех пользователей»;
 ;   dialog   — диалог режима на старте; /ALLUSERS и /CURRENTUSER его отменяют;
-;   UsePreviousPrivileges — если ETN уже установлена, повторный запуск не
-;              спрашивает режим: берётся прошлый выбор (меньше диалогов).
+;   UsePreviousPrivileges=no — диалог режима показывается при КАЖДОМ запуске.
+;              Так требует мастер: подсказки «закройте установщик и запустите
+;              снова, выбрав „для всех пользователей"» должны быть выполнимы.
+;              С yes (при уже установленной user-версии) Inno подавлял диалог:
+;              повторный запуск молча шёл в прошлом режиме — тупик (блокер
+;              приёмки 2dd215f7). Смена режима — повторный двойной клик, без
+;              флагов; /ALLUSERS и /CURRENTUSER по-прежнему отменяют диалог.
 #ifdef TestMode
 ; В тестовой сборке привилегий нет (иначе UAC в CI): административный режим
 ; моделируется хуком /TESTADMINMODE=1, неадминистративный — /TESTUSERONLYMODE=1.
@@ -303,7 +309,7 @@ PrivilegesRequiredOverridesAllowed=commandline
 #else
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline dialog
-UsePreviousPrivileges=yes
+UsePreviousPrivileges=no
 ; Предупреждение Inno «per-user areas in admin mode» снято осознанно: пути
 ; {localappdata}/{userdesktop}/{userprograms} используются только установкой
 ; клиента «только для меня», а в административном режиме она недоступна
@@ -382,9 +388,9 @@ Source: "{#ServicePayload}\*"; DestDir: "{app}\service"; Flags: ignoreversion re
 #endif
 
 ; --- Клиент (поставка 98ad5eec). «Для всех» ставится в {app}\client
-; --- привилегированной фазой; «только для меня» — в каталог профиля пользователя
-; --- ({#ClientUserDir} = %LOCALAPPDATA%\Programs\ETN), НЕ в {app}: в
-; --- административном режиме (/ALLUSERS) {app} — Program Files, и файлы
+; --- административным режимом установки; «только для меня» — в каталог профиля
+; --- пользователя ({#ClientUserDir} = %LOCALAPPDATA%\Programs\ETN), НЕ в {app}:
+; --- в административном режиме (/ALLUSERS) {app} — Program Files, и файлы
 ; --- расходились с client_scope=user (ошибка 0f8dd0f3, п.7). Явный каталог
 ; --- совпадает с ClientInstallPath.
 #ifdef HaveClientPayload
@@ -394,8 +400,8 @@ Source: "{#ClientPayload}\*"; DestDir: "{#ClientUserDir}"; Flags: ignoreversion 
 
 [Icons]
 ; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». Цель зависит
-; от области установки — «для всех» ставится в {app}\client привилегированной
-; фазой, «только для меня» — в явный каталог профиля ({#ClientUserDir}).
+; от области установки — «для всех» ставится в {app}\client административным
+; режимом установки, «только для меня» — в явный каталог профиля ({#ClientUserDir}).
 ; Каталоги ярлыков заданы через #define: в тестовой сборке они уведены в
 ; песочницу. Созданные ярлыки Inno удаляет деинсталлятором сам (записи [Icons]
 ; попадают в журнал удаления) — отдельного кода не нужно.
@@ -567,8 +573,8 @@ var
   GTestClientSoftIssued: Boolean;
   GTestClientGoneAt: Integer;
   { Пользователь отказался закрывать клиент (отличает отказ от технической
-    неудачи: техническую неудачу в родительском процессе исправит попытка в
-    привилегированной фазе, отказ — нет). }
+    неудачи: техническую неудачу можно устранить и повторить установку,
+    отказ — нет). }
   GClientCloseRefused: Boolean;
   { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
     снимает silent-термин для проверки копирования неэлевированной фазой
@@ -636,8 +642,9 @@ var
   GLogPath: String;
   GInstallJsonPath: String;
   GInstallJsonText: String;
-  { Файл параметров привилегированной фазы: создаётся родителем в общем
-    каталоге, путь передаётся дочернему через /PARAMS. }
+  { Файл параметров тестовой привилегированной фазы: пишется /TESTPARAMS и
+    читается /PRIVILEGEDPHASE. GUI-установка его не использует — режим и выбор
+    компонентов этот же процесс уже знает. }
   GParamsPath: String;
 
   { Выбор компонентов и параметры }
@@ -659,6 +666,10 @@ var
   GServerFilesPresent: Boolean;
   GDataDirPresent: Boolean;
   GClientFilesPresent: Boolean;
+  { Найдена копия клиента «только для меня» (ClientUserCopyPresent). В
+    административном режиме она не заменяется — рядом ставится машинная копия,
+    и мастер обязан сказать об этом (2dd215f7, замечание верификатора п.1). }
+  GUserClientCopyPresent: Boolean;
   GInstallerRecordPresent: Boolean;
   GFilesVersion: String;
   GInstalledVersion: String;
@@ -703,10 +714,9 @@ var
   GClientStateLabel: TNewStaticText;
   GClientHintLabel: TNewStaticText;
   GScopeHintLabel: TNewStaticText;
-  GScopeUserRadio: TNewRadioButton;
-  GScopeMachineRadio: TNewRadioButton;
-  { Область клиента при обновлении фиксирована: вместо радиокнопок
-    показывается текст (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec). }
+  { Область клиента: выбора в мастере нет (её задаёт диалог режима), при
+    обновлении показывается текст выбранной области (ea8e223a, 4a66b7a5;
+    замечание приёмки 98ad5eec). }
   GScopeFixedLabel: TNewStaticText;
   GDataNoteLabel: TNewStaticText;
   GReasonLabel: TNewStaticText;
@@ -715,9 +725,9 @@ var
   GLicenseCheck: TNewCheckBox;
   GLicenseLink: TNewLinkLabel;
   GLicenseAccepted: Boolean;
-  { Уведомление, оставленное после возврата на экран компонентов (отказ UAC,
-    ошибка удаления старого клиента): показывается вместо обычной причины и
-    сбрасывается при изменении выбора. }
+  { Уведомление, оставленное после возврата на экран компонентов (ошибка
+    закрытия клиента, ошибка удаления старого клиента): показывается вместо
+    обычной причины и сбрасывается при изменении выбора. }
   GComponentsNotice: String;
   { Экран компонентов построен и начальный выбор перенесён в контролы. До этого
     обработчики Checked (Inno вызывает OnClick и при программной установке
@@ -780,8 +790,8 @@ var
   { Обновление поверх установки: порт, хост и режим фиксированы install.json. }
   GParamsLocked: Boolean;
   { Строки журнала, записанные до создания журнала (чтение файла параметров
-    привилегированной фазы идёт раньше: от него зависит выбор компонентов и
-    место журнала). Выводятся сразу после InitLog. }
+    тестовой привилегированной фазы идёт раньше: от него зависит выбор
+    компонентов и место журнала). Выводятся сразу после InitLog. }
   GDeferredLog: String;
   { Файл причины отказа предусловия: привилегированная фаза (/PRIVILEGEDPHASE)
     пишет сюда причину, а вызывающий её процесс читает и показывает в
@@ -1319,41 +1329,72 @@ begin
     (FileExists(GDataDir + '\_system.db') or DirExists(GDataDir + '\networks'));
 end;
 
+{ Каталог клиента «только для меня» — явная константа из #define: один и тот
+  же путь в [Files], [Icons] и при определении «клиент установлен» (ошибка
+  0f8dd0f3, п.7). }
+function UserClientDir: String;
+begin
+  Result := ExpandConstant('{#ClientUserDir}');
+end;
+
+function ClientExeAt(const Dir: String): Boolean;
+begin
+  Result := (Dir <> '') and FileExists(Dir + '\ETN.exe');
+end;
+
+(* Копия клиента «только для меня»: строго корень профильного каталога —
+  машинный клиент лежит в {app}\client и за пользовательскую копию не
+  считается. Флаг нужен экрану компонентов: в административном режиме копия
+  в профиле не заменяется, рядом появляется машинная (2dd215f7, замечание
+  верификатора п.1). *)
+function ClientUserCopyPresent: Boolean;
+begin
+  Result := ClientExeAt(UserClientDir);
+end;
+
+(* Машинная копия клиента: всегда во вложенном каталоге client ({app}\client
+  либо {commonpf}\ETN\client, когда выбрана user-область). *)
+function ClientMachineCopyPresent: Boolean;
+begin
+  Result := ClientExeAt(GServerDir + '\client') or
+    ClientExeAt(MachineAppDir + '\client');
+end;
+
 (* Каталог установки клиента по области: «только для меня» — профиль
   пользователя (%LOCALAPPDATA%\Programs\ETN), «для всех» — Program Files.
-  Определён ДО ClientFilesPresent: признак «клиент установлен» обязан видеть
-  пользовательскую копию и в административном режиме установки (/ALLUSERS),
-  когда {app} — Program Files, а клиент лежит в профиле (ошибка 0f8dd0f3, п.7).
   Показывается на экране компонентов; запущенный клиент ищется по обоим
   вариантам (ClientCloseRoots), потому что обновление может застать клиента
   прежней области. Каталог фиксирован ADR 144bcdb0, но область установки
-  пользователь выбирает сам. *)
+  пользователь выбирает в диалоге режима Inno.
+
+  Ограничение Administrator Protection (2dd215f7): в элевированном процессе
+  {localappdata} может указывать на профиль SMAA, а не на профиль запустившего
+  пользователя. Поэтому путь «только для меня» задан явной константой
+  {#ClientUserDir} (та же, что в [Files]/[Icons]), а не вычисляется из {autopf}
+  выбранного режима: при обычном UAC она совпадает с профилем пользователя,
+  под AP — нет, и копию пользователя установщик может не увидеть (ограничение
+  диагностики, а не повод ставить вторую копию молча). *)
 function ClientInstallPath: String;
 begin
 #ifdef TestMode
   Result := GServerDir;
 #else
   if GClientScopeUser then
-    Result := ExpandConstant('{localappdata}') + '\Programs\ETN'
+    Result := UserClientDir
   else
     Result := ExpandConstant('{commonpf}') + '\ETN';
 #endif
 end;
 
 function ClientFilesPresent: Boolean;
-var
-  MachineDir, ScopeDir: String;
 begin
-  MachineDir := MachineAppDir;
-  ScopeDir := ClientInstallPath;
-  Result := (ScopeDir <> '') and
-    (FileExists(ScopeDir + '\ETN.exe') or FileExists(ScopeDir + '\client\ETN.exe'));
-  if not Result then
-    Result := FileExists(GServerDir + '\ETN.exe') or
-      FileExists(GServerDir + '\client\ETN.exe');
-  if not Result and (MachineDir <> '') then
-    Result := FileExists(MachineDir + '\client\ETN.exe') or
-      FileExists(MachineDir + '\ETN.exe');
+  (* Проверяются ОБЕ области (2dd215f7, замечание верификатора п.1): без
+    явной проверки профиля административный режим (/ALLUSERS) не видел
+    пользовательскую копию, считал клиент неустановленным и молча ставил
+    вторую копию. GServerDir/MachineAppDir покрывают машинную копию
+    ({app}\client) и запись без install.json. *)
+  Result := ClientUserCopyPresent or ClientMachineCopyPresent or
+    ClientExeAt(GServerDir) or ClientExeAt(MachineAppDir);
 end;
 
 { Запись установки Inno: машина целиком (HKLM/HKLM64) пишется только
@@ -1378,6 +1419,7 @@ begin
   GServerFilesPresent := ServerFilesPresent;
   GDataDirPresent := DataDirPresent;
   GClientFilesPresent := ClientFilesPresent;
+  GUserClientCopyPresent := ClientUserCopyPresent;
   GFilesVersion := ServerFilesVersion;
   GInstallerRecordPresent := MachineInstallRecordPresent;
 
@@ -1492,7 +1534,17 @@ begin
   if GClientState = 'installed' then
   begin
     if GClientSelected then
-      Result := 'клиент уже установлен — при обновлении он будет заменён'
+    begin
+      { Административный режим поверх установки «только для меня»: копия в
+        профиле не заменяется, рядом появляется машинная (2dd215f7, замечание
+        верификатора п.1) — обещать «замену» было бы неправдой. }
+      if GAdminMachineScope and GUserClientCopyPresent and
+         (not ClientMachineCopyPresent) then
+        Result := 'клиент установлен в варианте «только для меня» — будет ' +
+          'добавлена копия «для всех пользователей»'
+      else
+        Result := 'клиент уже установлен — при обновлении он будет заменён';
+    end
     else
       Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
   end
@@ -1521,25 +1573,11 @@ end;
 
 { Область установки клиента при обновлении фиксирована: менять её нельзя
   (ea8e223a, 4a66b7a5 — иначе на машине остались бы файлы и ярлыки старой
-  области). Радиокнопки в этом состоянии только сбивают с толку: они видны и
-  выглядят доступными, хотя выбор уже сделан (замечание приёмки 98ad5eec),
-  поэтому вместо них выводится текст. }
+  области). В этом состоянии выводится текст области (ClientScopeText):
+  выбора в мастере нет — его задаёт диалог режима Inno. }
 function ClientScopeFixed: Boolean;
 begin
   Result := GClientState = 'installed';
-end;
-
-{ В административном режиме установки «клиент для меня» запрещён: под
-  Administrator Protection элевированный процесс работает в отдельном профиле
-  (SMAA), и пользовательские файлы/ярлыки попали бы в чужой профиль. Это же
-  правило рекомендует Microsoft: в административном режиме пользовательские
-  области не трогать. В режиме «только для меня» область одна по построению —
-  радиокнопки тоже не нужны. Привилегированная фаза исключена — клиента «для
-  меня» ставит неэлевированная фаза, ребёнок его не касается. }
-function ClientScopeRadiosVisible: Boolean;
-begin
-  Result := (not ClientScopeFixed) and (not GAdminMachineScope) and
-    (not GUserOnlyMode);
 end;
 
 function ClientScopeText: String;
@@ -1549,16 +1587,29 @@ begin
     Result := 'Установщик запущен от имени администратора: клиент ставится ' +
       'для всех пользователей. Подключение к локальному серверу уже ' +
       'предзаполнено в ярлыке клиента.';
+    { Копия «только для меня» в профиле не заменяется (файлы user-области в
+      admin-режиме не копируются): говорим прямо, иначе мастер обещает
+      «замену», а на диске остаются две копии (2dd215f7, п.1). }
+    if GUserClientCopyPresent then
+    begin
+      if ClientMachineCopyPresent then
+        Result := Result + ' Найден клиент «только для меня»: он останется в ' +
+          'профиле, обновляется копия «для всех пользователей».'
+      else
+        Result := Result + ' Найден клиент «только для меня»: он останется в ' +
+          'профиле, а рядом будет установлена копия «для всех пользователей».';
+    end;
     Exit;
   end;
   { Режим «только для меня» (2dd215f7): клиент «для всех» без прав
     администратора не заменить — говорим, что сделать, вместо невнятного
-    «выберите хотя бы один компонент». }
+    «выберите хотя бы один компонент». UsePreviousPrivileges=no: диалог режима
+    показывается при каждом запуске, поэтому совет выполним. }
   if GUserOnlyMode and (GInstalledClientScope = 'machine') then
   begin
     Result := 'Клиент установлен для всех пользователей: его обновление ' +
-      'требует прав администратора. Закройте установщик и запустите его снова, ' +
-      'выбрав «Установить для всех пользователей».';
+      'требует прав администратора. Закройте установщик и запустите его снова: ' +
+      'в диалоге режима выберите «Установить для всех пользователей».';
     Exit;
   end;
   { Режим «только для меня»: клиент в профиле обновляется на месте; другой
@@ -1567,8 +1618,8 @@ begin
   begin
     Result := 'Клиент установлен в варианте «только для меня» — обновление ' +
       'продолжится в ваш профиль. Чтобы поставить клиент «для всех ' +
-      'пользователей», закройте установщик и запустите его снова, выбрав ' +
-      '«Установить для всех пользователей».';
+      'пользователей», закройте установщик и запустите его снова: в диалоге ' +
+      'режима выберите «Установить для всех пользователей».';
     Exit;
   end;
   { Формулировка пользователя (ошибка 860def0d, n5): прямо говорит, в каком
@@ -1999,8 +2050,8 @@ end;
 
 { Удаление старого клиента перед установкой нового (только при выбранном
   клиенте). В неэлевированном процессе удаляется запись текущего пользователя;
-  машинную запись удаляет привилегированная фаза — в GUI её вызов идёт до
-  показа экрана готовности. Возвращает False только когда удаление обязательно
+  машинную запись снимает административный режим установки — в GUI проверка
+  идёт на экране готовности. Возвращает False только когда удаление обязательно
   и не удалось. }
 function RemoveLegacyBeforeInstall(const Elevated: Boolean;
   var Reason: String): Boolean;
@@ -2405,9 +2456,8 @@ end;
 procedure SetInstallStage(const Stage: String);
 begin
   GInstallStage := Stage;
-  { Этап пишется в журнал всегда: при двухфазном UAC видимый процесс —
-    родительский, а привилегированная фаза silent; журнал остаётся
-    единственным следом каждого этапа. }
+  { Этап пишется в журнал всегда: журнал — след каждого этапа, а в GUI он
+    ещё и подписывается в StatusLabel. Установка идёт одним процессом. }
   LogLine('INFO', 'Этап: ' + Stage);
   if GSilent then Exit;
   if (WizardForm <> nil) and (WizardForm.StatusLabel <> nil) then
@@ -2422,10 +2472,10 @@ end;
 
 procedure WriteReasonFile(const Text: String);
 begin
-  { Причина отказа — родителю в двухфазном UAC. Файл тот же, что у
-    предусловий (GReasonFile), и читается по любому ненулевому коду дочернего
-    процесса. Перезаписывается после отката: родитель должен увидеть не
-    только причину, но и итог отката (bb063ac3). }
+  { Причина отказа — для экрана ошибки и для тестов: файл тот же, что у
+    предусловий (GReasonFile), и читается по любому ненулевому коду установки.
+    Перезаписывается после отката: должен быть виден не только причина, но и
+    итог отката (bb063ac3). }
   if GReasonFile <> '' then
     SaveStringToFile(GReasonFile, Utf8Encode(Text), False);
 end;
@@ -2439,7 +2489,7 @@ begin
   GExitCode := Code;
   if GFailureReason = '' then GFailureReason := Reason;
   LogLine('ERROR', 'Сбой: ' + Reason + ' (код ' + IntToStr(Code) + ')');
-  { Причина сбоя — родителю в двухфазном UAC: иначе он покажет только код.
+  { Причина сбоя — экрану ошибки и тестам: иначе будет виден только код.
     После отката файл перезаписывается полным текстом (WriteReasonFile). }
   WriteReasonFile(Reason);
 end;
@@ -2773,8 +2823,9 @@ begin
   Result := GSilent and GServerOnly;
 end;
 
-{ Единственная точка вызова etn init. Работает в привилегированной фазе:
-  файлы сервера уже скопированы, права администратора есть. Повторно init
+{ Единственная точка вызова etn init. Работает под администратором (в GUI —
+  административный режим установки; в тестах — /PRIVILEGEDPHASE): файлы
+  сервера уже скопированы, права администратора есть. Повторно init
   не вызывается: критерий — hasFirstUser. }
 procedure EnsureFirstUser;
 var
@@ -2792,7 +2843,7 @@ begin
     ResolveFirstUserState;
     if GFirstUserPresent then
     begin
-      LogLine('INFO', 'etn init не вызывается: первый администратор уже есть (проверка в привилегированной фазе)');
+      LogLine('INFO', 'etn init не вызывается: первый администратор уже есть (проверка под администратором)');
       Exit;
     end;
   end;
@@ -2960,10 +3011,9 @@ begin
   if Result then DeleteFile(Probe);
 end;
 
-{ Файл параметров для элевированной фазы: строки key=value, ASCII.
-  UAC может запустить дочерний процесс с учётными данными ДРУГОГО
-  администратора — профиль и %TEMP% тогда чужие, поэтому файл кладётся в
-  общий каталог. Кандидаты по порядку: %ProgramData%\ETN\.install (только для
+{ Файл параметров тестовой привилегированной фазы: строки key=value, ASCII.
+  Путь передаётся через /PARAMS (см. ParamsFilePath); файл кладётся в общий
+  каталог. Кандидаты по порядку: %ProgramData%\ETN\.install (только для
   серверной установки), %PUBLIC%, %TEMP%. Каждый проверяется записью пробного
   файла; секреты в командной строке не передаются — только путь к файлу. }
 function NewParamsFilePath: String;
@@ -3007,8 +3057,8 @@ end;
 
 function ParamsFilePath: String;
 begin
-  { Дочерний получает путь через /PARAMS; в остальных случаях — путь,
-    вычисленный родителем и сохранённый в GParamsPath. }
+  { Тестовый контракт: /PRIVILEGEDPHASE получает путь через /PARAMS, иначе —
+    путь, сохранённый /TESTPARAMS в GParamsPath. }
   Result := ParamValue('PARAMS');
   if Result = '' then Result := GParamsPath;
   if Result = '' then
@@ -4042,8 +4092,8 @@ begin
 end;
 
 { Самый свежий архив по имени: нужен итоговой сводке и экрану ошибки, чтобы
-  показать реальный путь резервной копии (в двухфазном UAC архив создаёт
-  дочерний процесс — родитель знает о нём только через каталог архивов). }
+  показать реальный путь резервной копии (архив создаёт сам установщик в
+  административном режиме; каталог архивов — единственный источник пути). }
 function LatestBackupDirName(const BackupsDir: String): String;
 var
   FindRec: TFindRec;
@@ -4844,10 +4894,10 @@ begin
   GWorkAllowed := False;
   LogLine('ERROR', 'Предусловие не выполнено: ' + Reason);
   LogLine('ERROR', 'Код возврата 20: изменения не выполнялись.');
-  { Причина отказа пишется в отдельный файл: родительский (неэлевированный)
-    экземпляр показывает её в сообщении вместо «смотрите журнал» (9b310991).
-    Кодировка UTF-8: причину читают и установщик, и тесты — кириллица не
-    должна зависеть от системной кодовой страницы. }
+  { Причина отказа пишется в отдельный файл: экран ошибки показывает её в
+    сообщении вместо «смотрите журнал», а тесты читают по ненулевому коду
+    (9b310991). Кодировка UTF-8: причину читают и установщик, и тесты —
+    кириллица не должна зависеть от системной кодовой страницы. }
   WriteReasonFile(Reason);
   { Немедленный выход до записи хоть чего-нибудь в каталог программы и данных.
     GetCustomSetupExitCode в Inno не вызывается, если Setup завершается до
@@ -4935,8 +4985,8 @@ end;
   не видит чужой процесс, слушающий 127.0.0.1 или конкретный адрес локальной
   сети, — дефект B1 приёмки 9b310991 (установщик считал порт свободным,
   health-check попадал в чужой процесс). Слушатели собственной службы ETN
-  занятостью не считаются: службу останавливает привилегированная фаза
-  (bb063ac3). WinSW 2.x запускает сервер дочерним процессом, поэтому
+  занятостью не считаются: службу останавливает административный режим
+  установки (bb063ac3). WinSW 2.x запускает сервер дочерним процессом, поэтому
   владелец сокета сравнивается не только с ProcessId службы, но и с её
   потомками до 4 уровней (иначе при обновлении поверх работающей установки
   порт ошибочно считался бы занятым чужим).
@@ -5388,7 +5438,7 @@ begin
   GClientSelected := False;
   { Предпроверки окружения до замены файлов: порт, запись в каталоги, место.
     Порт, занятый собственной службой, ошибкой не считается — её остановит
-    привилегированная фаза (bb063ac3). }
+    административный режим установки (bb063ac3). }
   Reason := CheckServerEnvironment(False);
   if Reason <> '' then
     FailPrecondition(Reason);
@@ -5447,10 +5497,10 @@ begin
     Result := 'причина не записана — смотрите журнал установки';
 end;
 
-{ Возврат на экран компонентов: отказ UAC и ошибка удаления старого клиента
-  не должны выбрасывать пользователя из мастера — выбор компонентов
-  сохраняется. Перейти на страницу напрямую Inno не даёт, поэтому «Назад»
-  нажимается программно. }
+{ Возврат на экран компонентов: ошибка закрытия запущенного клиента или
+  удаления старого клиента не должна выбрасывать пользователя из мастера —
+  выбор компонентов сохраняется. Перейти на страницу напрямую Inno не даёт,
+  поэтому «Назад» нажимается программно. }
 procedure ReturnToComponentsPage;
 var
   Guard: Integer;
@@ -5796,10 +5846,11 @@ begin
     Result := 'Установить клиент ETN';
 end;
 
-{ Единая точка чтения выбора: вызывается обработчиками OnClick всех контролов
-  (чекбоксы компонентов, радиокнопки области клиента, чекбокс лицензии) и
-  тестовым хуком /TESTSELECT. Область клиента читается с радиокнопок — без
-  обработчика на них выбор «для всех» не влиял бы на элевацию (NeedElevation). }
+{ Единая точка чтения выбора: обработчики OnClick чекбоксов (компоненты,
+  лицензия) и тестовый хук /TESTSELECT. Радиокнопок области в мастере нет:
+  в продуктовой сборке область задаёт диалог режима Inno (GAdminMachineScope /
+  GUserOnlyMode), при обновлении — install.json. Третий аргумент — только для
+  /TESTSELECT и сохранения текущей области в UpdateComponentsState. }
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
@@ -5807,8 +5858,7 @@ begin
     (2dd215f7). Флаг остаётся ложным даже если чекбокс программно отмечен. }
   GServerSelected := ServerChecked and (not GUserOnlyMode);
   GClientSelected := ClientChecked;
-  { В административном режиме область одна — «для всех» (GAdminMachineScope):
-    радиокнопки скрыты, а выбор из них всё равно не должен вернуть «для меня».
+  { В административном режиме область одна — «для всех» (GAdminMachineScope).
     В режиме «только для меня» — наоборот: только профиль пользователя. }
   if GUserOnlyMode then
     GClientScopeUser := True
@@ -5863,19 +5913,15 @@ begin
     Y := Y + GClientHintLabel.Height + ScaleY(4);
   end;
 
-  { Область клиента — одна строка: радиокнопки стоят рядом (см.
-    CreateComponentsPage), при обновлении на их месте поясняющий текст
-    (ea8e223a). }
+  { Область клиента: при обновлении — поясняющий текст (ea8e223a), в
+    административном режиме — постоянное объяснение; иначе (режим «только для
+    меня») — подсказка ниже. Радиокнопок нет: область задаёт диалог режима. }
   if GScopeFixedLabel <> nil then
   begin
     GScopeFixedLabel.Top := Y;
     if GScopeFixedLabel.Visible then
       Y := Y + GScopeFixedLabel.Height + ScaleY(4);
   end;
-  if GScopeUserRadio <> nil then GScopeUserRadio.Top := Y;
-  if GScopeMachineRadio <> nil then GScopeMachineRadio.Top := Y;
-  if (GScopeUserRadio <> nil) and GScopeUserRadio.Visible then
-    Y := Y + GScopeUserRadio.Height + ScaleY(4);
   if GScopeHintLabel <> nil then
   begin
     GScopeHintLabel.Top := Y;
@@ -5905,24 +5951,16 @@ end;
 procedure UpdateComponentsState(Sender: TObject);
 begin
   if GSilent or (not GComponentsReady) then Exit;
-  if (GServerCheck <> nil) and (GClientCheck <> nil) and (GScopeMachineRadio <> nil) then
-    ApplySelection(GServerCheck.Checked, GClientCheck.Checked, GScopeMachineRadio.Checked);
+  if (GServerCheck <> nil) and (GClientCheck <> nil) then
+    { Радиокнопок области нет: третий аргумент сохраняет текущую область
+      (install.json при обновлении) и принудительно включает машинную только
+      в административном режиме. }
+    ApplySelection(GServerCheck.Checked, GClientCheck.Checked,
+      (not GClientScopeUser) or GAdminMachineScope);
   if GLicenseCheck <> nil then
     GLicenseAccepted := GLicenseCheck.Checked;
-  { Область клиента: на обновлении она фиксирована — радиокнопки не просто
-    неактивны, а не показываются; выбранная область выводится текстом
-    (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec). На первой установке
-    радиокнопки видны и доступны только при выбранном клиенте. }
-  if GScopeUserRadio <> nil then
-  begin
-    GScopeUserRadio.Visible := ClientScopeRadiosVisible;
-    GScopeUserRadio.Enabled := GClientSelected;
-  end;
-  if GScopeMachineRadio <> nil then
-  begin
-    GScopeMachineRadio.Visible := ClientScopeRadiosVisible;
-    GScopeMachineRadio.Enabled := GClientSelected;
-  end;
+  { Область клиента: выбора в мастере нет — её задаёт диалог режима Inno;
+    при обновлении выбранная область выводится текстом (ea8e223a, 4a66b7a5). }
   if GScopeFixedLabel <> nil then
   begin
     GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
@@ -5941,8 +5979,8 @@ begin
       GServerHintLabel.Caption :=
         'Сервер не устанавливается в режиме «только для меня»: он работает как ' +
         'служба Windows и требует прав администратора. Чтобы установить сервер, ' +
-        'закройте установщик и запустите его снова, выбрав «Установить для всех ' +
-        'пользователей», — Windows запросит права.'
+        'закройте установщик и запустите его снова: в диалоге режима выберите ' +
+        '«Установить для всех пользователей» — Windows запросит права.'
     else
       GServerHintLabel.Caption :=
         'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
@@ -5980,8 +6018,9 @@ begin
     FitLabel(GClientHintLabel);
   end;
   { Чем «только для меня» отличается от «для всех пользователей» (п.2
-    ошибки 860def0d): подсказка показывается, пока выбор области доступен. В
-    режиме «только для меня» она объясняет сам режим и как получить сервер. }
+    ошибки 860def0d): в режиме «только для меня» подсказка объясняет сам режим
+    и как получить сервер; в административном режиме её роль играет
+    ClientScopeText, поэтому она скрыта. }
   if GScopeHintLabel <> nil then
   begin
     if GUserOnlyMode then
@@ -5996,8 +6035,7 @@ begin
         'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
         'администратора.';
     FitLabel(GScopeHintLabel);
-    GScopeHintLabel.Visible :=
-      (ClientScopeRadiosVisible or GUserOnlyMode) and GClientSelected;
+    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope);
   end;
   if GReasonLabel <> nil then
   begin
@@ -6011,7 +6049,8 @@ begin
       if GUserOnlyMode and (GInstalledClientScope = 'machine') then
         GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
           'обновление требует прав администратора — закройте установщик и ' +
-          'запустите его снова, выбрав «Установить для всех пользователей».'
+          'запустите его снова: в диалоге режима выберите «Установить для всех ' +
+          'пользователей».'
       else
         GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
     end
@@ -6030,7 +6069,7 @@ begin
       ((not LicensePromptNeeded) or GLicenseAccepted);
 end;
 
-{ Изменение выбора пользователем: уведомление после отказа UAC или ошибки
+{ Изменение выбора пользователем: уведомление об ошибке закрытия клиента или
   удаления старого клиента больше не актуально. }
 procedure ComponentsChanged(Sender: TObject);
 begin
@@ -6120,11 +6159,10 @@ begin
   GClientHintLabel.Caption := '';
   FitLabel(GClientHintLabel);
 
-  { Область клиента: на первой установке — радиокнопки, при обновлении — текст
-    в той же области (радиокнопки скрыты: выбор уже сделан, ea8e223a).
-    Радиокнопки стоят рядом — подсказка о разнице областей занимает отдельную
-    строку и при вертикальном расположении содержимое не помещалось на экран
-    (ошибка 860def0d, п.1–2). }
+  { Область клиента: выбора в мастере нет — её задаёт диалог режима Inno
+    (радиокнопки убраны как недостижимые в продуктовой сборке, замечание
+    верификатора 2dd215f7 п.4). При обновлении — текст выбранной области
+    (ea8e223a). }
   GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
   GScopeFixedLabel.Parent := GComponentsPage.Surface;
   GScopeFixedLabel.Left := 20;
@@ -6134,21 +6172,6 @@ begin
   GScopeFixedLabel.Caption := '';
   GScopeFixedLabel.Visible := False;
   FitLabel(GScopeFixedLabel);
-
-  GScopeUserRadio := TNewRadioButton.Create(GComponentsPage);
-  GScopeUserRadio.Parent := GComponentsPage.Surface;
-  GScopeUserRadio.Left := 20;
-  GScopeUserRadio.Width := ScaleX(220);
-  GScopeUserRadio.Caption := 'Клиент: только для меня';
-  GScopeUserRadio.Checked := True;
-  GScopeUserRadio.OnClick := @ComponentsChanged;
-
-  GScopeMachineRadio := TNewRadioButton.Create(GComponentsPage);
-  GScopeMachineRadio.Parent := GComponentsPage.Surface;
-  GScopeMachineRadio.Left := 20 + ScaleX(230);
-  GScopeMachineRadio.Width := GComponentsPage.SurfaceWidth - 20 - ScaleX(230);
-  GScopeMachineRadio.Caption := 'Клиент: для всех пользователей';
-  GScopeMachineRadio.OnClick := @ComponentsChanged;
 
   GScopeHintLabel := TNewStaticText.Create(GComponentsPage);
   GScopeHintLabel.Parent := GComponentsPage.Surface;
@@ -6205,8 +6228,6 @@ begin
     ещё не заполненные чекбоксы и снял выбор клиента (найдено при 860def0d). }
   GServerCheck.Checked := GServerSelected;
   GClientCheck.Checked := GClientSelected;
-  GScopeUserRadio.Checked := GClientScopeUser;
-  GScopeMachineRadio.Checked := not GClientScopeUser;
   GLicenseAccepted := False;
   GComponentsReady := True;
   UpdateComponentsState(nil);
@@ -6950,7 +6971,8 @@ begin
       ' default_client=' + Pick(GClientSelected, '1', '0') +
       ' client_scope=' + Pick(GClientScopeUser, 'user', 'machine') +
       ' scope_fixed=' + Pick(ClientScopeFixed, '1', '0') +
-      ' scope_radios=' + Pick(ClientScopeRadiosVisible, 'visible', 'hidden') +
+      ' user_copy=' + Pick(GUserClientCopyPresent, '1', '0') +
+      ' machine_copy=' + Pick(ClientMachineCopyPresent, '1', '0') +
       ' need_elevation=' + Pick(NeedElevation, '1', '0') +
       ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
       ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
@@ -7128,7 +7150,6 @@ begin
   LogLine('INFO', 'TESTLAYOUT state server_selected=' + Pick(GServerSelected, '1', '0') +
     ' client_selected=' + Pick(GClientSelected, '1', '0') +
     ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
-    ' radios=' + Pick(ClientScopeRadiosVisible, '1', '0') +
     ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
   DumpPageSurface('components', GComponentsPage);
   DumpControl('components', 'serverCheck', GServerCheck);
@@ -7139,8 +7160,6 @@ begin
   DumpText('components', 'clientState', GClientStateLabel);
   DumpText('components', 'clientHint', GClientHintLabel);
   DumpText('components', 'scopeFixed', GScopeFixedLabel);
-  DumpControl('components', 'scopeUser', GScopeUserRadio);
-  DumpControl('components', 'scopeMachine', GScopeMachineRadio);
   DumpText('components', 'scopeHint', GScopeHintLabel);
   DumpText('components', 'dataNote', GDataNoteLabel);
   DumpControl('components', 'license', GLicenseCheck);
@@ -7408,7 +7427,8 @@ begin
         if GUserOnlyMode and (GInstalledClientScope = 'machine') then
           GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
             'обновление требует прав администратора — закройте установщик и ' +
-            'запустите его снова, выбрав «Установить для всех пользователей».'
+            'запустите его снова: в диалоге режима выберите «Установить для всех ' +
+            'пользователей».'
         else
           GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
       end;
@@ -7423,8 +7443,8 @@ begin
     begin
       if GReasonLabel <> nil then
         GReasonLabel.Caption := 'Для установки сервера или клиента «для всех ' +
-          'пользователей» закройте установщик и запустите его снова, выбрав ' +
-          '«Установить для всех пользователей».';
+          'пользователей» закройте установщик и запустите его снова: в диалоге ' +
+          'режима выберите «Установить для всех пользователей».';
       LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
         'компоненты, требующие прав администратора');
       Result := False;
@@ -7767,9 +7787,9 @@ begin
       if GExitCode <> EXIT_OK then
       begin
         RollbackAfterFailure;
-        { Родитель (двухфазный UAC) читает reason-файл: FailInstall записал
-          только исходную причину, до отката. Перезаписываем полным текстом —
-          с итогом отката (блокер приёмки bb063ac3). }
+        { Экран ошибки и reason-файл для тестов читают итог отката: FailInstall
+          записал только исходную причину, до отката. Перезаписываем полным
+          текстом — с итогом отката (блокер приёмки bb063ac3). }
         WriteReasonFile(GFailureReason);
       end;
     end;
@@ -7793,8 +7813,9 @@ begin
       удалённом снимке оставлял установку без пути отката). }
     if (GExitCode = EXIT_OK) and GDoPrivilegedWork then
       CleanupRollbackSnapshot;
-    { Ключ мог создать дочерний (элевированный) процесс: читаем защищённый
-      файл после установки, чтобы показать его на экране ключа. }
+    { Ключ мог создать элевированный процесс (административный режим
+      установки): читаем защищённый файл после установки, чтобы показать его
+      на экране ключа. }
     if GServerSelected then
       LoadPendingKey;
     if GPendingKey <> GKeyBeforeInstall then
