@@ -504,4 +504,33 @@ describe('«Дневник»: сохранённый месяц календар
     );
     assert.deepEqual(tabUpdates, [], 'легаси-месяц не персистится повторно');
   });
+
+  it('4. выбор дня перезаписывает легаси-снимок нормальным форматом: период + месяц (2770c2cc)', async () => {
+    // DoD карточки: «после выбора любого отбора снимок перезаписывается
+    // нормальным форматом». Монтирование легаси-снимок не трогает (кейс 3),
+    // но первое действие пользователя обязано записать период и месяц —
+    // иначе игнорируемый месяц оставался бы в снимке навсегда.
+    const snapshot = JSON.stringify({
+      filter: { order: 'asc' },
+      month: { year: 2001, month: 3 },
+      savedFilterId: null,
+    });
+    await mountDiary('tab-dp-11', snapshot);
+    assert.deepEqual(panelMod.chroniclePeriod(), { from: '$today', to: '$today' });
+    (host.querySelector('.cal-day.is-today') as ShimElement).click();
+    await flush();
+    const saved = tabUpdates.filter((row) => typeof row.patch['chronicle_state'] === 'string').at(-1);
+    assert.notEqual(saved, undefined, 'выбор дня записал снимок');
+    const state = JSON.parse(saved!.patch['chronicle_state'] as string) as Dict;
+    const leaf = nodes(state.filter).find(
+      (node) => (node.entity as Dict)['kind'] === 'record_time' && node.operator === 'between',
+    );
+    assert.notEqual(leaf, null, 'снимок содержит период «Период записи»');
+    const today = diaryMod.todayLocal();
+    assert.deepEqual(
+      state.month,
+      { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) },
+      'в снимок лёг текущий месяц',
+    );
+  });
 });
