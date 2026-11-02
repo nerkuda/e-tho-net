@@ -29,13 +29,17 @@ export function sweepCommentHtml(dataDir: string, systemDb: SystemDb, log: Logge
     try {
       const ndb = openNetworkDb(dataDir, networkId, log);
       // layers:physical-read — пересборка кэша рендера по ВСЕМ строкам всех слоёв, включая тени и надгробия.
+      // `pk`, а не логический `id`: id общий у одноимённых строк всех слоёв
+      // (тень копирует id предка, у постоянных комментариев он ещё и
+      // детерминирован от владельца — миграция 048), поэтому `WHERE id = ?`
+      // перезаписывал `body_html` всех слоёв (ошибка b4ab6e94).
       const rows = ndb
-        .prepare("SELECT id, body_md FROM comments WHERE body_md <> ''") // layers:physical-read
-        .all() as Array<{ id: string; body_md: string }>;
-      const update = ndb.prepare('UPDATE comments SET body_html = ? WHERE id = ?');
+        .prepare("SELECT pk, body_md FROM comments WHERE body_md <> ''") // layers:physical-read
+        .all() as Array<{ pk: number; body_md: string }>;
+      const update = ndb.prepare('UPDATE comments SET body_html = ? WHERE pk = ?');
       ndb.transaction(() => {
         for (const row of rows) {
-          update.run(renderMarkdown(row.body_md), row.id);
+          update.run(renderMarkdown(row.body_md), row.pk);
         }
       });
       reRendered += rows.length;

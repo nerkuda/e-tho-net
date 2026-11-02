@@ -11,6 +11,11 @@ import { UI_STATE_KEY } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
 import { store, type WorkspaceView } from '../state.js';
+import {
+  isWorkspaceTransitionActive,
+  queueWorkspaceView,
+  registerWorkspaceViewApplier,
+} from './workspace-transition.js';
 import { ensureActivityInitialised } from './activity/activity.js';
 import { ensureStructuresInitialised } from './structures/structures.js';
 import { ensureChronicleInitialised } from './chronicle/chronicle.js';
@@ -22,6 +27,19 @@ import type { PublicationOpenTarget } from './publications/workspace.js';
 
 /** Switches the workspace view and persists the L4 `active_view` key per tab. */
 export function setActiveView(view: WorkspaceView): void {
+  // Окно смены поколения workspace (ошибка f1febdfc): закладка вида нажата в
+  // уходящем рабочем пространстве. Применять её сейчас нельзя — ранний выход
+  // «вид уже этот» терял клик, а публикация вида новой вкладки затирала его.
+  // Запоминаем намерение: его применит новое поколение (workspace-transition).
+  if (isWorkspaceTransitionActive()) {
+    queueWorkspaceView(view);
+    return;
+  }
+  applyView(view);
+}
+
+/** Применение вида к текущему (опубликованному) поколению workspace. */
+function applyView(view: WorkspaceView): void {
   if (store.state.activeView === view) return;
   store.update({ activeView: view });
   const networkId = store.state.networkId;
@@ -38,6 +56,10 @@ export function setActiveView(view: WorkspaceView): void {
   if (view === 'activity') void ensureActivityInitialised();
   if (view === 'publications') void ensurePublicationsInitialised();
 }
+
+// Намерение из окна перехода применяется к НОВОМУ поколению (сразу после
+// `showScreen`) — мимо проверки окна, иначе оно снова встало бы в очередь.
+registerWorkspaceViewApplier(applyView);
 
 /**
  * Единый путь команды «В фокус»: показать экран «Карта мыслей» и поставить в

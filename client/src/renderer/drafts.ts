@@ -7,20 +7,40 @@
  * - on successful send the draft is deleted;
  * - while the realtime connection is down the UI blocks saves (the edit stays
  *   a draft, the status bar shows 🔴);
- * - on (re)connect, pending drafts are re-sent automatically (idempotent
- *   `Client-Request-Id` machinery on the server prevents double-applies);
- *   version conflicts keep the draft, mark it `conflict` and notify the user
+ * - on a REAL (re)connect, pending drafts are re-sent automatically (idempotent
+ *   `Client-Request-Id` machinery on the server prevents double-applies). The
+ *   first `connected` of a session counts too: it flushes drafts typed in THIS
+ *   session while the link was down. A confirmed liveness probe
+ *   (`suspect → connected`) also flushes the drafts typed while the probe was
+ *   in flight — otherwise they would be lost silently (ошибка 351068ed п.1);
+ *   the «Соединение восстановлено» toast still never fires for a probe
+ *   (fb9d6058, п.4 решений);
+ * - обслуживание сервера (`serverMaintenance` активен) — не восстановление:
+ *   сервер в обновлении принимает сокет и сразу закрывает его кодом 1012,
+ *   поэтому `connected` мигает многократно. Пока состояние активно, ни досыл
+ *   черновиков, ни тост «Соединение восстановлено» не запускаются, а отказ
+ *   записи `SERVER_UPDATING` останавливает волну без красного тоста (задача
+ *   479e37ed, блокер приёмки);
+ * - drafts never survive a client restart: the main process purges every
+ *   unfinished row right after opening the local DB, before the window exists
+ *   (решение пользователя 2026-10-29, fb9d6058). The renderer only reports the
+ *   purge count once (`reportStartupPurge`);
+ * - a draft whose target is gone for good (`NOT_FOUND`) is terminal: marked
+ *   `failed`, never retried, text kept until the next launch (fb9d6058);
+ * - version conflicts keep the draft, mark it `conflict` and notify the user
  *   ONCE — a conflicting draft is never retried on later connects until the
  *   entity is edited again (ошибка 5726744b).
  */
 
-import { EtnError } from '@etn/shared';
+import { CLIENT_META_KEY, EtnError } from '@etn/shared';
 
-import { errText, isConnectionLostError, isDuplicateError } from './lib/dom.js';
+import { errText, isConnectionLostError, isDuplicateError, isServerUpdatingError } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { findPermanentComment } from './lib/permanent-comment.js';
 import { t } from './lib/i18n.js';
 import { notice, toast } from './lib/notice.js';
+import { pluralRu } from './lib/plural.js';
+import { serverMaintenanceText } from './lib/server-maintenance-text.js';
 import { isConnected } from './realtime.js';
 import { getRtStatus, store, type RtStatus } from './state.js';
 
@@ -47,7 +67,7 @@ export interface DraftRecord {
 }
 
 /** Outcome of sending one draft through the retry loop. */
-export type DraftSendOutcome = 'sent' | 'skipped' | 'conflict';
+export type DraftSendOutcome = 'sent' | 'skipped' | 'conflict' | 'failed' | 'unusable';
 
 let lastConnected = false;
 let initialized = false;
@@ -56,8 +76,17 @@ let hadConnection = false;
 /** Previous per-network statuses (draft retries are per network, de34b35b). */
 let prevByNetwork: Record<string, RtStatus> = {};
 
-/** Status-specific warning shown when the active connection drops (de34b35b). */
+/**
+ * Status-specific warning shown when the active connection drops (de34b35b).
+ *
+ * Обслуживание сервера — отдельная причина (задача 479e37ed, сценарий
+ * 610169a5): close `1012`/кадр `maintenance` НЕ выдаётся за «переподключение
+ * или сетевую аварию». Когда main подтвердил состояние обслуживания, текст
+ * говорит «сервер обновляется» и называет срок из `retry_after`.
+ */
 function linkLossMessage(status: RtStatus): string {
+  const maintenanceText = serverMaintenanceText(store.state.serverMaintenance);
+  if (maintenanceText !== null) return maintenanceText;
   switch (status) {
     case 'suspect':
       return t('realtime.link.lostSuspect');
@@ -78,40 +107,105 @@ export function initDrafts(): void {
   hadConnection = lastConnected;
   prevByNetwork = { ...store.state.rtStatusByNetwork };
   store.subscribe(() => {
+    const map = store.state.rtStatusByNetwork;
+    // Предыдущий статус АКТИВНОЙ сети снимается ДО перезаписи `prevByNetwork`
+    // (fb9d6058, ловушка реализации): иначе переход `suspect → connected` не
+    // отличить от настоящего восстановления после обрыва.
+    const activeId = store.state.networkId;
+    const prevActive = activeId === null ? undefined : prevByNetwork[activeId];
+    // Обслуживание сервера (блокер приёмки 479e37ed): во время обновления
+    // сервер принимает сокет и сразу закрывает его кодом 1012, поэтому статус
+    // успевает мигнуть `connected` десяток раз. Открытие сокета — не
+    // восстановление: ни досыл черновиков, ни тост «Соединение восстановлено»
+    // в обслуживании не запускаются, иначе пользователь получает 12 волн
+    // красных тостов и ложное «восстановлено» при «Сервер: обновление».
+    const maintenance = store.state.serverMaintenance;
+    const inMaintenance = maintenance !== null && maintenance.active === true;
     // Per-network recovery (de34b35b): drafts of EVERY network are re-sent,
     // not just the active one. The first connect of a session counts too — a
-    // draft left from the previous run must be flushed (H19). A draft that hit
-    // VERSION_CONFLICT is marked `conflict` after that first attempt and is
-    // therefore absent from later `pending` lists: no per-launch loop
-    // (ошибка 5726744b).
-    const map = store.state.rtStatusByNetwork;
+    // draft typed in THIS session while the link was down must be flushed
+    // (H19); rows left by previous runs are purged in main before the window
+    // exists (fb9d6058). A confirmed liveness probe (`suspect → connected`)
+    // flushes too: the draft typed while the probe was in flight would
+    // otherwise sit pending until a REAL drop and be purged on the next launch
+    // — silent loss under the «отправится после восстановления связи» promise
+    // (ошибка 351068ed п.1). Only the «Соединение восстановлено» toast stays
+    // suppressed — the probe is not a recovery on the messaging level.
     for (const [nid, status] of Object.entries(map)) {
-      // The very first `connected` of a session also flushes: a draft left by
-      // the previous run must be sent on launch (H19). Repeated snapshots with
-      // the same status are no-ops (`prev` is already `connected`).
-      if (status === 'connected' && prevByNetwork[nid] !== 'connected') {
+      if (!inMaintenance && status === 'connected' && prevByNetwork[nid] !== 'connected') {
         void retryPendingDrafts(nid);
       }
     }
     prevByNetwork = { ...map };
 
-    const connected = isConnected();
+    const status = getRtStatus(store.state);
+    const connected = status === 'connected';
     if (connected && !lastConnected) {
-      // Recovery notice only after a real loss: the very first connect must
-      // not claim «Соединение восстановлено» (de34b35b).
-      // Восстановление связи — важное сообщение (доступность сервера), поэтому
-      // тост, а не рутинная строка статус-бара (задача 28d22b8a).
-      if (hadConnection) toast(t('realtime.link.recovered'), 'success');
+      // Recovery notice only after a REAL loss of THE SAME network: the very
+      // first connect of a session, a probe answered in time (`suspect →
+      // connected`) and a switch to an already healthy network must not claim
+      // «Соединение восстановлено» (de34b35b, fb9d6058). Мигание сокета в
+      // обслуживании — тоже не восстановление (блокер приёмки 479e37ed).
+      // Переключение на здоровую сеть во время пробы раньше давало ложный
+      // тост: глобальный `lastConnected` был false из-за `suspect` СТАРОЙ
+      // сети, а `prevActive !== 'suspect'` пропускал статус НОВОЙ (ошибка
+      // 98f94df6). Поэтому тост решает только собственный переход сети:
+      // `reconnecting`/`offline → connected`. Таблица переходов — в
+      // постоянном комментарии ошибки 98f94df6. Восстановление связи —
+      // важное сообщение (доступность сервера), поэтому тост, а не рутинная
+      // строка статус-бара (задача 28d22b8a).
+      if (!inMaintenance && hadConnection && (prevActive === 'reconnecting' || prevActive === 'offline')) {
+        toast(t('realtime.link.recovered'), 'success');
+      }
       hadConnection = true;
-    } else if (!connected && lastConnected) {
-      // One notice per connected → not-connected transition; the status text
-      // follows the CURRENT state, so suspect→reconnecting→offline does not
-      // spam the user.
-      notice(linkLossMessage(getRtStatus(store.state)), 'warning');
+    } else if (status === 'suspect') {
+      // Проба живости только отправлена — потери связи ещё нет, и на входе в
+      // `suspect` пользователю НЕ сообщаем ничего (fb9d6058 п.4). Сообщение
+      // появится, только если проба не подтвердит живость (ветка ниже).
+    } else if (!connected && (lastConnected || prevActive === 'suspect')) {
+      // Реальный обрыв (connected → reconnecting/offline) либо проба, не
+      // подтвердившая живость за свой дедлайн (suspect → reconnecting/offline).
+      // Текст «Проверяем связь» — именно подтверждённое подозрение; вход в
+      // `suspect` молчит.
+      notice(linkLossMessage(prevActive === 'suspect' ? 'suspect' : status), 'warning');
     }
     if (connected) hadConnection = true;
     lastConnected = connected;
   });
+  void reportStartupPurge();
+}
+
+/**
+ * Форма слова «черновик» для счётчика (fb9d6058): сами формы — в словаре
+ * (`drafts.noun.*`), выбор — `pluralRu`; литералов кириллицы в модуле нет
+ * (сторож i18n).
+ */
+function draftNoun(count: number): string {
+  return pluralRu(count, t('drafts.noun.one'), t('drafts.noun.few'), t('drafts.noun.many'));
+}
+
+/**
+ * Одно стартовое сообщение о чистке черновиков прошлых запусков (fb9d6058,
+ * п.5 решений). Main удаляет их сразу после открытия local.db и ДО создания
+ * окна, поэтому показать сообщение сам не может: счётчик ждёт в `client_meta`,
+ * renderer читает его при старте, показывает ОДИН раз и очищает ключ.
+ * Пустой черновик терять нечего — счётчик считает только строки с текстом.
+ */
+export async function reportStartupPurge(): Promise<void> {
+  try {
+    const raw = await etn.meta.get(CLIENT_META_KEY.DRAFTS_PURGED_COUNT);
+    if (raw === null || raw === '') return;
+    // Ключ очищается при ЛЮБОМ значении, включая 0 (замечание приёмки к
+    // 351068ed): main пишет счётчик при каждом старте, прочитанное значение
+    // отработано и следующему запуску не принадлежит. Иначе «0» оставался бы
+    // в client_meta навсегда.
+    await etn.meta.set(CLIENT_META_KEY.DRAFTS_PURGED_COUNT, '');
+    const count = Number(raw);
+    if (!Number.isInteger(count) || count <= 0) return;
+    notice(t('drafts.startup.purged', [count, draftNoun(count)]), 'warning');
+  } catch {
+    // Локальное хранилище недоступно — сообщать нечего.
+  }
 }
 
 /**
@@ -357,8 +451,16 @@ export function offlineNotice(): void {
 
 /**
  * Re-sends pending drafts of `networkId` (default: the active network) after a
- * connection recovery (de34b35b). Per-network: a background tab that came back
- * online must flush its own drafts, not only the visible one.
+ * REAL connection recovery (de34b35b). Per-network: a background tab that came
+ * back online must flush its own drafts, not only the visible one.
+ *
+ * ONE wave per network at a time (ошибка 351068ed п.2). Two `connected` events
+ * in a row used to start two overlapping waves: the second one carried a stale
+ * `draftList` snapshot and re-sent a row the first wave had just deleted,
+ * producing a false `VERSION_CONFLICT` toast («запись изменена в другом
+ * месте»). A repeat call while a wave runs only schedules ONE more pass after
+ * it finishes: that pass re-reads the queue instead of replaying a snapshot,
+ * so rows typed during the wave still get sent.
  *
  * A draft whose send hits `VERSION_CONFLICT` is marked `conflict` on the FIRST
  * attempt and therefore disappears from the `pending` queue: later connects do
@@ -366,10 +468,120 @@ export function offlineNotice(): void {
  * the text stays intact until the entity is edited again (then the draft is
  * re-based by the next `saveDraft` upsert). That breaks the «comment version
  * mismatch» loop at client start (ошибка 5726744b).
+ *
+ * A draft whose target is gone for good (`NOT_FOUND`) is marked `failed` and
+ * also leaves the queue — forever (fb9d6058). Both terminal classes are
+ * reported by ONE aggregated message per wave, with a counter and no uuid or
+ * server English; the draft text is never deleted silently.
  */
 export async function retryPendingDrafts(networkId?: string): Promise<void> {
   const target = networkId ?? store.state.networkId;
   if (target === null) return;
+  const running = retryWaves.get(target);
+  if (running !== undefined) {
+    retryRerun.add(target);
+    return running;
+  }
+  const wave = (async () => {
+    try {
+      await runRetryWave(target);
+    } catch {
+      // Волна не должна оставлять отвергнутый промис в реестре: иначе
+      // следующие вызовы получают его вечно, а `initDrafts` — unhandled
+      // rejection (замечание приёмки к 351068ed).
+    } finally {
+      // Запись снимается ДО возможного повторного прохода: тот создаёт новую
+      // волну и кладёт в реестр собственный промис.
+      retryWaves.delete(target);
+    }
+    if (retryRerun.delete(target)) await retryPendingDrafts(target);
+  })();
+  retryWaves.set(target, wave);
+  return wave;
+}
+
+const fieldWritesInFlight = new Map<string, number>();
+
+/** Ключ поля правки — тот же, что у строки черновика (без профиля). */
+function draftFieldKey(key: {
+  networkId: string;
+  entityType: string;
+  entityId: string;
+  field: string;
+}): string {
+  return `${key.networkId}|${key.entityType}|${key.entityId}|${key.field}`;
+}
+
+/**
+ * Регистрирует PATCH, уже летящий по полю, которое зеркалится в черновики
+ * (ошибка 351068ed, блокер п.1). Пока запись не завершена, волна досыла НЕ
+ * отправляет черновик этого поля: второй PATCH с той же `If-Match`-версией
+ * дал бы ложный `VERSION_CONFLICT` — проиграла волна (тост «запись изменена в
+ * другом месте») или сохранение (ошибка коммита с английским текстом).
+ *
+ * Вызывают оба места зеркалирования: `editor/comments.ts` (`comment` /
+ * `comment-new`) и `editor/editor.ts` (заголовок `thought`). Регистрация
+ * охватывает и успешную очистку черновиков (`clearDraftsFor`), поэтому окно
+ * «PATCH завершился, строка ещё pending» тоже закрыто. Функция снятия
+ * идемпотентна; повторные входы по тому же ключу считаются.
+ */
+export function beginDraftFieldWrite(key: {
+  networkId: string;
+  entityType: DraftKind;
+  entityId: string;
+  field: string;
+}): () => void {
+  const k = draftFieldKey(key);
+  fieldWritesInFlight.set(k, (fieldWritesInFlight.get(k) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (fieldWritesInFlight.get(k) ?? 1) - 1;
+    if (left <= 0) fieldWritesInFlight.delete(k);
+    else fieldWritesInFlight.set(k, left);
+  };
+}
+
+/** Летит ли PATCH по этому полю прямо сейчас (см. {@link beginDraftFieldWrite}). */
+function isDraftFieldWriteInFlight(draft: DraftRecord): boolean {
+  return fieldWritesInFlight.has(draftFieldKey(draft));
+}
+
+/**
+ * Выполняет запись поля, зеркалируемого в черновики, удерживая in-flight
+ * регистрацию до конца `run` — включая очистку черновиков (ошибка f537f56b).
+ *
+ * Порядок обязателен: если снять регистрацию раньше завершения IPC-удаления
+ * строки, волна досыла увидит ещё pending-черновик и отправит второй PATCH с
+ * той же `If-Match`-версией → ложный `VERSION_CONFLICT`. `run` должен сам
+ * дождаться очистки (`await clearDraft` / `await clearDraftsFor`) — хелпер
+ * снимает ключ только после его завершения, в том числе при исключении.
+ */
+export async function withDraftFieldWrite<T>(
+  key: {
+    networkId: string;
+    entityType: DraftKind;
+    entityId: string;
+    field: string;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  const release = beginDraftFieldWrite(key);
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
+/** One wave per network: the in-flight promise (351068ed п.2). */
+const retryWaves = new Map<string, Promise<void>>();
+/** Сети, для которых во время волны запрошен ЕЩЁ один проход по свежей очереди. */
+const retryRerun = new Set<string>();
+
+/** Один проход по `pending`-очереди сети; терминальные исходы — агрегатом. */
+async function runRetryWave(target: string): Promise<void> {
   let drafts: DraftRecord[];
   try {
     drafts = await listDrafts(target, 'pending');
@@ -378,17 +590,72 @@ export async function retryPendingDrafts(networkId?: string): Promise<void> {
   }
   if (drafts.length === 0) return;
   let conflicts = 0;
+  let unavailable = 0;
+  let unusable = 0;
+  // Терминальные черновики этой волны уже вышли из очереди `pending` —
+  // повторной волны для них не будет. Поэтому агрегат показывается и при
+  // обрыве связи посреди досылки (fb9d6058, замечание верификатора).
+  const reportTerminalDrafts = (): void => {
+    if (unavailable > 0) {
+      notice(t('drafts.failed.unavailable', [unavailable, draftNoun(unavailable)]), 'warning');
+    }
+    if (unusable > 0) {
+      // Локальный дефект черновика (битый конверт/неизвестный тип): ретрай не
+      // поможет — строка переведена в терминальный `failed` (351068ed п.8).
+      notice(t('drafts.failed.unusable', [unusable, draftNoun(unusable)]), 'warning');
+    }
+    if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
+  };
   for (const draft of drafts) {
+    // PATCH этого поля уже летит сохранением (проба живости запустила волну
+    // посреди записи): второй PATCH с той же base_version дал бы ложный
+    // VERSION_CONFLICT. Строка остаётся `pending`; успешное сохранение удалит
+    // её через `clearDraftsFor`, неуспешное — отправит следующая волна
+    // (ошибка 351068ed, блокер п.1).
+    if (isDraftFieldWriteInFlight(draft)) continue;
     try {
-      if ((await sendDraft(draft)) === 'conflict') conflicts += 1;
+      const outcome = await sendDraft(draft);
+      if (outcome === 'conflict') conflicts += 1;
+      else if (outcome === 'failed') unavailable += 1;
+      else if (outcome === 'unusable') unusable += 1;
     } catch (err) {
-      notice(t('drafts.retry.failed', errText(err)), 'error');
+      // Обслуживание сервера (блокер приёмки 479e37ed): запись отклонена
+      // штатным `SERVER_UPDATING` — это не сбой досыла. Волну останавливаем
+      // без красного тоста (пользователь уже видит «Сервер: обновление» со
+      // сроком), текст остаётся в черновике до восстановления сервера.
+      if (isServerUpdatingError(err)) {
+        reportTerminalDrafts();
+        return;
+      }
+      notice(t('drafts.retry.failed', draftRetryErrorText(err)), 'error');
       // Соединение оборвалось посреди досылки: остальные строки отправлять
-      // бессмысленно, они уйдут на следующем восстановлении связи.
-      if (isConnectionLostError(err)) return;
+      // бессмысленно, они уйдут на следующем восстановлении связи. Агрегат за
+      // уже обработанные терминальные черновики — ДО выхода из волны.
+      if (isConnectionLostError(err)) {
+        reportTerminalDrafts();
+        return;
+      }
     }
   }
-  if (conflicts > 0) notice(t('drafts.conflict.kept'), 'warning');
+  reportTerminalDrafts();
+}
+
+/**
+ * Пользовательский текст сбоя досылки (351068ed п.7). Серверные сообщения
+ * английские и адресованы API — в тосте они не показываются. Русские ветки
+ * `errText` сохраняются только для распознанных классов (обрыв связи,
+ * недоступный сервер, обслуживание); всё остальное, включая локальные сбои БД
+ * с английским SQLite-текстом, получает общую русскую формулировку
+ * (замечание приёмки: класс «английский текст в тосте»).
+ */
+function draftRetryErrorText(err: unknown): string {
+  if (isConnectionLostError(err)) return t('errors.connectionLost');
+  const code =
+    typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (code === 'INTERNAL' || code === 'SERVER_UPDATING') {
+    return errText(err);
+  }
+  return t('drafts.retry.rejected');
 }
 
 /** True when the failure is an `If-Match` version conflict. */
@@ -400,12 +667,42 @@ function isVersionConflict(err: unknown): boolean {
 }
 
 /**
+ * True when the failure is terminal on its own: the target row does not exist
+ * in the current layer/session (`NOT_FOUND`). Terminal ONLY for `NOT_FOUND`
+ * (fb9d6058 п.3 решений): other 4xx stay retryable — the layer may be switched
+ * back, the entity may be restored from the trash or re-created, and blocking
+ * such a draft forever would lose the user's text without any way back.
+ * No existence pre-check is made: the first response decides.
+ */
+function isTargetUnavailable(err: unknown): boolean {
+  if (err instanceof EtnError && err.code === 'NOT_FOUND') return true;
+  // Structural fallback — same envelope contract as {@link isVersionConflict}.
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'NOT_FOUND';
+}
+
+/**
  * Stops auto-retrying a draft after a version conflict. The text is NOT
  * deleted — решением оркестратора текст пользователя не теряем.
  */
 async function markDraftConflict(draftId: string): Promise<void> {
   try {
     await etn.ui.draftSetStatus(draftId, 'conflict');
+  } catch {
+    // best-effort: не отметили — следующий connect попробует ещё раз
+  }
+}
+
+/**
+ * Stops auto-retrying a draft whose target is unreachable for good (fb9d6058).
+ * `failed` is terminal: the row leaves the `pending` queue, so no connect
+ * retries it and no wave repeats the message. `conflict` is NOT used here —
+ * it is reserved for «версия разошлась» (5726744b). The text stays in
+ * local.db until the next launch's startup purge (п.1 решений): потерять его
+ * молча нельзя, показать в GUI пока негде.
+ */
+async function markDraftFailed(draftId: string): Promise<void> {
+  try {
+    await etn.ui.draftSetStatus(draftId, 'failed');
   } catch {
     // best-effort: не отметили — следующий connect попробует ещё раз
   }
@@ -428,6 +725,10 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
         await markDraftConflict(draft.id);
         return 'conflict';
       }
+      if (isTargetUnavailable(err)) {
+        await markDraftFailed(draft.id);
+        return 'failed';
+      }
       throw err;
     }
     await etn.ui.draftDelete(draft.id);
@@ -446,11 +747,26 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
       );
     }
     case 'comment-new': {
-      const parsed = JSON.parse(value) as {
-        ownerType: 'thought' | 'link';
-        ownerId: string;
-        bodyMd: string;
-      };
+      // Конверт черновика создаёт сам клиент. Синтаксически битый JSON или
+      // чужая структура не станут отправляемыми ни при каком восстановлении
+      // связи: раньше `JSON.parse` бросал на каждом connect — вечный ретрай с
+      // техническим английским (351068ed п.8). Теперь это терминальный
+      // `failed`; текст строки цел до чистки при следующем запуске.
+      let parsed: { ownerType: 'thought' | 'link'; ownerId: string; bodyMd: string };
+      try {
+        parsed = JSON.parse(value) as typeof parsed;
+      } catch {
+        await markDraftFailed(draft.id);
+        return 'unusable';
+      }
+      const valid =
+        (parsed.ownerType === 'thought' || parsed.ownerType === 'link') &&
+        typeof parsed.ownerId === 'string' &&
+        typeof parsed.bodyMd === 'string';
+      if (!valid) {
+        await markDraftFailed(draft.id);
+        return 'unusable';
+      }
       try {
         return await writeFile(() =>
           etn.comments.create(networkId, parsed.ownerType, parsed.ownerId, {
@@ -503,10 +819,13 @@ async function sendDraft(draft: DraftRecord): Promise<DraftSendOutcome> {
       // после успешной единой записи (или по `Esc`).
       return 'skipped';
     default:
-      // Неизвестный тип черновика: не игнорировать молча — неизвестная строка
-      // не отправлена, и это должно быть видно (явная ветка `transclusion`
-      // выше обязана существовать: её нейтрализация уводит сюда и краснит тест).
-      throw new Error(t('drafts.unknownType', String(draft.entityType)));
+      // Неизвестный тип черновика: не игнорировать молча и не ретраить вечно
+      // (351068ed п.8) — тип не появится от восстановления связи, поэтому
+      // строка терминальна (`failed`), а пользователь получает одно русское
+      // сообщение на волну. Явная ветка `transclusion` выше обязана
+      // существовать: её удаление уводит сюда и краснит тест.
+      await markDraftFailed(draft.id);
+      return 'unusable';
   }
 }
 

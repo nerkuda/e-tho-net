@@ -475,7 +475,7 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
     }
   });
 
-  it('shelves.list лениво создаёт дефолтную «Полку» в основе (8c2660e6)', async () => {
+  it('shelves.list — чистое чтение: дефолтную «Полку» не пересоздаёт (ошибка df2d971f)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -485,25 +485,40 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         })) as { data: Array<{ id: string; title: string }> };
         assert.equal(initial.data.length, 1);
         assert.equal(initial.data[0]?.title, 'Полка', 'новая сеть создана с «Полкой»');
+        // Дефолтная полка сеется при создании сети — в основе (карточка c80951ea v2).
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const seeded = ndb
+          .prepare('SELECT layer_id FROM shelves WHERE id = ?')
+          .get(initial.data[0]!.id) as { layer_id: string } | undefined;
+        assert.equal(seeded?.layer_id, BASE_LAYER_ID, 'дефолтная полка создана в основе');
 
-        // Убираем полку физически — следующий список обязан создать её заново
-        // (паритет с REST GET /shelves, карточка c80951ea v2).
+        // Убираем полку физически — список её НЕ воссоздаёт: чтение не пишет
+        // в БД (до 0.15.1 ленивое создание из `list` проходило гейт
+        // обслуживания как read-only, хотя меняло данные). Пустой список —
+        // легальное состояние; полка создаётся явно.
         const deleted = (await call(handle.client, 'shelves.delete', {
           network_id: ctx.networkId,
           shelf_id: initial.data[0]!.id,
         }, true)) as { deleted: boolean };
         assert.equal(deleted.deleted, true);
 
-        const recreated = (await call(handle.client, 'shelves.list', {
+        for (const attempt of [1, 2]) {
+          const after = (await call(handle.client, 'shelves.list', {
+            network_id: ctx.networkId,
+          })) as { data: Array<{ id: string; title: string }>; meta: { total: number } };
+          assert.equal(after.data.length, 0, `вызов ${attempt}: список пуст, вставки нет`);
+          assert.equal(after.meta.total, 0);
+        }
+        const count = (
+          ndb.prepare('SELECT COUNT(*) AS c FROM shelves').get() as { c: number }
+        ).c;
+        assert.equal(count, 0, 'shelves.list не создал ни одной строки полки');
+
+        const created = (await call(handle.client, 'shelves.create', {
           network_id: ctx.networkId,
-        })) as { data: Array<{ id: string; title: string }> };
-        assert.equal(recreated.data.length, 1, 'дефолтная полка создана заново');
-        assert.equal(recreated.data[0]?.title, 'Полка');
-        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
-        const row = ndb
-          .prepare('SELECT layer_id FROM shelves WHERE id = ?')
-          .get(recreated.data[0]!.id) as { layer_id: string } | undefined;
-        assert.equal(row?.layer_id, BASE_LAYER_ID, 'полка создана в основе');
+          title: 'Явная полка',
+        })) as { id: string; title: string };
+        assert.equal(created.title, 'Явная полка', 'полка создаётся явным действием');
       } finally {
         await handle.close();
       }

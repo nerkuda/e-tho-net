@@ -21,7 +21,10 @@ import { CLIENT_META_KEY, EtnError, NOT_CONNECTED_ERROR_TEXT, NOT_CONNECTED_NETW
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult } from './contract.js';
+import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult, ServerMaintenanceDto } from './contract.js';
+import type { CompatibilityResult } from '../compatibility.js';
+import type { ConnectPrefill } from '../connect-prefill.js';
+import { openClientUpdatePage } from '../client-update.js';
 import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
@@ -51,6 +54,24 @@ export interface HandlerDeps {
   removeProfile: (profileId: string) => Promise<void>;
   /** Drops clients and clears the active network. */
   disconnect: () => void;
+  /**
+   * Текущий вердикт проверки совместимости (сущность 89aad200, задача
+   * 12fd5b0e) или `null`, если проверка ещё не выполнялась/пользователь
+   * отключился. Владелец состояния — `CompatibilityGate` в `register.ts`.
+   */
+  getCompatibility: () => CompatibilityResult | null;
+  /**
+   * Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6
+   * 860def0d): разобрано из argv в `main/index.ts`, `null` — обычный запуск.
+   * Значение неизменно весь запуск; renderer читает его на онбординге.
+   */
+  getConnectPrefill: () => ConnectPrefill | null;
+  /**
+   * Текущее состояние обслуживания сервера (задача 479e37ed, требование
+   * 9636b1cc, форма IPC `ServerMaintenanceDto`). Владелец — `register.ts`;
+   * `active: false` означает штатную работу.
+   */
+  getServerMaintenance: () => ServerMaintenanceDto;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
   getCurrentNetworkId: () => string | null;
   /** Opens a network: persists L4 state, connects realtime, returns meta. */
@@ -170,12 +191,32 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       return poolStatusFor(pool, networkId);
     }),
   );
+  // Вердикт проверки совместимости (сущность 89aad200, задача 12fd5b0e):
+  // renderer читает его при старте и слушает `compatibility:status`.
+  handlers.set(
+    'server.getCompatibility',
+    bind(() => deps.getCompatibility()),
+  );
+  // Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6):
+  // «Запустить клиент» передал имя и адрес локального сервера флагами
+  // `--connect-name/--connect-url`. Renderer заполняет ими форму.
+  handlers.set(
+    'server.connectPrefill',
+    bind(() => deps.getConnectPrefill()),
+  );
 
   // Per-network status snapshot (defect de34b35b): the renderer pulls it once
   // at boot so switching tabs shows the right indicator immediately.
   handlers.set(
     'realtime.getStatuses',
     bind(() => deps.getRealtimePool()?.statusSnapshot() ?? []),
+  );
+
+  // Состояние обслуживания сервера (задача 479e37ed): рендерер забирает его
+  // при старте/подключении — не дожидаясь первого кадра или статуса.
+  handlers.set(
+    'realtime.getMaintenance',
+    bind(() => deps.getServerMaintenance()),
   );
 
   // --- networks -------------------------------------------------------------
@@ -2021,6 +2062,25 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'system.version',
     bind(() => requireRest(deps).getVersion()),
   );
+  // Обновление сервера (задача ca26c59d, эндпоинты — 0a27a63b). Только
+  // администратор — это проверяет сервер; renderer ограничивает вход в диалог
+  // ролью из `/me`, но полагаться на UI-гейт нельзя.
+  handlers.set(
+    'system.getServerUpdate',
+    bind(() => requireRest(deps).getServerUpdate()),
+  );
+  handlers.set(
+    'system.checkServerUpdate',
+    bind(() => requireRest(deps).checkServerUpdate()),
+  );
+  handlers.set(
+    'system.applyServerUpdate',
+    bind((targetVersion: string) => requireRest(deps).systemUpdateApply(targetVersion)),
+  );
+  handlers.set(
+    'system.getServerUpdateProgress',
+    bind(() => requireRest(deps).getServerUpdateProgress()),
+  );
   handlers.set(
     'system.export',
     bind((networkId: string, request: Parameters<RestClient['exportThoughts']>[1]) =>
@@ -2040,6 +2100,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((filePath: string) => openAttachmentFile(deps, filePath)),
   );
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
+  handlers.set(
+    'system.openClientUpdatePage',
+    bind((url: string) => openClientUpdatePageShell(url)),
+  );
 
   // --- file journals: client + server (task f051bf95, 07-client-electron.md §7) ---
   handlers.set(
@@ -2549,6 +2613,20 @@ async function openExternalShell(target: string): Promise<string> {
       : ' (возможно, протокол не зарегистрирован в системе)';
     return `Не удалось открыть «${classified.url}»${hint}: ${detail}`;
   }
+}
+
+/**
+ * Открывает страницу релиза клиента в системном браузере (задача 61cec451,
+ * требование d654473a): только абсолютный http(s)-адрес, без скачивания файла
+ * и запуска установщика. Возвращает '' при успехе или причину отказа — тот же
+ * формат, что у {@link openExternalShell}.
+ */
+async function openClientUpdatePageShell(url: string): Promise<string> {
+  const { shell } = await import('electron');
+  const result = await openClientUpdatePage(url, {
+    openExternal: (target) => shell.openExternal(target),
+  });
+  return result.ok ? '' : result.reason;
 }
 
 /**

@@ -67,13 +67,20 @@ import {
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
-import { initRealtime, refreshRealtimeStatuses, setRealtimeEffects } from './realtime.js';
+import {
+  initRealtime,
+  refreshRealtimeStatuses,
+  refreshServerMaintenance,
+  setRealtimeEffects,
+} from './realtime.js';
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
+import { initCompatibilityDialog } from './lib/compatibility-dialog.js';
+import { openServerUpdateDialog } from './lib/server-update-dialog.js';
 import { initLockReconnect } from './lib/lock-guard.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
@@ -87,6 +94,11 @@ import {
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
+import {
+  applyPendingWorkspaceView,
+  beginWorkspaceTransition,
+  endWorkspaceTransition,
+} from './screens/workspace-transition.js';
 import {
   currentScreenPair,
   findOpenTargetTab,
@@ -156,6 +168,24 @@ function isCurrentOpenNetwork(seq: number): boolean {
  */
 export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
   const seq = ++openNetworkSeq;
+  // Окно смены поколения workspace (ошибка f1febdfc): пока новая сеть/вкладка
+  // не опубликована, в DOM живёт прежнее пространство. Клик по закладке вида в
+  // нём запоминается (`screens/workspace-transition.ts`) и применяется к новому
+  // поколению сразу после `showScreen`. Входы пикера/ленты вкладок открывают
+  // это окно раньше — на время собственного await до вызова `openNetwork`.
+  const transition = beginWorkspaceTransition();
+  try {
+    await openNetworkBody(seq, networkId, tabId);
+  } finally {
+    endWorkspaceTransition(transition);
+  }
+}
+
+async function openNetworkBody(
+  seq: number,
+  networkId: string,
+  tabId: string | undefined,
+): Promise<void> {
   // The cursor lives on a cloud from the previously open network — drop it
   // before anything else, otherwise a quick Ctrl+V in the new network would
   // target an id that no longer exists on the map.
@@ -174,6 +204,9 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   // status snapshot so the indicator does not wait for the next broadcast
   // (defect de34b35b, verify remark 4).
   void refreshRealtimeStatuses();
+  // Обслуживание сервера (задача 479e37ed): перечитываем и его состояние —
+  // редкий случай, когда оно уже активно к моменту открытия сети.
+  void refreshServerMaintenance();
   const prefs = await etn.networks.getPreferences(networkId);
   if (!isCurrentOpenNetwork(seq)) return;
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
@@ -347,6 +380,10 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   if (!isCurrentOpenNetwork(seq)) return;
 
   showScreen('workspace');
+  // Новое поколение в DOM, сеть/вкладка/вид опубликованы: клик по закладке
+  // вида, нажатый в уходящем workspace, применяется здесь — до загрузки фокуса,
+  // чтобы пользователь сразу увидел выбранный экран (ошибка f1febdfc).
+  applyPendingWorkspaceView();
 
   // Q-bugfix: per-tab focus_id takes priority over the legacy L4 key. The
   // tab's focus was already persisted by the previous `setFocus` call (or by
@@ -833,6 +870,24 @@ export function takeBootConnectFailure(): string | null {
 }
 
 /**
+ * Вердикт проверки совместимости в store (сущность 89aad200, задача 12fd5b0e).
+ *
+ * main публикует его каналом `compatibility:status` при подключении,
+ * переподключении, `426` в середине сессии и отключении (`null`); чтение при
+ * старте закрывает разрыв «проверка уже была — подписки ещё нет» (перезагрузка
+ * окна). Показ блокирующего диалога и баннера — задачи 0afec967/b57910b5;
+ * здесь только состояние, из которого они рисуются.
+ */
+export async function initCompatibilityState(): Promise<void> {
+  etn.server.onCompatibilityChange((result) => store.update({ compatibility: result }));
+  try {
+    store.update({ compatibility: await etn.server.getCompatibility() });
+  } catch {
+    // Текущий вердикт — best-effort: подписка доставит следующие изменения.
+  }
+}
+
+/**
  * Boot: initialise realtime plumbing, then route to onboarding (no active
  * profile) or to the last-active tab (Q-bugfix) — when the user has
  * previously opened tabs, drop them straight into the workspace; otherwise
@@ -860,6 +915,34 @@ export async function boot(): Promise<void> {
   // показывала устаревший текст.
   initTransclusionSourceCache();
   initRealtime();
+  // Вердикт совместимости — до первого `server.connect`: проверка в main
+  // публикует его раньше, чем renderer получит `me` (задача 12fd5b0e).
+  void initCompatibilityState();
+  // Блокирующий диалог несовместимости (элемент 8623b9ff, задача 0afec967):
+  // показывается только после аутентификации; «Повторить» переподключается к
+  // активному профилю, совместимый вердикт закрывает диалог сам.
+  initCompatibilityDialog({
+    getState: () => ({
+      compatibility: store.state.compatibility,
+      authenticated: store.state.me !== null,
+      profileId: store.state.profileId,
+    }),
+    subscribe: (listener) => store.subscribe(listener),
+    // Страница релиза клиента — только через `client-update.ts` (задача 61cec451).
+    openExternal: (url) => etn.system.openClientUpdatePage(url),
+    // «Обновить сервер» из блокирующего диалога — реальный диалог обновления
+    // (элемент c9c96e5c, задача ca26c59d); роль администратора проверяет сам.
+    openServerUpdate: () => openServerUpdateDialog(),
+    copyText: async (text) => {
+      await navigator.clipboard.writeText(text);
+    },
+    loadProfiles: () => etn.server.listProfiles(),
+    retry: async (profileId) => {
+      const me = await etn.server.connect(profileId);
+      store.update({ me });
+      await restoreSession();
+    },
+  });
   setRealtimeEffects({
     // Full visible resync, not just a focus refresh (defect de34b35b):
     // `resume.stale` means the event window was exceeded — the editor and the
@@ -899,8 +982,10 @@ export async function boot(): Promise<void> {
       const me = await etn.server.connect(active.id);
       store.update({ profileId: active.id, serverLabel, me });
       // The realtime pool now exists: pull the per-network status snapshot
-      // (defect de34b35b, verify remark 4).
+      // (defect de34b35b, verify remark 4) and the maintenance state
+      // (задача 479e37ed).
       void refreshRealtimeStatuses();
+      void refreshServerMaintenance();
       // Q-bugfix: restore the previous session — saved tabs go straight to
       // the most recently active one, no forced re-pick from the network list.
       await restoreSession();

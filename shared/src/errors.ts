@@ -26,6 +26,15 @@ export const ETN_ERROR_CODES = [
   'VERSION_CONFLICT',
   'DUPLICATE',
   'VALIDATION_ERROR',
+  // Версия desktop-клиента вне `client_compatibility` (или отсутствует) на
+  // изменяющем запросе — HTTP 426 (задача c3f33e6a, требование 271e3327,
+  // ADR 6ded6a87). Чтение и MCP этим кодом не блокируются.
+  'CLIENT_VERSION_UNSUPPORTED',
+  // Сервер в режиме обслуживания (обновление, задача 2f599b67): изменяющие
+  // запросы REST получают HTTP 503 + `Retry-After`, изменяющие MCP-инструменты —
+  // ошибку с этим кодом и `details.retry_after`. Чтение не блокируется
+  // (требование 9636b1cc; приоритет 503 выше 426).
+  'SERVER_UPDATING',
   'INTERNAL',
   'RATE_LIMITED',
   'PROTECTED_ENTITY',
@@ -36,6 +45,14 @@ export const ETN_ERROR_CODES = [
   // различает «правь позже» от «правки не было».
   'LOCKED',
   'LOCK_NOT_FOUND',
+  // Задание обновления сервера не смогло запустить установщик (задача 0a27a63b,
+  // операция `POST /system/update/apply` 8a2972c2): не скачался ассет, не
+  // сошёлся SHA-256 или процесс не запустился. HTTP 502 «Bad Gateway»: отказала
+  // сторона поставки, сервер продолжает работать на текущей версии. Отдельный
+  // код, а не `INTERNAL` с `details.status`, — рендерер показывает осмысленный
+  // текст, а клиент видит `details.retryable: false` и не повторяет вызов
+  // (повтор создал бы второе задание и второе скачивание).
+  'UPDATE_INSTALLER_FAILED',
 ] as const;
 export type EtnErrorCode = (typeof ETN_ERROR_CODES)[number];
 
@@ -107,6 +124,70 @@ export const PROPERTY_SIDE_ERROR_REASON = {
 } as const;
 export type PropertySideErrorReason =
   (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];
+
+/**
+ * Машиночитаемые причины отказа `426 CLIENT_VERSION_UNSUPPORTED` (задача
+ * c3f33e6a, требование 271e3327, ADR 6ded6a87).
+ *
+ * Guard сервера вызывается из `authPreHandler` после успешной аутентификации и
+ * проверяет только изменяющие методы (`POST`/`PUT`/`PATCH`/`DELETE`):
+ *
+ *   * `version-missing` — запрос desktop-клиента (`Client-Id` есть) без
+ *     заголовка `Client-Version`. Молча пропускать его запрещено ADR;
+ *   * `version-invalid` — заголовок есть, но не является версией SemVer;
+ *   * `version-out-of-range` — версия не входит в `client_compatibility`
+ *     сервера; `details` дополнительно несёт `server_version`, `client_version`,
+ *     `compatibility` и `download_url`.
+ *
+ * Запрос без `Client-Id` — API-интеграция/скрипт — проверку не проходит;
+ * `GET`/`HEAD`/`OPTIONS` и MCP не блокируются никогда. Клиент выбирает
+ * пользовательский текст по ЭТИМ значениям (`details.reason`), не разбирая
+ * серверное сообщение.
+ */
+export const CLIENT_VERSION_ERROR_REASON = {
+  missing: 'version-missing',
+  invalid: 'version-invalid',
+  outOfRange: 'version-out-of-range',
+} as const;
+export type ClientVersionErrorReason =
+  (typeof CLIENT_VERSION_ERROR_REASON)[keyof typeof CLIENT_VERSION_ERROR_REASON];
+
+/**
+ * Тело `details` отказа `426 CLIENT_VERSION_UNSUPPORTED`.
+ *
+ * `reason` присутствует всегда; версии, диапазон и ссылка на скачивание — только
+ * у `version-out-of-range` (у `version-invalid` дополнительно `client_version`
+ * как пришёл). Контракт один для сервера и клиента: обе стороны берут тип и
+ * значения причин из `@etn/shared`.
+ */
+export interface ClientVersionErrorDetails {
+  reason: ClientVersionErrorReason;
+  /** Версия сервера — источник диапазона `compatibility`. */
+  server_version?: string;
+  /** Присланная клиентом версия (как есть, без нормализации). */
+  client_version?: string;
+  /** Диапазон совместимых клиентов — тот же, что отдаёт `GET /version`. */
+  compatibility?: string;
+  /** Страница релиза клиента (`GET /version` → `client_download_url`). */
+  download_url?: string;
+}
+
+/**
+ * Тело `details` отказа `503 SERVER_UPDATING` (задача 2f599b67, требование
+ * 20be64a8).
+ *
+ * Сервер переводится в обслуживание перед запуском установщика обновления
+ * (тех.проект 2d9f5cc7): изменяющие запросы REST и изменяющие MCP-инструменты
+ * получают этот код вместо выполнения, пока состояние не станет `idle` (после
+ * перезапуска обновлённого сервера). `retry_after` — рекомендация паузы в
+ * целых секундах (то же значение уходит в заголовок `Retry-After` и в поле
+ * кадра `maintenance`); `target_version` — версия, до которой обновляется
+ * сервер, `null` — если неизвестна.
+ */
+export interface ServerUpdatingErrorDetails {
+  retry_after: number;
+  target_version: string | null;
+}
 
 /**
  * Канонический отказ main-процесса до установки соединения (ошибка f803afb6,

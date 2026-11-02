@@ -278,6 +278,13 @@ export const CLIENT_META_KEY = {
   WINDOW_BOUNDS: 'window_bounds',
   /** File journal flag of the Electron client (task f051bf95): 'true'/'false'. */
   LOG_ENABLED: 'log_enabled',
+  /**
+   * Число незаписанных черновиков прошлых запусков, удалённых при старте
+   * (ошибка fb9d6058, решение пользователя 2026-10-29). Main чистит их до
+   * создания окна и оставляет счётчик здесь; renderer показывает ОДНО
+   * стартовое сообщение и очищает ключ. Пусто/отсутствует — сообщать нечего.
+   */
+  DRAFTS_PURGED_COUNT: 'drafts_purged_count',
 } as const satisfies Record<string, string>;
 export type ClientMetaKey = (typeof CLIENT_META_KEY)[keyof typeof CLIENT_META_KEY];
 

@@ -265,6 +265,7 @@ describe('изменение типа связи перерисовывает р
       },
       realtime: {
         onStatusChange: () => undefined,
+        onMaintenance: () => undefined,
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,

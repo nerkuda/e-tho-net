@@ -433,6 +433,65 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Ошибка f87ca85d: `ref` новой мысли — на уровне элемента `thoughts[]`,
+  // рядом с блоком `thought`. Прежняя ошибка схемы («Неизвестные поля: ref»)
+  // не подсказывала правильное место, и вызовы падали дважды подряд.
+  it('rejects `ref` inside the `thought` block with a correct-place hint (f87ca85d)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought: { title: 'ref внутри блока', ref: 'a' } }],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(
+          text.includes('на уровне элемента'),
+          `expected correct-place hint for ref: ${text}`,
+        );
+        assert.ok(text.includes('"ref": "a"'), `expected correct example: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('rejects a `thought` item without `ref` with a hint where to declare it (f87ca85d)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            thoughts: [{ thought: { title: 'Без ref' } }],
+          },
+        });
+        assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
+        const text = toolText(result);
+        assert.ok(text.includes('VALIDATION_ERROR'), text);
+        assert.ok(
+          text.includes('на уровне элемента'),
+          `expected correct-place hint for ref: ${text}`,
+        );
+        assert.ok(text.includes('"ref": "a"'), `expected correct example: ${text}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('informative VALIDATION_ERROR when thoughts arrives as a string (a64c66f7)', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -1924,9 +1983,21 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const tool = tools.find((t) => t.name === 'etn.thoughts.write');
         assert.ok(tool, 'etn.thoughts.write must be registered');
         const description = tool.description ?? '';
+        // Ошибка f87ca85d: прежняя формулировка «блок `thought` ОБЯЗАН нести
+        // локальный `ref`» читалась как «ref лежит внутри блока» и разошлась
+        // со схемой. Теперь описание обязано называть уровень элемента и
+        // давать корректный пример; старую формулировку сторож не пускает.
         assert.ok(
-          description.includes('нести локальный `ref`'),
-          'описание обязано прямо требовать `ref` у элемента с блоком `thought` (521aa4b9)',
+          description.includes('на уровне элемента `thoughts[]`'),
+          'описание обязано называть уровень элемента `thoughts[]` для `ref` новой мысли (f87ca85d)',
+        );
+        assert.ok(
+          description.includes('`{ "ref": "a", "thought": { "title": "…" } }`'),
+          'описание обязано давать корректный пример элемента ref+thought (f87ca85d)',
+        );
+        assert.ok(
+          !description.includes('он ОБЯЗАН нести локальный `ref`'),
+          'описание не должно утверждать, что `ref` лежит внутри блока `thought` (f87ca85d)',
         );
         assert.ok(
           description.includes('ВНУТРИ `thought`'),
@@ -1942,6 +2013,10 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.ok(
           guide.includes('обязательно объяви `ref`'),
           'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило ref (521aa4b9)',
+        );
+        assert.ok(
+          guide.includes('на уровне элемента `thoughts[]`'),
+          'etn.guide { topic: "etn.how_to_write_batch" } обязан называть уровень `ref` (f87ca85d)',
         );
         assert.ok(
           guide.includes('вместе с блоком `thought` отвергаются'),

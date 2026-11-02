@@ -68,13 +68,19 @@ async function fetchFailure(url: string, init?: RequestInit): Promise<unknown> {
   assert.fail(`ожидался отказ подключения: ${url}`);
 }
 
-function makeClient(fetchImpl: typeof fetch, baseUrl = 'http://127.0.0.1:19777'): RestClient {
+function makeClient(
+  fetchImpl: typeof fetch,
+  baseUrl = 'http://127.0.0.1:19777',
+  responseTimeoutMs?: number,
+): RestClient {
   return new RestClient({
     baseUrl,
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
+    clientVersion: '0.15.1',
     fetchImpl,
     random: () => 0,
+    ...(responseTimeoutMs === undefined ? {} : { responseTimeoutMs }),
   });
 }
 
@@ -274,6 +280,29 @@ describe('RestClient: причина отказа едет в details (390e9746)
       assert.deepEqual(err.details, { kind: 'connect-failed', reason: 'timeout' });
       return true;
     });
+  });
+
+  it('getVersion на молчащий сервер ограничен прикладным таймаутом (12fd5b0e)', async () => {
+    // Сервер принимает TCP и не отвечает ни байтом. До фикса `/version` висел
+    // до таймаута undici (~5 мин) и отдавал сырой `fetch failed` — экран
+    // подключения не получал `check-failed`.
+    const server = await startProbeServer(() => {
+      // Намеренно молчим.
+    });
+    try {
+      const client = makeClient(fetch, `http://127.0.0.1:${server.port}`, 150);
+      const started = Date.now();
+      await assert.rejects(client.getVersion(), (err: unknown) => {
+        assert.ok(err instanceof EtnError, `ожидался EtnError, получено ${String(err)}`);
+        assert.equal(err.code, 'INTERNAL');
+        assert.deepEqual(err.details, { kind: 'connect-failed', reason: 'timeout' });
+        return true;
+      });
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed < 5_000, `getVersion отказал за ${elapsed} мс, а не за таймаут undici`);
+    } finally {
+      await server.close();
+    }
   });
 });
 

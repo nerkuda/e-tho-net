@@ -1,0 +1,97 @@
+{
+  "name": "f1febdfc-view-tab-race",
+  "description": "Ошибка f1febdfc: клик по закладке вида в окне смены поколения workspace не теряется. На «Дневнике» открывается пикер, в ОДНОМ тике кликается сеть и закладка «Дневник» (клик приходится на уходящее поколение: пикер ждёт etn.tabs.open). После сборки нового workspace вкладка обязана открыться на «Дневнике» (вид применён из очереди намерения) и сохранить view_mode=chronicle в табе. На коде до фикса гейт красный: клик теряется, новая вкладка остаётся на карте.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-diary",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null"
+    },
+    {
+      "name": "race-workspace-before",
+      "probe": "(() => { window.__wsRace = document.querySelector('.workspace'); return { workspace: window.__wsRace !== null, diary: document.querySelector('.chron-filter') !== null }; })()",
+      "expect": {
+        "workspace": true,
+        "diary": true
+      }
+    },
+    {
+      "name": "open-plus",
+      "click": ".tab.tab-plus"
+    },
+    {
+      "name": "picker-open",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.network-item') !== null"
+    },
+    {
+      "name": "race-two-clicks",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{networkName}}')); const view = document.querySelector('button.view-tab[title=\"Дневник\"]'); if (item === undefined || view === null) return 'no-target'; item.click(); view.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "race-workspace",
+      "timeout": 60000,
+      "waitFor": "window.__wsRace != null && document.querySelector('.workspace') !== null && document.querySelector('.workspace') !== window.__wsRace && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "race-view-applied",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('button.view-tab[title=\"Дневник\"]')?.classList.contains('ui-btn--active') === true"
+    },
+    {
+      "name": "race-numbers",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const active = document.querySelector('button.tab.tab-active')?.dataset.tabId; const row = tabs.find((t) => t.tab_id === active); return { activeTab: active, diaryMounted: document.querySelector('.chron-filter') !== null, diaryTabActive: document.querySelector('button.view-tab[title=\"Дневник\"]')?.classList.contains('ui-btn--active') ?? false, viewMode: row?.view_mode ?? null }; })()"
+    },
+    {
+      "name": "race-gate",
+      "probe": "(async () => { const tabs = await window.etn.tabs.list(); const active = document.querySelector('button.tab.tab-active')?.dataset.tabId; const row = tabs.find((t) => t.tab_id === active); const problems = []; if (document.querySelector('.chron-filter') === null) problems.push('diary-not-mounted'); if (!(document.querySelector('button.view-tab[title=\"Дневник\"]')?.classList.contains('ui-btn--active') ?? false)) problems.push('diary-tab-not-active'); if (row?.view_mode !== 'chronicle') problems.push('view-mode=' + String(row?.view_mode)); return problems.length === 0 ? 'ok' : problems.join('; '); })()",
+      "expect": "ok"
+    }
+  ]
+}

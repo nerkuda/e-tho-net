@@ -29,6 +29,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -46,7 +47,7 @@ async function call(
     url: `/api/v1/networks/${ctx.networkId}${url}`,
     headers: {
       ...authHeaders(ctx),
-      ...(clientId !== undefined ? { 'client-id': clientId } : {}),
+      ...clientHeaders(clientId),
     },
     ...(payload !== undefined ? { payload } : {}),
   });
@@ -201,6 +202,62 @@ describe(
         assert.ok(body.includes('<<<<<<< слой'));
         assert.ok(body.includes('L2') && body.includes('B1'));
         assert.ok(!(await overridden(ctx, layer.id)).thought_ids.includes(a));
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    /**
+     * Регресс ошибки b1c5e128: `combineThoughtComment` выбирал строку слоя
+     * корректно (`WHERE layer_id = ?`), но объединённое тело писал
+     * `UPDATE comments … WHERE id = ?` — логический `id` общий у строк одного
+     * комментария во всех слоях, поэтому объединённый текст (с маркерами
+     * конфликта) попадал ещё и в основу, и в строки соседних/дочерних слоёв.
+     * Ожидание: меняется только строка сливаемого слоя (далее её переносит
+     * обычный реплей); соседний слой сохраняет собственную редакцию.
+     */
+    it('combine: объединение комментария не задевает строку соседнего слоя (b1c5e128)', async () => {
+      const ctx = await buildRestContext();
+      const WORKER_A = 'merge-combine-a';
+      const WORKER_B = 'merge-combine-b';
+      try {
+        const a = await thought(ctx, 'A');
+        const commentId = await permanent(ctx, a, 'l1\nl2');
+        const layerA = await createLayer(ctx, 'Слой A');
+        const layerB = await createLayer(ctx, 'Слой B');
+
+        // Тень A — конфликтующая правка, тень B — своя независимая редакция.
+        await selectLayer(ctx, layerA.id, WORKER_A);
+        await patchComment(ctx, commentId, 'l1\nL2', WORKER_A);
+        await selectLayer(ctx, layerB.id, WORKER_B);
+        await patchComment(ctx, commentId, 'слой-B', WORKER_B);
+        // Основа правит комментарий → `base_version` расходится у обеих теней.
+        await patchComment(ctx, commentId, 'B1\nl2');
+
+        const res = await mergeThought(ctx, layerA.id, a, 'combine');
+        assert.equal(res.statusCode, 200, res.body?.toString());
+        const report = res.json().data as LayerMergeReport;
+        assert.equal(report.thought_merge?.comment_merged, true);
+        assert.equal(report.thought_merge?.comment_conflicts, 1);
+
+        // Физическая строка слоя B не изменилась: тела основы/слоя A
+        // (с маркерами конфликта) до неё не дошли.
+        const layerBRow = ctx.ndb
+          .prepare('SELECT body_md FROM comments WHERE id = ? AND layer_id = ?')
+          .get(commentId, layerB.id) as { body_md: string } | undefined;
+        assert.ok(layerBRow !== undefined, 'у слоя B должна остаться своя строка');
+        assert.equal(layerBRow.body_md, 'слой-B', 'строка соседнего слоя не должна получить объединённый текст');
+        assert.ok(!layerBRow.body_md.includes('<<<<<<< слой'));
+
+        // И в контексте B читается именно её редакция.
+        const read = await call(ctx, 'GET', `/comments/${commentId}`, undefined, WORKER_B);
+        assert.equal(read.statusCode, 200, read.body?.toString());
+        assert.equal((read.json().data as { body_md: string }).body_md, 'слой-B');
+
+        // Сливаемый слой A перенесён в основу — объединение в ней видно.
+        const baseBody = await commentBody(ctx, commentId);
+        assert.ok(baseBody.includes('<<<<<<< слой'));
+        assert.ok(baseBody.includes('L2') && baseBody.includes('B1'));
       } finally {
         await closeRestContext(ctx);
       }

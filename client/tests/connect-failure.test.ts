@@ -15,9 +15,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { CLIENT_VERSION_ERROR_REASON, EtnError } from '@etn/shared';
 
 import { describeConnectFailure } from '../src/renderer/lib/connect-failure.js';
+import type { CompatibilityResult } from '../src/main/ipc/contract.js';
 
 const DEAD_URL = 'http://127.0.0.1:19777';
 const LABEL = 'Мой сервер';
@@ -163,6 +164,102 @@ describe('describeConnectFailure: причина вместо «затычки»
     assert.equal(
       raw,
       `Не удалось подключиться к серверу ${DEAD_URL}: не удалось определить причину отказа`,
+    );
+  });
+});
+
+describe('describeConnectFailure: несовместимые версии (0afec967)', () => {
+  /** Вердикт проверки совместимости в том виде, в каком его кладёт main. */
+  function verdict(overrides: Partial<CompatibilityResult> = {}): CompatibilityResult {
+    return {
+      status: 'client-outdated',
+      banner: 'hidden',
+      blocking: true,
+      reason: 'client-outdated',
+      clientVersion: '0.15.1',
+      clientCompatibility: '>=0.15.0 <0.16.0',
+      serverVersion: '0.16.0',
+      serverCompatibility: '>=0.16.0 <0.17.0',
+      recommendedClientVersion: null,
+      downloadUrl: null,
+      roleConfirmed: true,
+      is_admin: false,
+      serverReason: null,
+      ...overrides,
+    };
+  }
+
+  /** Отказ подключения, как его бросает `verifyCompatibilityOnConnect`. */
+  function refusal(result: CompatibilityResult): EtnError {
+    return new EtnError(
+      'CLIENT_VERSION_UNSUPPORTED',
+      `Клиент ${result.clientVersion} несовместим с сервером: технический текст main.`,
+      { kind: 'client-compatibility', result },
+    );
+  }
+
+  it('client-outdated: человеческая причина и версии вместо технической строки main', () => {
+    const text = describeConnectFailure(refusal(verdict()), { baseUrl: DEAD_URL });
+    assert.equal(
+      text,
+      `Не удалось подключиться к серверу ${DEAD_URL}: ` +
+        'версии несовместимы — Клиент не подходит серверу — работа с этим сервером ' +
+        'невозможна. Клиент 0.15.1, сервер 0.16.0, требуется >=0.16.0 <0.17.0',
+    );
+    assert.equal(
+      text.includes('технический текст main'),
+      false,
+      'техническое сообщение main в интерфейс не попадает',
+    );
+  });
+
+  it('server-outdated: сервер старше клиента, назван встроенный диапазон клиента', () => {
+    const text = describeConnectFailure(
+      refusal(
+        verdict({
+          status: 'server-outdated',
+          reason: 'server-outdated',
+          serverVersion: '0.14.1',
+          // Диапазон клиентов старого сервера в «требуется» не попадает
+          // (ошибка ff1c5e44): нужен диапазон сервера, который принимает клиент.
+          serverCompatibility: null,
+        }),
+      ),
+      { label: LABEL, baseUrl: DEAD_URL },
+    );
+    assert.equal(
+      text,
+      `Не удалось подключиться к серверу «${LABEL}» (${DEAD_URL}): ` +
+        'версии несовместимы — Сервер старше клиента — работа с этим сервером невозможна. ' +
+        'Клиент 0.15.1, сервер 0.14.1, требуется >=0.15.0 <0.16.0',
+    );
+  });
+
+  it('причина берётся из details.reason сервера — все три различаются', () => {
+    const expected: Array<[string, RegExp]> = [
+      [CLIENT_VERSION_ERROR_REASON.missing, /Сервер не получил версию клиента/],
+      [CLIENT_VERSION_ERROR_REASON.invalid, /не смог разобрать присланную версию/],
+      [CLIENT_VERSION_ERROR_REASON.outOfRange, /вне диапазона, допущенного сервером/],
+    ];
+    const texts = new Set<string>();
+    for (const [reason, pattern] of expected) {
+      const text = describeConnectFailure(refusal(verdict({ serverReason: reason as never })), {
+        baseUrl: DEAD_URL,
+      });
+      assert.match(text, pattern, `причина ${reason} названа`);
+      texts.add(text);
+    }
+    assert.equal(texts.size, 3, 'формулировки причин различаются');
+  });
+
+  it('битые details не ломают сообщение: остаётся серверный текст', () => {
+    const broken = new EtnError('CLIENT_VERSION_UNSUPPORTED', 'Сервер отклонил версию клиента.', {
+      kind: 'client-compatibility',
+      result: null,
+    });
+    assert.equal(
+      describeConnectFailure(broken, { baseUrl: DEAD_URL }),
+      `Не удалось подключиться к серверу ${DEAD_URL}: Сервер отклонил версию клиента.`,
     );
   });
 });

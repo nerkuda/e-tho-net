@@ -30,6 +30,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 /** Create a layer via the API and return the parsed DTO. */
@@ -56,7 +57,7 @@ async function selectLayer(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-    headers: { ...authHeaders(ctx), ...(clientId !== undefined ? { 'client-id': clientId } : {}) },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload: {},
   });
   return res.statusCode;
@@ -70,7 +71,7 @@ async function listLayers(
   const res = await ctx.app.inject({
     method: 'GET',
     url: `/api/v1/networks/${ctx.networkId}/layers${opts.includeService ? '?include_service=true' : ''}`,
-    headers: { ...authHeaders(ctx), ...(opts.clientId !== undefined ? { 'client-id': opts.clientId } : {}) },
+    headers: { ...authHeaders(ctx), ...clientHeaders(opts.clientId) },
   });
   assert.equal(res.statusCode, 200);
   return res.json().data as Layer[];
@@ -81,7 +82,7 @@ async function postThought(ctx: RestTestContext, title: string, clientId?: strin
   return ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/thoughts`,
-    headers: { ...authHeaders(ctx), ...(clientId !== undefined ? { 'client-id': clientId } : {}) },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload: { title },
   });
 }

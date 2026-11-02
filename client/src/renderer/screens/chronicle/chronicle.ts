@@ -142,6 +142,7 @@ import {
   chronicleQueryDefinition,
   clearFilter,
   type ChronicleFilterState,
+  defaultChroniclePeriod,
   filterIssuesFromQueryError,
   filterIssuesFromQueryResult,
   getFilterState,
@@ -520,9 +521,20 @@ async function loadFilterSnapshot(raw: string, pair: ScreenPair): Promise<void> 
   // и в текущую применяться не должен (ошибка 58c55bb9).
   if (!isCurrentScreenPair(pair)) return;
   const parsed = parseChronicleState(raw, registryWithSides());
-  setFilterState(readFilterDefinition(parsed.filter));
+  // Отбор без периода — вход получает период по умолчанию (ошибка 167860ac):
+  // снимок без строки «Период записи» (легаси/импорт) не должен открывать
+  // ленту «за все записи».
+  const saved = readFilterDefinition(parsed.filter);
+  const savedPeriod = chroniclePeriod(saved);
+  const savedHasPeriod = savedPeriod.from !== '' || savedPeriod.to !== '';
+  setFilterState(defaultChroniclePeriod(saved));
   setSavedFilterId(parsed.savedFilterId);
-  if (parsed.month !== null) month = parsed.month;
+  if (parsed.month !== null) {
+    // Месяц без периода — остаток прежнего формата снимка, а не отбор: дневник
+    // открывается на текущей дате, как при входе без снимка (ошибка 2770c2cc).
+    // Нормальный снимок (период + месяц) применяется целиком (9b49d672).
+    month = savedHasPeriod ? parsed.month : null;
+  }
   if (ok) return;
   pendingFilterSnapshot = { raw, pair, signature: filterStateSignature() };
 }
@@ -568,8 +580,11 @@ async function retryPendingFilterSnapshot(): Promise<void> {
       return;
     }
     pendingFilterSnapshot = null;
-    const next = readFilterDefinition(
-      parseChronicleState(pending.raw, registryWithSides()).filter,
+    // Переразбор идёт тем же читателем, что первичный разбор: период по
+    // умолчанию (ошибка 167860ac) обязан примениться и здесь — иначе повтор
+    // после отказа реестра СНИМАЛ бы `$today` из отбора.
+    const next = defaultChroniclePeriod(
+      readFilterDefinition(parseChronicleState(pending.raw, registryWithSides()).filter),
     );
     // Переразбор без изменений (снимок новой модели реестра не требует) —
     // лишний сетевой перезапрос ленты не гоним.
@@ -636,6 +651,21 @@ export async function ensureChronicleInitialised(): Promise<void> {
   } catch {
     // Fall back to the empty filter.
   }
+  // Вход без отбора: «снимка нет» либо снимок без строки «Период записи» —
+  // период по умолчанию ТЕКУЩАЯ ДАТА (ошибка 167860ac, элементы 55b07702/
+  // 9b424548). Токен `$today` (не голая дата) раскрывается в момент применения
+  // (требование 91f8d8dd), поэтому вход на следующий день снова даёт
+  // «сегодня». Дефолт не персистится: пустой снимок остаётся признаком
+  // «отбор не настраивался».
+  if (chroniclePeriod().from === '' && chroniclePeriod().to === '') {
+    setChroniclePeriod('$today', '$today');
+  }
+  // Календарь собран в `mountChronicle` ДО чтения снимка: показываем месяц
+  // входа — восстановленный из снимка (`month`, ошибка 9b49d672) либо месяц
+  // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac). Выделение дня
+  // поставит `syncCalendar` после запроса ленты; `showDate` не уведомляет
+  // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
+  const entryMonthCounts = alignEntryMonth();
   await getHome().catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
@@ -643,6 +673,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
   if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
+  if (entryMonthCounts !== null) void refreshCalendarCounts(entryMonthCounts);
 }
 
 /** Persists the current filter + month to L4 (per-tab). Запись адресуется
@@ -676,6 +707,14 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   hostEl.replaceChildren();
   feedNav?.destroy();
   feedNav = null;
+  // Новый монтаж = новое рабочее пространство: инициализация обязана пройти
+  // заново даже для той же пары «сеть + вкладка». Иначе окно `openNetwork`
+  // (вторая вкладка той же сети наследует вид) инициализировало экран на
+  // ПРЕЖНЕМ хосте до пересборки рабочего пространства — ключ пары уже отмечен,
+  // и лента/календарь нового хоста оставались пустыми до смены вкладки
+  // (найдено GUI-стендом 167860ac). Тик store после `showScreen` (`screen`)
+  // запускает инициализацию нового хоста.
+  networkIdSeen = null;
 
   const filterArea = div('chron-filter-area');
   const splitter = splitterElement('chron-splitter');
@@ -1501,6 +1540,11 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // класс пересчитывается (запись могла перестать быть целью перехода).
   card.classList.toggle('diary-record-target', row.id === jumpHighlightId);
 
+  // Тело просмотра (0.15.1, ошибка 50a94510): REST-дефолт формата тела — `both`,
+  // поэтому клиент `body_html` получает всегда. Общий `ChronicleRow` допускает
+  // его отсутствие (агентский `body: 'md'`) — нормализуем один раз.
+  const bodyHtml = row.body_html ?? '';
+
   let editing = false;
   /** md тела загружен (лента несёт только `body_html`/`snippet`). */
   let bodyLoaded = false;
@@ -1512,7 +1556,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   const body = div('diary-record-body');
   // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
   // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
-  const recordView = renderRecordView(shell, row);
+  const recordView = renderRecordView(shell, { body_html: bodyHtml });
   body.append(shell.root);
   // Сворачивание заголовков в просмотре записи — тем же механизмом, что у
   // комментария мысли (ошибка c91a0067): статичный `body_html` без декоратора
@@ -1520,7 +1564,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // сам хроно-комментарий (`row.id`): иначе записи одной мысли делили бы
   // свёрнутость. Это забота ЭКРАНА: `record-body.ts` остаётся чистым.
   const collapseNetworkId = store.state.networkId;
-  if (collapseNetworkId !== null && row.body_html.trim() !== '') {
+  if (collapseNetworkId !== null && bodyHtml.trim() !== '') {
     // Резолв ID-форм wiki-ссылок (`[[#<id>]]` / `[[n:<net>#<id>]]`) в просмотре
     // записи (ошибка ab8b6da8): серверный `body_html` отдаёт такие ссылки пустым
     // спаном `<span class="wiki-link" data-wiki-id>` — имя мысли подставляет
@@ -1578,7 +1622,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     const owner = currentOwner();
     widget = createMarkdownField({
       md: bodyDraft,
-      html: row.body_html,
+      html: bodyHtml,
       placeholder: t('diary.emptyRecordHint'),
       // Каретка/выделение при входе в правку — в месте клика в просмотре
       // (требование bac754e4, задача 189da39e).
@@ -1638,7 +1682,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // монтирования карточки (`ensureWidget` не создаёт поле до `body.isConnected`),
   // поэтому откладываем на макрозадачу; `setTimeout`, а не rAF — кадры скрытого
   // окна заторможены (грабли 03e33360).
-  if (htmlHasTransclusionMarkup(row.body_html)) {
+  if (htmlHasTransclusionMarkup(bodyHtml)) {
     setTimeout(() => {
       if (body.isConnected) void ensureWidget();
     }, 0);
@@ -2241,6 +2285,35 @@ function syncCalendar(): void {
     resolvePeriodDay(period.to, todayLocal(), fdw),
   );
   month = calendar.getMonth();
+}
+
+/**
+ * Показать в календаре месяц ВХОДА. Календарь собран в `mountChronicle` ДО
+ * чтения снимка и мог остаться на месяце прежней пары, поэтому показанный
+ * месяц переводится на:
+ *   • сохранённый в снимке (`chronicle_state.month`) — ошибка 9b49d672:
+ *     после перезапуска календарь обязан открыться в сохранённом месяце;
+ *   • месяц сегодняшней даты, когда снимок месяца не нёс, — ошибка 167860ac:
+ *     вход без отбора позиционируется на текущей дате.
+ * `showDate` не уведомляет `onMonthChange` (месяц уже проставлен в `month`),
+ * поэтому счётчики нового месяца пересчитывает вызывающий: возвращённый снимок
+ * — признак реальной смены месяца.
+ */
+function alignEntryMonth(): CalendarCountsSnapshot | null {
+  if (calendar === null) return null;
+  const today = todayLocal();
+  const target = month ?? {
+    year: Number(today.slice(0, 4)),
+    month: Number(today.slice(5, 7)),
+  };
+  const shown = calendar.getMonth();
+  if (shown.year === target.year && shown.month === target.month) {
+    month = target;
+    return null;
+  }
+  calendar.showDate(`${target.year}-${pad2(target.month)}-01`);
+  month = target;
+  return calendarCountsSnapshot();
 }
 
 /**

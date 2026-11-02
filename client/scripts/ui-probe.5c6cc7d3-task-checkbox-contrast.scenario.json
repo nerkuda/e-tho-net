@@ -1,0 +1,351 @@
+{
+  "name": "5c6cc7d3-task-checkbox-contrast",
+  "description": "GUI-гейт ошибки 5c6cc7d3: чек-боксы task-списков в просмотре markdown видны в обеих темах, состояния отмечен/не отмечен различимы. Стенд сеет постоянный комментарий корневой мысли с полным набором обёрток (маркированный и нумерованный список, вложенность, пункт с абзацем, цитата, цитата внутри пункта) и дневниковую запись с task-списком (хост `.diary-body`, у него нет класса `.comment-view` — проверка правила «класс, а не случай»). DOM-проба считает контраст рамки/заливки против фактического фона (с учётом opacity; до фикса вендорский `input:disabled { opacity: .5 }` давал 1.25:1 в тёмной теме и 1.29:1 в светлой), растровые ассерты подтверждают, что цвета токенов действительно нарисованы. Тёмная тема — ключевой сценарий (блокер приёмки). Правка (live preview, `.cm-md-task-checkbox`) проверяется входом в режим редактирования. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.5c6cc7d3-task-checkbox-contrast.scenario.json",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "Обычный текст перед списком задач.\n\n- [ ] снятая задача верхнего уровня\n- [x] отмеченная задача верхнего уровня\n- [ ] задача с вложенным списком\n  - [x] вложенная отмеченная\n  - [ ] вложенная снятая\n\n1. [ ] нумерованная снятая\n2. [x] нумерованная отмеченная\n\n> - [ ] задача в цитате\n> - [x] отмеченная в цитате\n\n- смешанный пункт с абзацем\n\n  - [ ] вложенная задача после абзаца\n\n- [ ] задача с цитатой внутри\n\n  > - [x] чекбокс в цитате внутри списка"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "seed-diary-api",
+      "api": {
+        "name": "seededDiary",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "title": "Запись 5c6cc7d3",
+          "body_md": "- [ ] запись: снятая задача\n- [x] запись: отмеченная задача"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "chronological"
+    },
+    {
+      "name": "home-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"].cloud') !== null"
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "comment-view-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.ui-comment .md-field-view .task-list-item-checkbox').length >= 10"
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => {\n  const parse = (v) => {\n    const vv = String(v || '');\n    if (vv === '' || vv === 'transparent') return null;\n    if (!vv.includes('(')) return null;\n    const inner = vv.slice(vv.indexOf('(') + 1, vv.indexOf(')'));\n    const p = inner.split(/[\\s,/]+/).filter((s) => s !== '').map(Number);\n    if (p.length < 3 || p.some((n) => Number.isNaN(n))) return null;\n    return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };\n  };\n  const lum = (c) => {\n    const f = (x) => { const s = x / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };\n    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);\n  };\n  const ratio = (a, b) => {\n    const x = Math.max(lum(a), lum(b));\n    const y = Math.min(lum(a), lum(b));\n    return Math.round(((x + 0.05) / (y + 0.05)) * 100) / 100;\n  };\n  const mix = (fg, bg, alpha) => ({\n    r: Math.round(fg.r * alpha + bg.r * (1 - alpha)),\n    g: Math.round(fg.g * alpha + bg.g * (1 - alpha)),\n    b: Math.round(fg.b * alpha + bg.b * (1 - alpha)),\n    a: 1,\n  });\n  const pageBg = (el) => {\n    let n = el.parentElement;\n    while (n !== null) {\n      const c = parse(getComputedStyle(n).backgroundColor);\n      if (c !== null && c.a > 0.99) return c;\n      n = n.parentElement;\n    }\n    return { r: 0, g: 0, b: 0, a: 1 };\n  };\n  const hostOf = (el) => el.closest('.cm-editor') !== null ? 'edit' : el.closest('.diary-body') !== null ? 'diary' : el.closest('.comment-view') !== null ? 'view' : 'other';\n  window.__taskFacts = (selector) => [...document.querySelectorAll(selector)].map((el, i) => {\n    const cs = getComputedStyle(el);\n    const bg = pageBg(el);\n    const border = parse(cs.borderTopColor);\n    const fill = parse(cs.backgroundColor);\n    const alpha = Number(cs.opacity);\n    const borderEff = border === null ? null : mix(border, bg, alpha * border.a);\n    const fillEff = fill === null ? null : mix(fill, bg, alpha * fill.a);\n    const after = getComputedStyle(el, '::after');\n    const rect = el.getBoundingClientRect();\n    return {\n      i, host: hostOf(el), checked: el.checked,\n      appearance: cs.appearance, accent: cs.accentColor, scheme: cs.colorScheme, opacity: alpha,\n      border: cs.borderTopColor, fill: cs.backgroundColor,\n      bg: 'rgb(' + bg.r + ',' + bg.g + ',' + bg.b + ')',\n      contrastBorder: borderEff === null ? null : ratio(borderEff, bg),\n      contrastFill: fillEff === null ? null : ratio(fillEff, bg),\n      mark: after.maskImage !== 'none' || after.backgroundImage !== 'none',\n      size: Math.round(rect.width) + 'x' + Math.round(rect.height),\n    };\n  });\n  window.__taskGate = (selector) => {\n    const facts = window.__taskFacts(selector);\n    const open = facts.filter((f) => !f.checked);\n    const done = facts.filter((f) => f.checked);\n    if (open.length === 0) return 'no-unchecked';\n    for (const f of open) {\n      if (f.opacity < 1) return 'dimmed:' + f.host + ':' + f.opacity;\n      if (f.contrastBorder === null || f.contrastBorder < 4.5) return 'border:' + f.host + ':' + f.contrastBorder;\n      if (f.size.split('x').some((n) => Number(n) < 10)) return 'size:' + f.size;\n    }\n    if (done.length === 0) return 'no-checked';\n    for (const f of done) {\n      if (f.contrastFill === null || f.contrastFill < 3) return 'fill:' + f.host + ':' + f.contrastFill;\n      if (!f.mark) return 'no-mark:' + f.host;\n    }\n    const openFill = open[0].fill;\n    if (done[0].fill === openFill) return 'states-indistinct';\n    return 'ok';\n  };\n  window.__dbl = (selector, word) => {\n    const el = document.querySelector(selector);\n    if (el === null) return 'no-el';\n    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);\n    let node = walker.nextNode();\n    while (node !== null) {\n      const text = node.textContent || '';\n      const at = text.indexOf(word);\n      if (at >= 0) {\n        const range = document.createRange();\n        range.setStart(node, at);\n        range.setEnd(node, at + word.length);\n        const selection = window.getSelection();\n        selection.removeAllRanges();\n        selection.addRange(range);\n        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));\n        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 0, clientY: 0 }));\n        el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 0, clientY: 0 }));\n        return 'ok';\n      }\n      node = walker.nextNode();\n    }\n    return 'no-word';\n  };\n  return 'installed';\n})()"
+    },
+    {
+      "name": "set-dark",
+      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+    },
+    {
+      "name": "theme-dark",
+      "probe": "document.documentElement.dataset.theme",
+      "expect": "dark"
+    },
+    {
+      "name": "settle-dark",
+      "waitFor": "new Promise((r) => setTimeout(r, 450)).then(() => true)"
+    },
+    {
+      "name": "dark-facts",
+      "probe": "JSON.stringify(window.__taskFacts('.ui-comment .md-field-view .task-list-item-checkbox'))"
+    },
+    {
+      "name": "dark-gate",
+      "probe": "window.__taskGate('.ui-comment .md-field-view .task-list-item-checkbox')",
+      "expect": "ok"
+    },
+    {
+      "name": "scroll-dark",
+      "eval": "(() => { const el = document.querySelector('.ui-comment .md-field-view .task-list-item-checkbox'); if (el === null) return 'no-el'; el.scrollIntoView({ block: 'center' }); return 'ok'; })()"
+    },
+    {
+      "name": "scroll-dark-checked",
+      "eval": "(() => { const el = document.querySelector('.ui-comment .md-field-view .task-list-item-checkbox:checked'); if (el === null) return 'no-el'; el.scrollIntoView({ block: 'center' }); return 'ok'; })()"
+    },
+    {
+      "name": "dark-unchecked-raster",
+      "assert": {
+        "name": "dark-unchecked-raster",
+        "region": ".ui-comment .md-field-view .task-list-item-checkbox",
+        "checks": [
+          {
+            "kind": "hasColor",
+            "color": "#9aa3b5",
+            "tolerance": 30,
+            "minPixels": 4
+          },
+          {
+            "kind": "hasColor",
+            "color": "#1f2630",
+            "tolerance": 6,
+            "minPixels": 20
+          }
+        ],
+        "evidence": false
+      }
+    },
+    {
+      "name": "dark-checked-raster",
+      "assert": {
+        "name": "dark-checked-raster",
+        "region": ".ui-comment .md-field-view .task-list-item-checkbox:checked",
+        "checks": [
+          {
+            "kind": "hasColor",
+            "color": "#5b8cff",
+            "tolerance": 24,
+            "minPixels": 30
+          },
+          {
+            "kind": "hasColor",
+            "color": "#ffffff",
+            "tolerance": 40,
+            "minPixels": 2
+          }
+        ],
+        "evidence": false
+      }
+    },
+    {
+      "name": "dblclick-paragraph",
+      "expect": "ok",
+      "probe": {
+        "name": "dblclickParagraph",
+        "expression": "window.__dbl('.ui-comment .md-field-view p', 'Обычный')"
+      }
+    },
+    {
+      "name": "edit-mode",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null && document.querySelector('.cm-editor .cm-line .cm-md-task-checkbox') !== null"
+    },
+    {
+      "name": "settle-edit",
+      "waitFor": "new Promise((r) => setTimeout(r, 250)).then(() => true)"
+    },
+    {
+      "name": "edit-facts",
+      "probe": "JSON.stringify(window.__taskFacts('.cm-editor .cm-line .cm-md-task-checkbox'))"
+    },
+    {
+      "name": "edit-gate",
+      "probe": "window.__taskGate('.cm-editor .cm-line .cm-md-task-checkbox')",
+      "expect": "ok"
+    },
+    {
+      "name": "scroll-edit",
+      "eval": "(() => { const el = document.querySelector('.cm-editor .cm-line .cm-md-task-checkbox:checked'); if (el === null) return 'no-el'; el.scrollIntoView({ block: 'center' }); return 'ok'; })()"
+    },
+    {
+      "name": "edit-checked-raster",
+      "assert": {
+        "name": "edit-checked-raster",
+        "region": ".cm-editor .cm-line .cm-md-task-checkbox:checked",
+        "checks": [
+          {
+            "kind": "hasColor",
+            "color": "#5b8cff",
+            "tolerance": 24,
+            "minPixels": 30
+          },
+          {
+            "kind": "hasColor",
+            "color": "#ffffff",
+            "tolerance": 40,
+            "minPixels": 2
+          }
+        ],
+        "evidence": false
+      }
+    },
+    {
+      "name": "escape-edit",
+      "key": "Escape"
+    },
+    {
+      "name": "view-mode-back",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') === null"
+    },
+    {
+      "name": "set-light",
+      "eval": "(() => { document.documentElement.dataset.theme = 'light'; return document.documentElement.dataset.theme; })()"
+    },
+    {
+      "name": "theme-light",
+      "probe": "document.documentElement.dataset.theme",
+      "expect": "light"
+    },
+    {
+      "name": "settle-light",
+      "waitFor": "new Promise((r) => setTimeout(r, 450)).then(() => true)"
+    },
+    {
+      "name": "light-facts",
+      "probe": "JSON.stringify(window.__taskFacts('.ui-comment .md-field-view .task-list-item-checkbox'))"
+    },
+    {
+      "name": "light-gate",
+      "probe": "window.__taskGate('.ui-comment .md-field-view .task-list-item-checkbox')",
+      "expect": "ok"
+    },
+    {
+      "name": "scroll-light",
+      "eval": "(() => { const el = document.querySelector('.ui-comment .md-field-view .task-list-item-checkbox'); if (el === null) return 'no-el'; el.scrollIntoView({ block: 'center' }); return 'ok'; })()"
+    },
+    {
+      "name": "light-unchecked-raster",
+      "assert": {
+        "name": "light-unchecked-raster",
+        "region": ".ui-comment .md-field-view .task-list-item-checkbox",
+        "checks": [
+          {
+            "kind": "hasColor",
+            "color": "#5c6675",
+            "tolerance": 30,
+            "minPixels": 4
+          },
+          {
+            "kind": "hasColor",
+            "color": "#f6f7f9",
+            "tolerance": 6,
+            "minPixels": 20
+          }
+        ],
+        "evidence": false
+      }
+    },
+    {
+      "name": "scroll-light-checked",
+      "eval": "(() => { const el = document.querySelector('.ui-comment .md-field-view .task-list-item-checkbox:checked'); if (el === null) return 'no-el'; el.scrollIntoView({ block: 'center' }); return 'ok'; })()"
+    },
+    {
+      "name": "light-checked-raster",
+      "assert": {
+        "name": "light-checked-raster",
+        "region": ".ui-comment .md-field-view .task-list-item-checkbox:checked",
+        "checks": [
+          {
+            "kind": "hasColor",
+            "color": "#2f6fed",
+            "tolerance": 24,
+            "minPixels": 30
+          },
+          {
+            "kind": "hasColor",
+            "color": "#ffffff",
+            "tolerance": 40,
+            "minPixels": 2
+          }
+        ],
+        "evidence": false
+      }
+    },
+    {
+      "name": "open-diary",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-today') !== null"
+    },
+    {
+      "name": "goto-today",
+      "click": ".cal-today"
+    },
+    {
+      "name": "diary-record-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.diary-body .task-list-item-checkbox').length >= 2"
+    },
+    {
+      "name": "set-dark-diary",
+      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+    },
+    {
+      "name": "settle-diary",
+      "waitFor": "new Promise((r) => setTimeout(r, 450)).then(() => true)"
+    },
+    {
+      "name": "diary-facts",
+      "probe": "JSON.stringify(window.__taskFacts('.diary-body .task-list-item-checkbox'))"
+    },
+    {
+      "name": "diary-gate",
+      "probe": "window.__taskGate('.diary-body .task-list-item-checkbox')",
+      "expect": "ok"
+    },
+    {
+      "name": "scroll-diary",
+      "eval": "(() => { const el = document.querySelector('.diary-body .task-list-item-checkbox'); if (el === null) return 'no-el'; el.scrollIntoView({ block: 'center' }); return 'ok'; })()"
+    },
+    {
+      "name": "diary-unchecked-raster",
+      "assert": {
+        "name": "diary-unchecked-raster",
+        "region": ".diary-body .task-list-item-checkbox",
+        "checks": [
+          {
+            "kind": "hasColor",
+            "color": "#9aa3b5",
+            "tolerance": 30,
+            "minPixels": 4
+          }
+        ],
+        "evidence": false
+      }
+    }
+  ]
+}

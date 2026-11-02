@@ -291,6 +291,7 @@ describe('правка реестрового свойства перечиты�
       },
       realtime: {
         onStatusChange: () => undefined,
+        onMaintenance: () => undefined,
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,

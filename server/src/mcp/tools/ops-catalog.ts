@@ -108,6 +108,20 @@ export interface OpParamDoc {
 }
 
 /**
+ * Аргумент, при котором действие, помеченное `readOnly`, фактически пишет в БД
+ * (ошибка df2d971f). Пример — `thoughts.mentions_scan` с `create_links: true`:
+ * базовый режим читает, режим создания связей изменяет. Диспетчер `etn.ops`
+ * считает такой вызов изменяющим и применяет к нему гейт обслуживания, как к
+ * действиям с `readOnly: false`.
+ */
+export interface MutatingParamRule {
+  /** Имя параметра в `params` действия. */
+  param: string;
+  /** Значение параметра, включающее мутацию (строгое равенство). */
+  equals: string | number | boolean;
+}
+
+/**
  * Запись реестра редких операций. `tool` — имя снятого инструмента (совпадает
  * с именем операции в `audit_log` и в реестре аннотаций: аудит-след и события
  * операции переносятся без изменений). `action` — короткое имя для `etn.ops`.
@@ -127,6 +141,14 @@ export interface OpEntry {
   destructive: boolean;
   /** Read-only: не тратит write-бюджет, не пишет audit_log на содержательную правку. */
   readOnly: boolean;
+  /**
+   * Условная мутируемость (ошибка df2d971f): аргументы, при которых действие
+   * с `readOnly: true` пишет в БД. Пусто/отсутствует — чтение при любых
+   * аргументах; непустой список — диспетчер проверяет его ДО исполнения и
+   * блокирует вызов при обслуживании сервера. Живёт в реестре (а не в
+   * обработчике), чтобы гейт, гайд и сторож паритета читали один источник.
+   */
+  mutatingParams?: readonly MutatingParamRule[];
   /** Эффекты операции (инструкция по `topic`). */
   effects: string;
   /** Коды ошибок операции (инструкция по `topic`). */
@@ -654,7 +676,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: false,
     readOnly: true,
-    effects: 'без `create_links` — чтение; с `create_links` — создаёт связи (write-бюджет).',
+    mutatingParams: [{ param: 'create_links', equals: true }],
+    effects:
+      'без `create_links` — чтение; с `create_links: true` — создаёт связи (write-бюджет, audit-строка) и считается ИЗМЕНЯЮЩИМ: при обслуживании сервера блокируется `SERVER_UPDATING` (ошибка df2d971f). REST-двойник `POST /mentions/scan` такого режима не имеет (только поиск упоминаний в присланных текстах), поэтому читающий allowlist REST от этого режима не зависит.',
     errors: '`VALIDATION_ERROR`.',
     paramsContract: ThoughtsMentionsScan,
   },
@@ -1342,12 +1366,12 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'shelves.list',
     tool: 'etn.shelves.list',
     group: 'shelves',
-    when: 'полки сети с составом; если живых полок нет — создаёт дефолтную «Полку» в основе (побочная запись)',
+    when: 'полки сети с составом; чтение без побочных записей',
     params: [{ name: 'network_id', required: true, desc: 'сеть' }],
     destructive: false,
     readOnly: true,
     effects:
-      'чтение; при отсутствии живых полок создаёт дефолтную «Полку» В ОСНОВЕ (событие `shelf.updated` слоя BASIS). Помеченные в корзину полки скрыты (паритет REST `GET /shelves`).',
+      'чтение, без записи (ошибка df2d971f: дефолтная «Полка» больше НЕ создаётся при чтении). Дефолтная полка существует у новой сети с создания (`POST /networks` сеет её в основе) и создаётся явно — `shelves.create` или REST `POST /shelves`. Помеченные в корзину полки скрыты (паритет REST `GET /shelves`).',
     errors: '`VALIDATION_ERROR`.',
     paramsContract: McpShelfList,
   },
@@ -1477,6 +1501,24 @@ export const OPS_ACTIONS_BY_TOOL: ReadonlyMap<string, OpEntry> = new Map(
 
 /** Все короткие имена действий (для ошибок и реестра гайда). */
 export const OPS_ACTION_NAMES: readonly string[] = OPS_ACTIONS.map((e) => e.action);
+
+/**
+ * Пишет ли вызов действия при данных аргументах (ошибка df2d971f).
+ *
+ * Единственный источник решения «изменяющее/читающее» для диспетчера
+ * `etn.ops`: действие с `readOnly: false` изменяет всегда; действие с
+ * `readOnly: true` — только когда аргументы совпали с `mutatingParams`
+ * (например, `thoughts.mentions_scan` с `create_links: true`). Сравнение
+ * строгое — до валидации `params` значения имеют исходный JSON-тип, а
+ * неверный тип отклонит контракт.
+ */
+export function isMutatingOpCall(
+  entry: OpEntry,
+  params: Readonly<Record<string, unknown>>,
+): boolean {
+  if (!entry.readOnly) return true;
+  return (entry.mutatingParams ?? []).some((rule) => params[rule.param] === rule.equals);
+}
 
 // ---------------------------------------------------------------------------
 // Темы гайда для частых операций (0.8.3, задача 2bf09236; ADR b2eebf8b)
@@ -2073,8 +2115,9 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '- `shelves.update` — переименование и/или позиция в списке.',
       '- `shelves.assign` — `assigned: true` (по умолчанию) кладёт публикацию в конец состава',
       '  (или на `position`), `false` — убирает. Идемпотентно.',
-      '- `shelves.list` — полки с составом; при отсутствии живых полок создаёт дефолтную «Полку»',
-      '  В ОСНОВЕ (побочная запись, паритет REST `GET /shelves`). Помеченные в корзину скрыты.',
+      '- `shelves.list` — полки с составом; чистое чтение без побочных записей (ошибка',
+      '  df2d971f). Дефолтная «Полка» сеется при создании сети и создаётся явно',
+      '  (`shelves.create` / REST `POST /shelves`). Помеченные в корзину скрыты.',
       '',
       '## Жизненный цикл',
       '- `shelves.trash`/`shelves.restore` — обратимая пометка/возврат.',

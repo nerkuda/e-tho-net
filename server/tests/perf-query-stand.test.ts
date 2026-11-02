@@ -94,6 +94,17 @@ const PERF_ITERATIONS = 9;
 const PERF_COUNT_MAX_RATIO = 5;
 
 /**
+ * Потолок «задача reader-воркера» относительно чистого чтения из тех же
+ * раундов. Задача воркера — это `useLayer` (переустановка контекста слоя) плюс
+ * само чтение; при исправном контексте установка того же слоя почти бесплатна,
+ * и отношение близко к 1. Регресс ошибки 46bda0e8 (запись в temp.layer_chain на
+ * каждой задаче → ложный сигнал → пересборка снапшота) добавлял ~160–170 мс на
+ * задачу и уводил отношение в десятки раз; ×5 ловит это, не флейкуя от
+ * загрузки планировщика ОС.
+ */
+const PERF_TASK_MAX_RATIO = 5;
+
+/**
  * Id структурного свойства «Родители» (направление `in`), созданного миграцией
  * 039 на корневом типе мысли. Условие «Родитель = X» адресует именно его.
  */
@@ -520,6 +531,48 @@ describe(
         assert.ok(
           childrenMs <= PERF_TARGET_MS.astLeaf * PERF_CI_TOLERANCE,
           `слой-снапшот: AST «Потомок = X» ${childrenMs.toFixed(2)} мс > потолка`,
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // --- Режим повторных задач reader-воркера (ошибка 46bda0e8) ------------
+    /**
+     * Режим воркера: соединение одно, слой между задачами не меняется, а каждая
+     * задача переустанавливает контекст (`NetworkDb.useLayer`) и читает.
+     * Стенд мерит «задачу» против чистого чтения из тех же раундов: лишние
+     * 160–170 мс на задачу (пересборка снапшота от собственных temp-записей
+     * `layer_chain`) — именно тот регресс, который одиночные замеры ниже по
+     * файлу не видели.
+     */
+    it('повторные задачи на одном соединении в слое не пересобирают снапшот', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedStand(ndb);
+        const layerId = seedChildLayer(ndb);
+        const request: ThoughtQueryRequest = { sort: 'alpha', order: 'asc', limit: 100, offset: 0 };
+        const read = (): void => {
+          queryThoughts(ndb, STAND_USER, request, { emptyFilterMode: 'all' });
+        };
+        // Прогрев: снапшот собран, статистика/кэши прогреты.
+        read();
+
+        const { firstMs: readMs, secondMs: taskMs } = measurePair(read, () => {
+          ndb.useLayer(layerId);
+          read();
+        });
+
+        const ceiling = Math.max(readMs, 1) * PERF_TASK_MAX_RATIO;
+        console.log(
+          `[perf-stand] задача воркера в слое: чтение=${readMs.toFixed(2)} мс, ` +
+            `useLayer+чтение=${taskMs.toFixed(2)} мс (×${(taskMs / Math.max(readMs, 0.01)).toFixed(1)}, ` +
+            `потолок ×${PERF_TASK_MAX_RATIO} и не выше ${ceiling.toFixed(2)} мс)`,
+        );
+        assert.ok(
+          taskMs <= ceiling,
+          `задача воркера ${taskMs.toFixed(2)} мс > потолка ${ceiling.toFixed(2)} мс ` +
+            `(чтение ${readMs.toFixed(2)} мс × ${PERF_TASK_MAX_RATIO}): снапшот пересобирается на задаче`,
         );
       } finally {
         ndb.close();

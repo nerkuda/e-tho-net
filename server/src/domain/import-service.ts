@@ -934,18 +934,25 @@ function insertComment(
       : (normaliseInstant(c.valid_to, 'valid_to', 'end') ?? validFrom);
   const useTime = c.use_time === true ? 1 : 0;
   if (c.kind === 'permanent') {
+    // Ветка `permanent_comments_updated`. Строка выбирается из `comments_v` —
+    // это редакция, видимая в контексте слоя соединения (обычно основа), — и
+    // UPDATE обязан адресовать ровно ЕЁ: логический `id` общий у одноимённых
+    // строк всех слоёв (тень копирует id предка, у постоянного комментария он
+    // детерминирован от владельца — миграция 048), поэтому `WHERE id = ?`
+    // перезаписывал тело и HTML основы и соседних слоёв (ошибка ab696fb1).
+    // `pk` — суррогатный INTEGER PRIMARY KEY физической строки.
     const existing = ndb
       .prepare(
-        "SELECT id FROM comments_v WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'",
+        "SELECT pk FROM comments_v WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'",
       )
-      .get(resolvedOwnerId) as { id: string } | undefined;
+      .get(resolvedOwnerId) as { pk: number } | undefined;
     if (existing !== undefined) {
       ndb
         .prepare(
           `UPDATE comments SET title = ?, body_md = ?, body_html = ?, use_time = ?, version = version + 1,
-             updated_at = ?, updated_by = ? WHERE id = ?`,
+             updated_at = ?, updated_by = ? WHERE pk = ?`,
         )
-        .run(c.title, c.body_md, c.body_html, useTime, now, actorUserId, existing.id);
+        .run(c.title, c.body_md, c.body_html, useTime, now, actorUserId, existing.pk);
       return 'updated';
     }
     ndb

@@ -52,6 +52,7 @@ export {
 } from './transclusion.js';
 export { parseSelectionUnits } from './selection.js';
 export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
+export { BLANK_LINE_CLASS, blankLinesPlugin } from './blank-lines.js';
 export { extractHeadings, formatHeading } from './headings.js';
 export type { MarkdownHeading } from './headings.js';
 export {
@@ -135,8 +136,23 @@ export type {
  * ядровое правило выключено с круга 2, а встроенное внутристрочное ловит только
  * `://`, поэтому `mailto:` перестал быть ссылкой). Cached `body_html` must
  * re-render so `mailto:`-строки снова становятся ссылками.
+ *
+ * `markdown-it/11`: пустые строки исходника (ошибка 7f017ce1) — каждая пустая
+ * строка просмотра становится блоком `<div class="md-blank-line">` (число
+ * `<br>` = число пустых строк). Раньше серия пустых строк схлопывалась в один
+ * разрыв абзацев, а между пунктами списка, ведущие и хвостовые пустые строки
+ * исчезали полностью — правка показывает их построчно. Cached `body_html` must
+ * re-render so existing comments keep their empty lines in view, hover-preview
+ * и лентах, рисующих серверный HTML.
+ *
+ * `markdown-it/12`: пустые строки на границе контейнера и следующего блока
+ * (ошибка 7f017ce1, круг 2) — маркер ставится ПОСЛЕ закрытия контейнера
+ * (`</ul>`, `</ol>`, `</blockquote>`), а не внутри него. Иначе к пустой строке
+ * после списка добавлялся ещё и `margin-block-end` списка, и она считалась
+ * дважды (1 пустая строка = 40.3px вместо 20.15px). Cached `body_html` must
+ * re-render: в кеше круга 1 маркер лежит внутри `<li>`.
  */
-export const MD_RENDER_VERSION = 'markdown-it/10';
+export const MD_RENDER_VERSION = 'markdown-it/12';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {

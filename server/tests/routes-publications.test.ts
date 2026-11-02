@@ -35,6 +35,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 const skip = !nativeAvailable();
@@ -423,7 +424,7 @@ describe('routes-publications: REST-сценарий', { skip }, () => {
       setSessionLayer(ctx.ndb, ctx.adminId, 'held', layer.id, 0);
       const shadowEdit = await api(ctx, 'PATCH', `/publications/${pubHeld.id}`, {
         payload: { subtitle: 'правка слоя' },
-        headers: { 'client-id': 'held' },
+        headers: { ...clientHeaders('held') },
       });
       assert.equal(shadowEdit.statusCode, 200, shadowEdit.body);
 
@@ -556,7 +557,7 @@ async function connectWs(
   url.searchParams.set('network_id', ctx.networkId);
   url.searchParams.set('client_id', clientId);
   const ws = new WebSocket(url, {
-    headers: { authorization: `Bearer ${ctx.adminKey}`, 'client-id': clientId },
+    headers: { authorization: `Bearer ${ctx.adminKey}`, ...clientHeaders(clientId) },
   });
   await new Promise<void>((resolve, reject) => {
     ws.once('open', () => resolve());
@@ -599,7 +600,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       // --- запись в РАБОЧЕМ слое --------------------------------------------
       const inLayer = await api(ctx, 'POST', '/publications', {
         payload: { title: 'Слоевая' },
-        headers: { 'client-id': 'b2' },
+        headers: { ...clientHeaders('b2') },
       });
       assert.equal(inLayer.statusCode, 201, inLayer.body);
       const layeredEvent = await nextEvent(
@@ -617,7 +618,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
           title: 'Основная',
           title_recipe: { type_ids: [evtType.id], sort: 'alpha', order: 'asc' },
         },
-        headers: { 'client-id': 'a2' },
+        headers: { ...clientHeaders('a2') },
       });
       assert.equal(inBase.statusCode, 201, inBase.body);
       const basePubId = (inBase.json().data as { id: string }).id;
@@ -634,7 +635,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       // слоя обязан узнать об этом (fallback visibleWhenMissing) ------------
       const added = await api(ctx, 'POST', `/publications/${basePubId}/exclusions`, {
         payload: { thought_id: evtThought },
-        headers: { 'client-id': 'a2' },
+        headers: { ...clientHeaders('a2') },
       });
       assert.equal(added.statusCode, 200, added.body);
       const changeAdd = await nextEvent(
@@ -649,7 +650,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
         ctx,
         'DELETE',
         `/publications/${basePubId}/exclusions?thought_id=${evtThought}`,
-        { headers: { 'client-id': 'a2' } },
+        { headers: { ...clientHeaders('a2') } },
       );
       assert.equal(removed.statusCode, 200, removed.body);
       const changeRemove = await nextEvent(
@@ -664,7 +665,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
       // --- полка: событие shelf.updated -------------------------------------
       const shelf = await api(ctx, 'POST', '/shelves', {
         payload: { title: 'Событийная полка' },
-        headers: { 'client-id': 'a2' },
+        headers: { ...clientHeaders('a2') },
       });
       assert.equal(shelf.statusCode, 201, shelf.body);
       const shelfEvent = await nextEvent(base, (m) => m.type === 'shelf.updated', 5000);
@@ -691,7 +692,7 @@ describe('routes-publications: real-time и видимость слоёв', { sk
 
       const created = await api(ctx, 'POST', '/publications', {
         payload: { title: 'Полный DTO' },
-        headers: { 'client-id': 'c2' },
+        headers: { ...clientHeaders('c2') },
       });
       assert.equal(created.statusCode, 201, created.body);
       const createdId = (created.json().data as { id: string }).id;
@@ -738,7 +739,7 @@ describe('routes-publications: дефолтная полка «Полка» (8c2
     }
   });
 
-  it('сеть без живых полок: GET создаёт «Полку»; удаление последней → пересоздание', async () => {
+  it('сеть без живых полок: GET не создаёт «Полку» — чтение без записи (df2d971f)', async () => {
     const ctx = await buildRestContext();
     try {
       const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
@@ -747,40 +748,57 @@ describe('routes-publications: дефолтная полка «Полка» (8c2
       }>;
       const firstId = first[0]!.id;
       assert.equal((await api(ctx, 'DELETE', `/shelves/${firstId}`)).statusCode, 204);
-      const after = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
-        id: string;
-        title: string;
-      }>;
-      assert.equal(after.length, 1, 'дефолтная полка создана заново');
-      assert.equal(after[0]?.title, 'Полка');
-      // id дефолтной полки детерминирован (8c2660e6): пересоздание даёт тот же
-      // id; важно, что строка снова живая и доступна.
-      assert.equal(after[0]?.id, firstId, 'пересоздана с детерминированным id');
+      // До 0.15.1 GET /shelves лениво пересоздавал дефолтную «Полку» — чтение
+      // писало в БД и проходило гейт обслуживания как читающее. Теперь пустой
+      // список — легальное состояние: полка создаётся явно (`POST /shelves`).
+      for (const attempt of [1, 2]) {
+        const res = await api(ctx, 'GET', '/shelves');
+        assert.equal(res.statusCode, 200, res.body);
+        assert.equal((res.json().data as unknown[]).length, 0, `вызов ${attempt}: список пуст`);
+        assert.equal(res.json().meta.total, 0);
+      }
+      const count = (
+        ctx.ndb.prepare('SELECT COUNT(*) AS c FROM shelves').get() as { c: number }
+      ).c;
+      assert.equal(count, 0, 'GET /shelves не вставил ни одной строки полки');
+      const created = await api(ctx, 'POST', '/shelves', { payload: { title: 'Явная полка' } });
+      assert.equal(created.statusCode, 201, created.body);
     } finally {
       await closeRestContext(ctx);
     }
   });
 
-  it('одноимённая полка в корзине оживляется, а не дублируется', async () => {
+  it('помеченная в корзину полка не оживляется чтением — только явным restore', async () => {
     const ctx = await buildRestContext();
     try {
       const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{ id: string }>;
       const id = first[0]!.id;
       assert.equal((await api(ctx, 'POST', `/shelves/${id}/trash`)).statusCode, 200);
+      // Скрытая полка не появляется в списке, и GET её НЕ восстанавливает.
       const after = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
         id: string;
-        title: string;
         marked_for_deletion: boolean;
       }>;
-      assert.equal(after.length, 1, after as unknown as string);
-      assert.equal(after[0]?.id, id, 'имя удержано корзиной — полка восстановлена');
-      assert.equal(after[0]?.marked_for_deletion, false);
+      assert.equal(after.length, 0, 'помеченная полка скрыта и чтением не оживлена');
+      const trashed = ctx.ndb
+        .prepare('SELECT marked_for_deletion FROM shelves WHERE id = ?')
+        .get(id) as { marked_for_deletion: number } | undefined;
+      assert.equal(trashed?.marked_for_deletion, 1, 'строка осталась в корзине');
+      // Явный restore возвращает ту же полку (имя удержано корзиной).
+      assert.equal((await api(ctx, 'POST', `/shelves/${id}/restore`)).statusCode, 200);
+      const restored = (await api(ctx, 'GET', '/shelves')).json().data as Array<{
+        id: string;
+        marked_for_deletion: boolean;
+      }>;
+      assert.equal(restored.length, 1, restored as unknown as string);
+      assert.equal(restored[0]?.id, id, 'явный restore вернул ту же полку');
+      assert.equal(restored[0]?.marked_for_deletion, false);
     } finally {
       await closeRestContext(ctx);
     }
   });
 
-  it('ленивое создание идёт в основу даже когда сессия в рабочем слое', async () => {
+  it('GET в рабочем слое не создаёт полку в основе', async () => {
     const ctx = await buildRestContext();
     try {
       const first = (await api(ctx, 'GET', '/shelves')).json().data as Array<{ id: string }>;
@@ -791,20 +809,22 @@ describe('routes-publications: дефолтная полка «Полка» (8c2
         createdBy: ctx.adminId,
       });
       setSessionLayer(ctx.ndb, ctx.adminId, 'lay', layer.id, 0);
-      const res = await api(ctx, 'GET', '/shelves', { headers: { 'client-id': 'lay' } });
+      const res = await api(ctx, 'GET', '/shelves', { headers: { ...clientHeaders('lay') } });
       const rows = res.json().data as Array<{ id: string; title: string }>;
-      assert.equal(rows.length, 1, res.body);
-      assert.equal(rows[0]?.title, 'Полка');
-      const row = ctx.ndb
-        .prepare('SELECT layer_id FROM shelves WHERE id = ?')
-        .get(rows[0]!.id) as { layer_id: string } | undefined;
-      assert.equal(row?.layer_id, BASE_LAYER_ID, 'создана в основе, не в рабочем слое');
+      assert.equal(rows.length, 0, res.body);
+      // Ни в рабочем слое, ни в основе строки не появилось.
+      const baseRows = (
+        ctx.ndb
+          .prepare('SELECT COUNT(*) AS c FROM shelves WHERE layer_id = ?')
+          .get(BASE_LAYER_ID) as { c: number }
+      ).c;
+      assert.equal(baseRows, 0, 'чтение в слое не создало полку в основе');
     } finally {
       await closeRestContext(ctx);
     }
   });
 
-  it('ленивое создание шлёт подписчику событие shelf.updated', async () => {
+  it('GET не шлёт подписчику событие shelf.updated', async () => {
     const ctx = await buildRestContext();
     let port = 0;
     try {
@@ -815,10 +835,10 @@ describe('routes-publications: дефолтная полка «Полка» (8c2
 
       const ws = await connectWs(ctx, port, 'sub-default');
       sockets.push(ws);
-      const res = await api(ctx, 'GET', '/shelves', { headers: { 'client-id': 'lazy-requester' } });
+      const res = await api(ctx, 'GET', '/shelves', { headers: { ...clientHeaders('lazy-requester') } });
       assert.equal(res.statusCode, 200, res.body);
-      const event = await nextEvent(ws, (m) => m.type === 'shelf.updated', 5000);
-      assert.ok(event !== null, 'подписчик не получил событие создания дефолтной полки');
+      const event = await nextEvent(ws, (m) => m.type === 'shelf.updated', 800);
+      assert.equal(event, null, 'чистое чтение не порождает событие записи');
     } finally {
       for (const ws of sockets.splice(0)) ws.close();
       await closeRestContext(ctx);

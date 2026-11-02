@@ -1527,9 +1527,11 @@ function combineThoughtComment(
   };
   const layerRow = ndb
     .prepare(
-      `SELECT id, body_md, base_version FROM comments WHERE layer_id = ? AND owner_type = 'thought' AND owner_id = ? AND kind = 'permanent' -- layers:physical-read`,
+      `SELECT pk, id, body_md, base_version FROM comments WHERE layer_id = ? AND owner_type = 'thought' AND owner_id = ? AND kind = 'permanent' -- layers:physical-read`,
     )
-    .get(layerId, thoughtId) as { id: string; body_md: string; base_version: number } | undefined;
+    .get(layerId, thoughtId) as
+    | { pk: number; id: string; body_md: string; base_version: number }
+    | undefined;
   if (layerRow === undefined) return result; // слой комментарий не менял
   const target = resolveTargetPermanentComment(ndb, thoughtId);
   // Основа не меняла комментарий с момента материализации тени — версия слоя
@@ -1537,12 +1539,17 @@ function combineThoughtComment(
   if (target === undefined || layerRow.base_version === target.version) return result;
   const merged = mergeCommentText(layerRow.body_md, target.body_md);
   if (merged.body !== layerRow.body_md) {
+    // `pk`, а не логический `id`: id общий у одноимённых строк всех слоёв
+    // (тень копирует id предка; у постоянного комментария он детерминирован
+    // от владельца — миграция 048), поэтому `WHERE id = ?` записывал
+    // объединённое тело ещё и в основу и в строки соседних слоёв (ошибка
+    // b1c5e128). Строка слоя выбрана выше по `layer_id` — адресуем ровно её.
     ndb
       .prepare(
         `UPDATE comments SET body_md = ?, body_html = ?, version = version + 1, updated_at = ?
-          WHERE id = ? -- layers:physical-read`,
+          WHERE pk = ? -- layers:physical-read`,
       )
-      .run(merged.body, renderMarkdown(merged.body), new Date().toISOString(), layerRow.id);
+      .run(merged.body, renderMarkdown(merged.body), new Date().toISOString(), layerRow.pk);
     result.comment_merged = true;
     result.comment_conflicts = merged.conflicts;
   }

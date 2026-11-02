@@ -1,0 +1,5 @@
+# Каталог подготовленного payload установщика (готовят задачи 8b1f5980 и 98ad5eec:
+# Node 22, server/package.json, dist, migrations, prod-node_modules, service, client).
+# Содержимое — артефакт сборки (сотни мегабайт), в репозитории не версионируется.
+*
+!.gitignore

@@ -10,7 +10,7 @@ import { describe, it, mock } from 'node:test';
 
 import { EtnError } from '@etn/shared';
 
-import { RestClient, type RequestOptions } from '../src/main/net/rest-client.js';
+import { RestClient, UPDATE_APPLY_TIMEOUT_MS, type RequestOptions } from '../src/main/net/rest-client.js';
 
 /** Minimal record of a single fetch invocation. */
 interface FetchCall {
@@ -65,6 +65,7 @@ function makeClient(fetchImpl: typeof fetch, extra: { random?: () => number } = 
     baseUrl: 'http://localhost:3000',
     getApiKey: async () => 'etn_testkey',
     getClientId: () => '11111111-1111-1111-1111-111111111111',
+    clientVersion: '0.15.1',
     fetchImpl,
     random: extra.random ?? (() => 0),
   });
@@ -129,6 +130,9 @@ describe('RestClient — headers', () => {
     const headers = new Headers(calls[0]!.init.headers as HeadersInit);
     assert.equal(headers.get('Authorization'), 'Bearer etn_testkey');
     assert.equal(headers.get('Client-Id'), '11111111-1111-1111-1111-111111111111');
+    // Версия клиента уходит и на чтении (требование 339b507f): сервер проверяет
+    // её только на изменяющих методах, но заголовок обязан быть в каждом запросе.
+    assert.equal(headers.get('Client-Version'), '0.15.1');
     assert.equal(headers.get('Accept'), 'application/json');
     assert.equal(headers.get('Content-Type'), null);
   });
@@ -165,6 +169,7 @@ describe('RestClient — headers', () => {
       baseUrl: 'http://localhost:3000',
       getApiKey: async () => key,
       getClientId: () => 'c1',
+      clientVersion: '0.15.1',
       fetchImpl: fetch,
       random: () => 0,
     });
@@ -233,6 +238,7 @@ describe('RestClient — URL & query', () => {
       baseUrl: 'http://localhost:3000///',
       getApiKey: async () => 'k',
       getClientId: () => 'c',
+      clientVersion: '0.15.1',
       fetchImpl: fetch,
       random: () => 0,
     });
@@ -517,6 +523,7 @@ describe('RestClient — retry & timeout', () => {
       baseUrl: 'http://localhost:3000',
       getApiKey: async () => 'k',
       getClientId: () => 'c',
+      clientVersion: '0.15.1',
       fetchImpl: fetchImpl,
       random: () => 0,
     });
@@ -533,6 +540,7 @@ describe('RestClient — retry & timeout', () => {
       baseUrl: 'http://localhost:3000',
       getApiKey: async () => 'k',
       getClientId: () => 'c',
+      clientVersion: '0.15.1',
       fetchImpl: fetchImpl,
       random: () => 0,
     });
@@ -545,6 +553,189 @@ describe('RestClient — retry & timeout', () => {
         return true;
       },
     );
+  });
+});
+
+describe('RestClient — apply обновления сервера без автоповтора (задача 0a27a63b)', () => {
+  const JOB = {
+    id: 'job-1',
+    target_version: '0.15.2',
+    stage: 'preparing',
+    started_at: '2026-10-29T00:00:00.000Z',
+    error: null,
+    backup_path: null,
+  };
+
+  it('502 UPDATE_INSTALLER_FAILED — ровно одна попытка, код сервера сохранён', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 502,
+        body: {
+          error: {
+            code: 'UPDATE_INSTALLER_FAILED',
+            message: 'SHA-256 установщика не совпал',
+            details: { status: 502, stage: 'preparing', reason: 'installer-hash', retryable: false },
+          },
+        },
+      },
+    ]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    await assert.rejects(
+      () => client.systemUpdateApply('0.15.2'),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal((err as EtnError).code, 'UPDATE_INSTALLER_FAILED');
+        assert.deepEqual((err as EtnError).details, {
+          status: 502,
+          stage: 'preparing',
+          reason: 'installer-hash',
+          retryable: false,
+        });
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, '502 от apply не повторяется');
+    assert.equal(calls[0]!.init.method, 'POST');
+    assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { target_version: '0.15.2' });
+  });
+
+  it('обрыв/тайм-аут apply тоже не повторяется: ответ может идти дольше клиентского тайм-аута', async () => {
+    let callsCount = 0;
+    const fetchImpl = mock.fn((): Promise<Response> => {
+      callsCount++;
+      return Promise.reject(new Error('ETN response timeout'));
+    }) as unknown as typeof fetch;
+    const client = new RestClient({
+      baseUrl: 'http://localhost:3000',
+      getApiKey: async () => 'k',
+      getClientId: () => 'c',
+      clientVersion: '0.15.1',
+      fetchImpl,
+      random: () => 0,
+    });
+
+    await assert.rejects(() => client.systemUpdateApply('0.15.2'));
+    assert.equal(callsCount, 1, 'сетевой сбой apply не повторяется');
+  });
+
+  it('тот же 502 на обычном вызове по-прежнему повторяется (отказ только для apply)', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 502,
+        body: {
+          error: { code: 'UPDATE_INSTALLER_FAILED', message: 'нет установщика' },
+        },
+      },
+    ]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    await assert.rejects(
+      () => client.getMe(),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal((err as EtnError).code, 'UPDATE_INSTALLER_FAILED');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 3, 'остальные вызовы повторяют 5xx до MAX_ATTEMPTS');
+  });
+
+  it('успешный apply отдаёт задание из общего контракта', async () => {
+    const { fetch, calls } = makeFetch([{ status: 201, body: { data: JOB } }]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    const job = await client.systemUpdateApply('0.15.2');
+    assert.deepEqual(job, JOB);
+    assert.equal(calls.length, 1);
+  });
+
+  it('apply получает поднятый тайм-аут ответа (сервер отвечает до 10 минут)', async () => {
+    assert.equal(UPDATE_APPLY_TIMEOUT_MS, 11 * 60 * 1000, '11 минут — запас над серверным пределом');
+    // Тайм-аут вызова переопределяем вниз, чтобы проба была быстрой: fetch
+    // «молчит», клиент обязан оборвать запрос по своему таймеру, а не ждать 11
+    // минут и не повторять вызов.
+    let aborted = false;
+    const fetchImpl = ((_url: string, init?: RequestInit): Promise<Response> => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(init.signal?.reason ?? new Error('aborted'));
+        });
+      });
+    }) as unknown as typeof fetch;
+    const client = makeClient(fetchImpl, { random: () => 0 });
+
+    await assert.rejects(() => client.systemUpdateApply('0.15.2', { timeoutMs: 20 }));
+    assert.equal(aborted, true, 'запрос оборван таймером вызова');
+  });
+});
+
+describe('RestClient — admin-эндпоинты обновления сервера (задача 0a27a63b)', () => {
+  const STATUS = {
+    current_version: '0.15.1',
+    available_version: '0.15.2',
+    channel: 'stable',
+    checked_at: '2026-10-29T12:00:00.000Z',
+    check_error: null,
+    download_url: 'https://example.test/ETN-Setup-0.15.2.exe',
+    sha256: 'a'.repeat(64),
+    deployment: 'windows-service',
+    instruction: null,
+  };
+
+  it('GET /system/update — снимок кеша как есть', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: { data: STATUS } }]);
+    const client = makeClient(fetch);
+
+    const status = await client.getServerUpdate();
+    assert.deepEqual(status, STATUS);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.init.method, 'GET');
+    assert.ok(calls[0]!.url.endsWith('/api/v1/system/update'));
+  });
+
+  it('POST /system/update/check — 429 остаётся каноническим RATE_LIMITED', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 429,
+        body: { error: { code: 'RATE_LIMITED', message: 'Проверка обновлений уже идёт.' } },
+      },
+    ]);
+    const client = makeClient(fetch, { random: () => 0 });
+
+    await assert.rejects(
+      () => client.checkServerUpdate(),
+      (err: unknown) => {
+        assert.ok(err instanceof EtnError);
+        assert.equal((err as EtnError).code, 'RATE_LIMITED');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, '429 не повторяется');
+    assert.equal(calls[0]!.init.method, 'POST');
+    assert.ok(calls[0]!.url.endsWith('/api/v1/system/update/check'));
+  });
+
+  it('GET /system/update/progress — последнее задание или null', async () => {
+    const job = {
+      id: 'job-1',
+      target_version: '0.15.2',
+      stage: 'backing-up',
+      started_at: '2026-10-29T12:00:00.000Z',
+      error: null,
+      backup_path: null,
+    };
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: { job } } },
+      { status: 200, body: { data: { job: null } } },
+    ]);
+    const client = makeClient(fetch);
+
+    assert.deepEqual(await client.getServerUpdateProgress(), { job });
+    assert.deepEqual(await client.getServerUpdateProgress(), { job: null });
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0]!.url.endsWith('/api/v1/system/update/progress'));
   });
 });
 
@@ -899,6 +1090,8 @@ describe('RestClient — §16 system endpoints', () => {
     assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/health');
     const headers = new Headers(calls[0]!.init.headers as HeadersInit);
     assert.equal(headers.get('Authorization'), null);
+    // Публичный запрос всё равно несёт версию клиента (требование 339b507f).
+    assert.equal(headers.get('Client-Version'), '0.15.1');
     assert.equal(health.status, 'ok');
     assert.equal(health.version, '0.5.5');
   });

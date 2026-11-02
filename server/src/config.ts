@@ -3,7 +3,13 @@
  *
  * Required: `ETN_DATA_DIR` (absolute path to the data root). Optional: `ETN_HOST`,
  * `ETN_PORT`, `ETN_TLS_CERT`/`ETN_TLS_KEY` (both-or-neither), `ETN_LOG_LEVEL`,
- * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`, `ETN_MCP_SESSION_IDLE_TTL_MS`.
+ * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`, `ETN_MCP_SESSION_IDLE_TTL_MS` и аварийные
+ * override канала обновления клиента `ETN_CLIENT_COMPATIBILITY`,
+ * `ETN_RECOMMENDED_CLIENT_VERSION`, `ETN_CLIENT_DOWNLOAD_URL`,
+ * `ETN_CLIENT_SHA256` (вывод и валидация — `version.ts`). Канал обновлений
+ * сервера — `ETN_UPDATE_FEED`, `ETN_UPDATE_CHANNEL`,
+ * `ETN_UPDATE_CHECK_INTERVAL_HOURS` (сущность fc0a99ba, задача 8264988a) и
+ * режим развёртывания `ETN_DEPLOYMENT` (модуль `update/deployment.ts`).
  *
  * A bad configuration raises {@link ConfigError} with a human-readable message;
  * the CLI/server entry point surfaces it to the operator at startup.
@@ -13,6 +19,18 @@
 
 import path from 'node:path';
 import { availableParallelism } from 'node:os';
+
+import { resolveClientChannel, type ClientChannel } from './version.js';
+import {
+  DEFAULT_UPDATE_CHANNEL,
+  DEFAULT_UPDATE_CHECK_INTERVAL_MS,
+  DEFAULT_UPDATE_FEED_URL,
+  MAX_UPDATE_CHECK_INTERVAL_MS,
+  MIN_UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CHANNELS,
+  type UpdateChannel,
+} from './update/checker.js';
+import { DeploymentConfigError, resolveDeployment, type Deployment } from './update/deployment.js';
 
 /** TLS material pair (both fields required when TLS is enabled). */
 export interface TlsConfig {
@@ -84,6 +102,56 @@ export interface ServerConfig {
    * `wal_checkpoint(TRUNCATE)`.
    */
   walCheckpoint: WalCheckpointConfig;
+  /**
+   * Канал совместимости и обновления клиента для `GET /api/v1/version`
+   * (задача 89a6ea40): диапазон, `min_client`, рекомендация, страница релиза
+   * и хеш Linux-архива. Выводится из версии сервера в `version.ts`;
+   * `ETN_CLIENT_*` — аварийные override с валидацией.
+   */
+  clientChannel: ClientChannel;
+  /**
+   * Канал обновлений сервера (сущность fc0a99ba, задача 8264988a): адрес
+   * фида, канал и интервал фоновой проверки.
+   */
+  update: UpdateConfig;
+  /**
+   * Режим развёртывания (`ETN_DEPLOYMENT`, маркер `/.dockerenv`; модуль
+   * `update/deployment.ts`): поле `deployment` кеша проверки обновлений.
+   */
+  deployment: Deployment;
+}
+
+/** Настройки канала обновлений сервера (сущность fc0a99ba). */
+export interface UpdateConfig {
+  /**
+   * Абсолютный http(s)-адрес фида метаданных релизов (`ETN_UPDATE_FEED`);
+   * по умолчанию — список релизов GitHub Releases (ADR 23a931f9).
+   */
+  feedUrl: string;
+  /** Канал проверки (`ETN_UPDATE_CHANNEL`): `stable` | `prerelease`. */
+  channel: UpdateChannel;
+  /**
+   * Интервал фоновых проверок, мс (`ETN_UPDATE_CHECK_INTERVAL_HOURS`, по
+   * умолчанию 12 часов, минимум 1 час).
+   */
+  intervalMs: number;
+}
+
+/** Настройки канала обновлений по умолчанию (канал, фид, 12 часов). */
+export const DEFAULT_UPDATE_CONFIG: UpdateConfig = Object.freeze({
+  feedUrl: DEFAULT_UPDATE_FEED_URL,
+  channel: DEFAULT_UPDATE_CHANNEL,
+  intervalMs: DEFAULT_UPDATE_CHECK_INTERVAL_MS,
+});
+
+/** Подменяемые пробы окружения при загрузке конфигурации (тесты). */
+export interface LoadConfigOptions {
+  /**
+   * Готовый режим развёртывания; по умолчанию определяется из `env` и
+   * файловой системы ({@link resolveDeployment}). Тесты передают явное
+   * значение, чтобы результат не зависел от машины.
+   */
+  deployment?: Deployment;
 }
 
 /** Настройки фонового чекпойнта WAL (ошибка dac92886). */
@@ -131,6 +199,8 @@ const PORT_MIN = 1;
 const PORT_MAX = 65535;
 /** Default pino log level when `ETN_LOG_LEVEL` is unset. */
 const DEFAULT_LOG_LEVEL = 'info';
+/** Миллисекунд в часе — для `ETN_UPDATE_CHECK_INTERVAL_HOURS`. */
+const HOUR_MS = 60 * 60 * 1000;
 
 /**
  * Default idle TTL of a StreamableHTTP MCP session — 24 hours.
@@ -212,9 +282,15 @@ function isLogLevel(value: string): value is LogLevel {
 /**
  * Read and validate configuration from `env` (defaults to `process.env`).
  *
+ * @param env Environment variables.
+ * @param options Test probes; `deployment` pins the deployment mode instead of
+ *   detecting it from the environment and the file system.
  * @throws {ConfigError} when a required variable is missing or a value is invalid.
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  options: LoadConfigOptions = {},
+): ServerConfig {
   // --- ETN_DATA_DIR (required) ---
   const dataDirRaw = env.ETN_DATA_DIR;
   if (dataDirRaw === undefined || dataDirRaw.trim() === '') {
@@ -400,6 +476,72 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     walCheckpointIntervalMs = parsed;
   }
 
+  // --- ETN_CLIENT_* (задача 89a6ea40, сущность «Ответ GET /version») -------
+  // Диапазон совместимости, рекомендация, страница релиза и хеш Linux-архива:
+  // по умолчанию выводятся из версии сервера (`version.ts`), переменные —
+  // аварийные override. Некорректное значение — отказ старта, а не молчаливо
+  // сломанный контракт.
+  let clientChannel: ClientChannel;
+  try {
+    clientChannel = resolveClientChannel(env);
+  } catch (err) {
+    throw new ConfigError((err as Error).message);
+  }
+
+  // --- ETN_UPDATE_* (сущность fc0a99ba, задача 8264988a) -------------------
+  // Фид по умолчанию — GitHub Releases; канал — серверный параметр (клиент его
+  // не выбирает), переход на prerelease только явной настройкой; интервал
+  // фоновых проверок — 12 часов, минимум 1 час. Некорректное значение —
+  // отказ старта: молча сломанный канал обновлений хуже, чем явная ошибка.
+  const feedRaw = env.ETN_UPDATE_FEED?.trim();
+  const updateFeedUrl =
+    feedRaw !== undefined && feedRaw !== '' ? feedRaw : DEFAULT_UPDATE_CONFIG.feedUrl;
+  validateUpdateFeedUrl(updateFeedUrl);
+
+  const channelRaw = env.ETN_UPDATE_CHANNEL?.trim().toLowerCase() ?? '';
+  if (channelRaw !== '' && !(UPDATE_CHANNELS as readonly string[]).includes(channelRaw)) {
+    throw new ConfigError(
+      `ETN_UPDATE_CHANNEL must be one of ${UPDATE_CHANNELS.join(', ')}, got: ${JSON.stringify(channelRaw)}`,
+    );
+  }
+  const updateChannel: UpdateChannel =
+    channelRaw === '' ? DEFAULT_UPDATE_CONFIG.channel : (channelRaw as UpdateChannel);
+
+  let updateIntervalMs = DEFAULT_UPDATE_CONFIG.intervalMs;
+  const intervalHoursRaw = env.ETN_UPDATE_CHECK_INTERVAL_HOURS?.trim();
+  if (intervalHoursRaw !== undefined && intervalHoursRaw !== '') {
+    const hours = Number(intervalHoursRaw);
+    if (!Number.isFinite(hours) || hours < MIN_UPDATE_CHECK_INTERVAL_MS / HOUR_MS) {
+      throw new ConfigError(
+        `ETN_UPDATE_CHECK_INTERVAL_HOURS must be a number of hours not less than ` +
+          `${MIN_UPDATE_CHECK_INTERVAL_MS / HOUR_MS}, got: ${JSON.stringify(intervalHoursRaw)}`,
+      );
+    }
+    if (hours > MAX_UPDATE_CHECK_INTERVAL_MS / HOUR_MS) {
+      // setInterval в Node молча заменяет задержку больше 2^31-1 мс на 1 мс:
+      // «месячный» интервал превратился бы в шторм проверок.
+      throw new ConfigError(
+        `ETN_UPDATE_CHECK_INTERVAL_HOURS must not exceed ` +
+          `${MAX_UPDATE_CHECK_INTERVAL_MS / HOUR_MS} hours, got: ${JSON.stringify(intervalHoursRaw)}`,
+      );
+    }
+    updateIntervalMs = Math.round(hours * HOUR_MS);
+  }
+
+  let deployment: Deployment;
+  if (options.deployment !== undefined) {
+    deployment = options.deployment;
+  } else {
+    try {
+      deployment = resolveDeployment(env);
+    } catch (err) {
+      if (err instanceof DeploymentConfigError) {
+        throw new ConfigError(err.message);
+      }
+      throw err;
+    }
+  }
+
   return {
     dataDir,
     host,
@@ -414,5 +556,35 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       idleEvictionMs: writeEvictIdleMs,
     },
     walCheckpoint: { intervalMs: walCheckpointIntervalMs },
+    clientChannel,
+    update: {
+      feedUrl: updateFeedUrl,
+      channel: updateChannel,
+      intervalMs: updateIntervalMs,
+    },
+    deployment,
   };
+}
+
+/**
+ * Validate `ETN_UPDATE_FEED`: an absolute http(s) URL with a non-empty host.
+ *
+ * `http` is deliberately allowed (unlike `ETN_CLIENT_DOWNLOAD_URL`): a closed
+ * network mirror may live on plain HTTP, and the feed carries metadata only —
+ * the installer itself is never downloaded during the check.
+ */
+function validateUpdateFeedUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new ConfigError(
+      `ETN_UPDATE_FEED must be an absolute http(s) URL, got: ${JSON.stringify(value)}`,
+    );
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.hostname === '') {
+    throw new ConfigError(
+      `ETN_UPDATE_FEED must be an absolute http(s) URL, got: ${JSON.stringify(value)}`,
+    );
+  }
 }

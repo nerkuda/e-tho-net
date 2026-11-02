@@ -19,8 +19,12 @@ import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 import { WebSocket } from 'ws';
 
-import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
+import {
+  DEFAULT_MCP_SESSION_IDLE_TTL_MS,
+  DEFAULT_UPDATE_CONFIG,
+} from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
+import { resolveClientChannel } from '../src/version.js';
 import type { RealtimeGatewayOptions } from '../src/realtime/gateway.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
@@ -29,6 +33,7 @@ import { createServer } from '../src/http/server.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
 import { emitDomainEvent } from '../src/realtime/emit.js';
+import { clientHeaders } from './rest-helpers.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -52,6 +57,9 @@ const TEST_CONFIG: ServerConfig = {
   walCheckpoint: { intervalMs: 0 },
   // Пул записи в тестах выключен: пути записи переводит отдельная задача (c8920d04).
   writePool: { size: 0, taskTimeoutMs: 120000, idleEvictionMs: 30000 },
+  clientChannel: resolveClientChannel({}),
+  update: DEFAULT_UPDATE_CONFIG,
+  deployment: 'standalone',
 };
 
 /** A seeded user with a usable API-key. */
@@ -153,7 +161,7 @@ function connect(
   }
   const headers: Record<string, string> = { authorization: `Bearer ${key}` };
   if (clientId !== undefined) {
-    headers['client-id'] = clientId;
+    Object.assign(headers, clientHeaders(clientId));
   }
   const ws = new WebSocket(url, { headers });
   running.sockets.push(ws);
@@ -370,7 +378,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-X',
+            ...clientHeaders('client-X'),
           },
           payload: { display_name: 'Renamed' },
         });
@@ -405,7 +413,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'shared-client',
+            ...clientHeaders('shared-client'),
           },
           payload: { display_name: 'Shared' },
         });
@@ -465,7 +473,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}/preferences/show_inactive`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-X',
+            ...clientHeaders('client-X'),
           },
           payload: { value: true },
         });
@@ -651,7 +659,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'client-X',
+            ...clientHeaders('client-X'),
           },
           payload: { display_name: 'By X' },
         });
@@ -691,7 +699,7 @@ describe(
           url: `/api/v1/networks/${running.networkId}`,
           headers: {
             authorization: `Bearer ${running.owner.key}`,
-            'client-id': 'late-client',
+            ...clientHeaders('late-client'),
           },
           payload: { display_name: 'Hello' },
         });

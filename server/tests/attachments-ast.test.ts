@@ -431,9 +431,9 @@ describe('отбор вложений на общий AST (задача 5a007bed
           },
         });
         assert.equal(mcpRes.isError, undefined, toolText(mcpRes));
-        const payload = toolJson<Array<{ id: string }>>(mcpRes);
+        const payload = toolJson<{ data: Array<{ id: string }>; meta: { total: number } }>(mcpRes);
         assert.deepEqual(
-          payload.map((i) => i.id).sort(),
+          payload.data.map((i) => i.id).sort(),
           scoped.data.map((i) => i.id).sort(),
           'REST и MCP с одним ast дают один набор',
         );

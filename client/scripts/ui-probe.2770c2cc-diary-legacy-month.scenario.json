@@ -1,0 +1,180 @@
+{
+  "name": "2770c2cc-diary-legacy-month",
+  "description": "Ошибка 2770c2cc: легаси-снимок вкладки «Дневника» — месяц БЕЗ периода. По решению пользователя такой снимок не отбор: дневник открывается на текущей дате (период $today, календарь текущего месяца, сегодня выделено), а не на сохранённом месяце. Сценарий пишет легаси-снимок (month={2001,3} без record_time) через window.etn.tabs.updateState, перемонтирует «Дневник» переключением вкладок (снимок читается из обновлённого store) и проверяет: период $today/$today, сетка текущего месяца, ровно одна выделенная ячейка и это сегодня, лента — только сегодняшняя запись, снимок при монтировании НЕ перезаписан. Затем клик по сегодняшнему дню обязан перезаписать снимок нормальным форматом (период + месяц) — закрывает замечание верификатора к DoD; после повторного перемонтирования нормальный снимок применяется целиком. Красная фаза на коде до фикса: календарь показывает март 2001, выделения нет.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "seed-records",
+      "probe": "(async () => { const pad = (n) => String(n).padStart(2, '0'); const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; const now = new Date(); const at = (o) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + o, 12, 0, 0, 0); const days = [-5, -2, 0].map((o) => local(at(o))); for (const day of days) { const iso = new Date(day + 'T12:00:00').toISOString(); await window.etn.comments.create('{{networkId}}', 'thought', '{{thoughtId}}', { kind: 'chronological', title: 'Проба ' + day, body_md: 'запись ' + day, valid_from: iso, valid_to: iso }); } window.__probe2770 = { today: local(now), days }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-diary",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null"
+    },
+    {
+      "name": "default-feed",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.diary-day').length >= 1"
+    },
+    {
+      "name": "remember-workspace",
+      "probe": "(() => { window.__ws2770 = document.querySelector('.workspace'); return window.__ws2770 !== null; })()",
+      "expect": true
+    },
+    {
+      "name": "inject-legacy-snapshot",
+      "probe": "(async () => { const active = document.querySelector('button.tab.tab-active')?.dataset.tabId ?? null; if (active === null) return 'no-active-tab'; window.__tab2770 = active; const legacy = { filter: { order: 'asc' }, month: { year: 2001, month: 3 }, savedFilterId: null }; await window.etn.tabs.updateState(active, { chronicle_state: JSON.stringify(legacy) }); const raw = (await window.etn.tabs.list()).find((t) => t.tab_id === active)?.chronicle_state ?? null; return raw !== null && raw.includes('2001') && !raw.includes('record_time') ? 'ok' : 'not-persisted'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "create-second-tab",
+      "click": ".tab.tab-plus"
+    },
+    {
+      "name": "picker-open",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.network-item') !== null"
+    },
+    {
+      "name": "pick-same-network-second-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{networkName}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "second-tab-workspace",
+      "timeout": 60000,
+      "waitFor": "window.__ws2770 != null && document.querySelector('.workspace') !== null && document.querySelector('.workspace') !== window.__ws2770 && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "back-to-first-tab",
+      "probe": "(() => { const tab = document.querySelector('.tab[data-tab-id=\"' + window.__tab2770 + '\"]'); if (tab === null) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "first-tab-active",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('button.tab.tab-active')?.dataset.tabId === window.__tab2770 && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-diary-again",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel-again",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null"
+    },
+    {
+      "name": "feed-again",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.diary-day').length >= 1"
+    },
+    {
+      "name": "legacy-state",
+      "probe": "(async () => { const now = new Date(); const pad = (n) => String(n).padStart(2, '0'); const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; const curMonth = today.slice(0, 7); const tabs = await window.etn.tabs.list(); const row = tabs.find((t) => t.tab_id === window.__tab2770); const ownDays = [...document.querySelectorAll('.cal-day')].filter((e) => !e.classList.contains('is-out')).map((e) => e.title); const raw = row?.chronicle_state ?? null; return { today, periodCells: document.querySelectorAll('.chron-filter .fv-date').length, from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null, ownDaysCount: ownDays.length, ownDaysCurrentMonth: ownDays.length > 0 && ownDays.every((d) => d.startsWith(curMonth)), hasFirstDay: ownDays.includes(curMonth + '-01'), selected: document.querySelectorAll('.cal-day.is-selected').length, selectedToday: document.querySelectorAll('.cal-day.is-today.is-selected').length, feedDays: document.querySelectorAll('.diary-day').length, feedRecords: document.querySelectorAll('.diary-record').length, snapshotHasPeriod: typeof raw === 'string' && raw.includes('record_time'), snapshotLegacyMonth: typeof raw === 'string' && raw.includes('2001') }; })()"
+    },
+    {
+      "name": "legacy-gate",
+      "probe": "(async () => { const now = new Date(); const pad = (n) => String(n).padStart(2, '0'); const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; const curMonth = today.slice(0, 7); const tabs = await window.etn.tabs.list(); const row = tabs.find((t) => t.tab_id === window.__tab2770); const ownDays = [...document.querySelectorAll('.cal-day')].filter((e) => !e.classList.contains('is-out')).map((e) => e.title); const raw = row?.chronicle_state ?? null; const from = document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null; const to = document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null; const problems = []; if (document.querySelectorAll('.chron-filter .fv-date').length !== 2) problems.push('periodCells'); if (from !== '$today' || to !== '$today') problems.push('period=' + from + '..' + to); if (ownDays.length === 0 || !ownDays.every((d) => d.startsWith(curMonth))) problems.push('month-not-current'); if (!ownDays.includes(curMonth + '-01')) problems.push('first-day-missing'); if (document.querySelectorAll('.cal-day.is-selected').length !== 1) problems.push('selected'); if (document.querySelectorAll('.cal-day.is-today.is-selected').length !== 1) problems.push('selected-not-today'); if (document.querySelectorAll('.diary-day').length !== 1 || document.querySelectorAll('.diary-record').length !== 1) problems.push('feed=' + document.querySelectorAll('.diary-day').length + '/' + document.querySelectorAll('.diary-record').length); if (typeof raw === 'string' && raw.includes('record_time')) problems.push('rewritten-on-mount'); if (typeof raw !== 'string' || !raw.includes('2001')) problems.push('legacy-snapshot-lost'); return problems.length === 0 ? 'ok' : problems.join('; '); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "click-today",
+      "click": ".cal-day.is-today"
+    },
+    {
+      "name": "rewritten-snapshot",
+      "probe": "(async () => { const now = new Date(); const pad = (n) => String(n).padStart(2, '0'); const curMonth = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`; const hasRecordTime = (v) => { if (v === null || typeof v !== 'object') return false; if (Array.isArray(v)) return v.some(hasRecordTime); if (v.entity !== null && typeof v.entity === 'object' && v.entity.kind === 'record_time') return true; return Object.values(v).some(hasRecordTime); }; const problems = []; for (let i = 0; i < 60; i += 1) { const row = (await window.etn.tabs.list()).find((t) => t.tab_id === window.__tab2770); const raw = row?.chronicle_state ?? null; if (typeof raw === 'string') { try { const parsed = JSON.parse(raw); if (hasRecordTime(parsed.filter) && parsed.month !== null && parsed.month !== undefined) { const monthOk = parsed.month.year === now.getFullYear() && parsed.month.month === now.getMonth() + 1; if (monthOk) return 'ok'; problems.push('month=' + JSON.stringify(parsed.month)); } else { problems.push('no-period-or-month'); } } catch { problems.push('parse'); } } await new Promise((r) => setTimeout(r, 100)); } return problems.length === 0 ? 'not-rewritten' : 'not-rewritten: ' + problems.slice(-3).join(','); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "switch-to-second-tab",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && e.dataset.tabId !== window.__tab2770 && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "second-tab-active-again",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('button.tab.tab-active')?.dataset.tabId !== window.__tab2770"
+    },
+    {
+      "name": "back-to-first-tab-after-save",
+      "probe": "(() => { const tab = document.querySelector('.tab[data-tab-id=\"' + window.__tab2770 + '\"]'); if (tab === null) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "first-tab-active-after-save",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('button.tab.tab-active')?.dataset.tabId === window.__tab2770 && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-diary-after-save",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel-after-save",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null"
+    },
+    {
+      "name": "feed-after-save",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.diary-day').length >= 1"
+    },
+    {
+      "name": "normal-snapshot-state",
+      "probe": "(async () => { const now = new Date(); const pad = (n) => String(n).padStart(2, '0'); const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; const curMonth = today.slice(0, 7); const tabs = await window.etn.tabs.list(); const row = tabs.find((t) => t.tab_id === window.__tab2770); const ownDays = [...document.querySelectorAll('.cal-day')].filter((e) => !e.classList.contains('is-out')).map((e) => e.title); const raw = row?.chronicle_state ?? null; return { today, from: document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null, to: document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null, ownDaysCount: ownDays.length, ownDaysCurrentMonth: ownDays.length > 0 && ownDays.every((d) => d.startsWith(curMonth)), selected: document.querySelectorAll('.cal-day.is-selected').length, selectedToday: document.querySelectorAll('.cal-day.is-today.is-selected').length, feedDays: document.querySelectorAll('.diary-day').length, feedRecords: document.querySelectorAll('.diary-record').length, snapshotHasPeriod: typeof raw === 'string' && raw.includes('record_time'), snapshot: raw }; })()"
+    },
+    {
+      "name": "normal-snapshot-gate",
+      "probe": "(async () => { const now = new Date(); const pad = (n) => String(n).padStart(2, '0'); const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; const curMonth = today.slice(0, 7); const tabs = await window.etn.tabs.list(); const row = tabs.find((t) => t.tab_id === window.__tab2770); const ownDays = [...document.querySelectorAll('.cal-day')].filter((e) => !e.classList.contains('is-out')).map((e) => e.title); const raw = row?.chronicle_state ?? null; const from = document.querySelector('.chron-filter .fv-date[data-bound=\"from\"] select')?.value ?? null; const to = document.querySelector('.chron-filter .fv-date[data-bound=\"to\"] select')?.value ?? null; const problems = []; if (from !== '$today' || to !== '$today') problems.push('period=' + from + '..' + to); if (ownDays.length === 0 || !ownDays.every((d) => d.startsWith(curMonth))) problems.push('month-not-current'); if (document.querySelectorAll('.cal-day.is-selected').length !== 1) problems.push('selected'); if (document.querySelectorAll('.cal-day.is-today.is-selected').length !== 1) problems.push('selected-not-today'); if (document.querySelectorAll('.diary-day').length !== 1 || document.querySelectorAll('.diary-record').length !== 1) problems.push('feed=' + document.querySelectorAll('.diary-day').length + '/' + document.querySelectorAll('.diary-record').length); if (typeof raw !== 'string' || !raw.includes('record_time')) problems.push('snapshot-lost'); return problems.length === 0 ? 'ok' : problems.join('; '); })()",
+      "expect": "ok"
+    }
+  ]
+}

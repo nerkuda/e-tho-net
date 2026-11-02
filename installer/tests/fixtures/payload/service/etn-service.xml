@@ -1,0 +1,18 @@
+<!-- Фикстура шаблона службы WinSW (поставка службы — задача 8b1f5980).
+     Структура повторяет installer/service/etn-service.xml в части, которую
+     читает установщик: подстановка {{DATA_DIR}}, {{PORT}}, {{HOST}}, фиксированный
+     ETN_DEPLOYMENT=windows-service (ошибка e375123f) и каталог журнала службы
+     (задача 9b310991). Кириллица обязана пережить подстановку без порчи
+     кодировки — проверяется installer/tests/silent-codes.ps1. -->
+<service>
+  <id>ETN</id>
+  <name>ETN</name>
+  <description>ETN — сервер графовых баз знаний</description>
+  <executable>%BASE%\..\node\node.exe</executable>
+  <arguments>"%BASE%\..\server\dist\index.js"</arguments>
+  <env name="ETN_DATA_DIR" value="{{DATA_DIR}}"/>
+  <env name="ETN_PORT" value="{{PORT}}"/>
+  <env name="ETN_HOST" value="{{HOST}}"/>
+  <env name="ETN_DEPLOYMENT" value="windows-service"/>
+  <logpath>{{DATA_DIR}}\logs\service</logpath>
+</service>

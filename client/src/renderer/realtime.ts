@@ -17,10 +17,13 @@
  */
 
 import type { AnyRealtimeEvent } from '@etn/shared';
+import type { ServerMaintenanceDto } from '../main/ipc/contract.js';
 
 import { etn } from './lib/etn.js';
 import { routeRealtimeEvent } from './lib/live/event-router.js';
+import { toast } from './lib/notice.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
+import { activeServerMaintenanceText } from './lib/server-maintenance-text.js';
 import {
   getRtStatus,
   store,
@@ -76,6 +79,21 @@ export function setRealtimeEffects(next: Partial<RealtimeEffects>): void {
 }
 
 /**
+ * Known visual qualifiers of a realtime status. Unknown values from IPC are
+ * dropped rather than rendered as someone else's detail.
+ * `server-maintenance` — сервер на обслуживании (close 1012, 12fd5b0e); текст
+ * для него добавляет задача 479e37ed, до тех пор показывается текст статуса.
+ */
+const STATUS_DETAILS: readonly RtStatusDetail[] = ['server-restart', 'server-maintenance'];
+
+/** Narrows an IPC `detail` value to a known {@link RtStatusDetail}. */
+export function toRtStatusDetail(value: unknown): RtStatusDetail | null {
+  return typeof value === 'string' && (STATUS_DETAILS as readonly string[]).includes(value)
+    ? (value as RtStatusDetail)
+    : null;
+}
+
+/**
  * Pulls the per-network status snapshot and merges it into the store
  * (defect de34b35b). Called at init, again after the profile is connected
  * (the pool appears only then, so the cold-start snapshot is empty) and after
@@ -99,7 +117,8 @@ export async function refreshRealtimeStatuses(): Promise<void> {
     for (const entry of snapshot) {
       if (!valid.includes(entry.status as RtStatus)) continue;
       map[entry.networkId] = entry.status as RtStatus;
-      if (entry.detail === 'server-restart') details[entry.networkId] = 'server-restart';
+      const detail = toRtStatusDetail(entry.detail);
+      if (detail !== null) details[entry.networkId] = detail;
       else delete details[entry.networkId];
     }
     store.update({
@@ -109,6 +128,45 @@ export async function refreshRealtimeStatuses(): Promise<void> {
     });
   } catch {
     // Snapshot is best-effort: broadcast statuses still fill the map.
+  }
+}
+
+/**
+ * Приводит состояние обслуживания сервера (задача 479e37ed) к состоянию из
+ * main и один раз объявляет ПЕРЕХОД в обслуживание тостом: это важное
+ * событие доступности сервера (решение 28d22b8a — тост, не статусбар).
+ * Повторные кадры/статусы того же обслуживания тост не дублируют.
+ */
+function applyServerMaintenance(dto: ServerMaintenanceDto): void {
+  if (dto.active !== true) {
+    if (store.state.serverMaintenance !== null) store.update({ serverMaintenance: null });
+    return;
+  }
+  const retry =
+    typeof dto.retry_after === 'number' && Number.isFinite(dto.retry_after) && dto.retry_after > 0
+      ? Math.ceil(dto.retry_after)
+      : undefined;
+  const next: ServerMaintenanceDto = {
+    active: true,
+    ...(retry === undefined ? {} : { retry_after: retry }),
+    target_version: dto.target_version ?? null,
+  };
+  const wasActive = store.state.serverMaintenance !== null;
+  store.update({ serverMaintenance: next });
+  if (!wasActive) toast(activeServerMaintenanceText(next), 'warning');
+}
+
+/**
+ * Забирает текущее состояние обслуживания сервера (задача 479e37ed) — при
+ * старте и после подключения профиля, не дожидаясь первого кадра/статуса.
+ * Ошибка IPC здесь не критична: канал `realtime:maintenance` догонит состояние.
+ */
+export async function refreshServerMaintenance(): Promise<void> {
+  try {
+    applyServerMaintenance(await etn.realtime.getMaintenance());
+  } catch {
+    // Состояние — украшение статуса, а не источник данных: молча оставляем
+    // прежнее значение, следующий кадр/статус его обновит.
   }
 }
 
@@ -145,7 +203,8 @@ export function initRealtime(): void {
     const next = statusStr as RtStatus;
     const map = { ...store.state.rtStatusByNetwork, [networkId]: next };
     const details = { ...store.state.rtStatusDetailByNetwork };
-    if (obj.detail === 'server-restart') details[networkId] = obj.detail as RtStatusDetail;
+    const detail = toRtStatusDetail(obj.detail);
+    if (detail !== null) details[networkId] = detail;
     else delete details[networkId];
     store.update({
       rtStatusByNetwork: map,
@@ -154,10 +213,23 @@ export function initRealtime(): void {
     });
   });
 
+  // Обслуживание сервера (задача 479e37ed): единое состояние на подключение.
+  // Кадр `maintenance` и `503 SERVER_UPDATING` приходят из main одним каналом;
+  // `active: false` — восстановление подтверждено (`GET /me` / открытие сокета).
+  etn.realtime.onMaintenance((payload) => {
+    const obj = payload as { active?: unknown; retry_after?: unknown; target_version?: unknown };
+    applyServerMaintenance({
+      active: obj.active === true,
+      ...(typeof obj.retry_after === 'number' ? { retry_after: obj.retry_after } : {}),
+      target_version: typeof obj.target_version === 'string' ? obj.target_version : null,
+    });
+  });
+
   // Initial pull (the snapshot is empty at cold start because the pool is
   // created later, after `etn.server.connect`; `refreshRealtimeStatuses()` is
   // called again right after connecting / opening a network).
   void refreshRealtimeStatuses();
+  void refreshServerMaintenance();
 
   // Tab switch → recompute the active status from the per-network map. The
   // guard against rewriting the same network makes the subscription

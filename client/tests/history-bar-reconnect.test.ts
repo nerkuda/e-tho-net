@@ -20,7 +20,13 @@
  *  4. без изменения входов лишнего чтения нет (подпись по-прежнему кэширует);
  *  5. отказ при НЕИЗМЕННОМ статусе не залипает: подпись, снятая до чтения,
  *     сбрасывается на отказе, и следующий тик store повторяет чтение (мутация
- *     «убрать сброс» делает кейс красным).
+ *     «убрать сброс» делает кейс красным);
+ *  6. при висящем `thoughts.resolve` облачка уже нарисованы первым проходом
+ *     по кэшу-фолбэку — полоса не пустует на время сетевого round-trip
+ *     (ошибка e9c05267);
+ *  7. повторные тики store при висящем resolve не плодят запросы: render'ы с
+ *     тем же набором неразрешённых id ждут один общий запрос (дедуп в полёте,
+ *     ошибка e9c05267).
  */
 
 import assert from 'node:assert/strict';
@@ -34,6 +40,8 @@ type Dict = Record<string, unknown>;
 /** Запись фальшивого моста: что и сколько раз просили. */
 interface BridgeLog {
   historyList: (string | null)[];
+  /** Батчи id, ушедшие в `thoughts.resolve` (по одному элементу на запрос). */
+  resolveCalls: string[][];
 }
 
 interface Harness {
@@ -105,7 +113,7 @@ async function mountBar(options: {
 }): Promise<Harness> {
   activeUnmount?.();
   activeUnmount = null;
-  const log: BridgeLog = { historyList: [] };
+  const log: BridgeLog = { historyList: [], resolveCalls: [] };
   const bridge: Dict = {
     history: {
       list: (_profileId: string, _networkId: string, tabId: string | null) => {
@@ -114,10 +122,12 @@ async function mountBar(options: {
       },
     },
     thoughts: {
-      resolve: (_networkId: string, ids: string[]) =>
-        options.resolve === undefined
+      resolve: (_networkId: string, ids: string[]) => {
+        log.resolveCalls.push([...ids]);
+        return options.resolve === undefined
           ? Promise.resolve(ids.map((id) => ({ id, title: `t-${id}`, active: true })))
-          : options.resolve(ids),
+          : options.resolve(ids);
+      },
     },
   };
   installShims(bridge);
@@ -278,6 +288,119 @@ describe('полоса истории: повтор после сбоя соед
     await harness.flush();
     assert.equal(harness.log.historyList.length, 2, 'отказ не зафиксировал подпись — чтение повторено');
     assert.deepEqual(harness.chips(), ['t-alpha'], 'полоса заполнилась без смены статуса');
+    harness.unmount();
+  });
+});
+
+describe('полоса истории: отрисовка без ожидания resolve (e9c05267)', () => {
+  /** Разрешение серверного ответа, которым управляет тест. */
+  interface Deferred {
+    release: () => void;
+  }
+
+  /** `resolve` моста, который висит до `release()` — окно «сеть думает». */
+  function hangingResolve(state: Deferred) {
+    return async (ids: string[]): Promise<Dict[]> => {
+      await new Promise<void>((done) => {
+        state.release = done;
+      });
+      return ids.map((id) => ({ id, title: `t-${id}`, active: true }));
+    };
+  }
+
+  it('пока resolve в полёте, облачка уже нарисованы по кэшу-фолбэку', async () => {
+    const deferred: Deferred = { release: () => undefined };
+    const harness = await mountBar({
+      list: async () => [
+        { thoughtId: 'slow-alpha', visitedAt: '' },
+        { thoughtId: 'slow-beta', visitedAt: '' },
+      ],
+      resolve: hangingResolve(deferred),
+      status: 'connected',
+    });
+    await harness.flush();
+    assert.equal(harness.log.resolveCalls.length, 1, 'резолв запущен и висит');
+    assert.deepEqual(
+      harness.chips().sort(),
+      ['slow-alpha', 'slow-beta'],
+      'первый проход отрисован по кэшу-фолбэку, не дожидаясь сервера',
+    );
+    assert.equal(
+      (harness.host as unknown as ShimElement).findAll('history-empty').length,
+      0,
+      'полоса не пустует и не показывает заглушку',
+    );
+
+    deferred.release();
+    await harness.flush();
+    assert.deepEqual(
+      harness.chips().sort(),
+      ['t-slow-alpha', 't-slow-beta'],
+      'после ответа resolve та же полоса перерисована заголовками сервера',
+    );
+    harness.unmount();
+  });
+
+  it('три тика store при висящем resolve дают один запрос (дедуп в полёте)', async () => {
+    const deferred: Deferred = { release: () => undefined };
+    const harness = await mountBar({
+      list: async () => [
+        { thoughtId: 'dup-alpha', visitedAt: '' },
+        { thoughtId: 'dup-beta', visitedAt: '' },
+      ],
+      resolve: hangingResolve(deferred),
+      status: 'connecting',
+    });
+    await harness.flush();
+    assert.equal(harness.log.resolveCalls.length, 1, 'стартовый render запустил resolve');
+
+    // Флапы WS: статус соединения — вход подписи полосы, значит каждый тик
+    // запускает свой render, пока первый resolve ещё висит.
+    harness.store.update({ rtStatusByNetwork: { 'network-1': 'offline' } });
+    await harness.flush();
+    harness.store.update({ rtStatusByNetwork: { 'network-1': 'connecting' } });
+    await harness.flush();
+    harness.store.update({ rtStatusByNetwork: { 'network-1': 'connected' } });
+    await harness.flush();
+    assert.equal(
+      harness.log.resolveCalls.length,
+      1,
+      'три render с тем же набором неразрешённых id ждут общий запрос',
+    );
+
+    deferred.release();
+    await harness.flush();
+    assert.deepEqual(
+      harness.chips().sort(),
+      ['t-dup-alpha', 't-dup-beta'],
+      'ответ общего запроса нарисован последним render',
+    );
+    harness.unmount();
+  });
+
+  it('частичная запись кэша без title не роняет полосу: id-фолбэк, затем до-заполнение', async () => {
+    const deferred: Deferred = { release: () => undefined };
+    // Частичная запись (патч realtime-события без title) лежит в кэше до
+    // монтирования полосы: фабрика облачка ждёт строковый заголовок, поэтому
+    // без проверки отрисовка падала бы, оставляя хост пустым.
+    const { putEntity } = await import('../src/renderer/lib/live/entities.js');
+    putEntity('thought', 'partial-alpha', { id: 'partial-alpha', active: true });
+    const harness = await mountBar({
+      list: async () => [{ thoughtId: 'partial-alpha', visitedAt: '' }],
+      resolve: hangingResolve(deferred),
+      status: 'connected',
+    });
+    await harness.flush();
+    assert.deepEqual(
+      harness.log.resolveCalls,
+      [['partial-alpha']],
+      'запись без title считается неразрешённой и до-запрашивается',
+    );
+    assert.deepEqual(harness.chips(), ['partial-alpha'], 'на полосе штатный id-фолбэк, а не пустота');
+
+    deferred.release();
+    await harness.flush();
+    assert.deepEqual(harness.chips(), ['t-partial-alpha'], 'resolve заменил частичную запись полной');
     harness.unmount();
   });
 });

@@ -30,6 +30,7 @@ const EXPECTED_FILES = [
   '013_networks_type_roles.sql',
   '014_user_settings.sql',
   '015_networks_first_day_of_week.sql',
+  '016_update_jobs.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */
@@ -47,6 +48,7 @@ const EXPECTED_TABLES = [
   'event_log',
   'network_seq',
   'mcp_tool_call_metrics',
+  'update_jobs',
 ];
 
 /** True when the `better-sqlite3` native binding loads. */

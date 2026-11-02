@@ -1,0 +1,156 @@
+# CI на ВМ-раннерах Gitea (задача 00345091, подзадача П4).
+# Host-mode: джобы выполняются шеллом в ВМ (без docker).
+# GitHub Actions (ci.yml) остаётся на hosted-раннерах для main — не трогаем.
+#
+# Джобы сериализованы намеренно: linux-vm и win-vm живут на одном физическом
+# NVMe, и их одновременная тяжёлая работа даёт многоминутные IO-столлы гостей
+# (ошибка 68a395b5: файлы серверных тестов по 3 с снимались по таймауту 120 с,
+# а `tsc` на win-vm шёл 15 минут вместо 58 с). Пока нет отдельных дисков,
+# последовательный запуск — единственный детерминированный способ убрать
+# конкуренцию; `if: always()` сохраняет независимость результата Linux-джобы
+# от исхода Windows.
+#
+# Linux-джоба выполняется раннером `etn-wsl-linux` в WSL2 Ubuntu на том же
+# хосте; label `linux-vm` сохранён, поэтому workflow от переезда не меняется.
+# Причина: VirtualBox-ВМ при включённых VBS/HVCI работает в режиме NEM (WHPX)
+# и периодически замирает на 2–4 минуты — гостевые soft lockup, пропуски лога
+# 178–228 с при полностью простаивающем хосте (ошибка 68a395b5). В WSL2 тех же
+# замираний нет. VirtualBox-ВМ остаётся для ручных GUI-сценариев (n4, n10–n12).
+name: Gitea CI
+
+on:
+  push:
+    branches: ['releases/**', 'main']
+  pull_request:
+
+jobs:
+  windows:
+    name: Windows (win-vm)
+    runs-on: win-vm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build @etn/shared
+        run: npm run build:shared
+
+      # Ресурсы раннера в лог: разбор замираний и IO-столлов win-vm
+      # (ошибка 68a395b5) требует знать реальные CPU/RAM/диск джобы.
+      - name: Runner resources
+        run: |
+          Write-Output ("NUMBER_OF_PROCESSORS=" + $env:NUMBER_OF_PROCESSORS)
+          node -p "require('os').availableParallelism()"
+          Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory,TotalVisibleMemorySize | Format-List
+          Get-PSDrive C | Select-Object Used,Free | Format-List
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Server tests
+        run: npm -w @etn/server test
+
+      - name: Client tests
+        run: npm -w @etn/client test
+
+      # Установщик Windows (DoD П4, задача 00345091): TestMode-сборка с
+      # фиктивным payload и матрица silent-режима — installer/tests/silent-codes.ps1.
+      # Скрипт рассчитан на pwsh (в 5.1 stderr нативной команды при
+      # $ErrorActionPreference='Stop' обрывает прогон), поэтому инструменты
+      # ставятся заранее: Inno Setup 6 (ISCC) и PowerShell 7.
+      - name: Ensure CI tools (Inno Setup 6, PowerShell 7)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\tests\ensure-ci-tools.ps1
+
+      # Команда обязана начинаться с оператора вызова `&`: раннер Gitea на
+      # Windows исполняет run в Windows PowerShell, и строка, начинающаяся с
+      # кавычки, разбирается как выражение, а не как команда («Unexpected
+      # token '-NoProfile'», run 92).
+      - name: Installer silent-contract tests
+        run: '& "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\silent-codes.ps1'
+
+  linux:
+    name: Linux (linux-vm)
+    runs-on: linux-vm
+    # Сериализация с Windows-джобой — см. комментарий в шапке файла.
+    # `always()` — Linux отрабатывает и при красной Windows-джобе.
+    needs: [windows]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build @etn/shared
+        run: npm run build:shared
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      # Ресурсы раннера в лог: разбор таймаутов серверных тестов (ошибка
+      # 68a395b5) требует знать реальные CPU/RAM/диск и IO-давление ВМ.
+      - name: Runner resources
+        run: |
+          nproc
+          node -p "require('os').availableParallelism()"
+          free -m
+          df -h /opt /tmp
+          uptime
+          cat /proc/pressure/io || true
+
+      - name: Server tests
+        run: npm -w @etn/server test
+
+      # Поставка Linux (DoD П4): те же шаги, что release.yml (linux-client и
+      # linux-server), но без публикации — проверяем сборку ассетов на раннере.
+      - name: Build client tarball
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./server/package.json').version")"
+          npm -w @etn/client run package -- --dir --publish never
+          unpacked="client/release/linux-unpacked"
+          if [ ! -x "${unpacked}/etn" ]; then
+            echo "::error::electron-builder не создал ${unpacked}/etn"
+            ls -la client/release || true
+            exit 1
+          fi
+          # Иконка для ярлыка рабочего стола: install.sh берёт etn.png из
+          # каталога установленной версии, если он есть.
+          cp client/build/icon.png "${unpacked}/etn.png"
+          asset="ETN-Client-${version}-linux-x64.tar.gz"
+          mkdir -p dist
+          tar --owner=0 --group=0 --numeric-owner -czf "dist/${asset}" -C "${unpacked}" .
+          test -s "dist/${asset}"
+          echo "OK: dist/${asset} ($(du -h "dist/${asset}" | cut -f1))"
+
+      - name: Build server tarball
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./server/package.json').version")"
+          # Скрипт сам проверяет состав архива и прогоняет smoke-test:
+          # etn init + запуск сервера + GET /api/v1/health.
+          node server/scripts/build-server-tarball.mjs --version "${version}" --out dist
+          test -s "dist/etn-server-${version}.tar.gz"
+          echo "OK: dist/etn-server-${version}.tar.gz"
+
+      # Проверка установщика Linux-клиента (DoD П4): подставной архив + локальный
+      # file://-источник релиза. Настоящий electron-бинарник потребовал бы
+      # GUI-библиотек (libgtk-3, libnss3, …) и упал бы на проверке ldd, хотя
+      # проверяется логика install.sh, а не клиент.
+      - name: install.sh checks
+        run: bash scripts/install-sh-smoke.sh "$(node -p "require('./server/package.json').version")"

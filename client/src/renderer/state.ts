@@ -34,7 +34,7 @@ import {
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
-import type { TabDto } from '../main/ipc/contract.js';
+import type { CompatibilityResult, ServerMaintenanceDto, TabDto } from '../main/ipc/contract.js';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
@@ -59,8 +59,13 @@ export type EditorTarget =
 /** Realtime connection status as reported by the main process (de34b35b). */
 export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspect';
 
-/** Visual qualifier of a realtime status (`server-restart` → «Сервер перезапускается…»). */
-export type RtStatusDetail = 'server-restart';
+/**
+ * Visual qualifier of a realtime status (de34b35b; 12fd5b0e):
+ * `server-restart` → «Сервер перезапускается…», `server-maintenance` →
+ * обслуживание сервера. Текст для обслуживания добавляет задача 479e37ed; до
+ * него показывается обычный текст статуса, но уточнение уже хранится в сторе.
+ */
+export type RtStatusDetail = 'server-restart' | 'server-maintenance';
 
 /** UI theme (L5 `client_meta.theme`, L10). */
 export type Theme = 'light' | 'dark';
@@ -215,6 +220,26 @@ export interface AppState {
    * `useTick`/`memo` keys without subscribing to the whole store.
    */
   lockCacheTick: number;
+  /**
+   * Вердикт проверки совместимости клиента с сервером (сущность 89aad200,
+   * задача 12fd5b0e). `null` — проверки ещё не было или пользователь
+   * отключился. Блокирующие статусы (`client-outdated`/`server-outdated`)
+   * показываются диалогом 8623b9ff, `recommended-update`/`unknown` — баннером
+   * ed068706; сами элементы — задачи 0afec967/b57910b5, здесь только состояние.
+   */
+  compatibility: CompatibilityResult | null;
+  /**
+   * Обслуживание сервера (задача 479e37ed, требование 9636b1cc): `null` —
+   * сервер работает штатно. Активное состояние приходит каналом
+   * `realtime:maintenance` (кадр `maintenance` или `503 SERVER_UPDATING`) и
+   * снимается по двум признакам: сокет прожил стабильное окно 10 с
+   * (`maintenance-stable`) либо успешный `GET /me` вернул, что публичный
+   * `GET /version` показывает ДРУГУЮ версию процесса (или не меньше
+   * `target_version`) — один `/me` не выход: в обслуживании он отвечает 200.
+   * По состоянию статус-бар и уведомление показывают причину, а не сетевую
+   * ошибку.
+   */
+  serverMaintenance: ServerMaintenanceDto | null;
 }
 
 /** Initial snapshot. */
@@ -277,6 +302,8 @@ const initial: AppState = {
   layerOverrides: { thought_ids: [], link_ids: [] },
   lockCache: {},
   lockCacheTick: 0,
+  compatibility: null,
+  serverMaintenance: null,
 };
 
 /**

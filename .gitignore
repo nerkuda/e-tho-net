@@ -8,6 +8,11 @@ out/
 release/
 *.tsbuildinfo
 
+# Установщик: payload (Node, WinSW, prod-зависимости) и кэш загрузок —
+# артефакты сборки на сотни мегабайт (задача 8b1f5980).
+installer/payload/
+installer/.cache/
+
 # Исходные ресурсы упаковки electron-builder (client/build) — версионируются
 # (ошибка 5d0f698b: правило `build/` молча съедало новые ассеты упаковки).
 # Генерируемый notices-файл остаётся игнорируемым.

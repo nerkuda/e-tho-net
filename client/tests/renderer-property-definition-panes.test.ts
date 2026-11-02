@@ -321,6 +321,7 @@ describe('определения свойств типа перечитываю�
       },
       realtime: {
         onStatusChange: () => undefined,
+        onMaintenance: () => undefined,
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,

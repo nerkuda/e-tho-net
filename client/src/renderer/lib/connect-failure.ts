@@ -12,6 +12,9 @@
  *    (`ConnectFailureDetails`: main различает отказ в соединении, таймаут, DNS,
  *    недоступность сети и сброс соединения и кладёт причину в `details`, не
  *    заставляя UI разбирать технический текст);
+ *  - отказ из-за несовместимых версий (`details.kind === 'client-compatibility'`,
+ *    задача 0afec967) — причина и версии сторон из результата проверки
+ *    совместимости, а не техническое сообщение main;
  *  - ответ сервера — его собственный код (`UNAUTHORIZED` → «отклонил API-key»,
  *    `RATE_LIMITED` и т.п.);
  *  - иначе — серверный текст через `errText`; локальные технические огрызки
@@ -22,7 +25,12 @@
  * не относится.
  */
 
-import type { ConnectFailureDetails, ConnectFailureReason } from '../../main/ipc/contract.js';
+import type {
+  CompatibilityResult,
+  ConnectFailureDetails,
+  ConnectFailureReason,
+} from '../../main/ipc/contract.js';
+import { compatibilityFactsText, compatibilityReasonText } from './compatibility-reason.js';
 import { errText } from './dom.js';
 import { t, type MessageKey } from './i18n.js';
 
@@ -58,6 +66,31 @@ function connectFailureDetails(err: unknown): ConnectFailureDetails | null {
   return { kind: 'connect-failed', reason: known ? (d.reason as ConnectFailureReason) : 'other' };
 }
 
+/**
+ * Отказ подключения из-за несовместимых версий (задача 0afec967, требование
+ * 4d3be6ca): main кладёт в `details` `{ kind: 'client-compatibility', result }`.
+ * Причина — машиночитаемые поля результата проверки, а не техническое сообщение
+ * main («Клиент 0.15.1 несовместим с сервером…»): на экране подключения
+ * пользователь видит человеческую формулировку и версии сторон. `null` —
+ * отказ не этого вида.
+ */
+function compatibilityFailureReason(err: unknown): string | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const details = (err as { details?: unknown }).details;
+  if (typeof details !== 'object' || details === null) return null;
+  const d = details as { kind?: unknown; result?: unknown };
+  if (d.kind !== 'client-compatibility') return null;
+  const result = d.result;
+  if (typeof result !== 'object' || result === null) return null;
+  const status = (result as { status?: unknown }).status;
+  if (status !== 'client-outdated' && status !== 'server-outdated') return null;
+  const verdict = result as CompatibilityResult;
+  return t('connect.reason.compatibility', [
+    compatibilityReasonText(verdict),
+    compatibilityFactsText(verdict),
+  ]);
+}
+
 /** Код ошибки сервера (`EtnError.code`), если он есть в восстановленной ошибке. */
 function errorCodeOf(err: unknown): string | null {
   if (typeof err !== 'object' || err === null) return null;
@@ -65,8 +98,10 @@ function errorCodeOf(err: unknown): string | null {
   return typeof code === 'string' && code !== '' ? code : null;
 }
 
-/** Текст причины: структурированная причина, код сервера, серверный текст. */
+/** Текст причины: несовместимость версий, структурированная причина, код сервера, серверный текст. */
 function reasonText(err: unknown): string {
+  const compatibility = compatibilityFailureReason(err);
+  if (compatibility !== null) return compatibility;
   const details = connectFailureDetails(err);
   if (details !== null) return t(REASON_KEYS[details.reason]);
   switch (errorCodeOf(err)) {

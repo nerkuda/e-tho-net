@@ -388,6 +388,7 @@ describe('поколение чтения значений владельца (�
       admin: { listUsers: async () => [] },
       realtime: {
         onStatusChange: () => undefined,
+        onMaintenance: () => undefined,
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,

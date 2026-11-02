@@ -782,6 +782,51 @@
   inline-size: calc(var(--hit-area) - 3px);
 }
 
+/* ----- баннер рекомендованной версии клиента (ed068706, b57910b5) -------- */
+/* Ненавязчивая полоса над статус-баром: не перекрывает работу, не является
+ * тостом (тот автозакрывается) и не заменяет блокирующий диалог 8623b9ff.
+ * Хост пуст/скрыт, когда баннера нет. Размеры и цвета — токены шкал. */
+.update-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--font-size-s);
+}
+
+/* `.update-banner { display: flex }` (author) перебивает браузерное
+ * `[hidden] { display: none }` — без этого правила скрытый баннер оставался бы
+ * в раскладке (тот же класс ошибки, что у `.tab[hidden]` выше). */
+.update-banner[hidden] {
+  display: none;
+}
+
+.update-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.update-banner-title {
+  font-weight: var(--font-weight-semibold);
+}
+
+.update-banner-subtitle {
+  color: var(--text-dim);
+}
+
+.update-banner-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .statusbar {
   flex: 0 0 var(--statusbar-h);
   display: flex;

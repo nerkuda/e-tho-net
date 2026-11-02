@@ -26,8 +26,14 @@
  *  2. Каждый общий тип, которым типизирован ответ, должен использоваться и на
  *     сервере (`server/src/**`) — иначе «общий» тип на деле односторонний и
  *     снова может разойтись.
+ *  3. Возврат метода может ссылаться только на типы, импортированные из
+ *     `@etn/shared` (и встроенные типы TS/Node): клиентский named-тип —
+ *     такое же зеркало DTO, как inline-форма, и расходится с сервером молча
+ *     (вердикт приёмки ca26c59d: `ServerUpdateStatusDto` в клиентском модуле).
  *
- * Проверка статическая: разбор исходников без запуска сервера.
+ * Проверка статическая: разбор исходников без запуска сервера. Для правил
+ * есть self-проба на синтетическом источнике: ослабление детектора краснит
+ * тест, даже если в реальном `rest-client.ts` нарушений ещё нет.
  */
 
 import assert from 'node:assert/strict';
@@ -140,6 +146,72 @@ function publicResponseTypes(source: string): Array<{ name: string; ret: string;
   return out;
 }
 
+/**
+ * Имена, импортированные `rest-client.ts` из `@etn/shared`. Возврат публичного
+ * метода может ссылаться только на них: named-тип, объявленный в клиентском
+ * модуле, — то же зеркало DTO, что и inline-форма, и расходится с сервером
+ * молча (вердикт приёмки ca26c59d).
+ */
+function sharedImportedNames(source: string): Set<string> {
+  const names = new Set<string>();
+  const re = /import\s+(?:type\s+)?\{([\s\S]*?)\}\s+from\s+['"]@etn\/shared['"]/g;
+  for (const m of source.matchAll(re)) {
+    for (const part of m[1]!.split(',')) {
+      const clean = part.replace(/\btype\s+/g, '').trim();
+      if (clean === '') continue;
+      const [imported, alias] = clean.split(/\s+as\s+/);
+      if (imported !== undefined && imported !== '') names.add(imported.trim());
+      if (alias !== undefined && alias !== '') names.add(alias.trim());
+    }
+  }
+  return names;
+}
+
+/** Встроенные типы TS/Node, допустимые внутри именованного общего типа. */
+const BUILTIN_TYPE_NAMES = new Set([
+  'null',
+  'undefined',
+  'void',
+  'string',
+  'number',
+  'boolean',
+  'unknown',
+  'never',
+  'any',
+  'Buffer',
+  'Array',
+  'ReadonlyArray',
+  'Record',
+  'Partial',
+  'Pick',
+  'Omit',
+  'Date',
+  'Uint8Array',
+  'Promise',
+]);
+
+/**
+ * Клиентские named-типы в ответах: идентификатор типа возврата не импортирован
+ * из `@etn/shared` и не встроенный. Квалифицированный `import('@etn/shared').X`
+ * разрешён — это по-прежнему общий контракт, просто записанный инлайн.
+ */
+function clientOwnedReturnTypes(
+  methods: Array<{ name: string; ret: string; line: number }>,
+  sharedNames: Set<string>,
+): string[] {
+  const out: string[] = [];
+  for (const m of methods) {
+    if (RAW_TRANSPORT_METHODS.has(m.name)) continue;
+    const ret = m.ret.replace(/import\(\s*['"]@etn\/shared['"]\s*\)\.\w+/g, ' ');
+    for (const id of ret.matchAll(/[A-Za-z_$][\w$]*/g)) {
+      const name = id[0];
+      if (sharedNames.has(name) || BUILTIN_TYPE_NAMES.has(name)) continue;
+      out.push(`rest-client.ts:${m.line} ${m.name} — ${name} (${ret.replace(/\s+/g, ' ').trim()})`);
+    }
+  }
+  return [...new Set(out)];
+}
+
 describe('guard: формы ответов RestClient — общие контракты @etn/shared', () => {
   it('ответы типизированы именованными общими типами, не inline-формами', () => {
     const methods = publicResponseTypes(fs.readFileSync(REST_CLIENT_TS, 'utf8'));
@@ -156,6 +228,43 @@ describe('guard: формы ответов RestClient — общие контр�
         '`shared/src/types/rest.ts` и используйте на обеих сторонах ' +
         `(ошибка c83f0215):\n  ${inline.join('\n  ')}`,
     );
+  });
+
+  it('ответы типизированы только типами из @etn/shared (клиентский named-тип — красный)', () => {
+    const source = fs.readFileSync(REST_CLIENT_TS, 'utf8');
+    const problems = clientOwnedReturnTypes(
+      publicResponseTypes(source),
+      sharedImportedNames(source),
+    );
+    assert.deepEqual(
+      problems,
+      [],
+      'ответ публичного метода типизирован клиентским named-типом — это ' +
+        'зеркало DTO, а не общий контракт (стандарт 01268f2d). Объявите форму ' +
+        `в \`shared/src/types/rest.ts\` и импортируйте из \`@etn/shared\`:\n  ${problems.join('\n  ')}`,
+    );
+  });
+
+  it('сторож распознаёт клиентский named-тип в ответе (self-проба)', () => {
+    const source = [
+      "import type { SystemUpdateStatus } from '@etn/shared';",
+      'type ClientOwnedDto = { current_version: string };',
+      'class RestClient {',
+      '  public async good(): Promise<SystemUpdateStatus> { throw new Error(); }',
+      '  public async bad(): Promise<ClientOwnedDto> { throw new Error(); }',
+      '  public async qualified(): Promise<import(\'@etn/shared\').VersionResponse> { throw new Error(); }',
+      '}',
+    ].join('\n');
+    const problems = clientOwnedReturnTypes(
+      publicResponseTypes(source),
+      sharedImportedNames(source),
+    );
+    assert.equal(
+      problems.length,
+      1,
+      `ожидалось ровно одно нарушение (клиентский ClientOwnedDto):\n${problems.join('\n')}`,
+    );
+    assert.match(problems[0]!, /bad — ClientOwnedDto/);
   });
 
   it('общие типы ответов используются и на сервере', () => {

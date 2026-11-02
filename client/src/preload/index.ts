@@ -12,7 +12,12 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { DeepLinkPayload, EtnBridgeApi, IpcInvokePayload } from '../main/ipc/contract.js';
+import type {
+  CompatibilityResult,
+  DeepLinkPayload,
+  EtnBridgeApi,
+  IpcInvokePayload,
+} from '../main/ipc/contract.js';
 import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
@@ -55,6 +60,20 @@ function buildApi(): EtnBridgeApi {
       removeProfile: (profileId) => invoke('server.removeProfile', profileId),
       disconnect: () => invoke('server.disconnect'),
       getStatus: () => invoke('server.getStatus'),
+      // Вердикт проверки совместимости (сущность 89aad200, задача 12fd5b0e):
+      // чтение при старте + подписка на изменения (подключение,
+      // переподключение, 426 в середине сессии, отключение → null).
+      getCompatibility: () => invoke('server.getCompatibility'),
+      // Предзаполнение подключения от установщика (ошибка 0f8dd0f3, п.6
+      // 860def0d): «Запустить клиент» передал имя и адрес сервера флагами.
+      connectPrefill: () => invoke('server.connectPrefill'),
+      onCompatibilityChange(cb) {
+        const listener = (_event: unknown, payload: unknown): void => {
+          cb(payload as CompatibilityResult | null);
+        };
+        ipcRenderer.on('compatibility:status', listener);
+        return () => ipcRenderer.removeListener('compatibility:status', listener);
+      },
     },
     networks: {
       list: () => invoke('networks.list'),
@@ -387,6 +406,13 @@ function buildApi(): EtnBridgeApi {
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
       getStatuses: () => invoke('realtime.getStatuses'),
+      getMaintenance: () => invoke('realtime.getMaintenance'),
+      onMaintenance(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { active: boolean; retry_after?: number; target_version?: string | null });
+        ipcRenderer.on('realtime:maintenance', listener);
+        return () => ipcRenderer.removeListener('realtime:maintenance', listener);
+      },
       onStale(cb) {
         const listener = (_event: unknown, payload: unknown): void =>
           cb(payload as { networkId: string; lastSeq: number });
@@ -502,6 +528,13 @@ function buildApi(): EtnBridgeApi {
       readClipboard: () => invoke('system.readClipboard'),
       health: () => invoke('system.health'),
       version: () => invoke('system.version'),
+      // Обновление сервера (задача ca26c59d): снимок кеша, проверка канала,
+      // запуск задания и чтение прогресса. Права проверяет сервер.
+      getServerUpdate: () => invoke('system.getServerUpdate'),
+      checkServerUpdate: () => invoke('system.checkServerUpdate'),
+      applyServerUpdate: (targetVersion: string) =>
+        invoke('system.applyServerUpdate', targetVersion),
+      getServerUpdateProgress: () => invoke('system.getServerUpdateProgress'),
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
       downloadExport: (jobId: string, suggestedFilename: string, targetPath?: string) =>
@@ -524,6 +557,7 @@ function buildApi(): EtnBridgeApi {
       openPath: (filePath: string) => invoke('system.openPath', filePath),
       openAttachmentFile: (filePath: string) => invoke('system.openAttachment', filePath),
       openExternal: (url: string) => invoke('system.openExternal', url),
+      openClientUpdatePage: (url: string) => invoke('system.openClientUpdatePage', url),
       // --- file journals (task f051bf95) ---
       getClientLogState: () => invoke('system.getClientLogState'),
       setClientLogging: (enabled: boolean) => invoke('system.setClientLogging', enabled),

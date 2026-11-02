@@ -55,12 +55,26 @@ interface ActivityDbRow {
   user_id: string;
 }
 
-/** Все строки журнала сети (свежие контексты стартуют с пустым журналом). */
+/**
+ * Все строки журнала сети в порядке ВСТАВКИ (свежие контексты стартуют с
+ * пустым журналом).
+ *
+ * Почему rowid, а не `occurred_at_ms`: монотонные метки `baseMs + i` обёртка
+ * записи выдаёт только строкам ОДНОГО исхода. Строки разных исходов получают
+ * `Date.now()` каждый в своём вызове, и порядок записей, попавших в одну
+ * миллисекунду, спецификация `/activity` не определяет (сортировка ленты —
+ * `occurred_at_ms DESC`, при равенстве — `id`). Проверка «по часам» давала
+ * редкий флейк: в CI-прогоне 93 созданная строка комментария (`baseMs + 1`,
+ * второй элемент батча) оказалась позже `updated` (`baseMs`), и порядок
+ * инвертировался (ошибка 87eabd31). Журнал append-only, поэтому порядок
+ * вставки (`rowid`) — детерминированный и достаточный признак: тест
+ * проверяет, что журнал записал действия в порядке их выполнения.
+ */
 function allActivity(ctx: McpTestContext): ActivityDbRow[] {
   return openNetworkDb(ctx.dataDir, ctx.networkId)
     .prepare(
       'SELECT action, entity_type, entity_id, entity_title, layer_id, user_id ' +
-        'FROM activity_log ORDER BY occurred_at_ms ASC, id ASC',
+        'FROM activity_log ORDER BY rowid ASC',
     )
     .all() as ActivityDbRow[];
 }

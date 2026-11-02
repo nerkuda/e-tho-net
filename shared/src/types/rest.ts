@@ -56,6 +56,92 @@ export interface AuditListResult {
   total: number;
 }
 
+/**
+ * Этап задания обновления сервера — значения сущности «Задание обновления
+ * сервера» 1f39811c (задача 0a27a63b). Терминальные — `done` и `failed`;
+ * остальные означают «обновление идёт».
+ */
+export type UpdateJobStage =
+  | 'preparing'
+  | 'backing-up'
+  | 'stopping'
+  | 'installing'
+  | 'starting'
+  | 'health-check'
+  | 'done'
+  | 'rolling-back'
+  | 'failed';
+
+/**
+ * Задание обновления сервера в том виде, в каком его отдают admin-эндпоинты
+ * (`POST /system/update/apply`, `GET /system/update/progress`) — ровно поля
+ * сущности 1f39811c. Контракт общий: сервер собирает payload этим типом,
+ * клиент читает его же (стандарт 01268f2d).
+ */
+export interface UpdateJob {
+  id: string;
+  target_version: string;
+  stage: UpdateJobStage;
+  /** ISO-8601 момента создания задания. */
+  started_at: string;
+  /**
+   * Причина сбоя (`failed`). У восстановленного после перезапуска задания
+   * `done` — справочное пояснение итога (какая версия достигнута, когда);
+   * `null` — сбоя и пояснения нет (сущность 1f39811c).
+   */
+  error: string | null;
+  /** Путь к архиву БД; `null` — неизвестен (архив создаёт установщик). */
+  backup_path: string | null;
+}
+
+/** Канал проверки обновлений сервера (`ETN_UPDATE_CHANNEL`). */
+export type UpdateChannel = 'stable' | 'prerelease';
+
+/**
+ * Режим развёртывания сервера (поле `deployment` кеша проверки, сущность
+ * 6f79610d): служба Windows, обычный процесс или контейнер Docker.
+ */
+export type ServerDeployment = 'windows-service' | 'standalone' | 'docker';
+
+/**
+ * `GET /api/v1/system/update` и `POST /api/v1/system/update/check` — снимок
+ * кеша проверки обновлений (сущность 6f79610d) плюс инструкция обновления.
+ * Сервер собирает payload с `satisfies SystemUpdateStatus` (`statusPayload`),
+ * клиент читает тот же тип (стандарт 01268f2d, задача ca26c59d).
+ */
+export interface SystemUpdateStatus {
+  /** Версия работающего сервера. */
+  current_version: string;
+  /** Доступная версия строго новее текущей; `null` — обновлений нет. */
+  available_version: string | null;
+  /** Канал проверки. */
+  channel: UpdateChannel;
+  /** ISO-8601 момента последней завершённой проверки; `null` — проверок не было. */
+  checked_at: string | null;
+  /** Текст последней ошибки проверки; `null` — последняя проверка успешна. */
+  check_error: string | null;
+  /** Ссылка на установщик; `null` — нет обновления или Docker. */
+  download_url: string | null;
+  /** SHA-256 установщика; `null` — нет обновления или Docker. */
+  sha256: string | null;
+  /** Режим развёртывания сервера; определяет доступность кнопки обновления. */
+  deployment: ServerDeployment;
+  /**
+   * Инструкция обновления: для `docker` — команда обновления контейнера и
+   * пояснение о сохранности данных (задача c79afe43), иначе `null`.
+   */
+  instruction: string | null;
+}
+
+/**
+ * `GET /api/v1/system/update/progress` — последнее задание обновления или
+ * `null`, если заданий ещё не было. Общий контракт сервера и клиента
+ * (стандарт 01268f2d).
+ */
+export interface SystemUpdateProgress {
+  job: UpdateJob | null;
+}
+
 /** `POST /networks/{nid}/thoughts/{id}/focus-order` — порядок обхода фокуса. */
 export interface FocusOrderResult {
   focus_thought_id: string;

@@ -150,12 +150,13 @@ import {
   runTool,
   runWrite,
   runWriteTool,
+  serverUpdatingToolResult,
 } from '../context.js';
 import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
 import { mcpTokenContext } from './token-context.js';
 import { PUBLICATION_OPS_HANDLERS } from './publications.js';
-import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, type OpEntry } from './ops-catalog.js';
+import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, isMutatingOpCall, type OpEntry } from './ops-catalog.js';
 
 /** Разложить `params` по схеме действия (уже провалидированы контрактом). */
 export type Params = Record<string, unknown>;
@@ -411,8 +412,21 @@ const HANDLERS: Record<string, OpHandler> = {
       // Контекст профиля «вложения»: время не несётся (withTime=false), нужен
       // пользователь для под-выборки мыслей-владельцев.
       const tokenCtx = mcpTokenContext(rt, a.network_id, 'attachments');
-      const { items } = searchAttachments(ndb, query, { userId: tokenCtx.userId });
-      return items;
+      const { items, total, warnings } = searchAttachments(ndb, query, {
+        userId: tokenCtx.userId,
+      });
+      // 0.15.1 (ошибка b23a7104): ответ — конверт REST (`data` + `meta`), а не
+      // голый массив: в `meta` помещается `warnings` ядра отбора той же
+      // семантики, что у хроники и `etn.views.run` («пусто — поля нет»).
+      return {
+        data: items,
+        meta: {
+          total,
+          offset: query.offset ?? 0,
+          limit: query.limit ?? 50,
+          ...(warnings !== undefined && warnings.length > 0 ? { warnings } : {}),
+        },
+      };
     });
   },
   'attachments.usage': (rt, p) => {
@@ -1946,6 +1960,13 @@ function renderTopic(entry: OpEntry): string {
     `Вызов — только через \`etn.ops { action: "${entry.action}" }\`.`,
     `Деструктивна: ${entry.destructive ? 'да — требуется `confirm: true` на верхнем уровне `etn.ops`' : 'нет'}.`,
     `Read-only: ${entry.readOnly ? 'да' : 'нет'}.`,
+    ...((entry.mutatingParams ?? []).length === 0
+      ? []
+      : [
+          `Изменяет БД при аргументах: ${entry.mutatingParams!
+            .map((rule) => `\`${rule.param}: ${JSON.stringify(rule.equals)}\``)
+            .join(', ')} — такой вызов блокируется при обслуживании сервера (SERVER_UPDATING).`,
+        ]),
     '',
     '## params',
   ];
@@ -2043,6 +2064,20 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
             field: 'action',
             allowed: OPS_ACTION_NAMES,
           });
+        }
+        // Гейт обслуживания сервера (задача 2f599b67, требование f84db18e):
+        // read-only действия не блокируются, изменяющие отвечают
+        // SERVER_UPDATING до валидации params и любой записи. Тул-уровневая
+        // проверка диспетчера (`mcp/server.ts`) `etn.ops` пропускает — здесь
+        // роль «изменяющий» играет флаг действия в реестре, а у условно
+        // мутирующих (`mutatingParams`, ошибка df2d971f) — ещё и аргументы:
+        // `thoughts.mentions_scan` с `create_links: true` пишет связи и
+        // обязан блокироваться так же, как действие с `readOnly: false`.
+        if (isMutatingOpCall(entry, args.params ?? {})) {
+          const rejection = serverUpdatingToolResult(rt);
+          if (rejection !== null) {
+            return rejection;
+          }
         }
         if (entry.destructive && args.confirm !== true) {
           throw new EtnError(

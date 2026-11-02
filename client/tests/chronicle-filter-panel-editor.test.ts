@@ -96,6 +96,46 @@ describe('панель «Дневника» — единый редактор о
     });
   });
 
+  /**
+   * Ошибка 167860ac: вход в «Дневник» без отбора обязан дать период «текущая
+   * дата». `defaultChroniclePeriod` — чистая добавка к чтению снимка (обёртка
+   * стоит в `loadFilterSnapshot`/`retryPendingFilterSnapshot` экрана): пустой
+   * период получает `$today`/`$today` ТОКЕНОМ (раскрытие в момент применения —
+   * требование 91f8d8dd), прочие критерии не трогаются, свой период снимка не
+   * подменяется. Мутация «не добавлять период» краснит кейс.
+   */
+  it('дефолтный период входа: пустой отбор получает $today, прочие критерии целы (167860ac)', async () => {
+    const panel = await panelModule();
+    // Снимка нет: дерево пустое.
+    const empty = panel.readFilterDefinition(null);
+    assert.deepEqual(panel.chroniclePeriod(empty), { from: '', to: '' });
+    const filled = panel.defaultChroniclePeriod(empty);
+    assert.deepEqual(panel.chroniclePeriod(filled), { from: '$today', to: '$today' });
+    assert.equal(
+      leaves(filled.tree).filter((leaf) => leaf.entity.kind === 'record_time').length,
+      1,
+      'условие времени одно',
+    );
+    // Снимок без периода (легаси/импорт): тот же дефолт, остальное цело.
+    const legacy = panel.readFilterDefinition({
+      keywords: 'кофе',
+      keyword_scope: ['title'],
+      order: 'desc',
+    });
+    assert.deepEqual(panel.chroniclePeriod(legacy), { from: '', to: '' });
+    const legacyFilled = panel.defaultChroniclePeriod(legacy);
+    assert.deepEqual(panel.chroniclePeriod(legacyFilled), { from: '$today', to: '$today' });
+    assert.equal(legacyFilled.order, 'desc', 'порядок ленты сохранён');
+    assert.ok(
+      JSON.stringify(legacyFilled.tree).includes('кофе'),
+      'прочие критерии не потеряны',
+    );
+    // Свой период снимка дефолт не подменяет.
+    const own = panel.applyChroniclePeriod(legacy, '$weekStart', '$weekEnd');
+    const kept = panel.defaultChroniclePeriod(own);
+    assert.deepEqual(panel.chroniclePeriod(kept), { from: '$weekStart', to: '$weekEnd' });
+  });
+
   it('запрос уходит деревом: AST есть, плоских критериев нет, период подменяется в дереве', async () => {
     const panel = await panelModule();
     let state = panel.getFilterState();

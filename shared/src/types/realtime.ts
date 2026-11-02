@@ -818,6 +818,25 @@ export type RealtimeClientMessage =
   { type: 'hello'; client_id: string } | { type: 'resume'; last_seq: number } | { type: 'ping' };
 
 /**
+ * Кадр планового обслуживания сервера (задача 2f599b67, требование 9636b1cc).
+ *
+ * Сервер рассылает его всем активным сокетам перед остановкой на обновление и
+ * сразу после кадра закрывает соединение кодом {@link REALTIME_CLOSE_CODES}
+ * `SERVICE_RESTART` (1012) с причиной `server updating`. Клиент показывает
+ * «сервер обновляется» и переподключается не раньше `retry_after` секунд.
+ * Кадр не заменяет проверку версии: после переподключения клиент заново
+ * запрашивает `GET /version`.
+ */
+export interface RealtimeMaintenanceFrame {
+  type: 'maintenance';
+  reason: 'server-updating';
+  /** Рекомендуемая пауза до повтора, целые секунды (минимум 30). */
+  retry_after: number;
+  /** Версия, до которой обновляется сервер; `null` — неизвестна. */
+  target_version: string | null;
+}
+
+/**
  * Non-event frames the server may send to a client. `layer.switched` and
  * `layer.deleted` (task S9, docs/13-layers.md §7.1, §2.4, §12) are per-session
  * pushes — sent only to the connections of the exact `(user_id, client_id)`
@@ -834,11 +853,19 @@ export type RealtimeServerControlMessage =
   | { type: 'pong' }
   | { type: 'resume.stale'; last_seq: number }
   | { type: 'layer.switched'; layer: { id: string; title: string } }
-  | { type: 'layer.deleted'; layer: { id: string; title: string } };
+  | { type: 'layer.deleted'; layer: { id: string; title: string } }
+  | RealtimeMaintenanceFrame;
 
-/** WebSocket close codes used by the gateway (04-realtime.md §2). */
+/**
+ * WebSocket close codes used by the gateway (04-realtime.md §2).
+ *
+ * `SERVICE_RESTART` — плановое обслуживание сервера (задача 2f599b67): сокет
+ * закрывается после кадра `maintenance`, чтобы клиент отличил обновление от
+ * сетевого обрыва (1006) и штатного завершения (1001 `server shutdown`).
+ */
 export const REALTIME_CLOSE_CODES = {
   UNAUTHORIZED: 4401,
   NOT_FOUND: 4404,
+  SERVICE_RESTART: 1012,
 } as const satisfies Record<string, number>;
 export type RealtimeCloseCode = (typeof REALTIME_CLOSE_CODES)[keyof typeof REALTIME_CLOSE_CODES];

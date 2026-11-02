@@ -1,10 +1,13 @@
 {
   "name": "@etn/client",
-  "version": "0.14.1",
+  "version": "0.15.1",
   "private": true,
   "type": "module",
   "description": "ETN — The Endless Thought Network desktop client",
-  "author": "В. Зайцев <nerkuda@users.noreply.github.com>",
+  "author": {
+    "name": "В. Зайцев (aka Nerkuda)",
+    "email": "nerkuda@users.noreply.github.com"
+  },
   "homepage": "https://github.com/nerkuda/e-tho-net",
   "main": "out/main/index.js",
   "scripts": {
@@ -12,6 +15,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-vite build && electron-builder",
+    "prepackage:dir": "npm run notices",
+    "package:dir": "electron-vite build && electron-builder --dir",
     "prepackage": "npm run notices",
     "notices": "tsx scripts/generate-notices.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
@@ -50,7 +55,6 @@
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
-    "electron-updater": "^6.3.9",
     "lucide": "^1.52.0",
     "mermaid": "^11.16.1",
     "ws": "^8.21.3"

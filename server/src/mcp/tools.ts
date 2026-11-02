@@ -25,7 +25,7 @@ import type { McpRuntime } from './context.js';
 import { registerNetworksReadTools } from './tools/networks.js';
 import { registerFindDuplicatesTool, registerThoughtsReadTools } from './tools/thoughts-read.js';
 import { registerCommentsGetTool, registerCommentsWriteTools } from './tools/comments.js';
-import { registerTypesListTool } from './tools/types.js';
+import { registerTypesGetTool, registerTypesListTool } from './tools/types.js';
 import { registerViewsRunTool } from './tools/views.js';
 import { registerLayersReadTools, registerLayersWriteTools } from './tools/layers.js';
 import { registerChronicleQueryTool } from './tools/chronicle.js';
@@ -48,6 +48,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   registerThoughtsReadTools(mcp, rt);
   registerCommentsGetTool(mcp, rt);
   registerTypesListTool(mcp, rt);
+  registerTypesGetTool(mcp, rt);
   registerViewsRunTool(mcp, rt);
   registerLayersReadTools(mcp, rt);
   registerChronicleQueryTool(mcp, rt);

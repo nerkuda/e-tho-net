@@ -111,6 +111,9 @@ describe(
         systemDb: sys,
         rateLimiter,
         logger: createLogger('silent'),
+        // Версия клиента здесь не проверяется: матрица 426 — в
+        // `client-version-guard.test.ts` на реальном приложении.
+        clientVersionGuard: () => null,
       });
       return { sys, user, key: gen.key, preHandler, rateLimiter };
     }
@@ -194,6 +197,7 @@ describe(
           systemDb: sys,
           rateLimiter: thinLimiter,
           logger: createLogger('silent'),
+          clientVersionGuard: () => null,
         });
         const req = makeReq({ authHeader: 'Bearer malformed' });
         await fastPreHandler(req as never, makeReply() as never); // 1st failure: 401, count=1

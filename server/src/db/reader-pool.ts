@@ -67,13 +67,22 @@ interface Slot {
    * Сеть, к которой воркер держит кэшированное read-only соединение (контекст
    * последней задачи). Нужна для явного закрытия сети перед удалением
    * (ошибка abcd3f0b): контекст следующей задачи другой сети переоткрывает
-   * соединение, поэтому «текущая» сеть воркера всегда одна.
+   * соединение, поэтому «текущая» сеть воркера всегда одна. Задача без сети
+   * (`db.ping`) соединение не переоткрывает и привязку не меняет.
    */
   networkId: string | null;
 }
 
 /** Прорежённый тип сообщения воркера. */
 type WorkerMessage = ReaderTaskResponse;
+
+/**
+ * Сеть, к которой привязана задача. `db.ping` (проверка БД в `/health`)
+ * сети не имеет — для неё `null`, и `closeNetwork` такие задачи не трогает.
+ */
+function taskNetworkId(task: ReaderTask): string | null {
+  return task.op === 'db.ping' ? null : task.context.networkId;
+}
 
 /** Открыть `Worker` на файл воркера, подбирая загрузчик под расширение модуля. */
 function spawnWorker(): Worker {
@@ -200,7 +209,7 @@ export class ReaderPool {
     );
     for (let i = this.queue.length - 1; i >= 0; i -= 1) {
       const job = this.queue[i];
-      if (job !== undefined && job.task.context.networkId === networkId) {
+      if (job !== undefined && taskNetworkId(job.task) === networkId) {
         this.queue.splice(i, 1);
         clearTimeout(job.timer);
         job.reject(error);
@@ -249,8 +258,14 @@ export class ReaderPool {
       if (job === undefined) return;
       slot.job = job;
       // Воркер откроет/переиспользует соединение под эту сеть — запоминаем её,
-      // чтобы `closeNetwork` знал, какие воркеры держат `data.db`.
-      slot.networkId = job.task.context.networkId;
+      // чтобы `closeNetwork` знал, какие воркеры держат `data.db`. Задача без
+      // сети (`db.ping`, проверка БД в `/health`) соединение сети НЕ трогает:
+      // воркер по-прежнему держит кэшированный `data.db` прежней сети, поэтому
+      // привязку слота она не затирает (регресс: ping обнулял её, воркер
+      // становился невидим для `closeNetwork`, и удаление сети падало
+      // EBUSY — класс ошибки abcd3f0b).
+      const boundNetwork = taskNetworkId(job.task);
+      if (boundNetwork !== null) slot.networkId = boundNetwork;
       slot.worker.postMessage(job.task);
     }
   }

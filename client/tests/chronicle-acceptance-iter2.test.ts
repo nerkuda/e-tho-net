@@ -81,7 +81,13 @@ describe('приёмка №2, п.2–3: оболочка комментария
     // (`record-body.ts`) — приглашение пустой записи живёт там.
     assert.match(RECORD_BODY, /diary\.emptyRecordHint/, 'плейсхолдер пустой записи');
     assert.match(RECORD_BODY, /diary-snippet-empty/);
-    assert.match(CHRONICLE, /renderRecordView\(shell, row\)/, 'лента использует общий рендер');
+    // 0.15.1 (ошибка 50a94510): тело нормализуется в `bodyHtml` (общий тип
+    // допускает отсутствие `body_html`), в рендер уходит явный источник.
+    assert.match(
+      CHRONICLE,
+      /renderRecordView\(shell, \{ body_html: bodyHtml \}\)/,
+      'лента использует общий рендер',
+    );
   });
 });
 

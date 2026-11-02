@@ -5,9 +5,11 @@
  * Thin, fully-typed wrapper over the global `fetch` (stable on Node 20+ / Electron
  * main process). Responsibilities:
  *
- *  - attaches `Authorization: Bearer <apiKey>` and `Client-Id: <clientId>` to every
- *    request (the API-key is resolved lazily from `safeStorage` via `getApiKey()`,
- *    so it never sits in a long-lived field);
+ *  - attaches `Authorization: Bearer <apiKey>`, `Client-Id: <clientId>` and
+ *    `Client-Version: <semver>` to every request (the API-key is resolved lazily
+ *    from `safeStorage` via `getApiKey()`, so it never sits in a long-lived
+ *    field; the version is fixed in main for the process lifetime) — see
+ *    {@link RestClient.clientHeaders};
  *  - attaches `Client-Request-Id` on mutating requests when the caller provides a
  *    `clientRequestId` (idempotency, 01-architecture.md §6);
  *  - attaches `If-Match: <version>` for optimistic concurrency (03-server-api.md §1);
@@ -64,12 +66,23 @@ import {
   type Shelf,
   type ShelfInput,
   type SystemLoggingStatus,
+  type SystemUpdateProgress,
+  type SystemUpdateStatus,
   type ThoughtTypeViewsResult,
   type TypeOwnerType,
+  type UpdateJob,
+  type ClientVersionErrorDetails,
+  type ServerUpdatingErrorDetails,
 } from '@etn/shared';
 
 import { getClientLog } from '../log/client-log.js';
 import type { ConnectFailureDetails, ConnectFailureReason } from '../ipc/contract.js';
+import {
+  DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+  isMaintenanceEndedByVersion,
+  serverUpdatingError,
+  type ServerMaintenanceHandle,
+} from '../server-maintenance.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -82,6 +95,16 @@ const RETRY_MAX_DELAY_MS = 5_000;
 
 /** Response timeout applied to every request, in milliseconds (03-server-api.md §4.1). */
 const RESPONSE_TIMEOUT_MS = 30_000;
+
+/**
+ * Тайм-аут ответа `POST /system/update/apply` (задача ca26c59d): сервер
+ * отвечает синхронно — только после скачивания установщика и проверки
+ * SHA-256, до 10 минут по конфигурации runner'а. Общий тайм-аут 30 с дал бы
+ * ложный обрыв на живом обновлении. 11 минут — запас над серверным пределом;
+ * обрыв по нему диалог всё равно трактует как «обновление идёт» и читает
+ * прогресс (`GET /system/update/progress`), а не как отказ.
+ */
+export const UPDATE_APPLY_TIMEOUT_MS = 11 * 60 * 1000;
 
 /**
  * Network id embedded in an API path (`/networks/<uuid>/...`). Link-down
@@ -188,6 +211,15 @@ export interface RestClientOptions {
   /** Returns the installation Client-Id (sync; already materialised in `client_meta`). */
   getClientId: () => string;
   /**
+   * Версия этого клиента (`app.getVersion()` главного процесса; в разработке —
+   * `client/package.json`). Уходит заголовком `Client-Version` в КАЖДОМ запросе
+   * (требование 339b507f): сервер отклоняет изменяющие запросы desktop-клиента
+   * вне `client_compatibility` кодом `426 CLIENT_VERSION_UNSUPPORTED`
+   * (задача c3f33e6a, ADR 6ded6a87). Значение задаёт main; renderer подменить
+   * его не может.
+   */
+  clientVersion: string;
+  /**
    * Optional override of the global `fetch` — primarily for unit tests. Defaults to
    * the ambient `fetch` (Node 20+ / Electron main).
    */
@@ -201,6 +233,42 @@ export interface RestClientOptions {
    * `register.ts`: at least one known network and none `connected`.
    */
   isServerDown?: () => boolean;
+  /**
+   * Вызывается при отказе `426 CLIENT_VERSION_UNSUPPORTED` (задача 12fd5b0e,
+   * требование 271e3327): сервер отклонил изменяющий запрос desktop-клиента
+   * вне своего диапазона. Main по этому сигналу немедленно рвёт соединение и
+   * публикует блокирующее состояние — без ожидания перезапуска. `details` —
+   * тело отказа сервера; `null`, если ответ пришёл в неканонической форме.
+   *
+   * Колбэк синхронный и не должен бросать: он вызывается из разбора ответа.
+   */
+  onClientVersionUnsupported?: (details: ClientVersionErrorDetails | null) => void;
+  /**
+   * Состояние обслуживания сервера (задача 479e37ed, требование 9636b1cc):
+   * пока оно активно, изменяющий запрос НЕ отправляется — клиент отвечает
+   * `SERVER_UPDATING` с `retry_after` из состояния (повтор раньше `Retry-After`
+   * запрещён). Ответ `503 SERVER_UPDATING` от сервера переводит состояние в
+   * активное; успешный `GET /me` выводит из него ТОЛЬКО вместе со сменой
+   * версии процесса (публичный `GET /version`), потому что в обслуживании
+   * `/me` — обычное чтение и отвечает 200. Владелец состояния —
+   * `register.ts`; без него гейт выключен (юнит-тесты без обслуживания).
+   */
+  serverMaintenance?: ServerMaintenanceHandle;
+  /**
+   * Вызывается ПОСЛЕ действующего выхода из состояния обслуживания (успешный
+   * `GET /me` + смена версии процесса, правило
+   * {@link isMaintenanceEndedByVersion}). Владелец соединения по этому сигналу
+   * принудительно переподключает realtime (сокет всё ещё offline и ждёт
+   * `retry_after`) и повторяет проверку совместимости, как на переподключении
+   * (требование 4d3be6ca). Не вызывается, если состояние и не было активным.
+   */
+  onServerMaintenanceEnded?: () => void;
+  /**
+   * Прикладной таймаут одного HTTP-запроса, мс. По умолчанию
+   * {@link RESPONSE_TIMEOUT_MS} (30 с); переопределение — для тестов
+   * (молчащий сервер не должен держать сьют полминуты).
+   */
+  responseTimeoutMs?: number;
 }
 
 /** Extra per-call options accepted by mutating endpoints. */
@@ -211,6 +279,23 @@ export interface RequestOptions {
   expectedVersion?: number;
   /** Optional abort signal; combined with the internal response timeout. */
   signal?: AbortSignal;
+  /**
+   * Автоматические повторы при 5xx и сетевых сбоях. По умолчанию включены
+   * (до `MAX_ATTEMPTS` попыток, только для 5xx/сети). `false` — ровно одна
+   * попытка: для НЕидемпотентного вызова, где повтор создаёт второй эффект —
+   * например `POST /system/update/apply` создаёт второе задание и второе
+   * скачивание установщика (задача 0a27a63b). Ответ 5xx при этом штатно
+   * разбирается в `EtnError` с кодом сервера, а не превращается в `INTERNAL`
+   * «превышен лимит повторов».
+   */
+  retry?: boolean;
+  /**
+   * Тайм-аут ответа этого вызова, мс. Не задан — общий
+   * {@link RESPONSE_TIMEOUT_MS} (30 с). Нужен вызовам, где сервер отвечает
+   * долго по контракту: `POST /system/update/apply` ждёт скачивания установщика
+   * и проверки SHA-256 (до 10 минут, {@link UPDATE_APPLY_TIMEOUT_MS}).
+   */
+  timeoutMs?: number;
 }
 
 /** Query string value — primitives are stringified, arrays repeated. */
@@ -258,9 +343,24 @@ export class RestClient {
   private readonly baseUrl: string;
   private readonly getApiKey: () => Promise<string>;
   private readonly getClientId: () => string;
+  private readonly clientVersion: string;
   private readonly fetchImpl: typeof fetch;
   private readonly random: () => number;
   private readonly isServerDown: () => boolean;
+  private readonly onClientVersionUnsupported: (details: ClientVersionErrorDetails | null) => void;
+  private readonly serverMaintenance: ServerMaintenanceHandle | undefined;
+  private readonly onServerMaintenanceEnded: () => void;
+  private readonly responseTimeoutMs: number;
+
+  /**
+   * Последняя наблюдённая версия процесса сервера — её показал публичный
+   * `GET /version` (проверка совместимости при подключении и на
+   * переподключениях). Нужна как база эпизода обслуживания: версия, которую
+   * клиент наблюдал до обновления, — «версия на входе» (задача 479e37ed).
+   * Смена этой версии доказывает, что поднялся новый процесс; сам `/me`
+   * такого доказательства не даёт.
+   */
+  private lastKnownServerVersion: string | null = null;
 
   /**
    * In-flight plain GETs by final URL (see {@link requestEnvelope}): identical
@@ -320,9 +420,26 @@ export class RestClient {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
     this.getApiKey = opts.getApiKey;
     this.getClientId = opts.getClientId;
+    this.clientVersion = opts.clientVersion;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.random = opts.random ?? Math.random;
     this.isServerDown = opts.isServerDown ?? (() => false);
+    this.onClientVersionUnsupported = opts.onClientVersionUnsupported ?? (() => undefined);
+    this.serverMaintenance = opts.serverMaintenance;
+    this.onServerMaintenanceEnded = opts.onServerMaintenanceEnded ?? (() => undefined);
+    this.responseTimeoutMs = opts.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS;
+  }
+
+  /**
+   * Текущее состояние обслуживания сервера, если оно активно (задача 479e37ed).
+   * `null` — сервер работает штатно. Владелец — `register.ts`; здесь только
+   * чтение для гейта и показа.
+   */
+  public getServerMaintenance(): ServerUpdatingErrorDetails | null {
+    const info = this.serverMaintenance?.get() ?? null;
+    return info === null
+      ? null
+      : { retry_after: info.retry_after, target_version: info.target_version };
   }
 
   /**
@@ -540,9 +657,33 @@ export class RestClient {
     // are not writes and keep the epoch stable.
     const dataChanging = mutating && opts.idempotentPost !== true;
     if (dataChanging) this.invalidateInFlightReads();
+    // Автоповтор выключается на один вызов (`RequestOptions.retry: false`):
+    // неидемпотентная операция (например apply обновления сервера) при повторе
+    // создаёт второй эффект. При выключенном повторе 5xx НЕ перехватывается
+    // ветвью ретрая, а штатно разбирается в `parseResponse` — клиент получает
+    // код сервера (`UPDATE_INSTALLER_FAILED`), а не `INTERNAL` «превышен лимит
+    // повторов».
+    const retrying = ro.retry !== false;
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Maintenance gate (задача 479e37ed, требование 9636b1cc): пока сервер
+      // обновляется, изменяющий запрос не уходит вовсе — ни первой попыткой,
+      // ни повтором. Ответ — тот же канонический `SERVER_UPDATING` с
+      // `retry_after`, что вернул бы сервер, поэтому UI показывает причину
+      // обслуживания, а не «сервер недоступен». Чтения проходят: их серверный
+      // гейт не блокирует.
+      if (dataChanging) {
+        const maintenance = this.getServerMaintenance();
+        if (maintenance !== null) {
+          getClientLog()?.info('rest', 'request blocked: server maintenance', {
+            method,
+            path,
+            retry_after: maintenance.retry_after,
+          });
+          throw serverUpdatingError(maintenance);
+        }
+      }
       // Link gate (de34b35b): a mutating request for an unreachable network is
       // never sent — not even as a retry after the link dropped mid-flight.
       // Requests without a network context (`me.*`, `networks.create`, …) are
@@ -560,7 +701,7 @@ export class RestClient {
       // rotation mid-session is picked up without rebuilding the client.
       const headers: Record<string, string> = {
         Authorization: `Bearer ${await this.getApiKey()}`,
-        'Client-Id': this.getClientId(),
+        ...this.clientHeaders(),
         Accept: 'application/json',
       };
       if (opts.body !== undefined) {
@@ -579,7 +720,9 @@ export class RestClient {
       if (networkId !== null) this.trackController(networkId, controller);
       const timeout = setTimeout(
         () => controller.abort(new Error('ETN response timeout')),
-        RESPONSE_TIMEOUT_MS,
+        // Долгий по контракту вызов (apply обновления сервера) задаёт свой
+        // тайм-аут; остальные живут общим 30 с.
+        ro.timeoutMs ?? this.responseTimeoutMs,
       );
       if (ro.signal !== undefined) {
         // Forward caller-initiated aborts.
@@ -634,9 +777,11 @@ export class RestClient {
           );
         }
         // Network-level failure (DNS, connection refused, timeout abort, etc.).
-        // Retryable unless the caller aborted the request themselves.
+        // Retryable unless the caller aborted the request themselves or the
+        // call opted out of automatic repeats (`retry: false`): a repeat of a
+        // non-idempotent call could duplicate its effect.
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_ATTEMPTS) {
+        if (retrying && attempt < MAX_ATTEMPTS) {
           await this.backoff(method, path, attempt, classifyRetryReason(lastError));
           continue;
         }
@@ -660,8 +805,39 @@ export class RestClient {
       clearTimeout(timeout);
       if (networkId !== null) this.untrackController(networkId, controller);
 
-      // Retry transient server errors (5xx) once more.
-      if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {
+      // Retry transient server errors (5xx) once more — unless this call opted
+      // out of automatic repeats. A 5xx with `retry: false` falls through to
+      // `parseResponse`, so the caller sees the server's own error code.
+      //
+      // Обслуживание сервера (задача 479e37ed) распознаётся по КОНВЕРТУ с
+      // кодом `SERVER_UPDATING`, а не по заголовку `Retry-After` (замечание
+      // приёмки): у обслуживания собственный срок повтора, и повтор внутри
+      // вызова шёл бы раньше него. Голый `503` — например, от прокси или
+      // балансировщика — остаётся обычной транзиентной ошибкой и повторяется
+      // (3 попытки), даже если несёт `Retry-After`: заголовок прокси ставит по
+      // своим правилам, признак обслуживания — только код в конверте.
+      //
+      // Тело 503 читается ЗДЕСЬ (и передаётся в `parseResponse`), потому что
+      // признак живёт в теле, а не в статусе/заголовках.
+      let bodyText: string | undefined;
+      let maintenanceRejection = false;
+      if (res.status === 503) {
+        try {
+          bodyText = await readResponseBody(() => res.text(), ro.signal);
+          maintenanceRejection = isServerUpdatingBody(bodyText);
+        } catch {
+          // Тело не прочиталось (обрыв уже начатого ответа): обслуживанием это
+          // быть не может — решает обычная ветка повтора/разбора.
+          bodyText = undefined;
+        }
+      }
+      if (
+        retrying &&
+        res.status >= 500 &&
+        res.status < 600 &&
+        !maintenanceRejection &&
+        attempt < MAX_ATTEMPTS
+      ) {
         lastError = new Error(`HTTP ${res.status}`);
         await this.backoff(method, path, attempt, `http_${res.status}`);
         continue;
@@ -674,11 +850,15 @@ export class RestClient {
         duration_ms: Date.now() - attemptStarted,
         status: res.status,
       });
-      const envelope = await this.parseResponse<T>(res, ro.signal);
+      const envelope = await this.parseResponse<T>(res, ro.signal, bodyText);
       // Completion boundary (ошибка da7bbb53): a GET started while this write
       // was in flight could have been computed by the server BEFORE its commit
       // and delivered after it, so it must not be reused by later reads either.
       if (dataChanging) this.invalidateInFlightReads();
+      // Конец обслуживания (задача 479e37ed): успешный `GET /me` сам по себе
+      // НЕ доказательство — в обслуживании это обычное чтение с ответом 200.
+      // Выход решает смена версии процесса, её показывает публичный `/version`.
+      if (method === 'GET' && path === '/me') await this.confirmServerMaintenanceEnded();
       return envelope;
     }
 
@@ -706,12 +886,16 @@ export class RestClient {
    * Тело читается через {@link readResponseBody}: обрыв уже начатого ответа
    * (заголовки получены, сокет закрыт) нормализуется в `EtnError` с причиной
    * (ошибка 69790006), а не уходит сырым `TypeError: terminated`.
+   *
+   * `bodyText` — уже прочитанное тело (вызывающий прочитал его, чтобы отличить
+   * `503 SERVER_UPDATING` от голого 503): второй раз поток не читается.
    */
   private async parseResponse<T>(
     res: Response,
     callerSignal?: AbortSignal,
+    bodyText?: string,
   ): Promise<ResponseEnvelope<T>> {
-    const text = await readResponseBody(() => res.text(), callerSignal);
+    const text = bodyText ?? (await readResponseBody(() => res.text(), callerSignal));
     const empty = text.length === 0;
     let payload: unknown = undefined;
     if (!empty) {
@@ -723,7 +907,7 @@ export class RestClient {
       }
     }
 
-    if (res.status === 204 || empty) {
+    if (res.status === 204) {
       // 204 No Content (e.g. DELETE) — no body to return.
       return { data: undefined as T, meta: undefined };
     }
@@ -732,13 +916,25 @@ export class RestClient {
       const body = payload as Partial<{ error: EtnErrorBody }> | undefined;
       const err = body?.error;
       if (err) {
+        this.notifyVersionRejection(err.code, err.details);
+        this.notifyServerUpdating(err.code, err.details);
         throw new EtnError(err.code, err.message, err.details, err.request_id);
       }
-      // Server returned an error in a non-canonical shape.
+      // Server returned an error in a non-canonical shape. Пустое тело ошибки
+      // (голый 503 прокси/балансировщика) — всё равно ОТКАЗ: успехом пустой
+      // ответ на 4xx/5xx не бывает, иначе вызывающий получил бы `undefined`
+      // как данные.
+      const code = mapHttpStatus(res.status);
+      this.notifyVersionRejection(code, undefined);
       throw new EtnError(
-        mapHttpStatus(res.status),
+        code,
         `HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
       );
+    }
+
+    if (empty) {
+      // 2xx без тела — данные отсутствуют (декремент счётчика, DELETE 200…).
+      return { data: undefined as T, meta: undefined };
     }
 
     // Success envelope: either `{ data, meta }` (single) or `{ data: [...], meta }`
@@ -750,6 +946,113 @@ export class RestClient {
 
     // Unexpected success shape (e.g. plain primitive) — return as-is.
     return { data: payload as T, meta: undefined };
+  }
+
+  /**
+   * Сообщает main о `426 CLIENT_VERSION_UNSUPPORTED` (задача 12fd5b0e): сервер
+   * отклонил изменяющий запрос клиента вне диапазона. Признак — канонический
+   * код в конверте ошибки либо HTTP 426 в неканоническом ответе; второго
+   * диапазона клиент не изобретает.
+   */
+  private notifyVersionRejection(code: string, details: unknown): void {
+    if (code !== 'CLIENT_VERSION_UNSUPPORTED') return;
+    this.onClientVersionUnsupported(versionDetailsOrNull(details));
+  }
+
+  /**
+   * Сообщает владельцу состояния об отказе `503 SERVER_UPDATING` (задача
+   * 479e37ed): сервер ушёл в обслуживание до запуска установщика. Дальнейшие
+   * изменяющие запросы блокируются до смены версии процесса (успешный
+   * `/me` + другой `/version`) или стабильного окна сокета
+   * (`maintenance-stable`) — ровно поэтому мало «просто показать ошибку»:
+   * следующий клик пользователя не должен снова уходить на сервер раньше
+   * `Retry-After`. Версия на входе — последняя наблюдённая `/version`: её
+   * смена и будет доказательством, что обновлённый процесс поднялся.
+   */
+  private notifyServerUpdating(code: string, details: unknown): void {
+    if (code !== 'SERVER_UPDATING' || this.serverMaintenance === undefined) return;
+    this.serverMaintenance.enter(
+      serverUpdatingDetailsOrNull(details),
+      'rest',
+      this.lastKnownServerVersion,
+    );
+  }
+
+  /**
+   * Конец обслуживания по успешному `GET /me` (задача 479e37ed, вердикт
+   * повторной приёмки). `/me` — чтение: сервер в обслуживании отвечает на него
+   * 200, поэтому успех сам по себе НЕ выход (раньше он гасил состояние, и
+   * причина обслуживания подменялась «нет соединения» до `retry_after`).
+   * Выход доказывает только смена версии процесса:
+   *
+   *  1. состояние не активно — выходить не из чего, запросов нет;
+   *  2. ОДИН публичный `GET /version` (`requestRaw`: одна попытка, гейт
+   *     обслуживания его не трогает, сервер отвечает 200);
+   *  3. решение — общее правило {@link isMaintenanceEndedByVersion}
+   *     (`target_version` из состояния либо смена версии от базы эпизода);
+   *  4. действующий выход — `leave()` и сигнал владельцу соединения
+   *     (принудительный реконнект realtime + проверка совместимости).
+   *
+   * Ошибка/пустой ответ `/version` оставляет состояние активным: без
+   * доказательства изменяющая запись не уходит, а следующий `/me`, стабильный
+   * сокет или `retry_after` дадут новую попытку.
+   */
+  private async confirmServerMaintenanceEnded(): Promise<void> {
+    const handle = this.serverMaintenance;
+    if (handle === undefined) return;
+    const info = handle.get();
+    if (info === null) return;
+    const observed = await this.observeServerVersion();
+    if (!isMaintenanceEndedByVersion(info, observed)) {
+      getClientLog()?.info('rest', 'server maintenance exit deferred: server version unchanged', {
+        observed: observed ?? '',
+        entry: info.entry_version ?? '',
+        target: info.target_version ?? '',
+      });
+      return;
+    }
+    if (handle.leave() !== true) return;
+    getClientLog()?.info('rest', 'server maintenance ended: server version changed', {
+      observed: observed ?? '',
+      entry: info.entry_version ?? '',
+      target: info.target_version ?? '',
+    });
+    try {
+      this.onServerMaintenanceEnded();
+    } catch {
+      // Колбэк владельца не должен ломать ответ успешного `/me`.
+    }
+  }
+
+  /**
+   * Один публичный `GET /version` для проверки выхода из обслуживания.
+   * Ошибка (таймаут, 5xx, обрыв) — `null`: доказательства нет, состояние
+   * остаётся активным.
+   */
+  private async observeServerVersion(): Promise<string | null> {
+    try {
+      const response = await this.getVersion();
+      return typeof response?.version === 'string' ? response.version : null;
+    } catch (err) {
+      getClientLog()?.info('rest', 'server maintenance version check failed', {
+        error: errTextShort(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Заголовки версии клиента — единственный источник пары `Client-Id` +
+   * `Client-Version` для ВСЕХ запросов этого класса (требование 339b507f):
+   * обычных, вложений, raw-скачивания, печати и публичных `/health`/`/version`.
+   *
+   * Каждое место, где строится объект заголовков, обязано подмешать их через
+   * спред; пропуск в одном месте — `426 CLIENT_VERSION_UNSUPPORTED` на
+   * изменяющем запросе. Дубль литерала заголовка мимо этого метода краснит
+   * сторож `client/tests/guard-rest-client-version-header.test.ts`.
+   */
+  private clientHeaders(): Record<string, string> {
+    return { 'Client-Id': this.getClientId(), 'Client-Version': this.clientVersion };
   }
 
   /** Builds the final URL with query string. Array values are repeated. */
@@ -2450,7 +2753,7 @@ export class RestClient {
       `/attachments/raw?path=${encodeURIComponent(filePath)}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
-      'Client-Id': this.getClientId(),
+      ...this.clientHeaders(),
       Accept: '*/*',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -3440,6 +3743,7 @@ export class RestClient {
     const url = `${this.baseUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/download`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
+      ...this.clientHeaders(),
       Accept: '*/*',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -3462,13 +3766,88 @@ export class RestClient {
   }
 
   /** `GET /api/v1/version` (03-server-api.md §16) — public, без авторизации;
-   *  используется для проверки совместимости и в диалоге «О программе». */
+   *  используется для проверки совместимости и в диалоге «О программе».
+   *
+   *  Запоминает версию процесса (`lastKnownServerVersion`): это база эпизода
+   *  обслуживания — версия, которую клиент наблюдал до обновления. Смена этой
+   *  версии после `/me` доказывает, что поднялся новый процесс (задача
+   *  479e37ed, вердикт повторной приёмки). */
   public async getVersion(): Promise<import('@etn/shared').VersionResponse> {
-    return this.requestRaw('GET', '/version');
+    const response = await this.requestRaw<import('@etn/shared').VersionResponse>('GET', '/version');
+    const version = response?.version;
+    this.lastKnownServerVersion = typeof version === 'string' && version.trim() !== '' ? version : null;
+    return response;
   }
 
   // §16a Server file journal (task f051bf95, 03-server-api.md §16):
   // admin-only management endpoints of the server diagnostic journal.
+
+  /**
+   * `GET /system/update` — кеш проверки канала, режим развёртывания и
+   * инструкция (задача 0a27a63b, операция GET). Администратор; читается
+   * диалогом обновления при открытии (задача ca26c59d).
+   */
+  public async getServerUpdate(): Promise<SystemUpdateStatus> {
+    return this.request('GET', '/system/update');
+  }
+
+  /**
+   * `POST /system/update/check` — принудительная проверка канала (операция
+   * POST /check). Ответ — тот же снимок кеша, что у {@link getServerUpdate}.
+   *
+   * `429 RATE_LIMITED` означает «проверка уже идёт» и НЕ является ошибкой:
+   * диалог обновления показывает её как состояние проверки, а не как сбой
+   * (задача ca26c59d).
+   */
+  public async checkServerUpdate(): Promise<SystemUpdateStatus> {
+    return this.request('POST', '/system/update/check');
+  }
+
+  /**
+   * `GET /system/update/progress` — последнее задание обновления (операция
+   * progress): `{ job: UpdateJob | null }`. Единственный источник фактического
+   * прогресса после обрыва/тайм-аута apply.
+   */
+  public async getServerUpdateProgress(): Promise<SystemUpdateProgress> {
+    return this.request('GET', '/system/update/progress');
+  }
+
+  /**
+   * `POST /system/update/apply` — создать задание обновления сервера (задача
+   * 0a27a63b, операция 8a2972c2). Администратор; `201` — задание создано и
+   * установщик запущен.
+   *
+   * Единственный вызов клиента с `retry: false` (`RequestOptions.retry`):
+   * операция неидемпотентна, а сервер отвечает синхронно — только после
+   * скачивания установщика и проверки SHA-256 (до 10 минут), при клиентском
+   * тайм-ауте 30 с. Любой повтор создал бы второе задание и второе скачивание.
+   * Поэтому же вызову поднят тайм-аут ответа ({@link UPDATE_APPLY_TIMEOUT_MS}):
+   * иначе живое обновление обрывалось бы на 30-й секунде.
+   *
+   * **Трактовка сбоя (обязанность диалога `ca26c59d`).** Обрыв соединения,
+   * тайм-аут, `409` (задание уже идёт) и `503` (сервер в обслуживании) значат
+   * «обновление идёт», а не «обновить не удалось»: фактическое состояние
+   * читается из `GET /system/update/progress`. `502 UPDATE_INSTALLER_FAILED`
+   * означает отказ до запуска установщика (`details.retryable: false`,
+   * `details.stage`, `details.job`) — сервер продолжает работать на текущей
+   * версии, повторять вызов нельзя.
+   */
+  public async systemUpdateApply(
+    targetVersion: string,
+    opts?: RequestOptions,
+  ): Promise<UpdateJob> {
+    return this.request('POST', '/system/update/apply', {
+      body: { target_version: targetVersion },
+      requestOptions: {
+        ...opts,
+        // `retry: false` перекрывает значение из opts осознанно: автоповтор
+        // этого вызова запрещён на уровне клиента, а не на уровне вызывающего.
+        // Тайм-аут ответа — под серверный предел скачивания и проверки хеша.
+        retry: false,
+        timeoutMs: opts?.timeoutMs ?? UPDATE_APPLY_TIMEOUT_MS,
+      },
+    });
+  }
 
   /** `GET /system/logging` — server journal flag + retention + file list. */
   public async getServerLogging(): Promise<SystemLoggingStatus> {
@@ -3493,7 +3872,7 @@ export class RestClient {
     const url = `${this.baseUrl}/api/v1/system/logs/${encodeURIComponent(filename)}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
-      'Client-Id': this.getClientId(),
+      ...this.clientHeaders(),
       Accept: '*/*',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -3967,7 +4346,7 @@ export class RestClient {
       `/publications/${encodeURIComponent(id)}/print`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
-      'Client-Id': this.getClientId(),
+      ...this.clientHeaders(),
       Accept: 'text/html',
     };
     const res = await this.fetchImpl(url, { method: 'GET', headers });
@@ -4111,14 +4490,36 @@ export class RestClient {
    * Variant of {@link request} without the auth header — health/version are
    * public (§16). The path still goes under `/api/v1` like every other
    * endpoint (the server serves no root-level routes).
+   *
+   * Таймаут и нормализация отказа — как у {@link performRequest} (задача
+   * 12fd5b0e): `/version` стоит на критическом пути подключения, и молчащий
+   * сервер не должен держать экран подключения до таймаута undici (~5 мин).
+   * Одна попытка (проверка версии не ждёт 3 × 30 с), причина отказа едет в
+   * `details { kind: 'connect-failed', reason }` (ошибка 390e9746), чтобы
+   * основной процесс отличил timeout/refused от «несовместимой версии».
    */
   private async requestRaw<T>(method: string, path: string): Promise<T> {
     const url = `${this.baseUrl}/api/v1${path.startsWith('/') ? path : `/${path}`}`;
-    const res = await this.fetchImpl(url, {
-      method,
-      headers: { Accept: 'application/json', 'Client-Id': this.getClientId() },
-    });
-    return (await this.parseResponse<T>(res)).data;
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error('ETN response timeout')),
+      this.responseTimeoutMs,
+    );
+    try {
+      const res = await this.fetchImpl(url, {
+        method,
+        headers: { Accept: 'application/json', ...this.clientHeaders() },
+        signal: controller.signal,
+      });
+      return (await this.parseResponse<T>(res)).data;
+    } catch (err) {
+      // Ошибка конверта/статуса уже типизирована `parseResponse`; всё прочее —
+      // транспортный отказ (включая собственный таймаут и обрыв тела).
+      if (err instanceof EtnError) throw err;
+      throw transportFailure(err);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -4133,6 +4534,8 @@ function mapHttpStatus(status: number): EtnErrorCode {
   if (status === 404) return 'NOT_FOUND';
   if (status === 409) return 'DUPLICATE';
   if (status === 422) return 'VALIDATION_ERROR';
+  // Изменяющий запрос desktop-клиента отклонён по версии (задача c3f33e6a).
+  if (status === 426) return 'CLIENT_VERSION_UNSUPPORTED';
   if (status === 429) return 'RATE_LIMITED';
   return 'INTERNAL';
 }
@@ -4140,6 +4543,60 @@ function mapHttpStatus(status: number): EtnErrorCode {
 /** Compact one-line error rendering for journal fields. */
 function errTextShort(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * `details` отказа 426 → типизированный вид; всё, что не похоже на
+ * {@link ClientVersionErrorDetails} (или отсутствует), — `null`: main построит
+ * `client-outdated` без версий сервера, честно оставив поля пустыми.
+ */
+function versionDetailsOrNull(details: unknown): ClientVersionErrorDetails | null {
+  if (typeof details !== 'object' || details === null) return null;
+  const d = details as Record<string, unknown>;
+  if (typeof d['reason'] !== 'string') return null;
+  return details as ClientVersionErrorDetails;
+}
+
+/**
+ * `details` отказа `503 SERVER_UPDATING` → типизированный вид. Недостающая или
+ * битая пауза заменяется умолчанием серверной стороны: клиенту нужен срок
+ * повтора для показа и паузы, а не точность чужого поля.
+ */
+function serverUpdatingDetailsOrNull(
+  details: unknown,
+): Pick<ServerUpdatingErrorDetails, 'retry_after' | 'target_version'> {
+  if (typeof details !== 'object' || details === null) {
+    return {
+      retry_after: DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+      target_version: null,
+    };
+  }
+  const d = details as Record<string, unknown>;
+  const retry = d['retry_after'];
+  const target = d['target_version'];
+  return {
+    retry_after:
+      typeof retry === 'number' && Number.isFinite(retry) && retry > 0
+        ? Math.ceil(retry)
+        : DEFAULT_SERVER_MAINTENANCE_RETRY_AFTER_SECONDS,
+    target_version: typeof target === 'string' && target.trim() !== '' ? target : null,
+  };
+}
+
+/**
+ * `true` — тело ответа `503` является каноническим конвертом обслуживания
+ * (`{ error: { code: 'SERVER_UPDATING', … } }`, задача 479e37ed). Признак
+ * обслуживания — КОД в конверте, а не заголовок `Retry-After`: голый 503
+ * прокси с этим заголовком остаётся транзиентной ошибкой и повторяется.
+ */
+function isServerUpdatingBody(text: string): boolean {
+  try {
+    const payload = JSON.parse(text) as { error?: { code?: unknown } } | null;
+    return payload?.error?.code === 'SERVER_UPDATING';
+  } catch {
+    // Не JSON (HTML прокси, пустое тело) — обслуживанием не является.
+    return false;
+  }
 }
 
 /** Retry reason classification for the journal (timeout / network / 5xx). */
@@ -4236,22 +4693,23 @@ const CONNECT_FAILURE_REASON_TEXT: Readonly<Record<ConnectFailureReason, string>
 };
 
 /**
- * Обрыв тела УЖЕ начатого ответа (ошибка 69790006): заголовки получены,
- * `fetch` вернул `Response`, но чтение тела упало — `TypeError: terminated`
- * (cause `UND_ERR_SOCKET` «other side closed»,
- * `UND_ERR_RES_CONTENT_LENGTH_MISMATCH` и т.п.). Раньше ошибка уходила наружу
- * сырой, и GUI показывал «Не удалось подключиться к серверу <адрес>:
- * terminated».
+ * Транспортный отказ без конверта сервера: обрыв уже начатого ответа (ошибка
+ * 69790006: заголовки получены, чтение тела упало — `TypeError: terminated`,
+ * cause `UND_ERR_SOCKET` «other side closed», `UND_ERR_RES_CONTENT_LENGTH_MISMATCH`
+ * и т.п.) либо отказ публичного запроса `requestRaw` до получения ответа
+ * (таймаут, отказ соединения — задача 12fd5b0e). Раньше такие ошибки уходили
+ * наружу сырыми, и GUI показывал «Не удалось подключиться к серверу <адрес>:
+ * terminated/fetch failed».
  *
  * Нормализация — той же схемой, что у отказа подключения (390e9746):
  * {@link classifyConnectFailure} проходит cause-цепочку, причина едет в
  * `details { kind: 'connect-failed', reason }`, текст — человеческий.
  * `kind` остаётся `connect-failed`: для потребителей это транспортный отказ с
- * причиной, и все три пути подключения рендерят её из `details`, не разбирая
+ * причиной, и все пути подключения рендерят её из `details`, не разбирая
  * текст исключения; новый `kind` потребовал бы синхронных правок всех
  * потребителей без выигрыша в смысле.
  */
-function responseBodyFailure(err: unknown): EtnError {
+function transportFailure(err: unknown): EtnError {
   const reason = classifyConnectFailure(err);
   return new EtnError(
     'INTERNAL',
@@ -4273,6 +4731,6 @@ async function readResponseBody<T>(
     return await read();
   } catch (err) {
     if (callerSignal?.aborted === true) throw callerSignal.reason ?? err;
-    throw responseBodyFailure(err);
+    throw transportFailure(err);
   }
 }

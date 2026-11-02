@@ -9,7 +9,13 @@
  * requested date range.
  */
 
-import type { ChronicleLinkScope, SavedFilterView, SortOrder, StructureKeywordScope } from '../enums.js';
+import type {
+  ChronicleBodyFormat,
+  ChronicleLinkScope,
+  SavedFilterView,
+  SortOrder,
+  StructureKeywordScope,
+} from '../enums.js';
 import type { FilterAst, FilterDiagnostic } from './filter-ast.js';
 import type { StructureAuthorOp, StructureFilter } from './structure.js';
 import type { ThoughtRef } from './thought.js';
@@ -104,12 +110,20 @@ export interface ChronicleFilter {
 /** Filter + paging of `POST /chronicle/query`. */
 export interface ChronicleQueryRequest extends ChronicleFilter {
   /**
-   * Sort direction of the whole sort key (0.10.1): класс записи → `valid_from`
-   * → `valid_to` → `created_at` → `id`.
+   * Sort direction of the whole sort key (0.10.1): `valid_from` → `valid_to`
+   * → `created_at` → `id`.
    */
   order: SortOrder;
   limit: number;
   offset: number;
+  /**
+   * Формат тела записи в строке ответа (0.15.1, ошибки 50a94510, 35e1319a):
+   * `md` — только `body_md`, `html` — только `body_html`, `both` — оба поля.
+   * Проекция выполняется в домене — единый путь для REST и MCP. Отсутствие —
+   * `html` (дефолт REST = прежний состав ответа: клиент читает `body_html`);
+   * MCP-инструмент подставляет свой дефолт `md` до разбора тела.
+   */
+  body?: ChronicleBodyFormat;
 }
 
 /** A link attachment of a chronicle row, resolved for display. */
@@ -150,11 +164,20 @@ export interface ChronicleRow {
   /** Plain-text preview of `body_md` (~160 chars, `<mark>` highlights). */
   snippet: string;
   /**
+   * Тело записи в markdown — есть, когда запрошен формат тела `md` или `both`
+   * (0.15.1, ошибка 50a94510). MCP `etn.chronicle.query` по умолчанию отдаёт
+   * только это поле (дефолт `body: 'md'`); REST по умолчанию отдаёт только
+   * `body_html` (дефолт `'html'`, ошибка 35e1319a), `body_md` — по явному
+   * `md`/`both`.
+   */
+  body_md?: string;
+  /**
    * Полный HTML тела записи (0.10.1, приёмка №3, задача 9bef6a27; колонка
    * `comments.body_html`). Лента показывает запись ЦЕЛИКОМ в этом виде;
-   * `snippet` остаётся в ответе ради совместимости MCP-инструмента.
+   * `snippet` остаётся в ответе ради совместимости MCP-инструмента. Поля нет,
+   * когда запрошен формат тела `md` (0.15.1, ошибка 50a94510).
    */
-  body_html: string;
+  body_html?: string;
   /** All attachments of the comment (m2m), resolved. */
   targets: ChronicleTarget[];
 }

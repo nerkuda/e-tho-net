@@ -23,6 +23,7 @@ import {
   createSecondAdminUser,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 interface LockRow {
@@ -42,7 +43,7 @@ async function apiAcquire(
   clientId?: string,
 ): Promise<{ statusCode: number; data: LockRow | null; errorCode?: string }> {
   const headers: Record<string, string> = { authorization: `Bearer ${key}` };
-  if (clientId !== undefined) headers['client-id'] = clientId;
+  if (clientId !== undefined) Object.assign(headers, clientHeaders(clientId));
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/locks`,

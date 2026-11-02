@@ -1,0 +1,104 @@
+{
+  "name": "fb9d6058-probe-silent",
+  "description": "Ошибка fb9d6058, п.4 решений: action-проба живости на медленном чтении не должна давать ни одного тоста. Гейт проверяет только тишину сообщений: досыл черновиков подтверждённой пробой — штатное поведение с 351068ed п.1 и проверяется отдельным сценарием досыла. Задержка ОТВЕТА на thoughts/<id> 5 с: чтение hangs > 3 с → проба шлёт suspect → pong возвращает connected (журнал статусов в окне видит оба), ответ приходит на 5-й секунде. Ожидания: стек тостов пуст (ни «Соединение восстановлено», ни «Черновик не отправлен»), статус-бар снова «Сервер: ОК». Не-вакуумность: журнал статусов обязан содержать suspect→connected, а стенд печатает срабатывание правила задержки.",
+  "timeout": 90000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "status-connected",
+      "timeout": 20000,
+      "waitFor": "(async () => { const s = await window.etn.realtime.getStatuses(); return s.some((x) => x.networkId === '{{networkId}}' && x.status === 'connected'); })()"
+    },
+    {
+      "name": "install-status-log",
+      "eval": "window.__rtLog = []; window.etn.realtime.onStatusChange((p) => window.__rtLog.push(p.status)); true"
+    },
+    {
+      "name": "start-delayed-read",
+      "eval": "window.__probeDone = false; window.etn.thoughts.get('{{networkId}}', '{{thoughtId}}').then(() => { window.__probeDone = true; }, () => { window.__probeDone = true; }); true"
+    },
+    {
+      "name": "probe-sent",
+      "timeout": 15000,
+      "waitFor": "window.__rtLog.includes('suspect')"
+    },
+    {
+      "name": "probe-confirmed",
+      "timeout": 15000,
+      "waitFor": "window.__rtLog.includes('connected')"
+    },
+    {
+      "name": "delayed-read-done",
+      "timeout": 20000,
+      "waitFor": "window.__probeDone === true"
+    },
+    {
+      "name": "status-log",
+      "probe": { "name": "statusLog", "expression": "window.__rtLog.join(',')" }
+    },
+    {
+      "name": "probe-seen",
+      "probe": {
+        "name": "probeSeen",
+        "expression": "window.__rtLog.includes('suspect') && window.__rtLog.includes('connected')"
+      },
+      "expect": true
+    },
+    {
+      "name": "probe-order",
+      "probe": {
+        "name": "suspectThenConnected",
+        "expression": "window.__rtLog.indexOf('suspect') !== -1 && window.__rtLog.lastIndexOf('connected') > window.__rtLog.indexOf('suspect')"
+      },
+      "expect": true
+    },
+    {
+      "name": "toast-count",
+      "probe": {
+        "name": "toastCount",
+        "expression": "document.querySelector('.notice-stack')?.children.length ?? 0"
+      },
+      "expect": 0
+    },
+    {
+      "name": "toast-texts",
+      "probe": {
+        "name": "toastTexts",
+        "expression": "Array.from(document.querySelector('.notice-stack')?.children ?? []).map((el) => el.textContent ?? '').join(' | ')"
+      }
+    },
+    {
+      "name": "status-bar-green",
+      "probe": {
+        "name": "statusText",
+        "expression": "document.querySelector('.sb-status-text')?.textContent ?? ''"
+      },
+      "expect": "Сервер: ОК"
+    },
+    {
+      "name": "connected-now",
+      "probe": {
+        "name": "connectedNow",
+        "expression": "(async () => { const s = await window.etn.realtime.getStatuses(); return s.find((x) => x.networkId === '{{networkId}}')?.status ?? 'none'; })()"
+      },
+      "expect": "connected"
+    }
+  ]
+}

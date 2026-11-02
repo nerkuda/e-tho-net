@@ -28,6 +28,7 @@ import { store } from '../../state.js';
 import type { NetworkListItem } from '@etn/shared';
 import { upsertTab } from './tab-state.js';
 import { refreshTabAccessibility } from './tab-accessibility.js';
+import { beginWorkspaceTransition, endWorkspaceTransition } from '../workspace-transition.js';
 import { uiButton } from '../../lib/ui/button.js';
 import { fieldInput } from '../../lib/ui/field.js';
 import { badge } from '../../lib/ui/badge.js';
@@ -114,6 +115,11 @@ export function mountPicker(host: HTMLElement): () => void {
    */
   async function pickNetwork(networkId: string): Promise<void> {
     errorLine.hidden = true;
+    // Окно смены поколения workspace (ошибка f1febdfc): `etn.tabs.open` уже
+    // вернул вкладку, но рабочее пространство ещё прежнее — клик по закладке
+    // вида в нём не должен потеряться. Окно закрывается после `openNetwork`;
+    // вложенное окно самого `openNetwork` учитывается счётчиком.
+    const transition = beginWorkspaceTransition();
     try {
       const tab = await etn.tabs.open(networkId);
       upsertTab(tab);
@@ -123,6 +129,8 @@ export function mountPicker(host: HTMLElement): () => void {
     } catch (err) {
       errorLine.textContent = errText(err);
       errorLine.hidden = false;
+    } finally {
+      endWorkspaceTransition(transition);
     }
   }
 

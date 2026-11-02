@@ -12,6 +12,25 @@
  */
 
 import type { DraftStatus } from '../db/local-db.js';
+// Вердикт проверки совместимости — сущность 89aad200 (задача 12fd5b0e).
+// Тип объявлен в main-модуле проверки и реэкспортируется здесь как часть
+// IPC-контракта; renderer видит только тип, не код main-процесса.
+import type { CompatibilityResult } from '../compatibility.js';
+// Предзаполнение подключения от установщика (ошибка 0f8dd0f3, п.6 860def0d):
+// тип принадлежит чистому разборщику argv, контракт его только объявляет.
+import type { ConnectPrefill } from '../connect-prefill.js';
+// Контракт обновления сервера (задача ca26c59d, тех.проект 2d9f5cc7):
+// формы ответов admin-эндпоинтов `/system/update*` (задача 0a27a63b) —
+// общие контракты `@etn/shared` (стандарт 01268f2d), здесь только реэкспорт
+// для рендерера. Сеть — в `net/rest-client.ts`.
+export type {
+  ServerDeployment,
+  SystemUpdateProgress,
+  SystemUpdateStatus,
+  UpdateChannel,
+} from '@etn/shared';
+
+export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState } from '../compatibility.js';
 
 import type {
   ApiKey,
@@ -132,6 +151,9 @@ import type {
   UserFocusPreferences,
   UserPreferenceEntry,
   UsageClearResult,
+  UpdateJob,
+  SystemUpdateProgress,
+  SystemUpdateStatus,
   VersionResponse,
   Layer,
   LayerColors,
@@ -240,6 +262,24 @@ export interface RealtimeStatusSnapshotDto {
   networkId: string;
   status: string;
   detail?: string;
+}
+
+/**
+ * Состояние обслуживания сервера для рендерера (задача 479e37ed, требование
+ * 9636b1cc). `active: false` — сервер работает штатно и полей нет. Активное
+ * состояние несёт `retry_after` (секунды до рекомендуемого повтора) и
+ * `target_version` (версия обновления; `null` — неизвестна) — по ним UI
+ * строит текст «сервер обновляется, вернётся примерно через N с».
+ *
+ * Одно на активное подключение (сервер один): кадр `maintenance` по любой сети
+ * и `503 SERVER_UPDATING` на изменяющем запросе дают одно и то же состояние.
+ */
+export interface ServerMaintenanceDto {
+  active: boolean;
+  /** Рекомендуемая пауза до повтора, целые секунды (только при `active`). */
+  retry_after?: number;
+  /** Версия, до которой обновляется сервер (только при `active`). */
+  target_version?: string | null;
 }
 
 /**
@@ -453,6 +493,26 @@ export interface EtnApi {
     removeProfile(profileId: string): Promise<void>;
     disconnect(): Promise<void>;
     getStatus(): Promise<ServerStatus>;
+    /**
+     * Текущий вердикт проверки совместимости клиента с сервером (сущность
+     * 89aad200, задача 12fd5b0e): пять статусов, причина, версии, диапазоны,
+     * ссылка на релиз и флаг подтверждённой роли. `null` — проверка ещё не
+     * выполнялась или пользователь отключился.
+     */
+    getCompatibility(): Promise<CompatibilityResult | null>;
+    /**
+     * Предзаполнение нового подключения от установщика (ошибка 0f8dd0f3, п.6
+     * 860def0d): имя и адрес локального сервера из флагов
+     * `--connect-name/--connect-url`, с которыми установщик запускает клиент
+     * после установки сервера. `null` — обычный запуск (из меню, ярлыка).
+     */
+    connectPrefill(): Promise<ConnectPrefill | null>;
+    /**
+     * Подписка на изменение вердикта (канал `compatibility:status`):
+     * подключение/переподключение, `426` в середине сессии, отключение
+     * (`null`). Возвращает функцию отписки.
+     */
+    onCompatibilityChange(cb: (result: CompatibilityResult | null) => void): () => void;
   };
   networks: {
     list(): Promise<NetworkListItem[]>;
@@ -1371,6 +1431,23 @@ export interface EtnApi {
      */
     getStatuses(): Promise<RealtimeStatusSnapshotDto[]>;
     /**
+     * Текущее состояние обслуживания сервера (задача 479e37ed). Рендерер
+     * читает его при старте и на каждом подключении, чтобы не ждать первого
+     * кадра/статуса; активное состояние — повод показать «сервер обновляется»
+     * и блокировать изменяющие действия.
+     */
+    getMaintenance(): Promise<ServerMaintenanceDto>;
+    /**
+     * Смена состояния обслуживания сервера (задача 479e37ed). Один канал на
+     * сервер: кадр `maintenance` любой сети и `503 SERVER_UPDATING` дают одну
+     * и ту же запись; `active: false` — обслуживание закончилось: сокет прожил
+     * стабильное окно 10 с (`maintenance-stable`) либо успешный `GET /me`
+     * показал, что публичный `GET /version` вернул ДРУГУЮ версию процесса
+     * (или версию не меньше `target_version`). Один `/me` — не выход: в
+     * обслуживании он отвечает 200 как обычное чтение.
+     */
+    onMaintenance(cb: (payload: ServerMaintenanceDto) => void): () => void;
+    /**
      * `resume.stale` per network (Q2). Payload: `{networkId, lastSeq}` — the
      * UI must fully re-focus the network whose event-log window was exceeded.
      */
@@ -1594,6 +1671,34 @@ export interface EtnApi {
     readClipboard(): Promise<ClipboardReadResult>;
     health(): Promise<HealthResponse>;
     version(): Promise<VersionResponse>;
+    /**
+     * `GET /api/v1/system/update` — снимок кеша проверки обновлений сервера
+     * (текущая и доступная версии, канал, дата проверки, `check_error`),
+     * режим развёртывания (`deployment`) и инструкция (`instruction`).
+     * Только администратор (сервер отвечает `403` остальным).
+     */
+    getServerUpdate(): Promise<SystemUpdateStatus>;
+    /**
+     * `POST /api/v1/system/update/check` — принудительная проверка канала;
+     * ответ — новый снимок кеша. `429 RATE_LIMITED` значит «проверка уже
+     * идёт»: диалог показывает это состоянием, а не ошибкой.
+     */
+    checkServerUpdate(): Promise<SystemUpdateStatus>;
+    /**
+     * `POST /api/v1/system/update/apply` — создать задание обновления и
+     * запустить установщик (`201`). Единственный вызов, который renderer
+     * делает без автоповтора и с поднятым тайм-аутом ответа: сервер отвечает
+     * после скачивания установщика и проверки SHA-256 (до 10 минут).
+     * Обрыв/`409`/`503` трактуются как «обновление идёт», состояние читается
+     * через {@link getServerUpdateProgress}.
+     */
+    applyServerUpdate(targetVersion: string): Promise<UpdateJob>;
+    /**
+     * `GET /api/v1/system/update/progress` — последнее задание обновления
+     * (`{ job: UpdateJob | null }`). Источник правды о ходе обновления после
+     * обрыва apply и при повторном открытии диалога.
+     */
+    getServerUpdateProgress(): Promise<SystemUpdateProgress>;
     export(networkId: string, request: ExportRequest): Promise<ExportJobStartResult>;
     getJob(jobId: string): Promise<ExportJob>;
     /**
@@ -1688,6 +1793,14 @@ export interface EtnApi {
      * so the renderer can show feedback.
      */
     openExternal(url: string): Promise<string>;
+    /**
+     * Открыть страницу релиза клиента (`client_download_url` из
+     * `/api/v1/version`) в системном браузере (задача 61cec451, требование
+     * d654473a). Принимается только абсолютный http(s)-адрес; файл не
+     * скачивается, хеш не проверяется, установщик не запускается. Возвращает
+     * пустую строку при успехе или причину отказа для строки ошибки.
+     */
+    openClientUpdatePage(url: string): Promise<string>;
     // --- client/server file journals (task f051bf95, 07-client-electron.md §7) ---
     /**
      * State of the CLIENT file journal: the `log_enabled` flag, the current

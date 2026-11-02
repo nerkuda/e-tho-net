@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { BASE_LAYER_ID } from '@etn/shared';
+import { BASE_LAYER_ID, type HealthDbStatus } from '@etn/shared';
 
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import corsPlugin from '@fastify/cors';
@@ -23,6 +23,7 @@ import type { ServerConfig } from '../config.js';
 import type { SystemDb } from '../db/system-db.js';
 import type { Logger } from '../logger.js';
 import { createAuthPreHandler, ensureAuthDecorator } from '../auth/auth-middleware.js';
+import { createClientVersionGuard } from '../auth/client-version-guard.js';
 import { AuthRateLimiter } from '../auth/rate-limiter.js';
 import { createAccessControl } from '../auth/access-control.js';
 import { NetworkMembersService } from '../domain/network-members-service.js';
@@ -31,8 +32,16 @@ import { startEventLogCleanup } from '../realtime/event-log-cleanup.js';
 import { EventLogRelay } from '../realtime/event-log-relay.js';
 import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gateway.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
-import { normaliseError } from './errors.js';
+import { normaliseError, sendEtnError } from './errors.js';
+import { createMaintenanceGuard } from './maintenance-guard.js';
+import { SERVER_UPDATING_MESSAGE, createMaintenanceService } from '../maintenance.js';
+import { createUpdateChecker } from '../update/checker.js';
+import {
+  createUpdateApplyService,
+  type UpdateApplyServiceOptions,
+} from '../update/apply.js';
 import { meRoutes } from '../routes/me.js';
+import { systemUpdateRoutes } from '../routes/system-update.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
@@ -66,10 +75,25 @@ import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { createApiKeyAuthProvider } from '../mcp/auth.js';
 import { createMcpHttpEndpoint } from '../mcp/http.js';
-import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
+import { systemDbPath } from '../paths.js';
+import { createDbHealthCheck } from '../db/db-health.js';
+import {
+  HEALTH_STARTED_AT,
+  HEALTH_RESPONSE,
+  SERVER_VERSION,
+  buildVersionPayload,
+} from '../version.js';
 
 /** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
 const RATE_LIMITER_CLEANUP_MS = 60_000;
+
+/**
+ * Проверка БД для `GET /api/v1/health` (задача 0178253c): `ok` — лёгкое
+ * чтение через reader pool прошло, `error` — нет. Дефолт — кешированная
+ * проверка системной БД (`createDbHealthCheck`), но чистая функция-зависимость
+ * позволяет тестам подменить источник.
+ */
+export type DbHealthCheck = () => Promise<HealthDbStatus>;
 
 /** Dependencies injected into {@link createServer}. */
 export interface ServerDeps {
@@ -81,6 +105,19 @@ export interface ServerDeps {
   logger: Logger;
   /** Optional WebSocket gateway tuning (mainly for tests). */
   realtimeOptions?: Partial<RealtimeGatewayOptions>;
+  /**
+   * Настройки задания обновления сервера (задача 0a27a63b; тесты подменяют
+   * HTTP-клиент и процесс установщика, чтобы не запускать настоящий exe, и
+   * версию сервера для восстановления итога задания).
+   */
+  updateApplyOptions?: Pick<UpdateApplyServiceOptions, 'runnerOptions' | 'now' | 'serverVersion'>;
+  /**
+   * Проверка БД для `/health` (задача 0178253c). По умолчанию — лёгкое чтение
+   * системной БД через процессный reader-пул с кешем 1.5 с. Тесты подменяют
+   * пробу: их системная БД — `:memory:`, которую вторым соединением не
+   * открыть; реальный путь проверяется в `health-db.test.ts`.
+   */
+  dbHealth?: DbHealthCheck;
 }
 
 /** Name of the reply header carrying the correlation id for every request. */
@@ -188,13 +225,82 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // immediately. Registered before any route so it applies to all of them.
   registerLayerEchoHook(app, config.dataDir);
 
+  // --- Maintenance state and REST gate (задача 2f599b67, требование 20be64a8) ---
+  // Состояние обслуживания живёт в памяти процесса и после старта всегда
+  // `idle` (сущность aa55d459); сервис декорируется на приложение — задание
+  // обновления (`0a27a63b`) вызовет `app.maintenance.beginUpdating(...)` перед
+  // запуском установщика.
+  // Сам гейт (`onRequest`) регистрируется НИЖЕ, после плагина CORS: иначе 503
+  // уходил без `access-control-allow-origin` (замечание приёмки 2f599b67), и
+  // браузерный клиент видел сетевую ошибку вместо причины. Приоритет 503 над
+  // 426/401 сохраняется: гейт по-прежнему onRequest, а версия клиента
+  // проверяется позже в preHandler.
+  // Гейтвей создаётся позже (после WS-плагина); до этого сокетов нет, и
+  // замыкание `announce` читает переменную на момент вызова.
+  let realtimeGatewayForClose: RealtimeGateway | null = null;
+  const maintenance = createMaintenanceService({
+    announce: async (frame) => {
+      await realtimeGatewayForClose?.announceMaintenance(frame);
+    },
+  });
+  app.decorate('maintenance', maintenance);
+  const maintenanceGuard = createMaintenanceGuard({ getState: () => maintenance.getState() });
+
+  // --- Проверка канала обновлений и кеш версий (задача 8264988a) ------------
+  // Сервис только держит кеш и умеет `checkNow()`; фоновая проверка (старт и
+  // каждые `ETN_UPDATE_CHECK_INTERVAL_HOURS`) запускается в `index.ts`, а
+  // admin-эндпоинты `GET/POST /system/update*` — задача 0a27a63b.
+  app.decorate(
+    'updateChecker',
+    createUpdateChecker({
+      feedUrl: config.update.feedUrl,
+      channel: config.update.channel,
+      currentVersion: SERVER_VERSION,
+      deployment: config.deployment,
+      logger,
+    }),
+  );
+
+  // --- Задание обновления сервера (задача 0a27a63b) ------------------------
+  // Прогресс — в системной БД (`update_jobs`); создание сервиса — точка
+  // «старта процесса»: установщик убивает сервер до записи итога, поэтому
+  // незавершённое задание завершается здесь — `done`, если запущенная версия
+  // достигла `target_version`, иначе `failed`; возобновления нет (сущность
+  // 1f39811c). Runner установщика создаётся здесь же; тесты подменяют его
+  // HTTP-клиент и процесс через `updateApplyOptions`.
+  app.decorate(
+    'updateApply',
+    createUpdateApplyService({
+      systemDb,
+      deployment: config.deployment,
+      maintenance,
+      getCache: () => app.updateChecker.getCache(),
+      logger,
+      ...deps.updateApplyOptions,
+    }),
+  );
+
   // --- Plugins -------------------------------------------------------------
   await app.register(corsPlugin, {
     origin: true, // reflect request origin; credentials not used (bearer keys)
   });
+
+  // Гейт обслуживания — ПОСЛЕ CORS (замечание приёмки 2f599b67): 503 обязан
+  // нести `access-control-allow-origin`, иначе браузерный клиент не увидит
+  // причину отказа. Порядок хуков — порядок регистрации: CORS успевает
+  // проставить заголовки, затем гейт отправляет 503. Приоритет 503 над 426/401
+  // не меняется: оба гейта смотрят onRequest/preHandler.
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    const rejection = maintenanceGuard(req);
+    if (rejection === null) {
+      return;
+    }
+    reply.header('retry-after', String(rejection.retry_after));
+    sendEtnError(reply, 'SERVER_UPDATING', SERVER_UPDATING_MESSAGE, rejection, req.id);
+  });
   // Realtime gateway instance is created after the WS plugin (it needs the
-  // plugin's routes context); the hook closure reads it lazily.
-  let realtimeGatewayForClose: RealtimeGateway | null = null;
+  // plugin's routes context); the hook closure reads it lazily. The variable
+  // itself is declared above — the maintenance announcer needs it too.
   // Planned-shutdown close frame (defect de34b35b): `@fastify/websocket` adds
   // its own `preClose` on registration and runs FIRST when it was registered
   // earlier — it would drop sockets with 1005, hiding the reason from the
@@ -210,7 +316,21 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   ensureAuthDecorator(app);
   const rateLimiter = new AuthRateLimiter();
   app.decorate('rateLimiter', rateLimiter);
-  app.decorate('authPreHandler', createAuthPreHandler({ systemDb, rateLimiter, logger }));
+  // Версия desktop-клиента проверяется на изменяющих запросах (задача
+  // c3f33e6a). Источник диапазона — тот же `config.clientChannel`, из которого
+  // собран `GET /version`: второго диапазона в проекте нет (ADR 6ded6a87).
+  app.decorate(
+    'authPreHandler',
+    createAuthPreHandler({
+      systemDb,
+      rateLimiter,
+      logger,
+      clientVersionGuard: createClientVersionGuard({
+        clientChannel: config.clientChannel,
+        serverVersion: SERVER_VERSION,
+      }),
+    }),
+  );
   // Periodic eviction of expired failure/ban entries.
   const cleanupTimer = setInterval(() => rateLimiter.cleanup(), RATE_LIMITER_CLEANUP_MS);
   cleanupTimer.unref?.();
@@ -233,6 +353,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     logger,
     options: deps.realtimeOptions,
     fileLog,
+    // Новые сокеты в период обслуживания не принимаются: сервер закроет их
+    // кодом 1012, чтобы клиент остался в режиме «сервер обновляется» и не
+    // принял скорую остановку службы за сетевую аварию (требование 20be64a8:
+    // установленный WebSocket — признак, что обслуживание закончилось).
+    isServerUpdating: () => maintenance.getState().state === 'updating',
   });
   gateway.register(app);
   realtimeGatewayForClose = gateway;
@@ -381,15 +506,40 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(createImportRoutes(routeDeps), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
-  app.get('/api/v1/health', async () => {
-    return { ...HEALTH_RESPONSE, uptime: Math.round(process.uptime() * 1000) / 1000 };
+  // `GET /health` (операция ae4ae06f, требование 0a79d9de, задача 0178253c):
+  // 200 `{status:"ok", version, uptime, db:"ok"}`, пока лёгкое чтение БД через
+  // reader pool проходит. Сбой чтения — 503 `{status:"error", …, db:"error"}`:
+  // установщик обновления (`bb063ac3`) разбирает тело, а не только код, и по
+  // `db:"error"` уходит в откат. Проверка кешируется на 1.5 с, поэтому
+  // частый опрос не бьёт БД. Гейт обслуживания (2f599b67) блокирует только
+  // изменяющие запросы — health в обслуживании остаётся 200.
+  const dbHealth: DbHealthCheck =
+    deps.dbHealth ?? createDbHealthCheck({ dbPath: systemDbPath(config.dataDir) });
+  app.get('/api/v1/health', async (_req, reply) => {
+    const db = await dbHealth();
+    const uptime = Math.round(process.uptime() * 1000) / 1000;
+    if (db !== 'ok') {
+      reply.code(503);
+      return { ...HEALTH_RESPONSE, status: 'error', db, uptime };
+    }
+    return { ...HEALTH_RESPONSE, db, uptime };
   });
 
-  app.get('/api/v1/version', async () => VERSION_PAYLOAD);
+  // Нормативный контракт версии и канала обновления клиента (сущность
+  // «Ответ GET /version», задача 89a6ea40). Поля неизменны в течение жизни
+  // процесса: `loadConfig` вывел их из версии сервера и провалидировал
+  // override на старте. Публичный, всегда 200 — в том числе в обслуживании.
+  const versionPayload = buildVersionPayload(config.clientChannel);
+  app.get('/api/v1/version', async () => versionPayload);
 
   // File-journal management (task 1dd33e23 §4): admin-only status/toggle and
   // per-file download/delete endpoints.
   await app.register(systemLoggingRoutes, { prefix: '/api/v1' });
+
+  // Admin-эндпоинты обновления сервера (задача 0a27a63b): статус кеша
+  // (841a2515), принудительная проверка (5b9b064c), создание задания
+  // (8a2972c2) и прогресс (3bc8a9c3). Все — только администратору.
+  await app.register(systemUpdateRoutes, { prefix: '/api/v1' });
 
   // --- MCP StreamableHTTP endpoint (phase F, 05-mcp-server.md §2) -----------
   // Mounted when ETN_MCP_ENABLED=1; agents authenticate with the same
@@ -406,6 +556,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         logger,
         networkService,
         fileLog,
+        // Диспетчер MCP проверяет обслуживание сам (требование f84db18e):
+        // `/mcp` не перехватывается общим REST-503.
+        maintenance: () => maintenance.getState(),
       },
       { sessionIdleTtlMs: config.mcp.sessionIdleTtlMs },
     );

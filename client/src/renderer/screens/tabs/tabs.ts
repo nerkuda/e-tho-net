@@ -20,6 +20,7 @@ import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { TabDto } from '../../../main/ipc/contract.js';
 import { clearTabDirty, pickNeighborTab, removeTab, upsertTab } from './tab-state.js';
+import { beginWorkspaceTransition, endWorkspaceTransition } from '../workspace-transition.js';
 import {
   buildOverflowButton,
   recomputeOverflow,
@@ -266,10 +267,18 @@ export async function activateTab(tabId: string): Promise<void> {
  * `openNetwork` so the canvas/views hydrate from the tab's snapshot.
  */
 async function openNetworkTab(networkId: string, tabId: string): Promise<void> {
-  await etn.tabs.activate(tabId).catch(() => undefined);
-  const fresh = store.state.tabs.find((t) => t.tab_id === tabId);
-  if (fresh !== undefined) upsertTab(fresh);
-  await openNetwork(networkId, tabId);
+  // Окно смены поколения workspace (ошибка f1febdfc): между `tabs.activate` и
+  // публикацией новой вкладки в DOM ещё прежнее пространство — клик по
+  // закладке вида в нём запоминается и применяется к новой вкладке.
+  const transition = beginWorkspaceTransition();
+  try {
+    await etn.tabs.activate(tabId).catch(() => undefined);
+    const fresh = store.state.tabs.find((t) => t.tab_id === tabId);
+    if (fresh !== undefined) upsertTab(fresh);
+    await openNetwork(networkId, tabId);
+  } finally {
+    endWorkspaceTransition(transition);
+  }
 }
 
 /**

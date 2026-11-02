@@ -16,6 +16,7 @@
 import {
   type AnyRealtimeEvent,
   type CurrentUser,
+  type RealtimeMaintenanceFrame,
   REALTIME_CLOSE_CODES,
 } from '@etn/shared';
 import type { ServerProfileRow } from '../db/local-db.js';
@@ -92,6 +93,22 @@ export interface TabRealtimePoolOptions {
    * the renderer still happens on the same tick.
    */
   onStatus?: (networkId: string, status: RealtimeStatus, detail?: RealtimeStatusDetail) => void;
+  /**
+   * Optional main-process side-channel for the `maintenance` frame (задача
+   * 479e37ed, операция 9636b1cc): сервер уходит на обновление. Main переводит
+   * общее состояние обслуживания, по которому REST-клиент блокирует запись, а
+   * рендерер показывает причину. Кадр приходит до close `1012`, поэтому
+   * состояние включается раньше статуса `reconnecting`.
+   */
+  onMaintenance?: (networkId: string, frame: RealtimeMaintenanceFrame) => void;
+  /**
+   * Optional main-process side-channel: соединение в режиме обслуживания
+   * прожило стабильное окно (`maintenanceStableMs`) — обновление завершено.
+   * ТОЛЬКО этот сигнал (либо успешный `GET /me`) снимает состояние
+   * обслуживания: открытие сокета ничего не доказывает — сервер в обслуживании
+   * принимает его и сразу закрывает кодом 1012.
+   */
+  onMaintenanceStable?: (networkId: string) => void;
 }
 
 /** One pooled network entry. */
@@ -312,6 +329,12 @@ export class TabRealtimePool {
     });
     client.onTyped('layer-control', (control) => {
       this.opts.broadcast('realtime:layer', { ...control, networkId });
+    });
+    client.onTyped('maintenance', (frame: RealtimeMaintenanceFrame) => {
+      this.opts.onMaintenance?.(networkId, frame);
+    });
+    client.onTyped('maintenance-stable', () => {
+      this.opts.onMaintenanceStable?.(networkId);
     });
     client.onTyped('unauthorized', () => {
       const payload: RealtimeNetworkLostPayload = {

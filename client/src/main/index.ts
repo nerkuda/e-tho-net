@@ -18,6 +18,7 @@ import path from 'node:path';
 import { CLIENT_META_KEY } from '@etn/shared';
 import { serveEtnimgRequest, type EtnimgServeDeps } from './etnimg.js';
 import { LocalDb } from './db/local-db.js';
+import { purgeStaleDrafts, type DraftPurgeResult } from './db/drafts-purge.js';
 import {
   defaultMigrationsDir,
   isDefaultUserDataDir,
@@ -27,6 +28,7 @@ import {
   parseUserDataDirArg,
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
+import { parseConnectArgs } from './connect-prefill.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { decideNavigation, EXTERNAL_SCHEMES } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
@@ -37,7 +39,6 @@ import {
   extractDeepLink,
   type DeepLinkPayload,
 } from './ipc/deep-link.js';
-import { initAutoUpdater } from './updater.js';
 import {
   loadWindowBounds,
   sanitizeBounds,
@@ -84,6 +85,15 @@ if (userDataDirArg !== null) {
   // share the installed app's local.db / server profiles / settings.
   app.setPath('userData', path.join(app.getPath('appData'), '@etn-dev'));
 }
+
+/**
+ * Предзаполнение подключения от установщика (ошибка 0f8dd0f3, п.6 860def0d):
+ * «Запустить клиент» после установки сервера передаёт
+ * `--connect-url=http://localhost:<порт> --connect-name="Локальный сервер"`.
+ * Значение живёт весь запуск и отдаётся renderer запросом
+ * `server.connectPrefill`; обычный запуск из меню даёт `null`.
+ */
+const connectPrefill = parseConnectArgs(process.argv);
 
 // Hidden-window test mode must never touch the user's real profile (task
 // 5c5b30e2). Guard by construction, before the journal, the local DB or any
@@ -493,6 +503,30 @@ app
       // (electron-builder `extraResources`); dev runs use `client/migrations`.
       migrationsDir: app.isPackaged ? packagedMigrationsDir() : defaultMigrationsDir(),
     });
+
+    // Чистка незаписанных черновиков прошлых запусков (ошибка fb9d6058, решение
+    // пользователя 2026-10-29). Точка — здесь, сразу после открытия local.db и
+    // ДО registerIpc/createWindow: ни renderer, ни первый connect сессии не
+    // должны увидеть строку прошлого запуска. Между запусками прошло
+    // неизвестное время; правку могли записать через другой клиент или
+    // MCP/REST, а цель черновика — удалить. Пурж идёт по ВСЕМ профилям и сетям
+    // и удаляет все незавершённые статусы (pending/conflict/failed).
+    // Пользователю — ОДНО стартовое сообщение при N > 0: окна ещё нет, поэтому
+    // счётчик уезжает в client_meta, renderer читает его при старте
+    // (`initDrafts` → `reportStartupPurge`) и очищает ключ.
+    // Сбой локальной БД не должен мешать старту клиента (351068ed п.5): пурж
+    // сам не бросает, а запись счётчика обёрнута здесь. След чистки — в
+    // журнале клиента ниже (успех и сбой).
+    let draftsPurge: DraftPurgeResult | null = null;
+    try {
+      draftsPurge = purgeStaleDrafts(localDb);
+      // Счётчик пишется ВСЕГДА, в том числе 0 (351068ed п.4): условная запись
+      // оставляла в client_meta число запуска, который упал до показа, и
+      // следующий запуск без черновиков показывал чужой счётчик.
+      localDb.setMeta(CLIENT_META_KEY.DRAFTS_PURGED_COUNT, String(draftsPurge.deletedWithText));
+    } catch (err) {
+      console.error('[ETN] drafts purge failed:', err);
+    }
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
 
@@ -518,6 +552,18 @@ app
         userData: app.getPath('userData'),
         argv: process.argv.join(' '),
       });
+      // След стартовой чистки черновиков (351068ed п.5): сколько удалено,
+      // сколько из них с текстом (по этому числу renderer покажет одно
+      // сообщение) и сколько операций сорвалось.
+      if (draftsPurge === null) {
+        clientLog.warn('drafts', 'startup purge failed');
+      } else {
+        clientLog.info('drafts', 'startup purge', {
+          deleted: draftsPurge.deleted,
+          withText: draftsPurge.deletedWithText,
+          failed: draftsPurge.failed,
+        });
+      }
     }
 
     // The etnimg protocol serves attachment files through the active
@@ -559,6 +605,13 @@ app
     ipc = registerIpc({
       localDb,
       clientId,
+      // Версия клиента для заголовка `Client-Version` в каждом REST-запросе
+      // (требование 339b507f): сервер отклоняет изменяющие запросы вне
+      // `client_compatibility` кодом 426 (задача c3f33e6a).
+      clientVersion: app.getVersion(),
+      // Предзаполнение подключения от установщика (ошибка 0f8dd0f3): renderer
+      // забирает его на онбординге запросом `server.connectPrefill`.
+      connectPrefill,
       getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     });
 
@@ -600,9 +653,6 @@ app
     // Cold start (Win/Linux): URL в argv — цель ждёт в буфере до ack renderer.
     const initial = extractDeepLink(process.argv);
     if (initial !== null) dispatchOrBuffer(win, initial);
-
-    // Auto-update (K4): quiet check in packaged builds; inert in dev.
-    void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0 && localDb !== null) {

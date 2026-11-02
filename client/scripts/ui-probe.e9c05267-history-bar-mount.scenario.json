@@ -1,0 +1,152 @@
+{
+  "name": "e9c05267-history-bar-mount",
+  "description": "Ошибка e9c05267: полоса истории обязана рисоваться по кэшу, не дожидаясь thoughts/resolve, и дедуплицировать resolve в полёте. Метрика детерминирована: ведётся ПОКОЛЕНИЕ элемента .history-bar (пересборка workspace = новый хост) и меряется окно пустоты НОВОГО хоста, а не старой полосы. Прогон: ui-probe-stand --scenario client/scripts/ui-probe.e9c05267-history-bar-mount.scenario.json --delay-seed-response-rule 2500:thoughts/resolve --delay-seed-response-rule 800:thoughts/query. Красная фаза (до фикса a1a9899d, тот же сценарий): пустота нового хоста 2551 мс, контент на +2618 мс; после фикса — 66 мс / +136 мс.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 60000,
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')) ?? items[0]; if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.history-bar') !== null && document.querySelector('.cloud[data-id=\"{{homeId}}\"]') !== null"
+    },
+    {
+      "name": "install-poller",
+      "eval": "(() => { window.__hb = { samples: [], iv: 0, mark: 0, gen: 0, last: null, genAtMark: 0 }; window.__hb.iv = setInterval(() => { const h = document.querySelector('.history-bar'); if (h !== window.__hb.last) { window.__hb.last = h; window.__hb.gen += 1; } window.__hb.samples.push({ t: Date.now(), gen: window.__hb.gen, exists: h !== null, n: h === null ? -1 : h.children.length, chips: h === null ? -1 : h.querySelectorAll('.history-cloud').length, empty: h === null ? -1 : h.querySelectorAll('.history-empty').length, text: h === null ? '' : (h.textContent || '').slice(0, 40), w: h === null ? -1 : h.clientWidth }); if (window.__hb.samples.length > 1200) window.__hb.samples.shift(); }, 40); return 'ok'; })()"
+    },
+    {
+      "name": "click-thought",
+      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "pause-1",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 400)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "click-home",
+      "click": ".cloud[data-id=\"{{homeId}}\"]"
+    },
+    {
+      "name": "pause-2",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 400)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "click-thought-again",
+      "click": ".cloud[data-id=\"{{thoughtId}}\"]"
+    },
+    {
+      "name": "pause-3",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 400)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "before-switch",
+      "probe": "(async () => { const p = (await window.etn.server.listProfiles()).find((x) => x.isActive); const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); const rows = (await window.etn.history.list(p.id, '{{networkId}}', t.tab_id, 50)).map((e) => e.thoughtId.slice(0, 8)); const h = document.querySelector('.history-bar'); return JSON.stringify({ focus: (t.focus_id || '').slice(0, 8), rows, bar: { children: h.children.length, chips: h.querySelectorAll('.history-cloud').length, empty: h.querySelectorAll('.history-empty').length, text: (h.textContent || '').slice(0, 30) } }); })()"
+    },
+    {
+      "name": "create-network-b",
+      "probe": "(async () => { const n = await window.etn.networks.create('Сеть B e9c05267'); window.__netB = n.id; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B e9c05267'))"
+    },
+    {
+      "name": "open-network-b-tab",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B e9c05267')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B e9c05267')) && document.querySelector('.history-bar') !== null"
+    },
+    {
+      "name": "settle-b",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 600)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "bar-in-b",
+      "eval": "(() => { const h = document.querySelector('.history-bar'); return JSON.stringify({ children: h.children.length, chips: h.querySelectorAll('.history-cloud').length, empty: h.querySelectorAll('.history-empty').length, text: (h.textContent || '').slice(0, 30) }); })()"
+    },
+    {
+      "name": "mark-return",
+      "eval": "(() => { window.__hb.mark = Date.now(); window.__hb.genAtMark = window.__hb.gen; return 'ok'; })()"
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "settle-return",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 6000)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "return-timeline",
+      "probe": "(() => { \n  const mark = window.__hb.mark;\n  const genAtMark = window.__hb.genAtMark;\n  const S = window.__hb.samples.filter((x) => x.t >= mark);\n  const oldBar = S.filter((x) => x.gen === genAtMark && x.n > 0);\n  const fresh = S.filter((x) => x.gen !== genAtMark && x.n >= 0);\n  const hostAt = fresh.length > 0 ? fresh[0] : null;\n  const newGen = hostAt === null ? 0 : hostAt.gen;\n  const inNew = S.filter((x) => x.gen === newGen);\n  const content = inNew.find((x) => x.n > 0);\n  const chip = inNew.find((x) => x.chips > 0);\n  const afterChip = chip === undefined ? [] : inNew.filter((x) => x.t > chip.t);\n  const lost = afterChip.filter((x) => x.chips === 0);\n  window.__hb.iv && clearInterval(window.__hb.iv);\n  return ({\n    samples: S.length,\n    oldBarLastAtMs: oldBar.length === 0 ? -1 : oldBar[oldBar.length - 1].t - mark,\n    newHostAtMs: hostAt === null ? -1 : hostAt.t - mark,\n    newHostFirst: inNew.slice(0, 4).map((x) => ({ dt: x.t - mark, n: x.n, chips: x.chips, empty: x.empty, text: x.text })),\n    newHostContentAtMs: content === undefined ? -1 : content.t - mark,\n    newHostBlankMs: (hostAt === null || content === undefined) ? -1 : content.t - hostAt.t,\n    newHostChipAtMs: chip === undefined ? -1 : chip.t - mark,\n    lostChipSamples: lost.length,\n    newHostLast: inNew.length === 0 ? null : { dt: inNew[inNew.length - 1].t - mark, n: inNew[inNew.length - 1].n, chips: inNew[inNew.length - 1].chips, text: inNew[inNew.length - 1].text }\n  });\n })()"
+    },
+    {
+      "name": "return-blank-gate",
+      "probe": "(() => { const mark = window.__hb.mark; const genAtMark = window.__hb.genAtMark; const S = window.__hb.samples.filter((x) => x.t >= mark); const fresh = S.filter((x) => x.gen !== genAtMark && x.n >= 0); const hostAt = fresh.length > 0 ? fresh[0] : null; const newGen = hostAt === null ? 0 : hostAt.gen; const inNew = S.filter((x) => x.gen === newGen); const content = inNew.find((x) => x.n > 0); const problems = []; if (hostAt === null) problems.push('no-new-host'); if (content === undefined) problems.push('no-content'); if (hostAt !== null && content !== undefined && content.t - hostAt.t > 1000) problems.push('blank=' + (content.t - hostAt.t)); return problems.length === 0 ? 'ok' : problems.join('; '); })()",
+      "expect": "ok"
+    },
+    {
+      "name": "final-state",
+      "probe": "(() => { const h = document.querySelector('.history-bar'); return ({ children: h.children.length, chips: h.querySelectorAll('.history-cloud').length, empty: h.querySelectorAll('.history-empty').length, text: (h.textContent || '').slice(0, 40), width: h.clientWidth }); })()"
+    },
+    {
+      "name": "final-bar-gate",
+      "probe": "(() => { const h = document.querySelector('.history-bar'); const chips = h.querySelectorAll('.history-cloud').length; const empty = h.querySelectorAll('.history-empty').length; const text = (h.textContent || '').trim(); const problems = []; if (h.children.length === 0) problems.push('bar-empty'); if (chips === 0 && empty === 0) problems.push('no-content'); if (text === '') problems.push('no-text'); return problems.length === 0 ? 'ok' : problems.join('; '); })()",
+      "expect": "ok"
+    }
+  ]
+}

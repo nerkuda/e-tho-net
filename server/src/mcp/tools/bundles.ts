@@ -187,9 +187,18 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
       }
     })
     // Если задано `thought` (новая мысль, XOR гарантирован выше), нужен
-    // `ref` для возможных `target_ref` в других элементах батча.
+    // `ref` для возможных `target_ref` в других элементах батча. Место `ref` —
+    // УРОВЕНЬ ЭЛЕМЕНТА `thoughts[]`, рядом с `thought`: внутри блока `thought`
+    // такого поля нет (`.strict()` выше отвергает его — ошибка f87ca85d:
+    // описание читалось как «ref внутри thought», и вызовы падали). Подсказку
+    // для `ref` внутри блока даёт preflight сырых аргументов
+    // (`server.ts`, `preflightToolArgs`) — zod к моменту этой ошибки уже
+    // отбросил неизвестный ключ.
     .refine((v) => v.thought === undefined || v.ref !== undefined, {
-      message: 'a batch item with `thought` (new thought) must also declare a local `ref`',
+      message:
+        'элемент с блоком `thought` (новая мысль) обязан объявить локальный `ref` ' +
+        'на уровне элемента `thoughts[]`, рядом с `thought`, а не внутри него: ' +
+        '`{ "ref": "a", "thought": { "title": "…" } }`',
     })
     // Item-level `type_id`/`type` (bug 870c0c0d): тип задаётся по id ИЛИ по
     // имени, не одновременно — как у `thought`.
@@ -217,7 +226,9 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
         MCP_MAX_THOUGHTS_PER_WRITE +
         ' связанных единиц знания одной транзакцией: мысли, постоянные и хронологические ' +
         'комментарии, свойства, связи, вложения. `thought_id` XOR `thought`: новая мысль идёт ' +
-        'блоком `thought`, он ОБЯЗАН нести локальный `ref` (иначе `VALIDATION_ERROR`); ' +
+        'блоком `thought`; локальный `ref` — на уровне элемента `thoughts[]`, рядом с ' +
+        '`thought`: `{ "ref": "a", "thought": { "title": "…" } }`; `ref` ВНУТРИ `thought` — ' +
+        '`VALIDATION_ERROR`; ' +
         '`title`/`synonyms`/`type`/`type_id` — ВНУТРИ `thought`, у существующей мысли их задают ' +
         'item-level (вместе с `thought` — `VALIDATION_ERROR`; `synonyms` ЗАМЕНЯЮТ набор, ' +
         'item-level `active` — в обоих случаях). `links[].target_id` XOR `target_ref`; ' +

@@ -231,13 +231,22 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         // пользователь для под-выборки мыслей-владельцев.
         const query = parseAttachmentSearchQuery({ ...input }, req.id);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
-        const { items, total } = searchAttachments(ndb, query, {
+        const { items, total, warnings } = searchAttachments(ndb, query, {
           userId: req.auth!.user.id,
           requestId: req.id,
         });
         const limit = query.limit ?? 50;
         const offset = query.offset ?? 0;
-        sendList(reply, items, total, offset, limit);
+        sendList(
+          reply,
+          items,
+          total,
+          offset,
+          limit,
+          // Ошибка b23a7104: жёлтая диагностика ядра отбора в конверте —
+          // семантика «пусто — поля нет», как у хроники и `etn.views.run`.
+          warnings !== undefined && warnings.length > 0 ? { warnings } : undefined,
+        );
       },
     );
 

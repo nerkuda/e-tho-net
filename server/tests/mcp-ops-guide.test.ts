@@ -315,10 +315,10 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
             title: 'Документ',
           }),
         );
-        const found = toolJson<unknown[]>(
+        const found = toolJson<{ data: unknown[] }>(
           await callOp(c, 'attachments.search', { network_id: net, q: 'example' }),
         );
-        assert.ok(found.length >= 1);
+        assert.ok(found.data.length >= 1);
         assert.equal(
           (
             await callOp(

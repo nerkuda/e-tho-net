@@ -698,6 +698,12 @@ const DIALOG_FILES = new Set([
   'import-export/export-dialog.ts',
   'import-export/import-dialog.ts',
   'lib/date-period-dialog.ts',
+  // Блокирующий диалог несовместимости версий (элемент 8623b9ff, задача
+  // 0afec967): оболочка `showDialog` с `dismissible: false`; не список.
+  'lib/compatibility-dialog.ts',
+  // Диалог обновления сервера (элемент c9c96e5c, задача ca26c59d): оболочка
+  // `showDialog` с версиями, прогрессом и футером действий; не список.
+  'lib/server-update-dialog.ts',
   // Общий диалог удаления сущности «Удалить совсем / В корзину» (задача
   // 00160da1): фасад для мыслей, связей, публикаций и полок.
   'lib/delete-dialog.ts',

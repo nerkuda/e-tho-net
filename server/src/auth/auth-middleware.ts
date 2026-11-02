@@ -15,6 +15,10 @@ import type { Logger } from '../logger.js';
 import { sendEtnError } from '../http/errors.js';
 import { type AuthContext, extractBearerToken, readClientId } from '../http/context.js';
 import { deriveApiKeyPrefix, hashApiKey, isValidApiKeyFormat } from './api-key.js';
+import {
+  describeClientVersionRejection,
+  type ClientVersionGuardFn,
+} from './client-version-guard.js';
 import { AuthRateLimiter, bucketKey, type RateLimitResult } from './rate-limiter.js';
 
 /** Signature of a Fastify preHandler hook. */
@@ -34,6 +38,13 @@ export interface AuthMiddlewareDeps {
   systemDb: SystemDb;
   rateLimiter: AuthRateLimiter;
   logger: Logger;
+  /**
+   * Проверка версии desktop-клиента на изменяющих запросах (задача c3f33e6a,
+   * ADR 6ded6a87). Вызывается после успешной аутентификации; `null` —
+   * запрос допустим. Отказ уходит каноническим конвертом `426
+   * CLIENT_VERSION_UNSUPPORTED`.
+   */
+  clientVersionGuard: ClientVersionGuardFn;
 }
 
 /**
@@ -67,7 +78,7 @@ function requestIp(req: FastifyRequest): string {
 export function createAuthPreHandler(
   deps: AuthMiddlewareDeps,
 ): (req: FastifyRequest, reply: FastifyReply) => Promise<void> {
-  const { systemDb, rateLimiter, logger } = deps;
+  const { systemDb, rateLimiter, logger, clientVersionGuard } = deps;
 
   return async function authPreHandler(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const ip = requestIp(req);
@@ -163,6 +174,32 @@ export function createAuthPreHandler(
         logger.warn({ err, key_id: apiKey.id }, 'auth: failed to update last_used_at');
       }
     });
+
+    // --- Client version (задача c3f33e6a, ADR 6ded6a87) ------------------------
+    // After authentication, before the route handler: mutating requests of a
+    // desktop client must carry a compatible `Client-Version`. Read-only
+    // methods are skipped by the guard; a request without `Client-Id` is an
+    // API integration and is skipped too. The response is the canonical
+    // envelope with HTTP 426 — never 400/422 (ADR "Запрещено").
+    const rejection = clientVersionGuard(req);
+    if (rejection !== null) {
+      logger.warn(
+        {
+          request_id: requestId,
+          reason: rejection.reason,
+          client_version: rejection.details.client_version ?? null,
+        },
+        'auth: client version rejected',
+      );
+      sendEtnError(
+        reply,
+        'CLIENT_VERSION_UNSUPPORTED',
+        describeClientVersionRejection(rejection),
+        rejection.details,
+        requestId,
+      );
+      return;
+    }
   };
 }
 

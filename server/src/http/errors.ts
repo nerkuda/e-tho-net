@@ -48,8 +48,24 @@ export function httpStatusForCode(code: EtnErrorCode): number {
     case 'VALIDATION_ERROR':
     case 'PROTECTED_ENTITY':
       return 422;
+    case 'CLIENT_VERSION_UNSUPPORTED':
+      // Изменяющий запрос desktop-клиента без версии или вне `client_compatibility`
+      // (требование 271e3327, ADR 6ded6a87) — «Upgrade Required».
+      return 426;
+    case 'SERVER_UPDATING':
+      // Сервер в режиме обслуживания перед обновлением (задача 2f599b67,
+      // требование 20be64a8): изменяющие запросы получают «Service Unavailable»
+      // и заголовок `Retry-After`.
+      return 503;
     case 'RATE_LIMITED':
       return 429;
+    case 'UPDATE_INSTALLER_FAILED':
+      // Установщик обновления не скачан/не проверен/не запущен (задача
+      // 0a27a63b): «Bad Gateway» — отказала сторона поставки, сервер работает
+      // на текущей версии. Отдельный код вместо `INTERNAL` + `details.status`,
+      // чтобы рендерер показал осмысленный текст (как ATTACHMENT_OWNER_IS_ICON
+      // сохраняет свой прецедент явного статуса для 409).
+      return 502;
     case 'INTERNAL':
     default:
       return 500;

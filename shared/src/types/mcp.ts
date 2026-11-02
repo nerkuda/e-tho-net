@@ -49,6 +49,7 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.usage',
   'etn.comments.get',
   'etn.types.list',
+  'etn.types.get',
   'etn.views.run',
   'etn.chronicle.query',
   'etn.layers.list',
@@ -129,6 +130,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.usage': { readOnlyHint: true },
   'etn.comments.get': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
+  // `etn.types.get` (задача 17ff4619, 0.15.1) — точечное чтение одного типа
+  // по `id`/`name` вместо выкачивания каталога (см. `etn.types.list`).
+  'etn.types.get': { readOnlyHint: true },
   // `etn.views.run` (задача c1fa71d4, 0.7.3) — read-only исполнение отбора;
   // не пишет событий и audit_log, всегда идемпотентно для одного набора аргументов.
   'etn.views.run': { readOnlyHint: true },
@@ -321,6 +325,33 @@ export interface McpLinkTypeEntry extends LinkTypeRef {
   properties: McpEffectiveTypeProperty[];
 }
 
+/**
+ * Компактная запись типа мысли в `etn.types.list { compact: true }` (задача
+ * 17ff4619, 0.15.1): только идентификационные поля и признак иерархии. Без
+ * `description`, `comment_template_md`, `properties`, `views`, иконок и цветов —
+ * агент узнаёт «что есть», а детали берёт через `etn.types.get`.
+ */
+export interface McpThoughtTypeCompactEntry {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  is_root: boolean;
+  /** Только при `in_subtree_of` — сколько записей поддерева несут этот тип. */
+  usage_count?: number;
+}
+
+/** Компактная запись типа связи в `etn.types.list { compact: true }` (задача
+ *  17ff4619, 0.15.1): {@link McpThoughtTypeCompactEntry} для каталога связей. */
+export interface McpLinkTypeCompactEntry {
+  id: string;
+  name_forward: string;
+  name_reverse: string;
+  parent_id: string | null;
+  is_root: boolean;
+  /** Только при `in_subtree_of` — сколько связей поддерева несут этот тип. */
+  usage_count?: number;
+}
+
 /** Which catalogue(s) `etn.types.list` returns (05-mcp-server.md §5.1b). */
 export const TYPES_LIST_SCOPES = ['thoughts', 'links', 'all'] as const;
 export type TypesListScope = (typeof TYPES_LIST_SCOPES)[number];
@@ -368,6 +399,32 @@ export interface McpTypesListMeta {
   limit?: number;
   /** Echo of the requested `offset`; absent when not set. */
   offset?: number;
+  /**
+   * Echo of the requested `keywords` filter (задача 17ff4619, 0.15.1):
+   * мини-синтаксис §6.10 по именам типов. Totals ниже отражают уже
+   * отфильтрованный набор.
+   */
+  keywords?: string;
+  /** Echo of the requested `compact` mode (задача 17ff4619, 0.15.1). */
+  compact?: boolean;
+  /** Сколько записей каталога мыслей реально доставлено в этой странице
+   *  (после `limit`/`offset` и обрезки по `max_chars`). */
+  thought_types_returned?: number;
+  /** Сколько записей каталога связей реально доставлено в этой странице. */
+  link_types_returned?: number;
+  /**
+   * `true`, когда в каталоге остались недоставленные записи: страница
+   * (`limit`/`offset`) или обрезка по `max_chars` срезала хвост. `false` —
+   * выдано всё, что прошло фильтры (задача 17ff4619, 0.15.1).
+   */
+  has_more?: boolean;
+  /**
+   * `offset` следующей страницы или `null`, когда всё выдано. Для двух
+   * каталогов берётся минимальная позиция среди недочитанных: повтор записи
+   * лучше пропуска. Если `has_more: true`, а `next_offset` не сдвинулся —
+   * страница не влезла в `max_chars`: увеличь бюджет или уменьши `scope`.
+   */
+  next_offset?: number | null;
   /** Echo of the `max_chars` budget that triggered shrinking; absent when the
    *  caller did not set `max_chars` and nothing was trimmed. */
   max_chars?: number;
@@ -381,11 +438,12 @@ export interface McpTypesListMeta {
 /** Result of `etn.types.list` — both catalogues in full (not just the types
  *  used in some other response, unlike {@link ThoughtTypeRef}/{@link LinkTypeRef}
  *  reference tables). With `scope: "thoughts"` / `"links"` only the matching
- *  field is present. The optional `meta` block is present whenever pagination
- *  or `max_chars` trimming was applied. */
+ *  field is present. The optional `meta` block is present whenever any of
+ *  `limit`/`offset`/`max_chars`/`keywords`/`compact` was passed (legacy calls
+ *  without them keep the pre-0.15.1 envelope, no `meta`). */
 export interface McpTypesListResult {
-  thought_types?: McpThoughtTypeEntry[];
-  link_types?: McpLinkTypeEntry[];
+  thought_types?: McpThoughtTypeEntry[] | McpThoughtTypeCompactEntry[];
+  link_types?: McpLinkTypeEntry[] | McpLinkTypeCompactEntry[];
   /**
    * Пояснение о структурных свойствах-связях каталога (0.8.3). Структурные
    * «Родители»/«Потомки» объявлены на корневом типе и наследуются всеми
@@ -394,7 +452,32 @@ export interface McpTypesListResult {
    * когда в ответе есть `thought_types`.
    */
   structural_properties_note?: string;
+  /**
+   * Эхо поддерева (`in_subtree_of`) и счётчики каталогов ПОСЛЕ фильтров
+   * (`in_subtree_of` + `keywords`, задача 17ff4619) — до пагинации и обрезки.
+   */
+  scope?: {
+    in_subtree_of: string;
+    max_depth: number;
+    thought_types_total: number;
+    link_types_total: number;
+  };
   meta?: McpTypesListMeta;
+}
+
+/**
+ * Result of `etn.types.get` (задача 17ff4619, 0.15.1) — ОДИН тип по `id`/`name`
+ * вместо выкачивания каталога. Запись имеет ровно ту же форму, что в
+ * `etn.types.list` (тот же сборщик: трансклюзии, `comment_template_md`, `icon`,
+ * эффективные свойства, `views[]`), но без `usage_count` — поддерева нет.
+ * Совпадение в обоих каталогах при `scope: "all"` возвращается обоими (не
+ * неоднозначность); `scope: "thoughts"`/`"links"` оставляет только свой ключ.
+ */
+export interface McpTypesGetResult {
+  thought_types?: McpThoughtTypeEntry[];
+  link_types?: McpLinkTypeEntry[];
+  /** Присутствует, когда в ответе есть тип мысли (см. `etn.types.list`). */
+  structural_properties_note?: string;
 }
 
 /**

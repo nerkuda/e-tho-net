@@ -4,13 +4,23 @@
  * Entry point published as the `etn` bin (`dist/cli.js`). Implements the only
  * MVP subcommand:
  *
- *   etn init --username <login> [--display-name "<name>"]
+ *   etn init --username <login> [--display-name "<name>"] [--key-out <file>]
+ *   etn init --check
  *
  * `etn init` creates the data directory and `_system.db`, applies migrations,
  * creates the first (root) administrator with `is_admin=1, is_first_user=1`,
- * issues a primary API-key, prints it **exactly once**, and writes an
- * `audit_log` row (`category=system, action=init`). A repeated invocation
- * fails with a clear "already initialised" message.
+ * issues a primary API-key, prints it **exactly once** (or writes it to the
+ * `--key-out` file requested by the installer), and writes an `audit_log` row
+ * (`category=system, action=init`). A repeated invocation fails with a clear
+ * "already initialised" message.
+ *
+ * `etn init --check` is the installer's idempotency probe (task 686c5d76): it
+ * reports whether the first administrator exists (`hasFirstUser()`) without
+ * creating the data directory, the database or running migrations. The database
+ * is opened strictly read-only; SQLite in WAL mode may still create the
+ * `_system.db-shm`/`_system.db-wal` sidecars next to it — normal SQLite files,
+ * not a change of the database contents (9b310991). Exit codes:
+ * 0 — initialised, 1 — not initialised, 2 — check failed.
  *
  * Argument parsing is hand-rolled (no external parser dep). `main()` is
  * exported for tests; a module-level guard runs it when this file is the entry
@@ -56,8 +66,13 @@ export class CliError extends Error {
 
 /** Parsed arguments for the `init` subcommand. */
 export interface InitArgs {
+  /** Login of the first administrator; empty in `--check` mode. */
   username: string;
   displayName: string | null;
+  /** `--check`: report whether the first administrator exists, change nothing. */
+  check: boolean;
+  /** `--key-out <path>`: write the key into this file instead of printing it. */
+  keyOut: string | null;
 }
 
 /** Options accepted by {@link main} (for testability). */
@@ -67,14 +82,21 @@ export interface MainOptions {
 }
 
 /**
- * Parse `init` subcommand arguments. Accepts `--username`/`-u` and
- * `--display-name`/`-d` in both `--flag value` and `--flag=value` forms.
+ * Parse `init` subcommand arguments. Accepts `--username`/`-u`,
+ * `--display-name`/`-d`, `--key-out` and `--check` in both `--flag value`
+ * and `--flag=value` forms.
  *
- * @throws {CliError} when `--username` is missing or an unknown flag appears.
+ * `--check` is mutually exclusive with the initialisation arguments: it only
+ * reports state (installer contract, task 686c5d76).
+ *
+ * @throws {CliError} when `--username` is missing (outside `--check`), when
+ *   `--check` is combined with initialisation arguments, or on an unknown flag.
  */
 export function parseInitArgs(tokens: string[]): InitArgs {
   let username: string | null = null;
   let displayName: string | null = null;
+  let keyOut: string | null = null;
+  let check = false;
 
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
@@ -87,11 +109,27 @@ export function parseInitArgs(tokens: string[]): InitArgs {
       displayName = tokens[++i] ?? null;
     } else if (t.startsWith('--display-name=')) {
       displayName = t.slice('--display-name='.length);
+    } else if (t === '--key-out') {
+      keyOut = requireValue('--key-out', tokens[++i]);
+    } else if (t.startsWith('--key-out=')) {
+      keyOut = requireValue('--key-out', t.slice('--key-out='.length));
+    } else if (t === '--check') {
+      check = true;
     } else if (t === '--help' || t === '-h') {
       throw new CliError(HELP_INIT);
     } else {
       throw new CliError(`Неизвестный аргумент: ${t}`);
     }
+  }
+
+  if (check) {
+    if (username !== null || displayName !== null || keyOut !== null) {
+      throw new CliError(
+        'Аргумент --check несовместим с --username, --display-name и --key-out: ' +
+          'он только сообщает состояние инициализации.',
+      );
+    }
+    return { username: '', displayName: null, check: true, keyOut: null };
   }
 
   if (username === null || username.trim() === '') {
@@ -104,6 +142,8 @@ export function parseInitArgs(tokens: string[]): InitArgs {
   return {
     username: trimmedName,
     displayName: displayName === null ? null : displayName.trim() || null,
+    check: false,
+    keyOut,
   };
 }
 
@@ -111,7 +151,8 @@ const HELP_GLOBAL = `Использование: etn <команда> [опци�
 
 Команды:
   init          Первичная инициализация сервера: создаёт _system.db, первого
-                администратора и первичный API-key.
+                администратора и первичный API-key. "etn init --check" только
+                сообщает состояние инициализации (для установщика).
   mcp           MCP-сервер в stdio-режиме (для локальных AI-агентов). API-key —
                 через ETN_API_KEY или --api-key.
   publications  Пересборка публикаций в каталог (CI и git-хуки).
@@ -128,15 +169,39 @@ const HELP_GLOBAL = `Использование: etn <команда> [опци�
   ETN_MCP_SESSION_IDLE_TTL_MS
                      Время жизни простаивающей MCP-сессии, мс (по умолчанию
                      86400000 — 24 часа; допустимо 1000…2592000000).
+  ETN_CLIENT_COMPATIBILITY
+                     Аварийный override диапазона совместимых клиентов
+                     (по умолчанию — minor-окно версии сервера,
+                     ">=X.Y.0 <X.(Y+1).0").
+  ETN_RECOMMENDED_CLIENT_VERSION
+                     Аварийный override рекомендованной версии клиента
+                     (по умолчанию — версия сервера; обязана входить
+                     в диапазон совместимости).
+  ETN_CLIENT_DOWNLOAD_URL
+                     Аварийный override страницы релиза для кнопки
+                     «Обновить клиент» (абсолютный https:// URL).
+  ETN_CLIENT_SHA256  SHA-256 (64 hex) Linux-архива клиента для install.sh.
   ETN_API_KEY        API-key для "etn mcp" и "etn publications" (если не
                      передан --api-key).
 
 Запустите: etn <команда> --help для справки по команде.`;
 
-const HELP_INIT = `Использование: etn init --username <логин> [--display-name "<имя>"]
+const HELP_INIT = `Использование: etn init --username <логин> [--display-name "<имя>"] [--key-out <файл>]
+                etn init --check
 
 Создаёт корневого администратора и первичный API-key. Повторный запуск
-завершается ошибкой «уже инициализировано».`;
+завершается ошибкой «уже инициализировано».
+
+  --key-out <файл>   Записать ключ в файл (для установщика — каталог с
+                     ограниченным доступом) и не печатать его. Ключ всё равно
+                     выдаётся один раз: восстановить его нельзя.
+  --check            Только сообщить состояние инициализации, ничего не менять
+                     и не создавать. Коды: 0 — первый администратор есть,
+                     1 — сервер не инициализирован, 2 — проверить не удалось.
+                     База открывается строго на чтение; SQLite в режиме WAL
+                     может создать рядом служебные файлы _system.db-shm и
+                     _system.db-wal — это нормальные файлы SQLite, содержимое
+                     _system.db не меняется.`;
 
 const HELP_MCP = `Использование: etn mcp [--api-key <ключ>]
 
@@ -542,7 +607,39 @@ function printGlobalHelp(): void {
 }
 
 /**
+ * Write the freshly generated key into the installer's protected file
+ * (`--key-out`). The file is recreated so that it inherits the ACL of the
+ * restricted directory instead of keeping a stale one, and permissions are
+ * narrowed to the owner at the POSIX level (`mode` is advisory on Windows —
+ * the directory DACL is what actually restricts access, see installer).
+ *
+ * @returns `true` when the key is safely on disk.
+ */
+function writeKeyOutFile(keyPath: string, key: string): boolean {
+  try {
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    rmSync(keyPath, { force: true });
+    writeFileSync(keyPath, `${key}\n`, { mode: 0o600 });
+    return true;
+  } catch (err) {
+    console.error(
+      `Не удалось записать ключ в ${keyPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    console.error(
+      'Ключ не создан в базе: исправьте доступ к каталогу и повторите etn init.',
+    );
+    return false;
+  }
+}
+
+/**
  * Run the `init` subcommand against `config.dataDir`.
+ *
+ * The key is delivered exactly once: printed to stdout by default, or written
+ * into the `--key-out` file when the installer asks for it. With `--key-out`
+ * the file is written **before** the database transaction, so a crash between
+ * the two never leaves an administrator whose key is unknown; a failed
+ * transaction removes the file again.
  *
  * @returns process exit code (0 = success, 1 = failure).
  */
@@ -561,29 +658,40 @@ function runInit(args: InitArgs, config: ServerConfig): number {
     const userId = randomUUID();
     const apiKeyId = randomUUID();
 
-    sys.transaction(() => {
-      const user = sys.createUser({
-        id: userId,
-        username: args.username,
-        displayName: args.displayName,
-        isAdmin: true,
-        isFirstUser: true,
+    let keyPath: string | null = null;
+    if (args.keyOut !== null) {
+      keyPath = path.resolve(args.keyOut);
+      if (!writeKeyOutFile(keyPath, gen.key)) return 1;
+    }
+
+    try {
+      sys.transaction(() => {
+        const user = sys.createUser({
+          id: userId,
+          username: args.username,
+          displayName: args.displayName,
+          isAdmin: true,
+          isFirstUser: true,
+        });
+        sys.createApiKey({
+          id: apiKeyId,
+          userId: user.id,
+          label: 'primary',
+          keyHash: gen.keyHash,
+          keyPrefix: gen.keyPrefix,
+        });
+        sys.insertAuditLog({
+          category: 'system',
+          action: 'init',
+          actorUserId: user.id,
+          targetType: 'user',
+          targetId: user.id,
+        });
       });
-      sys.createApiKey({
-        id: apiKeyId,
-        userId: user.id,
-        label: 'primary',
-        keyHash: gen.keyHash,
-        keyPrefix: gen.keyPrefix,
-      });
-      sys.insertAuditLog({
-        category: 'system',
-        action: 'init',
-        actorUserId: user.id,
-        targetType: 'user',
-        targetId: user.id,
-      });
-    });
+    } catch (err) {
+      if (keyPath !== null) rmSync(keyPath, { force: true });
+      throw err;
+    }
 
     console.log('ETN инициализирован.');
     console.log('');
@@ -593,8 +701,13 @@ function runInit(args: InitArgs, config: ServerConfig): number {
       console.log(`  Отображаемое имя:  ${args.displayName}`);
     }
     console.log('');
-    console.log('Первичный API-key (показан один раз — сохраните его):');
-    console.log(`  ${gen.key}`);
+    if (keyPath !== null) {
+      console.log('Первичный API-key записан в защищённый файл (в консоль не выводится):');
+      console.log(`  ${keyPath}`);
+    } else {
+      console.log('Первичный API-key (показан один раз — сохраните его):');
+      console.log(`  ${gen.key}`);
+    }
     console.log('');
     console.log(
       'Внимание: ключ не передавайте по открытым каналам. Восстановить его ' +
@@ -604,6 +717,46 @@ function runInit(args: InitArgs, config: ServerConfig): number {
   } finally {
     sys.close();
   }
+}
+
+/** Exit code of `etn init --check`: the first administrator exists. */
+const INIT_CHECK_INITIALIZED = 0;
+/** Exit code of `etn init --check`: no first administrator (init is needed). */
+const INIT_CHECK_NOT_INITIALIZED = 1;
+/** Exit code of `etn init --check`: the state could not be determined. */
+const INIT_CHECK_FAILED = 2;
+
+/**
+ * Run `etn init --check` — the installer's idempotency probe (task 686c5d76).
+ *
+ * The criterion is `hasFirstUser()`, not the presence of `_system.db`: a
+ * database left over from an interrupted attempt must be initialised again.
+ * The check opens the database strictly read-only and never creates the data
+ * directory, the database file or migrations. SQLite in WAL mode can create the
+ * `_system.db-shm`/`_system.db-wal` sidecars on a read-only open: they are
+ * normal SQLite service files and do not change the database contents
+ * (9b310991); `hasFirstUser()` behaviour is unchanged.
+ *
+ * @returns 0 — initialised, 1 — not initialised, 2 — check failed.
+ */
+function runInitCheck(config: ServerConfig): number {
+  const result = SystemDb.checkFirstUser(config.dataDir);
+  if (result.state === 'unreadable') {
+    console.error(`Не удалось проверить инициализацию: ${result.error}`);
+    return INIT_CHECK_FAILED;
+  }
+  if (result.state === 'initialized') {
+    console.log('Сервер инициализирован: первый администратор есть.');
+    return INIT_CHECK_INITIALIZED;
+  }
+  if (result.reason === 'no-db') {
+    console.log('Сервер не инициализирован: файла _system.db нет.');
+  } else if (result.reason === 'no-users-table') {
+    console.log('Сервер не инициализирован: в _system.db нет таблицы users.');
+  } else {
+    console.log('Сервер не инициализирован: первого администратора нет.');
+  }
+  return INIT_CHECK_NOT_INITIALIZED;
 }
 
 /**
@@ -641,7 +794,7 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       );
       return 1;
     }
-    return runInit(parsed, config);
+    return parsed.check ? runInitCheck(config) : runInit(parsed, config);
   }
 
   if (command === 'mcp') {

@@ -1,0 +1,165 @@
+{
+  "name": "1ae1f9b8-hidden-structures-indicators",
+  "description": "GUI-гейт ошибки 1ae1f9b8: скрытый экран «Структуры» не держит подписки индикаторов облачков. Стенд сеет дерево из 15 строк (фикстура ui-probe.1ae1f9b8-seed.mjs: HOME + мысль карты + группа «Дерево 1ae1f9b8» + 12 строк) и слой «Слой 1ae1f9b8». Сценарий открывает «Структуры» (дерево подписывает свои строки), уходит на карту и дважды переключает слой через настоящее меню «Основа» — каждая смена запускает волну indicatorsAll. serverLog.atMost считает запросы comments/attachments за прогон: до фикса волна читала строки скрытого дерева, после — только видимые облачка карты (проверена красная фаза на дофиксовой сборке). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.1ae1f9b8-hidden-indicators.scenario.json --scenario-seed client/scripts/ui-probe.1ae1f9b8-seed.mjs",
+  "timeout": 300000,
+  "serverLog": {
+    "atMost": [
+      {
+        "pattern": "\"url\":\"[^\"]*/thoughts/[^\"]*/comments\",\"status\":200",
+        "max": 48
+      },
+      {
+        "pattern": "\"url\":\"[^\"]*/thoughts/[^\"]*/attachments\",\"status\":200",
+        "max": 48
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    {
+      "name": "server-url-value",
+      "probe": "document.querySelector(\"input[placeholder^='http']\")?.value ?? null",
+      "expect": "{{serverUrl}}"
+    },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "canvas-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.canvas-focus-row .focus-cloud') !== null"
+    },
+    {
+      "name": "open-structures",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"Структуры мыслей\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tree-home-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelectorAll('.st-row').length > 0"
+    },
+    {
+      "name": "expand-home",
+      "probe": "(() => { const row = document.querySelector('.st-row'); const e = row === null ? null : row.querySelector('.ellipse-bottom'); if (e === null) return 'no-ellipse'; e.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "group-visible",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.st-row .cloud')].some((e) => { const t = e.querySelector('.cloud-title'); return ((t ? t.textContent : e.textContent) || '').trim() === 'Дерево 1ae1f9b8'; })"
+    },
+    {
+      "name": "expand-group",
+      "probe": "(() => { const cloud = [...document.querySelectorAll('.st-row .cloud')].find((e) => { const t = e.querySelector('.cloud-title'); return ((t ? t.textContent : e.textContent) || '').trim() === 'Дерево 1ae1f9b8'; }); const e = cloud === undefined ? null : cloud.querySelector('.ellipse-bottom'); if (e === null) return 'no-ellipse'; e.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tree-rows-visible",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.st-row .cloud')].some((e) => { const t = e.querySelector('.cloud-title'); return ((t ? t.textContent : e.textContent) || '').trim() === 'Строка 1ae1f9b8 1'; })"
+    },
+    {
+      "name": "tree-rows-count",
+      "probe": "document.querySelectorAll('.st-row').length"
+    },
+    {
+      "name": "tree-rows-enough",
+      "probe": "document.querySelectorAll('.st-row').length >= 10",
+      "expect": true
+    },
+    {
+      "name": "tree-row-counter-visible",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.st-row .cloud')].some((e) => { const t = e.querySelector('.cloud-title'); if (((t ? t.textContent : e.textContent) || '').trim() !== 'Строка 1ae1f9b8 1') return false; const cells = e.querySelectorAll('.cloud-ind .ind'); return cells.length === 3 && /^📅[0-9]+$/.test((cells[1].textContent || '').trim()); })"
+    },
+    {
+      "name": "install-helper",
+      "probe": "(() => { window.__i1ae = { t: (e) => { const q = e.querySelector('.cloud-title'); return ((q ? q.textContent : e.textContent) || '').trim(); }, treeRows: () => document.querySelectorAll('.st-row').length, layerLabel: () => [...document.querySelectorAll('.toolbar .tb-label')].map((x) => (x.textContent || '').trim()).find((t) => t === 'Основа' || t === 'Слой 1ae1f9b8') || null, openLayerMenu: () => { const s = [...document.querySelectorAll('.toolbar .tb-label')].find((x) => { const t = (x.textContent || '').trim(); return t === 'Основа' || t === 'Слой 1ae1f9b8'; }); if (s === undefined) return 'no-button'; s.closest('button').click(); return 'ok'; }, pickLayer: (title) => { const item = [...document.querySelectorAll('.menu .menu-item')].find((e) => { const l = e.querySelector('.menu-item-label'); return ((l ? l.textContent : e.textContent) || '').trim() === title; }); if (item === undefined) return 'no-item'; item.click(); return 'ok'; } }; return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "back-to-map",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"Карта мыслей\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "map-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas-focus-row .focus-cloud') !== null"
+    },
+    {
+      "name": "hidden-tree-intact",
+      "probe": "window.__i1ae.treeRows() >= 10",
+      "expect": true
+    },
+    { "name": "layer-label-before", "probe": "window.__i1ae.layerLabel()", "expect": "Основа" },
+    { "name": "open-layer-menu-1", "probe": "window.__i1ae.openLayerMenu()", "expect": "ok" },
+    {
+      "name": "layer-menu-open-1",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "layer-item-1",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.menu .menu-item')].some((e) => { const l = e.querySelector('.menu-item-label'); return ((l ? l.textContent : e.textContent) || '').trim() === 'Слой 1ae1f9b8'; })"
+    },
+    { "name": "pick-layer-1", "probe": "window.__i1ae.pickLayer('Слой 1ae1f9b8')", "expect": "ok" },
+    {
+      "name": "layer-switched-1",
+      "timeout": 60000,
+      "waitFor": "window.__i1ae.layerLabel() === 'Слой 1ae1f9b8'"
+    },
+    {
+      "name": "wave-settle-1",
+      "timeout": 60000,
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 8000)); return true; })()",
+      "expect": true
+    },
+    { "name": "open-layer-menu-2", "probe": "window.__i1ae.openLayerMenu()", "expect": "ok" },
+    {
+      "name": "layer-menu-open-2",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.menu') !== null"
+    },
+    {
+      "name": "layer-item-2",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.menu .menu-item')].some((e) => { const l = e.querySelector('.menu-item-label'); return ((l ? l.textContent : e.textContent) || '').trim() === 'Основа'; })"
+    },
+    { "name": "pick-layer-2", "probe": "window.__i1ae.pickLayer('Основа')", "expect": "ok" },
+    {
+      "name": "layer-switched-2",
+      "timeout": 60000,
+      "waitFor": "window.__i1ae.layerLabel() === 'Основа'"
+    },
+    {
+      "name": "wave-settle-2",
+      "timeout": 60000,
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 8000)); return true; })()",
+      "expect": true
+    },
+    {
+      "name": "map-survived",
+      "probe": "document.querySelector('.canvas-focus-row .focus-cloud') !== null",
+      "expect": true
+    },
+    {
+      "name": "hidden-tree-still-rendered",
+      "probe": "window.__i1ae.treeRows() >= 10",
+      "expect": true
+    }
+  ]
+}

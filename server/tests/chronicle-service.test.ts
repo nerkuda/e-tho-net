@@ -433,14 +433,101 @@ describe(
           },
           USER,
         );
+        // Без поля `body` — дефолт REST `html` (прежний состав ответа,
+        // ошибка 35e1319a): только `body_html`, `body_md` на провод не идёт.
         const row = query(ndb, {}).rows[0];
         assert.ok(row, 'запись найдена');
-        assert.match(row!.body_html, /<h2/, 'заголовок markdown — как <h2>');
-        assert.match(row!.body_html, /<ul/, 'список markdown — как <ul>');
-        assert.match(row!.body_html, /<strong/, 'жирный markdown — как <strong>');
-        assert.ok(!row!.body_html.includes('##'), 'markdown-разметка не остаётся текстом');
+        assert.ok(row!.body_html !== undefined, 'дефолт REST отдаёт body_html');
+        assert.ok(!('body_md' in row!), 'дефолт REST не отдаёт body_md');
+        assert.match(row!.body_html!, /<h2/, 'заголовок markdown — как <h2>');
+        assert.match(row!.body_html!, /<ul/, 'список markdown — как <ul>');
+        assert.match(row!.body_html!, /<strong/, 'жирный markdown — как <strong>');
+        assert.ok(!row!.body_html!.includes('##'), 'markdown-разметка не остаётся текстом');
         // Выжимка остаётся в ответе ради совместимости MCP.
         assert.ok(row!.snippet.length > 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('проекция тела записи по `body`: md — только markdown, html — только HTML, дефолт html (0.15.1, ошибки 50a94510, 35e1319a)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const bodyMd = '## Итоги дня\n\n- первое\n\n**важно**';
+        createComment(
+          ndb,
+          'thought',
+          a,
+          { kind: 'chronological', body_md: bodyMd, valid_from: '2024-01-01' },
+          USER,
+        );
+        const md = query(ndb, { body: 'md' }).rows[0];
+        assert.ok(md, 'запись найдена (md)');
+        assert.equal(md!.body_md, bodyMd, 'md: тело — исходный markdown');
+        assert.ok(!('body_html' in md!), 'md: поля body_html нет');
+        const html = query(ndb, { body: 'html' }).rows[0];
+        assert.ok(html, 'запись найдена (html)');
+        assert.ok(!('body_md' in html!), 'html: поля body_md нет');
+        assert.match(html!.body_html!, /<h2/, 'html: markdown отрендерен');
+        // Дефолт REST — `html`: ровно прежний состав ответа, без `body_md`
+        // (ошибка 35e1319a).
+        const byDefault = query(ndb, {}).rows[0];
+        assert.ok(byDefault, 'запись найдена (без body)');
+        assert.equal(byDefault!.body_html, html!.body_html, 'дефолт = html: то же тело');
+        assert.ok(!('body_md' in byDefault!), 'дефолт: поля body_md нет');
+        const both = query(ndb, { body: 'both' }).rows[0];
+        assert.ok(both, 'запись найдена (both)');
+        assert.equal(both!.body_md, bodyMd);
+        assert.match(both!.body_html!, /<h2/);
+        // `snippet` не зависит от формата тела (ошибка 50a94510).
+        assert.equal(md!.snippet, html!.snippet, 'snippet стабилен md ↔ html');
+        assert.equal(md!.snippet, both!.snippet, 'snippet стабилен md ↔ both');
+        assert.equal(md!.snippet, byDefault!.snippet, 'snippet стабилен md ↔ дефолт');
+        // Закрытый словарь: прочие значения — VALIDATION_ERROR поля `body`.
+        assert.throws(
+          () => query(ndb, { body: 'markdown' }),
+          (err: unknown) =>
+            err instanceof EtnError &&
+            err.code === 'VALIDATION_ERROR' &&
+            (err.details as { field?: string }).field === 'body',
+          'недопустимый body отвергается',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('MCP-трансформ body_html не вызывается для формата md (экономия рендера)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        createComment(
+          ndb,
+          'thought',
+          a,
+          { kind: 'chronological', body_md: 'тело', valid_from: '2024-01-01' },
+          USER,
+        );
+        let calls = 0;
+        const run = (body: 'md' | 'html' | 'both'): void => {
+          const request = parseChronicleQueryBody(
+            { body, order: 'asc', limit: 50, offset: 0 },
+            'test-request',
+          );
+          queryChronicle(ndb, request, {
+            bodyHtmlTransform: (md) => {
+              calls += 1;
+              return `<p>${md}</p>`;
+            },
+          });
+        };
+        run('md');
+        assert.equal(calls, 0, 'для md HTML не собирается');
+        run('html');
+        assert.equal(calls, 1, 'для html HTML собирается');
+        run('both');
+        assert.equal(calls, 2, 'для both HTML собирается');
       } finally {
         ndb.close();
       }

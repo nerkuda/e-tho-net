@@ -114,16 +114,16 @@ function extractChangelogSection(changelog, version) {
   return body.join('\n');
 }
 
-/** Футер тела релиза: ассеты по ОС, автообновление и compare-ссылка. */
+/** Футер тела релиза: ассеты по платформам и compare-ссылка. */
 function buildFooter(version, prevTag, repo) {
   const lines = [
     '## Скачать',
     '',
-    `- Windows: \`ETN.Setup.${version}.exe\``,
-    `- macOS (Apple Silicon): \`ETN-${version}-arm64.dmg\``,
-    `- Linux: \`ETN-${version}.AppImage\` / \`ETN-${version}.deb\``,
+    `- Windows: \`ETN-Setup-${version}.exe\` — установщик сервера и клиента`,
+    `- Linux-клиент: \`ETN-Client-${version}-linux-x64.tar.gz\` — установка и обновление скриптом \`install.sh\``,
+    `- Сервер Linux: \`etn-server-${version}.tar.gz\` — архив серверной поставки`,
     '',
-    'Установленный клиент обновится сам.',
+    'SHA-256 каждого ассета — в файле `SHA256SUMS` этого же релиза.',
   ];
   if (typeof prevTag === 'string' && prevTag !== '') {
     const compareUrl = `https://github.com/${repo}/compare/${prevTag}...v${version}`;

@@ -424,3 +424,35 @@ describe('ссылки: автолинк голых URL выглядит как 
     }
   });
 });
+
+describe('пустые строки исходника: маркер рендерера и стиль просмотра (ошибка 7f017ce1)', () => {
+  it('класс маркера в рендерере и в CSS совпадает', () => {
+    // Класс объявлен в `markdown/src/blank-lines.ts` (BLANK_LINE_CLASS) и
+    // используется правилом просмотра: переименование одной стороны без
+    // другой молча вернёт ошибку (маркеры останутся без снятия зазора).
+    const renderer = readFileSync(
+      resolve(CLIENT_ROOT, '..', 'markdown', 'src', 'blank-lines.ts'),
+      'utf8',
+    );
+    const match = /export const BLANK_LINE_CLASS = '([^']+)'/.exec(renderer);
+    assert.ok(match !== null, 'в markdown/src/blank-lines.ts объявлен BLANK_LINE_CLASS');
+    const cls = match[1]!;
+    assert.ok(
+      readRendererCss().includes(`.${cls}`),
+      `стили просмотра обязаны знать класс .${cls} (снятие автоматического зазора у блока перед маркером)`,
+    );
+  });
+
+  it('автоматический зазор снят у блока перед маркером пустой строки', () => {
+    const css = readRendererCss();
+    assert.ok(
+      parseRules(css).some(
+        (r) =>
+          r.prelude.includes(':has(+ .md-blank-line)') &&
+          /margin-block-end:\s*0/.test(r.body),
+      ),
+      'блок перед `.md-blank-line` не должен добавлять свой зазор: иначе первая ' +
+        'пустая строка считается дважды, а серия склеивается',
+    );
+  });
+});

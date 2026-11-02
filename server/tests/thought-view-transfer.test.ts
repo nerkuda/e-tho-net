@@ -57,6 +57,7 @@ import {
   closeRestContext,
   nativeAvailable,
   type RestTestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 
 const USER = 'user-1';
@@ -1027,7 +1028,7 @@ async function selectLayer(
   const res = await ctx.app.inject({
     method: 'POST',
     url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-    headers: { ...authHeaders(ctx), 'client-id': clientId },
+    headers: { ...authHeaders(ctx), ...clientHeaders(clientId) },
     payload: {},
   });
   assert.equal(res.statusCode, 200, res.body?.toString());
@@ -1333,7 +1334,7 @@ describe(
         const typeId = await createType(ctx, 'task');
         const thoughtId = await createThought(ctx, 'Мысль', typeId);
         const layerId = await createLayer(ctx, 'Слой переносов');
-        const layerHeaders = { ...h, 'client-id': 'transfer-layer' };
+        const layerHeaders = { ...h, ...clientHeaders('transfer-layer') };
         await selectLayer(ctx, layerId, 'transfer-layer');
 
         // В слое: типовой отбор «Занято» → удаляем (надгробие занимает имя).

@@ -31,6 +31,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { EtnError, type EtnErrorCode } from '@etn/shared';
 
 import type {
+  ReaderDbPingResult,
   ReaderTask,
   ReaderTaskContext,
   ReaderTaskResponse,
@@ -122,8 +123,36 @@ function toFailure(err: unknown): ReaderTaskResponse {
   return { ok: false, error: { code, message: err instanceof Error ? err.message : String(err) } };
 }
 
+/**
+ * Лёгкое чтение для `GET /api/v1/health` (задача 0178253c, требование
+ * 0a79d9de): открыть файл `readonly: true`, прочитать `PRAGMA
+ * schema_version` и закрыть соединение.
+ *
+ * Соединение НЕ кешируется: пинг редкий (кеш health — 1.5 с), а закрытое
+ * соединение не держит файл на Windows — иначе `rmSync` временного каталога
+ * после теста/удаления сети упирался бы в открытый дескриптор (класс ошибки
+ * abcd3f0b). Контекст слоя не применяется: проверяется любой файл SQLite, а
+ * не только `data.db` сети.
+ */
+function pingDatabase(dbPath: string): ReaderTaskResponse {
+  let db: Database.Database | null = null;
+  try {
+    db = new DatabaseConstructor(dbPath, { readonly: true, fileMustExist: true });
+    const rows = db.pragma('schema_version') as Array<{ schema_version: number }>;
+    const result: ReaderDbPingResult = { schema_version: rows[0]?.schema_version ?? 0 };
+    return { ok: true, result };
+  } catch (err) {
+    return toFailure(err);
+  } finally {
+    db?.close();
+  }
+}
+
 /** Исполнить задачу на соединении воркера. Только чтение. */
 function execute(task: ReaderTask): ReaderTaskResponse {
+  // `db.ping` не привязан к сети и слою: соединение к файлу БД открывается
+  // напрямую, `connectionFor` для него неприменим (в системной БД нет слоёв).
+  if (task.op === 'db.ping') return pingDatabase(task.context.dbPath);
   const ndb = connectionFor(task.context);
   switch (task.op) {
     case 'thoughts.query': {

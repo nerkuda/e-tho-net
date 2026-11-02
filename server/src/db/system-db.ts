@@ -15,7 +15,7 @@
 
 import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 
 import type {
   AnyRealtimeEvent,
@@ -44,6 +44,14 @@ import {
   type WalCheckpointMode,
   type WalCheckpointStats,
 } from './wal-checkpoint.js';
+
+/**
+ * Критерий «первый администратор есть» — единственный источник и для
+ * {@link SystemDb.hasFirstUser}, и для read-only проверки
+ * {@link SystemDb.checkFirstUser} (задача 686c5d76). Вынесен в константу,
+ * чтобы проба на базе предыдущей версии не могла разойтись с рабочей веткой.
+ */
+const COUNT_FIRST_USER_SQL = 'SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1';
 
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
@@ -239,12 +247,58 @@ export interface ApiKeyWithUser {
   user: User;
 }
 
+/**
+ * Строка журнала заданий обновления сервера (таблица `update_jobs`, миграция
+ * `016_update_jobs.sql`, сущность «Задание обновления сервера» 1f39811c,
+ * задача 0a27a63b).
+ *
+ * `stage` хранится строкой: набор допустимых значений и их терминальность —
+ * знание домена (`server/src/update/apply.ts`), а не схемы. `updated_at` и
+ * `finished_at` — служебные поля хранения: сущность отдаёт клиенту только
+ * `id`/`target_version`/`stage`/`started_at`/`error`/`backup_path`.
+ */
+export interface UpdateJobRow {
+  id: string;
+  target_version: string;
+  stage: string;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  error: string | null;
+  backup_path: string | null;
+}
+
+/** Поля задания обновления, которые меняются по ходу исполнения. */
+export interface UpdateJobPatch {
+  stage: string;
+  /** ISO-8601 момента записи. */
+  updatedAt: string;
+  /** ISO-8601 момента завершения; `null` у активного задания. */
+  finishedAt: string | null;
+  error: string | null;
+  backupPath: string | null;
+}
+
 /** A still-fresh cached idempotent response (02-data-model.md §2.7). */
 export interface CachedResponse {
   status: number;
   /** JSON-encoded body as stored. */
   body: string | null;
 }
+
+/**
+ * Result of {@link SystemDb.checkFirstUser}: the read-only probe used by
+ * `etn init --check` (installer, task 686c5d76), which must answer "is the
+ * first administrator present" without creating the data directory, the
+ * database or migrations. The database is opened with `readonly: true`, but
+ * SQLite in WAL mode may create the `_system.db-shm`/`_system.db-wal` sidecars
+ * next to it — normal SQLite service files that do not change the database
+ * contents (documented behaviour, 9b310991).
+ */
+export type FirstUserCheck =
+  | { state: 'initialized' }
+  | { state: 'not-initialized'; reason: 'no-db' | 'no-users-table' | 'no-first-user' }
+  | { state: 'unreadable'; error: string };
 
 /**
  * Typed accessor for `_system.db`.
@@ -304,10 +358,24 @@ export class SystemDb {
   private readonly stInsertToolCallMetric: Database.Statement;
   private readonly stListApiKeyIdsByUser: Database.Statement;
   private readonly stListMemberNetworkIds: Database.Statement;
+  private readonly stInsertUpdateJob: Database.Statement;
+  private readonly stGetUpdateJob: Database.Statement;
+  private readonly stLatestUpdateJob: Database.Statement;
+  private readonly stActiveUpdateJob: Database.Statement;
+  private readonly stListActiveUpdateJobs: Database.Statement;
+  private readonly stUpdateUpdateJob: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
    * PRAGMAs or migrations — callers that need those use {@link SystemDb.open}.
+   *
+   * Требование к схеме: statements готовятся для ВСЕХ таблиц текущей версии,
+   * поэтому соединение обязано пройти миграции. Чтение базы предыдущей версии
+   * (без новых миграций) идёт не через конструктор, а через статическую пробу
+   * {@link SystemDb.checkFirstUser}: иначе отсутствующая таблица (например
+   * `update_jobs` из миграции 016) роняет конструктор на `no such table` и
+   * ломает контракт `etn init --check` (блокер приёмки 0a27a63b, задача
+   * 686c5d76).
    */
   constructor(db: Database.Database) {
     this.db = db;
@@ -324,7 +392,7 @@ export class SystemDb {
     this.stInsertAudit = db.prepare(
       'INSERT INTO audit_log (ts, actor_user_id, network_id, category, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
-    this.stCountFirstUser = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1');
+    this.stCountFirstUser = db.prepare(COUNT_FIRST_USER_SQL);
     this.stGetMemberRole = db.prepare(
       'SELECT role FROM network_members WHERE user_id = ? AND network_id = ? LIMIT 1',
     );
@@ -459,6 +527,36 @@ export class SystemDb {
     this.stListMemberNetworkIds = db.prepare(
       'SELECT network_id FROM network_members WHERE user_id = ?',
     );
+    // Задание обновления сервера (таблица `update_jobs`, задача 0a27a63b):
+    // терминальные этапы сущности 1f39811c — `done` и `failed`; всё остальное
+    // считается активным (в т.ч. неизвестное значение — его завершит
+    // восстановление после старта: `done` по достигнутой версии либо `failed`).
+    // Одновременно активным может быть не более одного задания; это держит
+    // синхронная пара «проверка + вставка» в update/apply.ts.
+    this.stInsertUpdateJob = db.prepare(
+      `INSERT INTO update_jobs
+         (id, target_version, stage, started_at, updated_at, finished_at, error, backup_path)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+    );
+    this.stGetUpdateJob = db.prepare('SELECT * FROM update_jobs WHERE id = ? LIMIT 1');
+    this.stLatestUpdateJob = db.prepare(
+      'SELECT * FROM update_jobs ORDER BY started_at DESC, rowid DESC LIMIT 1',
+    );
+    this.stActiveUpdateJob = db.prepare(
+      `SELECT * FROM update_jobs
+        WHERE stage <> 'done' AND stage <> 'failed'
+        ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+    );
+    this.stListActiveUpdateJobs = db.prepare(
+      `SELECT * FROM update_jobs
+        WHERE stage <> 'done' AND stage <> 'failed'
+        ORDER BY started_at ASC, rowid ASC`,
+    );
+    this.stUpdateUpdateJob = db.prepare(
+      `UPDATE update_jobs
+          SET stage = ?, updated_at = ?, finished_at = ?, error = ?, backup_path = ?
+        WHERE id = ?`,
+    );
   }
 
   /** TTL window for cached idempotent responses, in milliseconds. */
@@ -486,6 +584,47 @@ export class SystemDb {
     db.pragma(`journal_size_limit = ${WAL_JOURNAL_SIZE_LIMIT_BYTES}`);
     runMigrations(db, systemMigrationsDir(), log);
     return new SystemDb(db);
+  }
+
+  /**
+   * Read-only probe of the first administrator (`etn init --check`, task
+   * 686c5d76). The criterion is {@link hasFirstUser}, not the presence of
+   * `_system.db`: a database left over from an interrupted attempt reports
+   * `not-initialized` and must be initialised again.
+   *
+   * Never creates the data directory, the database file or migrations: the
+   * connection is opened with `readonly: true` and only `sqlite_master` /
+   * `users` are read. Схему текущей версии проверка НЕ требует: база
+   * предыдущей версии (например 0.15.0 без таблицы `update_jobs`) обязана
+   * читаться, иначе установщик получает exit 2 вместо контрактного 0/1.
+   * Поэтому запрос — минимальный (`COUNT_FIRST_USER_SQL`), а не
+   * `new SystemDb(db)` с подготовкой statements всех таблиц (блокер приёмки
+   * 0a27a63b).
+   *
+   * @param dataDir - absolute ETN data directory.
+   */
+  static checkFirstUser(dataDir: string): FirstUserCheck {
+    const dbPath = systemDbPath(dataDir);
+    if (!existsSync(dbPath)) return { state: 'not-initialized', reason: 'no-db' };
+    let db: Database.Database | null = null;
+    try {
+      db = new DatabaseConstructor(dbPath, { readonly: true, fileMustExist: true });
+      // База от прерванной попытки: файл создан, миграции не применились.
+      const usersTable = db
+        .prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table' AND name = 'users'")
+        .get() as { c: number };
+      if (usersTable.c === 0) return { state: 'not-initialized', reason: 'no-users-table' };
+      // Тот же критерий, что у hasFirstUser(), но без конструктора: он
+      // готовит statements для таблиц, которых в базе прошлой версии ещё нет.
+      const firstUser = db.prepare(COUNT_FIRST_USER_SQL).get() as { c: number };
+      return firstUser.c > 0
+        ? { state: 'initialized' }
+        : { state: 'not-initialized', reason: 'no-first-user' };
+    } catch (err) {
+      return { state: 'unreadable', error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      if (db !== null) db.close();
+    }
   }
 
   /** Insert a user and return the domain object. */
@@ -1309,6 +1448,98 @@ export class SystemDb {
   listMemberNetworkIds(userId: string): string[] {
     const rows = this.stListMemberNetworkIds.all(userId) as Array<{ network_id: string }>;
     return rows.map((r) => r.network_id);
+  }
+
+  // -------------------------------------------------------------------------
+  // Задание обновления сервера (таблица `update_jobs`, задача 0a27a63b)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Создать задание обновления в этапе `preparing`. Вызывающий уже проверил,
+   * что активного задания нет, — отдельного UNIQUE-ограничения в схеме нет
+   * (см. комментарий миграции `016_update_jobs.sql`).
+   */
+  createUpdateJob(params: {
+    id: string;
+    targetVersion: string;
+    stage: string;
+    startedAt: string;
+  }): void {
+    this.stInsertUpdateJob.run(
+      params.id,
+      params.targetVersion,
+      params.stage,
+      params.startedAt,
+      params.startedAt,
+    );
+  }
+
+  /** Задание обновления по id или `null`. */
+  getUpdateJob(id: string): UpdateJobRow | null {
+    const row = this.stGetUpdateJob.get(id) as UpdateJobRow | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Последнее задание обновления по времени старта — то, что показывает
+   * `GET /api/v1/system/update/progress` (терминальное задание тоже: итог
+   * последней попытки). `null` — заданий не было.
+   */
+  getLatestUpdateJob(): UpdateJobRow | null {
+    const row = this.stLatestUpdateJob.get() as UpdateJobRow | undefined;
+    return row ?? null;
+  }
+
+  /** Активное (не терминальное) задание обновления или `null`. */
+  getActiveUpdateJob(): UpdateJobRow | null {
+    const row = this.stActiveUpdateJob.get() as UpdateJobRow | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Завершить незавершённые задания обновления — по одному итогу на задание,
+   * одной транзакцией (терминальные не трогаются). Итог решает домен
+   * (`update/apply.ts`): хранилище не знает semver и версий, поэтому
+   * `outcomeFor` получает строку целиком (включая `target_version`,
+   * `stage`, `backup_path`) и возвращает терминальный этап и пояснение.
+   * `nowIso` пишется и в `updated_at`, и в `finished_at`: завершённое задание
+   * не может остаться с пустым временем завершения.
+   * Возвращает число завершённых заданий.
+   */
+  recoverInterruptedUpdateJobs(
+    nowIso: string,
+    outcomeFor: (row: UpdateJobRow) => { stage: 'done' | 'failed'; error: string | null },
+  ): number {
+    const rows = this.stListActiveUpdateJobs.all() as UpdateJobRow[];
+    if (rows.length === 0) {
+      return 0;
+    }
+    this.transaction(() => {
+      for (const row of rows) {
+        const outcome = outcomeFor(row);
+        this.stUpdateUpdateJob.run(
+          outcome.stage,
+          nowIso,
+          nowIso,
+          outcome.error,
+          row.backup_path,
+          row.id,
+        );
+      }
+    });
+    return rows.length;
+  }
+
+  /** Записать новое состояние задания (полная замена изменяемых полей). */
+  updateUpdateJob(id: string, patch: UpdateJobPatch): void {
+    this.stUpdateUpdateJob.run(
+      patch.stage,
+      patch.updatedAt,
+      patch.finishedAt,
+      patch.error,
+      patch.backupPath,
+      id,
+    );
   }
 
   /** Rebuild a full event envelope from an `event_log` row. */

@@ -46,6 +46,7 @@ import {
   authHeaders,
   buildRestContext,
   closeRestContext,
+  clientHeaders,
 } from './rest-helpers.js';
 import { createCommentWithTargets } from '../src/domain/comment-service.js';
 
@@ -324,7 +325,7 @@ describe('ошибка 3f535ae8: витрина и структура читаю
       const selected = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/networks/${ctx.networkId}/layers/${layerId}/select`,
-        headers: { ...authHeaders(ctx), 'client-id': layerClient },
+        headers: { ...authHeaders(ctx), ...clientHeaders(layerClient) },
         payload: {},
       });
       assert.equal(selected.statusCode, 200);
@@ -333,7 +334,7 @@ describe('ошибка 3f535ae8: витрина и структура читаю
       const updated = await ctx.app.inject({
         method: 'PATCH',
         url: `/api/v1/networks/${ctx.networkId}/comments/${comment.id}`,
-        headers: { ...authHeaders(ctx), 'client-id': layerClient },
+        headers: { ...authHeaders(ctx), ...clientHeaders(layerClient) },
         payload: { body_md: 'Слой: шаг 1, шаг 2.' },
       });
       assert.equal(updated.statusCode, 200, updated.body?.toString());
@@ -344,7 +345,7 @@ describe('ошибка 3f535ae8: витрина и структура читаю
       const inLayer = await ctx.app.inject({
         method: 'GET',
         url: `${baseUrl}?instruction_id=${instructionId}`,
-        headers: { ...authHeaders(ctx), 'client-id': layerClient },
+        headers: { ...authHeaders(ctx), ...clientHeaders(layerClient) },
       });
       assert.equal(inLayer.statusCode, 200);
       assert.equal(inLayer.json().data.body_md, 'Слой: шаг 1, шаг 2.');
@@ -353,7 +354,7 @@ describe('ошибка 3f535ae8: витрина и структура читаю
       const listInLayer = await ctx.app.inject({
         method: 'GET',
         url: baseUrl,
-        headers: { ...authHeaders(ctx), 'client-id': layerClient },
+        headers: { ...authHeaders(ctx), ...clientHeaders(layerClient) },
       });
       assert.equal(listInLayer.statusCode, 200);
       const listBody = listInLayer.json().data as {
@@ -365,7 +366,7 @@ describe('ошибка 3f535ae8: витрина и структура читаю
       // видят текст основы.
       for (const headers of [
         authHeaders(ctx),
-        { ...authHeaders(ctx), 'client-id': 'другой-клиент' },
+        { ...authHeaders(ctx), ...clientHeaders('другой-клиент') },
       ]) {
         const onBase = await ctx.app.inject({
           method: 'GET',

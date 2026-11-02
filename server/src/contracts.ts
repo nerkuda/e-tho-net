@@ -56,6 +56,7 @@ import {
   LAYER_THOUGHT_MERGE_MODES,
   LINK_PROPERTY_SIDES,
   LINK_STYLES,
+  MCP_CHRONICLE_BODY_FORMATS,
   MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_VIEW_MODES,
   parseLinkTypeFilterValue,
@@ -1904,7 +1905,41 @@ export const TypesList = defineContract(
     limit: z.number().int().min(1).max(500).optional(),
     offset: z.number().int().min(0).optional(),
     max_chars: z.number().int().min(1000).optional(),
+    // Задача 17ff4619 (0.15.1): фильтр по именам типов до пагинации — агент
+    // не выкачивает каталог ради одного имени.
+    keywords: z.string().min(1).optional(),
+    // Задача 17ff4619 (0.15.1): только идентификационные поля записи.
+    compact: z.boolean().optional(),
   }),
+  {},
+);
+
+/**
+ * `etn.types.get` (задача 17ff4619, 0.15.1, элемент спеки — «etn.types.get»):
+ * точечное чтение ОДНОГО типа по `id` XOR `name`. До инструмента агент
+ * выкачивал весь каталог и повторял вызов, не находя нужный тип в обрезанном
+ * ответе.
+ *
+ * `scope` ограничивает каталог поиска; резолв имени — тот же, что у `type` в
+ * `etn.thoughts.write`: мысли по `name_key`, связи по `name_forward` ИЛИ
+ * `name_reverse` (case-insensitive). Несколько совпадений В ОДНОМ каталоге →
+ * `VALIDATION_ERROR` с `details.candidates`; в разных каталогах при `scope:
+ * "all"` — не неоднозначность, возвращаются оба.
+ */
+export const TypesGet = defineContract(
+  'etn.types.get',
+  z
+    .object({
+      network_id: NetworkId,
+      id: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      scope: z.enum(TYPES_LIST_SCOPES).optional(),
+    })
+    // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
+    .strict()
+    .refine((v) => (v.id === undefined) !== (v.name === undefined), {
+      message: 'Укажите ровно одно: id (идентификатор типа) или name (имя типа).',
+    }),
   {},
 );
 
@@ -2176,6 +2211,11 @@ export const ChronicleQuery = defineContract(
     // операнды записи (`record_*`) и «Цели» (`targets`). XOR с плоскими
     // критериями — разбирает доменный `parseChronicleQueryBody`.
     ast: FilterAstBody.optional(),
+    // Формат тела записи в строке (0.15.1, ошибки 50a94510, 35e1319a): агенту
+    // по умолчанию нужен markdown, HTML — по явному запросу. `both` агенту не
+    // предлагается: это значение только для REST (там дефолт `html` — прежний
+    // состав ответа); дефолт `md` подставляет фасад.
+    body: z.enum(MCP_CHRONICLE_BODY_FORMATS).optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
@@ -4538,7 +4578,8 @@ export type ReaderOp =
   | 'comments.visible'
   | 'comments.presented'
   | 'comments.permanentPresented'
-  | 'comments.previewBatch';
+  | 'comments.previewBatch'
+  | 'db.ping';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
 export interface ReaderThoughtsQueryPayload {
@@ -4654,23 +4695,43 @@ export interface ReaderCommentsPreviewPayload {
   expandTransclusions: boolean;
 }
 
+/**
+ * Контекст задачи `db.ping` (задача 0178253c, `/health`): проверка БД не
+ * привязана ни к сети, ни к слою — нужен только файл. Соединение открывается
+ * воркером `readonly: true`; контекст слоя (`connectionFor`) не применяется.
+ */
+export interface ReaderDbPingContext {
+  /** Абсолютный путь к проверяемому файлу SQLite. */
+  dbPath: string;
+}
+
+/** Payload `db.ping` — пустой: путь БД приходит в контексте задачи. */
+export type ReaderDbPingPayload = Record<string, never>;
+
+/** Результат `db.ping` — версия схемы прочитанной БД (доказательство чтения). */
+export interface ReaderDbPingResult {
+  schema_version: number;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
-export type ReaderTask = { context: ReaderTaskContext } & (
-  | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
-  | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
-  | { op: 'thoughts.resolve'; payload: ReaderResolvePayload }
-  | { op: 'thoughts.resolveCards'; payload: ReaderResolvePayload }
-  | { op: 'thoughts.neighbors'; payload: ReaderNeighborsPayload }
-  | { op: 'thoughts.findDuplicates'; payload: ReaderFindDuplicatesPayload }
-  | { op: 'search.query'; payload: ReaderSearchPayload }
-  | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
-  | { op: 'graph.traverse'; payload: ReaderTraversePayload }
-  | { op: 'comments.list'; payload: ReaderCommentsListPayload }
-  | { op: 'comments.visible'; payload: ReaderCommentByIdPayload }
-  | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
-  | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
-  | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
-);
+export type ReaderTask =
+  | ({ context: ReaderTaskContext } & (
+      | { op: 'thoughts.query'; payload: ReaderThoughtsQueryPayload }
+      | { op: 'thoughts.queryIds'; payload: ReaderThoughtsQueryPayload }
+      | { op: 'thoughts.resolve'; payload: ReaderResolvePayload }
+      | { op: 'thoughts.resolveCards'; payload: ReaderResolvePayload }
+      | { op: 'thoughts.neighbors'; payload: ReaderNeighborsPayload }
+      | { op: 'thoughts.findDuplicates'; payload: ReaderFindDuplicatesPayload }
+      | { op: 'search.query'; payload: ReaderSearchPayload }
+      | { op: 'graph.subgraph'; payload: ReaderSubgraphPayload }
+      | { op: 'graph.traverse'; payload: ReaderTraversePayload }
+      | { op: 'comments.list'; payload: ReaderCommentsListPayload }
+      | { op: 'comments.visible'; payload: ReaderCommentByIdPayload }
+      | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
+      | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
+      | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
+    ))
+  | { context: ReaderDbPingContext; op: 'db.ping'; payload: ReaderDbPingPayload };
 
 /** `depths` в плоском виде (Map не переживает structured clone). */
 export interface ReaderDepthsEntry {

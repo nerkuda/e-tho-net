@@ -139,4 +139,20 @@ describe('guard: MCP — описания несут контрактные фо
       '`total` уменьшается, только если якорь попал на страницу',
     ]);
   });
+
+  it('etn.thoughts.write: `ref` новой мысли — на уровне элемента thoughts[], не внутри thought (f87ca85d)', async () => {
+    const all = await toolDescriptions();
+    const description = descriptionOf(all, 'etn.thoughts.write');
+    assertMentions(description, 'etn.thoughts.write', [
+      'на уровне элемента `thoughts[]`',
+      '`{ "ref": "a", "thought": { "title": "…" } }`',
+    ]);
+    // Прежняя формулировка «блок `thought` … он ОБЯЗАН нести локальный `ref`»
+    // читалась как «ref лежит внутри блока» и разошлась со схемой: два живых
+    // вызова упали на VALIDATION_ERROR (f87ca85d). Сторож не пускает её назад.
+    assert.ok(
+      !description.includes('он ОБЯЗАН нести локальный `ref`'),
+      `etn.thoughts.write: вернулась формулировка «ref внутри блока thought»\n---\n${description}`,
+    );
+  });
 });

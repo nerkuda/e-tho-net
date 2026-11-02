@@ -12,10 +12,16 @@
  */
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { BASE_LAYER_ID, EtnError, type LayerEcho } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  EtnError,
+  type LayerEcho,
+  type ServerUpdatingErrorDetails,
+} from '@etn/shared';
 
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
+import { SERVER_UPDATING_MESSAGE } from '../maintenance.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
 import type { CrossNetworkAccessContext } from '../domain/cross-network-ref-service.js';
 import { emitDomainEvent, type DomainEventActor } from '../realtime/emit.js';
@@ -186,6 +192,37 @@ export function requireWriteBudget(rt: McpRuntime): void {
         'Wait and retry.',
     );
   }
+}
+
+/**
+ * Гейт обслуживания сервера для изменяющих MCP-инструментов (задача 2f599b67,
+ * требование f84db18e; состояние — сущность aa55d459).
+ *
+ * Пока сервер в состоянии `updating`, изменяющий инструмент возвращает ошибку
+ * `SERVER_UPDATING` вместо выполнения — частичных записей и «тихих» успехов
+ * нет, TCP-соединение не рвётся, чтобы клиент получил ошибку инструмента.
+ * `details.retry_after` — пауза до повтора в секундах. Читающие инструменты не
+ * блокируются (карточка задачи; расхождение с f84db18e зафиксировано в хроно).
+ *
+ * Проверка живёт в диспетчере, общем для обоих транспортов (`mcp/server.ts`
+ * для основных инструментов, `tools/ops.ts` — для действий `etn.ops`), а не в
+ * HTTP-хуке: `/mcp` на отдельном порту обслуживается сырым node-http и в хуки
+ * Fastify не попадает.
+ *
+ * @returns `null` — сервер не на обслуживании; иначе готовый MCP-ответ отказа
+ *   (`isError: true`, канонический текст `ETN error [SERVER_UPDATING]: …`).
+ */
+export function serverUpdatingToolResult(rt: McpRuntime): CallToolResult | null {
+  const state = rt.deps.maintenance?.();
+  if (state === undefined || state.state !== 'updating') {
+    return null;
+  }
+  const details: ServerUpdatingErrorDetails = {
+    retry_after: state.retry_after,
+    target_version: state.target_version,
+  };
+  const error = new EtnError('SERVER_UPDATING', SERVER_UPDATING_MESSAGE, details);
+  return { content: [{ type: 'text', text: etnErrorText(error) }], isError: true };
 }
 
 /** Real-time actor of MCP mutations: the key's user, no client id. */

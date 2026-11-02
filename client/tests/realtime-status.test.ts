@@ -13,6 +13,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { ShimElement } from './dom-shim.js';
 import { getRtStatus, getRtStatusDetail, store } from '../src/renderer/state.js';
 import { canSave, initDrafts } from '../src/renderer/drafts.js';
+import { refreshRealtimeStatuses, toRtStatusDetail } from '../src/renderer/realtime.js';
 
 const NET1 = '11111111-2222-3333-4444-555555555555';
 const NET2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -37,6 +38,12 @@ function noticeTexts(): string[] {
   const stack = body.children.find((el) => el.classList.contains('notice-stack'));
   if (stack === undefined) return [];
   return stack.children.map((box) => box.children.map((child) => child.textContent).join(' '));
+}
+
+/** Даёт отработать async-цепочкам досылки черновиков. */
+async function settleAsync(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
 describe('renderer realtime status (de34b35b)', () => {
@@ -84,26 +91,81 @@ describe('renderer realtime status (de34b35b)', () => {
     assert.equal(canSave(), true);
   });
 
-  it('первое подключение не показывает «Соединение восстановлено», потеря — одно уведомление', () => {
+  it('проба живости: suspect→connected без тостов, черновики досылаются; потеря и восстановление — по одному сообщению', async () => {
     installDom();
+    // Мост черновиков: волна досылки видна по вызову `draftList`. Стартовое
+    // сообщение о чистке (client_meta) здесь пустое.
+    const draftListCalls: string[] = [];
+    (globalThis as unknown as { window: { etn: unknown } }).window.etn = {
+      ui: {
+        draftList: async (networkId: string) => {
+          draftListCalls.push(networkId);
+          return [];
+        },
+      },
+      meta: { get: async () => null, set: async () => undefined },
+    };
     initDrafts();
 
-    // Первое подключение: сообщения о восстановлении быть не должно.
+    // Первое подключение: сообщения о восстановлении быть не должно. Первый
+    // connect сессии — досыл черновиков ТЕКУЩЕЙ сессии (H19), поэтому ровно
+    // одна волна.
     store.update({ rtStatusByNetwork: { [NET1]: 'connected' }, rtStatus: 'connected' });
+    await settleAsync();
     assert.deepEqual(noticeTexts(), []);
+    assert.equal(draftListCalls.length, 1, 'первый connect — досыл черновиков сессии');
 
-    // Потеря: ровно одно жёлтое уведомление, дальше suspect→reconnecting→offline
-    // не спамит.
+    // Проба живости (действие зависло > 3 с): на входе в suspect сообщения НЕТ
+    // (fb9d6058 п.4), а pong до дедлайна возвращает connected без ложного
+    // «Соединение восстановлено». Черновики, набранные в окне пробы, при
+    // подтверждении ДОСЫЛАЮТСЯ (351068ed п.1): иначе сохранённый текст
+    // теряется молча при следующем запуске.
+    store.update({ rtStatusByNetwork: { [NET1]: 'suspect' }, rtStatus: 'suspect' });
+    assert.deepEqual(noticeTexts(), [], 'вход в suspect молчит');
+    store.update({ rtStatusByNetwork: { [NET1]: 'connected' }, rtStatus: 'connected' });
+    await settleAsync();
+    assert.deepEqual(noticeTexts(), [], 'проба подтвердила живость — тишина');
+    assert.equal(draftListCalls.length, 2, 'проба подтвердилась — черновики досылаются');
+
+    // Реальная потеря: проба НЕ подтвердилась за дедлайн (suspect →
+    // reconnecting) — ровно одно «Проверяем связь», дальше до offline молчание.
     store.update({ rtStatusByNetwork: { [NET1]: 'suspect' }, rtStatus: 'suspect' });
     store.update({ rtStatusByNetwork: { [NET1]: 'reconnecting' }, rtStatus: 'reconnecting' });
     store.update({ rtStatusByNetwork: { [NET1]: 'offline' }, rtStatus: 'offline' });
+    await settleAsync();
     const lost = noticeTexts();
     assert.equal(lost.length, 1, lost.join(' | '));
+    assert.ok(lost[0]!.includes('Проверяем связь'), lost.join(' | '));
 
-    // Реальное восстановление — одно сообщение.
+    // Реальное восстановление — одно сообщение и одна волна досыла.
     store.update({ rtStatusByNetwork: { [NET1]: 'connected' }, rtStatus: 'connected' });
+    await settleAsync();
     const restored = noticeTexts();
     assert.equal(restored.length, 2, restored.join(' | '));
     assert.ok(restored.some((t) => t.includes('Соединение восстановлено')));
+    assert.equal(draftListCalls.length, 3, 'реальное восстановление — досыл');
+  });
+
+  it('detail server-maintenance из main доходит до store, неизвестный — отбрасывается (12fd5b0e)', async () => {
+    assert.equal(toRtStatusDetail('server-restart'), 'server-restart');
+    assert.equal(toRtStatusDetail('server-maintenance'), 'server-maintenance');
+    assert.equal(toRtStatusDetail('bogus'), null);
+    assert.equal(toRtStatusDetail(undefined), null);
+
+    installDom();
+    (globalThis as unknown as { window: { etn: unknown } }).window.etn = {
+      realtime: {
+        getStatuses: async () => [
+          { networkId: NET1, status: 'offline', detail: 'server-maintenance' },
+          { networkId: NET2, status: 'reconnecting', detail: 'bogus' },
+        ],
+      },
+    };
+    store.update({ networkId: NET1, rtStatusDetailByNetwork: {} });
+    await refreshRealtimeStatuses();
+    assert.equal(getRtStatusDetail(store.state), 'server-maintenance');
+    store.update({ networkId: NET2 });
+    assert.equal(getRtStatusDetail(store.state), null, 'неизвестное уточнение отброшено');
+    store.update({ networkId: NET1 });
   });
 });

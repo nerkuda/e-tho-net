@@ -43,10 +43,12 @@ describe('сторож: meta ответа RestClient привязана к св�
     assert.match(src, /requestEnvelope<T>/);
     // `parseResponse` возвращает конверт, а не пишет в состояние класса.
     // Необязательный сигнал вызывающего (ошибка 69790006) — параметр метода,
-    // а не общий слот состояния; смысл проверки не меняется.
+    // а не общий слот состояния; смысл проверки не меняется. Третий параметр
+    // `bodyText` (задача 479e37ed) — уже прочитанное тело 503 для распознавания
+    // конверта `SERVER_UPDATING`: тоже параметр вызова, а не поле класса.
     assert.match(
       src,
-      /parseResponse<T>\(\s*res: Response,\s*callerSignal\?: AbortSignal,?\s*\): Promise<ResponseEnvelope<T>>/,
+      /parseResponse<T>\(\s*res: Response,\s*callerSignal\?: AbortSignal,\s*bodyText\?: string,?\s*\): Promise<ResponseEnvelope<T>>/,
     );
   });
 });

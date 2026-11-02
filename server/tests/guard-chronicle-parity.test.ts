@@ -30,6 +30,7 @@ import {
   closeMcpContext,
   connectMcpClient,
   toolJson,
+  toolText,
 } from './mcp-helpers.js';
 import { authHeaders, buildRestContext, closeRestContext } from './rest-helpers.js';
 
@@ -88,7 +89,7 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
     for (const field of T3_FIELDS) {
       assert.match(
         MCP,
-        new RegExp(`body\\.${field}\\s*=\\s*args\\.${field}`),
+        new RegExp(`payload\\.${field}\\s*=\\s*args\\.${field}`),
         `MCP-инструмент обязан прокинуть ${field}`,
       );
     }
@@ -110,7 +111,7 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
   it('MCP-фасад прокидывает keyword_scope в тело (задача 46057359)', () => {
     assert.match(
       MCP,
-      /body\.keyword_scope\s*=\s*args\.keyword_scope/,
+      /payload\.keyword_scope\s*=\s*args\.keyword_scope/,
       'MCP-инструмент обязан прокинуть keyword_scope — иначе путь Б не гейтится',
     );
   });
@@ -555,6 +556,272 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
       setFirstDay(1);
       assert.equal(await total(), 0, 'firstDayOfWeek=1 обязан считать неделю с понедельника');
     } finally {
+      await closeRestContext(rest);
+    }
+  });
+
+  it('формат тела записи: MCP — md по умолчанию и html по запросу, REST — три значения с дефолтом html (ошибки 50a94510, 35e1319a)', async () => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Формат тела');
+      const bodyMd = '## Итоги\n\n- первое\n\n**важно**';
+      createComment(
+        ndb,
+        'thought',
+        target,
+        { kind: 'chronological', body_md: bodyMd, valid_from: '2024-01-01' },
+        USER,
+      );
+
+      type Row = { id: string; snippet: string; body_md?: string; body_html?: string };
+      const restRow = async (payload: Record<string, unknown>): Promise<Row> => {
+        const res = await rest.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+          headers: authHeaders(rest),
+          payload,
+        });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.json()));
+        return (res.json().data as Row[])[0]!;
+      };
+      const mcpRow = async (args: Record<string, unknown>): Promise<Row> => {
+        const res = await handle.client.callTool({
+          name: 'etn.chronicle.query',
+          arguments: { network_id: rest.networkId, ...args },
+        });
+        assert.notEqual(res.isError, true, toolText(res));
+        return toolJson<{ rows: Row[] }>(res).rows[0]!;
+      };
+
+      // MCP: дефолт — только markdown, HTML не собирается вовсе.
+      const mcpDefault = await mcpRow({ thought_ids: [target] });
+      assert.equal(mcpDefault.body_md, bodyMd, 'MCP по умолчанию отдаёт body_md');
+      assert.ok(!('body_html' in mcpDefault), 'MCP по умолчанию не отдаёт body_html');
+
+      // MCP: html — только HTML, markdown нет.
+      const mcpHtml = await mcpRow({ thought_ids: [target], body: 'html' });
+      assert.ok(!('body_md' in mcpHtml), 'MCP body=html не отдаёт body_md');
+      assert.match(mcpHtml.body_html!, /<h2/, 'MCP body=html отдаёт отрендеренный HTML');
+
+      // `snippet` не зависит от формата.
+      assert.equal(mcpDefault.snippet, mcpHtml.snippet, 'MCP: snippet стабилен md ↔ html');
+
+      // MCP-словарь закрыт: `both` агенту не предлагается.
+      const both = await handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: { network_id: rest.networkId, thought_ids: [target], body: 'both' },
+      });
+      assert.equal(both.isError, true, 'MCP отвергает body=both (закрытый словарь)');
+
+      // REST: дефолт — `html` (ровно прежний состав ответа: клиент читает
+      // `body_html`; `body_md` на провод не идёт — ошибка 35e1319a).
+      const restDefault = await restRow({ thought_ids: [target] });
+      assert.match(restDefault.body_html!, /<h2/);
+      assert.ok(!('body_md' in restDefault), 'REST-дефолт не отдаёт body_md');
+
+      // REST: все три значения словаря.
+      assert.equal((await restRow({ thought_ids: [target], body: 'md' })).body_md, bodyMd);
+      assert.ok(!('body_html' in (await restRow({ thought_ids: [target], body: 'md' }))));
+      assert.ok(!('body_md' in (await restRow({ thought_ids: [target], body: 'html' }))));
+      assert.match(
+        (await restRow({ thought_ids: [target], body: 'html' })).body_html!,
+        /<h2/,
+      );
+      const restBoth = await restRow({ thought_ids: [target], body: 'both' });
+      assert.equal(restBoth.body_md, bodyMd);
+      assert.match(restBoth.body_html!, /<h2/, 'both: оба тела');
+
+      // REST: недопустимое значение — 422 поля `body`.
+      const invalid = await rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+        headers: authHeaders(rest),
+        payload: { thought_ids: [target], body: 'markdown' },
+      });
+      assert.equal(invalid.statusCode, 422, 'REST отвергает body вне словаря');
+      assert.deepEqual(
+        (invalid.json().error.details as { field?: string } | undefined)?.field,
+        'body',
+      );
+
+      // REST: snippet стабилен между форматами.
+      const snippets = await Promise.all(
+        (['md', 'html', 'both'] as const).map((body) =>
+          restRow({ thought_ids: [target], body }).then((r) => r.snippet),
+        ),
+      );
+      assert.equal(new Set(snippets).size, 1, 'REST: snippet стабилен md/html/both');
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
+  it('MCP отдаёт meta.warnings той же формы, что REST (ошибка 5c24af2f)', async (t) => {
+    // Pin против удаления проброса (до фикса фасад вообще не упоминал warnings
+    // — красный на дофиксовой сборке). Проверка допускает эквивалентные записи
+    // условия («непустой список»): `warnings !== undefined && warnings.length > 0`
+    // и `warnings?.length`; переноси pin вместе с рефакторингом фасада.
+    // Семантику «пусто — поля нет» доказывает прогон ниже, не эта регулярка.
+    assert.match(
+      MCP,
+      /warnings(?:\?\.|\.)length/,
+      'MCP-фасад обязан проверять непустоту warnings перед добавлением в meta',
+    );
+    assert.match(
+      MCP,
+      /warnings\s*:\s*(?:result\.)?warnings\b/,
+      'MCP-фасад обязан прокидывать результат домена в meta.warnings',
+    );
+    assert.match(
+      MCP,
+      /meta:\s*\{[\s\S]*warnings/,
+      'warnings обязаны лежать в meta (конверт REST)',
+    );
+
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Ast-фикстура');
+      createComment(
+        ndb,
+        'thought',
+        target,
+        { kind: 'chronological', body_md: 'запись', valid_from: '2024-01-01' },
+        USER,
+      );
+      const ast = {
+        version: 1,
+        filter: { entity: { kind: 'targets' }, operator: 'not_empty' },
+      };
+
+      const restRes = await rest.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${rest.networkId}/chronicle/query`,
+        headers: authHeaders(rest),
+        payload: { ast },
+      });
+      assert.equal(restRes.statusCode, 200, JSON.stringify(restRes.json()));
+      const restMeta = restRes.json().meta as { total: number; warnings?: unknown[] };
+
+      const mcpRes = await handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: { network_id: rest.networkId, ast },
+      });
+      const mcpMeta = toolJson<{ meta: { total: number; offset: number; limit: number; warnings?: unknown[] } }>(
+        mcpRes,
+      ).meta;
+
+      // Жёлтое ядро хроники строится только с контекстом типа (требование
+      // 0fd1dc5d), которого у записи нет: на штатной фикстуре warnings пуст у
+      // ОБОИХ фасадов, и пустое поле не добавляется. Непустой случай проверяет
+      // прогон с мутацией домена (отчёт работы 5c24af2f): REST↔MCP совпадают.
+      // Семантика «пусто — поля нет» единая; при непустом ответе форма общая.
+      if (restMeta.warnings === undefined) {
+        assert.equal('warnings' in mcpMeta, false, 'REST: пусто — поля нет; MCP тоже');
+      } else {
+        assert.deepEqual(mcpMeta.warnings, restMeta.warnings, 'warnings совпадают по форме');
+      }
+      assert.equal(mcpMeta.total, restMeta.total, 'total совпадает');
+      t.diagnostic(
+        `warnings parity: REST=${JSON.stringify(restMeta.warnings)}, MCP=${JSON.stringify(mcpMeta.warnings)}`,
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
+      await closeRestContext(rest);
+    }
+  });
+
+  it('замер: MCP-ответ на 50 записей в md меньше, чем в html (ошибка 50a94510)', async (t) => {
+    const rest = await buildRestContext();
+    const mcp = await buildMcpContext({
+      dataDir: rest.dataDir,
+      networkId: rest.networkId,
+      systemDb: rest.sys,
+    });
+    const handle = await connectMcpClient(mcp, rest.adminKey);
+    try {
+      const ndb = rest.ndb as NetworkDb;
+      const target = seedThought(ndb, 'Лента 50');
+      for (let i = 0; i < 50; i += 1) {
+        createComment(
+          ndb,
+          'thought',
+          target,
+          {
+            kind: 'chronological',
+            body_md:
+              `## Запись ${i}\n\n- пункт один\n- пункт два\n\n` +
+              `**важно** текст записи ${i} с несколькими словами для длины.`,
+            valid_from: `2024-01-01T00:${String(i % 60).padStart(2, '0')}:00.000Z`,
+          },
+          USER,
+        );
+      }
+      const call = async (body: 'md' | 'html'): Promise<{ bytes: number; has: (key: string) => boolean }> => {
+        const res = await handle.client.callTool({
+          name: 'etn.chronicle.query',
+          arguments: { network_id: rest.networkId, thought_ids: [target], limit: 50, body },
+        });
+        const text = toolText(res);
+        const rows = (JSON.parse(text) as { rows: Array<Record<string, unknown>> }).rows;
+        assert.equal(rows.length, 50, `50 записей (${body})`);
+        return {
+          bytes: Buffer.byteLength(text),
+          has: (key) => key in rows[0]!,
+        };
+      };
+      // Дефолт без параметра — md.
+      const byDefault = await handle.client.callTool({
+        name: 'etn.chronicle.query',
+        arguments: { network_id: rest.networkId, thought_ids: [target], limit: 50 },
+      });
+      const defaultBytes = Buffer.byteLength(toolText(byDefault));
+      const md = await call('md');
+      const html = await call('html');
+      assert.equal(defaultBytes, md.bytes, 'MCP-дефолт = md по размеру и составу');
+      assert.equal(md.has('body_md'), true);
+      assert.equal(md.has('body_html'), false);
+      assert.equal(html.has('body_html'), true);
+      assert.equal(html.has('body_md'), false);
+      assert.ok(
+        md.bytes < html.bytes,
+        `md (${md.bytes} Б) обязан быть меньше html (${html.bytes} Б)`,
+      );
+      t.diagnostic(
+        `50 записей: MCP md=${md.bytes} Б, html=${html.bytes} Б, ` +
+          `экономия=${html.bytes - md.bytes} Б (${Math.round((1 - md.bytes / html.bytes) * 100)}%)`,
+      );
+    } finally {
+      await handle.close();
+      await closeMcpContext(mcp, {
+        dataDir: rest.dataDir,
+        networkId: rest.networkId,
+        systemDb: rest.sys,
+      });
       await closeRestContext(rest);
     }
   });
