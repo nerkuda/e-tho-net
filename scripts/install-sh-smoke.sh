@@ -44,12 +44,13 @@ case "$version" in
 esac
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/etn-install-smoke.XXXXXX")"
-http_pid=""
+http_pids=()
 cleanup() {
-  if [ -n "$http_pid" ]; then
-    kill "$http_pid" 2>/dev/null || true
-    wait "$http_pid" 2>/dev/null || true
-  fi
+  local pid
+  for pid in "${http_pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
   rm -rf -- "$work"
 }
 trap cleanup EXIT
@@ -81,8 +82,14 @@ STUB
   tar -czf "$dir/$asset" -C "$work/stub-$v" .
   ( cd "$dir" && sha256sum "$asset" > SHA256SUMS )
   if [ "$corrupt" = "--corrupt-sum" ]; then
-    # Подменяем хеш: установка обязана прерваться до распаковки и не менять current.
-    ( cd "$dir" && sed -i 's/^./0/' SHA256SUMS )
+    # Подменяем хеш ГАРАНТИРОВАННО: первый символ инвертируется (0→1, иначе→0).
+    # Прежний `sed 's/^./0/'` не менял файл, если хеш уже начинался с «0»
+    # (~6% случаев) — проверка «битого SHA256SUMS» ложно проходила установкой.
+    ( cd "$dir" && awk '{
+        first = substr($0, 1, 1)
+        sub(/^./, first == "0" ? "1" : "0")
+        print
+      }' SHA256SUMS > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS )
   fi
 }
 
@@ -100,15 +107,24 @@ run_installer() { # run_installer <home> <base-url> [аргументы...]
 
 # Статический HTTP-сервер как у зеркала: отдаёт файлы из каталога релиза.
 # Порт 0 — свободный; фактический порт пишется в файл, чтобы не гадать.
-start_http_server() { # start_http_server <корень> <файл-порт>; печатает PID
+# Третий аргумент включает GitHub-подобный режим: /releases/latest отвечает
+# 302 на /releases/tag/v<версия>, статический файл не отдаётся.
+start_http_server() { # start_http_server <корень> <файл-порт> [версия-для-редиректа]
   node -e '
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(process.argv[1]);
 const portFile = process.argv[2];
+const redirectLatest = process.argv[3] || "";
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent((req.url || "/").split("?")[0]);
+  if (redirectLatest && url === "/releases/latest") {
+    res.statusCode = 302;
+    res.setHeader("Location", "/releases/tag/v" + redirectLatest);
+    res.end();
+    return;
+  }
   const file = path.resolve(root, "." + url);
   if (file !== root && !file.startsWith(root + path.sep)) {
     res.statusCode = 403;
@@ -126,7 +142,7 @@ const server = http.createServer((req, res) => {
   });
 });
 server.listen(0, "127.0.0.1", () => fs.writeFileSync(portFile, String(server.address().port)));
-' "$1" "$2" >/dev/null 2>&1 &
+' "$1" "$2" "${3:-}" >/dev/null 2>&1 &
   echo $!
 }
 
@@ -220,7 +236,7 @@ check "file://releases/latest: установлена ${version}" \
 # Раздача содержит и сам install.sh: одношные команды скачивают его отсюда.
 cp -- "$installer" "$release/install.sh"
 port_file="$work/http-port"
-http_pid="$(start_http_server "$release" "$port_file")"
+http_pids+=("$(start_http_server "$release" "$port_file")")
 if wait_for_file "$port_file"; then
   http_port="$(cat "$port_file")"
   http_base="http://127.0.0.1:${http_port}"
@@ -284,6 +300,51 @@ if wait_for_file "$port_file"; then
   fi
   check "сообщение без curl и wget называет оба клиента" \
     grep -Eq 'curl.*wget|wget.*curl' "$work/noclient.log"
+
+  # --- 4b. GitHub-подобный редирект /releases/latest → /releases/tag/vX.Y.Z ---
+  # Продакшен-путь: статического файла версии нет, единственный её источник —
+  # заголовок Location из 302. wget печатает Location дважды (заголовок ответа
+  # и сообщение с маркером «[following]»); при разборе последней строки версия
+  # становится «0.14.1 [following]» и VERSION_PATTERN её отвергает (блокер
+  # верификатора 2026-11-02). Проверяем оба пути без curl: установку и пайп.
+  redirect_port_file="$work/http-redirect-port"
+  http_pids+=("$(start_http_server "$release" "$redirect_port_file" "$version")")
+  if wait_for_file "$redirect_port_file"; then
+    redirect_base="http://127.0.0.1:$(cat "$redirect_port_file")"
+    # Гейт не должен быть вакуумным: подтверждаем, что wget в этом окружении
+    # действительно печатает Location с маркером «[following]» (репро блокера).
+    { wget -S --spider --max-redirect=0 --tries=1 --timeout=15 \
+        "$redirect_base/releases/latest" 2>&1 || true; } > "$work/redirect-headers.log"
+    check "редирект: wget печатает Location с маркером [following]" \
+      grep -q '\[following\]' "$work/redirect-headers.log"
+
+    redirect_home="$work/home-redirect-wget"
+    if env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$redirect_home" \
+        PATH="$nocurl_bin" ETN_RELEASE_BASE_URL="$redirect_base" bash "$installer" \
+        > "$work/redirect-install.log" 2>&1; then
+      pass "wget без curl по редиректу /releases/latest: код 0"
+    else
+      fail "wget без curl по редиректу /releases/latest: ненулевой код"
+      sed -n '1,20p' "$work/redirect-install.log"
+    fi
+    check "wget-установка по редиректу: установлена ${version}" \
+      test "$(readlink -- "$redirect_home/.local/opt/etn/current")" = "$version"
+
+    redirect_pipe_home="$work/home-redirect-wget-pipe"
+    if wget -qO- "$redirect_base/install.sh" \
+        | env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$redirect_pipe_home" \
+            PATH="$nocurl_bin" ETN_RELEASE_BASE_URL="$redirect_base" bash -s -- \
+            > "$work/redirect-pipe.log" 2>&1; then
+      pass "wget -qO- <base>/install.sh | bash по редиректу без curl: код 0"
+    else
+      fail "wget -qO- <base>/install.sh | bash по редиректу без curl: ненулевой код"
+      sed -n '1,20p' "$work/redirect-pipe.log"
+    fi
+    check "wget-пайп по редиректу: установлена ${version}" \
+      test "$(readlink -- "$redirect_pipe_home/.local/opt/etn/current")" = "$version"
+  else
+    fail "редирект-HTTP-сервер не поднялся за 10 с"
+  fi
 
   # --- 5. Повтор без --version обновляет клиент ------------------------------
   set_latest 9.9.9

@@ -467,8 +467,15 @@ http_effective_url() {
     curl -fsSLI -o /dev/null -w '%{url_effective}' \
       --connect-timeout 20 "$url" 2>/dev/null || true
   elif command -v wget >/dev/null 2>&1; then
+    # wget печатает Location дважды: строку заголовка ответа и отдельное
+    # сообщение о переходе с маркером «[following]» (оно локализуется).
+    # Берём первую строку — машинный заголовок, — а маркер срезаем на случай,
+    # если он окажется единственной строкой (без -S): иначе в версию уедет
+    # «0.14.1 [following]» и VERSION_PATTERN его отвергнет.
     { wget -S --spider --max-redirect=0 --tries=1 --timeout=20 "$url" 2>&1 || true; } \
-      | sed -n 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//p' | tr -d '\r' | tail -n 1
+      | sed -n 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//p' \
+      | sed 's/[[:space:]]*\[following\][[:space:]]*$//' \
+      | tr -d '\r' | head -n 1
   else
     die "не найдены curl и wget — установите один из них: sudo apt-get install -y curl (или wget)"
   fi

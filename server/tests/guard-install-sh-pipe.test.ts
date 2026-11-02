@@ -206,6 +206,30 @@ describe('guard: scripts/install.sh работает в пайпе', () => {
       /command -v wget/,
       'scripts/install.sh: http_effective_url без ветки wget сломает определение версии на системе без curl.',
     );
+    // wget печатает Location дважды: строку заголовка ответа и отдельное
+    // сообщение о переходе с маркером «[following]». Разбор последней строки
+    // отдаёт «0.14.1 [following]» — VERSION_PATTERN такую версию отвергает,
+    // и production-путь без curl падает на GitHub-редиректе (блокер 2026-11-02).
+    assert.doesNotMatch(
+      effective,
+      /tail -n 1/,
+      'scripts/install.sh: http_effective_url берёт последнюю строку вывода wget — ' +
+        'это сообщение о переходе с маркером «[following]», а не чистый URL. ' +
+        'Нужна первая Location-строка (заголовок ответа).',
+    );
+    assert.match(
+      effective,
+      /head -n 1/,
+      'scripts/install.sh: http_effective_url должен брать первую Location-строку ' +
+        '(заголовок ответа), иначе версия получится «0.14.1 [following]».',
+    );
+    assert.match(
+      effective,
+      /\[following\]/,
+      'scripts/install.sh: http_effective_url не срезает маркер «[following]» ' +
+        'на случай, если Location придёт единственной строкой (без -S): ' +
+        'VERSION_PATTERN отвергнет версию с маркером.',
+    );
 
     assert.doesNotMatch(
       readInstaller(),
