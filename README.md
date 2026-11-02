@@ -175,7 +175,7 @@ base=https://github.com/nerkuda/e-tho-net/releases/download/v0.15.1
 curl -fsSLO "$base/etn-server-0.15.1.tar.gz" && curl -fsSLO "$base/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing && tar -xzf etn-server-0.15.1.tar.gz
 cd etn-server-0.15.1
-export ETN_DATA_DIR=/var/lib/etn   # каталог данных; нужен доступ на запись
+export ETN_DATA_DIR="$HOME/.local/share/etn"   # каталог данных; нужен доступ на запись
 export ETN_HOST=0.0.0.0            # доступ из локальной сети; без этого — только 127.0.0.1
 export ETN_PORT=4321
 node dist/cli.js init --username admin --display-name "Администратор"
@@ -240,7 +240,7 @@ curl http://localhost:4321/api/v1/health
 git clone https://github.com/nerkuda/e-tho-net.git && cd e-tho-net
 npm install && npm -w @etn/client run rebuild:native
 npm run build
-export ETN_DATA_DIR=/var/lib/etn
+export ETN_DATA_DIR="$HOME/.local/share/etn"
 export ETN_HOST=0.0.0.0   # доступ из локальной сети; без этого — только 127.0.0.1
 export ETN_PORT=4321
 node server/dist/cli.js init --username admin --display-name "Администратор"

@@ -51,14 +51,14 @@ cd etn-server-0.15.1
 Нужен Node.js 22 LTS. Первый запуск и работа — из распакованного каталога `etn-server-<версия>/` (в нём лежит `dist/`):
 
 ```bash
-export ETN_DATA_DIR=/var/lib/etn
+export ETN_DATA_DIR="$HOME/.local/share/etn"
 export ETN_HOST=0.0.0.0   # доступ из локальной сети; без этого — только 127.0.0.1
 export ETN_PORT=4321
 node dist/cli.js init --username admin --display-name "Администратор"
 node dist/index.js
 ```
 
-Для постоянной работы оформите запуск службой (systemd и т.п.), задав `ETN_DATA_DIR` и `ETN_PORT`.
+Для постоянной работы оформите запуск службой (systemd и т.п.), задав `ETN_DATA_DIR`, `ETN_PORT` и — для доступа по сети — `ETN_HOST`.
 
 ### Установка из исходников
 
@@ -78,7 +78,7 @@ npm run build
 Первый пользователь-администратор создаётся один раз командой `etn init` (при установке в Windows это делает установщик). Пока администратора нет, сервер не запускается.
 
 ```bash
-export ETN_DATA_DIR=/var/lib/etn     # каталог данных, пример
+export ETN_DATA_DIR="$HOME/.local/share/etn"     # каталог данных, пример
 node server/dist/cli.js init --username admin --display-name "Администратор"
 ```
 
@@ -118,7 +118,7 @@ node server/dist/cli.js init --username admin --display-name "Администр
 1. Разово перед запуском (до закрытия терминала):
 
 ```bash
-export ETN_DATA_DIR=/var/lib/etn
+export ETN_DATA_DIR="$HOME/.local/share/etn"
 export ETN_PORT=4321
 ```
 
@@ -158,7 +158,7 @@ curl http://localhost:4321/api/v1/health
 
 Ответ должен быть вида `{"status":"ok","db":"ok","version":"...","uptime":...}`.
 
-Для постоянной работы запускайте сервер как службу средствами ОС (systemd в Linux; служба ETN, которую ставит установщик, — в Windows) либо контейнером Docker (пример — `docker-compose.yml` в репозитории). Во всех случаях задайте `ETN_DATA_DIR` и порт.
+Для постоянной работы запускайте сервер как службу средствами ОС (systemd в Linux; служба ETN, которую ставит установщик, — в Windows) либо контейнером Docker (пример — `docker-compose.yml` в репозитории). Во всех случаях задайте `ETN_DATA_DIR`, порт и, если нужен доступ по сети, `ETN_HOST`.
 
 ### Доступ по HTTPS
 
