@@ -1,4 +1,4 @@
-# Релизный конвейер ETN (задача 6d93fe6f, 0.15.1).
+# Релизный конвейер ETN (задачи 6d93fe6f, 0.15.1; ae122f1d, 0.15.2).
 #
 # На тег `vX.Y.Z` (или на ручной запуск с указанием тега) workflow собирает
 # ассеты релиза и публикует GitHub Release:
@@ -25,9 +25,14 @@
 # каналом переводит релиз в другой канал — ассеты перезаписываются, а не
 # дублируются.
 #
-# macOS DMG и Docker-образ сервера в 0.15.1 не публикуются (границы
-# компонента f4c02ddd): macOS в поставку версии не входит, Docker —
-# отдельная задача.
+# Docker-образ сервера — обязательная часть релиза (задача ae122f1d): джоба
+# `docker-image` вызывает переиспользуемый `.github/workflows/docker-image.yml`
+# и публикует `ghcr.io/<repo>/etn-server:<tag>`. `publish` зависит от неё,
+# поэтому релиз без образа не выпускается. Образ для уже вышедшего тега
+# доопубликовывается ручным запуском `docker-image.yml` (workflow_dispatch),
+# без пересборки остальных ассетов.
+#
+# macOS DMG в поставку версии не входит (границы компонента f4c02ddd).
 
 name: release
 
@@ -246,8 +251,19 @@ jobs:
           path: dist/etn-server-*.tar.gz
           if-no-files-found: error
 
+  # Docker-образ сервера — обязательный артефакт релиза: `publish` ждёт эту
+  # джобу. Права задаются здесь, потому что reusable workflow может только
+  # сузить набор, переданный вызывающей джобой.
+  docker-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+
   publish:
-    needs: [version, windows-installer, linux-client, linux-server]
+    needs: [version, windows-installer, linux-client, linux-server, docker-image]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
