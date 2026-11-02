@@ -1,34 +1,42 @@
 /**
- * Русское согласование числа (задача d23279f6, замечание верификатора:
- * «1 потомков» вместо «1 потомок»).
+ * Плюрализация: категории и формы по правилам языка (задача e6374cd1).
  *
- * Чистая функция без зависимостей: категория выбирается по правилам русского
- * языка — `one` (1, 21, 31…, но не 11), `few` (2–4, 22–24…, но не 12–14),
- * `many` (0, 5–20, 25–30…). Вызывающий берёт из словаря форму для категории,
- * поэтому строки остаются в `lib/locales`, а не склеиваются в коде.
+ * Единственная точка выбора категории — `Intl.PluralRules`: правила языка
+ * (ru `one/few/many/other`, en `one/other`, zh `other`) не дублируются в коде,
+ * а берутся из ICU. Модуль чистый (без DOM и сети) и служит общим типом для
+ * каталогов языков: файл языка экспортирует типизированный `*Plurals`
+ * (`PluralCatalog`), а `tp(key, n)` в `lib/i18n.ts` выбирает форму категории.
  *
- * Единая точка вместо копий `n === 1 ? '' : 'ов'` (trash.ts, usage-panel.ts):
- * копии уже давали рассогласование на числе 1.
+ * Почему не `n === 1 ? …` в местах вызова: копии такого условия уже давали
+ * рассогласование на 1 и 11 (задача d23279f6), а дробные числа (1,5) по
+ * русским правилам — категория `other`, которую точечные проверки не знали.
+ *
+ * Категории `zero`/`two` зарезервированы ICU (нужны арабскому и др.); каталог
+ * языка заполняет только те, что реально выбирает `Intl.PluralRules` этого
+ * языка. Сторож — `tests/guard-plural-categories.test.ts`.
  */
 
-/** Категория согласования для русского числа. */
-export type PluralCategory = 'one' | 'few' | 'many';
+/** Категория плюрализации ICU (`one`, `few`, `many`, `other`, …). */
+export type PluralCategory = Intl.LDMLPluralRule;
 
-/** Категория русского согласования для целого числа. */
-export function pluralCategory(n: number): PluralCategory {
-  const abs = Math.abs(Math.trunc(n));
-  const mod100 = abs % 100;
-  if (mod100 >= 11 && mod100 <= 14) return 'many';
-  const mod10 = abs % 10;
-  if (mod10 === 1) return 'one';
-  if (mod10 >= 2 && mod10 <= 4) return 'few';
-  return 'many';
-}
+/** Формы одного ключа: категория → текст с подстановкой `%1`. */
+export type PluralForms = Partial<Record<PluralCategory, string>>;
 
-/** Готовая форма слова: `pluralRu(1, 'потомок', 'потомка', 'потомков')`. */
-export function pluralRu(n: number, one: string, few: string, many: string): string {
-  const category = pluralCategory(n);
-  if (category === 'one') return one;
-  if (category === 'few') return few;
-  return many;
+/** Каталог плюрализации языка: ключ → формы. */
+export type PluralCatalog = Record<string, PluralForms>;
+
+/** Кеш правил: `Intl.PluralRules` одного языка создаётся один раз. */
+const rules = new Map<string, Intl.PluralRules>();
+
+/**
+ * Категория числа по правилам языка. Дробные и отрицательные числа
+ * обрабатывает ICU: для `ru` 1,5 → `other`, −3 → `few`.
+ */
+export function pluralCategory(lang: string, n: number): PluralCategory {
+  let instance = rules.get(lang);
+  if (instance === undefined) {
+    instance = new Intl.PluralRules(lang);
+    rules.set(lang, instance);
+  }
+  return instance.select(n);
 }

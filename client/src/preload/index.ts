@@ -525,6 +525,8 @@ function buildApi(): EtnBridgeApi {
     },
     system: {
       appInfo: () => invoke('system.appInfo'),
+      // Язык системного окружения для первого запуска (задача e6374cd1).
+      preferredLanguage: () => invoke('system.preferredLanguage'),
       readClipboard: () => invoke('system.readClipboard'),
       health: () => invoke('system.health'),
       version: () => invoke('system.version'),

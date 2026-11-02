@@ -393,12 +393,12 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
   it('подсказки: склонение, сторона при совпадении имён, реальная вкладка — 42a7c0a1', () => {
     const model = readText(SRC.model);
     assert.ok(
-      model.includes("from '../lib/plural.js'") && model.includes('pluralRu('),
-      'the «связь/связи/связей» form comes from the shared plural helper',
+      model.includes("from '../lib/i18n.js'") && model.includes("tp('plurals.link', n)"),
+      'the «связь/связи/связей» form comes from the shared plural API (e6374cd1)',
     );
     assert.ok(
-      model.includes("'связь', 'связи', 'связей'"),
-      'the plural forms are wired for the links word',
+      model.includes("'plurals.link'"),
+      'the plural key of the links word is one dictionary entry',
     );
     assert.ok(
       /pair\.side === 'out' \? 'исходящие' : 'входящие'/.test(model),

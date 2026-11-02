@@ -49,7 +49,7 @@ import { uiTabs } from '../lib/ui/tabs.js';
 import { div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { availableLocales, getLang, t } from '../lib/i18n.js';
-import { applyLang } from '../lib/lang.js';
+import { applyLang, unavailableLang } from '../lib/lang.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -633,10 +633,20 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
+    // Язык недоступен в сборке (задача e6374cd1): интерфейс уже на исходном
+    // ru, но пользователь обязан увидеть, почему выбранный/унаследованный
+    // язык не применился.
+    const unavailable = unavailableLang();
+    const unavailableNote =
+      unavailable === null
+        ? null
+        : el('p', 'muted', t('settings.langUnavailable', unavailable));
+
     root.append(
       el('h3', 'settings-section-title', t('settings.language')),
       langGroup,
       el('p', 'muted', t('settings.languageHint')),
+      ...(unavailableNote === null ? [] : [unavailableNote]),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Тема'),
       themeGroup,
       el('p', 'muted', 'Применяется на всех экранах. Действует только на этом клиенте.'),
@@ -843,8 +853,27 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     }
   }
 
+  /**
+   * Подписи, которые не пересобираются `renderContent` (навигация и футер):
+   * при смене языка они перечитываются из словаря вместе с содержимым раздела
+   * (задача e6374cd1). Черновик формы живёт вне DOM, поэтому пересборка не
+   * теряет введённые значения.
+   */
+  function updateTexts(): void {
+    for (const key of Object.keys(navButtons) as Section[]) {
+      navButtons[key].textContent = SECTION_TITLES[key];
+    }
+    btnApply.textContent = t('actions.apply');
+    btnApply.title = t('actions.applyShortcut', 'Shift+Enter');
+    btnApplyClose.textContent = t('actions.applyClose');
+    btnApplyClose.title = t('actions.applyCloseShortcut', 'Ctrl+Enter');
+    btnCancel.textContent = t('actions.cancel');
+    btnCancel.title = t('actions.cancelShortcut', 'Esc');
+  }
+
   closeDialog = showDialog({
-    title: t('settings.title'),
+    // Заголовок-функция: каркас перечитывает его при смене языка (e6374cd1).
+    title: () => t('settings.title'),
     size: 'l',
     // Высота фиксируется ролью: разделы разной высоты (Пользователь / Мыслесеть
     // / Клиент / Логирование) при переключении больше не меняют высоту окна —
@@ -864,6 +893,12 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     },
     extraShortcuts: {
       shiftEnter: () => void applyDraft(false),
+    },
+    // Живая смена языка (задача e6374cd1): открытый диалог перерисовывается
+    // целиком, но значения полей берутся из черновика — ввод не теряется.
+    onLangChange: () => {
+      updateTexts();
+      renderContent();
     },
   });
 

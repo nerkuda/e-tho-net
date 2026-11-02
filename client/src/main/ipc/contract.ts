@@ -364,6 +364,13 @@ export interface AppInfo {
 }
 
 /**
+ * Код языка каталога, который клиент умеет показать (задача e6374cd1).
+ * Автодетект ОС сводит любое предпочтение к одному из этих кодов
+ * (`src/main/system-locale.ts`); остальные каталоги появятся вместе с en/zh.
+ */
+export type ClientLanguage = 'ru' | 'en' | 'zh';
+
+/**
  * State of the client file journal (task f051bf95, 07-client-electron.md §7):
  * the flag, the current daily file and the journal directory.
  */
@@ -1662,6 +1669,14 @@ export interface EtnApi {
      * a connection.
      */
     appInfo(): Promise<AppInfo>;
+    /**
+     * Язык системного окружения для ПЕРВОГО запуска (задача e6374cd1): первый
+     * элемент `app.getPreferredSystemLanguages()`, сведённый к коду каталога
+     * (`en-*` → `en`, `zh-*` → `zh`, иначе `ru`). Используется только как
+     * стартовое отображение, пока `client_meta.lang` пуст; никуда не
+     * персистится. Работает без соединения с сервером.
+     */
+    preferredLanguage(): Promise<ClientLanguage>;
     /**
      * Читает системный буфер обмена главным процессом (задача 78eaf07a):
      * текст и/или картинку как `data:`-URL PNG. Рендерер не имеет доступа к

@@ -48,6 +48,24 @@ node client/scripts/ui-probe-stand.mjs            # свежая база + си
 node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key etn_…
 ```
 
+### Тестовая локаль (`--mode test`)
+
+Живая смена языка интерфейса (задача e6374cd1) проверяется пользовательским
+путём «Все настройки → Клиент → язык → Применить». Пока каталогов en/zh нет,
+единственный production-язык — `ru`, поэтому для такого сценария клиент
+собирают в режиме `test`:
+
+```bash
+npm -w @etn/client run build -- --mode test
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.e6374cd1-i18n-live.scenario.json
+```
+
+В тестовой сборке `app.ts` регистрирует фикстуру `lib/locales/test.ts` (код
+`zz`, несколько узнаваемых подписей); в production-сборке ветка статически
+ложна, и фикстура в бандл не попадает. После прогона верни обычную сборку
+(`npm -w @etn/client run build`).
+
 ### Фикстура данных сценария (`--scenario-seed`)
 
 Если сценарию нужны данные сверх пробной сети (например, 12 рёбер одной пары),

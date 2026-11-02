@@ -9,7 +9,7 @@
 
 import { PROPERTY_SIDE_ERROR_REASON, isNotConnectedErrorMessage } from '@etn/shared';
 
-import { t } from './i18n.js';
+import { t, formatDate, formatDateTime } from './i18n.js';
 import { splitHighlightRuns } from './pure.js';
 
 /** Creates an element with an optional class and text. */
@@ -241,19 +241,19 @@ function propertySideErrorText(like: ErrorLike | null): string | null {
     : t('errors.propertySideRequired');
 }
 
-/** Formats an ISO date as `ДД.ММ.ГГГГ` (Russian locale). */
+/** Formats an ISO date as a short date of the current UI language. */
 export function fmtDate(iso: string | null | undefined): string {
   if (iso === null || iso === undefined) return '—';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleDateString('ru-RU');
+  return formatDate(date);
 }
 
-/** Formats an ISO timestamp as `ДД.ММ.ГГГГ, ЧЧ:ММ:СС`. */
+/** Formats an ISO timestamp as short date + medium time of the current language. */
 export function fmtDateTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'medium' });
+  return formatDateTime(date);
 }
 
 /** True when `text` looks like an http(s) URL. */

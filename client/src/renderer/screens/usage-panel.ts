@@ -41,7 +41,7 @@ import { onThoughtDeleted, scheduleRefresh } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { patchFocusEdge, store } from '../state.js';
 import { div, errText, span } from '../lib/dom.js';
-import { t } from '../lib/i18n.js';
+import { t, tp } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { MENU_SEPARATOR, menuAction, type MenuItem } from '../lib/menu.js';
@@ -56,7 +56,6 @@ import {
   type PurgePrecheck,
   type UsagePropertyRow,
 } from '../lib/usage.js';
-import { pluralCategory } from '../lib/plural.js';
 import { errorState, loadingState } from '../lib/ui/empty-state.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
@@ -86,13 +85,6 @@ export interface UsagePanelData {
 
 /** Где живёт экземпляр панели: экран или док корзины. */
 export type UsagePanelMode = 'screen' | 'dock';
-
-/** Формы предупреждения об осиротевших потомках (согласование числа). */
-const ORPHANED_KEYS = {
-  one: 'usagePanel.purgeOrphaned.one',
-  few: 'usagePanel.purgeOrphaned.few',
-  many: 'usagePanel.purgeOrphaned.many',
-} as const;
 
 /** Параметры экземпляра панели. */
 export interface CreateUsagePanelOptions {
@@ -410,9 +402,9 @@ export function createUsagePanel(options: CreateUsagePanelOptions): UsagePanelHa
 
     const message =
       orphanedChildren > 0
-        ? `${t('usagePanel.purgeConfirmMessage', target.title)} ${t(
-            ORPHANED_KEYS[pluralCategory(orphanedChildren)],
-            String(orphanedChildren),
+        ? `${t('usagePanel.purgeConfirmMessage', target.title)} ${tp(
+            'plurals.orphanedChildren',
+            orphanedChildren,
           )}`
         : t('usagePanel.purgeConfirmMessage', target.title);
     const ok = await confirmDialog(

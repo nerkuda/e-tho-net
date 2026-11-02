@@ -899,6 +899,14 @@ export async function boot(): Promise<void> {
   await initTheme();
   // Язык интерфейса (L5 `client_meta.lang`, задача 57f09136): словарь должен
   // быть выбран до монтажа первого экрана, иначе тексты придут на исходном ru.
+  // В тестовой сборке (--mode test) до первого экрана регистрируется локаль
+  // GUI-стенда (задача e6374cd1): живая смена языка проверяется пользовательским
+  // путём «настройки → язык», пока каталогов en/zh нет. В production-сборке
+  // ветка статически ложна и фикстура в бандл не попадает.
+  if (import.meta.env.MODE === 'test') {
+    const { registerTestLocale } = await import('./lib/locales/test.js');
+    registerTestLocale();
+  }
   await initLang();
   // Layer colour indication (0.6.4 §2.2a): one store subscription writing
   // the --layer-* overrides (or clearing them) whenever the current layer,

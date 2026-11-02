@@ -22,7 +22,7 @@
  */
 
 import { div, el, errText } from './dom.js';
-import { t } from './i18n.js';
+import { onLangChange, t } from './i18n.js';
 import { svgIcon } from './ui/icon.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput, fieldRow } from './ui/field.js';
@@ -123,7 +123,12 @@ export interface DialogButton {  label: string;
 
 /** Options of {@link showDialog}. */
 export interface DialogOptions {
-  title: string;
+  /**
+   * Заголовок диалога. Функция — для диалогов, чьи тексты обязаны обновиться
+   * при смене языка: каркас перечитывает её вместе с {@link onLangChange}
+   * (задача e6374cd1). Строка — обычный статический заголовок.
+   */
+  title: string | (() => string);
   /**
    * Тело диалога. Не задаётся, когда содержимое разложено по вкладкам
    * ({@link tabs}); в остальных случаях обязательно.
@@ -223,6 +228,17 @@ export interface DialogOptions {
    * сессию сплиттера.
    */
   onEscape?: () => boolean;
+  /**
+   * Обновление текстов при смене языка интерфейса (задача e6374cd1). Каркас
+   * держит ОДНУ подписку на `onLangChange` и по ней обходит стек диалогов,
+   * вызывая хуки; заголовок-функция {@link title} перечитывается до хука.
+   * Ошибка одного хука не прерывает остальные диалоги.
+   *
+   * Нужен диалогам с формой: перерисовка содержимого из их черновика не теряет
+   * ввод (значения живут в черновике, а не в DOM). Подтверждения и сообщения
+   * хук не задают — их текст на момент открытия осмысленен и без перерисовки.
+   */
+  onLangChange?: () => void;
   /** Called after the dialog is mounted (focus management, etc.). */
   onMount?: (close: () => void, box: HTMLElement) => void;
   /**
@@ -267,6 +283,45 @@ const stack: HTMLDivElement[] = [];
 
 /** Entity identity of every open dialog that declared one ({@link DialogOptions.dedupeKey}). */
 const dialogKeys = new WeakMap<HTMLDivElement, string>();
+
+/**
+ * Хуки перерисовки открытых диалогов при смене языка (задача e6374cd1).
+ * Ключ — подложка диалога, поэтому закрытие удаляет хук вместе с элементом;
+ * обход идёт по стеку — только живые диалоги.
+ */
+const langHooks = new WeakMap<HTMLDivElement, () => void>();
+
+/** Подписка каркаса на смену языка поставлена (одна на модуль). */
+let langSubscribed = false;
+
+/** Заголовок диалога (функция — перечитывается при смене языка). */
+const dialogTitles = new WeakMap<HTMLDivElement, string | (() => string)>();
+
+/**
+ * Единственная подписка диалогового каркаса на `onLangChange`: по смене языка
+ * перечитывает заголовки-функции и зовёт хук каждого открытого диалога.
+ * Ошибка одного диалога не мешает остальным и не отменяет `setLang`.
+ */
+function ensureLangSubscription(): void {
+  if (langSubscribed) return;
+  langSubscribed = true;
+  onLangChange(() => {
+    for (const backdrop of stack) {
+      const title = dialogTitles.get(backdrop);
+      if (title !== undefined) {
+        const node = backdrop.querySelector<HTMLElement>('.dialog-title');
+        if (node !== null) node.textContent = typeof title === 'function' ? title() : title;
+      }
+      const hook = langHooks.get(backdrop);
+      if (hook === undefined) continue;
+      try {
+        hook();
+      } catch (err) {
+        console.error('[dialog] onLangChange hook failed', err);
+      }
+    }
+  });
+}
 
 /** The subset of KeyboardEvent fields the dialog shortcuts inspect. */
 export interface ShortcutEventLike {
@@ -646,7 +701,15 @@ export function showDialog(opts: DialogOptions): () => void {
   let primaryBtn: HTMLButtonElement | null = null;
 
   const header = div('dialog-header');
-  header.append(el('span', 'dialog-title', opts.title));
+  header.append(
+    el('span', 'dialog-title', typeof opts.title === 'function' ? opts.title() : opts.title),
+  );
+  // Заголовок-функция перечитывается каркасом при смене языка (e6374cd1).
+  dialogTitles.set(backdrop, opts.title);
+  if (opts.onLangChange !== undefined) {
+    langHooks.set(backdrop, opts.onLangChange);
+    ensureLangSubscription();
+  }
   // Блокирующий диалог (dismissible: false) не показывает крестик: закрыть его
   // пользователь не может, только приложение или смена состояния (8623b9ff).
   if (opts.dismissible !== false) {

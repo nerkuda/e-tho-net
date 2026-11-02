@@ -12,7 +12,7 @@
 
 import type { Link, LinkStyle, LinkType } from '@etn/shared';
 
-import { pluralRu } from '../lib/plural.js';
+import { tp } from '../lib/i18n.js';
 import { LINK_STYLE_DEFAULTS, resolveLinkTypeVisual } from '../lib/type-tree.js';
 
 /** Слово вместо имени типа связи, когда тип не задан (п.3 задачи). */
@@ -26,7 +26,7 @@ export const LINKS_TAB_TITLE = 'Свойства';
 
 /** Согласованная форма «связь/связи/связей» для числа скрытых рёбер. */
 function linksWord(n: number): string {
-  return pluralRu(n, 'связь', 'связи', 'связей');
+  return tp('plurals.link', n);
 }
 
 /** Сколько соседей рисуется пилюлями; остальные — за счётчиком «не поместилось». */

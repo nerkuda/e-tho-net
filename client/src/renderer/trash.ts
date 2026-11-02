@@ -23,7 +23,7 @@ import {
   type ThoughtDeletionCheckResult,
   type TrashListResult,
 } from '@etn/shared';
-import { t } from './lib/i18n.js';
+import { t, tp } from './lib/i18n.js';
 import { MENU_SEPARATOR, menuAction, type MenuItem } from './lib/menu.js';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
@@ -58,7 +58,6 @@ import { fieldInput } from './lib/ui/field.js';
 import { bindSearchNav } from './lib/ui/search-nav.js';
 import { createTable } from './lib/ui/table.js';
 import { splitterElement, wireSplitter, type SplitterHandle } from './lib/ui/splitter.js';
-import { pluralRu } from './lib/plural.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -256,7 +255,7 @@ export async function openThoughtDeleteDialog(
   }
   if (check.orphaned_children > 0) {
     lines.push(
-      `${check.orphaned_children} ${pluralRu(check.orphaned_children, 'потомок', 'потомка', 'потомков')} останется без родителей.`,
+      `${check.orphaned_children} ${tp('plurals.child', check.orphaned_children)} останется без родителей.`,
     );
   }
 
@@ -292,7 +291,7 @@ export async function openThoughtDeleteDialog(
       }
       if (next.orphaned_children > 0) {
         nextLines.push(
-          `${next.orphaned_children} ${pluralRu(next.orphaned_children, 'потомок', 'потомка', 'потомков')} останется без родителей.`,
+          `${next.orphaned_children} ${tp('plurals.child', next.orphaned_children)} останется без родителей.`,
         );
       }
       return { lines: nextLines, blocked: next.blocked };
@@ -668,7 +667,7 @@ export async function openThoughtGroupDeleteDialog(
       el(
         'p',
         'dialog-text group-delete-warning',
-        `${totalOrphaned} ${pluralRu(totalOrphaned, 'потомок', 'потомка', 'потомков')} лишится родителя.`,
+        `${totalOrphaned} ${tp('plurals.child', totalOrphaned)} лишится родителя.`,
       ),
     );
   }
