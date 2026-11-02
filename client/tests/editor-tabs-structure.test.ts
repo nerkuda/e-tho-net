@@ -146,11 +146,17 @@ describe('вкладка «Граф» — мини-граф на всю высо
 
   it('editor.ts содержит вкладку «Граф» между «Дневник» и «Метаданные» и «Упоминания»', () => {
     const editorSrc = readText(SRC.editor);
-    assert.ok(editorSrc.includes("title: t('editor.title.mentions')"), '«Упоминания» tab title present');
-    assert.ok(editorSrc.includes("title: t('editor.title.graph')"), '«Граф» tab title present');
-    const chronoIdx = editorSrc.indexOf("title: t('editor.title.dnevnik')");
-    const graphIdx = editorSrc.indexOf("title: t('editor.title.graph')");
-    const metadataIdx = editorSrc.indexOf("title: t('editor.title.metadata')");
+    assert.ok(
+      /id: 'links',\s*get title\(\) \{\s*return t\('editor\.title\.mentions'\)/.test(editorSrc),
+      '«Упоминания» tab title present',
+    );
+    assert.ok(
+      /id: 'graph',\s*get title\(\) \{\s*return t\('editor\.title\.graph'\)/.test(editorSrc),
+      '«Граф» tab title present',
+    );
+    const chronoIdx = editorSrc.indexOf("t('editor.title.dnevnik')");
+    const graphIdx = editorSrc.indexOf("t('editor.title.graph')");
+    const metadataIdx = editorSrc.indexOf("t('editor.title.metadata')");
     assert.ok(chronoIdx >= 0 && graphIdx >= 0 && metadataIdx >= 0, 'all three titles present');
     assert.ok(chronoIdx < graphIdx && graphIdx < metadataIdx, '«Граф» sits between «Дневник» and «Метаданные»');
   });
@@ -369,9 +375,9 @@ describe('набор вкладок зависит от сущности (0.8.1,
   it('TABS_LINK — только «Комментарий», «Мысли», «Метаданные»', () => {
     const src = readText(SRC.editor);
     const link = sliceConst(src, 'TABS_LINK');
-    assert.ok(link.includes("title: t('comment.title.kommentariy')"), '«Комментарий» present in the link set');
-    assert.ok(link.includes("title: t('editor.title.thought')"), '«Мысли» present in the link set');
-    assert.ok(link.includes("title: t('editor.title.metadata')"), '«Метаданные» present in the link set');
+    assert.ok(link.includes("return t('comment.title.kommentariy')"), '«Комментарий» present in the link set');
+    assert.ok(link.includes("return t('editor.title.thought')"), '«Мысли» present in the link set');
+    assert.ok(link.includes("return t('editor.title.metadata')"), '«Метаданные» present in the link set');
     // Вкладок, осмысленных только для мысли, у связи нет.
     for (const gone of ["'Свойства'", "'Вложения'", "'Дневник'", "'Граф'", "'Упоминания'"]) {
       assert.ok(!link.includes(gone), `link tab set must not contain ${gone}`);
@@ -379,7 +385,7 @@ describe('набор вкладок зависит от сущности (0.8.1,
     // id вкладки «Мысли» — тот же `links`, что у «Упоминаний» мысли: id-контракт
     // не плодится, предпочтение активной вкладки не сбрасывается.
     assert.ok(
-      /id:\s*'links',\s*title:\s*t\('editor\.title\.thought'\)/.test(link),
+      /id:\s*'links',\s*get title\(\) \{\s*return t\('editor\.title\.thought'\)/.test(link),
       '«Мысли» reuses the `links` tab id',
     );
     assert.ok(!/counted:\s*true/.test(link), 'no counted tabs in the link set');

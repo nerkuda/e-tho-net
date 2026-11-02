@@ -49,13 +49,26 @@ export interface PropertyRowMenuActions {
   move?: (from: number, to: number) => void;
 }
 
-/** Подписи пунктов — единый источник для меню и тестов. */
+/**
+ * Подписи пунктов — единый источник для меню и тестов. Геттеры: текст
+ * берётся в момент рендера, а не при импорте модуля (ошибка ebed42d3).
+ */
 export const PROPERTY_ROW_MENU_LABELS = {
-  edit: t('properties.editProperty'),
-  clear: t('actions.reset'),
-  promote: t('properties.perenestiTipovyeProperties'),
-  exclude: t('properties.isklyuchitTipovyhProperties'),
-  remove: t('actions.delete'),
+  get edit() {
+    return t('properties.editProperty');
+  },
+  get clear() {
+    return t('actions.reset');
+  },
+  get promote() {
+    return t('properties.perenestiTipovyeProperties');
+  },
+  get exclude() {
+    return t('properties.isklyuchitTipovyhProperties');
+  },
+  get remove() {
+    return t('actions.delete');
+  },
 } as const;
 
 /** Собирает пункты меню строки свойства по её состоянию. */

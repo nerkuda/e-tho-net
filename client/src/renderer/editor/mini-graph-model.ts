@@ -16,14 +16,21 @@ import { tp } from '../lib/i18n.js';
 import { LINK_STYLE_DEFAULTS, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { t } from '../lib/i18n.js';
 
-/** Слово вместо имени типа связи, когда тип не задан (п.3 задачи). */
-export const UNTYPED_LINK_LABEL = t('clipboard.link');
+/**
+ * Слово вместо имени типа связи, когда тип не задан (п.3 задачи).
+ * Функция: текст берётся в момент рендера (ошибка ebed42d3).
+ */
+export function untypedLinkLabel(): string {
+  return t('clipboard.link');
+}
 
 /** Порог «массовости» пары (тип, сосед): избыточные рёбра прячутся за «+N». */
 export const MASS_LINK_THRESHOLD = 10;
 
 /** Где в клиенте живёт полный список прямых связей мысли (вкладка редактора). */
-export const LINKS_TAB_TITLE = t('editor.title.properties');
+export function linksTabTitle(): string {
+  return t('editor.title.properties');
+}
 
 /** Согласованная форма «связь/связи/связей» для числа скрытых рёбер. */
 function linksWord(n: number): string {
@@ -151,8 +158,10 @@ export function shiftEdgeByLane(
   return { a: { x: a.x + ox, y: a.y + oy }, b: { x: b.x + ox, y: b.y + oy } };
 }
 
-/** Пометка корзины в тултипе ребра (ошибка 355319d4). */
-export const TRASHED_EDGE_TITLE_SUFFIX = t('miniGraph.inTrash');
+/** Пометка корзины в тултипе ребра (ошибка 355319d4); текст — в момент рендера. */
+export function trashedEdgeTitleSuffix(): string {
+  return t('miniGraph.inTrash');
+}
 
 /** Штрих помеченного на удаление ребра — приглушённый пунктир. */
 export const TRASHED_EDGE_DASH = '4 4';
@@ -178,8 +187,8 @@ export function edgeTooltip(
   targetTitle: string,
   trashed = false,
 ): string {
-  const name = typeName === '' ? UNTYPED_LINK_LABEL : typeName;
-  const suffix = trashed ? ` ${TRASHED_EDGE_TITLE_SUFFIX}` : '';
+  const name = typeName === '' ? untypedLinkLabel() : typeName;
+  const suffix = trashed ? ` ${trashedEdgeTitleSuffix()}` : '';
   return `${name}: ${sourceTitle} -> ${targetTitle}${suffix}`;
 }
 
@@ -368,7 +377,7 @@ export function planGraphEdges(
       info.trashed += trashed;
       const typeName = edgeTypeName(group.type, side === 'out');
       info.pairs.push({
-        label: typeName === '' ? UNTYPED_LINK_LABEL : typeName,
+        label: typeName === '' ? untypedLinkLabel() : typeName,
         side,
         hidden: hiddenLinks.length,
         trashed,
@@ -413,7 +422,7 @@ export function massChipTooltip(mass: MassInfo): string {
       ? t('miniGraph.inTrashMetkaTrashChipaVosstanovlenie', mass.trashed)
       : '';
   const liveWord = mass.trashed > 0 ? t('miniGraph.zhivyhLinks') : '';
-  return t('miniGraph.polnyyListVkladke', [details, trashed, liveWord, LINKS_TAB_TITLE]);
+  return t('miniGraph.polnyyListVkladke', [details, trashed, liveWord, linksTabTitle()]);
 }
 
 /** Показатели шапки графа. */
@@ -605,14 +614,18 @@ export function graphStatEntries(stats: GraphStats): StatEntry[] {
     entries.push({
       text: t('miniGraph.hiddenMassovyh', stats.massHidden),
       tooltip:
-        t('miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber', [MASS_LINK_THRESHOLD, LINKS_TAB_TITLE]),
+        t('miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber', [MASS_LINK_THRESHOLD, linksTabTitle()]),
     });
   }
   if (stats.peripheryHidden > 0) {
     entries.push({
       text: t('miniGraph.moreNotPomestilos', stats.peripheryHidden),
       tooltip:
-        t('miniGraph.onGraphPokazanyPervyeNeighboursOstalnye', [PERIPHERY_CAP, stats.peripheryHidden, LINKS_TAB_TITLE]),
+        t('miniGraph.onGraphPokazanyPervyeNeighboursOstalnye', [
+          PERIPHERY_CAP,
+          stats.peripheryHidden,
+          linksTabTitle(),
+        ]),
     });
   }
   return entries;

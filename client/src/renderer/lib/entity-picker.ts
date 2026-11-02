@@ -1857,12 +1857,23 @@ export function normalizeParentTypeId(
   return parentId === rootId ? null : parentId;
 }
 
-/** Заголовок диалога «…» по виду выбираемой сущности (см. {@link buildEntityCombo}). */
+/**
+ * Заголовок диалога «…» по виду выбираемой сущности (см. {@link buildEntityCombo}).
+ * Геттеры: текст берётся в момент открытия диалога (ошибка ebed42d3).
+ */
 const PICKER_TITLES: Record<Exclude<EntityKind, 'link-properties'>, string> = {
-  'thought-types': t('entityPicker.selectTypeThought'),
-  'link-types': t('entityPicker.selectTypeLink'),
-  thoughts: t('entityPicker.thoughts.selectThought'),
-  publications: t('publications.field.pickerTitle'),
+  get 'thought-types'() {
+    return t('entityPicker.selectTypeThought');
+  },
+  get 'link-types'() {
+    return t('entityPicker.selectTypeLink');
+  },
+  get thoughts() {
+    return t('entityPicker.thoughts.selectThought');
+  },
+  get publications() {
+    return t('publications.field.pickerTitle');
+  },
 };
 
 /** Заголовок диалога «…»: `override` вызывающего либо словарная подпись вида

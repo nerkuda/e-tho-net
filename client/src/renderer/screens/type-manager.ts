@@ -176,19 +176,37 @@ import { FIELD_CLASS } from '../lib/ui/field.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
-  text: t('valueEditor.row'),
-  number: t('valueEditor.number'),
-  date: t('valueEditor.date'),
-  bool: t('typeManager.bool.bulevo'),
-  url: t('propertyList.url.urlSaytFile'),
-  link: t('clipboard.link'),
+  get text() {
+    return t('valueEditor.row');
+  },
+  get number() {
+    return t('valueEditor.number');
+  },
+  get date() {
+    return t('valueEditor.date');
+  },
+  get bool() {
+    return t('typeManager.bool.bulevo');
+  },
+  get url() {
+    return t('propertyList.url.urlSaytFile');
+  },
+  get link() {
+    return t('clipboard.link');
+  },
   // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
   // типах маркер оставлен для компиляции тестов и импорта архивов.
-  thought_ref: t('typeManager.thought_ref.linkRefThoughtLegacy'),
+  get thought_ref() {
+    return t('typeManager.thought_ref.linkRefThoughtLegacy');
+  },
   // Кросс-сетевая ссылка (задача 7849008a).
-  cross_network_ref: t('propertyList.cross_network_ref.krossSetevayaLinkRef'),
+  get cross_network_ref() {
+    return t('propertyList.cross_network_ref.krossSetevayaLinkRef');
+  },
   // Ссылка на публикацию (0.11.1, задача f37b468d).
-  publication: t('propertyList.publication.publication'),
+  get publication() {
+    return t('propertyList.publication.publication');
+  },
 };
 
 /** CSS-класс текущей (выделенной с клавиатуры) строки таблицы привязок. */

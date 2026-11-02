@@ -2021,11 +2021,21 @@ async function resolveZoneRefs(networkId: string, ids: string[]): Promise<void> 
 // Zones
 // ---------------------------------------------------------------------------
 
-/** Empty-zone hints; the double-click hint only where the gesture works (L19). */
+/**
+ * Empty-zone hints; the double-click hint only where the gesture works (L19).
+ * Геттеры: текст берётся в момент рендера — иначе константа зафиксировала бы
+ * язык импорта модуля (ошибка ebed42d3).
+ */
 const ZONE_EMPTY_LABELS: Record<'parents' | 'siblings' | 'children', string> = {
-  parents: t('canvas.vliyayuschihThoughtsNoDvoynoyKlikAdd'),
-  siblings: t('canvas.siblings.rodstvennyhThoughtsNo'),
-  children: t('canvas.podchinennyhThoughtsNoDvoynoyKlikAdd'),
+  get parents() {
+    return t('canvas.vliyayuschihThoughtsNoDvoynoyKlikAdd');
+  },
+  get siblings() {
+    return t('canvas.siblings.rodstvennyhThoughtsNo');
+  },
+  get children() {
+    return t('canvas.podchinennyhThoughtsNoDvoynoyKlikAdd');
+  },
 };
 
 /**

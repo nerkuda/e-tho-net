@@ -329,7 +329,7 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       assert.ok(model.includes(`t('${key}'`), `the model names the stat «${key}»`);
     }
     assert.ok(
-      model.includes("LINKS_TAB_TITLE = t('editor.title.properties')") && model.includes('LINKS_TAB_TITLE'),
+      model.includes("linksTabTitle()") && model.includes('export function linksTabTitle'),
       'the tooltip explains how to see the hidden links',
     );
     // Вкладки «Связи» в клиенте нет — прямые связи живут на «Свойствах»
@@ -405,7 +405,8 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'colliding side names are distinguished by direction',
     );
     assert.ok(
-      model.includes("LINKS_TAB_TITLE = t('editor.title.properties')"),
+      model.includes('export function linksTabTitle') &&
+        model.includes("return t('editor.title.properties')"),
       'the model knows where the full link list actually lives',
     );
   });

@@ -407,8 +407,10 @@ export interface ThoughtCloudOptions {
   highlightTerms?: readonly string[];
 }
 
-/** Подсказка метки корзины (S13). */
-const TRASH_BADGE_TOOLTIP = t('thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore');
+/** Подсказка метки корзины (S13); текст — в момент рендера (ошибка ebed42d3). */
+function trashBadgeTooltip(): string {
+  return t('thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore');
+}
 
 /** Классы корня и внутренних частей по профилю (один набор на профиль). */
 const PROFILE_DOM: Record<CloudProfile, { root: string; icon: string; title: string; titleTag: 'div' | 'span' }> = {
@@ -468,7 +470,7 @@ function buildTrashMark(
   if (profile === 'chip') {
     const mark = span('', 'list-trash-mark');
     mark.append(svgIcon('trash', 10));
-    setTooltip(mark, TRASH_BADGE_TOOLTIP);
+    setTooltip(mark, trashBadgeTooltip());
     mark.addEventListener('click', (event) => {
       event.stopPropagation();
       actions?.onTrashBadgeClick?.(id);
@@ -477,7 +479,7 @@ function buildTrashMark(
   }
   const badge = span('', 'cloud-trash-badge');
   badge.append(svgIcon('trash', 17));
-  setTooltip(badge, TRASH_BADGE_TOOLTIP);
+  setTooltip(badge, trashBadgeTooltip());
   badge.addEventListener('click', (event) => {
     event.stopPropagation();
     actions?.onTrashBadgeClick?.(id);

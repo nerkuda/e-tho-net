@@ -31,6 +31,19 @@ export const testLocale: MessageCatalog = {
   'workspace.networkLabel': 'TestNet',
   'workspace.view.map': 'TestMap',
   'realtime.status.idle': 'TestIdle',
+  // Подписи из мест, которые до ошибки ebed42d3 вычислялись на уровне модуля
+  // (карты/константы при импорте): при живой смене языка они обязаны
+  // перерисоваться вместе с экраном.
+  'canvas.vliyayuschihThoughtsNoDvoynoyKlikAdd': 'TestParentsEmpty',
+  'canvas.siblings.rodstvennyhThoughtsNo': 'TestSiblingsEmpty',
+  'canvas.podchinennyhThoughtsNoDvoynoyKlikAdd': 'TestChildrenEmpty',
+  'comment.title.kommentariy': 'TestComment',
+  'editor.title.properties': 'TestProps',
+  'editor.title.attachments': 'TestAttach',
+  'editor.title.mentions': 'TestMentions',
+  'editor.title.dnevnik': 'TestChrono',
+  'editor.title.graph': 'TestGraph',
+  'editor.title.metadata': 'TestMeta',
 };
 
 /** Формы плюрализации тестовой локали (en-подобные). */

@@ -32,7 +32,7 @@ import { invalidateRef } from './canvas/canvas.js';
 // ребра локального графа (`edgeTooltip`): подпись связи обязана читаться
 // одинаково в диалоге удаления связи и в строке корзины (ошибки ce687b37,
 // 009784ad).
-import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
+import { untypedLinkLabel } from './editor/mini-graph-model.js';
 // Мини-облачка строк группового удаления собирает общая фабрика (профиль
 // `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
 // со всеми остальными списками клиента.
@@ -91,14 +91,14 @@ async function thoughtVersion(networkId: string, id: string): Promise<number> {
 
 /**
  * Имя типа связи «вперёд» (сторона источника) из кэша типов сети. Тип не задан
- * или не резолвится — слово-заглушка {@link UNTYPED_LINK_LABEL}: то же, что
+ * или не резолвится — слово-заглушка {@link untypedLinkLabel}: то же, что
  * показывает тултип ребра локального графа (`edgeTooltip`), поэтому подпись
  * связи читается одинаково во всех местах клиента.
  */
 export function linkTypeForwardName(typeId: string | null): string {
-  if (typeId === null) return UNTYPED_LINK_LABEL;
+  if (typeId === null) return untypedLinkLabel();
   const type = store.state.linkTypes.find((t) => t.id === typeId);
-  if (type === undefined || type.name_forward.trim() === '') return UNTYPED_LINK_LABEL;
+  if (type === undefined || type.name_forward.trim() === '') return untypedLinkLabel();
   return type.name_forward;
 }
 

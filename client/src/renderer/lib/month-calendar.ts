@@ -50,7 +50,18 @@ import { t } from './i18n.js';
 export { buildMonthWeeks } from './dates.js';
 export type { CalendarCell, CalendarWeek } from './dates.js';
 
-const WEEKDAYS = [t('calendar.pn'), t('calendar.vt'), t('calendar.sr'), t('calendar.cht'), t('calendar.pt'), t('calendar.sb'), t('calendar.vs')];
+/** Подписи дней недели Пн…Вс; функция — текст берётся в момент рендера (ошибка ebed42d3). */
+function weekdayNames(): string[] {
+  return [
+    t('calendar.pn'),
+    t('calendar.vt'),
+    t('calendar.sr'),
+    t('calendar.cht'),
+    t('calendar.pt'),
+    t('calendar.sb'),
+    t('calendar.vs'),
+  ];
+}
 
 /**
  * Подписи столбцов дней недели, начиная с первого дня недели сети
@@ -60,38 +71,43 @@ const WEEKDAYS = [t('calendar.pn'), t('calendar.vt'), t('calendar.sr'), t('calen
 export function weekdayLabels(firstDayOfWeek = 1): string[] {
   const iso = firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : 1;
   const offset = iso - 1;
-  return [...WEEKDAYS.slice(offset), ...WEEKDAYS.slice(0, offset)];
+  const weekdays = weekdayNames();
+  return [...weekdays.slice(offset), ...weekdays.slice(0, offset)];
 }
 /** Полные названия месяцев для списка выбора (январь–декабрь). */
-const MONTHS = [
-  t('calendar.yanvar'),
-  t('calendar.fevral'),
-  t('calendar.mart'),
-  t('calendar.aprel'),
-  t('calendar.may'),
-  t('calendar.iyun'),
-  t('calendar.iyul'),
-  t('calendar.avgust'),
-  t('calendar.sentyabr'),
-  t('calendar.oktyabr'),
-  t('calendar.noyabr'),
-  t('calendar.dekabr'),
-];
+function monthNames(): string[] {
+  return [
+    t('calendar.yanvar'),
+    t('calendar.fevral'),
+    t('calendar.mart'),
+    t('calendar.aprel'),
+    t('calendar.may'),
+    t('calendar.iyun'),
+    t('calendar.iyul'),
+    t('calendar.avgust'),
+    t('calendar.sentyabr'),
+    t('calendar.oktyabr'),
+    t('calendar.noyabr'),
+    t('calendar.dekabr'),
+  ];
+}
 /** Короткие подписи месяца в заголовке («сен 2026»). */
-const MONTHS_SHORT = [
-  t('calendar.yanv'),
-  t('calendar.fev'),
-  t('calendar.mar'),
-  t('calendar.apr'),
-  t('calendar.may2'),
-  t('calendar.iyun2'),
-  t('calendar.iyul2'),
-  t('calendar.avg'),
-  t('calendar.sen'),
-  t('calendar.okt'),
-  t('calendar.noya'),
-  t('calendar.dek'),
-];
+function monthNamesShort(): string[] {
+  return [
+    t('calendar.yanv'),
+    t('calendar.fev'),
+    t('calendar.mar'),
+    t('calendar.apr'),
+    t('calendar.may2'),
+    t('calendar.iyun2'),
+    t('calendar.iyul2'),
+    t('calendar.avg'),
+    t('calendar.sen'),
+    t('calendar.okt'),
+    t('calendar.noya'),
+    t('calendar.dek'),
+  ];
+}
 
 /** Границы вводимого года. */
 const MIN_YEAR = 1900;
@@ -343,7 +359,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       const index = i;
       list.append(
         uiButton({
-          label: MONTHS[i]!,
+          label: monthNames()[i]!,
           role: 'ghost',
           size: 's',
           class: 'cal-month-item',
@@ -490,7 +506,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   }
 
   function renderHead(): void {
-    monthBtn.textContent = MONTHS_SHORT[month - 1]!;
+    monthBtn.textContent = monthNamesShort()[month - 1]!;
     yearBtn.textContent = String(year);
     // Год, показанный в поле ввода, синхронизируем с текущим.
     if (yearEditing || yearInput.style.display !== 'none') yearInput.value = String(year);

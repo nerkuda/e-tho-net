@@ -80,25 +80,26 @@ import {
 const PAGE_SIZE = 50;
 
 /** Russian labels for action codes (the wire format is English); из словаря
- *  локализации — это строки списка (задача ae76b75e, требование 93115633). */
+ *  локализации — это строки списка (задача ae76b75e, требование 93115633).
+ *  Геттеры: подписи берутся в момент рендера (ошибка ebed42d3). */
 const ACTION_LABELS: Record<ActionFilter, string> = {
-  created: t('activity.action.created'),
-  updated: t('activity.action.updated'),
-  deleted: t('activity.action.deleted'),
-  trashed: t('activity.action.trashed'),
-  restored: t('activity.action.restored'),
+  get created() { return t('activity.action.created'); },
+  get updated() { return t('activity.action.updated'); },
+  get deleted() { return t('activity.action.deleted'); },
+  get trashed() { return t('activity.action.trashed'); },
+  get restored() { return t('activity.action.restored'); },
 };
 
 /** Russian labels for entity types used in the «сущность» column. */
 const ENTITY_LABELS: Record<string, string> = {
-  thought: t('activity.entity.thought'),
-  link: t('activity.entity.link'),
-  thought_type: t('activity.entity.thought_type'),
-  link_type: t('activity.entity.link_type'),
-  property: t('activity.entity.property'),
-  comment: t('activity.entity.comment'),
-  attachment: t('activity.entity.attachment'),
-  layer: t('activity.entity.layer'),
+  get thought() { return t('activity.entity.thought'); },
+  get link() { return t('activity.entity.link'); },
+  get thought_type() { return t('activity.entity.thought_type'); },
+  get link_type() { return t('activity.entity.link_type'); },
+  get property() { return t('activity.entity.property'); },
+  get comment() { return t('activity.entity.comment'); },
+  get attachment() { return t('activity.entity.attachment'); },
+  get layer() { return t('activity.entity.layer'); },
 };
 
 /** Подпись действия строки (метка из словаря, иначе — сырой код). */
@@ -111,16 +112,22 @@ function entityTypeLabel(entityType: string): string {
   return ENTITY_LABELS[entityType] ?? entityType;
 }
 
-/** Варианты enum-ячейки «Тип действия» (флажки словаря, требование db5e1063). */
-const ACTION_ENUM_OPTIONS: ReadonlyArray<FilterValueEnumOption> = (
-  ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActionFilter>
-).map((action) => ({ value: action, label: ACTION_LABELS[action] }));
+/** Варианты enum-ячейки «Тип действия» (флажки словаря, требование db5e1063).
+ *  Функция: подписи берутся в момент рендера (ошибка ebed42d3). */
+function actionEnumOptions(): ReadonlyArray<FilterValueEnumOption> {
+  return (ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActionFilter>).map((action) => ({
+    value: action,
+    label: ACTION_LABELS[action],
+  }));
+}
 
-/** Варианты enum-ячейки «Вид сущности» — словарь экрана. */
-const ENTITY_TYPE_ENUM_OPTIONS: ReadonlyArray<FilterValueEnumOption> = ENTITY_TYPE_OPTIONS.map((o) => ({
-  value: o.value,
-  label: ENTITY_LABELS[o.value] ?? o.value,
-}));
+/** Варианты enum-ячейки «Вид сущности» — словарь экрана; текст — в момент рендера. */
+function entityTypeEnumOptions(): ReadonlyArray<FilterValueEnumOption> {
+  return ENTITY_TYPE_OPTIONS.map((o) => ({
+    value: o.value,
+    label: ENTITY_LABELS[o.value] ?? o.value,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -575,8 +582,8 @@ function mountFilterPanel(area: HTMLElement): void {
     },
     sort: false,
     enumOptions: (leaf) => {
-      if (leaf.entity.kind === 'action') return ACTION_ENUM_OPTIONS;
-      if (leaf.entity.kind === 'entity_type') return ENTITY_TYPE_ENUM_OPTIONS;
+      if (leaf.entity.kind === 'action') return actionEnumOptions();
+      if (leaf.entity.kind === 'entity_type') return entityTypeEnumOptions();
       // Остальные операнды профиля выбирают ячейку значения сами
       // (дата/время, выбор сущности, текстовый ввод).
       return [];

@@ -17,16 +17,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** English group name → Russian UI label. */
-const GROUP_NAMES_RU = {
-  'Smileys & Emotion': 'Смайлики и эмоции',
-  'People & Body': 'Люди и тело',
-  'Animals & Nature': 'Животные и природа',
-  'Food & Drink': 'Еда и напитки',
-  'Travel & Places': 'Путешествия и места',
-  Activities: 'Занятия',
-  Objects: 'Предметы',
-  Symbols: 'Символы',
-  Flags: 'Флаги',
+/** English group name → ключ словаря `lib/locales/ru.ts` (подпись в пикере). */
+const GROUP_NAME_KEYS = {
+  'Smileys & Emotion': 'emoji.name.smilesEmotions',
+  'People & Body': 'emoji.name.peopleBody',
+  'Animals & Nature': 'emoji.name.animalsNature',
+  'Food & Drink': 'emoji.name.foodDrinks',
+  'Travel & Places': 'emoji.name.travelPlaces',
+  Activities: 'emoji.name.activities',
+  Objects: 'emoji.name.objects',
+  Symbols: 'emoji.name.symbols',
+  Flags: 'emoji.name.flags',
 };
 
 /** Skin-tone modifier code points — variants of the base emoji (1F3FB–1F3FF). */
@@ -65,6 +66,8 @@ function render(groups, version) {
   lines.push(' * by hand. Skin-tone variants are omitted (duplicates of the base emoji).');
   lines.push(' */');
   lines.push('');
+  lines.push("import { t } from './i18n.js';");
+  lines.push('');
   lines.push('export interface EmojiGroup {');
   lines.push("  /** Russian label shown in the picker (08-ui-spec.md §6.8). */");
   lines.push('  name: string;');
@@ -74,13 +77,21 @@ function render(groups, version) {
   lines.push('');
   lines.push('export const EMOJI_GROUPS: EmojiGroup[] = [');
   for (const g of groups) {
-    const ru = GROUP_NAMES_RU[g.name] ?? g.name;
+    const key = GROUP_NAME_KEYS[g.name];
     const rows = [];
     for (let i = 0; i < g.items.length; i += 16) {
       const chunk = g.items.slice(i, i + 16).map((s) => `'${s}'`).join(', ');
       rows.push(`    ${chunk},`);
     }
-    lines.push(`  { name: '${ru}', items: [`);
+    // Подпись — геттер: текст берётся в момент рендера, иначе константа
+    // зафиксировала бы язык импорта модуля (ошибка ebed42d3).
+    lines.push('  {');
+    lines.push(
+      key === undefined
+        ? `    name: ${JSON.stringify(g.name)}, // нет ключа словаря — имя CLDR`
+        : `    get name() { return t('${key}'); },`,
+    );
+    lines.push('    items: [');
     lines.push(...rows);
     lines.push('  ],');
     lines.push(`  // ${g.name} (${g.items.length})`);

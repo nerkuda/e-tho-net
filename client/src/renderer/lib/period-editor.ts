@@ -232,26 +232,26 @@ export function canonicalGlobalToken(text: string): string {
  * по-прежнему принимает вводом, но не предлагает.
  */
 export const PERIOD_TOKEN_PRESETS: readonly { text: string; label: string }[] = [
-  { text: '$today', label: t('filterTokens.label.todaySegodnya') },
-  { text: '$now', label: t('filterTokens.label.nowCurrentMoment') },
-  { text: '$today+1d', label: t('periodEditor.label.today1dZavtra') },
-  { text: '$today-1d', label: t('periodEditor.label.today1dVchera') },
-  { text: '$weekStart', label: t('periodEditor.label.weekstartStartWeek') },
-  { text: '$weekEnd', label: t('periodEditor.label.weekendEndWeek') },
-  { text: '$weekStart-1w', label: t('periodEditor.weekstart1wStartProshloyWeek') },
-  { text: '$weekStart+1w', label: t('periodEditor.weekstart1wStartBuduscheyWeek') },
-  { text: '$monthStart', label: t('periodEditor.label.monthstartStartMonth') },
-  { text: '$monthEnd', label: t('periodEditor.label.monthendEndMonth') },
-  { text: '$monthStart-1mo', label: t('periodEditor.monthstart1moStartProshlogoMonth') },
-  { text: '$monthEnd+1mo', label: t('periodEditor.monthend1moEndBuduschegoMonth') },
-  { text: '$yearStart', label: t('periodEditor.label.yearstartStartYear') },
-  { text: '$yearEnd', label: t('periodEditor.label.yearendEndYear') },
-  { text: '$yearStart-1y', label: t('periodEditor.yearstart1yStartProshlogoYear') },
-  { text: '$yearEnd+1y', label: t('periodEditor.yearend1yEndBuduschegoYear') },
-  { text: '$today+7d', label: t('periodEditor.label.today7dViaWeek') },
-  { text: '$today-7d', label: t('periodEditor.label.today7dWeekBack') },
-  { text: '$today+30d', label: t('periodEditor.label.today30dViaMonth') },
-  { text: '$today-30d', label: t('periodEditor.label.today30dMonthBack') },
+  { text: '$today', get label() { return t('filterTokens.label.todaySegodnya'); } },
+  { text: '$now', get label() { return t('filterTokens.label.nowCurrentMoment'); } },
+  { text: '$today+1d', get label() { return t('periodEditor.label.today1dZavtra'); } },
+  { text: '$today-1d', get label() { return t('periodEditor.label.today1dVchera'); } },
+  { text: '$weekStart', get label() { return t('periodEditor.label.weekstartStartWeek'); } },
+  { text: '$weekEnd', get label() { return t('periodEditor.label.weekendEndWeek'); } },
+  { text: '$weekStart-1w', get label() { return t('periodEditor.weekstart1wStartProshloyWeek'); } },
+  { text: '$weekStart+1w', get label() { return t('periodEditor.weekstart1wStartBuduscheyWeek'); } },
+  { text: '$monthStart', get label() { return t('periodEditor.label.monthstartStartMonth'); } },
+  { text: '$monthEnd', get label() { return t('periodEditor.label.monthendEndMonth'); } },
+  { text: '$monthStart-1mo', get label() { return t('periodEditor.monthstart1moStartProshlogoMonth'); } },
+  { text: '$monthEnd+1mo', get label() { return t('periodEditor.monthend1moEndBuduschegoMonth'); } },
+  { text: '$yearStart', get label() { return t('periodEditor.label.yearstartStartYear'); } },
+  { text: '$yearEnd', get label() { return t('periodEditor.label.yearendEndYear'); } },
+  { text: '$yearStart-1y', get label() { return t('periodEditor.yearstart1yStartProshlogoYear'); } },
+  { text: '$yearEnd+1y', get label() { return t('periodEditor.yearend1yEndBuduschegoYear'); } },
+  { text: '$today+7d', get label() { return t('periodEditor.label.today7dViaWeek'); } },
+  { text: '$today-7d', get label() { return t('periodEditor.label.today7dWeekBack'); } },
+  { text: '$today+30d', get label() { return t('periodEditor.label.today30dViaMonth'); } },
+  { text: '$today-30d', get label() { return t('periodEditor.label.today30dMonthBack'); } },
 ];
 
 /**
@@ -599,17 +599,17 @@ const DIALOG_CLEAR_CLASS = 'pe-dialog-clear';
 /** Класс индикатора «Учитывать время». */
 const DIALOG_TIME_CLASS = 'pe-dialog-time';
 /** Подпись незаданного периода. */
-const DIALOG_PLACEHOLDER = t('periodEditor.periodNotZadan');
+const DIALOG_PLACEHOLDER = (): string => t('periodEditor.periodNotZadan');
 
 const MODE_ITEMS = [
-  { id: 'date', label: t('datePeriod.label.date') },
-  { id: 'datetime', label: t('periodEditor.label.dateTime') },
-  { id: 'range', label: t('periodEditor.label.diapazon') },
+  { id: 'date', get label() { return t('datePeriod.label.date'); } },
+  { id: 'datetime', get label() { return t('periodEditor.label.dateTime'); } },
+  { id: 'range', get label() { return t('periodEditor.label.diapazon'); } },
 ] as const;
 
 const PANEL_MODE_ITEMS = [
-  { id: 'presets', label: t('periodEditor.label.presety') },
-  { id: 'dates', label: t('filterForm.dates') },
+  { id: 'presets', get label() { return t('periodEditor.label.presety'); } },
+  { id: 'dates', get label() { return t('filterForm.dates'); } },
 ] as const;
 
 /**
@@ -619,22 +619,22 @@ const PANEL_MODE_ITEMS = [
  * единого языка; в поле показывается человекочитаемая подпись, не токен.
  */
 const PANEL_ANCHORS: readonly { id: string; label: string }[] = [
-  { id: '$today', label: t('periodEditor.label.segodnya') },
-  { id: '$now', label: t('periodEditor.label.seychas') },
-  { id: '$weekStart', label: t('periodEditor.label.startWeek') },
-  { id: '$weekEnd', label: t('periodEditor.label.endWeek') },
-  { id: '$monthStart', label: t('periodEditor.label.startMonth') },
-  { id: '$monthEnd', label: t('periodEditor.label.endMonth') },
-  { id: '$yearStart', label: t('periodEditor.label.startYear') },
-  { id: '$yearEnd', label: t('periodEditor.label.endYear') },
+  { id: '$today', get label() { return t('periodEditor.label.segodnya'); } },
+  { id: '$now', get label() { return t('periodEditor.label.seychas'); } },
+  { id: '$weekStart', get label() { return t('periodEditor.label.startWeek'); } },
+  { id: '$weekEnd', get label() { return t('periodEditor.label.endWeek'); } },
+  { id: '$monthStart', get label() { return t('periodEditor.label.startMonth'); } },
+  { id: '$monthEnd', get label() { return t('periodEditor.label.endMonth'); } },
+  { id: '$yearStart', get label() { return t('periodEditor.label.startYear'); } },
+  { id: '$yearEnd', get label() { return t('periodEditor.label.endYear'); } },
 ];
 
 /** Единицы арифметики пресет-границы (код тока → краткая подпись). */
 const PANEL_UNITS: readonly { id: string; label: string }[] = [
-  { id: 'd', label: t('filterValue.label.d') },
-  { id: 'w', label: t('filterValue.label.w') },
-  { id: 'mo', label: t('filterValue.label.mo') },
-  { id: 'y', label: t('periodEditor.label.years') },
+  { id: 'd', get label() { return t('filterValue.label.d'); } },
+  { id: 'w', get label() { return t('filterValue.label.w'); } },
+  { id: 'mo', get label() { return t('filterValue.label.mo'); } },
+  { id: 'y', get label() { return t('periodEditor.label.years'); } },
 ];
 
 /** Разбор панельного токена на опору и арифметику. */
@@ -917,7 +917,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       hasExplicitTime(parseLocalBound(toValue).time);
 
     const valueBtn = uiButton({
-      label: formatPeriodLocalDisplay(fromValue, toValue) || DIALOG_PLACEHOLDER,
+      label: formatPeriodLocalDisplay(fromValue, toValue) || DIALOG_PLACEHOLDER(),
       role: 'ghost',
       size: 's',
       class: DIALOG_VALUE_CLASS,

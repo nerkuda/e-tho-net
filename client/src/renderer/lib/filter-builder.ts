@@ -95,50 +95,50 @@ import { t } from './i18n.js';
  */
 export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
   text: [
-    { op: 'contains', label: t('filter.label.contains') },
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'in', label: t('filter.label.inList') },
-    { op: 'not_in', label: t('filter.label.notList') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'contains', get label() { return t('filter.label.contains'); } },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'in', get label() { return t('filter.label.inList'); } },
+    { op: 'not_in', get label() { return t('filter.label.notList'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
   url: [
-    { op: 'contains', label: t('filter.label.contains') },
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'in', label: t('filter.label.inList') },
-    { op: 'not_in', label: t('filter.label.notList') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'contains', get label() { return t('filter.label.contains'); } },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'in', get label() { return t('filter.label.inList'); } },
+    { op: 'not_in', get label() { return t('filter.label.notList'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
   date: [
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'gt', label: t('filter.label.greater') },
-    { op: 'lt', label: t('filter.label.less') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'gt', get label() { return t('filter.label.greater'); } },
+    { op: 'lt', get label() { return t('filter.label.less'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
   number: [
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'gt', label: t('filter.label.greater') },
-    { op: 'lt', label: t('filter.label.less') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'gt', get label() { return t('filter.label.greater'); } },
+    { op: 'lt', get label() { return t('filter.label.less'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
-  bool: [{ op: 'eq', label: t('filter.label.equal') }],
+  bool: [{ op: 'eq', get label() { return t('filter.label.equal'); } }],
   // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
   // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже.
   link: [
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'in', label: t('filter.label.inList') },
-    { op: 'not_in', label: t('filter.label.notList') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'in', get label() { return t('filter.label.inList'); } },
+    { op: 'not_in', get label() { return t('filter.label.notList'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
   // Legacy (миграция 040): таких свойств в живой БД не остаётся;
   // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
   thought_ref: [
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
   // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81):
   // отбор по хранимому адресу. eq/ne — точное совпадение; для наборов —
@@ -146,24 +146,24 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
   // адрес задан/не задан (ошибка 0e976df4: значение необязательное, пустую
   // ссылку иначе не отобрать — NULL не «не равно»).
   cross_network_ref: [
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'ne', label: t('filter.label.notEqual') },
-    { op: 'any_of', label: t('filter.label.containsLyuboy') },
-    { op: 'all_of', label: t('filter.label.containsAll') },
-    { op: 'none_of', label: t('filter.notContainsNiOdnogo') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'ne', get label() { return t('filter.label.notEqual'); } },
+    { op: 'any_of', get label() { return t('filter.label.containsLyuboy'); } },
+    { op: 'all_of', get label() { return t('filter.label.containsAll'); } },
+    { op: 'none_of', get label() { return t('filter.notContainsNiOdnogo'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
   // Ссылка на публикацию (0.11.1, задача f37b468d): отбор по id — та же
   // матрица, что у cross_network_ref, включая наличие значения (0e976df4).
   publication: [
-    { op: 'eq', label: t('filter.label.equal') },
-    { op: 'ne', label: t('filter.label.notEqual') },
-    { op: 'any_of', label: t('filter.label.containsLyuboy') },
-    { op: 'all_of', label: t('filter.label.containsAll') },
-    { op: 'none_of', label: t('filter.notContainsNiOdnogo') },
-    { op: 'not_empty', label: t('filter.label.zapolneno') },
-    { op: 'is_empty', label: t('filter.label.notZapolneno') },
+    { op: 'eq', get label() { return t('filter.label.equal'); } },
+    { op: 'ne', get label() { return t('filter.label.notEqual'); } },
+    { op: 'any_of', get label() { return t('filter.label.containsLyuboy'); } },
+    { op: 'all_of', get label() { return t('filter.label.containsAll'); } },
+    { op: 'none_of', get label() { return t('filter.notContainsNiOdnogo'); } },
+    { op: 'not_empty', get label() { return t('filter.label.zapolneno'); } },
+    { op: 'is_empty', get label() { return t('filter.label.notZapolneno'); } },
   ],
 };
 
@@ -183,16 +183,16 @@ export interface FilterSortOption {
  * только исполнимое; исполнитель принимает всё, что здесь перечислено.
  */
 export const FILTER_SORTS: ReadonlyArray<FilterSortOption> = [
-  { v: 'alpha', label: t('filter.label.byTitle') },
-  { v: 'created', label: t('filter.label.byDateCreate') },
-  { v: 'viewed', label: t('filter.label.byProsmotru') },
-  { v: 'updated', label: t('filter.label.byDateChanges') },
+  { v: 'alpha', get label() { return t('filter.label.byTitle'); } },
+  { v: 'created', get label() { return t('filter.label.byDateCreate'); } },
+  { v: 'viewed', get label() { return t('filter.label.byProsmotru'); } },
+  { v: 'updated', get label() { return t('filter.label.byDateChanges'); } },
 ];
 
 /** Единый набор направлений сортировки. */
 export const FILTER_ORDERS: ReadonlyArray<{ v: SortOrder; label: string }> = [
-  { v: 'asc', label: t('filter.label.asc') },
-  { v: 'desc', label: t('filter.label.desc') },
+  { v: 'asc', get label() { return t('filter.label.asc'); } },
+  { v: 'desc', get label() { return t('filter.label.desc'); } },
 ];
 
 /** True — значение входит в единый набор сортировок конструктора. */
@@ -233,12 +233,12 @@ export function sortValueLabel(raw: string): string {
  * типа, панель «Хроники» и панель «Журнала активности» читают отсюда.
  */
 export const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: t('filter.eq.equal'),
-  ne: t('filter.ne.notEqual'),
-  in: t('filter.label.inList'),
-  not_in: t('filter.label.notList'),
-  empty: t('filter.label.notZapolneno'),
-  not_empty: t('filter.label.zapolneno'),
+  get eq() { return t('filter.eq.equal'); },
+  get ne() { return t('filter.ne.notEqual'); },
+  get in() { return t('filter.label.inList'); },
+  get not_in() { return t('filter.label.notList'); },
+  get empty() { return t('filter.label.notZapolneno'); },
+  get not_empty() { return t('filter.label.zapolneno'); },
 };
 
 // ---------------------------------------------------------------------------
@@ -680,41 +680,41 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   // «Ссылка на мысль по id» — служебная подпись вида условия, просочившаяся в
   // UI; значение пользователь указывает чип-полем мыслей, ID не видит
   // (решение заказчика 2026-10-14, задача a577875b).
-  id: t('editor.thought'),
-  type: t('addDialog.label.typeThought'),
-  link_type: t('addDialog.label.typeLink'),
-  parents: t('filter.parents.parents'),
-  children: t('filter.children.children'),
-  incoming_links: t('canvas.hasIncomingLink'),
-  outgoing_links: t('canvas.hasOutgoingLink'),
-  attachments: t('filter.attachments.hasAttachments'),
-  chronology: t('filter.chronology.hasDnevnikovyeRecords'),
-  comment: t('filter.comment.hasKommentariy'),
-  active: t('filter.active.active'),
-  trashed: t('filter.trashed.markedDelete'),
-  keywords: t('filter.keywords.findSlova'),
-  author: t('filter.author.avtor'),
-  editor: t('filter.editor.editor'),
-  created_at: t('filter.created_at.dateCreate'),
-  updated_at: t('filter.updated_at.dateChanges'),
-  properties: t('filter.properties.hasProperties'),
-  targets: t('filter.targets.targetsRecords'),
-  record_time: t('filter.record_time.periodRecords'),
-  record_title: t('filter.record_title.titleRecords'),
-  record_body: t('filter.record_body.textRecords'),
-  record_author: t('filter.record_author.avtorRecords'),
-  record_editor: t('filter.record_editor.editorRecords'),
-  occurred_at: t('filter.occurred_at.timeEvents'),
-  action: t('filter.action.typeActions'),
-  entity_type: t('filter.entity_type.vidSuschnosti'),
-  entity_title: t('filter.entity_title.titleSuschnosti'),
-  entity_id: t('filter.entity_id.suschnost'),
-  user: t('filter.user.avtorEvents'),
-  name: t('filter.name.nameAttachments'),
-  kind: t('filter.kind.vidAttachments'),
-  mime_type: t('filter.mime_type.mimePodtip'),
-  owner: t('filter.owner.owners'),
-  size: t('filter.size.razmer'),
+  get id() { return t('editor.thought'); },
+  get type() { return t('addDialog.label.typeThought'); },
+  get link_type() { return t('addDialog.label.typeLink'); },
+  get parents() { return t('filter.parents.parents'); },
+  get children() { return t('filter.children.children'); },
+  get incoming_links() { return t('canvas.hasIncomingLink'); },
+  get outgoing_links() { return t('canvas.hasOutgoingLink'); },
+  get attachments() { return t('filter.attachments.hasAttachments'); },
+  get chronology() { return t('filter.chronology.hasDnevnikovyeRecords'); },
+  get comment() { return t('filter.comment.hasKommentariy'); },
+  get active() { return t('filter.active.active'); },
+  get trashed() { return t('filter.trashed.markedDelete'); },
+  get keywords() { return t('filter.keywords.findSlova'); },
+  get author() { return t('filter.author.avtor'); },
+  get editor() { return t('filter.editor.editor'); },
+  get created_at() { return t('filter.created_at.dateCreate'); },
+  get updated_at() { return t('filter.updated_at.dateChanges'); },
+  get properties() { return t('filter.properties.hasProperties'); },
+  get targets() { return t('filter.targets.targetsRecords'); },
+  get record_time() { return t('filter.record_time.periodRecords'); },
+  get record_title() { return t('filter.record_title.titleRecords'); },
+  get record_body() { return t('filter.record_body.textRecords'); },
+  get record_author() { return t('filter.record_author.avtorRecords'); },
+  get record_editor() { return t('filter.record_editor.editorRecords'); },
+  get occurred_at() { return t('filter.occurred_at.timeEvents'); },
+  get action() { return t('filter.action.typeActions'); },
+  get entity_type() { return t('filter.entity_type.vidSuschnosti'); },
+  get entity_title() { return t('filter.entity_title.titleSuschnosti'); },
+  get entity_id() { return t('filter.entity_id.suschnost'); },
+  get user() { return t('filter.user.avtorEvents'); },
+  get name() { return t('filter.name.nameAttachments'); },
+  get kind() { return t('filter.kind.vidAttachments'); },
+  get mime_type() { return t('filter.mime_type.mimePodtip'); },
+  get owner() { return t('filter.owner.owners'); },
+  get size() { return t('filter.size.razmer'); },
 };
 
 /** Данные сети, нужные для подписей строк (дерево отдаёт ту же структуру). */
@@ -2706,9 +2706,11 @@ export function applyLegacyHierarchyTraversal(tree: FilterTreeNode): void {
 
 /**
  * Сообщение о нечитаемом AST-теле определения (потеря при чтении).
+ * Функция: текст берётся в момент показа (ошибка ebed42d3).
  */
-const AST_UNREADABLE_MESSAGE =
-  t('filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy');
+function astUnreadableMessage(): string {
+  return t('filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy');
+}
 
 /**
  * Описания условий ПЛОСКОГО определения (`definition v1`), которые модель НЕ
@@ -2806,7 +2808,7 @@ export function readFilterDefinitionDetailed(
       return { state, lost: [] };
     }
     state.tree = defaultFilterTreeGroup('and');
-    return { state, lost: [AST_UNREADABLE_MESSAGE] };
+    return { state, lost: [astUnreadableMessage()] };
   }
   const registry = opts.registry ?? new Map<string, NetworkProperty>();
   const lost = flatDefinitionLosses(def, registry);
@@ -2865,27 +2867,27 @@ export const AST_OPERATOR_LABELS: Record<FilterAstOperator, string> = {
   // Тултипы операторов остаются полными словами (`AST_OPERATOR_DESCRIPTIONS`).
   eq: '=',
   ne: '≠',
-  contains: t('filter.label.contains'),
-  not_contains: t('filter.not_contains.notContains'),
-  gt: t('filter.label.greater'),
-  gte: t('filter.gte.greaterEqual'),
-  lt: t('filter.label.less'),
-  lte: t('filter.lte.lessEqual'),
-  between: t('filter.between.between'),
-  not_between: t('filter.not_between.notBetween'),
-  in: t('filter.in.in'),
-  not_in: t('filter.not_in.not'),
+  get contains() { return t('filter.label.contains'); },
+  get not_contains() { return t('filter.not_contains.notContains'); },
+  get gt() { return t('filter.label.greater'); },
+  get gte() { return t('filter.gte.greaterEqual'); },
+  get lt() { return t('filter.label.less'); },
+  get lte() { return t('filter.lte.lessEqual'); },
+  get between() { return t('filter.between.between'); },
+  get not_between() { return t('filter.not_between.notBetween'); },
+  get in() { return t('filter.in.in'); },
+  get not_in() { return t('filter.not_in.not'); },
   // Формулировки заказчика 2026-10-14 (ошибка 4258e694, п.7б).
-  any_of: t('filter.any_of.lyuboy'),
-  all_of: t('filter.all_of.all'),
-  none_of: t('filter.none_of.niOdnogo'),
-  is_empty: t('filter.label.notZapolneno'),
-  not_empty: t('filter.label.zapolneno'),
-  matches: t('filter.matches.hasSlova'),
-  in_hierarchy: t('filter.in_hierarchy.inIerarhii'),
-  not_in_hierarchy: t('filter.not_in_hierarchy.notIerarhii'),
-  has: t('filter.has.imeetProperty'),
-  not_has: t('filter.not_has.notImeetProperty'),
+  get any_of() { return t('filter.any_of.lyuboy'); },
+  get all_of() { return t('filter.all_of.all'); },
+  get none_of() { return t('filter.none_of.niOdnogo'); },
+  get is_empty() { return t('filter.label.notZapolneno'); },
+  get not_empty() { return t('filter.label.zapolneno'); },
+  get matches() { return t('filter.matches.hasSlova'); },
+  get in_hierarchy() { return t('filter.in_hierarchy.inIerarhii'); },
+  get not_in_hierarchy() { return t('filter.not_in_hierarchy.notIerarhii'); },
+  get has() { return t('filter.has.imeetProperty'); },
+  get not_has() { return t('filter.not_has.notImeetProperty'); },
 };
 
 /** Подпись кода оператора AST (имя из словаря спецификации). */

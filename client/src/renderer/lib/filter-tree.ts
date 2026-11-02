@@ -562,7 +562,9 @@ const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
 }> = [
   {
     key: 'compare',
-    title: t('filterTree.title.sravnenie'),
+    get title() {
+      return t('filterTree.title.sravnenie');
+    },
     rows: [
       { yes: ['eq'], no: ['ne'] },
       { yes: ['contains'], no: ['not_contains'] },
@@ -581,9 +583,27 @@ const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
       { yes: ['between'], no: ['not_between'] },
     ],
   },
-  { key: 'state', title: t('filterTree.title.state'), rows: [{ yes: ['not_empty'], no: ['is_empty'] }] },
-  { key: 'words', title: t('filterTree.title.slova'), rows: [{ yes: ['matches'], no: [] }] },
-  { key: 'property', title: t('filterTree.title.property'), rows: [{ yes: ['has'], no: ['not_has'] }] },
+  {
+    key: 'state',
+    get title() {
+      return t('filterTree.title.state');
+    },
+    rows: [{ yes: ['not_empty'], no: ['is_empty'] }],
+  },
+  {
+    key: 'words',
+    get title() {
+      return t('filterTree.title.slova');
+    },
+    rows: [{ yes: ['matches'], no: [] }],
+  },
+  {
+    key: 'property',
+    get title() {
+      return t('filterTree.title.property');
+    },
+    rows: [{ yes: ['has'], no: ['not_has'] }],
+  },
 ];
 
 /** Подпись оператора в дереве (словарь спецификации из конструктора). */
@@ -629,28 +649,36 @@ interface QuickPeriodUnit {
 const QUICK_PERIOD_UNITS: readonly QuickPeriodUnit[] = [
   {
     key: 'day',
-    forms: [t('filterTree.currentDen'), t('filterTree.proshlyyDen'), t('filterTree.sleduyuschiyDen')],
+    get forms(): readonly [string, string, string] {
+      return [t('filterTree.currentDen'), t('filterTree.proshlyyDen'), t('filterTree.sleduyuschiyDen')];
+    },
     from: '$today',
     to: '$today',
     shiftUnit: 'd',
   },
   {
     key: 'week',
-    forms: [t('filterTree.currentWeek'), t('filterTree.proshlayaWeek'), t('filterTree.sleduyuschayaWeek')],
+    get forms(): readonly [string, string, string] {
+      return [t('filterTree.currentWeek'), t('filterTree.proshlayaWeek'), t('filterTree.sleduyuschayaWeek')];
+    },
     from: '$weekStart',
     to: '$weekEnd',
     shiftUnit: 'w',
   },
   {
     key: 'month',
-    forms: [t('filterTree.currentMonth'), t('filterTree.proshlyyMonth'), t('filterTree.sleduyuschiyMonth')],
+    get forms(): readonly [string, string, string] {
+      return [t('filterTree.currentMonth'), t('filterTree.proshlyyMonth'), t('filterTree.sleduyuschiyMonth')];
+    },
     from: '$monthStart',
     to: '$monthEnd',
     shiftUnit: 'mo',
   },
   {
     key: 'year',
-    forms: [t('filterTree.currentYear'), t('filterTree.proshlyyYear'), t('filterTree.sleduyuschiyYear')],
+    get forms(): readonly [string, string, string] {
+      return [t('filterTree.currentYear'), t('filterTree.proshlyyYear'), t('filterTree.sleduyuschiyYear')];
+    },
     from: '$yearStart',
     to: '$yearEnd',
     shiftUnit: 'y',
@@ -850,13 +878,18 @@ export interface FilterTreeOperandEntry {
   icon?: IconName;
 }
 
-/** Раздел списка «Что» — человекочитаемая подпись (пусто — без заголовка). */
+/** Раздел списка «Что» — человекочитаемая подпись (пусто — без заголовка).
+ *  Геттеры: подписи берутся в момент рендера (ошибка ebed42d3). */
 export const FILTER_TREE_OPERAND_GROUPS: Readonly<Record<FilterTreeOperandEntry['group'], string>> = {
   // Первая группа (контекстные операнды места) идёт БЕЗ заголовка — заголовок
   // «В этом месте» убран по требованию заказчика (2026-10-13).
   context: '',
-  operands: t('filterTree.operands.harakteristiki'),
-  properties: t('editor.title.properties'),
+  get operands() {
+    return t('filterTree.operands.harakteristiki');
+  },
+  get properties() {
+    return t('editor.title.properties');
+  },
 };
 
 /**
@@ -1102,20 +1135,35 @@ export function filterTreeConnectorIndicator(op: 'and' | 'or'): string {
  * Пункты списка коннекции группы (требование заказчика 2026-10-13): заголовок
  * группы — ВЫПАДАЮЩИЙ СПИСОК «все условия (И)» / «любое из условий (ИЛИ)», а не
  * сегмент-переключатель. Ключ пункта — код коннектора модели (`and`/`or`).
+ * Функция: подписи берутся в момент открытия меню (ошибка ebed42d3).
  */
-export const FILTER_TREE_CONNECTOR_CHOICES: ReadonlyArray<{ key: 'and' | 'or'; label: string }> = [
-  { key: 'and', label: filterTreeConnectorLabel('and') },
-  { key: 'or', label: filterTreeConnectorLabel('or') },
-];
+export function filterTreeConnectorChoices(): ReadonlyArray<{ key: 'and' | 'or'; label: string }> {
+  return [
+    { key: 'and', label: filterTreeConnectorLabel('and') },
+    { key: 'or', label: filterTreeConnectorLabel('or') },
+  ];
+}
 
 /** Тип целевой сущности профиля — для заголовка «Показать <сущность> по условиям:». */
 const PROFILE_TARGET_LABELS: Readonly<Record<string, string>> = {
-  thought: t('clipboard.thought2'),
-  chronicle_record: t('filterTree.chronicle_record.recordsDnevnika'),
-  activity: t('filterTree.activity.events'),
-  attachment: t('filterTree.attachment.attachments'),
-  link: t('clipboard.link2'),
-  publication: t('filterTree.publication.publication'),
+  get thought() {
+    return t('clipboard.thought2');
+  },
+  get chronicle_record() {
+    return t('filterTree.chronicle_record.recordsDnevnika');
+  },
+  get activity() {
+    return t('filterTree.activity.events');
+  },
+  get attachment() {
+    return t('filterTree.attachment.attachments');
+  },
+  get link() {
+    return t('clipboard.link2');
+  },
+  get publication() {
+    return t('filterTree.publication.publication');
+  },
 };
 
 /** Заголовок редактора: «Показать <сущность> по условиям:» (элемент fc65b647). */
@@ -2108,7 +2156,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     connector.addEventListener('click', () => {
       openChoiceMenu(connector, {
         title: t('filterTree.title.konnekciyaGroups'),
-        groups: [{ label: '', items: FILTER_TREE_CONNECTOR_CHOICES.map((c) => ({ ...c })) }],
+        groups: [{ label: '', items: filterTreeConnectorChoices().map((c) => ({ ...c })) }],
         activeKey: group.op,
         onPick: (id) => {
           if (id !== 'and' && id !== 'or') return;

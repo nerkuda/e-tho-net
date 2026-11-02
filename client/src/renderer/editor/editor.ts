@@ -226,15 +226,58 @@ interface EditorTabDef {
 /**
  * Tab set of the thought editor — the full set, порядок фиксирован
  * (08-ui-spec.md §6.3). Не менять порядок: на него опираются тесты вёрстки.
+ * Подписи — геттеры: текст берётся в момент рендера (ошибка ebed42d3).
  */
 const TABS_THOUGHT: EditorTabDef[] = [
-  { id: 'main', title: t('comment.title.kommentariy'), counted: false },
-  { id: 'properties', title: t('editor.title.properties'), counted: false },
-  { id: 'attachments', title: t('editor.title.attachments'), counted: true },
-  { id: 'links', title: t('editor.title.mentions'), counted: false },
-  { id: 'chrono', title: t('editor.title.dnevnik'), counted: true },
-  { id: 'graph', title: t('editor.title.graph'), counted: false },
-  { id: 'metadata', title: t('editor.title.metadata'), counted: false },
+  {
+    id: 'main',
+    get title() {
+      return t('comment.title.kommentariy');
+    },
+    counted: false,
+  },
+  {
+    id: 'properties',
+    get title() {
+      return t('editor.title.properties');
+    },
+    counted: false,
+  },
+  {
+    id: 'attachments',
+    get title() {
+      return t('editor.title.attachments');
+    },
+    counted: true,
+  },
+  {
+    id: 'links',
+    get title() {
+      return t('editor.title.mentions');
+    },
+    counted: false,
+  },
+  {
+    id: 'chrono',
+    get title() {
+      return t('editor.title.dnevnik');
+    },
+    counted: true,
+  },
+  {
+    id: 'graph',
+    get title() {
+      return t('editor.title.graph');
+    },
+    counted: false,
+  },
+  {
+    id: 'metadata',
+    get title() {
+      return t('editor.title.metadata');
+    },
+    counted: false,
+  },
 ];
 
 /**
@@ -244,9 +287,27 @@ const TABS_THOUGHT: EditorTabDef[] = [
  * мысли, чтобы предпочтение активной вкладки не сбрасывалось).
  */
 const TABS_LINK: EditorTabDef[] = [
-  { id: 'main', title: t('comment.title.kommentariy'), counted: false },
-  { id: 'links', title: t('editor.title.thought'), counted: false },
-  { id: 'metadata', title: t('editor.title.metadata'), counted: false },
+  {
+    id: 'main',
+    get title() {
+      return t('comment.title.kommentariy');
+    },
+    counted: false,
+  },
+  {
+    id: 'links',
+    get title() {
+      return t('editor.title.thought');
+    },
+    counted: false,
+  },
+  {
+    id: 'metadata',
+    get title() {
+      return t('editor.title.metadata');
+    },
+    counted: false,
+  },
 ];
 
 /**

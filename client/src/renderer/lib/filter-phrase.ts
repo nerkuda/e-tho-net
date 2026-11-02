@@ -90,11 +90,16 @@ export const FILTER_PHRASE_NAME_LIMIT = 32;
  * пока имя не догружено (или мысль недоступна), фраза не показывает сырой или
  * обрезанный UUID — только нейтральный текст. Как только кэш имён наполнится
  * (`lib/thought-names.ts`), подписка перерисует фразу с настоящим именем.
+ * Функция: текст берётся в момент сборки фразы (ошибка ebed42d3).
  */
-export const FILTER_PHRASE_UNKNOWN_THOUGHT = t('filterPhrase.withoutTitle');
+export function filterPhraseUnknownThought(): string {
+  return t('filterPhrase.withoutTitle');
+}
 
 /** Тот же плейсхолдер для неизвестного участника (`ctx.userName` не нашёл имя). */
-export const FILTER_PHRASE_UNKNOWN_USER = t('filterPhrase.withoutName');
+export function filterPhraseUnknownUser(): string {
+  return t('filterPhrase.withoutName');
+}
 
 /** Состояние отбора, нужное композеру (часть единой модели `FilterCriteriaState`). */
 export interface FilterPhraseState {
@@ -124,7 +129,7 @@ export interface FilterPhraseContext extends FilterLabelData {
    * фразе-превью показывается её ИМЯ, а не UUID. Источник — кэш имён клиента
    * (`lib/thought-names.ts`); функцию передают данными, поэтому модуль остаётся
    * чистым (догрузка имён — ВНЕ композера). Резолвер задан, а имени нет
-   * (мысль ещё не догружена/удалена) — {@link FILTER_PHRASE_UNKNOWN_THOUGHT};
+   * (мысль ещё не догружена/удалена) — {@link filterPhraseUnknownThought};
    * резолвер не задан — значение остаётся как есть (прежняя деградация для
    * вызовов без кэша, например в юнит-тестах композера).
    */
@@ -138,19 +143,30 @@ export interface FilterPhraseContext extends FilterLabelData {
  *  `Record<StructureKeywordScope, string>` требует подпись для КАЖДОГО кода:
  *  новый код области, добавленный в shared, ломает сборку, пока подпись не
  *  заведена (ошибка 2bc251de). Словарь ОДИН на клиент — он же рисует чекбоксы
- *  ячейки (`lib/filter-value.ts`), поэтому фраза-превью и ячейка не расходятся. */
+ *  ячейки (`lib/filter-value.ts`), поэтому фраза-превью и ячейка не расходятся.
+ *  Геттеры: подписи берутся в момент сборки фразы (ошибка ebed42d3). */
 const KEYWORD_SCOPE_LABELS: Readonly<Record<StructureKeywordScope, string>> = {
-  title: t('filterPhrase.title.inImenah'),
-  synonyms: t('filterPhrase.title.inImenah'),
-  comment: t('filterPhrase.comment.inKommentarii'),
-  diary: t('filterPhrase.diary.inDnevnikah'),
+  get title() {
+    return t('filterPhrase.title.inImenah');
+  },
+  get synonyms() {
+    return t('filterPhrase.title.inImenah');
+  },
+  get comment() {
+    return t('filterPhrase.comment.inKommentarii');
+  },
+  get diary() {
+    return t('filterPhrase.diary.inDnevnikah');
+  },
 };
 
 /** Области поиска «Найти слова» в порядке словаря: код → подпись во фразе. */
-export const FILTER_PHRASE_KEYWORD_SCOPES: readonly {
+export function filterPhraseKeywordScopeOptions(): readonly {
   value: StructureKeywordScope;
   label: string;
-}[] = STRUCTURE_KEYWORD_SCOPES.map((value) => ({ value, label: KEYWORD_SCOPE_LABELS[value] }));
+}[] {
+  return STRUCTURE_KEYWORD_SCOPES.map((value) => ({ value, label: KEYWORD_SCOPE_LABELS[value] }));
+}
 
 /** Подпись области из словаря: ячейка значения и фраза берут её отсюда —
  *  подписи в одном месте (элемент интерфейса 9ecf405b). */
@@ -160,18 +176,31 @@ export function filterKeywordScopeLabel(value: StructureKeywordScope): string {
 
 /** Подписи оператора под-выборки (wire `FilterAstSubqueryValue['operator']`). */
 const SUBQUERY_OPERATOR_LABELS: Readonly<Record<string, string>> = {
-  in: t('filterPhrase.in.inSelection'),
-  not_in: t('filterPhrase.not_in.notSelection'),
-  all_in: t('filterPhrase.all_in.allSelection'),
+  get in() {
+    return t('filterPhrase.in.inSelection');
+  },
+  get not_in() {
+    return t('filterPhrase.not_in.notSelection');
+  },
+  get all_in() {
+    return t('filterPhrase.all_in.allSelection');
+  },
 };
 
 /** Коннекция группы во фразе — оператор В ВЕРХНЕМ РЕГИСТРЕ между условиями
  *  (правка заказчика 2026-10-14, ошибка 4258e694 п.12а): служебные префиксы
- *  «все условия»/«любое условие» убраны. `НЕ` — префикс к единственному ребёнку. */
+ *  «все условия»/«любое условие» убраны. `НЕ` — префикс к единственному ребёнку.
+ *  Геттеры: текст берётся в момент сборки фразы (ошибка ebed42d3). */
 const GROUP_SEPARATOR: Readonly<Record<string, string>> = {
-  and: t('filterPhrase.and.and'),
-  or: t('filterPhrase.or.or'),
-  not: t('filterPhrase.not.not'),
+  get and() {
+    return t('filterPhrase.and.and');
+  },
+  get or() {
+    return t('filterPhrase.or.or');
+  },
+  get not() {
+    return t('filterPhrase.not.not');
+  },
 };
 
 /**
@@ -253,7 +282,7 @@ export function filterPhraseUnit(unit: string): string {
 
 /** Подпись областей поиска «Найти слова» (пусто — «области не выбраны»). */
 export function filterPhraseKeywordScopes(scope: readonly string[] | undefined): string {
-  const active = FILTER_PHRASE_KEYWORD_SCOPES.filter((s) => (scope ?? []).includes(s.value));
+  const active = filterPhraseKeywordScopeOptions().filter((s) => (scope ?? []).includes(s.value));
   if (active.length === 0) return t('filterPhrase.oblastiNotSelected');
   // «В именах» — имена И синонимы вместе: во фразе не дублируется.
   const labels = [...new Set(active.map((s) => s.label))];
@@ -330,10 +359,10 @@ function filterPhraseScalar(
  *      совместимость с уже сохранёнными отборами;
  *   3. имя МЫСЛИ из резолвера `ctx.thoughtName` — для операндов-ссылок на мысль
  *      и значений свойств-ссылок (ошибка d17a8bfd); резолвер задан, имени нет —
- *      {@link FILTER_PHRASE_UNKNOWN_THOUGHT} (без ID, требование 9d5e3c4e);
+ *      {@link filterPhraseUnknownThought} (без ID, требование 9d5e3c4e);
  *   4. каталог контекста (тип мысли, тип связи, реестр свойств);
  *   5. имя ПОЛЬЗОВАТЕЛЯ из `ctx.userName`; кэш задан, имени нет —
- *      {@link FILTER_PHRASE_UNKNOWN_USER};
+ *      {@link filterPhraseUnknownUser};
  *   6. как было — само значение (id), тоже обрезанное (нет резолвера).
  */
 function filterPhraseNamedValue(
@@ -353,7 +382,7 @@ function filterPhraseNamedValue(
   if (filterPhraseValueIsThoughtRef(leaf, ctx.registry)) {
     const name = ctx.thoughtName?.(raw) ?? null;
     if (name !== null && name !== '') return truncateFilterName(name);
-    if (ctx.thoughtName !== undefined) return FILTER_PHRASE_UNKNOWN_THOUGHT;
+    if (ctx.thoughtName !== undefined) return filterPhraseUnknownThought();
   }
   const catalogue = filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx);
   if (catalogue !== null && catalogue !== '') return truncateFilterName(catalogue);
@@ -362,7 +391,7 @@ function filterPhraseNamedValue(
   if (FILTER_USER_OPERAND_KINDS.has(leaf.entity.kind)) {
     const name = ctx.userName?.(raw) ?? null;
     if (name !== null && name !== '') return truncateFilterName(name);
-    if (ctx.userName !== undefined) return FILTER_PHRASE_UNKNOWN_USER;
+    if (ctx.userName !== undefined) return filterPhraseUnknownUser();
   }
   return truncateFilterName(raw);
 }

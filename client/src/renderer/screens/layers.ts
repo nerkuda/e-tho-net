@@ -839,15 +839,16 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
 const DIFF_PAGE_LIMIT = 100;
 
 /** Human-readable heading of every diff section (the canonical server order
- *  is preserved; headings appear in the order the stream delivers them). */
+ *  is preserved; headings appear in the order the stream delivers them).
+ *  Геттеры: заголовки берутся в момент рендера (ошибка ebed42d3). */
 const DIFF_SECTION_LABELS: Record<LayerDiffSection, string> = {
-  'links.added': t('layers.dobavlennyeLink'),
-  'links.removed': t('layers.udalennyeLink'),
-  'links.type_changed': t('layers.izmenennyyTypeLink'),
-  'links.reorder_collapsed': t('layers.izmenennyyOrderLinks'),
-  'links.reparented': t('layers.smenennyyParent'),
-  'overridden.thought_ids': t('layers.izmenennyeThought'),
-  'overridden.link_ids': t('layers.izmenennyeLink'),
+  get 'links.added'() { return t('layers.dobavlennyeLink'); },
+  get 'links.removed'() { return t('layers.udalennyeLink'); },
+  get 'links.type_changed'() { return t('layers.izmenennyyTypeLink'); },
+  get 'links.reorder_collapsed'() { return t('layers.izmenennyyOrderLinks'); },
+  get 'links.reparented'() { return t('layers.smenennyyParent'); },
+  get 'overridden.thought_ids'() { return t('layers.izmenennyeThought'); },
+  get 'overridden.link_ids'() { return t('layers.izmenennyeLink'); },
 };
 
 /** One rendered difference: a link change or an overridden entity. */
@@ -1070,11 +1071,11 @@ function openThoughtDiffDialog(
 
 /** Field label of the per-thought diff, by server field key. */
 const THOUGHT_DIFF_FIELD_LABELS: Record<LayerThoughtDiffFieldKey, string> = {
-  title: t('activity.name.title'),
-  type: t('attachments.label.type'),
-  synonyms: t('layers.synonyms.synonyms'),
-  active: t('filter.active.active'),
-  comment: t('layers.comment.postoyannyyKommentariy'),
+  get title() { return t('activity.name.title'); },
+  get type() { return t('attachments.label.type'); },
+  get synonyms() { return t('layers.synonyms.synonyms'); },
+  get active() { return t('filter.active.active'); },
+  get comment() { return t('layers.comment.postoyannyyKommentariy'); },
 };
 
 /** Render the per-thought diff: one labelled block per changed attribute with

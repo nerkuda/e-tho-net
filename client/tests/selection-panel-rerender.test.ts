@@ -20,8 +20,8 @@ import { beforeEach, describe, it } from 'node:test';
 
 import { store } from '../src/renderer/state.js';
 import {
-  SELECTION_UNAVAILABLE_TITLE,
   planSelectionRows,
+  selectionUnavailableTitle,
   selectionRowTitles,
 } from '../src/renderer/lib/pure.js';
 import { subscribeSelectionChanges } from '../src/renderer/selection/selection.js';
@@ -78,10 +78,10 @@ describe('selectionRowTitles — имя строки никогда не id (3a6
       new Set(['b', 'c']),
     );
     assert.equal(titles.get('a'), 'Персоны');
-    assert.equal(titles.get('b'), SELECTION_UNAVAILABLE_TITLE);
+    assert.equal(titles.get('b'), selectionUnavailableTitle());
     // Подтверждённое отсутствие важнее прежней подписи: строка не должна
     // выглядеть как обычная, если мысль недоступна в текущем контексте.
-    assert.equal(titles.get('c'), SELECTION_UNAVAILABLE_TITLE);
+    assert.equal(titles.get('c'), selectionUnavailableTitle());
   });
 });
 

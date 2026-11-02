@@ -95,17 +95,18 @@ export interface FilterTokenData {
   withFocusThought?: boolean;
 }
 
-/** Пояснения полей мысли — чтобы токены искались по подписи (п. A5б). */
+/** Пояснения полей мысли — чтобы токены искались по подписи (п. A5б).
+ *  Геттеры: подписи берутся в момент рендера (ошибка ebed42d3). */
 const THOUGHT_FIELD_TOKENS: Readonly<Record<string, string>> = {
-  $thought: t('filterTokens.thoughtKontekstView'),
-  '$thought.title': t('filterTokens.titleThoughtKonteksta'),
-  '$thought.synonyms': t('filterTokens.synonymsThoughtOdnoyStrokoy'),
-  '$thought.type': t('filterTokens.typeThoughtKonteksta'),
-  '$thought.active': t('filterTokens.activeThoughtKonteksta'),
-  '$thought.author': t('filterTokens.avtorThoughtKonteksta'),
-  '$thought.editor': t('filterTokens.lastEditorThought'),
-  '$thought.created': t('filterTokens.dateCreateThought'),
-  '$thought.updated': t('filterTokens.dateChangesThought'),
+  get $thought() { return t('filterTokens.thoughtKontekstView'); },
+  get '$thought.title'() { return t('filterTokens.titleThoughtKonteksta'); },
+  get '$thought.synonyms'() { return t('filterTokens.synonymsThoughtOdnoyStrokoy'); },
+  get '$thought.type'() { return t('filterTokens.typeThoughtKonteksta'); },
+  get '$thought.active'() { return t('filterTokens.activeThoughtKonteksta'); },
+  get '$thought.author'() { return t('filterTokens.avtorThoughtKonteksta'); },
+  get '$thought.editor'() { return t('filterTokens.lastEditorThought'); },
+  get '$thought.created'() { return t('filterTokens.dateCreateThought'); },
+  get '$thought.updated'() { return t('filterTokens.dateChangesThought'); },
 };
 
 /** Токен поля мысли с подписью-пояснением. */

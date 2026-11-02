@@ -40,16 +40,21 @@ import { store } from '../state.js';
 /** Synthetic row id for the structural («Родители»/«Потомки») checkbox —
  *  never a real link-type id, so it can share the same `checked` set. */
 const STRUCTURAL_ROW_ID = '__structural__';
-const STRUCTURAL_LABEL = t('linkFilter.strukturaParentsChildren');
 
-/** Синтетический вариант пикера — строка «Структура». */
-const STRUCTURAL_OPTION: EntityOption = {
-  id: STRUCTURAL_ROW_ID,
-  title: STRUCTURAL_LABEL,
-  depth: 0,
-  selectable: true,
-  cloud: { id: STRUCTURAL_ROW_ID, title: STRUCTURAL_LABEL, icon: '🔗', icon_kind: 'emoji' },
-};
+/**
+ * Синтетический вариант пикера — строка «Структура». Собирается при каждом
+ * открытии: подпись берётся из словаря в момент рендера (ошибка ebed42d3).
+ */
+function structuralOption(): EntityOption {
+  const title = t('linkFilter.strukturaParentsChildren');
+  return {
+    id: STRUCTURAL_ROW_ID,
+    title,
+    depth: 0,
+    selectable: true,
+    cloud: { id: STRUCTURAL_ROW_ID, title, icon: '🔗', icon_kind: 'emoji' },
+  };
+}
 
 /** Opens the dialog. Fetches the current preference + property registry
  *  fresh on every open — infrequent action, no need to cache. */
@@ -85,7 +90,7 @@ async function loadAndOpen(networkId: string): Promise<void> {
     currentIds: [...checked],
     allowEmpty: false,
     applyLabel: t('actions.applyClose'),
-    extraOptions: [STRUCTURAL_OPTION],
+    extraOptions: [structuralOption()],
     commands: linkFilterCommands(defaultFilter),
   });
   if (picked === null) return;

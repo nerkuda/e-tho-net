@@ -21,7 +21,7 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  COMMON_SIDE_DEFAULT_LABEL,
+  commonSideDefaultLabel,
   commonSideDefaultSpec,
   linkSideColumnParts,
   type TypeRowDraft,
@@ -43,9 +43,9 @@ function makeRow(overrides: Partial<TypeRowDraft> = {}): TypeRowDraft {
 
 describe('commonSideDefaultSpec — подпись и тултип (задача 99312ffa)', () => {
   it('подпись одинаковая у обеих сторон: «Значение по умолчанию для всех типов»', () => {
-    assert.equal(COMMON_SIDE_DEFAULT_LABEL, 'Значение по умолчанию для всех типов');
-    assert.equal(commonSideDefaultSpec([], 'source').label, COMMON_SIDE_DEFAULT_LABEL);
-    assert.equal(commonSideDefaultSpec([], 'target').label, COMMON_SIDE_DEFAULT_LABEL);
+    assert.equal(commonSideDefaultLabel(), 'Значение по умолчанию для всех типов');
+    assert.equal(commonSideDefaultSpec([], 'source').label, commonSideDefaultLabel());
+    assert.equal(commonSideDefaultSpec([], 'target').label, commonSideDefaultLabel());
   });
 
   it('тултип под «Типами источников» — дословно', () => {

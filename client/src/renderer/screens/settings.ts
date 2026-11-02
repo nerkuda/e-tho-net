@@ -64,33 +64,39 @@ import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
 /** Sections of the settings dialog (order in the sidebar). */
 type Section = 'user' | 'network' | 'client' | 'logs';
 
-/** Title rendered above a section. */
+/** Title rendered above a section. Геттеры: текст берётся в момент рендера
+ *  (ошибка ebed42d3). */
 const SECTION_TITLES: Record<Section, string> = {
-  user: t('settings.user.user'),
-  network: t('settings.network.mysleset'),
-  client: t('settingsLogs.client'),
-  logs: t('settings.logs.logging'),
+  get user() { return t('settings.user.user'); },
+  get network() { return t('settings.network.mysleset'); },
+  get client() { return t('settingsLogs.client'); },
+  get logs() { return t('settings.logs.logging'); },
 };
 
 /** Tabs inside the «Мыслесеть» section (task O5). */
 type NetworkTab = 'description' | 'when_to_use' | 'conventions' | 'examples';
 
 const NETWORK_TAB_TITLES: Record<NetworkTab, string> = {
-  description: t('propertyManager.label.description'),
-  when_to_use: t('settings.when_to_use.kogdaUse'),
-  conventions: t('settings.conventions.pravila'),
-  examples: t('settings.examples.examples'),
+  get description() { return t('propertyManager.label.description'); },
+  get when_to_use() { return t('settings.when_to_use.kogdaUse'); },
+  get conventions() { return t('settings.conventions.pravila'); },
+  get examples() { return t('settings.examples.examples'); },
 };
 
 /** Hint shown under an empty markdown field (mirrors the old textarea placeholder). */
 const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
-  description:
-    t('settings.naznachenieNetworkOdnomDvuhAbzacahUvidit'),
-  when_to_use:
-    t('settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse'),
-  conventions:
-    t('settings.pravilaRecordsFormatHronologiyPometkaActive'),
-  examples: t('settings.examplesHoroshihPlohihRecordsToAgent'),
+  get description() {
+    return t('settings.naznachenieNetworkOdnomDvuhAbzacahUvidit');
+  },
+  get when_to_use() {
+    return t('settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse');
+  },
+  get conventions() {
+    return t('settings.pravilaRecordsFormatHronologiyPometkaActive');
+  },
+  get examples() {
+    return t('settings.examplesHoroshihPlohihRecordsToAgent');
+  },
 };
 
 /** Maximum length of one network markdown field (task O5). */
@@ -102,13 +108,13 @@ const NETWORK_FIELDS_TEXT_MAX = 20_000;
  * `PATCH /networks/{id}`, что и остальные поля раздела.
  */
 const FIRST_DAY_OF_WEEK_OPTIONS = [
-  { value: '1', label: t('settings.label.ponedelnik') },
-  { value: '2', label: t('settings.label.vtornik') },
-  { value: '3', label: t('settings.label.sreda') },
-  { value: '4', label: t('settings.label.chetverg') },
-  { value: '5', label: t('settings.label.pyatnica') },
-  { value: '6', label: t('settings.label.subbota') },
-  { value: '7', label: t('settings.label.voskresene') },
+  { value: '1', get label() { return t('settings.label.ponedelnik'); } },
+  { value: '2', get label() { return t('settings.label.vtornik'); } },
+  { value: '3', get label() { return t('settings.label.sreda'); } },
+  { value: '4', get label() { return t('settings.label.chetverg'); } },
+  { value: '5', get label() { return t('settings.label.pyatnica'); } },
+  { value: '6', get label() { return t('settings.label.subbota'); } },
+  { value: '7', get label() { return t('settings.label.voskresene'); } },
 ] as const;
 
 /**

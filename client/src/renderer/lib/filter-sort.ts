@@ -60,10 +60,17 @@ export const FILTER_SORT_ORDER_GLYPHS: Readonly<Record<SortOrder, string>> = {
   desc: '↓',
 };
 
-/** Подписи направления (подсказки кнопки чипа). */
+/**
+ * Подписи направления (подсказки кнопки чипа). Геттеры: текст берётся в
+ * момент рендера (ошибка ebed42d3).
+ */
 export const FILTER_SORT_ORDER_LABELS: Readonly<Record<SortOrder, string>> = {
-  asc: t('filter.label.asc'),
-  desc: t('filter.label.desc'),
+  get asc() {
+    return t('filter.label.asc');
+  },
+  get desc() {
+    return t('filter.label.desc');
+  },
 };
 
 /** Одно доступное поле сортировки. */

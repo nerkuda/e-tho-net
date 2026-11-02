@@ -35,14 +35,14 @@ import { store } from '../state.js';
 const APP_URL = 'https://github.com/nerkuda/e-tho-net';
 
 /** Author and licence (root `LICENSE`: MIT © 2026). */
-const APP_COPYRIGHT = t('about.inZaycevAkaNerkuda');
+const APP_COPYRIGHT = (): string => t('about.inZaycevAkaNerkuda');
 const APP_LICENSE = 'MIT';
 
-/** External links shown in the dialog (08-ui-spec.md §8.2). */
+/** External links shown in the dialog (08-ui-spec.md §8.2); подписи — геттеры. */
 const ABOUT_LINKS: Array<{ label: string; url: string }> = [
-  { label: t('about.label.novoeVersion'), url: `${APP_URL}/blob/main/CHANGELOG.md` },
-  { label: t('about.label.sobrannyeRelizy'), url: `${APP_URL}/releases` },
-  { label: t('about.label.textLicenzii'), url: `${APP_URL}/blob/main/LICENSE` },
+  { get label() { return t('about.label.novoeVersion'); }, url: `${APP_URL}/blob/main/CHANGELOG.md` },
+  { get label() { return t('about.label.sobrannyeRelizy'); }, url: `${APP_URL}/releases` },
+  { get label() { return t('about.label.textLicenzii'); }, url: `${APP_URL}/blob/main/LICENSE` },
 ];
 
 /** Opens the «О программе» dialog. */
@@ -69,7 +69,7 @@ export function showAboutDialog(): void {
     el('h2', 'about-title', 'ETN'),
     el('p', 'about-tagline muted', t('about.theEndlessThoughtNetworkSelfHosted')),
     versionLine,
-    el('p', 'about-meta', t('about.licenziya', [APP_COPYRIGHT, APP_LICENSE])),
+    el('p', 'about-meta', t('about.licenziya', [APP_COPYRIGHT(), APP_LICENSE])),
     linksRow,
     techLine,
     serverLine,

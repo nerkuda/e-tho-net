@@ -785,7 +785,7 @@ function presetChronicle(children: FilterAstNode[]): ChronicleFilterDefinition {
  */
 export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
   {
-    name: t('chrono.name.moiRecordsZaWeek'),
+    get name() { return t('chrono.name.moiRecordsZaWeek'); },
     definition: presetChronicle([
       {
         entity: { kind: 'record_time' },
@@ -796,7 +796,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: t('chrono.name.recordsZaDney'),
+    get name() { return t('chrono.name.recordsZaDney'); },
     definition: presetChronicle([
       {
         entity: { kind: 'record_time' },

@@ -80,22 +80,43 @@ export interface PropertyRegistryRow extends NetworkProperty {
   binding_target_type_ids?: string[];
 }
 
-/** Человекочитаемые подписи видов значения. */
+/**
+ * Человекочитаемые подписи видов значения. Геттеры: подпись берётся в момент
+ * рендера, а не при импорте модуля (ошибка ebed42d3).
+ */
 export const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
-  text: t('valueEditor.row'),
-  number: t('valueEditor.number'),
-  date: t('valueEditor.date'),
-  bool: t('valueEditor.daNo'),
-  url: t('propertyList.url.urlSaytFile'),
-  link: t('clipboard.link'),
-  thought_ref: t('propertyList.linkRefThoughtLegacyUnavailable'),
+  get text() {
+    return t('valueEditor.row');
+  },
+  get number() {
+    return t('valueEditor.number');
+  },
+  get date() {
+    return t('valueEditor.date');
+  },
+  get bool() {
+    return t('valueEditor.daNo');
+  },
+  get url() {
+    return t('propertyList.url.urlSaytFile');
+  },
+  get link() {
+    return t('clipboard.link');
+  },
+  get thought_ref() {
+    return t('propertyList.linkRefThoughtLegacyUnavailable');
+  },
   // Кросс-сетевая ссылка (задача 7849008a, ADR ae8346d0): адрес
   // `n:<network_id>#<thought_id>` другой сети; снапшот имени хранится
   // служебно, чтение чужой базы не открывает.
-  cross_network_ref: t('propertyList.cross_network_ref.krossSetevayaLinkRef'),
+  get cross_network_ref() {
+    return t('propertyList.cross_network_ref.krossSetevayaLinkRef');
+  },
   // Ссылка на публикацию (0.11.1, задача f37b468d): значение — публикация
   // текущей сети.
-  publication: t('propertyList.publication.publication'),
+  get publication() {
+    return t('propertyList.publication.publication');
+  },
 };
 
 /** Предел обрезки имени стороны связи в колонке «Тип значения» (задача

@@ -877,7 +877,7 @@ function presetAst(children: FilterAstNode[]): FilterAst {
  */
 export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
   {
-    name: t('structures.name.sirotskieThoughtWithoutParents'),
+    get name() { return t('structures.name.sirotskieThoughtWithoutParents'); },
     definition: presetAst([
       { entity: { kind: 'parents' }, operator: 'is_empty' },
       { entity: { kind: 'active' }, operator: 'eq', value: true },
@@ -885,7 +885,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: t('structures.name.createdWeek'),
+    get name() { return t('structures.name.createdWeek'); },
     definition: presetAst([
       {
         entity: { kind: 'created_at' },
@@ -897,7 +897,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: t('structures.name.createdZaDney'),
+    get name() { return t('structures.name.createdZaDney'); },
     definition: presetAst([
       {
         entity: { kind: 'created_at' },
@@ -909,7 +909,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: t('structures.name.markedDelete'),
+    get name() { return t('structures.name.markedDelete'); },
     definition: presetAst([{ entity: { kind: 'trashed' }, operator: 'eq', value: true }]),
   },
 ];

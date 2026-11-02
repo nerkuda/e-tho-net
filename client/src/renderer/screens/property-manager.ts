@@ -150,18 +150,36 @@ import type { CataloguePanel } from './type-catalogue.js';
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
  *  типах для компиляции тестов и импорта архивов. */
 const VALUE_TYPE_LABELS: Record<Exclude<PropertyValueType, 'thought_ref'> | 'thought_ref', string> = {
-  text: t('valueEditor.row'),
-  number: t('valueEditor.number'),
-  date: t('valueEditor.date'),
-  bool: t('valueEditor.daNo'),
-  url: t('propertyList.url.urlSaytFile'),
-  link: t('clipboard.link'),
-  thought_ref: t('propertyList.linkRefThoughtLegacyUnavailable'),
+  get text() {
+    return t('valueEditor.row');
+  },
+  get number() {
+    return t('valueEditor.number');
+  },
+  get date() {
+    return t('valueEditor.date');
+  },
+  get bool() {
+    return t('valueEditor.daNo');
+  },
+  get url() {
+    return t('propertyList.url.urlSaytFile');
+  },
+  get link() {
+    return t('clipboard.link');
+  },
+  get thought_ref() {
+    return t('propertyList.linkRefThoughtLegacyUnavailable');
+  },
   // Кросс-сетевая ссылка (задача 7849008a): значение адресует мысль ДРУГОЙ
   // сети по `n:<network_id>#<thought_id>`; снапшот имени — служебные данные.
-  cross_network_ref: t('propertyList.cross_network_ref.krossSetevayaLinkRef'),
+  get cross_network_ref() {
+    return t('propertyList.cross_network_ref.krossSetevayaLinkRef');
+  },
   // Ссылка на публикацию (0.11.1, задача f37b468d) — публикация текущей сети.
-  publication: t('propertyList.publication.publication'),
+  get publication() {
+    return t('propertyList.publication.publication');
+  },
 };
 
 /** Виды значения, доступные пользователю в выборе — `thought_ref` скрыт. */
@@ -730,8 +748,11 @@ function collectOppositeSideTypeIds(
 /** Подпись поля общего дефолта стороны свойства-связи (задача 99312ffa):
  *  у обеих сторон одна и та же — «Значение по умолчанию для всех типов».
  *  Поле стоит в колонке своей таблицы, поэтому «для источников»/«для
- *  назначений» читается из контекста (тултип уточняет сторону). */
-export const COMMON_SIDE_DEFAULT_LABEL = t('propertyManager.valueDefaultAllTypes');
+ *  назначений» читается из контекста (тултип уточняет сторону).
+ *  Функция: текст берётся в момент рендера (ошибка ebed42d3). */
+export function commonSideDefaultLabel(): string {
+  return t('propertyManager.valueDefaultAllTypes');
+}
 
 /** Ограничения и подсказка общего дефолта стороны свойства-связи (задача
  *  99312ffa): подпись, дословный тултип и набор допустимых типов-кандидатов.
@@ -748,7 +769,7 @@ export function commonSideDefaultSpec(
       ? t('propertyManager.valueDefaultIstochnikovLyubyhTypesCan')
       : t('propertyManager.valueDefaultNaznacheniyLyubyhTypesCan');
   return {
-    label: COMMON_SIDE_DEFAULT_LABEL,
+    label: commonSideDefaultLabel(),
     tooltip,
     allowedTypeIds: linkAllowedTypeIds(collectOppositeSideTypeIds(rows, side)),
   };

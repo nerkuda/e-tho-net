@@ -916,81 +916,81 @@ export function isRealtimeEvent(value: unknown): value is AnyRealtimeEvent {
 
 /** Russian one-word descriptions of realtime event types (status bar). */
 const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
-  'thought.created': t('events.createdThought'),
-  'thought.updated': t('events.changedThought'),
-  'thought.deleted': t('events.deletedThought'),
-  'thought.reordered': t('events.changedOrderThoughts'),
-  'thought.properties.reordered': t('events.changedOrderProperties'),
-  'link.created': t('events.createdLink'),
-  'link.updated': t('events.changedLink'),
-  'link.deleted': t('events.deletedLink'),
-  'thought-type.created': t('events.createdTypeThoughts'),
-  'thought-type.updated': t('events.changedTypeThoughts'),
-  'thought-type.deleted': t('events.deletedTypeThoughts'),
-  'link-type.created': t('events.createdTypeLinks'),
-  'link-type.updated': t('events.changedTypeLinks'),
-  'link-type.deleted': t('events.deletedTypeLinks'),
-  'property-definition.created': t('events.addedPropertyType'),
-  'property-definition.updated': t('events.changedPropertyType'),
-  'property-definition.deleted': t('events.deletedPropertyType'),
-  'property-registry.created': t('events.addedProperty'),
-  'property-registry.updated': t('events.changedProperty'),
-  'property-registry.deleted': t('events.deletedProperty'),
-  'comment.created': t('events.addedKommentariy'),
-  'comment.updated': t('events.changedKommentariy'),
-  'comment.deleted': t('events.deletedKommentariy'),
-  'attachment.created': t('events.addedAttachment'),
-  'attachment.updated': t('events.changedAttachment'),
-  'attachment.deleted': t('events.deletedAttachment'),
-  'attachment.owner.added': t('events.uAttachmentsAddedOwner'),
-  'attachment.owner.removed': t('events.uAttachmentsUnsetOwner'),
-  'property-value.set': t('events.changedProperty'),
-  'property-value.deleted': t('events.deletedProperty'),
-  'network.updated': t('events.changedNetwork'),
-  'network.deleted': t('events.networkDeleted'),
-  'member.added': t('events.addedMemberNetwork'),
-  'member.removed': t('events.memberPokinulNetwork'),
-  'member.role_changed': t('events.changedRolMember'),
-  'presence.joined': t('events.memberPodklyuchilsya'),
-  'presence.left': t('events.memberOtklyuchilsya'),
-  'presence.focus_changed': t('events.memberSmenilFocus'),
-  'user-preference.updated': t('events.obnovlenySettings'),
-  'user-focus-preferences.updated': t('events.obnovlenaSortZon'),
-  'user-focus-order.updated': t('events.obnovlenOrderZony'),
-  'thought-view.updated': t('events.obnovlenProsmotr'),
-  'saved-filter.created': t('events.savedView'),
-  'saved-filter.updated': t('events.changedView'),
-  'saved-filter.deleted': t('events.deletedView'),
-  'pinned-thoughts.updated': t('events.obnovlenyZakreplennye'),
-  'layer.merged': t('events.mergedLayer'),
+  get 'thought.created'() { return t('events.createdThought'); },
+  get 'thought.updated'() { return t('events.changedThought'); },
+  get 'thought.deleted'() { return t('events.deletedThought'); },
+  get 'thought.reordered'() { return t('events.changedOrderThoughts'); },
+  get 'thought.properties.reordered'() { return t('events.changedOrderProperties'); },
+  get 'link.created'() { return t('events.createdLink'); },
+  get 'link.updated'() { return t('events.changedLink'); },
+  get 'link.deleted'() { return t('events.deletedLink'); },
+  get 'thought-type.created'() { return t('events.createdTypeThoughts'); },
+  get 'thought-type.updated'() { return t('events.changedTypeThoughts'); },
+  get 'thought-type.deleted'() { return t('events.deletedTypeThoughts'); },
+  get 'link-type.created'() { return t('events.createdTypeLinks'); },
+  get 'link-type.updated'() { return t('events.changedTypeLinks'); },
+  get 'link-type.deleted'() { return t('events.deletedTypeLinks'); },
+  get 'property-definition.created'() { return t('events.addedPropertyType'); },
+  get 'property-definition.updated'() { return t('events.changedPropertyType'); },
+  get 'property-definition.deleted'() { return t('events.deletedPropertyType'); },
+  get 'property-registry.created'() { return t('events.addedProperty'); },
+  get 'property-registry.updated'() { return t('events.changedProperty'); },
+  get 'property-registry.deleted'() { return t('events.deletedProperty'); },
+  get 'comment.created'() { return t('events.addedKommentariy'); },
+  get 'comment.updated'() { return t('events.changedKommentariy'); },
+  get 'comment.deleted'() { return t('events.deletedKommentariy'); },
+  get 'attachment.created'() { return t('events.addedAttachment'); },
+  get 'attachment.updated'() { return t('events.changedAttachment'); },
+  get 'attachment.deleted'() { return t('events.deletedAttachment'); },
+  get 'attachment.owner.added'() { return t('events.uAttachmentsAddedOwner'); },
+  get 'attachment.owner.removed'() { return t('events.uAttachmentsUnsetOwner'); },
+  get 'property-value.set'() { return t('events.changedProperty'); },
+  get 'property-value.deleted'() { return t('events.deletedProperty'); },
+  get 'network.updated'() { return t('events.changedNetwork'); },
+  get 'network.deleted'() { return t('events.networkDeleted'); },
+  get 'member.added'() { return t('events.addedMemberNetwork'); },
+  get 'member.removed'() { return t('events.memberPokinulNetwork'); },
+  get 'member.role_changed'() { return t('events.changedRolMember'); },
+  get 'presence.joined'() { return t('events.memberPodklyuchilsya'); },
+  get 'presence.left'() { return t('events.memberOtklyuchilsya'); },
+  get 'presence.focus_changed'() { return t('events.memberSmenilFocus'); },
+  get 'user-preference.updated'() { return t('events.obnovlenySettings'); },
+  get 'user-focus-preferences.updated'() { return t('events.obnovlenaSortZon'); },
+  get 'user-focus-order.updated'() { return t('events.obnovlenOrderZony'); },
+  get 'thought-view.updated'() { return t('events.obnovlenProsmotr'); },
+  get 'saved-filter.created'() { return t('events.savedView'); },
+  get 'saved-filter.updated'() { return t('events.changedView'); },
+  get 'saved-filter.deleted'() { return t('events.deletedView'); },
+  get 'pinned-thoughts.updated'() { return t('events.obnovlenyZakreplennye'); },
+  get 'layer.merged'() { return t('events.mergedLayer'); },
   // Object-lock indicators (task 2031df5e). Title is not used; clients show
   // holder's name in the card overlay, not in the status bar.
-  'edit.acquired': t('events.zahvachenObekt'),
-  'edit.released': t('events.unsetZahvat'),
-  'edit.cleared': t('events.sbroshenZahvat'),
+  get 'edit.acquired'() { return t('events.zahvachenObekt'); },
+  get 'edit.released'() { return t('events.unsetZahvat'); },
+  get 'edit.cleared'() { return t('events.sbroshenZahvat'); },
   // Thought-type views (задача 65de7eaa) — отборы типов мыслей.
   // В статус-баре показываем только `run` (факт чтения/исполнения);
   // created/updated/deleted — это синхронизация набора кнопок на холсте,
   // отдельного уведомления не требуется.
-  'thought-type-view.created': t('events.addedViewType'),
-  'thought-type-view.updated': t('events.changedViewType'),
-  'thought-type-view.deleted': t('events.deletedViewType'),
-  'thought-type-view.run': t('events.ispolnenView'),
+  get 'thought-type-view.created'() { return t('events.addedViewType'); },
+  get 'thought-type-view.updated'() { return t('events.changedViewType'); },
+  get 'thought-type-view.deleted'() { return t('events.deletedViewType'); },
+  get 'thought-type-view.run'() { return t('events.ispolnenView'); },
   // Внетиповые отборы мысли (0.14.1, задача a28d444b) — те же правила.
-  'thought-custom-view.created': t('events.addedViewThought'),
-  'thought-custom-view.updated': t('events.changedViewThought'),
-  'thought-custom-view.deleted': t('events.deletedViewThought'),
-  'thought-custom-view.run': t('events.ispolnenView'),
+  get 'thought-custom-view.created'() { return t('events.addedViewThought'); },
+  get 'thought-custom-view.updated'() { return t('events.changedViewThought'); },
+  get 'thought-custom-view.deleted'() { return t('events.deletedViewThought'); },
+  get 'thought-custom-view.run'() { return t('events.ispolnenView'); },
   // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
-  'publication.updated': t('events.changedPublication'),
-  'publication.order.reordered': t('events.changedOrderPublication'),
-  'publication.exclusions.changed': t('events.changedIsklyucheniyaPublication'),
-  'publication.rebuilt': t('events.publicationPeresobrana'),
-  'publication.trashed': t('events.publicationTrash'),
-  'publication.restored': t('events.publicationRestored'),
-  'publication.purged': t('events.publicationDeleted'),
-  'shelf.updated': t('events.changedShelf'),
-  'shelf.deleted': t('events.shelfDeleted'),
+  get 'publication.updated'() { return t('events.changedPublication'); },
+  get 'publication.order.reordered'() { return t('events.changedOrderPublication'); },
+  get 'publication.exclusions.changed'() { return t('events.changedIsklyucheniyaPublication'); },
+  get 'publication.rebuilt'() { return t('events.publicationPeresobrana'); },
+  get 'publication.trashed'() { return t('events.publicationTrash'); },
+  get 'publication.restored'() { return t('events.publicationRestored'); },
+  get 'publication.purged'() { return t('events.publicationDeleted'); },
+  get 'shelf.updated'() { return t('events.changedShelf'); },
+  get 'shelf.deleted'() { return t('events.shelfDeleted'); },
 };
 
 /**
@@ -1626,8 +1626,10 @@ export function resolveFocusFlightOrigin(
 // Размер файла в человекочитаемом виде (задача c69b078d, 0.9.1)
 // ---------------------------------------------------------------------------
 
-/** Единицы размера по возрастанию (байты → терабайты). */
-const FILE_SIZE_UNITS = [t('events.b'), t('events.kb'), t('events.mb'), t('events.gb'), t('events.tb')] as const;
+/** Единицы размера по возрастанию (байты → терабайты); текст — в момент вызова. */
+function fileSizeUnits(): readonly string[] {
+  return [t('events.b'), t('events.kb'), t('events.mb'), t('events.gb'), t('events.tb')];
+}
 
 /**
  * Форматирует размер в байтах как «<число> <единица>» с авто-выбором
@@ -1637,17 +1639,18 @@ const FILE_SIZE_UNITS = [t('events.b'), t('events.kb'), t('events.mb'), t('event
  * значение трактуется как 0. Чистая функция — покрыта юнит-тестами.
  */
 export function formatFileSize(bytes: number): string {
+  const units = fileSizeUnits();
   const safe = Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : 0;
-  if (safe < 1024) return `${safe} ${FILE_SIZE_UNITS[0]}`;
+  if (safe < 1024) return `${safe} ${units[0]}`;
   let value = safe / 1024;
   let unit = 1;
-  while (value >= 1024 && unit < FILE_SIZE_UNITS.length - 1) {
+  while (value >= 1024 && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
   const rounded = Math.round(value * 10) / 10;
   const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
-  return `${text} ${FILE_SIZE_UNITS[unit]}`;
+  return `${text} ${units[unit]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1663,8 +1666,13 @@ export function formatFileSize(bytes: number): string {
  */
 export const LAYER_MENU_LABEL_MAX = 32;
 
-/** Метка заголовка меню слоёв, когда слой сессии не выбран (основа). */
-export const LAYER_MENU_LABEL_FALLBACK = t('events.base');
+/**
+ * Метка заголовка меню слоёв, когда слой сессии не выбран (основа).
+ * Функция: текст берётся в момент рендера (ошибка ebed42d3).
+ */
+export function layerMenuLabelFallback(): string {
+  return t('events.base');
+}
 
 /**
  * Полное имя слоя для тултипа кнопки-заголовка: имя слоя, а для основы —
@@ -1672,7 +1680,7 @@ export const LAYER_MENU_LABEL_FALLBACK = t('events.base');
  * метка (требование задачи 4388305f).
  */
 export function layerMenuTooltip(title: string | null | undefined): string {
-  return title ?? LAYER_MENU_LABEL_FALLBACK;
+  return title ?? layerMenuLabelFallback();
 }
 
 /**
@@ -1727,13 +1735,15 @@ export function planSelectionRows(
 export const SELECTION_UNAVAILABLE_TITLE_KEY = 'selection.unavailable';
 
 /**
- * Подпись строки панели выделенных для подтверждённо отсутствующей мысли
- * (значение на момент импорта — для сравнений и тестов). В отрисовке берётся
- * `t(SELECTION_UNAVAILABLE_TITLE_KEY)`, чтобы смена языка подхватывалась
- * следующей перерисовкой. Текст — из словаря, не литерал (требование
+ * Подпись строки панели выделенных для подтверждённо отсутствующей мысли.
+ * Функция: в отрисовке берётся `t(SELECTION_UNAVAILABLE_TITLE_KEY)`, чтобы
+ * смена языка подхватывалась следующей перерисовкой (ошибка ebed42d3); тесты
+ * сравнивают с тем же вызовом. Текст — из словаря, не литерал (требование
  * 0e5ff1c6, замечание верификатора к b213cf60).
  */
-export const SELECTION_UNAVAILABLE_TITLE = t(SELECTION_UNAVAILABLE_TITLE_KEY);
+export function selectionUnavailableTitle(): string {
+  return t(SELECTION_UNAVAILABLE_TITLE_KEY);
+}
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 

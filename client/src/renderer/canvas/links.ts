@@ -93,8 +93,13 @@ const BEND_MAX = 140;
 const TRASHED_STROKE = 'var(--link-default, #9aa3b2)';
 const TRASHED_DASH = '4 4';
 const TRASHED_OPACITY = '0.45';
-/** Суффикс подписи типа у помеченного ребра («входит в (в корзине)»). */
-const TRASHED_LABEL_SUFFIX = t('canvasLinks.inTrash');
+/**
+ * Суффикс подписи типа у помеченного ребра («входит в (в корзине)»).
+ * Функция, а не константа: текст берётся в момент рендера (ошибка ebed42d3).
+ */
+function trashedLabelSuffix(): string {
+  return t('canvasLinks.inTrash');
+}
 /**
  * Где на кривой живёт метка корзины (доля параметра Безье): НЕ в середине —
  * там подпись типа и бейдж-счётчик пачки, метка корзины их не перекрывает.
@@ -834,7 +839,7 @@ function drawVisualLine(
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));
     text.setAttribute('dominant-baseline', 'middle');
-    text.textContent = linkLabel(bundle, type) + (trashed ? TRASHED_LABEL_SUFFIX : '');
+    text.textContent = linkLabel(bundle, type) + (trashed ? trashedLabelSuffix() : '');
     svg.append(text);
   }
 }
@@ -1016,7 +1021,7 @@ function drawTopLine(
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));
     text.setAttribute('dominant-baseline', 'middle');
-    text.textContent = linkLabel(bundle, type) + (trashed ? TRASHED_LABEL_SUFFIX : '');
+    text.textContent = linkLabel(bundle, type) + (trashed ? trashedLabelSuffix() : '');
     svgTop.append(text);
   }
 }

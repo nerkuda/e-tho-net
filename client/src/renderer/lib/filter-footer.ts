@@ -313,9 +313,12 @@ export function filterFooterApplyBlocked(preview: FilterFooterPreview | undefine
 
 /**
  * Подсказка о переходе к проблемной строке — ОДИН текст на текстовый тултип
- * ({@link filterFooterTooltip}) и на разметочный тултип фразы.
+ * ({@link filterFooterTooltip}) и на разметочный тултип фразы. Функция:
+ * текст берётся в момент рендера (ошибка ebed42d3).
  */
-export const FILTER_FOOTER_TIP_HINT = t('filterFooter.clickTextToPereytiRowOshibkoy');
+function filterFooterTipHint(): string {
+  return t('filterFooter.clickTextToPereytiRowOshibkoy');
+}
 
 /** Классы частей разметочного тултипа фразы (вид — `styles/filter-editor.css`). */
 const TIP_ISSUES_CLASS = 'ff-preview__tip-issues';
@@ -363,7 +366,7 @@ function fillPreviewTip(tip: HTMLElement, preview: FilterFooterPreview, fixPath:
     for (const issue of issues) list.append(span(`• ${filterIssueReason(issue)}`, TIP_ISSUE_CLASS));
     parts.push(list);
   }
-  if (fixPath !== null) parts.push(span(FILTER_FOOTER_TIP_HINT, TIP_HINT_CLASS));
+  if (fixPath !== null) parts.push(span(filterFooterTipHint(), TIP_HINT_CLASS));
   tip.textContent = '';
   tip.replaceChildren(...parts);
 }

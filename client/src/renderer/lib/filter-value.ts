@@ -71,7 +71,7 @@ import {
 } from './filter-builder.js';
 import type { FilterTreeData, FilterTreeValueSlotApi } from './filter-tree.js';
 import {
-  FILTER_PHRASE_KEYWORD_SCOPES,
+  filterPhraseKeywordScopeOptions,
   filterKeywordScopeLabel,
   filterPhraseToken,
 } from './filter-phrase.js';
@@ -250,8 +250,8 @@ const HIERARCHY_OPS: ReadonlySet<FilterAstOperator> = new Set(['in_hierarchy', '
 
 /** Значения-перечисления вида вложения (`kind`) — словарь спецификации. */
 const ATTACHMENT_KIND_OPTIONS: readonly FilterValueEnumOption[] = [
-  { value: 'file', label: t('filterValue.label.file') },
-  { value: 'url', label: t('filterValue.label.linkRef') },
+  { value: 'file', get label() { return t('filterValue.label.file'); } },
+  { value: 'url', get label() { return t('filterValue.label.linkRef'); } },
 ];
 
 /** Ссылочные операнды: значение — мысль/тип/тип связи (элемент 21955e84). */
@@ -435,12 +435,13 @@ export function filterValueAcceptsPayload(
   }
 }
 
-/** Вид значения для объяснения отказа (пользовательский текст). */
+/** Вид значения для объяснения отказа (пользовательский текст).
+ *  Геттеры: текст берётся в момент показа (ошибка ebed42d3). */
 const DROP_PAYLOAD_LABELS: Readonly<Record<ThoughtDropPayload['kind'], string>> = {
-  thought: t('clipboard.thought'),
-  type: t('filterValue.type.type'),
-  string: t('filterValue.string.line'),
-  date: t('filterValue.date.date'),
+  get thought() { return t('clipboard.thought'); },
+  get type() { return t('filterValue.type.type'); },
+  get string() { return t('filterValue.string.line'); },
+  get date() { return t('filterValue.date.date'); },
 };
 
 /** Объяснение несовместимого броска: модель не меняется, причина видна. */
@@ -534,7 +535,7 @@ export function filterValueIsOff(leaf: FilterTreeLeaf): boolean {
  * композере фразы (`lib/filter-phrase.ts`): он же строит подпись областей во
  * фразе-превью, поэтому ячейка и фраза не расходятся.
  */
-export const FILTER_VALUE_KEYWORD_SCOPES = FILTER_PHRASE_KEYWORD_SCOPES;
+export const FILTER_VALUE_KEYWORD_SCOPES = filterPhraseKeywordScopeOptions;
 
 /**
  * Подпись единицы «количества» — что именно считается (элемент af7bdee2).
