@@ -62,6 +62,18 @@ function functionBody(name: string): string {
   return body.slice(0, end);
 }
 
+/**
+ * Тело shell-функции без строк-комментариев. Подстрока из комментария (например
+ * «[following]») не должна маскировать удаление фактического кода: сторож
+ * проверяет только исполняемые строки.
+ */
+function codeOnly(body: string): string {
+  return body
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+}
+
 describe('guard: scripts/install.sh работает в пайпе', () => {
   it('не выводит своё местоположение из $0 и BASH_SOURCE', () => {
     const text = readInstaller();
@@ -195,7 +207,7 @@ describe('guard: scripts/install.sh работает в пайпе', () => {
         'и http_effective_url.',
     );
 
-    const effective = functionBody('http_effective_url');
+    const effective = codeOnly(functionBody('http_effective_url'));
     assert.match(
       effective,
       /command -v curl/,
@@ -223,12 +235,21 @@ describe('guard: scripts/install.sh работает в пайпе', () => {
       'scripts/install.sh: http_effective_url должен брать первую Location-строку ' +
         '(заголовок ответа), иначе версия получится «0.14.1 [following]».',
     );
+    // Проверяем именно sed-выражения, а не упоминание маркера: без вырезания
+    // комментариев упоминание `[following]` в пояснениях оставляло сторож
+    // зелёным после удаления фактической строки срезания.
     assert.match(
       effective,
-      /\[following\]/,
+      /sed\s+-n\s+['"]s\/\^\[\[:space:\]\]\*\[Ll\]ocation:/,
+      'scripts/install.sh: http_effective_url не извлекает Location первой строкой ' +
+        'фактическим sed-выражением (комментарии не в счёт).',
+    );
+    assert.match(
+      effective,
+      /sed\s+['"]s\/\[\[:space:\]\]\*\\\[following\\\]/,
       'scripts/install.sh: http_effective_url не срезает маркер «[following]» ' +
-        'на случай, если Location придёт единственной строкой (без -S): ' +
-        'VERSION_PATTERN отвергнет версию с маркером.',
+        'фактическим sed-выражением (комментарии не в счёт) — VERSION_PATTERN ' +
+        'отвергнет версию с маркером.',
     );
 
     assert.doesNotMatch(
