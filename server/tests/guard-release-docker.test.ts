@@ -9,10 +9,17 @@
  *     триггер `workflow_call` (вызов из релиза) и `workflow_dispatch`
  *     (доопубликовать образ для уже вышедшего тега), обязательный вход `tag`,
  *     checkout по тегу, пуш `ghcr.io/<repo>/etn-server:<tag>` из
- *     `server/Dockerfile`, права `contents: read` + `packages: write`;
- *   * `.github/workflows/release.yml` — джоба `docker-image` вызывает этот
- *     workflow и передаёт тег; джоба `publish` перечисляет `docker-image`
- *     в `needs`, поэтому релиз без успешной публикации образа не выходит.
+ *     `server/Dockerfile`, права `contents: read` + `packages: write`.
+ *     Настройки сверяются внутри своего шага (`checkout`, `login`,
+ *     `build-push`): перенос `file:`/`push:`/`tags:` в чужой шаг сторож
+ *     ловит. `if:` и `continue-on-error:` у джобы и у шага сборки запрещены —
+ *     иначе обязательную сборку можно отключить при зелёном прогоне;
+ *   * `.github/workflows/release.yml` — джоба `docker-image` зависит от
+ *     `version` (упавшая валидация версии/тега не оставляет образ-сироту),
+ *     вызывает этот workflow и передаёт тег; джоба `publish` перечисляет
+ *     `docker-image` в `needs`, поэтому релиз без успешной публикации образа
+ *     не выходит. Джоба `docker-image` не отключается (`if:`,
+ *     `continue-on-error:` запрещены).
  *
  * Сторож статический: читает YAML как текст, без новых зависимостей.
  * Полноценный разбор не нужен — проверяются именованные ключи на своих
@@ -124,6 +131,65 @@ function inputTagBlock(workflow: string, trigger: string): string[] | null {
   return findBlock(inputs, 'tag', 6);
 }
 
+/** Экранирование строки для использования в регулярном выражении. */
+function escapeRe(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Элементы YAML-списка (`- ...`) в блоке: шаг и его продолжение. */
+function listItems(block: readonly string[]): string[][] {
+  const items: string[][] = [];
+  let current: string[] | null = null;
+  for (const line of block) {
+    if (/^\s*-\s/.test(line)) {
+      current = [line];
+      items.push(current);
+      continue;
+    }
+    if (current) current.push(line);
+  }
+  return items;
+}
+
+/** Единственная джоба переиспользуемого workflow (её блок). */
+function singleJob(workflow: string): string[] {
+  const jobs = findBlock(workflow.split('\n'), 'jobs', 0);
+  assert.ok(jobs !== null, `${DOCKER_WORKFLOW}: нет блока jobs.`);
+
+  const names = jobs
+    .map((line) => /^ {2}([A-Za-z0-9_.-]+):\s*$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => match[1] ?? '');
+  assert.equal(
+    names.length,
+    1,
+    `${DOCKER_WORKFLOW}: ожидается ровно одна джоба, найдено ${names.length}: ` +
+      `${names.join(', ') || 'ни одной'}.`,
+  );
+
+  const job = findBlock(jobs, names[0] ?? '', 2);
+  assert.ok(job !== null, `${DOCKER_WORKFLOW}: не найден блок джобы ${names[0]}.`);
+  return job;
+}
+
+/** Шаг с указанным `uses: <action>` (его блок вместе с `with:`). */
+function stepUsing(job: readonly string[], action: string): string[] | null {
+  const steps = findBlock(job, 'steps', 4);
+  if (!steps) return null;
+  const pattern = new RegExp(`^\\s*-\\s+uses:\\s*${escapeRe(action)}\\s*$`);
+  return listItems(steps).find((item) => item.some((line) => pattern.test(line))) ?? null;
+}
+
+/** Ключ на уровне джобы (отступ 4): `if:`, `continue-on-error:` и подобные. */
+function jobLevelKey(job: readonly string[], key: string): boolean {
+  return job.some((line) => new RegExp(`^ {4}${escapeRe(key)}:`).test(line));
+}
+
+/** Ключ на уровне шага: `- if:` в заголовке или `if:` в продолжении. */
+function stepKey(step: readonly string[], key: string): boolean {
+  return step.some((line) => new RegExp(`^\\s*(?:-\\s+)?${escapeRe(key)}:`).test(line));
+}
+
 describe('guard: Docker-образ сервера — обязательная часть релиза', () => {
   it(`${DOCKER_WORKFLOW}: workflow_call и workflow_dispatch с обязательным входом tag`, () => {
     const text = readWorkflow(DOCKER_WORKFLOW, 'переиспользуемая сборка образа');
@@ -163,54 +229,88 @@ describe('guard: Docker-образ сервера — обязательная �
 
   it(`${DOCKER_WORKFLOW}: пушит ghcr.io/<repo>/etn-server:<tag> из server/Dockerfile`, () => {
     const text = stripComments(readWorkflow(DOCKER_WORKFLOW, 'переиспользуемая сборка образа'));
+    const job = singleJob(text);
 
-    assert.match(
-      text,
-      /^\s*(?:-\s+)?uses:\s*docker\/build-push-action@v7\s*$/m,
-      `${DOCKER_WORKFLOW}: нет docker/build-push-action@v7 — образ не собирается.`,
+    // Джоба сборки не отключается: `if: false` или `continue-on-error` дали бы
+    // зелёный прогон без образа, а `publish` дождался бы «успеха».
+    assert.ok(
+      !jobLevelKey(job, 'if'),
+      `${DOCKER_WORKFLOW}: у джобы сборки есть if: — её можно отключить (if: false), ` +
+        'и образ молча не соберётся.',
     );
-    assert.match(
-      text,
-      /^\s*(?:-\s+)?uses:\s*docker\/login-action@v4\s*$/m,
-      `${DOCKER_WORKFLOW}: нет docker/login-action@v4 — пуш в GHCR не авторизуется.`,
+    assert.ok(
+      !jobLevelKey(job, 'continue-on-error'),
+      `${DOCKER_WORKFLOW}: у джобы сборки есть continue-on-error: — провал сборки/пуша ` +
+        'не сделает джобу красной.',
     );
-    assert.match(
-      text,
-      /^\s*registry:\s*ghcr\.io\s*$/m,
-      `${DOCKER_WORKFLOW}: вход в реестр не указан (registry: ghcr.io).`,
+
+    const checkout = stepUsing(job, 'actions/checkout@v7');
+    assert.ok(
+      checkout !== null,
+      `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код по тегу не скачивается.`,
     );
-    assert.match(
-      text,
-      /^\s*username:\s*\$\{\{\s*github\.actor\s*\}\}\s*$/m,
-      `${DOCKER_WORKFLOW}: пользователь GHCR должен быть github.actor.`,
+    assert.ok(
+      checkout.some((line) => /^\s*ref:\s*\$\{\{\s*inputs\.tag\s*\}\}\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: в шаге checkout нет ref: \${{ inputs.tag }} — ` +
+        'образ собирается не из того кода.',
     );
-    assert.match(
-      text,
-      /^\s*password:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}\s*$/m,
-      `${DOCKER_WORKFLOW}: пароль GHCR должен быть secrets.GITHUB_TOKEN.`,
+
+    const login = stepUsing(job, 'docker/login-action@v4');
+    assert.ok(
+      login !== null,
+      `${DOCKER_WORKFLOW}: нет шага docker/login-action@v4 — пуш в GHCR не авторизуется.`,
     );
-    assert.match(
-      text,
-      /^\s*file:\s*server\/Dockerfile\s*$/m,
-      `${DOCKER_WORKFLOW}: сборка идёт не из server/Dockerfile — образ сервера не соберётся.`,
+    assert.ok(
+      login.some((line) => /^\s*registry:\s*ghcr\.io\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: шаг login не входит в ghcr.io (registry: ghcr.io).`,
     );
-    assert.match(
-      text,
-      /^\s*push:\s*true\s*$/m,
-      `${DOCKER_WORKFLOW}: push: true не задан — образ соберётся, но не попадёт в GHCR.`,
+    assert.ok(
+      login.some((line) => /^\s*username:\s*\$\{\{\s*github\.actor\s*\}\}\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: шаг login должен использовать github.actor.`,
     );
-    assert.match(
-      text,
-      /^\s*tags:\s*ghcr\.io\/\$\{\{\s*github\.repository\s*\}\}\/etn-server:\$\{\{\s*inputs\.tag\s*\}\}\s*$/m,
-      `${DOCKER_WORKFLOW}: тег образа должен быть ` +
+    assert.ok(
+      login.some((line) => /^\s*password:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: шаг login должен использовать secrets.GITHUB_TOKEN.`,
+    );
+
+    const build = stepUsing(job, 'docker/build-push-action@v7');
+    assert.ok(
+      build !== null,
+      `${DOCKER_WORKFLOW}: нет шага docker/build-push-action@v7 — образ не собирается.`,
+    );
+    // Проверки привязаны к шагу сборки: `file:`/`push:`/`tags:` в чужом шаге
+    // (например, в login) образ не собирают и не пушат.
+    assert.ok(
+      build.some((line) => /^\s*file:\s*server\/Dockerfile\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: в шаге build-push нет file: server/Dockerfile — ` +
+        'образ сервера не соберётся.',
+    );
+    assert.ok(
+      build.some((line) => /^\s*push:\s*true\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: в шаге build-push нет push: true — образ соберётся, ` +
+        'но не попадёт в GHCR.',
+    );
+    assert.ok(
+      build.some((line) =>
+        /^\s*tags:\s*ghcr\.io\/\$\{\{\s*github\.repository\s*\}\}\/etn-server:\$\{\{\s*inputs\.tag\s*\}\}\s*$/.test(
+          line,
+        ),
+      ),
+      `${DOCKER_WORKFLOW}: в шаге build-push тег образа должен быть ` +
         'ghcr.io/${{ github.repository }}/etn-server:${{ inputs.tag }} — ' +
         'только версия тега, без latest.',
     );
-    assert.match(
-      text,
-      /^\s*ref:\s*\$\{\{\s*inputs\.tag\s*\}\}\s*$/m,
-      `${DOCKER_WORKFLOW}: checkout идёт не по inputs.tag — образ собирается не из того кода.`,
+    assert.ok(
+      !stepKey(build, 'if'),
+      `${DOCKER_WORKFLOW}: у шага build-push есть if: — сборку/пуш можно отключить, ` +
+        'и образ молча не соберётся.',
     );
+    assert.ok(
+      !stepKey(build, 'continue-on-error'),
+      `${DOCKER_WORKFLOW}: у шага build-push есть continue-on-error: — провал сборки/пуша ` +
+        'не сделает джобу красной.',
+    );
+
     assert.match(
       text,
       /^\s*packages:\s*write\s*$/m,
@@ -229,6 +329,27 @@ describe('guard: Docker-образ сервера — обязательная �
     assert.ok(
       job !== null,
       `${RELEASE_WORKFLOW}: нет джобы docker-image — релиз публикуется без Docker-образа.`,
+    );
+
+    // Джобу нельзя отключить или сделать «необязательной»: зелёный прогон без
+    // образа для publish неотличим от успешной публикации.
+    assert.ok(
+      !jobLevelKey(job, 'if'),
+      `${RELEASE_WORKFLOW}: у джобы docker-image есть if: — её можно отключить ` +
+        '(if: false), и релиз выйдет без образа при зелёном прогоне.',
+    );
+    assert.ok(
+      !jobLevelKey(job, 'continue-on-error'),
+      `${RELEASE_WORKFLOW}: у джобы docker-image есть continue-on-error: — провал сборки ` +
+        'образа не сделает джобу красной, и publish не остановится.',
+    );
+
+    const jobNeeds = needsOf(job);
+    assert.ok(
+      jobNeeds.includes('version'),
+      `${RELEASE_WORKFLOW}: docker-image не зависит от version (needs: ${jobNeeds.join(', ') || 'пусто'}) — ` +
+        'при падении валидации версии/тега образ уедет в GHCR сиротой для релиза, ' +
+        'который не выйдет.',
     );
 
     const uses = findBlock(job, 'uses', 4);
