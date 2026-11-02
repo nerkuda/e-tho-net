@@ -176,12 +176,16 @@ curl -fsSLO "$base/etn-server-0.15.1.tar.gz" && curl -fsSLO "$base/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing && tar -xzf etn-server-0.15.1.tar.gz
 cd etn-server-0.15.1
 export ETN_DATA_DIR=/var/lib/etn   # каталог данных; нужен доступ на запись
+export ETN_HOST=0.0.0.0            # доступ из локальной сети; без этого — только 127.0.0.1
+export ETN_PORT=4321
 node dist/cli.js init --username admin --display-name "Администратор"
 node dist/index.js
 ```
 
 `init` печатает **первичный API-key один раз** — сохраните. Без администратора
-сервер не запускается. Порт — `ETN_PORT` (4321), адрес — `ETN_HOST` (`0.0.0.0`).
+сервер не запускается. Порт и адрес прослушивания задают `ETN_PORT` и `ETN_HOST`;
+если их не задать, сервер слушает `127.0.0.1:3000`. В примере выше порт 4321 и
+адрес `0.0.0.0` заданы явно, поэтому проверка ниже обращается к `:4321`.
 Проверка в другом терминале:
 
 ```bash
@@ -237,6 +241,8 @@ git clone https://github.com/nerkuda/e-tho-net.git && cd e-tho-net
 npm install && npm -w @etn/client run rebuild:native
 npm run build
 export ETN_DATA_DIR=/var/lib/etn
+export ETN_HOST=0.0.0.0   # доступ из локальной сети; без этого — только 127.0.0.1
+export ETN_PORT=4321
 node server/dist/cli.js init --username admin --display-name "Администратор"
 node server/dist/index.js
 ```

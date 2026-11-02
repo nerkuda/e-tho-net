@@ -1,7 +1,7 @@
 # ETN self-hosted deployment (task K2, docs/install-server.md §6).
 #
 #   docker compose up -d
-#   docker compose run --rm etn node /app/server/dist/cli.js init --username admin --display-name Admin
+#   docker compose run --rm --entrypoint node etn /app/server/dist/cli.js init --username admin --display-name Admin
 
 services:
   etn:

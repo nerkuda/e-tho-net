@@ -8,7 +8,7 @@
 
 ## Установка сервера ETN
 
-Сервер ETN — один процесс Node.js; все данные он хранит в SQLite в каталоге данных. Работает на Linux, Windows 10/11 и macOS. Клиент подключается к нему по сети (по умолчанию — порт 4321).
+Сервер ETN — один процесс Node.js; все данные он хранит в SQLite в каталоге данных. Работает на Linux, Windows 10/11 и macOS. Клиент подключается к нему по сети (в примерах ниже — порт 4321).
 
 Готовые сборки версии 0.15.1 публикуются в релизах проекта:
 
@@ -52,6 +52,8 @@ cd etn-server-0.15.1
 
 ```bash
 export ETN_DATA_DIR=/var/lib/etn
+export ETN_HOST=0.0.0.0   # доступ из локальной сети; без этого — только 127.0.0.1
+export ETN_PORT=4321
 node dist/cli.js init --username admin --display-name "Администратор"
 node dist/index.js
 ```
@@ -95,8 +97,8 @@ node server/dist/cli.js init --username admin --display-name "Администр
 | Переменная | Назначение | По умолчанию |
 |-----------|------------|--------------|
 | `ETN_DATA_DIR` | **Обязательна.** Каталог данных сервера | — |
-| `ETN_HOST` | Адрес прослушивания | `0.0.0.0` |
-| `ETN_PORT` | Порт HTTP | `4321` |
+| `ETN_HOST` | Адрес прослушивания | `127.0.0.1` |
+| `ETN_PORT` | Порт HTTP | `3000` |
 | `ETN_TLS_CERT` / `ETN_TLS_KEY` | Свой сертификат и ключ (включают HTTPS) | — |
 | `ETN_LOG_LEVEL` | Подробность журнала в консоли: `trace`/`debug`/`info`/`warn`/`error` | `info` |
 | `ETN_MCP_ENABLED` | `1` — включить подключение AI-агентов | `0` |
@@ -106,6 +108,8 @@ node server/dist/cli.js init --username admin --display-name "Администр
 | `ETN_UPDATE_CHANNEL` | Канал проверки: `stable` или `prerelease` | `stable` |
 | `ETN_UPDATE_CHECK_INTERVAL_HOURS` | Период фоновых проверок обновлений, часы (минимум 1) | `12` |
 | `ETN_DEPLOYMENT` | Режим развёртывания: `windows-service`, `standalone` или `docker`; обычно определяется сам | `standalone`, в контейнере — `docker` |
+
+Дефолты в таблице — для ручного запуска: без переменных сервер слушает `127.0.0.1:3000`. Windows-установщик и `docker-compose.yml` задают `0.0.0.0:4321` явно; в примерах ниже порт задаётся вручную.
 
 **Зачем нужен `ETN_DEPLOYMENT`.** От режима зависит обновление: из клиента обновляется только сервер-служба Windows (`windows-service`) — установщик умеет остановить и снова запустить именно службу. Обычный процесс (`standalone`) и контейнер (`docker`) из клиента не обновляются: у сервера нет прав останавливать чужой процесс, а установщик Windows в контейнере неприменим. Поэтому шаблон службы `installer/service/etn-service.xml` задаёт `ETN_DEPLOYMENT=windows-service` сам, при установке и обновлении; вручную эту переменную не задают. Значения по умолчанию в таблице относятся к ручному запуску `node dist/index.js` (`standalone`) и к Docker (`docker` — по маркеру `/.dockerenv`).
 
@@ -123,6 +127,7 @@ export ETN_PORT=4321
 
 ```env
 ETN_DATA_DIR=C:/ETN/data
+ETN_PORT=4321
 ```
 
 ### Каталог данных
