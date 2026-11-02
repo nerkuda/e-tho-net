@@ -49,6 +49,7 @@ import {
   type PluralCategory,
   type PluralForms,
 } from './plural.js';
+import { en, enPlurals } from './locales/en.js';
 import { ru, ruPlurals } from './locales/ru.js';
 
 /** Ключ строки словаря — только ключи исходного языка (`ru`). */
@@ -295,3 +296,6 @@ export function hasMessage(lang: string, key: MessageKey): boolean {
 }
 
 registerLocale(DEFAULT_LANG, ru, ruPlurals);
+// Английский каталог (задача d08c422d): полный перевод ключей `ru.ts`,
+// регистрация делает язык доступным для выбора (`availableLocales`).
+registerLocale('en', en, enPlurals);

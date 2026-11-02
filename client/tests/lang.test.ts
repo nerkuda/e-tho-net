@@ -2,9 +2,9 @@
  * Деградация языка и автодетект на старте (задача e6374cd1).
  *
  * Проверяется поведение `lib/lang.ts` поверх шима `document`/`window.etn`:
- * - каталог недоступен (en/zh ещё не собраны) — эффективный язык `ru`,
- *   `document.lang` НЕ выставляется в недоступный код, в журнал уходит
- *   `ui.i18n.locale_unavailable`, состояние видно настройкам;
+ * - каталог недоступен (zh ещё не собран; en собран задачей d08c422d) —
+ *   эффективный язык `ru`, `document.lang` НЕ выставляется в недоступный код,
+ *   в журнал уходит `ui.i18n.locale_unavailable`, состояние видно настройкам;
  * - сохранённый доступный язык (тестовая локаль) применяется;
  * - пустой `client_meta.lang` — детект ОС от main, детект не персистится.
  */
@@ -80,16 +80,16 @@ describe('lang: деградация и автодетект', () => {
     assert.deepEqual(writes, [], 'детект ОС не записывается в client_meta');
   });
 
-  it('язык ОС en без каталога: деградация на ru с сообщением, без записи', async () => {
+  it('язык ОС en: каталог собран — применяется без деградации (задача d08c422d)', async () => {
     writes.length = 0;
     storedLang = null;
     preferred = 'en';
     documentElement.lang = '';
     const { initLang, unavailableLang } = await import('../src/renderer/lib/lang.js');
     await initLang();
-    assert.equal(documentElement.lang, DEFAULT_LANG);
-    assert.equal(unavailableLang(), 'en');
-    assert.deepEqual(writes, []);
+    assert.equal(documentElement.lang, 'en', 'английский каталог доступен — язык ОС применяется');
+    assert.equal(unavailableLang(), null, 'деградации нет');
+    assert.deepEqual(writes, [], 'детект ОС не записывается в client_meta');
   });
 
   it('сохранённый доступный язык (тестовая локаль) применяется', async () => {

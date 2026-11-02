@@ -1,0 +1,387 @@
+{
+  "name": "i18n-en-live-switch",
+  "description": "Задача d08c422d: английский каталог en.ts зарегистрирован, полный перевод словаря ru.ts. Проверяется пользовательский путь «Все настройки → Клиент → English → Применить»: живая смена без перезапуска (заголовок диалога, закладки экранов, меню, кнопки футера, названия языков), ввод в форму не теряется, document.lang следует за языком, основные экраны (карта/структуры/дневник/публикации), меню пользователя и диалог мастера публикации показывают английские подписи без смеси языков и без сырых ключей словаря. Данные мыслесети (имя сети, названия мыслей) не переводятся — это ожидаемо. Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.d08c422d-i18n-en.scenario.json --out .tmp/d08c422d/run1",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-user-menu",
+      "click": ".top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => ['Настройки', 'Settings'].includes((e.textContent || '').trim())); if (!row) throw new Error('нет пункта настроек'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "lang-at-start",
+      "probe": "document.documentElement.lang"
+    },
+    {
+      "name": "baseline-open-client",
+      "eval": "(() => { const nav = document.querySelectorAll('.settings-nav-item'); if (nav.length < 3) throw new Error('нет третьего раздела настроек (Client)'); nav[2].click(); return (nav[2].textContent || '').trim(); })()"
+    },
+    {
+      "name": "baseline-ru-present",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]') !== null"
+    },
+    {
+      "name": "baseline-pick-ru",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "baseline-apply-enabled",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => ((b.textContent || '').trim() === 'Apply' || (b.textContent || '').trim() === 'Применить') && !b.disabled)"
+    },
+    {
+      "name": "baseline-apply-ru",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Apply' || (e.textContent || '').trim() === 'Применить'); if (!b) throw new Error('нет кнопки Apply/Применить'); b.click(); return true; })()"
+    },
+    {
+      "name": "baseline-ru-applied",
+      "timeout": 15000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('.dialog-title')?.textContent === 'Все настройки'"
+    },
+    {
+      "name": "lang-before",
+      "probe": "document.documentElement.lang",
+      "expect": "ru"
+    },
+    {
+      "name": "network-label-before",
+      "probe": "(() => { const labels = Array.from(document.querySelectorAll('.toolbar > :last-child .tb-label')); return labels.length ? labels[labels.length - 1].textContent : null; })()",
+      "expect": "Мыслесеть"
+    },
+    {
+      "name": "tabs-before",
+      "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title'))",
+      "expect": [
+        "Карта мыслей",
+        "Структуры мыслей",
+        "Дневник",
+        "Публикации",
+        "События"
+      ]
+    },
+    {
+      "name": "dialog-title-before",
+      "probe": "document.querySelector('.dialog-title')?.textContent ?? null",
+      "expect": "Все настройки"
+    },
+    {
+      "name": "nav-before",
+      "probe": "Array.from(document.querySelectorAll('.settings-nav-item')).map((e) => (e.textContent || '').trim())",
+      "expect": [
+        "Пользователь",
+        "Мыслесеть",
+        "Клиент",
+        "Логирование"
+      ]
+    },
+    {
+      "name": "footer-buttons-before",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => (b.textContent || '').trim())",
+      "expect": [
+        "Применить",
+        "Отмена",
+        "Применить и закрыть"
+      ]
+    },
+    {
+      "name": "lang-labels-before",
+      "probe": "Array.from(document.querySelectorAll('.settings-section label')).map((e) => (e.textContent || '').trim()).filter((s) => s === 'Русский' || s === 'English')",
+      "expect": [
+        "Русский",
+        "English"
+      ]
+    },
+    {
+      "name": "open-user-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Пользователь'); if (!nav) throw new Error('нет раздела «Пользователь»'); nav.click(); const input = document.querySelector('.settings-section input[type=text]'); if (!input) throw new Error('нет поля имени'); input.value = 'Проверка d08c422d'; input.dispatchEvent(new Event('input', { bubbles: true })); return input.value; })()"
+    },
+    {
+      "name": "display-name-typed",
+      "probe": "document.querySelector('.settings-section input[type=text]')?.value ?? null",
+      "expect": "Проверка d08c422d"
+    },
+    {
+      "name": "open-client-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "en-radio-present",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"en\"]') !== null"
+    },
+    {
+      "name": "lang-checked-before",
+      "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null",
+      "expect": "ru"
+    },
+    {
+      "name": "pick-english",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"en\"]'); if (!r) throw new Error('нет локали en'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "english-picked",
+      "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null",
+      "expect": "en"
+    },
+    {
+      "name": "apply-enabled",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => (b.textContent || '').trim() === 'Применить' && !b.disabled)"
+    },
+    {
+      "name": "apply-english",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Применить'); if (!b) throw new Error('нет кнопки «Применить»'); b.click(); return true; })()"
+    },
+    {
+      "name": "live-lang-applied",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'en' && document.querySelector('.dialog-title')?.textContent === 'All settings' && (() => { const labels = Array.from(document.querySelectorAll('.toolbar > :last-child .tb-label')); return labels.length > 0 && labels[labels.length - 1].textContent === 'Thought network'; })()"
+    },
+    {
+      "name": "tabs-after",
+      "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title'))",
+      "expect": [
+        "Thought map",
+        "Thought structures",
+        "Diary",
+        "Publications",
+        "Events"
+      ]
+    },
+    {
+      "name": "nav-after",
+      "probe": "Array.from(document.querySelectorAll('.settings-nav-item')).map((e) => (e.textContent || '').trim())",
+      "expect": [
+        "User",
+        "Thought network",
+        "Client",
+        "Logging"
+      ]
+    },
+    {
+      "name": "footer-buttons-after",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => (b.textContent || '').trim())",
+      "expect": [
+        "Apply",
+        "Cancel",
+        "Apply and close"
+      ]
+    },
+    {
+      "name": "lang-labels-after",
+      "probe": "Array.from(document.querySelectorAll('.settings-section label')).map((e) => (e.textContent || '').trim()).filter((s) => s === 'Русский' || s === 'English')",
+      "expect": [
+        "Русский",
+        "English"
+      ]
+    },
+    {
+      "name": "chrome-no-cyrillic",
+      "probe": "(() => { const nodes = [...document.querySelectorAll('.settings-nav-item'), ...document.querySelectorAll('.settings-footer-buttons button'), ...Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => ({ textContent: b.getAttribute('title') }))]; return nodes.filter((n) => /[А-Яа-яЁё]/.test(n.textContent || '')).map((n) => n.textContent); })()",
+      "expect": []
+    },
+    {
+      "name": "no-raw-dictionary-keys",
+      "probe": "(() => { const text = document.querySelector('.dialog-backdrop')?.innerText ?? ''; return (text.match(/\\b(actions|dialog|list|common|state|table|propertyList|workspace|settings|settingsLogs|userMenu|menu|editor|diary|structures|publications|publication|filter|trash|admin|comment|attachments|chrono)\\.([a-z][a-zA-Z0-9]+)/g) ?? []); })()",
+      "expect": []
+    },
+    {
+      "name": "open-user-section-en",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'User'); if (!nav) throw new Error('нет раздела User после смены языка'); nav.click(); return true; })()"
+    },
+    {
+      "name": "input-preserved",
+      "probe": "document.querySelector('.settings-section input[type=text]')?.value ?? null",
+      "expect": "Проверка d08c422d"
+    },
+    {
+      "name": "close-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Cancel'); if (!b) throw new Error('нет кнопки Cancel'); b.click(); return true; })()"
+    },
+    {
+      "name": "dialog-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-user-menu-again",
+      "click": ".top-right button"
+    },
+    {
+      "name": "user-menu-again-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "user-menu-items-en",
+      "probe": "(() => { const items = Array.from(document.querySelectorAll('.menu-item')).map((e) => (e.textContent || '').trim()); return { hasSettings: items.includes('Settings'), hasAbout: items.includes('About'), hasDisconnect: items.includes('Disconnect'), cyrillic: items.filter((s) => /[А-Яа-яЁё]/.test(s)) }; })()",
+      "expect": {
+        "hasSettings": true,
+        "hasAbout": true,
+        "hasDisconnect": true,
+        "cyrillic": []
+      }
+    },
+    {
+      "name": "close-user-menu",
+      "key": "Escape"
+    },
+    {
+      "name": "user-menu-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') === null"
+    },
+    {
+      "name": "open-structures",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === 'Thought structures'); if (!b) throw new Error('нет закладки Thought structures'); b.click(); return true; })()"
+    },
+    {
+      "name": "structures-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.ff-extra--commands') !== null"
+    },
+    {
+      "name": "structures-commands-en",
+      "probe": "(() => { const el = document.querySelector('.ff-extra--commands'); return { text: (el?.textContent || '').trim(), cyrillic: /[А-Яа-яЁё]/.test(el?.textContent || '') }; })()",
+      "expect": {
+        "text": "Commands ▾",
+        "cyrillic": false
+      }
+    },
+    {
+      "name": "open-diary",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === 'Diary'); if (!b) throw new Error('нет закладки Diary'); b.click(); return true; })()"
+    },
+    {
+      "name": "diary-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.diary-add-btn') !== null"
+    },
+    {
+      "name": "diary-add-en",
+      "probe": "(() => { const el = document.querySelector('.diary-add-btn'); return { text: (el?.textContent || '').trim(), cyrillic: /[А-Яа-яЁё]/.test(el?.textContent || '') }; })()",
+      "expect": {
+        "text": "Add diary entry",
+        "cyrillic": false
+      }
+    },
+    {
+      "name": "open-publications",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === 'Publications'); if (!b) throw new Error('нет закладки Publications'); b.click(); return true; })()"
+    },
+    {
+      "name": "publications-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.pub-toolbar') !== null"
+    },
+    {
+      "name": "publications-chrome-en",
+      "probe": "(() => { const buttons = Array.from(document.querySelectorAll('.pub-toolbar button')).map((b) => (b.textContent || '').trim()).filter((s) => s !== ''); const search = document.querySelector('.pub-toolbar input[type=search]'); return { buttons, searchPlaceholder: search?.placeholder ?? null, cyrillic: /[А-Яа-яЁё]/.test((document.querySelector('.pub-toolbar')?.textContent || '')) }; })()",
+      "expect": {
+        "buttons": [
+          "Shelves",
+          "List",
+          "Sort: Manual",
+          "Shelf",
+          "Publication"
+        ],
+        "searchPlaceholder": "Search by title…",
+        "cyrillic": false
+      }
+    },
+    {
+      "name": "open-publication-wizard",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.pub-toolbar button')).find((e) => (e.textContent || '').trim() === 'Publication'); if (!b) throw new Error('нет кнопки Publication'); b.click(); return true; })()"
+    },
+    {
+      "name": "wizard-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .dialog-title')?.textContent === 'New publication'"
+    },
+    {
+      "name": "wizard-chrome-en",
+      "probe": "(() => { const labelsAll = Array.from(document.querySelectorAll('.dialog-backdrop .form-stack label')).map((e) => (e.textContent || '').trim()); const chrome = [document.querySelector('.dialog-title')?.textContent ?? '', ...labelsAll, ...Array.from(document.querySelectorAll('.dialog-footer button')).map((b) => (b.textContent || '').trim())].join(' | '); return { title: document.querySelector('.dialog-title')?.textContent ?? null, buttons: Array.from(document.querySelectorAll('.dialog-footer button')).map((b) => (b.textContent || '').trim()), fields: labelsAll.filter((s) => s === 'Title' || s === 'Subtitle' || s === 'Author'), cyr: chrome.match(/[А-Яа-яЁё].*/g) }; })()",
+      "expect": {
+        "title": "New publication",
+        "buttons": [
+          "Cancel",
+          "Create"
+        ],
+        "fields": [
+          "Title",
+          "Subtitle",
+          "Author"
+        ],
+        "cyr": null
+      }
+    },
+    {
+      "name": "close-wizard",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-footer button')).find((e) => (e.textContent || '').trim() === 'Cancel'); if (!b) throw new Error('нет кнопки Cancel в мастере'); b.click(); return true; })()"
+    },
+    {
+      "name": "wizard-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "lang-after",
+      "probe": "document.documentElement.lang",
+      "expect": "en"
+    },
+    {
+      "name": "network-data-not-translated",
+      "probe": "(() => { const tab = document.querySelector('.tb-label'); return document.body.innerText.includes('GUI-стенд'); })()",
+      "expect": true
+    }
+  ]
+}
