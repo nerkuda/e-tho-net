@@ -16,6 +16,11 @@
  * `releases/latest` с текстом версии. Без этого фолбэка одношная команда на
  * зеркале требует `--version` и/или `ETN_RELEASE_BASE_URL`.
  *
+ * Третья половина — HTTP-клиент. В минимальной Ubuntu 24.04 нет curl: жёсткая
+ * зависимость от него даёт пустой stdin у `curl … | bash` и «ничего не
+ * произошло». Загрузка идёт через `fetch_http` (curl, при отсутствии — wget),
+ * отсутствие обоих — понятная ошибка с подсказкой установить любой из них.
+ *
  * Сторож статический: он читает `scripts/install.sh` и падает на
  * `npm -w @etn/server test`. Функциональный прогон пайпа и HTTP-раздачи —
  * `scripts/install-sh-smoke.sh` (Linux-джоба CI).
@@ -44,6 +49,17 @@ function readInstaller(): string {
 function lineNumbers(text: string, pattern: RegExp): number[] {
   const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
   return [...text.matchAll(re)].map((m) => text.slice(0, m.index ?? 0).split('\n').length);
+}
+
+/** Тело функции верхнего уровня installer'а: от `name() {` до закрывающей `}`. */
+function functionBody(name: string): string {
+  const text = readInstaller();
+  const start = text.search(new RegExp(`^${name}\\(\\) \\{`, 'm'));
+  assert.ok(start >= 0, `scripts/install.sh: нет функции ${name}()`);
+  const body = text.slice(start);
+  const end = body.search(/^\}/m);
+  assert.ok(end > 0, `scripts/install.sh: не найдена закрывающая скобка функции ${name}()`);
+  return body.slice(0, end);
 }
 
 describe('guard: scripts/install.sh работает в пайпе', () => {
@@ -93,9 +109,9 @@ describe('guard: scripts/install.sh работает в пайпе', () => {
         'источника версии помимо GitHub-редиректа. Зеркало и локальная раздача ' +
         'без статического файла потребуют --version.',
     );
-    // Чтение ТЕЛА файла (не HEAD): `curl -fsSL` без `I` — статический файл
+    // Чтение ТЕЛА файла (не HEAD): `fetch_http` скачивает статический файл
     // с текстом версии; HEAD-редирект остаётся отдельной веткой.
-    const bodyRead = lineNumbers(text, /curl -fsSL [^\n]*"\$RELEASE_BASE_URL\/releases\/latest"/);
+    const bodyRead = lineNumbers(text, /fetch_http "\$RELEASE_BASE_URL\/releases\/latest"/);
     assert.ok(
       bodyRead.length > 0,
       'scripts/install.sh: нет чтения тела <base>/releases/latest. Для зеркал и ' +
@@ -117,6 +133,85 @@ describe('guard: scripts/install.sh работает в пайпе', () => {
       'scripts/install.sh: VERSION_PATTERN применяется меньше двух раз — текст ' +
         '<base>/releases/latest не валидируется тем же шаблоном, что и --version. ' +
         `Найдено: ${patternUses.join(', ') || 'ни одного'}.`,
+    );
+  });
+
+  it('скачивает через curl, при его отсутствии — через wget', () => {
+    const needClient = functionBody('need_http_client');
+    assert.match(
+      needClient,
+      /command -v curl/,
+      'scripts/install.sh: need_http_client не проверяет curl.',
+    );
+    assert.match(
+      needClient,
+      /command -v wget/,
+      'scripts/install.sh: need_http_client не проверяет wget — на минимальной Ubuntu 24.04 ' +
+        'без curl установка обязана работать через wget.',
+    );
+
+    const fetchHttp = functionBody('fetch_http');
+    assert.match(fetchHttp, /command -v curl/, 'scripts/install.sh: fetch_http не использует curl.');
+    assert.match(
+      fetchHttp,
+      /command -v wget/,
+      'scripts/install.sh: fetch_http не имеет ветки wget — установка без curl невозможна.',
+    );
+    assert.match(
+      fetchHttp,
+      /wget -qO-/,
+      'scripts/install.sh: ветка wget в fetch_http должна отдавать тело в stdout (wget -qO-).',
+    );
+    assert.match(
+      fetchHttp,
+      /die "[^"\n]*curl[^"\n]*wget[^"\n]*"/,
+      'scripts/install.sh: при отсутствии и curl, и wget сообщение должно называть оба клиента ' +
+        'и подсказывать установку (sudo apt-get install -y curl или wget).',
+    );
+
+    const fetchUrl = functionBody('fetch_url');
+    assert.match(
+      fetchUrl,
+      /fetch_http/,
+      'scripts/install.sh: fetch_url должен скачивать через fetch_http, а не вызывать curl напрямую.',
+    );
+    assert.doesNotMatch(
+      fetchUrl,
+      /\bcurl\b|\bwget\b/,
+      'scripts/install.sh: fetch_url вызывает curl/wget напрямую в обход fallback fetch_http.',
+    );
+
+    const latest = functionBody('resolve_latest_version');
+    assert.match(
+      latest,
+      /need_http_client/,
+      'scripts/install.sh: resolve_latest_version должен проверять HTTP-клиент через need_http_client ' +
+        '(понятная ошибка до загрузки).',
+    );
+    assert.doesNotMatch(
+      latest,
+      /\bcurl\b|\bwget\b/,
+      'scripts/install.sh: resolve_latest_version вызывает curl/wget напрямую в обход fetch_http ' +
+        'и http_effective_url.',
+    );
+
+    const effective = functionBody('http_effective_url');
+    assert.match(
+      effective,
+      /command -v curl/,
+      'scripts/install.sh: http_effective_url не использует curl.',
+    );
+    assert.match(
+      effective,
+      /command -v wget/,
+      'scripts/install.sh: http_effective_url без ветки wget сломает определение версии на системе без curl.',
+    );
+
+    assert.doesNotMatch(
+      readInstaller(),
+      /need_cmd curl/,
+      'scripts/install.sh: жёсткая проверка need_cmd curl делает curl обязательным. ' +
+        'Нужен fallback на wget через need_http_client/fetch_http.',
     );
   });
 

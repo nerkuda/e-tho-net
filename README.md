@@ -125,10 +125,16 @@ npm test                 # все тесты
 
 ## Установка
 
-Клиент для Linux — одной командой (без sudo, в `~/.local/opt/etn`):
+Клиент для Linux — одной командой (без sudo, в `~/.local/opt/etn`). Нужен
+`curl` или `wget`; в минимальной Ubuntu 24.04 `curl` нет — поставьте его один
+раз (`sudo apt-get install -y curl`) или используйте вариант с `wget`.
 
 ```bash
 curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
+```
+
+```bash
+wget -qO- https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
 ```
 
 - **Сервер** — установщик Windows `ETN-Setup-<версия>.exe` (служба Windows),

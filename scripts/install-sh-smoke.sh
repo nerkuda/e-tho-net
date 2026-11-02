@@ -13,6 +13,12 @@
 #     его читать (иначе команда съедает остаток скрипта);
 #   * версия из статического файла <base>/releases/latest — по HTTP-раздаче
 #     (как у зеркала) и по file:// (локальная раздача), без --version;
+#   * одношные команды `curl -fsSL <base>/install.sh | bash` и
+#     `wget -qO- <base>/install.sh | bash`; первая — как есть, вторая — с PATH
+#     без curl (минимальная Ubuntu 24.04: там curl нет, установщик обязан
+#     скачать через wget);
+#   * отсутствие и curl, и wget — понятная ошибка с подсказкой установить один
+#     из клиентов (а не пустой stdin и код 0);
 #   * повторный запуск без --version обновляет клиент; битый SHA-256 — отказ.
 #
 # Клиентский архив — ПОДСТАВНОЙ (`etn` — шелл-скрипт): настоящий бинарник
@@ -133,6 +139,30 @@ wait_for_file() { # wait_for_file <файл> — до 10 с
   return 1
 }
 
+# PATH-песочница: симлинки на утилиты из /usr/bin и /bin, кроме перечисленных.
+# Проверяет установку на «минимальной Ubuntu 24.04», где нет curl.
+make_tool_path() { # make_tool_path <каталог> [исключённые имена...]
+  local dir="$1" src name excluded skip
+  shift
+  mkdir -p "$dir"
+  for src in /usr/bin/* /bin/*; do
+    if [ ! -e "$src" ] || [ -d "$src" ]; then
+      continue
+    fi
+    name="${src##*/}"
+    skip=0
+    for excluded in "$@"; do
+      if [ "$name" = "$excluded" ]; then
+        skip=1
+      fi
+    done
+    if [ "$skip" -eq 0 ]; then
+      ln -sf -- "$src" "$dir/$name"
+    fi
+  done
+  return 0
+}
+
 home="$work/home"
 base="$home/.local/opt/etn"
 desktop="$home/.local/share/applications/etn.desktop"
@@ -187,6 +217,8 @@ check "file://releases/latest: установлена ${version}" \
   test "$(readlink -- "$file_home/.local/opt/etn/current")" = "$version"
 
 # --- 4. Версия из статического releases/latest по HTTP (зеркало) -------------
+# Раздача содержит и сам install.sh: одношные команды скачивают его отсюда.
+cp -- "$installer" "$release/install.sh"
 port_file="$work/http-port"
 http_pid="$(start_http_server "$release" "$port_file")"
 if wait_for_file "$port_file"; then
@@ -201,6 +233,57 @@ if wait_for_file "$port_file"; then
   fi
   check "HTTP releases/latest: установлена ${version}" \
     test "$(readlink -- "$http_home/.local/opt/etn/current")" = "$version"
+
+  # --- 4a. Одношная команда по HTTP: curl и wget ----------------------------
+  # Пользовательский путь: `curl -fsSL <base>/install.sh | bash`.
+  if command -v curl >/dev/null 2>&1; then
+    curl_home="$work/home-curl-pipe"
+    if curl -fsSL "$http_base/install.sh" \
+        | env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$curl_home" \
+            ETN_RELEASE_BASE_URL="$http_base" bash -s -- \
+            > "$work/curl-pipe.log" 2>&1; then
+      pass "curl -fsSL <base>/install.sh | bash: код 0"
+    else
+      fail "curl -fsSL <base>/install.sh | bash: ненулевой код"
+      sed -n '1,20p' "$work/curl-pipe.log"
+    fi
+    check "curl-пайп: установлена ${version}" \
+      test "$(readlink -- "$curl_home/.local/opt/etn/current")" = "$version"
+  else
+    fail "curl не найден в среде smoke-теста: одношную команду через curl проверить нельзя"
+  fi
+
+  # Минимальная Ubuntu 24.04 идёт без curl: тот же путь через wget,
+  # а установщик внутри видит PATH без curl и обязан скачать через wget.
+  nocurl_bin="$work/nocurl-bin"
+  make_tool_path "$nocurl_bin" curl
+  check "PATH-песочница без curl: curl недоступен" test ! -e "$nocurl_bin/curl"
+  check "PATH-песочница без curl: wget доступен" test -x "$nocurl_bin/wget"
+  nocurl_home="$work/home-nocurl-pipe"
+  if wget -qO- "$http_base/install.sh" \
+      | env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$nocurl_home" \
+          PATH="$nocurl_bin" ETN_RELEASE_BASE_URL="$http_base" bash -s -- \
+          > "$work/nocurl-pipe.log" 2>&1; then
+    pass "wget -qO- <base>/install.sh | bash без curl: код 0"
+  else
+    fail "wget -qO- <base>/install.sh | bash без curl: ненулевой код"
+    sed -n '1,20p' "$work/nocurl-pipe.log"
+  fi
+  check "wget-пайп без curl: установлена ${version}" \
+    test "$(readlink -- "$nocurl_home/.local/opt/etn/current")" = "$version"
+
+  # Ни curl, ни wget: отказ с понятной подсказкой до первой загрузки.
+  noclient_bin="$work/noclient-bin"
+  make_tool_path "$noclient_bin" curl wget
+  if env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$work/home-noclient" \
+      PATH="$noclient_bin" ETN_RELEASE_BASE_URL="$http_base" bash "$installer" \
+      > "$work/noclient.log" 2>&1; then
+    fail "без curl и wget: установка не должна проходить"
+  else
+    pass "без curl и wget: установка отклонена"
+  fi
+  check "сообщение без curl и wget называет оба клиента" \
+    grep -Eq 'curl.*wget|wget.*curl' "$work/noclient.log"
 
   # --- 5. Повтор без --version обновляет клиент ------------------------------
   set_latest 9.9.9

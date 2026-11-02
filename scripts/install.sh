@@ -7,11 +7,17 @@
 # и атомарно переключает симлинк `current`. Профили и ключи в ~/.config/ETN
 # не трогаются никогда.
 #
-# Запуск:
+# Запуск (одной командой, без sudo и без переменных окружения):
 #   curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
+#   wget -qO- https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
 #   bash install.sh --version 0.15.1        # конкретная версия
 #   sudo bash install.sh --system           # системная установка (/opt/etn)
 #   bash install.sh --uninstall              # удалить (конфигурация сохраняется)
+#
+# Предусловие: curl или wget. В минимальной Ubuntu 24.04 curl нет —
+#   sudo apt-get install -y curl
+# либо используйте вариант с wget. Скрипт качает через curl, при его отсутствии
+# — через wget; если нет ни того, ни другого, сообщает об этом до установки.
 #
 # Версия по умолчанию — последний релиз. Источники: редирект
 # <base>/releases/latest → /releases/tag/vX.Y.Z (GitHub) и статический файл
@@ -22,6 +28,9 @@
 # Зеркало: раздавайте install.sh с заменённой строкой DEFAULT_RELEASE_BASE_URL
 # (адрес зеркала) и положите рядом файл releases/latest с текстом версии —
 # тогда `curl -fsSL <зеркало>/install.sh | bash` работает без env и sudo.
+# Файл <base>/releases/latest — часть контракта раздачи: без него версию
+# последнего релиза неоткуда взять, кроме GitHub-редиректа, и одношная команда
+# на зеркале или локальном стенде потребует --version.
 #
 # Раскладка:
 #   пользовательский режим: ~/.local/opt/etn/<версия> + ~/.local/opt/etn/current,
@@ -95,8 +104,11 @@ usage() {
 root. Повторный запуск обновляет клиент: новая версия ставится рядом со старой,
 симлинк `current` переключается только после проверки SHA-256 и распаковки.
 
-Одношная установка без sudo и без переменных окружения:
+Одношная установка без sudo и без переменных окружения (нужен curl или wget):
   curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
+  wget -qO- https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
+
+В минимальной Ubuntu 24.04 curl нет: sudo apt-get install -y curl
 EOF
 }
 
@@ -416,17 +428,57 @@ check_dependencies() {
 
 # --- Скачивание и проверка ----------------------------------------------------
 
+# Проверка HTTP-клиента до первой загрузки: без curl и wget установка с
+# http(s)-источника невозможна. Локальная раздача (file://) обходится без них.
+need_http_client() {
+  if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+    return 0
+  fi
+  die "не найдены curl и wget — установите один из них: sudo apt-get install -y curl (или wget) — и повторите запуск"
+}
+
+# Тело ответа в stdout. curl предпочтителен (повторы, проверка TLS), при его
+# отсутствии используется wget: минимальная Ubuntu 24.04 идёт без curl.
+fetch_http() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    case "$url" in
+      https://*)
+        curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 \
+          --connect-timeout 20 "$url"
+        ;;
+      *)
+        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 "$url"
+        ;;
+    esac
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- --tries=3 --timeout=20 "$url"
+  else
+    die "не найдены curl и wget — установите один из них: sudo apt-get install -y curl (или wget)"
+  fi
+}
+
+# Адрес после редиректов: для GitHub <base>/releases/latest → /releases/tag/vX.Y.Z.
+# curl отдаёт url_effective, wget — заголовок Location без перехода; пустой
+# ответ означает «редиректа нет» (зеркало со статическим файлом версии).
+http_effective_url() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSLI -o /dev/null -w '%{url_effective}' \
+      --connect-timeout 20 "$url" 2>/dev/null || true
+  elif command -v wget >/dev/null 2>&1; then
+    { wget -S --spider --max-redirect=0 --tries=1 --timeout=20 "$url" 2>&1 || true; } \
+      | sed -n 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//p' | tr -d '\r' | tail -n 1
+  else
+    die "не найдены curl и wget — установите один из них: sudo apt-get install -y curl (или wget)"
+  fi
+}
+
 fetch_url() {
   local url="$1" dest="$2"
   case "$url" in
     file://*) cp -- "${url#file://}" "$dest" ;;
-    https://*)
-      curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 \
-        --connect-timeout 20 -o "$dest" "$url"
-      ;;
-    *)
-      curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 -o "$dest" "$url"
-      ;;
+    *) fetch_http "$url" > "$dest" ;;
   esac
 }
 
@@ -468,15 +520,14 @@ resolve_latest_version() {
       ;;
   esac
 
-  need_cmd curl
+  need_http_client
 
-  effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-    --connect-timeout 20 "$RELEASE_BASE_URL/releases/latest" 2>/dev/null || true)"
+  effective="$(http_effective_url "$RELEASE_BASE_URL/releases/latest")"
   case "$effective" in
     */tag/v*) printf '%s\n' "${effective##*/tag/v}"; return 0 ;;
   esac
 
-  static="$(curl -fsSL --connect-timeout 20 "$RELEASE_BASE_URL/releases/latest" 2>/dev/null || true)"
+  static="$(fetch_http "$RELEASE_BASE_URL/releases/latest" 2>/dev/null || true)"
   if parsed="$(version_from_latest_text "$static")"; then
     printf '%s\n' "$parsed"
     return 0
@@ -540,7 +591,7 @@ install_version() {
 
   case "$RELEASE_BASE_URL" in
     file://*) ;;
-    *) need_cmd curl ;;
+    *) need_http_client ;;
   esac
   need_cmd tar
   detect_sha256_tool
