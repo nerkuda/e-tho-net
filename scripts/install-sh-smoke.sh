@@ -8,13 +8,21 @@
 # и отказ при несовпадении SHA-256 (текущая версия не меняется), удаление
 # (`--uninstall`) без потери конфигурации.
 #
+# Отдельно проверяется одношная установка (задача 20a56c57):
+#   * пайп-режим `cat install.sh | bash` — скрипт приходит на stdin и не должен
+#     его читать (иначе команда съедает остаток скрипта);
+#   * версия из статического файла <base>/releases/latest — по HTTP-раздаче
+#     (как у зеркала) и по file:// (локальная раздача), без --version;
+#   * повторный запуск без --version обновляет клиент; битый SHA-256 — отказ.
+#
 # Клиентский архив — ПОДСТАВНОЙ (`etn` — шелл-скрипт): настоящий бинарник
 # electron на раннере потребовал бы GUI-библиотек (libgtk-3, libnss3, …) и
 # упал бы на проверке ldd, хотя проверяется логика установщика, а не клиент.
 # Сборку настоящего клиентского тарбола делает предыдущий шаг CI.
 #
 # Запуск: bash scripts/install-sh-smoke.sh [версия]
-# Версия по умолчанию — из server/package.json. Нужны: bash, tar, sha256sum.
+# Версия по умолчанию — из server/package.json. Нужны: bash, tar, sha256sum,
+# node (статический HTTP-сервер для зеркала).
 
 set -euo pipefail
 
@@ -30,7 +38,14 @@ case "$version" in
 esac
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/etn-install-smoke.XXXXXX")"
-cleanup() { rm -rf -- "$work"; }
+http_pid=""
+cleanup() {
+  if [ -n "$http_pid" ]; then
+    kill "$http_pid" 2>/dev/null || true
+    wait "$http_pid" 2>/dev/null || true
+  fi
+  rm -rf -- "$work"
+}
 trap cleanup EXIT
 
 failures=0
@@ -65,9 +80,57 @@ STUB
   fi
 }
 
-run_installer() { # run_installer <аргументы...>
-  env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$work/home" \
-    ETN_RELEASE_BASE_URL="file://$release" bash "$installer" "$@"
+set_latest() { # set_latest <версия>
+  mkdir -p "$release/releases"
+  printf '%s\n' "$1" > "$release/releases/latest"
+}
+
+run_installer() { # run_installer <home> <base-url> [аргументы...]
+  local home="$1" base="$2"
+  shift 2
+  env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$home" \
+    ETN_RELEASE_BASE_URL="$base" bash "$installer" "$@"
+}
+
+# Статический HTTP-сервер как у зеркала: отдаёт файлы из каталога релиза.
+# Порт 0 — свободный; фактический порт пишется в файл, чтобы не гадать.
+start_http_server() { # start_http_server <корень> <файл-порт>; печатает PID
+  node -e '
+const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(process.argv[1]);
+const portFile = process.argv[2];
+const server = http.createServer((req, res) => {
+  const url = decodeURIComponent((req.url || "/").split("?")[0]);
+  const file = path.resolve(root, "." + url);
+  if (file !== root && !file.startsWith(root + path.sep)) {
+    res.statusCode = 403;
+    res.end("forbidden");
+    return;
+  }
+  fs.readFile(file, (err, data) => {
+    if (err) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+    res.statusCode = 200;
+    res.end(data);
+  });
+});
+server.listen(0, "127.0.0.1", () => fs.writeFileSync(portFile, String(server.address().port)));
+' "$1" "$2" >/dev/null 2>&1 &
+  echo $!
+}
+
+wait_for_file() { # wait_for_file <файл> — до 10 с
+  local f="$1" i
+  for i in $(seq 1 100); do
+    if [ -s "$f" ]; then return 0; fi
+    sleep 0.1
+  done
+  return 1
 }
 
 home="$work/home"
@@ -77,9 +140,24 @@ config_keep="$home/.config/ETN/keep.txt"
 mkdir -p "$home/.config/ETN"
 printf 'profiles' > "$config_keep"
 
-# --- 1. Установка ------------------------------------------------------------
+# --- 1. Пайп-режим: `cat install.sh | bash` ---------------------------------
+# Скрипт приходит на stdin. Любая команда, читающая stdin, съест остаток
+# скрипта — установка оборвётся. Это ровно путь `curl … | bash`.
 make_release "$version"
-if run_installer --version "$version" > "$work/install.log" 2>&1; then
+pipe_home="$work/home-pipe"
+if cat "$installer" | env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$pipe_home" \
+    ETN_RELEASE_BASE_URL="file://$release" bash -s -- --version "$version" \
+    > "$work/pipe.log" 2>&1; then
+  pass "пайп-режим (cat install.sh | bash): код 0"
+else
+  fail "пайп-режим (cat install.sh | bash): ненулевой код"
+  sed -n '1,20p' "$work/pipe.log"
+fi
+check "пайп-режим: версия установлена" \
+  test "$(readlink -- "$pipe_home/.local/opt/etn/current")" = "$version"
+
+# --- 2. Обычная установка ----------------------------------------------------
+if run_installer "$home" "file://$release" --version "$version" > "$work/install.log" 2>&1; then
   pass "install.sh --version ${version}: код 0"
 else
   fail "install.sh --version ${version}: ненулевой код"
@@ -96,8 +174,65 @@ check "ярлык помечен установщиком ETN" grep -qx 'X-ETN-I
 check "ярлык указывает на current/etn" \
   grep -qx "Exec=\"$base/current/etn\"" "$desktop"
 
-# --- 2. Повторная установка той же версии ------------------------------------
-if run_installer --version "$version" > "$work/reinstall.log" 2>&1; then
+# --- 3. Версия из статического releases/latest по file:// (локальная раздача) -
+set_latest "$version"
+file_home="$work/home-file"
+if run_installer "$file_home" "file://$release" > "$work/file-latest.log" 2>&1; then
+  pass "file://releases/latest без --version: код 0"
+else
+  fail "file://releases/latest без --version: ненулевой код"
+  sed -n '1,20p' "$work/file-latest.log"
+fi
+check "file://releases/latest: установлена ${version}" \
+  test "$(readlink -- "$file_home/.local/opt/etn/current")" = "$version"
+
+# --- 4. Версия из статического releases/latest по HTTP (зеркало) -------------
+port_file="$work/http-port"
+http_pid="$(start_http_server "$release" "$port_file")"
+if wait_for_file "$port_file"; then
+  http_port="$(cat "$port_file")"
+  http_base="http://127.0.0.1:${http_port}"
+  http_home="$work/home-http"
+  if run_installer "$http_home" "$http_base" > "$work/http-latest.log" 2>&1; then
+    pass "HTTP-раздача releases/latest без --version: код 0"
+  else
+    fail "HTTP-раздача releases/latest без --version: ненулевой код"
+    sed -n '1,20p' "$work/http-latest.log"
+  fi
+  check "HTTP releases/latest: установлена ${version}" \
+    test "$(readlink -- "$http_home/.local/opt/etn/current")" = "$version"
+
+  # --- 5. Повтор без --version обновляет клиент ------------------------------
+  set_latest 9.9.9
+  make_release 9.9.9
+  if run_installer "$http_home" "$http_base" > "$work/http-update.log" 2>&1; then
+    pass "повтор без --version (обновление): код 0"
+  else
+    fail "повтор без --version (обновление): ненулевой код"
+    sed -n '1,20p' "$work/http-update.log"
+  fi
+  check "обновление переключило current на 9.9.9" \
+    test "$(readlink -- "$http_home/.local/opt/etn/current")" = "9.9.9"
+
+  # --- 6. Битый SHA-256 у версии из releases/latest: отказ ------------------
+  set_latest 9.9.8
+  make_release 9.9.8 --corrupt-sum
+  if run_installer "$http_home" "$http_base" > "$work/http-badsum.log" 2>&1; then
+    fail "битый SHA256SUMS в releases/latest: установка не должна проходить"
+  else
+    pass "битый SHA256SUMS в releases/latest: установка отклонена"
+  fi
+  check "после отказа не появилась версия 9.9.8" \
+    test ! -e "$http_home/.local/opt/etn/9.9.8"
+  check "после отказа current остался 9.9.9" \
+    test "$(readlink -- "$http_home/.local/opt/etn/current")" = "9.9.9"
+  check "сообщение отказа упоминает SHA-256" grep -q 'SHA-256' "$work/http-badsum.log"
+else
+  fail "HTTP-сервер не поднялся за 10 с"
+fi
+
+# --- 7. Повторная установка той же версии ------------------------------------
+if run_installer "$home" "file://$release" --version "$version" > "$work/reinstall.log" 2>&1; then
   pass "повторная установка: код 0"
 else
   fail "повторная установка: ненулевой код"
@@ -105,10 +240,10 @@ fi
 check "повторная установка не сломала current" \
   test "$(readlink -- "$base/current")" = "$version"
 
-# --- 3. Несовпадение SHA-256: отказ, current не меняется ---------------------
+# --- 8. Несовпадение SHA-256: отказ, current не меняется ---------------------
 next="9.9.9"
 make_release "$next" --corrupt-sum
-if run_installer --version "$next" > "$work/badsum.log" 2>&1; then
+if run_installer "$home" "file://$release" --version "$next" > "$work/badsum.log" 2>&1; then
   fail "битый SHA256SUMS: установка не должна проходить"
 else
   pass "битый SHA256SUMS: установка отклонена"
@@ -118,8 +253,8 @@ check "после отказа current остался ${version}" \
   test "$(readlink -- "$base/current")" = "$version"
 check "сообщение отказа упоминает SHA-256" grep -q 'SHA-256' "$work/badsum.log"
 
-# --- 4. Удаление: каталог и ярлык сняты, конфигурация сохранена --------------
-if run_installer --uninstall > "$work/uninstall.log" 2>&1; then
+# --- 9. Удаление: каталог и ярлык сняты, конфигурация сохранена --------------
+if run_installer "$home" "file://$release" --uninstall > "$work/uninstall.log" 2>&1; then
   pass "install.sh --uninstall: код 0"
 else
   fail "install.sh --uninstall: ненулевой код"

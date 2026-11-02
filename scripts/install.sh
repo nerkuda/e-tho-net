@@ -13,6 +13,16 @@
 #   sudo bash install.sh --system           # системная установка (/opt/etn)
 #   bash install.sh --uninstall              # удалить (конфигурация сохраняется)
 #
+# Версия по умолчанию — последний релиз. Источники: редирект
+# <base>/releases/latest → /releases/tag/vX.Y.Z (GitHub) и статический файл
+# <base>/releases/latest с текстом версии («0.15.1») — для зеркал и локальной
+# раздачи. Скрипт рассчитан на запуск в пайпе: stdin не читает, своё
+# местоположение по имени запущенного файла не вычисляет.
+#
+# Зеркало: раздавайте install.sh с заменённой строкой DEFAULT_RELEASE_BASE_URL
+# (адрес зеркала) и положите рядом файл releases/latest с текстом версии —
+# тогда `curl -fsSL <зеркало>/install.sh | bash` работает без env и sudo.
+#
 # Раскладка:
 #   пользовательский режим: ~/.local/opt/etn/<версия> + ~/.local/opt/etn/current,
 #                           ярлык в ~/.local/share/applications/etn.desktop;
@@ -29,6 +39,8 @@ set -euo pipefail
 
 readonly PROG="install.sh"
 readonly DEFAULT_RELEASE_BASE_URL="https://github.com/nerkuda/e-tho-net"
+# Формат версии: им проверяются и --version, и текст <base>/releases/latest.
+readonly VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'
 readonly MARKER_NAME=".etn-install"
 readonly DESKTOP_MARKER="X-ETN-Installer=true"
 # Код возврата, когда установка найдена, но удалить её не удалось (права).
@@ -82,6 +94,9 @@ usage() {
 Без --system установка идёт в домашний каталог (~/.local/opt/etn) и не требует
 root. Повторный запуск обновляет клиент: новая версия ставится рядом со старой,
 симлинк `current` переключается только после проверки SHA-256 и распаковки.
+
+Одношная установка без sudo и без переменных окружения:
+  curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
 EOF
 }
 
@@ -126,7 +141,7 @@ if [ "$ACTION" = "uninstall" ] && [ -n "$VERSION" ]; then
   die "--uninstall не принимает --version"
 fi
 
-if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
+if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then
   die "некорректная версия: $VERSION (ожидается X.Y.Z)"
 fi
 
@@ -415,21 +430,59 @@ fetch_url() {
   esac
 }
 
+# Версия из текста <base>/releases/latest: первая непустая строка, необязательный
+# префикс v и CR в конце (файл мог приехать из Windows). Формат проверяется тем
+# же VERSION_PATTERN, что и --version: мусор в файле не должен уехать в URL.
+version_from_latest_text() {
+  local line
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] || continue
+    case "$line" in
+      v*) line="${line#v}" ;;
+    esac
+    if printf '%s' "$line" | grep -Eq "$VERSION_PATTERN"; then
+      printf '%s\n' "$line"
+      return 0
+    fi
+    return 1
+  done <<<"$1"
+  return 1
+}
+
+# Последняя версия: редирект <base>/releases/latest → /releases/tag/vX.Y.Z
+# (GitHub и совместимые) либо статический файл <base>/releases/latest с текстом
+# версии (зеркала и локальная раздача). Для file:// доступен только файл.
 resolve_latest_version() {
-  local effective
+  local effective static parsed
   case "$RELEASE_BASE_URL" in
     file://*)
-      die "для локального источника релизов укажите версию: --version X.Y.Z"
+      static="$(cat -- "${RELEASE_BASE_URL#file://}/releases/latest" 2>/dev/null || true)"
+      if parsed="$(version_from_latest_text "$static")"; then
+        printf '%s\n' "$parsed"
+        return 0
+      fi
+      die "не удалось определить версию последнего релиза: нет файла ${RELEASE_BASE_URL#file://}/releases/latest с текстом версии (например 0.15.1) — укажите версию: --version X.Y.Z"
       ;;
   esac
+
+  need_cmd curl
+
   effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-    --connect-timeout 20 "$RELEASE_BASE_URL/releases/latest" || true)"
+    --connect-timeout 20 "$RELEASE_BASE_URL/releases/latest" 2>/dev/null || true)"
   case "$effective" in
-    */tag/v*) printf '%s\n' "${effective##*/tag/v}" ;;
-    *)
-      die "не удалось определить последнюю версию релиза (${RELEASE_BASE_URL}/releases/latest)"
-      ;;
+    */tag/v*) printf '%s\n' "${effective##*/tag/v}"; return 0 ;;
   esac
+
+  static="$(curl -fsSL --connect-timeout 20 "$RELEASE_BASE_URL/releases/latest" 2>/dev/null || true)"
+  if parsed="$(version_from_latest_text "$static")"; then
+    printf '%s\n' "$parsed"
+    return 0
+  fi
+
+  die "не удалось определить последнюю версию релиза: ${RELEASE_BASE_URL}/releases/latest не перенаправляет на /releases/tag/vX.Y.Z и не содержит файла с версией — укажите версию: --version X.Y.Z"
 }
 
 # Ожидаемый хеш ассета из SHA256SUMS. Формат — `<64 hex>  <имя>`; допускается
@@ -731,9 +784,8 @@ if [ "$MODE" = "system" ] && [ "$EUID_NOW" -ne 0 ]; then
 fi
 
 if [ -z "$VERSION" ]; then
-  need_cmd curl
   VERSION="$(resolve_latest_version)"
-  if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
+  if ! printf '%s' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then
     die "не удалось разобрать версию последнего релиза: ${VERSION}"
   fi
 fi
